@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
-    io::Write,
+    io::{ErrorKind, Write},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -339,7 +339,7 @@ pub(crate) fn lane(
                 .context("CI_COMMIT_SHA names the run being recorded")?;
             record(&common, &sha, aliases)
         }
-        JournalAction::Check => check(&common, aliases),
+        JournalAction::Check => check(&common, aliases, expected_producers(kind)),
     }
 }
 
@@ -347,12 +347,12 @@ pub(crate) fn run(args: &VerdictArgs) -> Result<()> {
     let aliases = BTreeMap::new();
     match &args.command {
         VerdictCommand::Record { common, sha } => record(common, sha, &aliases),
-        VerdictCommand::Check { common } => check(common, &aliases),
+        VerdictCommand::Check { common } => check(common, &aliases, &[]),
     }
 }
 
 fn record(common: &Common, sha: &str, aliases: &BTreeMap<String, String>) -> Result<()> {
-    let observed = observe(common, aliases)?;
+    let observed = observe(common, aliases, &[])?;
     let remembered = JournalFile::new(common.journal.clone()).update(|journal| {
         journal.record(Run {
             sha: sha.to_owned(),
@@ -370,8 +370,8 @@ fn record(common: &Common, sha: &str, aliases: &BTreeMap<String, String>) -> Res
     Ok(())
 }
 
-fn check(common: &Common, aliases: &BTreeMap<String, String>) -> Result<()> {
-    let observed = observe(common, aliases)?;
+fn check(common: &Common, aliases: &BTreeMap<String, String>, expected: &[&str]) -> Result<()> {
+    let observed = observe(common, aliases, expected)?;
     let journal = JournalFile::new(common.journal.clone()).load()?;
     if journal.runs.is_empty() {
         bail!(
@@ -497,10 +497,15 @@ struct Observed {
 /// the browser suites, the sanitiser runs, mutation — contributes its own name
 /// instead, so a failure there is still something a merge request can be held
 /// on rather than a silence.
-fn observe(common: &Common, aliases: &BTreeMap<String, String>) -> Result<Observed> {
+fn observe(
+    common: &Common,
+    aliases: &BTreeMap<String, String>,
+    expected: &[&str],
+) -> Result<Observed> {
     let cases = collect(&common.reports)?;
     let jobs = failed_markers(&common.reports)?;
-    if cases.is_empty() && jobs.is_empty() {
+    let selection_is_empty = no_applicable_suites(&common.reports, expected, &jobs)?;
+    if cases.is_empty() && jobs.is_empty() && !selection_is_empty {
         bail!(
             "no `JUnit` reports and no failure markers under {} — a verdict on nothing is not a \
              verdict",
@@ -516,6 +521,39 @@ fn observe(common: &Common, aliases: &BTreeMap<String, String>) -> Result<Observ
         jobs,
         cases: cases.len(),
     })
+}
+
+const fn expected_producers(kind: PipelineKind) -> &'static [&'static str] {
+    match kind {
+        PipelineKind::Branch => &["apple-test"],
+        _ => &[],
+    }
+}
+
+fn no_applicable_suites(
+    reports: &Path,
+    expected: &[&str],
+    failed: &BTreeSet<String>,
+) -> Result<bool> {
+    let mut empty = !expected.is_empty();
+    for &lane in expected {
+        let path = reports.join(format!("{lane}.selection.json"));
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == ErrorKind::NotFound && failed.contains(lane) => {
+                empty = false;
+                continue;
+            }
+            Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+        };
+        let selected: Vec<String> =
+            serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        if !selected.is_empty() && collect(&reports.join(format!("{lane}.xml")))?.is_empty() {
+            bail!("selected producer `{lane}` has no test cases in its JUnit report");
+        }
+        empty &= selected.is_empty();
+    }
+    Ok(empty)
 }
 
 /// A lane that failed leaves its name behind, whether or not it could name a
@@ -686,6 +724,29 @@ mod tests {
     }
 
     #[test]
+    fn a_proven_empty_branch_selection_passes_without_junit() {
+        let directory = tempfile::tempdir().unwrap();
+        let common = Common {
+            reports: directory.path().join(consts::REPORT_DIR),
+            journal: directory.path().join("journal.json"),
+            base: Some("base".to_owned()),
+        };
+        fs::create_dir_all(&common.reports).unwrap();
+        fs::write(common.reports.join("apple-test.selection.json"), "[]").unwrap();
+        let mut journal = Journal::default();
+        journal.record(run_of("base", &[], &[]));
+        journal.store(&common.journal).unwrap();
+
+        check(
+            &common,
+            &BTreeMap::new(),
+            expected_producers(PipelineKind::Branch),
+        )
+        .unwrap();
+        assert!(check(&common, &BTreeMap::new(), &[]).is_err());
+    }
+
+    #[test]
     fn a_retried_pass_cannot_hide_behind_a_known_lane_failure() {
         let directory = tempfile::tempdir().unwrap();
         let common = Common {
@@ -706,7 +767,7 @@ mod tests {
         )
         .unwrap();
         gather(directory.path(), "apple-test", false).unwrap();
-        check(&common, &BTreeMap::new()).unwrap();
+        check(&common, &BTreeMap::new(), &[]).unwrap();
 
         for outcome in ["failure", "error", "flakyFailure", "flakyError"] {
             fs::write(
@@ -717,7 +778,7 @@ mod tests {
             )
             .unwrap();
             gather(directory.path(), "apple-test", true).unwrap();
-            let error = check(&common, &BTreeMap::new()).unwrap_err();
+            let error = check(&common, &BTreeMap::new(), &[]).unwrap_err();
             assert_eq!(
                 error.to_string(),
                 "1 test(s) and 0 lane(s) fail here and not on the default branch",
@@ -752,6 +813,7 @@ mod tests {
         fs::create_dir_all(&reports).unwrap();
         fs::write(reports.join("apple-ios-test.failed"), "").unwrap();
         fs::write(reports.join("apple-lint.failed"), "").unwrap();
+        fs::write(reports.join("apple-test.selection.json"), "[]").unwrap();
         fs::write(reports.join("apple-test.xml"), "<testsuites/>").unwrap();
 
         clear(directory.path(), "apple-ios-test").unwrap();
@@ -899,5 +961,174 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let journal = Journal::load(&directory.path().join("absent.json")).unwrap();
         assert!(journal.runs.is_empty());
+    }
+
+    mod selection {
+        use std::collections::BTreeMap;
+
+        use tempfile::TempDir;
+
+        use super::*;
+
+        const PASSING: &str = r#"<testsuites><testsuite name="suite"><testcase classname="suite" name="pass" time="0.1"/></testsuite></testsuites>"#;
+
+        fn fixture(jobs: &[&str]) -> (TempDir, Common) {
+            let directory = tempfile::tempdir().unwrap();
+            let common = Common {
+                reports: directory.path().join(consts::REPORT_DIR),
+                journal: directory.path().join("journal.json"),
+                base: Some("base".to_owned()),
+            };
+            fs::create_dir_all(&common.reports).unwrap();
+            let mut journal = Journal::default();
+            journal.record(Run {
+                sha: "base".to_owned(),
+                tests: BTreeSet::new(),
+                jobs: jobs.iter().map(|job| (*job).to_owned()).collect(),
+            });
+            journal.store(&common.journal).unwrap();
+            (directory, common)
+        }
+
+        fn snapshot(common: &Common, selected: bool) {
+            fs::write(
+                common.reports.join("apple-test.selection.json"),
+                serde_json::to_vec(&if selected {
+                    vec!["workspace"]
+                } else {
+                    Vec::new()
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        }
+
+        #[test]
+        fn a_selected_producer_requires_its_own_test_cases() {
+            for (name, report, passes) in [
+                ("apple-test.xml", "", false),
+                ("apple-test.xml", "<testsuites/>", false),
+                ("unrelated.xml", PASSING, false),
+                ("apple-test.xml", PASSING, true),
+            ] {
+                let (_directory, common) = fixture(&[]);
+                snapshot(&common, true);
+                if !report.is_empty() {
+                    fs::write(common.reports.join(name), report).unwrap();
+                }
+                assert_eq!(
+                    check(
+                        &common,
+                        &BTreeMap::new(),
+                        expected_producers(PipelineKind::Branch)
+                    )
+                    .is_ok(),
+                    passes,
+                    "{name}: {report}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_branch_requires_its_producers_valid_selection() {
+            for evidence in [
+                None,
+                Some(""),
+                Some("{"),
+                Some("{}"),
+                Some("null"),
+                Some("[false]"),
+                Some("[null]"),
+            ] {
+                let (_directory, common) = fixture(&[]);
+                fs::write(common.reports.join("unrelated.selection.json"), "[]").unwrap();
+                fs::write(common.reports.join("unrelated.xml"), PASSING).unwrap();
+                if let Some(evidence) = evidence {
+                    fs::write(common.reports.join("apple-test.selection.json"), evidence).unwrap();
+                }
+                assert!(
+                    check(
+                        &common,
+                        &BTreeMap::new(),
+                        expected_producers(PipelineKind::Branch)
+                    )
+                    .is_err(),
+                    "invalid selection: {evidence:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn an_empty_selection_does_not_hide_failures() {
+            for (name, contents) in [
+                ("apple-test.failed", ""),
+                ("unrelated.failed", ""),
+                ("apple-test.xml", "not XML"),
+                (
+                    "apple-test.xml",
+                    r#"<testsuites><testsuite name="suite"><testcase classname="suite" name="failure" time="0.1"><failure/></testcase></testsuite></testsuites>"#,
+                ),
+            ] {
+                let (_directory, common) = fixture(&[]);
+                snapshot(&common, false);
+                fs::write(common.reports.join(name), contents).unwrap();
+                assert!(
+                    check(
+                        &common,
+                        &BTreeMap::new(),
+                        expected_producers(PipelineKind::Branch)
+                    )
+                    .is_err(),
+                    "{name}: {contents}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_known_lane_failure_cannot_excuse_a_selected_missing_report() {
+            let (_directory, common) = fixture(&["apple-test"]);
+            snapshot(&common, true);
+            fs::write(common.reports.join("apple-test.failed"), "").unwrap();
+            assert!(
+                check(
+                    &common,
+                    &BTreeMap::new(),
+                    expected_producers(PipelineKind::Branch)
+                )
+                .is_err()
+            );
+        }
+
+        #[test]
+        fn a_failed_preflight_keeps_the_journals_failure_policy() {
+            for (known, passes) in [(&[][..], false), (&["apple-test"][..], true)] {
+                let (_directory, common) = fixture(known);
+                fs::write(common.reports.join("apple-test.failed"), "").unwrap();
+                assert_eq!(
+                    check(
+                        &common,
+                        &BTreeMap::new(),
+                        expected_producers(PipelineKind::Branch)
+                    )
+                    .is_ok(),
+                    passes
+                );
+            }
+        }
+
+        #[test]
+        fn an_empty_selection_still_needs_a_baseline() {
+            let (_directory, common) = fixture(&[]);
+            snapshot(&common, false);
+            fs::remove_file(&common.journal).unwrap();
+            assert!(
+                check(
+                    &common,
+                    &BTreeMap::new(),
+                    expected_producers(PipelineKind::Branch)
+                )
+                .is_err()
+            );
+        }
     }
 }

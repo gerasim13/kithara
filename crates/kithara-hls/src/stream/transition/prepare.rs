@@ -97,7 +97,7 @@ where
             .get(transition.incoming_variant().get())
             .cloned()
         else {
-            let _ = self.abr_publisher.abort_pending(claim.ticket());
+            let _ = self.abr_state.abort_pending(claim.ticket());
             return Err(StreamError::Source(SourceError::VariantNotFound(format!(
                 "incoming variant {}",
                 transition.incoming_variant().get()
@@ -115,7 +115,7 @@ where
         ) {
             Ok(session) => Arc::new(session),
             Err(error) => {
-                let _ = self.abr_publisher.abort_pending(claim.ticket());
+                let _ = self.abr_state.abort_pending(claim.ticket());
                 return Err(error);
             }
         };
@@ -125,7 +125,7 @@ where
         };
         if !claim_matches || self.variant_index() != transition.active_variant().get() {
             session.abort();
-            let _ = self.abr_publisher.abort_pending(claim.ticket());
+            let _ = self.abr_state.abort_pending(claim.ticket());
             return Ok(None);
         }
 

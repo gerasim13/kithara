@@ -84,7 +84,7 @@ impl Abr for ScheduledAbrPeer {
                 .state
                 .claim_pending_decision(self.state.current_variant_index())
                 .expect("the down-switch request must be claimable");
-            assert!(self.state.publisher().commit_pending(claim, Instant::now()));
+            assert!(self.state.commit_pending(claim, Instant::now()));
         }
         [66_000_u64, 134_000, 270_000, 900_000]
             .into_iter()

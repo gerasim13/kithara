@@ -36,12 +36,6 @@ pub trait DriverIo: Send + Sync + 'static {
     /// snapshot. Mutually consistent with [`read_committed`](Self::read_committed).
     fn committed_len(&self) -> Option<u64>;
 
-    /// Publish a write range to the fast-path mechanism.
-    ///
-    /// Called by [`Resource<D>`](crate::backend::Resource) after a
-    /// successful driver write, before updating state + condvar.
-    fn notify_write(&self, _range: &Range<u64>) {}
-
     /// Filesystem path, if any.
     fn path(&self) -> Option<&Path>;
 
@@ -103,15 +97,6 @@ pub trait DriverIo: Send + Sync + 'static {
 
     /// Physical storage length (for `read_at` clamping).
     fn storage_len(&self) -> u64;
-
-    /// Lock-free fast-path check before state mutex.
-    ///
-    /// Some drivers (mmap) maintain a lock-free queue of ready ranges.
-    /// Called before acquiring the state mutex in `wait_range`.
-    /// Return `true` if the range is definitely covered.
-    fn try_fast_check(&self, _range: &Range<u64>) -> bool {
-        false
-    }
 
     /// Returns the valid data window for ring buffer drivers.
     ///

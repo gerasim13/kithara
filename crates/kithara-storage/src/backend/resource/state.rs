@@ -21,13 +21,12 @@ use crate::{
 pub(super) struct CommonState {
     pub(super) failed: Option<String>,
     pub(super) final_len: Option<u64>,
-    pub(super) available: RangeSet<u64>,
     pub(super) committed: bool,
 }
 
 /// Shared inner storage.
 pub(super) struct Inner<D: DriverIo> {
-    pub(super) available_snapshot: ArcSwap<RangeSet<u64>>,
+    pub(super) available: ArcSwap<RangeSet<u64>>,
     /// Lock-free lifecycle flag: `true` while the resource is committed, `false`
     /// once `reactivate` reopens it for a re-download. Distinct from the driver's
     /// committed snapshot, which stays published across a reactivate so reads
@@ -48,7 +47,7 @@ pub(super) struct Inner<D: DriverIo> {
     /// [`CommonState`]; `wait()`/`notify_all()` coordinate `wait_range_inner`.
     pub(super) gate: CondvarGate<CommonState>,
     pub(super) driver: D,
-    /// Snapshots displaced from `available_snapshot`, held until quiesced.
+    /// Snapshots displaced from `available`, held until quiesced.
     /// Only writers lock it, and only after releasing `gate`: the produce
     /// core takes `gate` on the slow path of an active resource and must
     /// never wait on these frees.
@@ -57,14 +56,16 @@ pub(super) struct Inner<D: DriverIo> {
 }
 
 impl<D: DriverIo> Inner<D> {
-    /// Publish `state.available` to lock-free readers, release the gate, and
-    /// only then retire the snapshot this displaced: a read racing the write
-    /// never frees that snapshot, and a read queued on the gate never waits
-    /// on the frees.
-    pub(super) fn publish_available(&self, state: MutexGuard<'_, CommonState>) {
-        let displaced = self
-            .available_snapshot
-            .swap(Arc::new(state.available.clone()));
+    /// Edit availability under the gate, then retire the displaced snapshot
+    /// after releasing it so readers never free a range tree or wait on frees.
+    pub(super) fn edit_available(
+        &self,
+        state: MutexGuard<'_, CommonState>,
+        edit: impl FnOnce(&mut RangeSet<u64>),
+    ) {
+        let mut available = self.available.load().as_ref().clone();
+        edit(&mut available);
+        let displaced = self.available.swap(Arc::new(available));
         drop(state);
         self.retired.lock().retire(displaced);
     }
@@ -141,11 +142,10 @@ impl<D: Driver> ResourceCore<D> {
                 observer,
                 committed: AtomicBool::new(is_committed),
                 stamp_on_drop: AtomicBool::new(true),
-                available_snapshot: ArcSwap::from_pointee(available.clone()),
+                available: ArcSwap::from_pointee(available),
                 retired: Mutex::new(Retired::default()),
                 gate: CondvarGate::new(CommonState {
                     final_len,
-                    available,
                     failed: None,
                     committed: is_committed,
                 }),

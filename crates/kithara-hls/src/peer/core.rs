@@ -6,7 +6,7 @@ use std::{
 };
 
 use kithara_abr::{
-    Abr, AbrMode, AbrProgressSnapshot, AbrPublisher, AbrState, VariantDuration, VariantInfo,
+    Abr, AbrMode, AbrProgressSnapshot, AbrState, VariantDuration, VariantIndex, VariantInfo,
 };
 use kithara_assets::ResourceKey;
 use kithara_bufpool::HasPool;
@@ -55,7 +55,6 @@ pub(crate) struct HlsPeer<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    abr_publisher: AbrPublisher,
     abr: Arc<AbrState>,
     /// Narrow activity handle. Used by `priority()` to check whether
     /// the track is currently playing.
@@ -86,11 +85,9 @@ where
 {
     pub(crate) fn new(activity: Activity, initial_mode: AbrMode, cancel: CancelToken) -> Self {
         let abr = Arc::new(AbrState::new(initial_mode));
-        let abr_publisher = abr.publisher();
         Self {
             activity,
             abr,
-            abr_publisher,
             cancel,
             state: Mutex::new(None),
             pending_waker: Mutex::default(),
@@ -101,8 +98,8 @@ where
         }
     }
 
-    pub(crate) fn abr_publisher(&self) -> AbrPublisher {
-        self.abr_publisher.clone()
+    pub(crate) fn abr_state(&self) -> Arc<AbrState> {
+        Arc::clone(&self.abr)
     }
 
     /// Activate track planning and forward reader notifications to the downloader.
@@ -188,7 +185,16 @@ where
     /// valid "at/after the last segment" endpoint and sums the full slice, while `idx > len` is
     /// impossible and surfaces as `None` rather than being silently clamped.
     fn progress(&self) -> Option<AbrProgressSnapshot> {
-        let current = self.abr.current_variant_index();
+        let (current, download_head) = self.state.lock().as_ref().map_or_else(
+            || (self.abr.current_variant_index(), 0),
+            |state| {
+                let session = state.coord.active_session();
+                (
+                    VariantIndex::new(session.variant_index()),
+                    session.variant().download_head() as usize,
+                )
+            },
+        );
         let durations: Vec<Duration> = self
             .variants
             .lock()
@@ -199,11 +205,6 @@ where
                 VariantDuration::Total(_) | VariantDuration::Unknown => None,
             })?;
         let reader_idx = self.reader_segment.load(Ordering::Acquire);
-        let download_head = self
-            .state
-            .lock()
-            .as_ref()
-            .map_or(0, |s| s.coord.download_head() as usize);
         let reader_playback_time = duration_prefix(&durations, reader_idx)?;
         let download_head_playback_time = duration_prefix(&durations, download_head)?;
         Some(AbrProgressSnapshot {
