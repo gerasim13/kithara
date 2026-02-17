@@ -44,37 +44,33 @@ engine.stop()?;
 
 ## Architecture
 
-```
-                   ┌─────────────────────────────────────────────┐
-                   │                  Engine                      │
-                   │  (singleton -- arena of slots, audio output) │
-                   │                                              │
-                   │  ┌─────────┐  ┌─────────┐  ┌─────────┐     │
-                   │  │ Slot 0  │  │ Slot 1  │  │ Slot N  │     │
-                   │  │ Player  │  │ Player  │  │ Player  │     │
-                   │  │  Item   │  │  Item   │  │  Item   │     │
-                   │  │  Asset  │  │  Asset  │  │  Asset  │     │
-                   │  └────┬────┘  └────┬────┘  └────┬────┘     │
-                   │       │            │            │           │
-                   │       ▼            ▼            ▼           │
-                   │  ┌──────────────────────────────────────┐   │
-                   │  │              Mixer                    │   │
-                   │  │  gain · pan · mute · solo · EQ       │   │
-                   │  │  per-channel + master bus             │   │
-                   │  │  hardware-style crossfader            │   │
-                   │  └────────────────┬─────────────────────┘   │
-                   │                   │                          │
-                   │  ┌────────────────▼─────────────────────┐   │
-                   │  │         DJ subsystem                  │   │
-                   │  │  CrossfadeController · BpmAnalyzer    │   │
-                   │  │  BpmSync · Equalizer · DjEffect       │   │
-                   │  └──────────────────────────────────────┘   │
-                   │                                              │
-                   │  ┌──────────────────────────────────────┐   │
-                   │  │          AudioSession                 │   │
-                   │  │  category · mode · route · latency    │   │
-                   │  └──────────────────────────────────────┘   │
-                   └─────────────────────────────────────────────┘
+```mermaid
+%%{init: {"flowchart": {"curve": "linear"}} }%%
+graph TD
+    subgraph Engine ["Engine (singleton -- arena of slots, audio output)"]
+        S0["Slot 0<br/><i>Player · Item · Asset</i>"]
+        S1["Slot 1<br/><i>Player · Item · Asset</i>"]
+        SN["Slot N<br/><i>Player · Item · Asset</i>"]
+
+        MX["Mixer<br/><i>gain · pan · mute · solo · EQ</i><br/><i>per-channel + master bus</i><br/><i>hardware-style crossfader</i>"]
+
+        DJ["DJ subsystem<br/><i>CrossfadeController · BpmAnalyzer</i><br/><i>BpmSync · Equalizer · DjEffect</i>"]
+
+        AS["AudioSession<br/><i>category · mode · route · latency</i>"]
+
+        S0 --> MX
+        S1 --> MX
+        SN --> MX
+        MX --> DJ
+        DJ ~~~ AS
+    end
+
+    style S0 fill:#7ea87e,color:#fff
+    style S1 fill:#7ea87e,color:#fff
+    style SN fill:#7ea87e,color:#fff
+    style MX fill:#6b8cae,color:#fff
+    style DJ fill:#c4a35a,color:#fff
+    style AS fill:#8b6b8b,color:#fff
 ```
 
 ## Key Types
@@ -166,11 +162,19 @@ Events use `tokio::sync::broadcast`. Subscribe via `player.subscribe()` or `engi
 
 ## Crossfade Flow
 
-```
-Slot A: ████████████▓▓▓▓▓▓░░░░ (fade out)
-Slot B:             ░░░░▓▓▓▓▓▓████████████ (fade in)
-        ↑                      ↑
-        crossfade start        crossfade end
+```mermaid
+gantt
+    title Crossfade Timeline
+    dateFormat X
+    axisFormat %s
+
+    section Slot A
+        Full volume   :a1, 0, 6
+        Fade out      :a2, 6, 10
+
+    section Slot B
+        Fade in       :b1, 6, 10
+        Full volume   :b2, 10, 16
 ```
 
 `CrossfadeController::start(a, b, config)` initiates the transition. When `beat_aligned: true`, the controller waits for the next beat boundary before starting the fade.
