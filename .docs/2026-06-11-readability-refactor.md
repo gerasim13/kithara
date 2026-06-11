@@ -106,12 +106,11 @@ each still fits one focused session. WP15 needs its own plan first.
 - Prose deletion target: the `-1 for init` doc comment on `on_evict`.
 - Validation: `cargo test -p kithara-hls -p kithara-stream`.
 
-### [ ] WP4 — net: replace the hand-rolled decorators with the ecosystem
+### [ ] WP4 — net: delete dead code, fix Headers; keep retry
 
-- Evidence: `kithara-net/src/retry.rs` (479 lines, textbook exponential
-  backoff), `timeout.rs` (94 lines), `types.rs` (`Headers` over
-  `HashMap<String,String>`, case-sensitive). `tower` is a workspace dep and
-  is unused by kithara-net.
+- Evidence: `timeout.rs` (94 lines), `types.rs` (`Headers` over
+  `HashMap<String,String>`, case-sensitive), `retry.rs` (~147 production
+  lines; the rest is tests).
 - Timeout architecture (verified 2026-06-11): the idle-reset inactivity
   semantics live in reqwest `read_timeout` (`client.rs:85`, native) and in
   the per-chunk race in `dl/response.rs::wrap_with_cancel` (app-level; also
@@ -120,13 +119,20 @@ each still fits one focused session. WP15 needs its own plan first.
   is `RetryNet<RawHttp>` only, and `NetExt::with_timeout()` has no callers.
   Do NOT route timeouts through `tower::Timeout` — it is total-duration only
   and cannot express idle reset.
+- Retry (verified 2026-06-11): **keep `RetryNet`** — the loop is 33 lines
+  and carries three non-default semantics any replacement must preserve:
+  (a) zero-delay first retry (`delay_for_attempt(0) == ZERO`, then
+  base·2^(n−1) capped); (b) cancel-interruptible backoff sleep
+  (`biased select` — cancel is honored between attempts, not mid-request);
+  (c) sleeps via `kithara_platform::time::sleep` for wasm. `backon` would
+  need a custom Sleeper + BackoffBuilder to match — likely net-neutral LOC.
+  The `Retryability` classification (`error.rs:66-88`) is domain logic and
+  stays regardless. Revisit only if retry behavior needs to change anyway.
 - Approach: delete `TimeoutNet` and its README paragraphs (speculative code).
-  Retry via `backon` (add to `[workspace.dependencies]` with a one-line
-  justification, per the workspace-first rule) or `tower::retry` — session's
-  choice, justify in the PR. Headers → `reqwest::header::HeaderMap`
-  (re-export; avoids a new dep) — preserves case-insensitivity.
-- Prose deletion target: retry/timeout module docs; README `TimeoutNet`
-  sections; ~500 net LOC.
+  Headers → `reqwest::header::HeaderMap` (re-export; avoids a new dep) —
+  preserves case-insensitivity.
+- Prose deletion target: README `TimeoutNet` sections; ~180 LOC
+  (timeout.rs + Headers plumbing).
 - Validation: `cargo test -p kithara-net` plus one downstream smoke
   (`cargo test -p kithara-stream dl`).
 
