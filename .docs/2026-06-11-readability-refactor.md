@@ -109,16 +109,24 @@ each still fits one focused session. WP15 needs its own plan first.
 ### [ ] WP4 — net: replace the hand-rolled decorators with the ecosystem
 
 - Evidence: `kithara-net/src/retry.rs` (479 lines, textbook exponential
-  backoff), `timeout.rs` (94 lines restating the `Net` trait per method),
-  `types.rs` (`Headers` over `HashMap<String,String>`, case-sensitive).
-  `tower` is a workspace dep and is unused by kithara-net.
-- Approach: retry via `backon` (add to `[workspace.dependencies]` with a
-  one-line justification, per the workspace-first rule) or `tower::retry` —
-  session's choice, justify in the PR. Keep the wasm conditional from
-  timeout.rs but inline `tokio::time::timeout` at call sites. Headers →
-  `reqwest::header::HeaderMap` (re-export; avoids a new dep) — preserves
-  case-insensitivity.
-- Prose deletion target: retry/timeout module docs; ~500 net LOC.
+  backoff), `timeout.rs` (94 lines), `types.rs` (`Headers` over
+  `HashMap<String,String>`, case-sensitive). `tower` is a workspace dep and
+  is unused by kithara-net.
+- Timeout architecture (verified 2026-06-11): the idle-reset inactivity
+  semantics live in reqwest `read_timeout` (`client.rs:85`, native) and in
+  the per-chunk race in `dl/response.rs::wrap_with_cancel` (app-level; also
+  the wasm path, where reqwest timeouts don't apply). `TimeoutNet` itself is
+  a plain total-duration wrapper and is **dead code**: the production stack
+  is `RetryNet<RawHttp>` only, and `NetExt::with_timeout()` has no callers.
+  Do NOT route timeouts through `tower::Timeout` — it is total-duration only
+  and cannot express idle reset.
+- Approach: delete `TimeoutNet` and its README paragraphs (speculative code).
+  Retry via `backon` (add to `[workspace.dependencies]` with a one-line
+  justification, per the workspace-first rule) or `tower::retry` — session's
+  choice, justify in the PR. Headers → `reqwest::header::HeaderMap`
+  (re-export; avoids a new dep) — preserves case-insensitivity.
+- Prose deletion target: retry/timeout module docs; README `TimeoutNet`
+  sections; ~500 net LOC.
 - Validation: `cargo test -p kithara-net` plus one downstream smoke
   (`cargo test -p kithara-stream dl`).
 
@@ -128,11 +136,23 @@ each still fits one focused session. WP15 needs its own plan first.
   busy-spin; `AtomicUsize` + `AtomicWaker` completion plumbing across
   batch/downloader/registry. `response.rs` hand-rolls per-chunk
   timeout+cancel via `stream::unfold` + `select!`.
+- Semantics bug to fix here (verified 2026-06-11): in `wrap_with_cancel`
+  (`response.rs:163-170`) the idle-timeout arm yields `None`, which **ends
+  the stream silently** — `write_all` then returns `Ok(total)`, so an
+  idle-aborted download is indistinguishable from a successfully completed
+  shorter body. Worse, `chunk_timeout` is set from the same
+  `inactivity_timeout` as reqwest's `read_timeout` (`downloader.rs:111`), so
+  two idle timers race at the same duration: reqwest's surfaces an error,
+  the app-level one truncates silently — which one wins is timing luck.
 - Approach: `tokio::sync::Semaphore` (permit acquired before spawn, dropped at
   task end); rewrite body wrapping on `tokio_stream::StreamExt::timeout()` +
-  `take_until(cancel.cancelled())`. Keep the slot scheduler and watchdog
-  intact (see do-not-touch rationale). Watchdog progress classification may
-  need a small rework to observe permits instead of the raw counter.
+  `take_until(cancel.cancelled())` — per-item timeout preserves the
+  reset-on-bytes semantics AND yields `Err(Elapsed)` instead of a silent end;
+  map it to `NetError::Timeout` and add a red test (idle mid-body → error,
+  not Ok). Verify downstream handles the new error path. Keep the slot
+  scheduler and watchdog intact (see do-not-touch rationale). Watchdog
+  progress classification may need a small rework to observe permits instead
+  of the raw counter.
 - Prose deletion target: the waker-coordination comments in
   `downloader.rs:62-67`.
 - Validation: `cargo test -p kithara-stream`, hang-watchdog tests stay green.
