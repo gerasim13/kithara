@@ -20,12 +20,12 @@ live in the maintainer's head.
 | Site | Evidence |
 |---|---|
 | `kithara-play/src/impls/player.rs:125-160` | `PlayerImpl`: 8 atomics + 5 mutex fields + cancel/engine/bus/pool. Interdependent fields (`current_index`, `pending_next`, `status`) are updated independently with no single transition point. |
-| `kithara-play/src/impls/player.rs:49-53` | `PendingNext { src, activated: bool, index }` — a hand-rolled two-phase commit. `commit_next` and `finalize_handover_if_armed` race over `activated`; if the audio thread wins, `CurrentItemChanged` is skipped and queue `current_index` goes stale. Direct bug source. |
-| `kithara-play/src/impls/player_track.rs:105-107` | `notified_track_requested` / `notified_prefetch_requested` bool pair reset in 3 places; ordering-dependent duplicate/missing notifications. |
-| `kithara-audio/src/pipeline/source.rs` | `StreamAudioSource` resume state: `resume_target` as `(epoch, Duration)` tuple + `eof_drain_queue: Option<VecDeque<_>>` + stat counters that drive logic. Epoch mismatch silently no-ops (`pending_skip_amount`). |
+| `kithara-play/src/impls/player.rs:49-53` | `PendingNext { src, activated: bool, index }` — a hand-rolled two-phase commit. **Verified: not a bug** — both paths (`commit_next` for cf>0, `finalize_handover_if_armed` for cf=0) emit `CurrentItemChanged` exactly once and the scheme is documented. Remains a readability cost: the two-phase protocol would be clearer as an explicit `enum PendingSlot { Armed, Activated }` with one transition owner. |
+| `kithara-play/src/impls/player_track.rs:105-107` | `notified_track_requested` / `notified_prefetch_requested` bool pair. **Verified: no race** — `PlayerTrack` is `&mut self` on the audio thread only; these are once-latches with deliberate retry-on-full-ring semantics. Readability-only finding (enum would name the cycle states). |
+| `kithara-audio/src/pipeline/source.rs` | **Partially retracted on verification**: the FSM is more structured than first reported (`CurrentFsm`, `ApplySeekState`, `WaitContext`; resume state is a struct, not a tuple; `pending_skip_amount` is documented Option-chaining). The remaining valid criticism is file size and concern-mixing (see Theme 4), not flag soup. |
 | `kithara-audio/src/worker/decoder_node.rs:16-46` | `DecoderRuntime { eof_sent, preloaded, seek_epoch, chunks_sent }` reset via struct-update; adding a field silently breaks the reset. |
 | `kithara-decode/src/gapless/trimmer/core.rs` | `GaplessMode` + `tail_buffer` + `tail_buffered_frames` + dual-purpose `trailing_frames` ("sometimes metadata, sometimes scan window"). |
-| `kithara-hls/src/variant.rs:174,254-265` | `DownloadClaim.settled: bool` duplicates what the `Segment<Downloading>` typestate already proves; the Drop-side warning is a runtime patch over a compile-time guarantee. |
+| `kithara-hls/src/variant.rs:174,254-265` | `DownloadClaim.settled: bool` — **verified: standard disarm-the-guard pattern**, not redundancy: `Drop` still runs at the end of `into_loaded`, so without the flag the code would need `ManuallyDrop`. Acceptable as-is; low-priority. |
 | `kithara-audio/src/audio.rs` | `preloaded: bool` shadows `ConsumerPhase` (two sources of truth for the same fact). |
 
 Fix direction: per site, name the states (`enum PendingSlot { None, Armed{..},
@@ -106,44 +106,56 @@ keeps hitting at runtime.
 
 ## Theme 5 — Fallback chains papering over state bugs (forbidden by AGENTS.md)
 
-- **HLS cross-variant fallback search** (`kithara-hls/src/coord.rs:293-311`,
-  `variant.rs::variant_serving`): when the active variant can't resolve a byte,
-  silently search shrunk historical variants. Masks `byte_shift` computation
-  bugs; should fail loudly / trigger reset.
+- **HLS cross-variant lookup** (`kithara-hls/src/coord.rs:293-311`):
+  **verified: by-design, not a fallback bug** — after an ABR switch the shrunk
+  historical variant legitimately owns byte ranges before the switch boundary
+  (the virtual stream is a concatenation across variants over time). Retracted
+  as a finding; at most deserves a clearer name/doc.
 - **Position/duration fallback** in
-  `player_processor.rs::update_position_duration`: "no leading track produced
-  an outcome" is patched by re-reading per-track state instead of guaranteeing
-  exactly one leader.
+  `player_processor.rs::update_position_duration`: **verified: documented and
+  bounded** (cold start / all-fading cycles only, rationale in the doc
+  comment). Acceptable per the repo's "justified fallback" rule; optional
+  improvement is enforcing a single-leader invariant.
 - **Gapless source chain** (metadata → codec priming → heuristic) is silent;
   which path won is invisible to callers and logs (`composed.rs`,
   `gapless/trimmer`). Surface the chosen mode in `DecoderTrackInfo` + trace.
+  (Confirmed: `parse_itunsmpb` returns `None` on malformed input with no log.)
 - **Decoder seek recovery** (`source.rs::recover_from_decoder_seek_error`):
-  try-seek / catch / recreate-decoder retry loop compensates for stale
-  Symphonia state after variant switches instead of detecting the format change
-  before seeking.
+  **verified: documented in the crate README** ("Seek error recovery") and
+  split by error variant — a legitimate documented recovery path under the
+  repo rules. The open design question (detect format change before seeking)
+  stands, but this is not an undocumented fallback chain.
 - **Availability disk-probe fallback** (`kithara-assets/src/unified.rs`,
   `cache.rs::open_resource` linear rescan) patches gaps the index should not
   have.
 
 ## Theme 6 — Silently swallowed errors and lost signals
 
-- `try_push(...).ok()` on the notification ring (15+ sites in
-  `player_processor.rs` / `player_track.rs`): events (`Unloaded`,
-  `PlaybackStarted`) vanish when the consumer lags, no log, no counter.
+- `try_push(...).ok()` on the notification ring — **verified with nuance**:
+  the near-end triggers (`emit_handover_requested` / `emit_track_requested`)
+  deliberately retry next cycle on a full ring (flag set only on success).
+  But terminal events are lost permanently: `PlaybackStopped`
+  (`player_track.rs:301-308,320-327`) is pushed with `.ok()` while the state
+  is set to `Finished` regardless — a full ring drops the stop event with no
+  log. Fix the terminal-event sites; the trigger sites are fine.
 - `try_lock()` in the audio path (`player_processor.rs:271,409,745`,
   `player_track.rs:240,403,540,618`): contention silently drops commands such
   as rate updates. RT-safe, but failure must be observable (atomic param push
   or deferred retry, plus a counter).
-- `unwrap_or(0)` / `unwrap_or(u64::MAX)` sentinels in arithmetic
-  (`variant/layout.rs:134`, `stream.rs:564`, `composed.rs:173`): overflow
-  becomes a plausible-looking value.
-- `Weak::upgrade()` returning `None` on HLS fetch settle drops the committed
-  segment size forever, silently (`variant.rs:88-107,170-202`).
+- `unwrap_or(0)` / `unwrap_or(u64::MAX)` sentinels in arithmetic — verified:
+  `stream.rs:564` clamps an overflowed seek to `u64::MAX` (reads then hit EOF
+  instead of an error); `variant/layout.rs:134`'s `unwrap_or(0)` is actually
+  unreachable dead defense (value already checked `>= 0`) — noise rather than
+  data loss.
+- `Weak::upgrade()` on HLS fetch settle (`variant.rs:188-205`) — **verified:
+  harmless**: the upgrade only fails when the variant (and its layout/store)
+  is already dead, so there is nothing left to update. At most add a trace.
 - Lease/pin Drop paths log-and-continue on persistence failure, letting disk
   and memory state diverge (`kithara-assets/src/lease.rs`).
 - Decoder panics are caught per-call and converted into recoverable
-  `DecodeError`s (`source.rs` catch_unwind) — recovery hides real decoder bugs;
-  catch at worker top level and fail the track instead.
+  `DecodeError`s (`source.rs:734,774` catch_unwind). Design judgment call: it
+  keeps one corrupt file from killing the app, at the cost of masking decoder
+  bugs. Worth a counter/event so repeated panic-recoveries are visible.
 
 ## Theme 7 — Cross-crate seams
 
@@ -152,9 +164,11 @@ keeps hitting at runtime.
    stack. Wants a `StreamFactory`-style seam (or feature gates) with URL→source
    resolution at the facade.
 2. **Command relay chain**: `WorkerCmd` (ffi) → `PlayerCmd` (processor) →
-   `Cmd`/`Reply` (session) — three near-parallel enums; every new command
-   touches all of them. Collapse to one command type with per-layer adapters
-   only where representation genuinely differs.
+   `Cmd`/`Reply` (session) — every new command touches all of them. Verified
+   nuance: the three enums cross genuinely different transport boundaries
+   (serializable web-worker protocol / RT audio thread / session loop), so
+   full collapse is wrong; the realistic fix is shrinking the overlap and
+   generating the FFI mirror, not unifying the types.
 3. **Config explosion**: `AudioConfig<T>` (14 pub fields, nested `T::Config`),
    `PlayerConfig` (12), `HlsConfig` (9+), `DownloaderConfig` — threaded through
    five layers, mixed builder styles, no composite validation (pool sizes,
@@ -179,16 +193,19 @@ keeps hitting at runtime.
 
 Quick wins (small diffs, immediate bug-risk reduction):
 
-1. Kill `PendingNext.activated` race — replace with an explicit pending-slot
-   enum and one transition owner (play).
-2. Make every silent drop observable: counters/`warn!` on `try_push().ok()`,
-   `try_lock()` misses, `Weak::upgrade()` failures.
-3. Replace sentinels (`u32::MAX`, `-1`, `unwrap_or(0)`) with `Option`/`Result`
-   in hls layout + stream seek arithmetic.
-4. Remove redundant runtime flags already proven by types
-   (`DownloadClaim.settled`, `Audio.preloaded`).
-5. Route rate/param updates to the audio thread via the existing atomics
+1. Fix the terminal-event loss: `PlaybackStopped` pushed with `.ok()` while
+   state goes `Finished` regardless (`player_track.rs:301-308,320-327`) — at
+   minimum count+log, ideally a dedicated slot for terminal events.
+2. Make remaining silent drops observable: counters/`warn!` on `try_lock()`
+   misses in command handlers; a counter on decoder panic-recoveries
+   (`source.rs:734,774`).
+3. Replace sentinels (`u32::MAX`, `-1`) with `Option`/`Result` in hls
+   layout/segment-store, and reject (don't clamp) overflowed seeks at
+   `stream.rs:564`.
+4. Route rate/param updates to the audio thread via the existing atomics
    instead of `try_lock` on the resource.
+5. Readability refactors (no bug, verified): `PendingNext` two-phase bool →
+   explicit enum; notification once-latches → named cycle states.
 
 Medium (per-crate refactors, the readability payoff):
 
@@ -209,3 +226,30 @@ Large (needs a plan doc per `.docs/plans/_template.md`):
 
 Items 1–5 are independent and safe to land incrementally; 6–10 each fit a task
 packet; 11–13 change public contracts and need plans.
+
+## Verification pass (2026-06-11, same day)
+
+Every load-bearing claim above was re-checked by direct code reading after the
+initial agent-assisted survey. Outcome:
+
+**Confirmed:** PlayerImpl field sprawl; try_lock command drops; terminal
+`PlaybackStopped` loss on full ring; u32::MAX / -1 sentinels; seek-overflow
+clamp; two independent ABR/reader atomics + manual `sync_abr_lock`; assets
+availability TOCTOU (red test at `store.rs:815`); `WriterCleanup.disarm`
+ceremony; DownloaderConfig builder-default root cancel token; public re-export
+of session internals (`play/src/lib.rs:33-45`); gapless chain opacity; god-file
+sizes; kithara-net not using tower; Headers-over-HashMap; manual Display/Error
+boilerplate; `Arc<str>` serde workaround.
+
+**Corrected / softened:** PendingNext "lost event race" (not a bug — both
+paths emit exactly once); notification flag "race" (single-threaded);
+`settled` flag (standard guard disarm, not redundancy); cross-variant lookup
+(by-design ABR layering, not a fallback bug); position/duration fallback
+(documented and bounded); decoder seek recovery (README-documented);
+`Weak::upgrade` on settle (harmless — target already dead); seek-epoch
+"silent loss" (standard last-writer-wins); source.rs "flag soup" (FSM is
+structured; file size remains the issue); command-relay "collapse" (the three
+enums cross real transport boundaries).
+
+**Previously retracted:** downloader JoinSet replacement; `peer_done` command
+loss (see the NIH supplement's correction note).
