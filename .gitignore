@@ -104,3 +104,5 @@ docs-build/
 .baseline/
 .target
 release-artifacts/
+target-android/
+target-lint/
