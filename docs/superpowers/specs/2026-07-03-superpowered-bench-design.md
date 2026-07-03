@@ -362,3 +362,41 @@ Bugs found and fixed during Task 6 validation:
 
 Raw data: `bench/last-results.jsonl` (run B),
 `/Volumes/Render/dev/tmp/results-{A,B,pooled}.jsonl`.
+
+## Results addendum: raw Decoder API control (2026-07-03)
+
+Follow-up to the user's challenge of the 5.4x wall gap: is the
+Superpowered *decoder* slow, or is it the *player pipeline*?
+
+Setup: `bench/sp-bench/sp-dec-bench` drives `Superpowered::Decoder`
+directly on `bench/fixtures/shq.aac` — an ADTS stream-copy of the same
+payload (9485 packets, 9,712,640 frames, bit-exact with kithara's
+count). Local file, no network, no player. 12 reps plus 3 sp-player
+anchor reps in the same session (LA < 5); anchors matched the main-run
+numbers, so conditions are comparable.
+
+| config | wall_ms | cpu_user_s | pcm_frames |
+|---|---|---|---|
+| SP raw Decoder (local file) | 116.9 +/- 1.6 | 0.12 +/- 0.00 | 9,712,640 |
+| kithara/apple (full HLS pipeline) | 396 | 0.13 | 9,712,640 |
+| kithara/symphonia (full HLS pipeline) | 409 | 0.15 | 9,712,640 |
+| SP player (full HLS pipeline) | 2217 +/- 84 | 0.35 +/- 0.10 | 9,702,400 |
+
+Conclusions:
+
+- Superpowered's raw AAC decode is ~1880x realtime (0.12 s CPU per
+  220 s track) — NOT slow. Decoder CPU is at parity with kithara's
+  numbers (0.13-0.15, which additionally include the whole HLS
+  pipeline).
+- The SP player drains 19x slower than SP's own decoder on the same
+  payload: ~95% of the player's wall time is pipeline pacing
+  (buffer granularity, per-segment temp-file churn, thread handoffs),
+  not decoding.
+- Honest headline: kithara's HLS *pipeline* drains ~5.4x faster than
+  Superpowered's HLS *player* pipeline; the decoders themselves are
+  equally fast. kithara's edge is pipeline architecture for
+  faster-than-realtime consumption; SP keeps its RSS edge.
+- Side note: the raw Decoder emits the full frame count (no trim),
+  while the player path reports 9,702,400 (1024-block quantization).
+
+Raw data: `/Volumes/Render/dev/tmp/results-decoder.jsonl`.
