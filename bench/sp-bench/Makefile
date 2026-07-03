@@ -10,5 +10,10 @@ LIBS = $(SUPERPOWERED_LIB) \
        -framework CoreFoundation \
        -framework Foundation
 
+all: sp-bench sp-dec-bench
+
 sp-bench: main.cpp metrics.h
 	$(CXX) $(CXXFLAGS) main.cpp $(LIBS) -o sp-bench
+
+sp-dec-bench: decoder-main.cpp metrics.h
+	$(CXX) $(CXXFLAGS) decoder-main.cpp $(LIBS) -o sp-dec-bench

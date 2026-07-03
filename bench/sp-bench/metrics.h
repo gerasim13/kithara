@@ -28,20 +28,20 @@ struct Baseline {
 
 inline void printReport(const Baseline &baseline, double ttfaMs,
                         unsigned long long samples, unsigned int samplerate,
-                        unsigned int channels) {
+                        unsigned int channels, const char *decoder) {
     rusage ru{};
     getrusage(RUSAGE_SELF, &ru);
     const double cpuUser = Baseline::tv(ru.ru_utime) - baseline.u0;
     const double cpuSys = Baseline::tv(ru.ru_stime) - baseline.s0;
 
     std::printf(
-        "{\"engine\":\"superpowered\",\"decoder\":\"superpowered\","
+        "{\"engine\":\"superpowered\",\"decoder\":\"%s\","
         "\"ttfa_ms\":%.2f,\"wall_ms\":%.2f,"
         "\"cpu_user_s\":%.4f,\"cpu_sys_s\":%.4f,"
         "\"cpu_total_user_s\":%.4f,\"cpu_total_sys_s\":%.4f,"
         "\"max_rss_bytes\":%ld,\"samples\":%llu,"
         "\"pcm_frames\":%llu,\"samplerate\":%u,\"channels\":%u}\n",
-        ttfaMs, baseline.elapsedMs(), cpuUser, cpuSys, Baseline::tv(ru.ru_utime),
-        Baseline::tv(ru.ru_stime), ru.ru_maxrss, samples, samples / channels, samplerate,
-        channels);
+        decoder, ttfaMs, baseline.elapsedMs(), cpuUser, cpuSys,
+        Baseline::tv(ru.ru_utime), Baseline::tv(ru.ru_stime), ru.ru_maxrss,
+        samples, samples / channels, samplerate, channels);
 }

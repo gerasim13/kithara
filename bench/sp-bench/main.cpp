@@ -95,7 +95,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    printReport(baseline, ttfaMs, frames * 2, rate, 2);
+    printReport(baseline, ttfaMs, frames * 2, rate, 2, "superpowered");
     delete player;
     return 0;
 }
