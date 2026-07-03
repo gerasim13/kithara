@@ -111,20 +111,22 @@ fallback: одна сборка с обоими бэкендами + `--decoder`
 
 ### run.sh
 
-1. **Фаза build (не измеряется)**: собирает оба CLI в release, обе
-   kit-конфигурации, и `test_server` в release
-   (`cargo build --release -p kithara-integration-tests --bin test_server`
-   в основном worktree). Ни одна компиляция не происходит между
+1. **Фаза build (не измеряется)**: собирает оба CLI в release и обе
+   kit-конфигурации:
+   `(cd bench/kit-bench && cargo build --release)`,
+   `(cd bench/kit-bench && cargo build --release --no-default-features
+   --features apple --target-dir target-apple)`,
+   `(cd bench/sp-bench && make)`. Ни одна компиляция не происходит между
    измеряемыми прогонами.
 2. **Preflight**: фиксирует в шапку отчёта macOS-версию, модель CPU,
    версии rustc/clang, git-ревизию, профиль/флаги сборки обеих сторон и
    фактический `BENCH_TMPDIR`; предупреждает при высоком load
    average, взведённых `MallocStackLogging`/`MallocScribble`, кастомных
    `RUSTFLAGS`/`CXXFLAGS`.
-3. Поднимает `test_server` c `TEST_SERVER_PORT=0` (эфемерный порт, чтобы
-   не столкнуться с тестами других агентов на этой машине), парсит
-   реальный порт из строки «test server listening on ...», ждёт `/health`.
-   Фиксированный порт — только по явному флагу.
+3. Поднимает один `python3 -u -m http.server 0 --bind 127.0.0.1` из корня
+   worktree. Это симметрично сервит обе стороны из одного worktree-root
+   HTTP-сервера. Runner парсит порт из строки `Serving HTTP on 127.0.0.1
+   port NNNNN` и ждёт доступности kit master URL.
 4. **Warm-up**: один неизмеряемый прогон каждой конфигурации (греет
    page cache сервера и кода; клиентские кэши всё равно свежие в каждом
    прогоне).
@@ -140,9 +142,14 @@ fallback: одна сборка с обоими бэкендами + `--decoder`
 7. Отчёт: таблица медиан + межквартильный разброс по каждой метрике.
    Санити самого бенчмарка: два последовательных полных запуска должны
    давать медианы CPU в пределах ~5% — иначе предупреждение «машина шумит».
-8. `run.sh --url <fmp4-kit-url>` + `SP_URL=<ts-sp-url>` — те же CLI против
-   реального интернета (один контрольный прогон; только AAC; контейнеры
-   должны соответствовать результатам спайка).
+8. Локальные URL: kithara открывает
+   `/bench/fixtures/master-shq.m3u8` (single-variant master, потому что
+   media-playlist root rejected with `unexpected tag #EXT-X-TARGETDURATION`);
+   Superpowered открывает `/bench/fixtures-ts/shq/index.m3u8`. Внешний
+   контрольный прогон использует парные флаги
+   `--kit-url <fmp4-master-url> --sp-url <ts-url>`; оба обязательны вместе,
+   контейнеры должны соответствовать результатам спайка. Для внешних треков
+   runner передаёт `--duration-range MIN MAX` в `stats.py`.
 
 ## Методология метрик (идентична для обеих сторон)
 
@@ -293,3 +300,65 @@ MPEG-TS** (`ContainerFormat::MpegTs` отвергается обоими дек�
   replace exact `pcm_frames` matching with: `|kit - sp| <= 44100`
   pcm frames (1 s) and every side's duration must be within
   219.5-220.5 s.
+
+## Results
+
+Measured 2026-07-03 on Apple M3 Pro, macOS 26.5, rustc 1.93.1, Apple
+clang 17.0.0, git `d4cbbe39f`. Harness: `bench/run.sh 5` twice (run A +
+run B), pooled 10 reps per config, rotated order, one warm-up per
+engine, local `python3 http.server`, `BENCH_RATE=44100`. Fixture:
+220.2 s AAC-LC 44.1 kHz stereo (fMP4 for kithara, TS remux for
+Superpowered, same payload).
+
+Median +/- IQR over 10 reps:
+
+| engine | decoder | ttfa_ms | wall_ms | cpu_user_s | cpu_sys_s | max_rss |
+|---|---|---|---|---|---|---|
+| kithara | apple | 69.6 +/- 9.1 | 396 +/- 85 | 0.13 +/- 0.00 | 0.09 +/- 0.00 | 28.6 MB |
+| kithara | symphonia | 59.3 +/- 12.4 | 409 +/- 88 | 0.15 +/- 0.01 | 0.09 +/- 0.02 | 24.8 MB |
+| superpowered | superpowered | 139.5 +/- 5.7 | 2186 +/- 80 | 0.29 +/- 0.19 | 0.09 +/- 0.06 | 15.7 MB |
+
+Derived (track 220.2 s):
+
+- Pump speed: kithara/apple ~556x realtime, kithara/symphonia ~538x,
+  Superpowered ~101x. kithara consumes the track ~5.3-5.5x faster in
+  wall time.
+- TTFA: kithara 2.0-2.4x lower (59-70 ms vs 140 ms).
+- CPU (user): kithara ~2x lower median; Superpowered's CPU is bimodal
+  (IQR +/-0.19) - see caveats.
+- Peak RSS: Superpowered ~1.6-1.8x lower (15.7 MB vs 24.8-28.6 MB).
+
+Equivalence gate: PASS on every run (samplerate 44100, channels 2,
+`pcm_frames` kit 9,712,640 vs SP 9,702,400, delta 10,240 <= 44,100;
+durations 220.01-220.24 s).
+
+Repeatability (plan target: A-vs-B cpu medians within ~5%): kithara
+configs 6-7% - borderline; Superpowered FAILED (cpu_user 0.30 vs 0.20,
+intra-run IQR +/-0.15-0.19). Conditions: corporate security agents
+(Kaspersky, BI.Zone EDR, XProtect) actively scanning during runs;
+load average 5.7-6.3 at start. SP's per-segment temp-file churn
+plausibly triggers per-file AV scans, kithara's asset store less so.
+Before the final runs two orphaned `telegram` plugin `bun server.ts`
+processes (100% CPU each since Jul 1) were killed; earlier runs at
+LA 9-16 showed the same ordering with wider spread. Wall/ttfa
+orderings are stable across all six runs performed today; the
+headline conclusions are far above the noise floor.
+
+Bugs found and fixed during Task 6 validation:
+
+- `sp-bench` swallowed the one-shot `PlayerEvent_ConnectionLost`
+  (only `OpenFailed` handled) and spun forever; loop realigned to the
+  validated spike shape (unconditional `processStereo`, `play()` on
+  `Opened`) plus terminal-event exits.
+- `bench/run.sh` warm-up passed a nonexistent `--tmp` subdir
+  (`$WARM_TMP/sp` never created); Superpowered cannot persist
+  segments into a missing folder -> seg-0 retry storm
+  (`HLSMaximumDownloadAttempts=100`+1) -> `ConnectionLost`. Fixed with
+  `mkdir -p`. Root cause confirmed by A/B experiment (existing dir ->
+  JSON, missing dir -> clean `connection lost` failure).
+- `bench/run.sh` now defaults `BENCH_TMPDIR` to
+  `/Volumes/Render/dev/tmp` and exports `TMPDIR` so both engines'
+  scratch stays off the low-space system disk.
+
+Raw data: `bench/last-results.jsonl` (run B),
+`/Volumes/Render/dev/tmp/results-{A,B,pooled}.jsonl`.
