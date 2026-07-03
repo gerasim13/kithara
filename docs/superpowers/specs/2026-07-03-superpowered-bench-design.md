@@ -400,3 +400,50 @@ Conclusions:
   while the player path reports 9,702,400 (1024-block quantization).
 
 Raw data: `/Volumes/Render/dev/tmp/results-decoder.jsonl`.
+
+## Results addendum: progressive and local scenarios (2026-07-04)
+
+Same drain methodology, same payload as an ADTS single file
+(`bench/fixtures/shq.aac`, 9,712,640 frames / 220.24 s). New modes:
+`kit-bench --mode progressive|local` (FileSrc::Remote / FileSrc::Local
+through `AudioConfig::<File>`), `sp-bench --mode` (player `open()`
+instead of `openHLS()`), `run.sh --scenario`. Two `run.sh 5` runs per
+scenario, pooled; A-vs-B cpu medians within ~5% (local) and ~1.4%
+(progressive); IQRs are tight despite background load 16-26 because
+each rep is sub-second and single-core-bound. All rows bit-exact at
+9,712,640 frames (the SP player only trims frames on the HLS path).
+
+Local file (median +/- IQR, run B shown, run A equivalent):
+
+| config | ttfa_ms | wall_ms | cpu_user_s | max_rss |
+|---|---|---|---|---|
+| superpowered player | 2.3 +/- 0.2 | 134.7 +/- 0.9 | 0.14 | 28.3 MB |
+| kithara/apple | 13.4 +/- 0.8 | 152.6 +/- 1.1 | 0.15 | 32.1 MB |
+| kithara/symphonia | 2.1 +/- 0.2 | 169.1 +/- 1.4 | 0.17 | 27.4 MB |
+
+Progressive HTTP (single file over localhost):
+
+| config | ttfa_ms | wall_ms | cpu_user_s | max_rss |
+|---|---|---|---|---|
+| kithara/apple | 22.0 +/- 1.4 | 159.3 +/- 4.2 | 0.15 | 35.0 MB |
+| kithara/symphonia | 6.4 +/- 0.8 | 180.3 +/- 0.6 | 0.17 | 30.3 MB |
+| superpowered player | 552.8 +/- 17.1 | 692.5 +/- 15.0 | 0.15 | 30.1 MB |
+
+Conclusions:
+
+- Local files: effective parity. SP player is marginally fastest on
+  wall (135 vs 149-169 ms) and drops its HLS pacing overhead entirely;
+  everyone is within ~2x of the raw-decoder floor (117 ms). TTFA is
+  2 ms for SP and kithara/symphonia; kithara/apple pays ~13 ms
+  (AudioToolbox session setup).
+- Progressive: kithara streams while downloading -> TTFA 6-22 ms;
+  the SP player buffers a large prefix before `PlayerEvent_Opened`
+  -> TTFA ~553 ms (~80% of its wall). kithara reaches EOF ~4x faster;
+  first audio ~25-85x faster. CPU parity (0.14-0.17) across all.
+- Single-shot cold-cache runs can mislead: first-ever kit/apple local
+  run showed 925 ms wall; in warmed series it is ~150 ms. The harness
+  warm-up rep exists for exactly this reason.
+- SP's HLS RSS edge (15.7 MB) does not carry over: in file scenarios
+  all engines sit at 27-35 MB.
+
+Raw data: `/Volumes/Render/dev/tmp/results-{local,progressive}-{A,B}.jsonl`.
