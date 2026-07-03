@@ -12,6 +12,7 @@ apple = ["kithara/apple"]
 [dependencies]
 kithara = { path = "../../crates/kithara", default-features = false, features = [
   "hls",
+  "file",
   "client-reqwest",
   "tls-rustls",
   "tokio-net",

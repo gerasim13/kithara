@@ -1,9 +1,10 @@
-use std::{error::Error, thread, time::Duration};
+use std::{error::Error, path::PathBuf, thread, time::Duration};
 
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
+    file::{File, FileConfig, FileSrc},
     hls::{AbrMode, Hls, HlsConfig},
     platform::CancelToken,
     stream::Stream,
@@ -13,6 +14,13 @@ use url::Url;
 use crate::metrics::{Baseline, Report};
 
 const READ_BUF_SAMPLES: usize = 4096;
+
+#[derive(Clone, Copy)]
+pub(crate) enum Mode {
+    Hls,
+    Progressive,
+    Local,
+}
 
 #[cfg(not(any(
     feature = "symphonia",
@@ -30,14 +38,27 @@ fn decoder_backend() -> DecoderBackend {
     DecoderBackend::Symphonia
 }
 
-pub(crate) fn run(url: &str, paced: bool) -> Result<Report, Box<dyn Error>> {
+pub(crate) fn run(input: &str, paced: bool, mode: Mode) -> Result<Report, Box<dyn Error>> {
     let temp = tempfile::TempDir::new()?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
         .build()?;
-    let parsed_url = Url::parse(url)?;
 
+    match mode {
+        Mode::Hls => run_hls(input, paced, &temp, &rt),
+        Mode::Progressive => run_file(FileSrc::Remote(Url::parse(input)?), paced, &temp, &rt),
+        Mode::Local => run_file(FileSrc::Local(PathBuf::from(input)), paced, &temp, &rt),
+    }
+}
+
+fn run_hls(
+    url: &str,
+    paced: bool,
+    temp: &tempfile::TempDir,
+    rt: &tokio::runtime::Runtime,
+) -> Result<Report, Box<dyn Error>> {
+    let parsed_url = Url::parse(url)?;
     let baseline = Baseline::take();
     let backend = decoder_backend();
     let hls_config = HlsConfig::for_url(parsed_url)
@@ -49,8 +70,38 @@ pub(crate) fn run(url: &str, paced: bool) -> Result<Report, Box<dyn Error>> {
         .block_on_underrun(true)
         .decoder_backend(backend)
         .build();
-    let mut audio = rt.block_on(Audio::<Stream<Hls>>::new(config))?;
+    let audio = rt.block_on(Audio::<Stream<Hls>>::new(config))?;
 
+    drain_audio(audio, &baseline, backend, paced)
+}
+
+fn run_file(
+    src: FileSrc,
+    paced: bool,
+    temp: &tempfile::TempDir,
+    rt: &tokio::runtime::Runtime,
+) -> Result<Report, Box<dyn Error>> {
+    let baseline = Baseline::take();
+    let backend = decoder_backend();
+    let file_config = FileConfig::for_src(src)
+        .store(StoreOptions::new(temp.path()))
+        .cancel(CancelToken::never())
+        .build();
+    let config = AudioConfig::<File>::for_stream(file_config)
+        .block_on_underrun(true)
+        .decoder_backend(backend)
+        .build();
+    let audio = rt.block_on(Audio::<Stream<File>>::new(config))?;
+
+    drain_audio(audio, &baseline, backend, paced)
+}
+
+fn drain_audio<S>(
+    mut audio: Audio<S>,
+    baseline: &Baseline,
+    backend: DecoderBackend,
+    paced: bool,
+) -> Result<Report, Box<dyn Error>> {
     let spec = audio.spec();
     let samplerate = spec.sample_rate.get();
     let channels = spec.channels;
@@ -86,7 +137,5 @@ pub(crate) fn run(url: &str, paced: bool) -> Result<Report, Box<dyn Error>> {
         samplerate,
         channels,
     );
-    drop(audio);
-    drop(rt);
     Ok(report)
 }

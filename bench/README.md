@@ -1,6 +1,6 @@
 # Superpowered vs kithara Bench
 
-Local benchmark for faster-than-realtime HLS AAC reads on macOS arm64.
+Local benchmark for faster-than-realtime AAC reads on macOS arm64.
 
 ## Prerequisites
 
@@ -30,6 +30,18 @@ One measured smoke run:
 ```bash
 BENCH_RATE=44100 bench/run.sh 1
 ```
+
+## Scenarios
+
+`bench/run.sh` defaults to `--scenario hls`, which preserves the original
+comparison: kithara reads the fMP4 HLS fixture and Superpowered reads the
+MPEG-TS remuxed HLS fixture.
+
+`--scenario progressive` starts the same local HTTP server, but both engines
+read `bench/fixtures/shq.aac` as one progressive HTTP file.
+
+`--scenario local` does not start a server. Both engines read
+`bench/fixtures/shq.aac` directly from the local filesystem.
 
 External URLs must be provided as a pair because kithara and Superpowered use
 different container support paths:

@@ -8,24 +8,41 @@
 #include "SuperpoweredAdvancedAudioPlayer.h"
 #include "metrics.h"
 
+enum class Mode { Hls, Progressive, Local };
+
 int main(int argc, char **argv) {
+    const char *usage = "usage: sp-bench <url-or-path> <rate> [--paced] [--tmp <dir>] [--mode hls|progressive|local]";
+
     if (argc < 3) {
-        std::fprintf(stderr, "usage: sp-bench <url> <rate> [--paced] [--tmp <dir>]\n");
+        std::fprintf(stderr, "%s\n", usage);
         return 2;
     }
 
-    const char *url = argv[1];
+    const char *path = argv[1];
     const unsigned int rate = static_cast<unsigned int>(std::atoi(argv[2]));
     bool paced = false;
     const char *tmp = "/tmp/sp-bench-tmp";
+    Mode mode = Mode::Hls;
 
     for (int i = 3; i < argc; i++) {
         if (std::strcmp(argv[i], "--paced") == 0) {
             paced = true;
         } else if (std::strcmp(argv[i], "--tmp") == 0 && i + 1 < argc) {
             tmp = argv[++i];
+        } else if (std::strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
+            const char *value = argv[++i];
+            if (std::strcmp(value, "hls") == 0) {
+                mode = Mode::Hls;
+            } else if (std::strcmp(value, "progressive") == 0) {
+                mode = Mode::Progressive;
+            } else if (std::strcmp(value, "local") == 0) {
+                mode = Mode::Local;
+            } else {
+                std::fprintf(stderr, "%s\n", usage);
+                return 2;
+            }
         } else {
-            std::fprintf(stderr, "usage: sp-bench <url> <rate> [--paced] [--tmp <dir>]\n");
+            std::fprintf(stderr, "%s\n", usage);
             return 2;
         }
     }
@@ -39,7 +56,11 @@ int main(int argc, char **argv) {
     player->HLSBufferingSeconds = Superpowered::AdvancedAudioPlayer::HLSDownloadRemaining;
 
     const Baseline baseline = Baseline::take();
-    player->openHLS(url);
+    if (mode == Mode::Hls) {
+        player->openHLS(path);
+    } else {
+        player->open(path);
+    }
 
     float buf[1024 * 2 + 64];
     bool playing = false;

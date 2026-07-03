@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 usage() {
   cat >&2 <<'EOF'
-usage: bench/run.sh [N] [--paced] [--kit-url <url> --sp-url <url>] [--duration-range <min> <max>]
+usage: bench/run.sh [N] [--paced] [--scenario hls|progressive|local] [--kit-url <url> --sp-url <url>] [--duration-range <min> <max>]
 EOF
 }
 
@@ -14,6 +14,7 @@ PACED_ARGS=()
 KIT_URL_OVERRIDE=""
 SP_URL_OVERRIDE=""
 DURATION_ARGS=()
+SCENARIO="hls"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -29,6 +30,14 @@ while [[ $# -gt 0 ]]; do
     --sp-url)
       SP_URL_OVERRIDE="${2:-}"
       [[ -n "$SP_URL_OVERRIDE" ]] || { usage; exit 2; }
+      shift 2
+      ;;
+    --scenario)
+      SCENARIO="${2:-}"
+      case "$SCENARIO" in
+        hls|progressive|local) ;;
+        *) usage; exit 2 ;;
+      esac
       shift 2
       ;;
     --duration-range)
@@ -49,6 +58,11 @@ done
 
 if [[ -z "$KIT_URL_OVERRIDE" && -n "$SP_URL_OVERRIDE" ]] || [[ -n "$KIT_URL_OVERRIDE" && -z "$SP_URL_OVERRIDE" ]]; then
   echo "error: --kit-url and --sp-url must be provided together" >&2
+  exit 2
+fi
+
+if [[ "$SCENARIO" == "local" && ( -n "$KIT_URL_OVERRIDE" || -n "$SP_URL_OVERRIDE" ) ]]; then
+  echo "error: --kit-url/--sp-url are not valid with --scenario local" >&2
   exit 2
 fi
 
@@ -91,6 +105,7 @@ echo "== preflight =="
   echo "git: $(git rev-parse --short HEAD)"
   echo "BENCH_RATE: $RATE"
   echo "BENCH_TMPDIR: $BENCH_TMPDIR"
+  echo "scenario: $SCENARIO"
   echo "profiles: kit=release kit-apple=release sp=-O2"
   [[ -n "${RUSTFLAGS:-}" ]] && echo "WARN: RUSTFLAGS=$RUSTFLAGS"
   [[ -n "${CXXFLAGS:-}" ]] && echo "WARN: CXXFLAGS=$CXXFLAGS"
@@ -98,7 +113,17 @@ echo "== preflight =="
   uptime
 } | tee "$BENCH_TMPDIR/preflight.txt"
 
-if [[ -n "$KIT_URL_OVERRIDE" ]]; then
+KIT_MODE_ARGS=()
+SP_MODE_ARGS=()
+if [[ "$SCENARIO" != "hls" ]]; then
+  KIT_MODE_ARGS=(--mode "$SCENARIO")
+  SP_MODE_ARGS=(--mode "$SCENARIO")
+fi
+
+if [[ "$SCENARIO" == "local" ]]; then
+  KIT_URL="$PWD/bench/fixtures/shq.aac"
+  SP_URL="$PWD/bench/fixtures/shq.aac"
+elif [[ -n "$KIT_URL_OVERRIDE" ]]; then
   KIT_URL="$KIT_URL_OVERRIDE"
   SP_URL="$SP_URL_OVERRIDE"
 else
@@ -115,8 +140,16 @@ else
   done
   [[ -n "$PORT" ]] || { echo "server did not start"; cat "$BENCH_TMPDIR/server.log" >&2; exit 1; }
   BASE="http://127.0.0.1:$PORT"
-  KIT_URL="$BASE/bench/fixtures/master-shq.m3u8"
-  SP_URL="$BASE/bench/fixtures-ts/shq/index.m3u8"
+  case "$SCENARIO" in
+    hls)
+      KIT_URL="$BASE/bench/fixtures/master-shq.m3u8"
+      SP_URL="$BASE/bench/fixtures-ts/shq/index.m3u8"
+      ;;
+    progressive)
+      KIT_URL="$BASE/bench/fixtures/shq.aac"
+      SP_URL="$BASE/bench/fixtures/shq.aac"
+      ;;
+  esac
   for _ in $(seq 1 100); do
     if curl -fsS "$KIT_URL" >/dev/null 2>&1; then
       break
@@ -128,6 +161,7 @@ fi
 
 echo "kit url: $KIT_URL"
 echo "sp url: $SP_URL"
+echo "scenario: $SCENARIO"
 echo "rate: $RATE"
 
 KIT_SYM="$KIT_TARGET_SYM/release/kit-bench"
@@ -156,9 +190,9 @@ run_one() {
 echo "== warm-up (unmeasured) =="
 WARM_TMP="$(mktemp -d "$BENCH_TMPDIR/warm.XXXXXX")"
 mkdir -p "$WARM_TMP/sp"
-"$SP" "$SP_URL" "$RATE" "${PACED_ARGS[@]}" --tmp "$WARM_TMP/sp" >/dev/null 2>>"$ERRORS"
-"$KIT_SYM" "$KIT_URL" "${PACED_ARGS[@]}" >/dev/null 2>>"$ERRORS"
-"$KIT_APL" "$KIT_URL" "${PACED_ARGS[@]}" >/dev/null 2>>"$ERRORS"
+"$SP" "$SP_URL" "$RATE" "${PACED_ARGS[@]}" "${SP_MODE_ARGS[@]}" --tmp "$WARM_TMP/sp" >/dev/null 2>>"$ERRORS"
+"$KIT_SYM" "$KIT_URL" "${PACED_ARGS[@]}" "${KIT_MODE_ARGS[@]}" >/dev/null 2>>"$ERRORS"
+"$KIT_APL" "$KIT_URL" "${PACED_ARGS[@]}" "${KIT_MODE_ARGS[@]}" >/dev/null 2>>"$ERRORS"
 rm -rf "$WARM_TMP"
 
 echo "== measured: $N reps, rotated order =="
@@ -172,14 +206,14 @@ for i in $(seq 1 "$N"); do
     case "$side" in
       sp)
         SP_TMP="$(mktemp -d "$BENCH_TMPDIR/sp-$i.XXXXXX")"
-        run_one "sp[$i]" "$SP" "$SP_URL" "$RATE" "${PACED_ARGS[@]}" --tmp "$SP_TMP"
+        run_one "sp[$i]" "$SP" "$SP_URL" "$RATE" "${PACED_ARGS[@]}" "${SP_MODE_ARGS[@]}" --tmp "$SP_TMP"
         rm -rf "$SP_TMP"
         ;;
       sym)
-        run_one "sym[$i]" "$KIT_SYM" "$KIT_URL" "${PACED_ARGS[@]}"
+        run_one "sym[$i]" "$KIT_SYM" "$KIT_URL" "${PACED_ARGS[@]}" "${KIT_MODE_ARGS[@]}"
         ;;
       apl)
-        run_one "apl[$i]" "$KIT_APL" "$KIT_URL" "${PACED_ARGS[@]}"
+        run_one "apl[$i]" "$KIT_APL" "$KIT_URL" "${PACED_ARGS[@]}" "${KIT_MODE_ARGS[@]}"
         ;;
     esac
   done
