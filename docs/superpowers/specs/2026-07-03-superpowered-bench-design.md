@@ -512,3 +512,40 @@ Findings:
    Medians absorb it; IQR exposes it.
 
 Raw data: `/Volumes/Render/dev/tmp/real-{local,progressive,hls,adaptive}.jsonl`.
+
+## Profiling note: kithara/apple local-file gap (2026-07-04)
+
+Question: why is kithara/apple 2x slower than symphonia on local MP3
+(230 vs 115 ms wall, cpu 0.21 vs 0.10) while being FASTER on AAC
+(152 vs 169 ms), and why the ~11-13 ms TTFA floor?
+
+Method: xctrace Time Profiler on the release apple binary, local mp3
+run (284 samples) and local aac control (238 samples).
+
+Findings:
+
+- MP3: 192/284 samples (68% of all CPU) sit INSIDE Apple's system
+  codec — `ACMP3Decoder -> MP3DecoderWrapper_SpiritDSP::DecodeFrame`
+  (IDCT32PLONKAS, imdct36, mp3d_*). Apple ships a licensed SpiritDSP
+  software MP3 decoder and it is simply ~2x more CPU-expensive than
+  symphonia's Rust MP3 decoder. Not a kithara bug.
+- AAC: 134/238 samples inside Apple's `AACDecoder::DecodeFrame`
+  (hot leaf: SpectralData::Deserialize). Efficient — apple wins the
+  AAC drain.
+- kithara plumbing is thin and identical in both profiles
+  (decode_one_step -> ComposedDecoder -> AppleCodec ->
+  AudioConverterFillComplexBuffer); pipeline overhead is ~30 samples
+  of worker park/wake + ~16 memmove/memset.
+- No resampler frames in either profile: 48 kHz mp3 and 44.1 kHz aac
+  play at native rates, the fused SRC stays inactive. No hidden
+  format conversion, no misconfiguration found.
+- No hardware offload exists on this path: both codecs are pure-CPU
+  system libraries (no driver/IOKit frames). "Apple decoder" on macOS
+  means AudioToolbox software codecs.
+- The ~11-13 ms apple TTFA floor is one-time AudioToolbox
+  instantiation (codec plugin lookup/caulk hash tables/dispatch_once
+  visible in startup samples); symphonia starts emitting in ~1.5 ms.
+
+Implication: codec routing, not fixing — on macOS prefer symphonia
+for MP3 drain workloads; keep apple for AAC. Traces:
+`/Volumes/Render/dev/tmp/prof-{mp3,aac}.trace`.
