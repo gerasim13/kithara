@@ -156,6 +156,10 @@ doc:
 test *ARGS:
     cargo xtask test {{ARGS}}
 
+# Run the explicit full stress/heavy profile.
+test-stress *ARGS:
+    cargo xtask test --profile stress {{ARGS}}
+
 # Dual-run wave gate for the platform refactor: flash ON, then flash OFF.
 # OFF lane builds in its own target dir so the feature flip does not
 # invalidate the ON cache (and vice versa).

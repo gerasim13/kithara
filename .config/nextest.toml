@@ -15,6 +15,78 @@ experimental = ["setup-scripts"]
 command = 'cargo run -q -p kithara-integration-tests --bin fixture-cache-setup'
 
 [profile.default]
+default-filter = '''
+not (binary(suite_stress) + binary(suite_heavy))
++ test(=abr_contract::probe_commit_sequence::auto_commit_flips_active_variant)
++ test(=kithara_audio::alloc_free_hotpath::resampler_active_steady_state_alloc_free)
++ test(=kithara_decode::fixture_integration::test_packaged_hls_aac_and_flac_roundtrip_decode_descending_saw_flac)
++ test(=kithara_decode::gapless_encoding_parity::gapless_encoding_variants_yield_matching_decoder_metadata)
++ test(=kithara_decode::gapless_parity::generated_encoded_signal_visible_frames_match_requested_signal_frames_flac)
++ test(=kithara_decode::hls_abr_variant_switch::test_abr_variant_switch_no_byte_glitches)
++ test(=kithara_decode::stress_seek_random::stress_random_seek_read_synthetic_wav)
++ test(=kithara_decode::stress_timeline::stress_seeks_preserve_timeline_integrity)
++ test(=kithara_file::live_stress_real_mp3::live_stress_real_mp3_seek_read_cache_ephemeral)
++ test(=kithara_hls::abr_auto_switch::abr_auto_switch_during_playback)
++ test(=kithara_hls::abr_mode_switch::seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang_hw_same_codec_aac_low_to_high)
++ test(=kithara_hls::abr_switch_playback::abr_switch_real_assets_does_not_hang)
++ test(=kithara_hls::abr_switch_playback::seek_after_eof_mmap_produces_samples_drm)
++ test(=kithara_hls::abr_switch_playback::stream_continues_after_seek_drm_abr_auto_hw)
++ test(=kithara_hls::abr_switch_playback::stream_continues_after_seek_drm_abr_auto_sw)
++ test(=kithara_hls::abr_switch_playback::stream_continues_after_seek_drm_manual_v0_hw)
++ test(=kithara_hls::abr_switch_playback::stream_continues_after_seek_drm_manual_v0_sw)
++ test(=kithara_hls::deferred_abr_debug::debug_sequential_read)
++ test(=kithara_hls::drm_stream_integrity::drm_stream_byte_integrity_drm_disk_auto)
++ test(=kithara_hls::drm_stream_integrity::drm_stream_byte_integrity_drm_disk_v0)
++ test(=kithara_hls::drm_stream_integrity::drm_stream_byte_integrity_drm_disk_v3)
++ test(=kithara_hls::drm_stream_integrity::drm_stream_byte_integrity_drm_eph_auto)
++ test(=kithara_hls::drm_stream_integrity::drm_stream_byte_integrity_drm_eph_v0)
++ test(=kithara_hls::drm_stream_integrity::drm_stream_byte_integrity_drm_eph_v3)
++ test(=kithara_hls::drm_stream_integrity::drm_stream_byte_integrity_hls_disk_auto)
++ test(=kithara_hls::drm_stream_integrity::drm_stream_byte_integrity_hls_disk_v0)
++ test(=kithara_hls::drm_stream_integrity::drm_stream_byte_integrity_hls_disk_v3)
++ test(=kithara_hls::drm_stream_integrity::drm_stream_byte_integrity_hls_eph_auto)
++ test(=kithara_hls::drm_stream_integrity::drm_stream_byte_integrity_hls_eph_v0)
++ test(=kithara_hls::drm_stream_integrity::drm_stream_byte_integrity_hls_eph_v3)
++ test(=kithara_hls::idle_behavior::idle_prefetch_is_capped)
++ test(=kithara_hls::live_stress_real_stream::live_ephemeral_revisit_sequence_regression_drm_hw)
++ test(=kithara_hls::live_stress_real_stream::live_ephemeral_revisit_sequence_regression_drm_sw)
++ test(=kithara_hls::live_stress_real_stream::live_ephemeral_small_cache_playback_drm)
++ test(=kithara_hls::live_stress_real_stream::live_ephemeral_small_cache_playback_hls)
++ test(=kithara_hls::live_stress_real_stream::live_ephemeral_small_cache_seek_stress_drm_hw)
++ test(=kithara_hls::live_stress_real_stream::live_ephemeral_small_cache_seek_stress_drm_sw)
++ test(=kithara_hls::live_stress_real_stream::live_real_drm_playback_smoke)
++ test(=kithara_hls::live_stress_real_stream::live_real_stream_fixed_seek_window_regression_drm)
++ test(=kithara_hls::live_stress_real_stream::live_real_stream_random_seek_prefix_regression_drm)
++ test(=kithara_hls::live_stress_real_stream::live_real_stream_seek_resume_native_drm)
++ test(=kithara_hls::live_stress_real_stream::live_stress_real_stream_seek_read_cache_drm_ephemeral)
++ test(=kithara_hls::live_stress_real_stream::live_stress_real_stream_seek_read_cache_drm_mmap)
++ test(=kithara_hls::red_flaky_small_cache_hot_refetch::red_flaky_small_cache_hot_refetch_behind_reader)
++ test(=kithara_hls::red_leak_native_drm_seek_resume::red_leak_native_drm_seek_resume_thread_budget)
++ test(=kithara_hls::startup_no_eager_size_probe_storm::startup_issues_no_eager_size_probe_storm_flac_fmp4)
++ test(=kithara_hls::stress_chunk_integrity::stress_chunk_integrity_ephemeral)
++ test(=kithara_hls::stress_seek_abr::seek_sequence_from_log_real_stream_drm)
++ test(=kithara_hls::stress_seek_abr::seek_sequence_from_log_real_stream_hls)
++ test(=kithara_hls::stress_seek_abr::stress_seek_during_abr_switch_real_decoder_drm)
++ test(=kithara_hls::stress_seek_abr_audio::stress_seek_abr_audio_flac_fmp4)
++ test(=kithara_hls::stress_seek_audio::stress_seek_audio_hls_wav_apple_ephemeral)
++ test(=kithara_hls::stress_seek_lifecycle::stress_seek_lifecycle_with_zero_reset_ephemeral)
++ test(=kithara_hls::stress_seek_random::stress_random_seek_read_hls_encrypted_medium)
++ test(=kithara_hls::stress_seek_random::stress_random_seek_read_hls_encrypted_small)
++ test(=kithara_hls::stress_seek_random::stress_random_seek_read_hls_small)
++ test(=kithara_play::flac_realtime_player_continuity::flac_realtime_player_continuity_sustained_flac_symphonia)
++ test(=kithara_play::hls_seek_middle_stress_long::hls_seek_middle_repeated_seeks_long_stress_apple)
++ test(=multi_instance::concurrent_file::concurrent_file_instances_n2)
++ test(=multi_instance::concurrent_hls::concurrent_hls_instances_n2_manual)
++ test(=multi_instance::concurrent_mixed::concurrent_mixed_instances_two_file_two_hls)
++ test(=multi_instance::failure_resilience::healthy_instances_survive_cancelled_peers_h2_c2)
++ test(=phase_continuity::common::tests::anchor_detects_sample_drop_of_two)
++ test(=phase_continuity::file::phase_continuity_file_sentinel_mp3_apple_eph_e2e)
++ test(=phase_continuity::hls::phase_continuity_hls_aac_lc_symphonia_eph_manual_multi)
++ test(=phase_continuity::hls::phase_continuity_hls_diag_paced_aac_he_v2_symphonia_pace1ms)
++ test(=phase_continuity::hls::phase_continuity_hls_diag_paced_aac_lc_symphonia_pace1ms)
++ test(=phase_continuity::hls::phase_continuity_hls_known_warmup_drift_cross_codec_switch_apple_drm)
++ test(=phase_continuity::hls::phase_continuity_hls_known_warmup_drift_cross_codec_switch_symphonia_drm)
+'''
 fail-fast = false
 test-threads = "num-cpus"
 # Wall-clock BACKSTOP only. The real per-test bound is the macro `timeout(...)`
@@ -43,10 +115,11 @@ fail-fast = false
 test-threads = "num-cpus"
 leak-timeout = "2s"
 
-# Stress-only profile: run only the heavy test binary.
+# Stress/full profile: run the complete matrix, including stress/heavy variants.
 # No thread limit — a real audio player shares the machine with many
 # other processes. Tests must pass under CPU contention.
 [profile.stress]
+default-filter = "all()"
 fail-fast = false
 test-threads = "num-cpus"
 # Wall-clock backstop above the slowest actual runtime (~57s under contention),
@@ -68,7 +141,10 @@ leak-timeout = "2s"
 filter = 'package(kithara-integration-tests)'
 setup = ['fixture-cache']
 
-# Perf-measurement profile: behavior identical to default (profiles inherit
-# it); adds JUnit so `cargo xtask perf` gets exact per-test timings.
+# Perf-measurement profile: keep the full set so performance measurement does
+# not inherit the default canary split.
+[profile.perf]
+default-filter = "all()"
+
 [profile.perf.junit]
 path = "junit.xml"
