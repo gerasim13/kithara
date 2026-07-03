@@ -447,3 +447,68 @@ Conclusions:
   all engines sit at 27-35 MB.
 
 Raw data: `/Volumes/Render/dev/tmp/results-{local,progressive}-{A,B}.jsonl`.
+
+## Results addendum: real server (stream.silvercomet.top, 2026-07-04)
+
+Motivation: rule out local fixture-server overhead. Real content:
+`track.mp3` (MP3 48 kHz stereo, 161.96 s, 3.55 MB) and the production
+adaptive master `hls/master.m3u8` (4 variants: slq/smq/shq AAC +
+lossless FLAC; fMP4 segments — same content family as repo fixtures).
+kit-bench gained `--abr auto|<index>` (default 0). Protocol:
+5 reps per config, failures logged, no LA gating (runs are
+network-bound); one-off runner in session scratchpad.
+
+Local file, track.mp3 at native 48 kHz:
+
+| config | ttfa_ms | wall_ms | cpu_user_s |
+|---|---|---|---|
+| superpowered player | 1.5 | 76.0 +/- 4.3 | 0.08 |
+| kithara/symphonia | 1.4 | 114.5 +/- 10.6 | 0.10 |
+| kithara/apple | 11.2 | 229.9 +/- 3.3 | 0.21 |
+
+Progressive over the real network (kithara only — see finding 1):
+
+| config | ttfa_ms | wall_ms | cpu_user_s |
+|---|---|---|---|
+| kithara/symphonia | 560 +/- 68 | 4602 +/- 87 | 0.23 |
+| kithara/apple | 639 +/- 131 | 4681 +/- 212 | 0.35 |
+
+HLS pinned shq (`--abr 2`) and adaptive (`--abr auto`), kithara only:
+
+| config | ttfa_ms | wall_ms | cpu_sys_s |
+|---|---|---|---|
+| hls kithara/symphonia | 1792 +/- 190 | 9626 +/- 89 | 1.14 |
+| hls kithara/apple | 1935 (one ~40 s stall rep) | 9719 | 1.13 |
+| adaptive kithara/symphonia | 1226 +/- 171 | 10317 +/- 1797 | 1.11 |
+| adaptive kithara/apple | 1539 (same stall outlier) | 10634 | 1.18 |
+
+Findings:
+
+1. **Superpowered cannot reach this server at all.** All progressive
+   attempts fail in `open`: error 3 "Network socket error". curl
+   completes the TLS handshake in 0.25 s (HTTP/2); plain http is a 307
+   redirect back to https. The SP HTTP stack loses to a real-world
+   TLS/CDN setup that kithara's reqwest+rustls client handles without
+   a single failure (0 network errors across 30 kithara reps).
+   Real-server engine-vs-engine comparison is therefore only possible
+   for local files.
+2. **The python fixture server was not distorting engine numbers.**
+   Same shq payload: localhost HLS drain 0.40 s vs real-network 9.6 s
+   — localhost runs are compute-bound (that was the point: measuring
+   engine overhead), real runs are network-bound (download 7.3 MB +
+   per-segment TLS/RTT; cpu_sys rises to ~1.1 s). Both engines shared
+   the same fixture server, so relative results stand.
+3. Local mp3: same parity picture as local AAC — SP marginally
+   fastest (76 ms, cpu 0.08), symphonia close (115 ms, 0.10),
+   apple pays AudioToolbox setup+MP3 cost (230 ms, 0.21). SP got the
+   file's native 48 kHz; the first run passed 44100 and SP silently
+   resampled — caught by the stats.py samplerate gate.
+4. Adaptive vs pinned: adaptive wall is ~7% longer with higher CPU —
+   consistent with ABR upswitching from the slq cold start toward
+   heavier variants (incl. FLAC lossless) and thus downloading more
+   bytes; correct behavior, not a regression.
+5. Real-network flakiness is real: one apple HLS rep stalled ~40 s
+   (server-side; the same stall pattern seen with curl probes).
+   Medians absorb it; IQR exposes it.
+
+Raw data: `/Volumes/Render/dev/tmp/real-{local,progressive,hls,adaptive}.jsonl`.
