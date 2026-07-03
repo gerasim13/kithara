@@ -5,7 +5,7 @@
 
 **Goal:** Two CLI binaries + runner that measure CPU / wall / TTFA / peak-RSS of a full faster-than-realtime HLS AAC read on Superpowered SDK vs kithara, per spec `docs/superpowers/specs/2026-07-03-superpowered-bench-design.md`.
 
-**Architecture:** `bench/sp-bench` (C++, AdvancedAudioPlayer offline pump, Decoder fallback), `bench/kit-bench` (Rust, facade `Audio<Stream<Hls>>` + `block_on_underrun(true)`), `bench/run.sh` (build → preflight → ephemeral-port test_server → warm-up → N rotated runs → hard equivalence gate → median table). Stage-0 spike settles all unverified Superpowered facts before harness code.
+**Architecture:** `bench/sp-bench` (C++, AdvancedAudioPlayer offline pump), `bench/kit-bench` (Rust, facade `Audio<Stream<Hls>>` + `block_on_underrun(true)`), `bench/run.sh` (build → preflight → ephemeral-port test_server → TS fixture serving → warm-up → N rotated runs → hard equivalence gate → median table). Stage-0 spike settles all unverified Superpowered facts before harness code.
 
 **Tech Stack:** Rust edition 2024 (standalone crate, path-dep on `crates/kithara`), C++17 + clang, `$SUPERPOWERED_SDK_DIR` static lib, bash + python3 (stdlib only) for stats, existing `test_server` bin from `kithara-integration-tests`.
 
@@ -15,7 +15,7 @@
 - Only `bench/**` and `docs/superpowers/**` may change (plan-B exception: `bench/fixtures-ts/`).
 - `bench/kit-bench` is NOT a workspace member: its `Cargo.toml` ends with an empty `[workspace]` table. Root `Cargo.toml`, workspace-hack, lints of the main repo stay untouched.
 - Superpowered SDK is never committed. It lives at `$SUPERPOWERED_SDK_DIR` (default `~/code/Superpowered`), cloned from `github.com/superpoweredSDK/Low-Latency-Android-iOS-Linux-Windows-tvOS-macOS-Interactive-Audio-Platform`.
-- macOS arm64 only. Benchmark URL: media playlist `/assets/hls/index-shq-a1.m3u8` (AAC-LC ~270 kbps, 37 segs, ≈220.2 s) — never `master.m3u8` (contains FLAC variant, SP can't pin variants).
+- macOS arm64 only. `BENCH_RATE=44100`. kithara opens the original fMP4 media playlist `/assets/hls/index-shq-a1.m3u8` (AAC-LC ~270 kbps, 37 segs, ≈220.2 s) — never `master.m3u8` (contains FLAC variant, SP can't pin variants). Superpowered opens the plan-B TS remux served from `bench/fixtures-ts/shq/index.m3u8`.
 - Metrics JSON contract (single stdout line, both CLIs, exact keys): `{"engine":..., "decoder":..., "ttfa_ms":..., "wall_ms":..., "cpu_user_s":..., "cpu_sys_s":..., "cpu_total_user_s":..., "cpu_total_sys_s":..., "max_rss_bytes":..., "samples":..., "pcm_frames":..., "samplerate":..., "channels":...}`. Baseline (rusage + monotonic snapshot) is taken immediately before the open call; `cpu_*_s` are deltas baseline→EOF; `cpu_total_*` = whole process (diagnostic); `pcm_frames = samples / channels`.
 - Errors: any failure → non-zero exit, message to stderr, NO JSON line. Runner: any failed run or equivalence mismatch = whole benchmark run fails (no excluded samples).
 - Commit gate caveat: pre-commit (`prek` → `just lint-fast`) runs workspace clippy; on a fresh target dir boring-sys2 bindings break under feature unification. Recipe if it fires: `cargo clean -p boring-sys2 -p boring2 && just lint-fast` run DIRECTLY to green, then commit. Do not `--no-verify` code commits.
@@ -527,7 +527,7 @@ git commit -m "bench(kit): faster-than-realtime HLS pump with metrics"
 
 **Interfaces:**
 - Consumes: SPIKE-A…F verdicts (exact names from spec `## Spike findings`); spike Makefile recipe.
-- Produces: `sp-bench <url> <samplerate> [--paced] [--engine player|decoder]` printing the same contract JSON line with `"engine":"superpowered"`, `"decoder":"superpowered"`.
+- Produces: `sp-bench <url> <samplerate> [--paced] [--tmp <dir>]` printing the same contract JSON line with `"engine":"superpowered"`, `"decoder":"superpowered"`.
 
 - [ ] **Step 1 [Codex]: metrics.h — same measurement contract as Rust side**
 
@@ -564,7 +564,7 @@ inline void printReport(const Baseline &b, double ttfaMs, unsigned long long sam
 }
 ```
 
-- [ ] **Step 2 [Codex]: main.cpp — player path (+ decoder path only if SPIKE-B failed)**
+- [ ] **Step 2 [Codex]: main.cpp — player path (SPIKE-B passed; no Decoder fallback)**
 
 Structure (exact SDK names per spike findings; stereo ⇒ `channels = 2`, `samples = frames * 2`):
 
@@ -577,7 +577,7 @@ Structure (exact SDK names per spike findings; stereo ⇒ `channels = 2`, `sampl
 #include "Superpowered.h"
 #include "SuperpoweredAdvancedAudioPlayer.h"
 
-// usage: sp-bench <url> <samplerate> [--paced] [--engine player|decoder] [--tmp <dir>]
+// usage: sp-bench <url> <samplerate> [--paced] [--tmp <dir>]
 int main(int argc, char **argv) {
     if (argc < 3) { fprintf(stderr, "usage: sp-bench <url> <rate> [--paced] [--tmp <dir>]\n"); return 2; }
     const char *url = argv[1];
@@ -588,7 +588,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--tmp") && i + 1 < argc) tmp = argv[++i];
     }
 
-    Superpowered::Initialize("<key from SPIKE-C>");
+    Superpowered::Initialize("ExampleLicenseKey-WillExpire-OnNextUpdate");
     Superpowered::AdvancedAudioPlayer::setTempFolder(tmp); // exact API from SPIKE-D
 
     auto *player = new Superpowered::AdvancedAudioPlayer(rate, 0, 0);
@@ -640,7 +640,13 @@ int main(int argc, char **argv) {
 SDK ?= $(SUPERPOWERED_SDK_DIR)
 CXX ?= clang++
 CXXFLAGS = -std=c++17 -O2 -arch arm64 -I$(SDK)/Superpowered
-LIBS = <exact .a + frameworks from SPIKE-E>
+LIBS = $(SDK)/Superpowered/libSuperpoweredAudio.xcframework/macos-arm64_x86_64/libSuperpoweredAudioOSX.a \
+       -framework AudioToolbox \
+       -framework CoreMedia \
+       -framework CoreAudio \
+       -framework AVFoundation \
+       -framework CoreFoundation \
+       -framework Foundation
 
 sp-bench: main.cpp metrics.h
 	$(CXX) $(CXXFLAGS) main.cpp $(LIBS) -o sp-bench
@@ -651,10 +657,11 @@ sp-bench: main.cpp metrics.h
 ```bash
 cd bench/sp-bench && SUPERPOWERED_SDK_DIR=~/code/Superpowered make
 mkdir -p /tmp/sp-bench-tmp
-./sp-bench "<base>/assets/hls/index-shq-a1.m3u8" <rate> --tmp /tmp/sp-bench-tmp
+# SP_URL points to a local static server rooted at bench/fixtures-ts.
+./sp-bench "$SP_URL" 44100 --tmp /tmp/sp-bench-tmp
 ```
 
-Expected: one JSON line; `pcm_frames` within ±1 segment of kit-bench's (exact match asserted later by runner with tolerance 0 — if SP pads/trims edges, record the delta in spec and set the runner tolerance accordingly, documented).
+Expected: one JSON line; `pcm_frames` within 44100 frames (1 s) of kit-bench's and duration within 219.5-220.5 s. SPIKE-B passed, so `Superpowered::Decoder` fallback is not implemented. `--paced` remains a CLI flag for parity but is not needed for the primary result.
 
 - [ ] **Step 5 [Codex]: Commit**
 
@@ -674,7 +681,7 @@ git commit -m "bench(sp): superpowered HLS pump CLI"
 
 **Interfaces:**
 - Consumes: `kit-bench` (two builds), `sp-bench`, `test_server` listening line `test server listening on <base_url>` (`tests/src/test_server/native.rs:375`).
-- Produces: `bench/run.sh [N] [--paced] [--url <external-url>]` → median/IQR table; exit non-zero on any failed run or equivalence mismatch.
+- Produces: `bench/run.sh [N] [--paced] [--url <external-kit-url>]` → median/IQR table; exit non-zero on any failed run or equivalence mismatch. In plan-B mode `--url` applies to kithara's fMP4 URL; Superpowered uses `SP_URL` from the local `bench/fixtures-ts` server unless an explicit TS-compatible external `SP_URL` is supplied.
 
 - [ ] **Step 1 [Codex]: stats.py with self-test**
 
@@ -690,6 +697,9 @@ import statistics
 import sys
 
 METRICS = ["ttfa_ms", "wall_ms", "cpu_user_s", "cpu_sys_s", "max_rss_bytes"]
+FRAME_TOLERANCE = 44_100
+MIN_DURATION_S = 219.5
+MAX_DURATION_S = 220.5
 
 
 def aggregate(lines):
@@ -697,10 +707,18 @@ def aggregate(lines):
     for line in lines:
         r = json.loads(line)
         groups.setdefault((r["engine"], r["decoder"]), []).append(r)
-    frames = {(e, d): {x["pcm_frames"] for x in rs} for (e, d), rs in groups.items()}
-    all_frames = set().union(*frames.values()) if frames else set()
-    if len(all_frames) != 1:
-        raise SystemExit(f"EQUIVALENCE FAIL: pcm_frames differ across runs/engines: {frames}")
+    rows = [r for rs in groups.values() for r in rs]
+    frames = [r["pcm_frames"] for r in rows]
+    if frames and max(frames) - min(frames) > FRAME_TOLERANCE:
+        raise SystemExit(
+            f"EQUIVALENCE FAIL: pcm_frames exceed 1s tolerance: min={min(frames)} max={max(frames)}"
+        )
+    for r in rows:
+        duration = r["pcm_frames"] / r["samplerate"]
+        if not (MIN_DURATION_S <= duration <= MAX_DURATION_S):
+            raise SystemExit(
+                f"EQUIVALENCE FAIL: duration {duration:.3f}s outside fixture bounds for {r}"
+            )
     out = {}
     for key, rs in groups.items():
         out[key] = {}
@@ -712,15 +730,18 @@ def aggregate(lines):
 
 
 def self_test():
+    base_frames = 9_702_000
     lines = [
-        json.dumps({"engine": "a", "decoder": "x", "pcm_frames": 100, "ttfa_ms": t,
-                    "wall_ms": 1, "cpu_user_s": 1, "cpu_sys_s": 1, "max_rss_bytes": 1})
+        json.dumps({"engine": "a", "decoder": "x", "pcm_frames": base_frames, "samplerate": 44100,
+                    "ttfa_ms": t, "wall_ms": 1, "cpu_user_s": 1, "cpu_sys_s": 1, "max_rss_bytes": 1})
         for t in (10, 20, 30)
     ]
     agg = aggregate(lines)
     assert agg[("a", "x")]["ttfa_ms"][0] == 20, agg
-    bad = lines + [json.dumps({"engine": "b", "decoder": "y", "pcm_frames": 99, "ttfa_ms": 1,
-                               "wall_ms": 1, "cpu_user_s": 1, "cpu_sys_s": 1, "max_rss_bytes": 1})]
+    bad = lines + [json.dumps({"engine": "b", "decoder": "y",
+                               "pcm_frames": base_frames + FRAME_TOLERANCE + 1,
+                               "samplerate": 44100, "ttfa_ms": 1, "wall_ms": 1,
+                               "cpu_user_s": 1, "cpu_sys_s": 1, "max_rss_bytes": 1})]
     try:
         aggregate(bad)
     except SystemExit:
@@ -749,7 +770,7 @@ Expected: `self-test OK`.
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-# bench/run.sh [N] [--paced] [--url <external-url>]
+# bench/run.sh [N] [--paced] [--url <external-kit-url>]
 cd "$(dirname "$0")/.."   # repo root of the bench worktree
 N=5; PACED=""; EXT_URL=""
 while [[ $# -gt 0 ]]; do
@@ -759,7 +780,7 @@ while [[ $# -gt 0 ]]; do
     *) N="$1"; shift ;;
   esac
 done
-RATE="${BENCH_RATE:?set BENCH_RATE to the fixture sample rate from SPIKE-F}"
+RATE="${BENCH_RATE:-44100}"
 BENCH_TMPDIR="$(mktemp -d /tmp/kithara-bench.XXXXXX)"
 
 echo "== build phase (unmeasured) =="
@@ -773,7 +794,7 @@ echo "== preflight =="
 {
   echo "date: $(date -u +%FT%TZ)"; sw_vers; sysctl -n machdep.cpu.brand_string
   rustc --version; clang++ --version | head -1
-  echo "git: $(git rev-parse --short HEAD)"; echo "BENCH_TMPDIR: $BENCH_TMPDIR"
+  echo "git: $(git rev-parse --short HEAD)"; echo "BENCH_RATE: $RATE"; echo "BENCH_TMPDIR: $BENCH_TMPDIR"
   echo "profiles: kit=release sp=-O2 server=release"
   [[ -n "${RUSTFLAGS:-}" ]] && echo "WARN: RUSTFLAGS=$RUSTFLAGS"
   [[ -n "${CXXFLAGS:-}" ]] && echo "WARN: CXXFLAGS=$CXXFLAGS"
@@ -791,8 +812,13 @@ for _ in $(seq 1 100); do
   sleep 0.1
 done
 [[ -n "$BASE" ]] || { echo "server did not start"; exit 1; }
-URL="${EXT_URL:-$BASE/assets/hls/index-shq-a1.m3u8}"
-echo "url: $URL"
+# Plan B: kithara reads the original fMP4 fixture from test_server; SP reads
+# the TS remux from a local static server rooted at bench/fixtures-ts.
+# Task 5 implementation must start that static server and set SP_URL.
+KIT_URL="${EXT_URL:-$BASE/assets/hls/index-shq-a1.m3u8}"
+SP_URL="${SP_URL:?set SP_URL to the local bench/fixtures-ts/shq/index.m3u8 URL}"
+echo "kit url: $KIT_URL"
+echo "sp url: $SP_URL"
 
 KIT_SYM=bench/kit-bench/target/release/kit-bench
 KIT_APL=bench/kit-bench/target-apple/release/kit-bench
@@ -812,9 +838,9 @@ run_one() { # $1=tag $2...=cmd
 
 echo "== warm-up (unmeasured) =="
 TMPD=$(mktemp -d "$BENCH_TMPDIR/warm.XXXXXX")
-"$SP" "$URL" "$RATE" $PACED --tmp "$TMPD/sp" >/dev/null
-"$KIT_SYM" "$URL" $PACED >/dev/null
-"$KIT_APL" "$URL" $PACED >/dev/null
+"$SP" "$SP_URL" "$RATE" $PACED --tmp "$TMPD/sp" >/dev/null
+"$KIT_SYM" "$KIT_URL" $PACED >/dev/null
+"$KIT_APL" "$KIT_URL" $PACED >/dev/null
 rm -rf "$TMPD"
 
 echo "== measured: $N reps, rotated order =="
@@ -826,9 +852,9 @@ for i in $(seq 1 "$N"); do
   esac
   for side in "${ORDER[@]}"; do
     case $side in
-      sp)  run_one "sp[$i]"  "$SP" "$URL" "$RATE" $PACED --tmp "$BENCH_TMPDIR/sp-$i" ;;
-      sym) run_one "sym[$i]" "$KIT_SYM" "$URL" $PACED ;;
-      apl) run_one "apl[$i]" "$KIT_APL" "$URL" $PACED ;;
+      sp)  run_one "sp[$i]"  "$SP" "$SP_URL" "$RATE" $PACED --tmp "$BENCH_TMPDIR/sp-$i" ;;
+      sym) run_one "sym[$i]" "$KIT_SYM" "$KIT_URL" $PACED ;;
+      apl) run_one "apl[$i]" "$KIT_APL" "$KIT_URL" $PACED ;;
     esac
   done
 done
@@ -844,13 +870,13 @@ echo "raw: bench/last-results.jsonl"
 
 - [ ] **Step 4 [Codex]: README.md**
 
-Short: prerequisites (`SUPERPOWERED_SDK_DIR`, `BENCH_RATE` from spike), build+run one-liner, JSON contract table (copy from spec), plan-B note, `--paced`/`--url` flags, "never push this branch".
+Short: prerequisites (`SUPERPOWERED_SDK_DIR`, `BENCH_RATE=44100` from spike), build+run one-liner, JSON contract table (copy from spec), plan-B note, `--paced`/`--url` flags, "never push this branch".
 
 - [ ] **Step 5 [Claude]: End-to-end validation + commit**
 
 ```bash
 chmod +x bench/run.sh bench/stats.py
-BENCH_RATE=<rate> bench/run.sh 2
+BENCH_RATE=44100 bench/run.sh 2
 ```
 
 Expected: full pass, table printed, exit 0. Then Codex commits:
@@ -870,8 +896,8 @@ git commit -m "bench: runner with preflight, warm-up, rotation, equivalence gate
 - [ ] **Step 1: Two full runs, repeatability check**
 
 ```bash
-BENCH_RATE=<rate> bench/run.sh 5   # run A
-BENCH_RATE=<rate> bench/run.sh 5   # run B
+BENCH_RATE=44100 bench/run.sh 5   # run A
+BENCH_RATE=44100 bench/run.sh 5   # run B
 ```
 
 Expected: both exit 0; per-config CPU medians of A vs B within ~5% (spec sanity). If not — quiesce the machine (other agents' builds!) and rerun.
@@ -879,7 +905,7 @@ Expected: both exit 0; per-config CPU medians of A vs B within ~5% (spec sanity)
 - [ ] **Step 2: Optional internet control run**
 
 ```bash
-BENCH_RATE=<rate> bench/run.sh 1 --url "<user-provided or Apple public AAC HLS stream matching SPIKE-A container>"
+SP_URL="<TS-compatible Superpowered URL>" BENCH_RATE=44100 bench/run.sh 1 --url "<fMP4 kithara URL>"
 ```
 
 - [ ] **Step 3: Append `## Results` to the spec and commit**
@@ -891,5 +917,5 @@ Table of medians±IQR for sp / kit-symphonia / kit-apple × {cpu_user+sys, wall,
 ## Self-Review (done at write time)
 
 - **Spec coverage:** spike→T1; kit two configs→T2/T3; sp player+fallback→T4; runner/preflight/warm-up/rotation/ephemeral port/equivalence/stats→T5; final runs+5%+internet+Results→T6; plan B→T1/T4 gates; `--paced`→T3/T4 flags. Covered.
-- **Placeholders:** `<key from SPIKE-C>`, `<rate>`, `<base>`, `<exact .a + frameworks from SPIKE-E>` are deliberate spike-resolved inputs recorded in the spec before Tasks 2-6 run — not TBDs; every other step has complete code/commands.
+- **Placeholders:** spike-resolved inputs are now recorded in the spec: example license key, `BENCH_RATE=44100`, the macOS xcframework static lib and frameworks, and the plan-B TS fixture. `<base>` remains the runtime test-server base URL.
 - **Type consistency:** JSON keys identical across `metrics.rs`, `metrics.h`, `stats.py` (checked key-by-key); `Report::finish` signature matches pump call; `pcm_frames = samples/channels` everywhere; `samples = frames*2` on SP side matches stereo contract.

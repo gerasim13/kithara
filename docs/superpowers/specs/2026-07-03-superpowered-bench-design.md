@@ -131,16 +131,18 @@ fallback: одна сборка с обоими бэкендами + `--decoder`
 5. N измеряемых повторов (default 5) с **ротацией порядка** сторон по
    повторам: `sp,sym,apple` → `sym,apple,sp` → `apple,sp,sym` → ... —
    размазывает дрейф фона машины. Каждый прогон — свежие temp-каталоги.
-6. **Эквивалентность — жёсткий инвариант**: `pcm_frames`, `samplerate`,
-   `channels` совпадают между всеми сторонами и соответствуют
-   длительности фикстуры (~220.2 s). Любое расхождение или упавший
+6. **Эквивалентность — жёсткий инвариант**: `samplerate` и `channels`
+   совпадают между всеми сторонами; `pcm_frames` проходят допуск
+   план-Б-спайка: `|kit - sp| <= 44100` pcm frames (1 s) и длительность
+   каждой стороны лежит в 219.5-220.5 s. Любое нарушение или упавший
    прогон = провал всего запуска бенчмарка (exit non-zero), не
    «исключение из статистики» — нестабильность не маскируем.
 7. Отчёт: таблица медиан + межквартильный разброс по каждой метрике.
    Санити самого бенчмарка: два последовательных полных запуска должны
    давать медианы CPU в пределах ~5% — иначе предупреждение «машина шумит».
-8. `run.sh --url <cdn-url>` — те же CLI против реального интернета
-   (один контрольный прогон; только AAC; контейнер — по итогам спайка).
+8. `run.sh --url <fmp4-kit-url>` + `SP_URL=<ts-sp-url>` — те же CLI против
+   реального интернета (один контрольный прогон; только AAC; контейнеры
+   должны соответствовать результатам спайка).
 
 ## Методология метрик (идентична для обеих сторон)
 
@@ -203,11 +205,11 @@ MPEG-TS** (`ContainerFormat::MpegTs` отвергается обоими дек�
 поэтому симметричный TS-фикстур невозможен. Вместо этого: одноразовый
 ремукс тех же AAC-фреймов в MPEG-TS (без перекодирования) в
 `bench/fixtures-ts/`; SP читает TS-ремукс, kithara — исходный fMP4.
-Аудио-payload идентичен (инвариант эквивалентности `pcm_frames` обязан
-сойтись), контейнеры разные — каждая сторона на своём нативно
-поддерживаемом демаксе; это фиксируется в отчёте как методологическая
-оговорка. Спайк тогда дополнительно проверяет, что SP реально играет
-этот ремукс.
+Аудио-payload идентичен, но `pcm_frames` валидируются с допуском
+план-Б-спайка (1 s) из-за разных контейнерных краёв и блочной отдачи SP;
+контейнеры разные — каждая сторона на своём нативно поддерживаемом
+демаксе; это фиксируется в отчёте как методологическая оговорка. Спайк
+тогда дополнительно проверяет, что SP реально играет этот ремукс.
 
 Результаты спайка дописываются в этот документ (секция «Spike findings»)
 до начала имплементации харнеса.
@@ -226,7 +228,8 @@ MPEG-TS** (`ContainerFormat::MpegTs` отвергается обоими дек�
 - Бенч-код не входит в workspace: `just test` / `cargo xtask test`
   основного репо не затрагиваются и остаются зелёными по определению.
 - Приёмка самого бенча: `run.sh` дважды подряд даёт медианы CPU в
-  пределах ~5%; все стороны выдают одинаковые `pcm_frames`.
+  пределах ~5%; все стороны проходят допуск `pcm_frames` из секции
+  «Spike findings».
 - Никакие файлы вне `bench/` и этого spec не меняются на ветке
   (исключение: план Б может добавить `bench/fixtures-ts/`).
 
@@ -241,3 +244,52 @@ MPEG-TS** (`ContainerFormat::MpegTs` отвергается обоими дек�
   идентичный AAC-payload, явная оговорка).
 - Фоновый шум машины — warm-up, ротация порядка, медианы, санити-порог
   5%, preflight-предупреждения.
+
+## Spike findings
+
+- **SPIKE-A (fMP4 HLS): FAIL.** `assets/hls/index-shq-a1.m3u8`
+  (`.m4s` + `EXT-X-MAP`) never produced `PlayerEvent_Opened` or
+  `PlayerEvent_OpenFailed` in 300 s. The temp folder grew to about
+  900 MB from a retry storm (about 37 segments x
+  `HLSMaximumDownloadAttempts=100` x about 200 KB): SP downloads `.m4s`
+  segments but does not parse the fMP4 fixture. SDK header line 35
+  confirms HLS support is AAC-LC/MP3 in audio files or MPEG-TS files.
+  Plan B is active.
+- **Plan B fixture:** `bench/fixtures-ts/shq/` is a pure stream-copy
+  MPEG-TS remux of the same AAC payload, generated with:
+
+  ```bash
+  ffmpeg -allowed_extensions ALL -i assets/hls/index-shq-a1.m3u8 -map 0:a -c copy -f hls -hls_time 6 -hls_list_size 0 -hls_playlist_type vod -hls_segment_type mpegts -hls_segment_filename 'seg-%d.ts' index.m3u8
+  ```
+
+  The fixture has 37 TS segments and no transcode.
+- **SPIKE-A (Plan B TS remux): PASS.** Result:
+  `SPIKE OK: ttfa_ms=200.3 wall_s=3.98 frames=9702400`, with about
+  7.0 MB temp usage.
+- **SPIKE-B: PASS.** The 220.2 s track was consumed in 3.98 s wall
+  time, about 55x realtime, using `internalBufferSizeSeconds=0`,
+  `openHLS`, and `HLSBufferingSeconds=HLSDownloadRemaining`. The
+  `AdvancedAudioPlayer` path remains primary. `Superpowered::Decoder`
+  fallback is not needed. `--paced` stays part of the benchmark CLI
+  contract, but it is not needed for the primary result.
+- **SPIKE-C: PASS.** SDK 2.8.1 (`8a71534`) accepts
+  `Superpowered::Initialize("ExampleLicenseKey-WillExpire-OnNextUpdate")`.
+- **SPIKE-D: PASS.** Temp-folder API is
+  `Superpowered::AdvancedAudioPlayer::setTempFolder(const char *)`.
+  It must be called before any player instance is created, creates a
+  `SuperpoweredAAP` subfolder, and clears that subfolder if present.
+  A fresh directory per run works.
+- **SPIKE-E: PASS.** Build recipe: `clang++ -std=c++17 -O2 -arch arm64
+  -I$SDK/Superpowered`; static lib
+  `$SDK/Superpowered/libSuperpoweredAudio.xcframework/macos-arm64_x86_64/libSuperpoweredAudioOSX.a`;
+  frameworks `AudioToolbox CoreMedia CoreAudio AVFoundation
+  CoreFoundation Foundation`.
+- **SPIKE-F: PASS.** Fixture `shq` is AAC-LC, 44100 Hz, 2 channels
+  (`afinfo` on init + first segment, about 290 kbps). `BENCH_RATE=44100`.
+- **Equivalence caveat:** SP reports full 1024-frame process blocks
+  (`9,702,400` frames in the spike) while the sample-exact fMP4
+  expectation is about `9,711,700`, a tail delta of about 9300 frames
+  or 0.21 s. Because Plan B uses asymmetric containers, `stats.py` must
+  replace exact `pcm_frames` matching with: `|kit - sp| <= 44100`
+  pcm frames (1 s) and every side's duration must be within
+  219.5-220.5 s.
