@@ -1,0 +1,4 @@
+#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-STREAM-INF:BANDWIDTH=269930,CODECS="mp4a.40.2"
+../../assets/hls/index-shq-a1.m3u8
