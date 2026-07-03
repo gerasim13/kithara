@@ -22,6 +22,12 @@ pub(crate) enum Mode {
     Local,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum Abr {
+    Manual(usize),
+    Auto,
+}
+
 #[cfg(not(any(
     feature = "symphonia",
     all(feature = "apple", any(target_os = "macos", target_os = "ios"))
@@ -38,7 +44,12 @@ fn decoder_backend() -> DecoderBackend {
     DecoderBackend::Symphonia
 }
 
-pub(crate) fn run(input: &str, paced: bool, mode: Mode) -> Result<Report, Box<dyn Error>> {
+pub(crate) fn run(
+    input: &str,
+    paced: bool,
+    mode: Mode,
+    abr: Abr,
+) -> Result<Report, Box<dyn Error>> {
     let temp = tempfile::TempDir::new()?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -46,7 +57,7 @@ pub(crate) fn run(input: &str, paced: bool, mode: Mode) -> Result<Report, Box<dy
         .build()?;
 
     match mode {
-        Mode::Hls => run_hls(input, paced, &temp, &rt),
+        Mode::Hls => run_hls(input, paced, abr, &temp, &rt),
         Mode::Progressive => run_file(FileSrc::Remote(Url::parse(input)?), paced, &temp, &rt),
         Mode::Local => run_file(FileSrc::Local(PathBuf::from(input)), paced, &temp, &rt),
     }
@@ -55,16 +66,21 @@ pub(crate) fn run(input: &str, paced: bool, mode: Mode) -> Result<Report, Box<dy
 fn run_hls(
     url: &str,
     paced: bool,
+    abr: Abr,
     temp: &tempfile::TempDir,
     rt: &tokio::runtime::Runtime,
 ) -> Result<Report, Box<dyn Error>> {
     let parsed_url = Url::parse(url)?;
     let baseline = Baseline::take();
     let backend = decoder_backend();
+    let abr_mode = match abr {
+        Abr::Manual(idx) => AbrMode::manual(idx),
+        Abr::Auto => AbrMode::Auto(None),
+    };
     let hls_config = HlsConfig::for_url(parsed_url)
         .store(StoreOptions::new(temp.path()))
         .cancel(CancelToken::never())
-        .initial_abr_mode(AbrMode::manual(0))
+        .initial_abr_mode(abr_mode)
         .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .block_on_underrun(true)

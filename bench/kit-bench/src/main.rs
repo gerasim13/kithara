@@ -1,7 +1,7 @@
 mod metrics;
 mod pump;
 
-use pump::Mode;
+use pump::{Abr, Mode};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -14,6 +14,7 @@ fn main() {
     };
     let mut paced = false;
     let mut mode = Mode::Hls;
+    let mut abr = Abr::Manual(0);
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -36,6 +37,25 @@ fn main() {
                     }
                 };
             }
+            "--abr" => {
+                let value = match args.next() {
+                    Some(value) => value,
+                    None => {
+                        usage();
+                        std::process::exit(2);
+                    }
+                };
+                abr = match value.as_str() {
+                    "auto" => Abr::Auto,
+                    idx => match idx.parse() {
+                        Ok(idx) => Abr::Manual(idx),
+                        Err(_) => {
+                            usage();
+                            std::process::exit(2);
+                        }
+                    },
+                };
+            }
             _ => {
                 usage();
                 std::process::exit(2);
@@ -43,7 +63,7 @@ fn main() {
         }
     }
 
-    match pump::run(&input, paced, mode) {
+    match pump::run(&input, paced, mode, abr) {
         Ok(report) => println!("{}", report.to_json_line()),
         Err(err) => {
             eprintln!("kit-bench failed: {err}");
@@ -53,5 +73,7 @@ fn main() {
 }
 
 fn usage() {
-    eprintln!("usage: kit-bench <url-or-path> [--paced] [--mode hls|progressive|local]");
+    eprintln!(
+        "usage: kit-bench <url-or-path> [--paced] [--mode hls|progressive|local] [--abr auto|<index>]"
+    );
 }
