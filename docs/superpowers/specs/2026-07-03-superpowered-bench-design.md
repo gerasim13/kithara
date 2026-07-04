@@ -549,3 +549,30 @@ Findings:
 Implication: codec routing, not fixing — on macOS prefer symphonia
 for MP3 drain workloads; keep apple for AAC. Traces:
 `/Volumes/Render/dev/tmp/prof-{mp3,aac}.trace`.
+
+### Hardware-codec verification (2026-07-04)
+
+Challenged on "no hardware audio decode on macOS". Verified three ways,
+all agree:
+
+1. SDK header `AudioToolbox/AudioFormat.h`: the entire hardware-codec
+   API — `kAudioFormatProperty_HardwareCodecCapabilities` (= 'hwcc',
+   marked `__attribute__((deprecated))`), `kAppleHardwareAudioCodecManufacturer`
+   ('aphw'), `kAppleSoftwareAudioCodecManufacturer` ('appl') — is
+   wrapped in `#if TARGET_OS_IPHONE ... #endif`. These symbols do not
+   exist when compiling for macOS (a probe using them fails to compile).
+2. Header doc comment: "On iPhoneOS, a codec's manufacturer can be used
+   to distinguish between hardware and software codecs." The hw/sw
+   split is an iOS concept; even there the capabilities query is
+   deprecated.
+3. Empirical enumeration on this M3 Pro (macOS 26.5) via
+   `AudioFormatGetProperty(kAudioFormatProperty_Decoders)` +
+   `AudioComponentFindNext('adec')`: 47 audio decoders present, every
+   one manufacturer `'appl'` (software). MP3 -> single 'appl' decoder,
+   AAC -> single 'appl' decoder. Zero `'aphw'`.
+
+Conclusion: there is no hardware audio decoder to enable on macOS — the
+concept only ever applied to old iOS devices and is deprecated. The MP3
+cost is inherent to Apple's SpiritDSP software codec; nothing is
+misconfigured and nothing can be "switched to hardware". Probe kept at
+session scratchpad `codec_probe.c`.
