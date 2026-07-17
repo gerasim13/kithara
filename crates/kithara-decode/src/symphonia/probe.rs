@@ -12,7 +12,7 @@ use symphonia::{
         meta::MetadataOptions,
     },
     default::{
-        formats::{AdtsReader, FlacReader, IsoMp4Reader, MpaReader, OggReader, WavReader},
+        formats::{AdtsReader, FlacReader, IsoMp4Reader, OggReader, WavReader},
         get_probe,
     },
 };
@@ -146,8 +146,20 @@ fn create_reader_for_container(
             Ok(Box::new(reader))
         }
         ContainerFormat::MpegAudio => {
-            let reader = MpaReader::try_new(mss, format_opts).map_err(DecodeError::backend)?;
-            Ok(Box::new(reader))
+            // MpaReader syncs on the first 0xFFE bit pattern it sees; an
+            // ID3v2 tag in front of the stream (standard for downloaded
+            // mp3s) is opaque bytes to it, and a false sync inside the tag
+            // body misclassifies the stream (observed: album-art bytes
+            // detected as MPEG Layer 1). The probe pipeline runs the Id3v2
+            // metadata reader first and hands MpaReader the real first
+            // frame, so route MpegAudio through it like the Mp4 arm above.
+            let mut hint = Hint::new();
+            hint.with_extension("mp3");
+            let meta_opts = MetadataOptions::default();
+            let format_reader = get_probe()
+                .probe(&hint, mss, format_opts, meta_opts)
+                .map_err(DecodeError::backend)?;
+            Ok(format_reader)
         }
         ContainerFormat::Adts => {
             let reader = AdtsReader::try_new(mss, format_opts).map_err(DecodeError::backend)?;

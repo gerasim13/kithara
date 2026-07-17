@@ -393,7 +393,7 @@ impl SymphoniaDemuxer {
 fn build_track_info(track: &Track, codec_params: &AudioCodecParameters) -> DecodeResult<TrackInfo> {
     const DEFAULT_CHANNEL_COUNT: u16 = 2;
 
-    let codec = map_codec_id(codec_params.codec);
+    let codec = map_codec_id(codec_params.codec)?;
     let sample_rate = codec_params
         .sample_rate
         .ok_or_else(|| DecodeError::InvalidData {
@@ -436,22 +436,29 @@ fn time_to_duration(time: Time) -> Duration {
     Duration::new(seconds.cast_unsigned(), nanos)
 }
 
-/// Map a symphonia codec id to our [`AudioCodec`] enum. Unknown ids fall
-/// back to [`AudioCodec::Pcm`] / [`AudioCodec::Adpcm`] when the id sits
-/// inside the corresponding well-known range so PCM/ADPCM tracks still
-/// surface a usable [`TrackInfo`]. The matching codec wiring uses
-/// [`SymphoniaDemuxer::native_params`] for the actual decoder build.
-fn map_codec_id(id: AudioCodecId) -> AudioCodec {
+/// Map a symphonia codec id to our [`AudioCodec`] enum. PCM/ADPCM ids map
+/// by well-known range so those tracks still surface a usable
+/// [`TrackInfo`]. Any other unmapped id is an error: silently calling it
+/// PCM masked real detection failures (an ID3v2-prefixed mp3 once
+/// mis-synced as MPEG Layer 1 and surfaced as "Unsupported codec: Pcm").
+/// The matching codec wiring uses [`SymphoniaDemuxer::native_params`]
+/// for the actual decoder build.
+fn map_codec_id(id: AudioCodecId) -> DecodeResult<AudioCodec> {
     match id {
-        CODEC_ID_AAC => AudioCodec::AacLc,
-        CODEC_ID_FLAC => AudioCodec::Flac,
-        CODEC_ID_MP3 => AudioCodec::Mp3,
-        CODEC_ID_ALAC => AudioCodec::Alac,
-        CODEC_ID_OPUS => AudioCodec::Opus,
-        CODEC_ID_VORBIS => AudioCodec::Vorbis,
-        other if is_pcm_codec_id(other) => AudioCodec::Pcm,
-        other if is_adpcm_codec_id(other) => AudioCodec::Adpcm,
-        _ => AudioCodec::Pcm,
+        CODEC_ID_AAC => Ok(AudioCodec::AacLc),
+        CODEC_ID_FLAC => Ok(AudioCodec::Flac),
+        CODEC_ID_MP3 => Ok(AudioCodec::Mp3),
+        CODEC_ID_ALAC => Ok(AudioCodec::Alac),
+        CODEC_ID_OPUS => Ok(AudioCodec::Opus),
+        CODEC_ID_VORBIS => Ok(AudioCodec::Vorbis),
+        other if is_pcm_codec_id(other) => Ok(AudioCodec::Pcm),
+        other if is_adpcm_codec_id(other) => Ok(AudioCodec::Adpcm),
+        other => {
+            tracing::warn!(?other, "symphonia reported a codec id kithara does not map");
+            Err(DecodeError::InvalidData {
+                detail: "symphonia reported an unmapped codec id (see warn log)",
+            })
+        }
     }
 }
 
