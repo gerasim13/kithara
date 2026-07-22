@@ -104,6 +104,7 @@ pub(crate) enum ResolvedPackagedSignal {
     SawtoothDescending,
     Silence,
     Sine { freq_hz: f64 },
+    Sweep { start_hz: f64, end_hz: f64 },
     Pattern(PcmPattern),
 }
 
@@ -466,21 +467,50 @@ fn resolved_signal(
             validate_packaged_sine_freq_hz(freq_hz, sample_rate)?;
             Ok(ResolvedPackagedSignal::Sine { freq_hz })
         }
+        PackagedSignal::Sweep { start_hz, end_hz } => {
+            validate_packaged_frequency(
+                start_hz,
+                sample_rate,
+                "sweep start_hz must be finite and > 0",
+                "sweep start_hz must be <= half the sample rate (Nyquist)",
+            )?;
+            validate_packaged_frequency(
+                end_hz,
+                sample_rate,
+                "sweep end_hz must be finite and > 0",
+                "sweep end_hz must be <= half the sample rate (Nyquist)",
+            )?;
+            Ok(ResolvedPackagedSignal::Sweep { start_hz, end_hz })
+        }
     }
 }
 
 fn validate_packaged_sine_freq_hz(freq_hz: f64, sample_rate: u32) -> Result<(), HlsSpecError> {
+    validate_packaged_frequency(
+        freq_hz,
+        sample_rate,
+        "sine freq_hz must be finite and > 0",
+        "sine freq_hz must be <= half the sample rate (Nyquist)",
+    )
+}
+
+fn validate_packaged_frequency(
+    freq_hz: f64,
+    sample_rate: u32,
+    finite_message: &'static str,
+    nyquist_message: &'static str,
+) -> Result<(), HlsSpecError> {
     if !freq_hz.is_finite() || freq_hz <= 0.0 {
         return Err(HlsSpecError::InvalidField {
             field: "packaged_audio.source",
-            message: "sine freq_hz must be finite and > 0",
+            message: finite_message,
         });
     }
     let nyquist = f64::from(sample_rate) / 2.0;
     if freq_hz > nyquist {
         return Err(HlsSpecError::InvalidField {
             field: "packaged_audio.source",
-            message: "sine freq_hz must be <= half the sample rate (Nyquist)",
+            message: nyquist_message,
         });
     }
     Ok(())
@@ -615,6 +645,64 @@ mod tests {
         };
         let err = parse_hls_spec_with(&encode(&spec), |_| unreachable!()).unwrap_err();
         assert!(err.to_string().contains("Nyquist"));
+    }
+
+    #[kithara::test]
+    fn resolves_packaged_sweep() {
+        let spec = HlsSpec {
+            packaged_audio: Some(PackagedAudioRequest {
+                codec: AudioCodec::AacLc,
+                sample_rate: 44_100,
+                channels: 2,
+                start_frame: None,
+                timescale: None,
+                bit_rate: None,
+                encoder_delay: None,
+                trailing_delay: None,
+                source: PackagedAudioSource::Signal(PackagedSignal::Sweep {
+                    start_hz: 220.0,
+                    end_hz: 8_000.0,
+                }),
+                gapless_encoding: GaplessEncoding::default(),
+                variant_overrides: Vec::new(),
+            }),
+            ..HlsSpec::default()
+        };
+        let resolved = parse_hls_spec_with(&encode(&spec), |_| unreachable!()).unwrap();
+        let packaged = resolved.packaged_audio.unwrap();
+        assert!(matches!(
+            packaged.variants[0].signal,
+            ResolvedPackagedSignal::Sweep {
+                start_hz: 220.0,
+                end_hz: 8_000.0
+            }
+        ));
+    }
+
+    #[kithara::test]
+    fn rejects_packaged_sweep_endpoint_above_nyquist() {
+        let spec = HlsSpec {
+            packaged_audio: Some(PackagedAudioRequest {
+                codec: AudioCodec::AacLc,
+                sample_rate: 44_100,
+                channels: 2,
+                start_frame: None,
+                timescale: None,
+                bit_rate: None,
+                encoder_delay: None,
+                trailing_delay: None,
+                source: PackagedAudioSource::Signal(PackagedSignal::Sweep {
+                    start_hz: 220.0,
+                    end_hz: 50_000.0,
+                }),
+                gapless_encoding: GaplessEncoding::default(),
+                variant_overrides: Vec::new(),
+            }),
+            ..HlsSpec::default()
+        };
+        let error = parse_hls_spec_with(&encode(&spec), |_| unreachable!()).unwrap_err();
+        assert!(error.to_string().contains("sweep end_hz"));
+        assert!(error.to_string().contains("Nyquist"));
     }
 
     #[test]

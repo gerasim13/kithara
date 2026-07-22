@@ -18,7 +18,7 @@ use crate::{
         HlsSpecError, ResolvedDataMode, ResolvedEncryption, ResolvedHlsSpec, ResolvedInitMode,
         ResolvedPackagedAudioSpec, ResolvedPackagedSignal, ResolvedPackagedVariant,
     },
-    signal_pcm::{Finite, SignalPcm, signal},
+    signal_pcm::{Finite, SignalPcm, SweepMode, signal},
     wav::create_wav_from_signal,
 };
 
@@ -445,14 +445,14 @@ fn decode_variant_blob(blob: &[u8]) -> Option<PackagedVariantData> {
     })
 }
 
-fn encode_packaged_variant(
+fn packaged_frame_layout(
     packaged: &ResolvedPackagedAudioSpec,
-    variant: &ResolvedPackagedVariant,
-) -> Result<EncodedTrack, EncodeError> {
-    let encoder = EncoderFactory::create_packaged(variant.codec)?;
-    let frame_samples = encoder.packaged_frame_samples(variant.codec)?;
+    frame_samples: usize,
+) -> (usize, usize, usize, u32) {
     let requested_segment_frames =
         (packaged.segment_duration_secs * f64::from(packaged.sample_rate)).round() as usize;
+    let nominal_content_frames =
+        requested_segment_frames.saturating_mul(packaged.segments_per_variant);
     let packets_per_segment = requested_segment_frames.div_ceil(frame_samples).max(1);
     let content_frames = packets_per_segment
         .saturating_mul(frame_samples)
@@ -466,6 +466,22 @@ fn encode_packaged_variant(
     let aligned_trailing_delay = packaged.trailing_delay.saturating_add(
         u32::try_from(total_frames.saturating_sub(unaligned_total_frames)).unwrap_or(u32::MAX),
     );
+    (
+        nominal_content_frames,
+        packets_per_segment,
+        content_frames,
+        aligned_trailing_delay,
+    )
+}
+
+fn encode_packaged_variant(
+    packaged: &ResolvedPackagedAudioSpec,
+    variant: &ResolvedPackagedVariant,
+) -> Result<EncodedTrack, EncodeError> {
+    let encoder = EncoderFactory::create_packaged(variant.codec)?;
+    let frame_samples = encoder.packaged_frame_samples(variant.codec)?;
+    let (nominal_content_frames, packets_per_segment, content_frames, aligned_trailing_delay) =
+        packaged_frame_layout(packaged, frame_samples);
 
     let media_info = MediaInfo::builder()
         .codec(variant.codec)
@@ -566,6 +582,29 @@ fn encode_packaged_variant(
             } else {
                 let pcm = SignalPcm::new(
                     OffsetSignal::new(signal::SineWave(freq_hz), variant.start_frame),
+                    packaged.sample_rate,
+                    packaged.channels,
+                    content_length,
+                );
+                encode_signal(&pcm)
+            }
+        }
+        ResolvedPackagedSignal::Sweep { start_hz, end_hz } => {
+            let sweep_frames = nominal_content_frames.saturating_add(
+                usize::try_from(variant.start_frame).expect("start_frame must fit usize"),
+            );
+            let sweep = || signal::Sweep::new(start_hz, end_hz, sweep_frames, SweepMode::Linear);
+            if variant.start_frame == 0 {
+                let pcm = SignalPcm::new(
+                    sweep(),
+                    packaged.sample_rate,
+                    packaged.channels,
+                    content_length,
+                );
+                encode_signal(&pcm)
+            } else {
+                let pcm = SignalPcm::new(
+                    OffsetSignal::new(sweep(), variant.start_frame),
                     packaged.sample_rate,
                     packaged.channels,
                     content_length,

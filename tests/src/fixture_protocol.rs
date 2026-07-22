@@ -138,6 +138,7 @@ pub enum PackagedSignal {
     SawtoothDescending,
     Silence,
     Sine { freq_hz: f64 },
+    Sweep { start_hz: f64, end_hz: f64 },
 }
 
 /// How the fmp4 mux should encode `encoder_delay` / `trailing_delay` into
