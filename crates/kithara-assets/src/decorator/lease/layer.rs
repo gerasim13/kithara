@@ -10,6 +10,7 @@ use dashmap::DashMap;
 use kithara_events::{AssetEvent, EventBus};
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::ResourceStatus;
+use kithara_test_utils::kithara;
 
 use super::{
     guard::LeaseGuard,
@@ -272,6 +273,7 @@ where
         Ok((lease, Some(remove), self.byte_recorder.clone()))
     }
 
+    #[kithara::probe(key)]
     fn wrap_reader(
         &self,
         key: &ResourceKey,
@@ -290,6 +292,7 @@ where
         ))
     }
 
+    #[kithara::probe(key)]
     fn wrap_writer(
         &self,
         key: &ResourceKey,

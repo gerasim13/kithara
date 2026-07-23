@@ -15,6 +15,7 @@ use kithara_stream::{
     MediaInfo,
     dl::{FetchCmd, Peer, RequestPriority, reject_html_response},
 };
+use kithara_test_utils::kithara;
 
 use crate::session::inner::{FileInner, FilePhase};
 
@@ -50,6 +51,7 @@ impl FilePeer {
         }
     }
 
+    #[kithara::probe(resume_from)]
     fn build_fetch_cmd(&self, resume_from: u64) -> FetchCmd {
         let url = self.inner.asset.url.clone();
         let headers = self.inner.asset.headers.clone();
@@ -221,6 +223,7 @@ impl FileInner {
     /// Header capture (`Content-Length` / `Content-Type`) happens
     /// eagerly in `on_response`, not here, so a reader blocked on the
     /// first byte sees the seeded coord the instant `write_at` fires.
+    #[kithara::probe(resume_from, bytes_written)]
     fn finalize_fetch(&self, resume_from: u64, bytes_written: u64, err: Option<&NetError>) {
         if let Some(e) = err {
             let terminal =

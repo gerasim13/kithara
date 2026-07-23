@@ -3,6 +3,7 @@ use std::fmt;
 use kithara_bufpool::BytePool;
 use kithara_platform::sync::Arc;
 use kithara_storage::{StorageError, StorageResult};
+use kithara_test_utils::kithara;
 
 use super::{contract::ProcessCtx, gate::ReadinessGate, guard::GateGuard, reader::ProcessedReader};
 use crate::resource::{RawWriteHandle, ReadSide, WriteSide};
@@ -108,6 +109,7 @@ where
 {
     type Reader = ProcessedReader<W::Reader>;
 
+    #[kithara::probe(final_len)]
     fn commit(mut self, final_len: Option<u64>) -> StorageResult<ProcessedReader<W::Reader>> {
         let needs_processing = self.processor.is_some() && !self.guard.is_ready();
         let actual_len = match (needs_processing, final_len, self.processor.as_ref()) {
@@ -130,6 +132,7 @@ where
         ))
     }
 
+    #[kithara::probe]
     fn fail(mut self, reason: String) {
         self.inner.fail(reason);
         self.guard.fail();

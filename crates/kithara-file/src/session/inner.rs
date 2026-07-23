@@ -14,6 +14,7 @@ use kithara_platform::{
     sync::{Arc, Mutex},
 };
 use kithara_stream::{MediaInfo, WorkerWake};
+use kithara_test_utils::{kithara, probe::IntoProbeArg};
 use url::Url;
 
 use super::segments::FileSegmentIndex;
@@ -61,6 +62,12 @@ pub(crate) enum FilePhase {
     Downloading = 1,
     /// File fully downloaded (or local).
     Complete = 2,
+}
+
+impl IntoProbeArg for FilePhase {
+    fn into_probe_arg(self) -> u64 {
+        u64::from(self as u8)
+    }
 }
 
 /// Control-plane handles shared between the source and the download driver.
@@ -175,6 +182,7 @@ impl FileInner {
     /// on the `Complete` edge so the hot-path `byte_map` audit
     /// can short-circuit on `segment_index.get()` without re-reading the
     /// file each tick.
+    #[kithara::probe(phase)]
     pub(crate) fn set_phase(&self, phase: FilePhase) {
         let previous = self.phase.load(Ordering::Acquire);
         self.phase.store(phase as u8, Ordering::Release);

@@ -10,6 +10,8 @@ mod common;
 pub(crate) mod continuity;
 #[path = "common/gapless.rs"]
 mod gapless_common;
+#[path = "kithara_file/lifecycle_trace.rs"]
+pub(crate) mod lifecycle_trace;
 
 mod browser_runner_smoke;
 mod env_guard;
@@ -72,6 +74,7 @@ mod kithara_hls {
     mod html_error_body;
     mod html_error_cleanup;
     mod keys_integration;
+    mod lifecycle_trace;
     mod playlist_integration;
     mod prefetch_403_fails_open;
     mod probe_not_ready_at_creation;

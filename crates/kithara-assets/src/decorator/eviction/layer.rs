@@ -264,7 +264,7 @@ where
     type IndexRes = A::IndexRes;
     type ReadyRes = A::ReadyRes;
 
-    #[kithara::probe]
+    #[kithara::probe(key)]
     fn acquire_resource_with_ctx(
         &self,
         key: &ResourceKey,
@@ -277,7 +277,7 @@ where
         self.inner.acquire_resource_with_ctx(key, identity, ctx)
     }
 
-    #[kithara::probe]
+    #[kithara::probe(key)]
     fn open_resource_with_ctx(
         &self,
         key: &ResourceKey,

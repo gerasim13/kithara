@@ -1,8 +1,13 @@
 #![forbid(unsafe_code)]
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    path::{Path, PathBuf},
+};
 
 use kithara_platform::sync::Arc;
+use kithara_test_utils::probe::IntoProbeArg;
 use url::Url;
 
 use crate::error::{AssetsError, AssetsResult};
@@ -43,6 +48,20 @@ pub(crate) enum ResourceKeyKind {
         rel_path: Arc<str>,
     },
     Absolute(PathBuf),
+}
+
+impl From<&ResourceKey> for u64 {
+    fn from(key: &ResourceKey) -> Self {
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+impl IntoProbeArg for &ResourceKey {
+    fn into_probe_arg(self) -> u64 {
+        u64::from(self)
+    }
 }
 
 impl ResourceKey {

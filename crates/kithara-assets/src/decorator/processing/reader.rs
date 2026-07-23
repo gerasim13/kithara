@@ -3,6 +3,7 @@ use std::{fmt, ops::Range, path::Path};
 use kithara_bufpool::BytePool;
 use kithara_platform::sync::Arc;
 use kithara_storage::{ResourceStatus, StorageError, StorageResult, WaitOutcome};
+use kithara_test_utils::kithara;
 
 use super::{contract::ProcessCtx, gate::ReadinessGate, writer::ProcessedWriter};
 use crate::resource::ReadSide;
@@ -101,6 +102,7 @@ where
         }
     }
 
+    #[kithara::probe]
     fn reactivate(self) -> StorageResult<ProcessedWriter<R::Writer>> {
         let inner = self.inner.reactivate()?;
         Ok(ProcessedWriter::new(inner, self.processor, self.pool))
