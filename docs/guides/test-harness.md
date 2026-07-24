@@ -10,6 +10,20 @@ validation scope.
 - If a probe is reported, name the package, filter, lane, and why it is enough
   for that local question.
 
+### Invocations
+
+- Focused runs use nextest filter expressions through the harness:
+  `just test -E 'package(kithara-hls)'` or `just test -E 'test(name_substring)'`.
+- `just test -p <crate>` does NOT narrow the run: the workspace lane still
+  executes the full suite. Use `-E 'package(<crate>)'` instead.
+- Flake attribution and stress reproduction use nextest stress in ONE
+  invocation: `just test -E 'test(name)' --stress-count 20` (or
+  `--stress-duration 10m`). Do not hand-loop the harness in shell; loops pay
+  the harness overhead per iteration and change the concurrency profile.
+- Do not gate on a pipeline (`just test ... | tail`): the pipeline exit code
+  is the last command's, which masks failures. Redirect to a file and check
+  the harness exit code plus the nextest `Summary` line.
+
 ### Axes
 
 - `flash` is the default axis and defaults ON.
