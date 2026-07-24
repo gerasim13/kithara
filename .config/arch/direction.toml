@@ -16,7 +16,7 @@ crates = ["kithara-platform"]
 [[layer]]
 index = 2
 name = "infra"
-crates = ["kithara-bufpool", "kithara-drm", "kithara-events", "kithara-net"]
+crates = ["kithara-bufpool", "kithara-events", "kithara-net"]
 
 [[layer]]
 index = 3
@@ -26,7 +26,7 @@ crates = ["kithara-abr", "kithara-storage", "kithara-test-utils"]
 [[layer]]
 index = 4
 name = "core"
-crates = ["kithara-assets", "kithara-stream"]
+crates = ["kithara-assets", "kithara-drm", "kithara-stream"]
 
 [[layer]]
 index = 5

@@ -3,7 +3,6 @@
 pub mod config;
 pub mod error;
 
-mod decrypt_processor;
 mod handle;
 mod ids;
 mod peer;

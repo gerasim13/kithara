@@ -14,6 +14,7 @@
 mod cipher;
 mod context;
 mod decrypt;
+mod decrypt_processor;
 mod error;
 mod registry;
 
@@ -23,6 +24,7 @@ mod tests;
 pub use cipher::UniqueBinaryCipher;
 pub use context::DecryptContext;
 pub use decrypt::aes128_cbc_process_chunk;
+pub use decrypt_processor::as_process_ctx;
 pub use error::DrmError;
 pub use registry::{
     DomainMatcher, KeyProcessResult, KeyProcessor, KeyProcessorRegistry, KeyProcessorRule,

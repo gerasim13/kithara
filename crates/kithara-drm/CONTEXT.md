@@ -4,9 +4,13 @@ Detailed contracts and invariants for the kithara-drm crate; the README is the o
 
 ## How It Works
 
-HLS wraps `DecryptContext` as a `kithara-assets` `ResourceProcessor` / `ChunkSink`
-pair in `kithara-hls/src/decrypt_processor.rs`. When an encrypted segment is
-processed:
+`kithara-drm` owns the AES-128 `kithara-assets` `ResourceProcessor` adapter:
+`DecryptProcessor` wraps `DecryptContext`, and `as_process_ctx` exposes it as a
+per-acquire `ProcessCtx`. The normal `kithara-drm` -> `kithara-assets` dependency
+is intentional because the adapter implements the asset-processing contract in
+the DRM owner crate; accordingly the crate sits in the `core` layer of
+`.config/arch/direction.toml`, alongside `kithara-assets`. When an encrypted
+segment is processed:
 
 1. The segment data is read from disk in 64 KB chunks.
 2. Each chunk is decrypted via `aes128_cbc_process_chunk()`.

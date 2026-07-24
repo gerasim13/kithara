@@ -4,11 +4,13 @@
 use std::fmt;
 
 use kithara_assets::{ChunkSink, ProcessCtx, ResourceProcessor};
-use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_platform::sync::Arc;
 
+use crate::{DecryptContext, aes128_cbc_process_chunk};
+
 /// Wrap a [`DecryptContext`] as a per-acquire [`ProcessCtx`] trait object.
-pub(crate) fn as_process_ctx(ctx: DecryptContext) -> ProcessCtx {
+#[must_use]
+pub fn as_process_ctx(ctx: DecryptContext) -> ProcessCtx {
     Arc::new(DecryptProcessor::new(ctx))
 }
 

@@ -12,7 +12,18 @@ categories = ["multimedia::audio", "cryptography"]
 [package.metadata.cargo-machete]
 ignored = ["kithara-workspace-hack"]
 
+[features]
+default = ["client-reqwest", "tls-rustls"]
+# HTTP backend forwarding for standalone builds; kithara-drm reaches
+# kithara-net only through kithara-assets. Workspace-level
+# default-features = false keeps the default off for consumers.
+client-reqwest = ["kithara-assets/client-reqwest"]
+client-wreq = ["kithara-assets/client-wreq"]
+tls-native = ["kithara-assets/tls-native"]
+tls-rustls = ["kithara-assets/tls-rustls"]
+
 [dependencies]
+kithara-assets = { workspace = true }
 kithara-platform = { workspace = true }
 
 aes = { workspace = true }

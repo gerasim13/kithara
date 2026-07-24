@@ -4,10 +4,11 @@ use kithara_assets::{
     AssetResourceState, AssetScope, AssetsError, AssetsResult, ReadSide, ResourceAcquisition,
     ResourceKey,
 };
+use kithara_drm::as_process_ctx;
 use kithara_stream::{StreamError, StreamResult};
 use url::Url;
 
-use crate::{HlsError, decrypt_processor::as_process_ctx, segment::SegmentContent};
+use crate::{HlsError, segment::SegmentContent};
 
 /// Narrow per-segment view over the variant's on-disk resource. A segment (or
 /// its init prefix) talks to disk only through this surface — `read_at` /
