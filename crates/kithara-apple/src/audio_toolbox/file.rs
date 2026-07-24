@@ -59,7 +59,23 @@ where
     where
         T: ApplePod,
     {
-        let mut value = T::default();
+        self.get_property_with_input(property, T::default())
+    }
+
+    /// Reads a typed `AudioFile` property, seeding the query with `input`.
+    ///
+    /// Translation properties (e.g. `kAudioFilePropertyPacketToByte`) read
+    /// input fields the caller sets (the packet index) and overwrite the rest
+    /// (the byte offset), so the initial value must carry the request rather
+    /// than being zeroed.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `AudioToolbox` status when the property cannot be read.
+    pub fn get_property_with_input<T>(&self, property: u32, mut value: T) -> Result<T, OSStatus>
+    where
+        T: ApplePod,
+    {
         let mut size = UInt32::try_from(size_of::<T>()).map_err(|_| PARAM_ERR)?;
         // SAFETY: self.raw is live; value is writable storage for size bytes.
         let status = unsafe {

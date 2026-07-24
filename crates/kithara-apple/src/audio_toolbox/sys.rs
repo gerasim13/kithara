@@ -31,6 +31,7 @@ pub const AUDIO_FILE_PROPERTY_AUDIO_DATA_PACKET_COUNT: AudioFilePropertyID = 0x7
 pub const AUDIO_FILE_PROPERTY_DATA_FORMAT: AudioFilePropertyID = 0x6466_6d74;
 pub const AUDIO_FILE_PROPERTY_MAGIC_COOKIE_DATA: AudioFilePropertyID = 0x6d67_6963;
 pub const AUDIO_FILE_PROPERTY_MAXIMUM_PACKET_SIZE: AudioFilePropertyID = 0x7073_7a65;
+pub const AUDIO_FILE_PROPERTY_PACKET_TO_BYTE: AudioFilePropertyID = 0x706b_6279;
 pub const AUDIO_FORMAT_APPLE_LOSSLESS: AudioFormatID = 0x616c_6163;
 pub const AUDIO_FORMAT_FLAC: AudioFormatID = 0x666c_6163;
 pub const AUDIO_FORMAT_FLAG_IS_FLOAT: AudioFormatFlags = 1 << 0;
@@ -65,6 +66,18 @@ pub struct AudioStreamBasicDescription {
     pub channels_per_frame: UInt32,
     pub bits_per_channel: UInt32,
     pub reserved: UInt32,
+}
+
+/// `AudioBytePacketTranslation` — used with `kAudioFilePropertyPacketToByte`
+/// (and its inverse). The caller sets `packet` and reads back `byte`; `flags`
+/// carries `kBytePacketTranslationFlag_IsEstimate` when the file has no exact
+/// packet table and the offset is derived from the average packet size.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AudioBytePacketTranslation {
+    pub byte: SInt64,
+    pub packet: SInt64,
+    pub flags: UInt32,
 }
 
 #[repr(C)]

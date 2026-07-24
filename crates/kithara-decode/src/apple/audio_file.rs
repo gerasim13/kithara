@@ -5,9 +5,10 @@ use std::{
 
 use kithara_apple::audio_toolbox::{
     AUDIO_FILE_PROPERTY_AUDIO_DATA_PACKET_COUNT, AUDIO_FILE_PROPERTY_DATA_FORMAT,
-    AUDIO_FILE_PROPERTY_MAGIC_COOKIE_DATA, AUDIO_FILE_PROPERTY_MAXIMUM_PACKET_SIZE, AudioFile,
-    AudioFileCallbacks, AudioFilePacketRead, AudioStreamBasicDescription,
-    AudioStreamPacketDescription, OSStatus, PARAM_ERR, SInt64, UInt32,
+    AUDIO_FILE_PROPERTY_MAGIC_COOKIE_DATA, AUDIO_FILE_PROPERTY_MAXIMUM_PACKET_SIZE,
+    AUDIO_FILE_PROPERTY_PACKET_TO_BYTE, AudioBytePacketTranslation, AudioFile, AudioFileCallbacks,
+    AudioFilePacketRead, AudioStreamBasicDescription, AudioStreamPacketDescription, OSStatus,
+    PARAM_ERR, SInt64, UInt32,
 };
 
 use super::consts::os_status_to_string;
@@ -57,6 +58,25 @@ pub(crate) struct AppleAudioFile {
 impl AppleAudioFile {
     pub(crate) fn magic_cookie(&self) -> Option<Vec<u8>> {
         read_magic_cookie(&self.handle)
+    }
+
+    /// The source byte offset `AudioFileServices` maps `packet` to — the same
+    /// offset its own packet read seeks to. For a streamed format with no
+    /// on-disk packet table this is an average-packet-size estimate, but it is
+    /// the estimate Apple itself uses, so a size-less seek can report it as
+    /// `landed_byte` and keep the stream's byte cursor consistent with where
+    /// the decoder resumes. `None` when the property is unavailable.
+    pub(crate) fn packet_to_byte(&self, packet: u64) -> Option<u64> {
+        let query = AudioBytePacketTranslation {
+            packet: SInt64::try_from(packet).ok()?,
+            byte: 0,
+            flags: 0,
+        };
+        let translated = self
+            .handle
+            .get_property_with_input(AUDIO_FILE_PROPERTY_PACKET_TO_BYTE, query)
+            .ok()?;
+        u64::try_from(translated.byte).ok()
     }
 
     /// Open a complete local `source` as an audio file. `hint` is one of the
