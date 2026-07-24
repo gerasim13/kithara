@@ -2,11 +2,7 @@ use std::{num::NonZeroUsize, ops::Range};
 
 use kithara_assets::{AssetReader, AssetStore, ReadSide, ResourceKey};
 use kithara_events::EventBus;
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_storage::{ResourceStatus, StorageError, WaitOutcome};
 use kithara_stream::{
     Activity, AudioCodec, MediaInfo, NotReadyCause, PendingReason, PlayheadRead, PlayheadWrite,
@@ -14,25 +10,26 @@ use kithara_stream::{
     SourcePhase, StreamError, WorkerWake, dl::PeerHandle,
 };
 use tracing::trace;
-use url::Url;
 
-use super::{
-    inner::{FileAssetCtx, FileInner, FilePhase, FileSourceCtx},
-    segments::FileSegmentIndex,
+use super::{inner::FileSourceCtx, segments::FileSegmentIndex};
+use crate::{
+    coord::FileCoord,
+    engine::{EngineIdentity, FilePhase, LifecycleSink, ResourceEngine},
+    error::SourceError as FileSourceError,
 };
-use crate::{coord::FileCoord, error::SourceError as FileSourceError};
 
-/// Sync `Source` impl over a shared [`FileInner`].
+/// Sync `Source` impl over a shared [`ResourceEngine`].
 ///
 /// All async work — HTTP fetch, body streaming, finalization — is owned
 /// by the Downloader through [`FilePeer`](super::FilePeer); `FileSource`
 /// just exposes the cached bytes synchronously to the audio worker.
 #[derive(Clone)]
 pub struct FileSource {
-    /// Shared coordination — held next to `inner` so the hot read paths
-    /// don't have to dereference the inner Arc.
+    /// Shared coordination — held next to the engine so hot read paths
+    /// do not have to dereference the lifecycle sink.
     coord: Arc<FileCoord>,
-    inner: Arc<FileInner>,
+    engine: Arc<ResourceEngine>,
+    source: Arc<FileSourceCtx>,
     /// Peer registration handle returned by `Downloader::register`.
     /// Held here (mirroring `HlsSource::set_peer_handle`) so the peer
     /// stays registered for the source's lifetime — dropping the last
@@ -45,7 +42,7 @@ impl FileSource {
     fn known_len(&self) -> Option<u64> {
         self.coord
             .total_bytes()
-            .or_else(|| self.inner.asset.reader.len())
+            .or_else(|| self.engine.reader.len())
     }
 
     /// Create a source for a local/cached file (no downloads needed).
@@ -62,37 +59,33 @@ impl FileSource {
         cancel: CancelToken,
         cached_codec: Option<AudioCodec>,
     ) -> Self {
-        let inner = Arc::new(FileInner::new(
-            FileSourceCtx {
-                cancel,
-                bus,
-                coord: Arc::clone(&coord),
-            },
-            FileAssetCtx {
-                backend,
-                reader,
-                key,
-                writer: Mutex::default(),
-                raw: None,
-                headers: None,
-                url: Url::parse("file:///local")
-                    .expect("BUG: hard-coded literal `file:///local` is a valid URL"),
-            },
-            FilePhase::Complete,
-            None,
-        ));
-        if let Some(codec) = cached_codec {
-            let _ = inner.content_type_info.set(MediaInfo::from(codec));
-        }
-        let total_bytes = inner.asset.reader.len();
-        inner.publish_opened(
-            total_bytes,
+        let source = Arc::new(FileSourceCtx::new(
+            Arc::clone(&coord),
+            bus,
+            reader.clone(),
             true,
-            total_bytes.map(|_| kithara_events::TotalBytesSource::CommittedLen),
+            Some(kithara_events::TotalBytesSource::CommittedLen),
+        ));
+        let sink = Arc::clone(&source) as Arc<dyn LifecycleSink>;
+        let engine = Arc::new(
+            ResourceEngine::builder()
+                .identity(EngineIdentity {
+                    store: backend,
+                    key,
+                    process: None,
+                    cancel,
+                })
+                .reader(reader)
+                .sink(sink)
+                .initial_phase(FilePhase::Complete)
+                .build(),
         );
+        source.try_build_segment_index();
+        source.metadata_resolved(cached_codec.map(MediaInfo::from));
         Self {
             coord,
-            inner,
+            engine,
+            source,
             peer_handle: None,
         }
     }
@@ -119,26 +112,31 @@ impl FileSource {
     fn update_read_demand(&self, read_pos: u64) {
         if read_pos > self.coord.read_pos() {
             self.coord.set_read_pos(read_pos);
-            if let Some(lease) = self.inner.demand_lease.as_ref() {
+            if let Some(lease) = self.engine.demand_lease.as_ref() {
                 lease.note_progress();
             }
         }
     }
 
-    /// Build a `FileSource` over a pre-constructed [`FileInner`]. The
-    /// inner is created up in `stream.rs::Stream<File>::open` and shared
+    /// Build a `FileSource` over a pre-constructed [`ResourceEngine`]. The
+    /// engine is created up in `stream.rs::Stream<File>::open` and shared
     /// with [`FilePeer`](super::FilePeer); the Downloader owns the fetch
     /// loop, so this constructor does nothing async.
-    pub(crate) fn with_inner(inner: Arc<FileInner>, coord: Arc<FileCoord>) -> Self {
+    pub(crate) fn with_engine(
+        engine: Arc<ResourceEngine>,
+        source: Arc<FileSourceCtx>,
+        coord: Arc<FileCoord>,
+    ) -> Self {
         Self {
             coord,
-            inner,
+            engine,
+            source,
             peer_handle: None,
         }
     }
 
     fn zero_read_outcome(&self, offset: u64) -> kithara_stream::StreamResult<ReadOutcome> {
-        match self.inner.asset.reader.status() {
+        match self.engine.reader.status() {
             ResourceStatus::Active => Ok(ReadOutcome::Pending(PendingReason::NotReady(
                 NotReadyCause::SourcePending,
             ))),
@@ -175,9 +173,10 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn byte_map(&self) -> Option<Arc<dyn kithara_stream::ByteMap>> {
-        self.inner.segment_index.get()?;
+        self.source.segment_index.get()?;
         Some(Arc::new(FileByteMap {
-            inner: Arc::clone(&self.inner),
+            engine: Arc::clone(&self.engine),
+            source: Arc::clone(&self.source),
         }))
     }
 
@@ -186,7 +185,7 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
-        self.inner.content_type_info.get().cloned()
+        self.source.content_type_info.get().cloned()
     }
 
     fn phase(&self) -> SourcePhase {
@@ -196,14 +195,14 @@ impl kithara_stream::Source for FileSource {
 
     fn phase_at(&self, range: Range<u64>) -> SourcePhase {
         let Some(readable) = self.readable_part(range) else {
-            return match self.inner.asset.reader.status() {
+            return match self.engine.reader.status() {
                 ResourceStatus::Committed { .. } => SourcePhase::Eof,
                 ResourceStatus::Active | ResourceStatus::Failed(_) | ResourceStatus::Cancelled => {
                     SourcePhase::Waiting
                 }
             };
         };
-        let contains = readable.is_empty() || self.inner.asset.reader.contains_range(readable);
+        let contains = readable.is_empty() || self.engine.reader.contains_range(readable);
         if contains {
             return SourcePhase::Ready;
         }
@@ -221,8 +220,7 @@ impl kithara_stream::Source for FileSource {
         buf: &mut [u8],
     ) -> kithara_stream::StreamResult<ReadOutcome> {
         let n = self
-            .inner
-            .asset
+            .engine
             .reader
             .read_at(offset, buf)
             .map_err(|e| StreamError::Source(FileSourceError::Storage(e).into()))?;
@@ -237,12 +235,12 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>) {
-        self.inner.set_worker_wake(wake);
+        self.engine.set_worker_wake(wake);
     }
 
     fn take_reader_event_sink(&mut self) -> Option<kithara_stream::BoxedEventSink> {
         let hooks = super::reader::FileReaderEventSink::new(
-            self.inner.source.bus.clone(),
+            self.source.bus.clone(),
             Arc::clone(&self.coord),
             self.coord.seek_epoch_handle(),
         );
@@ -268,8 +266,7 @@ impl kithara_stream::Source for FileSource {
             return Err(StreamError::Source(StreamSourceError::WaitBudgetExceeded));
         }
 
-        self.inner
-            .asset
+        self.engine
             .reader
             .wait_range(range)
             .map_err(|e| StreamError::Source(FileSourceError::Storage(e).into()))
@@ -278,16 +275,17 @@ impl kithara_stream::Source for FileSource {
 
 /// Byte-map handle for a fully cached fragmented-mp4 file.
 ///
-/// Holds a clone of `FileInner` so the layout survives independently of
+/// Holds the engine and File shell so the layout survives independently of
 /// the original `FileSource` cursor; segment queries hit the lazy
 /// `OnceLock<FileSegmentIndex>` populated on first call.
 struct FileByteMap {
-    inner: Arc<FileInner>,
+    engine: Arc<ResourceEngine>,
+    source: Arc<FileSourceCtx>,
 }
 
 impl FileByteMap {
     fn segment_index(&self) -> Option<&FileSegmentIndex> {
-        self.inner.segment_index.get()
+        self.source.segment_index.get()
     }
 }
 
@@ -298,7 +296,7 @@ impl kithara_stream::ByteMap for FileByteMap {
     }
 
     fn len(&self) -> Option<u64> {
-        self.inner.asset.reader.len()
+        self.engine.reader.len()
     }
 
     fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {

@@ -33,6 +33,19 @@ flowchart LR
 - Each fetch's `writer` closure writes bytes directly into the underlying `AssetStore`-managed `StorageResource`; `on_complete` lets the peer advance its state.
 - The reader side (`Stream<File>::Read + Seek`) goes through `FileSource::wait_range` / `read_at`. `wait_range(_, Some(_))` is the worker probe: it checks phase once and returns `WaitBudgetExceeded` for missing in-range bytes instead of blocking. `wait_range(_, None)` is the off-RT adapter path and delegates to the storage wait until bytes, EOF, failure, or cancel resolves. The probe clamps oversized read-ahead ranges at a known EOF, so a fully cached file with `0..read_ahead` where `read_ahead > len` is `Ready`, not need-data. `Eof` is returned only when the range starts past the stream's known length; an in-range range that has not yet been written returns `WaitBudgetExceeded` (→ `Pending`/need-data) so the reader holds rather than terminating. See `crates/kithara-stream/CONTEXT.md` "End-of-stream contract" for the cross-source invariant. Note: the EOF length source currently blends the announced length (`FileCoord::total_bytes`, seeded from `Content-Length`) with the committed length (`AssetReader::len()`); keying EOF strictly off the committed length is a planned hardening (Phase 1 EndOfStream design).
 
+## Engine ownership
+
+`kithara-file` owns the per-resource lifecycle engine: acquire → plan → fetch
+→ write → commit/settle → wake. The engine is protocol-neutral and receives
+the resource key scope, asset store, optional processing context, cancel
+token, lifecycle sink, and demand-frontier handle as injected identity and
+state. The File shell wires protocol identity into the engine and owns key
+minting, event mapping, the byte-map, and configuration.
+
+`kithara-hls` becomes an engine consumer in S2. Its per-segment resource work
+routes through the same lifecycle; the segment write path never reaches
+around the engine to raw asset-writer APIs.
+
 ## Local Files
 
 When `FileSrc::Local(path)` is used, the crate opens the source via `AssetStore`
@@ -49,7 +62,15 @@ while the original local media file remains untouched.
 
 ## Remote Files
 
-For `FileSrc::Remote(url)`, downloading is pull-driven: the peer requests fetches as the reader advances, with backpressure controlled by the read-demand cell shared between `FileCoord` and the asset demand lease. A missing range advances that demand and wakes the elected producer; each successful HTTP chunk write wakes the audio worker through `WorkerWake` so a parked probe re-runs when bytes arrive instead of waiting for the scheduler backstop. Seek miss enqueues an explicit range fetch for the requested offset.
+For `FileSrc::Remote(url)`, downloading is pull-driven and planning is
+gap-driven. The engine's demand input is the read-frontier handle wired by
+`FileCoord::read_pos_handle` through `AssetStore::attach_demand`; that
+watermark is inert in planning today, and actual demand consumption arrives
+with S4a. A missing range advances the read frontier and wakes the elected
+producer; each successful HTTP chunk write wakes the audio worker through
+`WorkerWake` so a parked probe re-runs when bytes arrive instead of waiting
+for the scheduler backstop. Seek miss enqueues an explicit range fetch for
+the requested offset.
 
 Remote file cache naming is owned by the layout registered for the `File`
 marker in the shared `AssetStore`. The stream binds

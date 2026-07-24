@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use kithara_platform::sync::{Arc, Notify};
+use kithara_platform::sync::Arc;
 use kithara_stream::{
     Activity, PlayheadRead, PlayheadState, PlayheadWrite, SeekControl, SeekObserve, SeekState,
 };
@@ -30,7 +30,6 @@ pub(crate) struct FileCoord {
     #[field(get, vis = "pub(crate)", deref = false)]
     seek_obs: Arc<dyn SeekObserve>,
     total_bytes: Arc<AtomicU64>,
-    reader_advanced: Notify,
 }
 
 impl FileCoord {
@@ -50,7 +49,6 @@ impl FileCoord {
             activity,
             position: Arc::new(AtomicU64::new(0)),
             read_pos: Arc::new(AtomicU64::new(0)),
-            reader_advanced: Notify::default(),
             total_bytes: Arc::new(AtomicU64::new(Self::NO_TOTAL_BYTES)),
         }
     }
@@ -121,7 +119,6 @@ impl FileCoord {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(crate) fn set_read_pos(&self, value: u64) {
         self.read_pos.store(value, Ordering::Release);
-        self.reader_advanced.notify_one();
     }
 
     pub(crate) fn set_total_bytes(&self, total: Option<u64>) {

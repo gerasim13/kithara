@@ -8,7 +8,7 @@ use kithara_events::{EventBus, FileError, FileEvent};
 use kithara_net::{Headers, HttpClient, NetOptions};
 use kithara_platform::{
     CancelScope, CancelToken,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, sleep},
 };
 use kithara_storage::StorageError;
@@ -21,10 +21,9 @@ use kithara_test_utils::kithara;
 use crate::{
     config::{FileConfig, FileSrc},
     coord::FileCoord,
+    engine::{EngineIdentity, FilePhase, LifecycleSink, ResourceEngine},
     error::SourceError,
-    session::{
-        FileAssetCtx, FileInner, FilePeer, FilePhase, FileSource, FileSourceCtx, FileStreamState,
-    },
+    session::{FilePeer, FileSource, FileSourceCtx, FileStreamState},
 };
 
 /// Marker type for file streaming.
@@ -38,13 +37,11 @@ impl Consts {
 }
 
 struct RemoteFileOpen {
-    backend: AssetStore,
-    cancel: CancelToken,
+    identity: EngineIdentity,
     downloader: Downloader,
     bus: EventBus,
     headers: Option<Headers>,
     look_ahead_bytes: Option<u64>,
-    key: ResourceKey,
     url: url::Url,
 }
 
@@ -150,12 +147,10 @@ fn default_downloader(cancel: &CancelToken, pool: Option<BytePool>) -> Downloade
 impl RemoteFileOpen {
     fn into_source(self, writer: AssetWriter) -> FileSource {
         let Self {
-            backend,
             bus,
-            cancel,
             downloader,
             headers,
-            key,
+            identity,
             look_ahead_bytes,
             url,
         } = self;
@@ -164,34 +159,42 @@ impl RemoteFileOpen {
         let raw = writer.raw_write_handle();
         let coord = coord_with_total(reader.len());
         let (demand_lease, producer) =
-            backend.attach_demand(&key, coord.read_pos_handle(), look_ahead_bytes);
-
-        let inner = Arc::new(FileInner::new(
-            FileSourceCtx {
-                cancel,
-                coord: Arc::clone(&coord),
-                bus: bus.clone(),
-            },
-            FileAssetCtx {
-                url,
-                reader,
-                headers,
-                backend,
-                key,
-                writer: Mutex::new(Some(writer)),
-                raw: Some(raw),
-            },
-            FilePhase::Init,
-            Some(demand_lease),
+            identity
+                .store
+                .attach_demand(&identity.key, coord.read_pos_handle(), look_ahead_bytes);
+        let source = Arc::new(FileSourceCtx::new(
+            Arc::clone(&coord),
+            bus.clone(),
+            reader.clone(),
+            false,
+            None,
         ));
+        let sink = Arc::clone(&source) as Arc<dyn LifecycleSink>;
+        let engine = Arc::new(
+            ResourceEngine::builder()
+                .identity(identity)
+                .reader(reader)
+                .writer(writer)
+                .raw(raw)
+                .sink(sink)
+                .initial_phase(FilePhase::Init)
+                .demand_lease(demand_lease)
+                .build(),
+        );
 
         let peer_handle = downloader
-            .register(Arc::new(FilePeer::new(Arc::clone(&inner), producer)))
+            .register(Arc::new(FilePeer::new(
+                Arc::clone(&engine),
+                Arc::clone(&source),
+                producer,
+                url,
+                headers,
+            )))
             .with_bus(bus);
 
-        let mut source = FileSource::with_inner(inner, coord);
-        source.set_peer_handle(peer_handle);
-        source
+        let mut file_source = FileSource::with_engine(engine, source, coord);
+        file_source.set_peer_handle(peer_handle);
+        file_source
     }
 }
 
@@ -264,15 +267,16 @@ impl File {
         let downloader = downloader.unwrap_or_else(|| default_downloader(&cancel, pool.clone()));
         let backend = store;
         let key = remote_key(&backend, &url, discriminator, extension.as_deref())?;
-        let publish_bus = bus.clone();
-        let file_state = FileStreamState::create(&backend, key, bus, event_channel_capacity)
-            .inspect_err(|error| publish_open_error(publish_bus.as_ref(), error))?;
-        let FileStreamState {
-            backend,
-            acq,
-            bus,
+        let identity = EngineIdentity {
+            store: backend,
             key,
-        } = file_state;
+            process: None,
+            cancel,
+        };
+        let publish_bus = bus.clone();
+        let file_state = FileStreamState::create(identity, bus, event_channel_capacity)
+            .inspect_err(|error| publish_open_error(publish_bus.as_ref(), error))?;
+        let FileStreamState { identity, acq, bus } = file_state;
 
         // `Ready` means the file is already committed in the cache — no
         // download. `Pending` hands the single non-Clone commit owner to the
@@ -280,16 +284,17 @@ impl File {
         match acq {
             AcquisitionResult::Ready(reader) => {
                 tracing::debug!("file already cached, skipping download");
-                Ok(cached_source(reader, bus, backend, key, cancel.child()))
+                let EngineIdentity {
+                    store, key, cancel, ..
+                } = identity;
+                Ok(cached_source(reader, bus, store, key, cancel.child()))
             }
             AcquisitionResult::Pending(writer) => Ok(RemoteFileOpen {
-                backend,
-                cancel,
+                identity,
                 downloader,
                 bus,
                 headers,
                 look_ahead_bytes,
-                key,
                 url,
             }
             .into_source(writer)),

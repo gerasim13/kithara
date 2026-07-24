@@ -1,217 +1,89 @@
-use std::sync::{
-    OnceLock,
-    atomic::{AtomicU8, Ordering},
-};
+use std::sync::OnceLock;
 
-use kithara_assets::{
-    AssetReader, AssetStore, AssetWriter, DemandLease, RawWriteHandle, ReadSide,
-    ResourceAcquisition, ResourceKey, WriteSide,
+use kithara_assets::{AssetReader, ReadSide, ResourceAcquisition};
+use kithara_events::{
+    AudioCodecKind, ContainerKind, EventBus, FileError, FileEvent, TotalBytesSource,
 };
-use kithara_events::{AudioCodecKind, ContainerKind, EventBus, FileEvent, TotalBytesSource};
-use kithara_net::Headers;
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, Mutex},
-};
-use kithara_stream::{MediaInfo, WorkerWake};
-use kithara_test_utils::{kithara, probe::IntoProbeArg};
-use url::Url;
+use kithara_platform::sync::Arc;
+use kithara_stream::MediaInfo;
 
 use super::segments::FileSegmentIndex;
-use crate::{coord::FileCoord, error::SourceError};
+use crate::{
+    coord::FileCoord,
+    engine::{EngineIdentity, LifecycleSink},
+    error::SourceError,
+};
 
 /// Creation helper: acquire the asset resource and prepare the event bus
 /// before constructing a remote `FileSource`. The phase-typed acquisition
 /// (`Pending` writer to download / `Ready` reader already cached) is decided
 /// by the caller.
 pub(crate) struct FileStreamState {
-    pub(crate) backend: AssetStore,
+    pub(crate) identity: EngineIdentity,
     pub(crate) acq: ResourceAcquisition,
     pub(crate) bus: EventBus,
-    pub(crate) key: ResourceKey,
 }
 
 impl FileStreamState {
     pub(crate) fn create(
-        assets: &AssetStore,
-        key: ResourceKey,
+        identity: EngineIdentity,
         bus: Option<EventBus>,
         event_channel_capacity: usize,
     ) -> Result<Self, SourceError> {
-        let acq = assets
-            .acquire_resource(&key, None)
-            .map_err(SourceError::Assets)?;
+        let acq = identity.acquire().map_err(SourceError::Assets)?;
         let bus = bus.unwrap_or_else(|| EventBus::new(event_channel_capacity));
-        Ok(Self {
-            bus,
-            key,
-            acq,
-            backend: assets.clone(),
-        })
+        Ok(Self { identity, acq, bus })
     }
 }
 
-/// File-streaming FSM phases. Stored as `AtomicU8` for lock-free transitions
-/// from the download driver.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub(crate) enum FilePhase {
-    /// Ready to start the initial full-file download.
-    Init = 0,
-    /// Download in progress.
-    Downloading = 1,
-    /// File fully downloaded (or local).
-    Complete = 2,
-}
-
-impl IntoProbeArg for FilePhase {
-    fn into_probe_arg(self) -> u64 {
-        u64::from(self as u8)
-    }
-}
-
-/// Control-plane handles shared between the source and the download driver.
+/// File-shell state used by the engine's lifecycle callbacks.
 pub(crate) struct FileSourceCtx {
     pub(crate) coord: Arc<FileCoord>,
-    pub(crate) cancel: CancelToken,
     pub(crate) bus: EventBus,
-}
-
-/// Data-plane handles describing where the file lives and how to fetch it.
-///
-/// The resource is phase-split: `reader` serves the synchronous read path;
-/// `writer` is the single non-`Clone` commit owner (taken on commit/fail),
-/// present only on the download path; `raw` is the clone-able streaming-write
-/// handle a fetch closure uses to land bytes into the writer's generation.
-pub(crate) struct FileAssetCtx {
-    pub(crate) backend: AssetStore,
-    pub(crate) reader: AssetReader,
-    pub(crate) writer: Mutex<Option<AssetWriter>>,
-    pub(crate) headers: Option<Headers>,
-    pub(crate) raw: Option<RawWriteHandle>,
-    pub(crate) key: ResourceKey,
-    pub(crate) url: Url,
-}
-
-/// Shared inner state for a `FileSource`. All fields are either immutable
-/// (set at construction) or self-synchronizing — there is no `Mutex`.
-pub(crate) struct FileInner {
-    pub(crate) asset: FileAssetCtx,
-    pub(crate) source: FileSourceCtx,
-    /// `MediaInfo` discovered from the HTTP `Content-Type` header on
-    /// first connect (or sniffed from the cached bytes for local
-    /// fast-path). Set at most once. Carries both codec and container
-    /// so downstream Apple/Android dispatch can pick a backend without
-    /// re-probing the bytes.
     pub(crate) content_type_info: OnceLock<MediaInfo>,
-    /// Lazily-built fragmented-mp4 segment index. Populated on first
-    /// segment-method call once the file is fully cached and parses
-    /// as fragmented mp4. Stays empty for non-mp4 files, classic mp4
-    /// (no `moof` chain), or while the file is still downloading.
     pub(crate) segment_index: OnceLock<FileSegmentIndex>,
-
-    /// Consumer demand lease held for this source's lifetime. `Some` on
-    /// the remote-download path: it keeps the demand slot alive and lets
-    /// [`FilePeer`](super::FilePeer) take over the single-producer
-    /// election if the original producer drops. `None` for local /
-    /// already-cached sources that never download.
-    pub(crate) demand_lease: Option<DemandLease>,
+    reader: AssetReader,
+    cached: bool,
     opened_emitted: OnceLock<()>,
-
-    /// FSM phase as `FilePhase as u8`. Lock-free transitions.
-    phase: AtomicU8,
-
-    /// Late-bound audio-worker wake. Remote file sources can underrun while
-    /// HTTP bytes are still arriving, so each write wakes the worker that
-    /// previously parked on a non-blocking readiness probe.
-    worker_wake: OnceLock<Arc<dyn WorkerWake>>,
+    total_bytes_source: Option<TotalBytesSource>,
 }
 
-impl FileInner {
+impl FileSourceCtx {
     pub(crate) fn new(
-        source: FileSourceCtx,
-        asset: FileAssetCtx,
-        initial_phase: FilePhase,
-        demand_lease: Option<DemandLease>,
+        coord: Arc<FileCoord>,
+        bus: EventBus,
+        reader: AssetReader,
+        cached: bool,
+        total_bytes_source: Option<TotalBytesSource>,
     ) -> Self {
-        let inner = Self {
-            source,
-            asset,
-            demand_lease,
-            opened_emitted: OnceLock::new(),
+        Self {
+            coord,
+            bus,
+            reader,
+            cached,
+            total_bytes_source,
             content_type_info: OnceLock::new(),
             segment_index: OnceLock::new(),
-            worker_wake: OnceLock::new(),
-            phase: AtomicU8::new(initial_phase as u8),
-        };
-        if matches!(initial_phase, FilePhase::Complete) {
-            inner.try_build_segment_index();
+            opened_emitted: OnceLock::new(),
         }
-        inner
     }
 
     /// Read the fully cached file bytes and parse a fragmented-mp4 index,
     /// or `None` when the file is not yet complete or not fragmented mp4.
     fn build_segment_index_from_cache(&self) -> Option<FileSegmentIndex> {
-        let total = self.asset.reader.len()?;
-        if total == 0 || !self.asset.reader.contains_range(0..total) {
+        let total = self.reader.len()?;
+        if total == 0 || !self.reader.contains_range(0..total) {
             return None;
         }
         let total_usize = usize::try_from(total).ok()?;
         let mut buf: Box<[u8]> = std::iter::repeat_n(0u8, total_usize).collect();
-        self.asset.reader.read_at(0, &mut buf).ok()?;
+        self.reader.read_at(0, &mut buf).ok()?;
         FileSegmentIndex::try_build(&buf)
-    }
-
-    /// Mark the resource failed and evict the pre-allocated cache file.
-    ///
-    /// Call on any terminal download error so the file is gone from disk
-    /// before the task returns — without this the reader in `FileInner.asset`
-    /// keeps the mmap parked in the cache directory for the full lifetime
-    /// of the holding `Stream<File>`.
-    pub(crate) fn fail_and_evict(&self, reason: &str) {
-        if let Some(writer) = self.take_writer() {
-            writer.fail(reason.to_string());
-        }
-        if let Err(error) = self.asset.backend.remove_resource(&self.asset.key) {
-            tracing::warn!(%error, reason, "kithara-file: failed to remove terminal resource");
-        }
-    }
-
-    /// Lock-free FSM transition. The one-shot fragmented-mp4 parse runs
-    /// on the `Complete` edge so the hot-path `byte_map` audit
-    /// can short-circuit on `segment_index.get()` without re-reading the
-    /// file each tick.
-    #[kithara::probe(phase)]
-    pub(crate) fn set_phase(&self, phase: FilePhase) {
-        let previous = self.phase.load(Ordering::Acquire);
-        self.phase.store(phase as u8, Ordering::Release);
-        if matches!(phase, FilePhase::Complete) && previous != FilePhase::Complete as u8 {
-            if let Some(total_bytes) = self.source.coord.total_bytes() {
-                self.source
-                    .bus
-                    .publish(FileEvent::CacheComplete { total_bytes });
-            }
-            self.try_build_segment_index();
-        }
-    }
-
-    pub(crate) fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>) {
-        let _ = self.worker_wake.set(wake);
-    }
-
-    /// Take the single commit-owning writer, if this is a download path and it
-    /// has not been consumed yet.
-    pub(crate) fn take_writer(&self) -> Option<AssetWriter> {
-        self.asset.writer.lock().take()
     }
 
     /// One-shot fragmented-mp4 parse from the fully cached file bytes.
     /// Idempotent: a second call is a `OnceLock::get` fast-path no-op.
-    /// Called from `set_phase(Complete)` (and from `new` for files
-    /// constructed already-complete) so the hot-path `byte_map`
-    /// audit only ever reads the cached result.
-    fn try_build_segment_index(&self) {
+    pub(crate) fn try_build_segment_index(&self) {
         if self.segment_index.get().is_some() {
             return;
         }
@@ -219,44 +91,59 @@ impl FileInner {
             let _ = self.segment_index.set(index);
         }
     }
+}
 
-    pub(crate) fn wake_worker(&self) {
-        if let Some(wake) = self.worker_wake.get() {
-            wake.wake();
+impl LifecycleSink for FileSourceCtx {
+    fn metadata_resolved(&self, info: Option<MediaInfo>) {
+        if let Some(info) = info {
+            let _ = self.content_type_info.set(info);
         }
-    }
-
-    pub(crate) fn publish_opened(
-        &self,
-        total_bytes: Option<u64>,
-        cached: bool,
-        source: Option<TotalBytesSource>,
-    ) {
         if self.opened_emitted.set(()).is_err() {
             return;
         }
+        let total_bytes = self.coord.total_bytes().or_else(|| self.reader.len());
         let (codec, container) = self
             .content_type_info
             .get()
             .map_or((None, None), map_media_info);
-        self.source.bus.publish(FileEvent::Opened {
+        self.bus.publish(FileEvent::Opened {
             codec,
             container,
             total_bytes,
-            cached,
+            cached: self.cached,
         });
-        if let (Some(total_bytes), Some(source)) = (total_bytes, source) {
-            self.source.bus.publish(FileEvent::TotalBytesResolved {
+        if let (Some(total_bytes), Some(source)) = (total_bytes, self.total_bytes_source) {
+            self.bus.publish(FileEvent::TotalBytesResolved {
                 total_bytes,
                 source,
             });
         }
     }
 
-    pub(crate) fn publish_total_bytes_resolved(&self, total_bytes: u64, source: TotalBytesSource) {
-        self.source.bus.publish(FileEvent::TotalBytesResolved {
-            total_bytes,
-            source,
+    fn total_bytes_resolved(&self, total_bytes: u64) {
+        let previous_total = self.coord.total_bytes();
+        self.coord.set_total_bytes(Some(total_bytes));
+        if previous_total != Some(total_bytes) {
+            self.bus.publish(FileEvent::TotalBytesResolved {
+                total_bytes,
+                source: TotalBytesSource::ContentLength,
+            });
+        }
+    }
+
+    fn complete(&self, final_len: Option<u64>) {
+        if let Some(final_len) = final_len {
+            self.coord.set_total_bytes(Some(final_len));
+        }
+        if let Some(total_bytes) = self.coord.total_bytes() {
+            self.bus.publish(FileEvent::CacheComplete { total_bytes });
+        }
+        self.try_build_segment_index();
+    }
+
+    fn error(&self, reason: &str) {
+        self.bus.publish(FileEvent::Error {
+            error: FileError::Io(reason.to_string()),
         });
     }
 }
@@ -295,5 +182,144 @@ fn map_container(container: kithara_stream::ContainerFormat) -> ContainerKind {
         kithara_stream::ContainerFormat::Ogg => ContainerKind::Ogg,
         kithara_stream::ContainerFormat::Caf => ContainerKind::Caf,
         kithara_stream::ContainerFormat::Mkv => ContainerKind::Mkv,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_assets::{
+        AcquisitionResult, AssetResource, AssetResourceState, AssetSource, AssetStore,
+        AssetStoreBuilder, ResourceKey, StorageBackend, WriteSide,
+    };
+    use kithara_events::{Envelope, Event};
+    use kithara_platform::CancelToken;
+    use kithara_stream::{PlayheadState, SeekState};
+    use kithara_test_utils::kithara;
+    use url::Url;
+
+    use super::*;
+    use crate::{
+        File,
+        engine::{FilePhase, ResourceEngine},
+    };
+
+    fn test_key(store: &AssetStore) -> ResourceKey {
+        let source = AssetSource::Remote {
+            url: Url::parse("https://example.com/remote.dat").expect("test URL"),
+            discriminator: Some("peer-test".to_string()),
+        };
+        let scope = store.scope::<File>(&source).expect("test scope");
+        scope
+            .key(&AssetResource::Source {
+                extension: "dat".to_string(),
+            })
+            .expect("test resource key")
+    }
+
+    fn make_engine() -> (Arc<ResourceEngine>, Arc<FileSourceCtx>) {
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .cancel(CancelToken::never())
+            .build();
+        let key = test_key(&store);
+        let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
+            panic!("fresh acquire must be Pending");
+        };
+        let reader = writer.reader();
+        let coord = Arc::new(FileCoord::new(
+            Arc::new(PlayheadState::new()),
+            Arc::new(SeekState::new()),
+        ));
+        let source = Arc::new(FileSourceCtx::new(
+            coord,
+            EventBus::new(16),
+            reader.clone(),
+            false,
+            None,
+        ));
+        let sink = Arc::clone(&source) as Arc<dyn LifecycleSink>;
+        let identity = EngineIdentity {
+            store,
+            key,
+            process: None,
+            cancel: CancelToken::never(),
+        };
+        let engine = Arc::new(
+            ResourceEngine::builder()
+                .identity(identity)
+                .reader(reader)
+                .writer(writer)
+                .sink(sink)
+                .initial_phase(FilePhase::Init)
+                .build(),
+        );
+        (engine, source)
+    }
+
+    #[kithara::test]
+    fn remote_capture_metadata_publishes_opened() {
+        let (engine, source) = make_engine();
+        let mut rx = source.bus.subscribe();
+        let mut headers = kithara_net::Headers::new();
+        headers.insert("content-type", "audio/mpeg");
+        headers.insert("content-length", "12");
+
+        engine.capture_content_metadata(&headers, 0);
+
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Envelope {
+                event: Event::File(FileEvent::TotalBytesResolved { .. }),
+                ..
+            })
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Envelope {
+                event: Event::File(FileEvent::Opened {
+                    cached: false,
+                    total_bytes: Some(12),
+                    ..
+                }),
+                ..
+            })
+        ));
+    }
+
+    #[kithara::test]
+    fn complete_phase_publishes_cache_complete() {
+        let (engine, source) = make_engine();
+        let mut rx = source.bus.subscribe();
+        source.coord.set_total_bytes(Some(12));
+
+        engine.set_phase(FilePhase::Complete, Some(12));
+
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Envelope {
+                event: Event::File(FileEvent::CacheComplete { total_bytes: 12 }),
+                ..
+            })
+        ));
+    }
+
+    #[kithara::test]
+    fn terminal_failure_does_not_publish_cache_complete() {
+        let (engine, source) = make_engine();
+        let mut rx = source.bus.subscribe();
+        source.coord.set_total_bytes(Some(12));
+        engine.set_phase(FilePhase::Downloading, None);
+
+        engine.fail_and_evict("fixture terminal failure");
+
+        assert!(rx.try_recv().is_err());
+        assert!(matches!(
+            engine
+                .identity
+                .store
+                .resource_state(&engine.identity.key)
+                .expect("resource state"),
+            AssetResourceState::Missing
+        ));
     }
 }
