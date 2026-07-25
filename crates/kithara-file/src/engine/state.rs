@@ -1,6 +1,6 @@
 use std::sync::{
     OnceLock,
-    atomic::{AtomicU8, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
 use bon::bon;
@@ -10,6 +10,7 @@ use kithara_stream::WorkerWake;
 use kithara_test_utils::{kithara, probe::IntoProbeArg};
 
 use super::{EngineIdentity, LifecycleSink};
+use crate::config::{FetchCompleteFn, FetchOutcome};
 
 /// File-streaming FSM phases. Stored as `AtomicU8` for lock-free transitions
 /// from the download driver.
@@ -40,6 +41,9 @@ pub(crate) struct ResourceEngine {
     pub(crate) demand_lease: Option<DemandLease>,
     pub(crate) phase: AtomicU8,
     pub(crate) worker_wake: OnceLock<Arc<dyn WorkerWake>>,
+    /// Caller's terminal-outcome hook, fired at most once.
+    on_complete: Option<FetchCompleteFn>,
+    notified: AtomicBool,
 }
 
 #[bon]
@@ -53,6 +57,7 @@ impl ResourceEngine {
         sink: Arc<dyn LifecycleSink>,
         initial_phase: FilePhase,
         demand_lease: Option<DemandLease>,
+        on_complete: Option<FetchCompleteFn>,
     ) -> Self {
         Self {
             identity,
@@ -63,6 +68,8 @@ impl ResourceEngine {
             demand_lease,
             phase: AtomicU8::new(initial_phase as u8),
             worker_wake: OnceLock::new(),
+            on_complete,
+            notified: AtomicBool::new(false),
         }
     }
 
@@ -77,6 +84,18 @@ impl ResourceEngine {
         }
         if let Err(error) = self.identity.store.remove_resource(&self.identity.key) {
             tracing::warn!(%error, reason, "kithara-file: failed to remove terminal resource");
+        }
+    }
+
+    /// Report the terminal outcome to the caller's hook. The fetch has one
+    /// end, so the hook has one call: a resource that fails after a racing
+    /// commit, or is cancelled twice, still reports once.
+    pub(crate) fn notify_fetch_complete(&self, outcome: FetchOutcome) {
+        let Some(on_complete) = self.on_complete.as_ref() else {
+            return;
+        };
+        if !self.notified.swap(true, Ordering::AcqRel) {
+            on_complete(outcome);
         }
     }
 

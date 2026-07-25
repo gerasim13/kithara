@@ -4770,6 +4770,7 @@ dependencies = [
  "kithara-test-utils",
  "kithara-workspace-hack",
  "memory-stats",
+ "num-traits",
  "re_mp4",
  "tempfile",
  "thiserror 2.0.18",

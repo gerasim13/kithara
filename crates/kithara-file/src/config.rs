@@ -3,8 +3,8 @@ use std::{fmt, path::PathBuf};
 use bon::Builder;
 use kithara_assets::{AssetStore, BytePool, ProcessCtx, ResourceKey};
 use kithara_events::EventBus;
-use kithara_net::Headers;
-use kithara_platform::CancelToken;
+use kithara_net::{Headers, NetError};
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::dl::Downloader;
 use url::Url;
 
@@ -30,6 +30,50 @@ pub enum FileSrc {
     },
 }
 
+/// How a fetch ended, reported once through
+/// [`FileConfig::on_fetch_complete`].
+///
+/// This says what happened to the resource, never what to do next: the
+/// retry policy belongs to whoever owns the key.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum FetchOutcome {
+    /// The resource is committed. `final_len` is the length read back after
+    /// the commit — a [`ProcessCtx`] pass can shrink it — or `None` when a
+    /// racing writer committed the resource and its length is not known
+    /// here.
+    Committed {
+        /// On-disk length after commit.
+        final_len: Option<u64>,
+    },
+    /// The transfer failed and the resource was failed and evicted.
+    Failed {
+        /// What the transport reported. Classify it with
+        /// [`NetError::retryability`].
+        error: NetError,
+    },
+    /// The bytes arrived but the commit itself failed — a processing pass
+    /// rejected them, so the resource was failed and evicted.
+    CommitFailed {
+        /// What the commit reported.
+        reason: String,
+    },
+    /// The fetch was cancelled. `committed` is `true` when the resource was
+    /// already committed by another writer, so the bytes on disk are final
+    /// and this fetch's cancel says nothing about them.
+    Cancelled {
+        /// Whether the resource is committed despite the cancel.
+        committed: bool,
+    },
+}
+
+/// Reports the terminal [`FetchOutcome`] of a fetching source.
+///
+/// Called at most once, from the downloader thread that settles the fetch.
+/// A caller that must consume something on the callback (a one-shot claim)
+/// holds it behind its own `Option`.
+pub type FetchCompleteFn = Arc<dyn Fn(FetchOutcome) + Send + Sync>;
+
 /// Configuration for file streaming.
 ///
 /// Used with `Stream::<File>::new(config)`.
@@ -54,6 +98,10 @@ pub struct FileConfig {
     pub extension: Option<String>,
     /// Optional cache discriminator.
     pub discriminator: Option<String>,
+    /// Reports how the fetch ended. Only a fetching source
+    /// ([`FileSrc::Remote`] / [`FileSrc::Resource`]) reports; a local or
+    /// attached source never fetches.
+    pub on_fetch_complete: Option<FetchCompleteFn>,
     /// Shared byte pool for cache and fallback network buffers.
     pub pool: Option<BytePool>,
     /// Transform applied to the fetched bytes when the resource commits —

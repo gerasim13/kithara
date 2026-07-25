@@ -19,7 +19,7 @@ use kithara_stream::{
 use kithara_test_utils::kithara;
 
 use crate::{
-    config::{FileConfig, FileSrc},
+    config::{FetchCompleteFn, FetchOutcome, FileConfig, FileSrc},
     coord::FileCoord,
     engine::{EngineIdentity, FilePhase, LifecycleSink, ResourceEngine},
     error::SourceError,
@@ -42,6 +42,7 @@ struct RemoteFileOpen {
     bus: EventBus,
     headers: Option<Headers>,
     look_ahead_bytes: Option<u64>,
+    on_fetch_complete: Option<FetchCompleteFn>,
     url: url::Url,
 }
 
@@ -152,6 +153,7 @@ impl RemoteFileOpen {
             headers,
             identity,
             look_ahead_bytes,
+            on_fetch_complete,
             url,
         } = self;
 
@@ -179,6 +181,7 @@ impl RemoteFileOpen {
                 .sink(sink)
                 .initial_phase(FilePhase::Init)
                 .demand_lease(demand_lease)
+                .maybe_on_complete(on_fetch_complete)
                 .build(),
         );
 
@@ -303,6 +306,7 @@ impl File {
             extension,
             headers,
             look_ahead_bytes,
+            on_fetch_complete,
             pool,
             process,
             store,
@@ -331,6 +335,14 @@ impl File {
         match acq {
             AcquisitionResult::Ready(reader) => {
                 tracing::debug!("file already cached, skipping download");
+                // The fetch ended before it began: report the committed
+                // resource so a caller waiting on the outcome is not left
+                // waiting for a download that will never run.
+                if let Some(on_fetch_complete) = on_fetch_complete {
+                    on_fetch_complete(FetchOutcome::Committed {
+                        final_len: reader.len(),
+                    });
+                }
                 let EngineIdentity {
                     store, key, cancel, ..
                 } = identity;
@@ -342,6 +354,7 @@ impl File {
                 bus,
                 headers,
                 look_ahead_bytes,
+                on_fetch_complete,
                 url,
             }
             .into_source(writer)),

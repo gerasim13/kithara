@@ -26,11 +26,16 @@ use kithara::{
         ProcessCtx, ResourceKey, ResourceProcessor, StorageBackend,
     },
     drm::{DecryptContext, as_process_ctx},
-    file::{File, FileConfig, FileSrc},
-    platform::{sync::Arc, time::Duration, tokio::task::spawn_blocking},
+    file::{FetchCompleteFn, FetchOutcome, File, FileConfig, FileSrc},
+    platform::{
+        sync::{Arc, Mutex},
+        time::Duration,
+        tokio::task::spawn_blocking,
+    },
     stream::Stream,
 };
 use kithara_integration_tests::{TestHttpServer, hls_fixture::crypto, kithara};
+use num_traits::AsPrimitive;
 
 /// Long enough that a cut at `CUT` leaves a real gap to resume.
 const BODY_LEN: usize = 40_000;
@@ -38,7 +43,9 @@ const BODY_LEN: usize = 40_000;
 const CUT: usize = 12_000;
 
 fn body_bytes() -> Vec<u8> {
-    (0..BODY_LEN).map(|i| (i % 251) as u8).collect()
+    (0..BODY_LEN)
+        .map(|i| u8::try_from(i % 251).expect("modulo 251 fits u8"))
+        .collect()
 }
 
 #[derive(Clone)]
@@ -159,16 +166,43 @@ async fn open_with(
     url: &url::Url,
     process: Option<ProcessCtx>,
 ) -> Stream<File> {
+    open_full(store, key, url, process, None).await
+}
+
+async fn open_full(
+    store: &AssetStore,
+    key: &ResourceKey,
+    url: &url::Url,
+    process: Option<ProcessCtx>,
+    on_fetch_complete: Option<FetchCompleteFn>,
+) -> Stream<File> {
     let config = FileConfig::for_src(FileSrc::Resource {
         key: key.clone(),
         url: url.clone(),
     })
     .store(store.clone())
     .maybe_process(process)
+    .maybe_on_fetch_complete(on_fetch_complete)
     .build();
     Stream::<File>::new(config)
         .await
         .expect("open caller-keyed file")
+}
+
+/// Collects what the fetch reported, so a test can assert on the outcome the
+/// caller would drive its own state machine from.
+#[derive(Clone, Default)]
+struct Reported(Arc<Mutex<Vec<FetchOutcome>>>);
+
+impl Reported {
+    fn hook(&self) -> FetchCompleteFn {
+        let sink = Arc::clone(&self.0);
+        Arc::new(move |outcome| sink.lock().push(outcome))
+    }
+
+    fn outcomes(&self) -> Vec<FetchOutcome> {
+        self.0.lock().clone()
+    }
 }
 
 #[kithara::test(
@@ -185,11 +219,12 @@ async fn bytes_land_under_the_caller_key() {
 
     assert_eq!(read_all(open(&store, &key, &url).await).await, data);
 
+    let body_len: u64 = data.len().as_();
     assert_eq!(gets.load(Ordering::SeqCst), 1, "one GET for one fetch");
     assert!(
         matches!(
             store.resource_state(&key).expect("caller key state"),
-            AssetResourceState::Committed { final_len: Some(len) } if len == data.len() as u64
+            AssetResourceState::Committed { final_len: Some(len) } if len == body_len
         ),
         "the caller's key holds the committed bytes"
     );
@@ -248,6 +283,67 @@ async fn caller_key_resumes_from_the_reached_byte() {
     );
 }
 
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(20)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+)]
+async fn a_finished_fetch_reports_the_committed_length() {
+    let data = body_bytes();
+    let (server, _gets) = start_server(data.clone(), false).await;
+    let url = server.url("/segment-0.ts");
+    let store = memory_store();
+    let key = caller_key(&store, &url);
+    let reported = Reported::default();
+
+    let read = read_all(open_full(&store, &key, &url, None, Some(reported.hook())).await).await;
+
+    let body_len: u64 = data.len().as_();
+    assert_eq!(read, data);
+    assert!(
+        matches!(
+            reported.outcomes().as_slice(),
+            [FetchOutcome::Committed { final_len: Some(len) }] if *len == body_len
+        ),
+        "one fetch reports one outcome, carrying the length the caller needs to size its own \
+         layout, got {:?}",
+        reported.outcomes()
+    );
+}
+
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(20)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+)]
+async fn a_cache_hit_still_reports_a_commit() {
+    let data = body_bytes();
+    let (server, gets) = start_server(data.clone(), false).await;
+    let url = server.url("/segment-0.ts");
+    let store = memory_store();
+    let key = caller_key(&store, &url);
+    read_all(open(&store, &key, &url).await).await;
+
+    let reported = Reported::default();
+    read_all(open_full(&store, &key, &url, None, Some(reported.hook())).await).await;
+
+    let body_len: u64 = data.len().as_();
+    assert_eq!(
+        gets.load(Ordering::SeqCst),
+        1,
+        "the second open is a cache hit"
+    );
+    assert!(
+        matches!(
+            reported.outcomes().as_slice(),
+            [FetchOutcome::Committed { final_len: Some(len) }] if *len == body_len
+        ),
+        "a fetch that never had to run still ended — a caller waiting on the outcome must not \
+         wait forever, got {:?}",
+        reported.outcomes()
+    );
+}
+
 /// Drops a fixed trailer on the last chunk, so the committed length is shorter
 /// than the fetched length — the same shape PKCS7 unpadding produces.
 #[derive(Debug)]
@@ -292,6 +388,7 @@ async fn processing_context_transforms_on_commit() {
 
     let read = read_all(open_with(&store, &key, &url, Some(process)).await).await;
 
+    let processed_len: u64 = (data.len() - TRAILER).as_();
     assert_eq!(
         read,
         data[..data.len() - TRAILER],
@@ -300,8 +397,7 @@ async fn processing_context_transforms_on_commit() {
     assert!(
         matches!(
             store.resource_state(&key).expect("state"),
-            AssetResourceState::Committed { final_len: Some(len) }
-                if len == (data.len() - TRAILER) as u64
+            AssetResourceState::Committed { final_len: Some(len) } if len == processed_len
         ),
         "the committed length is the processed length, read back after commit"
     );
