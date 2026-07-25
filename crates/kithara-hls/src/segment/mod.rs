@@ -5,7 +5,7 @@ pub(crate) mod size;
 pub(crate) mod state;
 
 pub(crate) use core::{
-    FetchCell, InitSegment, MediaSegment, Segment, SegmentContent, SegmentFile, SegmentSource,
+    FetchCell, InitSegment, MediaSegment, Segment, SegmentContent, SegmentSource,
 };
 
 pub(crate) use fetch::{FetchClaim, PlannedFetch, SegmentSettle};
