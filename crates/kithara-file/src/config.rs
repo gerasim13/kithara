@@ -1,7 +1,7 @@
 use std::{fmt, path::PathBuf};
 
 use bon::Builder;
-use kithara_assets::{AssetStore, BytePool, ResourceKey};
+use kithara_assets::{AssetStore, BytePool, ProcessCtx, ResourceKey};
 use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_platform::CancelToken;
@@ -12,12 +12,22 @@ use url::Url;
 #[derive(Clone, Debug, derive_more::From, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FileSrc {
-    /// Remote file accessed via HTTP(S).
+    /// Remote file accessed via HTTP(S). The cache key is derived from the
+    /// URL.
     Remote(Url),
     /// Local file accessed directly from disk.
     Local(PathBuf),
     /// Storage resource already acquired and written by another owner.
     Attached(ResourceKey),
+    /// Remote file whose cache key is owned by the caller. Used where the
+    /// key belongs to another layout — an HLS segment is keyed by its
+    /// variant's scope, not by its URL.
+    Resource {
+        /// Caller-minted key the bytes are fetched into.
+        key: ResourceKey,
+        /// Where the bytes come from.
+        url: Url,
+    },
 }
 
 /// Configuration for file streaming.
@@ -46,6 +56,10 @@ pub struct FileConfig {
     pub discriminator: Option<String>,
     /// Shared byte pool for cache and fallback network buffers.
     pub pool: Option<BytePool>,
+    /// Transform applied to the fetched bytes when the resource commits —
+    /// decryption for an encrypted source. Opaque here: the context is built
+    /// by whoever owns the scheme, so this crate stays cipher-agnostic.
+    pub process: Option<ProcessCtx>,
     /// Shared asset store used by local and remote sources.
     pub store: AssetStore,
     /// Event bus channel capacity (used when `bus` is not provided).

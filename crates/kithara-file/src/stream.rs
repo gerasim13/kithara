@@ -214,7 +214,11 @@ impl StreamType for File {
             FileSrc::Attached(_) => Self::open_attached(config),
             FileSrc::Remote(url) => {
                 let cancel = CancelScope::new(config.cancel.clone()).token();
-                Self::create_remote_wait_for_claim(url, config, cancel).await
+                Self::create_remote_wait_for_claim(url, None, config, cancel).await
+            }
+            FileSrc::Resource { key, url } => {
+                let cancel = CancelScope::new(config.cancel.clone()).token();
+                Self::create_remote_wait_for_claim(url, Some(key), config, cancel).await
             }
         }
     }
@@ -282,8 +286,12 @@ impl File {
     /// Content-Length and Content-Type are discovered asynchronously via the
     /// `on_connect` callback when the HTTP response arrives. Until then,
     /// `len()` returns `None`.
+    ///
+    /// `key` is the caller's when the resource identity belongs to another
+    /// layout (an HLS segment), and `None` when it is derived from the URL.
     fn create_remote(
         url: url::Url,
+        key: Option<ResourceKey>,
         config: FileConfig,
         cancel: CancelToken,
     ) -> Result<FileSource, SourceError> {
@@ -296,16 +304,20 @@ impl File {
             headers,
             look_ahead_bytes,
             pool,
+            process,
             store,
             ..
         } = config;
         let downloader = downloader.unwrap_or_else(|| default_downloader(&cancel, pool.clone()));
         let backend = store;
-        let key = remote_key(&backend, &url, discriminator, extension.as_deref())?;
+        let key = match key {
+            Some(key) => key,
+            None => remote_key(&backend, &url, discriminator, extension.as_deref())?,
+        };
         let identity = EngineIdentity {
             store: backend,
             key,
-            process: None,
+            process,
             cancel,
         };
         let publish_bus = bus.clone();
@@ -354,6 +366,7 @@ impl File {
     #[kithara::hang_watchdog]
     async fn create_remote_wait_for_claim(
         url: url::Url,
+        key: Option<ResourceKey>,
         config: FileConfig,
         cancel: CancelToken,
     ) -> Result<FileSource, StreamSourceError> {
@@ -365,7 +378,7 @@ impl File {
         const TMP_CLAIMED_POLL_INTERVAL: Duration = Duration::from_millis(10);
         let mut last_len: Option<u64> = None;
         loop {
-            match Self::create_remote(url.clone(), config.clone(), cancel.clone()) {
+            match Self::create_remote(url.clone(), key.clone(), config.clone(), cancel.clone()) {
                 Ok(src) => {
                     hang_reset!();
                     return Ok(src);

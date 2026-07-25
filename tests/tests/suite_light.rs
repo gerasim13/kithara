@@ -50,6 +50,8 @@ mod kithara_app {
 }
 
 mod kithara_file {
+    #[cfg(not(target_arch = "wasm32"))]
+    mod caller_owned_key;
     mod early_stream_close;
     mod file_source;
     mod html_error_cleanup;

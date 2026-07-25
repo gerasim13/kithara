@@ -28,13 +28,14 @@ pub fn aes128_plaintext_segment() -> Vec<u8> {
     b"V0-SEG-0:DRM-PLAINTEXT".to_vec()
 }
 
-/// Encrypted ciphertext using AES-128-CBC
+/// AES-128-CBC ciphertext for arbitrary plaintext, under the shared test key
+/// and IV.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn aes128_ciphertext() -> Vec<u8> {
+pub fn aes128_encrypt(plaintext: &[u8]) -> Vec<u8> {
     let key = aes128_key_bytes();
     let iv = aes128_iv();
-    let mut data = aes128_plaintext_segment();
-    let plain_len = data.len();
+    let plain_len = plaintext.len();
+    let mut data = plaintext.to_vec();
     data.resize(plain_len + 16, 0);
     let key_arr: &[u8; 16] = (&key[..16]).try_into().expect("key len");
     let encryptor = Encryptor::<Aes128>::new(key_arr.into(), (&iv).into());
@@ -42,6 +43,12 @@ pub fn aes128_ciphertext() -> Vec<u8> {
         .encrypt_padded::<Pkcs7>(&mut data, plain_len)
         .expect("aes128 encrypt");
     cipher.to_vec()
+}
+
+/// Encrypted ciphertext using AES-128-CBC
+#[cfg(not(target_arch = "wasm32"))]
+pub fn aes128_ciphertext() -> Vec<u8> {
+    aes128_encrypt(&aes128_plaintext_segment())
 }
 
 /// Test init data with extended content
