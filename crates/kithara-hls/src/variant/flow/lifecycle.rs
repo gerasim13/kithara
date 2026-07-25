@@ -1,7 +1,7 @@
 use kithara_platform::CancelToken;
 
 use super::HlsVariant;
-use crate::segment::{FetchClaim, Loaded, PlannedFetch};
+use crate::segment::{FetchClaim, Loaded, PlannedFetch, SegmentFile};
 
 impl HlsVariant {
     /// Settle hook: shrinks the appropriate size atom to `actual` and
@@ -21,6 +21,24 @@ impl HlsVariant {
             self.init_route_size()
         });
         self.complete_exact_seek_if_ready();
+    }
+
+    /// Settle-side source adopt: the file that fetched the slot becomes the
+    /// file the slot reads through, so a committed segment is never reopened
+    /// just to be read.
+    pub(crate) fn adopt_slot_source(&self, planned: PlannedFetch, file: SegmentFile) {
+        match planned {
+            PlannedFetch::Init => {
+                if let Some(init) = self.segments.init.as_ref() {
+                    init.adopt_source(file);
+                }
+            }
+            PlannedFetch::Segment(idx) => {
+                if let Some(slot) = self.segments.get(idx as usize) {
+                    slot.adopt_source(file);
+                }
+            }
+        }
     }
 
     /// Settle-side size store: shrink the appropriate atom to `final_len`.

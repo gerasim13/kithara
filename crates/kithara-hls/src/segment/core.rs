@@ -17,7 +17,7 @@ use crate::segment::{SegmentSize, SegmentSlotState};
 
 /// One `kithara-file` source over a segment resource — read-only when
 /// attached to someone else's bytes, fetching when it owns them.
-type FileHandle = <File as StreamType>::Source;
+pub(crate) type SegmentFile = <File as StreamType>::Source;
 
 #[derive(Debug, Error)]
 pub(crate) enum SegmentSourceError {
@@ -37,14 +37,18 @@ pub(crate) enum SegmentSourceError {
 
 /// Shared home of the in-flight fetch. Exactly two parties reach it: the
 /// slot that starts the fetch and the hook that ends it.
-pub(crate) type FetchCell = Arc<Mutex<Option<FileHandle>>>;
+pub(crate) type FetchCell = Arc<Mutex<Option<SegmentFile>>>;
 
 pub(crate) struct SegmentSource {
     store: AssetStore,
     cancel: CancelToken,
-    slot: Mutex<Option<FileHandle>>,
-    /// The file fetching this slot's bytes, held for the fetch's lifetime
-    /// only: the fetch owns the file, the slot merely keeps it alive.
+    /// The file this slot reads through. Either the one that fetched the
+    /// bytes — adopted here when the fetch left them readable — or, for a
+    /// resource somebody else wrote, one attached read-only on first read.
+    slot: Mutex<Option<SegmentFile>>,
+    /// The file fetching this slot's bytes, held for the fetch's lifetime.
+    /// On a readable outcome it moves into `slot` instead of being dropped,
+    /// so nothing reopens the resource to read what it just wrote.
     fetch: FetchCell,
 }
 
@@ -138,6 +142,14 @@ impl Segment {
         Arc::clone(&self.source().fetch)
     }
 
+    /// Keep `file` as the slot's reading source, now that its fetch left
+    /// readable bytes behind. Replaces any read-only attachment opened while
+    /// the download was still running.
+    pub(crate) fn adopt_source(&self, file: SegmentFile) {
+        let previous = self.source().slot.lock().replace(file);
+        drop(previous);
+    }
+
     /// The transform the resource commits through: decryption for an
     /// encrypted segment, nothing for a cleartext one.
     pub(crate) fn process(&self) -> Option<ProcessCtx> {
@@ -177,7 +189,7 @@ impl Segment {
     }
 
     /// Runs `use_source` under the source-slot mutex; the closure must not block.
-    fn with_attached_source<T>(&self, use_source: impl FnOnce(&FileHandle) -> T) -> Option<T> {
+    fn with_attached_source<T>(&self, use_source: impl FnOnce(&SegmentFile) -> T) -> Option<T> {
         let source = self.source();
         let mut slot = source.slot.lock();
         if let Some(attached) = slot.as_ref() {

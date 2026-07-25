@@ -231,24 +231,53 @@ impl<'a> SegmentSettle<'a> {
             debug!(target: "kithara_hls::settle", "outcome for an already-settled claim");
             return;
         };
-        self.transition(handle, outcome);
+        let site = (handle.variant(), handle.planned());
+        let readable = self.transition(handle, outcome);
         self.signal.fire();
-        // The fetch is over, so the file goes — and with it the peer
-        // registration. Taken out of the cell first so the drop runs
-        // without the cell lock held.
-        drop(self.cell.lock().take());
+        // The fetch is over. Taken out of the cell first so neither the adopt
+        // nor the drop runs with the cell lock held.
+        let file = self.cell.lock().take();
+        match (readable, file, site) {
+            // It left readable bytes, so the slot keeps reading through the
+            // very file that wrote them rather than reopening the resource.
+            (true, Some(file), (Some(variant), planned)) => {
+                variant.adopt_slot_source(planned, file);
+            }
+            // Nothing readable came of it, so the file goes — and with it the
+            // peer registration.
+            (_, file, _) => drop(file),
+        }
     }
 
-    fn transition(&self, handle: FetchClaim<Downloading>, outcome: FetchOutcome) {
+    /// Reports whether the slot came out of this readable through the file
+    /// that fetched it.
+    fn transition(&self, handle: FetchClaim<Downloading>, outcome: FetchOutcome) -> bool {
         match outcome {
-            FetchOutcome::Committed { final_len } => Self::committed(handle, final_len),
-            FetchOutcome::Cancelled { committed } => Self::cancelled(handle, committed),
-            FetchOutcome::Failed { error } => self.failed(handle, &error),
-            FetchOutcome::CommitFailed { reason } => self.commit_failed(handle, reason),
+            FetchOutcome::Committed { final_len } => {
+                Self::committed(handle, final_len);
+                true
+            }
+            FetchOutcome::Cancelled { committed } => {
+                Self::cancelled(handle, committed);
+                // A cancel that found the resource committed leaves bytes a
+                // reader can trust — whoever committed them owns the slot now.
+                committed
+            }
+            FetchOutcome::Failed { error } => {
+                self.failed(handle, &error);
+                false
+            }
+            FetchOutcome::CommitFailed { reason } => {
+                self.commit_failed(handle, reason);
+                false
+            }
             // An outcome this crate does not know is not a transition it
             // can make: dropping the claim reverts the slot to `Missing`,
             // which keeps it re-dispatchable.
-            _ => warn!(target: "kithara_hls::settle", "unrecognised fetch outcome"),
+            _ => {
+                warn!(target: "kithara_hls::settle", "unrecognised fetch outcome");
+                false
+            }
         }
     }
 
