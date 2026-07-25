@@ -8,8 +8,8 @@ use kithara_assets::{AssetStore, BytePool};
 use kithara_drm::KeyProcessorRegistry;
 use kithara_events::EventBus;
 use kithara_net::{Headers, NetOptions};
-use kithara_platform::CancelToken;
-use kithara_stream::dl::Downloader;
+use kithara_platform::{CancelToken, sync::Arc};
+use kithara_stream::dl::FetchScope;
 use url::Url;
 
 /// Encryption key handling configuration.
@@ -72,14 +72,14 @@ pub struct HlsConfig {
     #[builder(default)]
     pub keys: KeyOptions,
     /// Net options (idle/stall `inactivity_timeout`, `retry_policy`,
-    /// compression) for the HTTP client built when no [`downloader`] is
-    /// injected. Ignored when [`downloader`] is provided — the injected
-    /// downloader already carries its own client. Defaults to
-    /// [`NetOptions::default`]; lower the `inactivity_timeout` to bound a
-    /// withheld-body fetch sooner (the net resilient body owns the stall
-    /// and retries, then settles the segment terminally).
+    /// compression) for the HTTP client built when no [`fetch`] scope is
+    /// injected. Ignored when [`fetch`] is provided — the scope already
+    /// carries its own client. Defaults to [`NetOptions::default`]; lower
+    /// the `inactivity_timeout` to bound a withheld-body fetch sooner (the
+    /// net resilient body owns the stall and retries, then settles the
+    /// segment terminally).
     ///
-    /// [`downloader`]: Self::downloader
+    /// [`fetch`]: Self::fetch
     #[builder(default)]
     pub net_options: NetOptions,
     /// Base URL for resolving relative playlist/segment URLs.
@@ -93,8 +93,12 @@ pub struct HlsConfig {
     /// downloader / net / asset paths derive children from its inner
     /// [`CancelToken`](kithara_platform::CancelToken).
     pub cancel: Option<CancelToken>,
-    /// Shared downloader (created lazily if not provided).
-    pub downloader: Option<Downloader>,
+    /// Where this stream registers to fetch: the shared pool, or another
+    /// peer's handle when the stream is itself one piece of a larger
+    /// download. Segment files then register under the stream's own peer, so
+    /// the whole track is one download in the pool's eyes. A pool of its own
+    /// is created when this is not provided.
+    pub fetch: Option<Arc<dyn FetchScope>>,
     /// Additional HTTP headers to include in all requests.
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.

@@ -5,10 +5,7 @@ use kithara_assets::{AssetStore, BytePool, ProcessCtx, ResourceKey};
 use kithara_events::EventBus;
 use kithara_net::{Headers, NetError};
 use kithara_platform::{CancelToken, sync::Arc};
-use kithara_stream::{
-    Activity,
-    dl::{Downloader, PeerRef},
-};
+use kithara_stream::{Activity, dl::FetchScope};
 use url::Url;
 
 /// Source of a file stream.
@@ -98,8 +95,14 @@ pub struct FileConfig {
     pub bus: Option<EventBus>,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancelToken>,
-    /// Shared downloader (created lazily if not provided).
-    pub downloader: Option<Downloader>,
+    /// Where this file registers to fetch: the shared pool for a file that
+    /// downloads for itself, or another peer's handle when the file is one
+    /// piece of a larger download — an HLS segment fetching inside its
+    /// variant. Registering in a branch is what ranks the fetch inside its
+    /// parent, credits its bytes to the parent's ABR identity, and ends the
+    /// registration when the parent goes away. A pool of its own is created
+    /// when this is not provided.
+    pub fetch: Option<Arc<dyn FetchScope>>,
     /// Additional HTTP headers to include in all requests.
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
@@ -112,11 +115,6 @@ pub struct FileConfig {
     /// fetch's queue priority; a source left to itself is never active and
     /// so never outranks one that is.
     pub activity: Option<Arc<dyn Activity>>,
-    /// The peer this fetch works for, when it is one of many carrying a
-    /// single logical download. Its priority ranks this fetch against
-    /// everything else in the pool, and its ABR identity is credited with
-    /// the bytes.
-    pub parent: Option<PeerRef>,
     /// Reports how the fetch ended. Only a fetching source
     /// ([`FileSrc::Remote`] / [`FileSrc::Resource`]) reports; a local or
     /// attached source never fetches.

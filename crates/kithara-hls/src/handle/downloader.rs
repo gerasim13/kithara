@@ -1,10 +1,10 @@
 use kithara_assets::AssetScope;
 use kithara_events::EventBus;
 use kithara_platform::sync::Arc;
-use kithara_stream::dl::{Downloader, Peer, PeerHandle};
+use kithara_stream::dl::{FetchScope, Peer, PeerHandle};
 
 /// Single owner of the raw transport + storage + headers quartet and the
-/// sole `downloader.register` site. Vends one permanent narrow handle
+/// stream's sole [`FetchScope::register`] site. Vends one permanent narrow handle
 /// ([`Self::peer_handle`] / [`Self::scope`] / [`Self::byte_pool`]) for the
 /// loaders that still need full download + disk capability.
 pub(crate) struct StreamPeer {
@@ -24,16 +24,16 @@ impl StreamPeer {
         self.peer_handle.clone()
     }
 
-    /// Register `peer` on `downloader` and take ownership of the quartet.
-    /// The sole `downloader.register(...).with_bus(...)` site.
+    /// Register `peer` in `transport` and take ownership of the quartet.
+    /// The sole `register(...).with_bus(...)` site.
     pub(crate) fn register(
-        downloader: &Downloader,
+        transport: &dyn FetchScope,
         peer: Arc<dyn Peer>,
         bus: EventBus,
         scope: AssetScope,
         byte_pool: kithara_bufpool::BytePool,
     ) -> Self {
-        let peer_handle = downloader.register(peer).with_bus(bus);
+        let peer_handle = transport.register(peer).with_bus(bus);
         Self {
             scope,
             byte_pool,

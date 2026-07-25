@@ -25,7 +25,9 @@ use kithara_platform::{
 use kithara_test_utils::kithara;
 use url::Url;
 
-use super::{BodyStream, Downloader, DownloaderConfig, FetchCmd, Peer, RequestPriority};
+use super::{
+    BodyStream, Downloader, DownloaderConfig, FetchCmd, FetchScope, Peer, RequestPriority,
+};
 use crate::{Activity, SeekState};
 
 const CONCURRENCY_TEST_TIMEOUT_SECS: u64 = 30;
@@ -1217,7 +1219,7 @@ mod composite_rank {
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
-    use super::{super::PeerRef, Downloader, Peer, RequestPriority, test_config};
+    use super::{super::PeerRef, Downloader, FetchScope, Peer, RequestPriority, test_config};
 
     struct Fixed {
         priority: RequestPriority,
@@ -1236,15 +1238,18 @@ mod composite_rank {
         }
     }
 
-    /// Registering returns the handle that keeps the peer alive; a child
-    /// references it through [`PeerHandle::as_parent`].
+    /// Registering returns the handle that keeps the peer alive. The parent
+    /// comes from the scope registered in — the pool for a root peer,
+    /// another peer's handle for a piece of its download.
     fn register(
-        downloader: &Downloader,
+        scope: &dyn FetchScope,
         priority: RequestPriority,
-        parent: Option<PeerRef>,
     ) -> (super::super::PeerHandle, Arc<Fixed>) {
-        let peer = Arc::new(Fixed { priority, parent });
-        let handle = downloader.register(Arc::clone(&peer) as Arc<dyn Peer>);
+        let peer = Arc::new(Fixed {
+            priority,
+            parent: scope.parent(),
+        });
+        let handle = scope.register(Arc::clone(&peer) as Arc<dyn Peer>);
         (handle, peer)
     }
 
@@ -1259,9 +1264,8 @@ mod composite_rank {
         #[case] expected_slot: usize,
     ) {
         let downloader = Downloader::new(test_config());
-        let (parent_handle, _parent) = register(&downloader, parent_priority, None);
-        let (_child_handle, child) =
-            register(&downloader, child_priority, Some(parent_handle.as_parent()));
+        let (parent_handle, _parent) = register(&downloader, parent_priority);
+        let (_child_handle, child) = register(&parent_handle, child_priority);
 
         assert_eq!(
             Peer::fetch_priority(child.as_ref()).slot(),
@@ -1273,7 +1277,7 @@ mod composite_rank {
     #[kithara::test(tokio)]
     async fn a_root_peer_keeps_its_own_rank() {
         let downloader = Downloader::new(test_config());
-        let (_handle, peer) = register(&downloader, RequestPriority::HIGH, None);
+        let (_handle, peer) = register(&downloader, RequestPriority::HIGH);
 
         assert_eq!(
             Peer::fetch_priority(peer.as_ref()),
@@ -1287,7 +1291,7 @@ mod composite_rank {
     #[kithara::test(tokio)]
     async fn a_child_whose_parent_is_gone_answers_for_itself() {
         let downloader = Downloader::new(test_config());
-        let (handle, _live) = register(&downloader, RequestPriority::LOW, None);
+        let (handle, _live) = register(&downloader, RequestPriority::LOW);
         let ghost: Arc<dyn Peer> = Arc::new(Fixed {
             priority: RequestPriority::LOW,
             parent: None,
@@ -1295,10 +1299,15 @@ mod composite_rank {
         let parent_ref = PeerRef::new(&ghost, handle.abr().peer_id());
         drop(ghost);
 
-        let (_child_handle, child) = register(&downloader, RequestPriority::HIGH, Some(parent_ref));
+        // Built rather than registered: a scope hands out a parent that is
+        // alive by construction, and this is the state where it is not.
+        let child = Fixed {
+            priority: RequestPriority::HIGH,
+            parent: Some(parent_ref),
+        };
 
         assert_eq!(
-            Peer::fetch_priority(child.as_ref()),
+            Peer::fetch_priority(&child),
             RequestPriority::PEER,
             "an orphaned child answers for itself — its own priority stands \
              unnested, with no outer rank left to sit inside"

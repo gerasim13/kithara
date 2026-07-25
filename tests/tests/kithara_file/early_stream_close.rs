@@ -119,7 +119,7 @@ async fn file_stream_closes_early_seek_still_works() {
         ))
         .cancel(cancel_token)
         .look_ahead_bytes(256_000)
-        .downloader(dl)
+        .fetch(Arc::new(dl))
         .build();
 
     let stream = Stream::<File>::new(config).await.unwrap();

@@ -134,7 +134,7 @@ async fn zero_progress_resume_loop_fails_terminally() {
         .store(kithara_integration_tests::disk_asset_store(temp.path()))
         .cancel(cancel)
         .look_ahead_bytes(Consts::TOTAL as u64)
-        .downloader(downloader)
+        .fetch(Arc::new(downloader))
         .build();
     let _stream = Stream::<File>::new(config)
         .await

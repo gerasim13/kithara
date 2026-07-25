@@ -3,7 +3,7 @@ use std::io::Read;
 use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
+    platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
     stream::{
         Stream,
         dl::{Downloader, DownloaderConfig},
@@ -49,13 +49,13 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
         .cancel(cancel.clone())
         .store(kithara_integration_tests::disk_asset_store(&temp_a))
         .initial_abr_mode(AbrMode::manual(0))
-        .downloader(downloader.clone())
+        .fetch(Arc::new(downloader.clone()))
         .build();
     let config_b = HlsConfig::for_url(server_b.url("/master.m3u8"))
         .cancel(cancel.clone())
         .store(kithara_integration_tests::disk_asset_store(&temp_b))
         .initial_abr_mode(AbrMode::manual(0))
-        .downloader(downloader.clone())
+        .fetch(Arc::new(downloader.clone()))
         .build();
 
     let mut stream_a = Stream::<Hls>::new(config_a).await.unwrap();

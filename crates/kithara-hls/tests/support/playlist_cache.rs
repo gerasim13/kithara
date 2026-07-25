@@ -17,7 +17,7 @@ use kithara_platform::{
         task::{spawn, yield_now},
     },
 };
-use kithara_stream::dl::{Downloader, DownloaderConfig, Peer};
+use kithara_stream::dl::{Downloader, DownloaderConfig, FetchScope, Peer};
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
 

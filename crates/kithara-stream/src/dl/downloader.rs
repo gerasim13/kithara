@@ -87,6 +87,39 @@ pub(super) struct DownloaderInner {
 }
 
 impl DownloaderInner {
+    /// Register `peer` with a cancel token derived from `parent_cancel`.
+    ///
+    /// The token is what binds a registration's lifetime: the Registry drops
+    /// an entry once its token fires, and cancellation walks down the tree.
+    /// So a peer registered under another peer's token goes away with it,
+    /// and one registered under the pool's token lives as long as the pool.
+    pub(super) fn register_peer(
+        self: &Arc<Self>,
+        peer: Arc<dyn Peer>,
+        parent_cancel: &CancelToken,
+    ) -> PeerHandle {
+        /// Capacity of the per-peer bounded command channel.
+        const PEER_CMD_CHANNEL_CAPACITY: usize = 32;
+        let cancel = parent_cancel.child();
+        let (cmd_tx, cmd_rx) = mpsc::channel(PEER_CMD_CHANNEL_CAPACITY);
+        let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::default());
+
+        let abr_peer: Arc<dyn Abr> = Arc::clone(&peer) as Arc<dyn Abr>;
+        let abr_handle = self.abr.register(&abr_peer);
+        let peer_id = abr_handle.peer_id();
+        let peer_ref = PeerRef::new(&peer, peer_id);
+
+        let entry = RegisteredPeerEntry {
+            peer,
+            cmd_rx,
+            peer_id,
+            cancel: cancel.clone(),
+            bus: Arc::clone(&bus),
+        };
+        self.register_tx.send(entry).ok();
+        PeerHandle::new(Arc::clone(self), cancel, cmd_tx, bus, abr_handle, peer_ref)
+    }
+
     /// Allocate a fresh [`kithara_events::RequestId`].
     pub(super) fn next_request_id(&self) -> RequestId {
         let raw = self.next_request_id.fetch_add(1, Ordering::Relaxed);
@@ -137,7 +170,7 @@ impl Downloader {
 
     /// Ensure the download loop is running (lazy spawn on first register
     /// in an async-capable context).
-    fn ensure_spawned(&self) {
+    pub(super) fn ensure_spawned(&self) {
         let Some(rx) = self.inner.register_rx.lock().take() else {
             return;
         };
@@ -145,40 +178,11 @@ impl Downloader {
         Self::spawn_run(&self.inner, this, rx);
     }
 
-    /// Register a peer and return its [`PeerHandle`].
-    ///
-    /// Double-registers the peer: fetch channel through the download loop
-    /// and ABR state through the shared controller. The returned handle's
-    /// `Drop` unregisters both.
-    pub fn register(&self, peer: Arc<dyn Peer>) -> PeerHandle {
-        /// Capacity of the per-peer bounded command channel.
-        const PEER_CMD_CHANNEL_CAPACITY: usize = 32;
-        self.ensure_spawned();
-        let cancel = self.inner.cancel.child();
-        let (cmd_tx, cmd_rx) = mpsc::channel(PEER_CMD_CHANNEL_CAPACITY);
-        let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::default());
-
-        let abr_peer: Arc<dyn Abr> = Arc::clone(&peer) as Arc<dyn Abr>;
-        let abr_handle = self.inner.abr.register(&abr_peer);
-        let peer_id = abr_handle.peer_id();
-        let peer_ref = PeerRef::new(&peer, peer_id);
-
-        let entry = RegisteredPeerEntry {
-            peer,
-            cmd_rx,
-            peer_id,
-            cancel: cancel.clone(),
-            bus: Arc::clone(&bus),
-        };
-        self.inner.register_tx.send(entry).ok();
-        PeerHandle::new(
-            Arc::clone(&self.inner),
-            cancel,
-            cmd_tx,
-            bus,
-            abr_handle,
-            peer_ref,
-        )
+    /// The pool a registration lands in. Root registrations derive their
+    /// cancel token from [`DownloaderInner::cancel`], so they live as long
+    /// as the pool does.
+    pub(super) fn pool(&self) -> &Arc<DownloaderInner> {
+        &self.inner
     }
 
     /// Download loop.

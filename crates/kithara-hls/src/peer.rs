@@ -140,9 +140,8 @@ impl HlsPeer {
             .map_or(0, |(idx, _, _)| idx);
         if let Some(active) = coord.active() {
             let plan_ctx = PlanCtx {
-                parent: coord.parent.clone(),
                 bus: active.event_bus(),
-                downloader: coord.downloader.clone(),
+                fetch: Arc::clone(&coord.fetch),
                 prefetch_budget,
                 look_ahead_bytes,
                 size_probe_method,
@@ -572,9 +571,8 @@ impl HlsTrackState {
 
     fn plan_ctx(&self) -> PlanCtx {
         PlanCtx {
-            parent: self.coord.parent.clone(),
             bus: self.coord.emit.bus().clone(),
-            downloader: self.coord.downloader.clone(),
+            fetch: Arc::clone(&self.coord.fetch),
             master_cancel: self.coord.cancel.clone(),
             scope: self.coord.scope.clone(),
             headers: self.coord.headers.clone(),

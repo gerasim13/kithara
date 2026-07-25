@@ -44,11 +44,9 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
             .cancel(cancel.clone())
             .build(),
     );
-    let (downloader, parent) = crate::variant::test_transport();
     PlanCtx {
-        parent,
         bus: EventBus::new(8),
-        downloader,
+        fetch: crate::variant::test_transport(),
         prefetch_budget,
         master_cancel: cancel,
         scope: backend

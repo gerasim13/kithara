@@ -606,7 +606,7 @@ mod tests {
         sync::{Arc, Notify},
         tokio::{join, net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn},
     };
-    use kithara_stream::dl::{Downloader, DownloaderConfig, Peer};
+    use kithara_stream::dl::{Downloader, DownloaderConfig, FetchScope, Peer};
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
 

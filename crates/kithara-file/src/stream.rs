@@ -14,7 +14,7 @@ use kithara_platform::{
 use kithara_storage::StorageError;
 use kithara_stream::{
     Activity, AudioCodec, PlayheadState, SeekState, SourceError as StreamSourceError, StreamType,
-    dl::{Downloader, DownloaderConfig, PeerRef},
+    dl::{Downloader, DownloaderConfig, FetchScope},
 };
 use kithara_test_utils::kithara;
 
@@ -38,7 +38,9 @@ impl Consts {
 
 struct RemoteFileOpen {
     identity: EngineIdentity,
-    downloader: Downloader,
+    /// Where this fetch registers — the pool, or the peer whose download
+    /// this file is one piece of.
+    fetch: Arc<dyn FetchScope>,
     bus: EventBus,
     headers: Option<Headers>,
     look_ahead_bytes: Option<u64>,
@@ -46,9 +48,6 @@ struct RemoteFileOpen {
     on_slow: Option<SlowFn>,
     /// Answers whether these bytes are wanted now; decides queue priority.
     activity: Option<Arc<dyn Activity>>,
-    /// The peer this fetch works for, when it carries one piece of a larger
-    /// download.
-    parent: Option<PeerRef>,
     url: url::Url,
 }
 
@@ -172,14 +171,13 @@ impl RemoteFileOpen {
     fn into_source(self, writer: AssetWriter) -> FileSource {
         let Self {
             bus,
-            downloader,
+            fetch,
             headers,
             identity,
             look_ahead_bytes,
             on_fetch_complete,
             on_slow,
             activity,
-            parent,
             url,
         } = self;
 
@@ -212,14 +210,17 @@ impl RemoteFileOpen {
                 .build(),
         );
 
-        let peer_handle = downloader
+        // The scope answers for the parent: a file registered in a branch is
+        // a piece of that peer's download and says so, one registered at the
+        // pool fetches for itself.
+        let peer_handle = fetch
             .register(Arc::new(FilePeer::new(
                 Arc::clone(&engine),
                 Arc::clone(&source),
                 producer,
                 url,
                 headers,
-                parent,
+                fetch.parent(),
             )))
             .with_bus(bus);
 
@@ -344,7 +345,7 @@ impl File {
         let FileConfig {
             bus,
             discriminator,
-            downloader,
+            fetch,
             event_channel_capacity,
             extension,
             headers,
@@ -352,13 +353,14 @@ impl File {
             on_fetch_complete,
             on_slow,
             activity,
-            parent,
             pool,
             process,
             store,
             ..
         } = config;
-        let downloader = downloader.unwrap_or_else(|| default_downloader(&cancel, pool.clone()));
+        let fetch = fetch.unwrap_or_else(|| {
+            Arc::new(default_downloader(&cancel, pool.clone())) as Arc<dyn FetchScope>
+        });
         let backend = store;
         let key = match key {
             Some(key) => key,
@@ -396,14 +398,13 @@ impl File {
             }
             AcquisitionResult::Pending(writer) => Ok(RemoteFileOpen {
                 identity,
-                downloader,
+                fetch,
                 bus,
                 headers,
                 look_ahead_bytes,
                 on_fetch_complete,
                 on_slow,
                 activity,
-                parent,
                 url,
             }
             .into_source(writer)),

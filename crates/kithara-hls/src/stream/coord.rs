@@ -20,7 +20,7 @@ use kithara_stream::{
     PlayheadState, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SeekState,
     SegmentDescriptor, SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult,
     VariantControl,
-    dl::{Downloader, FetchCmd, PeerRef},
+    dl::{FetchCmd, FetchScope},
 };
 use kithara_test_utils::kithara;
 
@@ -43,11 +43,10 @@ const WAIT_HANG_TIMEOUT: Duration = Duration::from_secs(180);
 /// variant's `dispatch` closures.
 pub(crate) struct HlsCoordEnv {
     pub(crate) scope: AssetScope,
-    /// Shared transport handed to `PlanCtx` so a segment file fetches
-    /// through the track pool rather than a client of its own.
-    pub(crate) downloader: Downloader,
-    /// The stream peer every segment file fetches as a child of.
-    pub(crate) parent: PeerRef,
+    /// The stream peer, handed to `PlanCtx` as the scope a segment file
+    /// registers in: it fetches through the track pool rather than a client
+    /// of its own, and as a child of the stream rather than a stranger.
+    pub(crate) fetch: Arc<dyn FetchScope>,
     pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
     pub(crate) emit: Arc<DeferredBus<HlsEvent>>,
@@ -74,9 +73,8 @@ pub(crate) struct HlsCoord {
     pub(crate) abr: AbrHandle,
     pub(crate) variants: Arc<[Arc<HlsVariant>]>,
     pub(crate) scope: AssetScope,
-    pub(crate) downloader: Downloader,
-    /// The stream peer every segment file fetches as a child of.
-    pub(crate) parent: PeerRef,
+    /// The scope every segment file registers in — see [`HlsCoordEnv::fetch`].
+    pub(crate) fetch: Arc<dyn FetchScope>,
     pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
     /// Backing playhead state — the coord owns the `Arc` directly and
@@ -161,8 +159,7 @@ impl HlsCoord {
             playlist_state,
             cancel: env.cancel,
             scope: env.scope,
-            downloader: env.downloader,
-            parent: env.parent,
+            fetch: env.fetch,
             headers: env.headers,
             emit: env.emit,
             variant_generation: AtomicU64::new(0),
@@ -916,11 +913,9 @@ mod tests {
                 .cancel(cancel.clone())
                 .build(),
         );
-        let (downloader, parent) = crate::variant::test_transport();
         PlanCtx {
-            parent,
             bus: bus.clone(),
-            downloader,
+            fetch: crate::variant::test_transport(),
             prefetch_budget: 1,
             master_cancel: cancel.clone(),
             scope: store
@@ -1058,8 +1053,7 @@ mod tests {
         let coord = Arc::new(HlsCoord::new(
             HlsCoordEnv {
                 scope: ctx.scope.clone(),
-                downloader: crate::variant::test_transport().0,
-                parent: crate::variant::test_transport().1,
+                fetch: crate::variant::test_transport(),
                 cancel,
                 headers: None,
                 emit: Arc::new(DeferredBus::new(bus.clone(), 8)),

@@ -13,7 +13,7 @@ use kithara_platform::{
 };
 use kithara_stream::{
     Activity, PlayheadState, PlayheadWrite, SeekObserve, SeekState, SourceError, StreamType,
-    dl::{Downloader, DownloaderConfig, Peer},
+    dl::{Downloader, DownloaderConfig, FetchScope, Peer},
 };
 
 use super::{
@@ -62,10 +62,9 @@ impl StreamType for Hls {
             .clone()
             .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
 
-        let downloader = config
-            .downloader
-            .clone()
-            .unwrap_or_else(|| default_downloader(&config, &cancel));
+        let transport: Arc<dyn FetchScope> = config.fetch.clone().unwrap_or_else(|| {
+            Arc::new(default_downloader(&config, &cancel)) as Arc<dyn FetchScope>
+        });
 
         let (evict_tx, evict_rx) = mpsc::unbounded_channel::<ResourceKey>();
 
@@ -90,7 +89,7 @@ impl StreamType for Hls {
             config.initial_abr_mode,
         ));
         let stream_peer = StreamPeer::register(
-            &downloader,
+            transport.as_ref(),
             Arc::clone(&hls_peer) as Arc<dyn Peer>,
             bus.clone(),
             scope,
@@ -139,10 +138,13 @@ impl StreamType for Hls {
         let signal = SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new()));
         let emit = Arc::new(DeferredBus::new(bus.clone(), 256));
 
+        // Every segment file registers here: in the stream's peer, not in the
+        // pool, so the piece is a piece by construction.
+        let fetch: Arc<dyn FetchScope> = Arc::new(stream_peer.peer_handle());
+
         let plan_ctx = PlanCtx {
-            parent: stream_peer.peer_handle().as_parent(),
             bus: bus.clone(),
-            downloader: downloader.clone(),
+            fetch: Arc::clone(&fetch),
             look_ahead_bytes,
             look_ahead_segments,
             master_cancel: cancel.clone(),
@@ -177,8 +179,7 @@ impl StreamType for Hls {
         let coord = Arc::new(HlsCoord::new(
             HlsCoordEnv {
                 signal,
-                downloader,
-                parent: stream_peer.peer_handle().as_parent(),
+                fetch,
                 cancel: cancel.clone(),
                 scope: stream_peer.scope(),
                 headers: config.headers.clone(),

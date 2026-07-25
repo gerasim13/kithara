@@ -26,6 +26,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
+        sync::Arc,
         time::Duration,
         tokio::runtime::{Builder, Runtime},
     },
@@ -384,7 +385,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                     let config = HlsConfig::for_url(url)
                         .store(store)
                         .initial_abr_mode(auto(1))
-                        .downloader(downloader)
+                        .fetch(Arc::new(downloader))
                         .download_batch_size(3)
                         .look_ahead_bytes(96_000)
                         .build();

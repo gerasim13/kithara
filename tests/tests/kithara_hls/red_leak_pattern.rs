@@ -18,7 +18,7 @@ use kithara::{
     },
     stream::{
         Stream,
-        dl::{Downloader, DownloaderConfig, FetchCmd, Peer},
+        dl::{Downloader, DownloaderConfig, FetchCmd, FetchScope, Peer},
     },
 };
 use kithara_integration_tests::{TestTempDir, hls_server::TestServer, temp_dir};
@@ -160,7 +160,7 @@ async fn red_hls_source_drop_leaks_peer(
             HlsConfig::for_url(url.clone())
                 .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
                 .cancel(CancelToken::never())
-                .downloader(downloader.clone())
+                .fetch(Arc::new(downloader.clone()))
                 .build(),
         )
         .await?;
@@ -176,7 +176,7 @@ async fn red_hls_source_drop_leaks_peer(
             HlsConfig::for_url(url.clone())
                 .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
                 .cancel(CancelToken::never())
-                .downloader(downloader.clone())
+                .fetch(Arc::new(downloader.clone()))
                 .build(),
         )
         .await?;

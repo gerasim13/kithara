@@ -14,10 +14,9 @@ use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use kithara_stream::{
-    AudioCodec, ContainerFormat, SeekObserve,
-    dl::{Downloader, PeerRef},
-};
+#[cfg(test)]
+use kithara_stream::dl::Downloader;
+use kithara_stream::{AudioCodec, ContainerFormat, SeekObserve, dl::FetchScope};
 
 use super::{
     cancel_epoch::CancelEpoch,
@@ -40,24 +39,17 @@ use crate::{
 
 pub(super) const INIT_PLACEHOLDER_BYTES: u64 = 16 * 1024;
 
-/// Transport for a `PlanCtx` built in a unit test: a real downloader to
-/// register segment peers against, plus the stateless ABR handle of an idle
-/// peer standing in for the stream's. No test in this crate drives either to
-/// the network.
+/// Fetch scope for a `PlanCtx` built in a unit test: a real pool with an
+/// idle stream peer registered in it, so a segment file registers as that
+/// peer's child exactly as it does in production. No test in this crate
+/// drives it to the network.
 #[cfg(test)]
-pub(crate) fn test_transport() -> (Downloader, PeerRef) {
+pub(crate) fn test_transport() -> Arc<dyn FetchScope> {
     struct Idle;
 
     impl Abr for Idle {}
 
-    impl kithara_stream::dl::Peer for Idle {
-        fn poll_next(
-            &self,
-            _cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Option<Vec<kithara_stream::dl::FetchCmd>>> {
-            std::task::Poll::Ready(None)
-        }
-    }
+    impl kithara_stream::dl::Peer for Idle {}
 
     let downloader = Downloader::new(
         kithara_stream::dl::DownloaderConfig::for_client(kithara_net::HttpClient::new(
@@ -66,19 +58,18 @@ pub(crate) fn test_transport() -> (Downloader, PeerRef) {
         ))
         .build(),
     );
-    let parent = downloader.register(Arc::new(Idle)).as_parent();
-    (downloader, parent)
+    Arc::new(downloader.register(Arc::new(Idle)))
 }
 
 pub(crate) struct PlanCtx {
     pub(crate) bus: EventBus,
-    /// The stream's peer. Every segment file fetches as its child, so the
-    /// pool ranks segments behind the stream and credits their bytes to it.
-    pub(crate) parent: PeerRef,
-    /// Shared transport every segment file fetches through. A segment is an
-    /// ordinary `kithara-file` file, and it must use this pool rather than
-    /// mint an HTTP client of its own.
-    pub(crate) downloader: Downloader,
+    /// The stream's peer, handed down as the scope every segment file
+    /// registers in. A segment is an ordinary `kithara-file` file: it
+    /// fetches through this pool rather than minting a client of its own,
+    /// and registering here is what makes it a piece of the stream's
+    /// download — ranked behind it, crediting its bytes to it, and
+    /// unregistered when the stream goes away.
+    pub(crate) fetch: Arc<dyn FetchScope>,
     pub(crate) scope: kithara_assets::AssetScope,
     pub(crate) master_cancel: CancelToken,
     /// Per-resource HTTP headers applied to every init/segment fetch.

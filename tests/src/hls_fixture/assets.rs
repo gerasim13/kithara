@@ -8,7 +8,7 @@ use kithara::{
     hls::{Hls, KeyStore, PlaylistCache},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc},
-    stream::dl::{Downloader, DownloaderConfig, Peer, PeerHandle},
+    stream::dl::{Downloader, DownloaderConfig, FetchScope, Peer, PeerHandle},
 };
 use url::Url;
 
@@ -117,7 +117,7 @@ pub fn create_test_downloader() -> Downloader {
     Downloader::new(DownloaderConfig::for_client(create_test_net()).build())
 }
 
-/// Create a private test [`PeerHandle`] via `Downloader::register`.
+/// Create a private test [`PeerHandle`] rooted in a private pool.
 fn create_test_peer_handle() -> PeerHandle {
     struct TestPeer;
     impl kithara::abr::Abr for TestPeer {}

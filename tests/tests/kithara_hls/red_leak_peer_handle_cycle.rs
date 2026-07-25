@@ -14,7 +14,7 @@ use kithara::{
         sync::{Arc, Mutex},
         time::Duration,
     },
-    stream::dl::{Downloader, DownloaderConfig, FetchCmd, Peer, PeerHandle},
+    stream::dl::{Downloader, DownloaderConfig, FetchCmd, FetchScope, Peer, PeerHandle},
 };
 
 /// Peer that stashes its own `PeerHandle` clone after registration —

@@ -3,8 +3,8 @@ use kithara_decode::DecodeError;
 use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::HlsConfig;
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancelScope;
-use kithara_stream::dl::{Downloader, DownloaderConfig};
+use kithara_platform::{CancelScope, sync::Arc};
+use kithara_stream::dl::{Downloader, DownloaderConfig, FetchScope};
 use url::Url;
 
 use super::{ResourceConfig, ResourceSrc};
@@ -54,7 +54,7 @@ where
         });
         let file_config = FileConfig::for_src(file_src)
             .store(self.store.clone())
-            .downloader(downloader)
+            .fetch(Arc::new(downloader))
             .maybe_look_ahead_bytes(self.look_ahead_bytes)
             .maybe_headers(self.headers.clone())
             .maybe_discriminator(self.discriminator.clone())
@@ -92,7 +92,10 @@ where
         let hls_config = HlsConfig::for_url(url)
             .store(self.store.clone())
             .keys(self.keys)
-            .maybe_downloader(self.downloader)
+            .maybe_fetch(
+                self.downloader
+                    .map(|downloader| Arc::new(downloader) as Arc<dyn FetchScope>),
+            )
             .initial_abr_mode(self.initial_abr_mode)
             .maybe_look_ahead_bytes(self.look_ahead_bytes)
             .maybe_headers(self.headers)

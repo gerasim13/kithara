@@ -9,6 +9,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
+        sync::Arc,
         time::{self, Duration},
     },
     stream::{
@@ -65,7 +66,7 @@ async fn run_drm_seek_resume_cycle(
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .downloader(downloader.clone())
+        .fetch(Arc::new(downloader.clone()))
         .initial_abr_mode(auto(0))
         .build();
 

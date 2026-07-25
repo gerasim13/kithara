@@ -43,11 +43,10 @@ impl HlsVariant {
         // downloads and where ABR's throughput samples surface.
         .events(self.profile.bus.clone())
         .store(ctx.scope.store().clone())
-        .downloader(ctx.downloader.clone())
+        .fetch(Arc::clone(&ctx.fetch))
         .cancel(self.cancel_handle())
         .maybe_headers(self.profile.headers.clone())
         .maybe_process(segment.process())
-        .parent(ctx.parent.clone())
         .activity(Arc::new(SlotDemand {
             segment: handle_planned,
             variant: Arc::downgrade(self),

@@ -193,9 +193,10 @@ struct PeerInner {
     /// with the shared `AbrController` until the last `PeerHandle` drops
     /// (the handle's `Drop` calls `controller.unregister`).
     abr: AbrHandle,
-    /// Keeps `DownloaderInner` (`HttpClient`, cancel, runtime) alive
-    /// for this peer's lifetime.
-    _pool: Arc<DownloaderInner>,
+    /// Keeps `DownloaderInner` (`HttpClient`, cancel, runtime) alive for
+    /// this peer's lifetime, and is the pool a child registered under this
+    /// handle lands in.
+    pool: Arc<DownloaderInner>,
     /// Shared with the Registry's `PeerEntry`. Writing through
     /// [`PeerHandle::with_bus`] immediately makes the new bus visible
     /// to both the handle's own imperative path and the Registry's
@@ -242,20 +243,24 @@ impl PeerHandle {
     ) -> Self {
         Self {
             inner: Arc::new(PeerInner {
+                abr,
+                pool,
+                bus,
                 cancel,
                 cmd_tx,
-                bus,
-                abr,
                 peer_ref,
-                _pool: pool,
             }),
         }
     }
 
-    /// Reference a child peer uses to declare this one as its
+    /// The pool this handle registers children into.
+    pub(super) fn pool(&self) -> &Arc<DownloaderInner> {
+        &self.inner.pool
+    }
+
+    /// Reference a peer registered under this handle declares as its
     /// [`Peer::parent`].
-    #[must_use]
-    pub fn as_parent(&self) -> PeerRef {
+    pub(super) fn peer_ref(&self) -> PeerRef {
         self.inner.peer_ref.clone()
     }
 
@@ -350,7 +355,7 @@ impl PeerHandle {
     ) {
         let cancel = CancelGroup::new(vec![self.inner.cancel.child()]);
         let (resp_tx, resp_rx) = oneshot::channel();
-        let request_id = self.inner._pool.next_request_id();
+        let request_id = self.inner.pool.next_request_id();
         let enqueued_at = Instant::now();
         let internal = InternalCmd {
             cmd,
