@@ -5,7 +5,10 @@ use kithara_assets::{AssetStore, BytePool, ProcessCtx, ResourceKey};
 use kithara_events::EventBus;
 use kithara_net::{Headers, NetError};
 use kithara_platform::{CancelToken, sync::Arc};
-use kithara_stream::dl::Downloader;
+use kithara_stream::{
+    Activity,
+    dl::{Downloader, PeerRef},
+};
 use url::Url;
 
 /// Source of a file stream.
@@ -74,6 +77,13 @@ pub enum FetchOutcome {
 /// holds it behind its own `Option`.
 pub type FetchCompleteFn = Arc<dyn Fn(FetchOutcome) + Send + Sync>;
 
+/// Reports that an in-flight request crossed the downloader's soft timeout.
+///
+/// Not terminal: the fetch is still running. A caller that schedules across
+/// several sources (an HLS variant deciding whether to escape a stalled
+/// one) learns here that this one is not making progress.
+pub type SlowFn = Arc<dyn Fn() + Send + Sync>;
+
 /// Configuration for file streaming.
 ///
 /// Used with `Stream::<File>::new(config)`.
@@ -98,10 +108,22 @@ pub struct FileConfig {
     pub extension: Option<String>,
     /// Optional cache discriminator.
     pub discriminator: Option<String>,
+    /// Whether the consumer of these bytes is active right now. Decides the
+    /// fetch's queue priority; a source left to itself is never active and
+    /// so never outranks one that is.
+    pub activity: Option<Arc<dyn Activity>>,
+    /// The peer this fetch works for, when it is one of many carrying a
+    /// single logical download. Its priority ranks this fetch against
+    /// everything else in the pool, and its ABR identity is credited with
+    /// the bytes.
+    pub parent: Option<PeerRef>,
     /// Reports how the fetch ended. Only a fetching source
     /// ([`FileSrc::Remote`] / [`FileSrc::Resource`]) reports; a local or
     /// attached source never fetches.
     pub on_fetch_complete: Option<FetchCompleteFn>,
+    /// Called when an in-flight request crosses the downloader's soft
+    /// timeout. Fires per request, not per source.
+    pub on_slow: Option<SlowFn>,
     /// Shared byte pool for cache and fallback network buffers.
     pub pool: Option<BytePool>,
     /// Transform applied to the fetched bytes when the resource commits —

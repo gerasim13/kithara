@@ -70,15 +70,16 @@ impl ResourceEngine {
         }
     }
 
-    /// A cancelled fetch owns nothing: another writer may have committed the
-    /// resource under it, and evicting that is destroying someone else's
-    /// bytes. Only an uncommitted resource is ours to fail.
+    /// A cancelled fetch owns nothing but its own writer.
+    ///
+    /// Failing the writer is generation-scoped and race-safe; **evicting the
+    /// resource is not**, and another writer — a new seek epoch fetching the
+    /// same segment — may already be filling it. So a cancel never evicts,
+    /// and it is not an error either: the outcome says it was cancelled.
     fn finalize_cancel(&self, e: &NetError) {
         let committed = self.committed();
-        if !committed {
-            let reason = e.to_string();
-            self.fail_and_evict(&reason);
-            self.sink.error(&reason);
+        if !committed && let Some(writer) = self.take_writer() {
+            writer.fail(e.to_string());
         }
         self.notify_fetch_complete(FetchOutcome::Cancelled { committed });
     }
@@ -362,10 +363,14 @@ mod tests {
                 fixture.outcome(),
                 Some(FetchOutcome::Cancelled { committed: false })
             ),
-            "nothing committed, so the partial resource is ours to drop, got {:?}",
+            "nothing committed, so the partial resource is ours to fail, got {:?}",
             fixture.outcome()
         );
-        assert_eq!(fixture.state(), AssetResourceState::Missing);
+        assert!(
+            matches!(fixture.state(), AssetResourceState::Failed { .. }),
+            "our writer is failed — but the resource is NOT evicted, because a \
+             new epoch fetching the same key may already own it"
+        );
     }
 
     #[kithara::test]

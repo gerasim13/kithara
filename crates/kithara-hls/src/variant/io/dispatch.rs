@@ -4,7 +4,7 @@ use kithara_test_utils::kithara;
 use tracing::debug;
 
 use super::{HlsVariant, PlanCtx};
-use crate::segment::{Downloading, FetchClaim, PlannedFetch};
+use crate::segment::{Downloading, FetchClaim, PlannedFetch, Segment};
 
 impl HlsVariant {
     #[kithara::probe(
@@ -78,16 +78,15 @@ impl HlsVariant {
                         ctx.signal.fire();
                         continue;
                     }
-                    let Some(cmd) = self.build_init_cmd(ctx, handle) else {
-                        if self
-                            .init()
-                            .is_some_and(|i| !i.state().is_loaded() && !i.state().is_failed())
-                        {
-                            deferred.push(planned);
-                        }
+                    if let Err(error) = self.start_fetch(ctx, init, handle, ctx.signal.clone()) {
+                        debug!(
+                            variant = self.variant,
+                            error = %error,
+                            "init fetch not started (variant switch in flight)"
+                        );
+                        deferred.push(planned);
                         continue;
-                    };
-                    out.push(cmd);
+                    }
                 }
                 PlannedFetch::Segment(seg_idx) => {
                     let Some(entry) = self.segments.get(seg_idx as usize) else {
@@ -111,13 +110,16 @@ impl HlsVariant {
                         ctx.signal.fire();
                         continue;
                     }
-                    let Some(cmd) = self.emit_fetch_cmd(ctx, seg_idx, handle) else {
-                        // Acquire raced (the claim was reverted to `Missing`
-                        // inside `emit_fetch_cmd`): re-queue, don't drop it.
+                    if self
+                        .start_segment_fetch(ctx, seg_idx, entry, handle)
+                        .is_err()
+                    {
+                        // The resource could not be opened (a variant switch
+                        // dropped it, or a sibling store holds the tmp): the
+                        // claim is back at `Missing`, so re-queue it.
                         deferred.push(planned);
                         continue;
-                    };
-                    out.push(cmd);
+                    }
                 }
             }
             remaining -= 1;
@@ -131,32 +133,29 @@ impl HlsVariant {
         out
     }
 
+    /// Media-segment wrapper over [`start_fetch`](Self::start_fetch), owning
+    /// the per-segment probe point the seek tests read.
     #[kithara::probe(
         seek_epoch = ctx.seek_epoch,
         segment_index = u64::from(seg_idx),
         variant = self.variant as u64
     )]
-    fn emit_fetch_cmd(
+    fn start_segment_fetch(
         self: &Arc<Self>,
         ctx: &PlanCtx,
         seg_idx: u32,
+        entry: &Segment,
         handle: FetchClaim<Downloading>,
-    ) -> Option<FetchCmd> {
-        let entry = &self.segments[seg_idx as usize];
-        let resource = match entry.acquire(ctx.scope.store()) {
-            Ok(r) => r,
-            Err(err) => {
+    ) -> Result<(), kithara_stream::SourceError> {
+        self.start_fetch(ctx, entry, handle, ctx.signal.clone())
+            .inspect_err(|error| {
                 debug!(
                     variant = self.variant,
                     seg_idx,
-                    error = %err,
-                    "emit_fetch_cmd: acquire_resource dropped (variant switch in flight)"
+                    error = %error,
+                    "segment fetch not started (variant switch in flight)"
                 );
-                let _ = handle.into_missing();
-                return None;
-            }
-        };
-        self.build_cmd(entry.url().clone(), resource, handle, ctx.signal.clone())
+            })
     }
 
     fn prefetch_segment_cap(&self, ctx: &PlanCtx, prefetch_base: u64) -> Option<u32> {

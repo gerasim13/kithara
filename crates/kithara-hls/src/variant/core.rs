@@ -3,6 +3,8 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
 };
 
+#[cfg(test)]
+use kithara_abr::Abr;
 use kithara_assets::AssetResource;
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
@@ -12,7 +14,10 @@ use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use kithara_stream::{AudioCodec, ContainerFormat, SeekObserve};
+use kithara_stream::{
+    AudioCodec, ContainerFormat, SeekObserve,
+    dl::{Downloader, PeerRef},
+};
 
 use super::{
     cancel_epoch::CancelEpoch,
@@ -35,8 +40,45 @@ use crate::{
 
 pub(super) const INIT_PLACEHOLDER_BYTES: u64 = 16 * 1024;
 
+/// Transport for a `PlanCtx` built in a unit test: a real downloader to
+/// register segment peers against, plus the stateless ABR handle of an idle
+/// peer standing in for the stream's. No test in this crate drives either to
+/// the network.
+#[cfg(test)]
+pub(crate) fn test_transport() -> (Downloader, PeerRef) {
+    struct Idle;
+
+    impl Abr for Idle {}
+
+    impl kithara_stream::dl::Peer for Idle {
+        fn poll_next(
+            &self,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Vec<kithara_stream::dl::FetchCmd>>> {
+            std::task::Poll::Ready(None)
+        }
+    }
+
+    let downloader = Downloader::new(
+        kithara_stream::dl::DownloaderConfig::for_client(kithara_net::HttpClient::new(
+            kithara_net::NetOptions::default(),
+            CancelToken::never(),
+        ))
+        .build(),
+    );
+    let parent = downloader.register(Arc::new(Idle)).as_parent();
+    (downloader, parent)
+}
+
 pub(crate) struct PlanCtx {
     pub(crate) bus: EventBus,
+    /// The stream's peer. Every segment file fetches as its child, so the
+    /// pool ranks segments behind the stream and credits their bytes to it.
+    pub(crate) parent: PeerRef,
+    /// Shared transport every segment file fetches through. A segment is an
+    /// ordinary `kithara-file` file, and it must use this pool rather than
+    /// mint an HTTP client of its own.
+    pub(crate) downloader: Downloader,
     pub(crate) scope: kithara_assets::AssetScope,
     pub(crate) master_cancel: CancelToken,
     /// Per-resource HTTP headers applied to every init/segment fetch.

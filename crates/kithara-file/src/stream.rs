@@ -13,13 +13,13 @@ use kithara_platform::{
 };
 use kithara_storage::StorageError;
 use kithara_stream::{
-    AudioCodec, PlayheadState, SeekState, SourceError as StreamSourceError, StreamType,
-    dl::{Downloader, DownloaderConfig},
+    Activity, AudioCodec, PlayheadState, SeekState, SourceError as StreamSourceError, StreamType,
+    dl::{Downloader, DownloaderConfig, PeerRef},
 };
 use kithara_test_utils::kithara;
 
 use crate::{
-    config::{FetchCompleteFn, FetchOutcome, FileConfig, FileSrc},
+    config::{FetchCompleteFn, FetchOutcome, FileConfig, FileSrc, SlowFn},
     coord::FileCoord,
     engine::{EngineIdentity, FilePhase, LifecycleSink, ResourceEngine},
     error::SourceError,
@@ -43,6 +43,12 @@ struct RemoteFileOpen {
     headers: Option<Headers>,
     look_ahead_bytes: Option<u64>,
     on_fetch_complete: Option<FetchCompleteFn>,
+    on_slow: Option<SlowFn>,
+    /// Answers whether these bytes are wanted now; decides queue priority.
+    activity: Option<Arc<dyn Activity>>,
+    /// The peer this fetch works for, when it carries one piece of a larger
+    /// download.
+    parent: Option<PeerRef>,
     url: url::Url,
 }
 
@@ -63,9 +69,16 @@ fn local_key(path: PathBuf) -> Result<ResourceKey, SourceError> {
 }
 
 fn coord_with_total(len: Option<u64>) -> Arc<FileCoord> {
-    let coord = Arc::new(FileCoord::new(
+    coord_for(len, None)
+}
+
+/// Coord for a source whose activity — and so its queue priority — is
+/// answered by the caller.
+fn coord_for(len: Option<u64>, activity: Option<Arc<dyn Activity>>) -> Arc<FileCoord> {
+    let coord = Arc::new(FileCoord::with_activity(
         Arc::new(PlayheadState::new()),
         Arc::new(SeekState::new()),
+        activity,
     ));
     coord.set_total_bytes(len);
     coord
@@ -134,6 +147,16 @@ fn remote_key(
     scope.key(&resource).map_err(SourceError::from)
 }
 
+/// Where a fetching source gets its bytes and, when the caller owns the
+/// identity, its key.
+fn fetch_target(src: &FileSrc) -> Result<(url::Url, Option<ResourceKey>), SourceError> {
+    match src {
+        FileSrc::Remote(url) => Ok((url.clone(), None)),
+        FileSrc::Resource { key, url } => Ok((url.clone(), Some(key.clone()))),
+        FileSrc::Local(_) | FileSrc::Attached(_) => Err(SourceError::FetchingSourceRequired),
+    }
+}
+
 fn default_downloader(cancel: &CancelToken, pool: Option<BytePool>) -> Downloader {
     let cancel_for_dl = cancel.child();
     let net_options = NetOptions::builder().maybe_byte_pool(pool).build();
@@ -154,12 +177,15 @@ impl RemoteFileOpen {
             identity,
             look_ahead_bytes,
             on_fetch_complete,
+            on_slow,
+            activity,
+            parent,
             url,
         } = self;
 
         let reader = writer.reader();
         let raw = writer.raw_write_handle();
-        let coord = coord_with_total(reader.len());
+        let coord = coord_for(reader.len(), activity);
         let (demand_lease, producer) =
             identity
                 .store
@@ -182,6 +208,7 @@ impl RemoteFileOpen {
                 .initial_phase(FilePhase::Init)
                 .demand_lease(demand_lease)
                 .maybe_on_complete(on_fetch_complete)
+                .maybe_on_slow(on_slow)
                 .build(),
         );
 
@@ -192,6 +219,7 @@ impl RemoteFileOpen {
                 producer,
                 url,
                 headers,
+                parent,
             )))
             .with_bus(bus);
 
@@ -215,13 +243,10 @@ impl StreamType for File {
                 Self::create_local(path, config, &cancel).map_err(StreamSourceError::from)
             }
             FileSrc::Attached(_) => Self::open_attached(config),
-            FileSrc::Remote(url) => {
+            fetching => {
+                let (url, key) = fetch_target(&fetching)?;
                 let cancel = CancelScope::new(config.cancel.clone()).token();
-                Self::create_remote_wait_for_claim(url, None, config, cancel).await
-            }
-            FileSrc::Resource { key, url } => {
-                let cancel = CancelScope::new(config.cancel.clone()).token();
-                Self::create_remote_wait_for_claim(url, Some(key), config, cancel).await
+                Self::create_remote_wait_for_claim(url, key, config, cancel).await
             }
         }
     }
@@ -261,6 +286,24 @@ impl File {
             key,
             cancel.child(),
         ))
+    }
+
+    /// Open a source that fetches its resource, without waiting for a
+    /// sibling `AssetStore` instance to release the tmp claim.
+    ///
+    /// This is the synchronous half of [`StreamType::create`]: a caller
+    /// driving its own dispatch loop (an HLS variant fetching a segment)
+    /// re-tries on its own tick instead of parking in a sleep-poll.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `config` names a local or attached source, and
+    /// `Storage(StorageError::TmpClaimed)` when another `AssetStore`
+    /// instance holds the tmp — the caller owns that retry.
+    pub fn open_fetch(config: FileConfig) -> Result<FileSource, StreamSourceError> {
+        let (url, key) = fetch_target(&config.src)?;
+        let cancel = CancelScope::new(config.cancel.clone()).token();
+        Self::create_remote(url, key, config, cancel).map_err(StreamSourceError::from)
     }
 
     /// Create a source for a local file.
@@ -307,6 +350,9 @@ impl File {
             headers,
             look_ahead_bytes,
             on_fetch_complete,
+            on_slow,
+            activity,
+            parent,
             pool,
             process,
             store,
@@ -355,6 +401,9 @@ impl File {
                 headers,
                 look_ahead_bytes,
                 on_fetch_complete,
+                on_slow,
+                activity,
+                parent,
                 url,
             }
             .into_source(writer)),

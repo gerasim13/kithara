@@ -74,11 +74,17 @@ impl ResourceEngine {
             },
         );
 
+        let on_slow = self
+            .on_slow
+            .clone()
+            .map(|on_slow| Box::new(move || on_slow()) as Box<dyn FnOnce() + Send>);
+
         FetchCmd::get(url)
             .cancel(cancel)
             .writer(writer)
             .validator(reject_html_response)
             .on_response(on_response)
+            .maybe_on_slow(on_slow)
             .maybe_range((resume_from > 0).then(|| RangeSpec::new(resume_from, None)))
             .maybe_headers(headers)
             .on_complete(on_complete)

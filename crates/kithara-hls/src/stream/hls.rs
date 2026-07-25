@@ -140,7 +140,9 @@ impl StreamType for Hls {
         let emit = Arc::new(DeferredBus::new(bus.clone(), 256));
 
         let plan_ctx = PlanCtx {
+            parent: stream_peer.peer_handle().as_parent(),
             bus: bus.clone(),
+            downloader: downloader.clone(),
             look_ahead_bytes,
             look_ahead_segments,
             master_cancel: cancel.clone(),
@@ -175,6 +177,8 @@ impl StreamType for Hls {
         let coord = Arc::new(HlsCoord::new(
             HlsCoordEnv {
                 signal,
+                downloader,
+                parent: stream_peer.peer_handle().as_parent(),
                 cancel: cancel.clone(),
                 scope: stream_peer.scope(),
                 headers: config.headers.clone(),

@@ -318,7 +318,9 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
     let post_seek_prefix_emissions: Vec<_> = probe_events
         .iter()
         .filter(|e| e.seq().is_some_and(|s| s > pre_seek_seq))
-        .filter(|e| e.target == "kithara_hls_probe" && e.probe_name() == Some("emit_fetch_cmd"))
+        .filter(|e| {
+            e.target == "kithara_hls_probe" && e.probe_name() == Some("start_segment_fetch")
+        })
         .filter(|e| e.u64("seek_epoch") == Some(new_epoch))
         .filter(|e| {
             e.u64("segment_index").is_some_and(|s| {
@@ -344,7 +346,9 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
     let target_emissions: Vec<_> = probe_events
         .iter()
         .filter(|e| e.seq().is_some_and(|s| s > pre_seek_seq))
-        .filter(|e| e.target == "kithara_hls_probe" && e.probe_name() == Some("emit_fetch_cmd"))
+        .filter(|e| {
+            e.target == "kithara_hls_probe" && e.probe_name() == Some("start_segment_fetch")
+        })
         .filter(|e| e.u64("seek_epoch") == Some(new_epoch))
         .filter(|e| {
             e.u64("segment_index").is_some_and(|s| {

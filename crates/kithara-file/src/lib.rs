@@ -22,5 +22,5 @@ mod error;
 mod session;
 mod stream;
 
-pub use config::{FetchCompleteFn, FetchOutcome, FileConfig, FileSrc};
+pub use config::{FetchCompleteFn, FetchOutcome, FileConfig, FileSrc, SlowFn};
 pub use stream::File;

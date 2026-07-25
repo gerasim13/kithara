@@ -33,6 +33,7 @@ tls-native = ["kithara-net?/tls-native"]
 kithara-net = { workspace = true, optional = true, default-features = false }
 kithara-platform = { workspace = true }
 
+bitflags = { workspace = true }
 crossbeam-queue = { workspace = true }
 dashmap = { workspace = true }
 delegate = { workspace = true }

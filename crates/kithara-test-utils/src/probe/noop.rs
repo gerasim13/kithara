@@ -64,10 +64,7 @@ impl IntoProbeArg for RequestId {
 }
 
 fn request_priority_wire(p: RequestPriority) -> u64 {
-    match p {
-        RequestPriority::High => 0,
-        RequestPriority::Low => 1,
-    }
+    u64::from(p.bits())
 }
 
 impl IntoProbeArg for RequestPriority {

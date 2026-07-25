@@ -45,18 +45,52 @@ pub enum RequestMethod {
     Head,
 }
 
-/// Effective scheduling priority of a request.
-///
-/// Used in the Downloader's 2×2 slot map (peer priority × cmd
-/// priority): `High` commands and peers are processed before `Low`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum RequestPriority {
-    /// Latency-sensitive: demand segments, `execute`/`batch` calls,
-    /// seek.
-    High = 0,
-    /// Background: prefetch, idle downloads. Default.
-    #[default]
-    Low = 1,
+bitflags::bitflags! {
+    /// Where a request sits in the download queue: one field, one bit per
+    /// reason to go first.
+    ///
+    /// Bits compose with `|`, so a request carried by a composite peer takes
+    /// its parent's bits plus its own, and the queue drains from the highest
+    /// bits down — setting a bit only ever moves a request forward. Empty is
+    /// the background rank: prefetch and idle downloads.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub struct RequestPriority: u8 {
+        /// The peer these bytes are for is active.
+        const PEER = 0b10;
+        /// A consumer is waiting on this request, as opposed to it being
+        /// fetched ahead of need.
+        const REQUEST = 0b01;
+
+        /// Latency-sensitive: what a peer sets when it is the active one.
+        const HIGH = Self::PEER.bits();
+        /// Background: prefetch, idle downloads. The default rank.
+        const LOW = 0;
+    }
+}
+
+impl RequestPriority {
+    /// Number of distinct ranks — every combination of the bits.
+    #[must_use]
+    pub const fn rank_count() -> usize {
+        1 << 2
+    }
+
+    /// This priority as a child's contribution to its parent's.
+    ///
+    /// What ranks a peer among its own consumers ranks its pieces among
+    /// each other, one level in: a composite peer's parent already carries
+    /// the outer bit, so the child spends the inner one.
+    #[must_use]
+    pub const fn nested(self) -> Self {
+        Self::from_bits_truncate(self.bits() >> 1)
+    }
+
+    /// Queue slot: rank 0 drains first, so the highest bits map to the
+    /// lowest index.
+    #[must_use]
+    pub const fn slot(self) -> usize {
+        (Self::all().bits() - self.bits()) as usize
+    }
 }
 
 /// Why a fetch was cancelled.
@@ -179,4 +213,58 @@ pub enum DownloaderEvent {
         from: RequestPriority,
         to: RequestPriority,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::RequestPriority;
+
+    /// Every combination is its own queue, and more reasons to go first
+    /// means an earlier one. This is the whole ordering contract: the
+    /// scheduler indexes its queues by [`RequestPriority::slot`] and drains
+    /// them in index order.
+    #[kithara::test]
+    fn more_reasons_to_hurry_means_an_earlier_queue() {
+        let ranks = [
+            RequestPriority::PEER | RequestPriority::REQUEST,
+            RequestPriority::PEER,
+            RequestPriority::REQUEST,
+            RequestPriority::empty(),
+        ];
+        let slots: Vec<usize> = ranks.iter().map(|rank| rank.slot()).collect();
+
+        assert_eq!(slots, vec![0, 1, 2, 3]);
+        assert!(
+            slots
+                .iter()
+                .max()
+                .is_some_and(|max| *max < RequestPriority::rank_count()),
+            "every rank must address a queue that exists"
+        );
+    }
+
+    /// The aliases the call sites use are the bits, not a parallel scale.
+    #[kithara::test]
+    fn the_high_low_aliases_are_the_bits() {
+        assert_eq!(RequestPriority::HIGH, RequestPriority::PEER);
+        assert_eq!(RequestPriority::LOW, RequestPriority::empty());
+        assert_eq!(RequestPriority::default(), RequestPriority::LOW);
+    }
+
+    /// Composition: a child's urgency ranks it among its siblings, one
+    /// level below whatever its parent contributes — so a parent's rank is
+    /// never displaced by a child's.
+    #[kithara::test]
+    fn nesting_demotes_one_level() {
+        assert_eq!(RequestPriority::PEER.nested(), RequestPriority::REQUEST);
+        assert_eq!(RequestPriority::REQUEST.nested(), RequestPriority::empty());
+        assert_eq!(RequestPriority::empty().nested(), RequestPriority::empty());
+        assert_eq!(
+            RequestPriority::PEER | RequestPriority::PEER.nested(),
+            RequestPriority::PEER | RequestPriority::REQUEST,
+            "an active peer's own urgent request takes the first queue"
+        );
+    }
 }

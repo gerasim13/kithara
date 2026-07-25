@@ -4,41 +4,16 @@ use kithara_assets::AssetResource;
 #[cfg(test)]
 use kithara_assets::ResourceKey;
 use kithara_drm::DecryptContext;
-use kithara_platform::sync::Arc;
-use kithara_stream::{StreamResult, dl::FetchCmd, needs_exact_byte_sizes};
+use kithara_stream::{StreamResult, needs_exact_byte_sizes};
 
 use super::{HlsVariant, PlanCtx, core::INIT_PLACEHOLDER_BYTES};
 use crate::{
     HlsResult,
     playlist::{PlaylistAccess, PlaylistState},
-    segment::{
-        Downloading, FetchClaim, InitSegment, Segment, SegmentContent, SegmentSize,
-        SegmentSlotState, SegmentSource,
-    },
+    segment::{InitSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState, SegmentSource},
 };
 
 impl HlsVariant {
-    pub(super) fn build_init_cmd(
-        self: &Arc<Self>,
-        ctx: &PlanCtx,
-        handle: FetchClaim<Downloading>,
-    ) -> Option<FetchCmd> {
-        let init = self.init()?;
-        let resource = match init.acquire(ctx.scope.store()) {
-            Ok(resource) => resource,
-            Err(error) => {
-                tracing::debug!(
-                    variant = self.variant,
-                    error = %error,
-                    "build_init_cmd: acquire_resource dropped (variant switch in flight)"
-                );
-                let _ = handle.into_missing();
-                return None;
-            }
-        };
-        self.build_cmd(init.url().clone(), resource, handle, ctx.signal.clone())
-    }
-
     /// Builds the variant's init slot. The slot exists (`Some(Segment::Init)`)
     /// iff the playlist carries an `#EXT-X-MAP` URL — NOT iff the init's
     /// byte length is already known (R5). A not-yet-resolved init leaves

@@ -22,6 +22,9 @@ pub enum SourceError {
     #[error("attached file source required")]
     AttachedSourceRequired,
 
+    #[error("fetching file source required")]
+    FetchingSourceRequired,
+
     #[error("unexpected asset acquisition state")]
     UnexpectedAcquisitionState,
 }
@@ -33,9 +36,9 @@ impl From<SourceError> for StreamSourceError {
             SourceError::Storage(e) => Self::Storage(e),
             SourceError::Assets(e) => Self::other(e),
             SourceError::InvalidPath(s) => Self::InvalidPath(s),
-            SourceError::AttachedSourceRequired | SourceError::UnexpectedAcquisitionState => {
-                Self::other(err)
-            }
+            SourceError::AttachedSourceRequired
+            | SourceError::FetchingSourceRequired
+            | SourceError::UnexpectedAcquisitionState => Self::other(err),
         }
     }
 }

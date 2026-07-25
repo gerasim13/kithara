@@ -4685,6 +4685,7 @@ dependencies = [
 name = "kithara-events"
 version = "0.0.1-alpha4"
 dependencies = [
+ "bitflags 2.13.0",
  "crossbeam-queue",
  "dashmap",
  "delegate",

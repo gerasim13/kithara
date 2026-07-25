@@ -1,7 +1,7 @@
 use std::{fmt, ops::Range};
 
-use kithara_assets::{AssetResourceState, AssetStore, AssetsError, ResourceKey};
-use kithara_drm::DecryptContext;
+use kithara_assets::{AssetResourceState, AssetStore, AssetsError, ProcessCtx, ResourceKey};
+use kithara_drm::{DecryptContext, as_process_ctx};
 use kithara_file::{File, FileConfig, FileSrc};
 use kithara_platform::{
     CancelToken,
@@ -15,7 +15,9 @@ use url::Url;
 
 use crate::segment::{SegmentSize, SegmentSlotState};
 
-type AttachedFileSource = <File as StreamType>::Source;
+/// One `kithara-file` source over a segment resource — read-only when
+/// attached to someone else's bytes, fetching when it owns them.
+type FileHandle = <File as StreamType>::Source;
 
 #[derive(Debug, Error)]
 pub(crate) enum SegmentSourceError {
@@ -33,10 +35,17 @@ pub(crate) enum SegmentSourceError {
     },
 }
 
+/// Shared home of the in-flight fetch. Exactly two parties reach it: the
+/// slot that starts the fetch and the hook that ends it.
+pub(crate) type FetchCell = Arc<Mutex<Option<FileHandle>>>;
+
 pub(crate) struct SegmentSource {
     store: AssetStore,
     cancel: CancelToken,
-    slot: Mutex<Option<AttachedFileSource>>,
+    slot: Mutex<Option<FileHandle>>,
+    /// The file fetching this slot's bytes, held for the fetch's lifetime
+    /// only: the fetch owns the file, the slot merely keeps it alive.
+    fetch: FetchCell,
 }
 
 impl SegmentSource {
@@ -45,6 +54,7 @@ impl SegmentSource {
             store,
             cancel,
             slot: Mutex::default(),
+            fetch: FetchCell::default(),
         }
     }
 }
@@ -115,11 +125,25 @@ impl Segment {
             .unwrap_or(false)
     }
 
-    /// Decryption disposition — the acquire path branches on it.
+    /// Decryption disposition — the fetch's processing context comes from it.
     pub(crate) fn content(&self) -> &SegmentContent {
         match self {
             Self::Init(s) => &s.content,
             Self::Media(s) => &s.content,
+        }
+    }
+
+    /// Where the in-flight fetch lives while it runs.
+    pub(crate) fn fetch_cell(&self) -> FetchCell {
+        Arc::clone(&self.source().fetch)
+    }
+
+    /// The transform the resource commits through: decryption for an
+    /// encrypted segment, nothing for a cleartext one.
+    pub(crate) fn process(&self) -> Option<ProcessCtx> {
+        match self.content() {
+            SegmentContent::Plain => None,
+            SegmentContent::Encrypted(context) => Some(as_process_ctx(context.clone())),
         }
     }
 
@@ -153,10 +177,7 @@ impl Segment {
     }
 
     /// Runs `use_source` under the source-slot mutex; the closure must not block.
-    fn with_attached_source<T>(
-        &self,
-        use_source: impl FnOnce(&AttachedFileSource) -> T,
-    ) -> Option<T> {
+    fn with_attached_source<T>(&self, use_source: impl FnOnce(&FileHandle) -> T) -> Option<T> {
         let source = self.source();
         let mut slot = source.slot.lock();
         if let Some(attached) = slot.as_ref() {

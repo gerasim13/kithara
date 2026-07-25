@@ -221,8 +221,11 @@ mod tests {
                 .cancel(cancel.clone())
                 .build(),
         );
+        let (downloader, parent) = crate::variant::test_transport();
         PlanCtx {
+            parent,
             bus: bus.clone(),
+            downloader,
             prefetch_budget: 1,
             master_cancel: cancel,
             scope: store
@@ -317,6 +320,8 @@ mod tests {
         ));
         Arc::new(HlsCoord::new(
             HlsCoordEnv {
+                downloader: crate::variant::test_transport().0,
+                parent: crate::variant::test_transport().1,
                 scope: ctx.scope.clone(),
                 cancel: ctx.master_cancel.clone(),
                 headers: None,

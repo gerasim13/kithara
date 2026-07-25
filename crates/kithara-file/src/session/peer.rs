@@ -7,7 +7,7 @@ use kithara_abr::Abr;
 use kithara_assets::ProducerHandle;
 use kithara_net::Headers;
 use kithara_platform::sync::{Arc, Mutex};
-use kithara_stream::dl::{FetchCmd, Peer, RequestPriority};
+use kithara_stream::dl::{FetchCmd, Peer, PeerRef, RequestPriority};
 use url::Url;
 
 use super::FileSourceCtx;
@@ -24,6 +24,9 @@ pub(crate) struct FilePeer {
     source: Arc<FileSourceCtx>,
     url: Url,
     headers: Option<Headers>,
+    /// The peer this one fetches for, when it carries one piece of a larger
+    /// download. `None` when the file is its own consumer.
+    parent: Option<PeerRef>,
     /// Single-producer election handle. `Some` only while this peer is
     /// the elected producer for the shared resource. Starts as the
     /// attach-time winner (or `None` for a loser); a loser promotes
@@ -39,6 +42,7 @@ impl FilePeer {
         producer: Option<ProducerHandle>,
         url: Url,
         headers: Option<Headers>,
+        parent: Option<PeerRef>,
     ) -> Self {
         Self {
             engine,
@@ -47,6 +51,7 @@ impl FilePeer {
             producer: Mutex::new(producer),
             url,
             headers,
+            parent,
         }
     }
 }
@@ -88,11 +93,15 @@ impl Peer for FilePeer {
         Poll::Ready(Some(vec![command]))
     }
 
+    fn parent(&self) -> Option<PeerRef> {
+        self.parent.clone()
+    }
+
     fn priority(&self) -> RequestPriority {
         if self.source.coord.activity().is_playing() {
-            RequestPriority::High
+            RequestPriority::HIGH
         } else {
-            RequestPriority::Low
+            RequestPriority::LOW
         }
     }
 }

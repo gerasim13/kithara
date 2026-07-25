@@ -44,8 +44,11 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
             .cancel(cancel.clone())
             .build(),
     );
+    let (downloader, parent) = crate::variant::test_transport();
     PlanCtx {
+        parent,
         bus: EventBus::new(8),
+        downloader,
         prefetch_budget,
         master_cancel: cancel,
         scope: backend
@@ -205,6 +208,30 @@ fn media_info_carries_playlist_container() {
 
 fn push_planned(v: &HlsVariant, seg: u32) {
     v.flow.queue.lock().push_back(PlannedFetch::Segment(seg));
+}
+
+/// Slots this variant has claimed for fetching, init first then media in
+/// segment order.
+///
+/// A dispatch pass no longer returns fetch commands — each segment is an
+/// ordinary file that drives its own download — so what a pass did is read
+/// off the slots it claimed. In a unit test the downloader has no runtime
+/// to spawn its loop on, so nothing settles and the claims stand.
+fn claimed(v: &HlsVariant) -> Vec<PlannedFetch> {
+    let init = v
+        .init()
+        .filter(|seg| seg.state().is_downloading())
+        .map(|_| PlannedFetch::Init);
+    init.into_iter()
+        .chain(
+            v.segments()
+                .iter()
+                .enumerate()
+                .filter(|(_, seg)| seg.state().is_downloading())
+                .filter_map(|(idx, _)| u32::try_from(idx).ok())
+                .map(PlannedFetch::Segment),
+        )
+        .collect()
 }
 
 fn queue_seg_indices(v: &HlsVariant) -> Vec<u32> {
@@ -735,10 +762,12 @@ fn variant_init_not_applicable_no_acquire() {
         !queue_has_init(&v),
         "a None init slot must never enqueue PlannedFetch::Init"
     );
-    let cmds = v.dispatch(&ctx, 10);
-    assert_eq!(cmds.len(), 2, "only the two media segments dispatch");
-    let seg0_url = v.segments()[0].url().clone();
-    assert_eq!(cmds[0].url, seg0_url, "first cmd is seg 0, not an init");
+    v.dispatch(&ctx, 10);
+    assert_eq!(
+        claimed(&v),
+        vec![PlannedFetch::Segment(0), PlannedFetch::Segment(1)],
+        "only the two media segments fetch — there is no init slot to claim"
+    );
 }
 
 /// `init_size > 0` (fMP4 `#EXT-X-MAP` with a known size) is a present
@@ -753,7 +782,6 @@ fn variant_init_pending_for_fmp4() {
     };
     assert_eq!(entry.size().get(), 200);
     assert_eq!(v.init_size(), 200);
-    let init_url = entry.url().clone();
     assert!(
         v.init_resource().is_some(),
         "Pending init exposes its resource key"
@@ -763,9 +791,16 @@ fn variant_init_pending_for_fmp4() {
         queue_has_init(&v),
         "Pending init must enqueue PlannedFetch::Init first"
     );
-    let cmds = v.dispatch(&ctx, 10);
-    assert_eq!(cmds.len(), 3, "init + two media segments dispatch");
-    assert_eq!(cmds[0].url, init_url, "init dispatched first");
+    v.dispatch(&ctx, 10);
+    assert_eq!(
+        claimed(&v),
+        vec![
+            PlannedFetch::Init,
+            PlannedFetch::Segment(0),
+            PlannedFetch::Segment(1)
+        ],
+        "a present init is fetched like any other slot"
+    );
 }
 
 /// Frozen-discriminator guard: `init.size` only ever shrinks post-commit
@@ -1079,23 +1114,29 @@ fn exact_size_rebuild_with_decoder_probe_starts_tail_at_target_segment() {
 }
 
 #[kithara::test]
-fn dispatch_emits_init_first_then_segments_under_budget() {
+fn dispatch_fetches_init_before_any_segment() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400, 400], &ctx);
-    let init_url = v.init().expect("init is present").url().clone();
-    let seg0_url = v.segments()[0].url().clone();
-    let seg1_url = v.segments()[1].url().clone();
-    let seg2_url = v.segments()[2].url().clone();
     v.rebuild(&ctx, 0);
-    let cmds = v.dispatch(&ctx, 10);
-    assert_eq!(cmds.len(), 4);
-    assert_eq!(cmds[0].url, init_url, "init dispatched first");
-    assert_eq!(cmds[1].url, seg0_url);
-    assert_eq!(cmds[2].url, seg1_url);
-    assert_eq!(cmds[3].url, seg2_url);
-    for cmd in &cmds {
-        assert!(cmd.cancel.is_some(), "every cmd carries a cancel token");
-    }
+
+    v.dispatch(&ctx, 1);
+    assert_eq!(
+        claimed(&v),
+        vec![PlannedFetch::Init],
+        "the one slot a single-fetch budget buys is the init — the demuxer \
+         needs it before any segment can decode"
+    );
+
+    v.dispatch(&ctx, 10);
+    assert_eq!(
+        claimed(&v),
+        vec![
+            PlannedFetch::Init,
+            PlannedFetch::Segment(0),
+            PlannedFetch::Segment(1),
+            PlannedFetch::Segment(2)
+        ],
+    );
 }
 
 #[kithara::test]
@@ -1103,8 +1144,16 @@ fn dispatch_respects_budget() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100; 10], &ctx);
     v.rebuild(&ctx, 0);
-    let cmds = v.dispatch(&ctx, 3);
-    assert_eq!(cmds.len(), 3);
+    v.dispatch(&ctx, 3);
+    assert_eq!(
+        claimed(&v),
+        vec![
+            PlannedFetch::Segment(0),
+            PlannedFetch::Segment(1),
+            PlannedFetch::Segment(2)
+        ],
+        "the budget bounds how many slots one pass claims"
+    );
     assert_eq!(queue_seg_indices(&v), vec![3, 4, 5, 6, 7, 8, 9]);
 }
 
@@ -1115,9 +1164,13 @@ fn dispatch_respects_segment_lookahead_cap() {
     let v = make_var(0, 0, &[100; 6], &ctx);
     v.rebuild(&ctx, 0);
 
-    let cmds = v.dispatch(&ctx, 10);
+    v.dispatch(&ctx, 10);
 
-    assert_eq!(cmds.len(), 2);
+    assert_eq!(
+        claimed(&v),
+        vec![PlannedFetch::Segment(0), PlannedFetch::Segment(1)],
+        "the look-ahead cap stops the pass regardless of budget"
+    );
     assert_eq!(queue_seg_indices(&v), vec![2, 3, 4, 5]);
 }
 
@@ -1130,8 +1183,12 @@ fn dispatch_skips_non_missing_segments() {
     for seg in 0..3_u32 {
         push_planned(&v, seg);
     }
-    let cmds = v.dispatch(&ctx, 10);
-    assert_eq!(cmds.len(), 2);
+    v.dispatch(&ctx, 10);
+    assert_eq!(
+        claimed(&v),
+        vec![PlannedFetch::Segment(0), PlannedFetch::Segment(2)],
+        "an already-loaded slot is not re-claimed"
+    );
     assert!(v.segments()[1].state().is_loaded());
 }
 
@@ -1158,12 +1215,16 @@ fn dispatch_requeues_orphaned_downloading_segment() {
         push_planned(&v, seg);
     }
 
-    // First dispatch: seg 0 + seg 2 emit; seg 1 is Downloading -> claim fails.
-    let cmds = v.dispatch(&ctx, 10);
+    // First dispatch: seg 0 + seg 2 claim; seg 1 is Downloading -> claim fails.
+    v.dispatch(&ctx, 10);
     assert_eq!(
-        cmds.len(),
-        2,
-        "seg 0 and seg 2 dispatch; seg 1 is in-flight"
+        claimed(&v),
+        vec![
+            PlannedFetch::Segment(0),
+            PlannedFetch::Segment(1),
+            PlannedFetch::Segment(2)
+        ],
+        "seg 0 and seg 2 claim; seg 1 shows as in-flight under the orphan"
     );
 
     // The orphaned fetch settles back to Missing (cancel before commit) — the
@@ -1176,11 +1237,10 @@ fn dispatch_requeues_orphaned_downloading_segment() {
 
     // A later dispatch (reader re-aim / next poll) MUST re-fetch seg 1. Before
     // the fix the segment was popped+dropped from the queue and lost, so this
-    // returned 0 and the reader hung.
-    let cmds2 = v.dispatch(&ctx, 10);
-    assert_eq!(
-        cmds2.len(),
-        1,
+    // claimed nothing and the reader hung.
+    v.dispatch(&ctx, 10);
+    assert!(
+        v.segments()[1].state().is_downloading(),
         "seg 1 (orphaned -> Missing) must be re-dispatched, not lost from the queue"
     );
 }
@@ -1411,13 +1471,20 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
     }
     .into_variant(0, &ctx);
     push_planned(&v, 0);
-    let cmds = v.dispatch(&ctx, 10);
-    assert_eq!(cmds.len(), 1);
-    assert!(cmds[0].cancel.is_some());
-    push_planned(&v, 0);
+    v.dispatch(&ctx, 10);
+    assert_eq!(claimed(&v), vec![PlannedFetch::Segment(0)]);
     assert!(
-        v.dispatch(&ctx, 10).is_empty(),
-        "claimed (in-flight) segment must not be re-dispatched"
+        v.segments()[0].process().is_some(),
+        "an encrypted segment hands its decrypt context to the fetch, which \
+         applies it at commit"
+    );
+
+    push_planned(&v, 0);
+    v.dispatch(&ctx, 10);
+    assert_eq!(
+        queue_seg_indices(&v),
+        vec![0],
+        "a claimed (in-flight) segment is re-queued, not re-claimed"
     );
 }
 
@@ -1432,11 +1499,17 @@ fn active_segment_reads_attach_file_source_lazily() {
         None
     );
 
-    push_planned(&v, 0);
-    let mut commands = v.dispatch(&ctx, 1);
-    let mut command = commands.pop().expect("segment fetch command");
-    let writer = command.writer.as_mut().expect("segment writer");
-    writer(b"data").expect("write segment bytes");
+    // The fetching file writes into the resource; a hand-held writer stands in
+    // for it so the test stays off the network.
+    let AcquisitionResult::Pending(writer) = ctx
+        .scope
+        .store()
+        .acquire_resource(v.segments()[0].resource_id(), None)
+        .expect("acquire segment")
+    else {
+        panic!("a fresh segment must be pending");
+    };
+    writer.write_at(0, b"data").expect("write segment bytes");
 
     assert!(v.segment_contains(0, 0..4));
     let mut bytes = [0; 4];
@@ -1448,8 +1521,7 @@ fn active_segment_reads_attach_file_source_lazily() {
     assert_eq!(bytes, *b"data");
     assert_eq!(v.committed_final_len(0), None);
 
-    let complete = command.on_complete.take().expect("segment completion");
-    complete(4, None, None);
+    let _ = writer.commit(Some(4)).expect("commit segment");
     assert_eq!(v.committed_final_len(0), Some(4));
 }
 
@@ -1495,22 +1567,27 @@ fn committed_segment_source_attaches_lazily_without_dispatch() {
     );
 }
 
+/// The `DownloadClaim` Drop safety net: a claim that never settles must
+/// revert its slot. A leaked handle would otherwise strand the segment
+/// `Downloading` and hang the reader waiting on it.
 #[kithara::test]
-fn dropped_fetch_cmd_reverts_segment_to_missing() {
+fn an_unsettled_claim_reverts_the_segment_to_missing() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100, 100], &ctx);
+    let claim = v.segments()[0]
+        .state()
+        .try_claim(PlannedFetch::Segment(0), Arc::downgrade(&v))
+        .expect("seg 0 must be claimable");
+    assert_eq!(claimed(&v), vec![PlannedFetch::Segment(0)]);
+
+    drop(claim);
+
     push_planned(&v, 0);
-    let cmds = v.dispatch(&ctx, 10);
-    assert_eq!(cmds.len(), 1, "first dispatch claims and emits seg 0");
-    // Drop the command without running its `on_complete`: the owned
-    // download handle is dropped without a settle, so the Drop safety
-    // net must revert the slot to Missing rather than strand it.
-    drop(cmds);
-    push_planned(&v, 0);
+    v.dispatch(&ctx, 10);
     assert_eq!(
-        v.dispatch(&ctx, 10).len(),
-        1,
-        "dropped claim must revert the slot to Missing so it re-dispatches"
+        claimed(&v),
+        vec![PlannedFetch::Segment(0)],
+        "the reverted slot re-dispatches"
     );
 }
 
@@ -1552,29 +1629,6 @@ fn position_advances_are_strictly_monotonic() {
 }
 
 #[kithara::test]
-fn dispatch_cmd_cancel_shares_cancellation_with_variant_cancel() {
-    let ctx = test_ctx(5);
-    let v = make_var(0, 0, &[100, 100], &ctx);
-    let variant_cancel = v.cancel_handle();
-    for seg in 0..2_u32 {
-        push_planned(&v, seg);
-    }
-    let cmds = v.dispatch(&ctx, 10);
-    for cmd in &cmds {
-        let token = cmd.cancel.as_ref().expect("cmd carries cancel");
-        assert!(!token.is_cancelled());
-    }
-    variant_cancel.cancel();
-    for cmd in &cmds {
-        let token = cmd.cancel.as_ref().expect("cmd carries cancel");
-        assert!(
-            token.is_cancelled(),
-            "cmd cancel must follow variant.cancel"
-        );
-    }
-}
-
-#[kithara::test]
 fn variant_flip_cancels_v_old_and_keeps_v_new_token_live() {
     let ctx = test_ctx(3);
     let v_old = make_var(0, 0, &[100; 20], &ctx);
@@ -1606,13 +1660,18 @@ fn dispatch_skips_loaded_segments_in_queue_without_burning_budget() {
     v.segments()[10].state().mark_loaded();
 
     v.rebuild(&ctx, 10);
-    let cmds = v.dispatch(&ctx, 3);
-    assert_eq!(cmds.len(), 3);
-    let seg10_url = v.segments()[10].url().clone();
-    assert!(
-        cmds.iter().all(|c| c.url != seg10_url),
-        "Loaded seg 10 must not be re-emitted"
+    v.dispatch(&ctx, 3);
+    assert_eq!(
+        claimed(&v),
+        vec![
+            PlannedFetch::Segment(11),
+            PlannedFetch::Segment(12),
+            PlannedFetch::Segment(13)
+        ],
+        "the Loaded slot at the head of the queue is skipped without spending \
+         budget, so three fresh slots still claim"
     );
+    assert!(v.segments()[10].state().is_loaded());
 }
 
 /// Non-blocking-pull contract: a not-ready range must make `wait_range`

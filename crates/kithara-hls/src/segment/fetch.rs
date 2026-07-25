@@ -1,22 +1,16 @@
-use std::{
-    io::Error as IoError,
-    marker::PhantomData,
-    sync::{
-        Weak,
-        atomic::{AtomicU64, Ordering},
-    },
-};
+use std::{marker::PhantomData, sync::Weak};
 
-use kithara_assets::{AssetReader, AssetWriter, RawWriteHandle, ReadSide, WriteSide};
 use kithara_events::{DrmEvent, EventBus, HlsError as EventHlsError, HlsEvent};
+use kithara_file::FetchOutcome;
 use kithara_net::{NetError, Retryability};
-use kithara_platform::{CancelToken, sync::Arc};
-use kithara_storage::ResourceStatus;
-use kithara_stream::dl::{OnCompleteFn, WriterFn};
+use kithara_platform::sync::{Arc, Mutex};
 use tracing::{debug, error, warn};
 
 use crate::{
-    segment::state::{Downloading, Failed, Loaded, Missing, SegmentPhase, SegmentSlotState},
+    segment::{
+        core::FetchCell,
+        state::{Downloading, Failed, Loaded, Missing, SegmentPhase, SegmentSlotState},
+    },
     signal::SizeSignal,
     variant::HlsVariant,
 };
@@ -151,8 +145,7 @@ impl FetchClaim<Downloading> {
     }
 
     /// Share the slot's CAS cell so the `on_slow` hook can flag the in-flight
-    /// fetch slow without owning the claim. Cloned before the claim moves into
-    /// the `FetchSlot`'s `on_complete`.
+    /// fetch slow without owning the claim.
     pub(crate) fn slot_state(&self) -> Arc<SegmentSlotState> {
         Arc::clone(&self.data.slot)
     }
@@ -204,186 +197,128 @@ pub(crate) enum PlannedFetch {
     Segment(u32),
 }
 
-/// Fetch ownership and epoch state settled back into one variant slot.
-/// Its weak variant reference does not extend the variant lifetime.
-pub(crate) struct FetchSlot {
-    /// Read view of the writer's generation — used to observe a
-    /// committed-by-race status before deciding the terminal transition.
-    pub(crate) reader: AssetReader,
-    /// Sole commit owner (non-`Clone`); consumed in `settle`.
-    pub(crate) writer: AssetWriter,
-    pub(crate) cancel: CancelToken,
-    pub(crate) handle: FetchClaim<Downloading>,
-    /// Clone-able streaming-write handle for the fetch body closure.
-    pub(crate) raw: RawWriteHandle,
-    /// Unified reader-wake handle — [`SizeSignal::fire`]d on every terminal
-    /// settle (commit/fail/cancel) so an off-RT reader parked in
-    /// `wait_range(_, None)` re-probes the now-resolved range and the RT
-    /// decoder's audio worker re-ticks the instant a commit makes bytes
-    /// readable (the decrypt gate opens here for DRM segments), not on its
-    /// 10 ms poll.
-    pub(crate) signal: SizeSignal,
-    pub(crate) bus: EventBus,
+/// Turns the outcome of a segment's file fetch into the slot transition it
+/// implies. The file owned the bytes; this owns the timeline.
+pub(crate) struct SegmentSettle<'a> {
+    bus: &'a EventBus,
+    cell: &'a FetchCell,
+    claim: &'a Mutex<Option<FetchClaim<Downloading>>>,
+    signal: &'a SizeSignal,
 }
 
-impl From<FetchSlot> for OnCompleteFn {
-    fn from(slot: FetchSlot) -> Self {
-        Box::new(move |bytes_written, _headers, err| slot.settle(bytes_written, err))
-    }
-}
-
-impl FetchSlot {
-    /// On success, commits the resource. `bytes_written` is forwarded as
-    /// `final_len` — required by [`ProcessedResource::commit`] to trigger
-    /// the post-write decrypt pass on encrypted segments (passing `None`
-    /// silently skips decryption, leaving ciphertext on disk). After a
-    /// successful commit we read back the resource's `final_len` and
-    /// shrink the variant's layout to match: for DRM segments PKCS7
-    /// strips up to 16 bytes off the encrypted size, so HEAD-based
-    /// estimates are always upper bounds.
-    ///
-    /// Consumes the slot (`OnCompleteFn` is `FnOnce`): the owned
-    /// [`FetchClaim<Downloading>`](FetchClaim) handle is moved into exactly one
-    /// terminal transition, so the slot state can never be double-driven.
-    fn settle(self, bytes_written: u64, err: Option<&NetError>) {
-        // Wake any reader parked on this range AFTER the terminal transition
-        // (commit makes bytes readable / fail flips `range_has_failed`). The
-        // worker wake re-ticks the RT decoder's audio worker too — for DRM the
-        // decrypted bytes only become readable at this commit, so settle (not
-        // the ciphertext write) is the load-bearing wake.
-        let signal = self.signal.clone();
-        self.settle_inner(bytes_written, err);
-        signal.fire();
+impl<'a> SegmentSettle<'a> {
+    pub(crate) fn new(
+        claim: &'a Mutex<Option<FetchClaim<Downloading>>>,
+        cell: &'a FetchCell,
+        signal: &'a SizeSignal,
+        bus: &'a EventBus,
+    ) -> Self {
+        Self {
+            bus,
+            cell,
+            claim,
+            signal,
+        }
     }
 
-    fn settle_cancelled(self, bytes_written: u64) {
-        let Self {
-            handle,
-            writer,
-            reader,
-            ..
-        } = self;
-        let committed = matches!(reader.status(), ResourceStatus::Committed { .. });
-        debug!(target: "kithara_hls::settle", bytes_written, committed, "stale (cancelled)");
+    /// Settle the slot, then wake. The wake comes AFTER the terminal
+    /// transition (commit makes bytes readable / fail flips
+    /// `range_has_failed`) and re-ticks the RT decoder's audio worker: for
+    /// DRM the decrypted bytes only become readable at commit, so this —
+    /// not the ciphertext write — is the load-bearing wake.
+    pub(crate) fn apply(self, outcome: FetchOutcome) {
+        let Some(handle) = self.claim.lock().take() else {
+            debug!(target: "kithara_hls::settle", "outcome for an already-settled claim");
+            return;
+        };
+        self.transition(handle, outcome);
+        self.signal.fire();
+        // The fetch is over, so the file goes — and with it the peer
+        // registration. Taken out of the cell first so the drop runs
+        // without the cell lock held.
+        drop(self.cell.lock().take());
+    }
+
+    fn transition(&self, handle: FetchClaim<Downloading>, outcome: FetchOutcome) {
+        match outcome {
+            FetchOutcome::Committed { final_len } => Self::committed(handle, final_len),
+            FetchOutcome::Cancelled { committed } => Self::cancelled(handle, committed),
+            FetchOutcome::Failed { error } => self.failed(handle, &error),
+            FetchOutcome::CommitFailed { reason } => self.commit_failed(handle, reason),
+            // An outcome this crate does not know is not a transition it
+            // can make: dropping the claim reverts the slot to `Missing`,
+            // which keeps it re-dispatchable.
+            _ => warn!(target: "kithara_hls::settle", "unrecognised fetch outcome"),
+        }
+    }
+
+    /// A length means the resource committed here and the variant's layout
+    /// shrinks to it; no length means a racing writer committed and reported
+    /// none, so the existing estimate stands.
+    fn committed(handle: FetchClaim<Downloading>, final_len: Option<u64>) {
+        let Some(actual) = final_len else {
+            debug!(target: "kithara_hls::settle", "committed by a racing writer");
+            handle.into_loaded_no_apply();
+            return;
+        };
+        debug!(target: "kithara_hls::settle", actual, "committed");
+        let variant = handle.variant();
+        handle.into_loaded(actual);
+        if let Some(variant) = variant {
+            variant.maybe_publish_cache_complete();
+        }
+    }
+
+    /// A cancel whose resource committed belongs to the new epoch's writer —
+    /// it owns the slot now, so leaving it alone is the correct settle.
+    fn cancelled(handle: FetchClaim<Downloading>, committed: bool) {
         if committed {
-            // Committed by the new epoch's writer — dropping our (stale)
-            // writer fails only its own generation's gate; the cleanup is
-            // race-safe (skips removal when the live state is Committed).
-            drop(writer);
+            debug!(target: "kithara_hls::settle", "stale (cancelled), resource committed");
             handle.abandon();
         } else {
-            writer.fail("fetch cancelled before completion".into());
+            debug!(target: "kithara_hls::settle", "stale (cancelled) before commit");
             handle.into_missing();
         }
     }
 
-    fn settle_failure(self, e: &NetError) {
-        let Self {
-            handle,
-            writer,
-            reader,
-            bus,
-            ..
-        } = self;
-        let committed = matches!(reader.status(), ResourceStatus::Committed { .. });
-        debug!(target: "kithara_hls::settle", err = %e, committed, "fail-path");
-        if committed {
-            // Committed by the new epoch's writer; ours never wrote — drop it
-            // (cleanup is race-safe) and adopt the on-disk length.
-            drop(writer);
-            if let ResourceStatus::Committed { final_len: Some(n) } = reader.status() {
-                handle.into_loaded(n);
-            } else {
-                handle.into_loaded_no_apply();
-            }
-        } else {
-            writer.fail(e.to_string());
-            // The net layer's resilient body already retried stalls and
-            // transient body errors; a `Fatal` error here (e.g.
-            // `RetryExhausted`) means the downloader gave up, so the slot
-            // is terminal — parking it as `Failed` stops the re-dispatch
-            // loop and lets a waiting reader surface a terminal error.
-            // `Cancelled` is recoverable (epoch rebuild owns it) and stays
-            // `Missing`. The typed cause is logged here; readers see only
-            // the fixed terminal message (no transport detail).
-            if is_terminal_fetch_error(e) {
-                error!(
-                    target: "kithara_hls::settle",
-                    err = %e,
-                    "terminal fetch failure — slot parked Failed, will not re-dispatch"
-                );
-                bus.publish(HlsEvent::Error {
-                    error: EventHlsError::Other("segment fetch failed".to_string()),
-                });
-                handle.into_failed();
-            } else {
-                handle.into_missing();
-            }
+    /// The bytes arrived but the commit rejected them — for a DRM segment
+    /// that is a decrypt failure. Recoverable: the slot returns to the
+    /// dispatch pool.
+    fn commit_failed(&self, handle: FetchClaim<Downloading>, reason: String) {
+        debug!(target: "kithara_hls::settle", reason, "commit rejected the bytes");
+        if let Some((variant, segment_index)) =
+            decrypt_failure_site(handle.planned(), handle.variant().as_ref())
+        {
+            self.bus.publish(DrmEvent::SegmentDecryptFailed {
+                variant,
+                segment_index,
+                detail: reason,
+            });
         }
+        handle.into_missing();
     }
 
-    fn settle_inner(self, bytes_written: u64, err: Option<&NetError>) {
-        if self.cancel.is_cancelled() {
-            self.settle_cancelled(bytes_written);
+    /// The net layer's resilient body already retried stalls and transient
+    /// body errors; a `Fatal` error here (e.g. `RetryExhausted`) means the
+    /// downloader gave up, so the slot is terminal — parking it as `Failed`
+    /// stops the re-dispatch loop and lets a waiting reader surface a
+    /// terminal error. The typed cause is logged here; readers see only the
+    /// fixed terminal message (no transport detail).
+    fn failed(&self, handle: FetchClaim<Downloading>, error: &NetError) {
+        if !is_terminal_fetch_error(error) {
+            debug!(target: "kithara_hls::settle", err = %error, "recoverable fetch failure");
+            handle.into_missing();
             return;
         }
-        match err {
-            None => self.settle_success(bytes_written),
-            Some(e) => self.settle_failure(e),
-        }
-    }
-
-    fn settle_success(self, bytes_written: u64) {
-        let Self {
-            handle,
-            writer,
-            bus,
-            ..
-        } = self;
-        let planned = handle.planned();
-        let variant = handle.variant();
-        // Consume-self commit returns the Ready reader; read `final_len` off it
-        // (PKCS7 unpad shrinks DRM segments below the announced size).
-        match writer.commit(Some(bytes_written)) {
-            Ok(reader) => {
-                debug!(target: "kithara_hls::settle", bytes_written, "success");
-                let actual = match reader.status() {
-                    ResourceStatus::Committed { final_len: Some(n) } => n,
-                    _ => bytes_written,
-                };
-                handle.into_loaded(actual);
-                if let Some(variant) = variant {
-                    variant.maybe_publish_cache_complete();
-                }
-            }
-            Err(e) => {
-                debug!(
-                    target: "kithara_hls::settle",
-                    bytes_written,
-                    err = %e,
-                    "success-but-commit-failed"
-                );
-                if let Some((variant_idx, segment_index)) =
-                    decrypt_failure_site(planned, variant.as_ref())
-                {
-                    bus.publish(DrmEvent::SegmentDecryptFailed {
-                        variant: variant_idx,
-                        segment_index,
-                        detail: e.to_string(),
-                    });
-                }
-                handle.into_missing();
-            }
-        }
-    }
-
-    pub(crate) fn writer(&self) -> WriterFn {
-        let raw = self.raw.clone();
-        let offset = Arc::new(AtomicU64::new(0));
-        Box::new(move |chunk: &[u8]| {
-            let pos = offset.fetch_add(chunk.len() as u64, Ordering::Relaxed);
-            raw.write_at(pos, chunk).map_err(IoError::other)
-        })
+        error!(
+            target: "kithara_hls::settle",
+            err = %error,
+            "terminal fetch failure — slot parked Failed, will not re-dispatch"
+        );
+        self.bus.publish(HlsEvent::Error {
+            error: EventHlsError::Other("segment fetch failed".to_string()),
+        });
+        handle.into_failed();
     }
 }
 

@@ -10,7 +10,7 @@ use kithara_stream::WorkerWake;
 use kithara_test_utils::{kithara, probe::IntoProbeArg};
 
 use super::{EngineIdentity, LifecycleSink};
-use crate::config::{FetchCompleteFn, FetchOutcome};
+use crate::config::{FetchCompleteFn, FetchOutcome, SlowFn};
 
 /// File-streaming FSM phases. Stored as `AtomicU8` for lock-free transitions
 /// from the download driver.
@@ -43,6 +43,8 @@ pub(crate) struct ResourceEngine {
     pub(crate) worker_wake: OnceLock<Arc<dyn WorkerWake>>,
     /// Caller's terminal-outcome hook, fired at most once.
     on_complete: Option<FetchCompleteFn>,
+    /// Caller's soft-timeout hook, fired per slow request.
+    pub(crate) on_slow: Option<SlowFn>,
     notified: AtomicBool,
 }
 
@@ -58,6 +60,7 @@ impl ResourceEngine {
         initial_phase: FilePhase,
         demand_lease: Option<DemandLease>,
         on_complete: Option<FetchCompleteFn>,
+        on_slow: Option<SlowFn>,
     ) -> Self {
         Self {
             identity,
@@ -69,6 +72,7 @@ impl ResourceEngine {
             phase: AtomicU8::new(initial_phase as u8),
             worker_wake: OnceLock::new(),
             on_complete,
+            on_slow,
             notified: AtomicBool::new(false),
         }
     }

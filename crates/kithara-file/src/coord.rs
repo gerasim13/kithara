@@ -40,8 +40,21 @@ impl FileCoord {
 
     #[must_use]
     pub(crate) fn new(playhead: Arc<PlayheadState>, seek: Arc<SeekState>) -> Self {
+        Self::with_activity(playhead, seek, None)
+    }
+
+    /// Build a coord whose activity — and so the download queue priority of
+    /// the source that owns it — is answered by the caller rather than by
+    /// this source's own seek state. Used where one consumer drives many
+    /// sources and decides which of them is wanted now.
+    #[must_use]
+    pub(crate) fn with_activity(
+        playhead: Arc<PlayheadState>,
+        seek: Arc<SeekState>,
+        activity: Option<Arc<dyn Activity>>,
+    ) -> Self {
         let seek_obs = Arc::clone(&seek) as Arc<dyn SeekObserve>;
-        let activity = Arc::clone(&seek) as Arc<dyn Activity>;
+        let activity = activity.unwrap_or_else(|| Arc::clone(&seek) as Arc<dyn Activity>);
         Self {
             playhead,
             seek,

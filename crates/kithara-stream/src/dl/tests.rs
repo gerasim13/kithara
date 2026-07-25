@@ -436,7 +436,7 @@ async fn poll_next_respects_max_concurrent() {
     impl Abr for FloodPeer {}
     impl Peer for FloodPeer {
         fn priority(&self) -> RequestPriority {
-            RequestPriority::Low
+            RequestPriority::LOW
         }
 
         fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
@@ -796,9 +796,9 @@ impl Peer for TaggedPriorityPeer {
 
     fn priority(&self) -> RequestPriority {
         if self.seek.is_playing() {
-            RequestPriority::High
+            RequestPriority::HIGH
         } else {
-            RequestPriority::Low
+            RequestPriority::LOW
         }
     }
 }
@@ -1166,9 +1166,9 @@ async fn peer_handle_execute_respects_either_peer_priority() {
     impl Peer for FlippablePeer {
         fn priority(&self) -> RequestPriority {
             if self.seek.is_playing() {
-                RequestPriority::High
+                RequestPriority::HIGH
             } else {
-                RequestPriority::Low
+                RequestPriority::LOW
             }
         }
     }
@@ -1184,7 +1184,7 @@ async fn peer_handle_execute_respects_either_peer_priority() {
 
     assert_eq!(
         peer_priority_from_handle(&handle, &seek),
-        RequestPriority::Low
+        RequestPriority::LOW
     );
     let low_resp = handle.execute(FetchCmd::get(url.clone()).build()).await;
     assert!(low_resp.is_ok(), "execute must succeed while Low");
@@ -1192,7 +1192,7 @@ async fn peer_handle_execute_respects_either_peer_priority() {
     seek.set_playing(true);
     assert_eq!(
         peer_priority_from_handle(&handle, &seek),
-        RequestPriority::High
+        RequestPriority::HIGH
     );
     let high_resp = handle.execute(FetchCmd::get(url).build()).await;
     assert!(high_resp.is_ok(), "execute must succeed while High");
@@ -1202,8 +1202,106 @@ async fn peer_handle_execute_respects_either_peer_priority() {
 /// peer priority from the same `SeekState` activity the peer observes.
 fn peer_priority_from_handle(_handle: &super::PeerHandle, seek: &SeekState) -> RequestPriority {
     if seek.is_playing() {
-        RequestPriority::High
+        RequestPriority::HIGH
     } else {
-        RequestPriority::Low
+        RequestPriority::LOW
+    }
+}
+
+/// Composite-peer ranking: a child is placed behind its parent, and its own
+/// urgency only orders it against its siblings. Without this a peer that
+/// carries pieces of someone else's download would rank as an anonymous
+/// stranger — which is what drops every piece into the background queue.
+mod composite_rank {
+    use kithara_abr::Abr;
+    use kithara_platform::sync::Arc;
+    use kithara_test_utils::kithara;
+
+    use super::{super::PeerRef, Downloader, Peer, RequestPriority, test_config};
+
+    struct Fixed {
+        priority: RequestPriority,
+        parent: Option<PeerRef>,
+    }
+
+    impl Abr for Fixed {}
+
+    impl Peer for Fixed {
+        fn priority(&self) -> RequestPriority {
+            self.priority
+        }
+
+        fn parent(&self) -> Option<PeerRef> {
+            self.parent.clone()
+        }
+    }
+
+    /// Registering returns the handle that keeps the peer alive; a child
+    /// references it through [`PeerHandle::as_parent`].
+    fn register(
+        downloader: &Downloader,
+        priority: RequestPriority,
+        parent: Option<PeerRef>,
+    ) -> (super::super::PeerHandle, Arc<Fixed>) {
+        let peer = Arc::new(Fixed { priority, parent });
+        let handle = downloader.register(Arc::clone(&peer) as Arc<dyn Peer>);
+        (handle, peer)
+    }
+
+    #[kithara::test(tokio)]
+    #[case(RequestPriority::HIGH, RequestPriority::HIGH, 0)]
+    #[case(RequestPriority::HIGH, RequestPriority::LOW, 1)]
+    #[case(RequestPriority::LOW, RequestPriority::HIGH, 2)]
+    #[case(RequestPriority::LOW, RequestPriority::LOW, 3)]
+    async fn a_child_is_queued_behind_its_parent_and_ahead_of_its_siblings(
+        #[case] parent_priority: RequestPriority,
+        #[case] child_priority: RequestPriority,
+        #[case] expected_slot: usize,
+    ) {
+        let downloader = Downloader::new(test_config());
+        let (parent_handle, _parent) = register(&downloader, parent_priority, None);
+        let (_child_handle, child) =
+            register(&downloader, child_priority, Some(parent_handle.as_parent()));
+
+        assert_eq!(
+            Peer::fetch_priority(child.as_ref()).slot(),
+            expected_slot,
+            "a {parent_priority:?} parent carrying a {child_priority:?} child"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn a_root_peer_keeps_its_own_rank() {
+        let downloader = Downloader::new(test_config());
+        let (_handle, peer) = register(&downloader, RequestPriority::HIGH, None);
+
+        assert_eq!(
+            Peer::fetch_priority(peer.as_ref()),
+            RequestPriority::PEER,
+            "with no parent there is nothing to inherit and nothing to nest under"
+        );
+    }
+
+    /// Dropping the parent peer itself, not just a handle to it: the ref a
+    /// child holds is weak, so it must resolve to "no inherited rank".
+    #[kithara::test(tokio)]
+    async fn a_child_whose_parent_is_gone_answers_for_itself() {
+        let downloader = Downloader::new(test_config());
+        let (handle, _live) = register(&downloader, RequestPriority::LOW, None);
+        let ghost: Arc<dyn Peer> = Arc::new(Fixed {
+            priority: RequestPriority::LOW,
+            parent: None,
+        });
+        let parent_ref = PeerRef::new(&ghost, handle.abr().peer_id());
+        drop(ghost);
+
+        let (_child_handle, child) = register(&downloader, RequestPriority::HIGH, Some(parent_ref));
+
+        assert_eq!(
+            Peer::fetch_priority(child.as_ref()),
+            RequestPriority::PEER,
+            "an orphaned child answers for itself — its own priority stands \
+             unnested, with no outer rank left to sit inside"
+        );
     }
 }

@@ -19,7 +19,8 @@ use kithara_stream::{
     Activity, ByteMap, ContainerFormat, DeferredWake, MediaInfo, PendingReason, PlayheadRead,
     PlayheadState, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SeekState,
     SegmentDescriptor, SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult,
-    VariantControl, dl::FetchCmd,
+    VariantControl,
+    dl::{Downloader, FetchCmd, PeerRef},
 };
 use kithara_test_utils::kithara;
 
@@ -42,6 +43,11 @@ const WAIT_HANG_TIMEOUT: Duration = Duration::from_secs(180);
 /// variant's `dispatch` closures.
 pub(crate) struct HlsCoordEnv {
     pub(crate) scope: AssetScope,
+    /// Shared transport handed to `PlanCtx` so a segment file fetches
+    /// through the track pool rather than a client of its own.
+    pub(crate) downloader: Downloader,
+    /// The stream peer every segment file fetches as a child of.
+    pub(crate) parent: PeerRef,
     pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
     pub(crate) emit: Arc<DeferredBus<HlsEvent>>,
@@ -68,6 +74,9 @@ pub(crate) struct HlsCoord {
     pub(crate) abr: AbrHandle,
     pub(crate) variants: Arc<[Arc<HlsVariant>]>,
     pub(crate) scope: AssetScope,
+    pub(crate) downloader: Downloader,
+    /// The stream peer every segment file fetches as a child of.
+    pub(crate) parent: PeerRef,
     pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
     /// Backing playhead state — the coord owns the `Arc` directly and
@@ -152,6 +161,8 @@ impl HlsCoord {
             playlist_state,
             cancel: env.cancel,
             scope: env.scope,
+            downloader: env.downloader,
+            parent: env.parent,
             headers: env.headers,
             emit: env.emit,
             variant_generation: AtomicU64::new(0),
@@ -898,18 +909,18 @@ mod tests {
         }
     }
 
-    fn switch_coord() -> (Arc<HlsCoord>, EventBus, PlanCtx) {
-        let bus = EventBus::new(8);
-        let cancel = CancelToken::never();
+    fn switch_ctx(bus: &EventBus, cancel: &CancelToken, signal: &SizeSignal) -> PlanCtx {
         let store = Arc::new(
             AssetStoreBuilder::default()
                 .backend(StorageBackend::Memory)
                 .cancel(cancel.clone())
                 .build(),
         );
-        let signal = SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new()));
-        let ctx = PlanCtx {
+        let (downloader, parent) = crate::variant::test_transport();
+        PlanCtx {
+            parent,
             bus: bus.clone(),
+            downloader,
             prefetch_budget: 1,
             master_cancel: cancel.clone(),
             scope: store
@@ -926,7 +937,14 @@ mod tests {
             headers: None,
             size_probe_method: SizeProbeMethod::Head,
             signal: signal.clone(),
-        };
+        }
+    }
+
+    fn switch_coord() -> (Arc<HlsCoord>, EventBus, PlanCtx) {
+        let bus = EventBus::new(8);
+        let cancel = CancelToken::never();
+        let signal = SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new()));
+        let ctx = switch_ctx(&bus, &cancel, &signal);
         let playlist = Arc::new(PlaylistState::new(vec![
             VariantState {
                 codec: Some(AudioCodec::AacLc),
@@ -1040,6 +1058,8 @@ mod tests {
         let coord = Arc::new(HlsCoord::new(
             HlsCoordEnv {
                 scope: ctx.scope.clone(),
+                downloader: crate::variant::test_transport().0,
+                parent: crate::variant::test_transport().1,
                 cancel,
                 headers: None,
                 emit: Arc::new(DeferredBus::new(bus.clone(), 8)),

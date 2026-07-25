@@ -140,7 +140,9 @@ impl HlsPeer {
             .map_or(0, |(idx, _, _)| idx);
         if let Some(active) = coord.active() {
             let plan_ctx = PlanCtx {
+                parent: coord.parent.clone(),
                 bus: active.event_bus(),
+                downloader: coord.downloader.clone(),
                 prefetch_budget,
                 look_ahead_bytes,
                 size_probe_method,
@@ -338,9 +340,9 @@ impl Peer for HlsPeer {
 
     fn priority(&self) -> RequestPriority {
         if self.activity.is_playing() {
-            RequestPriority::High
+            RequestPriority::HIGH
         } else {
-            RequestPriority::Low
+            RequestPriority::LOW
         }
     }
 }
@@ -570,7 +572,9 @@ impl HlsTrackState {
 
     fn plan_ctx(&self) -> PlanCtx {
         PlanCtx {
+            parent: self.coord.parent.clone(),
             bus: self.coord.emit.bus().clone(),
+            downloader: self.coord.downloader.clone(),
             master_cancel: self.coord.cancel.clone(),
             scope: self.coord.scope.clone(),
             headers: self.coord.headers.clone(),

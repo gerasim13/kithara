@@ -42,6 +42,8 @@ mod size;
 
 #[cfg(test)]
 pub(crate) use self::core::VariantParts;
+#[cfg(test)]
+pub(crate) use self::core::test_transport;
 pub(crate) use self::core::{HlsVariant, PlanCtx, SegmentActivateParams, VariantParams};
 #[cfg(test)]
 pub(in crate::variant) use self::{core::segment_placeholder_size, probe::SizeDemand};

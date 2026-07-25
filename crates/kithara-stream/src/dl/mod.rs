@@ -18,5 +18,5 @@ pub use cmd::{FetchCmd, OnCompleteFn, OnResponseFn, OnSlowFn, WriterFn, reject_h
 pub use config::DownloaderConfig;
 pub use downloader::Downloader;
 pub use kithara_events::{RequestMethod, RequestPriority};
-pub use peer::{Peer, PeerHandle};
+pub use peer::{Peer, PeerHandle, PeerRef};
 pub use response::{BodyStream, FetchResponse};

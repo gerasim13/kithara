@@ -57,9 +57,86 @@ pub trait Peer: Abr {
         Poll::Ready(None)
     }
 
-    /// Peer-level priority. `High` = active playback track.
+    /// Whether this peer is active — `High` when what it fetches is wanted
+    /// now rather than ahead of need.
     fn priority(&self) -> RequestPriority {
-        RequestPriority::Low
+        RequestPriority::LOW
+    }
+
+    /// The peer this one fetches on behalf of, when it is not fetching for
+    /// itself.
+    ///
+    /// A composite peer is one logical download carried by several
+    /// registrations, each fetching a piece. Declaring the parent keeps the
+    /// pieces one download: a child is ranked behind its parent and its
+    /// bytes are credited to the parent's identity, so bandwidth accounting
+    /// sees one consumer rather than a crowd of anonymous fetches.
+    ///
+    /// The child's own [`priority`](Self::priority) still orders it against
+    /// its siblings — the piece someone is waiting on outranks the pieces
+    /// fetched ahead of it.
+    fn parent(&self) -> Option<PeerRef> {
+        None
+    }
+
+    /// Full queue rank of this peer's fetches.
+    ///
+    /// Composed from [`priority`](Self::priority) and
+    /// [`parent`](Self::parent) here, in the trait, so a peer answers for
+    /// its own placement instead of leaving the rule to the scheduler: a
+    /// root peer's priority stands as-is, and a child's is OR'd into its
+    /// parent's one level in ([`RequestPriority::nested`]). Override only
+    /// to break that composition.
+    fn fetch_priority(&self) -> RequestPriority {
+        let own = self.priority();
+        // A parent that has gone leaves the child to answer for itself: its
+        // own priority stands unnested, since there is no longer an outer
+        // rank for it to sit inside.
+        self.parent()
+            .and_then(|parent| parent.priority())
+            .map_or(own, |inherited| inherited | own.nested())
+    }
+
+    /// Identity this peer's bytes are credited to — its parent's when it
+    /// fetches on another's behalf, otherwise its own (`None`).
+    fn credit_to(&self) -> Option<AbrPeerId> {
+        self.parent().map(|parent| parent.peer_id())
+    }
+}
+
+/// Weak reference to a registered peer, naming a [`Peer::parent`]. Weak so
+/// a child in flight cannot keep its parent — and through it the whole
+/// download — alive.
+#[derive(Clone)]
+pub struct PeerRef {
+    peer: std::sync::Weak<dyn Peer>,
+    peer_id: AbrPeerId,
+}
+
+impl std::fmt::Debug for PeerRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PeerRef")
+            .field("peer_id", &self.peer_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PeerRef {
+    pub(super) fn new(peer: &Arc<dyn Peer>, peer_id: AbrPeerId) -> Self {
+        Self {
+            peer: Arc::downgrade(peer),
+            peer_id,
+        }
+    }
+
+    /// The ABR identity a child's fetches are credited to.
+    pub(super) fn peer_id(&self) -> AbrPeerId {
+        self.peer_id
+    }
+
+    /// The parent's current priority, or `None` once the parent is gone.
+    pub(super) fn priority(&self) -> Option<RequestPriority> {
+        Some(self.peer.upgrade()?.priority())
     }
 }
 
@@ -126,6 +203,9 @@ struct PeerInner {
     bus: Arc<RwLock<Option<EventBus>>>,
     cancel: CancelToken,
     cmd_tx: mpsc::Sender<InternalCmd>,
+    /// Reference to the registered peer, vended to children that fetch on
+    /// its behalf.
+    peer_ref: PeerRef,
 }
 
 impl Drop for PeerInner {
@@ -158,6 +238,7 @@ impl PeerHandle {
         cmd_tx: mpsc::Sender<InternalCmd>,
         bus: Arc<RwLock<Option<EventBus>>>,
         abr: AbrHandle,
+        peer_ref: PeerRef,
     ) -> Self {
         Self {
             inner: Arc::new(PeerInner {
@@ -165,9 +246,17 @@ impl PeerHandle {
                 cmd_tx,
                 bus,
                 abr,
+                peer_ref,
                 _pool: pool,
             }),
         }
+    }
+
+    /// Reference a child peer uses to declare this one as its
+    /// [`Peer::parent`].
+    #[must_use]
+    pub fn as_parent(&self) -> PeerRef {
+        self.inner.peer_ref.clone()
     }
 
     /// ABR-side handle attached at registration.
@@ -270,7 +359,7 @@ impl PeerHandle {
             peer_id,
             request_id,
             enqueued_at,
-            priority: RequestPriority::High,
+            priority: RequestPriority::HIGH,
             response: ResponseTarget::Channel(resp_tx),
             peer: None,
         };

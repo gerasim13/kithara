@@ -51,7 +51,7 @@ fn enqueue_request(
     }
 }
 
-const SLOT_COUNT: usize = 4;
+const SLOT_COUNT: usize = RequestPriority::rank_count();
 
 /// Observable forward motion of the fetch pipeline across one
 /// [`Registry::tick`]. Consumed by the hang watchdog in
@@ -82,25 +82,6 @@ struct PollStats {
     peer_batches: usize,
 }
 
-#[repr(usize)]
-enum Slot {
-    HighHigh = 0,
-    HighLow = 1,
-    LowHigh = 2,
-    LowLow = 3,
-}
-
-/// Map (`peer_priority`, `cmd_priority`) → slot index.
-/// Processing order: 0 → 1 → 2 → 3.
-fn slot_index(peer_prio: RequestPriority, cmd_prio: RequestPriority) -> usize {
-    match (peer_prio, cmd_prio) {
-        (RequestPriority::High, RequestPriority::High) => Slot::HighHigh as usize,
-        (RequestPriority::High, RequestPriority::Low) => Slot::HighLow as usize,
-        (RequestPriority::Low, RequestPriority::High) => Slot::LowHigh as usize,
-        (RequestPriority::Low, RequestPriority::Low) => Slot::LowLow as usize,
-    }
-}
-
 /// Per-peer entry in the registry.
 struct PeerEntry {
     /// ABR peer id stamped on every proactively-scheduled `InternalCmd`
@@ -115,6 +96,20 @@ struct PeerEntry {
     peer_cancel: CancelToken,
     cmd_rx: mpsc::Receiver<InternalCmd>,
     peer_done: bool,
+}
+
+impl PeerEntry {
+    /// ABR identity this peer's bytes are credited to — its parent's when
+    /// it fetches on another's behalf.
+    fn credit_to(&self) -> AbrPeerId {
+        self.peer.credit_to().unwrap_or(self.peer_id)
+    }
+
+    /// Rank of a command the peer submitted itself: the peer's standing
+    /// plus whatever urgency the command declares.
+    fn submitted_priority(&self, cmd_prio: RequestPriority) -> RequestPriority {
+        self.peer.fetch_priority() | cmd_prio.nested()
+    }
 }
 
 /// Peer registry: owns peers, routes commands to priority slots,
@@ -172,8 +167,8 @@ impl Registry {
                 to_remove.push(idx);
             }
             while let Poll::Ready(Some(mut cmd)) = entry.cmd_rx.poll_recv(cx) {
-                let peer_prio = entry.peer.priority();
-                let slot = slot_index(peer_prio, cmd.priority);
+                cmd.priority = entry.submitted_priority(cmd.priority);
+                let slot = cmd.priority.slot();
                 cmd.peer = Some(idx);
                 let entry_slot = SlotEntry {
                     cmd,
@@ -201,7 +196,7 @@ impl Registry {
 
             match entry.peer.poll_next(cx) {
                 Poll::Ready(Some(batch)) => {
-                    let peer_prio = entry.peer.priority();
+                    let priority = entry.peer.fetch_priority();
                     let bus = entry.bus.read().clone();
                     let batch_had_cmds = !batch.is_empty();
                     for cmd in batch {
@@ -210,8 +205,8 @@ impl Registry {
                             Some(epoch) => CancelGroup::new(vec![entry.peer_cancel.clone(), epoch]),
                             None => CancelGroup::new(vec![entry.peer_cancel.child()]),
                         };
-                        let cmd_prio = RequestPriority::Low;
-                        let slot = slot_index(peer_prio, cmd_prio);
+                        let cmd_prio = priority;
+                        let slot = priority.slot();
                         let request_id = inner.next_request_id();
                         let enqueued_at = Instant::now();
                         let internal = InternalCmd {
@@ -223,7 +218,7 @@ impl Registry {
                             response: ResponseTarget::Streaming,
                             peer: Some(idx),
                             bus: bus.clone(),
-                            peer_id: entry.peer_id,
+                            peer_id: entry.credit_to(),
                         };
                         let entry_slot = SlotEntry {
                             cmd: internal,
@@ -272,7 +267,7 @@ impl Registry {
                     cancels.push((slot_idx, i));
                     continue;
                 };
-                let correct_slot = slot_index(entry.peer.priority(), cmd.priority);
+                let correct_slot = entry.submitted_priority(cmd.priority).slot();
                 if correct_slot != slot_idx {
                     moves.push((slot_idx, i, correct_slot));
                 }
