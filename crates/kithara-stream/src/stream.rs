@@ -1053,17 +1053,19 @@ mod tests {
         .with_peer_wake(Arc::clone(&wake));
         let mut stream = Stream::<DummyType> { source };
 
-        let started = Instant::now();
         let pos = stream
             .probe_seek(SeekFrom::Start(42))
             .expect("absolute on-core seek within range");
-        let elapsed = started.elapsed();
 
         assert_eq!(pos, 42);
         assert_eq!(stream.source.position(), 42, "cursor moved to the target");
-        assert!(
-            elapsed < Duration::from_millis(2),
-            "probe_seek must not prime/spin (the consumer Seek would); took {elapsed:?}"
+        // "Did not prime/spin" is the untouched wait script, not a stopwatch:
+        // priming consumes a scripted `wait_range` outcome, so both seeded
+        // entries surviving is the state that says it returned straight through.
+        assert_eq!(
+            stream.source.waits.len(),
+            2,
+            "probe_seek must not prime/spin (the consumer Seek would): it consumed a scripted wait"
         );
         assert!(
             wake.flush(),

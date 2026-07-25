@@ -1621,35 +1621,40 @@ fn dispatch_skips_loaded_segments_in_queue_without_burning_budget() {
 /// so the read path never blocks on a syscall. Waking the peer downloader is
 /// the reader driver's job (`Stream::probe_read` / `read` / `prime_seek_range`,
 /// per its on-core/off-core context), not this method's. The old
-/// implementation slept 2ms per spin and looped until the 10ms budget elapsed;
-/// the probe must now return in well under that.
+/// implementation slept 2ms per spin and looped until the 10ms budget elapsed.
+///
+/// The budget is passed but must be IGNORED — `wait_range` takes it as
+/// `_timeout` and owns no sleep, park or loop, so "does not sleep" is a
+/// structural property of the signature, not something a stopwatch in this test
+/// can observe. What is asserted here is the classification the caller depends
+/// on: a not-ready range is reported as a budget miss rather than spun on.
 #[kithara::test]
-fn wait_range_probes_without_sleeping() {
+fn wait_range_not_ready_reports_budget_exceeded() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400], &ctx);
 
-    let started = Instant::now();
     let outcome = v.wait_range(0..1, Some(Duration::from_millis(10)));
-    let elapsed = started.elapsed();
 
     assert!(
         matches!(
             outcome,
             Err(StreamError::Source(SourceError::WaitBudgetExceeded))
         ),
-        "not-ready range must signal WaitBudgetExceeded immediately, got {outcome:?}"
+        "not-ready range must signal WaitBudgetExceeded, got {outcome:?}"
     );
     assert!(
-        elapsed < Duration::from_millis(2),
-        "probe must not sleep (old impl slept 2ms/spin up to the 10ms budget); took {elapsed:?}"
+        v.wait_range(0..1, None).is_err(),
+        "the budget is advisory: the same not-ready range reports the same way without one"
     );
 }
 
-/// The flush short-circuit remains reachable and immediate after the
-/// non-blocking-pull conversion: a flushing seek state yields `Interrupted`
-/// without spinning on the budget signal.
+/// The flush short-circuit remains reachable after the non-blocking-pull
+/// conversion: a flushing seek state yields `Interrupted` and wins over the
+/// not-ready classification, and the flush is left standing rather than waited
+/// out. See [`wait_range_not_ready_reports_budget_exceeded`] for why the
+/// "without sleeping" half is structural and not timed here.
 #[kithara::test]
-fn wait_range_flush_short_circuits_without_sleeping() {
+fn wait_range_flush_short_circuits_to_interrupted() {
     let ctx = test_ctx(3);
     let seek = Arc::new(SeekState::new());
     let v = make_var_with_seek_obs(
@@ -1659,16 +1664,24 @@ fn wait_range_flush_short_circuits_without_sleeping() {
         &ctx,
         Arc::clone(&seek) as Arc<dyn SeekObserve>,
     );
+    assert!(
+        matches!(
+            v.wait_range(0..1, Some(Duration::from_millis(10))),
+            Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+        ),
+        "control: the same range is a budget miss while nothing is flushing"
+    );
 
-    let _ = SeekControl::begin(&*seek, Duration::from_millis(10));
-    let started = Instant::now();
+    let epoch = SeekControl::begin(&*seek, Duration::from_millis(10));
     let interrupted = v.wait_range(0..1, Some(Duration::from_millis(10)));
+
     assert!(
         matches!(interrupted, Ok(WaitOutcome::Interrupted)),
         "flushing seek state must Interrupt the probe, got {interrupted:?}"
     );
     assert!(
-        started.elapsed() < Duration::from_millis(2),
-        "flush short-circuit must not sleep"
+        seek.is_flushing(),
+        "the short-circuit must leave the flush in place, not wait it out"
     );
+    assert_eq!(seek.epoch(), epoch, "the probe must not advance the seek");
 }
