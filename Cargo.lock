@@ -4815,6 +4815,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-drm",
  "kithara-events",
+ "kithara-file",
  "kithara-hls",
  "kithara-net",
  "kithara-platform",

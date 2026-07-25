@@ -143,11 +143,7 @@ impl HlsVariant {
         handle: FetchClaim<Downloading>,
     ) -> Option<FetchCmd> {
         let entry = &self.segments[seg_idx as usize];
-        let Some(resource_handle) = self.segment_handle(seg_idx) else {
-            let _ = handle.into_missing();
-            return None;
-        };
-        let resource = match resource_handle.acquire(entry.content()) {
+        let resource = match entry.acquire(ctx.scope.store()) {
             Ok(r) => r,
             Err(err) => {
                 debug!(
@@ -160,12 +156,7 @@ impl HlsVariant {
                 return None;
             }
         };
-        self.build_cmd(
-            resource_handle.url().clone(),
-            resource,
-            handle,
-            ctx.signal.clone(),
-        )
+        self.build_cmd(entry.url().clone(), resource, handle, ctx.signal.clone())
     }
 
     fn prefetch_segment_cap(&self, ctx: &PlanCtx, prefetch_base: u64) -> Option<u32> {

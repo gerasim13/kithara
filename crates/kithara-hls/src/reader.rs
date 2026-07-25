@@ -195,7 +195,9 @@ mod tests {
     use crate::{
         config::SizeProbeMethod,
         playlist::{PlaylistState, SegmentState, VariantState},
-        segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
+        segment::{
+            MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState, SegmentSource,
+        },
         signal::SizeSignal,
         stream::HlsCoordEnv,
         variant::{PlanCtx, VariantParts},
@@ -277,6 +279,7 @@ mod tests {
                 state: SegmentSlotState::missing(),
                 size: SegmentSize::seed(100),
                 content: SegmentContent::Plain,
+                source: SegmentSource::new(ctx.scope.store().clone(), ctx.master_cancel.child()),
                 decode_time: kithara_platform::time::Duration::ZERO,
                 duration: kithara_platform::time::Duration::from_secs(2),
             }),
@@ -291,6 +294,7 @@ mod tests {
                 state: SegmentSlotState::missing(),
                 size: SegmentSize::seed(200),
                 content: SegmentContent::Plain,
+                source: SegmentSource::new(ctx.scope.store().clone(), ctx.master_cancel.child()),
                 decode_time: kithara_platform::time::Duration::from_secs(2),
                 duration: kithara_platform::time::Duration::from_secs(2),
             }),

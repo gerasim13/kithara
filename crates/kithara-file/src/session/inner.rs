@@ -138,7 +138,6 @@ impl LifecycleSink for FileSourceCtx {
         if let Some(total_bytes) = self.coord.total_bytes() {
             self.bus.publish(FileEvent::CacheComplete { total_bytes });
         }
-        self.try_build_segment_index();
     }
 
     fn error(&self, reason: &str) {

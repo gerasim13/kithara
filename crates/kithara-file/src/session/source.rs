@@ -80,8 +80,45 @@ impl FileSource {
                 .initial_phase(FilePhase::Complete)
                 .build(),
         );
-        source.try_build_segment_index();
         source.metadata_resolved(cached_codec.map(MediaInfo::from));
+        Self {
+            coord,
+            engine,
+            source,
+            peer_handle: None,
+        }
+    }
+
+    /// Create a source over a resource whose writer is owned elsewhere.
+    pub(crate) fn attached(
+        reader: AssetReader,
+        coord: Arc<FileCoord>,
+        bus: EventBus,
+        backend: AssetStore,
+        key: ResourceKey,
+        cancel: CancelToken,
+    ) -> Self {
+        let source = Arc::new(FileSourceCtx::new(
+            Arc::clone(&coord),
+            bus,
+            reader.clone(),
+            false,
+            None,
+        ));
+        let sink = Arc::clone(&source) as Arc<dyn LifecycleSink>;
+        let engine = Arc::new(
+            ResourceEngine::builder()
+                .identity(EngineIdentity {
+                    store: backend,
+                    key,
+                    process: None,
+                    cancel,
+                })
+                .reader(reader)
+                .sink(sink)
+                .initial_phase(FilePhase::Init)
+                .build(),
+        );
         Self {
             coord,
             engine,
@@ -173,11 +210,12 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn byte_map(&self) -> Option<Arc<dyn kithara_stream::ByteMap>> {
-        self.source.segment_index.get()?;
-        Some(Arc::new(FileByteMap {
+        let byte_map = FileByteMap {
             engine: Arc::clone(&self.engine),
             source: Arc::clone(&self.source),
-        }))
+        };
+        byte_map.segment_index()?;
+        Some(Arc::new(byte_map))
     }
 
     fn len(&self) -> Option<u64> {
@@ -285,6 +323,7 @@ struct FileByteMap {
 
 impl FileByteMap {
     fn segment_index(&self) -> Option<&FileSegmentIndex> {
+        self.source.try_build_segment_index();
         self.source.segment_index.get()
     }
 }

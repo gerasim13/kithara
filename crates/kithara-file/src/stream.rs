@@ -204,14 +204,18 @@ impl StreamType for File {
     type Source = FileSource;
 
     async fn create(config: Self::Config) -> Result<Self::Source, StreamSourceError> {
-        let cancel = CancelScope::new(config.cancel.clone()).token();
         let src = config.src.clone();
 
         match src {
             FileSrc::Local(path) => {
+                let cancel = CancelScope::new(config.cancel.clone()).token();
                 Self::create_local(path, config, &cancel).map_err(StreamSourceError::from)
             }
-            FileSrc::Remote(url) => Self::create_remote_wait_for_claim(url, config, cancel).await,
+            FileSrc::Attached(_) => Self::open_attached(config),
+            FileSrc::Remote(url) => {
+                let cancel = CancelScope::new(config.cancel.clone()).token();
+                Self::create_remote_wait_for_claim(url, config, cancel).await
+            }
         }
     }
 
@@ -221,6 +225,37 @@ impl StreamType for File {
 }
 
 impl File {
+    /// Create a source for a storage resource owned by another writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `config` is not attached or the resource cannot be opened.
+    pub fn open_attached(config: FileConfig) -> Result<FileSource, StreamSourceError> {
+        let FileSrc::Attached(key) = config.src.clone() else {
+            return Err(StreamSourceError::from(SourceError::AttachedSourceRequired));
+        };
+        let cancel = CancelScope::new(config.cancel.clone()).token();
+        let store = config.store.clone();
+        let bus = config
+            .bus
+            .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
+        let reader = store.open_resource(&key, None).map_err(|error| {
+            let source_error = SourceError::Assets(error);
+            publish_open_error(Some(&bus), &source_error);
+            source_error
+        })?;
+        let coord = coord_with_total(reader.len());
+
+        Ok(FileSource::attached(
+            reader,
+            coord,
+            bus,
+            store,
+            key,
+            cancel.child(),
+        ))
+    }
+
     /// Create a source for a local file.
     fn create_local(
         path: PathBuf,
@@ -359,7 +394,10 @@ fn sniff_codec(reader: &AssetReader) -> Option<AudioCodec> {
 
 #[cfg(test)]
 mod tests {
-    use kithara_assets::{AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{
+        AcquisitionResult, AssetResource, AssetSource, AssetStoreBuilder, StorageBackend, WriteSide,
+    };
+    use kithara_stream::{ReadOutcome, Source};
 
     use super::*;
 
@@ -438,5 +476,50 @@ mod tests {
         let result = local_key(PathBuf::from("relative/track.mp3"));
 
         assert!(matches!(result, Err(SourceError::InvalidPath(_))));
+    }
+
+    #[kithara::test]
+    async fn attached_source_reads_an_active_resource_without_eager_metadata() {
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .build();
+        let source = AssetSource::Remote {
+            url: url("https://example.com/master.m3u8"),
+            discriminator: Some("attached-source".to_string()),
+        };
+        let scope = store.scope::<File>(&source).expect("file scope");
+        let key = scope
+            .key(&AssetResource::Source {
+                extension: "mp3".to_string(),
+            })
+            .expect("resource key");
+        let AcquisitionResult::Pending(writer) = store
+            .acquire_resource(&key, None)
+            .expect("acquire resource")
+        else {
+            panic!("new resource must be pending");
+        };
+        writer
+            .raw_write_handle()
+            .write_at(0, &[0xff, 0xfb, 0x90, 0x64])
+            .expect("write active bytes");
+
+        let config = FileConfig::new(FileSrc::Attached(key), store);
+        let mut attached = File::create(config).await.expect("attached file source");
+
+        assert_eq!(attached.len(), None);
+        assert_eq!(attached.media_info(), None);
+        assert_eq!(attached.phase_at(0..4), kithara_stream::SourcePhase::Ready);
+
+        attached.wait_range(0..4, None).expect("active range wait");
+        let mut bytes = [0; 4];
+        assert_eq!(
+            attached.read_at(0, &mut bytes).expect("active range read"),
+            ReadOutcome::Bytes(std::num::NonZeroUsize::new(4).expect("non-zero"))
+        );
+        assert_eq!(bytes, [0xff, 0xfb, 0x90, 0x64]);
+
+        let _ = writer.commit(Some(4)).expect("commit resource");
+        assert_eq!(attached.len(), Some(4));
     }
 }

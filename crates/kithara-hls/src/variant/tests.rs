@@ -31,7 +31,7 @@ use crate::{
     playlist::{PlaylistState, SegmentState, VariantState},
     segment::{
         InitSegment, MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize,
-        SegmentSlotState,
+        SegmentSlotState, SegmentSource,
     },
     signal::SizeSignal,
 };
@@ -77,6 +77,7 @@ fn make_init(size: u64, scope: &AssetScope) -> Option<Segment> {
         state: SegmentSlotState::missing(),
         size: SegmentSize::seed(size),
         content: SegmentContent::Plain,
+        source: SegmentSource::new(scope.store().clone(), CancelToken::never()),
     }))
 }
 
@@ -93,6 +94,7 @@ fn make_seg(idx: u32, size: u64, scope: &AssetScope) -> Segment {
         state: SegmentSlotState::missing(),
         size: SegmentSize::seed(size),
         content: SegmentContent::Plain,
+        source: SegmentSource::new(scope.store().clone(), CancelToken::never()),
         decode_time: Duration::from_millis(u64::from(idx) * 2000),
         duration: Duration::from_secs(2),
     })
@@ -111,6 +113,7 @@ fn make_placeholder_seg(idx: u32, size: u64, scope: &AssetScope) -> Segment {
         state: SegmentSlotState::missing(),
         size: SegmentSize::placeholder(size),
         content: SegmentContent::Plain,
+        source: SegmentSource::new(scope.store().clone(), CancelToken::never()),
         decode_time: Duration::from_millis(u64::from(idx) * 2000),
         duration: Duration::from_secs(2),
     })
@@ -834,6 +837,7 @@ fn read_at_zero_holds_pending_while_init_unsized() {
         state: SegmentSlotState::missing(),
         size: SegmentSize::seed(0),
         content: SegmentContent::Plain,
+        source: SegmentSource::new(ctx.scope.store().clone(), ctx.master_cancel.child()),
     }));
     let v = VariantParts {
         init,
@@ -1394,6 +1398,7 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
         state: SegmentSlotState::missing(),
         size: SegmentSize::seed(100),
         content: SegmentContent::Encrypted(DecryptContext::new(key, [0u8; 16])),
+        source: SegmentSource::new(ctx.scope.store().clone(), ctx.master_cancel.child()),
         decode_time: Duration::ZERO,
         duration: Duration::from_secs(2),
     });
@@ -1413,6 +1418,80 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
     assert!(
         v.dispatch(&ctx, 10).is_empty(),
         "claimed (in-flight) segment must not be re-dispatched"
+    );
+}
+
+#[kithara::test]
+fn active_segment_reads_attach_file_source_lazily() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[4], &ctx);
+    let mut empty = [0; 4];
+    assert_eq!(
+        v.segment_read_at(0, 0..4, &mut empty)
+            .expect("unacquired read"),
+        None
+    );
+
+    push_planned(&v, 0);
+    let mut commands = v.dispatch(&ctx, 1);
+    let mut command = commands.pop().expect("segment fetch command");
+    let writer = command.writer.as_mut().expect("segment writer");
+    writer(b"data").expect("write segment bytes");
+
+    assert!(v.segment_contains(0, 0..4));
+    let mut bytes = [0; 4];
+    assert_eq!(
+        v.segment_read_at(0, 0..4, &mut bytes)
+            .expect("active segment read"),
+        Some(4)
+    );
+    assert_eq!(bytes, *b"data");
+    assert_eq!(v.committed_final_len(0), None);
+
+    let complete = command.on_complete.take().expect("segment completion");
+    complete(4, None, None);
+    assert_eq!(v.committed_final_len(0), Some(4));
+}
+
+#[kithara::test]
+fn committed_segment_source_attaches_lazily_without_dispatch() {
+    let ctx = test_ctx(3);
+    let segment = make_seg(0, 4, &ctx.scope);
+    let resource = segment.resource_id().clone();
+    let AcquisitionResult::Pending(writer) = ctx
+        .scope
+        .store()
+        .acquire_resource(&resource, None)
+        .expect("acquire cached segment")
+    else {
+        panic!("new cached segment must be pending");
+    };
+    writer.write_at(0, b"data").expect("write cached segment");
+    let _ = writer.commit(Some(4)).expect("commit cached segment");
+
+    let v = VariantParts {
+        init: None,
+        segments: vec![segment],
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: None,
+        container: None,
+    }
+    .into_variant(0, &ctx);
+
+    assert_eq!(v.committed_final_len(0), Some(4));
+    assert!(v.segment_contains(0, 0..4));
+    let mut bytes = [0; 4];
+    assert_eq!(
+        v.segment_read_at(0, 0..4, &mut bytes)
+            .expect("cached segment read"),
+        Some(4)
+    );
+    assert_eq!(bytes, *b"data");
+
+    push_planned(&v, 0);
+    assert!(
+        v.dispatch(&ctx, 1).is_empty(),
+        "committed source must retain the cached dispatch fast path"
     );
 }
 

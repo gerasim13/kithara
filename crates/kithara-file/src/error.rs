@@ -19,6 +19,9 @@ pub enum SourceError {
     #[error("Invalid path: {0}")]
     InvalidPath(String),
 
+    #[error("attached file source required")]
+    AttachedSourceRequired,
+
     #[error("unexpected asset acquisition state")]
     UnexpectedAcquisitionState,
 }
@@ -30,7 +33,9 @@ impl From<SourceError> for StreamSourceError {
             SourceError::Storage(e) => Self::Storage(e),
             SourceError::Assets(e) => Self::other(e),
             SourceError::InvalidPath(s) => Self::InvalidPath(s),
-            SourceError::UnexpectedAcquisitionState => Self::other(err),
+            SourceError::AttachedSourceRequired | SourceError::UnexpectedAcquisitionState => {
+                Self::other(err)
+            }
         }
     }
 }

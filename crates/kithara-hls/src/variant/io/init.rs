@@ -10,11 +10,10 @@ use kithara_stream::{StreamResult, dl::FetchCmd, needs_exact_byte_sizes};
 use super::{HlsVariant, PlanCtx, core::INIT_PLACEHOLDER_BYTES};
 use crate::{
     HlsResult,
-    handle::ResourceHandle,
     playlist::{PlaylistAccess, PlaylistState},
     segment::{
         Downloading, FetchClaim, InitSegment, Segment, SegmentContent, SegmentSize,
-        SegmentSlotState,
+        SegmentSlotState, SegmentSource,
     },
 };
 
@@ -25,8 +24,7 @@ impl HlsVariant {
         handle: FetchClaim<Downloading>,
     ) -> Option<FetchCmd> {
         let init = self.init()?;
-        let resource_handle = self.init_handle()?;
-        let resource = match resource_handle.acquire(init.content()) {
+        let resource = match init.acquire(ctx.scope.store()) {
             Ok(resource) => resource,
             Err(error) => {
                 tracing::debug!(
@@ -38,12 +36,7 @@ impl HlsVariant {
                 return None;
             }
         };
-        self.build_cmd(
-            resource_handle.url().clone(),
-            resource,
-            handle,
-            ctx.signal.clone(),
-        )
+        self.build_cmd(init.url().clone(), resource, handle, ctx.signal.clone())
     }
 
     /// Builds the variant's init slot. The slot exists (`Some(Segment::Init)`)
@@ -81,6 +74,7 @@ impl HlsVariant {
             state: SegmentSlotState::missing(),
             size,
             content: SegmentContent::from(decrypt_ctx),
+            source: SegmentSource::new(ctx.scope.store().clone(), ctx.master_cancel.child()),
         })))
     }
 
@@ -95,11 +89,6 @@ impl HlsVariant {
             /// atom. `None` for a variant with no separate init.
             #[call(as_ref)]
             pub(super) fn init(&self) -> Option<&Segment>;
-            /// Narrow disk handle for the variant's separately fetched init segment,
-            /// or `None` for a variant with no `#EXT-X-MAP` init.
-            #[expr(Some($?.resource(&self.segments.scope)))]
-            #[call(as_ref)]
-            fn init_handle(&self) -> Option<ResourceHandle>;
             #[expr($.map_or(0, Segment::len))]
             #[call(as_ref)]
             pub(super) fn init_route_size(&self) -> u64;
@@ -112,10 +101,7 @@ impl HlsVariant {
     /// Committed on-disk length of the (separately fetched) init segment, as
     /// [`committed_final_len`](Self::committed_final_len) for media.
     pub(super) fn init_committed_final_len(&self) -> Option<u64> {
-        self.segments
-            .init
-            .as_ref()?
-            .committed_len(&self.segments.scope)
+        self.segments.init.as_ref()?.committed_len()
     }
 
     /// Whether every byte in `range` is present on disk for the init segment.
@@ -123,7 +109,7 @@ impl HlsVariant {
         self.segments
             .init
             .as_ref()
-            .is_some_and(|seg| seg.size().is_exact() && seg.contains(&self.segments.scope, range))
+            .is_some_and(|seg| seg.size().is_exact() && seg.contains(range))
     }
 
     pub(super) fn init_downloading(&self) -> bool {
@@ -153,7 +139,7 @@ impl HlsVariant {
             || Ok(None),
             |seg| {
                 if seg.size().is_exact() {
-                    seg.read_at(&self.segments.scope, range, dst)
+                    seg.read_at(range, dst)
                 } else {
                     Ok(None)
                 }
@@ -163,7 +149,7 @@ impl HlsVariant {
 
     /// Resource key for the variant's init segment — `None` when the
     /// playlist has no `#EXT-X-MAP` (raw TS/AAC). Test-only assertion helper;
-    /// the reader paths read the init through [`Self::init_handle`].
+    /// the reader paths read the init through its attached file source.
     #[cfg(test)]
     pub(crate) fn init_resource(&self) -> Option<ResourceKey> {
         Some(self.segments.init.as_ref()?.resource_id().clone())

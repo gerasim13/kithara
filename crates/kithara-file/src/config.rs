@@ -1,20 +1,23 @@
 use std::{fmt, path::PathBuf};
 
 use bon::Builder;
-use kithara_assets::{AssetStore, BytePool};
+use kithara_assets::{AssetStore, BytePool, ResourceKey};
 use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_platform::CancelToken;
 use kithara_stream::dl::Downloader;
 use url::Url;
 
-/// Source of a file stream: either a remote URL or a local path.
+/// Source of a file stream.
 #[derive(Clone, Debug, derive_more::From, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FileSrc {
     /// Remote file accessed via HTTP(S).
     Remote(Url),
     /// Local file accessed directly from disk.
     Local(PathBuf),
+    /// Storage resource already acquired and written by another owner.
+    Attached(ResourceKey),
 }
 
 /// Configuration for file streaming.
@@ -24,7 +27,7 @@ pub enum FileSrc {
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct FileConfig {
-    /// File source (remote URL or local path).
+    /// File source.
     pub src: FileSrc,
     /// Event bus (optional - if not provided, one is created internally).
     #[builder(name = events)]
@@ -102,6 +105,18 @@ mod tests {
     #[kithara::test]
     #[case(test_src())]
     #[case(FileSrc::Local(PathBuf::from("/tmp/song.mp3")))]
+    #[case(FileSrc::Attached(
+        test_store()
+            .scope::<crate::File>(&kithara_assets::AssetSource::Remote {
+                url: Url::parse("http://example.com/audio.mp3").unwrap(),
+                discriminator: None,
+            })
+            .unwrap()
+            .key(&kithara_assets::AssetResource::Source {
+                extension: "mp3".to_string(),
+            })
+            .unwrap()
+    ))]
     fn test_file_config_new_preserves_source(#[case] src: FileSrc) {
         let config = FileConfig::new(src.clone(), test_store());
 

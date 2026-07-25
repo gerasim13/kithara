@@ -4,19 +4,14 @@ use kithara_platform::time::Duration;
 use kithara_stream::{MediaInfo, StreamResult};
 
 use super::HlsVariant;
-use crate::{
-    handle::ResourceHandle,
-    segment::{MediaSegment, Segment},
-};
+use crate::segment::{MediaSegment, Segment};
 
 impl HlsVariant {
     /// Committed on-disk length for media segment `seg_idx` when its resource
     /// is `Committed` with a known `final_len` — the skip-fetch guard's size
     /// source. `None` when the index is out of range.
     pub(super) fn committed_final_len(&self, seg_idx: u32) -> Option<u64> {
-        self.segments
-            .get(seg_idx as usize)?
-            .committed_len(&self.segments.scope)
+        self.segments.get(seg_idx as usize)?.committed_len()
     }
 
     /// Clamped segment index whose decode-time window contains `t`, or
@@ -56,7 +51,7 @@ impl HlsVariant {
     pub(super) fn segment_contains(&self, seg_idx: u32, range: Range<u64>) -> bool {
         self.segments
             .get(seg_idx as usize)
-            .is_some_and(|seg| seg.size().is_exact() && seg.contains(&self.segments.scope, range))
+            .is_some_and(|seg| seg.size().is_exact() && seg.contains(range))
     }
 
     pub(super) fn segment_downloading(&self, seg_idx: u32) -> bool {
@@ -74,17 +69,6 @@ impl HlsVariant {
             .is_some_and(|s| s.state().is_failed())
     }
 
-    /// Narrow disk handle for media segment `seg_idx`, or `None` when the
-    /// index is out of range. Cheap: clones the shared scope plus the
-    /// segment's key and url.
-    pub(super) fn segment_handle(&self, seg_idx: u32) -> Option<ResourceHandle> {
-        Some(
-            self.segments
-                .get(seg_idx as usize)?
-                .resource(&self.segments.scope),
-        )
-    }
-
     /// Read `range` of media segment `seg_idx` into `dst` via the [`Segment`]
     /// cascade. `Ok(None)` when the segment is out of range or its bytes are
     /// not on disk yet.
@@ -98,7 +82,7 @@ impl HlsVariant {
             || Ok(None),
             |seg| {
                 if seg.size().is_exact() {
-                    seg.read_at(&self.segments.scope, range, dst)
+                    seg.read_at(range, dst)
                 } else {
                     Ok(None)
                 }

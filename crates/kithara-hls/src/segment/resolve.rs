@@ -1,13 +1,11 @@
-use kithara_assets::AssetScope;
-
 use crate::segment::Segment;
 
 impl Segment {
     /// Committed on-disk length for this slot when its resource is `Committed`
-    /// with a known `final_len`, routed through the slot's narrow disk handle.
+    /// with a known `final_len`, routed through the slot's attached file source.
     /// `None` when the resource is not committed.
-    pub(crate) fn committed_len(&self, scope: &AssetScope) -> Option<u64> {
-        self.resource(scope).committed_len()
+    pub(crate) fn committed_len(&self) -> Option<u64> {
+        self.attached_len()
     }
 
     /// Store a loaded/committed byte length and mark the size atom EXACT.

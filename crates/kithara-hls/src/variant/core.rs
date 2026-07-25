@@ -26,7 +26,10 @@ use crate::{
     HlsResult,
     config::SizeProbeMethod,
     playlist::{PlaylistAccess, PlaylistState},
-    segment::{MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize, SegmentSlotState},
+    segment::{
+        MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize, SegmentSlotState,
+        SegmentSource,
+    },
     signal::SizeSignal,
 };
 
@@ -157,13 +160,6 @@ pub(super) struct VariantSeek {
 
 #[derive(derive_more::Deref)]
 pub(super) struct VariantSegments {
-    /// Per-track asset store. The single source-of-truth clone: each vended
-    /// [`ResourceHandle`] gets a cheap clone of it, and the fetch path
-    /// acquires *writable* resources via the same clone in `PlanCtx::scope`.
-    /// Vends a narrow `ResourceHandle` per segment/init (`segment_handle` /
-    /// `init_handle`); the produce-core's disk read and acquire flow through
-    /// that handle, and it is the home for the `WS5d` held-resource lease.
-    pub(super) scope: kithara_assets::AssetScope,
     /// Init slot: `Some(Segment::Init)` for a variant that advertises a
     /// separately fetched `#EXT-X-MAP` init, `None` otherwise. Its existence
     /// is keyed on the playlist `#EXT-X-MAP` URL, never on the known byte size
@@ -176,16 +172,8 @@ pub(super) struct VariantSegments {
 }
 
 impl VariantSegments {
-    fn new(
-        scope: kithara_assets::AssetScope,
-        init: Option<Segment>,
-        entries: Vec<Segment>,
-    ) -> Self {
-        Self {
-            scope,
-            init,
-            entries,
-        }
+    fn new(init: Option<Segment>, entries: Vec<Segment>) -> Self {
+        Self { init, entries }
     }
 }
 
@@ -338,7 +326,7 @@ impl VariantParts {
                 bus: ctx.bus.clone(),
             },
             seek: VariantSeek::new(HlsVariant::NO_SEEK_TAIL),
-            segments: VariantSegments::new(ctx.scope.clone(), init, segments),
+            segments: VariantSegments::new(init, segments),
             cache_complete_emitted: AtomicBool::new(false),
         })
     }
@@ -412,6 +400,7 @@ impl HlsVariant {
                 state: SegmentSlotState::missing(),
                 size,
                 content: SegmentContent::from(decrypt_ctx),
+                source: SegmentSource::new(ctx.scope.store().clone(), ctx.master_cancel.child()),
                 decode_time,
                 duration,
             }));

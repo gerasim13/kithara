@@ -1,15 +1,53 @@
-use std::ops::Range;
+use std::{fmt, ops::Range};
 
-use kithara_assets::{AssetScope, ResourceKey};
+use kithara_assets::{AssetResourceState, AssetStore, AssetsError, ResourceKey};
 use kithara_drm::DecryptContext;
-use kithara_platform::{sync::Arc, time::Duration};
-use kithara_stream::StreamResult;
+use kithara_file::{File, FileConfig, FileSrc};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use kithara_stream::{ReadOutcome, Source, SourceError, SourcePhase, StreamResult, StreamType};
+use thiserror::Error;
+use tracing::debug;
 use url::Url;
 
-use crate::{
-    handle::ResourceHandle,
-    segment::{SegmentSize, SegmentSlotState},
-};
+use crate::segment::{SegmentSize, SegmentSlotState};
+
+type AttachedFileSource = <File as StreamType>::Source;
+
+#[derive(Debug, Error)]
+pub(crate) enum SegmentSourceError {
+    #[error("failed to inspect attached file resource {resource:?}: {source}")]
+    State {
+        resource: ResourceKey,
+        #[source]
+        source: Box<AssetsError>,
+    },
+    #[error("failed to open attached file source for resource {resource:?}: {source}")]
+    Open {
+        resource: ResourceKey,
+        #[source]
+        source: Box<SourceError>,
+    },
+}
+
+pub(crate) struct SegmentSource {
+    store: AssetStore,
+    cancel: CancelToken,
+    slot: Mutex<Option<AttachedFileSource>>,
+}
+
+impl SegmentSource {
+    pub(crate) fn new(store: AssetStore, cancel: CancelToken) -> Self {
+        Self {
+            store,
+            cancel,
+            slot: Mutex::default(),
+        }
+    }
+}
 
 /// Decryption disposition for a segment / init resource. Replaces
 /// `decrypt_ctx: Option<DecryptContext>`, whose `.is_some()` /
@@ -31,20 +69,33 @@ impl From<Option<DecryptContext>> for SegmentContent {
 /// One cache slot in the variant's content domain. The shared-but-distinct
 /// kinds — a separately fetched `#EXT-X-MAP` init prefix vs a media segment —
 /// are folded under one enum (req 6): callers treat any slot uniformly through
-/// the cascade methods (`state` / `size` / `resource` / `read_at` / `contains`
+/// the cascade methods (`state` / `size` / `read_at` / `contains`
 /// / `len` / `url`), and the few media-only queries (`decode_time` / `duration`)
 /// live on [`MediaSegment`].
 ///
 /// Each cascade method dispatches DOWN into the arm, reproducing exactly the
 /// per-kind code path the variant's `read_at` / `range_ready` /
-/// `media_descriptor` / `init_descriptor_at` ran before the fold. `read_at` /
-/// `contains` route through the segment's [`ResourceHandle`] — the same handle
-/// `segment_handle` / `init_handle` vended — built from the passed scope plus
-/// the arm's `resource_id` + `url`.
-#[derive(Debug)]
+/// `media_descriptor` / `init_descriptor_at` ran before the fold.
 pub(crate) enum Segment {
     Init(InitSegment),
     Media(MediaSegment),
+}
+
+impl fmt::Debug for Segment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Init(segment) => f
+                .debug_struct("Segment::Init")
+                .field("resource_id", &segment.resource_id)
+                .field("url", &segment.url)
+                .finish_non_exhaustive(),
+            Self::Media(segment) => f
+                .debug_struct("Segment::Media")
+                .field("resource_id", &segment.resource_id)
+                .field("url", &segment.url)
+                .finish_non_exhaustive(),
+        }
+    }
 }
 
 impl Segment {
@@ -58,9 +109,10 @@ impl Segment {
         }
     }
 
-    /// Whether every byte in `range` is already present on disk for this slot.
-    pub(crate) fn contains(&self, scope: &AssetScope, range: Range<u64>) -> bool {
-        self.resource(scope).contains(range)
+    /// Whether every byte in `range` is readable from this slot's file source.
+    pub(crate) fn contains(&self, range: Range<u64>) -> bool {
+        self.with_attached_source(|source| source.phase_at(range) == SourcePhase::Ready)
+            .unwrap_or(false)
     }
 
     /// Decryption disposition — the acquire path branches on it.
@@ -86,27 +138,77 @@ impl Segment {
         }
     }
 
-    /// Open the slot's resource and copy `range` into `dst`. Routes through the
-    /// slot's [`ResourceHandle`] — `Ok(None)` means the bytes are not on disk
-    /// yet.
-    pub(crate) fn read_at(
-        &self,
-        scope: &AssetScope,
-        range: Range<u64>,
-        dst: &mut [u8],
-    ) -> StreamResult<Option<usize>> {
-        self.resource(scope).read_at(range, dst)
+    /// Wait for and read `range` through the slot's attached file source.
+    /// `Ok(None)` means no source has been attached or the source is pending.
+    pub(crate) fn read_at(&self, range: Range<u64>, dst: &mut [u8]) -> StreamResult<Option<usize>> {
+        let Some(mut source) = self.with_attached_source(Clone::clone) else {
+            return Ok(None);
+        };
+        let _ = source.wait_range(range.clone(), None)?;
+        match source.read_at(range.start, dst)? {
+            ReadOutcome::Bytes(count) => Ok(Some(count.get())),
+            ReadOutcome::Pending(_) => Ok(None),
+            ReadOutcome::Eof => Ok(Some(0)),
+        }
     }
 
-    /// Narrow disk handle for this slot, built from the variant's shared scope
-    /// plus the slot's key and url — the same cheap clone `segment_handle` /
-    /// `init_handle` produced.
-    pub(crate) fn resource(&self, scope: &AssetScope) -> ResourceHandle {
-        ResourceHandle::new(
-            scope.clone(),
-            self.resource_id().clone(),
-            self.url().clone(),
-        )
+    /// Runs `use_source` under the source-slot mutex; the closure must not block.
+    fn with_attached_source<T>(
+        &self,
+        use_source: impl FnOnce(&AttachedFileSource) -> T,
+    ) -> Option<T> {
+        let source = self.source();
+        let mut slot = source.slot.lock();
+        if let Some(attached) = slot.as_ref() {
+            return Some(use_source(attached));
+        }
+        let resource = self.resource_id().clone();
+        let state = match source.store.resource_state(&resource) {
+            Ok(state) => state,
+            Err(error) => {
+                let error = SegmentSourceError::State {
+                    resource,
+                    source: Box::new(error),
+                };
+                debug!(error = %error, "attached file source unavailable");
+                return None;
+            }
+        };
+        if !matches!(
+            state,
+            AssetResourceState::Active | AssetResourceState::Committed { .. }
+        ) {
+            return None;
+        }
+        let config = FileConfig::for_src(FileSrc::Attached(resource.clone()))
+            .store(source.store.clone())
+            .cancel(source.cancel.clone())
+            .build();
+        match File::open_attached(config) {
+            Ok(attached) => {
+                *slot = Some(attached);
+                slot.as_ref().map(use_source)
+            }
+            Err(error) => {
+                let error = SegmentSourceError::Open {
+                    resource,
+                    source: Box::new(error),
+                };
+                debug!(error = %error, "attached file source unavailable");
+                None
+            }
+        }
+    }
+
+    pub(super) fn attached_len(&self) -> Option<u64> {
+        self.with_attached_source(Source::len).flatten()
+    }
+
+    fn source(&self) -> &SegmentSource {
+        match self {
+            Self::Init(segment) => &segment.source,
+            Self::Media(segment) => &segment.source,
+        }
     }
 
     /// The segment's resource key.
@@ -143,7 +245,7 @@ impl Segment {
     }
 }
 
-#[derive(Debug, fieldwork::Fieldwork)]
+#[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct MediaSegment {
     /// Cache state. The owning [`FetchClaim<Downloading>`](crate::segment::FetchClaim) handle (held by the
@@ -158,18 +260,19 @@ pub(crate) struct MediaSegment {
     pub(crate) duration: Duration,
     pub(crate) resource_id: ResourceKey,
     pub(crate) content: SegmentContent,
+    pub(crate) source: SegmentSource,
     /// Media size state. Non-exact placeholders are routeable before commit;
     /// committed lengths update the contiguous HLS byte map.
     pub(crate) size: SegmentSize,
     pub(crate) url: Url,
 }
 
-#[derive(Debug)]
 pub(crate) struct InitSegment {
     /// Shared with the init segment's `FetchSlot` handle; see
     /// [`MediaSegment::state`].
     pub(crate) state: Arc<SegmentSlotState>,
     pub(crate) resource_id: ResourceKey,
+    pub(crate) source: SegmentSource,
     /// Decryption disposition for the init segment. HLS init segments
     /// don't carry their own `#EXT-X-KEY`; an encrypted variant mirrors
     /// the first media segment's key — the standard packaging convention.
