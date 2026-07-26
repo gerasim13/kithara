@@ -17,9 +17,7 @@ pub(crate) use crate::{
         fetch::EpochValidator,
         parts::SourceParts,
         rebuild::port::RebuildRuntime,
-        source::{
-            DecodeInit, DecoderFactory as StreamDecoderFactory, OffsetReader, StreamAudioSource,
-        },
+        source::{DecodeInit, DecoderFactory as StreamDecoderFactory, StreamAudioSource},
     },
     renderer::{ThreadWake, TrackId, TrackRegistration, WorkerWakeBridge},
     runtime::{AtomicServiceClass, Inlet, Outlet, WakeSignal, connect},

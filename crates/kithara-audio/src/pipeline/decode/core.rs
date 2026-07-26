@@ -38,8 +38,9 @@ pub(crate) struct DecoderSession {
 
 /// Factory closure that creates a new decoder from stream, media info, and base offset.
 ///
-/// Production creates a Symphonia decoder via `OffsetReader`; tests may return
-/// a mock decoder without real I/O. Interrupted construction remains distinct
+/// Production opens a reader session on the stream and builds a decoder over
+/// it; tests may return a mock decoder without real I/O. Interrupted
+/// construction remains distinct
 /// from a hard decoder or codec error so recreation can wait for source bytes.
 pub(crate) type DecoderFactory<T> = Arc<
     dyn Fn(SharedStream<T>, MediaInfo, u64) -> Result<Box<dyn Decoder>, DecodeError> + Send + Sync,

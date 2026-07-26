@@ -16,7 +16,10 @@ use kithara_platform::{
     tokio::{runtime::Handle as RuntimeHandle, task::spawn_blocking},
 };
 use kithara_resampler::ResamplerBackend;
-use kithara_stream::{MediaInfo, PlayheadRead, SharedStream, Stream, StreamType, WorkerWake};
+use kithara_stream::{
+    MediaInfo, PlayheadRead, ReaderHint, SessionReader, SharedStream, Stream, StreamType,
+    WorkerWake,
+};
 use portable_atomic::AtomicF32;
 use tracing::{debug, info, warn};
 
@@ -445,9 +448,8 @@ where
 {
     let deps = FactoryDeps::new(decoder, epoch, byte_len);
     Arc::new(move |stream, info, base_offset| {
-        let byte_len = stream
-            .len()
-            .map_or(0, |length| length.saturating_sub(base_offset));
+        let mut reader = stream.open_reader(ReaderHint::builder().base_offset(base_offset).build());
+        let byte_len = reader.byte_len().unwrap_or(0);
         deps.byte_len.store(byte_len, Ordering::Release);
         let config = DecoderConfig::builder()
             .backend(deps.decoder.decoder.backend())
@@ -455,12 +457,11 @@ where
             .pcm_pool(deps.decoder.pcm_pool.clone())
             .byte_pool(deps.decoder.byte_pool.clone())
             .epoch(deps.epoch.load(Ordering::Acquire))
-            .maybe_byte_map(stream.byte_map())
-            .maybe_hooks(stream.take_reader_event_sink())
+            .maybe_byte_map(reader.byte_map())
+            .maybe_hooks(reader.take_event_sink())
             .maybe_resampler(deps.decoder.resampler_config()?)
             .build();
-        let source = super::OffsetReader::new(stream, base_offset);
-        match DecoderFactory::create_from_media_info(source, &info, config) {
+        match DecoderFactory::create_from_media_info(reader, &info, config) {
             Ok(decoder) => {
                 decoder.update_byte_len(byte_len);
                 Ok(decoder)

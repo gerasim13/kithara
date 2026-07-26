@@ -15,9 +15,9 @@ use kithara_platform::{
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, AudioCodec, ByteMap, ChunkPosition, ContainerFormat, MediaInfo, PlayheadRead,
-    PlayheadState, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SegmentDescriptor,
-    SharedStream, Source, SourceError, SourcePhase, SourceSeekAnchor, Stream, StreamError,
-    StreamResult, StreamType, TimelineState, VariantControl, WorkerWake,
+    PlayheadState, PlayheadWrite, ReadOutcome, ReaderHint, SeekControl, SeekObserve,
+    SegmentDescriptor, SharedStream, Source, SourceError, SourcePhase, SourceSeekAnchor, Stream,
+    StreamError, StreamResult, StreamType, TimelineState, VariantControl, WorkerWake,
 };
 use kithara_test_utils::kithara;
 
@@ -29,7 +29,6 @@ use crate::{
         rebuild::{RecreateCause, RecreateNext, RecreateState, port::RebuildRuntime},
         seek::{SeekContext, SeekRequest},
         source::StreamAudioSource,
-        stream::offset::OffsetReader,
         track::{self, TrackStep},
     },
     renderer::AudioWorkerSource,
@@ -432,7 +431,7 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
                     .maybe_byte_map(stream.byte_map())
                     .gapless(false)
                     .build();
-            let input = OffsetReader::new(stream, base_offset);
+            let input = stream.open_reader(ReaderHint::builder().base_offset(base_offset).build());
             let decoder = DecodeFactory::create_from_media_info(input, &info, config)?;
             decoder.update_byte_len(byte_len);
             Ok(decoder)
