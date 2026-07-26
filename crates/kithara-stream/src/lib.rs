@@ -32,7 +32,7 @@ pub use media::{AudioCodec, ContainerFormat, MediaInfo, needs_exact_byte_sizes};
 pub use playhead::{ChunkPosition, PlayheadRead, PlayheadState, PlayheadWrite};
 pub use preroll::PrerollHint;
 pub use publication::{Publication, SessionId};
-pub use reader::{CursorReader, Frontier, ReaderHint, SessionReader, WaitMode};
+pub use reader::{CursorReader, ReaderHint, SessionReader, WaitMode};
 pub use shared::SharedStream;
 pub use source::{
     ByteMap, NotReadyCause, PendingReason, ReadOutcome, SegmentDescriptor, Source, SourcePhase,

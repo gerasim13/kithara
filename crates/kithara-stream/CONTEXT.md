@@ -65,7 +65,7 @@ session. Everything a decoder needs comes from it (`Read + Seek` plus
 `byte_len`/`byte_map`/`take_event_sink`), so no caller assembles a reader from
 pieces read off the stream beside it.
 
-A session answers three questions, each owned by exactly one axis:
+A session answers two questions, each owned by exactly one axis:
 
 - **`base_offset` — where its zero is.** A decoder rebuilt at a mid-stream
   boundary addresses its segment from 0 while the bytes live wherever the
@@ -79,17 +79,18 @@ A session answers three questions, each owned by exactly one axis:
   can answer it differently — that is what lets a decoder be prepared off-core
   while another one is audible. Opening a session is always position math,
   whatever the mode: it must not wait for bytes nobody has asked for yet.
-- **`Frontier` — whether what it consumes is the track's position.**
-  `Published` reads through the stream's own cursor and credits consumed bytes
-  back to it. It deliberately has no private copy: that cursor IS the track's
-  position, an externally applied seek re-aims it, and a private copy would
-  silently stop following the track. `Private` owns its byte position; its
-  reads and seeks leave the stream's cursor alone, so preparing a decoder
-  nobody hears cannot move the track under the session that is audible.
 
-`Stream<T>` itself still implements `Read + Seek` for byte-only consumers; that
-surface is the degenerate case — the stream as its own published session over
-its whole self.
+Reads and seeks resolve against an explicit byte position (`try_read_from`,
+`probe_read_from`, `blocking_read_from`, `probe_seek_from`,
+`blocking_seek_from`) and do **not** move a cursor themselves. Crediting what a
+session consumed back to the stream is a separate act, and it is what makes the
+stream's cursor the track's playback position — reading and publishing are two
+decisions, not one. Every session publishes today; a session that reads without
+publishing arrives with the off-core decoder build that needs one.
+
+`Stream<T>` itself implements `Read + Seek` for byte-only consumers; that
+surface is the degenerate case — the stream as its own session over its whole
+self.
 
 ### End-of-stream contract
 

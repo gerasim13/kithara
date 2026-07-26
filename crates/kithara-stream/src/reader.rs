@@ -29,27 +29,7 @@ impl WaitMode {
     }
 }
 
-/// Whether what a session consumes is the track's playback position.
-///
-/// Orthogonal to [`WaitMode`]: one says how a read waits for its bytes, this
-/// says who is told about them afterwards.
-#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum Frontier {
-    /// The session the listener is hearing. What it consumes is what the
-    /// stream reports as the track's position, so it reads through the
-    /// stream's own cursor — an external seek re-aims that cursor, and this
-    /// session has to follow.
-    #[default]
-    Published,
-    /// A session preparing a decoder nobody hears yet. It owns its byte
-    /// position; what it reads must not move the track under the session that
-    /// is audible.
-    Private,
-}
-
-/// Where a reader starts in the stream, how it waits there, and whether what
-/// it consumes is the track's position.
+/// Where a reader starts in the stream and how it waits there.
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, bon::Builder)]
 #[non_exhaustive]
 pub struct ReaderHint {
@@ -60,8 +40,6 @@ pub struct ReaderHint {
     pub base_offset: u64,
     #[builder(default)]
     pub wait: WaitMode,
-    #[builder(default)]
-    pub frontier: Frontier,
 }
 
 /// One reading session over a stream.
@@ -92,17 +70,6 @@ pub struct CursorReader<T: StreamType> {
     shared: SharedStream<T>,
     base_offset: u64,
     wait: WaitMode,
-    cursor: Cursor,
-}
-
-/// Where a session's byte position lives.
-///
-/// The published session has none of its own on purpose: the stream's cursor
-/// IS the track's position, and a seek applied from outside moves it, so a
-/// private copy here would silently stop following the track.
-enum Cursor {
-    Published,
-    Private(u64),
 }
 
 impl<T: StreamType> CursorReader<T> {
@@ -111,49 +78,15 @@ impl<T: StreamType> CursorReader<T> {
             shared,
             base_offset: hint.base_offset,
             wait: hint.wait,
-            cursor: match hint.frontier {
-                Frontier::Published => Cursor::Published,
-                Frontier::Private => Cursor::Private(hint.base_offset),
-            },
         };
         // Aim the stream at the session's start before anyone reads: the
         // decoder's first read has to land on its own segment, and its first
         // `seek` may never come. Position math only, never the priming seek:
         // opening a session must not wait for bytes nobody has asked for yet.
         // A target the stream cannot resolve yet is not an error here — the
-        // read that follows discovers it. A private session needs no aim at
-        // all; its cursor already starts where the session does, and moving
-        // the stream's would yank whoever is audible.
-        if matches!(reader.cursor, Cursor::Published) {
-            let _ = reader.shared.probe_seek(SeekFrom::Start(hint.base_offset));
-        }
+        // read that follows discovers it.
+        let _ = reader.shared.probe_seek(SeekFrom::Start(hint.base_offset));
         reader
-    }
-
-    /// Where this session's next read starts, in the stream's coordinates.
-    fn position(&self) -> u64 {
-        match self.cursor {
-            Cursor::Published => self.shared.position(),
-            Cursor::Private(position) => position,
-        }
-    }
-
-    /// Record `n` consumed bytes. The published session credits them to the
-    /// stream, which is what makes them the track's position; a private
-    /// session keeps them.
-    fn consumed(&mut self, n: u64) {
-        match &mut self.cursor {
-            Cursor::Published => self.shared.advance(n),
-            Cursor::Private(position) => *position = position.saturating_add(n),
-        }
-    }
-
-    /// Record where a seek landed.
-    fn landed(&mut self, at: u64) {
-        match &mut self.cursor {
-            Cursor::Published => self.shared.set_position(at),
-            Cursor::Private(position) => *position = at,
-        }
     }
 }
 
@@ -175,12 +108,14 @@ impl<T: StreamType> SessionReader for CursorReader<T> {
 
 impl<T: StreamType> Read for CursorReader<T> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let from = self.position();
+        let from = self.shared.position();
         let count = match self.wait {
             WaitMode::Probe => self.shared.probe_read_from(from, buf)?,
             WaitMode::Block => self.shared.blocking_read_from(from, buf)?,
         };
-        self.consumed(count as u64);
+        // Crediting what this session consumed is what makes the stream's
+        // cursor the track's position — a separate act from the read itself.
+        self.shared.advance(count as u64);
         Ok(count)
     }
 }
@@ -199,12 +134,12 @@ impl<T: StreamType> Seek for CursorReader<T> {
             SeekFrom::Start(p) => SeekFrom::Start(self.base_offset.saturating_add(p)),
             other => other,
         };
-        let from = self.position();
+        let from = self.shared.position();
         let landed = match self.wait {
             WaitMode::Probe => self.shared.probe_seek_from(from, target)?,
             WaitMode::Block => self.shared.blocking_seek_from(from, target)?,
         };
-        self.landed(landed);
+        self.shared.set_position(landed);
         Ok(landed.saturating_sub(self.base_offset))
     }
 }
@@ -445,54 +380,23 @@ mod tests {
         );
     }
 
-    /// A private session reads at its own position and keeps what it consumed
-    /// to itself: a decoder being prepared must not move the track under the
-    /// one that is audible.
+    /// What a session consumes is credited to the stream: that is what makes
+    /// its cursor the track's position, and the stream follows byte for byte.
     #[kithara::test]
-    fn a_private_session_reads_its_own_position_and_leaves_the_track_alone() {
+    fn what_a_session_consumes_becomes_the_track_position() {
         let Probe { stream, reads, .. } = probe();
-        let mut private = stream.open_reader(
-            ReaderHint::builder()
-                .base_offset(40)
-                .frontier(Frontier::Private)
-                .build(),
-        );
+        let mut session = stream.open_reader(ReaderHint::builder().base_offset(40).build());
         let mut buf = [0_u8; 8];
 
-        assert_eq!(
-            stream.position(),
-            0,
-            "opening a private session aims nothing"
-        );
-
-        assert_eq!(private.read(&mut buf).expect("private read"), 8);
-        assert_eq!(private.read(&mut buf).expect("private read again"), 8);
-
-        assert_eq!(
-            *reads.lock(),
-            vec![40, 48],
-            "the private session advances its own cursor"
-        );
-        assert_eq!(
-            stream.position(),
-            0,
-            "and the track's position never followed it"
-        );
-    }
-
-    /// The published session is the mirror image: what it consumes IS the
-    /// track's position, so the stream follows it byte for byte.
-    #[kithara::test]
-    fn a_published_session_is_the_track_position() {
-        let Probe { stream, reads, .. } = probe();
-        let mut published = stream.open_reader(ReaderHint::builder().base_offset(40).build());
-        let mut buf = [0_u8; 8];
-
-        assert_eq!(published.read(&mut buf).expect("published read"), 8);
-        assert_eq!(published.read(&mut buf).expect("published read again"), 8);
+        assert_eq!(session.read(&mut buf).expect("session read"), 8);
+        assert_eq!(session.read(&mut buf).expect("session read again"), 8);
 
         assert_eq!(*reads.lock(), vec![40, 48]);
-        assert_eq!(stream.position(), 56, "the track followed the session");
+        assert_eq!(
+            stream.position(),
+            56,
+            "the track followed what the session consumed"
+        );
     }
 
     /// What the decoder is told about length is what IT can address, not what
