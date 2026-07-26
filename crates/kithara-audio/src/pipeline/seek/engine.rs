@@ -3,7 +3,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use kithara_decode::DecodeError;
 use kithara_events::{DeferredBus, Event, SeekLifecycleStage};
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_stream::{PlayheadWrite, SeekControl, SeekObserve, SourceSeekAnchor, StreamType};
+use kithara_stream::{
+    PlayheadWrite, SeekControl, SeekObserve, SharedStream, SourceSeekAnchor, StreamType,
+};
 use tracing::{trace, warn};
 
 use crate::pipeline::{
@@ -20,7 +22,6 @@ use crate::pipeline::{
         skip::estimate_target_byte,
         state::{ApplySeekState, ResumeState, SeekMode, SeekRequest},
     },
-    stream::shared::SharedStream,
     track::{WaitContext, WaitingReason},
 };
 

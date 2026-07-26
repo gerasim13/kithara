@@ -15,9 +15,9 @@ use kithara_platform::{
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, AudioCodec, ByteMap, ChunkPosition, ContainerFormat, MediaInfo, PlayheadRead,
-    PlayheadState, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SegmentDescriptor, Source,
-    SourceError, SourcePhase, SourceSeekAnchor, Stream, StreamError, StreamResult, StreamType,
-    TimelineState, VariantControl, WorkerWake,
+    PlayheadState, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SegmentDescriptor,
+    SharedStream, Source, SourceError, SourcePhase, SourceSeekAnchor, Stream, StreamError,
+    StreamResult, StreamType, TimelineState, VariantControl, WorkerWake,
 };
 use kithara_test_utils::kithara;
 
@@ -29,7 +29,7 @@ use crate::{
         rebuild::{RecreateCause, RecreateNext, RecreateState, port::RebuildRuntime},
         seek::{SeekContext, SeekRequest},
         source::StreamAudioSource,
-        stream::{offset::OffsetReader, shared::SharedStream},
+        stream::offset::OffsetReader,
         track::{self, TrackStep},
     },
     renderer::AudioWorkerSource,

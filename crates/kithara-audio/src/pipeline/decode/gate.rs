@@ -2,13 +2,12 @@ use std::ops::Range;
 
 use kithara_decode::InputRequirement;
 use kithara_platform::sync::Arc;
-use kithara_stream::{DeferredWake, SeekControl, SourcePhase, StreamType};
+use kithara_stream::{DeferredWake, SeekControl, SharedStream, SourcePhase, StreamType};
 use tracing::trace;
 
 use crate::pipeline::{
     rebuild::RecreateState,
     seek::{ApplySeekState, ResumeState, SeekMode},
-    stream::shared::SharedStream,
     track::{WaitContext, WaitingReason, map_source_phase},
 };
 

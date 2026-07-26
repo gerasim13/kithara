@@ -20,9 +20,9 @@ use kithara_platform::{
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, AudioCodec, ChunkPosition, ContainerFormat, MediaInfo, PlayheadRead, PlayheadState,
-    PlayheadWrite, PrerollHint, ReadOutcome, SeekControl, SeekObserve, Source, SourceError,
-    SourcePhase, Stream, StreamError, StreamResult, StreamType, TimelineState, VariantControl,
-    WorkerWake,
+    PlayheadWrite, PrerollHint, ReadOutcome, SeekControl, SeekObserve, SharedStream, Source,
+    SourceError, SourcePhase, Stream, StreamError, StreamResult, StreamType, TimelineState,
+    VariantControl, WorkerWake,
 };
 use kithara_test_utils::kithara;
 
@@ -37,7 +37,6 @@ use crate::{
         },
         seek::{SeekContext, SeekRequest},
         source::StreamAudioSource,
-        stream::shared::SharedStream,
         track::{
             self, CurrentFsm, RebuildingDecoder, Track, TrackFailure, TrackStep, WaitingReason,
         },

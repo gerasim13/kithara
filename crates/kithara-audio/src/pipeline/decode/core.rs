@@ -11,7 +11,7 @@ use kithara_decode::{
 };
 use kithara_events::{DeferredBus, Event};
 use kithara_platform::sync::Arc;
-use kithara_stream::{MediaInfo, PlayheadWrite, SeekObserve, StreamType};
+use kithara_stream::{MediaInfo, PlayheadWrite, SeekObserve, SharedStream, StreamType};
 use kithara_test_utils::kithara;
 use tracing::{debug, warn};
 
@@ -22,7 +22,6 @@ use crate::{
         gapless::GaplessStage,
         rebuild::RecreateState,
         seek::{ResumeState, SeekEngine, emit::commit_outcome},
-        stream::shared::SharedStream,
         track::{TrackFailure, WaitingReason},
     },
     renderer::{apply_effects, reset_effects},

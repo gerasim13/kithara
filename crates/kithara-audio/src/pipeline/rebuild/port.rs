@@ -8,7 +8,7 @@ use kithara_platform::{
     sync::Arc,
     tokio::{runtime::Handle as RuntimeHandle, task::spawn_blocking_on},
 };
-use kithara_stream::{MediaInfo, StreamType, WorkerWake};
+use kithara_stream::{MediaInfo, SharedStream, StreamType, WorkerWake};
 use tracing::warn;
 
 use crate::pipeline::{
@@ -20,7 +20,6 @@ use crate::pipeline::{
             RecreateState,
         },
     },
-    stream::shared::SharedStream,
 };
 
 struct JobDeps<T: StreamType> {

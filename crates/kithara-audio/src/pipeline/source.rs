@@ -2,11 +2,11 @@ use arc_swap::ArcSwap;
 use kithara_decode::PcmChunk;
 use kithara_events::{AudioEvent, DeferredBus, Event, TrackFailureKind};
 use kithara_platform::sync::Arc;
-use kithara_stream::{Activity, PlayheadWrite, SeekControl, SeekObserve, StreamType};
+use kithara_stream::{Activity, PlayheadWrite, SeekControl, SeekObserve, SharedStream, StreamType};
 
 pub(crate) use crate::pipeline::{
     decode::core::{DecodeCore, DecodeInit, DecoderFactory},
-    stream::{offset::OffsetReader, shared::SharedStream},
+    stream::offset::OffsetReader,
 };
 use crate::{
     pipeline::{

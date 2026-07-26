@@ -1,13 +1,12 @@
 use kithara_decode::DecoderSeekOutcome;
 use kithara_events::{AudioEvent, DeferredBus, Event, SeekLifecycleStage, SegmentLocation};
 use kithara_platform::time::Duration;
-use kithara_stream::{PlayheadWrite, SeekObserve, StreamType};
+use kithara_stream::{PlayheadWrite, SeekObserve, SharedStream, StreamType};
 
 use crate::pipeline::{
     decode::{DecoderSession, core::DecodeCore},
     rebuild::{RecreateNext, RecreateState},
     seek::SeekEngine,
-    stream::shared::SharedStream,
     track::{CurrentFsm, WaitContext},
 };
 

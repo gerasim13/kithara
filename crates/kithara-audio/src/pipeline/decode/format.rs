@@ -1,11 +1,10 @@
 use kithara_decode::DecodeError;
-use kithara_stream::{MediaInfo, SeekObserve, StreamType};
+use kithara_stream::{MediaInfo, SeekObserve, SharedStream, StreamType};
 
 use crate::pipeline::{
     decode::DecoderSession,
     rebuild::{RecreateCause, RecreateNext, RecreateState},
     seek::anchor::variant_boundary,
-    stream::shared::SharedStream,
 };
 
 pub(crate) enum FormatDecision {

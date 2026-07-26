@@ -1,8 +1,8 @@
 use kithara_decode::{PcmChunk, PcmSpec};
 use kithara_platform::time::Duration;
-use kithara_stream::StreamType;
+use kithara_stream::{SharedStream, StreamType};
 
-use crate::pipeline::{decode::DecoderSession, seek::ResumeState, stream::shared::SharedStream};
+use crate::pipeline::{decode::DecoderSession, seek::ResumeState};
 
 struct Consts;
 

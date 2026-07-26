@@ -18,8 +18,7 @@ pub(crate) use crate::{
         parts::SourceParts,
         rebuild::port::RebuildRuntime,
         source::{
-            DecodeInit, DecoderFactory as StreamDecoderFactory, OffsetReader, SharedStream,
-            StreamAudioSource,
+            DecodeInit, DecoderFactory as StreamDecoderFactory, OffsetReader, StreamAudioSource,
         },
     },
     renderer::{ThreadWake, TrackId, TrackRegistration, WorkerWakeBridge},

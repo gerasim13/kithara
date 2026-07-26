@@ -1,7 +1,7 @@
 use std::sync::atomic::AtomicU64;
 
 use kithara_platform::sync::Arc;
-use kithara_stream::{Activity, PlayheadWrite, SeekControl, SeekObserve, StreamType};
+use kithara_stream::{Activity, PlayheadWrite, SeekControl, SeekObserve, SharedStream, StreamType};
 
 use crate::pipeline::{
     decode::{
@@ -11,7 +11,6 @@ use crate::pipeline::{
     },
     rebuild::port::{RebuildPort, RebuildRuntime},
     seek::SeekEngine,
-    stream::shared::SharedStream,
 };
 
 pub(crate) struct SourceParts<T: StreamType> {

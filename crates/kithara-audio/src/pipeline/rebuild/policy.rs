@@ -1,10 +1,9 @@
 use kithara_decode::{DecodeError, ErrorClass};
-use kithara_stream::{MediaInfo, SeekObserve, StreamType};
+use kithara_stream::{MediaInfo, SeekObserve, SharedStream, StreamType};
 
 use crate::pipeline::{
     rebuild::state::{RebuildState, RecreateOutcome, RecreateState},
     seek::{SeekContext, SeekRequest},
-    stream::shared::SharedStream,
 };
 
 pub(crate) fn classify(error: &DecodeError) -> RecreateOutcome {

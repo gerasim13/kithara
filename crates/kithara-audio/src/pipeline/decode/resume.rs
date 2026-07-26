@@ -2,14 +2,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use kithara_decode::{DecoderSeekOutcome, PcmChunk, duration_for_frames};
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_stream::{SourceSeekAnchor, StreamType};
+use kithara_stream::{SharedStream, SourceSeekAnchor, StreamType};
 use tracing::warn;
 
 use crate::pipeline::{
     decode::DecoderSession,
     rebuild::{RecreateCause, RecreateNext, RecreateState},
     seek::{SeekContext, SeekEngine, SeekRequest},
-    stream::shared::SharedStream,
 };
 
 pub(crate) struct ResumeCursor {

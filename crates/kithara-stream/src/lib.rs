@@ -15,6 +15,7 @@ mod hooks;
 mod media;
 mod playhead;
 mod preroll;
+mod shared;
 mod source;
 mod stream;
 mod timeline;
@@ -28,6 +29,7 @@ pub use hooks::{BoxedEventSink, ReaderChunkSignal, ReaderEventSink, ReaderSeekSi
 pub use media::{AudioCodec, ContainerFormat, MediaInfo, needs_exact_byte_sizes};
 pub use playhead::{ChunkPosition, PlayheadRead, PlayheadState, PlayheadWrite};
 pub use preroll::PrerollHint;
+pub use shared::SharedStream;
 pub use source::{
     ByteMap, NotReadyCause, PendingReason, ReadOutcome, SegmentDescriptor, Source, SourcePhase,
     SourceSeekAnchor, VariantControl,

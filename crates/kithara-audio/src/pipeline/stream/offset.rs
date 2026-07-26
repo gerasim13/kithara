@@ -1,9 +1,7 @@
 use std::io::{self, Read, Seek, SeekFrom};
 
 use delegate::delegate;
-use kithara_stream::StreamType;
-
-use super::shared::SharedStream;
+use kithara_stream::{SharedStream, StreamType};
 
 /// Reader that offsets all positions by a base offset.
 ///
