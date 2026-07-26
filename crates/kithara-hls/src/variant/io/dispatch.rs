@@ -9,11 +9,15 @@ use crate::segment::{Downloading, FetchClaim, PlannedFetch, Segment};
 impl ReadLease {
     #[kithara::probe(
         variant = self.variant.index() as u64,
-        budget = budget as u64,
+        budget = *remaining as u64,
         queue_len = self.queue.lock().len() as u64
     )]
     #[kithara::hang_watchdog]
-    pub(crate) fn dispatch(self: &Arc<Self>, ctx: &PlanCtx, budget: usize) -> Vec<FetchCmd> {
+    pub(crate) fn dispatch(
+        self: &Arc<Self>,
+        ctx: &PlanCtx,
+        remaining: &mut usize,
+    ) -> Vec<FetchCmd> {
         let mut out = Vec::new();
         // Popped segments that could not be dispatched this pass but are NOT
         // terminal (a slot still `Downloading` under an orphaned/in-flight
@@ -25,14 +29,13 @@ impl ReadLease {
         // references it, so it is never re-fetched and the reader hangs (the
         // `player_worker_hls_then_unavailable_mp3_then_mp3_recovery` deadlock).
         let mut deferred: Vec<PlannedFetch> = Vec::new();
-        let mut remaining = budget;
-        self.dispatch_size_demands(ctx, &mut out, &mut remaining);
+        self.dispatch_size_demands(ctx, &mut out, remaining);
         let prefetch_base = self.get_position().max(self.prefetch_anchor());
         let prefetch_byte_cap = ctx
             .look_ahead_bytes
             .map(|n| prefetch_base.saturating_add(n));
         let prefetch_segment_cap = self.prefetch_segment_cap(ctx, prefetch_base);
-        while remaining > 0 {
+        while *remaining > 0 {
             hang_tick!();
             let planned = {
                 let mut queue = self.queue.lock();
@@ -122,7 +125,7 @@ impl ReadLease {
                     }
                 }
             }
-            remaining -= 1;
+            *remaining -= 1;
         }
         if !deferred.is_empty() {
             let mut queue = self.queue.lock();

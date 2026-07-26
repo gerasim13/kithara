@@ -38,6 +38,10 @@ impl SizeDemandState {
         self.inflight.remove(&demand);
     }
 
+    pub(super) fn is_pending(&self) -> bool {
+        !self.queue.is_empty()
+    }
+
     fn pop_dispatchable(&mut self) -> Option<SizeDemand> {
         while let Some(demand) = self.queue.pop_front() {
             self.queued.remove(&demand);

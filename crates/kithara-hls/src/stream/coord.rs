@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    cmp::Reverse,
     ops::Range,
     sync::atomic::{AtomicU64, AtomicUsize, Ordering},
 };
@@ -17,9 +18,9 @@ use kithara_platform::{
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, ByteMap, ContainerFormat, DeferredWake, MediaInfo, PendingReason, PlayheadRead,
-    PlayheadState, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SegmentDescriptor,
-    SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult, TimelineState,
-    VariantControl,
+    PlayheadState, PlayheadWrite, Publication, ReadOutcome, SeekControl, SeekObserve,
+    SegmentDescriptor, SessionId, SourceError, SourcePhase, SourceSeekAnchor, StreamError,
+    StreamResult, TimelineState, VariantControl,
     dl::{FetchCmd, FetchScope},
 };
 use kithara_test_utils::kithara;
@@ -96,6 +97,10 @@ pub(crate) struct HlsCoord {
     /// so a second session could plan an incoming variant without disturbing
     /// this one.
     session: ReadSession,
+    /// Which session speaks for the stream. Its consumed-to frontier is what
+    /// [`Self::position`] reports; a session built ahead of time reads without
+    /// moving it.
+    publication: Arc<Publication>,
     /// Last generation acknowledged by the reader. When `<
     /// variant_generation` the read gate is closed; when equal the gate
     /// is open. [`Self::clear_variant_fence`] copies the current
@@ -155,9 +160,18 @@ impl HlsCoord {
         );
         let seek_obs = Arc::clone(&seek) as Arc<dyn SeekObserve>;
         let playhead_read = Arc::clone(&playhead) as Arc<dyn PlayheadRead>;
-        let session = ReadSession::new(Arc::clone(&seek_obs), &variants);
+        // The reader that opens the track is the one that speaks for it.
+        let audible = SessionId::from(1);
+        let publication = Arc::new(Publication::new(audible));
+        let session = ReadSession::new(
+            audible,
+            Arc::clone(&seek_obs),
+            Arc::clone(&publication),
+            &variants,
+        );
         Self {
             session,
+            publication,
             playhead,
             seek,
             seek_obs,
@@ -637,11 +651,42 @@ impl HlsCoord {
         self.active_lease()?.rebuild_at_time(ctx, target)
     }
 
-    /// Ask the audible lease for the next batch of fetches.
+    /// Spend one poll's fetch budget across the serving leases, most starved
+    /// first. One lease takes all of it, as it always has; the ordering is
+    /// what keeps a second one from being talked over once a transition opens.
     pub(crate) fn dispatch(&self, ctx: &PlanCtx, budget: usize) -> Vec<FetchCmd> {
-        self.active_lease()
-            .map(|lease| lease.dispatch(ctx, budget))
-            .unwrap_or_default()
+        // A lease can hold priority for at most this many polls after being
+        // unstuck. Derived from the budget rather than a constant of its own:
+        // the debt that matters is measured in polls' worth of commands.
+        let cap = ctx.prefetch_budget.saturating_mul(2);
+        let audible = self.variant_index();
+        let mut serving: Vec<&Arc<ReadLease>> = self.serving_leases().collect();
+        // Most starved first; at equal starvation the ear wins, then the
+        // lower variant index — deterministic for any number of leases.
+        serving.sort_by_key(|lease| {
+            (
+                Reverse(lease.deficit()),
+                lease.variant_index() != audible,
+                lease.variant_index(),
+            )
+        });
+        let mut remaining = budget;
+        let mut out = Vec::new();
+        for lease in serving {
+            let eligible = lease.has_eligible_work();
+            if !eligible {
+                continue;
+            }
+            let before = remaining;
+            out.extend(lease.dispatch(ctx, &mut remaining));
+            let spent = before.saturating_sub(remaining);
+            if spent == 0 {
+                lease.accrue(cap);
+            } else {
+                lease.debit(spent);
+            }
+        }
+        out
     }
 
     /// Mirror `abr.lock()` state to `seek_obs.is_pending()`.
@@ -840,9 +885,9 @@ impl HlsCoord {
             pub(crate) fn download_head(&self) -> u32;
             pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
         }
-        to self.session {
-            /// The byte the audible reader has consumed up to — what the
-            /// stream publishes as its position.
+        to self.publication {
+            /// What the stream reports as its position: the consumed-to
+            /// frontier of the session holding the publication token.
             pub(crate) fn position(&self) -> u64;
         }
     }

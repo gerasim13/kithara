@@ -16,8 +16,8 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    AudioCodec, ContainerFormat, ReadOutcome, SeekControl, SeekObserve, SourceError, SourcePhase,
-    StreamError, TimelineState,
+    AudioCodec, ContainerFormat, Publication, ReadOutcome, SeekControl, SeekObserve, SessionId,
+    SourceError, SourcePhase, StreamError, TimelineState,
 };
 use kithara_test_utils::kithara;
 use url::Url;
@@ -173,18 +173,21 @@ fn make_variant(
 
 /// The one lease of a fresh single-reader session over `variant`.
 fn lease_over(variant: Arc<HlsVariant>, seek_obs: Arc<dyn SeekObserve>) -> Arc<ReadLease> {
-    let session = ReadSession::new(seek_obs, std::slice::from_ref(&variant));
-    Arc::clone(session.lease(0).expect("session vends a lease per variant"))
+    let (_publication, leases) = session_over(std::slice::from_ref(&variant), seek_obs);
+    Arc::clone(&leases[0])
 }
 
 /// Leases of ONE session over several variants — they share the byte cursor,
-/// which is what makes a variant switch continuous for the reader.
+/// which is what makes a variant switch continuous for the reader. The session
+/// holds the publication token, so its progress is what the stream reports.
 fn session_over(
     variants: &[Arc<HlsVariant>],
     seek_obs: Arc<dyn SeekObserve>,
-) -> Vec<Arc<ReadLease>> {
-    let session = ReadSession::new(seek_obs, variants);
-    session.leases().map(Arc::clone).collect()
+) -> (Arc<Publication>, Vec<Arc<ReadLease>>) {
+    let id = SessionId::from(1);
+    let publication = Arc::new(Publication::new(id));
+    let session = ReadSession::new(id, seek_obs, Arc::clone(&publication), variants);
+    (publication, session.leases().map(Arc::clone).collect())
 }
 
 fn make_playlist_state(
@@ -789,7 +792,7 @@ fn variant_init_not_applicable_no_acquire() {
         !queue_has_init(&v),
         "a None init slot must never enqueue PlannedFetch::Init"
     );
-    v.dispatch(&ctx, 10);
+    v.dispatch(&ctx, &mut 10);
     assert_eq!(
         claimed(&v),
         vec![PlannedFetch::Segment(0), PlannedFetch::Segment(1)],
@@ -818,7 +821,7 @@ fn variant_init_pending_for_fmp4() {
         queue_has_init(&v),
         "Pending init must enqueue PlannedFetch::Init first"
     );
-    v.dispatch(&ctx, 10);
+    v.dispatch(&ctx, &mut 10);
     assert_eq!(
         claimed(&v),
         vec![
@@ -1146,7 +1149,7 @@ fn dispatch_fetches_init_before_any_segment() {
     let v = make_var(0, 200, &[400, 400, 400], &ctx);
     v.rebuild(&ctx, 0);
 
-    v.dispatch(&ctx, 1);
+    v.dispatch(&ctx, &mut 1);
     assert_eq!(
         claimed(&v),
         vec![PlannedFetch::Init],
@@ -1154,7 +1157,7 @@ fn dispatch_fetches_init_before_any_segment() {
          needs it before any segment can decode"
     );
 
-    v.dispatch(&ctx, 10);
+    v.dispatch(&ctx, &mut 10);
     assert_eq!(
         claimed(&v),
         vec![
@@ -1171,7 +1174,7 @@ fn dispatch_respects_budget() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100; 10], &ctx);
     v.rebuild(&ctx, 0);
-    v.dispatch(&ctx, 3);
+    v.dispatch(&ctx, &mut 3);
     assert_eq!(
         claimed(&v),
         vec![
@@ -1191,7 +1194,7 @@ fn dispatch_respects_segment_lookahead_cap() {
     let v = make_var(0, 0, &[100; 6], &ctx);
     v.rebuild(&ctx, 0);
 
-    v.dispatch(&ctx, 10);
+    v.dispatch(&ctx, &mut 10);
 
     assert_eq!(
         claimed(&v),
@@ -1210,7 +1213,7 @@ fn dispatch_skips_non_missing_segments() {
     for seg in 0..3_u32 {
         push_planned(&v, seg);
     }
-    v.dispatch(&ctx, 10);
+    v.dispatch(&ctx, &mut 10);
     assert_eq!(
         claimed(&v),
         vec![PlannedFetch::Segment(0), PlannedFetch::Segment(2)],
@@ -1243,7 +1246,7 @@ fn dispatch_requeues_orphaned_downloading_segment() {
     }
 
     // First dispatch: seg 0 + seg 2 claim; seg 1 is Downloading -> claim fails.
-    v.dispatch(&ctx, 10);
+    v.dispatch(&ctx, &mut 10);
     assert_eq!(
         claimed(&v),
         vec![
@@ -1265,7 +1268,7 @@ fn dispatch_requeues_orphaned_downloading_segment() {
     // A later dispatch (reader re-aim / next poll) MUST re-fetch seg 1. Before
     // the fix the segment was popped+dropped from the queue and lost, so this
     // claimed nothing and the reader hung.
-    v.dispatch(&ctx, 10);
+    v.dispatch(&ctx, &mut 10);
     assert!(
         v.segments()[1].state().is_downloading(),
         "seg 1 (orphaned -> Missing) must be re-dispatched, not lost from the queue"
@@ -1353,13 +1356,13 @@ fn raw_byte_seek_registers_lazy_exact_demand_only_after_cursor_moves() {
 
     v.set_position(0);
     assert!(
-        v.dispatch(&ctx, 3).is_empty(),
+        v.dispatch(&ctx, &mut 3).is_empty(),
         "a no-op seek to the current cursor must not issue startup size probes"
     );
 
     v.set_position(512);
     assert_eq!(v.phase_at(512..513), SourcePhase::WaitingDemand);
-    let cmds = v.dispatch(&ctx, 3);
+    let cmds = v.dispatch(&ctx, &mut 3);
     assert_eq!(
         cmds.len(),
         3,
@@ -1368,7 +1371,7 @@ fn raw_byte_seek_registers_lazy_exact_demand_only_after_cursor_moves() {
     assert_eq!(cmds[0].url, v.segments()[0].url().clone());
     assert_eq!(cmds[1].url, v.segments()[1].url().clone());
     assert_eq!(cmds[2].url, v.segments()[2].url().clone());
-    let cmds = v.dispatch(&ctx, 3);
+    let cmds = v.dispatch(&ctx, &mut 3);
     assert_eq!(cmds.len(), 3);
     assert_eq!(cmds[0].url, v.segments()[3].url().clone());
     assert_eq!(cmds[1].url, v.segments()[4].url().clone());
@@ -1498,7 +1501,7 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
     .into_variant(0, &ctx);
     let v = lease_over(v, Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>);
     push_planned(&v, 0);
-    v.dispatch(&ctx, 10);
+    v.dispatch(&ctx, &mut 10);
     assert_eq!(claimed(&v), vec![PlannedFetch::Segment(0)]);
     assert!(
         v.segments()[0].process().is_some(),
@@ -1507,7 +1510,7 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
     );
 
     push_planned(&v, 0);
-    v.dispatch(&ctx, 10);
+    v.dispatch(&ctx, &mut 10);
     assert_eq!(
         queue_seg_indices(&v),
         vec![0],
@@ -1589,7 +1592,7 @@ fn committed_segment_source_attaches_lazily_without_dispatch() {
 
     push_planned(&v, 0);
     assert!(
-        v.dispatch(&ctx, 1).is_empty(),
+        v.dispatch(&ctx, &mut 1).is_empty(),
         "committed source must retain the cached dispatch fast path"
     );
 }
@@ -1610,7 +1613,7 @@ fn an_unsettled_claim_reverts_the_segment_to_missing() {
     drop(claim);
 
     push_planned(&v, 0);
-    v.dispatch(&ctx, 10);
+    v.dispatch(&ctx, &mut 10);
     assert_eq!(
         claimed(&v),
         vec![PlannedFetch::Segment(0)],
@@ -1687,7 +1690,7 @@ fn dispatch_skips_loaded_segments_in_queue_without_burning_budget() {
     v.segments()[10].state().mark_loaded();
 
     v.rebuild(&ctx, 10);
-    v.dispatch(&ctx, 3);
+    v.dispatch(&ctx, &mut 3);
     assert_eq!(
         claimed(&v),
         vec![
@@ -1783,7 +1786,7 @@ fn one_sessions_leases_share_its_cursor() {
         make_variant(0, 0, &[100, 100, 100], &ctx),
         make_variant(1, 0, &[100, 100, 100], &ctx),
     ];
-    let leases = session_over(
+    let (publication, leases) = session_over(
         &variants,
         Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
     );
@@ -1793,6 +1796,11 @@ fn one_sessions_leases_share_its_cursor() {
         leases[1].get_position(),
         240,
         "the lease taking over reads from where the reader already is"
+    );
+    assert_eq!(
+        publication.position(),
+        240,
+        "and the stream reports the holder's frontier, whichever lease moved it"
     );
 
     leases[1].advance(60);
@@ -1808,7 +1816,7 @@ fn leases_plan_their_own_variant_only() {
         make_variant(0, 0, &[100, 100, 100], &ctx),
         make_variant(1, 0, &[100, 100, 100], &ctx),
     ];
-    let leases = session_over(
+    let (_publication, leases) = session_over(
         &variants,
         Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
     );
@@ -1818,4 +1826,46 @@ fn leases_plan_their_own_variant_only() {
 
     assert_eq!(queue_seg_indices(&leases[0]), vec![0, 1, 2]);
     assert_eq!(queue_seg_indices(&leases[1]), vec![2]);
+}
+
+/// The starvation counter is bounded: a lease that goes unserved for a long
+/// time can hold priority for a while after it unsticks, but not forever.
+#[kithara::test]
+fn a_lease_falls_behind_only_up_to_the_cap() {
+    let ctx = test_ctx(2);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+
+    for _ in 0..10 {
+        v.accrue(3);
+    }
+
+    assert_eq!(v.deficit(), 3);
+}
+
+/// Commands pay the debt back, and never past zero.
+#[kithara::test]
+fn emitting_pays_the_deficit_back_and_stops_at_zero() {
+    let ctx = test_ctx(2);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    v.accrue(4);
+    v.accrue(4);
+
+    v.debit(1);
+    assert_eq!(v.deficit(), 1);
+
+    v.debit(5);
+    assert_eq!(v.deficit(), 0, "a lease cannot be owed budget");
+}
+
+/// A lease with an empty plan and no size to learn is skipped: it consumes no
+/// budget, so it is not the reason anyone else went unserved.
+#[kithara::test]
+fn a_lease_with_nothing_to_do_is_not_eligible() {
+    let ctx = test_ctx(2);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+
+    assert!(!v.has_eligible_work(), "a fresh lease has planned nothing");
+
+    v.rebuild(&ctx, 0);
+    assert!(v.has_eligible_work());
 }
