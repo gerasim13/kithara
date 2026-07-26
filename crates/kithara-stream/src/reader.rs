@@ -74,15 +74,27 @@ pub struct CursorReader<T: StreamType> {
 
 impl<T: StreamType> CursorReader<T> {
     fn new(shared: SharedStream<T>, hint: ReaderHint) -> Self {
-        // Aim the stream at the session's start before anyone reads: the
-        // decoder's first read has to land on its own segment, and its first
-        // `seek` may never come. A target the stream cannot resolve yet is
-        // not an error here — the read that follows discovers it.
-        let _ = shared.probe_seek(SeekFrom::Start(hint.base_offset));
-        Self {
+        let reader = Self {
             shared,
             base_offset: hint.base_offset,
             wait: hint.wait,
+        };
+        // Aim the stream at the session's start before anyone reads: the
+        // decoder's first read has to land on its own segment, and its first
+        // `seek` may never come. Position math only, never the priming seek,
+        // whatever the session's wait mode: opening a session must not wait
+        // for bytes nobody has asked for yet. A target the stream cannot
+        // resolve yet is not an error here — the read that follows discovers
+        // it.
+        let _ = reader.shared.probe_seek(SeekFrom::Start(hint.base_offset));
+        reader
+    }
+
+    /// Seek in the stream's own coordinates, the way this session waits.
+    fn seek_absolute(&self, target: SeekFrom) -> io::Result<u64> {
+        match self.wait {
+            WaitMode::Probe => self.shared.probe_seek(target),
+            WaitMode::Block => self.shared.blocking_seek(target),
         }
     }
 }
@@ -113,9 +125,9 @@ impl<T: StreamType> Read for CursorReader<T> {
 }
 
 impl<T: StreamType> Seek for CursorReader<T> {
-    /// Always the on-core [`SharedStream::probe_seek`]: a decoder runs on the
-    /// produce core, where the off-RT adapter's inline priming is not allowed
-    /// to spin.
+    /// Seeks the way the session reads: a `Probe` session feeds the produce
+    /// core, where the off-RT adapter's inline priming is not allowed to spin;
+    /// a `Block` session is already off that core and may prime.
     ///
     /// `Start` is the only variant the base offset applies to going in —
     /// `Current` and `End` are already expressed against the stream's own
@@ -126,7 +138,7 @@ impl<T: StreamType> Seek for CursorReader<T> {
             SeekFrom::Start(p) => SeekFrom::Start(self.base_offset.saturating_add(p)),
             other => other,
         };
-        let landed = self.shared.probe_seek(target)?;
+        let landed = self.seek_absolute(target)?;
         Ok(landed.saturating_sub(self.base_offset))
     }
 }
@@ -150,6 +162,7 @@ mod tests {
         sync::atomic::{AtomicU64, Ordering},
     };
 
+    use kithara_platform::sync::Mutex;
     use kithara_storage::WaitOutcome;
     use kithara_test_utils::kithara;
 
@@ -165,6 +178,10 @@ mod tests {
         position: Arc<AtomicU64>,
         seek: Arc<TimelineState>,
         playhead: Arc<PlayheadState>,
+        /// Timeout each `wait_range` was given. `Some` is a bounded probe,
+        /// `None` is an unbounded park — which is how a reader's wait mode
+        /// becomes visible at the source boundary.
+        waits: Arc<Mutex<Vec<Option<Duration>>>>,
     }
 
     impl Source for FlatSource {
@@ -186,15 +203,18 @@ mod tests {
         fn wait_range(
             &mut self,
             _range: Range<u64>,
-            _timeout: Option<Duration>,
+            timeout: Option<Duration>,
         ) -> StreamResult<WaitOutcome> {
+            self.waits.lock().push(timeout);
             Ok(WaitOutcome::Ready)
         }
         fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> StreamResult<ReadOutcome> {
             Ok(ReadOutcome::Eof)
         }
+        /// Never resident, so a priming seek actually reaches `wait_range`
+        /// instead of taking the cache-hit short circuit.
         fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
-            SourcePhase::Ready
+            SourcePhase::Waiting
         }
         fn len(&self) -> Option<u64> {
             Some(LEN)
@@ -224,18 +244,23 @@ mod tests {
         }
     }
 
-    fn shared() -> SharedStream<FlatType> {
-        SharedStream::new(Stream::<FlatType> {
+    type Waits = Arc<Mutex<Vec<Option<Duration>>>>;
+
+    fn shared() -> (SharedStream<FlatType>, Waits) {
+        let waits: Waits = Arc::new(Mutex::new(Vec::new()));
+        let stream = SharedStream::new(Stream::<FlatType> {
             source: FlatSource {
                 position: Arc::new(AtomicU64::new(0)),
                 seek: Arc::new(TimelineState::new()),
                 playhead: Arc::new(PlayheadState::new()),
+                waits: Arc::clone(&waits),
             },
-        })
+        });
+        (stream, waits)
     }
 
     fn reader_at(base: u64) -> (SharedStream<FlatType>, CursorReader<FlatType>) {
-        let shared = shared();
+        let (shared, _waits) = shared();
         let reader = shared.open_reader(ReaderHint::builder().base_offset(base).build());
         (shared, reader)
     }
@@ -287,6 +312,56 @@ mod tests {
         let (_shared, mut reader) = reader_at(LEN + 10);
 
         assert_eq!(reader.seek(SeekFrom::Start(0)).expect("seek"), 0);
+    }
+
+    /// Whether a read waits belongs to the session, not to the stream: one
+    /// session can be building a decoder off the real-time path and want to
+    /// park, while another feeds the produce core over the same stream and
+    /// must never block. Two readers, one stream, two answers.
+    #[kithara::test]
+    fn two_sessions_over_one_stream_wait_differently() {
+        let (shared, waits) = shared();
+        let mut probe = shared.open_reader(ReaderHint::builder().build());
+        let mut block = shared.open_reader(ReaderHint::builder().wait(WaitMode::Block).build());
+        let mut buf = [0_u8; 8];
+
+        waits.lock().clear();
+        let _ = probe.read(&mut buf);
+        let probed = waits.lock().clone();
+        assert!(
+            !probed.is_empty() && probed.iter().all(Option::is_some),
+            "a probe session waits on a budget: {probed:?}"
+        );
+
+        waits.lock().clear();
+        let _ = block.read(&mut buf);
+        let blocked = waits.lock().clone();
+        assert!(
+            !blocked.is_empty() && blocked.iter().all(Option::is_none),
+            "a block session parks until the range resolves: {blocked:?}"
+        );
+    }
+
+    /// A seek waits the same way its session reads. A block session is off the
+    /// produce core, so its seek may prime the target range; a probe session
+    /// does position math only and discovers lateness at the read.
+    #[kithara::test]
+    fn a_seek_primes_only_for_the_session_that_waits() {
+        let (shared, waits) = shared();
+        let mut probe = shared.open_reader(ReaderHint::builder().build());
+        let mut block = shared.open_reader(ReaderHint::builder().wait(WaitMode::Block).build());
+
+        waits.lock().clear();
+        probe.seek(SeekFrom::Start(10)).expect("probe seek");
+        assert!(waits.lock().is_empty(), "a probe seek does not prime");
+
+        waits.lock().clear();
+        block.seek(SeekFrom::Start(10)).expect("block seek");
+        let primed = waits.lock().clone();
+        assert!(
+            !primed.is_empty() && primed.iter().all(Option::is_none),
+            "a block seek primes its target range: {primed:?}"
+        );
     }
 
     /// What the decoder is told about length is what IT can address, not what

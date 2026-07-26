@@ -405,7 +405,7 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
     let backend = decoder_backend();
     let initial_byte_len = Arc::new(AtomicU64::new(0));
     let initial_decoder = DecodeFactory::create_from_media_info(
-        shared_stream.clone(),
+        shared_stream.open_reader(ReaderHint::builder().build()),
         &media_info(Consts::SLQ_VARIANT),
         decoder_config(&shared_stream, backend, initial_byte_len),
     )

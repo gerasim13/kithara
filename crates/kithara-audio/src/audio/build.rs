@@ -17,7 +17,7 @@ use kithara_platform::{
 };
 use kithara_resampler::ResamplerBackend;
 use kithara_stream::{
-    MediaInfo, PlayheadRead, ReaderHint, SessionReader, SharedStream, Stream, StreamType,
+    MediaInfo, PlayheadRead, ReaderHint, SessionReader, SharedStream, Stream, StreamType, WaitMode,
     WorkerWake,
 };
 use portable_atomic::AtomicF32;
@@ -192,7 +192,6 @@ where
             pcm_buffer_chunks,
         );
 
-        shared_stream.set_blocking(true);
         let gapless_mode = decoder.gapless_mode();
         let deps = DecoderDeps::new(
             decoder,
@@ -206,9 +205,7 @@ where
             hint,
             &deps,
         )
-        .await;
-        shared_stream.set_blocking(false);
-        let decoder = decoder?;
+        .await?;
 
         let initial_spec = decoder.spec();
         let initial_track_info = decoder.track_info();
@@ -482,22 +479,27 @@ where
     T: StreamType,
     B: ResamplerBackend,
 {
+    // This build runs off the produce core, so its session is the one allowed
+    // to wait for bytes. The wait is the session's, not the stream's: the RT
+    // sessions opened later over the same stream keep probing.
+    let mut reader = shared_stream.open_reader(ReaderHint::builder().wait(WaitMode::Block).build());
+    let byte_len = reader.byte_len().unwrap_or(0);
     let config = DecoderConfig::builder()
         .backend(deps.decoder.backend())
         .blend(deps.decoder.blend())
-        .byte_len_handle(Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0))))
+        .byte_len_handle(Arc::new(AtomicU64::new(byte_len)))
         .pcm_pool(deps.pcm_pool.clone())
         .byte_pool(deps.byte_pool.clone())
-        .maybe_byte_map(shared_stream.byte_map())
-        .maybe_hooks(shared_stream.take_reader_event_sink())
+        .maybe_byte_map(reader.byte_map())
+        .maybe_hooks(reader.take_event_sink())
         .maybe_hint(hint.clone())
         .maybe_resampler(deps.resampler_config()?)
         .build();
     spawn_blocking(move || {
         if let Some(info) = &media_info {
-            DecoderFactory::create_from_media_info(shared_stream, info, config)
+            DecoderFactory::create_from_media_info(reader, info, config)
         } else {
-            DecoderFactory::create_with_probe(shared_stream, hint.as_deref(), config)
+            DecoderFactory::create_with_probe(reader, hint.as_deref(), config)
         }
     })
     .await
