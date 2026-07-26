@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use bon::Builder;
-use kithara_decode::{DecoderBackend, DecoderResamplerConfig, GaplessMode};
+use kithara_decode::{DecoderBackend, DecoderBlend, DecoderResamplerConfig, GaplessMode};
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
 
 #[derive(Clone, Debug, Builder)]
@@ -54,6 +54,10 @@ where
 pub struct AudioDecoderConfig<B = NoResamplerBackend> {
     #[builder(default)]
     pub(crate) backend: DecoderBackend,
+    /// What the blender does when this decoder generation hands off to the
+    /// next. Forwarded to the decoder, which owns the policy.
+    #[builder(default)]
+    pub(crate) blend: DecoderBlend,
     #[builder(default)]
     pub(crate) gapless_mode: GaplessMode,
     pub(crate) resampler: Option<DecoderResamplerSettings<B>>,
@@ -67,6 +71,12 @@ where
     #[must_use]
     pub fn backend(&self) -> DecoderBackend {
         self.backend
+    }
+
+    /// Return the decoder-transition blend policy.
+    #[must_use]
+    pub fn blend(&self) -> DecoderBlend {
+        self.blend
     }
 
     /// Return the gapless playback mode.
@@ -109,6 +119,7 @@ impl<B> Default for AudioDecoderConfig<B> {
     fn default() -> Self {
         Self {
             backend: DecoderBackend::default(),
+            blend: DecoderBlend::default(),
             gapless_mode: GaplessMode::default(),
             resampler: None,
         }

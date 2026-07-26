@@ -17,7 +17,11 @@ use tracing::{debug, warn};
 
 use crate::{
     pipeline::{
-        decode::{drain::EofDrain, resume::ResumeCursor},
+        decode::{
+            blend::{ActiveDecode, BlendSide},
+            drain::EofDrain,
+            resume::ResumeCursor,
+        },
         fetch::Fetch,
         gapless::GaplessStage,
         rebuild::RecreateState,
@@ -121,9 +125,10 @@ impl<T: StreamType> DecodeInit<T> {
 }
 
 pub(crate) struct DecodeCore {
-    session: DecoderSession,
+    /// Everything the blender is mixing. Always present, even at one input —
+    /// there is one PCM path, and `Single` is its one-input arm.
+    active: ActiveDecode,
     gapless_mode: GaplessMode,
-    gapless: GaplessStage,
     effects: Vec<Box<dyn AudioEffect>>,
     drain: EofDrain,
 }
@@ -156,16 +161,15 @@ impl DecodeCore {
     ) -> Self {
         let drain = EofDrain::new(effects.len());
         Self {
-            session,
+            active: ActiveDecode::Single(BlendSide::new(session, gapless)),
             gapless_mode,
-            gapless,
             effects,
             drain,
         }
     }
 
     pub(crate) fn session(&self) -> &DecoderSession {
-        &self.session
+        &self.active.audible().session
     }
 
     pub(crate) fn gapless_mode(&self) -> GaplessMode {
@@ -178,17 +182,18 @@ impl DecodeCore {
     }
 
     pub(crate) fn notify_seek(&mut self) {
-        self.gapless.notify_seek();
+        self.active.audible_mut().gapless.notify_seek();
     }
 
     pub(crate) fn set_tail_compensation(&mut self) {
-        self.gapless
-            .set_tail_compensation(self.session.decoder.track_info().gapless_tail);
-        self.gapless.flush();
+        let side = self.active.audible_mut();
+        side.gapless
+            .set_tail_compensation(side.session.decoder.track_info().gapless_tail);
+        side.gapless.flush();
     }
 
     pub(crate) fn push(&mut self, chunk: PcmChunk) {
-        self.gapless.push(chunk);
+        self.active.audible_mut().gapless.push(chunk);
     }
 
     pub(crate) fn track(
@@ -200,8 +205,10 @@ impl DecodeCore {
         self.drain.track(chunk, playhead, emit);
     }
 
+    /// One chunk out of the blender, with the effect chain applied once on top
+    /// of whatever it mixed.
     pub(crate) fn next_gapless(&mut self) -> Option<PcmChunk> {
-        while let Some(chunk) = self.gapless.next() {
+        while let Some(chunk) = self.active.next() {
             if let Some(output) = apply_effects(&mut self.effects, chunk) {
                 return Some(output);
             }
@@ -219,7 +226,9 @@ impl DecodeCore {
 
     #[kithara::rtsan_allow_blocking]
     pub(crate) fn next_chunk(&mut self, stream_position: u64) -> DecodeResult<DecoderChunkOutcome> {
-        let outcome = match catch_unwind(AssertUnwindSafe(|| self.session.decoder.next_chunk())) {
+        let outcome = match catch_unwind(AssertUnwindSafe(|| {
+            self.active.audible_mut().session.decoder.next_chunk()
+        })) {
             Ok(result) => result,
             Err(payload) => {
                 warn!(panic = %panic_message(payload), "decoder panicked during next_chunk");
@@ -254,7 +263,9 @@ impl DecodeCore {
         position: kithara_platform::time::Duration,
     ) -> DecodeResult<DecoderSeekOutcome> {
         let before = stream.position();
-        let outcome = match catch_unwind(AssertUnwindSafe(|| self.session.decoder.seek(position))) {
+        let outcome = match catch_unwind(AssertUnwindSafe(|| {
+            self.active.audible_mut().session.decoder.seek(position)
+        })) {
             Ok(result) => result,
             Err(payload) => {
                 warn!(panic = %panic_message(payload), "decoder panicked during seek");
@@ -264,7 +275,7 @@ impl DecodeCore {
             }
         };
         if let Ok(ref outcome) = outcome {
-            commit_outcome(&self.session, stream, playhead, outcome);
+            commit_outcome(&self.active.audible().session, stream, playhead, outcome);
         }
         debug!(
             ?position,
@@ -277,7 +288,7 @@ impl DecodeCore {
     }
 
     pub(crate) fn update_len(&self, len: u64) {
-        self.session.decoder.update_byte_len(len);
+        self.active.audible().session.decoder.update_byte_len(len);
     }
 
     pub(crate) fn install(
@@ -293,12 +304,19 @@ impl DecodeCore {
             base_offset: offset,
             installed_at_seek_epoch: seek_epoch,
         };
-        let old = mem::replace(&mut self.session, session);
+        // The replacement decoder takes over the audible side and keeps that
+        // side's gapless stage: the logical track is unchanged, only the
+        // generation decoding it.
+        let old = mem::replace(&mut self.active.audible_mut().session, session);
         old.decoder
     }
 
     pub(crate) fn flush_reader_signals(&mut self) {
-        self.session.decoder.flush_reader_signals();
+        self.active
+            .audible_mut()
+            .session
+            .decoder
+            .flush_reader_signals();
     }
 }
 

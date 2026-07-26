@@ -450,6 +450,7 @@ where
         // one replacing it reads.
         let config = DecoderConfig::builder()
             .backend(deps.decoder.decoder.backend())
+            .blend(deps.decoder.decoder.blend())
             .byte_len_handle(Arc::new(AtomicU64::new(byte_len)))
             .pcm_pool(deps.decoder.pcm_pool.clone())
             .byte_pool(deps.decoder.byte_pool.clone())
@@ -483,6 +484,7 @@ where
 {
     let config = DecoderConfig::builder()
         .backend(deps.decoder.backend())
+        .blend(deps.decoder.blend())
         .byte_len_handle(Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0))))
         .pcm_pool(deps.pcm_pool.clone())
         .byte_pool(deps.byte_pool.clone())
