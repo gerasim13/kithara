@@ -58,6 +58,39 @@ Defined here as the single source of truth and re-exported by other crates:
 4. `Source::read_at(offset, buf)` performs the actual sync copy once the range is present.
 5. Cancellation flows top-down through the cancel-token hierarchy described in `crates/kithara-play/CONTEXT.md`.
 
+## Reading sessions
+
+`SharedStream::open_reader(ReaderHint)` vends a `CursorReader` — one reading
+session. Everything a decoder needs comes from it (`Read + Seek` plus
+`byte_len`/`byte_map`/`take_event_sink`), so no caller assembles a reader from
+pieces read off the stream beside it.
+
+A session answers three questions, each owned by exactly one axis:
+
+- **`base_offset` — where its zero is.** A decoder rebuilt at a mid-stream
+  boundary addresses its segment from 0 while the bytes live wherever the
+  stream keeps them. Only `SeekFrom::Start` is rebased going in; all three
+  variants report back from the session's zero.
+- **`WaitMode` — whether a read waits.** `Probe` feeds the produce core and
+  must never block; `Block` is off it and parks event-driven. The mode governs
+  seeks too: a `Block` session seeks through the priming `Stream::seek`, a
+  `Probe` session through `probe_seek`, which does position math only. This is
+  the session's property, never the stream's, so two sessions over one stream
+  can answer it differently — that is what lets a decoder be prepared off-core
+  while another one is audible. Opening a session is always position math,
+  whatever the mode: it must not wait for bytes nobody has asked for yet.
+- **`Frontier` — whether what it consumes is the track's position.**
+  `Published` reads through the stream's own cursor and credits consumed bytes
+  back to it. It deliberately has no private copy: that cursor IS the track's
+  position, an externally applied seek re-aims it, and a private copy would
+  silently stop following the track. `Private` owns its byte position; its
+  reads and seeks leave the stream's cursor alone, so preparing a decoder
+  nobody hears cannot move the track under the session that is audible.
+
+`Stream<T>` itself still implements `Read + Seek` for byte-only consumers; that
+surface is the degenerate case — the stream as its own published session over
+its whole self.
+
 ### End-of-stream contract
 
 `Stream::try_read` surfaces `StreamReadOutcome::Eof` only from a `Source` that proves the end is genuinely reached — `WaitOutcome::Eof` from `wait_range` or `ReadOutcome::Eof` from `read_at`. A `Source` must **never** mint `Eof` for an in-range range whose bytes have not yet arrived; that case is `WaitBudgetExceeded`/`Pending(NotReady)` so the reader holds at need-data. Per source:

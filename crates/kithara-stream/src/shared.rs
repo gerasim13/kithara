@@ -1,5 +1,5 @@
 use std::{
-    io::{self, Read, Seek, SeekFrom},
+    io::{self, SeekFrom},
     ops::Range,
 };
 
@@ -30,7 +30,8 @@ impl<T: StreamType> SharedStream<T> {
         }
     }
 
-    /// Off-real-time read: parks event-driven until the range resolves.
+    /// Off-real-time read from the session's own byte position: parks
+    /// event-driven until the range resolves.
     ///
     /// Reached only through a [`CursorReader`](crate::CursorReader) opened
     /// with [`WaitMode::Block`](crate::WaitMode::Block) — whether a read waits
@@ -40,19 +41,20 @@ impl<T: StreamType> SharedStream<T> {
     /// # Errors
     ///
     /// Propagates the inner [`Stream`]'s blocking read adapter.
-    pub fn blocking_read(&self, buf: &mut [u8]) -> io::Result<usize> {
-        Read::read(&mut *self.inner.lock(), buf)
+    pub fn blocking_read_from(&self, from: u64, buf: &mut [u8]) -> io::Result<usize> {
+        self.inner.lock().blocking_read_from(from, buf)
     }
 
-    /// Off-real-time seek: primes the target range instead of doing position
-    /// math alone. The counterpart to [`Self::blocking_read`] — a session that
-    /// waits for its bytes waits for them at a seek too.
+    /// Off-real-time seek from the session's own byte position: primes the
+    /// target range instead of doing position math alone. The counterpart to
+    /// [`Self::blocking_read_from`] — a session that waits for its bytes waits
+    /// for them at a seek too.
     ///
     /// # Errors
     ///
     /// Propagates the inner [`Stream`]'s blocking seek adapter.
-    pub fn blocking_seek(&self, pos: SeekFrom) -> io::Result<u64> {
-        Seek::seek(&mut *self.inner.lock(), pos)
+    pub fn blocking_seek_from(&self, from: u64, pos: SeekFrom) -> io::Result<u64> {
+        self.inner.lock().blocking_seek_from(from, pos)
     }
 
     delegate! {
@@ -135,7 +137,19 @@ impl<T: StreamType> SharedStream<T> {
             /// Propagates [`Stream::probe_read`]: `Interrupted` for transient
             /// backpressure, `Other` at a variant boundary, the source's own
             /// error otherwise.
-            pub fn probe_read(&self, buf: &mut [u8]) -> io::Result<usize>;
+            pub fn probe_read_from(&self, from: u64, buf: &mut [u8]) -> io::Result<usize>;
+            /// Credit `n` consumed bytes to the stream's own position — the
+            /// track's published frontier. Only the published reading session
+            /// calls this; a session preparing a decoder nobody hears keeps
+            /// its consumption to itself.
+            pub fn advance(&self, n: u64);
+            /// Real-time seek resolved against an explicit position, without
+            /// moving the stream's cursor. See [`Stream::probe_seek_from`].
+            ///
+            /// # Errors
+            ///
+            /// Propagates [`Stream::probe_seek_from`].
+            pub fn probe_seek_from(&self, from: u64, pos: SeekFrom) -> io::Result<u64>;
             /// Real-time on-core seek (FSM recreate/boundary, decoder reader):
             /// position math + cursor set, no `prime_seek_range` spin on the
             /// forbid-blocking produce core. See [`Stream::probe_seek`].

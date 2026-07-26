@@ -302,7 +302,7 @@ impl<T: StreamType> Stream<T> {
 
 impl<T: StreamType> Stream<T> {
     /// Per-probe hint passed to [`Source::wait_range`] on the RT worker read
-    /// path (`probe_read` → [`WaitMode::Probe`]). Non-blocking-pull sources
+    /// path (`probe_read_from` → [`WaitMode::Probe`]). Non-blocking-pull sources
     /// (HLS) ignore the value and answer with a single readiness probe; the
     /// backoff between probes lives in the audio scheduler's `Waiting` park
     /// (10ms). The off-RT [`Read`] path passes `None` ([`WaitMode::Block`])
@@ -351,20 +351,42 @@ impl<T: StreamType> Stream<T> {
     /// Returns [`StreamReadError::Source`] only when the underlying source
     /// reports a genuine I/O failure. Backpressure, seek-pending, and a
     /// variant fence are non-errors — they surface as `Ok(Pending(..))`.
+    pub fn try_read_from(
+        &mut self,
+        from: u64,
+        buf: &mut [u8],
+    ) -> Result<StreamReadOutcome, StreamReadError> {
+        self.try_read_with(from, buf, WaitMode::Probe)
+    }
+
+    /// [`Self::try_read_from`] with the stream as its own published session:
+    /// reads at its cursor and credits what it consumed back to it. This is the
+    /// byte-consumer surface — a decoder reads through a
+    /// [`CursorReader`](crate::CursorReader) instead, which may keep its
+    /// position private.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::try_read_from`].
     pub fn try_read(&mut self, buf: &mut [u8]) -> Result<StreamReadOutcome, StreamReadError> {
-        self.try_read_with(buf, WaitMode::Probe)
+        let outcome = self.try_read_from(self.source.position(), buf)?;
+        if let StreamReadOutcome::Bytes { count, .. } = outcome {
+            self.source.advance(count.get() as u64);
+        }
+        Ok(outcome)
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
     #[kithara::hang_watchdog]
     fn try_read_with(
         &mut self,
+        from: u64,
         buf: &mut [u8],
         wait: WaitMode,
     ) -> Result<StreamReadOutcome, StreamReadError> {
         if buf.is_empty() {
             return Ok(StreamReadOutcome::Eof {
-                byte_position: self.source.position(),
+                byte_position: from,
             });
         }
 
@@ -372,7 +394,7 @@ impl<T: StreamType> Stream<T> {
         let seek_obs = self.source.seek_observe();
         loop {
             let read_epoch = seek_obs.epoch();
-            let pos = self.source.position();
+            let pos = from;
             let range = pos..pos.saturating_add(buf.len() as u64);
 
             if variant_control
@@ -428,11 +450,12 @@ impl<T: StreamType> Stream<T> {
                         return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
                     }
                     hang_reset!();
-                    self.source.advance(count.get() as u64);
-                    let new_pos = self.source.position();
+                    // Consuming is the reader's own bookkeeping; publishing it
+                    // as the track's position is a separate decision the
+                    // reading session makes (`Cursor::Published`).
                     return Ok(StreamReadOutcome::Bytes {
                         count,
-                        byte_position: new_pos,
+                        byte_position: pos.saturating_add(count.get() as u64),
                     });
                 }
                 ReadOutcome::Eof => {
@@ -495,8 +518,8 @@ impl<T: StreamType> Stream<T> {
     /// `Interrupted` error carrying [`StreamPending`] for transient
     /// backpressure / seek-pending, and `Other(VariantChangeError)` at a
     /// variant boundary.
-    pub fn probe_read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self.try_read(buf) {
+    pub fn probe_read_from(&mut self, from: u64, buf: &mut [u8]) -> io::Result<usize> {
+        match self.try_read_from(from, buf) {
             Ok(StreamReadOutcome::Bytes { count, .. }) => Ok(count.get()),
             Ok(StreamReadOutcome::Eof { .. }) => Ok(0),
             Ok(StreamReadOutcome::Pending(reason @ PendingReason::SeekPending)) => {
@@ -525,60 +548,43 @@ impl<T: StreamType> Stream<T> {
     /// [`CursorReader`](crate::CursorReader)) seeks through this; the off-RT
     /// [`Seek::seek`] adapter
     /// primes inline instead. The seeked range's readiness is discovered by the
-    /// next `probe_read` (park-on-not-ready), and the armed peer wake — flushed
+    /// next `probe_read_from` (park-on-not-ready), and the armed peer wake — flushed
     /// by the shell — drives the fetch.
     ///
     /// # Errors
     ///
-    /// See [`Self::resolve_seek_target`].
+    /// See [`resolve_seek_target`].
     pub fn probe_seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        let new_pos = self.resolve_seek_target(pos, self.source.len())?;
+        let new_pos = self.probe_seek_from(self.source.position(), pos)?;
         self.source.set_position(new_pos);
+        Ok(new_pos)
+    }
+
+    /// [`Self::probe_seek`] against an explicit position, resolving where the
+    /// seek lands without moving the stream's own cursor.
+    ///
+    /// A reading session that is not the published one owns its byte position;
+    /// resolving is the stream's job, recording the answer is the session's.
+    ///
+    /// # Errors
+    ///
+    /// See [`resolve_seek_target`].
+    pub fn probe_seek_from(&mut self, from: u64, pos: SeekFrom) -> io::Result<u64> {
+        let new_pos = resolve_seek_target(from, pos, self.source.len())?;
         // The reader cursor moved on the produce core: arm the peer so it
         // re-targets fetches around the new position. The shell flushes it.
         self.arm_peer_wake();
         Ok(new_pos)
     }
 
-    /// Resolve a [`SeekFrom`] to an absolute, clamped byte target — the shared
-    /// math behind the off-RT [`Seek::seek`] and the on-core [`Self::probe_seek`].
-    ///
-    /// `len` is the known source length, resolved by the caller (`seek` primes
-    /// to discover it; `probe_seek` uses the current value); `SeekFrom::End`
-    /// errors when it is `None`. `Current` is relative to the live cursor.
-    ///
-    /// # Errors
-    ///
-    /// `Unsupported` for `SeekFrom::End` without a known length; `InvalidInput`
-    /// for a negative resulting offset.
-    fn resolve_seek_target(&self, pos: SeekFrom, len: Option<u64>) -> io::Result<u64> {
-        let new_pos: i128 = match pos {
-            SeekFrom::Start(p) => i128::from(p),
-            SeekFrom::Current(delta) => {
-                i128::from(self.source.position()).saturating_add(i128::from(delta))
-            }
-            SeekFrom::End(delta) => {
-                let Some(len) = len else {
-                    return Err(IoError::new(
-                        ErrorKind::Unsupported,
-                        "seek from end requires known length",
-                    ));
-                };
-                i128::from(len).saturating_add(i128::from(delta))
-            }
-        };
-        if new_pos < 0 {
-            return Err(IoError::new(
-                ErrorKind::InvalidInput,
-                "negative seek position",
-            ));
-        }
-        Ok(u64::try_from(new_pos).unwrap_or(u64::MAX))
+    /// Credit `n` consumed bytes to the source's own position.
+    pub fn advance(&self, n: u64) {
+        self.source.advance(n);
     }
 }
 
-impl<T: StreamType> Read for Stream<T> {
-    /// Blocking `std::io::Read` for direct `Read + Seek` consumers.
+impl<T: StreamType> Stream<T> {
+    /// Blocking read for an off-real-time reading session.
     ///
     /// `try_read` is a single non-blocking probe; this adapter waits across
     /// repeated probes so a `read` issued right after stream open or a seek
@@ -605,11 +611,17 @@ impl<T: StreamType> Read for Stream<T> {
     /// wake, and the next probe parks again at once — never a busy spin. A
     /// genuine wedge (no signal site ever fires) is caught by the source's hang
     /// watchdog rather than masked here. This is the off-RT consumer interface —
-    /// the real-time worker uses [`Self::probe_read`] and never blocks here.
+    /// the real-time worker uses [`Self::probe_read_from`] and never blocks here.
+    ///
+    /// # Errors
+    ///
+    /// `Interrupted` for a seek that flushed mid-read, `Other`
+    /// ([`VariantChangeError`]) at a variant boundary, the source's own error
+    /// otherwise.
     #[kithara::flash(true)]
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+    pub fn blocking_read_from(&mut self, from: u64, buf: &mut [u8]) -> io::Result<usize> {
         loop {
-            match self.try_read_with(buf, WaitMode::Block) {
+            match self.try_read_with(from, buf, WaitMode::Block) {
                 Ok(StreamReadOutcome::Bytes { count, .. }) => return Ok(count.get()),
                 Ok(StreamReadOutcome::Eof { .. }) => return Ok(0),
                 Ok(StreamReadOutcome::Pending(
@@ -662,17 +674,25 @@ impl<T: StreamType> Stream<T> {
     }
 }
 
-impl<T: StreamType> Seek for Stream<T> {
+impl<T: StreamType> Stream<T> {
+    /// Off-real-time seek against an explicit position: primes the target range
+    /// and reports where the seek lands, without moving the stream's own cursor.
+    ///
+    /// The counterpart to [`Self::probe_seek_from`] — a session that waits for
+    /// its bytes waits for them at a seek too, and this is the half that waits.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` ([`StreamSeekPastEof`]) past a known end; otherwise see
+    /// [`resolve_seek_target`].
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        let current = self.source.position();
-
+    pub fn blocking_seek_from(&mut self, from: u64, pos: SeekFrom) -> io::Result<u64> {
         // Off-RT consumer path: discover the length for an End-relative seek by
-        // priming (the produce-core `probe_seek` cannot, and errors instead).
+        // priming (the produce-core `probe_seek_from` cannot, and errors instead).
         if matches!(pos, SeekFrom::End(_)) && self.source.len().is_none() {
             self.prime_seek_range(0..1);
         }
-        let new_pos = self.resolve_seek_target(pos, self.source.len())?;
+        let new_pos = resolve_seek_target(from, pos, self.source.len())?;
 
         let wait_range = match self.format_change_segment_range() {
             Ok(range) if range.start == new_pos => range,
@@ -688,11 +708,65 @@ impl<T: StreamType> Seek for Stream<T> {
                 StreamSeekPastEof {
                     new_pos,
                     len,
-                    current_pos: current,
+                    current_pos: from,
                 },
             ));
         }
 
+        Ok(new_pos)
+    }
+}
+
+/// Resolve a [`SeekFrom`] to an absolute, clamped byte target — the shared
+/// math behind the off-RT [`Seek::seek`] and the on-core [`Stream::probe_seek`].
+///
+/// `len` is the known source length, resolved by the caller (`seek` primes
+/// to discover it; `probe_seek` uses the current value); `SeekFrom::End`
+/// errors when it is `None`. `Current` is relative to the live cursor.
+///
+/// # Errors
+///
+/// `Unsupported` for `SeekFrom::End` without a known length; `InvalidInput`
+/// for a negative resulting offset.
+fn resolve_seek_target(from: u64, pos: SeekFrom, len: Option<u64>) -> io::Result<u64> {
+    let new_pos: i128 = match pos {
+        SeekFrom::Start(p) => i128::from(p),
+        SeekFrom::Current(delta) => i128::from(from).saturating_add(i128::from(delta)),
+        SeekFrom::End(delta) => {
+            let Some(len) = len else {
+                return Err(IoError::new(
+                    ErrorKind::Unsupported,
+                    "seek from end requires known length",
+                ));
+            };
+            i128::from(len).saturating_add(i128::from(delta))
+        }
+    };
+    if new_pos < 0 {
+        return Err(IoError::new(
+            ErrorKind::InvalidInput,
+            "negative seek position",
+        ));
+    }
+    Ok(u64::try_from(new_pos).unwrap_or(u64::MAX))
+}
+
+impl<T: StreamType> Read for Stream<T> {
+    /// The stream as its own published reading session: reads at its cursor
+    /// and credits what it consumed back to it, which is what makes that
+    /// cursor the track's position. A decoder reads through a
+    /// [`CursorReader`](crate::CursorReader) instead — that one may keep its
+    /// position private.
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let count = self.blocking_read_from(self.source.position(), buf)?;
+        self.source.advance(count as u64);
+        Ok(count)
+    }
+}
+
+impl<T: StreamType> Seek for Stream<T> {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        let new_pos = self.blocking_seek_from(self.source.position(), pos)?;
         self.source.set_position(new_pos);
         Ok(new_pos)
     }
@@ -978,7 +1052,7 @@ mod tests {
         let mut stream = Stream::<DummyType> { source };
         let mut buf = [0u8; 4];
 
-        let outcome = stream.probe_read(&mut buf);
+        let outcome = stream.probe_read_from(0, &mut buf);
         assert!(
             outcome.is_err(),
             "not-ready worker probe surfaces as an Interrupted io::Error"
