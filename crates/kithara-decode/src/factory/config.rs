@@ -7,7 +7,7 @@ use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, 
 use kithara_stream::{BoxedEventSink, ByteMap};
 
 use super::backend::DecoderBackend;
-use crate::error::DecodeResult;
+use crate::{GaplessMode, error::DecodeResult};
 
 /// What the blender does when this decoder generation hands off to the next.
 ///
@@ -154,9 +154,11 @@ pub struct DecoderConfig<B = NoResamplerBackend> {
     /// Optional decoder-side resampler plan. `None` means the decoder emits
     /// at the source rate.
     pub resampler: Option<DecoderResamplerConfig<B>>,
-    /// Enable gapless trim wiring through the per-backend codec.
-    #[builder(default = true)]
-    pub gapless: bool,
+    /// How gapless trimming is resolved for this track. Drives the codec's own
+    /// priming strip and the container gapless probe; the audio pipeline reads
+    /// the same value to build its trimmer.
+    #[builder(default)]
+    pub gapless_mode: GaplessMode,
     /// Epoch counter for decoder recreation tracking.
     #[builder(default)]
     pub epoch: u64,

@@ -185,7 +185,7 @@ where
                 ?codec,
                 "fmp4_segment: dispatching to segment-aware WebCodecs path"
             );
-            let gapless = config.gapless;
+            let gapless = config.gapless_mode.is_enabled();
             return build_fmp4_segment_decoder(source, layout, config, |track| {
                 WebCodecsCodec::open(track, gapless)
             });
@@ -236,7 +236,7 @@ where
         ?container,
         "file-symphonia: dispatching to ComposedDecoder<SymphoniaDemuxer, WebCodecsCodec>"
     );
-    let probed_gapless = if config.gapless {
+    let probed_gapless = if config.gapless_mode.is_enabled() {
         scoped_probe(&mut *source, codec)?
     } else {
         None
@@ -253,7 +253,7 @@ where
     if probed_gapless.is_some() {
         demuxer.set_gapless(probed_gapless);
     }
-    let codec_impl = WebCodecsCodec::open(demuxer.track_info(), config.gapless)?;
+    let codec_impl = WebCodecsCodec::open(demuxer.track_info(), config.gapless_mode.is_enabled())?;
     let pool = config.pcm_pool.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
@@ -290,7 +290,7 @@ where
                 ?codec,
                 "fmp4_segment: dispatching to segment-aware Apple HW codec path"
             );
-            let gapless = config.gapless;
+            let gapless = config.gapless_mode.is_enabled();
             let target_output_rate = decoder_embedded_target_output_rate(&config);
             return build_fmp4_segment_decoder(source, layout, config, |track| {
                 let output_track = track_with_output_domain_gapless(track, target_output_rate)?;
@@ -346,7 +346,7 @@ where
         gapless::{scoped_probe, scoped_startup_probe},
     };
     let startup_probe = scoped_startup_probe(&mut *source, codec)?;
-    let probed_gapless = if config.gapless {
+    let probed_gapless = if config.gapless_mode.is_enabled() {
         if matches!(codec, AudioCodec::Mp3) {
             startup_probe.gapless
         } else {
@@ -374,8 +374,11 @@ where
     if output_track.gapless.is_some() {
         demuxer.set_gapless(output_track.gapless);
     }
-    let codec_impl =
-        AppleCodec::open_with_config(&output_track, config.gapless, target_output_rate)?;
+    let codec_impl = AppleCodec::open_with_config(
+        &output_track,
+        config.gapless_mode.is_enabled(),
+        target_output_rate,
+    )?;
     let pool = config.pcm_pool.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
@@ -603,7 +606,7 @@ where
         "file-symphonia: dispatching to ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec>"
     );
 
-    let probed_gapless = if config.gapless {
+    let probed_gapless = if config.gapless_mode.is_enabled() {
         scoped_probe(&mut *source, codec)?
     } else {
         None
@@ -622,7 +625,7 @@ where
         demuxer.set_gapless(probed_gapless);
     }
     let symphonia_config = SymphoniaConfig {
-        gapless: config.gapless,
+        gapless: config.gapless_mode.is_enabled(),
         ..Default::default()
     };
     let codec_impl = if SymphoniaCodec::supports(codec) {
@@ -685,7 +688,7 @@ where
     match codec {
         AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 | AudioCodec::Flac => {
             let symphonia_config = SymphoniaConfig {
-                gapless: config.gapless,
+                gapless: config.gapless_mode.is_enabled(),
                 ..Default::default()
             };
             build_fmp4_segment_decoder(source, layout, config, |track| {

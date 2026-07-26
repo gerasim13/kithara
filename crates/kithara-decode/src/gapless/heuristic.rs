@@ -13,6 +13,17 @@ pub enum GaplessMode {
     SilenceTrim(SilenceTrimParams),
 }
 
+impl GaplessMode {
+    /// Whether any trimming happens at all. Every mode but [`Self::Disabled`]
+    /// needs the decoder to strip encoder priming and to probe the container
+    /// for gapless counts; they differ only in what to do when those counts
+    /// are absent.
+    #[must_use]
+    pub fn is_enabled(self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
+}
+
 /// Tunables for [`GaplessMode::SilenceTrim`].
 ///
 /// `threshold_db` is expressed as a positive number of dB *below* full

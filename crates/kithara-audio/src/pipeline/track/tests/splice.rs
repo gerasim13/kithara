@@ -385,7 +385,7 @@ fn decoder_config<T: StreamType>(
         .pcm_pool(PcmPool::default())
         .byte_len_handle(byte_len)
         .maybe_byte_map(stream.byte_map())
-        .gapless(false)
+        .gapless_mode(GaplessMode::Disabled)
         .build()
 }
 
@@ -429,7 +429,7 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
                     .pcm_pool(PcmPool::default())
                     .byte_len_handle(factory_byte_len.clone())
                     .maybe_byte_map(stream.byte_map())
-                    .gapless(false)
+                    .gapless_mode(GaplessMode::Disabled)
                     .build();
             let input = stream.open_reader(ReaderHint::builder().base_offset(base_offset).build());
             let decoder = DecodeFactory::create_from_media_info(input, &info, config)?;

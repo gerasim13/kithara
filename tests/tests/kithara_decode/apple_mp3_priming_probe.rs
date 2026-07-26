@@ -1,7 +1,7 @@
 use std::io::Cursor;
 
 use kithara::{
-    decode::{DecoderBackend, DecoderConfig, DecoderFactory, PcmChunk},
+    decode::{DecoderBackend, DecoderConfig, DecoderFactory, GaplessMode, PcmChunk},
     platform::time::Duration,
 };
 use kithara_integration_tests::{SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper};
@@ -58,14 +58,14 @@ fn write_enc_delay(bytes: &mut [u8], lame_tag_off: usize, new_enc_delay: u32) {
 fn measure_leading_silence(
     mp3_bytes: Vec<u8>,
     backend: DecoderBackend,
-    gapless: bool,
+    gapless_mode: GaplessMode,
 ) -> (usize, f32, usize) {
     let mut config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
         .build();
     config.backend = backend;
-    config.gapless = gapless;
+    config.gapless_mode = gapless_mode;
     config.hint = Some("mp3".to_owned());
     let mut decoder =
         DecoderFactory::create_with_probe(Cursor::new(mp3_bytes), Some("mp3"), config)
@@ -134,9 +134,9 @@ async fn mp3_raw_decoder_shift_vs_reference(
     let lame_off = find_lame_tag_offset(&bytes);
     let lame_tag = lame_off.and_then(|off| read_enc_delay_padding(&bytes, off));
     let (leading_silence, first_value, total) =
-        measure_leading_silence(bytes.clone(), backend, false);
+        measure_leading_silence(bytes.clone(), backend, GaplessMode::Disabled);
     let (leading_silence_gapless_on, first_value_on, _) =
-        measure_leading_silence(bytes.clone(), backend, true);
+        measure_leading_silence(bytes.clone(), backend, GaplessMode::MediaOnly);
 
     println!(
         "\n===== {backend:?}, bit_rate={bit_rate:?} =====\n\
@@ -222,7 +222,7 @@ async fn mp3_decoder_reads_lame_enc_delay_or_not(#[case] backend: DecoderBackend
         write_enc_delay(&mut patched, lame_off, override_val);
         let (round_trip_delay, _) = read_enc_delay_padding(&patched, lame_off).expect("read back");
         let (leading_silence, first_value, total) =
-            measure_leading_silence(patched, backend, false);
+            measure_leading_silence(patched, backend, GaplessMode::Disabled);
         println!(
             "  enc_delay_override = {override_val:>4} (round-trip read = {round_trip_delay:>4}) → \
             leading_silence = {leading_silence:>5} samples (decoded[{leading_silence}] = {first_value:+.6}, total_window = {total})",
