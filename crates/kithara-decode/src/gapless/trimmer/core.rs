@@ -3,7 +3,7 @@ use smallvec::SmallVec;
 
 use crate::{
     GaplessInfo, GaplessTailCompensation, PcmChunk, duration_for_frames,
-    gapless::heuristic::SilenceTrimParams,
+    gapless::{GaplessEnd, heuristic::SilenceTrimParams},
 };
 
 /// Inline batch of chunks released by one `GaplessTrimmer` operation.
@@ -204,8 +204,52 @@ impl GaplessTrimmer {
         self.tail_compensation = compensation;
     }
 
+    /// Release everything this decoder generation is still holding back.
+    ///
+    /// `end` decides what the hold-back meant. See CONTEXT.md, "Gapless
+    /// generation lifecycle", for which state each arm keeps and which it
+    /// drops.
     #[must_use]
-    pub fn flush(&mut self) -> GaplessOutput {
+    pub fn finish(&mut self, end: GaplessEnd) -> GaplessOutput {
+        match end {
+            GaplessEnd::FormatBoundary => self.finish_format_boundary(),
+            GaplessEnd::TrackEof => self.finish_track_eof(),
+        }
+    }
+
+    /// The logical track continues in the next generation, so no end-of-track
+    /// trim applies: the buffered tail is audible mid-track content and goes
+    /// out as it is. `trailing_frames` and a `Fixed` leading remainder are
+    /// per-track and survive; the counters that describe the generation that
+    /// just ended do not.
+    fn finish_format_boundary(&mut self) -> GaplessOutput {
+        let released = match &mut self.mode {
+            GaplessMode::Disabled => GaplessOutput::new(),
+            // The heuristic leading search cannot conclude once its buffer is
+            // gone, so it is abandoned and the buffer goes out untrimmed —
+            // that loses no audio, whereas guessing a boundary here would.
+            GaplessMode::Heuristic(state) if state.leading_enabled => {
+                debug_assert!(
+                    self.tail_buffer.is_empty() && self.tail_buffered_frames == 0,
+                    "leading-phase chunks never reach the tail buffer"
+                );
+                state.leading_enabled = false;
+                state.fade_in = None;
+                state.leading_buffered_frames = 0;
+                let mut released = GaplessOutput::new();
+                released.extend(std::mem::take(&mut state.leading_buffer));
+                released
+            }
+            GaplessMode::Fixed { .. } | GaplessMode::Heuristic(_) => {
+                drain_tail(&mut self.tail_buffer, &mut self.tail_buffered_frames)
+            }
+        };
+        self.tail_compensation = None;
+        self.input_frames_seen = 0;
+        released
+    }
+
+    fn finish_track_eof(&mut self) -> GaplessOutput {
         match &mut self.mode {
             GaplessMode::Disabled => GaplessOutput::new(),
             GaplessMode::Fixed { .. } => {

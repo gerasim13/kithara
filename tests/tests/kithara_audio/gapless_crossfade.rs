@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use kithara::{
     bufpool::PcmPool,
-    decode::{GaplessInfo, GaplessTrimmer, PcmChunk, PcmMeta, PcmSpec},
+    decode::{GaplessEnd, GaplessInfo, GaplessTrimmer, PcmChunk, PcmMeta, PcmSpec},
     platform::time::Duration,
 };
 use kithara_integration_tests::signal_pcm::signal::{SignalFn, SineWave};
@@ -110,7 +110,7 @@ fn trim_track(
     for chunk in trimmer.push(chunk) {
         output.extend_from_slice(&chunk.samples[..]);
     }
-    for chunk in trimmer.flush() {
+    for chunk in trimmer.finish(GaplessEnd::TrackEof) {
         output.extend_from_slice(&chunk.samples[..]);
     }
     output

@@ -1,6 +1,6 @@
 use kithara_decode::{
-    Decoder, GaplessMode, GaplessOutput, GaplessTailCompensation, GaplessTrimmer, PcmChunk,
-    duration_for_frames,
+    Decoder, GaplessEnd, GaplessMode, GaplessOutput, GaplessTailCompensation, GaplessTrimmer,
+    PcmChunk, duration_for_frames,
 };
 use kithara_platform::time::Duration;
 use kithara_stream::MediaInfo;
@@ -59,7 +59,7 @@ impl GaplessStage {
 
     /// Release any trimmer-held tail at decoder EOF.
     pub(crate) fn flush(&mut self) {
-        let output = self.trimmer.flush();
+        let output = self.trimmer.finish(GaplessEnd::TrackEof);
         self.replace_pending(output);
     }
 

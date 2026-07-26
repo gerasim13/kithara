@@ -6,7 +6,11 @@
 //! the codec/container returns `DecodeError::UnsupportedCodec`, both
 //! terminal. See CONTEXT.md "Decoder recreate strategy" and "Initialization Paths".
 
+mod backend;
+mod config;
 mod inner;
 mod probe;
 
-pub use inner::{DecoderBackend, DecoderConfig, DecoderFactory, DecoderResamplerConfig};
+pub use backend::DecoderBackend;
+pub use config::{DecoderBlend, DecoderConfig, DecoderResamplerConfig};
+pub use inner::DecoderFactory;

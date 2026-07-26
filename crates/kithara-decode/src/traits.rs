@@ -14,6 +14,7 @@ mod kithara {
 }
 
 use crate::{
+    DecoderBlend,
     error::DecodeResult,
     types::{PcmChunk, PcmSpec, TrackMetadata},
 };
@@ -175,6 +176,13 @@ pub(crate) type BoxedSource = Box<dyn DecoderInput>;
 /// decoder type is determined at runtime (e.g., based on media info).
 #[kithara::mock(api = DecoderMock)]
 pub trait Decoder: Send + 'static {
+    /// Overlap to apply when this decoder generation hands off to the next.
+    ///
+    /// Required rather than defaulted: the value is a policy the builder
+    /// resolved, so a decoder that answered from a default would tell the
+    /// blender to ramp for a duration nobody configured.
+    fn blend(&self) -> DecoderBlend;
+
     /// Default leading-silence frame count for `codec` when no
     /// container-/encoder-level gapless metadata is available.
     ///

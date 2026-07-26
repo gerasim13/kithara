@@ -2,7 +2,8 @@ use std::{io::Cursor, num::NonZeroU32};
 
 use kithara::{
     decode::{
-        DecodeResult, Decoder, DecoderBackend, DecoderConfig, DecoderFactory, GaplessTrimmer,
+        DecodeResult, Decoder, DecoderBackend, DecoderConfig, DecoderFactory, GaplessEnd,
+        GaplessTrimmer,
     },
     platform::time::Duration,
     stream::{AudioCodec as StreamAudioCodec, AudioCodec, ContainerFormat, MediaInfo},
@@ -214,7 +215,7 @@ fn decode_visible_frames(mut decoder: Box<dyn Decoder>) -> DecodeResult<DecodedF
         }
     }
 
-    for chunk in trimmer.flush() {
+    for chunk in trimmer.finish(GaplessEnd::TrackEof) {
         frames = frames.saturating_add(chunk.frames());
     }
 

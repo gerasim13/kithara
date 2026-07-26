@@ -1,3 +1,4 @@
+mod boundary;
 mod heuristic;
 mod info;
 #[cfg(any(
@@ -14,6 +15,7 @@ mod mp4;
 mod probe;
 mod trimmer;
 
+pub use boundary::GaplessEnd;
 pub use heuristic::{GaplessMode, SilenceTrimParams};
 pub use info::{GaplessInfo, GaplessTailCompensation};
 pub use mp4::probe_mp4_gapless;

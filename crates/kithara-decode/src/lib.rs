@@ -45,9 +45,11 @@ mod apple;
 
 pub use codec::CodecPriming;
 pub use error::{DecodeError, DecodeResult, ErrorClass};
-pub use factory::{DecoderBackend, DecoderConfig, DecoderFactory, DecoderResamplerConfig};
+pub use factory::{
+    DecoderBackend, DecoderBlend, DecoderConfig, DecoderFactory, DecoderResamplerConfig,
+};
 pub use gapless::{
-    GaplessInfo, GaplessMode, GaplessOutput, GaplessTailCompensation, GaplessTrimmer,
+    GaplessEnd, GaplessInfo, GaplessMode, GaplessOutput, GaplessTailCompensation, GaplessTrimmer,
     SilenceTrimParams, probe_mp4_gapless,
 };
 pub use input::InputRequirement;

@@ -65,6 +65,39 @@ The contract has one owner for actual trimming:
 - `GaplessTrimmer::notify_seek()` drops seek-sensitive state — leading trim,
   pending fade-in, and the buffered tail. Trailing trim still applies at EOF.
 
+### Gapless generation lifecycle
+
+A decoder generation ends through `GaplessTrimmer::finish(GaplessEnd)`, and the
+reason decides what the hold-back meant.
+
+`TrackEof` is the end of the track: fixed trailing trim (with its tail
+compensation) or the heuristic trailing-silence search applies, then whatever
+survives is released.
+
+`FormatBoundary` is a mid-track handoff — an ABR variant switch, where the
+logical track continues in the next generation:
+
+- no trailing trim of any kind. The held-back tail is audible content the next
+  generation continues from, not an end-of-track pad.
+- a `Fixed` leading remainder survives. It counts frames from track start, and
+  the next generation resumes at the same logical position. This is what
+  separates a boundary from `notify_seek`, which zeroes it because the position
+  jumped.
+- a pending heuristic leading search is abandoned: it cannot conclude once its
+  buffer is released, so the buffer goes out untrimmed and the search stays off
+  for the rest of the track. Releasing raw loses no audio; guessing a boundary
+  would.
+- the counters describing the generation that just ended — `tail_compensation`
+  and `input_frames_seen` — reset. Per-track configuration (`trailing_frames`,
+  the silence parameters, a pending fade-in that spans the boundary) does not.
+
+`DecoderConfig::blend_duration` owns the overlap applied at such a handoff, and
+the built decoder answers it through `Decoder::blend_duration()`, so the player
+never duplicates or hard-codes transition timing. The method is required rather
+than defaulted: a decoder answering from a default would tell the blender to
+ramp for a duration nobody configured. `Duration::ZERO` is a valid instantaneous
+change and takes the same path.
+
 When metadata is absent, `kithara-audio`'s `AudioConfig::gapless_mode` can select
 heuristic behaviour via `GaplessMode`:
 

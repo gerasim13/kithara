@@ -6,7 +6,7 @@ use kithara_test_utils::kithara;
 
 use super::{Consts, GaplessTrimmer};
 use crate::{
-    GaplessInfo, GaplessTailCompensation, PcmChunk, PcmMeta, PcmSpec,
+    GaplessEnd, GaplessInfo, GaplessTailCompensation, PcmChunk, PcmMeta, PcmSpec,
     gapless::heuristic::SilenceTrimParams,
 };
 
@@ -122,7 +122,7 @@ fn tail_compensation_reduces_fixed_trailing_trim_by_one_frame() {
     let mut output = super::GaplessOutput::new();
     output.extend(trimmer.push(chunk(spec, 0, 2)));
     output.extend(trimmer.push(chunk(spec, 2, 2)));
-    output.extend(trimmer.flush());
+    output.extend(trimmer.finish(GaplessEnd::TrackEof));
 
     assert_eq!(output.len(), 2);
     assert_eq!(output.iter().map(PcmChunk::frames).sum::<usize>(), 3);
@@ -141,7 +141,7 @@ fn tail_compensation_is_identity_without_deficit() {
     let mut output = super::GaplessOutput::new();
     output.extend(trimmer.push(chunk(spec, 0, 2)));
     output.extend(trimmer.push(chunk(spec, 2, 2)));
-    output.extend(trimmer.flush());
+    output.extend(trimmer.finish(GaplessEnd::TrackEof));
 
     assert_eq!(output.len(), 1);
     assert_eq!(output.iter().map(PcmChunk::frames).sum::<usize>(), 2);
@@ -162,7 +162,7 @@ fn trailing_trim_buffers_until_flush() {
     assert_eq!(ready.len(), 1);
     assert_eq!(ready.remove(0).frames(), 32);
 
-    let ready = trimmer.flush();
+    let ready = trimmer.finish(GaplessEnd::TrackEof);
     assert!(ready.is_empty());
 }
 
@@ -178,7 +178,7 @@ fn trailing_trim_drops_tail_on_flush() {
     assert!(trimmer.push(chunk(spec, 1_024, 1_024)).is_empty());
     assert_eq!(trimmer.push(chunk(spec, 2_048, 1_024)).len(), 1);
 
-    let ready = trimmer.flush();
+    let ready = trimmer.finish(GaplessEnd::TrackEof);
     assert!(ready.is_empty());
 }
 
@@ -196,7 +196,7 @@ fn trailing_trim_handles_more_than_inline_tail_chunks() {
     }
 
     output.extend(trimmer.push(chunk(spec, 8, 1)));
-    output.extend(trimmer.flush());
+    output.extend(trimmer.finish(GaplessEnd::TrackEof));
 
     assert_eq!(output.len(), 1);
     let out = output.remove(0);
@@ -211,7 +211,7 @@ fn disabled_trimmer_passes_through() {
     let mut ready = trimmer.push(chunk(spec, 0, 128));
     assert_eq!(ready.len(), 1);
     assert_eq!(ready.remove(0).frames(), 128);
-    assert!(trimmer.flush().is_empty());
+    assert!(trimmer.finish(GaplessEnd::TrackEof).is_empty());
 }
 
 #[kithara::test]
@@ -227,7 +227,7 @@ fn notify_seek_resets_leading_only() {
 
     assert!(trimmer.push(chunk(spec, 64, 128)).is_empty());
 
-    let mut ready = trimmer.flush();
+    let mut ready = trimmer.finish(GaplessEnd::TrackEof);
     assert_eq!(ready.len(), 1);
     assert_eq!(ready.remove(0).frames(), 64);
 }
@@ -303,7 +303,7 @@ fn silence_trim_below_threshold_is_trimmed() {
     pcm.extend(std::iter::repeat_n(0.5, 100));
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
-    let flushed = trimmer.flush();
+    let flushed = trimmer.finish(GaplessEnd::TrackEof);
     let pcm_out = collect_pcm(&flushed);
     assert_eq!(pcm_out.len(), 100);
     assert!(pcm_out[0].abs() < 0.05, "fade-in must soften the boundary");
@@ -317,7 +317,7 @@ fn silence_trim_above_threshold_preserves_audio() {
     let pcm = vec![3.16e-3_f32; 300];
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
-    let flushed = trimmer.flush();
+    let flushed = trimmer.finish(GaplessEnd::TrackEof);
     let pcm_out = collect_pcm(&flushed);
     assert_eq!(pcm_out.len(), 300);
     assert!(pcm_out.iter().all(|s| (*s - 3.16e-3).abs() < 1e-7));
@@ -332,7 +332,7 @@ fn silence_trim_preserves_quiet_intro_below_threshold_then_above() {
     pcm.extend(std::iter::repeat_n(0.001_8, 200));
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
-    let flushed = trimmer.flush();
+    let flushed = trimmer.finish(GaplessEnd::TrackEof);
     let pcm_out = collect_pcm(&flushed);
     assert_eq!(pcm_out.len(), 200);
     let fade_len = fade_frames_for(spec).min(pcm_out.len());
@@ -350,7 +350,7 @@ fn silence_trim_min_frames_boundary_under_min() {
     pcm.extend(std::iter::repeat_n(0.5, 64));
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
-    let flushed = trimmer.flush();
+    let flushed = trimmer.finish(GaplessEnd::TrackEof);
     let pcm_out = collect_pcm(&flushed);
     assert_eq!(pcm_out.len(), 95);
     assert_eq!(pcm_out[0], 0.0);
@@ -365,7 +365,7 @@ fn silence_trim_min_frames_boundary_at_min() {
     pcm.extend(std::iter::repeat_n(0.5, 64));
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
-    let flushed = trimmer.flush();
+    let flushed = trimmer.finish(GaplessEnd::TrackEof);
     let pcm_out = collect_pcm(&flushed);
     assert_eq!(pcm_out.len(), 64);
     assert!(pcm_out[0].abs() < 0.05);
@@ -385,7 +385,7 @@ fn silence_trim_scan_window_exhausted_preserves_audio() {
     let pcm = vec![0.0_f32; 300];
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
-    let flushed = trimmer.flush();
+    let flushed = trimmer.finish(GaplessEnd::TrackEof);
     let pcm_out = collect_pcm(&flushed);
     assert_eq!(pcm_out.len(), 300);
     assert!(pcm_out.iter().all(|s| *s == 0.0));
@@ -399,7 +399,7 @@ fn silence_trim_no_op_with_immediate_content() {
     let pcm = vec![0.5_f32; 256];
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
-    let flushed = trimmer.flush();
+    let flushed = trimmer.finish(GaplessEnd::TrackEof);
     let pcm_out = collect_pcm(&flushed);
     assert_eq!(pcm_out.len(), 256);
     assert!(pcm_out.iter().all(|s| (*s - 0.5).abs() < 1e-7));
@@ -414,7 +414,7 @@ fn silence_trim_trailing_disabled_by_default() {
     pcm.extend(std::iter::repeat_n(0.0, 64));
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
-    let flushed = trimmer.flush();
+    let flushed = trimmer.finish(GaplessEnd::TrackEof);
     let pcm_out = collect_pcm(&flushed);
     assert_eq!(pcm_out.len(), 128);
 }
@@ -436,7 +436,7 @@ fn silence_trim_trailing_enabled() {
     pcm.extend(std::iter::repeat_n(0.0, silent_frames));
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
-    let flushed = trimmer.flush();
+    let flushed = trimmer.finish(GaplessEnd::TrackEof);
     let pcm_out = collect_pcm(&flushed);
     assert_eq!(pcm_out.len(), audible_frames);
 
@@ -486,7 +486,7 @@ fn silence_trim_trailing_window_rms_ignores_zero_crossings_in_audible_signal() {
     pcm.extend(std::iter::repeat_n(0.0, silent_frames as usize));
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
-    let flushed = trimmer.flush();
+    let flushed = trimmer.finish(GaplessEnd::TrackEof);
     let pcm_out = collect_pcm(&flushed);
     assert_eq!(pcm_out.len(), sine_frames as usize);
 
@@ -518,7 +518,7 @@ fn silence_trim_seek_disables_leading_only() {
             .is_empty()
     );
 
-    let mut flushed = trimmer.flush();
+    let mut flushed = trimmer.finish(GaplessEnd::TrackEof);
     assert_eq!(flushed.len(), 1);
     let out = flushed.remove(0);
     assert_eq!(out.meta.frame_offset, 128);
@@ -532,7 +532,7 @@ fn silence_trim_preserves_all_silence_track() {
 
     assert!(trimmer.push(silent_chunk(spec, 0, 128)).is_empty());
 
-    let mut flushed = trimmer.flush();
+    let mut flushed = trimmer.finish(GaplessEnd::TrackEof);
     assert_eq!(flushed.len(), 1);
     let out = flushed.remove(0);
     assert_eq!(out.frames(), 128);
@@ -559,7 +559,7 @@ fn silence_trim_respects_multi_channel_threshold() {
             .is_empty()
     );
 
-    let mut flushed = trimmer.flush();
+    let mut flushed = trimmer.finish(GaplessEnd::TrackEof);
     assert_eq!(flushed.len(), 1);
     let out = flushed.remove(0);
     assert_eq!(out.meta.frame_offset, 32);
@@ -576,11 +576,231 @@ fn silence_trim_does_not_introduce_click_at_boundary() {
     pcm.extend(std::iter::repeat_n(1.0, 256));
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
-    let flushed = trimmer.flush();
+    let flushed = trimmer.finish(GaplessEnd::TrackEof);
     let pcm_out = collect_pcm(&flushed);
     assert!(
         pcm_out[0].abs() < 0.1,
         "boundary sample {} too loud",
         pcm_out[0]
     );
+}
+
+/// A generation that ends mid-track hands its held-back tail on as it is:
+/// those frames are audible content the next generation continues from, not
+/// an end-of-track pad. `TrackEof` on the same state drops all 64
+/// (`trailing_trim_buffers_until_flush`).
+#[kithara::test]
+fn format_boundary_releases_the_held_tail_untrimmed() {
+    let spec = mono_spec();
+    let mut trimmer = GaplessTrimmer::from(GaplessInfo {
+        leading_frames: 0,
+        trailing_frames: 64,
+    });
+
+    assert!(trimmer.push(chunk(spec, 0, 32)).is_empty());
+    assert_eq!(trimmer.push(chunk(spec, 32, 64)).len(), 1);
+
+    let released = trimmer.finish(GaplessEnd::FormatBoundary);
+    assert_eq!(released.iter().map(PcmChunk::frames).sum::<usize>(), 64);
+}
+
+/// The leading trim counts frames from track start, and the next generation
+/// resumes at the same logical position — so its remainder survives the
+/// boundary. This is what separates it from a seek
+/// (`notify_seek_resets_leading_only`), where the position jumped.
+#[kithara::test]
+fn format_boundary_keeps_the_leading_remainder_for_the_next_generation() {
+    let spec = mono_spec();
+    let mut trimmer = GaplessTrimmer::from(GaplessInfo {
+        leading_frames: 128,
+        trailing_frames: 0,
+    });
+
+    assert!(trimmer.push(chunk(spec, 0, 64)).is_empty());
+    assert!(trimmer.finish(GaplessEnd::FormatBoundary).is_empty());
+
+    let mut ready = trimmer.push(chunk(spec, 64, 128));
+    assert_eq!(ready.len(), 1);
+    assert_eq!(ready.remove(0).frames(), 64);
+}
+
+/// The heuristic leading search cannot conclude once its buffer is released,
+/// so the boundary abandons it: the buffered audio goes out raw and the next
+/// generation is forwarded untouched. Compare
+/// `silence_trim_below_threshold_is_trimmed`, where the same second input
+/// loses its 300 silent frames.
+#[kithara::test]
+fn format_boundary_abandons_a_pending_leading_search() {
+    let spec = mono_spec();
+    let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
+
+    assert!(
+        trimmer
+            .push(custom_chunk(spec, 0, vec![0.0_f32; 300]))
+            .is_empty()
+    );
+
+    let released = collect_pcm(&trimmer.finish(GaplessEnd::FormatBoundary));
+    assert_eq!(released.len(), 300);
+    assert!(released.iter().all(|sample| *sample == 0.0));
+
+    let mut pcm = vec![0.0_f32; 300];
+    pcm.extend(std::iter::repeat_n(0.5, 100));
+    assert!(trimmer.push(custom_chunk(spec, 300, pcm)).is_empty());
+
+    let rest = collect_pcm(&trimmer.finish(GaplessEnd::TrackEof));
+    assert_eq!(rest.len(), 400);
+}
+
+/// Trailing-silence search is an end-of-track operation. Mid-track the
+/// silence is content — `silence_trim_trailing_enabled` shows the same 480
+/// frames going away at `TrackEof`.
+#[kithara::test]
+fn format_boundary_keeps_a_silent_suffix_that_track_eof_would_trim() {
+    let spec = mono_spec();
+    let params = SilenceTrimParams {
+        threshold_db: 60.0,
+        min_trim_frames: 32,
+        scan_window_frames: 4096,
+        trim_trailing: true,
+    };
+    let mut trimmer = GaplessTrimmer::silence_trim(params);
+
+    let mut pcm = vec![0.5_f32; 256];
+    pcm.extend(std::iter::repeat_n(0.0, 480));
+    assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
+
+    let released = collect_pcm(&trimmer.finish(GaplessEnd::FormatBoundary));
+    assert_eq!(released.len(), 736);
+    assert!(released[256..].iter().all(|sample| *sample == 0.0));
+
+    // The policy itself is per-track and re-arms: the generation that does
+    // reach the end of the track still loses its silent suffix.
+    let mut pcm = vec![0.5_f32; 256];
+    pcm.extend(std::iter::repeat_n(0.0, 480));
+    assert!(trimmer.push(custom_chunk(spec, 736, pcm)).is_empty());
+    assert_eq!(
+        collect_pcm(&trimmer.finish(GaplessEnd::TrackEof)).len(),
+        256
+    );
+}
+
+/// Tail compensation describes the generation that just ended — how far the
+/// fused resampler fell short of its ideal output length — so the boundary
+/// clears it along with the input-frame counter that feeds it. The next
+/// generation trims its full uncompensated 2 frames; compare
+/// `tail_compensation_reduces_fixed_trailing_trim_by_one_frame`.
+#[kithara::test]
+fn format_boundary_clears_the_finished_generation_tail_compensation() {
+    let spec = mono_spec();
+    let mut trimmer = GaplessTrimmer::from(GaplessInfo {
+        leading_frames: 0,
+        trailing_frames: 2,
+    })
+    .with_tail_compensation(Some(GaplessTailCompensation::new(5)));
+
+    let mut first = super::GaplessOutput::new();
+    first.extend(trimmer.push(chunk(spec, 0, 2)));
+    first.extend(trimmer.push(chunk(spec, 2, 2)));
+    first.extend(trimmer.finish(GaplessEnd::FormatBoundary));
+    assert_eq!(first.iter().map(PcmChunk::frames).sum::<usize>(), 4);
+
+    let mut second = super::GaplessOutput::new();
+    second.extend(trimmer.push(chunk(spec, 4, 2)));
+    second.extend(trimmer.push(chunk(spec, 6, 2)));
+    second.extend(trimmer.finish(GaplessEnd::TrackEof));
+    assert_eq!(second.iter().map(PcmChunk::frames).sum::<usize>(), 2);
+}
+
+/// A trimmer with nothing to hold back has nothing to release.
+#[kithara::test]
+fn format_boundary_on_a_disabled_trimmer_releases_nothing() {
+    let spec = mono_spec();
+    let mut trimmer = GaplessTrimmer::disabled();
+
+    assert_eq!(trimmer.push(chunk(spec, 0, 128)).len(), 1);
+    assert!(trimmer.finish(GaplessEnd::FormatBoundary).is_empty());
+}
+
+/// A click-suppression fade spans the boundary rather than restarting at it:
+/// the two generations are one continuous stretch of audio, and a fade that
+/// began again from zero would be an audible dip where nothing happened.
+#[kithara::test]
+fn format_boundary_continues_a_partly_applied_fade() {
+    let spec = mono_spec();
+    let fade_len = fade_frames_for(spec);
+    let mut trimmer = GaplessTrimmer::codec_priming(100, spec.sample_rate.get());
+
+    let mut pcm = vec![1.0_f32; 100];
+    pcm.extend(std::iter::repeat_n(1.0, 50));
+    let first = collect_pcm(&trimmer.push(custom_chunk(spec, 0, pcm)));
+    assert_eq!(first.len(), 50);
+    assert!(trimmer.finish(GaplessEnd::FormatBoundary).is_empty());
+
+    let second = collect_pcm(&trimmer.push(custom_chunk(spec, 150, vec![1.0_f32; fade_len])));
+    assert!(
+        second[0] > first[49],
+        "the fade restarted at the boundary: {} then {}",
+        first[49],
+        second[0]
+    );
+    for &sample in &second[fade_len - 50..] {
+        assert!(
+            (sample - 1.0).abs() < 1e-5,
+            "fade never completed: {sample}"
+        );
+    }
+}
+
+/// The boundary releases more chunks than the output batch holds inline, so
+/// the cold path has to spill — order, metadata, and samples all survive it.
+#[kithara::test]
+fn format_boundary_releases_every_buffered_chunk_in_order() {
+    let spec = mono_spec();
+    let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
+
+    for index in 0..4_u64 {
+        assert!(
+            trimmer
+                .push(custom_chunk(spec, index * 64, vec![0.0003_f32; 64]))
+                .is_empty()
+        );
+    }
+
+    let released = trimmer.finish(GaplessEnd::FormatBoundary);
+    assert_eq!(
+        released
+            .iter()
+            .map(|chunk| chunk.meta.frame_offset)
+            .collect::<Vec<_>>(),
+        vec![0, 64, 128, 192]
+    );
+    let pcm = collect_pcm(&released);
+    assert_eq!(pcm.len(), 256);
+    assert!(pcm.iter().all(|sample| *sample == 0.0003));
+}
+
+/// Tail compensation measures how far a generation fell short of its ideal
+/// output length, so the next generation's deficit must be computed from its
+/// own input alone. With the counter left running the deficit would read as
+/// zero and the full uncompensated 2 frames would come off.
+#[kithara::test]
+fn format_boundary_resets_the_input_count_the_next_compensation_reads() {
+    let spec = mono_spec();
+    let mut trimmer = GaplessTrimmer::from(GaplessInfo {
+        leading_frames: 0,
+        trailing_frames: 2,
+    });
+
+    let _ = trimmer.push(chunk(spec, 0, 2));
+    let _ = trimmer.push(chunk(spec, 2, 2));
+    let _ = trimmer.finish(GaplessEnd::FormatBoundary);
+
+    trimmer.set_tail_compensation(Some(GaplessTailCompensation::new(5)));
+    let mut second = super::GaplessOutput::new();
+    second.extend(trimmer.push(chunk(spec, 4, 2)));
+    second.extend(trimmer.push(chunk(spec, 6, 2)));
+    second.extend(trimmer.finish(GaplessEnd::TrackEof));
+
+    assert_eq!(second.iter().map(PcmChunk::frames).sum::<usize>(), 3);
 }

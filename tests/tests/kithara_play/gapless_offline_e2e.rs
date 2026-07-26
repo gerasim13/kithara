@@ -11,8 +11,8 @@ use kithara::{
     audio::{ChunkOutcome, PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome},
     bufpool::PcmPool,
     decode::{
-        DecodeError, GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer, PcmChunk,
-        PcmMeta, PcmSpec, SilenceTrimParams, TrackMetadata,
+        DecodeError, GaplessEnd, GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer,
+        PcmChunk, PcmMeta, PcmSpec, SilenceTrimParams, TrackMetadata,
     },
     events::EventBus,
     platform::{
@@ -993,7 +993,9 @@ fn synthetic_tail_trimmed_first_frames(tail_compensation: bool) -> Vec<f32> {
 
     let mut output = Vec::new();
     output.extend(left_frames_from_chunks(trimmer.push(source)));
-    output.extend(left_frames_from_chunks(trimmer.flush()));
+    output.extend(left_frames_from_chunks(
+        trimmer.finish(GaplessEnd::TrackEof),
+    ));
     output
 }
 

@@ -1,20 +1,16 @@
-use std::{
-    io::{Read, Seek},
-    num::NonZeroU32,
-    sync::atomic::AtomicU64,
-};
+use std::io::{Read, Seek};
 
-use bon::Builder;
-use kithara_bufpool::{BytePool, PcmPool};
 use kithara_platform::sync::Arc;
-use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
-use kithara_stream::{
-    AudioCodec, BoxedEventSink, ByteMap, ContainerFormat, MediaInfo, needs_exact_byte_sizes,
-};
+use kithara_resampler::ResamplerBackend;
+use kithara_stream::{AudioCodec, ByteMap, ContainerFormat, MediaInfo, needs_exact_byte_sizes};
 
-use super::probe::{
-    ProbeHint, codec_from_mp4_fourcc, container_from_extension, probe_codec,
-    resolve_codec_container, sniff_container_from_source,
+use super::{
+    backend::DecoderBackend,
+    config::DecoderConfig,
+    probe::{
+        ProbeHint, codec_from_mp4_fourcc, container_from_extension, probe_codec,
+        resolve_codec_container, sniff_container_from_source,
+    },
 };
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 use crate::GaplessInfo;
@@ -24,179 +20,6 @@ use crate::{
     mp4::sniff_mp4_codec,
     traits::BoxedSource,
 };
-
-/// Explicit backend selection for [`DecoderFactory`].
-///
-/// Replaces the legacy boolean `prefer_hardware` flag with a typed
-/// enum so callers spell out which backend they want. Failures of the
-/// selected backend are terminal — there is no fallback chain.
-///
-/// Variants are gated on cargo features: a hardware variant exists in
-/// the type only when its platform feature is enabled (and only on a
-/// matching `target_os`). Picking `DecoderBackend::Apple` on Linux is
-/// therefore a compile error, not a runtime `BackendUnavailable`.
-///
-/// Default = [`DecoderBackend::WebCodecs`] on wasm32 when its feature is
-/// enabled. Elsewhere the default is [`DecoderBackend::Symphonia`], unless a
-/// device build enables only its platform backend. There is no runtime backend
-/// fallback.
-///
-/// Exactly one backend feature is expected per build: device builds
-/// (`apple` / `android`) compile with `--no-default-features` so
-/// `symphonia` is absent, and the hardware variant is the sole default.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, derive_more::Display, PartialEq, Eq)]
-pub enum DecoderBackend {
-    /// Apple `AudioToolbox` (macOS/iOS, requires the `apple` feature).
-    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-    #[cfg_attr(
-        all(
-            not(feature = "symphonia"),
-            feature = "apple",
-            any(target_os = "macos", target_os = "ios")
-        ),
-        default
-    )]
-    #[display("apple")]
-    Apple,
-    /// Android `MediaCodec` (Android, requires the `android` feature).
-    #[cfg(all(feature = "android", target_os = "android"))]
-    #[cfg_attr(
-        all(
-            not(feature = "symphonia"),
-            feature = "android",
-            target_os = "android",
-            not(all(feature = "apple", any(target_os = "macos", target_os = "ios")))
-        ),
-        default
-    )]
-    #[display("android")]
-    Android,
-    /// Browser `AudioDecoder` (wasm32, requires the `webcodecs` feature).
-    #[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
-    #[cfg_attr(all(target_arch = "wasm32", feature = "webcodecs"), default)]
-    #[display("webcodecs")]
-    WebCodecs,
-    /// Symphonia software decoder (cross-platform, requires the
-    /// `symphonia` feature).
-    #[cfg(feature = "symphonia")]
-    #[cfg_attr(not(all(target_arch = "wasm32", feature = "webcodecs")), default)]
-    #[display("symphonia")]
-    Symphonia,
-}
-/// Decoder-side resampler selected by the caller.
-///
-/// This describes conversion that is part of decoder construction, not the
-/// playback graph's effects chain. Backend choice is encoded by `B`.
-#[derive(Clone, Builder)]
-#[builder(state_mod(vis = "pub"))]
-#[non_exhaustive]
-pub struct DecoderResamplerConfig<B = NoResamplerBackend> {
-    pub backend: B,
-    #[builder(default)]
-    pub options: ResamplerOptions,
-    #[builder(default)]
-    pub quality: ResamplerQuality,
-    pub target_sample_rate: NonZeroU32,
-}
-
-impl<B> DecoderResamplerConfig<B>
-where
-    B: ResamplerBackend,
-{
-    #[must_use]
-    pub fn new(
-        target_sample_rate: NonZeroU32,
-        backend: B,
-        quality: ResamplerQuality,
-        options: ResamplerOptions,
-    ) -> Self {
-        Self {
-            backend,
-            options,
-            quality,
-            target_sample_rate,
-        }
-    }
-
-    /// Build the decoder resampler config selected by the audio decoder config.
-    ///
-    /// # Errors
-    ///
-    /// Currently this constructor is infallible; it returns a `Result` so the
-    /// typed Apple codec-integrated plan can add pair validation without
-    /// widening call sites again.
-    pub fn for_decoder_backend(
-        _decoder_backend: DecoderBackend,
-        target_sample_rate: NonZeroU32,
-        backend: B,
-        quality: ResamplerQuality,
-        options: ResamplerOptions,
-    ) -> DecodeResult<Option<Self>> {
-        Ok(Some(Self::new(
-            target_sample_rate,
-            backend,
-            quality,
-            options,
-        )))
-    }
-}
-
-impl<B> std::fmt::Debug for DecoderResamplerConfig<B>
-where
-    B: ResamplerBackend,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DecoderResamplerConfig")
-            .field("backend", &self.backend.name())
-            .field("options", &self.options)
-            .field("quality", &self.quality)
-            .field("target_sample_rate", &self.target_sample_rate)
-            .finish()
-    }
-}
-
-/// Configuration for `DecoderFactory`.
-#[derive(Builder)]
-#[builder(state_mod(vis = "pub"))]
-#[non_exhaustive]
-pub struct DecoderConfig<B = NoResamplerBackend> {
-    /// Which decoder backend to use. See [`DecoderBackend`].
-    #[builder(default)]
-    pub backend: DecoderBackend,
-    /// Handle for dynamic byte length updates (HLS).
-    pub byte_len_handle: Option<Arc<AtomicU64>>,
-    /// Optional byte-map handle over the underlying source.
-    pub byte_map: Option<Arc<dyn ByteMap>>,
-    /// Raw byte buffer pool, propagated from the host.
-    pub byte_pool: BytePool,
-    /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
-    pub hint: Option<String>,
-    /// Reader-side observer hooks. Single-owner; moved into
-    /// [`ComposedDecoder`] by the chosen backend path.
-    pub hooks: Option<BoxedEventSink>,
-    /// PCM buffer pool, propagated from the host.
-    pub pcm_pool: PcmPool,
-    /// Optional decoder-side resampler plan. `None` means the decoder emits
-    /// at the source rate.
-    pub resampler: Option<DecoderResamplerConfig<B>>,
-    /// Enable gapless trim wiring through the per-backend codec.
-    #[builder(default = true)]
-    pub gapless: bool,
-    /// Epoch counter for decoder recreation tracking.
-    #[builder(default)]
-    pub epoch: u64,
-}
-
-#[cfg(test)]
-impl Default for DecoderConfig {
-    fn default() -> Self {
-        Self::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
-            .build()
-    }
-}
 
 /// Factory for creating decoders with a single, strict backend selection.
 ///
@@ -437,6 +260,7 @@ where
         demuxer,
         codec_impl,
         DecoderRuntime {
+            blend: config.blend,
             pool: pool.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
@@ -558,6 +382,7 @@ where
         demuxer,
         codec_impl,
         DecoderRuntime {
+            blend: config.blend,
             pool: pool.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
@@ -727,6 +552,7 @@ where
         demuxer,
         codec_impl,
         DecoderRuntime {
+            blend: config.blend,
             pool: pool.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
@@ -810,6 +636,7 @@ where
         demuxer,
         codec_impl,
         DecoderRuntime {
+            blend: config.blend,
             pool: pool.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
@@ -898,6 +725,7 @@ where
         demuxer,
         codec,
         DecoderRuntime {
+            blend: config.blend,
             pool: pool.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
@@ -905,27 +733,6 @@ where
         },
     );
     crate::resampled::wrap(Box::new(decoder), resampler, &pool)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn decoder_resampler_config_keeps_typed_backend() {
-        let target_sample_rate = NonZeroU32::new(48_000).expect("test rate");
-        let config: DecoderResamplerConfig<kithara_resampler::rubato::RubatoBackend> =
-            DecoderResamplerConfig::builder()
-                .target_sample_rate(target_sample_rate)
-                .backend(kithara_resampler::rubato::RubatoBackend::default())
-                .build();
-
-        assert_eq!(config.target_sample_rate, target_sample_rate);
-        assert_eq!(
-            config.backend.name(),
-            kithara_resampler::rubato::RubatoBackend::default().name()
-        );
-    }
 }
 
 /// RED (device repro): on the size-reduced apple-only build (no symphonia
@@ -945,7 +752,8 @@ mod apple_factory_tests {
         track_with_output_domain_gapless,
     };
     use crate::{
-        DecodeError, DecoderChunkOutcome, DecoderTrackInfo, GaplessInfo, GaplessTrimmer, PcmSpec,
+        DecodeError, DecoderChunkOutcome, DecoderTrackInfo, GaplessEnd, GaplessInfo,
+        GaplessTrimmer, PcmSpec,
         codec::FrameCodec,
         composed::{ComposedDecoder, DecoderRuntime},
         demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
@@ -1186,7 +994,8 @@ mod apple_factory_tests {
                 }
                 DecoderChunkOutcome::Pending(reason) => panic!("unexpected Pending: {reason:?}"),
                 DecoderChunkOutcome::Eof => {
-                    trimmed_frames = trimmed_frames.saturating_add(output_frames(trimmer.flush()));
+                    trimmed_frames = trimmed_frames
+                        .saturating_add(output_frames(trimmer.finish(GaplessEnd::TrackEof)));
                     break;
                 }
             }
