@@ -6,7 +6,7 @@ use kithara_stream::dl::{FetchCmd, OnCompleteFn, WriterFn};
 use tracing::{debug, trace};
 use url::Url;
 
-use super::{HlsVariant, PlanCtx};
+use super::{HlsVariant, PlanCtx, ReadLease};
 use crate::{
     handle::{SegmentPeer, segment_peer::parse_size_headers},
     segment::SegmentContent,
@@ -50,13 +50,11 @@ impl SizeDemandState {
 }
 
 impl HlsVariant {
-    fn apply_cached_size(&self, demand: SizeDemand) -> bool {
-        let len = match demand {
+    pub(super) fn committed_size_for(&self, demand: SizeDemand) -> Option<u64> {
+        match demand {
             SizeDemand::Init => self.init_committed_final_len(),
             SizeDemand::Segment(idx) => self.committed_final_len(idx),
-        };
-        len.filter(|n| *n > 0)
-            .is_some_and(|n| self.apply_resolved_size(demand, n))
+        }
     }
 
     pub(super) fn apply_resolved_size(&self, demand: SizeDemand, len: u64) -> bool {
@@ -80,6 +78,41 @@ impl HlsVariant {
             };
             self.init_route_size()
         });
+        changed
+    }
+
+    pub(super) fn size_probe_allowed(&self, demand: SizeDemand) -> bool {
+        match demand {
+            SizeDemand::Init => self.segments.init.as_ref().is_some_and(|segment| {
+                !segment.size().is_exact() && matches!(segment.content(), SegmentContent::Plain)
+            }),
+            SizeDemand::Segment(idx) => self.segments.get(idx as usize).is_some_and(|segment| {
+                !segment.size().is_exact() && matches!(segment.content(), SegmentContent::Plain)
+            }),
+        }
+    }
+
+    fn size_probe_url(&self, demand: SizeDemand) -> Option<Url> {
+        match demand {
+            SizeDemand::Init => Some(self.segments.init.as_ref()?.url().clone()),
+            SizeDemand::Segment(idx) => Some(self.segments.get(idx as usize)?.url().clone()),
+        }
+    }
+}
+
+impl ReadLease {
+    fn apply_cached_size(&self, demand: SizeDemand) -> bool {
+        self.variant
+            .committed_size_for(demand)
+            .filter(|n| *n > 0)
+            .is_some_and(|n| self.apply_resolved_size(demand, n))
+    }
+
+    /// Publish a resolved length into the variant's layout and follow the
+    /// shift through this lease's pending exact-seek demand — the anchor it
+    /// handed the reader was computed against the pre-shift table.
+    pub(super) fn apply_resolved_size(&self, demand: SizeDemand, len: u64) -> bool {
+        let changed = self.variant.apply_resolved_size(demand, len);
         if changed {
             self.complete_exact_seek_if_ready();
         }
@@ -91,18 +124,18 @@ impl HlsVariant {
         ctx: &PlanCtx,
         demand: SizeDemand,
     ) -> Option<FetchCmd> {
-        let url = self.size_probe_url(demand)?;
-        let cancel = self.cancel_handle();
+        let url = self.variant.size_probe_url(demand)?;
+        let cancel = self.variant.cancel_handle();
         let weak = Arc::downgrade(self);
         let signal = ctx.signal.clone();
         let writer: WriterFn = Box::new(|_| Ok(()));
         let on_complete: OnCompleteFn = Box::new(move |_bytes_written, headers, err| {
-            if let Some(variant) = weak.upgrade() {
-                variant.finish_size_probe(demand, headers, err);
+            if let Some(lease) = weak.upgrade() {
+                lease.finish_size_probe(demand, headers, err);
             }
             signal.fire();
         });
-        let segment_peer = SegmentPeer::new(self.profile.headers.clone());
+        let segment_peer = SegmentPeer::new(self.variant.profile.headers.clone());
         Some(segment_peer.size_probe(url, ctx.size_probe_method, cancel, writer, on_complete))
     }
 
@@ -120,16 +153,16 @@ impl HlsVariant {
                 self.finish_size_demand(demand);
                 ctx.signal.fire();
                 trace!(
-                    variant = self.variant,
+                    variant = self.variant.index(),
                     demand = ?demand,
                     "resolved exact size from committed cache"
                 );
                 continue;
             }
-            if !self.size_probe_allowed(demand) {
+            if !self.variant.size_probe_allowed(demand) {
                 self.finish_size_demand(demand);
                 trace!(
-                    variant = self.variant,
+                    variant = self.variant.index(),
                     demand = ?demand,
                     "skip exact size probe"
                 );
@@ -138,14 +171,14 @@ impl HlsVariant {
             let Some(cmd) = self.build_size_probe_cmd(ctx, demand) else {
                 self.finish_size_demand(demand);
                 trace!(
-                    variant = self.variant,
+                    variant = self.variant.index(),
                     demand = ?demand,
                     "failed to build exact size probe"
                 );
                 continue;
             };
             trace!(
-                variant = self.variant,
+                variant = self.variant.index(),
                 demand = ?demand,
                 remaining = *remaining,
                 "dispatch exact size probe"
@@ -167,7 +200,7 @@ impl HlsVariant {
     }
 
     delegate::delegate! {
-        to self.seek.size_demand.lock() {
+        to self.size_demand.lock() {
             #[call(pop_dispatchable)]
             fn dispatchable_size_demand(&self) -> Option<SizeDemand>;
             #[call(enqueue)]
@@ -186,7 +219,7 @@ impl HlsVariant {
         self.finish_size_demand(demand);
         if let Some(err) = err {
             debug!(
-                variant = self.variant,
+                variant = self.variant.index(),
                 demand = ?demand,
                 error = %err,
                 "lazy size probe failed"
@@ -196,36 +229,18 @@ impl HlsVariant {
         let size = headers.map_or(0, parse_size_headers);
         if size == 0 {
             debug!(
-                variant = self.variant,
+                variant = self.variant.index(),
                 demand = ?demand,
                 "lazy size probe completed without length"
             );
             return;
         }
         trace!(
-            variant = self.variant,
+            variant = self.variant.index(),
             demand = ?demand,
             size,
             "lazy size probe resolved length"
         );
         self.apply_resolved_size(demand, size);
-    }
-
-    pub(super) fn size_probe_allowed(&self, demand: SizeDemand) -> bool {
-        match demand {
-            SizeDemand::Init => self.segments.init.as_ref().is_some_and(|segment| {
-                !segment.size().is_exact() && matches!(segment.content(), SegmentContent::Plain)
-            }),
-            SizeDemand::Segment(idx) => self.segments.get(idx as usize).is_some_and(|segment| {
-                !segment.size().is_exact() && matches!(segment.content(), SegmentContent::Plain)
-            }),
-        }
-    }
-
-    fn size_probe_url(&self, demand: SizeDemand) -> Option<Url> {
-        match demand {
-            SizeDemand::Init => Some(self.segments.init.as_ref()?.url().clone()),
-            SizeDemand::Segment(idx) => Some(self.segments.get(idx as usize)?.url().clone()),
-        }
     }
 }

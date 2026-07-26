@@ -303,7 +303,6 @@ mod tests {
         let variant = VariantParts {
             init: None,
             segments,
-            seek_obs: Arc::new(TimelineState::new()) as Arc<dyn kithara_stream::SeekObserve>,
             codec: playlist.variant_codec(0),
             container: playlist.variant_container(0),
         }

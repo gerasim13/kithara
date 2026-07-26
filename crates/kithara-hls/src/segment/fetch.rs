@@ -12,7 +12,7 @@ use crate::{
         state::{Downloading, Failed, Loaded, Missing, SegmentPhase, SegmentSlotState},
     },
     signal::SizeSignal,
-    variant::HlsVariant,
+    variant::{HlsVariant, ReadLease},
 };
 
 /// Whether a fetch error is terminal for the slot. The net layer's
@@ -43,7 +43,10 @@ pub(crate) struct FetchClaim<S: SegmentPhase> {
 pub(crate) struct DownloadClaim {
     slot: Arc<SegmentSlotState>,
     planned: PlannedFetch,
-    variant: Weak<HlsVariant>,
+    /// The lease that claimed the slot. The post-commit size apply is that
+    /// reader's business: it publishes the resolved length into the variant's
+    /// layout and follows the shift through its own pending exact-seek anchor.
+    lease: Weak<ReadLease>,
     settled: bool,
 }
 
@@ -68,13 +71,13 @@ impl FetchClaim<Downloading> {
     /// `Weak` back-reference for the post-commit size apply.
     pub(crate) fn claim(
         planned: PlannedFetch,
-        variant: Weak<HlsVariant>,
+        lease: Weak<ReadLease>,
         slot: Arc<SegmentSlotState>,
     ) -> Self {
         Self {
             data: DownloadClaim {
                 planned,
-                variant,
+                lease,
                 slot,
                 settled: false,
             },
@@ -110,8 +113,8 @@ impl FetchClaim<Downloading> {
             },
             _phase: PhantomData,
         };
-        if let Some(v) = self.data.variant.upgrade() {
-            v.apply_commit(&loaded);
+        if let Some(lease) = self.data.lease.upgrade() {
+            lease.apply_commit(&loaded);
         }
         self.data.slot.mark_loaded();
         self.data.settled = true;
@@ -155,7 +158,10 @@ impl FetchClaim<Downloading> {
     }
 
     pub(crate) fn variant(&self) -> Option<Arc<HlsVariant>> {
-        self.data.variant.upgrade()
+        self.data
+            .lease
+            .upgrade()
+            .map(|lease| Arc::clone(lease.variant()))
     }
 }
 

@@ -56,6 +56,39 @@ The crate's public surface is `Hls`, `HlsConfig`, `HlsSource`, the playlist pars
 
 Re-exports: `AbrMode` from `kithara-abr`; `KeyProcessor`, `KeyProcessorRegistry`, `KeyProcessorRule` from `kithara-drm`.
 
+## Reader leases
+
+A `ReadSession` is one reader of the track. It owns the byte cursor it
+consumes the stream through, and one `ReadLease` per variant
+(`variant/state/lease.rs`). The lease owns everything about fetching that
+depends on where that reader is: the plan queue, the prefetch anchor, the
+exact-seek and exact-byte-seek demands, the seek alias that stands in for an
+anchor until the exact prefix resolves, the segment-aware tail, and the
+variant's pending size demands. `HlsVariant` keeps only what every reader of
+it shares — the segment table, the byte layout, the slot a fetch claims, and
+the cancel epoch.
+
+Two consequences the layout is there for:
+
+- The cursor survives a variant switch. A commit re-aims which lease is served
+  without restarting where the reader is, so `HlsCoord::position()` stays
+  monotone across it. Before, each variant carried its own cursor and the
+  commit had to copy one into the other.
+- Plans do not meet. A second session plans its own variant without touching
+  the audible plan, which is what a transition needs to build its incoming
+  side while the outgoing side keeps playing.
+
+`HlsCoord` owns the session and resolves which lease is audible —
+`active_lease()` is the lease on `AbrState::current_variant`, the single
+source of truth for the active variant. `lease_serving(offset)` is the read
+router: the audible lease first, then leases on variants a prior commit
+shrunk, which still serve their pre-switch byte range.
+
+The lease that claims a slot is the one the settle calls back
+(`FetchClaim` holds `Weak<ReadLease>`): publishing the committed length into
+the layout shifts the offsets that reader's pending exact-seek anchor was
+computed against, so the follow-up belongs to it.
+
 ## ABR and Variant Switching
 
 - The peer asks `AbrController` for a decision per fetch (pull-driven, no separate scheduler thread).

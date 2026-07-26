@@ -27,7 +27,7 @@ use kithara_test_utils::kithara;
 use crate::{
     playlist::{PlaylistAccess, PlaylistState},
     signal::SizeSignal,
-    variant::{HlsVariant, PlanCtx, SegmentActivateParams},
+    variant::{HlsVariant, PlanCtx, ReadLease, ReadSession, SegmentActivateParams},
 };
 
 /// Watchdog timeout for the off-RT blocking `wait_range(_, None)`: must exceed
@@ -90,6 +90,12 @@ pub(crate) struct HlsCoord {
     /// Narrow seek-observe handle — derived from `seek` at construction.
     /// Used by internal methods that only need epoch/target/pending reads.
     seek_obs: Arc<dyn SeekObserve>,
+    /// The track's reading session: one lease per variant, sharing the byte
+    /// cursor the reader consumes the stream through. Everything about
+    /// fetching that depends on where the reader is lives on those leases,
+    /// so a second session could plan an incoming variant without disturbing
+    /// this one.
+    session: ReadSession,
     /// Last generation acknowledged by the reader. When `<
     /// variant_generation` the read gate is closed; when equal the gate
     /// is open. [`Self::clear_variant_fence`] copies the current
@@ -149,7 +155,9 @@ impl HlsCoord {
         );
         let seek_obs = Arc::clone(&seek) as Arc<dyn SeekObserve>;
         let playhead_read = Arc::clone(&playhead) as Arc<dyn PlayheadRead>;
+        let session = ReadSession::new(Arc::clone(&seek_obs), &variants);
         Self {
+            session,
             playhead,
             seek,
             seek_obs,
@@ -173,6 +181,17 @@ impl HlsCoord {
         self.variants.get(self.variant_index())
     }
 
+    /// The lease the audible reader plans through — this session's claim on
+    /// the ABR-current variant.
+    pub(crate) fn active_lease(&self) -> Option<&Arc<ReadLease>> {
+        self.session.lease(self.variant_index())
+    }
+
+    fn active_lease_required(&self) -> &Arc<ReadLease> {
+        self.active_lease()
+            .expect("HlsCoord constructed without variants — bug")
+    }
+
     /// `AbrState` always returns a valid index (constructor asserts
     /// stateful handle), and `variants` is non-empty (asserted in
     /// [`Self::new`]). This lookup therefore always succeeds. Used by
@@ -181,6 +200,10 @@ impl HlsCoord {
     fn active_required(&self) -> &Arc<HlsVariant> {
         self.active()
             .expect("HlsCoord constructed without variants — bug")
+    }
+
+    pub(crate) fn event_bus(&self) -> kithara_events::EventBus {
+        self.active_required().event_bus()
     }
 
     pub(crate) fn activity(&self) -> Arc<dyn Activity> {
@@ -195,17 +218,22 @@ impl HlsCoord {
     /// activation (ABR flip) calls `rebuild` and picks up the Missing
     /// entries then.
     pub(crate) fn broadcast_eviction(&self, ctx: &PlanCtx, key: &ResourceKey, seg_at_reader: u32) {
-        let active_idx = self.variant_index();
-        let active_lost = self
+        let lost: Vec<usize> = self
             .variants
             .iter()
             .enumerate()
-            .fold(false, |acc, (v_idx, v)| {
-                let hit = v.on_evict(key).is_some() && v_idx == active_idx;
-                acc || hit
-            });
-        if active_lost && let Some(active) = self.active() {
-            active.rebuild(ctx, seg_at_reader);
+            .filter(|(_, v)| v.on_evict(key).is_some())
+            .map(|(v_idx, _)| v_idx)
+            .collect();
+        // Every SERVING lease on a variant that lost the slot replans, so the
+        // now-`Missing` entry is back in the plan of every reader that can
+        // still ask for it. A lease nobody is reading through is left alone —
+        // its plan is rebuilt when it starts serving.
+        for lease in self
+            .serving_leases()
+            .filter(|lease| lost.contains(&lease.variant_index()))
+        {
+            lease.rebuild(ctx, seg_at_reader);
         }
     }
 
@@ -271,9 +299,12 @@ impl HlsCoord {
             same_codec,
             self.playlist_state.variant_container(new_v),
         );
+        let Some(lease_new) = self.session.lease(new_v) else {
+            return false;
+        };
         if needs_byte_continuity {
             let switch_at = switch_at.min(v_new.num_segments());
-            if !v_new.prepare_exact_prefix_for_boundary(switch_at) {
+            if !lease_new.prepare_exact_prefix_for_boundary(switch_at) {
                 return false;
             }
             let reader_pos = self.position();
@@ -284,7 +315,7 @@ impl HlsCoord {
                 v_old.cancel();
                 v_old.set_served_until(switch_at);
             }
-            v_new.activate_at_segment_with_shift(
+            lease_new.activate_at_segment_with_shift(
                 ctx,
                 SegmentActivateParams {
                     seg_boundary,
@@ -297,7 +328,7 @@ impl HlsCoord {
             if let Some(v_old) = v_old {
                 v_old.cancel();
             }
-            v_new.reset_to_full_range();
+            lease_new.reset_to_full_range();
             if is_cross_codec {
                 v_new.invalidate_init();
             }
@@ -309,7 +340,7 @@ impl HlsCoord {
                 .and_then(|(seg, _, _)| u32::try_from(seg).ok())
                 .unwrap_or(0);
             let target_byte = v_new.segment_byte_offset_natural(target_seg).unwrap_or(0);
-            v_new.set_position(target_byte);
+            lease_new.set_position(target_byte);
             self.fence_target.store(new_v, Ordering::Release);
             self.variant_generation.fetch_add(1, Ordering::Release);
             self.emit.enqueue(HlsEvent::VariantSwitchFenced {
@@ -318,7 +349,7 @@ impl HlsCoord {
                 cross_codec: is_cross_codec,
             });
             self.abr.apply_decision(&decision, Instant::now());
-            v_new.rebuild_with_decoder_probe(ctx, target_seg);
+            lease_new.rebuild_with_decoder_probe(ctx, target_seg);
         }
         let reader_pt = self.playhead_read.position();
         self.abr
@@ -339,8 +370,7 @@ impl HlsCoord {
     /// lookups keep the existing `find_at_offset` routing for shrunk outgoing
     /// variants.
     pub(crate) fn demand_segment_at_offset(&self, byte_offset: u64) -> Option<u32> {
-        let active = self.active_required();
-        active
+        self.active_lease_required()
             .demand_segment_at_offset(byte_offset)
             .or_else(|| self.find_at_offset(byte_offset).map(|(idx, _, _)| idx))
     }
@@ -359,30 +389,43 @@ impl HlsCoord {
         }
         self.variants
             .get(target)
-            .map_or_else(Vec::new, |variant| variant.dispatch_size_only(ctx, budget))
+            .and_then(|_| self.session.lease(target))
+            .map_or_else(Vec::new, |lease| lease.dispatch_size_only(ctx, budget))
     }
 
     /// Cross-variant segment lookup. Mirrors [`Self::variant_serving`]'s
     /// priority: active first, then shrunk `v_old`s. Returns `None` if no
     /// engaged variant claims the offset.
     pub(crate) fn find_at_offset(&self, byte_offset: u64) -> Option<(u32, u64, u64)> {
-        let active = self.active_required();
+        let active = self.active_lease_required();
         if let Some(found) = active.find_at_offset(byte_offset) {
             return Some(found);
         }
-        for v in self.variants.iter() {
-            if Arc::ptr_eq(v, active) {
-                continue;
-            }
-            let shrunk = v.is_shrunk();
-            if !shrunk {
-                continue;
-            }
-            if let Some(found) = v.find_at_offset(byte_offset) {
+        for lease in self.shrunk_leases(active) {
+            if let Some(found) = lease.find_at_offset(byte_offset) {
                 return Some(found);
             }
         }
         None
+    }
+
+    /// The leases a reader can currently reach bytes through. One today: the
+    /// audible one. A transition adds the window's lease here, which is what
+    /// makes dispatch and eviction reach both sides at once.
+    fn serving_leases(&self) -> impl Iterator<Item = &Arc<ReadLease>> {
+        self.active_lease().into_iter()
+    }
+
+    /// Leases on variants that a prior ABR commit shrunk out of the active
+    /// range — the `v_old`s that still serve their pre-switch bytes so a
+    /// reader crossing the boundary mid-buffer hits the right payload.
+    fn shrunk_leases<'a>(
+        &'a self,
+        active: &'a Arc<ReadLease>,
+    ) -> impl Iterator<Item = &'a Arc<ReadLease>> {
+        self.session
+            .leases()
+            .filter(move |lease| !Arc::ptr_eq(lease, active) && lease.variant().is_shrunk())
     }
 
     /// Public-API mirror of [`Self::variant_change_pending`] used by the
@@ -413,7 +456,7 @@ impl HlsCoord {
         if self.cancel.is_cancelled() {
             return SourcePhase::Cancelled;
         }
-        self.variant_serving(range.start).phase_at(range)
+        self.lease_serving(range.start).phase_at(range)
     }
 
     pub(crate) fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
@@ -467,7 +510,7 @@ impl HlsCoord {
         if self.variant_change_pending() {
             return Ok(WaitOutcome::Interrupted);
         }
-        self.variant_serving(range.start).wait_range(range, timeout)
+        self.lease_serving(range.start).wait_range(range, timeout)
     }
 
     pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
@@ -477,7 +520,7 @@ impl HlsCoord {
         if self.variant_change_pending() {
             return Ok(ReadOutcome::Pending(PendingReason::VariantChange));
         }
-        self.variant_serving(offset).read_at(offset, buf)
+        self.lease_serving(offset).read_at(offset, buf)
     }
 
     /// The bare readiness gate, captured by the cancel waker's `on_cancel`
@@ -571,6 +614,34 @@ impl HlsCoord {
             && self.active().is_some_and(|active| {
                 active.segment_stalled_at_boundary(reader_seg, self.position())
             })
+    }
+
+    /// Replan the audible lease from `from_seg`.
+    pub(crate) fn rebuild(&self, ctx: &PlanCtx, from_seg: u32) {
+        if let Some(lease) = self.active_lease() {
+            lease.rebuild(ctx, from_seg);
+        }
+    }
+
+    /// Replan the audible lease from `from_seg`, keeping the segment-0 probe
+    /// a mid-flight decoder recreate still needs.
+    pub(crate) fn rebuild_with_decoder_probe(&self, ctx: &PlanCtx, from_seg: u32) {
+        if let Some(lease) = self.active_lease() {
+            lease.rebuild_with_decoder_probe(ctx, from_seg);
+        }
+    }
+
+    /// Re-aim the audible lease at `target` and report the segment it landed
+    /// on, or `None` when the time resolves to no segment.
+    pub(crate) fn rebuild_at_time(&self, ctx: &PlanCtx, target: Duration) -> Option<u32> {
+        self.active_lease()?.rebuild_at_time(ctx, target)
+    }
+
+    /// Ask the audible lease for the next batch of fetches.
+    pub(crate) fn dispatch(&self, ctx: &PlanCtx, budget: usize) -> Vec<FetchCmd> {
+        self.active_lease()
+            .map(|lease| lease.dispatch(ctx, budget))
+            .unwrap_or_default()
     }
 
     /// Mirror `abr.lock()` state to `seek_obs.is_pending()`.
@@ -674,21 +745,18 @@ impl HlsCoord {
     /// excluded: their layout overlaps the active range but their
     /// resources were never fetched, so routing to them would return
     /// `NotFound` / `Pending(Retry)`.
-    pub(crate) fn variant_serving(&self, offset: u64) -> &Arc<HlsVariant> {
-        let active = self.active_required();
-        if active.init_descriptor_at(offset).is_some() || active.find_at_offset(offset).is_some() {
+    pub(crate) fn lease_serving(&self, offset: u64) -> &Arc<ReadLease> {
+        let active = self.active_lease_required();
+        if active.variant().init_descriptor_at(offset).is_some()
+            || active.find_at_offset(offset).is_some()
+        {
             return active;
         }
-        for v in self.variants.iter() {
-            if Arc::ptr_eq(v, active) {
-                continue;
-            }
-            let shrunk = v.is_shrunk();
-            if !shrunk {
-                continue;
-            }
-            if v.init_descriptor_at(offset).is_some() || v.find_at_offset(offset).is_some() {
-                return v;
+        for lease in self.shrunk_leases(active) {
+            if lease.variant().init_descriptor_at(offset).is_some()
+                || lease.find_at_offset(offset).is_some()
+            {
+                return lease;
             }
         }
         active
@@ -760,17 +828,22 @@ impl HlsCoord {
     }
 
     delegate! {
-        to self.active_required().as_ref() {
-            #[call(get_position)]
-            pub(crate) fn position(&self) -> u64;
+        to self.active_lease_required().as_ref() {
             pub(crate) fn advance(&self, n: u64);
             pub(crate) fn set_position(&self, pos: u64);
-            pub(crate) fn download_head(&self) -> u32;
-            pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
             pub(crate) fn seek_time_anchor(
                 &self,
                 position: Duration,
             ) -> StreamResult<Option<SourceSeekAnchor>>;
+        }
+        to self.active_required().as_ref() {
+            pub(crate) fn download_head(&self) -> u32;
+            pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
+        }
+        to self.session {
+            /// The byte the audible reader has consumed up to — what the
+            /// stream publishes as its position.
+            pub(crate) fn position(&self) -> u64;
         }
     }
 }
@@ -850,7 +923,7 @@ impl ByteMap for HlsCoord {
             #[call(active)]
             fn len(&self) -> Option<u64>;
             #[expr($.descriptor_at_byte(byte))]
-            #[call(variant_serving)]
+            #[call(lease_serving)]
             fn segment_at_byte(&self, byte: u64) -> Option<SegmentDescriptor>;
             #[expr(Some($?.num_segments()))]
             #[call(active)]
@@ -873,199 +946,27 @@ impl ByteMap for HlsCoord {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
-
-    use kithara_abr::{Abr, AbrController, AbrSettings, AbrState};
-    use kithara_assets::{AssetResource, AssetSource, AssetStoreBuilder, StorageBackend};
     use kithara_events::{AbrMode, Event, EventBus, VariantIndex};
-    use kithara_platform::sync::{Arc, ThreadGate};
+    use kithara_platform::sync::Arc;
     use kithara_stream::{AudioCodec, ContainerFormat, PlayheadWrite, SeekControl};
 
     use super::*;
     use crate::{
-        config::SizeProbeMethod,
-        playlist::{PlaylistState, SegmentState, VariantState},
-        segment::{
-            MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState, SegmentSource,
-        },
-        variant::{PlanCtx, VariantParts},
+        stream::fixture::{StubAbrPeer, VariantSpec, coord_fixture},
+        variant::PlanCtx,
     };
 
-    struct TestAbrPeer {
-        state: Arc<AbrState>,
-        variants: Vec<kithara_events::VariantInfo>,
-    }
-
-    impl Abr for TestAbrPeer {
-        fn state(&self) -> Option<Arc<AbrState>> {
-            Some(Arc::clone(&self.state))
-        }
-
-        fn variants(&self) -> Vec<kithara_events::VariantInfo> {
-            self.variants.clone()
-        }
-    }
-
-    fn switch_ctx(bus: &EventBus, cancel: &CancelToken, signal: &SizeSignal) -> PlanCtx {
-        let store = Arc::new(
-            AssetStoreBuilder::default()
-                .backend(StorageBackend::Memory)
-                .cancel(cancel.clone())
-                .build(),
-        );
-        PlanCtx {
-            bus: bus.clone(),
-            fetch: crate::variant::test_transport(),
-            prefetch_budget: 1,
-            master_cancel: cancel.clone(),
-            scope: store
-                .scope::<crate::Hls>(&AssetSource::Remote {
-                    url: "https://example.com/master.m3u8"
-                        .parse()
-                        .expect("master url"),
-                    discriminator: Some("coord-test".to_owned()),
-                })
-                .expect("coord asset scope"),
-            seek_epoch: 0,
-            look_ahead_bytes: None,
-            look_ahead_segments: None,
-            headers: None,
-            size_probe_method: SizeProbeMethod::Head,
-            signal: signal.clone(),
-        }
-    }
-
     fn switch_coord() -> (Arc<HlsCoord>, EventBus, PlanCtx) {
-        let bus = EventBus::new(8);
-        let cancel = CancelToken::never();
-        let signal = SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new()));
-        let ctx = switch_ctx(&bus, &cancel, &signal);
-        let playlist = Arc::new(PlaylistState::new(vec![
-            VariantState {
-                codec: Some(AudioCodec::AacLc),
-                container: Some(ContainerFormat::Fmp4),
-                init_url: None,
-                segments: vec![SegmentState {
-                    url: "https://example.com/v0-seg0.m4s".parse().expect("url"),
-                    duration: Duration::from_secs(2),
-                    byte_range_len: Some(100),
-                    index: crate::ids::SegmentIndex::try_new(0, 1).expect("idx"),
-                }],
-            },
-            VariantState {
-                codec: Some(AudioCodec::Mp3),
-                container: Some(ContainerFormat::MpegAudio),
-                init_url: None,
-                segments: vec![SegmentState {
-                    url: "https://example.com/v1-seg0.m4s".parse().expect("url"),
-                    duration: Duration::from_secs(2),
-                    byte_range_len: Some(100),
-                    index: crate::ids::SegmentIndex::try_new(0, 1).expect("idx"),
-                }],
-            },
-        ]));
-        let variants: Arc<[Arc<HlsVariant>]> = Arc::from(vec![
-            VariantParts {
-                init: None,
-                segments: vec![Segment::Media(MediaSegment {
-                    url: "https://example.com/v0-seg0.m4s".parse().expect("url"),
-                    resource_id: ctx
-                        .scope
-                        .key(&AssetResource::Url(
-                            "https://example.com/v0-seg0.m4s".parse().expect("url"),
-                        ))
-                        .expect("segment key"),
-                    state: SegmentSlotState::missing(),
-                    size: SegmentSize::seed(100),
-                    content: SegmentContent::Plain,
-                    source: SegmentSource::new(
-                        ctx.scope.store().clone(),
-                        ctx.master_cancel.child(),
-                    ),
-                    decode_time: Duration::ZERO,
-                    duration: Duration::from_secs(2),
-                })],
-                seek_obs: Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
-                codec: playlist.variant_codec(0),
-                container: playlist.variant_container(0),
-            }
-            .into_variant(0, &ctx),
-            VariantParts {
-                init: None,
-                segments: vec![Segment::Media(MediaSegment {
-                    url: "https://example.com/v1-seg0.m4s".parse().expect("url"),
-                    resource_id: ctx
-                        .scope
-                        .key(&AssetResource::Url(
-                            "https://example.com/v1-seg0.m4s".parse().expect("url"),
-                        ))
-                        .expect("segment key"),
-                    state: SegmentSlotState::missing(),
-                    size: SegmentSize::seed(100),
-                    content: SegmentContent::Plain,
-                    source: SegmentSource::new(
-                        ctx.scope.store().clone(),
-                        ctx.master_cancel.child(),
-                    ),
-                    decode_time: Duration::ZERO,
-                    duration: Duration::from_secs(2),
-                })],
-                seek_obs: Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
-                codec: playlist.variant_codec(1),
-                container: playlist.variant_container(1),
-            }
-            .into_variant(1, &ctx),
-        ]);
-        let abr_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
-        let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer {
-            state: Arc::clone(&abr_state),
-            variants: vec![
-                kithara_events::VariantInfo {
-                    variant_index: VariantIndex::new(0),
-                    bandwidth_bps: Some(128_000),
-                    codecs: Some("mp4a.40.2".into()),
-                    container: Some("fmp4".into()),
-                    duration: kithara_events::VariantDuration::Segmented(vec![
-                        Duration::from_secs(2),
-                    ]),
-                    name: None,
-                },
-                kithara_events::VariantInfo {
-                    variant_index: VariantIndex::new(1),
-                    bandwidth_bps: Some(96_000),
-                    codecs: Some("mp3".into()),
-                    container: Some("mpeg-audio".into()),
-                    duration: kithara_events::VariantDuration::Segmented(vec![
-                        Duration::from_secs(2),
-                    ]),
-                    name: None,
-                },
-            ],
-        });
-        let controller = Arc::new(AbrController::new(
-            AbrSettings::default(),
-            CancelToken::never(),
-        ));
-        let handle = controller.register(&peer);
-        handle
+        let specs = [
+            VariantSpec::new(AudioCodec::AacLc, ContainerFormat::Fmp4, 1),
+            VariantSpec::new(AudioCodec::Mp3, ContainerFormat::MpegAudio, 1),
+        ];
+        let fixture = coord_fixture(&specs, 1, &StubAbrPeer::new(&specs));
+        fixture
+            .abr
             .set_mode(AbrMode::Manual(VariantIndex::new(1)))
             .expect("manual target in range");
-        let coord = Arc::new(HlsCoord::new(
-            HlsCoordEnv {
-                scope: ctx.scope.clone(),
-                fetch: crate::variant::test_transport(),
-                cancel,
-                headers: None,
-                emit: Arc::new(DeferredBus::new(bus.clone(), 8)),
-                signal,
-            },
-            Arc::new(PlayheadState::new()),
-            Arc::new(TimelineState::new()),
-            handle,
-            variants,
-            playlist,
-        ));
-        (coord, bus, ctx)
+        (fixture.coord, fixture.bus, fixture.ctx)
     }
 
     #[kithara::test]

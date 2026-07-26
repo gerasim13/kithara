@@ -1,234 +1,40 @@
-use std::{num::NonZeroUsize, ops::Range};
+use std::num::NonZeroUsize;
 
-use kithara_platform::time::Duration;
-use kithara_storage::WaitOutcome;
-use kithara_stream::{
-    PendingReason, ReadOutcome, SourcePhase, StreamError, StreamResult, needs_exact_byte_sizes,
-};
+use kithara_stream::{PendingReason, ReadOutcome, StreamResult};
 use kithara_test_utils::kithara;
 use tracing::trace;
 
-use super::HlsVariant;
-use crate::{HlsError, segment::PlannedFetch};
+use super::ReadLease;
+use crate::segment::PlannedFetch;
 
-impl HlsVariant {
-    fn fetch_is_planned(&self, planned: PlannedFetch) -> bool {
-        self.flow.queue.lock().contains(&planned)
+/// Where a lease turns byte offsets into bytes: the alias-aware lookup, and
+/// the walk that serves a read out of the init prefix and the media segments
+/// behind it.
+impl ReadLease {
+    pub(super) fn fetch_is_planned(&self, planned: PlannedFetch) -> bool {
+        self.queue.lock().contains(&planned)
     }
 
-    fn init_has_demand(&self) -> bool {
-        self.init_downloading() || self.fetch_is_planned(PlannedFetch::Init)
-    }
-
-    pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase {
-        // EOF wins over `range_ready`'s zero-width "ready" at `range.start ==
-        // total` so the phase is observable as `Eof` at the stream end (see
-        // `wait_range`); a flush in flight takes precedence.
-        let total = self.total_bytes();
-        let uses_seek_alias = self.seek_alias_at(range.start).is_some();
-        if !uses_seek_alias
-            && total > 0
-            && range.start >= total
-            && self.eof_ready()
-            && !self.flow.reader.is_flushing()
-        {
-            return SourcePhase::Eof;
-        }
-        if let Some(phase) = self.exact_seek_metadata_phase() {
-            return phase;
-        }
-        if let Some(phase) = self.exact_byte_metadata_phase() {
-            return phase;
-        }
-        if self.range_ready(&range) {
-            return SourcePhase::Ready;
-        }
-        if self.flow.reader.is_flushing() {
-            return SourcePhase::Seeking;
-        }
-        self.range_wait_phase(&range)
-    }
-
-    /// Whether any init/media segment covering `range` settled terminally
-    /// (`Failed`): the downloader exhausted its retry budget, so the range
-    /// will never load. [`wait_range`](Self::wait_range) consults this when
-    /// a range is not ready to tell "still downloading" (spin) from
-    /// "permanently failed" (terminal error). Walks the same descriptors as
-    /// [`range_ready`](Self::range_ready), checking slot state rather than
-    /// on-disk bytes; the per-byte `contains_range` walk stays out so this
-    /// only fires on a real terminal settle, never on a transient gap.
-    fn range_has_failed(&self, range: &Range<u64>) -> bool {
-        let total = self.total_bytes();
-        let uses_seek_alias = self.seek_alias_at(range.start).is_some();
-        let end = if !uses_seek_alias && total > 0 {
-            range.end.min(total)
-        } else {
-            range.end
-        };
-        let mut cursor = range.start;
-        // The init prefix is not a media segment, so `find_at_offset` returns
-        // `None` for a byte inside it — skip past it (jumping to media space)
-        // after checking the init's own terminal state, exactly as
-        // `range_ready` walks init then media.
-        if let Some(init_range) = self.init_descriptor_at(cursor) {
-            if self.init_failed() {
-                return true;
-            }
-            cursor = init_range.end;
-        }
-        while cursor < end {
-            let Some((seg_idx, seg_off, seg_size)) = self.find_at_offset(cursor) else {
-                break;
-            };
-            if self.segment_failed(seg_idx) {
-                return true;
-            }
-            cursor = (seg_off + seg_size).max(cursor + 1);
-        }
-        false
-    }
-
-    pub(crate) fn range_ready(&self, range: &Range<u64>) -> bool {
-        let total = self.total_bytes();
-        let uses_seek_alias = self.seek_alias_at(range.start).is_some();
-        let clamp_alias_to_eof = uses_seek_alias
-            && !needs_exact_byte_sizes(self.profile.codec, self.profile.container)
-            && self.eof_ready();
-        // When a served segment's size is still unknown, `total` is a lower
-        // bound, not the stream end. An offset at/past it is NOT "ready"
-        // (clamping `end` to the under-count would falsely report a zero-width
-        // ready range and let the reader spin past a real, not-yet-sized
-        // segment) — treat it as not-ready so the gate holds Waiting.
-        if !uses_seek_alias && total > 0 && range.start >= total && !self.sizes_complete() {
-            return false;
-        }
-        let end = if total > 0 && (!uses_seek_alias || clamp_alias_to_eof) {
-            range.end.min(total)
-        } else {
-            range.end
-        };
-        if range.start >= end {
-            return true;
-        }
-
-        let mut cursor = range.start;
-        while let Some(init_range) = self.init_descriptor_at(cursor) {
-            if cursor >= init_range.end {
-                break;
-            }
-            let slice_end = end.min(init_range.end);
-            let local_start = cursor - init_range.start;
-            let local_end = slice_end - init_range.start;
-            if !self.init_contains(local_start..local_end) {
-                return false;
-            }
-            cursor = slice_end;
-            if cursor >= end {
-                return true;
-            }
-        }
-        if cursor >= end {
-            return true;
-        }
-
-        while cursor < end {
-            let Some((seg_idx, seg_off, seg_size)) = self.find_at_offset(cursor) else {
-                return false;
-            };
-            let seg_end = seg_off + seg_size;
-            let slice_end = end.min(seg_end);
-            let local_start = cursor - seg_off;
-            let local_end = slice_end - seg_off;
-            if !self.segment_contains(seg_idx, local_start..local_end) {
-                return false;
-            }
-            cursor = slice_end;
-        }
-        cursor >= end
-    }
-
-    fn range_wait_phase(&self, range: &Range<u64>) -> SourcePhase {
-        let total = self.total_bytes();
-        let uses_seek_alias = self.seek_alias_at(range.start).is_some();
-        let clamp_alias_to_eof = uses_seek_alias
-            && !needs_exact_byte_sizes(self.profile.codec, self.profile.container)
-            && self.eof_ready();
-        if !uses_seek_alias && total > 0 && range.start >= total && !self.sizes_complete() {
-            let head = self.download_head();
-            return if self.segment_has_demand(head) {
-                SourcePhase::WaitingDemand
-            } else {
-                SourcePhase::Waiting
-            };
-        }
-
-        let end = if total > 0 && (!uses_seek_alias || clamp_alias_to_eof) {
-            range.end.min(total)
-        } else {
-            range.end
-        };
-        if range.start >= end {
-            return SourcePhase::Waiting;
-        }
-        let mut waiting_on_demand = false;
-        let mut cursor = range.start;
-        while let Some(init_range) = self.init_descriptor_at(cursor) {
-            if cursor >= init_range.end {
-                break;
-            }
-            let slice_end = end.min(init_range.end);
-            let local_start = cursor - init_range.start;
-            let local_end = slice_end - init_range.start;
-            if !self.init_contains(local_start..local_end) {
-                if !self.init_has_demand() {
-                    return SourcePhase::Waiting;
-                }
-                waiting_on_demand = true;
-            }
-            cursor = slice_end;
-            if cursor >= end {
-                return if waiting_on_demand {
-                    SourcePhase::WaitingDemand
-                } else {
-                    SourcePhase::Waiting
-                };
-            }
-        }
-
-        while cursor < end {
-            let Some((seg_idx, seg_off, seg_size)) = self.find_at_offset(cursor) else {
-                return SourcePhase::Waiting;
-            };
-            let seg_end = seg_off + seg_size;
-            let slice_end = end.min(seg_end);
-            let local_start = cursor - seg_off;
-            let local_end = slice_end - seg_off;
-            if !self.segment_contains(seg_idx, local_start..local_end) {
-                if !self.segment_has_demand(seg_idx) {
-                    return SourcePhase::Waiting;
-                }
-                waiting_on_demand = true;
-            }
-            cursor = slice_end;
-        }
-
-        if waiting_on_demand {
-            SourcePhase::WaitingDemand
-        } else {
-            SourcePhase::Waiting
-        }
+    /// Reader-facing lookup in **virtual** byte space. A seek alias this lease
+    /// planted wins: it stands in for the anchor the reader was handed before
+    /// the exact prefix resolved. Otherwise the variant's offset table
+    /// answers, gated against `[served_from..served_until)`, so cross-variant
+    /// lookups fall through to the variant that still serves the byte.
+    pub(crate) fn find_at_offset(&self, byte_offset: u64) -> Option<(u32, u64, u64)> {
+        self.seek_alias_at(byte_offset)
+            .or_else(|| self.variant.layout_find_at_offset(byte_offset))
     }
 
     #[kithara::hang_watchdog]
     pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
-        let total = self.total_bytes();
+        let total = self.variant.total_bytes();
         if total > 0 && offset >= total && self.eof_ready() {
             return Ok(ReadOutcome::Eof);
         }
         if self.exact_seek_metadata_phase().is_some() || self.exact_byte_metadata_phase().is_some()
         {
             trace!(
-                variant = self.variant,
+                variant = self.variant.index(),
                 offset, "read_at: gated by exact-size metadata demand"
             );
             return Ok(Self::wrap(0));
@@ -239,7 +45,7 @@ impl HlsVariant {
         let mut cursor = offset;
         let read_end = offset.saturating_add(buf_len);
 
-        while let Some(init_range) = self.init_descriptor_at(cursor) {
+        while let Some(init_range) = self.variant.init_descriptor_at(cursor) {
             hang_tick!();
             if cursor >= init_range.end {
                 break;
@@ -249,7 +55,7 @@ impl HlsVariant {
             let local_end = slice_end - init_range.start;
             let take = usize::try_from(local_end - local_start).unwrap_or(usize::MAX);
             let dst = &mut buf[written..written + take];
-            match self.init_read_at(local_start..local_end, dst)? {
+            match self.variant.init_read_at(local_start..local_end, dst)? {
                 Some(n) => {
                     written += n;
                     cursor += n as u64;
@@ -279,10 +85,10 @@ impl HlsVariant {
         // continue past offset 0 and must not be gated here. A terminally
         // failed init (`init_failed`) stops reserving the prefix so the read
         // surfaces an error instead of waiting forever.
-        if self.has_init()
-            && self.init_size() == 0
-            && self.served_from() == 0
-            && !self.init_failed()
+        if self.variant.has_init()
+            && self.variant.init_size() == 0
+            && self.variant.served_from() == 0
+            && !self.variant.init_failed()
         {
             return Ok(Self::wrap(written));
         }
@@ -298,16 +104,21 @@ impl HlsVariant {
             let local_end = slice_end - seg_off;
             let take = usize::try_from(local_end - local_start).unwrap_or(usize::MAX);
             let dst = &mut buf[written..written + take];
-            let Some(n) = self.segment_read_at(seg_idx, local_start..local_end, dst)? else {
+            let Some(n) = self
+                .variant
+                .segment_read_at(seg_idx, local_start..local_end, dst)?
+            else {
                 trace!(
-                    variant = self.variant,
+                    variant = self.variant.index(),
                     seg_idx,
                     cursor,
                     size_exact = self
+                        .variant
                         .segments
                         .get(seg_idx as usize)
                         .is_some_and(|s| s.size().is_exact()),
                     loaded = self
+                        .variant
                         .segments
                         .get(seg_idx as usize)
                         .is_some_and(|s| s.state().is_loaded()),
@@ -319,7 +130,7 @@ impl HlsVariant {
             cursor += n as u64;
             if n < take {
                 trace!(
-                    variant = self.variant,
+                    variant = self.variant.index(),
                     seg_idx, cursor, n, take, "read_at: short segment read"
                 );
                 break;
@@ -327,64 +138,6 @@ impl HlsVariant {
         }
 
         Ok(Self::wrap(written))
-    }
-
-    fn segment_has_demand(&self, seg_idx: u32) -> bool {
-        self.segment_downloading(seg_idx) || self.fetch_is_planned(PlannedFetch::Segment(seg_idx))
-    }
-
-    #[kithara::hang_watchdog]
-    pub(crate) fn wait_range(
-        &self,
-        range: Range<u64>,
-        _timeout: Option<Duration>,
-    ) -> StreamResult<WaitOutcome> {
-        // EOF must win over `range_ready`'s zero-width "ready" at the stream
-        // end: a read at `range.start == total` clamps to a `[total, total)`
-        // range that `range_ready` reports ready, so the gate would mint
-        // `Ready`, `read_at` then returns `Eof`, and the consumer's
-        // `phase()` stays `Ready` forever — EOF never becomes observable and a
-        // reader polling on phase spins. A seek in flight may pull the
-        // position back into the stream, so let the flush path win first.
-        let total = self.total_bytes();
-        let eof = total > 0
-            && range.start >= total
-            && self.eof_ready()
-            && !self.flow.reader.is_flushing();
-        let metadata_pending = !eof
-            && (self.exact_seek_metadata_phase().is_some()
-                || self.exact_byte_metadata_phase().is_some());
-        let ready = !metadata_pending && !eof && self.range_ready(&range);
-        let flushing = !eof && !ready && self.flow.reader.is_flushing();
-        // A segment covering this range settled terminally (the downloader
-        // exhausted its retries): the bytes will never arrive, so surface a
-        // terminal error instead of `WaitBudgetExceeded` — the reader stops
-        // here rather than spinning. Checked AFTER flushing/EOF: a seek in
-        // flight may be moving the read position off the failed range, and
-        // the failed check is scoped to the requested range so seeking away
-        // from it can clear the terminal range.
-        let failed = !eof && !ready && !flushing && self.range_has_failed(&range);
-        match (eof, ready, flushing, failed) {
-            (true, _, _, _) => Ok(WaitOutcome::Eof),
-            (_, true, _, _) => {
-                hang_reset!();
-                Ok(WaitOutcome::Ready)
-            }
-            (_, _, true, _) => Ok(WaitOutcome::Interrupted),
-            (_, _, _, true) => Err(StreamError::Source(HlsError::SegmentUnavailable.into())),
-            (false, false, false, false) => {
-                // Not ready: the reader driver (`Stream::probe_read` / `read` /
-                // `prime_seek_range`) wakes the peer for this range, per its own
-                // on-core/off-core context — this method stays wake-free.
-                trace!(
-                    variant = self.variant,
-                    start = range.start,
-                    end = range.end,
-                    "wait_range: range not ready (budget exceeded)"
-                );
-                Err(StreamError::Source(HlsError::WaitBudgetExceeded.into()))
-            }
-        }
     }
 
     fn wrap(written: usize) -> ReadOutcome {

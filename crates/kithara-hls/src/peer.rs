@@ -138,9 +138,9 @@ impl HlsPeer {
         let initial_seg = coord
             .find_at_offset(coord.position())
             .map_or(0, |(idx, _, _)| idx);
-        if let Some(active) = coord.active() {
+        {
             let plan_ctx = PlanCtx {
-                bus: active.event_bus(),
+                bus: coord.event_bus(),
                 fetch: Arc::clone(&coord.fetch),
                 prefetch_budget,
                 look_ahead_bytes,
@@ -152,7 +152,7 @@ impl HlsPeer {
                 seek_epoch: self.seek_obs.epoch(),
                 signal: coord.signal(),
             };
-            active.rebuild(&plan_ctx, initial_seg);
+            coord.rebuild(&plan_ctx, initial_seg);
         }
         self.reader_segment
             .store(initial_seg as usize, Ordering::Release);
@@ -323,13 +323,7 @@ impl Peer for HlsPeer {
             .dispatch_pending_size_demands(&outcome.ctx, outcome.ctx.prefetch_budget);
         let remaining = outcome.ctx.prefetch_budget.saturating_sub(cmds.len());
         if remaining > 0 {
-            cmds.extend(
-                outcome
-                    .coord
-                    .active()
-                    .map(|active| active.dispatch(&outcome.ctx, remaining))
-                    .unwrap_or_default(),
-            );
+            cmds.extend(outcome.coord.dispatch(&outcome.ctx, remaining));
         }
         if cmds.is_empty() {
             return Poll::Pending;
@@ -478,9 +472,7 @@ impl HlsTrackState {
                 // the codec preroll bound: a stale *lagging* cursor resolves
                 // many segments below the floor and stays suppressed (the
                 // prefix re-download guard the floor was built for is intact).
-                if let Some(active) = coord.active() {
-                    active.rebuild(ctx, landing);
-                }
+                coord.rebuild(ctx, landing);
                 self.seek_settle_floor = Some(landing);
                 return landing;
             } else {
@@ -528,14 +520,9 @@ impl HlsTrackState {
             && demand_segment.is_some()
             && coord.active().is_some_and(|a| a.served_from() == 0);
         if aligned_rescue {
-            if let Some(active) = coord.active() {
-                active.rebuild_with_decoder_probe(ctx, resolved);
-            }
-        } else if discontinuous_advance
-            && !switch_landed
-            && let Some(active) = coord.active()
-        {
-            active.rebuild(ctx, resolved);
+            coord.rebuild_with_decoder_probe(ctx, resolved);
+        } else if discontinuous_advance && !switch_landed {
+            coord.rebuild(ctx, resolved);
         }
         resolved
     }
@@ -598,12 +585,137 @@ impl HlsTrackState {
     )]
     fn seek_epoch_reset(&mut self, coord: &HlsCoord, ctx: &PlanCtx) {
         if let Some(target) = self.seek_obs.target()
-            && let Some(active) = coord.active()
-            && let Some(seg) = active.rebuild_at_time(ctx, target)
+            && let Some(seg) = coord.rebuild_at_time(ctx, target)
         {
             self.reader_segment.store(seg as usize, Ordering::Release);
             self.reader_variant = coord.variant_index();
             self.seek_settle_floor = Some(seg);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_events::VariantIndex;
+    use kithara_platform::tokio::{sync::mpsc, task::yield_now};
+    use kithara_stream::{AudioCodec, ContainerFormat, TimelineState, dl::RequestMethod};
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        segment::PlannedFetch,
+        stream::fixture::{VariantSpec, coord_fixture, segment_url, variant_infos},
+    };
+
+    /// Slots the peer's dispatch claimed on `variant`, in segment order.
+    ///
+    /// A segment fetch is an ordinary file that drives its own download, so a
+    /// dispatch pass leaves no command behind for it — what the pass did is
+    /// read off the slots it claimed. Only size probes surface as commands.
+    fn claimed(coord: &HlsCoord, variant: usize) -> Vec<PlannedFetch> {
+        coord.variants[variant]
+            .segments()
+            .iter()
+            .enumerate()
+            .filter(|(_, seg)| seg.state().is_downloading())
+            .filter_map(|(idx, _)| u32::try_from(idx).ok())
+            .map(PlannedFetch::Segment)
+            .collect()
+    }
+
+    fn poll_once(peer: &Arc<HlsPeer>) -> Poll<Option<Vec<FetchCmd>>> {
+        let waker = Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        peer.poll_next(&mut cx)
+    }
+
+    /// The peer's own command order, which the variant-level dispatch oracles
+    /// cannot see: pending size probes for the switch TARGET go out first and
+    /// spend the budget, and only what is left reaches the audible lease's
+    /// plan. Moving the plan onto the lease must not reorder that prefix.
+    #[kithara::test(tokio)]
+    async fn peer_dispatches_target_size_probes_before_the_audible_plan() {
+        let specs = [
+            VariantSpec::new(AudioCodec::AacLc, ContainerFormat::Adts, 3),
+            VariantSpec::new(AudioCodec::AacLc, ContainerFormat::Adts, 3).placeholder_sizes(),
+        ];
+        let peer = Arc::new(HlsPeer::new(
+            Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
+            Arc::new(TimelineState::new()) as Arc<dyn Activity>,
+            AbrMode::Auto(Some(VariantIndex::new(0))),
+        ));
+        peer.set_abr_variants(variant_infos(&specs));
+        let fixture = coord_fixture(&specs, 3, &(Arc::clone(&peer) as Arc<dyn Abr>));
+        let (_evict_tx, evict_rx) = mpsc::unbounded_channel();
+        peer.activate(
+            Arc::clone(&fixture.coord),
+            evict_rx,
+            3,
+            None,
+            None,
+            SizeProbeMethod::Head,
+        );
+        yield_now().await;
+
+        // A manual switch to the placeholder-sized variant leaves a pending
+        // decision: the commit cannot land until the target's byte prefix is
+        // exact, so the demand for it is what the next poll must serve first.
+        fixture
+            .abr
+            .set_mode(AbrMode::Manual(VariantIndex::new(1)))
+            .expect("manual target in range");
+
+        let Poll::Ready(Some(cmds)) = poll_once(&peer) else {
+            panic!("peer had work: a pending target prefix plus a claimable audible plan");
+        };
+
+        assert_eq!(
+            cmds.iter()
+                .map(|cmd| (cmd.method, cmd.url.clone()))
+                .collect::<Vec<_>>(),
+            vec![(RequestMethod::Head, segment_url(1, 0))],
+            "the target's prefix through the boundary segment is probed first"
+        );
+        assert_eq!(
+            claimed(&fixture.coord, 0),
+            vec![PlannedFetch::Segment(0), PlannedFetch::Segment(1)],
+            "and exactly the budget the probes left over reaches the audible plan"
+        );
+    }
+
+    /// With no switch pending there are no probes, so the whole budget is the
+    /// audible lease's — the sequence the variant-level oracles pin, reached
+    /// through the peer.
+    #[kithara::test(tokio)]
+    async fn peer_hands_the_whole_budget_to_the_audible_lease_when_nothing_is_pending() {
+        let specs = [VariantSpec::new(
+            AudioCodec::AacLc,
+            ContainerFormat::Adts,
+            5,
+        )];
+        let peer = Arc::new(HlsPeer::new(
+            Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
+            Arc::new(TimelineState::new()) as Arc<dyn Activity>,
+            AbrMode::Auto(Some(VariantIndex::new(0))),
+        ));
+        peer.set_abr_variants(variant_infos(&specs));
+        let fixture = coord_fixture(&specs, 2, &(Arc::clone(&peer) as Arc<dyn Abr>));
+        let (_evict_tx, evict_rx) = mpsc::unbounded_channel();
+        peer.activate(
+            Arc::clone(&fixture.coord),
+            evict_rx,
+            2,
+            None,
+            None,
+            SizeProbeMethod::Head,
+        );
+        yield_now().await;
+
+        assert!(matches!(poll_once(&peer), Poll::Pending));
+        assert_eq!(
+            claimed(&fixture.coord, 0),
+            vec![PlannedFetch::Segment(0), PlannedFetch::Segment(1)],
+            "two of budget two, from the plan's head"
+        );
     }
 }

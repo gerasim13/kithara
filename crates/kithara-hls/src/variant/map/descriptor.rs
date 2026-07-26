@@ -4,9 +4,9 @@ use kithara_platform::time::Duration;
 use kithara_stream::{SegmentDescriptor, SourceError, StreamError, StreamResult};
 use kithara_test_utils::kithara;
 
-use super::HlsVariant;
+use super::{HlsVariant, ReadLease};
 
-impl HlsVariant {
+impl ReadLease {
     /// Segment that owns fetch demand for `byte_offset`.
     ///
     /// `find_at_offset` is intentionally media-only: bytes inside an fMP4 init
@@ -15,12 +15,28 @@ impl HlsVariant {
     /// fetch plan that must carry the init + first media bytes needed by a
     /// decoder recreate.
     pub(crate) fn demand_segment_at_offset(&self, byte_offset: u64) -> Option<u32> {
-        if self.init_descriptor_at(byte_offset).is_some() && !self.segments.is_empty() {
+        if self.variant.init_descriptor_at(byte_offset).is_some()
+            && !self.variant.segments.is_empty()
+        {
             return Some(0);
         }
         self.find_at_offset(byte_offset).map(|(idx, _, _)| idx)
     }
 
+    pub(crate) fn descriptor_at_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
+        let (idx, off, size) = self.find_at_offset(byte)?;
+        let entry = self.variant.segments.get(idx as usize)?.as_media()?;
+        Some(SegmentDescriptor::new(
+            off..off + size,
+            entry.decode_time(),
+            entry.duration(),
+            idx,
+            self.variant.index(),
+        ))
+    }
+}
+
+impl HlsVariant {
     pub(crate) fn descriptor(&self, idx: usize) -> Option<SegmentDescriptor> {
         let entry = self.segments.get(idx)?.as_media()?;
         let seg_idx_u32 = u32::try_from(idx).ok()?;
@@ -49,19 +65,6 @@ impl HlsVariant {
             return None;
         }
         self.descriptor(idx)
-    }
-
-    #[kithara::probe(variant = self.variant as u64, byte)]
-    pub(crate) fn descriptor_at_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
-        let (idx, off, size) = self.find_at_offset(byte)?;
-        let entry = self.segments.get(idx as usize)?.as_media()?;
-        Some(SegmentDescriptor::new(
-            off..off + size,
-            entry.decode_time(),
-            entry.duration(),
-            idx,
-            self.variant,
-        ))
     }
 
     #[kithara::probe(variant = self.variant as u64)]

@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 mod coord;
+#[cfg(test)]
+pub(crate) mod fixture;
 mod hls;
 mod source;
 

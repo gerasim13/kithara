@@ -23,7 +23,8 @@ use kithara_test_utils::kithara;
 use url::Url;
 
 use super::{
-    HlsVariant, PlanCtx, SegmentActivateParams, SizeDemand, VariantParts, segment_placeholder_size,
+    HlsVariant, PlanCtx, ReadLease, ReadSession, SegmentActivateParams, SizeDemand, VariantParts,
+    segment_placeholder_size,
 };
 use crate::{
     config::SizeProbeMethod,
@@ -120,7 +121,10 @@ fn make_placeholder_seg(idx: u32, size: u64, scope: &AssetScope) -> Segment {
     })
 }
 
-fn make_var(variant: usize, init_size: u64, media_sizes: &[u64], ctx: &PlanCtx) -> Arc<HlsVariant> {
+/// A variant plus this test's lease on it. Unit tests read and plan through
+/// the lease, exactly as the coord does; `lease.variant()` reaches the
+/// geometry underneath.
+fn make_var(variant: usize, init_size: u64, media_sizes: &[u64], ctx: &PlanCtx) -> Arc<ReadLease> {
     make_var_with_seek_obs(
         variant,
         init_size,
@@ -136,6 +140,15 @@ fn make_var_with_seek_obs(
     media_sizes: &[u64],
     ctx: &PlanCtx,
     seek_obs: Arc<dyn SeekObserve>,
+) -> Arc<ReadLease> {
+    lease_over(make_variant(variant, init_size, media_sizes, ctx), seek_obs)
+}
+
+fn make_variant(
+    variant: usize,
+    init_size: u64,
+    media_sizes: &[u64],
+    ctx: &PlanCtx,
 ) -> Arc<HlsVariant> {
     let init = make_init(init_size, &ctx.scope);
     let segments: Vec<Segment> = media_sizes
@@ -152,11 +165,26 @@ fn make_var_with_seek_obs(
     VariantParts {
         init,
         segments,
-        seek_obs,
         codec: None,
         container: None,
     }
     .into_variant(variant, ctx)
+}
+
+/// The one lease of a fresh single-reader session over `variant`.
+fn lease_over(variant: Arc<HlsVariant>, seek_obs: Arc<dyn SeekObserve>) -> Arc<ReadLease> {
+    let session = ReadSession::new(seek_obs, std::slice::from_ref(&variant));
+    Arc::clone(session.lease(0).expect("session vends a lease per variant"))
+}
+
+/// Leases of ONE session over several variants — they share the byte cursor,
+/// which is what makes a variant switch continuous for the reader.
+fn session_over(
+    variants: &[Arc<HlsVariant>],
+    seek_obs: Arc<dyn SeekObserve>,
+) -> Vec<Arc<ReadLease>> {
+    let session = ReadSession::new(seek_obs, variants);
+    session.leases().map(Arc::clone).collect()
 }
 
 fn make_playlist_state(
@@ -193,19 +221,19 @@ fn media_info_carries_playlist_container() {
     let v = VariantParts {
         init: None,
         segments: vec![make_seg(0, 10, &ctx.scope)],
-        seek_obs: Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
         codec: playlist_state.variant_codec(0),
         container: playlist_state.variant_container(0),
     }
     .into_variant(0, &ctx);
+    let v = lease_over(v, Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>);
 
     let info = v.media_info();
     assert_eq!(info.codec, Some(AudioCodec::AacLc));
     assert_eq!(info.container, Some(ContainerFormat::Fmp4));
 }
 
-fn push_planned(v: &HlsVariant, seg: u32) {
-    v.flow.queue.lock().push_back(PlannedFetch::Segment(seg));
+fn push_planned(lease: &ReadLease, seg: u32) {
+    lease.queue.lock().push_back(PlannedFetch::Segment(seg));
 }
 
 /// Slots this variant has claimed for fetching, init first then media in
@@ -215,7 +243,8 @@ fn push_planned(v: &HlsVariant, seg: u32) {
 /// ordinary file that drives its own download — so what a pass did is read
 /// off the slots it claimed. In a unit test the downloader has no runtime
 /// to spawn its loop on, so nothing settles and the claims stand.
-fn claimed(v: &HlsVariant) -> Vec<PlannedFetch> {
+fn claimed(lease: &ReadLease) -> Vec<PlannedFetch> {
+    let v = lease.variant();
     let init = v
         .init()
         .filter(|seg| seg.state().is_downloading())
@@ -232,8 +261,8 @@ fn claimed(v: &HlsVariant) -> Vec<PlannedFetch> {
         .collect()
 }
 
-fn queue_seg_indices(v: &HlsVariant) -> Vec<u32> {
-    v.flow
+fn queue_seg_indices(lease: &ReadLease) -> Vec<u32> {
+    lease
         .queue
         .lock()
         .iter()
@@ -244,8 +273,8 @@ fn queue_seg_indices(v: &HlsVariant) -> Vec<u32> {
         .collect()
 }
 
-fn queue_has_init(v: &HlsVariant) -> bool {
-    v.flow
+fn queue_has_init(lease: &ReadLease) -> bool {
+    lease
         .queue
         .lock()
         .iter()
@@ -276,11 +305,11 @@ fn cache_complete_publishes_once_after_full_commit() {
     let v = VariantParts {
         init: make_init(8, &ctx.scope),
         segments: (0..2).map(|idx| make_seg(idx, 4, &ctx.scope)).collect(),
-        seek_obs: Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::AacLc),
         container: Some(ContainerFormat::Fmp4),
     }
     .into_variant(0, &ctx);
+    let v = lease_over(v, Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>);
 
     if let Some(init) = v.init() {
         let key = init.resource_id().clone();
@@ -329,11 +358,11 @@ fn range_ready_clamps_tail_seek_alias_to_eof() {
     let v = VariantParts {
         init: None,
         segments: (0..3).map(|idx| make_seg(idx, 10, &ctx.scope)).collect(),
-        seek_obs: Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::AacHeV2),
         container: Some(ContainerFormat::Fmp4),
     }
     .into_variant(0, &ctx);
+    let v = lease_over(v, Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>);
     for segment in v.segments() {
         let key = segment.resource_id().clone();
         let AcquisitionResult::Pending(writer) = ctx
@@ -368,11 +397,11 @@ fn segment_aware_seek_alias_routes_tail_by_segment_index() {
     let v = VariantParts {
         init: None,
         segments: (0..4).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Flac),
         container: Some(ContainerFormat::Fmp4),
     }
     .into_variant(0, &ctx);
+    let v = lease_over(v, Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>);
     let anchor = 1_000;
 
     v.set_seek_alias(anchor, 2);
@@ -442,7 +471,7 @@ fn activate_at_segment_with_shift_publishes_all_state_before_returning() {
         "position must follow the requested reader_pos"
     );
     assert!(
-        v.seek.exact_byte_seek.load().is_none(),
+        v.exact_byte_seek.load().is_none(),
         "ABR byte-continuity activation mirrors the old reader cursor; it must not register a seek-style exact-byte demand in the incoming variant"
     );
 }
@@ -875,11 +904,11 @@ fn read_at_zero_holds_pending_while_init_unsized() {
     let v = VariantParts {
         init,
         segments: vec![make_seg(0, 1024, &ctx.scope)],
-        seek_obs: Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
         codec: None,
         container: None,
     }
     .into_variant(0, &ctx);
+    let v = lease_over(v, Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>);
 
     assert!(
         v.has_init() && v.init_size() == 0,
@@ -990,11 +1019,11 @@ fn segment_aware_rebuild_at_time_prefetches_seek_preroll_segment() {
     let v = VariantParts {
         init: None,
         segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::AacLc),
         container: Some(ContainerFormat::Fmp4),
     }
     .into_variant(0, &ctx);
+    let v = lease_over(v, Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>);
 
     let target = v
         .rebuild_at_time(&ctx, Duration::from_secs(4))
@@ -1018,11 +1047,11 @@ fn segment_aware_seek_time_anchor_fetches_preroll_segment() {
     let v = VariantParts {
         init: None,
         segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::AacLc),
         container: Some(ContainerFormat::Fmp4),
     }
     .into_variant(0, &ctx);
+    let v = lease_over(v, Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>);
 
     let anchor = v
         .seek_time_anchor(Duration::from_secs(4))
@@ -1053,11 +1082,11 @@ fn segment_aware_rebuild_with_decoder_probe_fetches_recreate_preroll_segment() {
     let v = VariantParts {
         init: make_init(48, &ctx.scope),
         segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::AacLc),
         container: Some(ContainerFormat::Fmp4),
     }
     .into_variant(0, &ctx);
+    let v = lease_over(v, Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>);
 
     v.rebuild_with_decoder_probe(&ctx, 2);
 
@@ -1075,11 +1104,11 @@ fn exact_size_rebuild_at_time_starts_at_target_segment() {
     let v = VariantParts {
         init: None,
         segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
     .into_variant(0, &ctx);
+    let v = lease_over(v, Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>);
 
     let target = v
         .rebuild_at_time(&ctx, Duration::from_secs(4))
@@ -1099,11 +1128,11 @@ fn exact_size_rebuild_with_decoder_probe_starts_tail_at_target_segment() {
     let v = VariantParts {
         init: make_init(48, &ctx.scope),
         segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
     .into_variant(0, &ctx);
+    let v = lease_over(v, Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>);
 
     v.rebuild_with_decoder_probe(&ctx, 2);
 
@@ -1177,7 +1206,7 @@ fn dispatch_skips_non_missing_segments() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100, 100, 100], &ctx);
     v.segments()[1].state().mark_loaded();
-    v.flow.queue.lock().clear();
+    v.queue.lock().clear();
     for seg in 0..3_u32 {
         push_planned(&v, seg);
     }
@@ -1208,7 +1237,7 @@ fn dispatch_requeues_orphaned_downloading_segment() {
         .try_claim(PlannedFetch::Segment(1), Arc::downgrade(&v))
         .expect("seg 1 must be claimable");
 
-    v.flow.queue.lock().clear();
+    v.queue.lock().clear();
     for seg in 0..3_u32 {
         push_planned(&v, seg);
     }
@@ -1277,11 +1306,11 @@ fn exact_seek_completion_keeps_stale_anchor_alias_until_reader_moves() {
     let v = VariantParts {
         segments,
         init: None,
-        seek_obs: Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
     .into_variant(0, &ctx);
+    let v = lease_over(v, Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>);
     let stale_anchor = 512;
     v.set_position(stale_anchor);
     v.set_prefetch_anchor(stale_anchor);
@@ -1316,11 +1345,11 @@ fn raw_byte_seek_registers_lazy_exact_demand_only_after_cursor_moves() {
     let v = VariantParts {
         segments,
         init: None,
-        seek_obs: Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
     .into_variant(0, &ctx);
+    let v = lease_over(v, Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>);
 
     v.set_position(0);
     assert!(
@@ -1355,11 +1384,11 @@ fn byte_continuity_boundary_preparation_sizes_only_prefix() {
     let v = VariantParts {
         segments,
         init: None,
-        seek_obs: Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
     .into_variant(0, &ctx);
+    let v = lease_over(v, Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>);
 
     assert!(
         !v.prepare_exact_prefix_for_boundary(2),
@@ -1462,12 +1491,12 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
     });
     let v = VariantParts {
         init,
-        seek_obs: Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
         codec: None,
         container: None,
         segments: vec![seg],
     }
     .into_variant(0, &ctx);
+    let v = lease_over(v, Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>);
     push_planned(&v, 0);
     v.dispatch(&ctx, 10);
     assert_eq!(claimed(&v), vec![PlannedFetch::Segment(0)]);
@@ -1542,11 +1571,11 @@ fn committed_segment_source_attaches_lazily_without_dispatch() {
     let v = VariantParts {
         init: None,
         segments: vec![segment],
-        seek_obs: Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
         codec: None,
         container: None,
     }
     .into_variant(0, &ctx);
+    let v = lease_over(v, Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>);
 
     assert_eq!(v.committed_final_len(0), Some(4));
     assert!(v.segment_contains(0, 0..4));
@@ -1741,4 +1770,52 @@ fn wait_range_flush_short_circuits_to_interrupted() {
         "the short-circuit must leave the flush in place, not wait it out"
     );
     assert_eq!(seek.epoch(), epoch, "the probe must not advance the seek");
+}
+
+/// The reader's byte position belongs to the SESSION, not to a variant. A
+/// switch re-aims which plan is served without restarting where the reader
+/// is, which is what keeps `coord.position()` monotone across a commit — and
+/// what a second reader would need to have of its own.
+#[kithara::test]
+fn one_sessions_leases_share_its_cursor() {
+    let ctx = test_ctx(4);
+    let variants = [
+        make_variant(0, 0, &[100, 100, 100], &ctx),
+        make_variant(1, 0, &[100, 100, 100], &ctx),
+    ];
+    let leases = session_over(
+        &variants,
+        Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
+    );
+
+    leases[0].set_position(240);
+    assert_eq!(
+        leases[1].get_position(),
+        240,
+        "the lease taking over reads from where the reader already is"
+    );
+
+    leases[1].advance(60);
+    assert_eq!(leases[0].get_position(), 300);
+}
+
+/// Plans, on the other hand, are per lease: replanning one variant leaves the
+/// other's queue alone, which is the property two live readers depend on.
+#[kithara::test]
+fn leases_plan_their_own_variant_only() {
+    let ctx = test_ctx(4);
+    let variants = [
+        make_variant(0, 0, &[100, 100, 100], &ctx),
+        make_variant(1, 0, &[100, 100, 100], &ctx),
+    ];
+    let leases = session_over(
+        &variants,
+        Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
+    );
+
+    leases[0].rebuild(&ctx, 0);
+    leases[1].rebuild(&ctx, 2);
+
+    assert_eq!(queue_seg_indices(&leases[0]), vec![0, 1, 2]);
+    assert_eq!(queue_seg_indices(&leases[1]), vec![2]);
 }

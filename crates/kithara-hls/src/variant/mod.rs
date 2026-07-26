@@ -19,20 +19,22 @@ mod fetch;
 mod init;
 #[path = "map/layout.rs"]
 mod layout;
+#[path = "state/lease.rs"]
+mod lease;
 #[path = "flow/lifecycle.rs"]
 mod lifecycle;
 #[path = "map/media.rs"]
 mod media;
 #[path = "map/offsets.rs"]
 mod offsets;
+#[path = "io/phase.rs"]
+mod phase;
 #[path = "flow/probe.rs"]
 mod probe;
 #[path = "flow/queue.rs"]
 mod queue;
 #[path = "io/read.rs"]
 mod read;
-#[path = "state/reader.rs"]
-mod reader_runtime;
 #[path = "flow/seek.rs"]
 mod seek;
 #[path = "flow/seqlock.rs"]
@@ -44,9 +46,12 @@ mod size;
 pub(crate) use self::core::VariantParts;
 #[cfg(test)]
 pub(crate) use self::core::test_transport;
-pub(crate) use self::core::{HlsVariant, PlanCtx, SegmentActivateParams, VariantParams};
 #[cfg(test)]
 pub(in crate::variant) use self::{core::segment_placeholder_size, probe::SizeDemand};
+pub(crate) use self::{
+    core::{HlsVariant, PlanCtx, SegmentActivateParams, VariantParams},
+    lease::{ReadLease, ReadSession},
+};
 
 #[cfg(test)]
 mod tests;

@@ -3,17 +3,11 @@ use std::sync::atomic::Ordering;
 use kithara_platform::time::Duration;
 use kithara_stream::{SourceSeekAnchor, StreamError, StreamResult, needs_exact_byte_sizes};
 
-use super::{HlsVariant, seqlock::AliasSnapshot, size::ExactSeekDemand};
+use super::{HlsVariant, ReadLease, seqlock::AliasSnapshot, size::ExactSeekDemand};
 use crate::HlsError;
 
 impl HlsVariant {
     delegate::delegate! {
-        to self.seek.alias {
-            #[call(clear)]
-            pub(super) fn clear_seek_alias(&self);
-            #[call(set)]
-            pub(super) fn set_seek_alias(&self, anchor: u64, segment: u32);
-        }
         to self {
             /// Seek reset is layout-only. Active body fetches stay live: segment-aware
             /// decoders re-resolve media ranges by segment index, and canceling the
@@ -26,79 +20,87 @@ impl HlsVariant {
         }
     }
 
-    pub(super) fn clear_seek_alias_if_moved(&self, pos: u64) {
-        // RT-reachable (via `advance`): a lock-free, alloc-free load + atomic
-        // clear. The base is single-writer (on-core), so the `Some -> None`
-        // store never races a concurrent base writer.
-        if self
-            .seek
-            .alias
-            .load()
-            .is_some_and(|alias| !alias.covers_position(pos))
-        {
-            self.seek.alias.clear();
-        }
-    }
-
-    fn clear_segment_aware_seek_tail(&self) {
-        self.seek
-            .segment_aware_tail
-            .store(Self::NO_SEEK_TAIL, Ordering::Release);
-    }
-
-    /// Reset variant to a "fresh" single-variant layout: `byte_shift = 0`,
-    /// `served_from = 0`, `served_until = num_segments`. Called from
-    /// [`HlsCoord::reset_for_seek`] so a random seek collapses the
-    /// cross-variant byte continuity layering — variants archived from
-    /// earlier auto-switches no longer co-serve the byte address space,
-    /// and the (single) active variant addresses its segments by their
-    /// natural offsets. Subsequent ABR commits at boundary will re-build
-    /// the layering as usual.
-    pub(crate) fn reset_to_full_range(&self) {
-        self.clear_seek_alias();
-        self.clear_exact_seek();
-        self.clear_exact_byte_seek();
-        self.clear_segment_aware_seek_tail();
-        self.reset_layout_to_full_range();
-        self.rearm_cancel();
-    }
-
-    pub(super) fn resolve_seek_alias(&self, demand: ExactSeekDemand, exact_anchor: u64) {
-        // Off-RT (exact-prefix settle): a lock-free, alloc-free store of the
-        // resolved exact anchor onto the matching base, tagged with the base
-        // generation so a stale resolver cannot attach to a newer alias.
-        self.seek
-            .alias
-            .resolve(demand.segment, demand.anchor, exact_anchor);
-    }
-
-    pub(super) fn seek_alias_at(&self, byte: u64) -> Option<(u32, u64, u64)> {
-        let alias = self.seek.alias.load()?;
-        if byte < alias.anchor {
-            return None;
-        }
-        if !needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
-            return self.segment_aware_seek_alias_at(alias, byte);
-        }
-        let size = self.segment_size(alias.segment as usize)?;
-        let end = alias.anchor.saturating_add(size);
-        (byte < end).then_some((alias.segment, alias.anchor, size))
-    }
-
-    pub(super) fn seek_readahead_start_segment(&self, target_segment: u32) -> u32 {
+    pub(crate) fn seek_readahead_start_segment(&self, target_segment: u32) -> u32 {
         if needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
             target_segment
         } else {
             target_segment.saturating_sub(1)
         }
     }
+}
+
+impl ReadLease {
+    delegate::delegate! {
+        to self.alias {
+            #[call(clear)]
+            pub(super) fn clear_seek_alias(&self);
+            #[call(set)]
+            pub(super) fn set_seek_alias(&self, anchor: u64, segment: u32);
+        }
+    }
+
+    pub(super) fn clear_seek_alias_if_moved(&self, pos: u64) {
+        // RT-reachable (via `advance`): a lock-free, alloc-free load + atomic
+        // clear. The base is single-writer (on-core), so the `Some -> None`
+        // store never races a concurrent base writer.
+        if self
+            .alias
+            .load()
+            .is_some_and(|alias| !alias.covers_position(pos))
+        {
+            self.alias.clear();
+        }
+    }
+
+    fn clear_segment_aware_seek_tail(&self) {
+        self.segment_aware_tail
+            .store(HlsVariant::NO_SEEK_TAIL, Ordering::Release);
+    }
+
+    /// Reset variant to a "fresh" single-variant layout: `byte_shift = 0`,
+    /// `served_from = 0`, `served_until = num_segments`, and drop every
+    /// demand this lease had registered against the old geometry. Called
+    /// from the decoder-recreate commit branch — variants archived from
+    /// earlier auto-switches no longer co-serve the byte address space,
+    /// and the variant addresses its segments by their natural offsets.
+    /// Subsequent ABR commits at boundary will re-build the layering as usual.
+    pub(crate) fn reset_to_full_range(&self) {
+        self.clear_seek_alias();
+        self.clear_exact_seek();
+        self.clear_exact_byte_seek();
+        self.clear_segment_aware_seek_tail();
+        self.variant.reset_layout_to_full_range();
+        self.variant.rearm_cancel();
+    }
+
+    pub(super) fn resolve_seek_alias(&self, demand: ExactSeekDemand, exact_anchor: u64) {
+        // Off-RT (exact-prefix settle): a lock-free, alloc-free store of the
+        // resolved exact anchor onto the matching base, tagged with the base
+        // generation so a stale resolver cannot attach to a newer alias.
+        self.alias
+            .resolve(demand.segment, demand.anchor, exact_anchor);
+    }
+
+    pub(super) fn seek_alias_at(&self, byte: u64) -> Option<(u32, u64, u64)> {
+        let alias = self.alias.load()?;
+        if byte < alias.anchor {
+            return None;
+        }
+        if !needs_exact_byte_sizes(self.variant.profile.codec, self.variant.profile.container) {
+            return self.segment_aware_seek_alias_at(alias, byte);
+        }
+        let size = self.variant.segment_size(alias.segment as usize)?;
+        let end = alias.anchor.saturating_add(size);
+        (byte < end).then_some((alias.segment, alias.anchor, size))
+    }
 
     pub(crate) fn seek_time_anchor(
         &self,
         position: Duration,
     ) -> StreamResult<Option<SourceSeekAnchor>> {
-        let variant = self.variant;
-        let Some((seg_idx_u32, segment_start, segment_end)) = self.seek_point_at_time(position)
+        let variant = self.variant.index();
+        let Some((seg_idx_u32, segment_start, segment_end)) =
+            self.variant.seek_point_at_time(position)
         else {
             return Err(StreamError::Source(
                 HlsError::SegmentNotFound(format!(
@@ -108,16 +110,22 @@ impl HlsVariant {
                 .into(),
             ));
         };
-        let byte_offset = self.segment_byte_offset(seg_idx_u32).ok_or_else(|| {
-            StreamError::Source(
-                HlsError::SegmentNotFound(format!(
-                    "seek offset not found: variant={variant} segment={seg_idx_u32}"
-                ))
-                .into(),
-            )
-        })?;
-        let fetch_start = self.seek_readahead_start_segment(seg_idx_u32);
-        let prefetch_anchor = self.segment_byte_offset(fetch_start).unwrap_or(byte_offset);
+        let byte_offset = self
+            .variant
+            .segment_byte_offset(seg_idx_u32)
+            .ok_or_else(|| {
+                StreamError::Source(
+                    HlsError::SegmentNotFound(format!(
+                        "seek offset not found: variant={variant} segment={seg_idx_u32}"
+                    ))
+                    .into(),
+                )
+            })?;
+        let fetch_start = self.variant.seek_readahead_start_segment(seg_idx_u32);
+        let prefetch_anchor = self
+            .variant
+            .segment_byte_offset(fetch_start)
+            .unwrap_or(byte_offset);
         let anchor = SourceSeekAnchor::builder()
             .byte_offset(byte_offset)
             .segment_start(segment_start)
@@ -129,7 +137,7 @@ impl HlsVariant {
         self.set_prefetch_anchor(prefetch_anchor);
         self.set_seek_alias(byte_offset, seg_idx_u32);
         self.set_segment_aware_seek_tail(fetch_start);
-        if !self.fetch_plan_satisfied(fetch_start) {
+        if !self.variant.fetch_plan_satisfied(fetch_start) {
             self.rebuild_queue(fetch_start);
         }
         self.set_exact_seek_demand(byte_offset, seg_idx_u32);
@@ -143,6 +151,7 @@ impl HlsVariant {
     ) -> Option<(u32, u64, u64)> {
         let mut offset = alias.anchor;
         for (idx, segment) in self
+            .variant
             .segments
             .iter()
             .enumerate()
@@ -160,25 +169,23 @@ impl HlsVariant {
     }
 
     pub(super) fn segment_aware_seek_tail_complete(&self) -> bool {
-        if needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
+        if needs_exact_byte_sizes(self.variant.profile.codec, self.variant.profile.container) {
             return false;
         }
-        let start = self.seek.segment_aware_tail.load(Ordering::Acquire);
-        if start == Self::NO_SEEK_TAIL {
+        let start = self.segment_aware_tail.load(Ordering::Acquire);
+        if start == HlsVariant::NO_SEEK_TAIL {
             return false;
         }
         let start = start as usize;
-        let Some(tail) = self.segments.get(start..) else {
+        let Some(tail) = self.variant.segments.get(start..) else {
             return false;
         };
         !tail.is_empty() && tail.iter().all(|segment| segment.size().is_exact())
     }
 
     pub(super) fn set_segment_aware_seek_tail(&self, segment: u32) {
-        if !needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
-            self.seek
-                .segment_aware_tail
-                .store(segment, Ordering::Release);
+        if !needs_exact_byte_sizes(self.variant.profile.codec, self.variant.profile.container) {
+            self.segment_aware_tail.store(segment, Ordering::Release);
         }
     }
 }

@@ -167,7 +167,6 @@ impl StreamType for Hls {
                     VariantParams {
                         init_decrypt_ctx,
                         variant_idx: idx,
-                        seek_obs: Arc::clone(&seek_obs),
                         decrypt_contexts: &decrypt_contexts,
                         ctx: &plan_ctx,
                     },

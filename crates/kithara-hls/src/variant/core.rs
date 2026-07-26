@@ -1,7 +1,4 @@
-use std::{
-    collections::VecDeque,
-    sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(test)]
 use kithara_abr::Abr;
@@ -9,30 +6,18 @@ use kithara_assets::AssetResource;
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
 use kithara_net::Headers;
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 #[cfg(test)]
 use kithara_stream::dl::Downloader;
-use kithara_stream::{AudioCodec, ContainerFormat, SeekObserve, dl::FetchScope};
+use kithara_stream::{AudioCodec, ContainerFormat, dl::FetchScope};
 
-use super::{
-    cancel_epoch::CancelEpoch,
-    cas_anchor::CasAnchorCell,
-    offsets::Layout,
-    probe::SizeDemandState,
-    reader_runtime::ReaderRuntime,
-    seqlock::{AtomicOptU64, AtomicSeekAlias},
-};
+use super::{cancel_epoch::CancelEpoch, offsets::Layout};
 use crate::{
     HlsResult,
     config::SizeProbeMethod,
     playlist::{PlaylistAccess, PlaylistState},
     segment::{
-        MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize, SegmentSlotState,
-        SegmentSource,
+        MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState, SegmentSource,
     },
     signal::SizeSignal,
 };
@@ -122,15 +107,26 @@ pub(crate) struct SegmentActivateParams {
     pub(crate) seg_boundary: u64,
 }
 
+/// One variant of the track: what every reader of it shares.
+///
+/// The segment table, the byte layout and the slot a fetch claims are facts
+/// about the variant, so they live here. What depends on where a particular
+/// reader is — its plan, its prefetch aim, the sizes it is waiting on — is a
+/// [`ReadLease`](super::ReadLease) over this variant, not part of it.
 pub(crate) struct HlsVariant {
     /// Coherent owner of the cross-variant byte-address-space coordinates
     /// (`byte_shift`, `served_from`, `served_until`, `init_seed`, the media
     /// offset table). A single lock guards all five so a reader never mixes
     /// the shift of one activation with the served bounds of the next.
     pub(super) layout: Layout,
-    pub(super) flow: VariantFlow,
     pub(super) profile: VariantProfile,
-    pub(super) seek: VariantSeek,
+    /// The variant's cancel epoch: the per-track parent (mirror of
+    /// `coord.cancel` = `PlanCtx::master_cancel`) plus the rotating
+    /// per-activation child. Survives variant re-activation — a cross-codec
+    /// `commit_variant_switch` may flip from `v_old` to `v_new` and back to
+    /// `v_old`, and the second activation of `v_old` must dispatch fetches
+    /// under a *live* cancel, so [`HlsVariant::rearm_cancel`] rotates the child.
+    pub(super) cancel_epoch: CancelEpoch,
     pub(super) segments: VariantSegments,
     pub(super) variant: usize,
     pub(super) cache_complete_emitted: AtomicBool,
@@ -149,46 +145,6 @@ pub(super) struct VariantProfile {
     /// reach the same authenticated endpoint as the playlist load.
     pub(super) headers: Option<Headers>,
     pub(super) bus: EventBus,
-}
-
-pub(super) struct VariantFlow {
-    pub(super) prefetch_anchor: AtomicU64,
-    /// The variant's cancel epoch: the per-track parent (mirror of
-    /// `coord.cancel` = `PlanCtx::master_cancel`) plus the rotating
-    /// per-activation child. Survives variant re-activation — a cross-codec
-    /// `commit_variant_switch` may flip from `v_old` to `v_new` and back to
-    /// `v_old`, and the second activation of `v_old` must dispatch fetches
-    /// under a *live* cancel, so [`HlsVariant::rearm_cancel`] rotates the child.
-    pub(super) cancel_epoch: CancelEpoch,
-    pub(super) queue: Mutex<VecDeque<PlannedFetch>>,
-    /// Reader-side runtime: the shared byte cursor, peer wake handle, and the
-    /// timeline consulted for `is_flushing` gating. The probe-tagged
-    /// `get_position` / `set_position` stay on the facade and delegate here.
-    pub(super) reader: ReaderRuntime,
-}
-
-pub(super) struct VariantSeek {
-    /// Lock-free, allocation-free exact-byte-seek demand, read and cleared on
-    /// the produce-core metadata-phase gate
-    /// ([`HlsVariant::exact_byte_metadata_phase`]). A single `AtomicU64` with a
-    /// `u64::MAX` none sentinel.
-    pub(super) exact_byte_seek: AtomicOptU64,
-    /// Lock-free, allocation-free seek-alias snapshot. The produce-core read
-    /// path ([`HlsVariant::seek_alias_at`], reached on every `find_at_offset`)
-    /// and the steady-read-path clear (`advance`) touch only atomics; the base
-    /// is single-writer (on-core), the resolved exact anchor is published
-    /// off-RT under a generation tag. See `flow/seqlock.rs`.
-    pub(super) alias: AtomicSeekAlias,
-    pub(super) segment_aware_tail: AtomicU32,
-    /// Lock-free, allocation-free exact-seek demand, read on the produce-core
-    /// metadata-phase gate ([`HlsVariant::exact_seek_metadata_phase`]). Body is
-    /// MULTI-writer: the on-core seek path (`seek_time_anchor`) and the off-RT
-    /// downloader seek-epoch reset (`rebuild_at_time`) both SET it with no lock
-    /// between them, so the cell serializes writers with a CAS-acquired version
-    /// and the RT reader bails to not-ready (never spins) on a write-in-flight.
-    /// Off-RT completers CAS-consume the generation.
-    pub(super) exact_seek: CasAnchorCell,
-    pub(super) size_demand: Mutex<SizeDemandState>,
 }
 
 #[derive(derive_more::Deref)]
@@ -210,41 +166,10 @@ impl VariantSegments {
     }
 }
 
-impl VariantFlow {
-    fn new(
-        master_cancel: CancelToken,
-        seek_obs: Arc<dyn SeekObserve>,
-        queue_capacity: usize,
-    ) -> Self {
-        Self {
-            cancel_epoch: CancelEpoch::new(master_cancel),
-            prefetch_anchor: AtomicU64::new(0),
-            // Preallocate to the worst-case rebuild size (init + every media
-            // segment + the seg-0 decoder probe) so the per-seek
-            // `clear` + `extend` in `rebuild_queue` never reallocates on the
-            queue: Mutex::new(VecDeque::with_capacity(queue_capacity)),
-            reader: ReaderRuntime::new(seek_obs),
-        }
-    }
-}
-
-impl VariantSeek {
-    fn new(no_seek_tail: u32) -> Self {
-        Self {
-            alias: AtomicSeekAlias::new(),
-            exact_seek: CasAnchorCell::new(),
-            exact_byte_seek: AtomicOptU64::none(),
-            segment_aware_tail: AtomicU32::new(no_seek_tail),
-            size_demand: Mutex::default(),
-        }
-    }
-}
-
 /// Media payload + shared-dep snapshot that owns bare variant assembly.
 /// Production builds this from parsed playlist metadata; tests build it
 /// inline from synthesised fixtures.
 pub(crate) struct VariantParts {
-    pub(crate) seek_obs: Arc<dyn SeekObserve>,
     pub(crate) codec: Option<AudioCodec>,
     pub(crate) container: Option<ContainerFormat>,
     pub(crate) init: Option<Segment>,
@@ -293,7 +218,6 @@ pub(super) fn segment_placeholder_size(duration: Duration, bandwidth_bps: Option
 pub(crate) struct VariantParams<'a> {
     pub(crate) ctx: &'a PlanCtx,
     pub(crate) decrypt_contexts: &'a [Option<DecryptContext>],
-    pub(crate) seek_obs: Arc<dyn SeekObserve>,
     pub(crate) init_decrypt_ctx: Option<DecryptContext>,
     pub(crate) variant_idx: usize,
 }
@@ -305,7 +229,6 @@ impl HlsVariant {
     ) -> HlsResult<Arc<Self>> {
         let VariantParams {
             variant_idx,
-            seek_obs,
             init_decrypt_ctx,
             decrypt_contexts,
             ctx,
@@ -321,7 +244,6 @@ impl HlsVariant {
         let codec = playlist_state.variant_codec(variant_idx);
         let container = playlist_state.variant_container(variant_idx);
         Ok(VariantParts {
-            seek_obs,
             codec,
             container,
             init,
@@ -339,7 +261,6 @@ impl VariantParts {
             init,
             codec,
             container,
-            seek_obs,
             segments,
         } = self;
         let init_size = init_size_of(&init);
@@ -347,18 +268,13 @@ impl VariantParts {
         Arc::new(HlsVariant {
             variant,
             layout,
-            flow: VariantFlow::new(
-                ctx.master_cancel.clone(),
-                seek_obs,
-                segments.len().saturating_add(2),
-            ),
+            cancel_epoch: CancelEpoch::new(ctx.master_cancel.clone()),
             profile: VariantProfile {
                 codec,
                 container,
                 headers: ctx.headers.clone(),
                 bus: ctx.bus.clone(),
             },
-            seek: VariantSeek::new(HlsVariant::NO_SEEK_TAIL),
             segments: VariantSegments::new(init, segments),
             cache_complete_emitted: AtomicBool::new(false),
         })
@@ -370,6 +286,42 @@ impl HlsVariant {
 
     pub(crate) fn event_bus(&self) -> EventBus {
         self.profile.bus.clone()
+    }
+
+    /// Index of the first non-`Loaded` segment — interpreted as the
+    /// "download head" by the ABR controller. Returns `num_segments()`
+    /// when every segment is `Loaded`. Scans linearly; cheap because it
+    /// only runs from `Abr::progress` (ABR tick cadence).
+    pub(crate) fn download_head(&self) -> u32 {
+        let head = self
+            .segments
+            .iter()
+            .position(|s| !s.state().is_loaded())
+            .unwrap_or(self.segments.len());
+        u32::try_from(head).unwrap_or(u32::MAX)
+    }
+
+    /// True when every fetch a `rebuild_queue(from_seg)` would enqueue is
+    /// already `Loaded` — the init (if any) plus every media segment in
+    /// `[from_seg, num_segments)`. In that state a rebuild only reseeds
+    /// entries `dispatch` immediately skips, so it is pure churn on a
+    /// fully-cached seek. A partial cache returns `false` and rebuilds, so
+    /// the prefetch tail is still re-aimed at the seek target whenever a
+    /// fetch is actually outstanding.
+    pub(crate) fn fetch_plan_satisfied(&self, from_seg: u32) -> bool {
+        if self.needs_init_fetch() {
+            return false;
+        }
+        let segs_len = self.num_segments();
+        (from_seg..segs_len).all(|idx| {
+            self.segments
+                .get(idx as usize)
+                .is_some_and(|seg| seg.state().is_loaded())
+        })
+    }
+
+    pub(crate) fn index(&self) -> usize {
+        self.variant
     }
 
     pub(crate) fn is_encrypted_segment(&self, segment_index: u32) -> bool {

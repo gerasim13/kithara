@@ -3,14 +3,14 @@ use kithara_stream::dl::FetchCmd;
 use kithara_test_utils::kithara;
 use tracing::debug;
 
-use super::{HlsVariant, PlanCtx};
+use super::{PlanCtx, ReadLease};
 use crate::segment::{Downloading, FetchClaim, PlannedFetch, Segment};
 
-impl HlsVariant {
+impl ReadLease {
     #[kithara::probe(
-        variant = self.variant as u64,
+        variant = self.variant.index() as u64,
         budget = budget as u64,
-        queue_len = self.flow.queue.lock().len() as u64
+        queue_len = self.queue.lock().len() as u64
     )]
     #[kithara::hang_watchdog]
     pub(crate) fn dispatch(self: &Arc<Self>, ctx: &PlanCtx, budget: usize) -> Vec<FetchCmd> {
@@ -35,13 +35,13 @@ impl HlsVariant {
         while remaining > 0 {
             hang_tick!();
             let planned = {
-                let mut queue = self.flow.queue.lock();
+                let mut queue = self.queue.lock();
                 match queue.front().copied() {
                     None => break,
                     Some(PlannedFetch::Init) => queue.pop_front(),
                     Some(PlannedFetch::Segment(seg_idx)) => {
                         if let Some(cap) = prefetch_byte_cap
-                            && let Some(seg_off) = self.segment_byte_offset(seg_idx)
+                            && let Some(seg_off) = self.variant.segment_byte_offset(seg_idx)
                             && seg_off > cap
                         {
                             break;
@@ -61,7 +61,7 @@ impl HlsVariant {
                     // Only a present init is ever enqueued (the `rebuild`
                     // gate skips a `None` init), so a missing slot here is
                     // unreachable; skip defensively rather than claim a slot
-                    let Some(init) = self.init() else {
+                    let Some(init) = self.variant.init() else {
                         continue;
                     };
                     let Some(handle) = init
@@ -73,14 +73,14 @@ impl HlsVariant {
                         }
                         continue;
                     };
-                    if let Some(actual) = self.init_committed_final_len() {
+                    if let Some(actual) = self.variant.init_committed_final_len() {
                         handle.into_loaded(actual);
                         ctx.signal.fire();
                         continue;
                     }
                     if let Err(error) = self.start_fetch(ctx, init, handle, ctx.signal.clone()) {
                         debug!(
-                            variant = self.variant,
+                            variant = self.variant.index(),
                             error = %error,
                             "init fetch not started (variant switch in flight)"
                         );
@@ -89,7 +89,7 @@ impl HlsVariant {
                     }
                 }
                 PlannedFetch::Segment(seg_idx) => {
-                    let Some(entry) = self.segments.get(seg_idx as usize) else {
+                    let Some(entry) = self.variant.segments.get(seg_idx as usize) else {
                         continue;
                     };
                     let Some(handle) = entry
@@ -105,7 +105,7 @@ impl HlsVariant {
                         }
                         continue;
                     };
-                    if let Some(actual) = self.committed_final_len(seg_idx) {
+                    if let Some(actual) = self.variant.committed_final_len(seg_idx) {
                         handle.into_loaded(actual);
                         ctx.signal.fire();
                         continue;
@@ -125,7 +125,7 @@ impl HlsVariant {
             remaining -= 1;
         }
         if !deferred.is_empty() {
-            let mut queue = self.flow.queue.lock();
+            let mut queue = self.queue.lock();
             for planned in deferred.into_iter().rev() {
                 queue.push_front(planned);
             }
@@ -138,7 +138,7 @@ impl HlsVariant {
     #[kithara::probe(
         seek_epoch = ctx.seek_epoch,
         segment_index = u64::from(seg_idx),
-        variant = self.variant as u64
+        variant = self.variant.index() as u64
     )]
     fn start_segment_fetch(
         self: &Arc<Self>,
@@ -150,7 +150,7 @@ impl HlsVariant {
         self.start_fetch(ctx, entry, handle, ctx.signal.clone())
             .inspect_err(|error| {
                 debug!(
-                    variant = self.variant,
+                    variant = self.variant.index(),
                     seg_idx,
                     error = %error,
                     "segment fetch not started (variant switch in flight)"
@@ -161,7 +161,10 @@ impl HlsVariant {
     fn prefetch_segment_cap(&self, ctx: &PlanCtx, prefetch_base: u64) -> Option<u32> {
         let window = ctx.look_ahead_segments?;
         let window = u32::try_from(window.max(1)).unwrap_or(u32::MAX);
-        let base = self.descriptor_after_byte(prefetch_base)?.segment_index;
+        let base = self
+            .variant
+            .descriptor_after_byte(prefetch_base)?
+            .segment_index;
         Some(base.saturating_add(window.saturating_sub(1)))
     }
 }

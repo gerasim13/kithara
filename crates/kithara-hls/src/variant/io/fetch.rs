@@ -6,14 +6,14 @@ use kithara_platform::sync::{Arc, Mutex};
 use kithara_stream::Activity;
 use tracing::debug;
 
-use super::HlsVariant;
+use super::ReadLease;
 use crate::{
     segment::{Downloading, FetchCell, FetchClaim, PlannedFetch, Segment, SegmentSettle},
     signal::SizeSignal,
     variant::PlanCtx,
 };
 
-impl HlsVariant {
+impl ReadLease {
     /// Fetch one segment / init slot as an ordinary file.
     ///
     /// kithara-file owns everything about the resource — acquire, the
@@ -41,21 +41,21 @@ impl HlsVariant {
         // A segment fetch IS the track's network activity, so its transport
         // events belong on the track's bus — that is where a consumer counts
         // downloads and where ABR's throughput samples surface.
-        .events(self.profile.bus.clone())
+        .events(self.variant.profile.bus.clone())
         .store(ctx.scope.store().clone())
         .fetch(Arc::clone(&ctx.fetch))
-        .cancel(self.cancel_handle())
-        .maybe_headers(self.profile.headers.clone())
+        .cancel(self.variant.cancel_handle())
+        .maybe_headers(self.variant.profile.headers.clone())
         .maybe_process(segment.process())
         .activity(Arc::new(SlotDemand {
             segment: handle_planned,
-            variant: Arc::downgrade(self),
+            lease: Arc::downgrade(self),
         }) as Arc<dyn Activity>)
         .on_fetch_complete(settle_hook(
             Arc::clone(&claim),
             Arc::clone(&cell),
             signal.clone(),
-            self.profile.bus.clone(),
+            self.variant.profile.bus.clone(),
         ))
         .on_slow(slow_hook(Arc::clone(&claim), signal))
         .build();
@@ -87,19 +87,19 @@ impl HlsVariant {
 /// nothing in the variant decodes without it.
 struct SlotDemand {
     segment: PlannedFetch,
-    variant: Weak<HlsVariant>,
+    lease: Weak<ReadLease>,
 }
 
 impl Activity for SlotDemand {
     fn is_playing(&self) -> bool {
-        let Some(variant) = self.variant.upgrade() else {
+        let Some(lease) = self.lease.upgrade() else {
             return false;
         };
         let PlannedFetch::Segment(index) = self.segment else {
             return true;
         };
-        variant
-            .find_at_offset(variant.get_position())
+        lease
+            .find_at_offset(lease.get_position())
             .is_some_and(|(reader_segment, _, _)| reader_segment == index)
     }
 

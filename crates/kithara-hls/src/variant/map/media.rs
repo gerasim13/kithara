@@ -114,7 +114,7 @@ impl HlsVariant {
     /// Borrow the media table — the fetch path and the descriptor builders
     /// index it for `url` / `content` / `decode_time`.
     #[cfg(test)]
-    pub(super) fn segments(&self) -> &[Segment] {
+    pub(crate) fn segments(&self) -> &[Segment] {
         &self.segments
     }
 }

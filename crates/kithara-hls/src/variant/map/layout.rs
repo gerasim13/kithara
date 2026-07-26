@@ -10,16 +10,13 @@ impl HlsVariant {
         (total > 0 && self.sizes_complete()).then_some(total)
     }
 
-    pub(crate) fn eof_ready(&self) -> bool {
-        self.sizes_complete() || self.segment_aware_seek_tail_complete()
-    }
-
-    /// Reader-facing lookup in **virtual** byte space — delegates to the
-    /// [`Layout`], which subtracts `byte_shift`, runs the natural-space
-    /// search, and gates against `[served_from..served_until)` under one
-    /// lock. Returns `None` when the byte falls outside the served range so
-    /// cross-variant lookups in [`HlsCoord::find_at_offset`] fall through to
-    /// the previous variant.
+    /// Lookup in **virtual** byte space — delegates to the [`Layout`], which
+    /// subtracts `byte_shift`, runs the natural-space search, and gates
+    /// against `[served_from..served_until)` under one lock. Returns `None`
+    /// when the byte falls outside the served range so cross-variant lookups
+    /// fall through to the previous variant. Reader-facing lookups go through
+    /// [`ReadLease::find_at_offset`](super::ReadLease::find_at_offset), which
+    /// lets the lease's own seek alias answer first.
     #[kithara::probe(
         variant = self.variant as u64,
         byte_offset,
@@ -28,9 +25,8 @@ impl HlsVariant {
             .find_at_offset(byte_offset, &self.segments)
             .map_or(u64::MAX, |(i, _, _)| u64::from(i))
     )]
-    pub(crate) fn find_at_offset(&self, byte_offset: u64) -> Option<(u32, u64, u64)> {
-        self.seek_alias_at(byte_offset)
-            .or_else(|| self.layout.find_at_offset(byte_offset, &self.segments))
+    pub(crate) fn layout_find_at_offset(&self, byte_offset: u64) -> Option<(u32, u64, u64)> {
+        self.layout.find_at_offset(byte_offset, &self.segments)
     }
 
     delegate::delegate! {

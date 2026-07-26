@@ -1,13 +1,14 @@
 use kithara_platform::CancelToken;
 
-use super::HlsVariant;
+use super::{HlsVariant, ReadLease};
 use crate::segment::{FetchClaim, Loaded, PlannedFetch};
 
-impl HlsVariant {
-    /// Settle hook: shrinks the appropriate size atom to `actual` and
-    /// rebuilds the offset map. Called from
-    /// [`FetchSlot::settle`] via `Weak<HlsVariant>::upgrade()` once the
-    /// resource commits — for DRM, this is where the post-PKCS7 length
+impl ReadLease {
+    /// Settle hook: shrinks the appropriate size atom to `actual`, rebuilds
+    /// the offset map, and follows the shift through this lease's pending
+    /// exact-seek demand. Called from [`FetchSlot::settle`] via
+    /// `Weak<ReadLease>::upgrade()` on the lease that claimed the slot, once
+    /// the resource commits — for DRM, this is where the post-PKCS7 length
     /// replaces the encrypted estimate.
     ///
     /// Size store and offset recompute happen under the same Layout write
@@ -16,13 +17,18 @@ impl HlsVariant {
     /// `range_ready`. The closure performs the caller-owned size store and
     /// reports the post-store `init_size` to seed the recompute.
     pub(crate) fn apply_commit(&self, loaded: &FetchClaim<Loaded>) {
-        self.layout.apply_commit(&self.segments, || {
-            self.apply_loaded_size(loaded.planned(), loaded.final_len());
-            self.init_route_size()
-        });
+        self.variant
+            .layout
+            .apply_commit(&self.variant.segments, || {
+                self.variant
+                    .apply_loaded_size(loaded.planned(), loaded.final_len());
+                self.variant.init_route_size()
+            });
         self.complete_exact_seek_if_ready();
     }
+}
 
+impl HlsVariant {
     /// Settle-side size store: shrink the appropriate atom to `final_len`.
     /// The caller runs this inside [`Layout::apply_commit`](
     /// offsets::Layout::apply_commit)'s write-lock so a reader never
@@ -46,7 +52,7 @@ impl HlsVariant {
     }
 
     delegate::delegate! {
-        to self.flow.cancel_epoch {
+        to self.cancel_epoch {
             pub(crate) fn cancel(&self);
             #[call(handle)]
             pub(crate) fn cancel_handle(&self) -> CancelToken;
