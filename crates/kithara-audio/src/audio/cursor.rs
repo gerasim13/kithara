@@ -215,7 +215,7 @@ impl ChunkCursor {
         if finished {
             playhead.advance(&ChunkPosition::from(&chunk.meta));
         } else {
-            playhead.advance_partial(interpolated_position(chunk.meta, consumed_total));
+            playhead.advance_partial(chunk.meta.frame_timestamp(consumed_total));
         }
         Ok(CopyOutcome { samples, finished })
     }
@@ -233,17 +233,6 @@ fn frames_to_samples(frames: u64, channels: u64) -> Result<usize, DecodeError> {
             "frames*channels overflow: {samples} does not fit usize: {error}"
         )),
     })
-}
-
-fn interpolated_position(meta: PcmMeta, consumed_frames: u64) -> kithara_platform::time::Duration {
-    let total_frames = u64::from(meta.frames).max(1);
-    let start_ns = u64::try_from(meta.timestamp.as_nanos()).unwrap_or(u64::MAX);
-    let end_ns = u64::try_from(meta.end_timestamp.as_nanos()).unwrap_or(u64::MAX);
-    let span_ns = u128::from(end_ns.saturating_sub(start_ns));
-    let offset = span_ns * u128::from(consumed_frames) / u128::from(total_frames);
-    let interpolated = u128::from(start_ns).saturating_add(offset);
-    let nanos = u64::try_from(interpolated).unwrap_or(u64::MAX);
-    kithara_platform::time::Duration::from_nanos(nanos)
 }
 
 fn channel_failed() -> DecodeError {

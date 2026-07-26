@@ -156,6 +156,32 @@ const PLACEHOLDER_RATE: NonZeroU32 = match NonZeroU32::new(48_000) {
     None => unreachable!(),
 };
 
+impl PcmMeta {
+    /// Timestamp of the frame `frame` positions into this chunk.
+    ///
+    /// Interpolated proportionally across the chunk's own span rather than
+    /// recomputed from the sample rate: a chunk's span already accounts for
+    /// whatever rounding the decoder did, and deriving the split point from
+    /// `frame / sample_rate` instead would drift away from the timestamps the
+    /// chunk actually carries.
+    ///
+    /// Floors, in `u128`, and clamps at the chunk's own end: a partial read and
+    /// a cut at the same frame therefore land on the same instant, which is
+    /// what lets a chunk be consumed in pieces without the playhead drifting
+    /// from where the chunk says it ends.
+    #[must_use]
+    pub fn frame_timestamp(&self, frame: u64) -> Duration {
+        let total = u64::from(self.frames).max(1);
+        let start = u64::try_from(self.timestamp.as_nanos()).unwrap_or(u64::MAX);
+        let end = u64::try_from(self.end_timestamp.as_nanos()).unwrap_or(u64::MAX);
+        let span = u128::from(end.saturating_sub(start));
+        let offset = span * u128::from(frame.min(total)) / u128::from(total);
+        Duration::from_nanos(
+            u64::try_from(u128::from(start).saturating_add(offset)).unwrap_or(u64::MAX),
+        )
+    }
+}
+
 impl Default for PcmMeta {
     fn default() -> Self {
         Self {
@@ -415,5 +441,38 @@ mod tests {
         let debug_str = format!("{:?}", chunk);
 
         assert!(debug_str.contains("PcmChunk"));
+    }
+
+    /// A chunk spanning [1000, 1306) ns over 306 frames: frame 50 sits at
+    /// exactly 1050 ns, so a read stopped there and a cut made there agree.
+    #[kithara::test]
+    fn a_frame_timestamp_floors_across_the_chunk_span() {
+        let meta = PcmMeta {
+            spec: pcm_spec(2, 48_000),
+            timestamp: Duration::from_nanos(1_000),
+            end_timestamp: Duration::from_nanos(1_306),
+            frames: 306,
+            ..Default::default()
+        };
+
+        assert_eq!(meta.frame_timestamp(0), Duration::from_nanos(1_000));
+        assert_eq!(meta.frame_timestamp(50), Duration::from_nanos(1_050));
+        assert_eq!(meta.frame_timestamp(155), Duration::from_nanos(1_155));
+        assert_eq!(meta.frame_timestamp(306), Duration::from_nanos(1_306));
+    }
+
+    /// Past the last frame there is no more chunk to interpolate across, so
+    /// the answer is where the chunk ends rather than an extrapolation.
+    #[kithara::test]
+    fn a_frame_past_the_end_lands_on_the_end() {
+        let meta = PcmMeta {
+            spec: pcm_spec(2, 48_000),
+            timestamp: Duration::from_nanos(1_000),
+            end_timestamp: Duration::from_nanos(1_306),
+            frames: 306,
+            ..Default::default()
+        };
+
+        assert_eq!(meta.frame_timestamp(4_000), meta.end_timestamp);
     }
 }
