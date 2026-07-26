@@ -12,7 +12,7 @@ use kithara_platform::{
     traits::FromWithParams,
 };
 use kithara_stream::{
-    Activity, PlayheadState, PlayheadWrite, SeekObserve, SeekState, SourceError, StreamType,
+    Activity, PlayheadState, PlayheadWrite, SeekObserve, SourceError, StreamType, TimelineState,
     dl::{Downloader, DownloaderConfig, FetchScope, Peer},
 };
 
@@ -81,7 +81,7 @@ impl StreamType for Hls {
         let byte_pool = config.pool.clone();
 
         let playhead = Arc::new(PlayheadState::new());
-        let seek = Arc::new(SeekState::new());
+        let seek = Arc::new(TimelineState::new());
         let seek_obs = Arc::clone(&seek) as Arc<dyn SeekObserve>;
         let hls_peer = Arc::new(HlsPeer::new(
             Arc::clone(&seek_obs),

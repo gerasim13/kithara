@@ -15,9 +15,9 @@ use kithara_platform::{
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, AudioCodec, ByteMap, ChunkPosition, ContainerFormat, MediaInfo, PlayheadRead,
-    PlayheadState, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SeekState,
-    SegmentDescriptor, Source, SourceError, SourcePhase, SourceSeekAnchor, Stream, StreamError,
-    StreamResult, StreamType, VariantControl, WorkerWake,
+    PlayheadState, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SegmentDescriptor, Source,
+    SourceError, SourcePhase, SourceSeekAnchor, Stream, StreamError, StreamResult, StreamType,
+    TimelineState, VariantControl, WorkerWake,
 };
 use kithara_test_utils::kithara;
 
@@ -199,7 +199,7 @@ impl ByteMap for SpliceState {
 struct SpliceSource {
     playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
-    seek: Arc<SeekState>,
+    seek: Arc<TimelineState>,
     state: Arc<SpliceState>,
 }
 
@@ -208,7 +208,7 @@ impl SpliceSource {
         Self {
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
-            seek: Arc::new(SeekState::new()),
+            seek: Arc::new(TimelineState::new()),
             state,
         }
     }

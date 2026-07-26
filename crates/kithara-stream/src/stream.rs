@@ -21,8 +21,8 @@ use crate::{
     DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor,
     error::{SourceError, StreamError, StreamResult},
     playhead::PlayheadWrite,
-    seek_state::{Activity, SeekControl, SeekObserve},
     source::{NotReadyCause, PendingReason, ReadOutcome, Source, VariantControl},
+    timeline::{Activity, SeekControl, SeekObserve},
 };
 
 /// Real error from [`Stream::try_read`] — the underlying source
@@ -730,7 +730,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{PlayheadRead, PlayheadState, ReadOutcome, SeekState, Source, SourcePhase};
+    use crate::{PlayheadRead, PlayheadState, ReadOutcome, Source, SourcePhase, TimelineState};
 
     /// Test helper — script entry that maps to either `Bytes(N)` (with
     /// the source slicing actual `data`) or a terminal `Eof`. Pending
@@ -751,7 +751,7 @@ mod tests {
     struct ScriptSource {
         playhead: Arc<PlayheadState>,
         position: Arc<AtomicU64>,
-        seek: Arc<SeekState>,
+        seek: Arc<TimelineState>,
         anchor: Option<SourceSeekAnchor>,
         peer_wake: Option<Arc<DeferredWake>>,
         data: Vec<u8>,
@@ -761,7 +761,7 @@ mod tests {
 
     impl ScriptSource {
         fn new(
-            seek: Arc<SeekState>,
+            seek: Arc<TimelineState>,
             waits: impl IntoIterator<Item = WaitOutcome>,
             reads: impl IntoIterator<Item = ScriptRead>,
             data: Vec<u8>,
@@ -922,7 +922,7 @@ mod tests {
     struct SeekDuringWaitSource {
         playhead: Arc<PlayheadState>,
         position: Arc<AtomicU64>,
-        seek: Arc<SeekState>,
+        seek: Arc<TimelineState>,
         read_calls: usize,
     }
 
@@ -989,7 +989,7 @@ mod tests {
         // `kevent` the RT produce core must not make. The scheduler shell flushes
         let wake = Arc::new(DeferredWake::default());
         let source = ScriptSource::new(
-            Arc::new(SeekState::new()),
+            Arc::new(TimelineState::new()),
             [WaitOutcome::Interrupted],
             [],
             vec![0u8; 8],
@@ -1018,7 +1018,7 @@ mod tests {
         // armed — the distinguishing signal from the worker's deferred arm.
         let wake = Arc::new(DeferredWake::default());
         let source = ScriptSource::new(
-            Arc::new(SeekState::new()),
+            Arc::new(TimelineState::new()),
             [WaitOutcome::Interrupted, WaitOutcome::Ready],
             [ScriptRead::Data(4)],
             b"ABCD".to_vec(),
@@ -1045,7 +1045,7 @@ mod tests {
         // the target range is not ready (the wait script is never consulted).
         let wake = Arc::new(DeferredWake::default());
         let source = ScriptSource::new(
-            Arc::new(SeekState::new()),
+            Arc::new(TimelineState::new()),
             [WaitOutcome::Interrupted, WaitOutcome::Interrupted],
             [],
             vec![0u8; 100],
@@ -1076,7 +1076,7 @@ mod tests {
     #[kithara::test]
     fn try_read_yields_not_ready_on_interrupted_then_recovers_next_probe() {
         let source = ScriptSource::new(
-            Arc::new(SeekState::new()),
+            Arc::new(TimelineState::new()),
             [WaitOutcome::Interrupted, WaitOutcome::Ready],
             [ScriptRead::Data(4)],
             b"ABCD".to_vec(),
@@ -1101,7 +1101,7 @@ mod tests {
 
     #[kithara::test]
     fn try_read_returns_seek_pending_when_flushing() {
-        let seek = Arc::new(SeekState::new());
+        let seek = Arc::new(TimelineState::new());
         let _ = SeekControl::begin(&*seek, Duration::from_millis(10));
         let source = ScriptSource::new(Arc::clone(&seek), [WaitOutcome::Interrupted], [], vec![]);
         let mut stream = Stream::<DummyType> { source };
@@ -1119,7 +1119,7 @@ mod tests {
     #[kithara::test]
     fn try_read_returns_seek_pending_when_epoch_changes_after_wait() {
         let source = SeekDuringWaitSource {
-            seek: Arc::new(SeekState::new()),
+            seek: Arc::new(TimelineState::new()),
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             read_calls: 0,
@@ -1141,7 +1141,7 @@ mod tests {
 
     #[kithara::test]
     fn seek_updates_position() {
-        let source = ScriptSource::new(Arc::new(SeekState::new()), [], [], b"ABCDE".to_vec());
+        let source = ScriptSource::new(Arc::new(TimelineState::new()), [], [], b"ABCDE".to_vec());
         let mut stream = Stream::<DummyType> { source };
 
         let pos = stream
@@ -1154,7 +1154,8 @@ mod tests {
 
     #[kithara::test]
     fn seek_time_anchor_does_not_move_position() {
-        let mut source = ScriptSource::new(Arc::new(SeekState::new()), [], [], b"ABCDE".to_vec());
+        let mut source =
+            ScriptSource::new(Arc::new(TimelineState::new()), [], [], b"ABCDE".to_vec());
         source.set_position(11);
         source.anchor = Some(SourceSeekAnchor {
             byte_offset: 3,

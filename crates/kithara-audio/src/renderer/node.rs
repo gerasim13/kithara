@@ -314,7 +314,7 @@ mod tests {
     use kithara_decode::PcmMeta;
     use kithara_events::{AudioEvent, Event, EventBus};
     use kithara_platform::time::Duration;
-    use kithara_stream::{PlayheadState, PlayheadWrite, SeekControl, SeekObserve, SeekState};
+    use kithara_stream::{PlayheadState, PlayheadWrite, SeekControl, SeekObserve, TimelineState};
     use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};
 
@@ -375,7 +375,7 @@ mod tests {
             source,
             outlet,
             gate,
-            Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+            Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
         );
 
         assert_eq!(node.tick(), TickResult::Backpressured);
@@ -420,7 +420,7 @@ mod tests {
             source,
             outlet,
             trash_inlet,
-            seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+            seek_obs: Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
             preload_gate: Arc::new(PreloadGate::default()),
             playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadRead>,
             emit: Arc::new(DeferredBus::new(EventBus::new(8), 8)),
@@ -443,7 +443,7 @@ mod tests {
         let (outlet, _inlet) = connect::<Fetch<PcmChunk>>(4, None);
         let source = Box::new(Unimock::new(()));
         let gate = Arc::new(PreloadGate::default());
-        let seek = Arc::new(SeekState::new());
+        let seek = Arc::new(TimelineState::new());
         let playhead = Arc::new(PlayheadState::new());
         playhead.set_position(Duration::from_millis(100));
         playhead.set_decoded_frontier(Duration::from_millis(350));
@@ -517,7 +517,7 @@ mod tests {
             eof_source,
             eof_outlet,
             Arc::clone(&gate),
-            Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+            Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
         );
         assert_eq!(eof_node.tick(), TickResult::Progress);
         let eof_marker = drain_marker(&mut eof_node.outlet, &mut eof_inlet);
@@ -535,7 +535,7 @@ mod tests {
             failed_source,
             failed_outlet,
             gate,
-            Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+            Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
         );
         let _ = failed_node.tick();
         let failed_marker = drain_marker(&mut failed_node.outlet, &mut failed_inlet);
@@ -560,10 +560,10 @@ mod tests {
 
         // Consumer already requested the next seek: the seek epoch is now 1,
         // ahead of the decode epoch (0) the pending EOF belongs to.
-        let seek_state = SeekState::new();
-        let live_epoch = seek_state.begin(Duration::from_secs(1));
+        let timeline = TimelineState::new();
+        let live_epoch = timeline.begin(Duration::from_secs(1));
         assert_eq!(live_epoch, 1, "begin bumps the seek epoch to 1");
-        let seek_obs = Arc::new(seek_state) as Arc<dyn SeekObserve>;
+        let seek_obs = Arc::new(timeline) as Arc<dyn SeekObserve>;
 
         let source = Box::new(Unimock::new((
             MockAudioWorkerSource::step_track
@@ -608,7 +608,7 @@ mod tests {
             source,
             outlet,
             Arc::clone(&gate),
-            Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+            Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
         );
 
         assert_eq!(node.tick(), TickResult::Progress);
@@ -642,7 +642,7 @@ mod tests {
             source,
             outlet,
             gate,
-            Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+            Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
         );
 
         assert_eq!(node.tick(), TickResult::UpstreamPending);
@@ -653,7 +653,7 @@ mod tests {
         let gate = Arc::new(PreloadGate::default());
         let (outlet, mut inlet) = connect::<Fetch<PcmChunk>>(2, None);
 
-        let seek_state = Arc::new(SeekState::new());
+        let timeline = Arc::new(TimelineState::new());
         let source = Box::new(Unimock::new((
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
@@ -666,20 +666,20 @@ mod tests {
                 .returns(TrackStep::Produced(Fetch::data(empty_chunk(), 0))),
         )));
 
-        // Pass a seek_obs handle derived from `seek_state` so begin()
+        // Pass a seek_obs handle derived from `timeline` so begin()
         // arms the shared latch the node will observe on its next tick.
         let mut node = test_node(
             source,
             outlet,
             Arc::clone(&gate),
-            Arc::clone(&seek_state) as Arc<dyn SeekObserve>,
+            Arc::clone(&timeline) as Arc<dyn SeekObserve>,
         );
 
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(node.runtime.preloaded);
         assert!(gate.is_ready(), "first chunk opens the gate");
 
-        let epoch = SeekControl::begin(&*seek_state, Duration::from_secs(1));
+        let epoch = SeekControl::begin(&*timeline, Duration::from_secs(1));
 
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(!node.runtime.preloaded, "seek resets the preload runtime");

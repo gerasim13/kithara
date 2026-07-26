@@ -11,8 +11,8 @@ use kithara::{
     storage::WaitOutcome,
     stream::{
         Activity, AudioCodec, ContainerFormat, MediaInfo, PlayheadRead, PlayheadState,
-        PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SeekState, Source, SourceError,
-        SourcePhase, Stream, StreamResult, StreamType,
+        PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, Source, SourceError, SourcePhase,
+        Stream, StreamResult, StreamType, TimelineState,
     },
 };
 
@@ -24,7 +24,7 @@ use crate::{
 /// WAV-backed `Source` adapter over [`SignalPcm`].
 pub struct SignalSource<S: signal::SignalFn> {
     pcm: SignalPcm<S>,
-    seek: Arc<SeekState>,
+    seek: Arc<TimelineState>,
     playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
     header: WavHeader,
@@ -39,7 +39,7 @@ impl<S: signal::SignalFn> SignalSource<S> {
     #[must_use]
     pub fn new(pcm: SignalPcm<S>) -> Self {
         Self {
-            seek: Arc::new(SeekState::new()),
+            seek: Arc::new(TimelineState::new()),
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             header: create_header_from_signal(&pcm),

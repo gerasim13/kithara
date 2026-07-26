@@ -406,7 +406,7 @@ mod tests {
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmChunk, PcmMeta};
     use kithara_platform::sync::Arc;
-    use kithara_stream::{PlayheadState, SeekState};
+    use kithara_stream::{PlayheadState, TimelineState};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -428,9 +428,9 @@ mod tests {
                 epoch,
                 block_on_underrun: false,
             });
-            let seek_state = Arc::new(SeekState::new());
-            let seek: Arc<dyn SeekControl> = seek_state.clone();
-            let seek_obs: Arc<dyn SeekObserve> = seek_state;
+            let timeline = Arc::new(TimelineState::new());
+            let seek: Arc<dyn SeekControl> = timeline.clone();
+            let seek_obs: Arc<dyn SeekObserve> = timeline;
             let playhead: Arc<dyn PlayheadWrite> = Arc::new(PlayheadState::new());
             let pcm_pool = PcmPool::default().clone();
             let bus = EventBus::default();

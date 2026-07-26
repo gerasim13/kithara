@@ -192,7 +192,7 @@ mod tests {
     };
     use kithara_events::{Envelope, Event};
     use kithara_platform::CancelToken;
-    use kithara_stream::{PlayheadState, SeekState};
+    use kithara_stream::{PlayheadState, TimelineState};
     use kithara_test_utils::kithara;
     use url::Url;
 
@@ -227,7 +227,7 @@ mod tests {
         let reader = writer.reader();
         let coord = Arc::new(FileCoord::new(
             Arc::new(PlayheadState::new()),
-            Arc::new(SeekState::new()),
+            Arc::new(TimelineState::new()),
         ));
         let source = Arc::new(FileSourceCtx::new(
             coord,

@@ -20,8 +20,8 @@ use kithara_platform::{
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, AudioCodec, ChunkPosition, ContainerFormat, MediaInfo, PlayheadRead, PlayheadState,
-    PlayheadWrite, PrerollHint, ReadOutcome, SeekControl, SeekObserve, SeekState, Source,
-    SourceError, SourcePhase, Stream, StreamError, StreamResult, StreamType, VariantControl,
+    PlayheadWrite, PrerollHint, ReadOutcome, SeekControl, SeekObserve, Source, SourceError,
+    SourcePhase, Stream, StreamError, StreamResult, StreamType, TimelineState, VariantControl,
     WorkerWake,
 };
 use kithara_test_utils::kithara;
@@ -301,7 +301,7 @@ struct TestSource {
     control: Arc<TestControl>,
     playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
-    seek: Arc<SeekState>,
+    seek: Arc<TimelineState>,
 }
 
 impl TestSource {
@@ -310,7 +310,7 @@ impl TestSource {
             control,
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
-            seek: Arc::new(SeekState::new()),
+            seek: Arc::new(TimelineState::new()),
         }
     }
 }

@@ -28,7 +28,7 @@ use url::Url;
 use super::{
     BodyStream, Downloader, DownloaderConfig, FetchCmd, FetchScope, Peer, RequestPriority,
 };
-use crate::{Activity, SeekState};
+use crate::{Activity, TimelineState};
 
 const CONCURRENCY_TEST_TIMEOUT_SECS: u64 = 30;
 const FLOOD_BATCH_SIZE: usize = 10;
@@ -730,10 +730,10 @@ type CompletionLog = Arc<Mutex<Vec<(PeerTag, usize)>>>;
 
 /// Peer that emits `total_cmds` GET commands and stamps each with its
 /// tag when the response arrives. `priority()` reads the shared
-/// `SeekState` activity so a mid-stream flip of `set_playing` is observable.
+/// `TimelineState` activity so a mid-stream flip of `set_playing` is observable.
 struct TaggedPriorityPeer {
     gate: Arc<CompletionGate>,
-    seek: Arc<SeekState>,
+    seek: Arc<TimelineState>,
     completion_log: CompletionLog,
     remaining: Mutex<usize>,
     tag: PeerTag,
@@ -743,7 +743,7 @@ struct TaggedPriorityPeer {
 impl TaggedPriorityPeer {
     fn new(
         tag: PeerTag,
-        seek: Arc<SeekState>,
+        seek: Arc<TimelineState>,
         url: Url,
         cmds: usize,
         gate: &Arc<CompletionGate>,
@@ -1032,7 +1032,7 @@ async fn active_peer_completes_before_preload_under_contention() {
     let total = CMDS_PER_PEER * 2;
     let gate = CompletionGate::new(total);
 
-    let seek_active = Arc::new(SeekState::new());
+    let seek_active = Arc::new(TimelineState::new());
     seek_active.set_playing(true);
     let active = Arc::new(TaggedPriorityPeer::new(
         PeerTag::Active,
@@ -1043,7 +1043,7 @@ async fn active_peer_completes_before_preload_under_contention() {
         &completion_log,
     ));
 
-    let seek_preload = Arc::new(SeekState::new());
+    let seek_preload = Arc::new(TimelineState::new());
     let preload = Arc::new(TaggedPriorityPeer::new(
         PeerTag::Preload,
         seek_preload,
@@ -1121,7 +1121,7 @@ async fn both_peers_idle_no_priority_ordering_asserted() {
 
     let a = Arc::new(TaggedPriorityPeer::new(
         PeerTag::Active,
-        Arc::new(SeekState::new()),
+        Arc::new(TimelineState::new()),
         url.clone(),
         CMDS_PER_PEER,
         &gate,
@@ -1129,7 +1129,7 @@ async fn both_peers_idle_no_priority_ordering_asserted() {
     ));
     let b = Arc::new(TaggedPriorityPeer::new(
         PeerTag::Preload,
-        Arc::new(SeekState::new()),
+        Arc::new(TimelineState::new()),
         url,
         CMDS_PER_PEER,
         &gate,
@@ -1162,7 +1162,7 @@ async fn both_peers_idle_no_priority_ordering_asserted() {
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn peer_handle_execute_respects_either_peer_priority() {
     struct FlippablePeer {
-        seek: Arc<SeekState>,
+        seek: Arc<TimelineState>,
     }
     impl Abr for FlippablePeer {}
     impl Peer for FlippablePeer {
@@ -1176,7 +1176,7 @@ async fn peer_handle_execute_respects_either_peer_priority() {
     }
 
     let dl = Downloader::new(test_config());
-    let seek = Arc::new(SeekState::new());
+    let seek = Arc::new(TimelineState::new());
     let peer = Arc::new(FlippablePeer {
         seek: Arc::clone(&seek),
     });
@@ -1201,8 +1201,8 @@ async fn peer_handle_execute_respects_either_peer_priority() {
 }
 
 /// Helper for the deterministic routing test: reads the effective
-/// peer priority from the same `SeekState` activity the peer observes.
-fn peer_priority_from_handle(_handle: &super::PeerHandle, seek: &SeekState) -> RequestPriority {
+/// peer priority from the same `TimelineState` activity the peer observes.
+fn peer_priority_from_handle(_handle: &super::PeerHandle, seek: &TimelineState) -> RequestPriority {
     if seek.is_playing() {
         RequestPriority::HIGH
     } else {

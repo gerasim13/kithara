@@ -188,7 +188,7 @@ mod tests {
         CancelToken,
         sync::{Arc, ThreadGate},
     };
-    use kithara_stream::{AudioCodec, ContainerFormat, PlayheadState, SeekState};
+    use kithara_stream::{AudioCodec, ContainerFormat, PlayheadState, TimelineState};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -303,7 +303,7 @@ mod tests {
         let variant = VariantParts {
             init: None,
             segments,
-            seek_obs: Arc::new(SeekState::new()) as Arc<dyn kithara_stream::SeekObserve>,
+            seek_obs: Arc::new(TimelineState::new()) as Arc<dyn kithara_stream::SeekObserve>,
             codec: playlist.variant_codec(0),
             container: playlist.variant_container(0),
         }
@@ -326,7 +326,7 @@ mod tests {
                 signal: ctx.signal.clone(),
             },
             Arc::new(PlayheadState::new()),
-            Arc::new(SeekState::new()),
+            Arc::new(TimelineState::new()),
             controller.register(&peer),
             Arc::from(vec![variant]),
             playlist,

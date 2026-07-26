@@ -14,7 +14,7 @@ use crate::{
     error::StreamResult,
     media::MediaInfo,
     playhead::{PlayheadRead, PlayheadWrite},
-    seek_state::{Activity, SeekControl, SeekObserve},
+    timeline::{Activity, SeekControl, SeekObserve},
     wake::{DeferredWake, WorkerWake},
 };
 
@@ -449,7 +449,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{PlayheadState, SeekState};
+    use crate::{PlayheadState, TimelineState};
 
     #[kithara::test]
     fn test_source_trait_object_safety() {
@@ -466,7 +466,7 @@ mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
 
         struct ReadySource {
-            seek: Arc<SeekState>,
+            seek: Arc<TimelineState>,
             playhead: Arc<PlayheadState>,
             position: Arc<AtomicU64>,
         }
@@ -513,7 +513,7 @@ mod tests {
             }
         }
         let source = ReadySource {
-            seek: Arc::new(SeekState::new()),
+            seek: Arc::new(TimelineState::new()),
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
         };
@@ -534,7 +534,7 @@ mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
 
         struct MinimalSource {
-            seek: Arc<SeekState>,
+            seek: Arc<TimelineState>,
             playhead: Arc<PlayheadState>,
             position: Arc<AtomicU64>,
         }
@@ -582,7 +582,7 @@ mod tests {
         }
 
         let src = MinimalSource {
-            seek: Arc::new(SeekState::new()),
+            seek: Arc::new(TimelineState::new()),
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
         };

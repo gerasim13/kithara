@@ -13,7 +13,8 @@ use kithara_platform::{
 };
 use kithara_storage::StorageError;
 use kithara_stream::{
-    Activity, AudioCodec, PlayheadState, SeekState, SourceError as StreamSourceError, StreamType,
+    Activity, AudioCodec, PlayheadState, SourceError as StreamSourceError, StreamType,
+    TimelineState,
     dl::{Downloader, DownloaderConfig, FetchScope},
 };
 use kithara_test_utils::kithara;
@@ -76,7 +77,7 @@ fn coord_with_total(len: Option<u64>) -> Arc<FileCoord> {
 fn coord_for(len: Option<u64>, activity: Option<Arc<dyn Activity>>) -> Arc<FileCoord> {
     let coord = Arc::new(FileCoord::with_activity(
         Arc::new(PlayheadState::new()),
-        Arc::new(SeekState::new()),
+        Arc::new(TimelineState::new()),
         activity,
     ));
     coord.set_total_bytes(len);

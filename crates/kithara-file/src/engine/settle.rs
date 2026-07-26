@@ -117,7 +117,7 @@ mod tests {
         CancelScope, CancelToken,
         sync::{Arc, Mutex},
     };
-    use kithara_stream::{PlayheadState, SeekState};
+    use kithara_stream::{PlayheadState, TimelineState};
     use num_traits::AsPrimitive;
     use url::Url;
 
@@ -188,7 +188,7 @@ mod tests {
             let source = Arc::new(FileSourceCtx::new(
                 Arc::new(FileCoord::new(
                     Arc::new(PlayheadState::new()),
-                    Arc::new(SeekState::new()),
+                    Arc::new(TimelineState::new()),
                 )),
                 EventBus::new(16),
                 reader.clone(),

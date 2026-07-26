@@ -16,7 +16,7 @@ use kithara::{
     storage::WaitOutcome,
     stream::{
         Activity, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl,
-        SeekObserve, SeekState, Source, SourcePhase, Stream, StreamResult, StreamType,
+        SeekObserve, Source, SourcePhase, Stream, StreamResult, StreamType, TimelineState,
     },
 };
 use libfuzzer_sys::fuzz_target;
@@ -103,7 +103,7 @@ impl<'a> Arbitrary<'a> for Input {
 
 #[derive(Default)]
 struct ScriptSource {
-    seek: Arc<SeekState>,
+    seek: Arc<TimelineState>,
     playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
     data: Vec<u8>,
@@ -208,7 +208,7 @@ fuzz_target!(|input: Input| {
     });
 
     let source = ScriptSource {
-        seek: Arc::new(SeekState::new()),
+        seek: Arc::new(TimelineState::new()),
         playhead: Arc::new(PlayheadState::new()),
         position: Arc::new(AtomicU64::new(0)),
         data: input.data,

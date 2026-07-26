@@ -17,8 +17,8 @@ use kithara_platform::{
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, ByteMap, ContainerFormat, DeferredWake, MediaInfo, PendingReason, PlayheadRead,
-    PlayheadState, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SeekState,
-    SegmentDescriptor, SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult,
+    PlayheadState, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SegmentDescriptor,
+    SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult, TimelineState,
     VariantControl,
     dl::{FetchCmd, FetchScope},
 };
@@ -86,7 +86,7 @@ pub(crate) struct HlsCoord {
     playlist_state: Arc<PlaylistState>,
     /// Backing seek/activity state — the coord owns the `Arc` directly and
     /// vends narrow trait-object handles from it.
-    seek: Arc<SeekState>,
+    seek: Arc<TimelineState>,
     /// Narrow seek-observe handle — derived from `seek` at construction.
     /// Used by internal methods that only need epoch/target/pending reads.
     seek_obs: Arc<dyn SeekObserve>,
@@ -134,7 +134,7 @@ impl HlsCoord {
     pub(crate) fn new(
         env: HlsCoordEnv,
         playhead: Arc<PlayheadState>,
-        seek: Arc<SeekState>,
+        seek: Arc<TimelineState>,
         abr: AbrHandle,
         variants: Arc<[Arc<HlsVariant>]>,
         playlist_state: Arc<PlaylistState>,
@@ -985,7 +985,7 @@ mod tests {
                     decode_time: Duration::ZERO,
                     duration: Duration::from_secs(2),
                 })],
-                seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+                seek_obs: Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
                 codec: playlist.variant_codec(0),
                 container: playlist.variant_container(0),
             }
@@ -1010,7 +1010,7 @@ mod tests {
                     decode_time: Duration::ZERO,
                     duration: Duration::from_secs(2),
                 })],
-                seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+                seek_obs: Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
                 codec: playlist.variant_codec(1),
                 container: playlist.variant_container(1),
             }
@@ -1060,7 +1060,7 @@ mod tests {
                 signal,
             },
             Arc::new(PlayheadState::new()),
-            Arc::new(SeekState::new()),
+            Arc::new(TimelineState::new()),
             handle,
             variants,
             playlist,
@@ -1070,7 +1070,7 @@ mod tests {
 
     #[kithara::test]
     fn variant_switch_target_uses_active_seek_target() {
-        let seek = SeekState::new();
+        let seek = TimelineState::new();
         let playhead = PlayheadState::new();
         playhead.set_position(Duration::from_secs(9));
 
@@ -1084,7 +1084,7 @@ mod tests {
 
     #[kithara::test]
     fn variant_switch_target_keeps_flushing_seek_target_after_decoder_applies() {
-        let seek = SeekState::new();
+        let seek = TimelineState::new();
         let playhead = PlayheadState::new();
         playhead.set_position(Duration::from_secs(9));
 
@@ -1099,7 +1099,7 @@ mod tests {
 
     #[kithara::test]
     fn variant_switch_target_ignores_completed_seek_target() {
-        let seek = SeekState::new();
+        let seek = TimelineState::new();
         let playhead = PlayheadState::new();
 
         let epoch = seek.begin(Duration::from_secs(5));

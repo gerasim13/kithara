@@ -6,7 +6,7 @@ use bitflags::bitflags;
 use kithara_platform::{sync::Arc, time::Duration};
 
 bitflags! {
-    /// Boolean playback-state flags stored in a single `AtomicU8` on [`SeekState`].
+    /// Boolean playback-state flags stored in a single `AtomicU8` on [`TimelineState`].
     ///
     /// Consolidated into one atomic so readers (HLS peer priority, reader
     /// wait loops, audio FSM) observe a coherent snapshot with a single
@@ -42,18 +42,21 @@ pub trait SeekControl: Send + Sync {
     fn mark_pending(&self, epoch: u64);
 }
 
-/// Activity flag — whether the audio FSM has this timeline as active decode target.
+/// Activity flags — what the audio FSM is doing with this timeline.
 pub trait Activity: Send + Sync {
     fn is_playing(&self) -> bool;
     fn set_playing(&self, playing: bool);
 }
 
-/// Concrete owner of the six seek/activity atomics.
+/// Concrete owner of a track's playback state.
 ///
-/// Implements `SeekObserve`, `SeekControl`, and `Activity`. Coords hold an
-/// `Arc<SeekState>` and vend the narrow trait handles to readers/writers.
+/// Seeking is one phase of playing, not a frame around it, so the seek
+/// epoch and its latches live here beside the activity flags rather than in
+/// a state of their own. Implements `SeekObserve`, `SeekControl`, and
+/// `Activity` — coords hold an `Arc<TimelineState>` and vend those narrow
+/// handles, each a view of one part of the same state.
 #[derive(Debug)]
-pub struct SeekState {
+pub struct TimelineState {
     /// Kept as `Arc<AtomicU64>` so callers can hand out a cheap `Arc`
     /// clone of the shared seek epoch atomic.
     seek_epoch: Arc<AtomicU64>,
@@ -71,7 +74,7 @@ pub struct SeekState {
     flags: AtomicU8,
 }
 
-impl SeekState {
+impl TimelineState {
     const NO_PENDING_SEEK: u64 = u64::MAX;
     const NO_SEEK_TARGET: u64 = u64::MAX;
 
@@ -109,13 +112,13 @@ impl SeekState {
     }
 }
 
-impl Default for SeekState {
+impl Default for TimelineState {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SeekObserve for SeekState {
+impl SeekObserve for TimelineState {
     fn clear_pending_epoch(&self, epoch: u64) -> bool {
         self.pending_seek_epoch
             .compare_exchange(
@@ -168,7 +171,7 @@ impl SeekObserve for SeekState {
     }
 }
 
-impl SeekControl for SeekState {
+impl SeekControl for TimelineState {
     /// Initiate a seek (`FLUSH_START`).
     ///
     /// Sets flushing flag, records target position, increments epoch.
@@ -231,7 +234,7 @@ impl SeekControl for SeekState {
     }
 }
 
-impl Activity for SeekState {
+impl Activity for TimelineState {
     fn is_playing(&self) -> bool {
         TimelineFlags::from_bits_truncate(self.flags.load(Ordering::Acquire))
             .contains(TimelineFlags::PLAYING)
@@ -261,11 +264,11 @@ mod tests {
 
     use super::*;
 
-    fn state() -> SeekState {
-        SeekState::new()
+    fn state() -> TimelineState {
+        TimelineState::new()
     }
 
-    fn flags_snapshot(s: &SeekState, order: Ordering) -> TimelineFlags {
+    fn flags_snapshot(s: &TimelineState, order: Ordering) -> TimelineFlags {
         TimelineFlags::from_bits_truncate(s.flags_raw(order))
     }
 

@@ -387,7 +387,7 @@ mod tests {
     use kithara_decode::{PcmChunk, PcmMeta};
     use kithara_events::{AudioEvent, Event, EventBus};
     use kithara_platform::sync::Arc;
-    use kithara_stream::{SeekControl, SeekState};
+    use kithara_stream::{SeekControl, TimelineState};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -402,7 +402,7 @@ mod tests {
         let bus = EventBus::new(8);
         let mut receiver = bus.subscribe();
         let events = AudioEvents::new(bus.clone());
-        let seek = SeekState::new();
+        let seek = TimelineState::new();
         let position = Duration::from_millis(500);
         let epoch = seek.begin(position);
         seek.mark_pending(epoch);

@@ -1,7 +1,7 @@
 use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmMeta};
 use kithara_platform::sync::Arc;
-use kithara_stream::{SeekControl, SeekObserve, SeekState};
+use kithara_stream::{SeekControl, SeekObserve, TimelineState};
 
 use super::AudioWorkerSource;
 use crate::pipeline::{
@@ -24,7 +24,7 @@ pub(crate) struct MockSource {
 
 impl MockSource {
     pub(crate) fn new(chunks: usize) -> Self {
-        let state = Arc::new(SeekState::new());
+        let state = Arc::new(TimelineState::new());
         let seek = Arc::clone(&state) as Arc<dyn SeekControl>;
         let seek_obs = Arc::clone(&state) as Arc<dyn SeekObserve>;
         Self {

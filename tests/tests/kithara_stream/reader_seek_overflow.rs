@@ -14,13 +14,13 @@ use kithara::{
     storage::WaitOutcome,
     stream::{
         Activity, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl,
-        SeekObserve, SeekState, Source, SourcePhase, Stream, StreamResult, StreamType,
+        SeekObserve, Source, SourcePhase, Stream, StreamResult, StreamType, TimelineState,
     },
 };
 
 /// Minimal mock source with known length.
 struct MockSource {
-    seek: Arc<SeekState>,
+    seek: Arc<TimelineState>,
     playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
     data: Vec<u8>,
@@ -32,7 +32,7 @@ struct MockSource {
 impl MockSource {
     fn new(len: usize) -> Self {
         Self {
-            seek: Arc::new(SeekState::new()),
+            seek: Arc::new(TimelineState::new()),
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             reported_len: u64::try_from(len).unwrap_or(u64::MAX),
@@ -44,7 +44,7 @@ impl MockSource {
     /// Avoids allocating huge buffers when only testing seek bounds.
     fn with_reported_len(reported_len: u64) -> Self {
         Self {
-            seek: Arc::new(SeekState::new()),
+            seek: Arc::new(TimelineState::new()),
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             data: Vec::new(),

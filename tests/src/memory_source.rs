@@ -12,7 +12,8 @@ use kithara::{
     storage::WaitOutcome,
     stream::{
         Activity, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl,
-        SeekObserve, SeekState, Source, SourceError, SourcePhase, Stream, StreamResult, StreamType,
+        SeekObserve, Source, SourceError, SourcePhase, Stream, StreamResult, StreamType,
+        TimelineState,
     },
 };
 
@@ -27,7 +28,7 @@ pub struct MemorySourceError;
 /// Set `report_len` to `false` to simulate sources without known length
 /// (e.g. for testing `SeekFrom::End` error paths).
 pub struct MemorySource {
-    seek: Arc<SeekState>,
+    seek: Arc<TimelineState>,
     playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
     data: Vec<u8>,
@@ -39,7 +40,7 @@ impl MemorySource {
     pub fn new(data: Vec<u8>) -> Self {
         Self {
             data,
-            seek: Arc::new(SeekState::new()),
+            seek: Arc::new(TimelineState::new()),
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             report_len: true,
@@ -51,7 +52,7 @@ impl MemorySource {
     pub fn without_len(data: Vec<u8>) -> Self {
         Self {
             data,
-            seek: Arc::new(SeekState::new()),
+            seek: Arc::new(TimelineState::new()),
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             report_len: false,

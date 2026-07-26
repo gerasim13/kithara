@@ -10,8 +10,8 @@ use kithara_events::{
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    AudioCodec, NotReadyCause, PendingReason, PlayheadState, ReadOutcome, SeekState, Source,
-    SourceError as StreamSourceError, SourcePhase, StreamError,
+    AudioCodec, NotReadyCause, PendingReason, PlayheadState, ReadOutcome, Source,
+    SourceError as StreamSourceError, SourcePhase, StreamError, TimelineState,
 };
 use kithara_test_utils::kithara;
 
@@ -39,7 +39,7 @@ fn nz_bytes(n: usize) -> ReadOutcome {
 fn make_coord() -> Arc<FileCoord> {
     Arc::new(FileCoord::new(
         Arc::new(PlayheadState::new()),
-        Arc::new(SeekState::new()),
+        Arc::new(TimelineState::new()),
     ))
 }
 

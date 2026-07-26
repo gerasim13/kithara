@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara_platform::sync::Arc;
 use kithara_stream::{
-    Activity, PlayheadRead, PlayheadState, PlayheadWrite, SeekControl, SeekObserve, SeekState,
+    Activity, PlayheadRead, PlayheadState, PlayheadWrite, SeekControl, SeekObserve, TimelineState,
 };
 use kithara_test_utils::kithara;
 
@@ -24,9 +24,9 @@ pub(crate) struct FileCoord {
     read_pos: Arc<AtomicU64>,
     /// Backing seek/activity state — the coord owns the `Arc` directly and
     /// vends narrow trait-object handles from it.
-    seek: Arc<SeekState>,
+    seek: Arc<TimelineState>,
     /// Narrow seek-observe handle (flush gate) — derived from the shared
-    /// `SeekState`, so it observes the same flags without the wide type.
+    /// `TimelineState`, so it observes the same flags without the wide type.
     #[field(get, vis = "pub(crate)", deref = false)]
     seek_obs: Arc<dyn SeekObserve>,
     total_bytes: Arc<AtomicU64>,
@@ -39,7 +39,7 @@ impl FileCoord {
     const NO_TOTAL_BYTES: u64 = u64::MAX;
 
     #[must_use]
-    pub(crate) fn new(playhead: Arc<PlayheadState>, seek: Arc<SeekState>) -> Self {
+    pub(crate) fn new(playhead: Arc<PlayheadState>, seek: Arc<TimelineState>) -> Self {
         Self::with_activity(playhead, seek, None)
     }
 
@@ -50,7 +50,7 @@ impl FileCoord {
     #[must_use]
     pub(crate) fn with_activity(
         playhead: Arc<PlayheadState>,
-        seek: Arc<SeekState>,
+        seek: Arc<TimelineState>,
         activity: Option<Arc<dyn Activity>>,
     ) -> Self {
         let seek_obs = Arc::clone(&seek) as Arc<dyn SeekObserve>;
@@ -152,6 +152,9 @@ impl FileCoord {
 
 impl Default for FileCoord {
     fn default() -> Self {
-        Self::new(Arc::new(PlayheadState::new()), Arc::new(SeekState::new()))
+        Self::new(
+            Arc::new(PlayheadState::new()),
+            Arc::new(TimelineState::new()),
+        )
     }
 }
