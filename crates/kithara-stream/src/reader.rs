@@ -1,0 +1,306 @@
+use std::io::{self, Read, Seek, SeekFrom};
+
+use kithara_platform::{sync::Arc, time::Duration};
+
+use crate::{ByteMap, SharedStream, StreamType, hooks::BoxedEventSink};
+
+/// What a read does when the bytes it asked for have not arrived.
+///
+/// The choice belongs to the reader, not to the stream: one session can be
+/// building a decoder off the real-time path and want to wait, while another
+/// is feeding the produce core and must never block.
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum WaitMode {
+    /// Real-time / cooperative-yield probe: bounded wait, returns without
+    /// blocking so the caller can park and re-tick.
+    #[default]
+    Probe,
+    /// Off-real-time: park event-driven until the range resolves.
+    Block,
+}
+
+impl WaitMode {
+    pub(crate) fn timeout(self, probe: Duration) -> Option<Duration> {
+        match self {
+            Self::Probe => Some(probe),
+            Self::Block => None,
+        }
+    }
+}
+
+/// Where a reader starts in the stream and how it waits there.
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, bon::Builder)]
+#[non_exhaustive]
+pub struct ReaderHint {
+    /// Absolute byte the reader treats as its own position zero. A decoder
+    /// rebuilt mid-stream is handed the segment it starts at, and expects to
+    /// address it from 0.
+    #[builder(default)]
+    pub base_offset: u64,
+    #[builder(default)]
+    pub wait: WaitMode,
+}
+
+/// One reading session over a stream.
+///
+/// Everything the decode path needs to build a decoder comes from here: the
+/// bytes through `Read + Seek`, and the three facts a decoder has to be
+/// configured with. Before this, the caller read those three off the stream
+/// and constructed the reader separately, which only worked while there was
+/// exactly one reader and it was the whole stream.
+pub trait SessionReader: Read + Seek + Send + Sync {
+    /// Bytes this session can address, from ITS zero — already net of where
+    /// the session starts. `None` when the stream length is not known yet.
+    fn byte_len(&self) -> Option<u64>;
+
+    /// Segment map, for decoders that demux segment by segment.
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>>;
+
+    /// Reader-side event sink, taken once per session.
+    fn take_event_sink(&mut self) -> Option<BoxedEventSink>;
+}
+
+/// A [`SessionReader`] that reads a stream through a private base offset.
+///
+/// Positions it reports and accepts are relative to `base_offset`, so a
+/// decoder rebuilt at a mid-stream boundary addresses its segment from 0
+/// while the bytes come from wherever the stream actually keeps them.
+pub struct CursorReader<T: StreamType> {
+    shared: SharedStream<T>,
+    base_offset: u64,
+    wait: WaitMode,
+}
+
+impl<T: StreamType> CursorReader<T> {
+    fn new(shared: SharedStream<T>, hint: ReaderHint) -> Self {
+        // Aim the stream at the session's start before anyone reads: the
+        // decoder's first read has to land on its own segment, and its first
+        // `seek` may never come. A target the stream cannot resolve yet is
+        // not an error here — the read that follows discovers it.
+        let _ = shared.probe_seek(SeekFrom::Start(hint.base_offset));
+        Self {
+            shared,
+            base_offset: hint.base_offset,
+            wait: hint.wait,
+        }
+    }
+}
+
+impl<T: StreamType> SessionReader for CursorReader<T> {
+    fn byte_len(&self) -> Option<u64> {
+        self.shared
+            .len()
+            .map(|len| len.saturating_sub(self.base_offset))
+    }
+
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        self.shared.byte_map()
+    }
+
+    fn take_event_sink(&mut self) -> Option<BoxedEventSink> {
+        self.shared.take_reader_event_sink()
+    }
+}
+
+impl<T: StreamType> Read for CursorReader<T> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self.wait {
+            WaitMode::Probe => self.shared.probe_read(buf),
+            WaitMode::Block => self.shared.blocking_read(buf),
+        }
+    }
+}
+
+impl<T: StreamType> Seek for CursorReader<T> {
+    /// Always the on-core [`SharedStream::probe_seek`]: a decoder runs on the
+    /// produce core, where the off-RT adapter's inline priming is not allowed
+    /// to spin.
+    ///
+    /// `Start` is the only variant the base offset applies to going in —
+    /// `Current` and `End` are already expressed against the stream's own
+    /// cursor and end. Coming back out, all three are reported from the
+    /// session's zero.
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        let target = match pos {
+            SeekFrom::Start(p) => SeekFrom::Start(self.base_offset.saturating_add(p)),
+            other => other,
+        };
+        let landed = self.shared.probe_seek(target)?;
+        Ok(landed.saturating_sub(self.base_offset))
+    }
+}
+
+impl<T: StreamType> SharedStream<T> {
+    /// Open a reading session over this stream.
+    ///
+    /// The one way the decode path gets a reader, for every stream type —
+    /// what differs between a file and a segmented stream is inside the
+    /// source, not in how a reader over it is made.
+    #[must_use]
+    pub fn open_reader(&self, hint: ReaderHint) -> CursorReader<T> {
+        CursorReader::new(self.clone(), hint)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        ops::Range,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    use kithara_storage::WaitOutcome;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        Activity, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl,
+        SeekObserve, Source, SourceError, SourcePhase, Stream, StreamResult, TimelineState,
+    };
+
+    const LEN: u64 = 100;
+
+    struct FlatSource {
+        position: Arc<AtomicU64>,
+        seek: Arc<TimelineState>,
+        playhead: Arc<PlayheadState>,
+    }
+
+    impl Source for FlatSource {
+        fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+            Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
+        }
+        fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+            Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
+        }
+        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+            Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+        }
+        fn seek_control(&self) -> Arc<dyn SeekControl> {
+            Arc::clone(&self.seek) as Arc<dyn SeekControl>
+        }
+        fn activity(&self) -> Arc<dyn Activity> {
+            Arc::clone(&self.seek) as Arc<dyn Activity>
+        }
+        fn wait_range(
+            &mut self,
+            _range: Range<u64>,
+            _timeout: Option<Duration>,
+        ) -> StreamResult<WaitOutcome> {
+            Ok(WaitOutcome::Ready)
+        }
+        fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> StreamResult<ReadOutcome> {
+            Ok(ReadOutcome::Eof)
+        }
+        fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+            SourcePhase::Ready
+        }
+        fn len(&self) -> Option<u64> {
+            Some(LEN)
+        }
+        fn position(&self) -> u64 {
+            self.position.load(Ordering::Acquire)
+        }
+        fn advance(&self, n: u64) {
+            self.position.fetch_add(n, Ordering::AcqRel);
+        }
+        fn set_position(&self, pos: u64) {
+            self.position.store(pos, Ordering::Release);
+        }
+    }
+
+    struct FlatType;
+
+    impl StreamType for FlatType {
+        type Config = ();
+        type Events = ();
+        type Source = FlatSource;
+
+        async fn create(_config: Self::Config) -> Result<Self::Source, SourceError> {
+            Err(SourceError::other(io::Error::other(
+                "not used in unit tests",
+            )))
+        }
+    }
+
+    fn shared() -> SharedStream<FlatType> {
+        SharedStream::new(Stream::<FlatType> {
+            source: FlatSource {
+                position: Arc::new(AtomicU64::new(0)),
+                seek: Arc::new(TimelineState::new()),
+                playhead: Arc::new(PlayheadState::new()),
+            },
+        })
+    }
+
+    fn reader_at(base: u64) -> (SharedStream<FlatType>, CursorReader<FlatType>) {
+        let shared = shared();
+        let reader = shared.open_reader(ReaderHint::builder().base_offset(base).build());
+        (shared, reader)
+    }
+
+    /// A decoder rebuilt mid-stream may read before it ever seeks, so opening
+    /// the session has to leave the stream at the session's start.
+    #[kithara::test]
+    fn opening_a_session_aims_the_stream_at_its_start() {
+        let (shared, _reader) = reader_at(40);
+        assert_eq!(shared.position(), 40);
+    }
+
+    /// `Start` is the one variant the base applies to going in, and every
+    /// variant reports back from the session's zero.
+    #[kithara::test]
+    fn start_is_rebased_both_ways() {
+        let (shared, mut reader) = reader_at(40);
+
+        assert_eq!(reader.seek(SeekFrom::Start(10)).expect("seek"), 10);
+        assert_eq!(
+            shared.position(),
+            50,
+            "the stream moved to the absolute byte"
+        );
+    }
+
+    /// `Current` is already expressed against the stream's own cursor, so it
+    /// passes through untouched — only the answer is rebased.
+    #[kithara::test]
+    fn current_passes_through_and_only_the_answer_is_rebased() {
+        let (shared, mut reader) = reader_at(40);
+
+        assert_eq!(reader.seek(SeekFrom::Current(10)).expect("seek"), 10);
+        assert_eq!(shared.position(), 50);
+    }
+
+    /// `End` likewise: the end belongs to the stream, not to the session.
+    #[kithara::test]
+    fn end_is_the_streams_end_reported_from_the_sessions_zero() {
+        let (_shared, mut reader) = reader_at(40);
+
+        assert_eq!(reader.seek(SeekFrom::End(0)).expect("seek"), LEN - 40);
+    }
+
+    /// A session starting past the end reports zero rather than wrapping —
+    /// the reverse map saturates.
+    #[kithara::test]
+    fn a_session_past_the_end_reports_zero_not_a_wrapped_position() {
+        let (_shared, mut reader) = reader_at(LEN + 10);
+
+        assert_eq!(reader.seek(SeekFrom::Start(0)).expect("seek"), 0);
+    }
+
+    /// What the decoder is told about length is what IT can address, not what
+    /// the stream holds.
+    #[kithara::test]
+    fn byte_len_is_net_of_where_the_session_starts() {
+        let (_shared, reader) = reader_at(40);
+        assert_eq!(reader.byte_len(), Some(LEN - 40));
+
+        let (_shared, past_end) = reader_at(LEN + 10);
+        assert_eq!(
+            past_end.byte_len(),
+            Some(0),
+            "a session past the end addresses nothing"
+        );
+    }
+}

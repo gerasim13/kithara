@@ -21,6 +21,7 @@ use crate::{
     DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor,
     error::{SourceError, StreamError, StreamResult},
     playhead::PlayheadWrite,
+    reader::WaitMode,
     source::{NotReadyCause, PendingReason, ReadOutcome, Source, VariantControl},
     timeline::{Activity, SeekControl, SeekObserve},
 };
@@ -171,7 +172,7 @@ pub trait StreamType: MaybeSend + 'static {
 /// Stream holds the source directly and implements `Read + Seek` by calling
 /// `Source::wait_range()` and `Source::read_at()`.
 pub struct Stream<T: StreamType> {
-    source: T::Source,
+    pub(crate) source: T::Source,
 }
 
 impl<T: StreamType> Stream<T> {
@@ -296,28 +297,6 @@ impl<T: StreamType> Stream<T> {
         self.source
             .variant_control()
             .and_then(|vc| vc.variant_change_target())
-    }
-}
-
-/// Per-probe wait policy threaded into [`Stream::try_read_with`]. Internal
-/// plumbing, NOT a public knob — it selects the `Source::wait_range` timeout
-/// from the caller's statically-known context.
-#[derive(Clone, Copy)]
-enum WaitMode {
-    /// RT / cooperative-yield probe (`probe_read`): bounded
-    /// `Some(WAIT_RANGE_TIMEOUT)`, returns without blocking.
-    Probe,
-    /// Off-RT consumer (`impl Read`): `None` — the source parks event-driven
-    /// until the range resolves (no wall-clock poll at this layer).
-    Block,
-}
-
-impl WaitMode {
-    fn timeout(self, probe: Duration) -> Option<Duration> {
-        match self {
-            Self::Probe => Some(probe),
-            Self::Block => None,
-        }
     }
 }
 
@@ -543,7 +522,8 @@ impl<T: StreamType> Stream<T> {
     /// Real-time on-core seek: resolve + cursor set, with NO `prime_seek_range`
     /// spin — no `yield_now`/`notify_one` on the forbid-blocking produce core.
     /// The audio worker (the FSM's recreate/boundary seeks and the decoder's
-    /// `OffsetReader`) seeks through this; the off-RT [`Seek::seek`] adapter
+    /// [`CursorReader`](crate::CursorReader)) seeks through this; the off-RT
+    /// [`Seek::seek`] adapter
     /// primes inline instead. The seeked range's readiness is discovered by the
     /// next `probe_read` (park-on-not-ready), and the armed peer wake — flushed
     /// by the shell — drives the fetch.

@@ -42,6 +42,15 @@ impl<T: StreamType> SharedStream<T> {
         }
     }
 
+    /// Off-real-time read: parks event-driven until the range resolves.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the inner [`Stream`]'s blocking read adapter.
+    pub fn blocking_read(&self, buf: &mut [u8]) -> io::Result<usize> {
+        Read::read(&mut *self.inner.lock(), buf)
+    }
+
     /// Arm/disarm the construction-phase blocking read mode (see the
     /// `blocking` field). Shared across all clones derived from this handle,
     /// so arming before the decoder build and disarming before worker
@@ -123,6 +132,15 @@ impl<T: StreamType> SharedStream<T> {
             /// write/settle sites; no-op for non-segmented sources. Set once,
             /// after the worker exists.
             pub fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>);
+            /// Real-time read: a not-ready range surfaces immediately instead
+            /// of parking, so the caller can re-tick. See [`Stream::probe_read`].
+            ///
+            /// # Errors
+            ///
+            /// Propagates [`Stream::probe_read`]: `Interrupted` for transient
+            /// backpressure, `Other` at a variant boundary, the source's own
+            /// error otherwise.
+            pub fn probe_read(&self, buf: &mut [u8]) -> io::Result<usize>;
             /// Real-time on-core seek (FSM recreate/boundary, decoder reader):
             /// position math + cursor set, no `prime_seek_range` spin on the
             /// forbid-blocking produce core. See [`Stream::probe_seek`].
