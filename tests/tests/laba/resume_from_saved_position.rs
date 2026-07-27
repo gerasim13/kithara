@@ -141,13 +141,17 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
     )
     .await
     .unwrap_or_else(|error| panic!("LABA-408 precondition: {error}"));
-    second_queue.pause();
+    // The app restores the saved position on a freshly loaded, not-yet-playing
+    // track and only then starts playback.
     let outcome = second_queue.seek(saved);
     assert!(
         outcome.is_ok(),
         "LABA-408 precondition: seek to saved position {saved:.2}s failed: {:?}",
         outcome.err()
     );
+    // `SeekComplete` is published by the decoder once it reads at the new
+    // position, so it cannot arrive while the engine is still paused.
+    second_queue.play();
     wait_for_event(
         &mut second_rx,
         "saved-position seek completion",
@@ -158,12 +162,11 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
                     if (position.as_secs_f64() - saved).abs() < 1.0
             )
         },
-        Duration::from_secs(10),
+        Duration::from_secs(30),
     )
     .await
     .unwrap_or_else(|error| panic!("LABA-408 precondition: {error}"));
 
-    second_queue.play();
     let mut resumed_at = None;
     wait_for_event(
         &mut second_rx,

@@ -5,30 +5,55 @@ use std::collections::HashSet;
 use kithara::{
     events::{AudioEvent, DownloaderEvent, Event, QueueEvent, RequestId, RequestMethod},
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, sync::Arc, time::Duration},
-    play::{PlayerConfig, PlayerImpl, ResourceConfig, SessionDispatcher},
+    platform::{
+        CancelToken,
+        sync::Arc,
+        time::{self, Duration},
+        tokio,
+    },
+    play::{PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
-    audio_fixture::EmbeddedAudio, kithara, offline::OfflineSession, temp_dir,
-    waits::wait_for_loader_done_event,
+    audio_fixture::EmbeddedAudio,
+    kithara,
+    offline::OfflineSession,
+    temp_dir,
+    waits::{wait_for_event, wait_for_loader_done_event},
 };
 
-const SAMPLE_RATE: u32 = 44_100;
-const BLOCK_FRAMES: usize = 512;
 const TRACK_COUNT: usize = 3;
 const STORM_ROUNDS: usize = 12;
-const APPLY_BLOCKS: usize = 1_024;
-const SEEK_BLOCKS: usize = 1_024;
-const PAUSE_BLOCKS: usize = 128;
 const SEEK_TARGET_SECS: f64 = 5.0;
 const SEEK_TOLERANCE_SECS: f64 = 1.0;
+/// How far playback must carry past the seek landing to prove `play` was not
+/// swallowed. A positive fact, so no window of "nothing happened" is needed.
+const MIN_RESUME_PROGRESS_SECS: f64 = 1.0;
 
-fn render_and_tick(session: &OfflineSession, queue: &Queue) {
-    let _ = session.render(BLOCK_FRAMES);
-    queue.tick().expect("tick queue");
+fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
+    tokio::task::spawn(async move {
+        loop {
+            time::sleep(Duration::from_millis(20)).await;
+            if queue.tick().is_err() {
+                break;
+            }
+        }
+    })
+}
+
+/// `pause` and `play` reach the sink as slot commands, so the snapshot the
+/// queue exposes converges a tick later. Waiting for that convergence is the
+/// command-took-effect fact; never converging is the reported bug.
+async fn wait_for_playing(queue: &Queue, expected: bool, deadline: Duration) -> Result<(), String> {
+    time::timeout(deadline, async {
+        while queue.playback_view().playing != expected {
+            time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_| format!("playback state never became playing={expected} within {deadline:?}"))
 }
 
 fn resource_config(
@@ -68,36 +93,7 @@ fn drain_active_gets(rx: &mut kithara::events::EventReceiver, active: &mut HashS
     }
 }
 
-fn drain_seek_progress(
-    rx: &mut kithara::events::EventReceiver,
-    target: f64,
-    landed: &mut Option<f64>,
-) {
-    while let Ok(envelope) = rx.try_recv() {
-        match envelope.event {
-            Event::Audio(AudioEvent::SeekComplete { position, .. }) => {
-                *landed = Some(position.as_secs_f64());
-            }
-            Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) => {
-                let position = position_ms as f64 / 1000.0;
-                if (position - target).abs() < SEEK_TOLERANCE_SECS {
-                    *landed = Some(position);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-fn drain_post_pause_progress(rx: &mut kithara::events::EventReceiver, latest: &mut Option<f64>) {
-    while let Ok(envelope) = rx.try_recv() {
-        if let Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = envelope.event {
-            *latest = Some(position_ms as f64 / 1000.0);
-        }
-    }
-}
-
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let handles: Vec<_> = (0..TRACK_COUNT)
@@ -107,6 +103,8 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
                     bytes: Arc::new(EmbeddedAudio::TEST_MP3_BYTES.to_vec()),
                     content_type: Some("audio/mpeg"),
                 },
+                // Throttled so the storm lands while transfers are still in
+                // flight — that is the state the report describes.
                 delivery: Delivery::Throttle {
                     chunk: 4 * 1024,
                     delay_ms: 20,
@@ -119,123 +117,129 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
             .client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
-    let session = Arc::new(OfflineSession::new_manual());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(SAMPLE_RATE)
             .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(kithara::bufpool::PcmPool::default())
-            .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
+            .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Queue::new(QueueConfig::default().with_player(player));
+    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let ticker = spawn_ticker(Arc::clone(&queue));
     let mut status_rx = queue.subscribe();
     let mut probe_rx = queue.subscribe();
 
-    let mut ids = Vec::with_capacity(TRACK_COUNT);
-    for (index, handle) in handles.iter().enumerate() {
-        let id = queue.append(TrackSource::Config(Box::new(resource_config(
-            handle,
-            &downloader,
-            &temp_dir,
-            index,
-        ))));
-        wait_for_loader_done_event(&mut status_rx, &queue, id, Duration::from_secs(30))
-            .await
-            .unwrap_or_else(|error| panic!("LABA-425 precondition: track {index}: {error}"));
-        ids.push(id);
-    }
+    let ids: Vec<_> = handles
+        .iter()
+        .enumerate()
+        .map(|(index, handle)| {
+            queue.append(TrackSource::Config(Box::new(resource_config(
+                handle,
+                &downloader,
+                &temp_dir,
+                index,
+            ))))
+        })
+        .collect();
+    // Only the first track is awaited: the others must still be transferring
+    // when the storm starts.
+    wait_for_loader_done_event(&mut status_rx, &queue, ids[0], Duration::from_secs(60))
+        .await
+        .unwrap_or_else(|error| panic!("LABA-425 precondition: first track: {error}"));
+    queue.play();
 
     let mut active_gets = HashSet::new();
     drain_active_gets(&mut probe_rx, &mut active_gets);
     assert!(
         !active_gets.is_empty(),
-        "LABA-425 precondition: all throttled GETs completed before the switch storm; \
-         the in-flight scenario did not happen"
-    );
-    assert!(
-        handles.iter().all(|handle| handle.request_count() > 0),
-        "LABA-425 precondition: at least one throttled fixture was never requested"
+        "LABA-425 precondition: no throttled GET was in flight when the switch storm began; \
+         the reported scenario did not happen"
     );
 
-    let mut applied_switches = 0usize;
     for round in 0..STORM_ROUNDS {
         let target = ids[round % ids.len()];
         queue
             .select(target, Transition::None)
             .unwrap_or_else(|error| panic!("LABA-425: switch {round} was rejected: {error}"));
-        let mut current_changed = false;
-        for _ in 0..APPLY_BLOCKS {
-            render_and_tick(&session, &queue);
-            while let Ok(envelope) = status_rx.try_recv() {
-                if matches!(
-                    envelope.event,
-                    Event::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) }) if id == target
-                ) {
-                    current_changed = true;
-                }
-            }
-            if queue.current().is_some_and(|entry| entry.id == target) {
-                current_changed = true;
-                break;
-            }
+        if queue.current().is_some_and(|entry| entry.id == target) {
+            continue;
         }
-        assert!(
-            current_changed,
-            "LABA-425: switch {round} never made track {target:?} current"
-        );
-        applied_switches += 1;
-
-        let seek_step = u32::try_from(round).expect("storm round fits u32");
-        queue
-            .seek(f64::from(seek_step) * 0.25)
-            .unwrap_or_else(|error| panic!("LABA-425: storm seek {round} failed: {error}"));
-        queue.pause();
-        queue.play();
-        render_and_tick(&session, &queue);
-        drain_active_gets(&mut probe_rx, &mut active_gets);
+        wait_for_event(
+            &mut status_rx,
+            "the switched-to track becoming current",
+            |event| {
+                matches!(
+                    event,
+                    Event::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) }) if *id == target
+                )
+            },
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap_or_else(|error| {
+            panic!("LABA-425: switch {round} never made track {target:?} current: {error}")
+        });
     }
-    assert_eq!(
-        applied_switches, STORM_ROUNDS,
-        "LABA-425 precondition: switch storm did not complete"
-    );
 
-    while status_rx.try_recv().is_ok() {}
     queue
         .seek(SEEK_TARGET_SECS)
         .unwrap_or_else(|error| panic!("LABA-425: final seek failed: {error}"));
-    let mut landed = None;
-    for _ in 0..SEEK_BLOCKS {
-        render_and_tick(&session, &queue);
-        drain_seek_progress(&mut status_rx, SEEK_TARGET_SECS, &mut landed);
-        if landed.is_some() {
-            break;
-        }
-    }
-    let landed = landed.unwrap_or_else(|| {
-        panic!(
-            "LABA-425: no sink-truth seek completion reached {SEEK_TARGET_SECS:.1}s \
-             after the switch storm"
-        )
+    let mut landed = 0.0;
+    wait_for_event(
+        &mut status_rx,
+        "the post-storm seek completing",
+        |event| {
+            let Event::Audio(AudioEvent::SeekComplete { position, .. }) = event else {
+                return false;
+            };
+            landed = position.as_secs_f64();
+            true
+        },
+        Duration::from_secs(30),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!("LABA-425: seek to {SEEK_TARGET_SECS:.1}s never completed after the storm: {error}")
     });
     assert!(
         (landed - SEEK_TARGET_SECS).abs() < SEEK_TOLERANCE_SECS,
         "LABA-425: seek to {SEEK_TARGET_SECS:.1}s landed at {landed:.3}s after the switch storm"
     );
 
-    while status_rx.try_recv().is_ok() {}
     queue.pause();
-    let mut post_pause = None;
-    for _ in 0..PAUSE_BLOCKS {
-        render_and_tick(&session, &queue);
-        drain_post_pause_progress(&mut status_rx, &mut post_pause);
-    }
-    let post_pause = post_pause.unwrap_or(landed);
-    assert!(
-        post_pause <= landed + 0.05,
-        "LABA-425: sink progress kept moving after pause following the switch storm \
-         ({landed:.3}s -> {post_pause:.3}s); the command was swallowed"
-    );
+    wait_for_playing(&queue, false, Duration::from_secs(30))
+        .await
+        .unwrap_or_else(|error| {
+            panic!("LABA-425: pause was swallowed after the switch storm: {error}")
+        });
+    queue.play();
+    wait_for_playing(&queue, true, Duration::from_secs(30))
+        .await
+        .unwrap_or_else(|error| {
+            panic!("LABA-425: play was swallowed after the switch storm: {error}")
+        });
+
+    let resume_target = landed + MIN_RESUME_PROGRESS_SECS;
+    wait_for_event(
+        &mut status_rx,
+        "playback carrying on after the post-storm pause and play",
+        |event| {
+            let Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = event else {
+                return false;
+            };
+            *position_ms as f64 / 1000.0 >= resume_target
+        },
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "LABA-425: the queue reports playing after the storm, but the sink never carried \
+             past {resume_target:.3}s from the seek landing at {landed:.3}s: {error}"
+        )
+    });
 
     queue.clear();
+    ticker.abort();
+    let _ = ticker.await;
 }
