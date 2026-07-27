@@ -6,18 +6,53 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
+use base64::{Engine as _, prelude::BASE64_STANDARD};
 use kithara::platform::sync::Arc;
 use serde::{Deserialize, Serialize};
 
-use crate::test_server_state::TestServerState;
+use crate::{
+    test_server_state::{Content, Delivery, FixtureBehavior, TestServerState},
+    token_store::TokenResponse,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct NetworkRequest {
     pub online: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum ContentSpec {
+    HtmlError,
+    Status {
+        code: u16,
+    },
+    Bytes {
+        base64: String,
+        content_type: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum DeliverySpec {
+    Normal,
+    Range,
+    EarlyClose { after_bytes: usize },
+    StallAfter { after_bytes: usize },
+    Throttle { chunk: usize, delay_ms: u64 },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct BehaviorSpec {
+    pub content: ContentSpec,
+    pub delivery: DeliverySpec,
+}
+
 pub(crate) fn router() -> Router<Arc<TestServerState>> {
-    Router::new().route("/control/network", post(set_network))
+    Router::new()
+        .route("/control/network", post(set_network))
+        .route("/control/behavior", post(create_behavior))
 }
 
 async fn set_network(
@@ -26,6 +61,68 @@ async fn set_network(
 ) -> impl IntoResponse {
     state.set_network_online(request.online);
     StatusCode::NO_CONTENT
+}
+
+fn content_from_spec(spec: ContentSpec) -> Result<Content, String> {
+    match spec {
+        ContentSpec::HtmlError => Ok(Content::HtmlError(
+            "<html><body>503 Service Unavailable</body></html>",
+        )),
+        ContentSpec::Status { code } => Ok(Content::Status(code)),
+        ContentSpec::Bytes {
+            base64,
+            content_type,
+        } => {
+            let bytes = BASE64_STANDARD
+                .decode(base64)
+                .map_err(|error| format!("invalid base64 body: {error}"))?;
+            let content_type = match content_type.as_deref() {
+                None => None,
+                Some("application/vnd.apple.mpegurl") => Some("application/vnd.apple.mpegurl"),
+                Some("audio/mpeg") => Some("audio/mpeg"),
+                Some(other) => return Err(format!("unsupported content type: {other}")),
+            };
+            Ok(Content::StaticBytes {
+                bytes: Arc::new(bytes),
+                content_type,
+            })
+        }
+    }
+}
+
+fn delivery_from_spec(spec: DeliverySpec) -> Delivery {
+    match spec {
+        DeliverySpec::Normal => Delivery::Normal,
+        DeliverySpec::Range => Delivery::Range,
+        DeliverySpec::EarlyClose { after_bytes } => Delivery::EarlyClose { after_bytes },
+        DeliverySpec::StallAfter { after_bytes } => Delivery::StallAfter { after_bytes },
+        DeliverySpec::Throttle { chunk, delay_ms } => Delivery::Throttle { chunk, delay_ms },
+    }
+}
+
+#[cfg(test)]
+fn register_behavior_spec(state: &TestServerState, spec: BehaviorSpec) -> String {
+    let content = content_from_spec(spec.content).expect("valid content spec");
+    state.insert_behavior(FixtureBehavior {
+        content,
+        delivery: delivery_from_spec(spec.delivery),
+    })
+}
+
+async fn create_behavior(
+    State(state): State<Arc<TestServerState>>,
+    Json(spec): Json<BehaviorSpec>,
+) -> Response {
+    match content_from_spec(spec.content) {
+        Ok(content) => {
+            let token = state.insert_behavior(FixtureBehavior {
+                content,
+                delivery: delivery_from_spec(spec.delivery),
+            });
+            Json(TokenResponse { token }).into_response()
+        }
+        Err(error) => (StatusCode::BAD_REQUEST, error).into_response(),
+    }
 }
 
 /// Reject every data route while the global network switch is offline.
@@ -66,5 +163,21 @@ mod tests {
         );
         state.set_network_online(true);
         assert!(state.network_online(), "switch must bring the server back");
+    }
+
+    #[kithara::test]
+    fn behavior_registration_yields_a_token() {
+        let state = TestServerState::new();
+        let token = register_behavior_spec(
+            &state,
+            BehaviorSpec {
+                content: ContentSpec::Status { code: 503 },
+                delivery: DeliverySpec::Normal,
+            },
+        );
+        assert!(
+            state.get_behavior(&token).is_some(),
+            "registered behavior must be retrievable by its token"
+        );
     }
 }
