@@ -8,9 +8,20 @@ use crate::common::project::ProjectConfig;
 pub struct Ctx {
     pub root: PathBuf,
     pub config: ProjectConfig,
+    metadata: Option<Metadata>,
 }
 
 impl Ctx {
+    /// Creates a context for commands that do not require Cargo metadata.
+    #[must_use]
+    pub fn new(root: PathBuf, config: ProjectConfig) -> Self {
+        Self {
+            root,
+            config,
+            metadata: None,
+        }
+    }
+
     /// Loads the xtask context for the current Cargo workspace.
     ///
     /// # Errors
@@ -29,7 +40,17 @@ impl Ctx {
         if config.project.name.is_empty() {
             config.project.name = derive_project_name(&metadata, &root);
         }
-        Ok(Self { root, config })
+        Ok(Self {
+            root,
+            config,
+            metadata: Some(metadata),
+        })
+    }
+
+    pub(crate) fn metadata(&self) -> Result<&Metadata> {
+        self.metadata
+            .as_ref()
+            .context("workspace metadata is unavailable in this xtask context")
     }
 }
 

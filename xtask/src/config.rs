@@ -311,10 +311,10 @@ mod tests {
     use super::KitharaExt;
 
     fn ctx_from_config(text: &str) -> Ctx {
-        Ctx {
-            root: PathBuf::new(),
-            config: toml::from_str(text).expect("parse project config"),
-        }
+        Ctx::new(
+            PathBuf::new(),
+            toml::from_str(text).expect("parse project config"),
+        )
     }
 
     #[test]

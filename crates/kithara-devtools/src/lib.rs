@@ -72,7 +72,7 @@ pub enum CoreCommand {
     /// Comprehensive workspace health check with markdown report.
     Health(health::HealthArgs),
     #[cfg(feature = "viz")]
-    /// Architecture visualization tools (hierarchy, arc-map).
+    /// Build architecture views from shared source and runtime evidence.
     Viz(viz::VizArgs),
 }
 
@@ -102,6 +102,6 @@ pub fn run(cmd: &CoreCommand, ctx: &Ctx) -> anyhow::Result<()> {
         CoreCommand::Test(args) => test::run(args),
         CoreCommand::Health(args) => health::run(args),
         #[cfg(feature = "viz")]
-        CoreCommand::Viz(args) => viz::run(args),
+        CoreCommand::Viz(args) => viz::run(args, ctx),
     }
 }
