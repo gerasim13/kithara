@@ -4,7 +4,7 @@ use tracing::trace;
 
 use super::{
     AtEof, CurrentFsm, Decoding, Failed, RecreatingDecoder, TrackFailure, TrackStep,
-    decode::{DecodeStep, decode_step},
+    decode::{DecodeStep, decode_step, produce_or_block},
     fsm::apply_seek_transition,
     phase::{Track, TrackPhase, sealed},
 };
@@ -268,7 +268,7 @@ impl Track<WaitingForSource> {
                 })
                 .erase(),
             );
-            return TrackStep::Blocked(reason);
+            return produce_or_block(src, reason);
         }
 
         match phase {

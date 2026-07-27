@@ -99,6 +99,25 @@ pub(super) enum DecodeStep {
     Failed,
 }
 
+/// Give up whatever the generation now decoding has already made before
+/// reporting no progress.
+///
+/// A rebuild changes who decodes, not whether the one PCM path keeps running.
+/// Frames the incumbent has already produced are audio the listener is owed
+/// now, not once its successor exists — holding them until then is how a
+/// decoder swap becomes something you can hear.
+pub(super) fn produce_or_block<T: StreamType>(
+    src: &mut StreamAudioSource<T>,
+    reason: WaitingReason,
+) -> TrackStep<PcmChunk> {
+    let Some(chunk) = src.decode.next_gapless() else {
+        return TrackStep::Blocked(reason);
+    };
+    let epoch = src.seek_engine.epoch();
+    src.resume.record(&chunk, epoch);
+    TrackStep::Produced(Fetch::data(chunk, epoch))
+}
+
 pub(super) fn decode_step<T: StreamType>(src: &mut StreamAudioSource<T>) -> DecodeStep {
     let resuming = matches!(src.state, CurrentFsm::AwaitingResume(_));
     let action = {
