@@ -10,13 +10,13 @@ use kithara_decode::{
 };
 use kithara_events::{DeferredBus, Event};
 use kithara_platform::sync::Arc;
-use kithara_stream::{MediaInfo, PlayheadWrite, SeekObserve, SharedStream, StreamType};
+use kithara_stream::{AudioCodec, MediaInfo, PlayheadWrite, SeekObserve, SharedStream, StreamType};
 use kithara_test_utils::kithara;
 use tracing::{debug, warn};
 
 use crate::{
     pipeline::{
-        blend::{ActiveDecode, BlendSide, Origin},
+        blend::{ActiveDecode, BlendSide, Origin, on_container_clock},
         decode::{drain::EofDrain, resume::ResumeCursor},
         fetch::Fetch,
         gapless::GaplessStage,
@@ -132,10 +132,10 @@ pub(crate) struct DecodeCore {
     /// from its first chunk. Cleared when a generation is replaced, because
     /// the next one is free to have a different one.
     origin: Option<Origin>,
-    /// Whether the frames held back for the crossfade are quoted on a scale
-    /// the generation now decoding also reads. False across a codec change,
-    /// where the two sides have no position in common to hand over on.
-    tail_comparable: bool,
+    /// The codec whose container clock the track's scale is quoted on. A
+    /// position only means something together with this, because converting it
+    /// for another codec is exactly the difference between their containers.
+    anchor_codec: Option<AudioCodec>,
     gapless_mode: GaplessMode,
     effects: Vec<Box<dyn AudioEffect>>,
     drain: EofDrain,
@@ -172,7 +172,7 @@ impl DecodeCore {
             active: ActiveDecode::Single(BlendSide::new(session, gapless)),
             anchor: None,
             origin: None,
-            tail_comparable: true,
+            anchor_codec: None,
             gapless_mode,
             effects,
             drain,
@@ -216,22 +216,41 @@ impl DecodeCore {
     /// chunk of every later generation only says where *that* generation is
     /// counting from.
     fn rebase(&mut self, chunk: &mut PcmChunk) {
-        let origin = *self.origin.get_or_insert_with(|| Origin::of(chunk));
-        let anchor = *self.anchor.get_or_insert(origin);
-        origin.rebase(anchor, chunk);
+        let codec = self
+            .session()
+            .media_info
+            .as_ref()
+            .and_then(|info| info.codec);
+        let origin = *self.origin.get_or_insert_with(|| Origin::of(chunk, codec));
+        if self.anchor.is_none() {
+            self.anchor = Some(origin);
+            self.anchor_codec = codec;
+        }
+        origin.rebase(self.anchor.unwrap_or(origin), chunk);
+    }
+
+    /// Read a position quoted on the track's scale as one the decoder now
+    /// installed can be asked for. A seek target is a reading on a container's
+    /// clock, and the generation being asked may not keep the same one.
+    pub(crate) fn to_container_clock(
+        &self,
+        position: kithara_platform::time::Duration,
+    ) -> kithara_platform::time::Duration {
+        let session = self.session();
+        on_container_clock(
+            position,
+            self.anchor_codec,
+            session.media_info.as_ref().and_then(|info| info.codec),
+            session.decoder.spec().sample_rate.get(),
+        )
     }
 
     /// Where the crossfade starts: the first frame the audible side is holding
     /// back, quoted on the track's scale. This is the frame the incoming
-    /// generation has to produce first for the two sides to line up.
-    ///
-    /// Nothing to hand over when the scales differ — the position would mean
-    /// one thing to the generation that measured it and another to the one
-    /// being asked to land on it.
+    /// generation has to produce first for the two sides to line up, and
+    /// [`Self::to_container_clock`] is how it is asked for it.
     pub(crate) fn blend_start(&self) -> Option<kithara_platform::time::Duration> {
-        self.tail_comparable
-            .then(|| self.active.audible().tail_start())
-            .flatten()
+        self.active.audible().tail_start()
     }
 
     pub(crate) fn track(
@@ -351,18 +370,6 @@ impl DecodeCore {
         offset: u64,
         seek_epoch: u64,
     ) -> Box<dyn Decoder> {
-        // An origin is a reading on the container's clock, so it only compares
-        // between generations reading the same one. Two variants of a track
-        // share that clock; two codecs do not — their containers carry their
-        // own priming — so a codec change starts a scale rather than joining
-        // the one in use. What that leaves is the pre-existing offset between
-        // codecs, which is not this scale's to close.
-        let same_clock = self
-            .session()
-            .media_info
-            .as_ref()
-            .and_then(|info| info.codec)
-            == media_info.codec;
         let session = DecoderSession {
             decoder,
             media_info: Some(media_info),
@@ -374,10 +381,6 @@ impl DecodeCore {
         // what makes `rebase` read the new one off its first chunk; the anchor
         // stays, so the track keeps the timeline it has been playing on.
         self.origin = None;
-        self.tail_comparable = same_clock;
-        if !same_clock {
-            self.anchor = None;
-        }
         // The replacement decoder takes over the audible side and keeps that
         // side's gapless stage: the logical track is unchanged, only the
         // generation decoding it. What the outgoing generation was still

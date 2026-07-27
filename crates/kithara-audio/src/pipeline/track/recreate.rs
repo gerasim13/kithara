@@ -173,10 +173,14 @@ fn finish_format_boundary_rebuild<T: StreamType>(
     // never played, and those frames are the crossfade. Landing the incoming
     // generation on the first of them is what puts both sides over the same
     // audio; only with nothing held back does the decode head stand in.
-    let target_time = src.decode.blend_start().unwrap_or_else(|| {
+    let target = src.decode.blend_start().unwrap_or_else(|| {
         src.resume
             .resume_position(epoch_now, committed, src.seek_engine.resume_target())
     });
+    // The target is a position on the track's scale; the decoder being asked
+    // for it reads its own container's clock, and across a codec change those
+    // are not the same reading of the same music.
+    let target_time = src.decode.to_container_clock(target);
     debug!(
         ?target_time,
         stream_pos = src.shared_stream.position(),
