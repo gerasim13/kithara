@@ -1,6 +1,6 @@
 use std::env;
 
-use axum::{Router, routing::get};
+use axum::{Router, middleware, routing::get};
 use kithara::platform::{
     sync::Arc,
     time::{Duration, sleep},
@@ -15,7 +15,7 @@ use crate::{
     hls_url::HlsSpec,
     http_server::TestHttpServer,
     routes::{
-        assets, behavior, signal,
+        assets, behavior, control, signal,
         signal::{encode_signal_payload, encoded_signal_cache_key},
         stream,
     },
@@ -157,6 +157,13 @@ impl TestServerHelper {
             base_url: self.base_url.clone(),
             token,
         }
+    }
+
+    /// Lower or raise the server's global reachability switch.
+    ///
+    /// In-process counterpart of `POST /control/network`.
+    pub fn set_network_online(&self, online: bool) {
+        self.state.set_network_online(online);
     }
 
     /// Register a withhold gate for one media segment of the fixture behind
@@ -385,6 +392,11 @@ pub(crate) fn router(state: Arc<TestServerState>) -> Router {
         .merge(signal::router())
         .merge(stream::router())
         .merge(crate::routes::token::router())
+        .merge(control::router())
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            control::network_guard,
+        ))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
