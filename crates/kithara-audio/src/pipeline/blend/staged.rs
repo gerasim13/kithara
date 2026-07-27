@@ -16,7 +16,14 @@ pub(super) struct Staged {
 }
 
 impl Staged {
+    /// Take a chunk into the stage. A chunk with no frames carries no audio
+    /// and is dropped here, which is what lets everything downstream treat a
+    /// staged chunk as at least one frame — the crossfade advances by whatever
+    /// the leading chunk has, so a zero-frame one would be a step of nothing.
     pub(super) fn push(&mut self, chunk: PcmChunk) {
+        if chunk.frames() == 0 {
+            return;
+        }
         self.frames = self.frames.saturating_add(u64::from(chunk.meta.frames));
         self.chunks.push_back(chunk);
     }

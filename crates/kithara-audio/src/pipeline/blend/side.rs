@@ -1,4 +1,4 @@
-use std::mem;
+use std::{iter, mem};
 
 use kithara_decode::{Decoder, PcmChunk, duration_for_frames};
 use kithara_platform::time::Duration;
@@ -100,19 +100,23 @@ impl BlendSide {
 
     /// The next chunk, faded in over the outgoing generation's tail for as
     /// long as one is still running out.
+    ///
+    /// Draining the stage is what bounds this: the iterator holds the stage
+    /// exclusively, so nothing can put a chunk back while it is being emptied,
+    /// and it ends when the stage does.
     pub(super) fn take(&mut self) -> Option<PcmChunk> {
-        loop {
-            let mut chunk = self.staged.pop()?;
-            if self.ramp.is_running() && !self.tail.is_empty() {
-                mix(&mut self.tail, &mut chunk, &mut self.ramp);
+        let Self {
+            staged, tail, ramp, ..
+        } = self;
+        iter::from_fn(|| staged.pop()).find_map(|mut chunk| {
+            if ramp.is_running() && !tail.is_empty() {
+                mix(tail, &mut chunk, ramp);
             }
             // A chunk the incoming generation produced entirely before the
             // crossfade starts is a second copy of audio already played, and
             // aligning it leaves nothing. Nothing is not a chunk.
-            if chunk.frames() > 0 {
-                return Some(chunk);
-            }
-        }
+            (chunk.frames() > 0).then_some(chunk)
+        })
     }
 
     pub(crate) fn drop_staged(&mut self) {
@@ -135,6 +139,10 @@ fn ramp_frames(session: &DecoderSession) -> u64 {
 /// the ramp keeps its remaining frames untouched — past the ramp the incoming
 /// generation is already the whole signal, and multiplying it by one is the
 /// same thing as leaving it alone.
+///
+/// Every turn covers at least one frame: the loop runs only while both the
+/// chunk and the ramp have frames left, and a staged chunk always has one
+/// ([`Staged::push`]), so `done` reaches `chunk_frames` in finite steps.
 fn mix(tail: &mut Staged, chunk: &mut PcmChunk, ramp: &mut Ramp) {
     align(tail, chunk);
     let channels = usize::from(chunk.meta.spec.channels.max(1));
@@ -154,9 +162,6 @@ fn mix(tail: &mut Staged, chunk: &mut PcmChunk, ramp: &mut Ramp) {
             .frames()
             .min(usize::try_from(ramp.remaining()).unwrap_or(usize::MAX));
         let n = available.min(chunk_frames - done);
-        if n == 0 {
-            break;
-        }
         for frame in 0..n {
             let gain_in = ramp.gain(frame as u64);
             let gain_out = 1.0 - gain_in;
