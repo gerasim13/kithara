@@ -169,15 +169,14 @@ fn finish_format_boundary_rebuild<T: StreamType>(
     // materialized in produced chunks (`target > decode_head`);
     // comparing against the consumer's lagging `committed` mislabels
     // the warmed-up case and re-emits `[target..decode_head)`.
-    // A ramp earlier than the outgoing generation stopped: a crossfade needs
-    // both sides over the same frames, and the outgoing decoder is fenced at
-    // the boundary and can produce no more. Landing the incoming one here is
-    // what makes the two sides line up; the blender then spends the tail it
-    // held back against these frames instead of dropping either.
-    let target_time = src
-        .resume
-        .resume_position(epoch_now, committed, src.seek_engine.resume_target())
-        .saturating_sub(src.decode.ramp_length());
+    // The blender is holding the frames the outgoing generation decoded but
+    // never played, and those frames are the crossfade. Landing the incoming
+    // generation on the first of them is what puts both sides over the same
+    // audio; only with nothing held back does the decode head stand in.
+    let target_time = src.decode.blend_start().unwrap_or_else(|| {
+        src.resume
+            .resume_position(epoch_now, committed, src.seek_engine.resume_target())
+    });
     debug!(
         ?target_time,
         stream_pos = src.shared_stream.position(),

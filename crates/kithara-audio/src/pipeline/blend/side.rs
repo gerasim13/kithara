@@ -58,12 +58,11 @@ impl BlendSide {
         mem::replace(&mut self.session, session).decoder
     }
 
-    /// How far back the incoming generation has to start for its frames to
-    /// line up with the tail it is fading out of.
-    pub(crate) fn ramp_length(&self) -> Duration {
-        self.tail.front().map_or(Duration::ZERO, |front| {
-            duration_for_frames(front.meta.spec.sample_rate.get(), self.ramp.frames)
-        })
+    /// The first frame still held back, as a position on the track's scale.
+    /// Landing the incoming generation here is what puts both sides of the
+    /// crossfade over the same audio.
+    pub(crate) fn tail_start(&self) -> Option<Duration> {
+        self.tail.front().map(|front| front.meta.timestamp)
     }
 
     /// How many frames this side keeps in hand, read off the decoder that
@@ -102,11 +101,18 @@ impl BlendSide {
     /// The next chunk, faded in over the outgoing generation's tail for as
     /// long as one is still running out.
     pub(super) fn take(&mut self) -> Option<PcmChunk> {
-        let mut chunk = self.staged.pop()?;
-        if self.ramp.is_running() && !self.tail.is_empty() {
-            mix(&mut self.tail, &mut chunk, &mut self.ramp);
+        loop {
+            let mut chunk = self.staged.pop()?;
+            if self.ramp.is_running() && !self.tail.is_empty() {
+                mix(&mut self.tail, &mut chunk, &mut self.ramp);
+            }
+            // A chunk the incoming generation produced entirely before the
+            // crossfade starts is a second copy of audio already played, and
+            // aligning it leaves nothing. Nothing is not a chunk.
+            if chunk.frames() > 0 {
+                return Some(chunk);
+            }
         }
-        Some(chunk)
     }
 
     pub(crate) fn drop_staged(&mut self) {

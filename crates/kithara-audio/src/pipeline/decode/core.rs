@@ -16,7 +16,7 @@ use tracing::{debug, warn};
 
 use crate::{
     pipeline::{
-        blend::{ActiveDecode, BlendSide},
+        blend::{ActiveDecode, BlendSide, Origin},
         decode::{drain::EofDrain, resume::ResumeCursor},
         fetch::Fetch,
         gapless::GaplessStage,
@@ -124,6 +124,18 @@ pub(crate) struct DecodeCore {
     /// Everything the blender is mixing. Always present, even at one input —
     /// there is one PCM path, and `Single` is its one-input arm.
     active: ActiveDecode,
+    /// The scale this track's positions are quoted on: the first generation's
+    /// [`Origin`]. Every later generation is converted onto it, so the track
+    /// keeps the timeline it started with and a variant switch cannot move it.
+    anchor: Option<Origin>,
+    /// The scale the generation now decoding labels its output on, learned
+    /// from its first chunk. Cleared when a generation is replaced, because
+    /// the next one is free to have a different one.
+    origin: Option<Origin>,
+    /// Whether the frames held back for the crossfade are quoted on a scale
+    /// the generation now decoding also reads. False across a codec change,
+    /// where the two sides have no position in common to hand over on.
+    tail_comparable: bool,
     gapless_mode: GaplessMode,
     effects: Vec<Box<dyn AudioEffect>>,
     drain: EofDrain,
@@ -158,6 +170,9 @@ impl DecodeCore {
         let drain = EofDrain::new(effects.len());
         Self {
             active: ActiveDecode::Single(BlendSide::new(session, gapless)),
+            anchor: None,
+            origin: None,
+            tail_comparable: true,
             gapless_mode,
             effects,
             drain,
@@ -194,6 +209,29 @@ impl DecodeCore {
 
     pub(crate) fn push(&mut self, chunk: PcmChunk) {
         self.active.audible_mut().gapless.push(chunk);
+    }
+
+    /// Put a chunk on the track's scale before anything downstream reads its
+    /// position. The first chunk of the track defines that scale; the first
+    /// chunk of every later generation only says where *that* generation is
+    /// counting from.
+    fn rebase(&mut self, chunk: &mut PcmChunk) {
+        let origin = *self.origin.get_or_insert_with(|| Origin::of(chunk));
+        let anchor = *self.anchor.get_or_insert(origin);
+        origin.rebase(anchor, chunk);
+    }
+
+    /// Where the crossfade starts: the first frame the audible side is holding
+    /// back, quoted on the track's scale. This is the frame the incoming
+    /// generation has to produce first for the two sides to line up.
+    ///
+    /// Nothing to hand over when the scales differ — the position would mean
+    /// one thing to the generation that measured it and another to the one
+    /// being asked to land on it.
+    pub(crate) fn blend_start(&self) -> Option<kithara_platform::time::Duration> {
+        self.tail_comparable
+            .then(|| self.active.audible().tail_start())
+            .flatten()
     }
 
     pub(crate) fn track(
@@ -238,7 +276,7 @@ impl DecodeCore {
 
     #[kithara::rtsan_allow_blocking]
     pub(crate) fn next_chunk(&mut self, stream_position: u64) -> DecodeResult<DecoderChunkOutcome> {
-        let outcome = match catch_unwind(AssertUnwindSafe(|| {
+        let mut outcome = match catch_unwind(AssertUnwindSafe(|| {
             self.active.audible_mut().session.decoder.next_chunk()
         })) {
             Ok(result) => result,
@@ -249,6 +287,9 @@ impl DecodeCore {
                 })
             }
         };
+        if let Ok(DecoderChunkOutcome::Chunk(ref mut chunk)) = outcome {
+            self.rebase(chunk);
+        }
         let (chunks, samples) = self.stats();
         match &outcome {
             Ok(DecoderChunkOutcome::Eof) => {
@@ -299,12 +340,6 @@ impl DecodeCore {
         outcome
     }
 
-    /// How far back a freshly installed generation has to start so its frames
-    /// line up with the tail it fades out of.
-    pub(crate) fn ramp_length(&self) -> kithara_platform::time::Duration {
-        self.active.audible().ramp_length()
-    }
-
     pub(crate) fn update_len(&self, len: u64) {
         self.active.audible().session.decoder.update_byte_len(len);
     }
@@ -316,12 +351,33 @@ impl DecodeCore {
         offset: u64,
         seek_epoch: u64,
     ) -> Box<dyn Decoder> {
+        // An origin is a reading on the container's clock, so it only compares
+        // between generations reading the same one. Two variants of a track
+        // share that clock; two codecs do not — their containers carry their
+        // own priming — so a codec change starts a scale rather than joining
+        // the one in use. What that leaves is the pre-existing offset between
+        // codecs, which is not this scale's to close.
+        let same_clock = self
+            .session()
+            .media_info
+            .as_ref()
+            .and_then(|info| info.codec)
+            == media_info.codec;
         let session = DecoderSession {
             decoder,
             media_info: Some(media_info),
             base_offset: offset,
             installed_at_seek_epoch: seek_epoch,
         };
+        // The successor counts from wherever its own decoder starts, which is
+        // not where the retiring one counted from. Forgetting the old scale is
+        // what makes `rebase` read the new one off its first chunk; the anchor
+        // stays, so the track keeps the timeline it has been playing on.
+        self.origin = None;
+        self.tail_comparable = same_clock;
+        if !same_clock {
+            self.anchor = None;
+        }
         // The replacement decoder takes over the audible side and keeps that
         // side's gapless stage: the logical track is unchanged, only the
         // generation decoding it. What the outgoing generation was still
