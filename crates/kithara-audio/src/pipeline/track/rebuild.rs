@@ -7,6 +7,7 @@ use tracing::debug;
 
 use super::{
     CurrentFsm, TrackStep, WaitingReason,
+    decode::produce_or_block,
     phase::{Track, TrackPhase, sealed},
     recreate::{finish_rebuild, finish_recreate_outcome, wait_for_source_on_recreate},
 };
@@ -78,7 +79,7 @@ impl Track<RebuildingDecoder> {
             }
         }
         src.update_state(Self::new(rebuild).erase());
-        TrackStep::Blocked(WaitingReason::Waiting)
+        produce_or_block(src, WaitingReason::Waiting)
     }
 }
 

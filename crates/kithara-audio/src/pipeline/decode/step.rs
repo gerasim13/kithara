@@ -8,6 +8,7 @@ use crate::{
         decode_error_detail, map_audio_codec_kind, map_decode_error_class, map_decode_error_kind,
     },
     pipeline::{
+        blend::Keep,
         decode::{
             core::{DecodeAction, DecodeCore, DecodeCtx},
             format::{FormatDecision, detect, handle_variant_change},
@@ -40,7 +41,7 @@ pub(crate) fn tick<T: StreamType>(
         if ctx.seek_observe.is_flushing() || ctx.seek_observe.is_pending() {
             return DecodeAction::SeekInterrupted;
         }
-        if let Some(chunk) = core.next_gapless() {
+        if let Some(chunk) = core.next_gapless(Keep::Lead) {
             return produced(chunk, epoch, &mut ctx);
         }
         match core.next_chunk(ctx.stream.position()) {

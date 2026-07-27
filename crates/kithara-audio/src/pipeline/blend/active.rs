@@ -1,6 +1,6 @@
 use kithara_decode::PcmChunk;
 
-use crate::pipeline::blend::side::BlendSide;
+use crate::pipeline::blend::side::{BlendSide, Keep};
 
 /// What the blender currently has to mix.
 ///
@@ -31,9 +31,9 @@ impl ActiveDecode {
 
     /// The blender's output: one chunk of PCM, mixed from however many inputs
     /// are live. Effects run after this, once.
-    pub(crate) fn next(&mut self) -> Option<PcmChunk> {
+    pub(crate) fn next(&mut self, keep: Keep) -> Option<PcmChunk> {
         match self {
-            Self::Single(side) => side.emit(),
+            Self::Single(side) => side.emit(keep),
         }
     }
 

@@ -4,7 +4,7 @@ use tracing::trace;
 
 use super::{
     AtEof, CurrentFsm, Decoding, Failed, RecreatingDecoder, TrackFailure, TrackStep,
-    decode::{DecodeStep, decode_step},
+    decode::{DecodeStep, decode_step, produce_or_block},
     fsm::apply_seek_transition,
     phase::{Track, TrackPhase, sealed},
 };
@@ -260,6 +260,10 @@ impl Track<WaitingForSource> {
         let phase = source_phase_for_wait_context(&src.shared_stream, &context);
 
         if let Some(reason) = src.readiness.source_park(&src.shared_stream, phase) {
+            // A wait that a decoder rebuild is behind is what the blender's
+            // lead is held for; every other wait is the source itself being
+            // short, and there is nothing decoded to cover it with.
+            let rebuilding = matches!(context, WaitContext::Recreation(_));
             // Still waiting — restore the phase with its stored reason.
             src.update_state(
                 Self::new(WaitState {
@@ -268,7 +272,11 @@ impl Track<WaitingForSource> {
                 })
                 .erase(),
             );
-            return TrackStep::Blocked(reason);
+            return if rebuilding {
+                produce_or_block(src, reason)
+            } else {
+                TrackStep::Blocked(reason)
+            };
         }
 
         match phase {

@@ -60,6 +60,46 @@ impl From<DecoderBlend> for Duration {
     }
 }
 
+/// What a decoder generation keeps in hand, and how it gives it up.
+///
+/// Two numbers because a decoder change is two problems. The lead is audio
+/// already decoded and not yet played — what the listener hears while the next
+/// generation is being built, and the only reason a rebuild can be silent
+/// rather than heard. The blend is the last of that lead, spent fading into the
+/// generation that replaces it rather than played straight.
+///
+/// A lead shorter than the blend would promise a ramp out of frames that were
+/// never kept, so readers take the longer of the two.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DecoderHandoff {
+    /// Audio decoded ahead of the listener and held.
+    pub lead: Duration,
+    /// How the incoming generation replaces this one.
+    pub blend: DecoderBlend,
+}
+
+impl Default for DecoderHandoff {
+    /// 250 ms of lead: long enough to cover fetching and building a decoder
+    /// for the next variant over a live connection, short enough that a seek
+    /// still fills it in one burst.
+    fn default() -> Self {
+        Self {
+            lead: Duration::from_millis(250),
+            blend: DecoderBlend::default(),
+        }
+    }
+}
+
+impl DecoderHandoff {
+    /// Audio this generation holds back: the lead, never shorter than the ramp
+    /// it has to end on.
+    #[must_use]
+    pub fn held(self) -> Duration {
+        self.lead.max(Duration::from(self.blend))
+    }
+}
+
 /// Decoder-side resampler selected by the caller.
 ///
 /// This describes conversion that is part of decoder construction, not the
@@ -140,9 +180,10 @@ pub struct DecoderConfig<B = NoResamplerBackend> {
     /// Which decoder backend to use. See [`DecoderBackend`].
     #[builder(default)]
     pub backend: DecoderBackend,
-    /// Overlap applied when this decoder hands off to the next generation.
+    /// What this decoder holds back, and how it hands off to the next
+    /// generation.
     #[builder(default)]
-    pub blend: DecoderBlend,
+    pub handoff: DecoderHandoff,
     /// Handle for dynamic byte length updates (HLS).
     pub byte_len_handle: Option<Arc<AtomicU64>>,
     /// Optional byte-map handle over the underlying source.

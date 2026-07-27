@@ -9,9 +9,10 @@ use kithara_stream::AudioCodec;
 use smallvec::SmallVec;
 
 use crate::{
-    DecodeError, DecodeResult, Decoder, DecoderBlend, DecoderChunkOutcome, DecoderResamplerConfig,
-    DecoderSeekOutcome, DecoderTrackInfo, GaplessInfo, GaplessTailCompensation, PcmChunk, PcmMeta,
-    PcmSpec, TrackMetadata, duration_for_frames, frames_for_duration,
+    DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderHandoff,
+    DecoderResamplerConfig, DecoderSeekOutcome, DecoderTrackInfo, GaplessInfo,
+    GaplessTailCompensation, PcmChunk, PcmMeta, PcmSpec, TrackMetadata, duration_for_frames,
+    frames_for_duration,
 };
 
 pub(crate) fn wrap<B>(
@@ -354,7 +355,7 @@ where
 
     delegate::delegate! {
         to self.decoder {
-            fn blend(&self) -> DecoderBlend;
+            fn handoff(&self) -> DecoderHandoff;
             fn duration(&self) -> Option<kithara_platform::time::Duration>;
             fn flush_reader_signals(&mut self);
             fn metadata(&self) -> TrackMetadata;

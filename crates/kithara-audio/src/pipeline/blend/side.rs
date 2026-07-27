@@ -45,7 +45,7 @@ impl BlendSide {
     /// The outgoing decoder is already stopped when this runs — a variant
     /// fence holds it at the boundary and it can produce nothing further — so
     /// the frames it kept back are the only material a crossfade can have, and
-    /// keeping them back is the whole reason the blender holds a ramp.
+    /// keeping them back is the whole reason the blender holds a lead.
     pub(crate) fn hand_over(&mut self, session: DecoderSession) -> Box<dyn Decoder> {
         self.stage();
         self.tail = mem::take(&mut self.staged);
@@ -66,11 +66,16 @@ impl BlendSide {
     }
 
     /// How many frames this side keeps in hand, read off the decoder that
-    /// produced them: whoever built it chose the transition length, and a cut
-    /// is a ramp of zero — which holds nothing back and passes frames straight
-    /// through.
-    pub(super) fn holdback(&self) -> u64 {
-        ramp_frames(&self.session)
+    /// produced them: whoever built it chose both durations, and a cut is a
+    /// ramp of zero — which keeps nothing once the lead is being spent, and
+    /// passes frames straight through.
+    fn keeps(&self, keep: Keep) -> u64 {
+        let handoff = self.session.decoder.handoff();
+        let held = match keep {
+            Keep::Lead => handoff.held(),
+            Keep::Ramp => Duration::from(handoff.blend),
+        };
+        frames_for(self.session.decoder.spec(), held) as u64
     }
 
     /// Move everything the stage has ready into the holdback.
@@ -81,11 +86,11 @@ impl BlendSide {
     }
 
     /// The next chunk this side is willing to give up: it emits only what it
-    /// can spare above the ramp it must keep. Mid-crossfade it spares
-    /// everything — the ramp it was keeping is being spent right now.
-    pub(super) fn emit(&mut self) -> Option<PcmChunk> {
+    /// can spare above what `keep` says it must hold. Mid-crossfade it spares
+    /// everything — what it was keeping is being spent right now.
+    pub(super) fn emit(&mut self, keep: Keep) -> Option<PcmChunk> {
         self.stage();
-        if !self.ramp.is_running() && self.staged.frames_behind_front() < self.holdback() {
+        if !self.ramp.is_running() && self.staged.frames_behind_front() < self.keeps(keep) {
             return None;
         }
         self.take()
@@ -126,11 +131,20 @@ impl BlendSide {
     }
 }
 
-/// Frames of crossfade the decoder that produced a side asked for. A cut is a
-/// ramp of zero length, so it needs no arm of its own here either.
-fn ramp_frames(session: &DecoderSession) -> u64 {
-    let length = Duration::from(session.decoder.blend());
-    frames_for(session.decoder.spec(), length) as u64
+/// How much of what a side is holding it still has to keep.
+///
+/// The lead exists in order to be spent: it is the audio that plays while the
+/// generation replacing this one is being built, and playing it is not a
+/// special case of the blender but the whole point of holding it. What may
+/// never be spent is the ramp — without it the handover has nothing to fade
+/// across and the seam is a step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Keep {
+    /// Steady state: keep the whole lead, so a decoder change always starts
+    /// with audio already in hand.
+    Lead,
+    /// A decoder is being rebuilt: play the lead out, keep the ramp.
+    Ramp,
 }
 
 /// Fade `chunk` in over whatever `tail` still has, frame by frame.

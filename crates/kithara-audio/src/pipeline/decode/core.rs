@@ -16,7 +16,7 @@ use tracing::{debug, warn};
 
 use crate::{
     pipeline::{
-        blend::{ActiveDecode, BlendSide, Origin, on_container_clock},
+        blend::{ActiveDecode, BlendSide, Keep, Origin, on_container_clock},
         decode::{drain::EofDrain, resume::ResumeCursor},
         fetch::Fetch,
         gapless::GaplessStage,
@@ -264,8 +264,8 @@ impl DecodeCore {
 
     /// One chunk out of the blender, with the effect chain applied once on top
     /// of whatever it mixed.
-    pub(crate) fn next_gapless(&mut self) -> Option<PcmChunk> {
-        while let Some(chunk) = self.active.next() {
+    pub(crate) fn next_gapless(&mut self, keep: Keep) -> Option<PcmChunk> {
+        while let Some(chunk) = self.active.next(keep) {
             if let Some(output) = apply_effects(&mut self.effects, chunk) {
                 return Some(output);
             }

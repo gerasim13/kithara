@@ -8,6 +8,7 @@ use super::{
     rebuild::start_recreating_decoder,
 };
 use crate::pipeline::{
+    blend::Keep,
     decode::{
         core::{DecodeAction as CoreDecodeAction, DecodeCtx},
         format::{FormatDecision, detect},
@@ -89,6 +90,25 @@ impl Track<Decoding> {
             DecodeStep::Failed => TrackStep::Failed,
         }
     }
+}
+
+/// Play out of the blender's lead instead of going silent.
+///
+/// A decoder being rebuilt is what the lead is held for. Those frames are
+/// already decoded and already the listener's; whether the generation that
+/// produced them can produce more is not a reason to withhold them. Only the
+/// ramp stays behind, because the generation arriving needs something to fade
+/// in over.
+pub(super) fn produce_or_block<T: StreamType>(
+    src: &mut StreamAudioSource<T>,
+    reason: WaitingReason,
+) -> TrackStep<PcmChunk> {
+    let Some(chunk) = src.decode.next_gapless(Keep::Ramp) else {
+        return TrackStep::Blocked(reason);
+    };
+    let epoch = src.seek_engine.epoch();
+    src.resume.record(&chunk, epoch);
+    TrackStep::Produced(Fetch::data(chunk, epoch))
 }
 
 pub(super) enum DecodeStep {

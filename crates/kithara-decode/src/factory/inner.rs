@@ -260,7 +260,7 @@ where
         demuxer,
         codec_impl,
         DecoderRuntime {
-            blend: config.blend,
+            handoff: config.handoff,
             pool: pool.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
@@ -385,7 +385,7 @@ where
         demuxer,
         codec_impl,
         DecoderRuntime {
-            blend: config.blend,
+            handoff: config.handoff,
             pool: pool.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
@@ -555,7 +555,7 @@ where
         demuxer,
         codec_impl,
         DecoderRuntime {
-            blend: config.blend,
+            handoff: config.handoff,
             pool: pool.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
@@ -639,7 +639,7 @@ where
         demuxer,
         codec_impl,
         DecoderRuntime {
-            blend: config.blend,
+            handoff: config.handoff,
             pool: pool.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
@@ -728,7 +728,7 @@ where
         demuxer,
         codec,
         DecoderRuntime {
-            blend: config.blend,
+            handoff: config.handoff,
             pool: pool.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),

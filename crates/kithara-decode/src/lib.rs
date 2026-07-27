@@ -46,7 +46,8 @@ mod apple;
 pub use codec::CodecPriming;
 pub use error::{DecodeError, DecodeResult, ErrorClass};
 pub use factory::{
-    DecoderBackend, DecoderBlend, DecoderConfig, DecoderFactory, DecoderResamplerConfig,
+    DecoderBackend, DecoderBlend, DecoderConfig, DecoderFactory, DecoderHandoff,
+    DecoderResamplerConfig,
 };
 pub use gapless::{
     GaplessEnd, GaplessInfo, GaplessMode, GaplessOutput, GaplessTailCompensation, GaplessTrimmer,

@@ -447,7 +447,7 @@ where
         // one replacing it reads.
         let config = DecoderConfig::builder()
             .backend(deps.decoder.decoder.backend())
-            .blend(deps.decoder.decoder.blend())
+            .handoff(deps.decoder.decoder.handoff())
             .byte_len_handle(Arc::new(AtomicU64::new(byte_len)))
             .pcm_pool(deps.decoder.pcm_pool.clone())
             .byte_pool(deps.decoder.byte_pool.clone())
@@ -486,7 +486,7 @@ where
     let byte_len = reader.byte_len().unwrap_or(0);
     let config = DecoderConfig::builder()
         .backend(deps.decoder.backend())
-        .blend(deps.decoder.blend())
+        .handoff(deps.decoder.handoff())
         .byte_len_handle(Arc::new(AtomicU64::new(byte_len)))
         .pcm_pool(deps.pcm_pool.clone())
         .byte_pool(deps.byte_pool.clone())

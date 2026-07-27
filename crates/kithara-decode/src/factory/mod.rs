@@ -12,5 +12,5 @@ mod inner;
 mod probe;
 
 pub use backend::DecoderBackend;
-pub use config::{DecoderBlend, DecoderConfig, DecoderResamplerConfig};
+pub use config::{DecoderBlend, DecoderConfig, DecoderHandoff, DecoderResamplerConfig};
 pub use inner::DecoderFactory;

@@ -5,8 +5,8 @@ use tracing::{debug, warn};
 
 use super::{
     AwaitingResume, Decoding, Failed, RecreatingDecoder, SeekRequested, Track, TrackFailure,
-    TrackStep, WaitContext, WaitState, WaitingForSource, WaitingReason, fsm::apply_seek_transition,
-    rebuild::start_recreating_decoder,
+    TrackStep, WaitContext, WaitState, WaitingForSource, WaitingReason, decode::produce_or_block,
+    fsm::apply_seek_transition, rebuild::start_recreating_decoder,
 };
 use crate::{
     audio::event::{
@@ -413,14 +413,14 @@ pub(super) fn wait_for_source_on_recreate<T: StreamType>(
             })
             .erase(),
         );
-        return TrackStep::Blocked(reason);
+        return produce_or_block(src, reason);
     }
     if phase == SourcePhase::Cancelled {
         src.update_state(Track::<Failed>::new(TrackFailure::SourceCancelled).erase());
         return TrackStep::Failed;
     }
     src.update_state(Track::<RecreatingDecoder>::new(recreate).erase());
-    TrackStep::Blocked(WaitingReason::Waiting)
+    produce_or_block(src, WaitingReason::Waiting)
 }
 
 fn recreate_resumes_decode_head(recreate: &RecreateState) -> bool {

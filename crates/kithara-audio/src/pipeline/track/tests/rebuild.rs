@@ -6,7 +6,7 @@ use std::{
 
 use kithara_bufpool::PcmPool;
 use kithara_decode::{
-    DecodeError, DecodeResult, Decoder, DecoderBlend, DecoderChunkOutcome, DecoderSeekOutcome,
+    DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderHandoff, DecoderSeekOutcome,
     GaplessMode, PcmChunk, PcmMeta, PcmSpec, duration_for_frames, frames_for_duration,
 };
 use kithara_events::{
@@ -79,8 +79,8 @@ impl Drop for TestDecoder {
 }
 
 impl Decoder for TestDecoder {
-    fn blend(&self) -> DecoderBlend {
-        DecoderBlend::default()
+    fn handoff(&self) -> DecoderHandoff {
+        DecoderHandoff::default()
     }
 
     fn duration(&self) -> Option<Duration> {
@@ -110,8 +110,8 @@ impl Decoder for TestDecoder {
 struct FailingDecoder;
 
 impl Decoder for FailingDecoder {
-    fn blend(&self) -> DecoderBlend {
-        DecoderBlend::default()
+    fn handoff(&self) -> DecoderHandoff {
+        DecoderHandoff::default()
     }
 
     fn duration(&self) -> Option<Duration> {
@@ -172,8 +172,8 @@ impl Drop for RouteSignalDecoder {
 }
 
 impl Decoder for RouteSignalDecoder {
-    fn blend(&self) -> DecoderBlend {
-        DecoderBlend::default()
+    fn handoff(&self) -> DecoderHandoff {
+        DecoderHandoff::default()
     }
 
     fn duration(&self) -> Option<Duration> {

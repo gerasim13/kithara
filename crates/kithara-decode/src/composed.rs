@@ -8,7 +8,7 @@ use kithara_stream::{
 use kithara_test_utils::kithara;
 
 use crate::{
-    DecoderBlend,
+    DecoderHandoff,
     codec::FrameCodec,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
     duration_for_frames,
@@ -23,7 +23,7 @@ const ZERO_FRAME_BUDGET: u32 = 32;
 /// into a [`FrameCodec`] which produces PCM. One implementation, one
 /// dispatch path — no per-backend duplication.
 pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
-    blend: DecoderBlend,
+    handoff: DecoderHandoff,
     codec: C,
     demuxer: D,
     byte_len_handle: Option<Arc<AtomicU64>>,
@@ -70,7 +70,7 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
 /// single place that opts into the global pool, and it is `#[cfg(test)]`
 /// so production code physically cannot reach it.
 pub(crate) struct DecoderRuntime {
-    pub(crate) blend: DecoderBlend,
+    pub(crate) handoff: DecoderHandoff,
     pub(crate) byte_len_handle: Option<Arc<AtomicU64>>,
     pub(crate) hooks: Option<BoxedEventSink>,
     pub(crate) pool: PcmPool,
@@ -87,7 +87,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             codec,
             spec,
             duration,
-            blend: runtime.blend,
+            handoff: runtime.handoff,
             pool: runtime.pool,
             epoch: runtime.epoch,
             byte_len_handle: runtime.byte_len_handle,
@@ -321,8 +321,8 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
         }
     }
 
-    fn blend(&self) -> DecoderBlend {
-        self.blend
+    fn handoff(&self) -> DecoderHandoff {
+        self.handoff
     }
 
     fn duration(&self) -> Option<Duration> {
@@ -370,7 +370,7 @@ impl DecoderRuntime {
     /// of the host's configured one.
     pub(crate) fn for_test() -> Self {
         Self {
-            blend: DecoderBlend::default(),
+            handoff: DecoderHandoff::default(),
             pool: PcmPool::default(),
             epoch: 0,
             byte_len_handle: None,
