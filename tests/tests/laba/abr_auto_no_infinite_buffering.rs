@@ -6,7 +6,7 @@ use kithara::{
     events::AbrMode,
     hls::{Hls, HlsConfig},
     platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
-    stream::Stream,
+    stream::{Stream, VariantChangeError},
 };
 use kithara_integration_tests::{
     TestTempDir,
@@ -21,6 +21,14 @@ const SEGMENTS_PER_VARIANT: usize = 12;
 const FIRST_SEGMENT_DELAY_MS: u64 = 2_000;
 const BANDWIDTHS: [u64; VARIANT_COUNT] = [64_000, 192_000, 512_000];
 const CAPS: [Option<u64>; VARIANT_COUNT] = [Some(96_000), Some(256_000), None];
+const READ_DEADLINE: Duration = Duration::from_secs(30);
+const RETRY_BACKOFF: Duration = Duration::from_millis(50);
+
+fn is_variant_fence(error: &std::io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|source| source.downcast_ref::<VariantChangeError>().is_some())
+}
 
 /// LABA-429: toggling auto/manual ABR and bandwidth caps while the first
 /// segment is buffering must not wedge the stream; a subsequent read must
@@ -55,11 +63,6 @@ async fn abr_mode_storm_does_not_wedge_loading(temp_dir: TestTempDir, rt_cancel:
         "precondition: the ABR storm requires three variants"
     );
 
-    let read = spawn_blocking(move || {
-        let mut buffer = [0u8; 64 * 1024];
-        stream.read(&mut buffer)
-    });
-
     for round in 0..STORM_ROUNDS {
         let variant = round % VARIANT_COUNT;
         let mode = if round % 2 == 0 {
@@ -71,19 +74,48 @@ async fn abr_mode_storm_does_not_wedge_loading(temp_dir: TestTempDir, rt_cancel:
             .set_mode(mode)
             .expect("storm variant must exist in the fixture");
         handle.set_max_bandwidth_bps(CAPS[variant]);
-        kithara::platform::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
     handle
         .set_mode(AbrMode::Auto(None))
         .expect("return to automatic ABR");
     handle.set_max_bandwidth_bps(None);
 
+    // The storm lands while the stream is still fetching its delayed first
+    // segment — the state the report describes. `VariantChangeError` is the
+    // documented cross-variant fence, not a failure: the contract is that the
+    // consumer recreates its decoder and reads on. Honouring it keeps the
+    // assertion on the reported symptom, a stream that never yields bytes.
+    let read = time::timeout(READ_DEADLINE, async move {
+        loop {
+            let attempt = spawn_blocking(move || {
+                let mut buffer = [0u8; 64 * 1024];
+                let outcome = stream.read(&mut buffer);
+                (stream, outcome)
+            })
+            .await
+            .expect("read task panicked");
+            stream = attempt.0;
+            match attempt.1 {
+                Ok(bytes) => return Ok(bytes),
+                Err(error) if is_variant_fence(&error) => {}
+                Err(error) => return Err(error),
+            }
+            time::sleep(RETRY_BACKOFF).await;
+        }
+    })
+    .await;
+
     let bytes = read
-        .await
-        .expect("read task panicked")
-        .expect("read after the ABR storm must not error");
+        .unwrap_or_else(|_| {
+            panic!(
+                "LABA-429: the stream never yielded bytes within {READ_DEADLINE:?} after the \
+                 ABR mode and bitrate-cap storm — loading is wedged"
+            )
+        })
+        .unwrap_or_else(|error| panic!("LABA-429: read after the ABR storm failed: {error}"));
     assert!(
         bytes > 0,
-        "LABA-429: no bytes arrived after the ABR mode and bitrate-cap storm"
+        "LABA-429: the stream reported end-of-input rather than audio after the ABR storm"
     );
 }
