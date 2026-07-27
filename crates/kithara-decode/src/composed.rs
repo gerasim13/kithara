@@ -198,13 +198,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             let mut chunk_pts = if frames == 0 {
                 frame_pts
             } else {
-                head_dropped(
-                    self.resync_frame_offset_to_pts,
-                    self.codec.decoded_pts(frame_pts),
-                    frame.duration,
-                    frames,
-                    self.codec.spec().sample_rate.get(),
-                )
+                self.codec.decoded_pts(frame_pts)
             };
             if let Some(target) = self.pending_seek_target {
                 let decoded_end = if chunk_pts == frame_pts {
@@ -445,39 +439,6 @@ mod default_priming_tests {
 /// seek landing a fraction of a sample below the exact target frame, a floored
 /// label reads one frame short of the contiguous decode head (a −1 seam at a
 /// mid-playback recreate), while the trimmed audio itself stays continuous.
-/// Where a chunk really starts when the codec kept fewer frames than the packet
-/// covers.
-///
-/// A codec that carries an algorithmic delay pays it once, by dropping that
-/// many frames off the head of its first output, and a packet's leading frames
-/// can be container padding the demuxer asked to drop. Either way the audio
-/// that comes back is the tail of the packet, not the whole of it, and the
-/// position it is labelled with has to move by as much as was dropped —
-/// otherwise the whole generation is quoted earlier than it sounds, and any
-/// other generation aligned against it lands late by that much.
-///
-/// Only the first chunk of a generation is treated this way. Later in the
-/// stream a short chunk means the end of something, not padding at the front.
-fn head_dropped(
-    first: bool,
-    pts: Duration,
-    covers: Duration,
-    frames: u32,
-    sample_rate: u32,
-) -> Duration {
-    if !first {
-        return pts;
-    }
-    // Rounded, not floored: the packet duration is a whole number of frames
-    // rendered into nanoseconds, and a frame is not a whole number of them, so
-    // flooring reads one frame fewer than the packet actually covers.
-    let expected = frame_offset_for(covers, sample_rate);
-    let Some(dropped) = expected.checked_sub(u64::from(frames)).filter(|n| *n > 0) else {
-        return pts;
-    };
-    pts.saturating_add(duration_for_frames(sample_rate, dropped))
-}
-
 fn frame_offset_for(at: Duration, sample_rate: u32) -> u64 {
     let secs = at.as_secs();
     let subsec_frames = (u64::from(at.subsec_nanos()) * u64::from(sample_rate))
