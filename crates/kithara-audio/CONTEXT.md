@@ -381,6 +381,20 @@ On a fenced cross-codec ABR variant switch, the `DecoderNode` detects the format
 
 Known same-codec HLS switches are not decoder format changes. The HLS source retargets byte mapping at the segment boundary and keeps byte-continuity for the existing decoder; the audio layer must not turn a variant-index-only change into a recreate/fence.
 
+### Crossing generations (the blender)
+
+Every chunk leaves the decode path through one blender (`pipeline/decode/blend.rs`), a track that never switches variant included — a cut is a ramp of zero length, not a way around it. Effects run once on its output.
+
+The audible side keeps a ramp's worth of frames in hand (`DecoderBlend`, 10 ms by default, read off the decoder that produced them). It has to: the outgoing decoder is stopped by the variant fence at the boundary and can produce nothing past it, so the only material a crossfade can fade *out* of is what the blender declined to emit. `install` hands the side over to the incoming generation and turns that holdback into the tail.
+
+Both sides must cover the **same** timeline frames. A crossfade consumes N frames per side and emits N; sides covering different intervals silently eat the ramp out of the output. Since the outgoing side cannot reach forward, the incoming one reaches back: `finish_format_boundary_rebuild` lands the rebuilt decoder a ramp *before* the decode head, and the ramp length is exactly what the tail holds rather than what was configured.
+
+**Open**: the reach-back is not frame-exact. A demuxer lands on its own packet boundary, so for AAC the incoming side starts up to a full 1024-frame packet away from where it was asked to, and those surplus frames reach the output — measured as a 1024-frame musical-timeline shift on top of the pre-existing one (`decoder_recreation_preserves_sweep_timeline`, baseline lag −661, with the ramp −1685). Trimming the overshoot inside the blender was tried twice and made both oracles worse; the mechanism that belongs here is `ResumeState.skip` (`pipeline/seek/skip.rs::apply`), which already trims frame-exactly and keeps `frame_offset` / `timestamp` true.
+
+The gain law is equal-gain, not equal-power: the two generations are the same music decoded twice, so they are correlated and their sum is not root two — an equal-power pair would peak 3 dB high at every switch, which the continuity oracle counts as an onset the source never had.
+
+A seek drops the tail: frames held for a ramp belong to where the reader used to be. At EOF the tail is owed to the listener instead (`release_gapless`), since no generation is coming to ramp into.
+
 ### Decoder recreate policy
 
 - Decoder is **not** recreated on every seek.

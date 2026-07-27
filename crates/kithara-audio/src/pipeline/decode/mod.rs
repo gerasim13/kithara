@@ -1,4 +1,3 @@
-pub(crate) mod blend;
 pub(crate) mod core;
 pub(crate) mod drain;
 pub(crate) mod format;

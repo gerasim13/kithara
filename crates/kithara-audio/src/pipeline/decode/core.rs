@@ -1,6 +1,5 @@
 use std::{
     any::Any,
-    mem,
     panic::{AssertUnwindSafe, catch_unwind},
     sync::atomic::{AtomicU32, Ordering},
 };
@@ -17,11 +16,8 @@ use tracing::{debug, warn};
 
 use crate::{
     pipeline::{
-        decode::{
-            blend::{ActiveDecode, BlendSide},
-            drain::EofDrain,
-            resume::ResumeCursor,
-        },
+        blend::{ActiveDecode, BlendSide},
+        decode::{drain::EofDrain, resume::ResumeCursor},
         fetch::Fetch,
         gapless::GaplessStage,
         rebuild::RecreateState,
@@ -182,7 +178,11 @@ impl DecodeCore {
     }
 
     pub(crate) fn notify_seek(&mut self) {
-        self.active.audible_mut().gapless.notify_seek();
+        let side = self.active.audible_mut();
+        side.gapless.notify_seek();
+        // Frames held back for a ramp belong to where the reader used to be.
+        // A seek is the one event that makes them not audio anymore.
+        side.drop_staged();
     }
 
     pub(crate) fn set_tail_compensation(&mut self) {
@@ -209,6 +209,18 @@ impl DecodeCore {
     /// of whatever it mixed.
     pub(crate) fn next_gapless(&mut self) -> Option<PcmChunk> {
         while let Some(chunk) = self.active.next() {
+            if let Some(output) = apply_effects(&mut self.effects, chunk) {
+                return Some(output);
+            }
+        }
+        None
+    }
+
+    /// The blender's output at end of stream: what it was holding back for a
+    /// ramp is owed to the listener, because no generation is coming to ramp
+    /// into.
+    pub(crate) fn release_gapless(&mut self) -> Option<PcmChunk> {
+        while let Some(chunk) = self.active.release() {
             if let Some(output) = apply_effects(&mut self.effects, chunk) {
                 return Some(output);
             }
@@ -287,6 +299,12 @@ impl DecodeCore {
         outcome
     }
 
+    /// How far back a freshly installed generation has to start so its frames
+    /// line up with the tail it fades out of.
+    pub(crate) fn ramp_length(&self) -> kithara_platform::time::Duration {
+        self.active.audible().ramp_length()
+    }
+
     pub(crate) fn update_len(&self, len: u64) {
         self.active.audible().session.decoder.update_byte_len(len);
     }
@@ -306,9 +324,9 @@ impl DecodeCore {
         };
         // The replacement decoder takes over the audible side and keeps that
         // side's gapless stage: the logical track is unchanged, only the
-        // generation decoding it.
-        let old = mem::replace(&mut self.active.audible_mut().session, session);
-        old.decoder
+        // generation decoding it. What the outgoing generation was still
+        // holding back becomes the material its successor fades out of.
+        self.active.audible_mut().hand_over(session)
     }
 
     pub(crate) fn flush_reader_signals(&mut self) {

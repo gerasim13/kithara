@@ -78,7 +78,7 @@ pub(crate) fn tick<T: StreamType>(
             }
             Ok(DecoderChunkOutcome::Eof) => {
                 core.set_tail_compensation();
-                if let Some(chunk) = core.next_gapless() {
+                if let Some(chunk) = core.release_gapless() {
                     return produced(chunk, epoch, &mut ctx);
                 }
                 if let FormatDecision::Recreate(recreate) =

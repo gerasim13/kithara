@@ -21,7 +21,12 @@ use crate::{GaplessMode, error::DecodeResult};
 pub enum DecoderBlend {
     /// Cut straight to the incoming generation on its first frame.
     Instant,
-    /// Equal-power crossfade over this much audio.
+    /// Equal-gain crossfade over this much audio.
+    ///
+    /// Equal-gain rather than equal-power because the two generations are the
+    /// same music decoded twice: they are correlated, so their sum is not root
+    /// two, and an equal-power pair would peak three decibels high in the
+    /// middle of every switch.
     Crossfade(Duration),
 }
 
