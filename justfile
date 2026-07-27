@@ -813,6 +813,7 @@ android MODE="build" *ARGS:
 #   just apple demo                     # XCFramework + run KitharaDemo
 #   just apple xcode                    # XCFramework + open xcodeproj
 #   just apple ios SCHEME [DESTINATION] # build for iOS Simulator
+#   just apple test [DESTINATION]       # test hosted unit target on iOS Simulator
 #   just apple doc                      # combined Kithara+KitharaRx .doccarchive
 #   just apple release                  # XCFramework + strip + zip + checksum
 [positional-arguments]
@@ -844,6 +845,22 @@ apple MODE="xcframework" *ARGS:
         KITHARA_LOCAL_DEV=1 xcodebuild -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
             -scheme "$scheme" -destination "$destination" build
         ;;
+      test)
+        destination="${1:-platform=iOS Simulator,name=iPhone 16}"
+        test_server_url="${KITHARA_TEST_SERVER_URL:-}"
+        if [[ -z "$test_server_url" ]]; then
+          echo "KITHARA_TEST_SERVER_URL must name the running hermetic test server"
+          exit 2
+        fi
+        just apple xcframework --profile debug
+        just _xcodegen-local
+        KITHARA_LOCAL_DEV=1 \
+        TEST_RUNNER_KITHARA_TEST_SERVER_URL="$test_server_url" \
+          xcodebuild test \
+            -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
+            -scheme KitharaDemoUnitTests_iOS \
+            -destination "$destination"
+        ;;
       doc)
         just xtask apple docgen
         mkdir -p docs-build
@@ -857,7 +874,7 @@ apple MODE="xcframework" *ARGS:
         just xtask apple release
         ;;
       *)
-        echo "unknown apple mode: $mode (use xcframework|single|demo|xcode|ios|doc|release)"
+        echo "unknown apple mode: $mode (use xcframework|single|demo|xcode|ios|test|doc|release)"
         exit 2
         ;;
     esac
