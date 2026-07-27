@@ -2,28 +2,35 @@
 
 use kithara::{
     events::{AudioEvent, DownloaderEvent, Event, QueueEvent, TrackId},
+    hls::AbrMode,
     net::{HttpClient, NetOptions, RetryPolicy},
-    platform::{CancelToken, sync::Arc, time::Duration},
-    play::{PlayerConfig, PlayerImpl, ResourceConfig, SessionDispatcher},
+    platform::{
+        CancelToken,
+        sync::Arc,
+        time::{self, Duration},
+        tokio,
+    },
+    play::{PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, TestTempDir,
-    audio_fixture::EmbeddedAudio, kithara, offline::OfflineSession, temp_dir,
-    waits::wait_for_loader_done_event,
+    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    audio_fixture::EmbeddedAudio,
+    kithara,
+    offline::OfflineSession,
+    temp_dir,
+    waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
 
-const SAMPLE_RATE: u32 = 44_100;
-const BLOCK_FRAMES: usize = 512;
-const SEGMENT_COUNT: usize = 6;
-const SEGMENT_DURATION_SECS: f64 = 2.0;
-const RELEASE_SEGMENT: usize = 2;
-const MIN_PLAYED_BEFORE_FAILURE_SECS: f64 = 2.0;
-const MIN_RECOVERY_PROGRESS_SECS: f64 = 1.0;
-const SETUP_BLOCKS: usize = 2_048;
-const FAILURE_BLOCKS: usize = 2_048;
-const RECOVERY_BLOCKS: usize = 2_048;
+/// Bounded look-ahead over the 222 s packaged fixture: the downloader must
+/// still need further segments when the blip lands, otherwise the track is
+/// already fully cached and no fetch can fail.
+const LOOK_AHEAD_BYTES: u64 = 256 * 1024;
+const PLAY_BEFORE_FAILURE_SECS: f64 = 1.0;
+/// How far playback must carry on past the blip. Bounds the "no auto-skip"
+/// window with a fact rather than a stopwatch.
+const MIN_RECOVERY_PROGRESS_SECS: f64 = 5.0;
 
 struct NetworkRestore<'a>(&'a TestServerHelper);
 
@@ -33,77 +40,21 @@ impl Drop for NetworkRestore<'_> {
     }
 }
 
-#[derive(Default)]
-struct Observation {
-    auto_skipped: bool,
-    latest_position: Option<f64>,
-    saw_offline_failure: bool,
-}
-
-fn render_and_tick(session: &OfflineSession, queue: &Queue) {
-    let _ = session.render(BLOCK_FRAMES);
-    queue.tick().expect("tick queue");
-}
-
-fn drain_events(
-    rx: &mut kithara::events::EventReceiver,
-    target: TrackId,
-    fallback: TrackId,
-    observation: &mut Observation,
-) {
-    while let Ok(envelope) = rx.try_recv() {
-        match envelope.event {
-            Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) => {
-                observation.latest_position = Some(position_ms as f64 / 1000.0);
+fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
+    tokio::task::spawn(async move {
+        loop {
+            time::sleep(Duration::from_millis(20)).await;
+            if queue.tick().is_err() {
+                break;
             }
-            Event::Downloader(DownloaderEvent::FirstByte { status: 503, .. })
-            | Event::Downloader(DownloaderEvent::RequestFailed { .. })
-            | Event::Downloader(DownloaderEvent::RetryExhausted { .. }) => {
-                observation.saw_offline_failure = true;
-            }
-            Event::Queue(QueueEvent::TrackLoadFailed {
-                id,
-                auto_skipped: true,
-                ..
-            }) if id == target => {
-                observation.auto_skipped = true;
-            }
-            Event::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) }) if id == fallback => {
-                observation.auto_skipped = true;
-            }
-            _ => {}
         }
-    }
-}
-
-fn resource_config(
-    url: &url::Url,
-    downloader: &Downloader,
-    temp_dir: &TestTempDir,
-) -> ResourceConfig {
-    ResourceConfig::for_src(url.as_str())
-        .expect("valid fixture URL")
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .downloader(downloader.clone())
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
-        .build()
+    })
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
-    let target_fixture = helper
-        .create_hls(
-            HlsFixtureBuilder::new()
-                .variant_count(1)
-                .segments_per_variant(SEGMENT_COUNT)
-                .segment_duration_secs(SEGMENT_DURATION_SECS)
-                .packaged_audio_aac_lc(SAMPLE_RATE, 2),
-        )
-        .await
-        .expect("create HLS fixture");
-    let release_gate = helper.register_segment_gate(target_fixture.token(), 0, RELEASE_SEGMENT);
+    let target_url = helper.asset("hls/master.m3u8");
     let fallback_fixture = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
             bytes: Arc::new(EmbeddedAudio::TEST_MP3_BYTES.to_vec()),
@@ -126,115 +77,125 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
             .client(HttpClient::new(net, CancelToken::never()))
             .build(),
     );
-    let session = Arc::new(OfflineSession::new_manual());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(SAMPLE_RATE)
             .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(kithara::bufpool::PcmPool::default())
-            .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
+            .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Queue::new(QueueConfig::default().with_player(player));
-    let mut rx = queue.subscribe();
+    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
-    let target = queue.append(TrackSource::Config(Box::new(resource_config(
-        &target_fixture.master_url(),
-        &downloader,
-        &temp_dir,
-    ))));
-    let fallback = queue.append(TrackSource::Config(Box::new(resource_config(
-        &fallback_url,
-        &downloader,
-        &temp_dir,
-    ))));
-    wait_for_loader_done_event(&mut rx, &queue, fallback, Duration::from_secs(30))
-        .await
-        .unwrap_or_else(|error| panic!("LABA-428 precondition: fallback load failed: {error}"));
+    let target = queue.append(TrackSource::Config(Box::new(
+        ResourceConfig::for_src(target_url.as_str())
+            .expect("valid HLS URL")
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .downloader(downloader.clone())
+            .initial_abr_mode(AbrMode::manual(0))
+            .look_ahead_bytes(LOOK_AHEAD_BYTES)
+            .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+            .build(),
+    )));
+    // A next track is what an auto-skip would move to. Without it the queue
+    // has nowhere to go and the regression could not show itself.
+    let fallback = queue.append(TrackSource::Config(Box::new(
+        ResourceConfig::for_src(fallback_url.as_str())
+            .expect("valid fallback URL")
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .downloader(downloader)
+            .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+            .build(),
+    )));
+
+    let ticker = spawn_ticker(Arc::clone(&queue));
+    let mut rx = queue.subscribe();
     queue
         .select(target, Transition::None)
         .expect("select target track");
     wait_for_loader_done_event(&mut rx, &queue, target, Duration::from_secs(30))
         .await
         .unwrap_or_else(|error| panic!("LABA-428 precondition: target load failed: {error}"));
-
-    // Without this the engine stays paused, `render` returns silence, and the
-    // setup below pulls audio that never becomes playback progress.
     queue.play();
 
-    let mut observation = Observation::default();
-    for _ in 0..SETUP_BLOCKS {
-        render_and_tick(&session, &queue);
-        drain_events(&mut rx, target, fallback, &mut observation);
-        if release_gate.requested() > 0
-            && observation
-                .latest_position
-                .is_some_and(|position| position >= MIN_PLAYED_BEFORE_FAILURE_SECS)
-        {
-            break;
-        }
-    }
-    let before_failure = observation.latest_position.unwrap_or(0.0);
-    assert!(
-        before_failure >= MIN_PLAYED_BEFORE_FAILURE_SECS,
-        "LABA-428 precondition: target played only {before_failure:.3}s before fault injection"
-    );
-    assert!(
-        release_gate.requested() > 0,
-        "LABA-428 precondition: segment {RELEASE_SEGMENT} never reached the withhold gate; \
-         no mid-stream fault window was established"
-    );
-    assert!(
-        !observation.auto_skipped,
-        "LABA-428 precondition: target was skipped before the injected failure"
-    );
+    let before_failure = wait_for_position_event(
+        &mut rx,
+        &queue,
+        PLAY_BEFORE_FAILURE_SECS,
+        Duration::from_secs(30),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("LABA-428 precondition: {error}"));
 
+    // A blip, not an outage: the server goes away only long enough for one
+    // in-flight segment fetch to fail, then comes straight back.
     helper.set_network_online(false);
-    let _network_restore = NetworkRestore(&helper);
-    release_gate.release();
-    for _ in 0..FAILURE_BLOCKS {
-        render_and_tick(&session, &queue);
-        drain_events(&mut rx, target, fallback, &mut observation);
-        if observation.saw_offline_failure {
-            break;
-        }
-    }
-    helper.set_network_online(true);
-    let failure_position = observation.latest_position.unwrap_or(before_failure);
-    assert!(
-        observation.saw_offline_failure,
-        "LABA-428 precondition: no later segment fetch observed the offline server; \
-         the failure did not land mid-stream"
-    );
-    assert!(
-        failure_position >= MIN_PLAYED_BEFORE_FAILURE_SECS,
-        "LABA-428 precondition: fetch failed before two seconds of playback \
-         ({failure_position:.3}s)"
-    );
+    let restore = NetworkRestore(&helper);
+    wait_for_event(
+        &mut rx,
+        "a segment fetch failing against the offline server",
+        |event| {
+            matches!(
+                event,
+                Event::Downloader(
+                    DownloaderEvent::FirstByte { status: 503, .. }
+                        | DownloaderEvent::RequestFailed { .. }
+                        | DownloaderEvent::RetryExhausted { .. }
+                )
+            )
+        },
+        Duration::from_secs(30),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "LABA-428 precondition: {error}; no fetch was in flight when the server went \
+             away, so no transient failure was injected"
+        )
+    });
+    drop(restore);
 
-    let recovery_target = failure_position + MIN_RECOVERY_PROGRESS_SECS;
-    for _ in 0..RECOVERY_BLOCKS {
-        render_and_tick(&session, &queue);
-        drain_events(&mut rx, target, fallback, &mut observation);
-        if observation.auto_skipped
-            || observation
-                .latest_position
-                .is_some_and(|position| position >= recovery_target)
-        {
-            break;
-        }
-    }
-    let recovered_at = observation.latest_position.unwrap_or(failure_position);
+    let recovery_target = before_failure + MIN_RECOVERY_PROGRESS_SECS;
+    let mut skipped_to: Option<TrackId> = None;
+    let outcome = wait_for_event(
+        &mut rx,
+        "playback carrying on past the transient failure",
+        |event| match event {
+            Event::Queue(QueueEvent::TrackLoadFailed {
+                id,
+                auto_skipped: true,
+                ..
+            }) if *id == target => {
+                skipped_to = Some(target);
+                true
+            }
+            Event::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) }) if *id == fallback => {
+                skipped_to = Some(fallback);
+                true
+            }
+            Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) => {
+                *position_ms as f64 / 1000.0 >= recovery_target
+            }
+            _ => false,
+        },
+        Duration::from_secs(60),
+    )
+    .await;
+
     assert!(
-        !observation.auto_skipped,
-        "LABA-428: the current track was permanently failed and auto-skipped after a \
-         mid-stream transient failure at {failure_position:.3}s"
+        skipped_to.is_none(),
+        "LABA-428: a transient failure at {before_failure:.3}s permanently failed the current \
+         track and the queue auto-skipped away from it"
     );
-    assert!(
-        recovered_at >= recovery_target,
-        "LABA-428: connectivity returned after a mid-stream failure, but target playback \
-         stayed at {recovered_at:.3}s instead of reaching {recovery_target:.3}s"
-    );
+    outcome.unwrap_or_else(|error| {
+        panic!(
+            "LABA-428: the track survived a transient failure at {before_failure:.3}s but \
+             playback never reached {recovery_target:.3}s: {error}"
+        )
+    });
 
     queue.clear();
+    ticker.abort();
+    let _ = ticker.await;
 }
