@@ -3,6 +3,7 @@
 mod offline_player_harness;
 
 mod cache_commit_grows;
+mod commands_survive_switch_storm;
 mod lane_smoke;
 mod loaded_ranges_absolute;
 mod offline_resume;
