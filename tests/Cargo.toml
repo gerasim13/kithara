@@ -33,6 +33,12 @@ perf = ["dep:hotpath", "hotpath/hotpath", "kithara/perf"]
 # run at arbitrary sample rates, so every e2e lane in .config/xtask.toml pairs
 # this with a fixed-ratio SRC backend (rubato / glide / apple fused).
 e2e = []
+# Ловушки багов LABA-*, найденных QA при интеграции в zvooq-ios.
+# Красные по построению: каждый тест воспроизводит незакрытый баг.
+# Держатся вне основного гейта, чтобы известное красное не превращало
+# базлайн в шум. Починенный тест переезжает в `suite_light.rs` и
+# выбывает отсюда.
+laba = []
 # Selenium-driven WebDriver tests. Gated off by default so `just test`
 # doesn't try to spin up trunk + chromedriver. Run via `just test-selenium`.
 selenium = []
@@ -194,6 +200,11 @@ path = "tests/suite_stress.rs"
 name = "suite_e2e"
 path = "tests/suite_e2e.rs"
 required-features = ["e2e"]
+
+[[test]]
+name = "suite_laba"
+path = "tests/suite_laba.rs"
+required-features = ["laba"]
 
 [[test]]
 name = "suite_perf"

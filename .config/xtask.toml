@@ -182,6 +182,22 @@ prefix_args = [
 default_features = ["e2e", "kithara/resample-glide"]
 default_flash = false
 
+# Ловушки багов LABA-*. Красные по построению — вне основного гейта.
+[test.lanes.laba]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-integration-tests",
+  "--cargo-profile",
+  "test-release",
+  "--test",
+  "suite_laba",
+]
+default_features = ["laba"]
+default_flash = true
+
 [test.lanes.selenium]
 program = "cargo"
 prefix_args = [
