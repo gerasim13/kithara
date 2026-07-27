@@ -2,8 +2,6 @@ use kithara_decode::{PcmChunk, duration_for_frames};
 use kithara_platform::time::Duration;
 use kithara_stream::AudioCodec;
 
-use crate::pipeline::seek::skip::frames as frames_for;
-
 /// Where a decoder generation puts frame zero.
 ///
 /// Two things move it. A decoder labels its output by counting frames it
@@ -29,7 +27,7 @@ impl Origin {
     /// the generation's own count as `frame_offset`, and the codec says how far
     /// that container runs ahead of the music.
     pub(crate) fn of(chunk: &PcmChunk, codec: Option<AudioCodec>) -> Self {
-        let clock = frames_for(chunk.meta.spec, chunk.meta.timestamp) as i64;
+        let clock = frame_at(chunk.meta.timestamp, chunk.meta.spec.sample_rate.get());
         let counted = i64::try_from(chunk.meta.frame_offset).unwrap_or(i64::MAX);
         Self {
             frames: clock - counted - content_origin(codec),
@@ -57,6 +55,22 @@ impl Origin {
             chunk.meta.end_timestamp = chunk.meta.end_timestamp.saturating_sub(shift);
         }
     }
+}
+
+/// The frame a timestamp names.
+///
+/// A timestamp is a whole frame rendered into nanoseconds, and a frame is not a
+/// whole number of them: 1024 frames at 44.1 kHz render as 23219954 ns, which
+/// reads back as 1023.99998. Recovering the frame rounds — flooring loses one,
+/// and one frame of error in a generation's scale moves every generation
+/// aligned against it.
+fn frame_at(at: Duration, sample_rate: u32) -> i64 {
+    let frames = at
+        .as_nanos()
+        .saturating_mul(u128::from(sample_rate))
+        .saturating_add(500_000_000)
+        / 1_000_000_000;
+    i64::try_from(frames).unwrap_or(i64::MAX)
 }
 
 /// How far a codec's container runs ahead of the music it carries.
