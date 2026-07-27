@@ -25,8 +25,10 @@ use kithara_integration_tests::{
 
 /// Bounded look-ahead over the 222 s packaged fixture: the downloader must
 /// still need further segments when the blip lands, otherwise the track is
-/// already fully cached and no fetch can fail.
-const LOOK_AHEAD_BYTES: u64 = 256 * 1024;
+/// already fully cached and no fetch can fail. Kept narrow for the same
+/// reason as in the outage trap — a wide window makes the scenario depend on
+/// how much happened to be cached.
+const LOOK_AHEAD_BYTES: u64 = 64 * 1024;
 const PLAY_BEFORE_FAILURE_SECS: f64 = 1.0;
 /// How far playback must carry on past the blip. Bounds the "no auto-skip"
 /// window with a fact rather than a stopwatch.

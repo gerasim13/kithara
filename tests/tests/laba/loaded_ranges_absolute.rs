@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    events::{AudioEvent, DownloaderEvent, Event},
+    events::{DownloaderEvent, Event},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -15,18 +15,53 @@ use kithara::{
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
-    audio_fixture::EmbeddedAudio, kithara, offline::OfflineSession, temp_dir,
-    waits::wait_for_event,
+    audio_fixture::EmbeddedAudio,
+    kithara,
+    offline::OfflineSession,
+    temp_dir,
+    waits::{wait_for_event, wait_for_loader_done_event},
 };
 
-/// The whole body must have landed before the buffer bar is judged. Loopback
-/// delivers the 3 MB fixture long before playback leaves its first seconds,
-/// so the gap between "downloaded" and "played" is wide and unambiguous.
+/// `PlaybackView::buffered` is documented as the decoded-ahead window, so this
+/// trap pins a contract the core does not offer yet rather than a broken
+/// invariant: once the whole body is cached, the surface a progress bar reads
+/// must be able to say so. It stays red until an absolute downloaded-range
+/// surface exists.
+///
+/// The whole body must have landed before the bar is judged. Wide enough to
+/// hold the 3 MB fixture, so the transfer is never capped mid-way.
+const LOOK_AHEAD_BYTES: u64 = 8 * 1024 * 1024;
 const MIN_TRANSFERRED_FRACTION_PERCENT: u64 = 90;
-/// Playback must still be near the start, otherwise a frontier that merely
-/// tracks the playhead could satisfy the property by accident.
-const MAX_POSITION_FRACTION_PERCENT: u64 = 25;
+/// The buffered window only exists once a slot is playing, so the track has to
+/// be started. Duration must be the settled value before it can be compared
+/// against: an early estimate leaves `buffered ~= duration`, which clears the
+/// threshold on its own and is what made this trap flip to green under load.
+const MIN_SETTLED_DURATION_SECS: f64 = 100.0;
 const MIN_BUFFERED_FRACTION_PERCENT: u64 = 80;
+
+/// The MP3 duration starts as an estimate and settles once enough of the body
+/// is parsed. Comparing against the estimate is meaningless.
+async fn wait_for_settled_duration(
+    queue: &Queue,
+    deadline: Duration,
+) -> Result<kithara::queue::PlaybackView, String> {
+    time::timeout(deadline, async {
+        loop {
+            let view = queue.playback_view();
+            if view
+                .duration
+                .is_some_and(|duration| duration >= MIN_SETTLED_DURATION_SECS)
+            {
+                return view;
+            }
+            time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_| {
+        format!("duration never settled above {MIN_SETTLED_DURATION_SECS:.0}s within {deadline:?}")
+    })
+}
 
 fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
@@ -70,20 +105,28 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader)
+        .look_ahead_bytes(LOOK_AHEAD_BYTES)
         .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .build();
 
     let ticker = spawn_ticker(Arc::clone(&queue));
     let mut rx = queue.subscribe();
+    // Separate subscriber: the warm-up below drains `rx`, and the body can
+    // finish transferring before the pause — the completion must not be eaten
+    // by the wait that precedes it.
+    let mut transfer_rx = queue.subscribe();
     let id = queue.append(TrackSource::Config(Box::new(cfg)));
     queue
         .select(id, Transition::None)
         .expect("select progressive track");
+    wait_for_loader_done_event(&mut rx, &queue, id, Duration::from_secs(30))
+        .await
+        .unwrap_or_else(|error| panic!("LABA-430 precondition: {error}"));
     queue.play();
 
     let mut transferred = 0;
     wait_for_event(
-        &mut rx,
+        &mut transfer_rx,
         "the progressive body finishing its transfer",
         |event| {
             let Event::Downloader(DownloaderEvent::RequestCompleted {
@@ -106,42 +149,16 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
         )
     });
 
-    let mut position_ms = 0;
-    let mut buffered_ms = 0;
-    let mut total_ms = 0;
-    wait_for_event(
-        &mut rx,
-        "playback progress carrying a known duration",
-        |event| {
-            let Event::Audio(AudioEvent::PlaybackProgress {
-                position_ms: position,
-                total_ms: Some(total),
-                buffered_ms: buffered,
-                ..
-            }) = event
-            else {
-                return false;
-            };
-            position_ms = *position;
-            buffered_ms = buffered.unwrap_or(0);
-            total_ms = *total;
-            true
-        },
-        Duration::from_secs(30),
-    )
-    .await
-    .unwrap_or_else(|error| panic!("LABA-430 precondition: {error}"));
-
+    let view = wait_for_settled_duration(&queue, Duration::from_secs(30))
+        .await
+        .unwrap_or_else(|error| panic!("LABA-430 precondition: {error}"));
+    let duration = view.duration.unwrap_or_default();
+    let buffered = view.buffered.unwrap_or(0.0);
     assert!(
-        position_ms.saturating_mul(100) < total_ms.saturating_mul(MAX_POSITION_FRACTION_PERCENT),
-        "LABA-430 precondition: playback had already reached {position_ms}ms of {total_ms}ms, \
-         too far in to distinguish a download frontier from the playhead"
-    );
-    assert!(
-        buffered_ms.saturating_mul(100) >= total_ms.saturating_mul(MIN_BUFFERED_FRACTION_PERCENT),
-        "LABA-430: the whole {body_len}-byte body is downloaded, but the buffer frontier \
-         reports only {buffered_ms}ms of {total_ms}ms at position {position_ms}ms — it tracks \
-         decoded-ahead playback instead of what is actually available"
+        buffered >= duration * (MIN_BUFFERED_FRACTION_PERCENT as f64 / 100.0),
+        "LABA-430: the whole {body_len}-byte body is cached, but the buffered window reports \
+         only {buffered:.3}s of {duration:.3}s — there is no surface reporting what is \
+         actually downloaded"
     );
 
     queue.clear();

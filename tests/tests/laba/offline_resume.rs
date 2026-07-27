@@ -33,7 +33,11 @@ use kithara_integration_tests::{
 /// downloader finishes the whole variant over loopback before playback
 /// reaches its first second, and taking the network down afterwards is a
 /// no-op no product could react to.
-const LOOK_AHEAD_BYTES: u64 = 256 * 1024;
+///
+/// The window is deliberately narrow: the outage only becomes observable once
+/// the cached bytes drain, and draining is paced by real playback. At 256 KiB
+/// the drain outlasted the wait on roughly one run in five.
+const LOOK_AHEAD_BYTES: u64 = 64 * 1024;
 const PLAY_BEFORE_OUTAGE_SECS: f64 = 1.0;
 const MIN_RESUME_PROGRESS_SECS: f64 = 1.0;
 
