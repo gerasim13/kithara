@@ -5,3 +5,4 @@ mod offline_player_harness;
 mod lane_smoke;
 mod offline_resume;
 mod rate_applies_while_playing;
+mod transient_failure_no_permanent_skip;
