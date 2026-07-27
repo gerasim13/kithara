@@ -18,6 +18,7 @@ pub mod orphans;
 pub mod perf;
 pub mod perf_compare;
 pub mod quality;
+pub mod quality_lab;
 pub mod scope;
 pub mod similarity;
 mod stages;
@@ -64,7 +65,7 @@ pub enum CoreCommand {
         #[command(subcommand)]
         command: quality::QualityCommand,
     },
-    /// Translate scope tokens to tool-specific flags (used by `just audit`).
+    /// Translate scope tokens to tool-specific flags (used by `just ci audit`).
     Scope(scope::ScopeArgs),
     /// Run workspace tests through `cargo nextest`.
     Test(test::TestArgs),
@@ -96,7 +97,7 @@ pub fn run(cmd: &CoreCommand, ctx: &Ctx) -> anyhow::Result<()> {
         CoreCommand::Lint(args) => lint::run(args),
         CoreCommand::PerfCompare(args) => perf_compare::run(args),
         CoreCommand::Perf(args) => perf::run(args, ctx),
-        CoreCommand::Quality { command } => quality::run(command),
+        CoreCommand::Quality { command } => quality::run(command, ctx),
         CoreCommand::Scope(args) => scope::run(args),
         CoreCommand::Test(args) => test::run(args),
         CoreCommand::Health(args) => health::run(args),

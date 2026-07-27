@@ -37,9 +37,10 @@ fn load_config(workspace_root: &Path) -> Result<SimilarityConfig> {
 pub enum Profile {
     /// Blocking, low-noise: 0.96 / min-lines 12 / skip-test / fail-on-duplicates.
     Audit,
-    /// Informational, default for `just similarity`: 0.85 / 10 / skip-test.
+    /// Informational, default for `just lint similarity`: 0.85 / 10 / skip-test.
     Advisory,
-    /// Strict comprehensive: 0.80 / 8 / includes tests. Used by `just health`.
+    /// Strict comprehensive: 0.80 / 8 / includes tests. Used by
+    /// `just ci health`.
     Strict,
 }
 

@@ -8,11 +8,15 @@ use cargo_metadata::MetadataCommand;
 use clap::Subcommand;
 use regex::Regex;
 
-use crate::common::{project::ProjectConfig, timestamp::utc_timestamp, walker::walk_rs_files};
+use crate::{
+    Ctx,
+    common::{project::ProjectConfig, timestamp::utc_timestamp, walker::walk_rs_files},
+    quality_lab,
+};
 
 const MOCK_COVERAGE_PATTERN: &str = r"(unimock::unimock\(|#\[\s*kithara::mock)";
 
-#[derive(Clone, Copy, Debug, Subcommand)]
+#[derive(Debug, Subcommand)]
 pub enum QualityCommand {
     /// Generate a quality report.
     Report {
@@ -35,6 +39,11 @@ pub enum QualityCommand {
     TraitMockExceptions,
     /// Check unimock usage.
     UnimockCheck,
+    /// Run heavyweight external analyzers outside the fast lint loop.
+    Lab {
+        #[command(subcommand)]
+        command: quality_lab::LabCommand,
+    },
 }
 
 fn workspace_root() -> Result<PathBuf> {
@@ -96,7 +105,7 @@ fn count_rs_files_in(dir: &Path) -> Result<usize> {
     Ok(files.len())
 }
 
-pub(crate) fn run(cmd: &QualityCommand) -> Result<()> {
+pub(crate) fn run(cmd: &QualityCommand, ctx: &Ctx) -> Result<()> {
     match cmd {
         QualityCommand::Report {
             min_unimock_traits,
@@ -115,6 +124,7 @@ pub(crate) fn run(cmd: &QualityCommand) -> Result<()> {
         QualityCommand::TraitMockAudit => run_trait_mock_audit(),
         QualityCommand::TraitMockExceptions => run_trait_mock_exceptions(),
         QualityCommand::UnimockCheck => run_unimock_check(),
+        QualityCommand::Lab { command } => quality_lab::run(command, ctx),
     }
 }
 

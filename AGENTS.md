@@ -35,7 +35,32 @@ Use it for repo-wide coding conventions, path routing, and stable coordination s
 - Prefer clean, maintainable code over clever shortcuts or speculative abstractions.
 - Keep code readable and easy to understand.
 - Optimize for performance in hot paths.
-- Use repo harnesses for acceptance and formatting: `cargo xtask test` / `just test` and `cargo xtask format`. Raw `cargo test`, `cargo nextest`, or direct formatter commands are scoped probes only, not final validation claims.
+- Use repo harnesses for acceptance and formatting: `just test` and `just fmt`. Raw `cargo test`, `cargo nextest`, or direct formatter commands are scoped probes only, not final validation claims.
+
+## Command Routing
+
+Use these exact Just paths. Do not spend an agent turn on `just --list` for
+routine work:
+
+- `just fmt`; check-only: `just fmt check`.
+- `just check`; Clippy: `just check clippy`.
+- `just lint`; fast gate: `just lint fast`; full gate: `just lint full`.
+- `just test`; parameterized harness: `just test run <args>`; tests plus
+  doc-tests: `just test all`.
+- `just ci gate`; scoped audit: `just ci audit <scope>`; broad report:
+  `just ci health`.
+- `just quality lab list`; manual/scheduled analyzer run:
+  `just quality lab run <profile-or-tool>`; coverage risk:
+  `just quality coverage-risk`.
+- Platform entrypoints are `just platform apple ...`,
+  `just platform android ...`, and `just platform wasm ...`.
+- Direct cached xtask access is exceptional and uses
+  `just tooling xtask <subcommand>`. Agent hooks use the hidden
+  `just _agent-hook` transport configured in adapter JSON.
+
+The root `justfile` exposes only domain modules. Exact recipes live under
+`.config/just/`; `just --list` is an optional human overview, not an agent
+discovery requirement.
 
 ## Agent Red-Flag Gate
 

@@ -12,7 +12,8 @@
 
 # kithara-devtools
 
-Reusable, config-driven command core for `cargo xtask` build tooling. It holds
+Reusable, config-driven command core for cached xtask build tooling invoked
+through `just tooling xtask`. It holds
 the project-agnostic commands so several workspaces can share one implementation
 and keep only their own project-specific commands in a thin `xtask` binary.
 
@@ -33,7 +34,8 @@ Exposed through the `CoreCommand` subcommand enum:
 - `test` — workspace tests through `cargo nextest` with lane / backend / feature
   selection.
 - `health` — aggregated workspace health report.
-- `quality` — rstest / unimock / trait-mock audits.
+- `quality` — rstest / unimock / trait-mock audits plus the opt-in Quality Lab
+  for heavyweight external analyzers.
 - `scope` — translate scope tokens to tool-specific flags.
 - `perf-compare` — compare hotpath timing tables against a baseline.
 - `perf` — test-suite performance pipeline: matrix, slow aggregation, samply
@@ -90,6 +92,12 @@ The selected nextest profile must write JUnit at `junit.xml`, for example:
 [profile.perf.junit]
 path = "junit.xml"
 ```
+
+Quality Lab intentionally has a separate, required
+`.config/quality-lab.toml`. It pins analyzer versions, tool/profile time
+budgets, and the output directory without adding heavyweight tools to the fast
+lint path. Use `quality lab list` to inspect policy and `quality lab run
+coverage|scheduled|manual|<tool>` to execute it.
 
 ## Features
 

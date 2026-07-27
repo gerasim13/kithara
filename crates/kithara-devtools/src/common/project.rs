@@ -27,7 +27,7 @@ pub struct ProjectConfig {
     pub workspace_scan: WorkspaceScan,
 }
 
-/// Extended advisory clippy lints for the opt-in `cargo xtask audit-clippy` sweep.
+/// Extended advisory clippy lints for the opt-in `just lint audit-clippy` sweep.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AuditClippyConfig {

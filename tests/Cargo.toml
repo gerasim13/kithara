@@ -34,7 +34,8 @@ perf = ["dep:hotpath", "hotpath/hotpath", "kithara/perf"]
 # this with a fixed-ratio SRC backend (rubato / glide / apple fused).
 e2e = []
 # Selenium-driven WebDriver tests. Gated off by default so `just test`
-# doesn't try to spin up trunk + chromedriver. Run via `just test-selenium`.
+# doesn't try to spin up trunk + chromedriver. Run via
+# `just test run --lane=selenium`.
 selenium = []
 # Deterministic virtual-clock test mode. Routes the platform's blocking waits
 # (`thread::park_timeout`, `sync::Condvar`) onto the quiescence engine so timed
@@ -42,7 +43,7 @@ selenium = []
 # path-dep against the virtual `kithara::platform::time::Instant`. Used by the
 # phase-continuity equivalence proof.
 flash = ["kithara/flash", "kithara-test-utils/flash"]
-# Poll-blocking detector; enabled by `just test --no-block=on`.
+# Poll-blocking detector; enabled by `just test run --no-block=on`.
 no-block = ["kithara/no-block", "kithara-test-utils/no-block"]
 # Run integration tests with the native Apple HTTP backend (`NSURLSession`).
 # This is separate from `apple`, which only brings Apple decode/audio variants

@@ -46,6 +46,37 @@ single parsed configuration for the run.
 flags, and help text are the public surface — treat changes to them as
 API changes covered by the consuming project's expectations.
 
+## Quality Lab ownership
+
+`quality lab` owns heavyweight external code analysis that must stay outside
+`lint-fast`, the normal audit, and pre-commit. Its required
+`.config/quality-lab.toml` is loaded exactly once by the command and has a
+strict schema independent of the general `.config/xtask.toml`.
+
+- `coverage` owns the `cargo-crap` coverage-risk gate. A production run without
+  `--baseline` emits the absolute JSON artifact; a pull-request run supplies
+  that artifact and gates regressed entries plus new functions above CRAP 30.
+  The wrapper checks delta JSON because cargo-crap's `--fail-regression` exit
+  code does not include new functions.
+- `scheduled` runs Cha history/layers/smells, rustqual test-quality checks, and
+  cargo-dupes sub-function duplication. Findings are advisory; missing tools,
+  invalid reports, version mismatches, and timeouts are tool errors.
+- `manual` adds read-only PMAT `repo-score --format json --deep`. Missing
+  executables are `skipped`; findings stay advisory. A direct non-coverage tool
+  run follows this manual policy.
+- Every external version must match the exact pin before analysis. Native
+  output, stderr, per-tool `manifest.json`, and JSON/Markdown summaries live
+  below `target/quality-lab/<revision>/`.
+- Cha runs only from a clean, non-shallow source worktree and analyzes a
+  disposable local clone. The clone is deleted after the run so Cha cache state
+  cannot leak into the source checkout.
+
+KISS is not executed directly because it overlaps the existing stack and
+writes hidden user-level state. PMAT remains manual because its breadth and
+runtime make it unsuitable for a routine gate. Promoting a unique external
+check into `syn`, Cargo metadata, Git, or ast-grep requires repeated actionable,
+deterministic evidence and two comparison runs before retiring the adapter.
+
 ## Feature gating
 
 `lint` (arch/style/idioms/lint) and `viz` are default-on cargo features that

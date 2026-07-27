@@ -5,21 +5,21 @@ policy. Keep `AGENTS.md` short; put command details here.
 
 ## Fast Gate
 
-- `just fmt-check`: Rust fmt, Cargo manifest dependency order (`kithara-*`
+- `just fmt check`: Rust fmt, Cargo manifest dependency order (`kithara-*`
   first), formatted non-Cargo TOML, and sorted JSON/JSONC.
-- `just clippy`: workspace Clippy with warnings denied.
-- `just ast-grep`: structural policy rules from `.config/ast-grep/`.
-- `cargo xtask lint arch`: fast architecture gate used by pre-commit.
+- `just check clippy`: workspace Clippy with warnings denied.
+- `just lint ast-grep`: structural policy rules from `.config/ast-grep/`.
+- `just lint arch`: fast architecture gate used by pre-commit.
 
 These are suitable for local pre-commit feedback.
 
 ## Full Audit
 
-- `just audit`: scoped Rust fmt, Clippy, ast-grep, xtask lint, typos,
+- `just ci audit`: scoped Rust fmt, Clippy, ast-grep, xtask lint, typos,
   similarity, and scoped orphan-module checks. With no scope, the orphan stage
-  is latency-capped; `just health` owns the full workspace orphan sweep.
-- `just lint-full`: fast lint plus xtask self-tests and quality scans.
-- `just health`: broad local health report; heavy or environment-sensitive
+  is latency-capped; `just ci health` owns the full workspace orphan sweep.
+- `just lint full`: fast lint plus xtask self-tests and quality scans.
+- `just ci health`: broad local health report; heavy or environment-sensitive
   stages may report SKIP.
 - Audit and health consume one canonical argv source for their shared stages and
   validate each xtask command shape in the `kithara-devtools` unit tests.
@@ -41,11 +41,12 @@ These are suitable for local pre-commit feedback.
 
 ## Formatting Ownership
 
-- `cargo xtask format` is the formatter harness. Use `--check` for gates and
-  `--only rust|manifest|toml|json|markdown` for scoped work.
+- `just fmt` is the formatter harness and `just fmt check` is its gate. Use
+  `just tooling xtask format --only rust|manifest|toml|json|markdown` only for
+  scoped formatter work.
 - `rustfmt.toml` owns `.rs` formatting.
 - `.config/tomlfmt.toml` plus `cargo-sort` provide the mechanical `Cargo.toml`
-  write pass. `cargo xtask manifest dependency-order` owns the gate: internal
+  write pass. `just deps manifest dependency-order` owns the gate: internal
   `kithara` / `kithara-*` dependencies stay above external crates, and each
   dependency group stays sorted by key.
 - Do not use `cargo sort --check` in gates: it conflicts with the repo's
@@ -55,4 +56,4 @@ These are suitable for local pre-commit feedback.
 - `mdfmt` owns Markdown formatting. It is an explicit recipe/advisory health
   signal until the historical Markdown tree is cleaned up.
 - Do not add a second formatter for the same file class unless the owner is
-  changed here and in `justfile`.
+  changed here and in `.config/just/fmt.just`.
