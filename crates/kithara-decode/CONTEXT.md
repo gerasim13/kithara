@@ -155,6 +155,29 @@ Seeking is a two-step contract shared by the demuxer and `ComposedDecoder`:
    is evaluated against decoded output rather than the later packet being fed.
    Without this trim a seek leaks up to one packet of pre-target audio.
 
+**Open — the frame counter and the PTS disagree, per generation.**
+`frame_offset` counts frames emitted; `timestamp` carries the packet PTS. A
+codec that drops its own algorithmic delay (`aac_fdk.rs`, `delay_remaining`
+from `outputDelay`) removes audio the container still counts, so the two part
+company by however much that generation happened to drop — and that amount
+depends on where the generation started, because the delay is re-armed on
+every flush and lands on whichever packet comes first.
+
+Measured on the HLS AAC fixture (44.1 kHz, 1024-frame packets): a generation
+started at the container head runs 661 frames behind its PTS; one created
+mid-stream by a variant switch runs 1664 behind. The 1003-frame difference is
+the musical-timeline step the switch produces
+(`decoder_recreation_preserves_sweep_timeline`). FLAC, which drops nothing,
+has no gap at all.
+
+So neither coordinate is a timeline two generations can share: the counter is
+per-generation drift, and the PTS is a container position the emitted audio no
+longer sits at. Step 2 above trims against the PTS and therefore inherits the
+drift. Deciding which of the two the pipeline addresses — and making every
+generation of one codec agree on it — is the fix; moving the trim into frame
+space alone is not (measured: it takes the AAC↔FLAC step from 1024 frames to
+40 but grows the AAC↔AAC one from 661 to 1003).
+
 Current metadata sources:
 
 - AAC in MP4/M4A/fMP4: MP4 probe reads `edts/elst` first, then falls back to
