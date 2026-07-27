@@ -100,6 +100,11 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
     )
     .await
     .unwrap_or_else(|error| panic!("LABA-408 precondition: {error}"));
+
+    // Without this the first session never advances and no position worth
+    // saving is ever reached.
+    first_queue.play();
+
     let played = wait_for_position_event(
         &mut first_rx,
         &first_queue,

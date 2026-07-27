@@ -118,6 +118,10 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
         .select(id, Transition::None)
         .expect("select progressive track");
 
+    // Without this the engine stays paused and no playback progress is ever
+    // published, so the partial-transfer window below can never be observed.
+    queue.play();
+
     let ((consumed, expected), progress) = observe_partial_window(&mut rx, Duration::from_secs(15))
         .await
         .unwrap_or_else(|error| panic!("LABA-430 precondition: {error}"));

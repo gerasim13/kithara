@@ -158,6 +158,10 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
         .await
         .unwrap_or_else(|error| panic!("LABA-428 precondition: target load failed: {error}"));
 
+    // Without this the engine stays paused, `render` returns silence, and the
+    // setup below pulls audio that never becomes playback progress.
+    queue.play();
+
     let mut observation = Observation::default();
     for _ in 0..SETUP_BLOCKS {
         render_and_tick(&session, &queue);

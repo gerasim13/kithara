@@ -112,6 +112,10 @@ async fn playback_resumes_after_network_returns(temp_dir: TestTempDir) {
         .await
         .unwrap_or_else(|error| panic!("LABA-419 precondition: {error}"));
 
+    // Without this the engine stays paused, `render` returns silence, and the
+    // warm-up below pulls audio that never becomes playback progress.
+    queue.play();
+
     let mut latest = None;
     for _ in 0..WARMUP_BLOCKS {
         render_and_tick(&session, &queue);
