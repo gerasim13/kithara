@@ -1,112 +1,102 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{AudioEvent, Event, PlayerEvent},
     net::{HttpClient, NetOptions},
-    platform::{
-        CancelToken,
-        sync::Arc,
-        time::{self, Duration, Instant, timeout},
-        tokio,
-    },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    platform::{CancelToken, sync::Arc, time::Duration},
+    play::{PlayerConfig, PlayerImpl, ResourceConfig, SeekOutcome, SessionDispatcher},
+    queue::{PlaybackView, Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir, kithara,
-    offline::OfflineSession, temp_dir,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara, offline::OfflineSession, temp_dir,
+    waits::wait_for_loader_done_event,
 };
 
 const SAMPLE_RATE: u32 = 44_100;
-const CHANNELS: u16 = 2;
-const FREQ_HZ: f64 = 783.99;
-const STREAM_FRAMES: usize = 44_100 * 30;
+const BLOCK_FRAMES: usize = 512;
+const SEGMENT_COUNT: usize = 3;
+const SEGMENT_DURATION_SECS: f64 = 4.0;
+const FINAL_SEGMENT: usize = SEGMENT_COUNT - 1;
+const WARMUP_BLOCKS: usize = 2_048;
+const SEEK_BLOCKS: usize = 2_048;
+const MIN_WARMUP_SECS: f64 = 0.5;
+const NEAR_END_OFFSET_SECS: f64 = 0.05;
+const POSITION_TOLERANCE_SECS: f64 = 0.01;
 
-fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
-    tokio::task::spawn(async move {
-        loop {
-            time::sleep(Duration::from_millis(50)).await;
-            if queue.tick().is_err() {
-                break;
-            }
-        }
-    })
+#[derive(Clone, Copy, Debug)]
+enum Target {
+    NearEnd,
+    End,
 }
 
-async fn wait_for_loaded(
-    rx: &mut EventReceiver,
-    queue: &Queue,
-    id: TrackId,
-    deadline: Duration,
-) -> Result<(), String> {
-    if let Some(entry) = queue.track(id)
-        && matches!(entry.status, TrackStatus::Loaded)
-    {
-        return Ok(());
-    }
-    let start = Instant::now();
-    while start.elapsed() < deadline {
-        if let Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status }))) =
-            timeout(Duration::from_millis(500), rx.recv())
-                .await
-                .map(|result| result.map(|envelope| envelope.event))
-            && tid == id
-        {
-            match status {
-                TrackStatus::Loaded => return Ok(()),
-                TrackStatus::Failed(error) => return Err(format!("track failed: {error}")),
-                _ => {}
-            }
-        }
-    }
-    Err("track never reached Loaded".into())
+#[derive(Default)]
+struct SeekEvents {
+    end_of_stream: bool,
+    item_ended: bool,
+    seek_complete: bool,
+    seek_rejected: bool,
 }
 
-async fn wait_for_duration(queue: &Queue, deadline: Duration) -> Option<f64> {
-    let start = Instant::now();
-    while start.elapsed() < deadline {
-        if let Some(duration) = queue.playback_view().duration
-            && duration > 0.0
-        {
-            return Some(duration);
-        }
-        time::sleep(Duration::from_millis(100)).await;
-    }
-    queue.playback_view().duration
+fn render_and_tick(session: &OfflineSession, queue: &Queue) {
+    let _ = session.render(BLOCK_FRAMES);
+    queue.tick().expect("tick queue");
 }
 
-/// LABA-417: seeking to the duration boundary must preserve a coherent
-/// duration and must never publish a position beyond that duration.
-#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
-async fn seek_to_duration_keeps_time_and_duration_consistent(temp_dir: TestTempDir) {
-    let helper = TestServerHelper::new().await;
-    let spec = SignalSpec {
-        sample_rate: SAMPLE_RATE,
-        channels: CHANNELS,
-        length: SignalSpecLength::Frames(STREAM_FRAMES),
-        format: SignalFormat::Mp3,
-        bit_rate: None,
-    };
-    let url = helper.sine(&spec, FREQ_HZ).await;
+fn drain_warmup(rx: &mut kithara::events::EventReceiver, latest_position: &mut Option<f64>) {
+    while let Ok(envelope) = rx.try_recv() {
+        if let Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = envelope.event {
+            *latest_position = Some(position_ms as f64 / 1000.0);
+        }
+    }
+}
 
+fn drain_seek_events(rx: &mut kithara::events::EventReceiver, observation: &mut SeekEvents) {
+    while let Ok(envelope) = rx.try_recv() {
+        match envelope.event {
+            Event::Audio(AudioEvent::SeekComplete { .. }) => observation.seek_complete = true,
+            Event::Audio(AudioEvent::SeekRejected { .. }) => observation.seek_rejected = true,
+            Event::Audio(AudioEvent::EndOfStream) => observation.end_of_stream = true,
+            Event::Player(PlayerEvent::ItemDidPlayToEnd { .. }) => observation.item_ended = true,
+            _ => {}
+        }
+    }
+}
+
+fn known_duration(view: PlaybackView, phase: &str) -> f64 {
+    view.duration
+        .unwrap_or_else(|| panic!("LABA-417: duration became unknown {phase}"))
+}
+
+async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind: Target) {
+    let fixture = helper
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(SEGMENT_COUNT)
+                .segment_duration_secs(SEGMENT_DURATION_SECS)
+                .packaged_audio_aac_lc(SAMPLE_RATE, 2),
+        )
+        .await
+        .expect("create HLS fixture");
+    let gate = helper.register_segment_gate(fixture.token(), 0, FINAL_SEGMENT);
     let downloader = Downloader::new(
         DownloaderConfig::builder()
             .client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
+    let session = Arc::new(OfflineSession::new_manual());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(SAMPLE_RATE)
             .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(kithara::bufpool::PcmPool::default())
-            .session(OfflineSession::arc_auto())
+            .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
-    let tick_handle = spawn_ticker(Arc::clone(&queue));
-
-    let cfg = ResourceConfig::for_src(url.as_str())
-        .expect("valid URL")
+    let queue = Queue::new(QueueConfig::default().with_player(player));
+    let cfg = ResourceConfig::for_src(fixture.master_url().as_str())
+        .expect("valid HLS URL")
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader)
@@ -115,41 +105,114 @@ async fn seek_to_duration_keeps_time_and_duration_consistent(temp_dir: TestTempD
 
     let mut rx = queue.subscribe();
     let id = queue.append(TrackSource::Config(Box::new(cfg)));
-    let _ = queue.select(id, Transition::None);
-    wait_for_loaded(&mut rx, &queue, id, Duration::from_secs(30))
+    queue
+        .select(id, Transition::None)
+        .expect("select HLS track");
+    wait_for_loader_done_event(&mut rx, &queue, id, Duration::from_secs(30))
         .await
-        .unwrap_or_else(|error| panic!("precondition: {error}"));
+        .unwrap_or_else(|error| panic!("LABA-417 precondition: {error}"));
 
-    let duration = wait_for_duration(&queue, Duration::from_secs(10))
-        .await
-        .expect("LABA-417 precondition: duration must be known before seeking");
+    let mut warmup_position = None;
+    for _ in 0..WARMUP_BLOCKS {
+        render_and_tick(&session, &queue);
+        drain_warmup(&mut rx, &mut warmup_position);
+        if warmup_position.is_some_and(|position| position >= MIN_WARMUP_SECS)
+            && queue.playback_view().duration.is_some()
+            && gate.requested() > 0
+        {
+            break;
+        }
+    }
+    let before = queue.playback_view();
+    let duration = known_duration(before, "before the end seek");
+    let warmup_position = warmup_position.unwrap_or(0.0);
+    assert!(
+        warmup_position >= MIN_WARMUP_SECS,
+        "LABA-417 precondition: playback produced only {warmup_position:.3}s before the seek"
+    );
+    assert!(
+        warmup_position < duration / 2.0,
+        "LABA-417 precondition: playback had already reached {warmup_position:.3}s of \
+         {duration:.3}s before the end seek"
+    );
+    assert!(
+        gate.requested() > 0,
+        "LABA-417 precondition: withheld final segment {FINAL_SEGMENT} was never requested; \
+         the unbuffered-end window did not exist"
+    );
 
-    for target in [duration - 0.05, duration] {
-        let outcome = queue.seek(target);
-        assert!(
-            outcome.is_ok(),
-            "LABA-417: seek to {target:.3}s was rejected: {:?}",
-            outcome.err()
-        );
-        time::sleep(Duration::from_millis(200)).await;
-
-        let view = queue.playback_view();
-        let after = view
-            .duration
-            .expect("duration must survive a seek to the end");
-        assert!(
-            (after - duration).abs() < 0.01,
-            "LABA-417: duration changed across a seek to {target:.3}s \
-             ({duration:.3}s -> {after:.3}s)"
-        );
-
-        let position = view.position.unwrap_or(0.0);
-        assert!(
-            position <= duration + 0.01,
-            "LABA-417: position {position:.3}s exceeded duration {duration:.3}s \
-             after seeking to {target:.3}s"
-        );
+    while rx.try_recv().is_ok() {}
+    let target = match target_kind {
+        Target::NearEnd => duration - NEAR_END_OFFSET_SECS,
+        Target::End => duration,
+    };
+    let outcome = queue
+        .seek(target)
+        .unwrap_or_else(|error| panic!("LABA-417: seek to {target:.3}s failed: {error}"));
+    match target_kind {
+        Target::NearEnd => assert!(
+            matches!(outcome, SeekOutcome::Landed { .. }),
+            "LABA-417: near-end seek to {target:.3}s was classified as {outcome:?}"
+        ),
+        Target::End => assert!(
+            matches!(
+                outcome,
+                SeekOutcome::Landed { .. } | SeekOutcome::PastEof { .. }
+            ),
+            "LABA-417: duration-boundary seek returned {outcome:?}"
+        ),
     }
 
-    tick_handle.abort();
+    gate.release();
+
+    let mut observation = SeekEvents::default();
+    for _ in 0..SEEK_BLOCKS {
+        render_and_tick(&session, &queue);
+        drain_seek_events(&mut rx, &mut observation);
+        let reached_outcome = match target_kind {
+            Target::NearEnd => {
+                observation.seek_complete || observation.seek_rejected || observation.item_ended
+            }
+            Target::End => {
+                observation.item_ended
+                    || observation.end_of_stream
+                    || observation.seek_complete
+                    || observation.seek_rejected
+            }
+        };
+        if reached_outcome {
+            break;
+        }
+    }
+    assert!(
+        !observation.seek_rejected,
+        "LABA-417: seek to {target:.3}s was rejected after the final segment became available"
+    );
+    assert!(
+        observation.seek_complete || observation.item_ended || observation.end_of_stream,
+        "LABA-417: seek to {target:.3}s produced neither a committed seek nor a terminal event"
+    );
+
+    let after = queue.playback_view();
+    let duration_after = known_duration(after, "after the end seek");
+    assert!(
+        (duration_after - duration).abs() < POSITION_TOLERANCE_SECS,
+        "LABA-417: duration changed across a seek to {target:.3}s \
+         ({duration:.3}s -> {duration_after:.3}s)"
+    );
+    let position_after = after.position.unwrap_or(0.0);
+    assert!(
+        position_after <= duration_after + POSITION_TOLERANCE_SECS,
+        "LABA-417: position {position_after:.3}s exceeded duration {duration_after:.3}s \
+         after seeking to {target:.3}s"
+    );
+
+    queue.clear();
+}
+
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+async fn seek_to_duration_keeps_time_and_duration_consistent(temp_dir: TestTempDir) {
+    let helper = TestServerHelper::new().await;
+    run_case(&helper, &temp_dir, Target::NearEnd).await;
+    run_case(&helper, &temp_dir, Target::End).await;
 }

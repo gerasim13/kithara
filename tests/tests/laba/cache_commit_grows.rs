@@ -3,107 +3,76 @@
 use std::path::Path;
 
 use kithara::{
-    events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    assets::{AssetStore, AssetStoreBuilder, StorageBackend},
+    events::{AssetEvent, DownloaderEvent, Event},
     net::{HttpClient, NetOptions},
-    platform::{
-        CancelToken,
-        sync::Arc,
-        time::{self, Duration, Instant, timeout},
-        tokio,
-    },
+    platform::{CancelToken, sync::Arc, time::Duration},
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir, kithara,
-    offline::OfflineSession, temp_dir,
+    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    audio_fixture::EmbeddedAudio, kithara, offline::OfflineSession, temp_dir,
 };
 
-const SAMPLE_RATE: u32 = 44_100;
-const CHANNELS: u16 = 2;
-const STREAM_FRAMES: usize = 44_100 * 10;
-const FREQUENCIES_HZ: [f64; 2] = [440.0, 554.37];
+#[derive(Default)]
+struct Transfer {
+    committed_len: Option<u64>,
+    completed_bytes: u64,
+    saw_first_byte: bool,
+}
 
-fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
-    tokio::task::spawn(async move {
+async fn observe_transfer(rx: &mut kithara::events::EventReceiver, deadline: Duration) -> Transfer {
+    let mut transfer = Transfer::default();
+    let _ = kithara::platform::time::timeout(deadline, async {
         loop {
-            time::sleep(Duration::from_millis(50)).await;
-            if queue.tick().is_err() {
-                break;
+            let Ok(envelope) = rx.recv().await else {
+                return;
+            };
+            match envelope.event {
+                Event::Downloader(DownloaderEvent::FirstByte { status: 200, .. }) => {
+                    transfer.saw_first_byte = true;
+                }
+                Event::Downloader(DownloaderEvent::RequestCompleted {
+                    bytes_transferred, ..
+                }) => {
+                    transfer.completed_bytes = transfer.completed_bytes.max(bytes_transferred);
+                }
+                Event::Asset(AssetEvent::Committed {
+                    final_len: Some(final_len),
+                    ..
+                }) if final_len > 0 => {
+                    transfer.committed_len = Some(final_len);
+                }
+                _ => {}
+            }
+            if transfer.saw_first_byte
+                && transfer.completed_bytes > 0
+                && transfer.committed_len.is_some()
+            {
+                return;
             }
         }
     })
+    .await;
+    transfer
 }
 
-async fn wait_for_loaded(
-    rx: &mut EventReceiver,
-    queue: &Queue,
-    id: TrackId,
-    deadline: Duration,
-) -> Result<(), String> {
-    if let Some(entry) = queue.track(id)
-        && matches!(entry.status, TrackStatus::Loaded)
-    {
-        return Ok(());
-    }
-    let start = Instant::now();
-    while start.elapsed() < deadline {
-        if let Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status }))) =
-            timeout(Duration::from_millis(500), rx.recv())
-                .await
-                .map(|result| result.map(|envelope| envelope.event))
-            && tid == id
-        {
-            match status {
-                TrackStatus::Loaded => return Ok(()),
-                TrackStatus::Failed(error) => return Err(format!("track failed: {error}")),
-                _ => {}
-            }
-        }
-    }
-    Err("track never reached Loaded".into())
-}
-
-async fn append_and_load(
-    helper: &TestServerHelper,
-    queue: &Queue,
-    rx: &mut EventReceiver,
+fn resource_config(
+    handle: &BehaviorHandle,
     downloader: &Downloader,
-    cache_root: &Path,
-    track_index: usize,
-) -> TrackId {
-    let spec = SignalSpec {
-        sample_rate: SAMPLE_RATE,
-        channels: CHANNELS,
-        length: SignalSpecLength::Frames(STREAM_FRAMES),
-        format: SignalFormat::Mp3,
-        bit_rate: None,
-    };
-    let url = helper.sine(&spec, FREQUENCIES_HZ[track_index]).await;
-    let cfg = ResourceConfig::for_src(url.as_str())
-        .expect("valid URL")
+    store: &AssetStore,
+    name: &str,
+) -> ResourceConfig {
+    let url = handle.child_url(name);
+    ResourceConfig::for_src(url.as_str())
+        .expect("valid fixture URL")
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
-        .store(kithara_integration_tests::disk_asset_store(cache_root))
-        .build();
-    let id = queue.append(TrackSource::Config(Box::new(cfg)));
-    let _ = queue.select(id, Transition::None);
-    wait_for_loaded(rx, queue, id, Duration::from_secs(30))
-        .await
-        .unwrap_or_else(|error| panic!("precondition: {error}"));
-    id
-}
-
-async fn wait_for_cache_growth(root: &Path, previous: u64, deadline: Duration) -> u64 {
-    let start = Instant::now();
-    let mut largest = dir_size_bytes(root);
-    while largest <= previous && start.elapsed() < deadline {
-        time::sleep(Duration::from_millis(100)).await;
-        largest = largest.max(dir_size_bytes(root));
-    }
-    largest
+        .store(store.clone())
+        .build()
 }
 
 fn dir_size_bytes(root: &Path) -> u64 {
@@ -124,11 +93,40 @@ fn dir_size_bytes(root: &Path) -> u64 {
     total
 }
 
-/// LABA-413: playing distinct tracks through a disk-backed store must commit
-/// bytes below the configured cache root, and the second track must grow it.
-#[kithara::test(tokio, timeout(Duration::from_secs(90)))]
+async fn load_and_observe(
+    queue: &Queue,
+    rx: &mut kithara::events::EventReceiver,
+    handle: &BehaviorHandle,
+    downloader: &Downloader,
+    store: &AssetStore,
+    name: &str,
+) -> Transfer {
+    let id = queue.append(TrackSource::Config(Box::new(resource_config(
+        handle, downloader, store, name,
+    ))));
+    queue
+        .select(id, Transition::None)
+        .unwrap_or_else(|error| panic!("select {name}: {error}"));
+    observe_transfer(rx, Duration::from_secs(20)).await
+}
+
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(90)))]
 async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
+    let handles: Vec<_> = (0..2)
+        .map(|_| {
+            helper.register_behavior(FixtureBehavior {
+                content: Content::StaticBytes {
+                    bytes: Arc::new(EmbeddedAudio::TEST_MP3_BYTES.to_vec()),
+                    content_type: Some("audio/mpeg"),
+                },
+                delivery: Delivery::Throttle {
+                    chunk: 32 * 1024,
+                    delay_ms: 10,
+                },
+            })
+        })
+        .collect();
     let downloader = Downloader::new(
         DownloaderConfig::builder()
             .client(HttpClient::new(NetOptions::default(), CancelToken::never()))
@@ -141,28 +139,79 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
-    let tick_handle = spawn_ticker(Arc::clone(&queue));
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .event_bus(player.bus().clone())
+        .build();
+    let queue = Queue::new(
+        QueueConfig::default()
+            .with_player(player)
+            .with_store(store.clone()),
+    );
     let mut rx = queue.subscribe();
 
     let before = dir_size_bytes(temp_dir.path());
-    let _first = append_and_load(&helper, &queue, &mut rx, &downloader, temp_dir.path(), 0).await;
-    let after_first = wait_for_cache_growth(temp_dir.path(), before, Duration::from_secs(20)).await;
+    let first = load_and_observe(
+        &queue,
+        &mut rx,
+        &handles[0],
+        &downloader,
+        &store,
+        "first.mp3",
+    )
+    .await;
+    assert!(
+        handles[0].request_count() > 0 && first.saw_first_byte && first.completed_bytes > 0,
+        "LABA-413 precondition: first throttled transfer did not complete with bytes \
+         (requests={}, first_byte={}, bytes={})",
+        handles[0].request_count(),
+        first.saw_first_byte,
+        first.completed_bytes
+    );
+    let first_commit = first.committed_len.unwrap_or_else(|| {
+        panic!(
+            "LABA-413: first transfer completed {} bytes but no AssetEvent::Committed arrived",
+            first.completed_bytes
+        )
+    });
+    let after_first = dir_size_bytes(temp_dir.path());
     assert!(
         after_first > before,
-        "LABA-413: cache root did not grow after playing a track \
-         ({before} -> {after_first} bytes, root: {})",
-        temp_dir.path().display()
+        "LABA-413: first asset committed {first_commit} bytes but cache root did not grow \
+         ({before} -> {after_first} bytes)"
     );
 
-    let _second = append_and_load(&helper, &queue, &mut rx, &downloader, temp_dir.path(), 1).await;
-    let after_second =
-        wait_for_cache_growth(temp_dir.path(), after_first, Duration::from_secs(20)).await;
+    let second = load_and_observe(
+        &queue,
+        &mut rx,
+        &handles[1],
+        &downloader,
+        &store,
+        "second.mp3",
+    )
+    .await;
+    assert!(
+        handles[1].request_count() > 0 && second.saw_first_byte && second.completed_bytes > 0,
+        "LABA-413 precondition: second throttled transfer did not complete with bytes \
+         (requests={}, first_byte={}, bytes={})",
+        handles[1].request_count(),
+        second.saw_first_byte,
+        second.completed_bytes
+    );
+    let second_commit = second.committed_len.unwrap_or_else(|| {
+        panic!(
+            "LABA-413: second transfer completed {} bytes but no AssetEvent::Committed arrived",
+            second.completed_bytes
+        )
+    });
+    let after_second = dir_size_bytes(temp_dir.path());
     assert!(
         after_second > after_first,
-        "LABA-413: cache did not grow with the second track \
+        "LABA-413: second asset committed {second_commit} bytes but cache did not grow \
          ({after_first} -> {after_second} bytes)"
     );
 
-    tick_handle.abort();
+    queue.clear();
 }

@@ -1,101 +1,99 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
-    net::{HttpClient, NetOptions},
-    platform::{
-        CancelToken,
-        sync::Arc,
-        time::{self, Duration, Instant, timeout},
-        tokio,
-    },
+    events::{AudioEvent, DownloaderEvent, Event},
+    net::{HttpClient, NetOptions, RetryPolicy},
+    platform::{CancelToken, sync::Arc, time::Duration},
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
-    queue::{PlaybackView, Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir, kithara,
-    offline::OfflineSession, temp_dir,
+    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    audio_fixture::EmbeddedAudio, kithara, offline::OfflineSession, temp_dir,
 };
 
-const SAMPLE_RATE: u32 = 44_100;
-const CHANNELS: u16 = 2;
-const FREQ_HZ: f64 = 659.25;
-const STREAM_FRAMES: usize = 44_100 * 30;
-const BUFFER_MUST_REACH_FRACTION: f64 = 0.9;
+const STALL_AFTER_BYTES: usize = EmbeddedAudio::TEST_MP3_BYTES.len() / 2;
+const MIN_DOWNLOADED_FRACTION_PERCENT: u64 = 45;
+const MAX_POSITION_FRACTION_PERCENT: u64 = 25;
+const MIN_BUFFERED_FRACTION_PERCENT: u64 = 40;
 
-fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
-    tokio::task::spawn(async move {
+#[derive(Clone, Copy, Debug)]
+struct Progress {
+    buffered_ms: u64,
+    position_ms: u64,
+    total_ms: u64,
+}
+
+async fn observe_partial_window(
+    rx: &mut kithara::events::EventReceiver,
+    deadline: Duration,
+) -> Result<((u64, u64), Progress), String> {
+    let mut stalled = None;
+    let mut progress = None;
+    kithara::platform::time::timeout(deadline, async {
         loop {
-            time::sleep(Duration::from_millis(50)).await;
-            if queue.tick().is_err() {
-                break;
+            let event = rx
+                .recv()
+                .await
+                .map_err(|error| format!("event stream closed: {error}"))?
+                .event;
+            match event {
+                Event::Downloader(DownloaderEvent::BodyStalled {
+                    consumed,
+                    expected: Some(expected),
+                    ..
+                }) => {
+                    stalled = Some((consumed, expected));
+                }
+                Event::Audio(AudioEvent::PlaybackProgress {
+                    position_ms,
+                    total_ms: Some(total_ms),
+                    buffered_ms,
+                    ..
+                }) => {
+                    progress = Some(Progress {
+                        buffered_ms: buffered_ms.unwrap_or(0),
+                        position_ms,
+                        total_ms,
+                    });
+                }
+                _ => {}
+            }
+            if let (Some(stalled), Some(progress)) = (stalled, progress) {
+                return Ok((stalled, progress));
             }
         }
     })
+    .await
+    .map_err(|_| format!("partial-transfer facts not observed within {deadline:?}"))?
 }
 
-async fn wait_for_loaded(
-    rx: &mut EventReceiver,
-    queue: &Queue,
-    id: TrackId,
-    deadline: Duration,
-) -> Result<(), String> {
-    if let Some(entry) = queue.track(id)
-        && matches!(entry.status, TrackStatus::Loaded)
-    {
-        return Ok(());
-    }
-    let start = Instant::now();
-    while start.elapsed() < deadline {
-        if let Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status }))) =
-            timeout(Duration::from_millis(500), rx.recv())
-                .await
-                .map(|result| result.map(|envelope| envelope.event))
-            && tid == id
-        {
-            match status {
-                TrackStatus::Loaded => return Ok(()),
-                TrackStatus::Failed(error) => return Err(format!("track failed: {error}")),
-                _ => {}
-            }
-        }
-    }
-    Err("track never reached Loaded".into())
-}
-
-async fn play_to_first_third(queue: &Queue, deadline: Duration) -> PlaybackView {
-    let start = Instant::now();
-    let mut latest = PlaybackView::default();
-    while start.elapsed() < deadline {
-        time::sleep(Duration::from_millis(100)).await;
-        latest = queue.playback_view();
-        if let (Some(position), Some(duration)) = (latest.position, latest.duration)
-            && position >= duration / 3.0
-        {
-            return latest;
-        }
-    }
-    latest
-}
-
-/// LABA-430: once a progressive track has downloaded, its buffer bar must
-/// reach the track end instead of remaining tied to the decoded-ahead window.
-#[kithara::test(tokio, timeout(Duration::from_secs(90)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
-    let spec = SignalSpec {
-        sample_rate: SAMPLE_RATE,
-        channels: CHANNELS,
-        length: SignalSpecLength::Frames(STREAM_FRAMES),
-        format: SignalFormat::Mp3,
-        bit_rate: None,
-    };
-    let url = helper.sine(&spec, FREQ_HZ).await;
+    let handle = helper.register_behavior(FixtureBehavior {
+        content: Content::StaticBytes {
+            bytes: Arc::new(EmbeddedAudio::TEST_MP3_BYTES.to_vec()),
+            content_type: Some("audio/mpeg"),
+        },
+        delivery: Delivery::StallAfter {
+            after_bytes: STALL_AFTER_BYTES,
+        },
+    });
+    let url = handle.child_url("partial.mp3");
 
+    let net = NetOptions::builder()
+        .inactivity_timeout(Duration::from_millis(500))
+        .retry_policy(RetryPolicy::new(
+            0,
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+        ))
+        .build();
     let downloader = Downloader::new(
         DownloaderConfig::builder()
-            .client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .client(HttpClient::new(net, CancelToken::never()))
             .build(),
     );
     let player = Arc::new(PlayerImpl::new(
@@ -105,11 +103,9 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
-    let tick_handle = spawn_ticker(Arc::clone(&queue));
-
+    let queue = Queue::new(QueueConfig::default().with_player(player));
     let cfg = ResourceConfig::for_src(url.as_str())
-        .expect("valid URL")
+        .expect("valid fixture URL")
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader)
@@ -118,50 +114,44 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
 
     let mut rx = queue.subscribe();
     let id = queue.append(TrackSource::Config(Box::new(cfg)));
-    let _ = queue.select(id, Transition::None);
-    wait_for_loaded(&mut rx, &queue, id, Duration::from_secs(60))
+    queue
+        .select(id, Transition::None)
+        .expect("select progressive track");
+
+    let ((consumed, expected), progress) = observe_partial_window(&mut rx, Duration::from_secs(15))
         .await
-        .unwrap_or_else(|error| panic!("precondition: {error}"));
-
-    let third = play_to_first_third(&queue, Duration::from_secs(30)).await;
-    let third_position = third
-        .position
-        .expect("precondition: playback position must become known");
-    let third_duration = third
-        .duration
-        .expect("precondition: duration must become known");
+        .unwrap_or_else(|error| panic!("LABA-430 precondition: {error}"));
     assert!(
-        third_position >= third_duration / 3.0,
-        "precondition: playback reached only {third_position:.2}s of {third_duration:.2}s"
+        consumed > 0 && consumed < expected,
+        "LABA-430 precondition: transfer was not partial (consumed {consumed} of {expected} bytes)"
     );
-    queue.pause();
-
-    let mut best = queue.playback_view();
-    let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(10) {
-        time::sleep(Duration::from_millis(250)).await;
-        let view = queue.playback_view();
-        if view.buffered.unwrap_or(0.0) > best.buffered.unwrap_or(0.0) {
-            best = view;
-        }
-        if let (Some(buffered), Some(duration)) = (best.buffered, best.duration)
-            && buffered >= duration * BUFFER_MUST_REACH_FRACTION
-        {
-            break;
-        }
-    }
-
-    let duration = best
-        .duration
-        .expect("precondition: duration must be known before judging the buffer bar");
-    let buffered = best.buffered.unwrap_or(0.0);
-    let position = best.position.unwrap_or(0.0);
     assert!(
-        buffered >= duration * BUFFER_MUST_REACH_FRACTION,
-        "LABA-430: on a fully-downloaded progressive track the buffer bar \
-         reached only {buffered:.2}s of {duration:.2}s (position {position:.2}s); \
-         the decoded-ahead frontier cannot represent download progress"
+        consumed.saturating_mul(100) >= expected.saturating_mul(MIN_DOWNLOADED_FRACTION_PERCENT),
+        "LABA-430 precondition: stalled prefix was too small to expose an absolute range \
+         (consumed {consumed} of {expected} bytes)"
+    );
+    assert!(
+        progress.position_ms.saturating_mul(100)
+            < progress
+                .total_ms
+                .saturating_mul(MAX_POSITION_FRACTION_PERCENT),
+        "LABA-430 precondition: playback had already reached {}ms of {}ms before the partial \
+         buffer was observed",
+        progress.position_ms,
+        progress.total_ms
     );
 
-    tick_handle.abort();
+    assert!(
+        progress.buffered_ms.saturating_mul(100)
+            >= progress
+                .total_ms
+                .saturating_mul(MIN_BUFFERED_FRACTION_PERCENT),
+        "LABA-430: half the progressive body was downloaded, but the absolute buffer frontier \
+         reached only {}ms of {}ms at position {}ms; it still tracks decoded-ahead playback",
+        progress.buffered_ms,
+        progress.total_ms,
+        progress.position_ms
+    );
+
+    queue.clear();
 }
