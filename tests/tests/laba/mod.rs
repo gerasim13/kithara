@@ -2,6 +2,7 @@
 #[path = "../common/offline_player_harness.rs"]
 mod offline_player_harness;
 
+mod cache_commit_grows;
 mod lane_smoke;
 mod loaded_ranges_absolute;
 mod offline_resume;
