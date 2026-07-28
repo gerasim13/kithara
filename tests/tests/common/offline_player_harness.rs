@@ -4,7 +4,7 @@ use kithara::{
     audio::{EqBandConfig, StretchControls},
     bufpool::Region,
     decode::GaplessMode,
-    events::{Event, EventReceiver, PlayerEvent},
+    events::{Event, EventBus, EventReceiver, PlayerEvent},
     platform::sync::{Arc, Mutex},
     play::{PlayerConfig, PlayerImpl, SessionDispatcher},
 };
@@ -23,6 +23,7 @@ pub(crate) struct OfflinePlayerOptions {
     eq_layout: Option<Vec<EqBandConfig>>,
     #[builder(default)]
     gapless_mode: GaplessMode,
+    event_bus_capacity: Option<usize>,
     timestretch: Option<Arc<StretchControls>>,
 }
 
@@ -36,6 +37,7 @@ impl OfflinePlayerHarness {
             .gapless_mode(options.gapless_mode)
             .sample_rate(sample_rate)
             .session(Arc::clone(&session_dispatcher))
+            .maybe_bus(options.event_bus_capacity.map(EventBus::new))
             .byte_pool(region.byte_pool())
             .pcm_pool(region.pcm_pool())
             .maybe_eq_layout(options.eq_layout)

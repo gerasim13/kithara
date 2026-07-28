@@ -109,6 +109,18 @@ impl VariantControl for SpliceState {
         *self.target_variant.lock() = None;
     }
 
+    fn committed_variant_handoff(&self) -> Option<kithara_stream::VariantHandoff> {
+        None
+    }
+
+    fn close_variant_handoff(
+        &self,
+        _handoff: kithara_stream::VariantHandoff,
+        _exit: kithara_stream::VariantHandoffExit,
+    ) -> kithara_stream::VariantHandoffClose {
+        kithara_stream::VariantHandoffClose::Stale
+    }
+
     fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
         let range = self.active_layout().init_range.clone();
         if range.is_empty() {
@@ -120,6 +132,14 @@ impl VariantControl for SpliceState {
 
     fn has_variant_change_pending(&self) -> bool {
         self.pending_variant_change.load(Ordering::Acquire)
+    }
+
+    fn variant_handoff(&self) -> Option<kithara_stream::VariantHandoff> {
+        None
+    }
+
+    fn acknowledge_variant_handoff(&self, _handoff: kithara_stream::VariantHandoff) -> bool {
+        false
     }
 
     fn variant_change_target(&self) -> Option<usize> {
@@ -417,7 +437,7 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
         crate::pipeline::config::create_effects(initial_spec, None, &pcm_pool, Vec::new());
     let factory_byte_len = Arc::new(AtomicU64::new(0));
     let decoder_factory: DecoderFactory<SpliceStream> =
-        Arc::new(move |stream, info, base_offset| {
+        Arc::new(move |stream, info, base_offset, handoff| {
             let byte_len = stream
                 .len()
                 .map_or(0, |len| len.saturating_sub(base_offset));
@@ -431,7 +451,12 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
                     .maybe_byte_map(stream.byte_map())
                     .gapless_mode(GaplessMode::Disabled)
                     .build();
-            let input = stream.open_reader(ReaderHint::builder().base_offset(base_offset).build());
+            let input = stream.open_reader(
+                ReaderHint::builder()
+                    .base_offset(base_offset)
+                    .maybe_handoff(handoff)
+                    .build(),
+            );
             let decoder = DecodeFactory::create_from_media_info(input, &info, config)?;
             decoder.update_byte_len(byte_len);
             Ok(decoder)
@@ -610,18 +635,18 @@ async fn hls_aac_lc_same_variant_recreate_continuity_metric() {
                     let epoch = source.seek_engine.epoch();
                     track::start_recreating_decoder(
                         &mut source,
-                        RecreateState {
-                            cause: RecreateCause::VariantSwitch,
-                            media_info: media_info(active),
-                            next: RecreateNext::ApplySeek(SeekRequest {
+                        RecreateState::new(
+                            media_info(active),
+                            RecreateCause::VariantSwitch,
+                            RecreateNext::ApplySeek(SeekRequest {
                                 seek: SeekContext {
                                     epoch,
                                     target: chunk.meta.end_timestamp,
                                 },
                                 emit_request: false,
                             }),
-                            offset: state.active_layout().init_range.start,
-                        },
+                            state.active_layout().init_range.start,
+                        ),
                     );
                     recreated = true;
                     recreate_frame = Some(left.len());

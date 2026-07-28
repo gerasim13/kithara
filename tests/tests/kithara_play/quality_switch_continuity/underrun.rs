@@ -12,6 +12,7 @@ use super::*;
 
 const OUTPUT_RING_CHUNKS: usize = 1;
 const TARGET_SEGMENT_DELAY_MS: u64 = 250;
+const SLOW_TARGET_SEGMENT_DELAY_MS: u64 = 600;
 const OBSERVATION_FRAMES: usize = SAMPLE_RATE as usize * 3;
 const CAPTURE_FRAME: usize = SAMPLE_RATE as usize * 2;
 const TARGET_SWITCH_SEGMENT: usize = 3;
@@ -29,6 +30,15 @@ fn delayed_rebuild_fixture() -> HlsFixtureBuilder {
         segment_gte: None,
         variant: Some(FLAC),
         delay_ms: TARGET_SEGMENT_DELAY_MS,
+    }])
+}
+
+fn slow_target_rebuild_fixture() -> HlsFixtureBuilder {
+    fixture().delay_rules(vec![DelayRule {
+        segment_eq: Some(TARGET_SWITCH_SEGMENT),
+        segment_gte: None,
+        variant: Some(FLAC),
+        delay_ms: SLOW_TARGET_SEGMENT_DELAY_MS,
     }])
 }
 
@@ -267,5 +277,48 @@ async fn delayed_target_rebuild_keeps_the_player_output_continuous(
     assert!(
         switched_buckets <= control_buckets,
         "Cochlea found switch-only silent buckets during delayed target rebuild: switched={switched_buckets}, control={control_buckets}, target_delay_ms={TARGET_SEGMENT_DELAY_MS}",
+    );
+}
+
+#[kithara::test(
+    tokio,
+    multi_thread,
+    native,
+    serial,
+    timeout(Duration::from_secs(180)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "3")
+)]
+#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple(DecoderBackend::Apple)
+)]
+async fn manual_aac_to_flac_switch_has_no_gap_when_target_preparation_exceeds_decoder_lead(
+    #[case] backend: DecoderBackend,
+) {
+    let server = TestServerHelper::new().await;
+    let created = server
+        .create_hls(slow_target_rebuild_fixture())
+        .await
+        .expect("create slow AAC-to-FLAC quality-switch fixture");
+    let master_url = created.master_url();
+
+    let control = render_tiny_ring_control(&master_url, backend).await;
+    let switched = render_tiny_ring_switch(&master_url, backend).await;
+    assert_eq!(
+        switched.capture_frame, control.capture_frame,
+        "switch and no-switch control must start at the same source frame",
+    );
+    let control_silence = longest_silent_run(&control.samples);
+    let switched_silence = longest_silent_run(&switched.samples);
+    assert!(
+        switched_silence <= control_silence.saturating_add(MAX_EXTRA_SILENT_FRAMES),
+        "manual AAC-to-FLAC switch inserted an audible silent gap: switched={switched_silence} frames, control={control_silence} frames, target_delay_ms={SLOW_TARGET_SEGMENT_DELAY_MS}",
+    );
+    let control_buckets = cochlea_silent_buckets(&control.samples);
+    let switched_buckets = cochlea_silent_buckets(&switched.samples);
+    assert!(
+        switched_buckets <= control_buckets,
+        "Cochlea found switch-only silent buckets during manual AAC-to-FLAC switch: switched={switched_buckets}, control={control_buckets}, target_delay_ms={SLOW_TARGET_SEGMENT_DELAY_MS}",
     );
 }

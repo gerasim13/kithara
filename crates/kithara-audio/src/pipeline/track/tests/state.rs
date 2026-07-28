@@ -30,12 +30,12 @@ fn seek_req() -> SeekRequest {
 }
 
 fn recreate_state() -> RecreateState {
-    RecreateState {
-        cause: RecreateCause::FormatBoundary,
-        media_info: MediaInfo::default(),
-        next: RecreateNext::Decode,
-        offset: 0,
-    }
+    RecreateState::new(
+        MediaInfo::default(),
+        RecreateCause::FormatBoundary,
+        RecreateNext::Decode,
+        0,
+    )
 }
 
 fn rebuild_state() -> RebuildState {
@@ -69,12 +69,12 @@ fn playing_for_state_active_states_are_true() {
         .erase()
     ));
     assert!(playing_for_state(
-        &Track::<RecreatingDecoder>::new(RecreateState {
-            cause: RecreateCause::FormatBoundary,
-            media_info: MediaInfo::default(),
-            next: RecreateNext::Decode,
-            offset: 0,
-        })
+        &Track::<RecreatingDecoder>::new(RecreateState::new(
+            MediaInfo::default(),
+            RecreateCause::FormatBoundary,
+            RecreateNext::Decode,
+            0,
+        ))
         .erase()
     ));
     assert!(playing_for_state(
@@ -125,12 +125,12 @@ fn playing_matrix_covers_every_transition_endpoint() {
             true,
         ),
         (
-            Track::<RecreatingDecoder>::new(RecreateState {
-                cause: RecreateCause::VariantSwitch,
-                media_info: MediaInfo::default(),
-                next: RecreateNext::Decode,
-                offset: 0,
-            })
+            Track::<RecreatingDecoder>::new(RecreateState::new(
+                MediaInfo::default(),
+                RecreateCause::VariantSwitch,
+                RecreateNext::Decode,
+                0,
+            ))
             .erase(),
             true,
         ),

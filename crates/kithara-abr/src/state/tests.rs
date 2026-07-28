@@ -4,13 +4,14 @@ use kithara_events::{
 use kithara_platform::{
     CancelToken,
     sync::Arc,
+    thread,
     time::{Duration, Duration as StdDuration, Instant},
 };
 use kithara_test_utils::kithara;
 use proptest::prelude::*;
 
 use super::{AbrDecision, AbrState, AbrView};
-use crate::{Abr, AbrController, AbrSettings, ThroughputEstimator};
+use crate::{Abr, AbrController, AbrSettings, ThroughputEstimator, state::LockTransition};
 
 /// Canonical 3-variant fixture used by every test in this module. Private
 /// to the test module so it never leaks into the public API.
@@ -63,6 +64,27 @@ fn view_with_bw<'a>(
         buffer_ahead: None,
         bytes_downloaded: 10 * 1024 * 1024,
     }
+}
+
+fn apply_transition_and_lock(state: &AbrState, from: VariantIndex, to: VariantIndex, now: Instant) {
+    state.request_target(to, AbrReason::UpSwitch);
+    let decision = state
+        .peek_pending_decision(from)
+        .expect("pending transition must produce a decision");
+    assert_eq!(
+        decision,
+        AbrDecision::UpSwitch {
+            from,
+            to,
+            reason: AbrReason::UpSwitch,
+        }
+    );
+    assert!(
+        state
+            .claim_pending_decision(&decision)
+            .expect("exact pending transition must be claimable")
+            .apply_and_lock(now)
+    );
 }
 
 #[kithara::test]
@@ -216,6 +238,41 @@ fn lock_is_refcounted() {
     assert!(!state.is_locked());
 }
 
+#[kithara::test(loom)]
+fn concurrent_seek_observers_own_one_lock_level() {
+    let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
+    let observer = Arc::clone(&state);
+    let join = thread::spawn(move || observer.set_seek_locked(true));
+    let _ = state.set_seek_locked(true);
+    assert!(join.join().is_ok());
+
+    assert_eq!(state.lock_count(), 1);
+    assert_eq!(state.set_seek_locked(false), LockTransition::Unlocked);
+    assert_eq!(state.lock_count(), 0);
+}
+
+#[kithara::test]
+fn seek_owner_does_not_release_another_lock_owner() {
+    let state = AbrState::new(AbrMode::Auto(None));
+    state.lock();
+
+    assert_eq!(
+        state.set_seek_locked(true),
+        LockTransition::Unchanged,
+        "the aggregate was already locked by another owner"
+    );
+    assert_eq!(state.lock_count(), 2);
+    assert_eq!(
+        state.set_seek_locked(false),
+        LockTransition::Unchanged,
+        "releasing seek ownership must leave the generic lock intact"
+    );
+    assert_eq!(state.lock_count(), 1);
+
+    state.unlock();
+    assert!(!state.is_locked());
+}
+
 #[kithara::test]
 fn pending_target_is_empty_on_fresh_state() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
@@ -310,6 +367,351 @@ fn apply_decision_preserves_pending_overwritten_after_peek() {
         Some(VariantIndex::new(3)),
         "new pending must survive an apply for a different target"
     );
+}
+
+#[kithara::test]
+fn claim_pending_decision_rejects_reason_overwritten_after_peek() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    let decision = state
+        .peek_pending_decision(VariantIndex::new(0))
+        .expect("pending request must produce a decision");
+    state.request_target(VariantIndex::new(2), AbrReason::EscapeStalled);
+
+    assert!(state.claim_pending_decision(&decision).is_none());
+    assert_eq!(state.current_variant_index(), VariantIndex::new(0));
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
+}
+
+#[kithara::test]
+fn claim_pending_decision_rejects_stale_from_variant() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(1))));
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    let stale = AbrDecision::UpSwitch {
+        from: VariantIndex::new(0),
+        to: VariantIndex::new(2),
+        reason: AbrReason::UpSwitch,
+    };
+
+    assert!(state.claim_pending_decision(&stale).is_none());
+    assert_eq!(state.current_variant_index(), VariantIndex::new(1));
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
+}
+
+#[kithara::test]
+fn dropping_pending_decision_claim_preserves_intent() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    let decision = state
+        .peek_pending_decision(VariantIndex::new(0))
+        .expect("pending request must produce a decision");
+
+    let claim = state
+        .claim_pending_decision(&decision)
+        .expect("exact pending decision must be claimable");
+    drop(claim);
+
+    assert_eq!(state.current_variant_index(), VariantIndex::new(0));
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
+}
+
+#[kithara::test]
+fn applying_pending_decision_claim_publishes_exact_intent() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    let decision = state
+        .peek_pending_decision(VariantIndex::new(0))
+        .expect("pending request must produce a decision");
+    state
+        .claim_pending_decision(&decision)
+        .expect("exact pending decision must be claimable")
+        .apply(Instant::now());
+
+    assert_eq!(state.current_variant_index(), VariantIndex::new(2));
+    assert_eq!(state.pending_target(), None);
+}
+
+#[kithara::test]
+fn transition_abort_restores_exact_source_and_clears_transaction() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    apply_transition_and_lock(
+        &state,
+        VariantIndex::new(0),
+        VariantIndex::new(1),
+        Instant::now(),
+    );
+
+    assert_eq!(state.current_variant_index(), VariantIndex::new(1));
+    assert_eq!(state.lock_count(), 1);
+    assert!(state.restore_audible_variant(VariantIndex::new(1), VariantIndex::new(0)));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(0));
+    assert!(
+        !state.restore_audible_variant(VariantIndex::new(1), VariantIndex::new(0)),
+        "an exact transition transaction must close only once"
+    );
+    state.unlock();
+    assert_eq!(state.lock_count(), 0);
+}
+
+#[kithara::test]
+fn transition_abort_rebases_newer_pending_decision_to_audible_variant() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    apply_transition_and_lock(
+        &state,
+        VariantIndex::new(0),
+        VariantIndex::new(1),
+        Instant::now(),
+    );
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+
+    assert!(state.restore_audible_variant(VariantIndex::new(1), VariantIndex::new(0)));
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
+    state.unlock();
+
+    assert_eq!(
+        state.peek_pending_decision(VariantIndex::new(0)),
+        Some(AbrDecision::UpSwitch {
+            from: VariantIndex::new(0),
+            to: VariantIndex::new(2),
+            reason: AbrReason::UpSwitch,
+        }),
+        "surviving intent must be claimable from the actual audible variant"
+    );
+}
+
+#[kithara::test]
+fn transition_abort_is_a_noop_for_a_stale_expected_target() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    apply_transition_and_lock(
+        &state,
+        VariantIndex::new(0),
+        VariantIndex::new(1),
+        Instant::now(),
+    );
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+
+    assert!(!state.restore_audible_variant(VariantIndex::new(2), VariantIndex::new(0)));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(1));
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
+    assert_eq!(state.lock_count(), 1);
+
+    assert!(state.restore_audible_variant(VariantIndex::new(1), VariantIndex::new(0)));
+    state.unlock();
+}
+
+#[kithara::test]
+fn transition_abort_is_a_noop_for_a_stale_source() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    apply_transition_and_lock(
+        &state,
+        VariantIndex::new(0),
+        VariantIndex::new(1),
+        Instant::now(),
+    );
+
+    assert!(!state.restore_audible_variant(VariantIndex::new(1), VariantIndex::new(2)));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(1));
+    assert_eq!(state.lock_count(), 1);
+
+    assert!(state.restore_audible_variant(VariantIndex::new(1), VariantIndex::new(0)));
+    state.unlock();
+}
+
+#[kithara::test]
+fn transition_abort_restores_switch_timestamp_for_immediate_alternate_decision() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    let variants = test_variants_3();
+    let settings = AbrSettings {
+        min_switch_interval: Duration::from_secs(30),
+        min_buffer_for_up_switch: Duration::ZERO,
+        ..AbrSettings::default()
+    };
+    let first_switch_at = Instant::now();
+    state.apply_decision(
+        &AbrDecision::UpSwitch {
+            from: VariantIndex::new(0),
+            to: VariantIndex::new(1),
+            reason: AbrReason::UpSwitch,
+        },
+        first_switch_at,
+    );
+    let failed_switch_at = first_switch_at + Duration::from_secs(31);
+    apply_transition_and_lock(
+        &state,
+        VariantIndex::new(1),
+        VariantIndex::new(2),
+        failed_switch_at,
+    );
+
+    assert!(state.restore_audible_variant(VariantIndex::new(2), VariantIndex::new(1)));
+    state.unlock();
+    let alternate = state.decide(
+        &view_with_bw(Some(300_000), &variants, &settings),
+        failed_switch_at + Duration::from_secs(1),
+    );
+
+    assert_eq!(
+        alternate,
+        AbrDecision::DownSwitch {
+            from: VariantIndex::new(1),
+            to: VariantIndex::new(0),
+            reason: AbrReason::DownSwitch,
+        },
+        "the aborted switch timestamp must not throttle the next decision"
+    );
+}
+
+#[kithara::test]
+fn finalized_transition_cannot_be_aborted_and_unlocks_normally() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    apply_transition_and_lock(
+        &state,
+        VariantIndex::new(0),
+        VariantIndex::new(1),
+        Instant::now(),
+    );
+
+    assert!(
+        !state.finalize_transition(VariantIndex::new(0), VariantIndex::new(2)),
+        "a stale target must not finalize the live transaction"
+    );
+    assert!(state.finalize_transition(VariantIndex::new(0), VariantIndex::new(1)));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(1));
+    assert!(
+        !state.finalize_transition(VariantIndex::new(0), VariantIndex::new(1)),
+        "an exact transition transaction must finalize only once"
+    );
+    assert!(
+        !state.restore_audible_variant(VariantIndex::new(1), VariantIndex::new(0)),
+        "finalization must forget rollback authority"
+    );
+    state.unlock();
+    assert_eq!(state.lock_count(), 0);
+}
+
+#[kithara::test]
+fn locked_state_rejects_a_precomputed_decision() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    let decision = state
+        .peek_pending_decision(VariantIndex::new(0))
+        .expect("pending request must produce a decision");
+
+    state.lock();
+    state.apply_decision(&decision, Instant::now());
+
+    assert_eq!(state.current_variant_index(), VariantIndex::new(0));
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
+}
+
+#[kithara::test]
+fn manual_mode_rejects_a_precomputed_auto_decision() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    let decision = AbrDecision::UpSwitch {
+        from: VariantIndex::new(0),
+        to: VariantIndex::new(2),
+        reason: AbrReason::UpSwitch,
+    };
+
+    state.set_mode(AbrMode::Manual(VariantIndex::new(0)));
+    state.apply_decision(&decision, Instant::now());
+
+    assert_eq!(state.current_variant_index(), VariantIndex::new(0));
+    assert_eq!(state.mode(), AbrMode::Manual(VariantIndex::new(0)));
+}
+
+#[kithara::test]
+fn auto_mode_rejects_a_precomputed_manual_decision() {
+    let state = AbrState::new(AbrMode::Manual(VariantIndex::new(0)));
+    let decision = AbrDecision::Manual {
+        from: VariantIndex::new(0),
+        to: VariantIndex::new(2),
+    };
+
+    state.set_mode(AbrMode::Auto(None));
+    state.apply_decision(&decision, Instant::now());
+
+    assert_eq!(state.current_variant_index(), VariantIndex::new(0));
+    assert_eq!(state.mode(), AbrMode::Auto(None));
+}
+
+#[kithara::test]
+fn apply_rejects_a_decision_from_a_stale_variant() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(1))));
+    let decision = AbrDecision::UpSwitch {
+        from: VariantIndex::new(0),
+        to: VariantIndex::new(2),
+        reason: AbrReason::UpSwitch,
+    };
+
+    state.apply_decision(&decision, Instant::now());
+
+    assert_eq!(state.current_variant_index(), VariantIndex::new(1));
+}
+
+#[kithara::test]
+fn mode_change_invalidates_an_issued_decision() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    let variants = test_variants_3();
+    let settings = settings_fast();
+    let view = view_with_bw(Some(10_000_000), &variants, &settings);
+    let decision = state.decide(&view, Instant::now());
+
+    state.set_mode(AbrMode::Manual(VariantIndex::new(0)));
+    state.apply_decision(&decision, Instant::now());
+
+    assert_eq!(state.current_variant_index(), VariantIndex::new(0));
+    assert_eq!(state.pending_target(), None);
+}
+
+#[kithara::test]
+fn intervening_publications_invalidate_an_aba_decision() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    let variants = test_variants_3();
+    let settings = settings_fast();
+    let view = view_with_bw(Some(10_000_000), &variants, &settings);
+    let stale = state.decide(&view, Instant::now());
+    let now = Instant::now();
+
+    state.request_target(VariantIndex::new(1), AbrReason::UpSwitch);
+    let up = state
+        .peek_pending_decision(VariantIndex::new(0))
+        .expect("first exact publication");
+    state
+        .claim_pending_decision(&up)
+        .expect("first decision remains exact")
+        .apply(now);
+
+    state.request_target(VariantIndex::new(0), AbrReason::DownSwitch);
+    let down = state
+        .peek_pending_decision(VariantIndex::new(1))
+        .expect("second exact publication");
+    state
+        .claim_pending_decision(&down)
+        .expect("second decision remains exact")
+        .apply(now);
+
+    state.apply_decision(&stale, now);
+
+    assert_eq!(state.current_variant_index(), VariantIndex::new(0));
+    assert_eq!(state.pending_target(), None);
+}
+
+#[kithara::test]
+fn request_after_applied_claim_remains_pending() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    let decision = state
+        .peek_pending_decision(VariantIndex::new(0))
+        .expect("pending request must produce a decision");
+    state
+        .claim_pending_decision(&decision)
+        .expect("exact pending decision must be claimable")
+        .apply(Instant::now());
+    state.request_target(VariantIndex::new(1), AbrReason::DownSwitch);
+
+    assert_eq!(state.current_variant_index(), VariantIndex::new(2));
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(1)));
 }
 
 #[kithara::test]

@@ -3,6 +3,8 @@
 
 #[path = "quality_switch_continuity/continuity.rs"]
 mod continuity;
+#[path = "quality_switch_continuity/desktop.rs"]
+mod desktop;
 #[path = "quality_switch_continuity/timeline.rs"]
 mod timeline;
 #[path = "quality_switch_continuity/underrun.rs"]

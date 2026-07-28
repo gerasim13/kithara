@@ -17,6 +17,7 @@ use crate::{
     codec::{CodecPriming, FrameCodec},
     composed::{ComposedDecoder, DecoderRuntime},
     demuxer::{Demuxer, TrackInfo},
+    duration_for_frames,
     fmp4::{
         Fmp4SegmentDemuxer,
         parsing::{CodecConfig, parse_init, parse_segment_frames},
@@ -24,6 +25,12 @@ use crate::{
     symphonia::{SymphoniaCodec, SymphoniaConfig},
     traits::{BoxedSource, Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
 };
+
+struct Consts;
+
+impl Consts {
+    const AAC_PACKET_FRAMES: u64 = 1024;
+}
 
 /// Fixed-layout in-memory test source built from init+segment fixtures.
 /// Records every absolute byte offset hit by `Read::read` so tests can
@@ -114,13 +121,6 @@ fn pull_one_chunk(
     None
 }
 
-/// RED scaffold: a freshly opened `Fmp4SegmentDemuxer` always restarts at
-/// the layout's seg-0 (`open` hardcodes `next_segment_index = 0`), so ABR
-/// variant-switch `recreate_decoder` restarts playback at the new variant's
-/// seg-0 instead of resuming. Pins the broken observable; invert to
-/// `timestamp >= resume_point` when a non-zero resume API lands. Timestamp
-/// is bounded (not 0) because the fdk-aac adapter strips ~1024 frames of
-/// algo delay, landing the first chunk at packet 1 (≈46 ms @ 44.1 kHz).
 #[kithara::test]
 fn red_open_always_starts_at_layout_seg_0() {
     let (blob, segmented) = build_test_layout(TestLayoutCodec::Aac, 3);
@@ -334,6 +334,35 @@ fn symphonia_aac_decode_is_bit_identical_across_passes() {
         pcm_a, pcm_b,
         "decode_ref must be deterministic and bit-identical (no sample drift)"
     );
+}
+
+#[kithara::test]
+fn symphonia_aac_decoded_pts_tracks_the_frames_it_emitted() {
+    let pool = PcmPool::default();
+    let (mut codec, seg, ranges) = aac_codec_and_frames();
+    assert!(!ranges.is_empty(), "segment yielded no AAC frames");
+
+    let mut emitted = 0u64;
+    for (index, &(offset, size)) in ranges.iter().enumerate() {
+        let packet = u64::try_from(index).expect("packet index fits u64");
+        let rate = codec.spec().sample_rate.get();
+        let pts = duration_for_frames(rate, packet * Consts::AAC_PACKET_FRAMES);
+        let mut buf = pool.get();
+        let frames = codec
+            .decode_frame(&seg[offset..offset + size], pts, &[], &mut buf)
+            .expect("BUG: decode AAC frame");
+        if frames == 0 {
+            continue;
+        }
+        let labelled = codec.decoded_pts(pts);
+        assert_eq!(
+            labelled,
+            duration_for_frames(codec.spec().sample_rate.get(), emitted),
+            "AAC chunk {index} is labelled {labelled:?}, but the codec has emitted {emitted} frames since the packet clock started",
+        );
+        emitted = emitted.saturating_add(u64::from(frames));
+    }
+    assert!(emitted > 0, "decode produced no PCM");
 }
 
 /// R-tovec: a warm per-packet AAC decode loop must not grow the pool's

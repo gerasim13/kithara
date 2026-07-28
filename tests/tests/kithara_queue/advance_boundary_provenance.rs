@@ -4,7 +4,7 @@ use std::path::Path;
 
 use kithara::{
     audio::generate_log_spaced_bands,
-    events::{AbrEvent, AdvanceReason, Event, EventReceiver},
+    events::{AbrEvent, AdvanceReason, AudioEvent, Event, EventReceiver, SeekLifecycleStage},
     hls::AbrMode,
     platform::{
         sync::Arc,
@@ -36,6 +36,8 @@ const SEGMENT_SECS: f64 = 2.0;
 const REAL_GEOMETRY_SEGMENT_SECS: f64 = 6.0;
 const BLOCK_FRAMES: usize = 512;
 const BLOCK_BUDGET: usize = 2_400;
+/// Keeps lifecycle events lossless across one synchronous render block.
+const SEEK_EVENT_BUS_CAPACITY: usize = 4_096;
 const CROSSFADE_BLOCK_BUDGET: usize = 4_500;
 const REAL_GEOMETRY_BLOCK_BUDGET: usize = 9_000;
 const WINDOW_FRAMES: usize = 64;
@@ -476,7 +478,8 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k_real
 )]
 async fn natural_eof_advance_emits_only_b_flac_resampled_48k(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let setup = setup_queue_with_sample_rate(&server, &temp_dir, true, RESAMPLED_RENDER_RATE).await;
+    let setup =
+        setup_queue_with_sample_rate(&server, &temp_dir, true, RESAMPLED_RENDER_RATE, None).await;
 
     let (rendered, expected_a_frames) = render_until_b_with_postroll(
         &setup.queue,
@@ -729,9 +732,16 @@ async fn natural_eof_advance_emits_only_b_flac_crossfade_5s_resampled_48k(temp_d
 )]
 async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let setup = setup_queue(&server, &temp_dir, true).await;
+    let setup = setup_queue_with_sample_rate(
+        &server,
+        &temp_dir,
+        true,
+        SAMPLE_RATE,
+        Some(SEEK_EVENT_BUS_CAPACITY),
+    )
+    .await;
 
-    let (rendered, seek_issue_frame, duration) =
+    let (rendered, seek_issue_frame, landing_observed_frame, duration) =
         render_seek_near_end_until_b_with_postroll(&setup.queue, &setup.harness, SAMPLE_RATE).await;
     let left_raw = deinterleave_left(&rendered, usize::from(CHANNELS));
     let left = normalized_left(&left_raw, setup.queue.current_index());
@@ -749,7 +759,8 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
         .unwrap_or_else(|| {
             panic!(
                 "seek landing must reach the expected near-EOF phase; \
-                     seek_issue_frame={seek_issue_frame}; {}",
+                 seek_issue_frame={seek_issue_frame}; \
+                 landing_observed_frame={landing_observed_frame}; {}",
                 dump(
                     &[],
                     &runs,
@@ -792,7 +803,8 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
     assert!(
         replays.is_empty(),
         "post-seek track A phase must be monotonic until B starts; \
-         seek_issue_frame={seek_issue_frame}; {}",
+         seek_issue_frame={seek_issue_frame}; \
+         landing_observed_frame={landing_observed_frame}; {}",
         dump(
             &replays,
             &runs,
@@ -945,6 +957,13 @@ struct RenderProgress {
     descending_seen_at: Option<usize>,
 }
 
+#[derive(Default)]
+struct SeekTrace {
+    epoch: Option<u64>,
+    output_committed: bool,
+    landing_block_start: Option<usize>,
+}
+
 fn with_autoplay(mut config: QueueConfig, should_autoplay: bool) -> QueueConfig {
     config.should_autoplay = should_autoplay;
     config
@@ -1003,7 +1022,7 @@ fn crossfade_eq_stretch_player_config(timestretch: &Arc<StretchControls>) -> Off
 }
 
 async fn setup_queue(server: &TestServerHelper, temp_dir: &TestTempDir, flac: bool) -> QueueSetup {
-    setup_queue_with_sample_rate(server, temp_dir, flac, SAMPLE_RATE).await
+    setup_queue_with_sample_rate(server, temp_dir, flac, SAMPLE_RATE, None).await
 }
 
 async fn setup_queue_with_sample_rate(
@@ -1011,10 +1030,12 @@ async fn setup_queue_with_sample_rate(
     temp_dir: &TestTempDir,
     flac: bool,
     render_sample_rate: u32,
+    event_bus_capacity: Option<usize>,
 ) -> QueueSetup {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
+            .maybe_event_bus_capacity(event_bus_capacity)
             .build(),
         render_sample_rate,
     );
@@ -1576,15 +1597,32 @@ async fn render_seek_near_end_until_b_with_postroll(
     queue: &Queue,
     harness: &OfflinePlayerHarness,
     render_sample_rate: u32,
-) -> (Vec<f32>, usize, f64) {
+) -> (Vec<f32>, usize, usize, f64) {
     let mut progress = RenderProgress::new();
     let mut seek_issue_frame: Option<usize> = None;
     let mut seek_duration: Option<f64> = None;
+    let mut seek_events: Option<EventReceiver> = None;
+    let mut seek = SeekTrace::default();
 
     for _ in 0..BLOCK_BUDGET {
+        let block_start_frame = progress.rendered_frames();
         let _ = queue.tick();
         let block = harness.render(BLOCK_FRAMES);
         progress.push_block(&block, ASCENDING_TOL, seek_issue_frame);
+        if let Some(events) = seek_events.as_mut() {
+            drain_seek_events(events, &mut seek, block_start_frame);
+            if seek.landing_block_start.is_none() {
+                assert_eq!(
+                    queue.current_index(),
+                    Some(0),
+                    "production failure: queue advanced from A before seek commit"
+                );
+                assert!(
+                    progress.descending_seen_at.is_none(),
+                    "production failure: B PCM appeared before seek commit"
+                );
+            }
+        }
 
         if seek_issue_frame.is_none()
             && progress.rendered_frames()
@@ -1592,9 +1630,11 @@ async fn render_seek_near_end_until_b_with_postroll(
             && let Some(duration) = queue.duration_seconds()
             && duration > 7.0
         {
+            let events = queue.subscribe();
             queue.seek(duration - SEEK_OFFSET_SECS).expect("seek");
             seek_issue_frame = Some(progress.rendered_frames());
             seek_duration = Some(duration);
+            seek_events = Some(events);
         }
 
         time::sleep(Duration::from_millis(1)).await;
@@ -1604,11 +1644,71 @@ async fn render_seek_near_end_until_b_with_postroll(
         }
     }
 
+    let landing_block_start = seek.landing_block_start.unwrap_or_else(|| {
+        panic!(
+            "seek must emit same-epoch OutputCommitted and SeekComplete before B; \
+             seek_issue_frame={seek_issue_frame:?}; current_index={:?}; epoch={:?}; \
+             output_committed={}",
+            queue.current_index(),
+            seek.epoch,
+            seek.output_committed
+        )
+    });
+
     (
         progress.rendered,
         seek_issue_frame.expect("seek must be issued after duration becomes available"),
+        landing_block_start,
         seek_duration.expect("duration must be recorded when seek is issued"),
     )
+}
+
+fn drain_seek_events(events: &mut EventReceiver, seek: &mut SeekTrace, block_start_frame: usize) {
+    loop {
+        match events.try_recv().map(|env| env.event) {
+            Ok(Event::Audio(AudioEvent::SeekLifecycle {
+                seek_epoch,
+                stage: SeekLifecycleStage::SeekRequest,
+                ..
+            })) => assert_eq!(
+                *seek.epoch.get_or_insert(seek_epoch),
+                seek_epoch,
+                "oracle observed a second seek epoch before completion"
+            ),
+            Ok(Event::Audio(AudioEvent::SeekLifecycle {
+                seek_epoch,
+                stage: SeekLifecycleStage::OutputCommitted,
+                ..
+            })) => {
+                assert_eq!(
+                    seek.epoch,
+                    Some(seek_epoch),
+                    "OutputCommitted preceded its matching SeekRequest"
+                );
+                seek.output_committed = true;
+            }
+            Ok(Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. })) => {
+                assert_eq!(
+                    seek.epoch,
+                    Some(seek_epoch),
+                    "SeekComplete preceded its matching SeekRequest"
+                );
+                assert!(
+                    seek.output_committed,
+                    "production failure: SeekComplete preceded same-epoch OutputCommitted"
+                );
+                seek.landing_block_start.get_or_insert(block_start_frame);
+            }
+            Ok(Event::Audio(AudioEvent::SeekRejected { epoch, target }))
+                if seek.epoch.is_none_or(|expected| expected == epoch) =>
+            {
+                panic!("production failure: seek epoch {epoch} rejected target {target:?}");
+            }
+            Ok(_) => {}
+            Err(TryRecvError::Empty) => break,
+            Err(error) => panic!("oracle event receiver failed while tracing seek: {error}"),
+        }
+    }
 }
 
 async fn render_until_tone_b_with_postroll(

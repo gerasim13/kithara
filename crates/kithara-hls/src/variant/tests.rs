@@ -23,8 +23,8 @@ use kithara_test_utils::kithara;
 use url::Url;
 
 use super::{
-    HlsVariant, PlanCtx, ReadLease, ReadSession, SegmentActivateParams, SizeDemand, VariantParts,
-    segment_placeholder_size,
+    HlsVariant, PlanCtx, ReadLease, ReadSession, SegmentActivateParams, SizeDemand,
+    TargetBodyReadiness, VariantParts, segment_placeholder_size,
 };
 use crate::{
     config::SizeProbeMethod,
@@ -282,6 +282,10 @@ fn queue_has_init(lease: &ReadLease) -> bool {
         .lock()
         .iter()
         .any(|p| matches!(p, PlannedFetch::Init))
+}
+
+fn queued(lease: &ReadLease) -> Vec<PlannedFetch> {
+    lease.queue.lock().iter().copied().collect()
 }
 
 fn collect_events(events: &mut kithara_events::EventReceiver) -> Vec<Event> {
@@ -1098,6 +1102,103 @@ fn segment_aware_rebuild_with_decoder_probe_fetches_recreate_preroll_segment() {
         queue_seg_indices(&v),
         vec![0, 1, 2, 3, 4],
         "format-boundary decoder seek must fetch the codec pre-roll segment"
+    );
+}
+
+#[kithara::test]
+fn target_body_window_is_ordered_and_ready_only_when_complete() {
+    let ctx = test_ctx(5);
+    let lease = VariantParts {
+        init: make_init(48, &ctx.scope),
+        segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    let lease = lease_over(
+        lease,
+        Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
+    );
+
+    lease.start_target_body(2, 3);
+
+    assert_eq!(
+        queued(&lease),
+        vec![
+            PlannedFetch::Init,
+            PlannedFetch::Segment(0),
+            PlannedFetch::Segment(1),
+            PlannedFetch::Segment(2),
+            PlannedFetch::Segment(3),
+        ]
+    );
+    assert_eq!(
+        lease.target_body_readiness(2, 3),
+        TargetBodyReadiness::Pending
+    );
+
+    lease.mark_init_loaded();
+    for segment in &lease.segments()[0..3] {
+        segment.state().mark_loaded();
+    }
+    assert_eq!(
+        lease.target_body_readiness(2, 3),
+        TargetBodyReadiness::Pending
+    );
+    lease.segments()[3].state().mark_loaded();
+    assert_eq!(
+        lease.target_body_readiness(2, 3),
+        TargetBodyReadiness::Ready
+    );
+}
+
+#[kithara::test]
+fn target_body_extension_merges_and_requeues_an_evicted_prefix() {
+    let ctx = test_ctx(5);
+    let lease = VariantParts {
+        init: make_init(48, &ctx.scope),
+        segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    let lease = lease_over(
+        lease,
+        Arc::new(TimelineState::new()) as Arc<dyn SeekObserve>,
+    );
+    lease.start_target_body(1, 2);
+    lease.segments()[0].state().mark_loaded();
+    lease
+        .queue
+        .lock()
+        .retain(|planned| *planned != PlannedFetch::Segment(0));
+
+    lease.extend_target_body(1, 4);
+    assert_eq!(
+        queued(&lease),
+        vec![
+            PlannedFetch::Init,
+            PlannedFetch::Segment(1),
+            PlannedFetch::Segment(2),
+            PlannedFetch::Segment(3),
+            PlannedFetch::Segment(4),
+        ],
+        "loaded work stays out while the queued suffix is extended in order"
+    );
+
+    lease.segments()[0].state().mark_missing();
+    lease.extend_target_body(1, 4);
+    assert_eq!(
+        queued(&lease),
+        vec![
+            PlannedFetch::Init,
+            PlannedFetch::Segment(0),
+            PlannedFetch::Segment(1),
+            PlannedFetch::Segment(2),
+            PlannedFetch::Segment(3),
+            PlannedFetch::Segment(4),
+        ],
+        "an evicted required prefix is restored ahead of the existing tail"
     );
 }
 

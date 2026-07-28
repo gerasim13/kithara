@@ -21,7 +21,8 @@ mod support {
         ids::SegmentIndex,
         playlist::{PlaylistState, SegmentState, VariantState},
         segment::{
-            MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState, SegmentSource,
+            InitSegment, MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState,
+            SegmentSource,
         },
         signal::SizeSignal,
         stream::{HlsCoord, HlsCoordEnv},
@@ -35,6 +36,8 @@ mod support {
         pub(crate) container: ContainerFormat,
         pub(crate) segments: usize,
         pub(crate) segment_size: u64,
+        segment_duration: Duration,
+        has_init: bool,
         /// Whether the playlist declares the byte length (`#EXT-X-BYTERANGE`).
         /// A variant without it carries routeable placeholders, so anything that
         /// needs a real length has to probe for it.
@@ -48,8 +51,20 @@ mod support {
                 container,
                 segments,
                 segment_size: 100,
+                segment_duration: Duration::from_secs(2),
+                has_init: false,
                 exact_sizes: true,
             }
+        }
+
+        pub(crate) fn with_init(mut self) -> Self {
+            self.has_init = true;
+            self
+        }
+
+        pub(crate) fn with_segment_duration(mut self, duration: Duration) -> Self {
+            self.segment_duration = duration;
+            self
         }
 
         pub(crate) fn placeholder_sizes(mut self) -> Self {
@@ -75,6 +90,12 @@ mod support {
         format!("https://example.com/v{variant}-seg{seg}.m4s")
             .parse()
             .expect("fixture segment url")
+    }
+
+    fn init_url(variant: usize) -> url::Url {
+        format!("https://example.com/v{variant}-init.mp4")
+            .parse()
+            .expect("fixture init url")
     }
 
     fn plan_ctx(
@@ -119,11 +140,11 @@ mod support {
                 .map(|(v_idx, spec)| VariantState {
                     codec: Some(spec.codec),
                     container: Some(spec.container),
-                    init_url: None,
+                    init_url: spec.has_init.then(|| init_url(v_idx)),
                     segments: (0..spec.segments)
                         .map(|seg| SegmentState {
                             url: segment_url(v_idx, seg),
-                            duration: Duration::from_secs(2),
+                            duration: spec.segment_duration,
                             byte_range_len: spec.exact_sizes.then_some(spec.segment_size),
                             index: SegmentIndex::try_new(seg, spec.segments).expect("in-bounds"),
                         })
@@ -143,6 +164,23 @@ mod support {
                 .iter()
                 .enumerate()
                 .map(|(v_idx, spec)| {
+                    let init = spec.has_init.then(|| {
+                        let url = init_url(v_idx);
+                        Segment::Init(InitSegment {
+                            resource_id: ctx
+                                .scope
+                                .key(&AssetResource::Url(url.clone()))
+                                .expect("init key"),
+                            url,
+                            state: SegmentSlotState::missing(),
+                            size: SegmentSize::seed(32),
+                            content: SegmentContent::Plain,
+                            source: SegmentSource::new(
+                                ctx.scope.store().clone(),
+                                ctx.master_cancel.child(),
+                            ),
+                        })
+                    });
                     let segments = (0..spec.segments)
                         .map(|seg| {
                             let url = segment_url(v_idx, seg);
@@ -163,13 +201,15 @@ mod support {
                                     ctx.scope.store().clone(),
                                     ctx.master_cancel.child(),
                                 ),
-                                decode_time: Duration::from_secs(2 * seg as u64),
-                                duration: Duration::from_secs(2),
+                                decode_time: spec.segment_duration.saturating_mul(
+                                    u32::try_from(seg).expect("fixture segment index fits u32"),
+                                ),
+                                duration: spec.segment_duration,
                             })
                         })
                         .collect();
                     VariantParts {
-                        init: None,
+                        init,
                         segments,
                         codec: playlist.variant_codec(v_idx),
                         container: playlist.variant_container(v_idx),
@@ -235,7 +275,7 @@ mod support {
                 codecs: None,
                 container: Some(format!("{:?}", spec.container)),
                 duration: kithara_events::VariantDuration::Segmented(
-                    (0..spec.segments).map(|_| Duration::from_secs(2)).collect(),
+                    (0..spec.segments).map(|_| spec.segment_duration).collect(),
                 ),
                 name: None,
             })

@@ -19,10 +19,11 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    Activity, AudioCodec, ChunkPosition, ContainerFormat, MediaInfo, PlayheadRead, PlayheadState,
-    PlayheadWrite, PrerollHint, ReadOutcome, SeekControl, SeekObserve, SharedStream, Source,
-    SourceError, SourcePhase, Stream, StreamError, StreamResult, StreamType, TimelineState,
-    VariantControl, WorkerWake,
+    Activity, AudioCodec, ChunkPosition, ContainerFormat, MediaInfo, PendingReason, PlayheadRead,
+    PlayheadState, PlayheadWrite, PrerollHint, ReadOutcome, SeekControl, SeekObserve, SharedStream,
+    Source, SourceError, SourcePhase, Stream, StreamError, StreamResult, StreamType, TimelineState,
+    VariantControl, VariantHandoff, VariantHandoffClose, VariantHandoffExit, VariantTransition,
+    WorkerWake,
 };
 use kithara_test_utils::kithara;
 
@@ -32,13 +33,16 @@ use crate::{
         fetch::Fetch,
         parts::SourceParts,
         rebuild::{
-            DecoderRebuildComplete, RebuildState, RecreateCause, RecreateNext, RecreateState,
+            DecoderRebuildComplete, RebuildState, RecreateCause, RecreateNext, RecreateOutcome,
+            RecreateState,
             port::{RebuildPort, RebuildRuntime},
+            state::DecoderRebuildProduct,
         },
         seek::{SeekContext, SeekRequest},
         source::StreamAudioSource,
         track::{
-            self, CurrentFsm, RebuildingDecoder, Track, TrackFailure, TrackStep, WaitingReason,
+            self, CurrentFsm, RebuildingDecoder, Track, TrackFailure, TrackStep, WaitContext,
+            WaitState, WaitingForSource, WaitingReason,
         },
     },
     renderer::AudioWorkerSource,
@@ -259,6 +263,13 @@ impl WorkerWake for CountingWake {
 }
 
 struct TestControl {
+    committed_handoff: AtomicU64,
+    finished_handoff: AtomicU64,
+    finished_handoff_exit: Mutex<Option<VariantHandoffExit>>,
+    promoted_handoff: AtomicU64,
+    promoted_seek_epoch: AtomicU64,
+    handoff_acknowledged: AtomicBool,
+    handoff_preparing: AtomicBool,
     media_info: Mutex<Option<MediaInfo>>,
     variant_pending: AtomicBool,
     variant_target: Mutex<Option<usize>>,
@@ -268,6 +279,13 @@ struct TestControl {
 impl TestControl {
     fn new(media_info: MediaInfo) -> Self {
         Self {
+            committed_handoff: AtomicU64::new(0),
+            finished_handoff: AtomicU64::new(0),
+            finished_handoff_exit: Mutex::new(None),
+            promoted_handoff: AtomicU64::new(0),
+            promoted_seek_epoch: AtomicU64::new(u64::MAX),
+            handoff_acknowledged: AtomicBool::new(false),
+            handoff_preparing: AtomicBool::new(false),
             media_info: Mutex::new(Some(media_info)),
             variant_pending: AtomicBool::new(false),
             variant_target: Mutex::new(None),
@@ -284,12 +302,66 @@ impl TestControl {
         *self.variant_target.lock() = Some(target);
         self.variant_pending.store(true, Ordering::Release);
     }
+
+    fn set_handoff_preparing(&self, preparing: bool) {
+        if preparing {
+            self.handoff_acknowledged.store(false, Ordering::Release);
+        }
+        self.handoff_preparing.store(preparing, Ordering::Release);
+    }
+
+    fn set_committed_handoff(&self, ticket: u64) {
+        self.committed_handoff.store(ticket, Ordering::Release);
+    }
 }
 
 impl VariantControl for TestControl {
     fn clear_variant_fence(&self) {
         self.variant_pending.store(false, Ordering::Release);
         *self.variant_target.lock() = None;
+    }
+
+    fn committed_variant_handoff(&self) -> Option<VariantHandoff> {
+        VariantHandoff::try_new(self.committed_handoff.load(Ordering::Acquire))
+    }
+
+    fn committed_transition(&self) -> Option<VariantTransition> {
+        let handoff = self.committed_variant_handoff()?;
+        let media_info = self.media_info.lock().clone()?;
+        Some(VariantTransition::new(handoff, media_info, 0, 0))
+    }
+
+    fn close_variant_handoff(
+        &self,
+        handoff: VariantHandoff,
+        exit: VariantHandoffExit,
+    ) -> VariantHandoffClose {
+        let ticket = handoff.ticket();
+        if self
+            .committed_handoff
+            .compare_exchange(ticket, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return VariantHandoffClose::Stale;
+        }
+        *self.finished_handoff_exit.lock() = Some(exit);
+        self.finished_handoff.store(ticket, Ordering::Release);
+        VariantHandoffClose::Closed
+    }
+
+    fn promote_variant_handoff(&self, handoff: VariantHandoff, expected_seek_epoch: u64) -> bool {
+        if self.committed_variant_handoff() != Some(handoff) {
+            return false;
+        }
+        let promoted = self
+            .promoted_handoff
+            .compare_exchange(0, handoff.ticket(), Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+        if promoted {
+            self.promoted_seek_epoch
+                .store(expected_seek_epoch, Ordering::Release);
+        }
+        promoted
     }
 
     fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
@@ -301,6 +373,22 @@ impl VariantControl for TestControl {
 
     fn has_variant_change_pending(&self) -> bool {
         self.variant_pending.load(Ordering::Acquire)
+    }
+
+    fn variant_handoff(&self) -> Option<VariantHandoff> {
+        self.handoff_preparing
+            .load(Ordering::Acquire)
+            .then(|| VariantHandoff::try_new(1))
+            .flatten()
+    }
+
+    fn acknowledge_variant_handoff(&self, handoff: VariantHandoff) -> bool {
+        self.handoff_preparing.load(Ordering::Acquire)
+            && handoff.ticket() == 1
+            && self
+                .handoff_acknowledged
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
     }
 
     fn variant_change_target(&self) -> Option<usize> {
@@ -419,12 +507,12 @@ fn media_info(variant: u32) -> MediaInfo {
 }
 
 fn recreate_state(variant: u32) -> RecreateState {
-    RecreateState {
-        media_info: media_info(variant),
-        cause: RecreateCause::FormatBoundary,
-        next: RecreateNext::Decode,
-        offset: 0,
-    }
+    RecreateState::new(
+        media_info(variant),
+        RecreateCause::FormatBoundary,
+        RecreateNext::Decode,
+        0,
+    )
 }
 
 struct RebuildFixture {
@@ -451,9 +539,10 @@ async fn test_source(variant: u32) -> RebuildFixture {
     };
     let shared_stream = SharedStream::new(stream);
     let factory_drops = drops.clone();
-    let decoder_factory: DecoderFactory<TestStream> = Arc::new(move |_stream, _info, _offset| {
-        Ok(Box::new(TestDecoder::new(99, factory_drops.clone())))
-    });
+    let decoder_factory: DecoderFactory<TestStream> =
+        Arc::new(move |_stream, _info, _offset, _handoff| {
+            Ok(Box::new(TestDecoder::new(99, factory_drops.clone())))
+        });
     let runtime_handle = match RuntimeHandle::try_current() {
         Ok(handle) => handle,
         Err(err) => panic!("test requires tokio runtime: {err}"),
@@ -500,14 +589,15 @@ async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
     let shared_stream = SharedStream::new(stream);
     let factory_drops = drops.clone();
     let factory_host_rate = host_sample_rate.clone();
-    let decoder_factory: DecoderFactory<TestStream> = Arc::new(move |_stream, _info, _offset| {
-        let rate = factory_host_rate.load(Ordering::Acquire);
-        Ok(Box::new(RouteSignalDecoder::new(
-            99,
-            rate,
-            factory_drops.clone(),
-        )))
-    });
+    let decoder_factory: DecoderFactory<TestStream> =
+        Arc::new(move |_stream, _info, _offset, _handoff| {
+            let rate = factory_host_rate.load(Ordering::Acquire);
+            Ok(Box::new(RouteSignalDecoder::new(
+                99,
+                rate,
+                factory_drops.clone(),
+            )))
+        });
     let runtime_handle = match RuntimeHandle::try_current() {
         Ok(handle) => handle,
         Err(err) => panic!("test requires tokio runtime: {err}"),
@@ -540,6 +630,39 @@ async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
 
 fn run_pending_rebuild_inline(source: &mut StreamAudioSource<TestStream>) {
     source.rebuild.run_inline();
+}
+
+fn replace_rebuild_with_handoff_capture(
+    source: &mut StreamAudioSource<TestStream>,
+    captured: Arc<Mutex<Vec<Option<VariantHandoff>>>>,
+    drops: Arc<Mutex<Vec<u64>>>,
+) {
+    let factory: DecoderFactory<TestStream> = Arc::new(move |_stream, _info, _offset, handoff| {
+        captured.lock().push(handoff);
+        Ok(Box::new(TestDecoder::new(99, drops.clone())))
+    });
+    source.rebuild = RebuildPort::new(
+        factory,
+        RebuildRuntime {
+            handle: source.rebuild.runtime().clone(),
+            wake: Arc::new(TestWake),
+        },
+    );
+}
+
+fn apply_seek_recreate(cause: RecreateCause, epoch: u64) -> RecreateState {
+    RecreateState::new(
+        media_info(1),
+        cause,
+        RecreateNext::ApplySeek(SeekRequest {
+            seek: SeekContext {
+                target: Duration::from_secs(3),
+                epoch,
+            },
+            emit_request: false,
+        }),
+        0,
+    )
 }
 
 fn append_left_channel(left: &mut Vec<f32>, chunk: &PcmChunk) {
@@ -610,10 +733,100 @@ fn push_completion_with_drops(
     drops: Arc<Mutex<Vec<u64>>>,
 ) {
     let pushed = source.rebuild.completion().push(DecoderRebuildComplete {
-        result: Ok(Box::new(TestDecoder::new(decoder_id, drops))),
+        result: Ok(DecoderRebuildProduct::Decoder(Box::new(TestDecoder::new(
+            decoder_id, drops,
+        )))),
         ticket,
     });
     assert!(pushed.is_ok());
+}
+
+fn push_signal_completion(
+    source: &StreamAudioSource<TestStream>,
+    ticket: u64,
+    decoder_id: u64,
+    drops: Arc<Mutex<Vec<u64>>>,
+) {
+    let pushed = source.rebuild.completion().push(DecoderRebuildComplete {
+        result: Ok(DecoderRebuildProduct::Decoder(Box::new(
+            RouteSignalDecoder::new(decoder_id, Consts::SAMPLE_RATE, drops),
+        ))),
+        ticket,
+    });
+    assert!(pushed.is_ok());
+}
+
+fn push_rebuild_failure(
+    source: &StreamAudioSource<TestStream>,
+    ticket: u64,
+    outcome: RecreateOutcome,
+) {
+    let pushed = source.rebuild.completion().push(DecoderRebuildComplete {
+        result: Err(outcome),
+        ticket,
+    });
+    assert!(pushed.is_ok());
+}
+
+async fn adaptive_rebuild_source(
+    handoff_ticket: u64,
+) -> (
+    Arc<TestControl>,
+    Arc<Mutex<Vec<u64>>>,
+    StreamAudioSource<TestStream>,
+    VariantHandoff,
+) {
+    let (control, drops, source, handoff) = adaptive_rebuilding_source(handoff_ticket).await;
+    push_signal_completion(&source, 7, 2, drops.clone());
+    (control, drops, source, handoff)
+}
+
+async fn adaptive_rebuilding_source(
+    handoff_ticket: u64,
+) -> (
+    Arc<TestControl>,
+    Arc<Mutex<Vec<u64>>>,
+    StreamAudioSource<TestStream>,
+    VariantHandoff,
+) {
+    let RebuildFixture {
+        control,
+        drops,
+        mut source,
+    } = test_source(0).await;
+    let old = source.decode.install(
+        Box::new(RouteSignalDecoder::new(
+            7,
+            Consts::SAMPLE_RATE,
+            drops.clone(),
+        )),
+        media_info(0),
+        0,
+        0,
+    );
+    source.retired.retire(old);
+    assert!(matches!(
+        source.step_track(),
+        TrackStep::Produced(Fetch::Data { .. })
+    ));
+    let handoff = VariantHandoff::try_new(handoff_ticket)
+        .unwrap_or_else(|| panic!("non-zero handoff ticket"));
+    control.set_media_info(media_info(1));
+    control.set_committed_handoff(handoff.ticket());
+    source.state = Track::<RebuildingDecoder>::new(RebuildState {
+        ticket: 7,
+        recreate: RecreateState::from_committed_transition(VariantTransition::new(
+            handoff,
+            media_info(1),
+            0,
+            0,
+        )),
+        started_seek_epoch: source.seek_obs.epoch(),
+        completion: source.rebuild.completion(),
+        superseded_seek: None,
+    })
+    .erase();
+    (control, drops, source, handoff)
 }
 
 #[kithara::test(tokio)]
@@ -626,6 +839,202 @@ async fn rebuilding_decoder_pending_poll_blocks() {
         TrackStep::Blocked(WaitingReason::Waiting)
     ));
     assert!(matches!(source.state, CurrentFsm::RebuildingDecoder(_)));
+}
+
+#[kithara::test(tokio)]
+async fn late_handoff_does_not_attach_to_route_change_recreate() {
+    let RebuildFixture {
+        control,
+        drops,
+        mut source,
+    } = test_source(0).await;
+    let recreate = apply_seek_recreate(RecreateCause::RouteChange, source.seek_obs.epoch());
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    replace_rebuild_with_handoff_capture(&mut source, captured.clone(), drops);
+
+    control.set_committed_handoff(31);
+    let rebuild = source
+        .rebuild
+        .prepare(&source.shared_stream, recreate, source.seek_obs.epoch())
+        .expect("route-change rebuild must prepare");
+    source.rebuild.run_inline();
+
+    assert_eq!(rebuild.recreate.variant_handoff(), None);
+    assert_eq!(captured.lock().as_slice(), &[None]);
+}
+
+#[kithara::test(tokio)]
+async fn late_handoff_does_not_attach_to_apply_seek_recreate() {
+    let RebuildFixture {
+        control,
+        drops,
+        mut source,
+    } = test_source(0).await;
+    let recreate = apply_seek_recreate(RecreateCause::VariantSwitch, source.seek_obs.epoch());
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    replace_rebuild_with_handoff_capture(&mut source, captured.clone(), drops);
+
+    control.set_committed_handoff(37);
+    let rebuild = source
+        .rebuild
+        .prepare(&source.shared_stream, recreate, source.seek_obs.epoch())
+        .expect("seek rebuild must prepare");
+    source.rebuild.run_inline();
+
+    assert_eq!(rebuild.recreate.variant_handoff(), None);
+    assert_eq!(captured.lock().as_slice(), &[None]);
+}
+
+#[kithara::test(tokio)]
+async fn committed_transition_dispatch_captures_exact_handoff() {
+    let RebuildFixture {
+        control,
+        mut source,
+        ..
+    } = test_source(0).await;
+    let expected = VariantHandoff::try_new(39).expect("non-zero handoff");
+    let later = VariantHandoff::try_new(41).expect("non-zero handoff");
+    control.set_media_info(media_info(1));
+    control.set_committed_handoff(expected.ticket());
+
+    assert!(matches!(source.step_track(), TrackStep::StateChanged));
+    assert!(matches!(
+        &source.state,
+        CurrentFsm::RecreatingDecoder(handle)
+            if handle.data().variant_handoff() == Some(expected)
+                && handle.data().cause == RecreateCause::FormatBoundary
+                && matches!(handle.data().next, RecreateNext::Decode)
+    ));
+
+    control.set_committed_handoff(later.ticket());
+    assert!(matches!(source.step_track(), TrackStep::StateChanged));
+    assert!(matches!(
+        &source.state,
+        CurrentFsm::RebuildingDecoder(handle)
+            if handle.data().recreate.variant_handoff() == Some(expected)
+    ));
+}
+
+#[kithara::test(tokio)]
+async fn committed_transition_keeps_exact_handoff_across_build_retry() {
+    let RebuildFixture {
+        control,
+        drops,
+        mut source,
+    } = test_source(0).await;
+    let expected = VariantHandoff::try_new(41).expect("non-zero handoff");
+    let later = VariantHandoff::try_new(43).expect("non-zero handoff");
+    let recreate = RecreateState::from_committed_transition(VariantTransition::new(
+        expected,
+        media_info(1),
+        0,
+        0,
+    ));
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    replace_rebuild_with_handoff_capture(&mut source, captured.clone(), drops);
+
+    control.set_committed_handoff(later.ticket());
+    let rebuild = source
+        .rebuild
+        .prepare(&source.shared_stream, recreate, source.seek_obs.epoch())
+        .expect("committed transition rebuild must prepare");
+    source.rebuild.run_inline();
+    source
+        .rebuild
+        .prepare_build_retry(&source.shared_stream, &rebuild);
+    source.rebuild.run_inline();
+
+    assert_eq!(rebuild.recreate.variant_handoff(), Some(expected));
+    assert_eq!(
+        captured.lock().as_slice(),
+        &[Some(expected), Some(expected)]
+    );
+}
+
+#[kithara::test(tokio)]
+async fn adaptive_build_source_wait_retries_while_outgoing_decodes() {
+    let (control, _drops, mut source, handoff) = adaptive_rebuilding_source(41).await;
+    push_rebuild_failure(&source, 7, RecreateOutcome::NeedsSourceWait);
+
+    assert!(matches!(
+        source.step_track(),
+        TrackStep::Produced(Fetch::Data { .. })
+    ));
+    assert!(matches!(source.state, CurrentFsm::RebuildingDecoder(_)));
+    assert_eq!(control.committed_variant_handoff(), Some(handoff));
+    assert_eq!(control.promoted_handoff.load(Ordering::Acquire), 0);
+
+    run_pending_rebuild_inline(&mut source);
+    assert!(matches!(
+        source.step_track(),
+        TrackStep::Produced(Fetch::Data { .. })
+    ));
+    assert!(matches!(source.state, CurrentFsm::RebuildingDecoder(_)));
+    assert_eq!(control.promoted_handoff.load(Ordering::Acquire), 0);
+}
+
+#[kithara::test(tokio)]
+async fn adaptive_build_soft_failure_aborts_exact_handoff_and_keeps_decoding() {
+    let (control, _drops, mut source, handoff) = adaptive_rebuilding_source(47).await;
+    push_rebuild_failure(&source, 7, RecreateOutcome::SoftFailed);
+
+    assert!(matches!(
+        source.step_track(),
+        TrackStep::Produced(Fetch::Data { .. })
+    ));
+    assert!(matches!(source.state, CurrentFsm::Decoding(_)));
+
+    source.flush_deferred();
+    assert_eq!(control.committed_variant_handoff(), None);
+    assert_eq!(
+        control.finished_handoff.load(Ordering::Acquire),
+        handoff.ticket()
+    );
+    assert_eq!(
+        *control.finished_handoff_exit.lock(),
+        Some(VariantHandoffExit::Abort)
+    );
+    assert!(matches!(
+        source.step_track(),
+        TrackStep::Produced(Fetch::Data { .. })
+    ));
+}
+
+#[kithara::test(tokio)]
+async fn adaptive_build_soft_failure_resumes_sealed_outgoing() {
+    let (control, _drops, mut source, handoff) = adaptive_rebuilding_source(53).await;
+    source
+        .decode
+        .seal_outgoing()
+        .expect("single outgoing decoder can be sealed");
+    let position = source.shared_stream.position();
+    assert!(matches!(
+        source.decode.next_chunk(position),
+        Ok(DecoderChunkOutcome::Pending(PendingReason::VariantHandoff))
+    ));
+
+    push_rebuild_failure(&source, 7, RecreateOutcome::SoftFailed);
+    assert!(matches!(
+        source.step_track(),
+        TrackStep::Produced(Fetch::Data { .. })
+    ));
+    assert!(matches!(source.state, CurrentFsm::Decoding(_)));
+    let position = source.shared_stream.position();
+    assert!(matches!(
+        source.decode.next_chunk(position),
+        Ok(DecoderChunkOutcome::Chunk(_))
+    ));
+
+    source.flush_deferred();
+    assert_eq!(control.committed_variant_handoff(), None);
+    assert_eq!(
+        control.finished_handoff.load(Ordering::Acquire),
+        handoff.ticket()
+    );
+    assert_eq!(
+        *control.finished_handoff_exit.lock(),
+        Some(VariantHandoffExit::Abort)
+    );
 }
 
 #[kithara::test(tokio)]
@@ -651,6 +1060,101 @@ async fn rebuilding_decoder_completion_installs_once() {
 
     source.flush_deferred();
     assert_eq!(drops.lock().as_slice(), &[1]);
+}
+
+#[kithara::test(tokio)]
+async fn decoder_construction_does_not_promote_the_committed_handoff() {
+    let (control, _drops, mut source, handoff) = adaptive_rebuild_source(17).await;
+
+    assert!(matches!(
+        source.step_track(),
+        TrackStep::Produced(Fetch::Data { .. })
+    ));
+
+    assert_eq!(control.promoted_handoff.load(Ordering::Acquire), 0);
+    assert_eq!(
+        control.committed_handoff.load(Ordering::Acquire),
+        handoff.ticket()
+    );
+    assert!(!source.decode.is_blending());
+    assert!(matches!(source.state, CurrentFsm::RebuildingDecoder(_)));
+}
+
+#[kithara::test(tokio)]
+async fn only_ready_to_blend_promotes_the_committed_handoff() {
+    let (control, _drops, mut source, handoff) = adaptive_rebuild_source(23).await;
+    assert!(matches!(
+        source.step_track(),
+        TrackStep::Produced(Fetch::Data { .. })
+    ));
+    assert_eq!(control.promoted_handoff.load(Ordering::Acquire), 0);
+
+    for _ in 0..8 {
+        run_pending_rebuild_inline(&mut source);
+        let _ = source.step_track();
+        if source.decode.is_blending() {
+            break;
+        }
+        assert_eq!(
+            control.promoted_handoff.load(Ordering::Acquire),
+            0,
+            "an incomplete prime must not publish the incoming session"
+        );
+    }
+
+    assert!(source.decode.is_blending());
+    assert_eq!(
+        control.promoted_handoff.load(Ordering::Acquire),
+        handoff.ticket()
+    );
+    assert_eq!(
+        control.promoted_seek_epoch.load(Ordering::Acquire),
+        source.seek_obs.epoch()
+    );
+    assert_eq!(control.finished_handoff.load(Ordering::Acquire), 0);
+    assert_eq!(
+        source
+            .decode
+            .session()
+            .media_info
+            .as_ref()
+            .and_then(|info| info.variant_index),
+        Some(1)
+    );
+    assert!(matches!(source.state, CurrentFsm::Decoding(_)));
+}
+
+#[kithara::test(tokio)]
+async fn seek_preemption_aborts_the_committed_handoff() {
+    let RebuildFixture {
+        control,
+        mut source,
+        ..
+    } = test_source(0).await;
+    let handoff = VariantHandoff::try_new(19).unwrap_or_else(|| panic!("non-zero handoff ticket"));
+    control.set_committed_handoff(handoff.ticket());
+    source.state = Track::<WaitingForSource>::new(WaitState {
+        context: WaitContext::Playback,
+        reason: WaitingReason::Waiting,
+    })
+    .erase();
+    let epoch = source.seek.begin(Duration::from_secs(3));
+
+    assert!(matches!(source.step_track(), TrackStep::StateChanged));
+    assert!(matches!(
+        &source.state,
+        CurrentFsm::SeekRequested(handle) if handle.data().seek.epoch == epoch
+    ));
+    source.flush_deferred();
+    assert_eq!(control.committed_handoff.load(Ordering::Acquire), 0);
+    assert_eq!(
+        control.finished_handoff.load(Ordering::Acquire),
+        handoff.ticket()
+    );
+    assert_eq!(
+        *control.finished_handoff_exit.lock(),
+        Some(VariantHandoffExit::Abort)
+    );
 }
 
 #[kithara::test(tokio)]
@@ -705,6 +1209,58 @@ async fn decode_error_precedes_track_failure_on_event_bus() {
             seek_epoch: 0,
         }))
     ));
+}
+
+#[kithara::test(tokio)]
+async fn target_body_preparation_keeps_the_outgoing_decoder_live() {
+    let RebuildFixture {
+        control,
+        drops,
+        mut source,
+    } = test_source(0).await;
+    let old = source.decode.install(
+        Box::new(RouteSignalDecoder::new(7, Consts::SAMPLE_RATE, drops)),
+        media_info(0),
+        0,
+        0,
+    );
+    source.retired.retire(old);
+    control.set_handoff_preparing(true);
+
+    assert!(matches!(
+        source.step_track(),
+        TrackStep::Produced(Fetch::Data { .. })
+    ));
+    assert!(
+        control.handoff_acknowledged.load(Ordering::Acquire),
+        "the live outgoing decoder acknowledges the exact preparation ticket"
+    );
+    assert!(matches!(
+        source.step_track(),
+        TrackStep::Produced(Fetch::Data { .. })
+    ));
+}
+
+#[kithara::test(tokio)]
+async fn target_body_preparation_does_not_override_source_wait_resolution() {
+    let RebuildFixture {
+        control,
+        mut source,
+        ..
+    } = test_source(0).await;
+    source.state = Track::<WaitingForSource>::new(WaitState {
+        context: WaitContext::Playback,
+        reason: WaitingReason::Waiting,
+    })
+    .erase();
+    control.set_handoff_preparing(true);
+
+    assert!(matches!(source.step_track(), TrackStep::StateChanged));
+    assert!(
+        control.handoff_acknowledged.load(Ordering::Acquire),
+        "source-waiting playback must acknowledge the exact preparation ticket"
+    );
+    assert!(matches!(source.state, CurrentFsm::Decoding(_)));
 }
 
 #[kithara::test(tokio)]
@@ -924,11 +1480,12 @@ async fn rebuilding_decoder_variant_fence_preserves_inflight_seek() {
     enter_rebuilding(
         &mut source,
         7,
-        RecreateState {
-            cause: RecreateCause::VariantSwitch,
-            next: RecreateNext::Seek(request),
-            ..recreate_state(1)
-        },
+        RecreateState::new(
+            media_info(1),
+            RecreateCause::VariantSwitch,
+            RecreateNext::Seek(request),
+            0,
+        ),
     );
     control.raise_variant_fence(2, media_info(2));
     push_completion_with_drops(&source, 7, 2, drops.clone());
@@ -981,7 +1538,7 @@ async fn rebuild_factory_panic_fails_track_without_hang() {
 
     let wake = Arc::new(CountingWake::default());
     let panicking_factory: DecoderFactory<TestStream> =
-        Arc::new(|_stream, _info, _offset| panic!("decoder construction blew up"));
+        Arc::new(|_stream, _info, _offset, _handoff| panic!("decoder construction blew up"));
     source.rebuild = RebuildPort::new(
         panicking_factory,
         RebuildRuntime {

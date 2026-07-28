@@ -4,7 +4,10 @@
 use kithara::{
     assets::AssetStore,
     decode::DecoderBackend,
-    events::{AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{
+        AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage, TrackId,
+        TrackStatus,
+    },
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -45,6 +48,7 @@ impl Consts {
     /// Each individual seek must land or fail within this budget.
     /// A hang is anything > this (the user reports >10 s freezes).
     const SEEK_BUDGET: Duration = Duration::from_secs(6);
+    const EVENT_POLL: Duration = Duration::from_millis(20);
     /// Minimum post-seek position advance we require to declare a
     /// landed seek as "playing again".
     ///
@@ -78,16 +82,68 @@ enum IterOutcome {
     Ok,
     Hung {
         iter: u32,
+        stage: AttemptStage,
         target: f64,
         pos_before: f64,
         pos_after: f64,
         budget_ms: u128,
+        detail: String,
     },
     Errored {
         iter: u32,
-        target: f64,
+        target: Option<f64>,
         error: String,
     },
+    TimedOut {
+        iter: u32,
+        stage: AttemptStage,
+        target: Option<f64>,
+        deadline_ms: u128,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
+enum AttemptStage {
+    Setup,
+    Loading,
+    Warmup,
+    SeekLanding,
+    PostSeekAdvance,
+}
+
+impl AttemptStage {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Setup => "setup",
+            Self::Loading => "loading",
+            Self::Warmup => "warmup",
+            Self::SeekLanding => "seek_landing",
+            Self::PostSeekAdvance => "post_seek_advance",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct AttemptProgress {
+    stage: AttemptStage,
+    target: Option<f64>,
+}
+
+impl AttemptProgress {
+    fn new() -> Self {
+        Self {
+            stage: AttemptStage::Setup,
+            target: None,
+        }
+    }
+}
+
+struct TickDriver(tokio::task::JoinHandle<()>);
+
+impl Drop for TickDriver {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 async fn build_hls(helper: &TestServerHelper, include_sidx: bool) -> Url {
@@ -121,12 +177,7 @@ async fn drive_queue_ticks(queue: Arc<Queue>) {
 
 fn build_queue_with_tick(
     temp_dir: &TestTempDir,
-) -> (
-    Arc<Queue>,
-    Downloader,
-    AssetStore,
-    tokio::task::JoinHandle<()>,
-) {
+) -> (Arc<Queue>, Downloader, AssetStore, TickDriver) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
@@ -140,12 +191,12 @@ fn build_queue_with_tick(
             .with_player(player)
             .with_store(store.clone()),
     ));
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
+    let tick_driver = TickDriver(tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue))));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
-    (queue, downloader, store, tick_handle)
+    (queue, downloader, store, tick_driver)
 }
 
 /// Run one fresh-player attempt: spin up Queue + Player, append the HLS
@@ -158,17 +209,17 @@ async fn run_one_attempt(
     url: &Url,
     target_offset: f64,
     backend: DecoderBackend,
+    progress: &mut AttemptProgress,
 ) -> IterOutcome {
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
+    let (queue, downloader, store, _tick_driver) = build_queue_with_tick(&temp);
 
     let builder = match ResourceConfig::for_src(url.as_str()) {
         Ok(b) => b,
         Err(e) => {
-            tick_handle.abort();
             return IterOutcome::Errored {
                 iter,
-                target: f64::NAN,
+                target: None,
                 error: format!("ResourceConfig::for_src failed: {e}"),
             };
         }
@@ -194,25 +245,25 @@ async fn run_one_attempt(
     let mut rx = queue.subscribe();
 
     if let Err(e) = queue.select(track_id, Transition::None) {
-        tick_handle.abort();
         return IterOutcome::Errored {
             iter,
-            target: f64::NAN,
+            target: None,
             error: format!("queue.select failed: {e}"),
         };
     }
 
+    progress.stage = AttemptStage::Loading;
     if let Err(e) =
         wait_for_loader_done_event(&mut rx, &queue, track_id, Consts::LOAD_DEADLINE).await
     {
-        tick_handle.abort();
         return IterOutcome::Errored {
             iter,
-            target: f64::NAN,
+            target: None,
             error: format!("loader: {e}"),
         };
     }
 
+    progress.stage = AttemptStage::Warmup;
     if let Err(e) = wait_for_position_event(
         &mut rx,
         &queue,
@@ -221,10 +272,9 @@ async fn run_one_attempt(
     )
     .await
     {
-        tick_handle.abort();
         return IterOutcome::Errored {
             iter,
-            target: f64::NAN,
+            target: None,
             error: format!("warmup: {e}"),
         };
     }
@@ -232,101 +282,135 @@ async fn run_one_attempt(
     let duration = if let Some(d) = queue.duration_seconds() {
         d
     } else {
-        tick_handle.abort();
         return IterOutcome::Errored {
             iter,
-            target: f64::NAN,
+            target: None,
             error: "duration unknown after Loaded".into(),
         };
     };
 
     let target = (duration - target_offset).max(0.0);
     let pos_before = queue.position_seconds().unwrap_or(0.0);
+    progress.stage = AttemptStage::SeekLanding;
+    progress.target = Some(target);
+    rx = queue.subscribe();
 
-    if let Err(e) = queue.seek(target) {
-        tick_handle.abort();
-        return IterOutcome::Errored {
-            iter,
-            target,
-            error: format!("queue.seek returned Err: {e}"),
-        };
-    }
-
-    // Seek-landed: wait on the sink-truth events the worker emits after
-    // applying the seek — `SeekComplete` (post-seek output committed) or a
-    // `PlaybackProgress` whose position is within tolerance of `target` —
-    // rather than polling the tick-cached position. A `Failed` transition is
-    // the failure branch. The budget is a virtual hang ceiling under flash.
-    match wait_for_seek_landed(&mut rx, &queue, track_id, target, Consts::SEEK_BUDGET).await {
-        SeekLanded::Landed => {}
-        SeekLanded::Failed(err) => {
-            tick_handle.abort();
+    match queue.seek(target) {
+        Ok(kithara::play::SeekOutcome::Landed { .. }) => {}
+        Ok(outcome) => {
             return IterOutcome::Errored {
                 iter,
-                target,
-                error: err,
+                target: Some(target),
+                error: format!("queue.seek returned {outcome:?}"),
             };
         }
-        SeekLanded::Timeout => {
-            let pos_after = queue.position_seconds().unwrap_or(0.0);
-            tick_handle.abort();
-            return IterOutcome::Hung {
+        Err(e) => {
+            return IterOutcome::Errored {
                 iter,
-                target,
-                pos_before,
-                pos_after,
-                budget_ms: Consts::SEEK_BUDGET.as_millis(),
+                target: Some(target),
+                error: format!("queue.seek returned Err: {e}"),
             };
         }
     }
 
-    // Post-seek "playing again": wait for real PCM-commit progress past the
-    // seek target by `MIN_POST_SEEK_ADVANCE_S`, observed via
-    // `PlaybackProgress`, rather than a fixed render wall.
+    let seek_epoch =
+        match wait_for_seek_landed(&mut rx, &queue, track_id, target, Consts::SEEK_BUDGET).await {
+            SeekLanded::Landed { epoch } => epoch,
+            SeekLanded::Failed(err) => {
+                return IterOutcome::Errored {
+                    iter,
+                    target: Some(target),
+                    error: err,
+                };
+            }
+            SeekLanded::Timeout(detail) => {
+                let pos_after = queue.position_seconds().unwrap_or(0.0);
+                return IterOutcome::Hung {
+                    iter,
+                    stage: AttemptStage::SeekLanding,
+                    target,
+                    pos_before,
+                    pos_after,
+                    budget_ms: Consts::SEEK_BUDGET.as_millis(),
+                    detail,
+                };
+            }
+        };
+
+    progress.stage = AttemptStage::PostSeekAdvance;
     match wait_for_post_seek_advance(
         &mut rx,
         &queue,
         track_id,
+        seek_epoch,
         target,
         Consts::MIN_POST_SEEK_ADVANCE_S,
         Consts::POST_SEEK_RENDER_WALL,
     )
     .await
     {
-        PostSeekAdvance::Advanced => {
-            tick_handle.abort();
-            IterOutcome::Ok
-        }
-        PostSeekAdvance::Failed(err) => {
-            tick_handle.abort();
-            IterOutcome::Errored {
-                iter,
-                target,
-                error: err,
-            }
-        }
-        PostSeekAdvance::Timeout(pos_after) => {
-            tick_handle.abort();
-            IterOutcome::Hung {
-                iter,
-                target,
-                pos_before,
-                pos_after,
-                budget_ms: Consts::SEEK_BUDGET.as_millis(),
-            }
-        }
+        PostSeekAdvance::Advanced => IterOutcome::Ok,
+        PostSeekAdvance::Failed(err) => IterOutcome::Errored {
+            iter,
+            target: Some(target),
+            error: err,
+        },
+        PostSeekAdvance::Timeout(pos_after) => IterOutcome::Hung {
+            iter,
+            stage: AttemptStage::PostSeekAdvance,
+            target,
+            pos_before,
+            pos_after,
+            budget_ms: Consts::POST_SEEK_RENDER_WALL.as_millis(),
+            detail: format!(
+                "position did not reach {:.6}s",
+                target + Consts::MIN_POST_SEEK_ADVANCE_S
+            ),
+        },
     }
 }
 
 enum SeekLanded {
-    Landed,
+    Landed { epoch: u64 },
     Failed(String),
-    Timeout,
+    Timeout(String),
 }
 
-/// Wait until the seek lands: a `SeekComplete` whose committed position is
-/// within tolerance of `target`, or a `PlaybackProgress` position within
-/// tolerance. `Failed` is surfaced; the budget caps the wait.
+#[derive(Default)]
+struct SeekTrace {
+    epoch: Option<u64>,
+    applied: bool,
+    decode_started: bool,
+    output_committed: bool,
+}
+
+impl SeekTrace {
+    fn observe(&mut self, epoch: u64, stage: SeekLifecycleStage) {
+        match stage {
+            SeekLifecycleStage::SeekRequest => {
+                self.epoch.get_or_insert(epoch);
+            }
+            SeekLifecycleStage::SeekApplied if self.epoch == Some(epoch) => {
+                self.applied = true;
+            }
+            SeekLifecycleStage::DecodeStarted if self.epoch == Some(epoch) => {
+                self.decode_started = true;
+            }
+            SeekLifecycleStage::OutputCommitted if self.epoch == Some(epoch) => {
+                self.output_committed = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn summary(&self) -> String {
+        format!(
+            "epoch={:?} applied={} decode_started={} output_committed={}",
+            self.epoch, self.applied, self.decode_started, self.output_committed
+        )
+    }
+}
+
 async fn wait_for_seek_landed(
     rx: &mut EventReceiver,
     queue: &Queue,
@@ -339,18 +423,42 @@ async fn wait_for_seek_landed(
     {
         return SeekLanded::Failed(format!("track entered Failed: {err}"));
     }
+    let mut trace = SeekTrace::default();
     let landed = timeout(budget, async {
         loop {
             match rx.recv().await.map(|env| env.event) {
-                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
-                    if ((position_ms as f64 / 1000.0) - target).abs() < 1.0 {
-                        return Ok(());
-                    }
+                Ok(Event::Audio(AudioEvent::SeekLifecycle {
+                    seek_epoch, stage, ..
+                })) => {
+                    trace.observe(seek_epoch, stage);
                 }
-                Ok(Event::Audio(AudioEvent::SeekComplete { position, .. })) => {
-                    if (position.as_secs_f64() - target).abs() < 1.0 {
-                        return Ok(());
+                Ok(Event::Audio(AudioEvent::SeekComplete {
+                    seek_epoch,
+                    position,
+                })) if trace.epoch == Some(seek_epoch) => {
+                    if !trace.output_committed {
+                        return Err(format!(
+                            "SeekComplete arrived before OutputCommitted ({})",
+                            trace.summary()
+                        ));
                     }
+                    if (position.as_secs_f64() - target).abs() >= 1.0 {
+                        return Err(format!(
+                            "SeekComplete landed at {:.6}s for target {target:.6}s ({})",
+                            position.as_secs_f64(),
+                            trace.summary()
+                        ));
+                    }
+                    return Ok(seek_epoch);
+                }
+                Ok(Event::Audio(AudioEvent::SeekRejected {
+                    epoch,
+                    target: rejected,
+                })) if trace.epoch.is_none_or(|expected| expected == epoch) => {
+                    return Err(format!(
+                        "seek epoch {epoch} rejected target {:.6}s",
+                        rejected.as_secs_f64()
+                    ));
                 }
                 Ok(Event::Queue(QueueEvent::TrackStatusChanged {
                     id,
@@ -359,17 +467,11 @@ async fn wait_for_seek_landed(
                     return Err(format!("track entered Failed: {err}"));
                 }
                 Ok(_) => {}
-                Err(RecvError::Lagged(_)) => {
-                    if let Some(entry) = queue.track(track_id)
-                        && let TrackStatus::Failed(err) = &entry.status
-                    {
-                        return Err(format!("track entered Failed: {err}"));
-                    }
-                    if let Some(p) = queue.position_seconds()
-                        && (p - target).abs() < 1.0
-                    {
-                        return Ok(());
-                    }
+                Err(RecvError::Lagged(skipped)) => {
+                    return Err(format!(
+                        "event receiver lagged by {skipped} while tracing seek ({})",
+                        trace.summary()
+                    ));
                 }
                 Err(RecvError::Closed) => return Err("event stream closed".to_string()),
             }
@@ -377,9 +479,9 @@ async fn wait_for_seek_landed(
     })
     .await;
     match landed {
-        Ok(Ok(())) => SeekLanded::Landed,
+        Ok(Ok(epoch)) => SeekLanded::Landed { epoch },
         Ok(Err(err)) => SeekLanded::Failed(err),
-        Err(_) => SeekLanded::Timeout,
+        Err(_) => SeekLanded::Timeout(trace.summary()),
     }
 }
 
@@ -397,6 +499,7 @@ async fn wait_for_post_seek_advance(
     rx: &mut EventReceiver,
     queue: &Queue,
     track_id: TrackId,
+    seek_epoch: u64,
     target: f64,
     min_advance: f64,
     budget: Duration,
@@ -413,21 +516,41 @@ async fn wait_for_post_seek_advance(
     }
     let advanced = timeout(budget, async {
         loop {
-            match rx.recv().await.map(|env| env.event) {
-                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+            if let Some(p) = queue.position_seconds()
+                && (p - target) >= min_advance
+            {
+                return Ok(());
+            }
+            match timeout(Consts::EVENT_POLL, rx.recv())
+                .await
+                .map(|result| result.map(|env| env.event))
+            {
+                Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress {
+                    position_ms,
+                    seek_epoch: epoch,
+                    ..
+                }))) if epoch == seek_epoch => {
                     let p = position_ms as f64 / 1000.0;
                     if (p - target) >= min_advance {
                         return Ok(());
                     }
                 }
-                Ok(Event::Queue(QueueEvent::TrackStatusChanged {
+                Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged {
                     id,
                     status: TrackStatus::Failed(err),
-                })) if id == track_id => {
+                }))) if id == track_id => {
                     return Err(format!("track entered Failed (post-seek): {err}"));
                 }
-                Ok(_) => {}
-                Err(RecvError::Lagged(_)) => {
+                Ok(Ok(Event::Audio(AudioEvent::SeekRejected { epoch, target })))
+                    if epoch == seek_epoch =>
+                {
+                    return Err(format!(
+                        "seek epoch {epoch} rejected target {:.6}s",
+                        target.as_secs_f64()
+                    ));
+                }
+                Ok(Ok(_)) | Err(_) => {}
+                Ok(Err(RecvError::Lagged(_))) => {
                     if let Some(entry) = queue.track(track_id)
                         && let TrackStatus::Failed(err) = &entry.status
                     {
@@ -439,7 +562,7 @@ async fn wait_for_post_seek_advance(
                         return Ok(());
                     }
                 }
-                Err(RecvError::Closed) => return Err("event stream closed".to_string()),
+                Ok(Err(RecvError::Closed)) => return Err("event stream closed".to_string()),
             }
         }
     })
@@ -447,7 +570,14 @@ async fn wait_for_post_seek_advance(
     match advanced {
         Ok(Ok(())) => PostSeekAdvance::Advanced,
         Ok(Err(err)) => PostSeekAdvance::Failed(err),
-        Err(_) => PostSeekAdvance::Timeout(queue.position_seconds().unwrap_or(0.0)),
+        Err(_) => {
+            let position = queue.position_seconds().unwrap_or(0.0);
+            if (position - target) >= min_advance {
+                PostSeekAdvance::Advanced
+            } else {
+                PostSeekAdvance::Timeout(position)
+            }
+        }
     }
 }
 
@@ -483,20 +613,19 @@ async fn hls_seek_near_end_fresh_player_stress(
     let mut outcomes: Vec<IterOutcome> = Vec::with_capacity(Consts::FRESH_ITERATIONS as usize);
     for iter in 0..Consts::FRESH_ITERATIONS {
         let offset = Consts::NEAR_END_OFFSETS_S[(iter as usize) % Consts::NEAR_END_OFFSETS_S.len()];
+        let mut progress = AttemptProgress::new();
         let outcome = match time::timeout(
             Consts::ITER_DEADLINE,
-            run_one_attempt(iter, &url, offset, backend),
+            run_one_attempt(iter, &url, offset, backend, &mut progress),
         )
         .await
         {
             Ok(o) => o,
-            Err(_) => IterOutcome::Errored {
+            Err(_) => IterOutcome::TimedOut {
                 iter,
-                target: f64::NAN,
-                error: format!(
-                    "iteration exceeded ITER_DEADLINE ({:?}) — hung outside seek budget",
-                    Consts::ITER_DEADLINE,
-                ),
+                stage: progress.stage,
+                target: progress.target,
+                deadline_ms: Consts::ITER_DEADLINE.as_millis(),
             },
         };
         outcomes.push(outcome);
@@ -509,19 +638,35 @@ async fn hls_seek_near_end_fresh_player_stress(
             IterOutcome::Ok => {}
             IterOutcome::Hung {
                 iter,
+                stage,
                 target,
                 pos_before,
                 pos_after,
                 budget_ms,
+                detail,
             } => hangs.push(format!(
-                "[iter {iter}] hang: target={target:.2}s pos_before={pos_before:.2}s \
-                 pos_after={pos_after:.2}s budget={budget_ms}ms"
+                "[iter {iter}] hang: stage={} target={target:.6}s pos_before={pos_before:.2}s \
+                 pos_after={pos_after:.2}s budget={budget_ms}ms detail={detail}",
+                stage.label(),
             )),
             IterOutcome::Errored {
                 iter,
                 target,
                 error,
-            } => errors.push(format!("[iter {iter}] error: target={target:.2}s {error}")),
+            } => errors.push(format!(
+                "[iter {iter}] error: target={} {error}",
+                format_target(*target)
+            )),
+            IterOutcome::TimedOut {
+                iter,
+                stage,
+                target,
+                deadline_ms,
+            } => hangs.push(format!(
+                "[iter {iter}] hang: stage={} target={} deadline={deadline_ms}ms",
+                stage.label(),
+                format_target(*target),
+            )),
         }
     }
 
@@ -536,4 +681,14 @@ async fn hls_seek_near_end_fresh_player_stress(
             errors = errors.join("\n"),
         );
     }
+}
+
+fn format_target(target: Option<f64>) -> String {
+    target.map_or_else(|| "not-computed".into(), |value| format!("{value:.6}s"))
+}
+
+#[kithara::test]
+fn missing_target_is_not_reported_as_nan() {
+    assert_eq!(format_target(None), "not-computed");
+    assert_eq!(format_target(Some(31.5)), "31.500000s");
 }

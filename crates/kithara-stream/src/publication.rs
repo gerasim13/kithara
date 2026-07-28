@@ -172,7 +172,7 @@ mod tests {
     #[kithara::test]
     fn a_rebase_within_the_epoch_follows_the_reader_back() {
         let publication = opened();
-        publication.advance(holder(), 100, 3);
+        publication.rebase(holder(), 100, 3);
 
         publication.rebase(holder(), 60, 3);
 
