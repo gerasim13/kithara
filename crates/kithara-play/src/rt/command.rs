@@ -66,6 +66,7 @@ impl PlayerNodeProcessor {
         self.playback.playing.store(false, Ordering::SeqCst);
         self.playback.position.store(0.0, Ordering::Relaxed);
         self.playback.frontier.store(0.0, Ordering::Relaxed);
+        self.playback.cached.store(0.0, Ordering::Relaxed);
         self.playback.duration.store(0.0, Ordering::Relaxed);
     }
 

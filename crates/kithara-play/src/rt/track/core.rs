@@ -105,6 +105,12 @@ impl PlayerTrack {
         self.resource.decoded_frontier()
     }
 
+    /// Cached span in seconds: how much of the source is on disk.
+    #[must_use]
+    pub fn cached_span(&self) -> f64 {
+        self.resource.cached_span()
+    }
+
     /// Current visible (post-gapless-trim) duration in seconds.
     #[must_use]
     pub fn duration(&self) -> f64 {

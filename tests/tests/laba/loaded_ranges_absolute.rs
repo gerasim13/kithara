@@ -22,11 +22,11 @@ use kithara_integration_tests::{
     waits::{wait_for_event, wait_for_loader_done_event},
 };
 
-/// `PlaybackView::buffered` is documented as the decoded-ahead window, so this
-/// trap pins a contract the core does not offer yet rather than a broken
-/// invariant: once the whole body is cached, the surface a progress bar reads
-/// must be able to say so. It stays red until an absolute downloaded-range
-/// surface exists.
+/// `PlaybackView::buffered` is the surface a progress bar reads: once the whole
+/// body is cached it must say so, not report only what the decoder has produced
+/// so far. The cached span is owned by the asset store and published by the
+/// queue's playback view, unioned with the decoded frontier so the window can
+/// never fall behind the playhead.
 ///
 /// The whole body must have landed before the bar is judged. Wide enough to
 /// hold the 3 MB fixture, so the transfer is never capped mid-way.
@@ -41,16 +41,24 @@ const MIN_BUFFERED_FRACTION_PERCENT: u64 = 80;
 
 /// The MP3 duration starts as an estimate and settles once enough of the body
 /// is parsed. Comparing against the estimate is meaningless.
-async fn wait_for_settled_duration(
+///
+/// `playing` gates the read as well: the buffered window is published by the
+/// render pass off the leading track, so a view sampled between `play()` and
+/// the first render carries a window no track has written yet. Duration settles
+/// earlier than that — from the demuxer, before the first block — so waiting on
+/// duration alone can hand back a live duration next to an unwritten window.
+/// The gate is independent of what the trap asserts.
+async fn wait_for_playing_settled_duration(
     queue: &Queue,
     deadline: Duration,
 ) -> Result<kithara::queue::PlaybackView, String> {
     time::timeout(deadline, async {
         loop {
             let view = queue.playback_view();
-            if view
-                .duration
-                .is_some_and(|duration| duration >= MIN_SETTLED_DURATION_SECS)
+            if view.playing
+                && view
+                    .duration
+                    .is_some_and(|duration| duration >= MIN_SETTLED_DURATION_SECS)
             {
                 return view;
             }
@@ -59,7 +67,10 @@ async fn wait_for_settled_duration(
     })
     .await
     .map_err(|_| {
-        format!("duration never settled above {MIN_SETTLED_DURATION_SECS:.0}s within {deadline:?}")
+        format!(
+            "playback never reached a playing slot with a duration settled above \
+             {MIN_SETTLED_DURATION_SECS:.0}s within {deadline:?}"
+        )
     })
 }
 
@@ -149,7 +160,7 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
         )
     });
 
-    let view = wait_for_settled_duration(&queue, Duration::from_secs(30))
+    let view = wait_for_playing_settled_duration(&queue, Duration::from_secs(30))
         .await
         .unwrap_or_else(|error| panic!("LABA-430 precondition: {error}"));
     let duration = view.duration.unwrap_or_default();

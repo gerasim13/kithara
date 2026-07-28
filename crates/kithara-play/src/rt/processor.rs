@@ -276,14 +276,18 @@ impl PlayerNodeProcessor {
     /// the first render block, or every active track was a non-leading
     /// fade-in).
     fn update_position_duration(&self, leading_outcome: Option<(f64, f64)>) {
-        // Decoded-ahead frontier comes from the leading track's lock-free
-        // snapshot (always `>=` position) — the authoritative buffered/playable
-        // window the FFI polls for loaded ranges.
+        // Both windows come from the leading track's lock-free snapshots: the
+        // decoded frontier (always `>=` position) and the cached span the
+        // download side published. The queue view unions them into the
+        // buffered window the FFI polls for loaded ranges.
         for (_, track) in self.tracks.iter() {
             if track.state().is_leading() {
                 self.playback
                     .frontier
                     .store(track.decoded_frontier(), Ordering::Relaxed);
+                self.playback
+                    .cached
+                    .store(track.cached_span(), Ordering::Relaxed);
                 break;
             }
         }
