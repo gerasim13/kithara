@@ -51,14 +51,31 @@ remains code-owned because it describes font resource availability rather than s
 
 `SkinDoc` owns document-level paint roles and metrics. `paint::painter` owns the minimal trait and
 value types; they are toolkit-neutral and depend on no rendering toolkit. `paint::canvas`
-implements that trait against iced and owns translation, shaping, and canvas calls. A widget owns
-command order and local geometry, while its render-tree adapter owns toolkit lifecycle,
+implements that trait against iced and owns translation, shaping, and canvas calls.
+`paint::scene` implements it against Vello and owns translation, shaping, and scene encoding;
+the painter needs no GPU dependency. A future shell presentation stage will enable Vello's `wgpu`
+feature, which resolves to wgpu 29.x for Vello 0.9. Canonical family/weight-to-face selection and
+the face-to-byte mapping live in toolkit-neutral `fonts` whenever either backend is enabled.
+`render::fonts` is the sole public font-byte path and adds Lucide to those neutral faces. A widget
+owns command order and local geometry, while its render-tree adapter owns toolkit lifecycle,
 interaction state, and the translation from measured bounds to widget rectangles.
 
-Text crosses the painter seam as a string plus `TextStyle`; the backend shapes it.
+Text crosses the painter seam as a string plus `TextStyle`; the backend shapes it. Iced delegates
+advanced shaping, wraps at the supplied rectangle width, and top-aligns its default 1.2-em line
+box. Vello maps the selected embedded font's characters directly to glyph advances, skips and logs
+unavailable glyphs, and places the baseline at the top bound plus the font ascent; it neither wraps
+nor clips at the rectangle width and does not apply iced's line-box leading.
 
-The painter seam is `pub(crate)`; every implementation lives in this crate, and the recording
-implementation is test-only.
+On Apple, the canonical monospace selection resolves to embedded JetBrains Mono for Vello and to
+the system Menlo family for iced. Menlo is the shipped iced resource contract, while Vello has no
+system-font access. Other family and weight selections resolve to the same embedded face in both
+backends.
+
+The painter seam and `ScenePainter` are public so an external shell can implement or consume the
+toolkit-neutral contract. The iced implementation remains crate-owned, and the recording
+implementation remains test-only.
+`Rgba`, `Pt`, and `Rect` are directly constructible stable value contracts; `TextStyle` is
+non-exhaustive because text layout and typography fields will grow.
 
 ## Wave View Ownership
 

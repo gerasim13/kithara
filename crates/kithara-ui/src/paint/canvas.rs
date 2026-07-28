@@ -10,7 +10,10 @@ use iced::{
 use num_traits::cast::AsPrimitive;
 
 use super::{Painter, Pt, Rect, Rgba, TextStyle};
-use crate::skin::{FontFamily, FontWeight};
+use crate::{
+    fonts::catalog,
+    skin::{FontFamily, FontWeight},
+};
 
 pub(crate) struct IcedPainter<'frame> {
     frame: &'frame mut Frame,
@@ -89,11 +92,7 @@ impl Painter for IcedPainter<'_> {
 }
 
 pub(crate) const fn font(family: FontFamily, weight: FontWeight) -> Font {
-    let family = match family {
-        FontFamily::Display => Family::Name("Space Grotesk"),
-        FontFamily::Sans => Family::Name("Inter"),
-        FontFamily::Mono => mono_family(),
-    };
+    let face = catalog::select(family, weight);
     let weight = match weight {
         FontWeight::Normal => Weight::Normal,
         FontWeight::Medium => Weight::Medium,
@@ -101,21 +100,11 @@ pub(crate) const fn font(family: FontFamily, weight: FontWeight) -> Font {
         FontWeight::Bold => Weight::Bold,
     };
     Font {
-        family,
+        family: Family::Name(face.family_name()),
         weight,
         stretch: Stretch::Normal,
         style: Style::Normal,
     }
-}
-
-#[cfg(not(target_vendor = "apple"))]
-const fn mono_family() -> Family {
-    Family::Name("JetBrains Mono")
-}
-
-#[cfg(target_vendor = "apple")]
-const fn mono_family() -> Family {
-    Family::Name("Menlo")
 }
 
 impl From<Rgba> for Color {

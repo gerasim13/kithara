@@ -5,22 +5,15 @@ use crate::{
     skin::{FontFamily, FontWeight},
 };
 
-pub const INTER_REGULAR_BYTES: &[u8] = include_bytes!("../../assets/fonts/Inter-Regular.ttf");
-pub const INTER_SEMIBOLD_BYTES: &[u8] = include_bytes!("../../assets/fonts/Inter-SemiBold.ttf");
-pub const JETBRAINS_MONO_REGULAR_BYTES: &[u8] =
-    include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf");
-pub const JETBRAINS_MONO_MEDIUM_BYTES: &[u8] =
-    include_bytes!("../../assets/fonts/JetBrainsMono-Medium.ttf");
-pub const JETBRAINS_MONO_SEMIBOLD_BYTES: &[u8] =
-    include_bytes!("../../assets/fonts/JetBrainsMono-SemiBold.ttf");
-pub const SPACE_GROTESK_REGULAR_BYTES: &[u8] =
-    include_bytes!("../../assets/fonts/SpaceGrotesk-Regular.ttf");
-pub const SPACE_GROTESK_MEDIUM_BYTES: &[u8] =
-    include_bytes!("../../assets/fonts/SpaceGrotesk-Medium.ttf");
-pub const SPACE_GROTESK_SEMIBOLD_BYTES: &[u8] =
-    include_bytes!("../../assets/fonts/SpaceGrotesk-SemiBold.ttf");
-pub const SPACE_GROTESK_BOLD_BYTES: &[u8] =
-    include_bytes!("../../assets/fonts/SpaceGrotesk-Bold.ttf");
+pub const INTER_REGULAR_BYTES: &[u8] = crate::fonts::bytes::INTER_REGULAR_BYTES;
+pub const INTER_SEMIBOLD_BYTES: &[u8] = crate::fonts::bytes::INTER_SEMIBOLD_BYTES;
+pub const JETBRAINS_MONO_REGULAR_BYTES: &[u8] = crate::fonts::bytes::JETBRAINS_MONO_REGULAR_BYTES;
+pub const JETBRAINS_MONO_MEDIUM_BYTES: &[u8] = crate::fonts::bytes::JETBRAINS_MONO_MEDIUM_BYTES;
+pub const JETBRAINS_MONO_SEMIBOLD_BYTES: &[u8] = crate::fonts::bytes::JETBRAINS_MONO_SEMIBOLD_BYTES;
+pub const SPACE_GROTESK_REGULAR_BYTES: &[u8] = crate::fonts::bytes::SPACE_GROTESK_REGULAR_BYTES;
+pub const SPACE_GROTESK_MEDIUM_BYTES: &[u8] = crate::fonts::bytes::SPACE_GROTESK_MEDIUM_BYTES;
+pub const SPACE_GROTESK_SEMIBOLD_BYTES: &[u8] = crate::fonts::bytes::SPACE_GROTESK_SEMIBOLD_BYTES;
+pub const SPACE_GROTESK_BOLD_BYTES: &[u8] = crate::fonts::bytes::SPACE_GROTESK_BOLD_BYTES;
 
 pub const FONT_BYTES: [&[u8]; 10] = [
     INTER_REGULAR_BYTES,

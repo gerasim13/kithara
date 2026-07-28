@@ -2,42 +2,63 @@ use crate::skin::{FontFamily, FontWeight};
 
 /// A toolkit-neutral RGBA colour.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Rgba {
-    pub(crate) a: f32,
-    pub(crate) b: f32,
-    pub(crate) g: f32,
-    pub(crate) r: f32,
+pub struct Rgba {
+    pub a: f32,
+    pub b: f32,
+    pub g: f32,
+    pub r: f32,
 }
 
 /// A toolkit-neutral point in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Pt {
-    pub(crate) x: f32,
-    pub(crate) y: f32,
+pub struct Pt {
+    pub x: f32,
+    pub y: f32,
 }
 
 /// A toolkit-neutral rectangle in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Rect {
-    pub(crate) h: f32,
-    pub(crate) w: f32,
-    pub(crate) x: f32,
-    pub(crate) y: f32,
+pub struct Rect {
+    pub h: f32,
+    pub w: f32,
+    pub x: f32,
+    pub y: f32,
 }
 
 /// Toolkit-neutral text presentation shaped by the painter backend.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct TextStyle {
-    pub(crate) family: FontFamily,
-    pub(crate) weight: FontWeight,
-    pub(crate) color: Rgba,
-    pub(crate) size: f32,
+#[non_exhaustive]
+pub struct TextStyle {
+    pub family: FontFamily,
+    pub weight: FontWeight,
+    pub color: Rgba,
+    pub size: f32,
     /// Additional space between glyphs, relative to the font size.
-    pub(crate) tracking: f32,
+    pub tracking: f32,
+}
+
+impl TextStyle {
+    /// Creates toolkit-neutral text presentation.
+    #[must_use]
+    pub const fn new(
+        family: FontFamily,
+        weight: FontWeight,
+        color: Rgba,
+        size: f32,
+        tracking: f32,
+    ) -> Self {
+        Self {
+            family,
+            weight,
+            color,
+            size,
+            tracking,
+        }
+    }
 }
 
 /// Minimal drawing port implemented by rendering backends.
-pub(crate) trait Painter {
+pub trait Painter {
     fn fill_circle(&mut self, center: Pt, radius: f32, color: Rgba);
 
     /// Strokes an arc whose angles are expressed in radians.
