@@ -45,6 +45,10 @@ routine work:
 - `just fmt`; check-only: `just fmt check`.
 - `just check`; Clippy: `just check clippy`.
 - `just lint`; fast gate: `just lint fast`; full gate: `just lint full`.
+- Structural and behavioral duplication report: `just lint similarity`; scope
+  it by appending crate `src/` paths. Read
+  `target/similarity/<revision>/report.md` for the crate-level Mermaid map and
+  explainable candidates, and `report.json` for exhaustive evidence.
 - `just test`; parameterized harness: `just test run <args>`; tests plus
   doc-tests: `just test all`.
 - `just ci gate`; scoped audit: `just ci audit <scope>`; broad report:

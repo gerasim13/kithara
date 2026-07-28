@@ -28,8 +28,11 @@ Exposed through the `CoreCommand` subcommand enum:
 - `lint` — architectural / style / idiomatic fitness functions (`arch`, `style`,
   `idioms`), ratcheted against a baseline. *(feature `lint`)*
 - `format` — Rust, Cargo manifests, TOML, JSON, and Markdown formatting.
-- `typos`, `similarity`, `ast-grep` — thin wrappers over the matching CLIs with
-  the workspace config pinned.
+- `typos`, `ast-grep` — thin wrappers over the matching CLIs with the workspace
+  config pinned.
+- `similarity` — recursive Rust type-shape and normalized behavior analysis
+  with explainable revision-scoped artifacts, followed by the transitional
+  `similarity-rs` function-copy scan.
 - `manifest`, `orphans` — Cargo manifest hygiene and per-package orphan checks.
 - `test` — workspace tests through `cargo nextest` with lane / backend / feature
   selection.

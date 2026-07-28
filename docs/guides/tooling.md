@@ -68,6 +68,29 @@ These are suitable for local pre-commit feedback.
 - Audit and health consume one canonical argv source for their shared stages and
   validate each xtask command shape in the `kithara-devtools` unit tests.
 
+## Similarity Analysis
+
+- `just lint similarity` automatically combines native abstraction analysis
+  with the established `similarity-rs` function-copy scan. Append one or more
+  crate `src/` paths for a focused run; no discovery or secondary visualization
+  command is required.
+- Native artifacts live under `target/similarity/<revision>/`. Start with
+  `report.md`: its Mermaid graph aggregates every candidate by crate pair and
+  its findings explain state, behavior, matched fields, type-family scores,
+  substitution direction, and caveats. `report.json` and `graph.json` retain
+  exhaustive unaggregated evidence; `manifest.json` records the profile, scan
+  size, candidate count, and cache use.
+- `.config/similarity.toml` owns project exclusions and optional type
+  dictionaries. `[[types.relations]]` gives a pair a `similarity` in
+  `[0.0, 1.0]`, `substitution` (`safe`, `conditional`, or `incompatible`),
+  `direction` (`bidirectional`, `left-to-right`, or `right-to-left`), and
+  `caveats`. `[types.families.<name>]` supplies `members` and
+  `default_similarity`.
+- Audit and advisory analyze production source; strict also includes test paths
+  and `#[cfg(test)]` items. Native analysis is diagnostic and does not alter
+  existing CI thresholds or latency budgets. A high score is a refactoring
+  candidate, never proof of behavioral equivalence.
+
 ## Dependency And Surface Tools
 
 - `cargo-deny`: licenses, bans, advisories, and source policy.

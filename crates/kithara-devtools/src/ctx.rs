@@ -3,11 +3,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use cargo_metadata::Metadata;
 
-use crate::common::project::ProjectConfig;
+use crate::{common::project::ProjectConfig, similarity::SimilarityConfig};
 
 pub struct Ctx {
     pub root: PathBuf,
     pub config: ProjectConfig,
+    pub(crate) similarity: SimilarityConfig,
     metadata: Option<Metadata>,
 }
 
@@ -18,6 +19,7 @@ impl Ctx {
         Self {
             root,
             config,
+            similarity: SimilarityConfig::default(),
             metadata: None,
         }
     }
@@ -53,12 +55,14 @@ impl Ctx {
         let config_path = root.join(".config/xtask.toml");
         let mut config = ProjectConfig::load(&root)
             .with_context(|| format!("loading {}", config_path.display()))?;
+        let similarity = SimilarityConfig::load(&root)?;
         if config.project.name.is_empty() {
             config.project.name = derive_project_name(&metadata, &root);
         }
         Ok(Self {
             root,
             config,
+            similarity,
             metadata: Some(metadata),
         })
     }

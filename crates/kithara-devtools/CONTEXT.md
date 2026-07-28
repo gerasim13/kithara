@@ -128,6 +128,40 @@ optional rust-analyzer yields static/runtime output unless
 `--semantic required` was requested. Truncation is explicit, applies only to
 evidence collection, and never removes nodes because of diagram size.
 
+## Behavioral similarity ownership
+
+`similarity` owns native source-level comparison of Rust abstractions. The
+existing `just lint similarity` entrypoint first parses the selected production
+sources, writes `report.md`, `report.json`, `graph.json`, and `manifest.json`
+below `target/similarity/<revision>/`, then runs the existing `similarity-rs`
+function-copy profile. Native findings are diagnostic and do not change the
+audit, advisory, or strict budgets owned by the external profile.
+
+Type shapes are interned bottom-up and pair comparisons are memoized for the
+run. Generic parameter names normalize by position, derive attributes do not
+change source shape, nested container arguments compare recursively, and
+`SmallVec<[T; N]>` / `ArrayVec<[T; N]>` expose `T` as the container element.
+Built-in `std` families carry conservative similarity degrees. Dependency
+families activate only when Cargo metadata shows the dependency, and
+`.config/similarity.toml` may add project-specific families or directional
+pair relations with substitution caveats.
+
+Behavior is a normalized source graph over signatures, control flow, calls,
+field access, effects, and literal values. Generic and local names are erased
+where they do not carry semantics; domain types, constructors, significant
+macro symbols, and effects remain. Candidate buckets precede three rounds of
+Weisfeiler-Lehman refinement and bounded method alignment. `impl` blocks in
+separate files attach only when their owner resolves uniquely in the workspace
+or crate. Partial state overlap without matching behavior is a review finding;
+composition is recommended only when aligned `impl` behavior supports it.
+
+`report.json` and `graph.json` are exhaustive. The Mermaid view aggregates
+candidates by crate pair, so rendering remains useful without imposing a node
+or finding limit. Strict includes test paths and `#[cfg(test)]` items; audit and
+advisory keep the established production-only policy. Proc-macro output is not
+expanded, similarity never proves substitutability, and caveats must be checked
+before refactoring.
+
 ## Quality Lab ownership
 
 `quality lab` owns heavyweight external code analysis that must stay outside

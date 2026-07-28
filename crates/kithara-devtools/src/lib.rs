@@ -47,7 +47,7 @@ pub enum CoreCommand {
     AuditClippy(audit_clippy::AuditClippyArgs),
     /// Thin wrapper around `typos` that pins the workspace config.
     Typos(typos::TyposArgs),
-    /// Thin wrapper around `similarity-rs` with audit/advisory/strict profiles.
+    /// Analyze structural and behavioral similarity, then run similarity-rs.
     Similarity(similarity::SimilarityArgs),
     /// Cargo manifest hygiene checks.
     Manifest(manifest::ManifestArgs),
