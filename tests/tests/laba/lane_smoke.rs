@@ -2,9 +2,8 @@
 
 use kithara_integration_tests::TestServerHelper;
 
-/// Лейн собирается и достаёт тест-сервер. Единственный зелёный тест в
-/// `suite_laba` — он существует, чтобы отличить «лейн сломан» от
-/// «ловушка красная».
+/// Proves the lane builds and reaches the test server. This is the only
+/// green test in `suite_laba`, distinguishing a broken lane from a red trap.
 #[kithara::test(tokio)]
 async fn lane_reaches_test_server() {
     let helper = TestServerHelper::new().await;

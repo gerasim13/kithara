@@ -814,6 +814,7 @@ android MODE="build" *ARGS:
 #   just apple xcode                    # XCFramework + open xcodeproj
 #   just apple ios SCHEME [DESTINATION] # build for iOS Simulator
 #   just apple test [DESTINATION]       # test hosted unit target on iOS Simulator
+#   just apple laba [DESTINATION]       # LABA traps, one test process per trap
 #   just apple doc                      # combined Kithara+KitharaRx .doccarchive
 #   just apple release                  # XCFramework + strip + zip + checksum
 [positional-arguments]
@@ -860,6 +861,47 @@ apple MODE="xcframework" *ARGS:
             -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
             -scheme KitharaDemoUnitTests_iOS \
             -destination "$destination"
+        ;;
+      laba)
+        # One `xcodebuild` invocation per trap, and therefore one test process
+        # per trap. Sharing a process is not an option today: after the first
+        # player releases the session output stream, a stream started for the
+        # next player reports success in a millisecond and never delivers a
+        # callback, so every trap but the first would fail on its precondition
+        # rather than on its bug.
+        destination="${1:-platform=iOS Simulator,name=iPhone 16}"
+        test_server_url="${KITHARA_TEST_SERVER_URL:-}"
+        if [[ -z "$test_server_url" ]]; then
+          echo "KITHARA_TEST_SERVER_URL must name the running hermetic test server"
+          exit 2
+        fi
+        just apple xcframework --profile debug
+        just _xcodegen-local
+        KITHARA_LOCAL_DEV=1 xcodebuild build-for-testing \
+            -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
+            -scheme KitharaDemoUnitTests_iOS \
+            -destination "$destination" || exit 1
+        traps=$(grep -ho 'func laba[A-Za-z0-9]*' apple/Examples/KitharaDemo/UnitTests/*.swift \
+            | sed 's/^func //' | sort)
+        failed=""
+        for name in $traps; do
+          echo "=== $name ==="
+          KITHARA_LOCAL_DEV=1 TEST_RUNNER_KITHARA_TEST_SERVER_URL="$test_server_url" \
+            xcodebuild test-without-building \
+              -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
+              -scheme KitharaDemoUnitTests_iOS \
+              -destination "$destination" \
+              "-only-testing:KitharaDemoUnitTests_iOS/LabaIOSTraps/${name}()" \
+            > "$TMPDIR/kithara-laba-$name.log" 2>&1 || failed="$failed $name"
+          grep -E '✔ Test "|✘ Test "|↳ ' "$TMPDIR/kithara-laba-$name.log" || true
+        done
+        echo "=== summary ==="
+        if [[ -z "$failed" ]]; then
+          echo "all traps green"
+        else
+          echo "red:$failed"
+          exit 1
+        fi
         ;;
       doc)
         just xtask apple docgen

@@ -1,3 +1,5 @@
+use std::path::{Component, Path};
+
 use axum::{
     Json, Router,
     extract::{Request, State},
@@ -11,6 +13,7 @@ use kithara::platform::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    routes::assets::assets_dir,
     test_server_state::{Content, Delivery, FixtureBehavior, TestServerState},
     token_store::TokenResponse,
 };
@@ -30,6 +33,14 @@ pub(crate) enum ContentSpec {
     Bytes {
         base64: String,
         content_type: Option<String>,
+    },
+    /// Serve a fixture already on disk, named the way `/assets/*` names it.
+    ///
+    /// Out-of-process clients (the iOS traps) cannot construct
+    /// [`ContentSpec::Bytes`] for a multi-megabyte fixture without uploading
+    /// it, which the request-body limit rejects.
+    Asset {
+        name: String,
     },
 }
 
@@ -87,6 +98,32 @@ fn content_from_spec(spec: ContentSpec) -> Result<Content, String> {
                 content_type,
             })
         }
+        ContentSpec::Asset { name } => {
+            let relative = Path::new(&name);
+            if relative.is_absolute()
+                || relative
+                    .components()
+                    .any(|component| !matches!(component, Component::Normal(_)))
+            {
+                return Err(format!("asset name must stay under assets/: {name}"));
+            }
+            let bytes = std::fs::read(assets_dir().join(relative))
+                .map_err(|error| format!("asset `{name}` not readable: {error}"))?;
+            Ok(Content::StaticBytes {
+                bytes: Arc::new(bytes),
+                content_type: asset_content_type(&name),
+            })
+        }
+    }
+}
+
+fn asset_content_type(name: &str) -> Option<&'static str> {
+    if name.ends_with(".mp3") {
+        Some("audio/mpeg")
+    } else if name.ends_with(".m3u8") {
+        Some("application/vnd.apple.mpegurl")
+    } else {
+        None
     }
 }
 
@@ -163,6 +200,36 @@ mod tests {
         );
         state.set_network_online(true);
         assert!(state.network_online(), "switch must bring the server back");
+    }
+
+    #[kithara::test]
+    fn asset_spec_serves_the_fixture_without_uploading_it() {
+        let content = content_from_spec(ContentSpec::Asset {
+            name: "test.mp3".to_owned(),
+        })
+        .expect("the MP3 fixture must resolve");
+        let Content::StaticBytes {
+            bytes,
+            content_type,
+        } = content
+        else {
+            panic!("asset spec must resolve to static bytes");
+        };
+        assert_eq!(bytes.len(), 2_994_349, "fixture bytes come from disk");
+        assert_eq!(content_type, Some("audio/mpeg"));
+    }
+
+    #[kithara::test]
+    fn asset_spec_rejects_paths_outside_assets() {
+        let Err(error) = content_from_spec(ContentSpec::Asset {
+            name: "../Cargo.toml".to_owned(),
+        }) else {
+            panic!("traversal must be rejected");
+        };
+        assert!(
+            error.contains("must stay under assets/"),
+            "unexpected rejection reason: {error}"
+        );
     }
 
     #[kithara::test]

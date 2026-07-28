@@ -182,7 +182,7 @@ prefix_args = [
 default_features = ["e2e", "kithara/resample-glide"]
 default_flash = false
 
-# Ловушки багов LABA-*. Красные по построению — вне основного гейта.
+# LABA-* regression traps are red by design and stay outside the main gate.
 [test.lanes.laba]
 program = "cargo"
 prefix_args = [

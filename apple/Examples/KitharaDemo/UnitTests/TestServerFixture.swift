@@ -41,12 +41,17 @@ enum TestServerFixture {
         case htmlError
         case status(code: UInt16)
         case bytes(Data, contentType: String?)
+        /// Serve a fixture the server already has on disk. Preferred over
+        /// ``bytes(_:contentType:)`` for anything sizeable — uploading a
+        /// multi-megabyte body is rejected by the request-body limit.
+        case asset(name: String)
 
         private enum CodingKeys: String, CodingKey {
             case kind
             case code
             case base64
             case contentType = "content_type"
+            case name
         }
 
         func encode(to encoder: Encoder) throws {
@@ -61,6 +66,9 @@ enum TestServerFixture {
                 try container.encode("bytes", forKey: .kind)
                 try container.encode(data.base64EncodedString(), forKey: .base64)
                 try container.encodeIfPresent(contentType, forKey: .contentType)
+            case let .asset(name):
+                try container.encode("asset", forKey: .kind)
+                try container.encode(name, forKey: .name)
             }
         }
     }
