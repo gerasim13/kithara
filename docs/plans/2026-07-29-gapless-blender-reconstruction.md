@@ -32,8 +32,11 @@ reader-control handles are removed.
 - [ ] Seek cancels every transition descendant, discards staged PCM, advances
       the epoch, and installs one `Replace` generation without mixing.
 - [ ] The committed target oracles remain strict and non-vacuous.
-- [ ] Every production commit passes its scoped tests and the complete
-      `just test` gate in a clean checkout of that exact commit.
+- [ ] Every production commit after the preserved red oracles first become
+      green passes its scoped tests and the complete `just test` gate in a
+      clean checkout of that exact commit. Earlier reconstruction commits
+      compile the complete test graph and introduce no failures beyond the
+      explicitly preserved target-red set.
 - [ ] The final complete gate reports all workspace tests green, and a manual
       switch in `kithara-app` is audibly gapless.
 
@@ -44,6 +47,11 @@ The architecture is derived from these observed states:
 - The historical target-green state is the union of tracked snapshot
   `0f3c95d5800c` and untracked snapshot parent `4e045c6edf6b`.
 - The preserved target oracles are committed in `a46db92ff`.
+- `a46db92ff` also preserved two HLS target-body owner tests whose production
+  API was still only in the dirty WIP. At `884c01c91` the complete test graph
+  therefore stops at compile time on the missing `ReadLease` target-body
+  contract. That owner contract is restored before adding another oracle; it
+  is not replaced with a test edit or a compatibility shim.
 - The existing ownership contract is committed in `5c27aa29b`.
 - `c76a1557e` made a local Symphonia AAC emitted-frame measurement explicit,
   but also let that measurement redefine global seek/duration coordinates.
@@ -476,11 +484,27 @@ reverted; no later situational fixes are stacked on it.
 - Validation: document paths, refs, and repository formatting/hygiene.
 - No runtime claim.
 
+### P0.5. `fix(hls): restore target-body oracle dependency`
+
+- Make `ReadLease` the owner of the exact ordered target-body fetch window
+  already required by the committed HLS tests.
+- Land the first production transition consumer in the same commit; an API
+  reachable only under `cfg(test)` or left dead until a later slice is a
+  forbidden compatibility shim.
+- Build the target plan directly in canonical order; never collect, sort, or
+  positionally insert into the fetch queue.
+- Preserve the existing preallocated queue and its exact-size priority
+  semantics. Rebuilding a newer immutable target-coverage version must not
+  allocate after lease construction or lose in-flight slot state.
+- Validate the two existing target-body owner tests and compile the complete
+  integration-test graph before adding any new test.
+
 ### P1. `test: require live PCM after decoder transition`
 
 - Add only missing non-vacuity assertions to the already committed oracles.
 - Do not change thresholds or expected behavior.
-- Validate the focused oracle set, then full `just test`.
+- Validate the focused oracle set, then classify the complete `just test`
+  result against the preserved target-red set.
 
 ### P2. `refactor(decode): expose one decoder transition profile`
 
@@ -552,10 +576,13 @@ For every production slice:
    codec directions.
 4. Run isolated seek/ABR regressions that previously failed, including
    near-end seek and stress cases.
-5. Commit only when those probes are green.
+5. Before the preserved target set first becomes green, commit only when the
+   complete test graph compiles and every failure is in the explicit target-red
+   set. After that point, commit only when every probe is green.
 6. Validate a clean detached checkout of that exact commit with `just test`.
-   Record the total count; a small crate count or 229 tests is not the full
-   gate.
+   Record the total count and exact expected-red set during reconstruction; a
+   small crate count or 229 tests is not the full gate. The final result has no
+   expected-red exception.
 
 Final validation:
 
