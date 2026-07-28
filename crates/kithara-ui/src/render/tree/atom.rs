@@ -1,6 +1,7 @@
-use iced::Element;
+use iced::{Element, widget::Space};
+use num_traits::cast::AsPrimitive;
 
-use super::icon::render_icon;
+use super::{icon::render_icon, knob::KnobProgram};
 use crate::{
     atoms::{
         chip::Chip,
@@ -8,7 +9,6 @@ use crate::{
             cell::Cell, crossfader::Crossfader, segmented::Segmented, select::Select,
             status_dot::StatusDot, swatch::Swatch,
         },
-        knob::Knob,
         readout::Readout,
     },
     compile::CompiledUi,
@@ -78,13 +78,11 @@ pub(super) fn knob<'a>(
     value: Option<&ReadValue<'_>>,
     skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
-    Knob::builder()
-        .path(path)
-        .maybe_label(label)
-        .maybe_value(value)
-        .skin(skin)
-        .build()
-        .view()
+    let Some(ReadValue::Scalar(value)) = value else {
+        return Space::new().into();
+    };
+    let value = value.clamp(0.0, 1.0).as_();
+    KnobProgram::new(path, label, value, skin).view()
 }
 
 pub(super) fn readout<'a>(

@@ -1,7 +1,7 @@
 use kithara_ui::render::{Node, ReadValue, Scope, TrackRow};
 
 use super::value::Value;
-use crate::{catalog::Catalog, gui::studio_ui::cache::CatalogRowMarks};
+use crate::{catalog::Catalog, studio_ui::cache::CatalogRowMarks};
 
 pub(super) struct LibraryNode<'a> {
     rows: Vec<TrackRow<'a>>,

@@ -7,14 +7,15 @@ use iced::{
 use kithara_platform::{sync::Arc, time::Duration};
 
 use super::{
-    deck::DeckUi, frontend::window_settings, message::Message, studio_ui::StudioUi,
-    subscription::subscription_config, theme,
+    deck::DeckUi, frontend::window_settings, message::Message, subscription::subscription_config,
+    theme,
 };
 use crate::{
     catalog::Catalog,
     config::AppConfig,
     deck::{DeckId, DeckSet},
     state::StateController,
+    studio_ui::StudioUi,
     theme::gui,
 };
 

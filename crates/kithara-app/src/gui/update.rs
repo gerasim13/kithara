@@ -6,9 +6,9 @@ use super::{
     app::Kithara,
     deck::{self, DeckMsg},
     message::Message,
-    mix, studio_ui,
+    mix,
 };
-use crate::{catalog, deck::DeckId};
+use crate::{catalog, deck::DeckId, studio_ui};
 
 pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
     let task = match message {

@@ -2,7 +2,7 @@ use kithara_ui::render::{Node, ReadValue, Scope};
 use num_traits::cast::AsPrimitive;
 
 use super::value::Value;
-use crate::gui::studio_ui::{
+use crate::studio_ui::{
     cache::{CollapsedModules, DeckLayout},
     scope::deck_index,
 };

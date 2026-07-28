@@ -1,9 +1,9 @@
-use iced::{
-    Font,
-    font::{Family, Stretch, Style, Weight},
-};
+use iced::Font;
 
-use crate::skin::{FontFamily, FontWeight};
+use crate::{
+    paint::canvas::font,
+    skin::{FontFamily, FontWeight},
+};
 
 pub const INTER_REGULAR_BYTES: &[u8] = include_bytes!("../../assets/fonts/Inter-Regular.ttf");
 pub const INTER_SEMIBOLD_BYTES: &[u8] = include_bytes!("../../assets/fonts/Inter-SemiBold.ttf");
@@ -35,68 +35,23 @@ pub const FONT_BYTES: [&[u8]; 10] = [
     lucide_icons::LUCIDE_FONT_BYTES,
 ];
 
-pub const SANS: Font = font(inter_family(), Weight::Normal);
-pub const MONO: Font = font(mono_family(), Weight::Normal);
+pub const SANS: Font = font(FontFamily::Sans, FontWeight::Normal);
+pub const MONO: Font = font(FontFamily::Mono, FontWeight::Normal);
 pub const LUCIDE: Font = Font::with_name("lucide");
 
 #[must_use]
 pub const fn sans(weight: FontWeight) -> Font {
-    font(inter_family(), iced_weight(weight))
+    font(FontFamily::Sans, weight)
 }
 
 #[must_use]
 pub const fn mono(weight: FontWeight) -> Font {
-    font(mono_family(), iced_weight(weight))
+    font(FontFamily::Mono, weight)
 }
 
 #[must_use]
 pub const fn display(weight: FontWeight) -> Font {
-    font(display_family(), iced_weight(weight))
-}
-
-#[must_use]
-pub const fn family(family: FontFamily, weight: FontWeight) -> Font {
-    match family {
-        FontFamily::Display => display(weight),
-        FontFamily::Sans => sans(weight),
-        FontFamily::Mono => mono(weight),
-    }
-}
-
-const fn inter_family() -> Family {
-    Family::Name("Inter")
-}
-
-#[cfg(not(target_vendor = "apple"))]
-const fn mono_family() -> Family {
-    Family::Name("JetBrains Mono")
-}
-
-#[cfg(target_vendor = "apple")]
-const fn mono_family() -> Family {
-    Family::Name("Menlo")
-}
-
-const fn display_family() -> Family {
-    Family::Name("Space Grotesk")
-}
-
-const fn font(family: Family, weight: Weight) -> Font {
-    Font {
-        family,
-        weight,
-        stretch: Stretch::Normal,
-        style: Style::Normal,
-    }
-}
-
-const fn iced_weight(weight: FontWeight) -> Weight {
-    match weight {
-        FontWeight::Normal => Weight::Normal,
-        FontWeight::Medium => Weight::Medium,
-        FontWeight::Semibold => Weight::Semibold,
-        FontWeight::Bold => Weight::Bold,
-    }
+    font(FontFamily::Display, weight)
 }
 
 #[cfg(test)]

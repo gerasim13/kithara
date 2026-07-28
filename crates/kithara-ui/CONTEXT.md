@@ -41,10 +41,24 @@ sanctioned panic site for an invalid embedded document or color.
 ## Skin Ownership
 
 `SkinDoc` is the canonical owner of every configurable rendering metric, including intrinsic
-control sizes used by the toolkit-independent compiler. With the `render` feature, `Skin`
-converts the complete document to iced colors while retaining the document for layout sizing.
-The platform-specific monospace family remains code-owned because it describes font resource
-availability rather than skin design.
+control sizes used by the toolkit-independent compiler. With the `render` feature, `Skin` converts
+the complete document to iced colors while retaining the document for layout sizing. `Knob`
+painting is toolkit-neutral, but `atoms` remains render-gated because the knob consumes
+`render::Skin` and its adapter is an iced canvas program. The platform-specific monospace family
+remains code-owned because it describes font resource availability rather than skin design.
+
+## Painter Ownership
+
+`SkinDoc` owns document-level paint roles and metrics. `paint::painter` owns the minimal trait and
+value types; they are toolkit-neutral and depend on no rendering toolkit. `paint::canvas`
+implements that trait against iced and owns translation, shaping, and canvas calls. A widget owns
+command order and local geometry, while its render-tree adapter owns toolkit lifecycle,
+interaction state, and the translation from measured bounds to widget rectangles.
+
+Text crosses the painter seam as a string plus `TextStyle`; the backend shapes it.
+
+The painter seam is `pub(crate)`; every implementation lives in this crate, and the recording
+implementation is test-only.
 
 ## Wave View Ownership
 

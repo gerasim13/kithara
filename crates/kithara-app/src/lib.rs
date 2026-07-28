@@ -25,3 +25,5 @@ pub mod tui;
 
 #[cfg(feature = "gui")]
 pub mod gui;
+#[cfg(feature = "gui")]
+mod studio_ui;

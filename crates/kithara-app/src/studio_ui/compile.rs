@@ -12,52 +12,52 @@ use super::{
     endpoints::StudioRegistry,
     reads::StudioRoot,
 };
-use crate::gui::{app::Kithara, message::Message};
+use crate::gui::{Kithara, Message};
 
 const DOCS: &[(&str, &str)] = &[
     (
         "studio.klayout.ron",
-        include_str!("../../../assets/ui/studio.klayout.ron"),
+        include_str!("../../assets/ui/studio.klayout.ron"),
     ),
     (
         "studio-single.klayout.ron",
-        include_str!("../../../assets/ui/studio-single.klayout.ron"),
+        include_str!("../../assets/ui/studio-single.klayout.ron"),
     ),
     (
         "modules/studio-bar.kmodule.ron",
-        include_str!("../../../assets/ui/modules/studio-bar.kmodule.ron"),
+        include_str!("../../assets/ui/modules/studio-bar.kmodule.ron"),
     ),
     (
         "modules/studio-deck.kmodule.ron",
-        include_str!("../../../assets/ui/modules/studio-deck.kmodule.ron"),
+        include_str!("../../assets/ui/modules/studio-deck.kmodule.ron"),
     ),
     (
         "modules/studio-overview.kmodule.ron",
-        include_str!("../../../assets/ui/modules/studio-overview.kmodule.ron"),
+        include_str!("../../assets/ui/modules/studio-overview.kmodule.ron"),
     ),
     (
         "modules/studio-overview-single.kmodule.ron",
-        include_str!("../../../assets/ui/modules/studio-overview-single.kmodule.ron"),
+        include_str!("../../assets/ui/modules/studio-overview-single.kmodule.ron"),
     ),
     (
         "modules/studio-overview-row.kmodule.ron",
-        include_str!("../../../assets/ui/modules/studio-overview-row.kmodule.ron"),
+        include_str!("../../assets/ui/modules/studio-overview-row.kmodule.ron"),
     ),
     (
         "modules/studio-mixer.kmodule.ron",
-        include_str!("../../../assets/ui/modules/studio-mixer.kmodule.ron"),
+        include_str!("../../assets/ui/modules/studio-mixer.kmodule.ron"),
     ),
     (
         "modules/studio-mixer-single.kmodule.ron",
-        include_str!("../../../assets/ui/modules/studio-mixer-single.kmodule.ron"),
+        include_str!("../../assets/ui/modules/studio-mixer-single.kmodule.ron"),
     ),
     (
         "modules/studio-strip.kmodule.ron",
-        include_str!("../../../assets/ui/modules/studio-strip.kmodule.ron"),
+        include_str!("../../assets/ui/modules/studio-strip.kmodule.ron"),
     ),
     (
         "modules/studio-library.kmodule.ron",
-        include_str!("../../../assets/ui/modules/studio-library.kmodule.ron"),
+        include_str!("../../assets/ui/modules/studio-library.kmodule.ron"),
     ),
 ];
 
@@ -98,7 +98,7 @@ pub(super) fn compile_studio(layout: DeckLayout) -> Result<CompiledUi, UiDocErro
     compile(
         entry,
         &resolver,
-        &StudioRegistry::new(),
+        &StudioRegistry::default(),
         builtin::skin_doc(),
         &UiConfig::default(),
     )

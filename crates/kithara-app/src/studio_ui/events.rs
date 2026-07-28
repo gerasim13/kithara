@@ -8,12 +8,7 @@ use super::{
 };
 use crate::{
     deck::DeckId,
-    gui::{
-        app::Kithara,
-        deck::{DeckMsg, TEMPO_STEP},
-        message::Message,
-        mix::MixMsg,
-    },
+    gui::{DeckMsg, Kithara, Message, MixMsg, TEMPO_STEP},
 };
 
 /// Translate a compiled-UI event into an app message, applying host-owned

@@ -3,16 +3,13 @@ use num_traits::cast::AsPrimitive;
 
 use super::value::Value;
 use crate::{
-    gui::{
-        deck::{DeckView, TEMPO_RANGE, TimestretchState},
-        studio_ui::{
-            cache::{DeckCache, analysis_bpm},
-            endpoints::{EQ_MAX_DB, EQ_MIN_DB},
-            scope::deck_index,
-        },
-        view::playhead,
-    },
+    gui::{DeckView, TEMPO_RANGE, TimestretchState, playhead},
     state::UiState,
+    studio_ui::{
+        cache::{DeckCache, analysis_bpm},
+        endpoints::{EQ_MAX_DB, EQ_MIN_DB},
+        scope::deck_index,
+    },
 };
 
 #[derive(Clone, Copy)]

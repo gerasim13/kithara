@@ -7,11 +7,7 @@ use num_traits::cast::{AsPrimitive, ToPrimitive};
 use super::scope::deck_letter;
 use crate::{
     catalog::{Catalog, CatalogEntry, is_loaded},
-    gui::{
-        app::Decks,
-        deck::DeckUi,
-        view::{playhead, track_subtitle},
-    },
+    gui::{DeckUi, Decks, playhead, track_subtitle},
     state::UiState,
     waveform::TrackAnalysis,
 };

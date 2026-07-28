@@ -1,7 +1,7 @@
 use kithara_ui::render::{Node, ReadValue, Scope, StereoLevels};
 
 use super::value::Value;
-use crate::{gui::studio_ui::scope::deck_index, mix::MixState};
+use crate::{mix::MixState, studio_ui::scope::deck_index};
 
 #[derive(Clone, Copy)]
 pub(super) struct MixNode<'a> {

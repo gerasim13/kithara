@@ -4,6 +4,7 @@ use super::theme::RenderPalette;
 use crate::{
     error::UiDocError,
     ids::SourceUri,
+    paint::Rgba,
     skin::{
         ButtonSkin, CellSkin, CheckboxSkin, ChipSkin, ChromeSkin, ColorRole, CrossfaderSkin,
         DeckSkin, DividerSkin, DragSkin, FaderSkin, FrameSkin, GlobalBarSkin, KnobSkin,
@@ -154,6 +155,10 @@ impl Skin {
             ColorRole::WaveMid => self.palette.wave_mid,
             ColorRole::WaveHigh => self.palette.wave_high,
         }
+    }
+
+    pub(crate) fn rgba(&self, role: ColorRole) -> Rgba {
+        self.color(role).into()
     }
 
     pub(crate) fn border(&self, frame: FrameSkin) -> Border {

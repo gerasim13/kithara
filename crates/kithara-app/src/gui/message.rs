@@ -9,7 +9,7 @@ use crate::deck::DeckId;
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
     /// Raw event from the compiled studio UI; translated by
-    /// [`super::studio_ui::translate`].
+    /// [`crate::studio_ui::translate`].
     Ui(UiEvent),
     /// Event addressed to one deck.
     Deck(DeckId, super::deck::DeckMsg),

@@ -1,193 +1,89 @@
-use iced::{
-    Alignment, Color, Element, Event, Length, Point, Radians, Rectangle, Renderer, Theme,
-    mouse::{self, Cursor},
-    widget::{
-        Column, Space,
-        canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke, path::Arc},
-        container,
-    },
-};
-use num_traits::cast::AsPrimitive;
-
 use crate::{
-    render::{ReadValue, Skin, UiEvent, typography::styled_text},
-    skin::KnobSkin,
-    widgets::{
-        Widget,
-        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState, WheelStep},
-    },
+    paint::{Painter, Pt, Rect, Rgba, TextStyle},
+    render::Skin,
+    skin::ColorRole,
 };
 
-#[derive(bon::Builder)]
-pub(crate) struct Knob<'path, 'value, 'data, 'skin> {
-    path: &'path str,
+pub(crate) struct Knob<'data, 'skin> {
     label: Option<&'data str>,
-    value: Option<&'value ReadValue<'data>>,
+    value: f32,
     skin: &'skin Skin,
 }
 
-impl<'a> Widget<'a> for Knob<'_, '_, '_, '_> {
-    fn view(self) -> Element<'a, UiEvent> {
-        let Some(ReadValue::Scalar(value)) = self.value else {
-            return Space::new().into();
-        };
-        let value = value.clamp(0.0, 1.0).as_();
-        let dial = Canvas::new(KnobCanvas {
-            body_fill: self.skin.color(self.skin.knob.body_fill),
-            body_border: self.skin.color(self.skin.knob.body_border),
-            track_color: self.skin.color(self.skin.knob.track_color),
-            value_color: self.skin.color(self.skin.knob.value_color),
-            indicator_color: self.skin.color(self.skin.knob.indicator_color),
-            drag: ScalarDrag::builder()
-                .path(self.path.to_owned())
-                .mode(ScalarDragMode::RelativeVertical {
-                    value,
-                    range: self.skin.knob.drag_range,
-                })
-                .hover(HoverState::new(mouse::Interaction::ResizingVertically))
-                .double_click_value(0.5)
-                .wheel(WheelStep {
-                    value,
-                    step: self.skin.knob.wheel_step,
-                })
-                .build(),
-            metrics: self.skin.knob,
-            value,
-        })
-        .width(Length::Fill)
-        .height(Length::Fill);
-        let caption = container(match self.label {
-            Some(label) => styled_text(label.to_owned(), self.skin.knob.label_text, self.skin),
-            None => Space::new().into(),
-        })
-        .height(Length::Fixed(self.skin.knob.label_height))
-        .center_x(Length::Fill);
-
-        Column::new()
-            .push(dial)
-            .push(caption)
-            .spacing(self.skin.knob.label_gap)
-            .align_x(Alignment::Center)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+impl<'data, 'skin> Knob<'data, 'skin> {
+    pub(crate) fn new(label: Option<&'data str>, value: f32, skin: &'skin Skin) -> Self {
+        Self { label, value, skin }
     }
-}
 
-struct KnobCanvas {
-    body_fill: Color,
-    body_border: Color,
-    track_color: Color,
-    value_color: Color,
-    indicator_color: Color,
-    drag: ScalarDrag,
-    metrics: KnobSkin,
-    value: f32,
-}
+    fn color(&self, role: ColorRole) -> Rgba {
+        self.skin.rgba(role)
+    }
 
-impl canvas::Program<UiEvent> for KnobCanvas {
-    type State = ScalarDragState;
-
-    fn draw(
-        &self,
-        _state: &ScalarDragState,
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        _cursor: Cursor,
-    ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        let side = bounds.width.min(bounds.height);
-        let radius = (side / 2.0 - self.metrics.outer_inset).max(0.0);
-        let center = Point::new(bounds.width / 2.0, bounds.height / 2.0);
-        let angle = self.metrics.start_angle + self.metrics.sweep_angle * self.value;
+    pub(crate) fn paint<P: Painter>(&self, painter: &mut P, dial: Rect, caption: Rect) {
+        let metrics = self.skin.knob;
+        let side = dial.w.min(dial.h);
+        let radius = side / 2.0;
+        let center = Pt {
+            x: dial.x + dial.w / 2.0,
+            y: dial.y + dial.h / 2.0,
+        };
+        let angle = metrics.start_angle + metrics.sweep_angle * self.value;
 
         if radius > 0.0 {
-            draw_arc(
-                &mut frame,
+            let track = self.color(metrics.track_color);
+            painter.stroke_arc(
                 center,
                 radius,
-                self.metrics.start_angle,
-                self.metrics.start_angle + self.metrics.sweep_angle,
-                Color {
-                    a: self.metrics.track_alpha,
-                    ..self.track_color
+                metrics.start_angle,
+                metrics.start_angle + metrics.sweep_angle,
+                Rgba {
+                    a: metrics.track_alpha,
+                    ..track
                 },
-                self.metrics.track_width,
+                metrics.track_width,
             );
-            draw_arc(
-                &mut frame,
+            painter.stroke_arc(
                 center,
                 radius,
-                self.metrics.neutral_angle,
+                metrics.neutral_angle,
                 angle,
-                self.value_color,
-                self.metrics.track_width,
+                self.color(metrics.value_color),
+                metrics.track_width,
             );
 
-            let body_radius = self.metrics.body_ratio * radius;
-            let body = Path::circle(center, body_radius);
-            frame.fill(&body, self.body_fill);
-            frame.stroke(
-                &body,
-                Stroke::default()
-                    .with_color(self.body_border)
-                    .with_width(self.metrics.body_border_width),
+            let body_radius = metrics.body_ratio * radius;
+            painter.fill_circle(center, body_radius, self.color(metrics.body_fill));
+            painter.stroke_circle(
+                center,
+                body_radius,
+                self.color(metrics.body_border),
+                metrics.body_border_width,
             );
-            frame.stroke(
-                &Path::line(
-                    center,
-                    Point::new(
-                        center.x + angle.cos() * body_radius,
-                        center.y + angle.sin() * body_radius,
-                    ),
-                ),
-                Stroke::default()
-                    .with_color(self.indicator_color)
-                    .with_width(self.metrics.indicator_width),
+            painter.stroke_line(
+                center,
+                Pt {
+                    x: center.x + angle.cos() * body_radius,
+                    y: center.y + angle.sin() * body_radius,
+                },
+                self.color(metrics.indicator_color),
+                metrics.indicator_width,
             );
         }
 
-        vec![frame.into_geometry()]
-    }
-
-    delegate::delegate! {
-        to self.drag {
-            fn update(
-                &self,
-                state: &mut ScalarDragState,
-                event: &Event,
-                bounds: Rectangle,
-                cursor: Cursor,
-            ) -> Option<Action<UiEvent>>;
-            fn mouse_interaction(
-                &self,
-                state: &ScalarDragState,
-                bounds: Rectangle,
-                cursor: Cursor,
-            ) -> mouse::Interaction;
+        if let Some(label) = self.label {
+            painter.text(
+                caption,
+                label,
+                TextStyle {
+                    family: metrics.label_text.font,
+                    weight: metrics.label_text.weight,
+                    color: self.color(metrics.label_text.color),
+                    size: metrics.label_text.size,
+                    tracking: metrics.label_text.spacing,
+                },
+            );
         }
     }
-}
-
-fn draw_arc(
-    frame: &mut Frame,
-    center: Point,
-    radius: f32,
-    start_angle: f32,
-    end_angle: f32,
-    color: Color,
-    width: f32,
-) {
-    let path = Path::new(|builder| {
-        builder.arc(Arc {
-            center,
-            radius,
-            start_angle: Radians(start_angle),
-            end_angle: Radians(end_angle),
-        });
-    });
-    frame.stroke(&path, Stroke::default().with_color(color).with_width(width));
 }
 
 #[cfg(test)]
@@ -195,27 +91,90 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{builtin, ids::SourceUri};
+    use crate::{
+        builtin,
+        ids::SourceUri,
+        paint::record::{Cmd, RecordPainter},
+    };
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Kind {
+        FillCircle,
+        StrokeCircle,
+        StrokeArc,
+        StrokeLine,
+        Text,
+    }
 
     #[kithara::test]
-    fn the_knob_reserves_its_caption_row_with_and_without_a_label() {
+    fn knob_emits_ordered_commands_with_optional_text() {
         let origin = SourceUri("knob.kskin.ron".to_owned());
         let skin = Skin::resolve(builtin::skin_doc().clone(), &origin).unwrap();
-        let value = ReadValue::Scalar(0.5);
-        let rows = |label| {
-            Knob::builder()
-                .path("mixer/gain")
-                .maybe_label(label)
-                .value(&value)
-                .skin(&skin)
-                .build()
-                .view()
-                .as_widget()
-                .children()
-                .len()
+        let labelled = record(Some("GAIN"), &skin);
+        let unlabelled = record(None, &skin);
+
+        assert_eq!(
+            kinds(&labelled),
+            [
+                Kind::StrokeArc,
+                Kind::StrokeArc,
+                Kind::FillCircle,
+                Kind::StrokeCircle,
+                Kind::StrokeLine,
+                Kind::Text,
+            ]
+        );
+        assert_eq!(
+            kinds(&unlabelled),
+            [
+                Kind::StrokeArc,
+                Kind::StrokeArc,
+                Kind::FillCircle,
+                Kind::StrokeCircle,
+                Kind::StrokeLine,
+            ]
+        );
+        assert_eq!(
+            &labelled[..labelled.len() - 1],
+            unlabelled,
+            "the dial recording must not depend on caption presence"
+        );
+        assert!(matches!(
+            labelled.last(),
+            Some(Cmd::Text { content, .. }) if content == "GAIN"
+        ));
+    }
+
+    fn record(label: Option<&str>, skin: &Skin) -> Vec<Cmd> {
+        const DIAL: Rect = Rect {
+            h: 22.0,
+            w: 22.0,
+            x: 3.0,
+            y: 3.0,
+        };
+        const CAPTION: Rect = Rect {
+            h: 9.0,
+            w: 28.0,
+            x: 0.0,
+            y: 30.0,
         };
 
-        assert_eq!(rows(Some("GAIN")), 2, "a captioned knob is dial plus label");
-        assert_eq!(rows(None), rows(Some("GAIN")));
+        let knob = Knob::new(label, 0.25, skin);
+        let mut painter = RecordPainter::default();
+        knob.paint(&mut painter, DIAL, CAPTION);
+        painter.finish()
+    }
+
+    fn kinds(commands: &[Cmd]) -> Vec<Kind> {
+        commands
+            .iter()
+            .map(|command| match command {
+                Cmd::FillCircle { .. } => Kind::FillCircle,
+                Cmd::StrokeCircle { .. } => Kind::StrokeCircle,
+                Cmd::StrokeArc { .. } => Kind::StrokeArc,
+                Cmd::StrokeLine { .. } => Kind::StrokeLine,
+                Cmd::Text { .. } => Kind::Text,
+            })
+            .collect()
     }
 }

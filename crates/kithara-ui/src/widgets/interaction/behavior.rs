@@ -33,10 +33,6 @@ impl HoverState {
     }
 }
 
-/// Pointer travel that turns a press on an item into a drag; below it the
-/// press stays a plain click.
-const DRAG_THRESHOLD: f32 = 4.0;
-
 /// Drag source for one item of a list. It watches the pointer without ever
 /// capturing it, so the item keeps its own click behaviour and every other
 /// control still sees the same events.
@@ -81,6 +77,10 @@ impl ItemDrag {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Option<Action<UiEvent>> {
+        /// Pointer travel that turns a press on an item into a drag; below it the
+        /// press stays a plain click.
+        const DRAG_THRESHOLD: f32 = 4.0;
+
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
                 *state = ItemDragState {
@@ -391,14 +391,14 @@ impl ScalarDrag {
     }
 }
 
-/// Trackpad pixel deltas per emitted wheel step. A discrete wheel detent
-/// (`ScrollDelta::Lines`) is always one step; trackpads stream many small
-/// `Pixels` events per gesture, so those accumulate to this threshold.
-const WHEEL_PIXELS_PER_STEP: f32 = 20.0;
-
 /// Scroll deltas arrive content-directed (macOS natural scrolling): an
 /// upward gesture is negative, so the value axis is the negated delta.
 fn wheel_steps(accum: &mut f32, delta: ScrollDelta) -> f32 {
+    /// Trackpad pixel deltas per emitted wheel step. A discrete wheel detent
+    /// (`ScrollDelta::Lines`) is always one step; trackpads stream many small
+    /// `Pixels` events per gesture, so those accumulate to this threshold.
+    const WHEEL_PIXELS_PER_STEP: f32 = 20.0;
+
     match delta {
         ScrollDelta::Lines { y, .. } => {
             if y == 0.0 {
@@ -470,11 +470,11 @@ mod tests {
         Event::Mouse(mouse::Event::ButtonReleased(Button::Left))
     }
 
-    fn dragged(path: &str, phase: DragPhase) -> Option<UiEvent> {
-        Some(UiEvent::Control {
+    fn dragged(path: &str, phase: DragPhase) -> UiEvent {
+        UiEvent::Control {
             path: path.to_owned(),
             action: ControlAction::Drag(phase),
-        })
+        }
     }
 
     #[kithara::test]
@@ -499,7 +499,10 @@ mod tests {
             .update(&mut state, &moved(40.0), ROW, at(40.0))
             .unwrap_or_else(|| panic!("crossing the threshold must start the drag"));
         let (message, _, status) = started.into_inner();
-        assert_eq!(message, dragged("library/tracks", DragPhase::Start(3)));
+        assert_eq!(
+            message,
+            Some(dragged("library/tracks", DragPhase::Start(3)))
+        );
         assert_eq!(status, iced::event::Status::Ignored);
         assert!(
             drag.update(&mut state, &moved(80.0), ROW, at(80.0))
@@ -512,7 +515,7 @@ mod tests {
             .unwrap_or_else(|| panic!("release must end the drag"));
         assert_eq!(
             dropped.into_inner().0,
-            dragged("library/tracks", DragPhase::Drop)
+            Some(dragged("library/tracks", DragPhase::Drop))
         );
     }
 
@@ -538,7 +541,7 @@ mod tests {
             .unwrap_or_else(|| panic!("the drag must start away from the item"));
         assert_eq!(
             started.into_inner().0,
-            dragged("library/tracks", DragPhase::Start(1))
+            Some(dragged("library/tracks", DragPhase::Start(1)))
         );
 
         let dropped = drag
@@ -546,7 +549,7 @@ mod tests {
             .unwrap_or_else(|| panic!("release must end the drag"));
         assert_eq!(
             dropped.into_inner().0,
-            dragged("library/tracks", DragPhase::Drop)
+            Some(dragged("library/tracks", DragPhase::Drop))
         );
     }
 

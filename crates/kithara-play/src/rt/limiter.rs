@@ -13,14 +13,18 @@ use firewheel::{
 use kithara_audio::PeakLimiter;
 use kithara_test_utils::kithara;
 
-const SESSION_CEILING: f32 = 0.98;
+struct Consts;
 
-const SESSION_RELEASE_MS: f32 = 50.0;
+impl Consts {
+    const SESSION_CEILING: f32 = 0.98;
+    const SESSION_RELEASE_MS: f32 = 50.0;
+    const STEREO: NonZeroUsize = NonZeroUsize::new(2).expect("2 is non-zero");
+}
 
-const STEREO: NonZeroUsize = NonZeroUsize::new(2).expect("2 is non-zero");
-
-const _: () = assert!(SESSION_CEILING > 0.0 && SESSION_CEILING <= 1.0);
-const _: () = assert!(SESSION_RELEASE_MS > 0.0);
+const _: () = {
+    assert!(Consts::SESSION_CEILING > 0.0 && Consts::SESSION_CEILING <= 1.0);
+    assert!(Consts::SESSION_RELEASE_MS > 0.0);
+};
 
 /// Firewheel adapter around the shared [`PeakLimiter`]: the only site that sees
 /// Firewheel buffers.
@@ -63,8 +67,13 @@ impl LimiterProcessor {
 fn build_limiter(sample_rate: NonZeroU32) -> PeakLimiter {
     // The session constants are const-asserted valid above, so construction
     // cannot fail.
-    PeakLimiter::new(sample_rate, STEREO, SESSION_CEILING, SESSION_RELEASE_MS)
-        .expect("session limiter constants are const-asserted valid")
+    PeakLimiter::new(
+        sample_rate,
+        Consts::STEREO,
+        Consts::SESSION_CEILING,
+        Consts::SESSION_RELEASE_MS,
+    )
+    .expect("session limiter constants are const-asserted valid")
 }
 
 impl AudioNodeProcessor for LimiterProcessor {
@@ -80,14 +89,19 @@ impl AudioNodeProcessor for LimiterProcessor {
         _events: &mut ProcEvents,
         _extra: &mut ProcExtra,
     ) -> ProcessStatus {
-        if buffers.inputs.len() < STEREO.get() || buffers.outputs.len() < STEREO.get() {
+        if buffers.inputs.len() < Consts::STEREO.get()
+            || buffers.outputs.len() < Consts::STEREO.get()
+        {
             return ProcessStatus::Bypass;
         }
 
         buffers.outputs[0][..info.frames].copy_from_slice(&buffers.inputs[0][..info.frames]);
         buffers.outputs[1][..info.frames].copy_from_slice(&buffers.inputs[1][..info.frames]);
 
-        if info.in_silence_mask.all_channels_silent(STEREO.get()) {
+        if info
+            .in_silence_mask
+            .all_channels_silent(Consts::STEREO.get())
+        {
             return ProcessStatus::OutputsModifiedWithMask(MaskType::Silence(info.in_silence_mask));
         }
 

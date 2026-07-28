@@ -7,7 +7,6 @@ use kithara_ui::render::fonts;
 
 use super::{
     app::{Decks, Kithara},
-    studio_ui::StudioUi,
     update, view,
 };
 use crate::{
@@ -16,6 +15,7 @@ use crate::{
     deck::{DeckId, DeckSet},
     frontend::{Frontend, FrontendError},
     state::StateController,
+    studio_ui::StudioUi,
     theme::gui,
 };
 

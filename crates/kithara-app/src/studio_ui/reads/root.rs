@@ -6,9 +6,9 @@ use super::{
     mix::{MixNode, StripsNode},
     ui::{DragNode, UiNode},
 };
-use crate::gui::app::Kithara;
+use crate::gui::Kithara;
 
-pub(in crate::gui::studio_ui) struct StudioRoot<'a> {
+pub(in crate::studio_ui) struct StudioRoot<'a> {
     library: LibraryNode<'a>,
     decks: Vec<DeckNode<'a>>,
     engine: EngineNode,
@@ -18,7 +18,7 @@ pub(in crate::gui::studio_ui) struct StudioRoot<'a> {
 }
 
 impl<'a> StudioRoot<'a> {
-    pub(in crate::gui::studio_ui) fn new(state: &'a Kithara) -> Self {
+    pub(in crate::studio_ui) fn new(state: &'a Kithara) -> Self {
         let cache = &state.studio.cache;
         let library = LibraryNode::new(&state.catalog, &cache.deck_marks, state.selected_track);
         let focus = cache.focus_deck();
@@ -72,15 +72,13 @@ mod tests {
     use super::*;
     use crate::{
         catalog::Catalog,
-        gui::{
-            deck::DeckView,
-            studio_ui::{
-                cache::{CatalogRowMarks, CollapsedModules, DeckCache, DeckLayout},
-                endpoints::readable_endpoints,
-            },
-        },
+        gui::DeckView,
         mix::MixState,
         state::UiState,
+        studio_ui::{
+            cache::{CatalogRowMarks, CollapsedModules, DeckCache, DeckLayout},
+            endpoints::readable_endpoints,
+        },
     };
 
     const DERIVED: [&str; 5] = [

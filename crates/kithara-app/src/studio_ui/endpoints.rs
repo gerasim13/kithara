@@ -211,8 +211,8 @@ pub(super) struct StudioRegistry {
     endpoints: Vec<Registration>,
 }
 
-impl StudioRegistry {
-    pub(super) fn new() -> Self {
+impl Default for StudioRegistry {
+    fn default() -> Self {
         let endpoints = ENDPOINTS
             .iter()
             .map(|endpoint| Registration {

@@ -7,6 +7,7 @@ pub mod compile;
 pub mod error;
 pub mod expand;
 pub mod ids;
+pub(crate) mod paint;
 pub mod registry;
 #[cfg(feature = "render")]
 pub mod render;

@@ -4,7 +4,8 @@ use iced::{
 };
 
 use crate::{
-    render::{Skin, UiEvent, fonts},
+    paint::canvas::font,
+    render::{Skin, UiEvent},
     skin::TextRoleSkin,
 };
 
@@ -18,7 +19,7 @@ pub(crate) fn styled_text(
     role: TextRoleSkin,
     skin: &Skin,
 ) -> Element<'static, UiEvent> {
-    let font = fonts::family(role.font, role.weight);
+    let font = font(role.font, role.weight);
     let color = skin.color(role.color);
     if role.spacing <= 0.0 {
         return shaped_text(content)
