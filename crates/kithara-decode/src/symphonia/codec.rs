@@ -26,7 +26,6 @@ use crate::{
     GaplessInfo,
     codec::{CodecPriming, FrameCodec},
     demuxer::TrackInfo,
-    duration_for_frames,
     error::{DecodeError, DecodeResult},
     symphonia::config::SymphoniaConfig,
     types::{DecoderTrackInfo, PcmSpec},
@@ -48,29 +47,6 @@ impl Consts {
     const TRACK_ID: u32 = 0;
 }
 
-/// Per-generation clock for PCM emitted later than its input packet.
-#[derive(Clone, Copy)]
-struct Emitted {
-    start: Duration,
-    before_last: u64,
-    total: u64,
-}
-
-impl Emitted {
-    fn last_pts(self, sample_rate: u32) -> Duration {
-        self.start
-            .saturating_add(duration_for_frames(sample_rate, self.before_last))
-    }
-
-    fn advanced_by(self, frames: u32) -> Self {
-        Self {
-            before_last: self.total,
-            total: self.total.saturating_add(u64::from(frames)),
-            ..self
-        }
-    }
-}
-
 /// Frame codec backed by a symphonia codec registry decoder.
 pub(crate) struct SymphoniaCodec {
     decoder: Box<dyn AudioDecoder>,
@@ -85,10 +61,6 @@ pub(crate) struct SymphoniaCodec {
     /// rate-doubling (HE-AAC v2: container declares core rate, decoder
     /// outputs upsampled rate) without flooding the log.
     logged_first_frame: bool,
-    /// Emission clock for FDK-backed AAC, reset with the decoder.
-    emitted: Option<Emitted>,
-    /// Whether output lags the packet supplied to the decoder.
-    lags: bool,
 }
 
 impl SymphoniaCodec {
@@ -122,8 +94,6 @@ impl SymphoniaCodec {
             spec,
             track_info: DecoderTrackInfo::default(),
             logged_first_frame: false,
-            emitted: None,
-            lags: false,
         })
     }
 
@@ -184,8 +154,6 @@ impl SymphoniaCodec {
                 ..DecoderTrackInfo::default()
             },
             logged_first_frame: false,
-            emitted: None,
-            lags: codec_output_lags(track.codec),
         })
     }
 
@@ -198,11 +166,6 @@ impl SymphoniaCodec {
     pub(crate) fn supports(codec: AudioCodec) -> bool {
         !matches!(codec, AudioCodec::Pcm | AudioCodec::Adpcm)
     }
-
-    fn reset(&mut self) {
-        self.decoder.reset();
-        self.emitted = None;
-    }
 }
 
 impl FrameCodec for SymphoniaCodec {
@@ -213,14 +176,6 @@ impl FrameCodec for SymphoniaCodec {
         _packet_desc: &[u8],
         out: &mut PcmBuf,
     ) -> DecodeResult<u32> {
-        if self.lags && self.emitted.is_none() {
-            // FDK returns no PCM for the opening packet, so anchor before decode.
-            self.emitted = Some(Emitted {
-                start: pts,
-                before_last: 0,
-                total: 0,
-            });
-        }
         let pts_ticks = duration_to_ticks(pts, self.spec.sample_rate.get());
         let packet_pts = Timestamp::new(i64::try_from(pts_ticks).unwrap_or(i64::MAX));
         let packet_ref = PacketRef::new(
@@ -238,7 +193,7 @@ impl FrameCodec for SymphoniaCodec {
                 return Ok(0);
             }
             Err(SymphoniaError::ResetRequired) => {
-                self.reset();
+                self.decoder.reset();
                 out.clear();
                 return Ok(0);
             }
@@ -285,15 +240,7 @@ impl FrameCodec for SymphoniaCodec {
         out.ensure_len(num_samples)?;
         decoded.copy_to_slice_interleaved(&mut out[..num_samples]);
         out.truncate(num_samples);
-        let frames = u32::try_from(decoded.frames()).unwrap_or(u32::MAX);
-        self.emitted = self.emitted.map(|emitted| emitted.advanced_by(frames));
-        Ok(frames)
-    }
-
-    fn decoded_pts(&self, input_pts: Duration) -> Duration {
-        self.emitted.map_or(input_pts, |emitted| {
-            emitted.last_pts(self.spec.sample_rate.get())
-        })
+        Ok(u32::try_from(decoded.frames()).unwrap_or(u32::MAX))
     }
 
     fn decoder_algo_delay(&self, codec: AudioCodec) -> u64 {
@@ -301,7 +248,7 @@ impl FrameCodec for SymphoniaCodec {
     }
 
     fn flush(&mut self) -> DecodeResult<()> {
-        self.reset();
+        self.decoder.reset();
         Ok(())
     }
 
@@ -323,14 +270,6 @@ impl FrameCodec for SymphoniaCodec {
     fn track_info(&self) -> DecoderTrackInfo {
         self.track_info.clone()
     }
-}
-
-fn codec_output_lags(codec: AudioCodec) -> bool {
-    cfg!(feature = "fdk-aac")
-        && matches!(
-            codec,
-            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2
-        )
 }
 
 fn symphonia_decoder_algo_delay(codec: AudioCodec) -> u64 {
@@ -373,11 +312,10 @@ fn duration_to_ticks(d: Duration, sample_rate: u32) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use kithara_platform::time::Duration;
     use kithara_stream::AudioCodec;
     use kithara_test_utils::kithara;
 
-    use super::{Emitted, SymphoniaCodec, codec_output_lags};
+    use super::SymphoniaCodec;
     use crate::{
         codec::{CodecPriming, FrameCodec},
         demuxer::TrackInfo,
@@ -442,28 +380,5 @@ mod tests {
                 "symphonia handles {c:?} priming internally"
             );
         }
-    }
-
-    #[kithara::test]
-    fn output_lag_tracking_matches_fdk_registration() {
-        for codec in [AudioCodec::AacLc, AudioCodec::AacHe, AudioCodec::AacHeV2] {
-            assert_eq!(codec_output_lags(codec), cfg!(feature = "fdk-aac"));
-        }
-        assert!(!codec_output_lags(AudioCodec::Mp3));
-    }
-
-    #[kithara::test]
-    fn flush_clears_the_emission_generation() {
-        let mut codec = SymphoniaCodec::open_with_config(&mp3_track(), &SymphoniaConfig::default())
-            .expect("BUG: MP3 codec open");
-        codec.emitted = Some(Emitted {
-            start: Duration::from_secs(1),
-            before_last: 512,
-            total: 1_024,
-        });
-
-        codec.flush().expect("BUG: codec flush");
-
-        assert!(codec.emitted.is_none());
     }
 }
