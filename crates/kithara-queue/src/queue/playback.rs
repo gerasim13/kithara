@@ -236,15 +236,35 @@ impl Queue {
     /// (`items[i].take()`), so the current `Loaded` track is marked
     /// `Consumed` to keep the status truthful: a later re-select must go
     /// through the loader-respawn path, not select an emptied slot.
+    ///
+    /// Which item was consumed is read back from the player rather than
+    /// inferred from a status snapshot taken beforehand. `play()` starts the
+    /// audio engine before it loads, and a load completing inside that window
+    /// (130-400 ms against a real device) fills the slot and is picked up by
+    /// the same call — a track that was not yet `Loaded` when the snapshot was
+    /// taken. Recording nothing then leaves `Loaded` standing over an emptied
+    /// slot, and every later select of that track is rejected with
+    /// `PlayError::ItemConsumed`.
+    ///
+    /// The reconciliation runs under the selection lock so a concurrent
+    /// `spawn_apply_after_load` cannot publish `Loaded` on top of the slot
+    /// this call just emptied.
     pub fn play(&self) {
-        let entry = {
+        self.player.play();
+
+        let _apply = self.lock_select_apply();
+        let index = self.player.current_index();
+        if self.player.item_has_resource(index) {
+            return;
+        }
+        let consumed = {
             let guard = self.lock_tracks();
             guard
-                .get(self.player.current_index())
-                .map(|e| (e.id, e.status.clone()))
+                .get(index)
+                .filter(|entry| matches!(entry.status, TrackStatus::Loaded))
+                .map(|entry| entry.id)
         };
-        self.player.play();
-        if let Some((id, TrackStatus::Loaded)) = entry {
+        if let Some(id) = consumed {
             self.set_status(id, TrackStatus::Consumed);
         }
     }
