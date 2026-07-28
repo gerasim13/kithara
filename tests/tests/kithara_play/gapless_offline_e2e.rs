@@ -915,6 +915,8 @@ async fn create_apple_fused_resource(
                 .backend(DecoderBackend::Apple)
                 .build(),
         )
+        .byte_pool(player.byte_pool().clone())
+        .pcm_pool(player.pcm_pool().clone())
         .build();
     let config = player.prepare_config(config);
     let mut resource = Resource::new(config)
