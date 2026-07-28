@@ -83,9 +83,12 @@ async fn abr_mode_storm_does_not_wedge_loading(temp_dir: TestTempDir, rt_cancel:
 
     // The storm lands while the stream is still fetching its delayed first
     // segment — the state the report describes. `VariantChangeError` is the
-    // documented cross-variant fence, not a failure: the contract is that the
-    // consumer recreates its decoder and reads on. Honouring it keeps the
-    // assertion on the reported symptom, a stream that never yields bytes.
+    // documented cross-variant fence, not a failure: the fixture declares no
+    // `CODECS`, so every ABR commit takes the decoder-recreate branch, and the
+    // gate stays shut until the consumer acks it with `clear_variant_fence`.
+    // Retrying without that ack deadlocks the reader, not the framework.
+    // Acking and reading on keeps the assertion on the reported symptom, a
+    // stream that never yields bytes.
     let read = time::timeout(READ_DEADLINE, async move {
         loop {
             let attempt = spawn_blocking(move || {
@@ -98,7 +101,9 @@ async fn abr_mode_storm_does_not_wedge_loading(temp_dir: TestTempDir, rt_cancel:
             stream = attempt.0;
             match attempt.1 {
                 Ok(bytes) => return Ok(bytes),
-                Err(error) if is_variant_fence(&error) => {}
+                Err(error) if is_variant_fence(&error) => {
+                    stream.clear_variant_fence();
+                }
                 Err(error) => return Err(error),
             }
             time::sleep(RETRY_BACKOFF).await;
