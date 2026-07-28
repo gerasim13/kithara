@@ -1,11 +1,11 @@
-use syn::{Expr, Type, visit::Visit};
+use syn::{Expr, ItemImpl, Type, visit::Visit};
 
 use super::graph::{Edge, EdgeKind, Evidence, EvidenceGraph, Node, NodeId, NodeKind};
 
 pub(super) fn collect(
     package: &str,
     target: &str,
-    module: String,
+    module: &str,
     relative: &str,
     file: &syn::File,
     graph: &mut EvidenceGraph,
@@ -13,8 +13,10 @@ pub(super) fn collect(
     let mut visitor = OwnershipVisitor {
         package,
         target,
-        module,
+        module: module.to_string(),
         inline_modules: Vec::new(),
+        impl_type: None,
+        owner: None,
         relative,
         graph,
     };
@@ -26,6 +28,8 @@ struct OwnershipVisitor<'a> {
     target: &'a str,
     module: String,
     inline_modules: Vec<String>,
+    impl_type: Option<String>,
+    owner: Option<NodeId>,
     relative: &'a str,
     graph: &'a mut EvidenceGraph,
 }
@@ -68,6 +72,14 @@ impl OwnershipVisitor<'_> {
             )
             .at(self.relative, line),
         );
+        self.graph.merge_edge(Edge::new(
+            self.owner
+                .clone()
+                .unwrap_or_else(|| NodeId::module(self.package, self.target, &module)),
+            site_id.clone(),
+            EdgeKind::Contains,
+            Evidence::static_fact(origin.clone()),
+        ));
         let resource_evidence = if resource == "?" {
             Evidence::unresolved(origin.clone())
         } else {
@@ -87,20 +99,112 @@ impl OwnershipVisitor<'_> {
         self.graph
             .merge_edge(Edge::new(site_id, resource_id, edge_kind, edge_evidence));
     }
+
+    fn add_channel(&mut self, line: usize, column: usize, label: String) {
+        let module = self.current_module();
+        let site_id = NodeId::site(
+            self.package,
+            self.target,
+            &module,
+            &format!("channel-create@{line}:{column}"),
+        );
+        let resource_id = NodeId::resource(self.package, self.target, "channel<?>");
+        let origin = format!("{}:{line}:{column}", self.relative);
+        self.graph.merge_node(
+            Node::new(
+                site_id.clone(),
+                NodeKind::OwnershipSite,
+                label,
+                Evidence::static_fact(origin.clone()),
+            )
+            .at(self.relative, line),
+        );
+        self.graph.merge_edge(Edge::new(
+            self.owner
+                .clone()
+                .unwrap_or_else(|| NodeId::module(self.package, self.target, &module)),
+            site_id.clone(),
+            EdgeKind::Contains,
+            Evidence::static_fact(origin.clone()),
+        ));
+        self.graph.merge_node(Node::new(
+            resource_id.clone(),
+            NodeKind::Resource,
+            "channel<?>",
+            Evidence::unresolved(origin.clone()),
+        ));
+        self.graph.merge_edge(Edge::new(
+            site_id,
+            resource_id,
+            EdgeKind::Constructs,
+            Evidence::unresolved(origin),
+        ));
+    }
 }
 
 impl<'ast> Visit<'ast> for OwnershipVisitor<'_> {
     fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
-        if item.content.is_some() {
+        if item.content.is_some() && !super::calls::is_test_only(&item.attrs) {
             self.inline_modules.push(item.ident.to_string());
             syn::visit::visit_item_mod(self, item);
             self.inline_modules.pop();
         }
     }
 
+    fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
+        if super::calls::is_test_only(&item.attrs) {
+            return;
+        }
+        let previous = self.impl_type.replace(type_name(&item.self_ty));
+        syn::visit::visit_item_impl(self, item);
+        self.impl_type = previous;
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if super::calls::is_test_only(&item.attrs) {
+            return;
+        }
+        let previous = self.owner.replace(NodeId::symbol(
+            self.package,
+            self.target,
+            self.current_module(),
+            item.sig.ident.to_string(),
+        ));
+        syn::visit::visit_block(self, &item.block);
+        self.owner = previous;
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if super::calls::is_test_only(&item.attrs) {
+            return;
+        }
+        let symbol = self.impl_type.as_ref().map_or_else(
+            || item.sig.ident.to_string(),
+            |owner| format!("{owner}::{}", item.sig.ident),
+        );
+        let previous = self.owner.replace(NodeId::symbol(
+            self.package,
+            self.target,
+            self.current_module(),
+            symbol,
+        ));
+        syn::visit::visit_block(self, &item.block);
+        self.owner = previous;
+    }
+
     fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
         use syn::spanned::Spanned as _;
 
+        if super::calls::is_test_only(&item.attrs) {
+            return;
+        }
+        let previous = self.owner.replace(NodeId::abstraction(
+            self.package,
+            self.target,
+            &self.current_module(),
+            "type",
+            &item.ident.to_string(),
+        ));
         for field in &item.fields {
             let Some(resource) = arc_inner(&field.ty) else {
                 continue;
@@ -120,6 +224,7 @@ impl<'ast> Visit<'ast> for OwnershipVisitor<'_> {
             );
         }
         syn::visit::visit_item_struct(self, item);
+        self.owner = previous;
     }
 
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
@@ -155,10 +260,26 @@ impl<'ast> Visit<'ast> for OwnershipVisitor<'_> {
                     ),
                     _ => {}
                 }
+            } else if let [.., owner, method] = segments.as_slice()
+                && owner == "mpsc"
+                && matches!(method.as_str(), "channel" | "sync_channel")
+            {
+                let start = call.func.span().start();
+                self.add_channel(start.line, start.column, format!("mpsc::{method}(...)"));
             }
         }
         syn::visit::visit_expr_call(self, call);
     }
+}
+
+fn type_name(ty: &Type) -> String {
+    let Type::Path(path) = ty else {
+        return "?".to_string();
+    };
+    path.path
+        .segments
+        .last()
+        .map_or_else(|| "?".to_string(), |segment| segment.ident.to_string())
 }
 
 fn arc_inner(ty: &Type) -> Option<String> {

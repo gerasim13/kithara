@@ -6,7 +6,6 @@ mod manifest;
 mod native;
 mod orchestrator;
 mod report;
-mod runner;
 mod workspace;
 
 pub use cli::{LabCommand, run};

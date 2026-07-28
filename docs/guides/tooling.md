@@ -13,6 +13,42 @@ policy. Keep `AGENTS.md` short; put command details here.
 
 These are suitable for local pre-commit feedback.
 
+## Architecture Analysis
+
+- `just arch viz` automatically collects the workspace source graph, runs all
+  configured runtime scenarios, asks rust-analyzer to resolve selected calls,
+  and writes the Mermaid diagram plus its graph-derived report below
+  `target/architecture/<revision>/`.
+- Scope and detail are independent. Exact common commands are:
+  `just arch viz --lod 0` for crates; `just arch viz --crate <package>` for
+  automatic LOD 2 abstractions; `just arch viz --crate <package> --lod 3` for
+  constructors, boundary methods, resources, messages, and tasks; and
+  `just arch viz --crate <package> --module <path> --lod 4` for the complete
+  focused call graph. A crate scope keeps immediate incoming and outgoing
+  workspace neighbors and needs no discovery command.
+- `--view hierarchy|ownership` changes only the projection. `--semantic
+  off|required`, `--runtime off`, `--scenario <name>`, and `--trace <jsonl>`
+  control evidence collection.
+- `[architecture.filters]` supplies project-default crate/module exclusions.
+  Repeat `--exclude-crate <glob>` or `--exclude-module <glob>` for additive
+  one-off exclusions. Excluded runtime-test packages may still produce
+  evidence, but they do not enter semantic selection, the diagram,
+  `projection.json`, findings, or architecture counters. `manifest.json`
+  records the effective filters and excluded counts.
+- There is no diagram node budget. Hidden methods are lifted to their visible
+  abstraction with count, method pairs, origins, and evidence retained in
+  `projection.json`. LOD 4 writes an index plus linked contour pages instead of
+  dropping nodes. Optional and target-gated Cargo edges use the distinct
+  `conditional` evidence style.
+- Read `manifest.json` before using a result as architecture evidence.
+  `complete` and `runtime-enriched` are successful observations; `truncated`
+  names an evidence-collection limit, never diagram node removal;
+  `static-only` has no runtime evidence; `incomplete` preserves partial files
+  but is not an acceptance result.
+- Runtime traces and scenario stdout/stderr stay beside the diagram. Trace
+  absence never proves a path is dead, and unresolved calls are never assigned
+  a guessed target.
+
 ## Full Audit
 
 - `just ci audit`: scoped Rust fmt, Clippy, ast-grep, xtask lint, typos,

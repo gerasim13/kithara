@@ -28,6 +28,9 @@ relationships.
   and scenario views without rendering the entire function graph at once.
 - [ ] Missing, empty, timed-out, truncated, or ambiguous evidence is visible and
   never reported as a clean complete analysis.
+- [ ] Project defaults and repeatable CLI filters can exclude crates or module
+  subtrees from semantic selection, diagrams, projections, findings, and
+  architecture counters without disabling runtime evidence producers.
 - [ ] Existing fast lint, pre-commit, and ordinary audit latency do not regress.
 
 ## Understanding Summary
@@ -56,15 +59,15 @@ relationships.
 - A cached canonical run should target a five-minute local budget.
 - Compatible scenarios are grouped by build configuration to avoid redundant
   workspace builds.
-- Runtime events and diagram nodes have explicit budgets. Exceeding a budget
-  produces aggregation plus a visible `TRUNCATED` marker.
+- Runtime and semantic evidence stages have explicit budgets. Exceeding one
+  produces a visible `TRUNCATED` marker; diagram nodes are never dropped.
 
 ### Scale
 
 - The evidence graph may contain thousands of source items and many more
   runtime events.
-- A rendered diagram is always a bounded projection, never an unfiltered dump
-  of the evidence graph.
+- A rendered diagram follows explicit scope and LOD. LOD 4 partitions by
+  semantic contours instead of applying a global node cap.
 - Repeated runtime events are aggregated after their causal and resource
   identities have been preserved.
 
@@ -109,8 +112,10 @@ With no arguments it performs the complete configured analysis. Optional
 arguments narrow or enrich the same pipeline:
 
 ```text
+just arch viz --lod 0
 just arch viz --crate kithara-play
-just arch viz --module resource
+just arch viz --crate kithara-play --lod 3
+just arch viz --crate kithara-play --module resource --lod 4
 just arch viz --scenario queue-playback
 just arch viz --trace path/to/runtime.jsonl
 ```
@@ -230,13 +235,13 @@ as diagnostics; one source must not silently overwrite another.
 
 ## Diagram And Report Contract
 
-The full evidence graph is not directly rendered. A scope and zoom request
-produces a bounded `DiagramModel` containing:
+The full evidence graph is projected by independent scope and LOD into a
+`DiagramModel` containing:
 
 - visible nodes and edges;
 - aggregation groups;
 - evidence styles;
-- hidden-node counts;
+- lifted relation counts and original method/evidence details;
 - navigation links to deeper views;
 - completeness and truncation markers.
 
@@ -293,7 +298,8 @@ was included.
 - An unresolved static relation is a visible uncertainty, not a tool failure.
 - An unmatched runtime event becomes an external or unresolved node rather
   than disappearing.
-- Trace or node budgets produce aggregation and a visible `TRUNCATED` status.
+- Trace or semantic budgets produce a visible `TRUNCATED` status. Diagram
+  partitioning never marks evidence truncated.
 - Recursive cycles and large strongly connected components are collapsible
   groups.
 - Manual traces are visually distinct from canonical observations.
@@ -453,7 +459,8 @@ Agents must not edit the same shared types or configuration schema in parallel.
   downstream environments.
 - Instrumentation can perturb realtime paths or allocate unexpectedly.
 - Concurrent event order can be mistaken for causality.
-- Unbounded graphs become visually useless.
+- Full-detail graphs become visually useless without deterministic contour
+  partitioning.
 - Scenario lists can drift when tests are renamed.
 - A report generator can overstate findings if it bypasses the diagram model.
 
@@ -496,14 +503,133 @@ Agents must not edit the same shared types or configuration schema in parallel.
   selection belongs to the consuming workspace.
 8. **Scenario registry:** use a small generic `.config/xtask.toml` section. It
   selects commands but contains no architectural edges.
-9. **Primary output:** a bounded Mermaid diagram. The report explains and
-  supplements the same `DiagramModel`.
+9. **Primary output:** a scope/LOD Mermaid diagram, partitioned by contours at
+  full detail. The report explains and supplements the same `DiagramModel`.
 10. **Command layout:** keep the existing second-level `just arch viz` entry.
   No separate top-level visualization or report command is added.
 11. **Failure policy:** preserve partial artifacts, return non-zero for failed
   canonical stages, and mark incompleteness explicitly.
 12. **Portability proof:** pass a non-Kithara fixture before accepting Kithara's
   runtime integration.
+13. **Exclusion interface:** use separate repeatable `--exclude-crate` and
+   `--exclude-module` glob arguments plus additive project defaults. A unified
+   selector grammar and inferred `tests` / `tools` presets were rejected as
+   less explicit and less portable.
+14. **Exclusion boundary:** retain the complete raw evidence graph and runtime
+   producers, but remove excluded nodes before semantic selection and from the
+   visible `DiagramModel`. Do not lift relations through an excluded endpoint.
+15. **Filter transparency:** excluded nodes do not count as hidden
+   architecture. The manifest records effective patterns and excluded counts;
+   Mermaid, `projection.json`, findings, and architecture counters contain
+   only the allowed projection.
+
+## Projection Exclusion Filters
+
+### Understanding Summary
+
+- Maintainers and agents need a workspace diagram that can omit test harnesses,
+  integration-test packages, xtask, devtools, fuzz targets, and other
+  non-product contours.
+- The mechanism must remain reusable and must not contain Kithara package names
+  in `kithara-devtools`.
+- Exclusion affects the architecture presented for review, not the ability to
+  run a test or binary as a runtime evidence producer.
+- Crates and modules require separate repeatable selectors so their matching
+  domains and diagnostics stay explicit.
+- Excluded nodes, incident relations, findings, and architecture counters must
+  disappear together; the report must never describe an invisible node.
+- File-path scanning, Cargo target selection, and automatic category inference
+  are explicit non-goals.
+
+### Assumptions
+
+- Configuration defaults and CLI arguments are additive. With neither, the
+  current projection is unchanged.
+- Crate patterns match Cargo package names. Module patterns match canonical
+  `package::module::submodule` names.
+- Glob patterns are compiled once and applied in linear passes over selected
+  symbols, nodes, and edges.
+- Wildcards that match nothing are valid for portable project configuration.
+  An unknown exact crate passed through the CLI is an error.
+- The raw `graph.json` remains complete diagnostic evidence. Filtered
+  `projection.json` is the graph intended for architecture review.
+- Filter configuration is local, deterministic, offline, and contains no
+  sensitive runtime data.
+
+### Configuration And CLI
+
+Project defaults use a typed, strict section:
+
+```toml
+[architecture.filters]
+exclude_crates = [
+  "kithara-integration-tests",
+  "kithara-test-*",
+  "kithara-devtools",
+  "kithara-workspace-hack",
+  "kithara-fuzz",
+  "xtask",
+]
+exclude_modules = ["*::tests", "*::tests::*"]
+```
+
+One-off exclusions use repeatable arguments:
+
+```text
+just arch viz --exclude-crate "kithara-test-*"
+just arch viz --exclude-module "*::tests" --exclude-module "*::tests::*"
+```
+
+The effective filter is the normalized union of project and CLI values.
+Invalid globs fail before source collection, runtime execution, or semantic
+resolution.
+
+### Data Flow
+
+The runtime scenario registry remains independent from projection exclusions.
+An excluded integration-test crate may launch and emit trace evidence for
+included runtime crates.
+
+The effective filter is passed into semantic symbol selection so excluded
+symbols do not consume the established semantic budget. Projection eligibility
+then rejects a node when its package matches an excluded crate or its canonical
+module name matches an excluded module subtree. Every incident edge is removed;
+the projector never connects the excluded node's neighbors or lifts a relation
+through it.
+
+Excluded nodes are not included in `hidden_nodes`. Manifest schema advances to
+record effective crate/module patterns and excluded node and edge counts for
+reproducibility. The main report does not enumerate excluded names.
+
+### Error And Edge-Case Policy
+
+- A selected `--crate` or `--module` that is excluded is a fatal scope error.
+- A filter that removes every visible node is a fatal empty-projection error.
+- An invalid glob is a fatal configuration or CLI error.
+- A wildcard with no match is valid.
+- An unknown exact CLI crate name is a fatal input error.
+- No-filter runs preserve the previous model and artifact meaning.
+
+### Validation
+
+- CLI tests cover repeated crate and module arguments.
+- Configuration tests cover strict fields, invalid globs, and additive merging.
+- Projection tests remove crate descendants, module subtrees, and incident
+  edges without neighbor bridging or hidden-node inflation.
+- Semantic selection tests prove excluded symbols do not consume its budget.
+- Report, Mermaid, and projection tests prove excluded identifiers never leak.
+- A portable runtime fixture proves an excluded test harness can still produce
+  evidence for included crates.
+- A Kithara workspace run verifies the configured product-only LOD 0 diagram.
+
+### Risks
+
+- A broad filter can hide important coupling. Manifest transparency is
+  mandatory so every result remains reproducible.
+- Canonical module identities must remain stable across LOD projections.
+- Filtering only at render time would waste semantic work and could leak
+  findings; filtering the raw graph would break runtime diagnostics. The
+  selected boundary deliberately avoids both failure modes.
 
 ## Implementation Task Packet
 
@@ -743,8 +869,9 @@ tests while moving the owner.
 
 - The fixture defines direct calls, imports, re-exports, trait candidates,
   `Arc`, channel, spawn, recursion, and an intentionally unresolved call.
-- Tests require a bounded `DiagramModel`, stable Mermaid IDs, visible evidence
-  styles, collapsed cycles, and workspace-relative links.
+- Tests require stable LOD projections, Mermaid IDs, visible evidence styles,
+  lossless contour partitioning, collapsed full-detail cycles, and
+  workspace-relative links.
 - A report contract test rejects findings that reference invisible IDs.
 
 **GREEN**

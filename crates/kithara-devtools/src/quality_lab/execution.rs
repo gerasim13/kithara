@@ -10,10 +10,9 @@ use super::{
     adapter::{self, AdapterOptions, ToolSpec},
     config::QualityLabConfig,
     manifest::{InvocationManifest, Profile, Status, Tool, ToolManifest},
-    native,
-    runner::{ProcessError, ProcessRequest, run_process},
-    workspace,
+    native, workspace,
 };
+use crate::common::process::{ProcessError, ProcessRequest, run_process};
 
 const MANIFEST_SCHEMA_VERSION: u32 = 1;
 

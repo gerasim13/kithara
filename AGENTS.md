@@ -49,6 +49,17 @@ routine work:
   doc-tests: `just test all`.
 - `just ci gate`; scoped audit: `just ci audit <scope>`; broad report:
   `just ci health`.
+- Architecture diagram and report: `just arch viz` (workspace, automatic LOD
+  0); crate abstractions: `just arch viz --crate <package>` (automatic LOD 2);
+  crate boundaries/resources: `just arch viz --crate <package> --lod 3`;
+  complete module call graph: `just arch viz --crate <package> --module <path>
+  --lod 4`. A crate view includes its immediate workspace neighbors without a
+  discovery command. Use `--view ownership` for the ownership lens and
+  `--scenario <name>` for one configured runtime flow. Project defaults under
+  `[architecture.filters]` and repeatable `--exclude-crate <glob>` /
+  `--exclude-module <glob>` remove non-product contours from semantic
+  selection, diagrams, projections, and findings without disabling runtime
+  evidence producers.
 - `just quality lab list`; manual/scheduled analyzer run:
   `just quality lab run <profile-or-tool>`; coverage risk:
   `just quality coverage-risk`.

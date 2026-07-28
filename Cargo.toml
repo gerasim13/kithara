@@ -370,7 +370,7 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 tracing-wasm = "0.2"
 uniffi = { version = "0.31.2", default-features = false }
 unimock = { version = "0.6", features = ["std"] }
-url = "2.5.8"
+url = { version = "2.5.8", features = ["serde"] }
 usdt = { version = "0.6", default-features = false, features = ["asm"] }
 uuid = { version = "1", features = ["v5"] }
 wasm-bindgen = "0.2"

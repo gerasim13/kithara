@@ -29,7 +29,23 @@ impl Ctx {
     /// Returns an error if Cargo metadata cannot be resolved for the current
     /// working directory or the project config cannot be loaded.
     pub fn load() -> Result<Self> {
-        let metadata = cargo_metadata::MetadataCommand::new()
+        Self::load_with_metadata(cargo_metadata::MetadataCommand::new())
+    }
+
+    /// Loads an xtask context from a specific Cargo manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if Cargo metadata or the project config cannot be
+    /// loaded for the selected manifest.
+    pub fn load_from_manifest(manifest_path: &Path) -> Result<Self> {
+        let mut command = cargo_metadata::MetadataCommand::new();
+        command.manifest_path(manifest_path);
+        Self::load_with_metadata(command)
+    }
+
+    fn load_with_metadata(mut command: cargo_metadata::MetadataCommand) -> Result<Self> {
+        let metadata = command
             .no_deps()
             .exec()
             .context("resolving workspace root via cargo metadata")?;

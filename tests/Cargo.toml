@@ -54,12 +54,14 @@ apple-fused-src = ["kithara/apple-fused-src"]
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
 kithara = { workspace = true, features = ["full", "queue", "probe", "mock", "symphonia", "stretch-signalsmith", "stretch-bungee"] }
+kithara-devtools = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 
 # Crypto (for HLS encryption tests)
 aes = { workspace = true }
 
 # Async traits
+anyhow = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 

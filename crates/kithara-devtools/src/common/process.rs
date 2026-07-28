@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsStr,
     fs::File,
     io,
     path::Path,
@@ -23,7 +24,7 @@ const SECRET_ENV_KEYS: &[&str] = &[
 ];
 
 #[derive(Debug)]
-pub(super) enum ProcessError {
+pub(crate) enum ProcessError {
     MissingExecutable(String),
     Io(io::Error),
 }
@@ -52,22 +53,29 @@ impl std::error::Error for ProcessError {
 }
 
 #[derive(Debug)]
-pub(super) struct ProcessOutcome {
-    pub(super) duration: Duration,
-    pub(super) status: ExitStatus,
-    pub(super) timed_out: bool,
+pub(crate) struct ProcessOutcome {
+    pub(crate) duration: Duration,
+    pub(crate) status: ExitStatus,
+    pub(crate) timed_out: bool,
 }
 
-pub(super) struct ProcessRequest<'a> {
-    pub(super) program: &'a str,
-    pub(super) args: &'a [String],
-    pub(super) cwd: &'a Path,
-    pub(super) stdout_path: &'a Path,
-    pub(super) stderr_path: &'a Path,
-    pub(super) timeout: Duration,
+pub(crate) struct ProcessRequest<'a> {
+    pub(crate) program: &'a str,
+    pub(crate) args: &'a [String],
+    pub(crate) cwd: &'a Path,
+    pub(crate) stdout_path: &'a Path,
+    pub(crate) stderr_path: &'a Path,
+    pub(crate) timeout: Duration,
 }
 
-pub(super) fn run_process(request: &ProcessRequest<'_>) -> Result<ProcessOutcome, ProcessError> {
+pub(crate) fn run_process(request: &ProcessRequest<'_>) -> Result<ProcessOutcome, ProcessError> {
+    run_process_with_env(request, &[])
+}
+
+pub(crate) fn run_process_with_env(
+    request: &ProcessRequest<'_>,
+    environment: &[(&str, &OsStr)],
+) -> Result<ProcessOutcome, ProcessError> {
     let stdout = File::create(request.stdout_path).map_err(ProcessError::Io)?;
     let stderr = File::create(request.stderr_path).map_err(ProcessError::Io)?;
     let mut command = Command::new(request.program);
@@ -78,6 +86,7 @@ pub(super) fn run_process(request: &ProcessRequest<'_>) -> Result<ProcessOutcome
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
     remove_secret_environment(&mut command);
+    command.envs(environment.iter().copied());
     let mut child = command.spawn().map_err(|error| {
         if error.kind() == io::ErrorKind::NotFound {
             ProcessError::MissingExecutable(request.program.to_owned())

@@ -15,6 +15,7 @@ graph:
     cargo depgraph --workspace-only --dedup-transitive-deps | dot -Tsvg > target/depgraph.svg
     @echo "==> target/depgraph.svg"
 
+# Build the revision-scoped Mermaid architecture document.
 [positional-arguments]
 viz *ARGS:
     just _xtask viz "$@"

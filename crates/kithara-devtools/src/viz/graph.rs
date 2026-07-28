@@ -3,7 +3,9 @@ use std::{
     fmt,
 };
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+use serde::Serialize;
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) struct NodeId {
     pub(crate) package: String,
     pub(crate) target: String,
@@ -38,6 +40,25 @@ impl NodeId {
         Self::symbol(package, target, module, site)
     }
 
+    pub(crate) fn abstraction(
+        package: &str,
+        target: &str,
+        module: &str,
+        kind: &str,
+        name: &str,
+    ) -> Self {
+        Self::symbol(
+            package,
+            target,
+            module,
+            format!("<abstraction:{kind}:{name}>"),
+        )
+    }
+
+    pub(crate) fn module_functions(package: &str, target: &str, module: &str) -> Self {
+        Self::abstraction(package, target, module, "functions", module)
+    }
+
     pub(crate) fn resource(package: &str, target: &str, resource: &str) -> Self {
         Self::symbol(package, target, "<resource>", resource)
     }
@@ -53,39 +74,67 @@ impl fmt::Display for NodeId {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum NodeKind {
     Package,
     Module,
+    ConcreteType,
+    Trait,
+    ModuleFunctions,
     PublicItem,
     OwnershipSite,
     Resource,
+    Function,
+    PublicFunction,
+    Constructor,
+    TraitMethod,
+    Task,
+    Scenario,
+    RuntimeEvent,
+    UnresolvedCall,
+    CycleGroup,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum EdgeKind {
     Contains,
+    DependsOn,
+    Implements,
+    Starts,
+    Calls,
+    Spawns,
     Constructs,
     Clones,
     Stores,
+    Transfers,
+    Sends,
+    Drops,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum EvidenceClass {
     Static,
+    Conditional,
     Resolved,
+    Observed,
+    Manual,
     Inferred,
     Unresolved,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum Certainty {
     Resolved,
     Candidate,
     Unresolved,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum MergedCertainty {
     Resolved,
     Candidate,
@@ -93,7 +142,7 @@ pub(crate) enum MergedCertainty {
     Conflicting,
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) struct Evidence {
     pub(crate) class: EvidenceClass,
     pub(crate) certainty: Certainty,
@@ -109,8 +158,20 @@ impl Evidence {
         Self::new(EvidenceClass::Resolved, Certainty::Resolved, origin)
     }
 
+    pub(crate) fn conditional(origin: impl Into<String>) -> Self {
+        Self::new(EvidenceClass::Conditional, Certainty::Resolved, origin)
+    }
+
     pub(crate) fn inferred(origin: impl Into<String>) -> Self {
         Self::new(EvidenceClass::Inferred, Certainty::Candidate, origin)
+    }
+
+    pub(crate) fn observed(origin: impl Into<String>) -> Self {
+        Self::new(EvidenceClass::Observed, Certainty::Resolved, origin)
+    }
+
+    pub(crate) fn manual(origin: impl Into<String>) -> Self {
+        Self::new(EvidenceClass::Manual, Certainty::Resolved, origin)
     }
 
     pub(crate) fn unresolved(origin: impl Into<String>) -> Self {
@@ -126,13 +187,14 @@ impl Evidence {
     }
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) struct SourceLocation {
     pub(crate) path: String,
     pub(crate) line: usize,
+    pub(crate) column: usize,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct Node {
     pub(crate) id: NodeId,
     pub(crate) kind: NodeKind,
@@ -159,10 +221,20 @@ impl Node {
         }
     }
 
-    pub(crate) fn at(mut self, path: impl Into<String>, line: usize) -> Self {
+    pub(crate) fn at(self, path: impl Into<String>, line: usize) -> Self {
+        self.at_position(path, line, 0)
+    }
+
+    pub(crate) fn at_position(
+        mut self,
+        path: impl Into<String>,
+        line: usize,
+        column: usize,
+    ) -> Self {
         self.location = Some(SourceLocation {
             path: path.into(),
             line,
+            column,
         });
         self
     }
@@ -172,7 +244,7 @@ impl Node {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct Edge {
     pub(crate) source: NodeId,
     pub(crate) target: NodeId,
@@ -197,13 +269,15 @@ impl Edge {
 
 fn merge_certainty(certainties: impl Iterator<Item = Certainty>) -> MergedCertainty {
     let certainties = certainties.collect::<BTreeSet<_>>();
-    if certainties.len() > 1 {
+    if certainties.contains(&Certainty::Unresolved) && certainties.len() > 1 {
         return MergedCertainty::Conflicting;
     }
-    match certainties.first() {
-        Some(Certainty::Resolved) => MergedCertainty::Resolved,
-        Some(Certainty::Candidate) => MergedCertainty::Candidate,
-        Some(Certainty::Unresolved) | None => MergedCertainty::Unresolved,
+    if certainties.contains(&Certainty::Resolved) {
+        MergedCertainty::Resolved
+    } else if certainties.contains(&Certainty::Candidate) {
+        MergedCertainty::Candidate
+    } else {
+        MergedCertainty::Unresolved
     }
 }
 
@@ -250,6 +324,14 @@ impl EvidenceGraph {
         } else {
             self.edges.insert(key, edge);
         }
+    }
+
+    pub(crate) fn add_node_evidence(&mut self, id: &NodeId, evidence: Evidence) -> bool {
+        let Some(node) = self.nodes.get_mut(id) else {
+            return false;
+        };
+        node.evidence.insert(evidence);
+        true
     }
 
     pub(crate) fn node(&self, id: &NodeId) -> Option<&Node> {
@@ -338,6 +420,7 @@ mod tests {
             .edge(&source, &target, EdgeKind::Constructs)
             .expect("merged edge");
         assert_eq!(edge.evidence.len(), 2);
+        assert_eq!(edge.certainty(), MergedCertainty::Resolved);
     }
 
     #[test]

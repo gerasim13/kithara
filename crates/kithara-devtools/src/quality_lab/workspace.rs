@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use super::runner::{ProcessRequest, run_process};
+use crate::common::process::{ProcessRequest, run_process};
 
 pub(super) fn prepare_clean_clone(
     workspace_root: &Path,

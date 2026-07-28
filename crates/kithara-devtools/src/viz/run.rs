@@ -1,23 +1,127 @@
-use std::io;
+use std::{
+    io::{self, Write as _},
+    process::Command,
+};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use super::{
-    cli::{ViewName, VizArgs},
-    source,
-    view::{DEFAULT_NODE_BUDGET, DiagramModel, ViewKind, ViewRequest, project},
+    cli::{Lod, RuntimeMode, SemanticMode, ViewName, VizArgs},
+    filter::ArchitectureFilter,
+    manifest::{self, ArtifactRequest},
+    mermaid,
+    scenario::{self, RunRequest},
+    semantic, source,
+    view::{DetailLevel, ViewKind, ViewRequest, project},
 };
 use crate::Ctx;
 
 pub(crate) fn run(args: &VizArgs, ctx: &Ctx) -> Result<()> {
-    let graph = source::collect(ctx, args.krate.as_deref())?;
+    let metadata = ctx.metadata()?;
+    if let Some(package) = args.krate.as_deref()
+        && !metadata
+            .workspace_packages()
+            .iter()
+            .any(|candidate| candidate.name == package)
+    {
+        bail!("workspace package not found: {package}");
+    }
+    let filter = ArchitectureFilter::new(
+        &ctx.config.architecture.filters,
+        &args.exclude_crates,
+        &args.exclude_modules,
+        metadata,
+    )?;
+    if let Some(package) = args.krate.as_deref()
+        && filter.excludes_package(package)
+    {
+        bail!("selected workspace package is excluded: {package}");
+    }
+    let mut graph = source::collect(ctx)?;
+    if graph.nodes().all(|node| filter.excludes(&node.id)) {
+        bail!("architecture filters removed every node from the selected projection");
+    }
+    if let Some(module) = args.module.as_deref()
+        && filter.scope_is_fully_excluded(&graph, args.krate.as_deref(), module)
+    {
+        bail!("selected module scope is excluded: {module}");
+    }
+    let revision = revision(&ctx.root);
+    let output = ctx.root.join("target/architecture").join(&revision);
+    let runtime = scenario::run(
+        &RunRequest {
+            config: &ctx.config.architecture,
+            metadata,
+            root: &ctx.root,
+            output: &output,
+            selected: args.scenario.as_deref(),
+            manual_trace: args.trace.as_deref(),
+            run_configured: args.runtime == RuntimeMode::Auto,
+        },
+        &mut graph,
+    )?;
+    let semantic = if args.semantic == SemanticMode::Off {
+        semantic::SemanticSummary::static_only("semantic resolution disabled")
+    } else {
+        semantic::enrich(
+            &mut graph,
+            &ctx.root,
+            args.krate.as_deref(),
+            args.module.as_deref(),
+            args.scenario.as_deref(),
+            &filter,
+        )
+    };
     let request = ViewRequest {
         kind: view_kind(args.view),
+        package: args.krate.clone(),
         module: args.module.clone(),
-        node_budget: DEFAULT_NODE_BUDGET,
+        scenario: args
+            .scenario
+            .clone()
+            .or_else(|| args.trace.as_ref().map(|_| "manual".to_string())),
+        lod: detail_level(args),
+        filter: filter.clone(),
     };
     let model = project(&graph, &request);
-    write_model(&model, io::stdout().lock())
+    if model.nodes.is_empty() {
+        bail!("architecture filters removed every node from the selected projection");
+    }
+    let diagrams = mermaid::render_set(&model)?;
+    let filter_summary = filter.summary(&graph);
+    let artifacts = manifest::write(&ArtifactRequest {
+        root: &ctx.root,
+        revision: &revision,
+        project: &ctx.config.project.name,
+        args,
+        graph: &graph,
+        model: &model,
+        diagrams: &diagrams,
+        semantic: &semantic,
+        runtime: &runtime,
+        filters: &filter_summary,
+    })?;
+    writeln!(io::stdout().lock(), "==> {}", artifacts.document.display())?;
+    if semantic.is_incomplete()
+        || runtime.is_incomplete()
+        || args.semantic == SemanticMode::Required
+            && semantic.state == semantic::SemanticState::Unavailable
+    {
+        bail!("architecture analysis is incomplete; partial artifacts were preserved");
+    }
+    Ok(())
+}
+
+fn detail_level(args: &VizArgs) -> DetailLevel {
+    match args.lod {
+        Lod::Auto if args.module.is_some() => DetailLevel::Methods,
+        Lod::Auto if args.krate.is_some() => DetailLevel::Abstractions,
+        Lod::Auto | Lod::Level0 => DetailLevel::Crates,
+        Lod::Level1 => DetailLevel::Modules,
+        Lod::Level2 => DetailLevel::Abstractions,
+        Lod::Level3 => DetailLevel::Methods,
+        Lod::Level4 => DetailLevel::Full,
+    }
 }
 
 fn view_kind(view: ViewName) -> ViewKind {
@@ -28,36 +132,17 @@ fn view_kind(view: ViewName) -> ViewKind {
     }
 }
 
-fn write_model(model: &DiagramModel, mut output: impl io::Write) -> Result<()> {
-    writeln!(
-        output,
-        "architecture view: {:?} ({} visible, {} hidden)",
-        model.kind,
-        model.nodes.len(),
-        model.hidden_nodes
-    )?;
-    for node in &model.nodes {
-        if let Some(location) = &node.location {
-            writeln!(
-                output,
-                "node\t{}\t{:?}\t{:?}\t{}\t{}:{}",
-                node.id, node.kind, node.style, node.label, location.path, location.line
-            )?;
-        } else {
-            writeln!(
-                output,
-                "node\t{}\t{:?}\t{:?}\t{}",
-                node.id, node.kind, node.style, node.label
-            )?;
-        }
-    }
-    for edge in &model.edges {
-        writeln!(
-            output,
-            "edge\t{}\t{}\t{:?}\t{:?}",
-            edge.source, edge.target, edge.kind, edge.style
-        )?;
-    }
-    output.flush()?;
-    Ok(())
+fn revision(root: &std::path::Path) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--short=12", "HEAD"])
+        .output();
+    output
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|revision| revision.trim().to_string())
+        .filter(|revision| !revision.is_empty())
+        .unwrap_or_else(|| "working-tree".to_string())
 }

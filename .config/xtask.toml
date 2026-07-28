@@ -5,6 +5,26 @@
 [project]
 name = "kithara"
 
+[architecture.filters]
+exclude_crates = [
+  "kithara-devtools",
+  "kithara-fuzz",
+  "kithara-integration-tests",
+  "kithara-test-*",
+  "kithara-workspace-hack",
+  "xtask",
+]
+exclude_modules = ["*::tests"]
+
+[[architecture.runtime.scenarios]]
+name = "queue-playback"
+command = "test"
+package = "kithara-integration-tests"
+test = "suite_light"
+filter = "kithara_queue::architecture_flow::queue_playback_architecture"
+ignored = true
+timeout_secs = 120
+
 [audit_clippy]
 lints = [
   "redundant_clone",

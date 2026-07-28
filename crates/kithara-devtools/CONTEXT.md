@@ -46,6 +46,73 @@ single parsed configuration for the run.
 flags, and help text are the public surface — treat changes to them as
 API changes covered by the consuming project's expectations.
 
+`viz` has no required nested subcommand. Its no-argument path builds one
+lossless source-evidence graph, applies the selected scope and LOD, and writes
+Mermaid, Markdown, graph JSON, projection JSON, and a manifest below
+`target/architecture/<revision>/`. `--view hierarchy` and `--view ownership`
+are projections of that same graph, not independent analyzers. Static call
+targets remain candidates until rust-analyzer resolves them through stable LSP
+call hierarchy requests.
+
+LOD is independent from scope. `auto` means LOD 0 for a workspace, LOD 2 for a
+crate, and LOD 3 for a module. Explicit levels are crates (0), modules (1),
+abstractions (2), constructors/boundaries/resources (3), and the complete
+evidence graph (4). Concrete types own their `impl` methods, traits are
+contracts connected by `implements`, and free functions belong to one
+module-functions abstraction.
+
+`--crate <package>` also projects the same full workspace graph. It retains the
+selected package, immediate incoming and outgoing normal Cargo neighbors, and
+resolved cross-package call endpoints. Neighbor-to-neighbor edges are excluded
+from the focused model. This static neighborhood requires neither a configured
+runtime scenario nor an extra discovery command.
+
+When a relation endpoint is hidden by LOD, the endpoint lifts to its nearest
+visible owner. Equal visible endpoint/kind pairs aggregate while retaining the
+original method pairs, occurrence count, evidence origins, and style in
+`projection.json`. Relation kinds remain distinct. There is no diagram node
+budget: LOD 4 is partitioned by semantic contours into an index and linked
+pages, and manifest schema v3 records complete visible-node coverage.
+Optional and target-gated Cargo dependencies carry conditional evidence;
+unconditional normal dependencies remain resolved structural facts.
+
+Project defaults under `[architecture.filters]` and repeatable
+`--exclude-crate` / `--exclude-module` arguments compile into one additive
+projection filter. It removes matching symbols before semantic selection and
+removes matching contours plus incident edges from the `DiagramModel`; it does
+not alter raw `graph.json` evidence or disable an excluded package used as a
+runtime scenario. Manifest schema v3 records the effective patterns and
+excluded counts. Relations never lift through an excluded endpoint.
+
+`[architecture.runtime.scenarios]` is the only project-specific runtime
+evidence input.
+Its strict tagged schema accepts Cargo integration tests, Cargo binaries, and
+existing trace paths. Test and binary targets are validated against Cargo
+metadata and launched with structured arguments, a bounded timeout, captured
+logs, and `ARCHITECTURE_TRACE_PATH`; no shell command is stored in config. With
+no selector, `viz` runs every configured scenario. `--scenario <name>` runs one
+and projects only nodes carrying that scenario's trace evidence.
+
+Runtime producers use the public, domain-neutral `viz::trace` JSONL API.
+Records carry versioned source, span, task, thread, correlation, and resource
+identity. Cross-thread sends are connected only by an explicit correlation
+identifier. Source matching enriches existing syntax nodes; unmatched records
+remain visible runtime events rather than guessed static targets. Manual
+`--trace` input uses distinct evidence styling.
+
+Runtime enrichment precedes semantic resolution so a selected scenario limits
+rust-analyzer work to source functions observed in that trace. Both enrich the
+same graph before any view or prose is produced. The Markdown report is derived
+only from the visible `DiagramModel`; every finding and relation points to a
+visible Mermaid contour.
+
+Artifact status is `complete`, `truncated`, `static-only`, `runtime-enriched`,
+or `incomplete`. Timeout, failed execution, malformed trace, or failed semantic
+resolution preserves partial artifacts and makes the command fail. Missing
+optional rust-analyzer yields static/runtime output unless
+`--semantic required` was requested. Truncation is explicit, applies only to
+evidence collection, and never removes nodes because of diagram size.
+
 ## Quality Lab ownership
 
 `quality lab` owns heavyweight external code analysis that must stay outside

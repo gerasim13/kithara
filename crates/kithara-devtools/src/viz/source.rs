@@ -1,10 +1,10 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 
-use anyhow::{Result, bail};
-use cargo_metadata::{Package, Target, TargetKind};
+use anyhow::Result;
+use cargo_metadata::{DependencyKind, Package, Target, TargetKind};
 use syn::Item;
 
 use super::graph::{Edge, EdgeKind, Evidence, EvidenceGraph, Node, NodeId, NodeKind};
@@ -16,25 +16,62 @@ use crate::{
     },
 };
 
-pub(crate) fn collect(ctx: &Ctx, package_filter: Option<&str>) -> Result<EvidenceGraph> {
+pub(crate) fn collect(ctx: &Ctx) -> Result<EvidenceGraph> {
     let metadata = ctx.metadata()?;
     let mut packages = metadata
         .workspace_packages()
         .into_iter()
-        .filter(|package| package_filter.is_none_or(|filter| package.name == filter))
         .collect::<Vec<_>>();
     packages.sort_by(|left, right| left.name.cmp(&right.name));
-    if let Some(filter) = package_filter
-        && packages.is_empty()
-    {
-        bail!("workspace package not found: {filter}");
-    }
 
     let mut graph = EvidenceGraph::default();
-    for package in packages {
+    for package in &packages {
         collect_package(ctx, package, &mut graph)?;
     }
+    collect_dependencies(&packages, &mut graph);
     Ok(graph)
+}
+
+fn collect_dependencies(packages: &[&Package], graph: &mut EvidenceGraph) {
+    let paths = packages
+        .iter()
+        .filter_map(|package| {
+            package
+                .manifest_path
+                .parent()
+                .map(|path| (path, package.name.as_str()))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for package in packages {
+        for dependency in &package.dependencies {
+            if dependency.kind != DependencyKind::Normal {
+                continue;
+            }
+            let Some(target) = dependency.path.as_deref().and_then(|path| paths.get(path)) else {
+                continue;
+            };
+            let source = package.name.as_str();
+            let evidence = if dependency.optional || dependency.target.is_some() {
+                let target_condition = dependency
+                    .target
+                    .as_ref()
+                    .map_or_else(|| "any-target".to_string(), ToString::to_string);
+                Evidence::conditional(format!(
+                    "cargo:{source}->{target}:optional={}:target={target_condition}",
+                    dependency.optional
+                ))
+            } else {
+                Evidence::resolved(format!("cargo:{source}->{target}"))
+            };
+            graph.merge_edge(Edge::new(
+                NodeId::package(source),
+                NodeId::package(target),
+                EdgeKind::DependsOn,
+                evidence,
+            ));
+        }
+    }
 }
 
 fn collect_package(ctx: &Ctx, package: &Package, graph: &mut EvidenceGraph) -> Result<()> {
@@ -102,6 +139,7 @@ fn collect_target(
     }
     files.remove(root_file);
 
+    let mut parsed = Vec::new();
     for path in std::iter::once(root_file.to_path_buf()).chain(files) {
         let Ok(file) = parse_file(&path) else {
             continue;
@@ -110,18 +148,88 @@ fn collect_target(
         let relative = relative_to(&ctx.root, &path)
             .to_string_lossy()
             .replace('\\', "/");
-        ensure_module_chain(package, &target.name, package_id, &module, &relative, graph);
-        collect_public_items(
-            package,
-            &target.name,
-            &module,
-            &relative,
-            &file.items,
+        parsed.push((path, module, relative, file));
+    }
+    let test_modules = parsed
+        .iter()
+        .flat_map(|(_, module, _, file)| {
+            file.items.iter().filter_map(move |item| {
+                let Item::Mod(item) = item else {
+                    return None;
+                };
+                (item.content.is_none() && super::calls::is_test_only(&item.attrs))
+                    .then(|| child_module(module, &item.ident.to_string()))
+            })
+        })
+        .collect::<BTreeSet<_>>();
+    parsed.retain(|(_, module, _, _)| {
+        !test_modules
+            .iter()
+            .any(|test_module| module_within(module, test_module))
+    });
+
+    for (_, module, relative, file) in &parsed {
+        ensure_module_chain(package, &target.name, package_id, module, relative, graph);
+        collect_public_items(package, &target.name, module, relative, &file.items, graph);
+        super::ownership::collect(package, &target.name, module, relative, file, graph);
+    }
+
+    let mut call_index = super::calls::CallIndex::default();
+    for (_, module, relative, file) in &parsed {
+        super::calls::collect_abstractions(
+            &super::calls::SourceUnit {
+                package,
+                target: &target.name,
+                module,
+                relative,
+                file,
+            },
             graph,
+            &mut call_index,
         );
-        super::ownership::collect(package, &target.name, module, &relative, &file, graph);
+    }
+    for (_, module, relative, file) in &parsed {
+        super::calls::collect_definitions(
+            &super::calls::SourceUnit {
+                package,
+                target: &target.name,
+                module,
+                relative,
+                file,
+            },
+            graph,
+            &mut call_index,
+        );
+    }
+    for (_, module, relative, file) in &parsed {
+        super::calls::collect_edges(
+            &super::calls::SourceUnit {
+                package,
+                target: &target.name,
+                module,
+                relative,
+                file,
+            },
+            graph,
+            &call_index,
+        );
     }
     Ok(())
+}
+
+fn child_module(parent: &str, child: &str) -> String {
+    if parent == "crate" {
+        child.to_string()
+    } else {
+        format!("{parent}::{child}")
+    }
+}
+
+fn module_within(module: &str, parent: &str) -> bool {
+    module == parent
+        || module
+            .strip_prefix(parent)
+            .is_some_and(|suffix| suffix.starts_with("::"))
 }
 
 fn module_root(root_file: &Path) -> PathBuf {
@@ -237,41 +345,60 @@ fn public_item(item: &Item) -> Option<(String, String, usize)> {
     use syn::spanned::Spanned as _;
 
     match item {
-        Item::Struct(item) if is_pub_visibility(&item.vis) => Some((
-            item.ident.to_string(),
-            format!("struct {}", item.ident),
-            item.span().start().line,
-        )),
-        Item::Enum(item) if is_pub_visibility(&item.vis) => Some((
-            item.ident.to_string(),
-            format!("enum {}", item.ident),
-            item.span().start().line,
-        )),
-        Item::Trait(item) if is_pub_visibility(&item.vis) => Some((
-            item.ident.to_string(),
-            format!("trait {}", item.ident),
-            item.span().start().line,
-        )),
-        Item::Fn(item) if is_pub_visibility(&item.vis) => Some((
-            item.sig.ident.to_string(),
-            format!("fn {}()", item.sig.ident),
-            item.span().start().line,
-        )),
-        Item::Type(item) if is_pub_visibility(&item.vis) => Some((
-            item.ident.to_string(),
-            format!("type {}", item.ident),
-            item.span().start().line,
-        )),
-        Item::Const(item) if is_pub_visibility(&item.vis) => Some((
-            item.ident.to_string(),
-            format!("const {}", item.ident),
-            item.span().start().line,
-        )),
-        Item::Static(item) if is_pub_visibility(&item.vis) => Some((
-            item.ident.to_string(),
-            format!("static {}", item.ident),
-            item.span().start().line,
-        )),
+        Item::Struct(item)
+            if is_pub_visibility(&item.vis) && !super::calls::is_test_only(&item.attrs) =>
+        {
+            Some((
+                item.ident.to_string(),
+                format!("struct {}", item.ident),
+                item.span().start().line,
+            ))
+        }
+        Item::Enum(item)
+            if is_pub_visibility(&item.vis) && !super::calls::is_test_only(&item.attrs) =>
+        {
+            Some((
+                item.ident.to_string(),
+                format!("enum {}", item.ident),
+                item.span().start().line,
+            ))
+        }
+        Item::Trait(item)
+            if is_pub_visibility(&item.vis) && !super::calls::is_test_only(&item.attrs) =>
+        {
+            Some((
+                item.ident.to_string(),
+                format!("trait {}", item.ident),
+                item.span().start().line,
+            ))
+        }
+        Item::Type(item)
+            if is_pub_visibility(&item.vis) && !super::calls::is_test_only(&item.attrs) =>
+        {
+            Some((
+                item.ident.to_string(),
+                format!("type {}", item.ident),
+                item.span().start().line,
+            ))
+        }
+        Item::Const(item)
+            if is_pub_visibility(&item.vis) && !super::calls::is_test_only(&item.attrs) =>
+        {
+            Some((
+                item.ident.to_string(),
+                format!("const {}", item.ident),
+                item.span().start().line,
+            ))
+        }
+        Item::Static(item)
+            if is_pub_visibility(&item.vis) && !super::calls::is_test_only(&item.attrs) =>
+        {
+            Some((
+                item.ident.to_string(),
+                format!("static {}", item.ident),
+                item.span().start().line,
+            ))
+        }
         _ => None,
     }
 }

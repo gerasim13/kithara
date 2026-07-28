@@ -17,6 +17,8 @@ pub mod alac_fixture;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod apple_warmup;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod architecture_trace;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod asset_fixture;
 pub mod assets_ext;
 pub mod audio_fixture;

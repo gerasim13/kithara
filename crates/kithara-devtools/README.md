@@ -40,7 +40,16 @@ Exposed through the `CoreCommand` subcommand enum:
 - `perf-compare` — compare hotpath timing tables against a baseline.
 - `perf` — test-suite performance pipeline: matrix, slow aggregation, samply
   profiling, merged report, and xctrace escalation.
-- `viz` — architecture visualization. *(feature `viz`)*
+- `viz` — LOD-controlled Mermaid architecture diagrams from source evidence,
+  written below `target/architecture/<revision>/`. Configured runtime scenarios
+  and rust-analyzer semantic evidence enrich the same graph automatically.
+  `--crate <package>` keeps the selected crate and its immediate incoming and
+  outgoing workspace neighbors; it needs no runtime scenario. `--lod
+  auto|0|1|2|3|4` moves from crates through modules and abstractions to the
+  complete call graph. Repeatable `--exclude-crate <glob>` and
+  `--exclude-module <glob>` filters remove non-product contours from the
+  projection and report.
+  *(feature `viz`)*
 
 ## Consuming it
 
@@ -75,6 +84,66 @@ sections under `[ext.*]`, which the core passes through untouched.
 
 The shared `[workspace-scan] exclude` globs drop directories (media trees,
 virtualenvs, …) from the scanning commands.
+
+`[architecture.filters]` provides additive project defaults for the same
+repeatable CLI filters:
+
+```toml
+[architecture.filters]
+exclude_crates = ["integration-tests", "xtask"]
+exclude_modules = ["*::tests"]
+```
+
+Crate patterns match Cargo package names. Module patterns match canonical
+`package::module` names and exclude the complete matched subtree. Excluded
+packages may still run as runtime evidence producers; they do not enter
+semantic selection, Mermaid, `projection.json`, findings, or architecture
+counters. The complete diagnostic evidence remains in `graph.json`, while
+manifest schema v3 records the effective filters and excluded node/edge counts.
+
+`[architecture.runtime]` can declare portable tests, binaries, or existing
+JSONL traces that exercise representative flows:
+
+```toml
+[[architecture.runtime.scenarios]]
+name = "queue-playback"
+command = "test"
+package = "my-integration-tests"
+test = "architecture"
+filter = "queue_playback"
+ignored = true
+timeout_secs = 120
+```
+
+The test or binary receives `ARCHITECTURE_TRACE_PATH`. It can write neutral
+records through `viz::trace::{TraceRecord, TraceRecordKind, TraceSource,
+TraceWriter}`; no Kithara domain type or macro is required. `just arch viz`
+runs every configured scenario. `just arch viz --scenario queue-playback`
+runs and projects one flow, while `--trace <path>` merges an existing trace as
+manual evidence. `--semantic off|required` and `--runtime off` control optional
+enrichment without changing the artifact layout.
+
+The crate selector is a projection over the full workspace graph, not a
+package-only scan. It includes direct normal Cargo dependencies, direct
+workspace dependents, and resolved cross-package call endpoints. Relations
+between neighboring packages are hidden so the view does not expand into a
+second dependency level.
+
+The canonical graph groups concrete types and their methods, trait contracts,
+and each module's free functions. Hidden method relations lift to the nearest
+visible contour without merging calls with ownership, messaging, transfer, or
+spawn relations. Optional and target-gated Cargo dependencies are styled as
+conditional rather than required.
+
+Each run writes `architecture.md`, `architecture.mmd`, `graph.json`,
+`projection.json`, and `manifest.json`; runtime traces and captured process
+logs are preserved in adjacent `traces/` and `logs/` directories. There is no
+diagram node cap. LOD 4 writes an index plus linked documents below
+`contours/`, with manifest coverage proving that partitioning did not remove
+nodes. The manifest status is `complete`, `truncated`, `static-only`,
+`runtime-enriched`, or `incomplete`; `truncated` applies to evidence collection,
+not diagram size. An incomplete run returns an error after preserving partial
+artifacts.
 
 `[perf]` configures the generic test-suite performance pipeline:
 

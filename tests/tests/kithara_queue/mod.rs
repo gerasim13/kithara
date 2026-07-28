@@ -8,6 +8,7 @@ mod source_helper;
 use source_helper::app_track_source;
 
 mod advance_boundary_provenance;
+mod architecture_flow;
 mod auto_advance;
 mod cold_seek_middle;
 mod cpal_cold_seek_synthetic;
