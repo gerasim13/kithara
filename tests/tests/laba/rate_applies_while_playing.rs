@@ -10,7 +10,10 @@ use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
 const WARMUP_BLOCKS: usize = 8;
-const MEASURE_BLOCKS: usize = 40;
+/// Wide enough for the rate-1.0 baseline to reach silence inside the window.
+/// A window that clips the baseline makes both sides saturate at the cap and
+/// the comparison below vacuous.
+const MEASURE_BLOCKS: usize = 200;
 const FAST_RATE: f32 = 2.0;
 
 fn make_resource(duration_secs: f64) -> Resource {
@@ -30,6 +33,12 @@ fn rate_change_while_playing_changes_consumption() {
     let baseline = blocks_until_silence(None);
     let accelerated = blocks_until_silence(Some(FAST_RATE));
 
+    assert!(
+        baseline < MEASURE_BLOCKS,
+        "LABA-418: the rate-1.0 baseline must drain inside the measured window, \
+         got {baseline} of {MEASURE_BLOCKS} blocks — the comparison below would \
+         compare two saturated caps"
+    );
     assert!(
         accelerated < baseline,
         "LABA-418: at rate {FAST_RATE} the source must drain in fewer blocks \
