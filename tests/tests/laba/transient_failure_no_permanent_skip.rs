@@ -15,7 +15,7 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    Content, Delivery, FixtureBehavior, PrivateTestServer, TestTempDir,
     audio_fixture::EmbeddedAudio,
     kithara,
     offline::OfflineSession,
@@ -34,7 +34,7 @@ const PLAY_BEFORE_FAILURE_SECS: f64 = 1.0;
 /// window with a fact rather than a stopwatch.
 const MIN_RECOVERY_PROGRESS_SECS: f64 = 5.0;
 
-struct NetworkRestore<'a>(&'a TestServerHelper);
+struct NetworkRestore<'a>(&'a PrivateTestServer);
 
 impl Drop for NetworkRestore<'_> {
     fn drop(&mut self) {
@@ -55,7 +55,10 @@ fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
-    let helper = TestServerHelper::new().await;
+    // A private server: the blip below takes every data route down, so sharing
+    // one with parallel siblings would fail them instead.
+    let server = PrivateTestServer::start().await;
+    let helper = server.helper();
     let target_url = helper.asset("hls/master.m3u8");
     let fallback_fixture = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
@@ -132,8 +135,8 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
 
     // A blip, not an outage: the server goes away only long enough for one
     // in-flight segment fetch to fail, then comes straight back.
-    helper.set_network_online(false);
-    let restore = NetworkRestore(&helper);
+    server.set_network_online(false);
+    let restore = NetworkRestore(&server);
     wait_for_event(
         &mut rx,
         "a segment fetch failing against the offline server",

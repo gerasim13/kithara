@@ -313,8 +313,10 @@ pub(crate) struct TestServerState {
     /// `Audio::new()` versus the lazy per-segment resolve that probes only
     /// the active prefix.
     size_probes: RwLock<HashMap<String, AtomicU64>>,
-    /// Global reachability switch. While `false`, every data route returns
+    /// Server-wide reachability switch. While `false`, every data route returns
     /// `503`, modeling a total network outage rather than one failed URL.
+    /// Because it covers the whole server, only a server private to one test
+    /// may be taken offline — see `PrivateTestServer`.
     network_online: AtomicBool,
 }
 

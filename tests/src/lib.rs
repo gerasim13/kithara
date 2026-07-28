@@ -99,7 +99,8 @@ pub use signal_url::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use test_server::{
-    BehaviorHandle, Content, Delivery, FixtureBehavior, InitGateHandle, SegmentGateHandle,
+    BehaviorHandle, Content, Delivery, FixtureBehavior, InitGateHandle, PrivateTestServer,
+    SegmentGateHandle,
 };
 pub use test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder, TestServerHelper};
 pub use wav::{create_test_wav, create_wav_exact_bytes};

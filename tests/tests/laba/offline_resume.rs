@@ -15,7 +15,7 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir, kithara,
+    PrivateTestServer, TestTempDir, kithara,
     offline::OfflineSession,
     temp_dir,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
@@ -41,7 +41,7 @@ const LOOK_AHEAD_BYTES: u64 = 64 * 1024;
 const PLAY_BEFORE_OUTAGE_SECS: f64 = 1.0;
 const MIN_RESUME_PROGRESS_SECS: f64 = 1.0;
 
-struct NetworkRestore<'a>(&'a TestServerHelper);
+struct NetworkRestore<'a>(&'a PrivateTestServer);
 
 impl Drop for NetworkRestore<'_> {
     fn drop(&mut self) {
@@ -62,8 +62,10 @@ fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn playback_resumes_after_network_returns(temp_dir: TestTempDir) {
-    let helper = TestServerHelper::new().await;
-    let url = helper.asset("hls/master.m3u8");
+    // A private server: this test takes the network down, and the switch covers
+    // every data route on whichever server it runs against.
+    let server = PrivateTestServer::start().await;
+    let url = server.helper().asset("hls/master.m3u8");
 
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_millis(500))
@@ -116,8 +118,8 @@ async fn playback_resumes_after_network_returns(temp_dir: TestTempDir) {
     .await
     .unwrap_or_else(|error| panic!("LABA-419 precondition: {error}"));
 
-    helper.set_network_online(false);
-    let _network_restore = NetworkRestore(&helper);
+    server.set_network_online(false);
+    let _network_restore = NetworkRestore(&server);
     wait_for_event(
         &mut rx,
         "a segment fetch observing the offline server",
@@ -164,7 +166,7 @@ async fn playback_resumes_after_network_returns(temp_dir: TestTempDir) {
              down, so there was nothing for the recovery to resume from"
         )
     });
-    helper.set_network_online(true);
+    server.set_network_online(true);
 
     let resume_target = starved_at + MIN_RESUME_PROGRESS_SECS;
     let resumed_at =

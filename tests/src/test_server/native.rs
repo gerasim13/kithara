@@ -41,6 +41,10 @@ impl TestServerHelper {
         }
     }
 
+    pub(crate) fn for_server(state: Arc<TestServerState>, base_url: Url) -> Self {
+        Self { state, base_url }
+    }
+
     /// Build a URL for a static test asset.
     #[must_use]
     pub fn asset(&self, name: &str) -> Url {
@@ -159,13 +163,6 @@ impl TestServerHelper {
         }
     }
 
-    /// Lower or raise the server's global reachability switch.
-    ///
-    /// In-process counterpart of `POST /control/network`.
-    pub fn set_network_online(&self, online: bool) {
-        self.state.set_network_online(online);
-    }
-
     /// Register a withhold gate for one media segment of the fixture behind
     /// `hls_token`, returning a handle that releases it and reports how many
     /// segment GETs it has parked. The matching GET response is withheld until
@@ -238,6 +235,45 @@ impl TestServerHelper {
                 spawn_delay_releaser(gate, delay_ms, variant, segment);
             }
         }
+    }
+}
+
+/// A test server private to one test: its own port, its own [`TestServerState`].
+///
+/// Reachability is server-wide — the guard in front of every data route reads
+/// one flag — so a test that takes the network down must not share a server with
+/// anything else. On the process-global server ([`TestServerHelper::new`]) that
+/// outage answers every parallel sibling's request with `503`, and the siblings
+/// fail on preconditions that have nothing to do with what they assert.
+///
+/// Owning the switch here rather than on [`TestServerHelper`] is what keeps that
+/// from coming back: the shared helper has no way to take a server offline.
+///
+/// Dropping this shuts its server down.
+pub struct PrivateTestServer {
+    state: Arc<TestServerState>,
+    server: TestHttpServer,
+}
+
+impl PrivateTestServer {
+    /// Start a server private to this test on its own loopback port.
+    pub async fn start() -> Self {
+        let state = TestServerState::new();
+        let server = TestHttpServer::new(router(Arc::clone(&state))).await;
+        Self { state, server }
+    }
+
+    /// A helper bound to this private server instead of the shared one.
+    #[must_use]
+    pub fn helper(&self) -> TestServerHelper {
+        TestServerHelper::for_server(Arc::clone(&self.state), self.server.base_url().clone())
+    }
+
+    /// Lower or raise this server's reachability switch.
+    ///
+    /// In-process counterpart of `POST /control/network`.
+    pub fn set_network_online(&self, online: bool) {
+        self.state.set_network_online(online);
     }
 }
 

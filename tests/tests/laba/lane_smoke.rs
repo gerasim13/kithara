@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara_integration_tests::TestServerHelper;
+use kithara_integration_tests::{PrivateTestServer, TestServerHelper};
 
 /// Proves the lane builds and reaches the test server. This is the only
 /// green test in `suite_laba`, distinguishing a broken lane from a red trap.
@@ -16,9 +16,13 @@ async fn lane_reaches_test_server() {
 
 /// The network switch is reachable over HTTP and cannot lock itself out:
 /// `/control/*` must keep responding while data routes are offline.
+///
+/// Runs against a private server because it leaves data routes dead for the
+/// span of the test, which on the shared server every parallel sibling sees.
 #[kithara::test(tokio)]
 async fn network_switch_is_reachable_over_http() {
-    let helper = TestServerHelper::new().await;
+    let server = PrivateTestServer::start().await;
+    let helper = server.helper();
     let control = helper.url("/control/network");
     let health = helper.url("/health");
     let client = reqwest::Client::new();
