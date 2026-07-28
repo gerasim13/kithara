@@ -180,6 +180,12 @@ fn workspace_filters_remove_crates_modules_edges_and_report_findings() {
         &fs::read(output.with_file_name("projection.json")).expect("projection"),
     )
     .expect("projection JSON");
+    let metrics: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.with_file_name("metrics.json")).expect("metrics"))
+            .expect("metrics JSON");
+    let graph: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.with_file_name("graph.json")).expect("graph"))
+            .expect("graph JSON");
 
     assert!(!document.contains("unrelated"));
     assert!(!document.contains("[\"runtime\"]"));
@@ -204,7 +210,8 @@ fn workspace_filters_remove_crates_modules_edges_and_report_findings() {
                     && edge["target"]["module"] != "runtime"
             })
     );
-    assert_eq!(manifest["schema_version"], 3);
+    assert_eq!(manifest["schema_version"], 4);
+    assert_eq!(manifest["lod"], 1);
     assert_eq!(
         manifest["filters"]["exclude_crates"],
         serde_json::json!(["unrelated"])
@@ -223,6 +230,16 @@ fn workspace_filters_remove_crates_modules_edges_and_report_findings() {
             .as_u64()
             .is_some_and(|count| count > 0)
     );
+    assert!(metrics["contours"].as_object().is_some_and(|contours| {
+        contours
+            .keys()
+            .all(|path| !path.contains("unrelated") && !path.contains("flow/runtime"))
+    }));
+    assert!(graph["nodes"].as_array().is_some_and(|nodes| {
+        nodes
+            .iter()
+            .any(|node| node["id"]["package"] == "unrelated")
+    }));
 }
 
 #[test]
@@ -286,14 +303,156 @@ fn automatic_lod_follows_workspace_crate_and_module_scope() {
 
     for (scope, expected) in [
         (&[][..], 0),
-        (&["--crate", "flow"][..], 2),
-        (&["--crate", "flow", "--module", "runtime"][..], 3),
+        (&["--crate", "flow"][..], 1),
+        (&["--crate", "flow", "--module", "runtime"][..], 2),
     ] {
         kithara_devtools::run(&auto_lod_command(scope), &ctx).expect("automatic LOD run");
         let manifest: serde_json::Value =
             serde_json::from_slice(&fs::read(&output).expect("manifest")).expect("manifest JSON");
         assert_eq!(manifest["lod"], expected);
     }
+}
+
+#[test]
+fn crate_lod_one_contracts_modules_into_subsystems() {
+    let temp = tempdir().expect("tempdir");
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/architecture-workspace");
+    copy_tree(&fixture, temp.path());
+    let manifest = temp.path().join("Cargo.toml");
+    let ctx = Ctx::load_from_manifest(&manifest).expect("load fixture context");
+
+    kithara_devtools::run(&crate_lod_command("flow", "1"), &ctx).expect("crate LOD 1 run");
+
+    let output = temp
+        .path()
+        .join("target/architecture/working-tree/architecture.md");
+    let projection: serde_json::Value = serde_json::from_slice(
+        &fs::read(output.with_file_name("projection.json")).expect("projection"),
+    )
+    .expect("projection JSON");
+    let modules = projection["nodes"]
+        .as_array()
+        .expect("projection nodes")
+        .iter()
+        .filter(|node| node["id"]["package"] == "flow" && node["kind"] == "module")
+        .map(|node| node["id"]["module"].as_str().expect("module"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(modules, ["crate", "runtime"]);
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &fs::read(output.with_file_name("manifest.json")).expect("manifest"),
+    )
+    .expect("manifest JSON");
+    let metrics: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.with_file_name("metrics.json")).expect("metrics"))
+            .expect("metrics JSON");
+    let subsystem = manifest["partition"]["pages"]
+        .as_array()
+        .expect("subsystem pages")
+        .iter()
+        .find(|page| page["label"] == "flow::runtime")
+        .expect("runtime subsystem page");
+    let subsystem_document = fs::read_to_string(
+        output
+            .parent()
+            .expect("architecture output")
+            .join(subsystem["file"].as_str().expect("subsystem page file")),
+    )
+    .expect("subsystem document");
+    assert!(subsystem_document.contains("## Architectural complexity"));
+    assert!(subsystem_document.contains("### Metric findings"));
+    assert!(
+        metrics["confirmed"]["outgoing_relations"]
+            .as_u64()
+            .is_some_and(|relations| relations > 0)
+    );
+}
+
+#[test]
+fn workspace_metrics_are_explainable_and_machine_readable() {
+    let temp = tempdir().expect("tempdir");
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/architecture-workspace");
+    copy_tree(&fixture, temp.path());
+    let manifest = temp.path().join("Cargo.toml");
+    let ctx = Ctx::load_from_manifest(&manifest).expect("load fixture context");
+
+    kithara_devtools::run(&workspace_lod_command("0"), &ctx).expect("workspace metrics run");
+
+    let output = temp
+        .path()
+        .join("target/architecture/working-tree/metrics.json");
+    let metrics: serde_json::Value =
+        serde_json::from_slice(&fs::read(output).expect("metrics")).expect("metrics JSON");
+    let contours: serde_json::Value = serde_json::from_slice(
+        &fs::read(
+            temp.path()
+                .join("target/architecture/working-tree/contours.json"),
+        )
+        .expect("contours"),
+    )
+    .expect("contours JSON");
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &fs::read(
+            temp.path()
+                .join("target/architecture/working-tree/manifest.json"),
+        )
+        .expect("manifest"),
+    )
+    .expect("manifest JSON");
+
+    assert_eq!(metrics["schema_version"], 1);
+    assert_eq!(metrics["scope"]["kind"], "workspace");
+    assert_eq!(metrics["confirmed"]["node_count"], 6);
+    assert!(
+        metrics["confirmed"]["propagation_cost"]
+            .as_f64()
+            .is_some_and(|value| value > 0.0)
+    );
+    assert!(
+        metrics["architecture_complexity_index"]
+            .as_f64()
+            .is_some_and(|value| (0.0..=100.0).contains(&value))
+    );
+    assert!(
+        metrics["including_candidates_complexity_index"]
+            .as_f64()
+            .is_some_and(|value| (0.0..=100.0).contains(&value))
+    );
+    assert!(
+        metrics["contributions"]
+            .as_object()
+            .is_some_and(|contributions| !contributions.is_empty())
+    );
+    assert_eq!(contours["schema_version"], 1);
+    assert!(
+        contours["contours"]
+            .as_array()
+            .is_some_and(|records| records.iter().any(|record| {
+                record["id"]["package"] == "flow"
+                    && record["id"]["module"] == "runtime"
+                    && record["parent"]["module"] == "crate"
+            }))
+    );
+    assert_eq!(manifest["partition"]["state"], "hierarchical");
+    assert_eq!(manifest["files"]["workspace_mermaid"], "workspace.mmd");
+    assert!(
+        temp.path()
+            .join("target/architecture/working-tree/workspace.mmd")
+            .is_file()
+    );
+    assert!(
+        temp.path()
+            .join("target/architecture/working-tree/crates/flow.mmd")
+            .is_file()
+    );
+    let pages = manifest["partition"]["pages"]
+        .as_array()
+        .expect("hierarchical pages");
+    assert!(pages.iter().any(|page| page["label"] == "flow"));
+    let contour_metrics = metrics["contours"].as_object().expect("contour metrics");
+    assert!(contour_metrics.contains_key("crates/flow"));
 }
 
 #[test]
@@ -332,7 +491,7 @@ fn crate_lod_two_groups_methods_into_architectural_abstractions() {
     assert!(!document.contains("[\"fn worker()\"]"));
     assert!(document.contains("Architecture contours:"));
     assert!(document.contains("abstractions"));
-    assert_eq!(manifest["schema_version"], 3);
+    assert_eq!(manifest["schema_version"], 4);
     assert_eq!(manifest["lod"], 2);
     let lifted_call = projection["edges"]
         .as_array()
@@ -470,10 +629,28 @@ fn portable_workspace_produces_stable_mermaid_artifacts() {
     assert!(first.contains("## Limitations"));
     assert!(output.with_file_name("graph.json").is_file());
     assert!(output.with_file_name("manifest.json").is_file());
+    let first_metrics = fs::read(output.with_file_name("metrics.json")).expect("first metrics");
+    let first_contours = fs::read(output.with_file_name("contours.json")).expect("first contours");
 
     kithara_devtools::run(&viz_command("off"), &ctx).expect("second viz run");
     let second = fs::read_to_string(output).expect("architecture document");
     assert_eq!(first, second);
+    assert_eq!(
+        first_metrics,
+        fs::read(
+            temp.path()
+                .join("target/architecture/working-tree/metrics.json")
+        )
+        .expect("second metrics")
+    );
+    assert_eq!(
+        first_contours,
+        fs::read(
+            temp.path()
+                .join("target/architecture/working-tree/contours.json")
+        )
+        .expect("second contours")
+    );
 }
 
 #[test]
@@ -485,19 +662,44 @@ fn configured_runtime_scenario_enriches_the_same_graph() {
     let manifest = temp.path().join("Cargo.toml");
     let ctx = Ctx::load_from_manifest(&manifest).expect("load fixture context");
 
-    kithara_devtools::run(&viz_command("auto"), &ctx).expect("runtime viz run");
-
+    kithara_devtools::run(&viz_command("off"), &ctx).expect("static viz run");
     let output = temp
         .path()
         .join("target/architecture/working-tree/architecture.md");
+    let static_metrics: serde_json::Value = serde_json::from_slice(
+        &fs::read(output.with_file_name("metrics.json")).expect("static metrics"),
+    )
+    .expect("static metrics JSON");
+
+    kithara_devtools::run(&viz_command("auto"), &ctx).expect("runtime viz run");
+
     let document = fs::read_to_string(&output).expect("architecture document");
     let manifest: serde_json::Value = serde_json::from_slice(
         &fs::read(output.with_file_name("manifest.json")).expect("manifest"),
     )
     .expect("manifest JSON");
+    let runtime_metrics: serde_json::Value = serde_json::from_slice(
+        &fs::read(output.with_file_name("metrics.json")).expect("runtime metrics"),
+    )
+    .expect("runtime metrics JSON");
     assert!(document.contains("classDef observed"));
     assert_eq!(manifest["status"], "runtime-enriched");
     assert_eq!(manifest["runtime"]["scenarios"][0]["state"], "complete");
+    assert_eq!(runtime_metrics["confirmed"], static_metrics["confirmed"]);
+    assert_eq!(
+        runtime_metrics["architecture_complexity_index"],
+        static_metrics["architecture_complexity_index"]
+    );
+    assert_eq!(
+        runtime_metrics["including_candidates_complexity_index"],
+        static_metrics["including_candidates_complexity_index"]
+    );
+    assert!(runtime_metrics["runtime"]["observed_relations"].is_number());
+    assert!(
+        manifest["runtime"]["scenarios"][0]["trace"]["records"]
+            .as_u64()
+            .is_some_and(|records| records > 0)
+    );
     assert!(
         output
             .with_file_name("traces")

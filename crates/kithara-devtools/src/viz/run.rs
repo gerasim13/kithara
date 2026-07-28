@@ -8,11 +8,13 @@ use anyhow::{Result, bail};
 use super::{
     cli::{Lod, RuntimeMode, SemanticMode, ViewName, VizArgs},
     filter::ArchitectureFilter,
+    hierarchy,
     manifest::{self, ArtifactRequest},
     mermaid,
+    metrics::MetricsAnalyzer,
     scenario::{self, RunRequest},
     semantic, source,
-    view::{DetailLevel, ViewKind, ViewRequest, project},
+    view::{DetailLevel, Projector, ViewKind, ViewRequest},
 };
 use crate::Ctx;
 
@@ -83,11 +85,25 @@ pub(crate) fn run(args: &VizArgs, ctx: &Ctx) -> Result<()> {
         lod: detail_level(args),
         filter: filter.clone(),
     };
-    let model = project(&graph, &request);
+    let projector = Projector::new(&graph);
+    let model = projector.project(&request);
     if model.nodes.is_empty() {
         bail!("architecture filters removed every node from the selected projection");
     }
-    let diagrams = mermaid::render_set(&model)?;
+    let details = hierarchy::plan(&projector, &request, &model);
+    let analyzer = MetricsAnalyzer::new(&graph, &filter, projector.contours());
+    let mut metrics = analyzer.analyze(&model, args.krate.as_deref(), args.module.as_deref());
+    for detail in &details {
+        metrics.insert_contour(
+            detail.path.clone(),
+            analyzer.analyze(
+                &detail.model,
+                Some(&detail.package),
+                detail.module.as_deref(),
+            ),
+        );
+    }
+    let diagrams = mermaid::render_set(&model, details)?;
     let filter_summary = filter.summary(&graph);
     let artifacts = manifest::write(&ArtifactRequest {
         root: &ctx.root,
@@ -97,8 +113,10 @@ pub(crate) fn run(args: &VizArgs, ctx: &Ctx) -> Result<()> {
         graph: &graph,
         model: &model,
         diagrams: &diagrams,
+        metrics: &metrics,
         semantic: &semantic,
         runtime: &runtime,
+        filter: &filter,
         filters: &filter_summary,
     })?;
     writeln!(io::stdout().lock(), "==> {}", artifacts.document.display())?;
@@ -114,8 +132,9 @@ pub(crate) fn run(args: &VizArgs, ctx: &Ctx) -> Result<()> {
 
 fn detail_level(args: &VizArgs) -> DetailLevel {
     match args.lod {
-        Lod::Auto if args.module.is_some() => DetailLevel::Methods,
-        Lod::Auto if args.krate.is_some() => DetailLevel::Abstractions,
+        Lod::Auto if args.module.is_some() => DetailLevel::Abstractions,
+        Lod::Auto if args.krate.is_some() => DetailLevel::Modules,
+        Lod::Level1 if args.krate.is_none() => DetailLevel::Crates,
         Lod::Auto | Lod::Level0 => DetailLevel::Crates,
         Lod::Level1 => DetailLevel::Modules,
         Lod::Level2 => DetailLevel::Abstractions,

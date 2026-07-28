@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::{
     graph::{EdgeKind, NodeId, NodeKind},
     mermaid,
+    metrics::ArchitectureMetrics,
     view::{DiagramModel, EvidenceStyle},
 };
 
@@ -10,6 +11,133 @@ const DEGREE_FINDING_THRESHOLD: usize = 4;
 const LONG_CHAIN_THRESHOLD: usize = 6;
 const MAX_FINDINGS: usize = 12;
 const MAX_RELATIONS: usize = 20;
+
+pub(crate) fn render_metrics(metrics: &ArchitectureMetrics) -> String {
+    let confirmed = &metrics.confirmed;
+    let candidates = &metrics.including_candidates;
+    let index = metrics
+        .architecture_complexity_index
+        .map_or_else(|| "n/a".to_string(), |value| format!("{value:.2} / 100"));
+    let candidate_index = metrics
+        .including_candidates_complexity_index
+        .map_or_else(|| "n/a".to_string(), |value| format!("{value:.2} / 100"));
+    let mut output = format!(
+        "## Architectural complexity\n\n\
+         Experimental ACI: **{index}** resolved-static, **{candidate_index}** including \
+         syntax-derived candidates. Runtime observations cannot change either static score.\n\n\
+         | Metric | Confirmed | Including candidates |\n\
+         | --- | ---: | ---: |\n\
+         | Contours | {} | {} |\n\
+         | Internal relations | {} | {} |\n\
+         | Incoming relations | {} | {} |\n\
+         | Outgoing relations | {} | {} |\n\
+         | Propagation cost | {:.3} | {:.3} |\n\
+         | Normalized propagation | {:.3} | {:.3} |\n\
+         | Cyclic contours | {} | {} |\n\
+         | Largest cycle | {} | {} |\n\
+         | Normalized depth | {:.3} | {:.3} |\n\
+         | Instability | {} | {} |\n\
+         | Cohesion | {} | {} |\n\
+         | Boundary alignment | {} | {} |\n\
+         | External coupling | {} | {} |\n\
+         | Boundary load | {} | {} |\n\
+         | Shared ownership | {} | {} |\n\n",
+        confirmed.node_count,
+        candidates.node_count,
+        confirmed.internal_relations,
+        candidates.internal_relations,
+        confirmed.incoming_relations,
+        candidates.incoming_relations,
+        confirmed.outgoing_relations,
+        candidates.outgoing_relations,
+        confirmed.propagation_cost,
+        candidates.propagation_cost,
+        confirmed.normalized_propagation,
+        candidates.normalized_propagation,
+        confirmed.cyclic_nodes,
+        candidates.cyclic_nodes,
+        confirmed.largest_cycle,
+        candidates.largest_cycle,
+        confirmed.normalized_depth,
+        candidates.normalized_depth,
+        metric_value(confirmed.instability),
+        metric_value(candidates.instability),
+        metric_value(confirmed.cohesion),
+        metric_value(candidates.cohesion),
+        metric_value(confirmed.boundary_alignment),
+        metric_value(candidates.boundary_alignment),
+        metric_value(confirmed.external_coupling_ratio),
+        metric_value(candidates.external_coupling_ratio),
+        metric_value(confirmed.boundary_load),
+        metric_value(candidates.boundary_load),
+        metric_value(confirmed.shared_resource_ratio),
+        metric_value(candidates.shared_resource_ratio),
+    );
+    output.push_str(&format!(
+        "Type balance: abstractness {}, main-sequence distance {}.\n\n",
+        metric_value(confirmed.abstractness),
+        metric_value(confirmed.main_sequence_distance),
+    ));
+    output.push_str("ACI contributions:\n\n");
+    for (name, value) in &metrics.contributions {
+        output.push_str(&format!("- `{name}`: {value:.3}\n"));
+    }
+    if metrics.candidate_contributions != metrics.contributions {
+        output.push_str("\nCandidate-inclusive contributions:\n\n");
+        for (name, value) in &metrics.candidate_contributions {
+            output.push_str(&format!("- `{name}`: {value:.3}\n"));
+        }
+    }
+    output.push_str("\n### Metric findings\n\n");
+    if let Some((name, value)) = metrics
+        .contributions
+        .iter()
+        .max_by(|left, right| left.1.total_cmp(right.1))
+    {
+        output.push_str(&format!(
+            "- Largest confirmed ACI contribution: `{name}` at {value:.3}.\n"
+        ));
+    }
+    if confirmed.cyclic_nodes > 0 {
+        output.push_str(&format!(
+            "- {} contours participate in {} cyclic components; the largest contains {} contours.\n",
+            confirmed.cyclic_nodes, confirmed.cyclic_scc_count, confirmed.largest_cycle
+        ));
+    }
+    if confirmed.multi_owner_resources > 0 {
+        output.push_str(&format!(
+            "- {} resources have more than one visible owner.\n",
+            confirmed.multi_owner_resources
+        ));
+    }
+    let confirmed_relations =
+        confirmed.internal_relations + confirmed.incoming_relations + confirmed.outgoing_relations;
+    let candidate_relations = candidates.internal_relations
+        + candidates.incoming_relations
+        + candidates.outgoing_relations;
+    let additional_relations = candidate_relations.saturating_sub(confirmed_relations);
+    if additional_relations > 0 {
+        output.push_str(&format!(
+            "- Syntax-derived candidates add {additional_relations} cross-contour relations; \
+             resolve them semantically before treating their topology as confirmed.\n"
+        ));
+    }
+    if confirmed.cyclic_nodes == 0
+        && confirmed.multi_owner_resources == 0
+        && additional_relations == 0
+    {
+        output.push_str("- No cycle, multi-owner, or candidate-delta diagnostic is present.\n");
+    }
+    output.push_str(&format!(
+        "\nRuntime overlay: {} observed and {} manual cross-contour relations.\n\n",
+        metrics.runtime.observed_relations, metrics.runtime.manual_relations
+    ));
+    output
+}
+
+fn metric_value(value: Option<f64>) -> String {
+    value.map_or_else(|| "n/a".to_string(), |value| format!("{value:.3}"))
+}
 
 pub(crate) fn render(model: &DiagramModel) -> String {
     let analysis = analyze(model);

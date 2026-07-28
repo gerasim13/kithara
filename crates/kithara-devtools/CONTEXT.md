@@ -48,18 +48,24 @@ API changes covered by the consuming project's expectations.
 
 `viz` has no required nested subcommand. Its no-argument path builds one
 lossless source-evidence graph, applies the selected scope and LOD, and writes
-Mermaid, Markdown, graph JSON, projection JSON, and a manifest below
+Mermaid, Markdown, contour JSON, metrics JSON, graph JSON, projection JSON, and a manifest below
 `target/architecture/<revision>/`. `--view hierarchy` and `--view ownership`
 are projections of that same graph, not independent analyzers. Static call
 targets remain candidates until rust-analyzer resolves them through stable LSP
 call hierarchy requests.
 
-LOD is independent from scope. `auto` means LOD 0 for a workspace, LOD 2 for a
-crate, and LOD 3 for a module. Explicit levels are crates (0), modules (1),
-abstractions (2), constructors/boundaries/resources (3), and the complete
-evidence graph (4). Concrete types own their `impl` methods, traits are
-contracts connected by `implements`, and free functions belong to one
-module-functions abstraction.
+LOD is independent from scope. `auto` means LOD 0 for a workspace, LOD 1 for a
+crate, and LOD 2 for a module. Explicit levels are crates (0), top-level
+subsystems (1), modules and abstractions (2),
+constructors/boundaries/resources (3), and the complete evidence graph (4).
+Concrete types own their `impl` methods, traits are contracts connected by
+`implements`, and free functions belong to one module-functions abstraction.
+Workspace output automatically links per-crate diagrams and subsystem hotspots
+selected by contracted boundary degree; crate output links every subsystem's
+abstraction diagram. This page selection is navigation, not evidence
+truncation: every source contour remains in `contours.json`.
+Explicit workspace LOD 1 uses the same index-plus-pages shape rather than
+placing every workspace module in one Mermaid block.
 
 `--crate <package>` also projects the same full workspace graph. It retains the
 selected package, immediate incoming and outgoing normal Cargo neighbors, and
@@ -72,16 +78,25 @@ visible owner. Equal visible endpoint/kind pairs aggregate while retaining the
 original method pairs, occurrence count, evidence origins, and style in
 `projection.json`. Relation kinds remain distinct. There is no diagram node
 budget: LOD 4 is partitioned by semantic contours into an index and linked
-pages, and manifest schema v3 records complete visible-node coverage.
+pages, and manifest schema v4 records complete visible-node coverage plus
+hierarchical artifact paths.
 Optional and target-gated Cargo dependencies carry conditional evidence;
 unconditional normal dependencies remain resolved structural facts.
+
+The metrics profile is computed from the same contracted relations as Mermaid.
+It reports coupling, cohesion, propagation, cycles, depth, bottlenecks,
+ownership, boundary alignment, abstractness, main-sequence distance, and an
+experimental ACI. Resolved static evidence owns the stable profile; candidates
+and runtime observations remain separate comparisons. Boundary concentration
+and external coupling are weighted by actual boundary load before they enter
+the ACI. The ACI is diagnostic and does not alter existing CI budgets.
 
 Project defaults under `[architecture.filters]` and repeatable
 `--exclude-crate` / `--exclude-module` arguments compile into one additive
 projection filter. It removes matching symbols before semantic selection and
 removes matching contours plus incident edges from the `DiagramModel`; it does
 not alter raw `graph.json` evidence or disable an excluded package used as a
-runtime scenario. Manifest schema v3 records the effective patterns and
+runtime scenario. Manifest schema v4 records the effective patterns and
 excluded counts. Relations never lift through an excluded endpoint.
 
 `[architecture.runtime.scenarios]` is the only project-specific runtime
@@ -103,8 +118,8 @@ remain visible runtime events rather than guessed static targets. Manual
 Runtime enrichment precedes semantic resolution so a selected scenario limits
 rust-analyzer work to source functions observed in that trace. Both enrich the
 same graph before any view or prose is produced. The Markdown report is derived
-only from the visible `DiagramModel`; every finding and relation points to a
-visible Mermaid contour.
+from the visible `DiagramModel` and its contracted metrics graph; every finding
+and relation points to a visible Mermaid contour.
 
 Artifact status is `complete`, `truncated`, `static-only`, `runtime-enriched`,
 or `incomplete`. Timeout, failed execution, malformed trace, or failed semantic

@@ -51,6 +51,19 @@ pub(crate) enum Lod {
     Level4,
 }
 
+impl Lod {
+    pub(crate) fn resolve(self, automatic: u8) -> u8 {
+        match self {
+            Self::Auto => automatic,
+            Self::Level0 => 0,
+            Self::Level1 => 1,
+            Self::Level2 => 2,
+            Self::Level3 => 3,
+            Self::Level4 => 4,
+        }
+    }
+}
+
 #[derive(Debug, Args)]
 pub struct VizArgs {
     /// Projection rendered from the shared evidence graph.

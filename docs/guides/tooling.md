@@ -17,12 +17,13 @@ These are suitable for local pre-commit feedback.
 
 - `just arch viz` automatically collects the workspace source graph, runs all
   configured runtime scenarios, asks rust-analyzer to resolve selected calls,
-  and writes the Mermaid diagram plus its graph-derived report below
-  `target/architecture/<revision>/`.
+  and writes the Mermaid diagram, linked crate/hotspot-subsystem pages, and
+  graph-derived complexity report below `target/architecture/<revision>/`.
 - Scope and detail are independent. Exact common commands are:
   `just arch viz --lod 0` for crates; `just arch viz --crate <package>` for
-  automatic LOD 2 abstractions; `just arch viz --crate <package> --lod 3` for
-  constructors, boundary methods, resources, messages, and tasks; and
+  automatic LOD 1 subsystems; `just arch viz --crate <package> --module <path>`
+  for automatic LOD 2 abstractions; `just arch viz --crate <package> --lod 3`
+  for constructors, boundary methods, resources, messages, and tasks; and
   `just arch viz --crate <package> --module <path> --lod 4` for the complete
   focused call graph. A crate scope keeps immediate incoming and outgoing
   workspace neighbors and needs no discovery command.
@@ -35,6 +36,13 @@ These are suitable for local pre-commit feedback.
   evidence, but they do not enter semantic selection, the diagram,
   `projection.json`, findings, or architecture counters. `manifest.json`
   records the effective filters and excluded counts.
+- `metrics.json` contains resolved-static and candidate profiles for the
+  selected scope and every generated contour. It reports coupling, cohesion,
+  propagation, cycles, depth, bottlenecks, ownership, boundary alignment,
+  abstractness, and the experimental ACI. Runtime evidence is an overlay and
+  cannot change the stable score. Boundary concentration and external coupling
+  enter the ACI in proportion to actual boundary load. The ACI is diagnostic,
+  not a CI budget.
 - There is no diagram node budget. Hidden methods are lifted to their visible
   abstraction with count, method pairs, origins, and evidence retained in
   `projection.json`. LOD 4 writes an index plus linked contour pages instead of

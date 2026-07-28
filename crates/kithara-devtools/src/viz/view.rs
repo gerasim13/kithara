@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 
 use super::{
+    contour::ContourIndex,
     filter::ArchitectureFilter,
     graph::{
         Edge, EdgeKind, EvidenceGraph, MergedCertainty, Node, NodeId, NodeKind, SourceLocation,
@@ -47,6 +48,28 @@ pub(crate) struct ViewRequest {
     pub(crate) scenario: Option<String>,
     pub(crate) lod: DetailLevel,
     pub(crate) filter: ArchitectureFilter,
+}
+
+pub(crate) struct Projector<'a> {
+    graph: &'a EvidenceGraph,
+    contours: ContourIndex,
+}
+
+impl<'a> Projector<'a> {
+    pub(crate) fn new(graph: &'a EvidenceGraph) -> Self {
+        Self {
+            graph,
+            contours: ContourIndex::new(graph),
+        }
+    }
+
+    pub(crate) fn project(&self, request: &ViewRequest) -> DiagramModel {
+        project_with_contours(self.graph, request, &self.contours)
+    }
+
+    pub(crate) fn contours(&self) -> &ContourIndex {
+        &self.contours
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -98,13 +121,29 @@ pub(crate) struct DiagramModel {
     pub(crate) hidden_nodes: usize,
 }
 
+#[cfg(test)]
 pub(crate) fn project(graph: &EvidenceGraph, request: &ViewRequest) -> DiagramModel {
     if request.lod == DetailLevel::Crates {
         return project_crates(graph, request);
     }
+    Projector::new(graph).project(request)
+}
 
-    let parents = containment_parents(graph);
-    let boundary = boundary_functions(graph, &parents);
+fn project_with_contours(
+    graph: &EvidenceGraph,
+    request: &ViewRequest,
+    contours: &ContourIndex,
+) -> DiagramModel {
+    if request.lod == DetailLevel::Crates {
+        return project_crates(graph, request);
+    }
+
+    let parents = contours.parents();
+    let boundary = if request.lod == DetailLevel::Methods {
+        boundary_functions(graph, parents)
+    } else {
+        BTreeSet::new()
+    };
     let eligible = graph
         .nodes()
         .filter(|node| {
@@ -139,15 +178,15 @@ pub(crate) fn project(graph: &EvidenceGraph, request: &ViewRequest) -> DiagramMo
     if request.module.is_some() {
         include_connected_resources(graph, request.kind, &mut candidates);
     }
-    include_visible_ancestors(&parents, &eligible, &mut candidates);
+    include_visible_ancestors(parents, &eligible, &mut candidates);
 
     let visible = candidates;
     let nodes = graph
         .nodes()
         .filter(|node| visible.contains(&node.id))
-        .map(|node| diagram_node(node, visible_parent(&node.id, &visible, &parents)))
+        .map(|node| diagram_node(node, visible_parent(&node.id, &visible, parents)))
         .collect();
-    let edges = lifted_edges(graph, request, &visible, &parents);
+    let edges = lifted_edges(graph, request, &visible, parents);
 
     let mut model = DiagramModel {
         kind: request.kind,
@@ -251,14 +290,6 @@ fn lifted_edges(
             });
     }
     lifted.into_values().collect()
-}
-
-fn containment_parents(graph: &EvidenceGraph) -> BTreeMap<NodeId, NodeId> {
-    graph
-        .edges()
-        .filter(|edge| edge.kind == EdgeKind::Contains)
-        .map(|edge| (edge.target.clone(), edge.source.clone()))
-        .collect()
 }
 
 fn boundary_functions(
@@ -502,7 +533,7 @@ fn node_in_view(node: &Node, kind: ViewKind) -> bool {
 fn node_visible_at_lod(node: &Node, lod: DetailLevel, boundary: &BTreeSet<NodeId>) -> bool {
     match lod {
         DetailLevel::Crates => node.kind == NodeKind::Package,
-        DetailLevel::Modules => matches!(node.kind, NodeKind::Package | NodeKind::Module),
+        DetailLevel::Modules => node.kind == NodeKind::Package || ContourIndex::is_subsystem(node),
         DetailLevel::Abstractions => matches!(
             node.kind,
             NodeKind::Package

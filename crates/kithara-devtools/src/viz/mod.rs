@@ -1,10 +1,13 @@
 mod calls;
 mod cli;
+mod contour;
 mod cycle;
 mod filter;
 mod graph;
+mod hierarchy;
 mod manifest;
 mod mermaid;
+mod metrics;
 mod ownership;
 mod report;
 mod run;

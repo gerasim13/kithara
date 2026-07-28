@@ -4,6 +4,7 @@ extend-ignore-identifiers-re = ["^[A-F0-9]+$", ".*_[a-f0-9]{8,}.*"]
 [default.extend-words]
 caf = "caf"
 abr = "abr"
+aci = "aci"
 aac = "aac"
 flac = "flac"
 alac = "alac"

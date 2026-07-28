@@ -43,13 +43,21 @@ Exposed through the `CoreCommand` subcommand enum:
 - `viz` — LOD-controlled Mermaid architecture diagrams from source evidence,
   written below `target/architecture/<revision>/`. Configured runtime scenarios
   and rust-analyzer semantic evidence enrich the same graph automatically.
+  A workspace run links crate and hotspot-subsystem diagrams and writes explainable
+  per-contour complexity metrics derived from the same contracted graph.
   `--crate <package>` keeps the selected crate and its immediate incoming and
-  outgoing workspace neighbors; it needs no runtime scenario. `--lod
-  auto|0|1|2|3|4` moves from crates through modules and abstractions to the
-  complete call graph. Repeatable `--exclude-crate <glob>` and
+  outgoing workspace neighbors; it needs no runtime scenario. Automatic detail
+  is crates for a workspace, top-level subsystems for a crate, and abstractions
+  for a module. `--lod auto|0|1|2|3|4` moves from crates through subsystems,
+  modules, and abstractions to the complete call graph. Repeatable
+  `--exclude-crate <glob>` and
   `--exclude-module <glob>` filters remove non-product contours from the
   projection and report.
   *(feature `viz`)*
+
+Without `--crate`, LOD 1 keeps the workspace Mermaid at crate level and writes
+subsystem views as linked per-crate pages; it never expands every workspace
+module into one diagram.
 
 ## Consuming it
 
@@ -99,7 +107,8 @@ Crate patterns match Cargo package names. Module patterns match canonical
 packages may still run as runtime evidence producers; they do not enter
 semantic selection, Mermaid, `projection.json`, findings, or architecture
 counters. The complete diagnostic evidence remains in `graph.json`, while
-manifest schema v3 records the effective filters and excluded node/edge counts.
+manifest schema v4 records the effective filters, excluded node/edge counts,
+hierarchical pages, and machine-readable artifact paths.
 
 `[architecture.runtime]` can declare portable tests, binaries, or existing
 JSONL traces that exercise representative flows:
@@ -135,15 +144,22 @@ visible contour without merging calls with ownership, messaging, transfer, or
 spawn relations. Optional and target-gated Cargo dependencies are styled as
 conditional rather than required.
 
-Each run writes `architecture.md`, `architecture.mmd`, `graph.json`,
-`projection.json`, and `manifest.json`; runtime traces and captured process
-logs are preserved in adjacent `traces/` and `logs/` directories. There is no
-diagram node cap. LOD 4 writes an index plus linked documents below
-`contours/`, with manifest coverage proving that partitioning did not remove
-nodes. The manifest status is `complete`, `truncated`, `static-only`,
-`runtime-enriched`, or `incomplete`; `truncated` applies to evidence collection,
-not diagram size. An incomplete run returns an error after preserving partial
-artifacts.
+Each run writes `architecture.md`, `architecture.mmd`, `metrics.json`,
+`contours.json`, `graph.json`, `projection.json`, and `manifest.json`.
+Workspace runs also write `workspace.mmd`, readable diagrams below `crates/`,
+and linked hotspot-subsystem reports. A focused crate run writes every
+subsystem report. `metrics.json` separates resolved-static and
+candidate profiles, retains per-contour profiles, and labels the aggregate ACI
+experimental. Boundary concentration and external coupling contribute in
+proportion to the actual boundary load, so a single edge cannot dominate a
+large sparse contour. Runtime relations are a separate overlay and cannot
+change the stable index. Runtime traces and captured process logs are preserved in
+adjacent `traces/` and `logs/` directories. There is no diagram node cap. LOD 4
+writes an index plus linked documents below `contours/`, with manifest coverage
+proving that partitioning did not remove nodes. The manifest status is
+`complete`, `truncated`, `static-only`, `runtime-enriched`, or `incomplete`;
+`truncated` applies to evidence collection, not diagram size. An incomplete run
+returns an error after preserving partial artifacts.
 
 `[perf]` configures the generic test-suite performance pipeline:
 

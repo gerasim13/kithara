@@ -49,8 +49,11 @@ routine work:
   doc-tests: `just test all`.
 - `just ci gate`; scoped audit: `just ci audit <scope>`; broad report:
   `just ci health`.
-- Architecture diagram and report: `just arch viz` (workspace, automatic LOD
-  0); crate abstractions: `just arch viz --crate <package>` (automatic LOD 2);
+- Architecture diagram, linked contour reports, and complexity profile:
+  `just arch viz` (workspace, automatic LOD 0 plus crate/hotspot-subsystem pages);
+  crate subsystems: `just arch viz --crate <package>` (automatic LOD 1);
+  module abstractions: `just arch viz --crate <package> --module <path>`
+  (automatic LOD 2);
   crate boundaries/resources: `just arch viz --crate <package> --lod 3`;
   complete module call graph: `just arch viz --crate <package> --module <path>
   --lod 4`. A crate view includes its immediate workspace neighbors without a
@@ -59,7 +62,9 @@ routine work:
   `[architecture.filters]` and repeatable `--exclude-crate <glob>` /
   `--exclude-module <glob>` remove non-product contours from semantic
   selection, diagrams, projections, and findings without disabling runtime
-  evidence producers.
+  evidence producers. Read `metrics.json` for the resolved-static profile,
+  candidate comparison, per-contour metrics, and experimental ACI; runtime
+  observations are a separate overlay and do not change the stable score.
 - `just quality lab list`; manual/scheduled analyzer run:
   `just quality lab run <profile-or-tool>`; coverage risk:
   `just quality coverage-risk`.

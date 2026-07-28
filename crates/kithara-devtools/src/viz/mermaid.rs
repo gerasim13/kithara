@@ -14,22 +14,78 @@ pub(crate) struct DiagramSet {
     pub(crate) index: String,
     pub(crate) pages: Vec<DiagramPage>,
     pub(crate) covered_nodes: usize,
+    pub(crate) state: DiagramSetState,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DiagramSetState {
+    Single,
+    Hierarchical,
+    Partitioned,
+}
+
+impl DiagramSetState {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Single => "single",
+            Self::Hierarchical => "hierarchical",
+            Self::Partitioned => "partitioned",
+        }
+    }
+}
+
+pub(crate) struct DetailDiagram {
+    pub(crate) label: String,
+    pub(crate) path: String,
+    pub(crate) parent: Option<String>,
+    pub(crate) package: String,
+    pub(crate) module: Option<String>,
+    pub(crate) model: DiagramModel,
 }
 
 pub(crate) struct DiagramPage {
     pub(crate) label: String,
+    pub(crate) path: String,
+    pub(crate) parent: Option<String>,
     pub(crate) document_file: String,
     pub(crate) mermaid_file: String,
     pub(crate) mermaid: String,
     pub(crate) visible_nodes: usize,
+    pub(crate) model: DiagramModel,
 }
 
-pub(crate) fn render_set(model: &DiagramModel) -> Result<DiagramSet> {
+pub(crate) fn render_set(model: &DiagramModel, details: Vec<DetailDiagram>) -> Result<DiagramSet> {
     if model.lod != DetailLevel::Full {
+        let mut covered = model
+            .nodes
+            .iter()
+            .map(|node| node.id.clone())
+            .collect::<BTreeSet<_>>();
+        let mut pages = Vec::new();
+        for detail in details {
+            covered.extend(detail.model.nodes.iter().map(|node| node.id.clone()));
+            let mermaid = render(&detail.model)?;
+            pages.push(DiagramPage {
+                label: detail.label,
+                document_file: format!("{}.md", detail.path),
+                mermaid_file: format!("{}.mmd", detail.path),
+                path: detail.path,
+                parent: detail.parent,
+                mermaid,
+                visible_nodes: detail.model.nodes.len(),
+                model: detail.model,
+            });
+        }
+        pages.sort_by(|left, right| left.label.cmp(&right.label));
         return Ok(DiagramSet {
             index: render(model)?,
-            pages: Vec::new(),
-            covered_nodes: model.nodes.len(),
+            state: if pages.is_empty() {
+                DiagramSetState::Single
+            } else {
+                DiagramSetState::Hierarchical
+            },
+            pages,
+            covered_nodes: covered.len(),
         });
     }
 
@@ -61,12 +117,16 @@ pub(crate) fn render_set(model: &DiagramModel) -> Result<DiagramSet> {
         let visible = descendants.iter().cloned().collect::<BTreeSet<_>>();
         covered.extend(visible.iter().cloned());
         let suffix = node_id(&node.id).trim_start_matches("n_").to_string();
+        let page_model = reproject(model, &visible);
         pages.push(DiagramPage {
             label: contour_label(model, &node.id),
+            path: format!("contours/{suffix}"),
+            parent: None,
             document_file: format!("contours/{suffix}.md"),
             mermaid_file: format!("contours/{suffix}.mmd"),
-            mermaid: render(&reproject(model, &visible))?,
+            mermaid: render(&page_model)?,
             visible_nodes: visible.len(),
+            model: page_model,
         });
     }
     pages.sort_by(|left, right| left.label.cmp(&right.label));
@@ -75,6 +135,7 @@ pub(crate) fn render_set(model: &DiagramModel) -> Result<DiagramSet> {
         index,
         pages,
         covered_nodes: covered.len(),
+        state: DiagramSetState::Partitioned,
     })
 }
 
