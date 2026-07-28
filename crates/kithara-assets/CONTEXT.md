@@ -222,6 +222,19 @@ committed resource whose length is unknown is treated as unbounded and
 therefore cannot remain in a byte-bounded memory cache. This lifecycle work
 never runs from `read_at` or the decoder read loop.
 
+### Resource retention
+
+`AssetStore::retain_resource(&key)` returns a cloneable `ResourceRetention`
+guard for the exact `ResourceKey`. The guard can be acquired before the
+resource exists. While any clone is alive, `CachedAssets` excludes every cache
+entry for that key from both handle-count and memory-byte eviction.
+
+The cache owns one per-key retention registry. Clones share one RAII token, and
+dropping its final clone immediately re-enforces cache capacity. Explicit
+resource or asset deletion overrides retention and clears the matching cache
+entry. Protocol code retains exact resources, never cache capacity or a broad
+variant namespace.
+
 ## Conversions and builder inputs
 
 - `AssetStoreBuilder::{max_assets, max_bytes}` configure eviction directly;

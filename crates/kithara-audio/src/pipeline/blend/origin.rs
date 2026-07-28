@@ -2,30 +2,14 @@ use kithara_decode::{PcmChunk, duration_for_frames};
 use kithara_platform::time::Duration;
 use kithara_stream::AudioCodec;
 
-/// Where a decoder generation puts frame zero.
-///
-/// Two things move it. A decoder labels its output by counting frames it
-/// emitted, but it drops audio the container still counts, so its count sits
-/// behind the container's clock by however much it dropped — and how much that
-/// is depends on where the generation started. And the container itself starts
-/// ahead of the music: an AAC stream carries encoder priming before the first
-/// audible frame, a FLAC stream carries none, so the same instant of music is
-/// a different reading on each.
-///
-/// Which is why nothing downstream may take a generation's labels at face
-/// value. They are readings on that generation's own scale, and the pipeline
-/// keeps a single scale — the first generation's — that every later one is
-/// converted onto ([`Origin::rebase`]), including across a change of codec.
+/// Content-frame-zero offset on one decoder generation's PCM clock.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Origin {
     frames: i64,
 }
 
 impl Origin {
-    /// Read a generation's origin off a chunk it produced and the codec that
-    /// produced it: the chunk carries the container's clock as `timestamp` and
-    /// the generation's own count as `frame_offset`, and the codec says how far
-    /// that container runs ahead of the music.
+    /// Derive the generation origin from one decoded chunk.
     pub(crate) fn of(chunk: &PcmChunk, codec: Option<AudioCodec>) -> Self {
         let clock = frame_at(chunk.meta.timestamp, chunk.meta.spec.sample_rate.get());
         let counted = i64::try_from(chunk.meta.frame_offset).unwrap_or(i64::MAX);
@@ -57,13 +41,7 @@ impl Origin {
     }
 }
 
-/// The frame a timestamp names.
-///
-/// A timestamp is a whole frame rendered into nanoseconds, and a frame is not a
-/// whole number of them: 1024 frames at 44.1 kHz render as 23219954 ns, which
-/// reads back as 1023.99998. Recovering the frame rounds — flooring loses one,
-/// and one frame of error in a generation's scale moves every generation
-/// aligned against it.
+/// Convert a nanosecond timestamp to the nearest frame.
 fn frame_at(at: Duration, sample_rate: u32) -> i64 {
     let frames = at
         .as_nanos()
@@ -80,8 +58,7 @@ fn content_origin(codec: Option<AudioCodec>) -> i64 {
     })
 }
 
-/// Read a position quoted on `anchor`'s scale as a position on `codec`'s own
-/// container clock — what a decoder for that codec has to be asked for.
+/// Convert a track-timeline position to the target codec's container clock.
 pub(crate) fn on_container_clock(
     position: Duration,
     anchor: Option<AudioCodec>,

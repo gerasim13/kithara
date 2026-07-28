@@ -2,13 +2,7 @@ use std::collections::VecDeque;
 
 use kithara_decode::PcmChunk;
 
-/// Frames a side has taken out of its gapless stage but not yet emitted.
-///
-/// The blender emits from here rather than straight from the stage, because a
-/// crossfade needs the outgoing side's last frames still in hand at the moment
-/// the incoming side arrives — and by then that decoder is fenced and can
-/// produce nothing more. What it holds back is the ramp: keep a ramp's worth,
-/// and a ramp can start at any frame without asking anyone to decode again.
+/// Decoded frames retained for emission or handoff.
 #[derive(Default)]
 pub(super) struct Staged {
     chunks: VecDeque<PcmChunk>,
@@ -16,10 +10,7 @@ pub(super) struct Staged {
 }
 
 impl Staged {
-    /// Take a chunk into the stage. A chunk with no frames carries no audio
-    /// and is dropped here, which is what lets everything downstream treat a
-    /// staged chunk as at least one frame — the crossfade advances by whatever
-    /// the leading chunk has, so a zero-frame one would be a step of nothing.
+    /// Retain a non-empty chunk.
     pub(super) fn push(&mut self, chunk: PcmChunk) {
         if chunk.frames() == 0 {
             return;
@@ -68,8 +59,7 @@ impl Staged {
         self.frames = self.frames.saturating_sub(n as u64);
     }
 
-    /// Frames left once the chunk at the front is gone — what stays in hand if
-    /// it is emitted now.
+    /// Frames retained behind the front chunk.
     pub(super) fn frames_behind_front(&self) -> u64 {
         self.chunks.front().map_or(0, |front| {
             self.frames.saturating_sub(u64::from(front.meta.frames))

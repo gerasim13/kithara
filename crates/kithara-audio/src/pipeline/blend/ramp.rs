@@ -27,21 +27,14 @@ impl Ramp {
         self.frames.saturating_sub(self.emitted)
     }
 
-    /// Incoming gain at the `n`-th frame of the ramp.
-    ///
-    /// Equal-gain, not equal-power: the two sides are the same music decoded
-    /// twice, so they are correlated and their sum is not root-two. An
-    /// equal-power pair would peak three decibels high in the middle of every
-    /// switch, which is a transient the oracle counts as an onset the source
-    /// never had.
+    /// Equal-gain input coefficient for one frame of correlated audio.
     pub(super) fn gain(&self, n: u64) -> f32 {
         let frames = as_f32(self.frames.max(1));
         (as_f32(self.emitted.saturating_add(n).saturating_add(1)) / frames).min(1.0)
     }
 }
 
-/// Frame counts are small enough that `f32` holds them exactly; a ramp long
-/// enough to lose precision would be minutes of crossfade.
+/// Convert practical crossfade frame counts without precision loss.
 fn as_f32(frames: u64) -> f32 {
     frames.to_f32().unwrap_or(f32::MAX)
 }

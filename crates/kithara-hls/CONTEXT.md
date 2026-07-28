@@ -92,7 +92,9 @@ computed against, so the follow-up belongs to it.
 ## ABR and Variant Switching
 
 - The peer asks `AbrController` for a decision per fetch (pull-driven, no separate scheduler thread).
-- A cross-codec variant switch recreates the decoder; same-codec fMP4 switches refresh the init segment in place.
+- Decoder-recreate containers (including fMP4) rebuild at a variant boundary
+  even when the codec name is unchanged. Byte-continuity containers may keep
+  the installed decoder when their codec is unchanged.
 - Throughput samples are fed to ABR after each completed segment.
 - Manual ABR (`AbrMode::Manual`) overrides automatic selection — the next fetch picks the requested variant immediately.
 
@@ -101,6 +103,36 @@ computed against, so the follow-up belongs to it.
 On a post-ABR switch into mid-playback, `rebuild_with_decoder_probe` rebuilds the active variant's fetch queue like `rebuild` but also enqueues `seg 0` when `from_seg > 0`. The decoder factory's probe (Symphonia format reader) reads the container's first ~1 KB to construct the codec; without `seg 0` the queue would start at `target_seg`, leaving `[0..PROBE)` unfetched and the probe hanging on `wait_range budget exceeded`.
 
 `seg 0` is required even when the variant advertises a separate init (CMAF `EXT-X-MAP`): the init covers only a small header, but the probe scans further into the first media chunk. After the probe succeeds, `decoder_seek_safe(target_time)` jumps the decoder forward, so segments `1..from_seg` are never fetched — only `seg 0`. This adds at most one extra segment per switch; if `seg 0` is already cached the scheduler skips the fetch and the queue entry resolves via `committed_final_len` in `dispatch`.
+
+### Decoder transition transaction
+
+`HlsCoord` is the single owner of an adaptive decoder transition. The
+transaction binds one exact ABR decision, seek epoch, outgoing session,
+incoming session, target coverage version, retained resources, and descendant
+cancel token. No other layer keeps a mutable shadow of that lifecycle.
+
+Every decoder generation reads through its own session with an independent
+cursor and lease. Only the published session may advance the public stream
+position. An incoming session never falls back to the outgoing lease when its
+own route lacks coverage; missing coverage remains pending until the exact
+target resources are ready.
+
+Target coverage is immutable per version. If newly decoded PCM extends the
+required interval, HLS creates a new version and retains the additional exact
+resources before declaring it ready. Loaded means resource commit and DRM
+post-processing are complete. Queue order is represented by the owning data
+structure; hot paths do not repeatedly collect and sort deficits.
+
+For a normal manual or automatic switch, outgoing playback continues while the
+incoming session and decoder are prepared. Audio receives the incoming
+generation only when its trimmed PCM overlaps the outgoing timeline. Promotion
+atomically transfers publication, commits the exact ABR decision, releases the
+old retention, and closes the transaction once.
+
+A seek cancels the open transaction and all descendant work, releases its
+retention, invalidates staged PCM through the new seek epoch, and opens one
+replacement session for the variant selected by current intent. Seek never
+waits for target preparation and never enters the blend path.
 
 ### Variant init
 

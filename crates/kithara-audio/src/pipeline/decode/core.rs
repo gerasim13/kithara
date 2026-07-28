@@ -245,10 +245,7 @@ impl DecodeCore {
         )
     }
 
-    /// Where the crossfade starts: the first frame the audible side is holding
-    /// back, quoted on the track's scale. This is the frame the incoming
-    /// generation has to produce first for the two sides to line up, and
-    /// [`Self::to_container_clock`] is how it is asked for it.
+    /// First held frame the incoming generation must cover.
     pub(crate) fn blend_start(&self) -> Option<kithara_platform::time::Duration> {
         self.active.audible().tail_start()
     }

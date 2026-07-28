@@ -340,11 +340,7 @@ impl Peer for HlsPeer {
     }
 }
 
-/// Outcome of [`HlsPeer::poll_state_phase`]. Discriminates the three
-/// terminal possibilities the caller must distinguish:
-/// `Pending` (pre-activation), `Ready(None)` (stopped/cancelled), and
-/// the normal continuation with everything `poll_next`'s lock-free
-/// tail needs to dispatch + broadcast evictions.
+/// State-lock phase result consumed by the lock-free dispatch tail.
 enum PollPhase {
     NotActivated,
     Terminated,
@@ -359,11 +355,7 @@ struct PollOutcome {
 }
 
 impl HlsPeer {
-    /// Acquire the per-peer state lock and drive the four state-mutating
-    /// stages of one poll cycle (seek detection → ABR/seek lock sync →
-    /// segment-boundary commit → eviction drain). The guard drops at
-    /// the end of the function so dispatch + broadcast run lock-free in
-    /// the caller.
+    /// Apply one poll's state transitions under the peer lock.
     fn poll_state_phase(&self, cx: &mut Context<'_>) -> PollPhase {
         let mut guard = self.state.lock();
         let Some(state) = guard.as_mut() else {

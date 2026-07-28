@@ -25,6 +25,7 @@ Sits between `kithara-storage` (low-level I/O) and protocol crates (`kithara-fil
 - `AssetLayout` / `AssetLayoutRegistry` — own cache-root and resource-path policy, with optional overrides selected by protocol marker type.
 - `AssetSource` / `AssetResource` — semantic input to the selected layout.
 - `AssetScope` / `ResourceKey` — validated output used by cache operations.
+- `retain_resource(&key)` / `ResourceRetention` - pre-acquirable, cloneable RAII retention for one exact resource key.
 - `attach_demand(&key, read_pos, look_ahead)` — registers a consumer with the single-producer demand index.
 - `ResourceAcquisition` — the Pending/Ready `AcquisitionResult<AssetWriter, AssetReader>` surfaced by the facade.
 

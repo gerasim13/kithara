@@ -88,6 +88,24 @@ stream's cursor the track's playback position — reading and publishing are two
 decisions, not one. Every session publishes today; a session that reads without
 publishing arrives with the off-core decoder build that needs one.
 
+## Playhead frontiers
+
+`PlayheadState` keeps PCM-time facts with explicit epochs. `position` is the
+committed consumer position. A decoder generation's frontier is monotonic only
+inside its seek epoch; replacement resets it to the new decoder's truth.
+
+Reading and publication are separate capabilities. Each decoder session owns
+its cursor and lease, while one exact session owns publication. Promotion
+transfers the publication capability and projected frontier together. A stale
+session can continue no reads after cancellation and can never move the public
+position.
+
+Variant intent and session lifecycle are separate contracts. Stream types carry
+stable media identity, session identity, seek epoch, and typed pending reasons;
+the protocol owner carries the mutable transition transaction. A seek advances
+the epoch and propagates cancellation downward instead of waiting on a
+transition lock.
+
 `Stream<T>` itself implements `Read + Seek` for byte-only consumers; that
 surface is the degenerate case — the stream as its own session over its whole
 self.

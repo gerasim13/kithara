@@ -95,8 +95,8 @@ logical track continues in the next generation:
 the built decoder answers it through `Decoder::blend_duration()`, so the player
 never duplicates or hard-codes transition timing. The method is required rather
 than defaulted: a decoder answering from a default would tell the blender to
-ramp for a duration nobody configured. `Duration::ZERO` is a valid instantaneous
-change and takes the same path.
+ramp for a duration nobody configured. `Duration::ZERO` is a valid
+instantaneous change and takes the same path.
 
 When metadata is absent, `kithara-audio`'s `AudioConfig::gapless_mode` can select
 heuristic behaviour via `GaplessMode`:
@@ -155,24 +155,16 @@ Seeking is a two-step contract shared by the demuxer and `ComposedDecoder`:
    is evaluated against decoded output rather than the later packet being fed.
    Without this trim a seek leaks up to one packet of pre-target audio.
 
-**The frame counter and the PTS disagree, per generation.** `frame_offset`
-counts frames emitted; `timestamp` carries the packet PTS. A codec that drops
-its own algorithmic delay (`aac_fdk.rs`, `delay_remaining` from `outputDelay`)
-removes audio the container still counts, so the two part company by however
-much that generation dropped — and that depends on where the generation
-started, because the delay is re-armed on every flush and lands on whichever
-packet comes first.
+**A chunk's timestamp names the first emitted PCM frame it contains, not merely
+the packet that caused the codec call.** A codec that buffers, delays, or trims
+output must account for that before constructing the chunk. `frame_offset`
+counts the same emitted PCM within that decoder generation.
 
-Measured on the HLS AAC fixture (44.1 kHz, 1024-frame packets): a generation
-started at the container head runs 661 frames behind its PTS; one created
-mid-stream by a variant switch runs 1664 behind. FLAC, which drops nothing,
-has no gap at all.
+Each decoder session owns its exact `DecoderTrackInfo`, including priming and
+trailing-frame metadata, and applies its own `GaplessTrimmer`. Format-boundary
+and seek replacement create a new session with a new local trim state; they
+must not reuse static codec defaults or another generation's counters.
 
-Neither coordinate is therefore a timeline two generations share, and this
-crate does not pretend otherwise: a chunk reports both, and the gap between
-them is what identifies the scale it was labelled on. Converting between
-scales belongs to whoever owns the track's timeline — `kithara-audio`'s
-`Origin` / `DecodeCore::rebase` (its `CONTEXT.md`, "Crossing generations").
 Step 2 above trims against the PTS and so lands on the scale the generation
 is already labelling in, which is the one that conversion expects.
 

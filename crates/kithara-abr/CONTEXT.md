@@ -60,15 +60,17 @@ src/
 
 ## Architecture invariants
 
-- **`AbrState::current_variant_index()` has two legitimate writers**, both go through
-  [`AbrState::apply_decision`](src/state/core.rs):
-  1. `controller::tick` when the auto-mode FSM picks a new variant;
-  2. `kithara-hls` scheduler when the user manually selects a variant — HLS
-     holds `Arc<AbrState>` and applies a `Manual` decision so the layout
-     switch and the ABR state stay in sync.
-  `kithara-hls`'s `HlsCoord` reads the variant via `Arc<AbrState>` (no
-  cloneable `Arc<AtomicUsize>` handle is exposed) — see `redundant_accessors`
-  in `crates/kithara-devtools/src/arch/checks` for the rationale.
+- ABR owns selection intent, not decoder or playback lifecycle. Automatic and
+  manual selection both publish an exact, revisioned decision.
+- HLS reserves one exact decision while it prepares a target generation. A
+  newer decision or seek invalidates that reservation; stale work cannot
+  publish or roll back newer intent.
+- `current_variant_index` changes only when HLS commits the reserved decision
+  for the generation that audio promotes. There is no second mutable
+  current-variant value in HLS or audio.
+- ABR never waits for decoder construction, resource retention, or blending.
+  Those responsibilities belong to the HLS transition owner and the audio
+  data plane.
 
 ## Decision flow
 
@@ -82,9 +84,13 @@ Downloader → AbrController::record_bandwidth(peer_id, bytes, dur, source)
              │  ├─ Phase 1: parallel compute (5 independent let-bindings)
              │  ├─ Phase 2: single tuple-match → AbrDecision
              │  └─ Phase 3: bandwidth-aware up_switch / down_switch
-             ├─ if changed: AbrState::apply_decision()
-             │              + bus.publish(AbrEvent::VariantApplied)
-             │              + schedule_incoherence_watch (5 s deadline)
+             + if changed: publish exact revisioned intent
+             |              + wake protocol peer
+             + HLS reserves that exact decision and prepares the target
+             + audio promotes the prepared generation
+             + HLS commits the reservation and current_variant
+             |  + bus.publish(AbrEvent::VariantApplied)
+             |  + schedule_incoherence_watch (5 s deadline)
              └─ else: bus.publish(AbrEvent::DecisionSkipped)
 ```
 

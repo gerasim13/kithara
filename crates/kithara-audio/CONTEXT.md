@@ -372,26 +372,47 @@ A `VariantChange`/`SeekPending` at construction is **not** a rebuild trigger: th
 
 ## Format Change Handling
 
-On a fenced cross-codec ABR variant switch, the `DecoderNode` detects the format change via `Source::media_info()` polling and then:
+On a decoder-recreate ABR variant switch, the audio pipeline:
 
-1. Uses the variant fence on the source to prevent cross-variant reads.
-2. Seeks to the first segment of the new variant (where init data lives).
-3. Recreates the decoder via `DecoderFactory`.
-4. Resets the effects chain to avoid audio artifacts.
+1. Keeps the outgoing generation decoding and audible.
+2. Builds an independent incoming decoder session over the prepared variant.
+3. Applies that generation's gapless trimming before timeline alignment.
+4. Primes the incoming generation until both sides cover the same PCM frames.
+5. Hands both trimmed streams to the always-on blender.
 
-Known same-codec HLS switches are not decoder format changes. The HLS source retargets byte mapping at the segment boundary and keeps byte-continuity for the existing decoder; the audio layer must not turn a variant-index-only change into a recreate/fence.
+Byte-continuity HLS containers with an unchanged codec retarget their byte
+mapping without recreating the decoder. Structured containers such as fMP4
+rebuild even for an unchanged codec because their init/fragment state belongs
+to the variant; a matching codec name alone is not proof of byte continuity.
 
 ### Crossing generations (the blender)
 
-Every chunk leaves the decode path through one blender (`pipeline/blend/`), a track that never switches variant included — a cut is a ramp of zero length, not a way around it. Effects run once on its output.
+Every decoded chunk passes through one blender (`pipeline/blend/`), including
+the ordinary one-generation case. With one generation it is bit-exact and adds
+no scheduling work. Effects run once, after the blender.
 
-The audible side keeps a ramp's worth of frames in hand (`DecoderBlend`, 10 ms by default, read off the decoder that produced them). It has to: the outgoing decoder is stopped by the variant fence at the boundary and can produce nothing past it, so the only material a crossfade can fade *out* of is what the blender declined to emit. `install` hands the side over to the incoming generation and turns that holdback into the tail.
+The blender owns staged trimmed PCM for at most two generations. It aligns both
+sides by exact emitted-PCM timestamps, mixes only their overlapping frames with
+an equal-gain ramp, promotes the incoming generation once, and retires the
+outgoing decoder off the realtime thread. A format, channel, rate, epoch, or
+timeline mismatch is a typed transition failure; it must never silently emit
+one side as a fallback.
 
-Both sides must cover the **same** timeline frames, and a generation's own labels do not say which those are. A decoder counts the frames it emitted, but it drops audio the container still counts (encoder priming, a codec's algorithmic delay), so its count sits behind the container clock by however much it dropped — and that depends on where the generation started, not on the track. Two generations of one track routinely disagree: on the HLS AAC fixture the one playing from the head and the one a variant switch created stood 1003 frames apart.
+Target preparation does not consume a fixed playback holdback. The outgoing
+generation continues to feed the blender while the incoming decoder and its
+resources are prepared. Only the short overlap needed for the configured ramp
+is staged once both generations are ready.
 
-So positions are quoted on one scale. `Origin` (`pipeline/blend/origin.rs`) is read straight off a chunk — the gap between the container clock it carries as `timestamp` and its own `frame_offset` — and `DecodeCore::rebase` converts every generation after the first onto the first one's (`anchor`). The anchor is the first generation rather than any absolute origin, so a track keeps the timeline it started on and a switch cannot move it. `finish_format_boundary_rebuild` then lands the incoming generation on `blend_start` — the first frame still held back — which both sides now read the same way; the seek itself may be approximate, because the labels that follow are true and the tail's own `frame_offset` is what the mix aligns on.
+Gapless trimming belongs to each decoder generation. Encoder priming,
+algorithmic delay, and trailing padding are removed before PCM reaches the
+blender; the blender never guesses them from a codec enum.
 
-An origin only compares between generations reading one container clock. Two variants of a track share it; two codecs do not, each container carrying its own priming. A codec change therefore starts a scale instead of joining the one in use, and hands over no position (`tail_comparable`). **Open**: what that leaves is the offset between codecs — `decoder_recreation_preserves_sweep_timeline` measures 1024 frames on AAC↔FLAC, unchanged by any of this and older than it.
+Seek is not a blend. A seek cancels any open transition and its descendant
+work, clears staged PCM, advances the seek epoch, and installs one replacement
+generation for the variant selected by current manual or ABR intent. Playback
+resumes from that generation without waiting for, fading, or draining the old
+one. Route, device, and recovery rebuilds use the same explicit replacement
+path unless their owning contract says otherwise.
 
 The gain law is equal-gain, not equal-power: the two generations are the same music decoded twice, so they are correlated and their sum is not root two — an equal-power pair would peak 3 dB high at every switch, which the continuity oracle counts as an onset the source never had.
 
