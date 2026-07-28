@@ -80,10 +80,11 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             return .crossfadeStarted(durationSeconds: durationSeconds)
         case .crossfadeDurationChanged(let seconds):
             return .crossfadeDurationChanged(seconds: seconds)
+        case .repeatModeChanged(let mode):
+            return .repeatModeChanged(mode: RepeatMode(ffi: mode))
         case .trackAdded,
              .trackRemoved,
              .trackLoadFailed,
-             .repeatModeChanged,
              .nextTrackReady,
              .currentItemAdvanced,
              .engineStarted,
@@ -203,6 +204,20 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     /// the queue is empty.
     public var currentAudioItem: KitharaPlayerItem? {
         _currentItemSubject.value
+    }
+
+    // MARK: - Repeat
+
+    /// Queue behavior after the current item reaches its end.
+    public var repeatMode: RepeatMode {
+        get { RepeatMode(ffi: _inner.repeatMode()) }
+        set {
+            do {
+                try _inner.setRepeatMode(mode: newValue.ffi)
+            } catch {
+                _eventSubject.send(.error(error: String(describing: error)))
+            }
+        }
     }
 
     // MARK: - Rate
