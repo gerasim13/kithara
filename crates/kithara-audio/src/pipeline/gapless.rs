@@ -1,9 +1,7 @@
 use kithara_decode::{
-    Decoder, GaplessMode, GaplessOutput, GaplessTailCompensation, GaplessTrimmer, PcmChunk,
-    duration_for_frames,
+    GaplessMode, GaplessOutput, GaplessProfile, GaplessTrimmer, PcmChunk, duration_for_frames,
 };
 use kithara_platform::time::Duration;
-use kithara_stream::MediaInfo;
 
 /// Iterator over one pending gapless output batch.
 type GaplessOutputIter = <GaplessOutput as IntoIterator>::IntoIter;
@@ -22,32 +20,20 @@ pub(crate) struct GaplessStage {
 }
 
 impl GaplessStage {
-    /// Builds the trimmer for this track before any PCM flows through [`Self::push`].
-    ///
-    /// The implementation maps `GaplessMode` and the decoder `DecoderTrackInfo` into a `GaplessTrimmer`:
-    /// - **`MediaOnly`** — apply gapless from track metadata when `track_info.gapless` is set; otherwise no trim.
-    /// - **`CodecPriming`** — prefer metadata when present; if absent, approximate a codec priming strip using `media_info.codec`
-    ///   plus the decoder PCM spec (see module helper `resolve_codec_priming`), or disable when codec/length is unknown.
-    /// - **`SilenceTrim`** — prefer metadata when present; otherwise use the silence-trim parameters from the mode.
-    /// - **Disabled** — passthrough, no trim.
+    /// Builds one per-generation trimmer from immutable decoder facts.
     #[must_use]
-    pub(crate) fn build(
-        decoder: &dyn Decoder,
-        mode: GaplessMode,
-        media_info: Option<&MediaInfo>,
-    ) -> Self {
-        let track_info = decoder.track_info();
+    pub(crate) fn build(profile: GaplessProfile, mode: GaplessMode) -> Self {
         let from_info =
-            |info| GaplessTrimmer::from(info).with_tail_compensation(track_info.gapless_tail);
+            |info| GaplessTrimmer::from(info).with_tail_compensation(profile.tail_compensation());
         let trimmer = match mode {
-            GaplessMode::MediaOnly => track_info
-                .gapless
+            GaplessMode::MediaOnly => profile
+                .gapless()
                 .map_or_else(GaplessTrimmer::disabled, from_info),
-            GaplessMode::CodecPriming => track_info
-                .gapless
-                .map_or_else(|| resolve_codec_priming(decoder, media_info), from_info),
-            GaplessMode::SilenceTrim(params) => track_info
-                .gapless
+            GaplessMode::CodecPriming => profile
+                .gapless()
+                .map_or_else(|| resolve_codec_priming(profile), from_info),
+            GaplessMode::SilenceTrim(params) => profile
+                .gapless()
                 .map_or_else(|| GaplessTrimmer::silence_trim(params), from_info),
             _ => GaplessTrimmer::disabled(),
         };
@@ -63,8 +49,9 @@ impl GaplessStage {
         self.replace_pending(output);
     }
 
-    pub(crate) fn set_tail_compensation(&mut self, compensation: Option<GaplessTailCompensation>) {
-        self.trimmer.set_tail_compensation(compensation);
+    pub(crate) fn set_tail_compensation(&mut self, profile: GaplessProfile) {
+        self.trimmer
+            .set_tail_compensation(profile.tail_compensation());
     }
 
     /// Return the next trimmed chunk from the current output batch.
@@ -101,40 +88,29 @@ impl GaplessStage {
     }
 }
 
-fn resolve_codec_priming(decoder: &dyn Decoder, media_info: Option<&MediaInfo>) -> GaplessTrimmer {
-    let Some(codec) = media_info.and_then(|info| info.codec) else {
-        return GaplessTrimmer::disabled();
-    };
-    let frames = decoder.default_priming_frames(codec);
+fn resolve_codec_priming(profile: GaplessProfile) -> GaplessTrimmer {
+    let frames = profile.fallback_priming_frames();
     if frames == 0 {
         GaplessTrimmer::disabled()
     } else {
-        GaplessTrimmer::codec_priming(frames, decoder.spec().sample_rate.get())
+        GaplessTrimmer::codec_priming(frames, profile.spec().sample_rate.get())
     }
 }
 
-/// Duration of the PCM stream as observed downstream of `GaplessStage`.
+/// Returns the PCM duration downstream of exact metadata trim.
 ///
-/// The decoder reports the raw container duration (e.g. AAC reports a value
-/// that includes encoder priming and padding frames). For metadata-driven
-/// trim we know the exact frame counts and can subtract them from the
-/// reported duration.
-///
-/// For [`GaplessMode::CodecPriming`] and [`GaplessMode::SilenceTrim`], when decoder
-/// metadata is absent, we deliberately return the raw duration — the
-/// trim amount isn't known *a priori*, and `PlayerTrack` reconciles the
-/// duration once the decoder hits EOF (`frames_until_eof` in
-/// `player_track.rs`). The crossfade trigger may fire a few ms late,
-/// which is preferable to mispredicting early.
-///
-/// [`GaplessMode::Disabled`] ignores trim metadata entirely; timeline duration stays raw.
+/// Heuristic trim keeps the raw duration until EOF reconciles the timeline.
 #[must_use]
-pub(crate) fn visible_duration(decoder: &dyn Decoder, mode: GaplessMode) -> Option<Duration> {
-    let raw = decoder.duration()?;
+pub(crate) fn visible_duration(
+    raw: Option<Duration>,
+    profile: GaplessProfile,
+    mode: GaplessMode,
+) -> Option<Duration> {
+    let raw = raw?;
     if matches!(mode, GaplessMode::Disabled) {
         return Some(raw);
     }
-    let Some(info) = decoder.track_info().gapless else {
+    let Some(info) = profile.gapless() else {
         return Some(raw);
     };
     let trim_frames = info.leading_frames.saturating_add(info.trailing_frames);
@@ -142,6 +118,6 @@ pub(crate) fn visible_duration(decoder: &dyn Decoder, mode: GaplessMode) -> Opti
         return Some(raw);
     }
 
-    let trim = duration_for_frames(decoder.spec().sample_rate.get(), trim_frames);
+    let trim = duration_for_frames(profile.spec().sample_rate.get(), trim_frames);
     Some(raw.saturating_sub(trim))
 }

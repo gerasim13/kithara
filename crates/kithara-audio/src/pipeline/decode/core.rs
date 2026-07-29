@@ -7,7 +7,7 @@ use std::{
 
 use kithara_decode::{
     DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessMode,
-    PcmChunk,
+    GaplessProfile, PcmChunk,
 };
 use kithara_events::{DeferredBus, Event};
 use kithara_platform::sync::Arc;
@@ -35,6 +35,13 @@ pub(crate) struct DecoderSession {
     pub(crate) media_info: Option<MediaInfo>,
     pub(crate) base_offset: u64,
     pub(crate) installed_at_seek_epoch: u64,
+}
+
+impl DecoderSession {
+    pub(crate) fn gapless_profile(&self) -> GaplessProfile {
+        self.decoder
+            .gapless_profile(self.media_info.as_ref().and_then(|info| info.codec))
+    }
 }
 
 /// Factory closure that creates a new decoder from stream, media info, and base offset.
@@ -69,14 +76,6 @@ pub(crate) struct DecodeParts<T: StreamType> {
 }
 
 impl<T: StreamType> DecodeInit<T> {
-    pub(crate) fn build_gapless(&self) -> GaplessStage {
-        GaplessStage::build(
-            self.decoder.as_ref(),
-            self.gapless_mode,
-            self.media_info.as_ref(),
-        )
-    }
-
     pub(crate) fn decoder_host_sample_rate(&self) -> u32 {
         self.host_sample_rate.load(Ordering::Acquire)
     }
@@ -86,7 +85,6 @@ impl<T: StreamType> DecodeInit<T> {
         effects: Vec<Box<dyn AudioEffect>>,
         installed_at_seek_epoch: u64,
     ) -> DecodeParts<T> {
-        let gapless = self.build_gapless();
         let decoder_host_sample_rate = self.decoder_host_sample_rate();
         let Self {
             decoder,
@@ -98,18 +96,15 @@ impl<T: StreamType> DecodeInit<T> {
             playback_resampler_backend,
             recreate_on_host_rate_change,
         } = self;
+        let session = DecoderSession {
+            decoder,
+            base_offset: 0,
+            media_info,
+            installed_at_seek_epoch,
+        };
+        let gapless = GaplessStage::build(session.gapless_profile(), gapless_mode);
         DecodeParts {
-            core: DecodeCore::new(
-                DecoderSession {
-                    decoder,
-                    base_offset: 0,
-                    media_info,
-                    installed_at_seek_epoch,
-                },
-                gapless_mode,
-                gapless,
-                effects,
-            ),
+            core: DecodeCore::new(session, gapless_mode, gapless, effects),
             factory: decoder_factory,
             host_sample_rate,
             recreate_on_host_rate_change,
@@ -183,7 +178,7 @@ impl DecodeCore {
 
     pub(crate) fn set_tail_compensation(&mut self) {
         self.gapless
-            .set_tail_compensation(self.session.decoder.track_info().gapless_tail);
+            .set_tail_compensation(self.session.gapless_profile());
         self.gapless.flush();
     }
 

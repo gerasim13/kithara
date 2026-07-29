@@ -30,8 +30,12 @@ pub(crate) fn tick<T: StreamType>(
     core: &mut DecodeCore,
     mut ctx: DecodeCtx<'_, T>,
 ) -> DecodeAction {
-    if let Some(duration) = visible_duration(core.session().decoder.as_ref(), core.gapless_mode())
-        && Some(duration) > ctx.playhead.duration()
+    let session = core.session();
+    if let Some(duration) = visible_duration(
+        session.decoder.duration(),
+        session.gapless_profile(),
+        core.gapless_mode(),
+    ) && Some(duration) > ctx.playhead.duration()
     {
         ctx.playhead.set_duration(Some(duration));
     }
