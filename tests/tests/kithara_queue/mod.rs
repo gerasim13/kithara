@@ -22,6 +22,7 @@ mod loader_lanes;
 mod loader_starvation;
 mod local_track_plays;
 mod packaged_drm_seek;
+mod play_before_the_load_lands;
 mod playlist_stall_fails_load;
 mod rapid_scrub_decode_failure;
 mod real_playlist;
