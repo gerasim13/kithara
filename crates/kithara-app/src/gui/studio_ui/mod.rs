@@ -2,6 +2,7 @@ mod cache;
 mod compile;
 mod endpoints;
 mod events;
+#[path = "../studio_reads/mod.rs"]
 mod reads;
 mod scope;
 #[cfg(test)]

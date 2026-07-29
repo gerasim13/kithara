@@ -2,7 +2,6 @@ pub(crate) mod behavior;
 pub(crate) mod button;
 mod chrome;
 pub(crate) mod deck;
-pub(crate) mod drag_ghost;
 pub(crate) mod fader;
 pub(crate) mod global_bar;
 mod layout_preview;
@@ -15,7 +14,7 @@ pub(crate) mod vis;
 pub(crate) mod wave;
 pub(crate) mod wheel;
 pub(crate) mod window;
-pub(crate) use chrome::{DropZone, ModuleChrome, frame_overlay};
+pub(crate) use chrome::{DragGhost, DropZone, ModuleChrome, frame_overlay};
 pub use layout_preview::LayoutPreview;
 
 pub(crate) use crate::render::event::Widget;

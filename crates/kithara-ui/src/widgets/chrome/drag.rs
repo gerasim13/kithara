@@ -9,10 +9,10 @@ use iced::{
 };
 use num_traits::cast::AsPrimitive;
 
-use super::Widget;
 use crate::{
     render::{Skin, UiEvent, fonts},
     skin::DragSkin,
+    widgets::Widget,
 };
 
 /// What the pointer is carrying, drawn at the pointer over everything the
