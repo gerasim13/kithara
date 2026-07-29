@@ -7,9 +7,11 @@ use std::{
 use delegate::delegate;
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_stream::{
-    Activity, ByteMap, MediaInfo, PlayheadWrite, SeekControl, SeekObserve, SourcePhase,
-    SourceSeekAnchor, Stream, StreamType, WorkerWake,
+    Activity, ByteMap, MediaInfo, OpenedReader, PlayheadWrite, SeekControl, SeekObserve,
+    SourcePhase, SourceSeekAnchor, Stream, StreamType, WorkerWake,
 };
+
+use super::offset::OffsetReader;
 
 /// Shared stream wrapper for format change detection.
 ///
@@ -37,6 +39,23 @@ impl<T: StreamType> SharedStream<T> {
             inner: Arc::new(Mutex::new(stream)),
             blocking: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub(crate) fn open_initial_reader(&self) -> OpenedReader {
+        OpenedReader::new(
+            self.clone(),
+            self.len(),
+            self.byte_map(),
+            self.take_reader_event_sink(),
+        )
+    }
+
+    pub(crate) fn open_rebuild_reader(&self, base_offset: u64) -> OpenedReader {
+        let byte_len = self.len().map(|length| length.saturating_sub(base_offset));
+        let byte_map = self.byte_map();
+        let event_sink = self.take_reader_event_sink();
+        let input = OffsetReader::new(self.clone(), base_offset);
+        OpenedReader::new(input, byte_len, byte_map, event_sink)
     }
 
     /// Arm/disarm the construction-phase blocking read mode (see the

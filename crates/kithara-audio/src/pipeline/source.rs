@@ -6,7 +6,7 @@ use kithara_stream::{Activity, PlayheadWrite, SeekControl, SeekObserve, StreamTy
 
 pub(crate) use crate::pipeline::{
     decode::core::{DecodeCore, DecodeInit, DecoderFactory},
-    stream::{offset::OffsetReader, shared::SharedStream},
+    stream::shared::SharedStream,
 };
 use crate::{
     pipeline::{

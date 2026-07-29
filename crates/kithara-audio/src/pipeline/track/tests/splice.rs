@@ -29,7 +29,7 @@ use crate::{
         rebuild::{RecreateCause, RecreateNext, RecreateState, port::RebuildRuntime},
         seek::{SeekContext, SeekRequest},
         source::StreamAudioSource,
-        stream::{offset::OffsetReader, shared::SharedStream},
+        stream::shared::SharedStream,
         track::{self, TrackStep},
     },
     renderer::AudioWorkerSource,
@@ -417,26 +417,23 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
     let effects =
         crate::pipeline::config::create_effects(initial_spec, None, &pcm_pool, Vec::new());
     let factory_byte_len = Arc::new(AtomicU64::new(0));
-    let decoder_factory: DecoderFactory<SpliceStream> =
-        Arc::new(move |stream, info, base_offset| {
-            let byte_len = stream
-                .len()
-                .map_or(0, |len| len.saturating_sub(base_offset));
-            factory_byte_len.store(byte_len, Ordering::Release);
-            let config: DecoderConfig<kithara_resampler::NoResamplerBackend> =
-                DecoderConfig::builder()
-                    .backend(backend)
-                    .byte_pool(BytePool::default())
-                    .pcm_pool(PcmPool::default())
-                    .byte_len_handle(factory_byte_len.clone())
-                    .maybe_byte_map(stream.byte_map())
-                    .gapless(false)
-                    .build();
-            let input = OffsetReader::new(stream, base_offset);
-            let decoder = DecodeFactory::create_from_media_info(input, &info, config)?;
-            decoder.update_byte_len(byte_len);
-            Ok(decoder)
-        });
+    let decoder_factory: DecoderFactory = Arc::new(move |mut reader, info| {
+        let byte_len = reader.byte_len().unwrap_or(0);
+        factory_byte_len.store(byte_len, Ordering::Release);
+        let config: DecoderConfig<kithara_resampler::NoResamplerBackend> = DecoderConfig::builder()
+            .backend(backend)
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
+            .byte_len_handle(factory_byte_len.clone())
+            .maybe_byte_map(reader.byte_map())
+            .maybe_hooks(reader.take_event_sink())
+            .gapless(false)
+            .build();
+        let input = reader.into_inner();
+        let decoder = DecodeFactory::create_from_media_info(input, &info, config)?;
+        decoder.update_byte_len(byte_len);
+        Ok(decoder)
+    });
     let decode = DecodeInit {
         decoder: initial_decoder,
         decoder_factory,

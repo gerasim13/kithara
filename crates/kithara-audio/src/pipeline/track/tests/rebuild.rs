@@ -440,9 +440,8 @@ async fn test_source(variant: u32) -> RebuildFixture {
     };
     let shared_stream = SharedStream::new(stream);
     let factory_drops = drops.clone();
-    let decoder_factory: DecoderFactory<TestStream> = Arc::new(move |_stream, _info, _offset| {
-        Ok(Box::new(TestDecoder::new(99, factory_drops.clone())))
-    });
+    let decoder_factory: DecoderFactory =
+        Arc::new(move |_reader, _info| Ok(Box::new(TestDecoder::new(99, factory_drops.clone()))));
     let runtime_handle = match RuntimeHandle::try_current() {
         Ok(handle) => handle,
         Err(err) => panic!("test requires tokio runtime: {err}"),
@@ -489,7 +488,7 @@ async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
     let shared_stream = SharedStream::new(stream);
     let factory_drops = drops.clone();
     let factory_host_rate = host_sample_rate.clone();
-    let decoder_factory: DecoderFactory<TestStream> = Arc::new(move |_stream, _info, _offset| {
+    let decoder_factory: DecoderFactory = Arc::new(move |_reader, _info| {
         let rate = factory_host_rate.load(Ordering::Acquire);
         Ok(Box::new(RouteSignalDecoder::new(
             99,
@@ -969,8 +968,8 @@ async fn rebuild_factory_panic_fails_track_without_hang() {
     let RebuildFixture { mut source, .. } = test_source(1).await;
 
     let wake = Arc::new(CountingWake::default());
-    let panicking_factory: DecoderFactory<TestStream> =
-        Arc::new(|_stream, _info, _offset| panic!("decoder construction blew up"));
+    let panicking_factory: DecoderFactory =
+        Arc::new(|_reader, _info| panic!("decoder construction blew up"));
     source.rebuild = RebuildPort::new(
         panicking_factory,
         RebuildRuntime {

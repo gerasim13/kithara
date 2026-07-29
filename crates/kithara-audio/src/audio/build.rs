@@ -16,7 +16,7 @@ use kithara_platform::{
     tokio::{runtime::Handle as RuntimeHandle, task::spawn_blocking},
 };
 use kithara_resampler::ResamplerBackend;
-use kithara_stream::{MediaInfo, PlayheadRead, Stream, StreamType, WorkerWake};
+use kithara_stream::{MediaInfo, OpenedReader, PlayheadRead, Stream, StreamType, WorkerWake};
 use portable_atomic::AtomicF32;
 use tracing::{debug, info, warn};
 
@@ -105,7 +105,7 @@ struct StreamSourceRegistration<'a, T: StreamType> {
     cancel: &'a CancelToken,
     decoder: Box<dyn Decoder>,
     decoder_backend: kithara_decode::DecoderBackend,
-    decoder_factory: StreamDecoderFactory<T>,
+    decoder_factory: StreamDecoderFactory,
     effects: Vec<Box<dyn AudioEffect>>,
     emit: Arc<kithara_events::DeferredBus<Event>>,
     engine_load: Option<Arc<EngineLoad>>,
@@ -201,13 +201,9 @@ where
             byte_pool.clone(),
             &host_sample_rate,
         );
-        let decoder = create_initial_decoder(
-            shared_stream.clone(),
-            initial_media_info.clone(),
-            hint,
-            &deps,
-        )
-        .await;
+        let initial_reader = shared_stream.open_initial_reader();
+        let decoder =
+            create_initial_decoder(initial_reader, initial_media_info.clone(), hint, &deps).await;
         shared_stream.set_blocking(false);
         let decoder = decoder?;
 
@@ -434,20 +430,17 @@ where
     }
 }
 
-fn create_decoder_factory<T, B>(
+fn create_decoder_factory<B>(
     decoder: &DecoderDeps<B>,
     epoch: &Arc<AtomicU64>,
     byte_len: &Arc<AtomicU64>,
-) -> StreamDecoderFactory<T>
+) -> StreamDecoderFactory
 where
-    T: StreamType,
     B: ResamplerBackend,
 {
     let deps = FactoryDeps::new(decoder, epoch, byte_len);
-    Arc::new(move |stream, info, base_offset| {
-        let byte_len = stream
-            .len()
-            .map_or(0, |length| length.saturating_sub(base_offset));
+    Arc::new(move |mut reader, info| {
+        let byte_len = reader.byte_len().unwrap_or(0);
         deps.byte_len.store(byte_len, Ordering::Release);
         let config = DecoderConfig::builder()
             .backend(deps.decoder.decoder.backend())
@@ -455,11 +448,11 @@ where
             .pcm_pool(deps.decoder.pcm_pool.clone())
             .byte_pool(deps.decoder.byte_pool.clone())
             .epoch(deps.epoch.load(Ordering::Acquire))
-            .maybe_byte_map(stream.byte_map())
-            .maybe_hooks(stream.take_reader_event_sink())
+            .maybe_byte_map(reader.byte_map())
+            .maybe_hooks(reader.take_event_sink())
             .maybe_resampler(deps.decoder.resampler_config()?)
             .build();
-        let source = super::OffsetReader::new(stream, base_offset);
+        let source = reader.into_inner();
         match DecoderFactory::create_from_media_info(source, &info, config) {
             Ok(decoder) => {
                 decoder.update_byte_len(byte_len);
@@ -473,31 +466,32 @@ where
     })
 }
 
-async fn create_initial_decoder<T, B>(
-    shared_stream: SharedStream<T>,
+async fn create_initial_decoder<B>(
+    mut reader: OpenedReader,
     media_info: Option<MediaInfo>,
     hint: Option<String>,
     deps: &DecoderDeps<B>,
 ) -> Result<Box<dyn Decoder>, DecodeError>
 where
-    T: StreamType,
     B: ResamplerBackend,
 {
+    let byte_len = reader.byte_len().unwrap_or(0);
     let config = DecoderConfig::builder()
         .backend(deps.decoder.backend())
-        .byte_len_handle(Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0))))
+        .byte_len_handle(Arc::new(AtomicU64::new(byte_len)))
         .pcm_pool(deps.pcm_pool.clone())
         .byte_pool(deps.byte_pool.clone())
-        .maybe_byte_map(shared_stream.byte_map())
-        .maybe_hooks(shared_stream.take_reader_event_sink())
+        .maybe_byte_map(reader.byte_map())
+        .maybe_hooks(reader.take_event_sink())
         .maybe_hint(hint.clone())
         .maybe_resampler(deps.resampler_config()?)
         .build();
+    let source = reader.into_inner();
     spawn_blocking(move || {
         if let Some(info) = &media_info {
-            DecoderFactory::create_from_media_info(shared_stream, info, config)
+            DecoderFactory::create_from_media_info(source, info, config)
         } else {
-            DecoderFactory::create_with_probe(shared_stream, hint.as_deref(), config)
+            DecoderFactory::create_with_probe(source, hint.as_deref(), config)
         }
     })
     .await

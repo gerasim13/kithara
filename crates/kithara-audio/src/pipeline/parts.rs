@@ -31,7 +31,7 @@ pub(crate) struct SourceParts<T: StreamType> {
 impl<T: StreamType> SourceParts<T> {
     pub(crate) fn new(
         stream: &SharedStream<T>,
-        decode: DecodeParts<T>,
+        decode: DecodeParts,
         epoch: Arc<AtomicU64>,
         rebuild: RebuildRuntime,
     ) -> Self {

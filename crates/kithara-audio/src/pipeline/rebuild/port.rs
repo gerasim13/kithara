@@ -23,13 +23,13 @@ use crate::pipeline::{
     stream::shared::SharedStream,
 };
 
-struct JobDeps<T: StreamType> {
+struct JobDeps {
     completion: Arc<ArrayQueue<DecoderRebuildComplete>>,
-    factory: DecoderFactory<T>,
+    factory: DecoderFactory,
     wake: Arc<dyn WorkerWake>,
 }
 
-impl<T: StreamType> Clone for JobDeps<T> {
+impl Clone for JobDeps {
     fn clone(&self) -> Self {
         Self {
             completion: self.completion.clone(),
@@ -40,7 +40,7 @@ impl<T: StreamType> Clone for JobDeps<T> {
 }
 
 struct PendingJob<T: StreamType> {
-    deps: JobDeps<T>,
+    deps: JobDeps,
     stream: SharedStream<T>,
     media_info: MediaInfo,
     offset: u64,
@@ -48,7 +48,7 @@ struct PendingJob<T: StreamType> {
 }
 
 pub(crate) struct RebuildPort<T: StreamType> {
-    deps: JobDeps<T>,
+    deps: JobDeps,
     next_ticket: u64,
     pending: Option<PendingJob<T>>,
     runtime: RuntimeHandle,
@@ -60,7 +60,7 @@ pub(crate) struct RebuildRuntime {
 }
 
 impl<T: StreamType> RebuildPort<T> {
-    pub(crate) fn new(factory: DecoderFactory<T>, runtime: RebuildRuntime) -> Self {
+    pub(crate) fn new(factory: DecoderFactory, runtime: RebuildRuntime) -> Self {
         Self {
             deps: JobDeps {
                 completion: Arc::new(ArrayQueue::new(2)),
@@ -145,7 +145,8 @@ fn run<T: StreamType>(job: PendingJob<T>) {
         ticket,
     } = job;
     let result = match catch_unwind(AssertUnwindSafe(|| {
-        (deps.factory)(stream, media_info, offset)
+        let reader = stream.open_rebuild_reader(offset);
+        (deps.factory)(reader, media_info)
     })) {
         Ok(result) => result.map_err(|error| classify(&error)),
         Err(payload) => {

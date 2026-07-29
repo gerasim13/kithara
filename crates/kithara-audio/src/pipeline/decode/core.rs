@@ -11,7 +11,7 @@ use kithara_decode::{
 };
 use kithara_events::{DeferredBus, Event};
 use kithara_platform::sync::Arc;
-use kithara_stream::{MediaInfo, PlayheadWrite, SeekObserve, StreamType};
+use kithara_stream::{MediaInfo, OpenedReader, PlayheadWrite, SeekObserve, StreamType};
 use kithara_test_utils::kithara;
 use tracing::{debug, warn};
 
@@ -44,19 +44,14 @@ impl DecoderSession {
     }
 }
 
-/// Factory closure that creates a new decoder from stream, media info, and base offset.
-///
-/// Production creates a Symphonia decoder via `OffsetReader`; tests may return
-/// a mock decoder without real I/O. Interrupted construction remains distinct
-/// from a hard decoder or codec error so recreation can wait for source bytes.
-pub(crate) type DecoderFactory<T> = Arc<
-    dyn Fn(SharedStream<T>, MediaInfo, u64) -> Result<Box<dyn Decoder>, DecodeError> + Send + Sync,
->;
+/// Factory closure that creates a decoder from an opened reader and media facts.
+pub(crate) type DecoderFactory =
+    Arc<dyn Fn(OpenedReader, MediaInfo) -> Result<Box<dyn Decoder>, DecodeError> + Send + Sync>;
 
 /// Decoder construction state shared by initial installation and later rebuilds.
-pub(crate) struct DecodeInit<T: StreamType> {
+pub(crate) struct DecodeInit {
     pub(crate) decoder: Box<dyn Decoder>,
-    pub(crate) decoder_factory: DecoderFactory<T>,
+    pub(crate) decoder_factory: DecoderFactory,
     pub(crate) decoder_backend: kithara_decode::DecoderBackend,
     pub(crate) gapless_mode: GaplessMode,
     pub(crate) host_sample_rate: Arc<AtomicU32>,
@@ -65,9 +60,9 @@ pub(crate) struct DecodeInit<T: StreamType> {
     pub(crate) recreate_on_host_rate_change: bool,
 }
 
-pub(crate) struct DecodeParts<T: StreamType> {
+pub(crate) struct DecodeParts {
     pub(crate) core: DecodeCore,
-    pub(crate) factory: DecoderFactory<T>,
+    pub(crate) factory: DecoderFactory,
     pub(crate) host_sample_rate: Arc<AtomicU32>,
     pub(crate) recreate_on_host_rate_change: bool,
     pub(crate) decoder_host_sample_rate: u32,
@@ -75,7 +70,7 @@ pub(crate) struct DecodeParts<T: StreamType> {
     pub(crate) playback_resampler_backend: &'static str,
 }
 
-impl<T: StreamType> DecodeInit<T> {
+impl DecodeInit {
     pub(crate) fn decoder_host_sample_rate(&self) -> u32 {
         self.host_sample_rate.load(Ordering::Acquire)
     }
@@ -84,7 +79,7 @@ impl<T: StreamType> DecodeInit<T> {
         self,
         effects: Vec<Box<dyn AudioEffect>>,
         installed_at_seek_epoch: u64,
-    ) -> DecodeParts<T> {
+    ) -> DecodeParts {
         let decoder_host_sample_rate = self.decoder_host_sample_rate();
         let Self {
             decoder,
