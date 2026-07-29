@@ -3058,6 +3058,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "fontique"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff3336bc0b87fe42305047263fa60d2eabd650d29cbe62fdeb2a66c7a0a595f9"
+dependencies = [
+ "bytemuck",
+ "hashbrown 0.15.5",
+ "icu_locale_core",
+ "linebender_resource_handle",
+ "memmap2 0.9.10",
+ "read-fonts 0.35.0",
+ "smallvec",
+]
+
+[[package]]
 name = "foreign-types"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3543,6 +3558,8 @@ version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
+ "allocator-api2",
+ "equivalent",
  "foldhash 0.1.5",
 ]
 
@@ -4069,6 +4086,7 @@ checksum = "92219b62b3e2b4d88ac5119f8904c10f8f61bf7e95b640d25ba3075e6cac2c29"
 dependencies = [
  "displaydoc",
  "litemap",
+ "serde",
  "tinystr",
  "writeable",
  "zerovec",
@@ -5174,9 +5192,10 @@ dependencies = [
  "kithara-workspace-hack",
  "lucide-icons",
  "num-traits",
+ "parley",
  "ron",
  "serde",
- "skrifa 0.42.1",
+ "skrifa 0.37.0",
  "thiserror 2.0.18",
  "tracing",
  "vello",
@@ -5192,7 +5211,6 @@ dependencies = [
  "bit-vec 0.8.0",
  "bitflags 2.13.0",
  "block2 0.6.2",
- "bytemuck",
  "cc",
  "clang-sys",
  "clap",
@@ -5226,11 +5244,13 @@ dependencies = [
  "hotpath-macros",
  "hyper",
  "hyper-util",
+ "icu_locale_core",
  "idna",
  "indexmap",
  "itertools 0.13.0",
  "libc",
  "linux-raw-sys 0.12.1",
+ "litemap",
  "log",
  "memchr",
  "miniz_oxide",
@@ -5247,7 +5267,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rangemap",
- "read-fonts 0.35.0",
  "regex",
  "regex-automata",
  "regex-syntax",
@@ -5259,7 +5278,6 @@ dependencies = [
  "serde_core",
  "serde_json",
  "simd-adler32",
- "skrifa 0.37.0",
  "slab",
  "smallvec",
  "syn 2.0.118",
@@ -5267,6 +5285,7 @@ dependencies = [
  "thiserror 2.0.18",
  "thunderdome",
  "time",
+ "tinystr",
  "tokio",
  "tokio-util",
  "tower",
@@ -5275,7 +5294,9 @@ dependencies = [
  "tracing-subscriber",
  "web-sys",
  "winnow 1.0.3",
+ "writeable",
  "zerocopy",
+ "zerovec",
  "zstd",
  "zstd-safe",
  "zstd-sys",
@@ -6669,6 +6690,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "parley"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26746861bb76dbc9bcd5ed1b0b55d2fedf291100961251702a031ab2abd2ce52"
+dependencies = [
+ "fontique",
+ "harfrust",
+ "hashbrown 0.15.5",
+ "linebender_resource_handle",
+ "skrifa 0.37.0",
+ "swash",
+]
+
+[[package]]
 name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7477,16 +7512,6 @@ name = "read-fonts"
 version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b634fabf032fab15307ffd272149b622260f55974d9fad689292a5d33df02e5"
-dependencies = [
- "bytemuck",
- "font-types 0.11.3",
-]
-
-[[package]]
-name = "read-fonts"
-version = "0.39.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4ed38b89c2c77ff968c524145ad65fb010f38af5c7a224b53b81d47ac2daa81"
 dependencies = [
  "bytemuck",
  "font-types 0.11.3",
@@ -8517,16 +8542,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "skrifa"
-version = "0.42.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c34617370ae968efb7161bb2beb517d9084659aae19e24b89e3db25b46e4564"
-dependencies = [
- "bytemuck",
- "read-fonts 0.39.2",
-]
-
-[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9448,6 +9463,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8323304221c2a851516f22236c5722a72eaa19749016521d6dff0824447d96d"
 dependencies = [
  "displaydoc",
+ "serde_core",
  "zerovec",
 ]
 
@@ -11944,6 +11960,7 @@ version = "0.11.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90f911cbc359ab6af17377d242225f4d75119aec87ea711a880987b18cd7b239"
 dependencies = [
+ "serde",
  "yoke",
  "zerofrom",
  "zerovec-derive",

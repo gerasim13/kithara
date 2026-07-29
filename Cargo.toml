@@ -309,11 +309,12 @@ obfstr = "0.4.5"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false }
 parking_lot = "0.12"
+
+# proc macros
+parley = { version = "0.6", default-features = false, features = ["std"] }
 pin-project-lite = "0.2"
 plist = "1"
 portable-atomic = { version = "1.13.1", default-features = false, features = ["fallback", "float"] }
-
-# proc macros
 proc-macro2 = "1"
 proptest = "1"
 quote = "1"
@@ -344,7 +345,7 @@ sha2 = "0.11"
 signal-hook = "0.3"
 # Time-stretch backends: C++ FFI, native-only, behind `stretch-*` features.
 signalsmith-stretch = "0.1.3"
-skrifa = "0.42"
+skrifa = "0.37"
 slice_ring_buf = "0.3"
 smallvec = "1"
 stats_alloc = "0.1"

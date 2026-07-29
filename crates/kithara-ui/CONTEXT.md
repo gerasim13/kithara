@@ -51,36 +51,49 @@ remains code-owned because it describes font resource availability rather than s
 
 `SkinDoc` owns document-level paint roles and metrics. `paint::painter` owns the minimal trait and
 value types; they are toolkit-neutral and depend on no rendering toolkit. `paint::canvas`
-implements that trait against iced and owns translation, shaping, and canvas calls.
-`paint::scene` implements it against Vello and owns translation, shaping, and scene encoding;
+implements that trait against iced and owns translation, glyph-outline filling, and canvas calls.
+`paint::scene` implements it against Vello and owns translation and scene encoding;
 the painter needs no GPU dependency. Vello is held at 0.6 ahead of the masonry host, which is not a
 dependency yet: masonry 0.4 hands a widget a `Scene` from its own Vello 0.6, and `Scene` from a
 different Vello version is an unrelated type. Vello's `wgpu` feature stays off because the painter
-encodes and rasterises nothing; enabling it would add a second wgpu major beside iced's 27. The
-painter's own `skrifa` is a different crate instance from the one inside Vello, so only plain glyph
-ids may cross that boundary. Canonical
-family/weight-to-face selection and the face-to-byte mapping live in toolkit-neutral `fonts`
-whenever either backend is enabled.
-`render::fonts` is the sole public font-byte path and adds Lucide to those neutral faces. A widget
-owns command order and local geometry, while its render-tree adapter owns toolkit lifecycle,
-interaction state, and the translation from measured bounds to widget rectangles.
+encodes and rasterises nothing; enabling it would add a second wgpu major beside iced's 27.
 
-Text crosses the painter seam as a string plus `TextStyle`; the backend shapes it. Iced delegates
-advanced shaping, wraps at the supplied rectangle width, and top-aligns its default 1.2-em line
-box. Vello maps the selected embedded font's characters directly to glyph advances, skips and logs
-unavailable glyphs, and places the baseline at the top bound plus the font ascent; it neither wraps
-nor clips at the rectangle width and does not apply iced's line-box leading.
+`text::TextContext` is the canonical shaping owner. It owns Parley's font and layout contexts,
+registers only the embedded Inter, JetBrains Mono, and Space Grotesk faces, and disables Fontique
+system-font access. A context is a caller-owned value injected where shaping occurs; there is no
+process-global font context.
 
-On Apple, the canonical monospace selection resolves to embedded JetBrains Mono for Vello and to
-the system Menlo family for iced. Menlo is the shipped iced resource contract, while Vello has no
-system-font access. Other family and weight selections resolve to the same embedded face in both
-backends.
+Where that owner sits is transitional and is stated here so it does not become permanent by
+default. Each canvas adapter currently builds its own context, so a document holds as many font
+collections as it has shaped widgets: cloning a `Collection` duplicates the family index, the query
+state and the fallback cache, and every context carries its own Parley scratch buffers. Only the
+face bytes are shared, through `Blob`. The single owner arrives with the render engine, which owns
+one context for the whole document; until then the count is bounded by the widgets that draw text.
+For the same reason the Vello backend builds a `FontData` per text call — it has no route to the
+resources — and that ends when `Backend` gains a backend-owned font type.
+
+`text::FontId` owns family/weight-to-face selection and the
+face-to-byte mapping. `render::fonts` re-exports those bytes for iced host registration and adds
+Lucide. Invalid compile-time embedded font data is a fail-fast construction error.
+
+Text crosses the painter seam as the source string, a neutral `GlyphRun`, a transform, and a
+colour. `GlyphRun` carries the selected `FontId`, font size, measured width and height, and visual
+order glyphs as id plus positioned x/y. Backends do not shape: Vello submits those positions to
+`draw_glyphs`, while iced canvas extracts the corresponding outlines with skrifa and fills one
+canvas path; it never calls `Frame::fill_text`.
+
+Parley 0.6, Vello 0.6, and the iced outline path use the same skrifa 0.37 crate instance. Full
+positioned glyph data may cross between shaping and rendering; there is no bare-glyph-id-only
+boundary. Direct skrifa use belongs only to the iced outline adapter because Parley does not expose
+glyph outlines.
+
+A widget owns command order and local geometry, while its render-tree adapter owns toolkit
+lifecycle, interaction state, and the translation from measured bounds to widget rectangles.
 
 The painter seam and `ScenePainter` are public so an external shell can implement or consume the
 toolkit-neutral contract. The iced implementation remains crate-owned, and the recording
 implementation remains test-only.
-`Rgba`, `Pt`, and `Rect` are directly constructible stable value contracts; `TextStyle` is
-non-exhaustive because text layout and typography fields will grow.
+`Rgba`, `Pt`, `Rect`, and `Transform` are directly constructible stable value contracts.
 
 ## Wave View Ownership
 

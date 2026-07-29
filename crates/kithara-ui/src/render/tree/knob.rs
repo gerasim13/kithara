@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 use iced::{
     Element, Event, Length, Rectangle, Renderer, Theme,
     mouse::{Cursor, Interaction},
@@ -9,6 +11,7 @@ use crate::{
     paint::{Rect, canvas::IcedPainter},
     render::{Skin, UiEvent},
     skin::KnobSkin,
+    text::{TextContext, TextResources},
     widgets::behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState, WheelStep},
 };
 
@@ -16,6 +19,7 @@ pub(super) struct KnobProgram<'data, 'skin> {
     knob: Knob<'data, 'skin>,
     metrics: KnobSkin,
     drag: ScalarDrag,
+    text_resources: TextResources,
 }
 
 impl<'data, 'skin> KnobProgram<'data, 'skin> {
@@ -44,6 +48,7 @@ impl<'data, 'skin> KnobProgram<'data, 'skin> {
                     step: metrics.wheel_step,
                 })
                 .build(),
+            text_resources: skin.text_resources().clone(),
         }
     }
 
@@ -59,11 +64,11 @@ impl<'data, 'skin> KnobProgram<'data, 'skin> {
 }
 
 impl canvas::Program<UiEvent> for KnobProgram<'_, '_> {
-    type State = ScalarDragState;
+    type State = KnobState;
 
     fn draw(
         &self,
-        _state: &ScalarDragState,
+        state: &KnobState,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -71,28 +76,37 @@ impl canvas::Program<UiEvent> for KnobProgram<'_, '_> {
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         let (dial, caption) = self.rects(bounds);
+        let mut text = state.text.borrow_mut();
+        let text = text.get_or_insert_with(|| self.text_resources.clone().into());
         self.knob
-            .paint(&mut IcedPainter::new(&mut frame), dial, caption);
+            .paint(&mut IcedPainter::new(&mut frame), text, dial, caption);
         vec![frame.into_geometry()]
     }
 
-    delegate::delegate! {
-        to self.drag {
-            fn update(
-                &self,
-                state: &mut ScalarDragState,
-                event: &Event,
-                bounds: Rectangle,
-                cursor: Cursor,
-            ) -> Option<Action<UiEvent>>;
-            fn mouse_interaction(
-                &self,
-                state: &ScalarDragState,
-                bounds: Rectangle,
-                cursor: Cursor,
-            ) -> Interaction;
-        }
+    fn mouse_interaction(
+        &self,
+        state: &KnobState,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Interaction {
+        self.drag.mouse_interaction(&state.drag, bounds, cursor)
     }
+
+    fn update(
+        &self,
+        state: &mut KnobState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<UiEvent>> {
+        self.drag.update(&mut state.drag, event, bounds, cursor)
+    }
+}
+
+#[derive(Default)]
+pub(super) struct KnobState {
+    drag: ScalarDragState,
+    text: RefCell<Option<TextContext>>,
 }
 
 impl KnobProgram<'_, '_> {

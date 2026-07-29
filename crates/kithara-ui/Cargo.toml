@@ -11,8 +11,16 @@ categories = ["gui", "config"]
 
 [features]
 default = []
-render = ["dep:iced", "dep:lucide-icons", "dep:num-traits"]
-vello-backend = ["dep:kithara-platform", "dep:skrifa", "dep:tracing", "dep:vello"]
+render = [
+    "dep:iced",
+    "dep:kithara-platform",
+    "dep:lucide-icons",
+    "dep:num-traits",
+    "dep:parley",
+    "dep:skrifa",
+    "dep:tracing",
+]
+vello-backend = ["dep:kithara-platform", "dep:parley", "dep:vello"]
 
 [dependencies]
 kithara-platform = { workspace = true, optional = true }
@@ -24,6 +32,7 @@ derive_more = { workspace = true }
 iced = { workspace = true, optional = true }
 lucide-icons = { workspace = true, optional = true }
 num-traits = { workspace = true, optional = true }
+parley = { workspace = true, optional = true }
 ron = { workspace = true }
 serde = { workspace = true }
 skrifa = { workspace = true, optional = true }

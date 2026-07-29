@@ -1,17 +1,12 @@
-use kithara_platform::sync::{Arc as SharedArc, OnceLock};
-use skrifa::{
-    FontRef,
-    instance::{LocationRef, Size},
-    prelude::MetadataProvider,
-};
+use kithara_platform::sync::Arc as SharedArc;
 use vello::{
     Glyph, Scene,
     kurbo::{Affine, Arc, Cap, Circle, Join, Line, Point, Stroke, Vec2},
     peniko::{Blob, Color, Fill, FontData},
 };
 
-use super::{Painter, Pt, Rect, Rgba, TextStyle};
-use crate::fonts::catalog::{FontFace, select};
+use super::{Painter, Pt, Rgba, Transform};
+use crate::text::GlyphRun;
 
 /// A [`Painter`] that encodes drawing commands into a Vello [`Scene`].
 pub struct ScenePainter<'scene> {
@@ -81,31 +76,26 @@ impl Painter for ScenePainter<'_> {
         );
     }
 
-    fn text(&mut self, bounds: Rect, content: &str, style: TextStyle) {
-        let face = select(style.family, style.weight);
-        let font = cached_font(face);
-        let Some(font_ref) = font.reference.as_ref() else {
-            return;
-        };
-        let glyphs = shape(font_ref, face, content, style.size, style.tracking);
-        let width = glyphs.iter().map(|glyph| glyph.advance).sum::<f32>();
-        let metrics = font_ref.metrics(Size::new(style.size), LocationRef::default());
-        let baseline = bounds.y + metrics.ascent;
-        let mut x = bounds.x + (bounds.w - width) * 0.5;
-        let positioned = glyphs.into_iter().map(|glyph| {
-            let positioned = Glyph {
-                id: glyph.id,
-                x,
-                y: baseline,
-            };
-            x += glyph.advance;
-            positioned
+    fn text(&mut self, run: &GlyphRun, _content: &str, transform: Transform, color: Rgba) {
+        let data = FontData::new(Blob::new(SharedArc::new(run.font().bytes())), 0);
+        let glyphs = run.glyphs().iter().map(|glyph| Glyph {
+            id: glyph.id,
+            x: glyph.x,
+            y: glyph.y,
         });
         self.scene
-            .draw_glyphs(&font.data)
-            .font_size(style.size)
-            .brush(Color::from(style.color))
-            .draw(Fill::NonZero, positioned);
+            .draw_glyphs(&data)
+            .transform(Affine::new([
+                f64::from(transform.xx),
+                f64::from(transform.yx),
+                f64::from(transform.xy),
+                f64::from(transform.yy),
+                f64::from(transform.dx),
+                f64::from(transform.dy),
+            ]))
+            .font_size(run.size())
+            .brush(Color::from(color))
+            .draw(Fill::NonZero, glyphs);
     }
 }
 
@@ -127,108 +117,21 @@ impl From<Pt> for Point {
     }
 }
 
-struct ShapedGlyph {
-    advance: f32,
-    id: u32,
-}
-
-fn shape(
-    font: &FontRef<'_>,
-    face: FontFace,
-    content: &str,
-    size: f32,
-    tracking: f32,
-) -> Vec<ShapedGlyph> {
-    let charmap = font.charmap();
-    let metrics = font.glyph_metrics(Size::new(size), LocationRef::default());
-    let tracking = tracking * size;
-    let mut glyphs = Vec::with_capacity(content.chars().count());
-    for character in content.chars() {
-        let Some(id) = charmap.map(character) else {
-            tracing::debug!(?face, ?character, "font has no mapped glyph");
-            continue;
-        };
-        let Some(advance) = metrics.advance_width(id) else {
-            tracing::debug!(
-                ?face,
-                glyph_id = id.to_u32(),
-                ?character,
-                "font has no glyph advance"
-            );
-            continue;
-        };
-        glyphs.push(ShapedGlyph {
-            advance,
-            id: id.to_u32(),
-        });
-    }
-    if let Some((_, rest)) = glyphs.split_last_mut() {
-        for glyph in rest {
-            glyph.advance += tracking;
-        }
-    }
-    glyphs
-}
-
-struct CachedFont {
-    data: FontData,
-    reference: Option<FontRef<'static>>,
-}
-
-fn cached_font(face: FontFace) -> &'static CachedFont {
-    static INTER_REGULAR: OnceLock<CachedFont> = OnceLock::new();
-    static INTER_SEMIBOLD: OnceLock<CachedFont> = OnceLock::new();
-    static JETBRAINS_MONO_REGULAR: OnceLock<CachedFont> = OnceLock::new();
-    static JETBRAINS_MONO_MEDIUM: OnceLock<CachedFont> = OnceLock::new();
-    static JETBRAINS_MONO_SEMIBOLD: OnceLock<CachedFont> = OnceLock::new();
-    static SPACE_GROTESK_REGULAR: OnceLock<CachedFont> = OnceLock::new();
-    static SPACE_GROTESK_MEDIUM: OnceLock<CachedFont> = OnceLock::new();
-    static SPACE_GROTESK_SEMIBOLD: OnceLock<CachedFont> = OnceLock::new();
-    static SPACE_GROTESK_BOLD: OnceLock<CachedFont> = OnceLock::new();
-
-    let cache = match face {
-        FontFace::InterRegular => &INTER_REGULAR,
-        FontFace::InterSemibold => &INTER_SEMIBOLD,
-        FontFace::JetBrainsMonoRegular => &JETBRAINS_MONO_REGULAR,
-        FontFace::JetBrainsMonoMedium => &JETBRAINS_MONO_MEDIUM,
-        FontFace::JetBrainsMonoSemibold => &JETBRAINS_MONO_SEMIBOLD,
-        FontFace::SpaceGroteskRegular => &SPACE_GROTESK_REGULAR,
-        FontFace::SpaceGroteskMedium => &SPACE_GROTESK_MEDIUM,
-        FontFace::SpaceGroteskSemibold => &SPACE_GROTESK_SEMIBOLD,
-        FontFace::SpaceGroteskBold => &SPACE_GROTESK_BOLD,
-    };
-    cache.get_or_init(|| {
-        let bytes = face.bytes();
-        let reference = match FontRef::new(bytes) {
-            Ok(reference) => Some(reference),
-            Err(error) => {
-                tracing::error!(
-                    ?face,
-                    ?error,
-                    bytes = bytes.len(),
-                    "embedded font data is invalid"
-                );
-                None
-            }
-        };
-        CachedFont {
-            data: FontData::new(Blob::new(SharedArc::new(bytes)), 0),
-            reference,
-        }
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::skin::{FontFamily, FontWeight};
     #[cfg(feature = "render")]
     use crate::{
         atoms::knob::Knob,
         builtin,
         paint::record::{Cmd, RecordPainter},
+    };
+    use crate::{
+        paint::Rect,
+        skin::{FontFamily, FontWeight},
+        text::TextContext,
     };
 
     #[kithara::test]
@@ -257,7 +160,7 @@ mod tests {
         assert!(scene.encoding().n_paths > before);
 
         let before = scene.encoding().resources.glyphs.len();
-        ScenePainter::new(&mut scene).text(FIXTURE.bounds, "GAIN", FIXTURE.text_style);
+        paint_text(&mut scene, "GAIN");
         assert!(scene.encoding().resources.glyphs.len() > before);
     }
 
@@ -300,10 +203,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn missing_glyph_does_not_drop_the_rest_of_the_run() {
+    fn missing_character_does_not_drop_any_positioned_glyphs() {
         let scene = text_scene("A\u{10ffff}B");
 
-        assert_eq!(scene.encoding().resources.glyphs.len(), 2);
+        assert_eq!(scene.encoding().resources.glyphs.len(), 3);
     }
 
     #[cfg(feature = "render")]
@@ -324,7 +227,12 @@ mod tests {
 
         let knob = Knob::new(Some("GAIN"), 0.25, builtin::skin());
         let mut recorder = RecordPainter::default();
-        knob.paint(&mut recorder, DIAL, CAPTION);
+        knob.paint(
+            &mut recorder,
+            &mut TextContext::new().unwrap(),
+            DIAL,
+            CAPTION,
+        );
         let commands = recorder.finish();
         let geometry_commands = commands
             .iter()
@@ -340,15 +248,40 @@ mod tests {
             .fold(0_u32, |count, _| count + 1);
 
         let mut scene = Scene::new();
-        knob.paint(&mut ScenePainter::new(&mut scene), DIAL, CAPTION);
+        knob.paint(
+            &mut ScenePainter::new(&mut scene),
+            &mut TextContext::new().unwrap(),
+            DIAL,
+            CAPTION,
+        );
 
         assert_eq!(scene.encoding().n_paths, geometry_commands);
     }
 
     fn text_scene(content: &str) -> Scene {
         let mut scene = Scene::new();
-        ScenePainter::new(&mut scene).text(FIXTURE.bounds, content, FIXTURE.text_style);
+        paint_text(&mut scene, content);
         scene
+    }
+
+    fn paint_text(scene: &mut Scene, content: &str) {
+        let run = TextContext::new().unwrap().shape(
+            content,
+            FontFamily::Sans,
+            FontWeight::Normal,
+            12.0,
+            0.0,
+            Some(FIXTURE.bounds.w),
+        );
+        ScenePainter::new(scene).text(
+            &run,
+            content,
+            Transform::translate(Pt {
+                x: FIXTURE.bounds.x + (FIXTURE.bounds.w - run.width()) / 2.0,
+                y: FIXTURE.bounds.y,
+            }),
+            FIXTURE.color,
+        );
     }
 
     #[derive(Clone, Copy)]
@@ -356,7 +289,6 @@ mod tests {
         bounds: Rect,
         color: Rgba,
         point: Pt,
-        text_style: TextStyle,
     }
 
     const FIXTURE: PaintFixture = {
@@ -375,7 +307,6 @@ mod tests {
             },
             color,
             point: Pt { x: 4.0, y: 4.0 },
-            text_style: TextStyle::new(FontFamily::Sans, FontWeight::Normal, color, 12.0, 0.0),
         }
     };
 }

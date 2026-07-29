@@ -1,18 +1,21 @@
 use iced::{
-    Color, Font, Point, Radians, Vector,
-    alignment::Vertical,
+    Color, Font, Point, Radians,
     font::{Family, Stretch, Style, Weight},
-    widget::{
-        canvas::{Frame, Path, Stroke, Text as CanvasText, path::Arc},
-        text::{Alignment, Shaping},
+    widget::canvas::{
+        Frame, Path, Stroke,
+        path::{Arc, Builder},
     },
 };
-use num_traits::cast::AsPrimitive;
+use skrifa::{
+    GlyphId, MetadataProvider,
+    instance::{LocationRef, Size},
+    outline::{DrawSettings, OutlinePen},
+};
 
-use super::{Painter, Pt, Rect, Rgba, TextStyle};
+use super::{Painter, Pt, Rgba, Transform};
 use crate::{
-    fonts::catalog,
     skin::{FontFamily, FontWeight},
+    text::{GlyphRun, select},
 };
 
 pub(crate) struct IcedPainter<'frame> {
@@ -61,38 +64,39 @@ impl Painter for IcedPainter<'_> {
             .stroke(&Path::line(from.into(), to.into()), stroke(color, width));
     }
 
-    fn text(&mut self, bounds: Rect, content: &str, style: TextStyle) {
-        const HALF: f32 = 0.5;
-
-        let font = font(style.family, style.weight);
-        let tracking = style.tracking * style.size;
-        let gap_count: f32 = content.chars().count().saturating_sub(1).as_();
-        let tracking_width = tracking * gap_count;
-        let mut offset = -tracking_width * HALF;
-        CanvasText {
-            content: content.to_owned(),
-            position: Point::new(bounds.x + bounds.w * HALF, bounds.y),
-            max_width: bounds.w,
-            color: style.color.into(),
-            size: style.size.into(),
-            font,
-            align_x: Alignment::Center,
-            align_y: Vertical::Top,
-            shaping: Shaping::Advanced,
-            ..CanvasText::default()
-        }
-        .draw_with(|path, color| {
-            self.frame.with_save(|frame| {
-                frame.translate(Vector::new(offset, 0.0));
-                frame.fill(&path, color);
-            });
-            offset += tracking;
+    fn text(&mut self, run: &GlyphRun, _content: &str, transform: Transform, color: Rgba) {
+        let outlines = run.outline_font().outline_glyphs();
+        let path = Path::new(|builder| {
+            for glyph in run.glyphs() {
+                let Some(outline) = outlines.get(GlyphId::new(glyph.id)) else {
+                    continue;
+                };
+                let mut pen = IcedOutline {
+                    builder,
+                    glyph: Pt {
+                        x: glyph.x,
+                        y: glyph.y,
+                    },
+                    transform,
+                };
+                let settings =
+                    DrawSettings::unhinted(Size::new(run.size()), LocationRef::default());
+                if let Err(error) = outline.draw(settings, &mut pen) {
+                    tracing::warn!(
+                        face = ?run.font(),
+                        glyph_id = glyph.id,
+                        ?error,
+                        "failed to draw embedded glyph outline"
+                    );
+                }
+            }
         });
+        self.frame.fill(&path, Color::from(color));
     }
 }
 
 pub(crate) const fn font(family: FontFamily, weight: FontWeight) -> Font {
-    let face = catalog::select(family, weight);
+    let face = select(family, weight);
     let weight = match weight {
         FontWeight::Normal => Weight::Normal,
         FontWeight::Medium => Weight::Medium,
@@ -104,6 +108,47 @@ pub(crate) const fn font(family: FontFamily, weight: FontWeight) -> Font {
         weight,
         stretch: Stretch::Normal,
         style: Style::Normal,
+    }
+}
+
+struct IcedOutline<'builder> {
+    builder: &'builder mut Builder,
+    glyph: Pt,
+    transform: Transform,
+}
+
+impl IcedOutline<'_> {
+    fn point(&self, x: f32, y: f32) -> Point {
+        self.transform
+            .apply(Pt {
+                x: self.glyph.x + x,
+                y: self.glyph.y - y,
+            })
+            .into()
+    }
+}
+
+impl OutlinePen for IcedOutline<'_> {
+    fn close(&mut self) {
+        self.builder.close();
+    }
+
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+        self.builder
+            .bezier_curve_to(self.point(cx0, cy0), self.point(cx1, cy1), self.point(x, y));
+    }
+
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.builder.line_to(self.point(x, y));
+    }
+
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.builder.move_to(self.point(x, y));
+    }
+
+    fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
+        self.builder
+            .quadratic_curve_to(self.point(cx0, cy0), self.point(x, y));
     }
 }
 

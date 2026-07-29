@@ -1,4 +1,5 @@
-use super::{Painter, Pt, Rect, Rgba, TextStyle};
+use super::{Painter, Pt, Rgba, Transform};
+use crate::text::GlyphRun;
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum Cmd {
@@ -28,9 +29,10 @@ pub(crate) enum Cmd {
         width: f32,
     },
     Text {
-        bounds: Rect,
         content: String,
-        style: TextStyle,
+        run: GlyphRun,
+        transform: Transform,
+        color: Rgba,
     },
 }
 
@@ -91,11 +93,12 @@ impl Painter for RecordPainter {
         });
     }
 
-    fn text(&mut self, bounds: Rect, content: &str, style: TextStyle) {
+    fn text(&mut self, run: &GlyphRun, content: &str, transform: Transform, color: Rgba) {
         self.commands.push(Cmd::Text {
-            bounds,
             content: content.to_owned(),
-            style,
+            run: run.clone(),
+            transform,
+            color,
         });
     }
 }

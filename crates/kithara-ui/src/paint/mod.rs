@@ -8,4 +8,4 @@ pub(crate) mod record;
 pub mod scene;
 
 #[cfg(any(feature = "render", feature = "vello-backend"))]
-pub use painter::{Painter, Pt, Rect, Rgba, TextStyle};
+pub use painter::{Painter, Pt, Rect, Rgba, Transform};

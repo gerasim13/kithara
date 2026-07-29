@@ -6,8 +6,6 @@ pub mod builtin;
 pub mod compile;
 pub mod error;
 pub mod expand;
-#[cfg(any(feature = "render", feature = "vello-backend"))]
-mod fonts;
 pub mod ids;
 pub mod paint;
 pub mod registry;
@@ -15,6 +13,8 @@ pub mod registry;
 pub mod render;
 pub mod size;
 pub mod source;
+#[cfg(any(feature = "render", feature = "vello-backend"))]
+pub mod text;
 #[cfg(feature = "render")]
 pub mod widgets;
 

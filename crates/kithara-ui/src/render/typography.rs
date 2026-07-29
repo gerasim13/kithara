@@ -1,6 +1,6 @@
 use iced::{
     Element,
-    widget::{Row, Text, text},
+    widget::{Text, text},
 };
 
 use crate::{
@@ -21,21 +21,9 @@ pub(crate) fn styled_text(
 ) -> Element<'static, UiEvent> {
     let font = font(role.font, role.weight);
     let color = skin.color(role.color);
-    if role.spacing <= 0.0 {
-        return shaped_text(content)
-            .font(font)
-            .size(role.size)
-            .color(color)
-            .into();
-    }
-    let glyphs = content.chars().map(|glyph| {
-        shaped_text(glyph.to_string())
-            .font(font)
-            .size(role.size)
-            .color(color)
-            .into()
-    });
-    Row::with_children(glyphs)
-        .spacing(role.spacing * role.size)
+    shaped_text(content)
+        .font(font)
+        .size(role.size)
+        .color(color)
         .into()
 }

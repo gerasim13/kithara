@@ -13,6 +13,7 @@ use crate::{
         ToggleSkin, TrackListSkin, TreeSkin, VisSkin, VuStereoSkin, VuVerticalSkin, WaveSkin,
         WindowSkin, parse_color,
     },
+    text::{TextContext, TextResources},
 };
 
 /// Resolved skin consumed by iced renderers.
@@ -20,6 +21,7 @@ use crate::{
 #[non_exhaustive]
 pub struct Skin {
     document: SkinDoc,
+    text_resources: TextResources,
     pub palette: RenderPalette,
     pub layout: LayoutSkin,
     pub chrome: ChromeSkin,
@@ -60,8 +62,9 @@ impl Skin {
     /// Resolves a parsed document into iced colors and render metrics.
     ///
     /// # Errors
-    /// Returns [`UiDocError::BadColor`] when any palette value is malformed.
+    /// Returns [`UiDocError`] when a palette value or embedded font is invalid.
     pub fn resolve(document: SkinDoc, origin: &SourceUri) -> Result<Self, UiDocError> {
+        let text = TextContext::new()?;
         Ok(Self {
             palette: RenderPalette {
                 bg: color(&document.palette.bg, origin)?,
@@ -121,12 +124,17 @@ impl Skin {
             tree: document.tree.clone(),
             track_list: document.track_list.clone(),
             layout_preview: document.layout_preview,
+            text_resources: text.resources().clone(),
             document,
         })
     }
 
     pub(crate) fn document(&self) -> &SkinDoc {
         &self.document
+    }
+
+    pub(crate) const fn text_resources(&self) -> &TextResources {
+        &self.text_resources
     }
 
     pub(crate) fn color(&self, role: ColorRole) -> Color {

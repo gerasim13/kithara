@@ -1,7 +1,8 @@
 use crate::{
-    paint::{Painter, Pt, Rect, Rgba, TextStyle},
+    paint::{Painter, Pt, Rect, Rgba, Transform},
     render::Skin,
     skin::ColorRole,
+    text::TextContext,
 };
 
 pub(crate) struct Knob<'data, 'skin> {
@@ -19,7 +20,13 @@ impl<'data, 'skin> Knob<'data, 'skin> {
         self.skin.rgba(role)
     }
 
-    pub(crate) fn paint<P: Painter>(&self, painter: &mut P, dial: Rect, caption: Rect) {
+    pub(crate) fn paint<P: Painter>(
+        &self,
+        painter: &mut P,
+        text: &mut TextContext,
+        dial: Rect,
+        caption: Rect,
+    ) {
         let metrics = self.skin.knob;
         let side = dial.w.min(dial.h);
         let radius = side / 2.0;
@@ -71,16 +78,23 @@ impl<'data, 'skin> Knob<'data, 'skin> {
         }
 
         if let Some(label) = self.label {
-            painter.text(
-                caption,
+            let role = metrics.label_text;
+            let run = text.shape(
                 label,
-                TextStyle {
-                    family: metrics.label_text.font,
-                    weight: metrics.label_text.weight,
-                    color: self.color(metrics.label_text.color),
-                    size: metrics.label_text.size,
-                    tracking: metrics.label_text.spacing,
-                },
+                role.font,
+                role.weight,
+                role.size,
+                role.spacing,
+                Some(caption.w),
+            );
+            painter.text(
+                &run,
+                label,
+                Transform::translate(Pt {
+                    x: caption.x + (caption.w - run.width()) / 2.0,
+                    y: caption.y,
+                }),
+                self.color(role.color),
             );
         }
     }
@@ -161,7 +175,12 @@ mod tests {
 
         let knob = Knob::new(label, 0.25, skin);
         let mut painter = RecordPainter::default();
-        knob.paint(&mut painter, DIAL, CAPTION);
+        knob.paint(
+            &mut painter,
+            &mut TextContext::new().unwrap(),
+            DIAL,
+            CAPTION,
+        );
         painter.finish()
     }
 

@@ -3,17 +3,18 @@ use iced::Font;
 use crate::{
     paint::canvas::font,
     skin::{FontFamily, FontWeight},
+    text::FontId,
 };
 
-pub const INTER_REGULAR_BYTES: &[u8] = crate::fonts::bytes::INTER_REGULAR_BYTES;
-pub const INTER_SEMIBOLD_BYTES: &[u8] = crate::fonts::bytes::INTER_SEMIBOLD_BYTES;
-pub const JETBRAINS_MONO_REGULAR_BYTES: &[u8] = crate::fonts::bytes::JETBRAINS_MONO_REGULAR_BYTES;
-pub const JETBRAINS_MONO_MEDIUM_BYTES: &[u8] = crate::fonts::bytes::JETBRAINS_MONO_MEDIUM_BYTES;
-pub const JETBRAINS_MONO_SEMIBOLD_BYTES: &[u8] = crate::fonts::bytes::JETBRAINS_MONO_SEMIBOLD_BYTES;
-pub const SPACE_GROTESK_REGULAR_BYTES: &[u8] = crate::fonts::bytes::SPACE_GROTESK_REGULAR_BYTES;
-pub const SPACE_GROTESK_MEDIUM_BYTES: &[u8] = crate::fonts::bytes::SPACE_GROTESK_MEDIUM_BYTES;
-pub const SPACE_GROTESK_SEMIBOLD_BYTES: &[u8] = crate::fonts::bytes::SPACE_GROTESK_SEMIBOLD_BYTES;
-pub const SPACE_GROTESK_BOLD_BYTES: &[u8] = crate::fonts::bytes::SPACE_GROTESK_BOLD_BYTES;
+pub const INTER_REGULAR_BYTES: &[u8] = FontId::InterRegular.bytes();
+pub const INTER_SEMIBOLD_BYTES: &[u8] = FontId::InterSemibold.bytes();
+pub const JETBRAINS_MONO_REGULAR_BYTES: &[u8] = FontId::JetBrainsMonoRegular.bytes();
+pub const JETBRAINS_MONO_MEDIUM_BYTES: &[u8] = FontId::JetBrainsMonoMedium.bytes();
+pub const JETBRAINS_MONO_SEMIBOLD_BYTES: &[u8] = FontId::JetBrainsMonoSemibold.bytes();
+pub const SPACE_GROTESK_REGULAR_BYTES: &[u8] = FontId::SpaceGroteskRegular.bytes();
+pub const SPACE_GROTESK_MEDIUM_BYTES: &[u8] = FontId::SpaceGroteskMedium.bytes();
+pub const SPACE_GROTESK_SEMIBOLD_BYTES: &[u8] = FontId::SpaceGroteskSemibold.bytes();
+pub const SPACE_GROTESK_BOLD_BYTES: &[u8] = FontId::SpaceGroteskBold.bytes();
 
 pub const FONT_BYTES: [&[u8]; 10] = [
     INTER_REGULAR_BYTES,
