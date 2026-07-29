@@ -758,7 +758,7 @@ fn walk(
             expand_control(
                 context,
                 control,
-                ControlFields::new(id, control.size(), read, write, adaptive),
+                ControlFields::new(id, control.size().copied(), read, write, adaptive),
                 depth,
                 machine,
             )
@@ -774,7 +774,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        expand::Binding,
+        expand::{Binding, BindingKind},
         ids::StrArena,
         resolve::load_module_graph,
         source::{Limits, MemResolver},
@@ -889,7 +889,12 @@ mod tests {
             panic!("expected control");
         };
         assert_eq!(arena.resolve(*path), "transport/play");
-        let Some(Binding::Command { with, .. }) = write else {
+        let Some(Binding {
+            kind: BindingKind::Command,
+            with,
+            ..
+        }) = write
+        else {
             panic!("expected command");
         };
         let deck = with

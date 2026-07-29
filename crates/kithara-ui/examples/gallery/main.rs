@@ -465,7 +465,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use kithara_ui::{
         compile::CompiledNode,
-        expand::{Binding, ControlSpec, ExpandedNode},
+        expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
         module::ChromeStyle,
         render::ControlAction,
     };
@@ -663,7 +663,12 @@ mod tests {
             ExpandedNode::Control {
                 spec:
                     ControlSpec::Tree {
-                        query: Some(Binding::Model { id, .. }),
+                        query:
+                            Some(Binding {
+                                kind: BindingKind::Model,
+                                id,
+                                ..
+                            }),
                     },
                 ..
             } => queries.push(ui.resolve(*id)),
@@ -708,9 +713,19 @@ mod tests {
                 spec:
                     ControlSpec::ContextBar {
                         scope_items,
-                        scope: Some(Binding::Model { id: scope, .. }),
+                        scope:
+                            Some(Binding {
+                                kind: BindingKind::Model,
+                                id: scope,
+                                ..
+                            }),
                     },
-                write: Some(Binding::Model { id: write, .. }),
+                write:
+                    Some(Binding {
+                        kind: BindingKind::Model,
+                        id: write,
+                        ..
+                    }),
                 ..
             } => contexts.push((
                 ui.resolve(*path),
