@@ -756,6 +756,7 @@ impl HlsCoord {
             #[call(get_position)]
             pub(crate) fn position(&self) -> u64;
             pub(crate) fn advance(&self, n: u64);
+            pub(crate) fn take_prefetch_resume(&self) -> bool;
             pub(crate) fn set_position(&self, pos: u64);
             pub(crate) fn download_head(&self) -> u32;
             pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
