@@ -20,7 +20,7 @@ actually decoded — so the recreate path never probes.
 ## Decoder input contract
 
 Each demuxer declares the *shape* of input it needs to be constructed via
-`Demuxer::required_input() -> InputRequirement` (default `Incremental`;
+`Demuxer::required_input() -> ReaderInput` (default `Incremental`;
 `Fmp4SegmentDemuxer` overrides it). The value is a reading *discipline*, not a
 byte window — the concrete init range is resolved by the byte-space owner (the
 stream layer), which alone knows the ABR virtual-space byte shift.
@@ -35,10 +35,10 @@ stream layer), which alone knows the ABR virtual-space byte shift.
   `MediaExtractor`: self-framing, no separate init, so nothing is gated up front;
   the demuxer reads and pends as bytes arrive.
 
-`DecoderFactory::input_requirement(media_info, byte_map)` is the bridge to the
-kithara-audio readiness gate: it returns the contract of the demuxer the factory
-*would* build (mirroring `should_use_segment_aware`), which the gate then
-resolves to concrete bytes in its own virtual coordinate space.
+`DecoderFactory::reader_profile(media_info, byte_map)` is the bridge to the
+kithara-audio readiness gate. It returns the stream-owned `ReaderProfile` of the
+demuxer the factory would build, including its input shape and bounded
+read-ahead. The gate resolves that profile to bytes in virtual coordinate space.
 
 ## Gapless playback
 
@@ -328,7 +328,8 @@ output and every seek reset the zero-frame budget. EOF drain remains owned by
 - `src/composed.rs` — internal `ComposedDecoder<D: Demuxer, C: FrameCodec>` that implements `Decoder` by pairing a demuxer with a frame-level codec.
 - `src/demuxer.rs` — internal `Demuxer` trait.
 - `src/codec.rs` — internal `FrameCodec` trait and `CodecPriming`.
-- `src/input.rs` — `InputRequirement` contract used by decoder construction gates.
+- `kithara-stream::ReaderProfile` — reader construction, warmup, and bounded
+  read-ahead contract consumed by decoder construction gates.
 - `src/mock.rs` — mock support for tests and the `mock` feature.
 - `src/fmp4/`, `src/mp4/` — fMP4/MP4 container helpers.
 - `src/symphonia/` (feature `symphonia`) — Symphonia `Decoder` implementation; probe and direct paths; `ReadSeekAdapter`.

@@ -432,10 +432,19 @@ A seek drops the tail: frames held for a ramp belong to where the reader used to
 
 ### Recreate readiness gating
 
-What *kind* of bytes gate a decoder recreate is not guessed by the gate: `recreate_input` (`source.rs`) asks `DecoderFactory::input_requirement` for the demuxer's input contract (kithara-decode `CONTEXT.md` "Decoder input contract"). The contract names the input **shape**; this layer resolves it to a virtual byte range in `recreate_ready_range`, shared by the gate (`source_ready_for_recreate`) and the wait path (`wait_for_source_on_recreate`) so the two never disagree — a mismatch livelocks the worker (the HE-AAC v2 variant-switch hang). The demuxer cannot name the *virtual* range itself, because only the stream knows the ABR byte shift (`served_from`).
+What *kind* of bytes gate a decoder recreate is not guessed by the gate:
+`recreate_ready_range` asks `DecoderFactory::reader_profile` for the demuxer's
+stream-owned `ReaderProfile`. This layer resolves its input shape and bounded
+read-ahead to a virtual byte range shared by the gate and wait paths, so the two
+cannot disagree. The demuxer cannot name the virtual range itself because only
+the stream knows the ABR byte shift (`served_from`).
 
-- **`InputRequirement::InitOnly`** (segment-aware fMP4): gate on the init header resolved in virtual byte space (`format_change_segment_range`, `served_from`-aware), falling back to the `[offset..offset + DEFAULT_READ_AHEAD_BYTES)` read-ahead window when the init is unaddressable or larger than `DEFAULT_READ_AHEAD_BYTES`. The landing media segment is read by the rebuilt demuxer's first `next_frame`, not gated up front.
-- **`InputRequirement::Incremental`** (raw WAV/MP3/FLAC/Ogg): no init to wait for — gate on the read-ahead window directly.
+- **`ReaderInput::InitOnly`** (segment-aware fMP4): gate on the init header
+  resolved in virtual byte space, or on the profile's bounded read-ahead when
+  the init is unaddressable or too large. The rebuilt demuxer reads the landing
+  media segment on its first `next_frame`.
+- **`ReaderInput::Incremental`** (raw WAV/MP3/FLAC/Ogg): gate directly on the
+  profile's bounded read-ahead.
 
 ### Playback readiness gating
 

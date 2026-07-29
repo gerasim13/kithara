@@ -180,7 +180,7 @@ coordination shapes) · [`docs/workflows/rust-ai.md`](../../docs/workflows/rust-
 | [`kithara-abr`](../kithara-abr/CONTEXT.md) | ABR decision rules, EWMA throughput, initial-seed contract, `current_variant_index` two-writer invariant, decision-flow diagram, bench |
 | [`kithara-file`](../kithara-file/CONTEXT.md) | arch diagram, peer/writer/EOF readiness-probe contract, local/remote source orchestration |
 | [`kithara-hls`](../kithara-hls/CONTEXT.md) | full HLS internals: arch + public-items, ABR/variant-switch + decoder-probe rebuild + init-segment routing + format-change byte ranges, AES-128-CBC, segment cache, two-mode wait_range/seek/EOF + event wake |
-| [`kithara-decode`](../kithara-decode/CONTEXT.md) | init paths, recreate/no-fallback strategy, `InputRequirement`, gapless + seek pre-roll/trim, read-ahead strand, features, module layout, ESDS rationale, trait bridges |
+| [`kithara-decode`](../kithara-decode/CONTEXT.md) | init paths, recreate/no-fallback strategy, `ReaderProfile`, gapless + seek pre-roll/trim, read-ahead strand, features, module layout, ESDS rationale, trait bridges |
 | [`kithara-encode`](../kithara-encode/CONTEXT.md) | `EncoderFactory` output-method contracts (Outputs), kithara-stream shared-type / test-infra integration |
 | [`kithara-beat`](../kithara-beat/CONTEXT.md) | input/output contract, frozen pipeline constants (chunk 1500, border 6, stride 1488, 50 fps, hop 441), parity validation, MIT attribution |
 | [`kithara-stretch`](../kithara-stretch/CONTEXT.md) | backend contract, backend-selector ownership, PcmPool scratch rules, adding-backend checklist, no-backend/wasm constraints |
