@@ -3,7 +3,8 @@
 use kithara_integration_tests::{PrivateTestServer, TestServerHelper};
 
 /// Proves the lane builds and reaches the test server. This is the only
-/// green test in `suite_laba`, distinguishing a broken lane from a red trap.
+/// green test in `suite_integration_regressions`, distinguishing a broken lane
+/// from a red regression test.
 #[kithara::test(tokio)]
 async fn lane_reaches_test_server() {
     let helper = TestServerHelper::new().await;

@@ -65,7 +65,7 @@ fn drain_seek_events(rx: &mut kithara::events::EventReceiver, observation: &mut 
 
 fn known_duration(view: PlaybackView, phase: &str) -> f64 {
     view.duration
-        .unwrap_or_else(|| panic!("LABA-417: duration became unknown {phase}"))
+        .unwrap_or_else(|| panic!("duration became unknown {phase}"))
 }
 
 async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind: Target) {
@@ -110,7 +110,7 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
         .expect("select HLS track");
     wait_for_loader_done_event(&mut rx, &queue, id, Duration::from_secs(30))
         .await
-        .unwrap_or_else(|error| panic!("LABA-417 precondition: {error}"));
+        .unwrap_or_else(|error| panic!("precondition: {error}"));
 
     let mut warmup_position = None;
     for _ in 0..WARMUP_BLOCKS {
@@ -128,16 +128,16 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
     let warmup_position = warmup_position.unwrap_or(0.0);
     assert!(
         warmup_position >= MIN_WARMUP_SECS,
-        "LABA-417 precondition: playback produced only {warmup_position:.3}s before the seek"
+        "precondition: playback produced only {warmup_position:.3}s before the seek"
     );
     assert!(
         warmup_position < duration / 2.0,
-        "LABA-417 precondition: playback had already reached {warmup_position:.3}s of \
+        "precondition: playback had already reached {warmup_position:.3}s of \
          {duration:.3}s before the end seek"
     );
     assert!(
         gate.requested() > 0,
-        "LABA-417 precondition: withheld final segment {FINAL_SEGMENT} was never requested; \
+        "precondition: withheld final segment {FINAL_SEGMENT} was never requested; \
          the unbuffered-end window did not exist"
     );
 
@@ -148,18 +148,18 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
     };
     let outcome = queue
         .seek(target)
-        .unwrap_or_else(|error| panic!("LABA-417: seek to {target:.3}s failed: {error}"));
+        .unwrap_or_else(|error| panic!("seek to {target:.3}s failed: {error}"));
     match target_kind {
         Target::NearEnd => assert!(
             matches!(outcome, SeekOutcome::Landed { .. }),
-            "LABA-417: near-end seek to {target:.3}s was classified as {outcome:?}"
+            "near-end seek to {target:.3}s was classified as {outcome:?}"
         ),
         Target::End => assert!(
             matches!(
                 outcome,
                 SeekOutcome::Landed { .. } | SeekOutcome::PastEof { .. }
             ),
-            "LABA-417: duration-boundary seek returned {outcome:?}"
+            "duration-boundary seek returned {outcome:?}"
         ),
     }
 
@@ -186,24 +186,24 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
     }
     assert!(
         !observation.seek_rejected,
-        "LABA-417: seek to {target:.3}s was rejected after the final segment became available"
+        "seek to {target:.3}s was rejected after the final segment became available"
     );
     assert!(
         observation.seek_complete || observation.item_ended || observation.end_of_stream,
-        "LABA-417: seek to {target:.3}s produced neither a committed seek nor a terminal event"
+        "seek to {target:.3}s produced neither a committed seek nor a terminal event"
     );
 
     let after = queue.playback_view();
     let duration_after = known_duration(after, "after the end seek");
     assert!(
         (duration_after - duration).abs() < POSITION_TOLERANCE_SECS,
-        "LABA-417: duration changed across a seek to {target:.3}s \
+        "duration changed across a seek to {target:.3}s \
          ({duration:.3}s -> {duration_after:.3}s)"
     );
     let position_after = after.position.unwrap_or(0.0);
     assert!(
         position_after <= duration_after + POSITION_TOLERANCE_SECS,
-        "LABA-417: position {position_after:.3}s exceeded duration {duration_after:.3}s \
+        "position {position_after:.3}s exceeded duration {duration_after:.3}s \
          after seeking to {target:.3}s"
     );
 

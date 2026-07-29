@@ -4,4 +4,4 @@
     reason = "integration test crate — unwraps are acceptable in test code"
 )]
 
-mod laba;
+mod integration_regressions;

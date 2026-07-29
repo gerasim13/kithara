@@ -4,27 +4,27 @@ import Foundation
 import Kithara
 import Testing
 
-@Suite("LABA iOS traps", .serialized)
-struct LabaIOSTraps {}
+@Suite("Integration regressions (iOS)", .serialized)
+struct IntegrationRegressionsIOS {}
 
-extension LabaIOSTraps {
-    @Test("LABA-415 pauses and resumes for an audio-session interruption")
-    func laba415InterruptionResume() async throws {
+extension IntegrationRegressionsIOS {
+    @Test("An audio-session interruption pauses and then resumes playback")
+    func interruptionPausesThenResumesPlayback() async throws {
         let audioSession = AVAudioSession.sharedInstance()
         try audioSession.setCategory(.playback)
         try audioSession.setActive(true)
 
         let cacheURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("laba-415-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("interruption-resume-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
             at: cacheURL,
             withIntermediateDirectories: true
         )
-        let player = KitharaPlayer(config: .init(cacheDir: cacheURL.path))
+        let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
         let item = KitharaPlayerItem(
             url: try TestServerFixture.asset("test.mp3").absoluteString
         )
-        let rates = Laba415Rates()
+        let rates = InterruptionRates()
         let cancellable = player.rate.sink { rate in
             rates.record(rate)
         }
@@ -37,12 +37,12 @@ extension LabaIOSTraps {
 
         try player.insert(item)
         player.play()
-        try await waitFor415Fact("fixture playback to advance") {
+        try await waitForInterruptionFact("fixture playback to advance") {
             player.currentTime > 0.1
         }
         try #require(
             player.currentRate > 0,
-            "LABA-415 precondition: fixture playback did not start"
+            "precondition: fixture playback did not start"
         )
 
         // The player reacts across the FFI boundary, so reading the rate in the
@@ -50,11 +50,11 @@ extension LabaIOSTraps {
         // implementation and keep this trap red even once it is fixed.
         rates.reset()
         postInterruption(.began)
-        let paused = await reached415Fact { player.currentRate == 0 }
+        let paused = await reachedInterruptionFact { player.currentRate == 0 }
         #expect(
             paused,
             """
-            LABA-415: playback did not pause after AVAudioSession posted \
+            playback did not pause after AVAudioSession posted \
             interruption-began; rate=\(player.currentRate), \
             published=\(rates.snapshot())
             """
@@ -62,11 +62,11 @@ extension LabaIOSTraps {
 
         rates.reset()
         postInterruption(.ended, options: .shouldResume)
-        let resumed = await reached415Fact { player.currentRate > 0 }
+        let resumed = await reachedInterruptionFact { player.currentRate > 0 }
         #expect(
             resumed,
             """
-            LABA-415: playback did not resume after AVAudioSession ended the \
+            playback did not resume after AVAudioSession ended the \
             interruption with .shouldResume; rate=\(player.currentRate), \
             published=\(rates.snapshot())
             """
@@ -92,7 +92,7 @@ extension LabaIOSTraps {
 
     /// Bounded poll returning whether the fact arrived, so a missing reaction
     /// fails the expectation instead of throwing out of the test.
-    private func reached415Fact(_ condition: () -> Bool) async -> Bool {
+    private func reachedInterruptionFact(_ condition: () -> Bool) async -> Bool {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(5))
         while clock.now < deadline {
@@ -104,7 +104,7 @@ extension LabaIOSTraps {
         return condition()
     }
 
-    private func waitFor415Fact(
+    private func waitForInterruptionFact(
         _ description: String,
         condition: () -> Bool
     ) async throws {
@@ -112,14 +112,14 @@ extension LabaIOSTraps {
         let deadline = clock.now.advanced(by: .seconds(30))
         while !condition() {
             guard clock.now < deadline else {
-                throw Laba415FactTimeout(description)
+                throw InterruptionFactTimeout(description)
             }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
     }
 }
 
-private final class Laba415Rates: @unchecked Sendable {
+private final class InterruptionRates: @unchecked Sendable {
     private let lock = NSLock()
     private var rates: [Float] = []
 
@@ -142,7 +142,7 @@ private final class Laba415Rates: @unchecked Sendable {
     }
 }
 
-private struct Laba415FactTimeout: Error, CustomStringConvertible {
+private struct InterruptionFactTimeout: Error, CustomStringConvertible {
     let description: String
 
     init(_ description: String) {

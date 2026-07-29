@@ -94,7 +94,7 @@ async fn blocks_until_end(temp_dir: &TestTempDir, rate: f32) -> usize {
     panic!("the {rate}x track never reached end-of-stream within {DRAIN_BLOCK_BUDGET} blocks");
 }
 
-/// LABA-418: a rate change during playback must move media time, not just the
+/// A rate change during playback must move media time, not just the
 /// reported rate.
 ///
 /// The mock-reader trap next door drives `PcmReader::set_playback_rate` on a
@@ -110,7 +110,7 @@ async fn media_time_advances_with_the_playing_rate(temp_dir: TestTempDir) {
             .build(),
         SAMPLE_RATE,
     );
-    let path = temp_dir.path().join("laba-418.mp3");
+    let path = temp_dir.path().join("rate.mp3");
     std::fs::write(&path, EmbeddedAudio::TEST_MP3_BYTES).expect("write mp3 fixture");
     let resource = file_resource(harness.player(), &path, &temp_dir.path().join("store")).await;
     harness.player().insert(resource, None, None);
@@ -123,7 +123,7 @@ async fn media_time_advances_with_the_playing_rate(temp_dir: TestTempDir) {
     let baseline = media_advance(&harness, MEASURE_BLOCKS).await;
     assert!(
         baseline > 0.0,
-        "LABA-418 precondition: media time must advance at rate 1.0, got {baseline}s"
+        "precondition: media time must advance at rate 1.0, got {baseline}s"
     );
 
     harness.player().set_default_rate(FAST_RATE);
@@ -132,7 +132,7 @@ async fn media_time_advances_with_the_playing_rate(temp_dir: TestTempDir) {
 
     assert!(
         accelerated >= baseline * 1.5,
-        "LABA-418: over equal rendered-output windows media time advanced \
+        "over equal rendered-output windows media time advanced \
          {accelerated}s at rate {FAST_RATE} versus {baseline}s at rate 1.0 — \
          the reported clock is on the output scale, not the media scale"
     );
@@ -148,7 +148,7 @@ async fn a_faster_rate_drains_the_real_source_sooner(temp_dir: TestTempDir) {
 
     assert!(
         accelerated * DRAIN_SHARE_DEN <= baseline * DRAIN_SHARE_NUM,
-        "LABA-418: at rate {FAST_RATE} the source must reach end-of-stream in \
+        "at rate {FAST_RATE} the source must reach end-of-stream in \
          materially fewer rendered output blocks than at rate 1.0, got \
          {accelerated} versus {baseline}"
     );

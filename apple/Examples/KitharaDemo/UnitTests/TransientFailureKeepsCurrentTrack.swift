@@ -3,9 +3,9 @@ import Foundation
 import Kithara
 import Testing
 
-extension LabaIOSTraps {
-    @Test("LABA-428 keeps the current track after a transient network failure")
-    func laba428TransientFailureNoSkip() async throws {
+extension IntegrationRegressionsIOS {
+    @Test("A transient network failure does not kill the current track")
+    func transientFailureKeepsCurrentTrack() async throws {
         try await TestServerFixture.setNetwork(online: true)
         defer {
             Task {
@@ -14,20 +14,20 @@ extension LabaIOSTraps {
         }
 
         let cacheURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("laba-428-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("transient-failure-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
             at: cacheURL,
             withIntermediateDirectories: true
         )
 
-        let player = KitharaPlayer(config: .init(cacheDir: cacheURL.path))
+        let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
         let target = KitharaPlayerItem(
             url: try TestServerFixture.asset("hls/master.m3u8").absoluteString
         )
         let fallback = KitharaPlayerItem(
             url: try TestServerFixture.asset("test.mp3").absoluteString
         )
-        let observation = Laba428Observation()
+        let observation = TransientFailureObservation()
         let currentCancellable = player.currentItem.sink { item in
             observation.recordCurrent(item)
         }
@@ -49,20 +49,20 @@ extension LabaIOSTraps {
         try player.append(fallback)
         try #require(
             player.itemCount == 2,
-            "LABA-428 precondition: the target and auto-skip destination were not queued"
+            "precondition: the target and auto-skip destination were not queued"
         )
 
         player.play()
-        try await waitFor428Fact("the HLS target to become current and advance") {
+        try await waitForTransientFailureFact("the HLS target to become current and advance") {
             observation.matches(target) && player.currentTime > 1
         }
-        try await waitFor428Fact("the long HLS duration to settle") {
+        try await waitForTransientFailureFact("the long HLS duration to settle") {
             (player.duration ?? 0) >= 180
         }
 
         let failureBeganAt = player.currentTime
         try await TestServerFixture.setNetwork(online: false)
-        let failureFact = await observe428Failure(
+        let failureFact = await observeTransientFailure(
             player,
             observation: observation,
             fallback: fallback
@@ -73,7 +73,7 @@ extension LabaIOSTraps {
         try #require(
             failureFact != nil,
             """
-            LABA-428 precondition: the brief outage produced no observable \
+            precondition: the brief outage produced no observable \
             stall, failure, skip, or stopped playback; it began at \
             \(failureBeganAt)s
             """
@@ -81,7 +81,7 @@ extension LabaIOSTraps {
         #expect(
             observation.matches(target),
             """
-            LABA-428: the transient failure permanently failed the HLS target \
+            the transient failure permanently failed the HLS target \
             and moved the queue to item \
             \(observation.currentID.map(String.init) ?? "nil"); \
             fallback=\(fallback.id), signal=\(failureFact?.description ?? "none")
@@ -92,14 +92,14 @@ extension LabaIOSTraps {
         }
 
         let recoveryTarget = positionAtRestore + 5
-        let recovered = await reached428Fact(deadline: .seconds(45)) {
+        let recovered = await reachedTransientFailureFact(deadline: .seconds(45)) {
             observation.matches(target)
                 && player.currentTime >= recoveryTarget
         }
         #expect(
             recovered,
             """
-            LABA-428: the HLS target remained selected after the transient \
+            the HLS target remained selected after the transient \
             failure but never advanced from \(positionAtRestore)s to \
             \(recoveryTarget)s; signal=\(failureFact?.description ?? "none")
             """
@@ -107,17 +107,17 @@ extension LabaIOSTraps {
         #expect(
             observation.matches(target),
             """
-            LABA-428: the queue auto-skipped to \
+            the queue auto-skipped to \
             \(observation.currentID.map(String.init) ?? "nil") during recovery
             """
         )
     }
 
-    private func observe428Failure(
+    private func observeTransientFailure(
         _ player: KitharaPlayer,
-        observation: Laba428Observation,
+        observation: TransientFailureObservation,
         fallback: KitharaPlayerItem
-    ) async -> Laba428FailureFact? {
+    ) async -> TransientFailureFact? {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(45))
         var lastPosition = player.currentTime
@@ -146,7 +146,7 @@ extension LabaIOSTraps {
         return nil
     }
 
-    private func reached428Fact(
+    private func reachedTransientFailureFact(
         deadline duration: Duration,
         condition: () -> Bool
     ) async -> Bool {
@@ -161,7 +161,7 @@ extension LabaIOSTraps {
         return condition()
     }
 
-    private func waitFor428Fact(
+    private func waitForTransientFailureFact(
         _ description: String,
         condition: () -> Bool
     ) async throws {
@@ -169,14 +169,14 @@ extension LabaIOSTraps {
         let deadline = clock.now.advanced(by: .seconds(45))
         while !condition() {
             guard clock.now < deadline else {
-                throw Laba428FactTimeout(description)
+                throw TransientFailureTimeout(description)
             }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
     }
 }
 
-private enum Laba428FailureFact: CustomStringConvertible {
+private enum TransientFailureFact: CustomStringConvertible {
     case autoSkipped
     case failed(String)
     case stalled
@@ -196,7 +196,7 @@ private enum Laba428FailureFact: CustomStringConvertible {
     }
 }
 
-private final class Laba428Observation: @unchecked Sendable {
+private final class TransientFailureObservation: @unchecked Sendable {
     private let lock = NSLock()
     private var itemID: Int64?
     private var stalled = false
@@ -243,7 +243,7 @@ private final class Laba428Observation: @unchecked Sendable {
     }
 }
 
-private struct Laba428FactTimeout: Error, CustomStringConvertible {
+private struct TransientFailureTimeout: Error, CustomStringConvertible {
     let description: String
 
     init(_ description: String) {

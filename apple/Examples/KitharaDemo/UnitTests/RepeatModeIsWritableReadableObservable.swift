@@ -3,18 +3,18 @@ import Foundation
 import Kithara
 import Testing
 
-extension LabaIOSTraps {
-    @Test("LABA-420 repeat mode is writable, readable, and observable")
-    func laba420RepeatMode() async throws {
+extension IntegrationRegressionsIOS {
+    @Test("Repeat mode is writable, readable, and observable")
+    func repeatModeIsWritableReadableObservable() async throws {
         let cacheURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("laba-420-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("repeat-mode-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
             at: cacheURL,
             withIntermediateDirectories: true
         )
 
-        let player = KitharaPlayer(config: .init(cacheDir: cacheURL.path))
-        let events = Laba420RepeatEvents()
+        let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
+        let events = RepeatModeEvents()
         let cancellable = player.eventPublisher.sink { event in
             if case let .repeatModeChanged(mode) = event {
                 events.record(mode)
@@ -27,10 +27,10 @@ extension LabaIOSTraps {
         }
 
         player.repeatMode = .one
-        try await waitFor420Fact("repeatModeChanged(.one)") {
+        try await waitForRepeatModeFact("repeatModeChanged(.one)") {
             events.contains(.one)
         }
-        try await waitFor420Fact("repeatMode getter to report .one") {
+        try await waitForRepeatModeFact("repeatMode getter to report .one") {
             player.repeatMode == .one
         }
 
@@ -38,7 +38,7 @@ extension LabaIOSTraps {
         #expect(player.repeatMode == .one)
     }
 
-    private func waitFor420Fact(
+    private func waitForRepeatModeFact(
         _ description: String,
         condition: () -> Bool
     ) async throws {
@@ -46,14 +46,14 @@ extension LabaIOSTraps {
         let deadline = clock.now.advanced(by: .seconds(5))
         while !condition() {
             guard clock.now < deadline else {
-                throw Laba420FactTimeout(description)
+                throw RepeatModeFactTimeout(description)
             }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
     }
 }
 
-private final class Laba420RepeatEvents: @unchecked Sendable {
+private final class RepeatModeEvents: @unchecked Sendable {
     private let lock = NSLock()
     private var modes: [RepeatMode] = []
 
@@ -70,7 +70,7 @@ private final class Laba420RepeatEvents: @unchecked Sendable {
     }
 }
 
-private struct Laba420FactTimeout: Error, CustomStringConvertible {
+private struct RepeatModeFactTimeout: Error, CustomStringConvertible {
     let description: String
 
     init(_ description: String) {

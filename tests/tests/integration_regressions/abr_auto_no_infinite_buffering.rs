@@ -30,7 +30,7 @@ fn is_variant_fence(error: &std::io::Error) -> bool {
         .is_some_and(|source| source.downcast_ref::<VariantChangeError>().is_some())
 }
 
-/// LABA-429: toggling auto/manual ABR and bandwidth caps while the first
+/// Toggling auto/manual ABR and bandwidth caps while the first
 /// segment is buffering must not wedge the stream; a subsequent read must
 /// still produce bytes.
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
@@ -114,13 +114,13 @@ async fn abr_mode_storm_does_not_wedge_loading(temp_dir: TestTempDir, rt_cancel:
     let bytes = read
         .unwrap_or_else(|_| {
             panic!(
-                "LABA-429: the stream never yielded bytes within {READ_DEADLINE:?} after the \
+                "the stream never yielded bytes within {READ_DEADLINE:?} after the \
                  ABR mode and bitrate-cap storm — loading is wedged"
             )
         })
-        .unwrap_or_else(|error| panic!("LABA-429: read after the ABR storm failed: {error}"));
+        .unwrap_or_else(|error| panic!("read after the ABR storm failed: {error}"));
     assert!(
         bytes > 0,
-        "LABA-429: the stream reported end-of-input rather than audio after the ABR storm"
+        "the stream reported end-of-input rather than audio after the ABR storm"
     );
 }

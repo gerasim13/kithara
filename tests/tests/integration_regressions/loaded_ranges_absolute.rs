@@ -132,7 +132,7 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
         .expect("select progressive track");
     wait_for_loader_done_event(&mut rx, &queue, id, Duration::from_secs(30))
         .await
-        .unwrap_or_else(|error| panic!("LABA-430 precondition: {error}"));
+        .unwrap_or_else(|error| panic!("precondition: {error}"));
     queue.play();
 
     let mut transferred = 0;
@@ -155,19 +155,19 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
     .await
     .unwrap_or_else(|error| {
         panic!(
-            "LABA-430 precondition: {error}; only {transferred} of {body_len} bytes were \
+            "precondition: {error}; only {transferred} of {body_len} bytes were \
              transferred, so there is no downloaded-but-unplayed span to report"
         )
     });
 
     let view = wait_for_playing_settled_duration(&queue, Duration::from_secs(30))
         .await
-        .unwrap_or_else(|error| panic!("LABA-430 precondition: {error}"));
+        .unwrap_or_else(|error| panic!("precondition: {error}"));
     let duration = view.duration.unwrap_or_default();
     let buffered = view.buffered.unwrap_or(0.0);
     assert!(
         buffered >= duration * (MIN_BUFFERED_FRACTION_PERCENT as f64 / 100.0),
-        "LABA-430: the whole {body_len}-byte body is cached, but the buffered window reports \
+        "the whole {body_len}-byte body is cached, but the buffered window reports \
          only {buffered:.3}s of {duration:.3}s — there is no surface reporting what is \
          actually downloaded"
     );

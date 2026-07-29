@@ -3,24 +3,24 @@ import Foundation
 import Kithara
 import Testing
 
-extension LabaIOSTraps {
-    @Test("LABA-425 keeps commands alive after a track-switch storm")
-    func laba425CommandsSurviveSwitchStorm() async throws {
+extension IntegrationRegressionsIOS {
+    @Test("A track-switch storm does not swallow later commands")
+    func switchStormDoesNotSwallowCommands() async throws {
         let cacheURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("laba-425-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("switch-storm-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
             at: cacheURL,
             withIntermediateDirectories: true
         )
 
-        let fixture = try await throttled425Fixture()
+        let fixture = try await throttledStormFixture()
         let items = (0..<3).map { index in
             KitharaPlayerItem(
                 url: fixture.childURL("storm-\(index).mp3").absoluteString
             )
         }
-        let player = KitharaPlayer(config: .init(cacheDir: cacheURL.path))
-        let current = Laba425CurrentItem()
+        let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
+        let current = SwitchStormCurrentItem()
         let currentCancellable = player.currentItem.sink { item in
             current.record(item)
         }
@@ -35,11 +35,11 @@ extension LabaIOSTraps {
         try player.append(items[2])
         try #require(
             player.itemCount == items.count,
-            "LABA-425 precondition: the three-item queue was not constructed"
+            "precondition: the three-item queue was not constructed"
         )
 
         player.play()
-        try await waitFor425Fact("the first throttled track to start") {
+        try await waitForSwitchStormFact("the first throttled track to start") {
             current.matches(items[0]) && player.currentTime > 0.1
         }
 
@@ -53,17 +53,17 @@ extension LabaIOSTraps {
             do {
                 try player.selectItem(target, transition: .none)
             } catch {
-                throw Laba425CommandFailure(
+                throw SwitchStormCommandFailure(
                     "switch \(round) to item \(target.id) was rejected: \(error)"
                 )
             }
-            let switched = await reached425Fact(deadline: .seconds(30)) {
+            let switched = await reachedSwitchStormFact(deadline: .seconds(30)) {
                 current.matches(target)
             }
             #expect(
                 switched,
                 """
-                LABA-425: switch \(round) never made item \(target.id) current; \
+                switch \(round) never made item \(target.id) current; \
                 observed=\(current.itemID.map(String.init) ?? "nil")
                 """
             )
@@ -72,10 +72,10 @@ extension LabaIOSTraps {
             }
         }
 
-        try await waitFor425Fact("the final switched-to track to advance") {
+        try await waitForSwitchStormFact("the final switched-to track to advance") {
             player.currentTime > 0.1
         }
-        try await waitFor425Fact("the final track duration to settle") {
+        try await waitForSwitchStormFact("the final track duration to settle") {
             (player.duration ?? 0) >= 180
         }
 
@@ -83,7 +83,7 @@ extension LabaIOSTraps {
         try #require(
             player.currentTime < seekTarget - 1,
             """
-            LABA-425 precondition: the final track had already reached \
+            precondition: the final track had already reached \
             \(player.currentTime)s before the \(seekTarget)s seek
             """
         )
@@ -94,19 +94,19 @@ extension LabaIOSTraps {
         }
         #expect(
             accepted,
-            "LABA-425: seek was rejected after the track-switch storm"
+            "seek was rejected after the track-switch storm"
         )
         guard accepted else {
             return
         }
 
-        let landed = await reached425Fact(deadline: .seconds(30)) {
+        let landed = await reachedSwitchStormFact(deadline: .seconds(30)) {
             abs(player.currentTime - seekTarget) < 1
         }
         #expect(
             landed,
             """
-            LABA-425: seek to \(seekTarget)s did not land after the switch \
+            seek to \(seekTarget)s did not land after the switch \
             storm; current=\(player.currentTime)s
             """
         )
@@ -115,13 +115,13 @@ extension LabaIOSTraps {
         }
 
         player.pause()
-        let paused = await reached425Fact(deadline: .seconds(30)) {
+        let paused = await reachedSwitchStormFact(deadline: .seconds(30)) {
             player.currentRate == 0
         }
         #expect(
             paused,
             """
-            LABA-425: pause was swallowed after the switch storm; \
+            pause was swallowed after the switch storm; \
             rate=\(player.currentRate)
             """
         )
@@ -131,13 +131,13 @@ extension LabaIOSTraps {
 
         let pausedAt = player.currentTime
         player.play()
-        let playing = await reached425Fact(deadline: .seconds(30)) {
+        let playing = await reachedSwitchStormFact(deadline: .seconds(30)) {
             player.currentRate > 0
         }
         #expect(
             playing,
             """
-            LABA-425: play was swallowed after the switch storm; \
+            play was swallowed after the switch storm; \
             rate=\(player.currentRate)
             """
         )
@@ -145,13 +145,13 @@ extension LabaIOSTraps {
             return
         }
 
-        let carriedOn = await reached425Fact(deadline: .seconds(45)) {
+        let carriedOn = await reachedSwitchStormFact(deadline: .seconds(45)) {
             player.currentTime >= pausedAt + 1
         }
         #expect(
             carriedOn,
             """
-            LABA-425: playback reported a positive rate after the storm but \
+            playback reported a positive rate after the storm but \
             media time never advanced past \(pausedAt)s
             """
         )
@@ -160,7 +160,7 @@ extension LabaIOSTraps {
     /// Throttled so the switch storm lands while transfers are still in
     /// flight, which is the state the report describes. The fixture is named
     /// rather than uploaded — a 3 MB body exceeds the server's request limit.
-    private func throttled425Fixture() async throws -> TestServerFixture.BehaviorHandle {
+    private func throttledStormFixture() async throws -> TestServerFixture.BehaviorHandle {
         try await TestServerFixture.registerBehavior(
             .init(
                 content: .asset(name: "test.mp3"),
@@ -169,7 +169,7 @@ extension LabaIOSTraps {
         )
     }
 
-    private func reached425Fact(
+    private func reachedSwitchStormFact(
         deadline duration: Duration,
         condition: () -> Bool
     ) async -> Bool {
@@ -184,7 +184,7 @@ extension LabaIOSTraps {
         return condition()
     }
 
-    private func waitFor425Fact(
+    private func waitForSwitchStormFact(
         _ description: String,
         condition: () -> Bool
     ) async throws {
@@ -192,14 +192,14 @@ extension LabaIOSTraps {
         let deadline = clock.now.advanced(by: .seconds(60))
         while !condition() {
             guard clock.now < deadline else {
-                throw Laba425FactTimeout(description)
+                throw SwitchStormFactTimeout(description)
             }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
     }
 }
 
-private final class Laba425CurrentItem: @unchecked Sendable {
+private final class SwitchStormCurrentItem: @unchecked Sendable {
     private let lock = NSLock()
     private var currentID: Int64?
 
@@ -220,15 +220,15 @@ private final class Laba425CurrentItem: @unchecked Sendable {
     }
 }
 
-private struct Laba425CommandFailure: Error, CustomStringConvertible {
+private struct SwitchStormCommandFailure: Error, CustomStringConvertible {
     let description: String
 
     init(_ description: String) {
-        self.description = "LABA-425: \(description)"
+        self.description = description
     }
 }
 
-private struct Laba425FactTimeout: Error, CustomStringConvertible {
+private struct SwitchStormFactTimeout: Error, CustomStringConvertible {
     let description: String
 
     init(_ description: String) {

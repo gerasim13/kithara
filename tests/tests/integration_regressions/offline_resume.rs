@@ -21,9 +21,10 @@ use kithara_integration_tests::{
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
 
-/// LABA-419 does not reproduce in the core: with connectivity restored the
-/// engine resumes on its own. This stays as the contract that keeps it that
-/// way, and as the alibi placing the reported bug above the Rust layer.
+/// Playback failing to resume once connectivity returns does not reproduce in
+/// the core: with connectivity restored the engine resumes on its own. This
+/// stays as the contract that keeps it that way, and as the alibi placing the
+/// reported bug above the Rust layer.
 /// Verified to have teeth — leaving the server offline pins playback at the
 /// starvation point instead of advancing.
 ///
@@ -106,7 +107,7 @@ async fn playback_resumes_after_network_returns(temp_dir: TestTempDir) {
         .expect("select HLS track");
     wait_for_loader_done_event(&mut rx, &queue, id, Duration::from_secs(30))
         .await
-        .unwrap_or_else(|error| panic!("LABA-419 precondition: {error}"));
+        .unwrap_or_else(|error| panic!("precondition: {error}"));
     queue.play();
 
     let before_outage = wait_for_position_event(
@@ -116,7 +117,7 @@ async fn playback_resumes_after_network_returns(temp_dir: TestTempDir) {
         Duration::from_secs(30),
     )
     .await
-    .unwrap_or_else(|error| panic!("LABA-419 precondition: {error}"));
+    .unwrap_or_else(|error| panic!("precondition: {error}"));
 
     server.set_network_online(false);
     let _network_restore = NetworkRestore(&server);
@@ -138,7 +139,7 @@ async fn playback_resumes_after_network_returns(temp_dir: TestTempDir) {
     .await
     .unwrap_or_else(|error| {
         panic!(
-            "LABA-419 precondition: {error}; the look-ahead window never needed a further \
+            "precondition: {error}; the look-ahead window never needed a further \
              segment, so no outage was ever observed"
         )
     });
@@ -162,7 +163,7 @@ async fn playback_resumes_after_network_returns(temp_dir: TestTempDir) {
     .await
     .unwrap_or_else(|error| {
         panic!(
-            "LABA-419 precondition: {error}; the buffer never ran dry while the network was \
+            "precondition: {error}; the buffer never ran dry while the network was \
              down, so there was nothing for the recovery to resume from"
         )
     });
@@ -174,13 +175,13 @@ async fn playback_resumes_after_network_returns(temp_dir: TestTempDir) {
             .await
             .unwrap_or_else(|error| {
                 panic!(
-                    "LABA-419: connectivity returned after starving at {starved_at:.3}s (outage began at {before_outage:.3}s), but \
+                    "connectivity returned after starving at {starved_at:.3}s (outage began at {before_outage:.3}s), but \
                  playback never reached {resume_target:.3}s: {error}"
                 )
             });
     assert!(
         resumed_at >= resume_target,
-        "LABA-419: playback stayed at {resumed_at:.3}s after the network returned \
+        "playback stayed at {resumed_at:.3}s after the network returned \
          (starved at {starved_at:.3}s, outage began at {before_outage:.3}s)"
     );
 

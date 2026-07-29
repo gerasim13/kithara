@@ -23,7 +23,7 @@ fn make_resource(duration_secs: f64) -> Resource {
     ))
 }
 
-/// LABA-418: changing the rate during playback must immediately change
+/// Changing the rate during playback must immediately change
 /// source consumption without a pause/play cycle.
 ///
 /// This compares equal-sized offline pulls: at twice the rate, the same source
@@ -35,13 +35,13 @@ fn rate_change_while_playing_changes_consumption() {
 
     assert!(
         baseline < MEASURE_BLOCKS,
-        "LABA-418: the rate-1.0 baseline must drain inside the measured window, \
+        "the rate-1.0 baseline must drain inside the measured window, \
          got {baseline} of {MEASURE_BLOCKS} blocks — the comparison below would \
          compare two saturated caps"
     );
     assert!(
         accelerated < baseline,
-        "LABA-418: at rate {FAST_RATE} the source must drain in fewer blocks \
+        "at rate {FAST_RATE} the source must drain in fewer blocks \
          than at rate 1.0, got {accelerated} vs baseline {baseline}"
     );
 }

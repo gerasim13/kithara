@@ -3,25 +3,25 @@ import Foundation
 import Kithara
 import Testing
 
-extension LabaIOSTraps {
+extension IntegrationRegressionsIOS {
     /// The lane's control, mirroring `lane_smoke.rs` on the Rust side: it
     /// distinguishes "the framework cannot play at all" from "this trap's bug
     /// reproduced". Several traps assert that playback keeps advancing after
     /// some event; none of those verdicts mean anything while this one is red.
-    @Test("LABA control: playback keeps advancing for ten seconds")
-    func labaControlSustainedPlayback() async throws {
+    @Test("Playback keeps advancing over a sustained window")
+    func playbackAdvancesOverSustainedWindow() async throws {
         let audioSession = AVAudioSession.sharedInstance()
         try audioSession.setCategory(.playback)
         try audioSession.setActive(true)
 
         let cacheURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("laba-control-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("sustained-playback-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
             at: cacheURL,
             withIntermediateDirectories: true
         )
 
-        let player = KitharaPlayer(config: .init(cacheDir: cacheURL.path))
+        let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
         let item = KitharaPlayerItem(
             url: try TestServerFixture.asset("test.mp3").absoluteString
         )
@@ -50,7 +50,7 @@ extension LabaIOSTraps {
         #expect(
             reachedTarget,
             """
-            LABA control: playback stalled — media time moved from \
+            playback stalled — media time moved from \
             \(startPosition)s to \(player.currentTime)s over \(elapsed) of \
             wall clock. Every "playback did not advance" verdict in this lane \
             is unattributable while this is red.
@@ -81,14 +81,14 @@ extension LabaIOSTraps {
         let deadline = clock.now.advanced(by: .seconds(30))
         while !condition() {
             guard clock.now < deadline else {
-                throw LabaControlTimeout(description)
+                throw SustainedPlaybackTimeout(description)
             }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
     }
 }
 
-private struct LabaControlTimeout: Error, CustomStringConvertible {
+private struct SustainedPlaybackTimeout: Error, CustomStringConvertible {
     let description: String
 
     init(_ description: String) {

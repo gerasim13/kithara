@@ -4,9 +4,9 @@ import Foundation
 import Kithara
 import Testing
 
-extension LabaIOSTraps {
-    @Test("LABA-419 resumes playback after connectivity returns")
-    func laba419OfflineResume() async throws {
+extension IntegrationRegressionsIOS {
+    @Test("Playback resumes after connectivity returns")
+    func playbackResumesAfterConnectivityReturns() async throws {
         try await TestServerFixture.setNetwork(online: true)
         defer {
             Task {
@@ -19,17 +19,17 @@ extension LabaIOSTraps {
         try audioSession.setActive(true)
 
         let cacheURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("laba-419-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("connectivity-resume-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
             at: cacheURL,
             withIntermediateDirectories: true
         )
 
-        let player = KitharaPlayer(config: .init(cacheDir: cacheURL.path))
+        let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
         let item = KitharaPlayerItem(
             url: try TestServerFixture.asset("hls/master.m3u8").absoluteString
         )
-        let signals = Laba419Signals()
+        let signals = ResumeSignals()
         let stallCancellable = item.didStall.sink {
             signals.recordStall()
         }
@@ -41,41 +41,41 @@ extension LabaIOSTraps {
 
         try player.insert(item)
         player.play()
-        try await waitFor419Fact("HLS playback to advance before the outage") {
+        try await waitForResumeFact("HLS playback to advance before the outage") {
             player.currentTime > 1
         }
-        try await waitFor419Fact("the long HLS duration to settle") {
+        try await waitForResumeFact("the long HLS duration to settle") {
             (player.duration ?? 0) >= 180
         }
 
         let outageBeganAt = player.currentTime
         try await TestServerFixture.setNetwork(online: false)
-        let starvation = await observe419Starvation(player)
+        let starvation = await observeStarvation(player)
         try await TestServerFixture.setNetwork(online: true)
 
         let starvedAt = try #require(
             starvation,
             """
-            LABA-419 precondition: playback never stopped advancing while the \
+            precondition: playback never stopped advancing while the \
             server was offline; outage began at \(outageBeganAt)s, \
             didStall=\(signals.didStall)
             """
         )
         let resumeTarget = starvedAt + 1
-        let resumed = await reached419Fact(deadline: .seconds(45)) {
+        let resumed = await reachedResumeFact(deadline: .seconds(45)) {
             player.currentTime >= resumeTarget
         }
         #expect(
             resumed,
             """
-            LABA-419: connectivity returned after playback starved at \
+            connectivity returned after playback starved at \
             \(starvedAt)s, but media time never reached \(resumeTarget)s; \
             current=\(player.currentTime)s
             """
         )
     }
 
-    private func observe419Starvation(_ player: KitharaPlayer) async -> TimeInterval? {
+    private func observeStarvation(_ player: KitharaPlayer) async -> TimeInterval? {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(75))
         var lastPosition = player.currentTime
@@ -94,7 +94,7 @@ extension LabaIOSTraps {
         return nil
     }
 
-    private func reached419Fact(
+    private func reachedResumeFact(
         deadline duration: Duration,
         condition: () -> Bool
     ) async -> Bool {
@@ -109,7 +109,7 @@ extension LabaIOSTraps {
         return condition()
     }
 
-    private func waitFor419Fact(
+    private func waitForResumeFact(
         _ description: String,
         condition: () -> Bool
     ) async throws {
@@ -117,14 +117,14 @@ extension LabaIOSTraps {
         let deadline = clock.now.advanced(by: .seconds(45))
         while !condition() {
             guard clock.now < deadline else {
-                throw Laba419FactTimeout(description)
+                throw ResumeFactTimeout(description)
             }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
     }
 }
 
-private final class Laba419Signals: @unchecked Sendable {
+private final class ResumeSignals: @unchecked Sendable {
     private let lock = NSLock()
     private var stalled = false
 
@@ -141,7 +141,7 @@ private final class Laba419Signals: @unchecked Sendable {
     }
 }
 
-private struct Laba419FactTimeout: Error, CustomStringConvertible {
+private struct ResumeFactTimeout: Error, CustomStringConvertible {
     let description: String
 
     init(_ description: String) {

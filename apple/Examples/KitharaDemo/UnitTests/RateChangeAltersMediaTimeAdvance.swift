@@ -2,17 +2,17 @@ import Foundation
 import Kithara
 import Testing
 
-extension LabaIOSTraps {
-    @Test("LABA-418 applies a playing-rate change during playback")
-    func laba418RateAppliesWhilePlaying() async throws {
+extension IntegrationRegressionsIOS {
+    @Test("A rate change during playback changes how fast media time advances")
+    func rateChangeAltersMediaTimeAdvance() async throws {
         let cacheURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("laba-418-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("rate-change-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
             at: cacheURL,
             withIntermediateDirectories: true
         )
 
-        let player = KitharaPlayer(config: .init(cacheDir: cacheURL.path))
+        let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
         let item = KitharaPlayerItem(
             url: try TestServerFixture.asset("test.mp3").absoluteString
         )
@@ -24,15 +24,15 @@ extension LabaIOSTraps {
         try player.insert(item)
         player.playingRate = 1
         player.play()
-        try await waitFor418Fact("fixture playback to advance at rate 1.0") {
+        try await waitForRateFact("fixture playback to advance at rate 1.0") {
             player.currentTime > 0.1
                 && abs(player.currentRate - 1) < 0.05
         }
 
-        let normalAdvance = try await measure418Advance(player)
+        let normalAdvance = try await measureMediaTimeAdvance(player)
         try #require(
             normalAdvance > 0,
-            "LABA-418 precondition: media time did not advance during the rate-1.0 window"
+            "precondition: media time did not advance during the rate-1.0 window"
         )
 
         // Deliberately not waiting on `currentRate` here: the live rate and the
@@ -43,29 +43,29 @@ extension LabaIOSTraps {
         try #require(
             abs(player.playingRate - 2) < 0.05,
             """
-            LABA-418 precondition: the player did not accept a playing rate of \
+            precondition: the player did not accept a playing rate of \
             2.0; it reports \(player.playingRate)
             """
         )
-        let fastAdvance = try await measure418Advance(player)
+        let fastAdvance = try await measureMediaTimeAdvance(player)
 
         #expect(
             fastAdvance >= normalAdvance * 1.5,
             """
-            LABA-418: changing playingRate from 1.0 to 2.0 while playing \
+            changing playingRate from 1.0 to 2.0 while playing \
             advanced media time by only \(fastAdvance)s versus \
             \(normalAdvance)s over equal wall-clock windows
             """
         )
     }
 
-    private func measure418Advance(_ player: KitharaPlayer) async throws -> TimeInterval {
+    private func measureMediaTimeAdvance(_ player: KitharaPlayer) async throws -> TimeInterval {
         let start = player.currentTime
         try await Task.sleep(nanoseconds: 2_000_000_000)
         return player.currentTime - start
     }
 
-    private func waitFor418Fact(
+    private func waitForRateFact(
         _ description: String,
         condition: () -> Bool
     ) async throws {
@@ -73,14 +73,14 @@ extension LabaIOSTraps {
         let deadline = clock.now.advanced(by: .seconds(30))
         while !condition() {
             guard clock.now < deadline else {
-                throw Laba418FactTimeout(description)
+                throw RateFactTimeout(description)
             }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
     }
 }
 
-private struct Laba418FactTimeout: Error, CustomStringConvertible {
+private struct RateFactTimeout: Error, CustomStringConvertible {
     let description: String
 
     init(_ description: String) {

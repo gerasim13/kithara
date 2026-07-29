@@ -145,14 +145,14 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
     // when the storm starts.
     wait_for_loader_done_event(&mut status_rx, &queue, ids[0], Duration::from_secs(60))
         .await
-        .unwrap_or_else(|error| panic!("LABA-425 precondition: first track: {error}"));
+        .unwrap_or_else(|error| panic!("precondition: first track: {error}"));
     queue.play();
 
     let mut active_gets = HashSet::new();
     drain_active_gets(&mut probe_rx, &mut active_gets);
     assert!(
         !active_gets.is_empty(),
-        "LABA-425 precondition: no throttled GET was in flight when the switch storm began; \
+        "precondition: no throttled GET was in flight when the switch storm began; \
          the reported scenario did not happen"
     );
 
@@ -160,7 +160,7 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
         let target = ids[round % ids.len()];
         queue
             .select(target, Transition::None)
-            .unwrap_or_else(|error| panic!("LABA-425: switch {round} was rejected: {error}"));
+            .unwrap_or_else(|error| panic!("switch {round} was rejected: {error}"));
         if queue.current().is_some_and(|entry| entry.id == target) {
             continue;
         }
@@ -177,13 +177,13 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
         )
         .await
         .unwrap_or_else(|error| {
-            panic!("LABA-425: switch {round} never made track {target:?} current: {error}")
+            panic!("switch {round} never made track {target:?} current: {error}")
         });
     }
 
     queue
         .seek(SEEK_TARGET_SECS)
-        .unwrap_or_else(|error| panic!("LABA-425: final seek failed: {error}"));
+        .unwrap_or_else(|error| panic!("final seek failed: {error}"));
     let mut landed = 0.0;
     wait_for_event(
         &mut status_rx,
@@ -199,25 +199,21 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
     )
     .await
     .unwrap_or_else(|error| {
-        panic!("LABA-425: seek to {SEEK_TARGET_SECS:.1}s never completed after the storm: {error}")
+        panic!("seek to {SEEK_TARGET_SECS:.1}s never completed after the storm: {error}")
     });
     assert!(
         (landed - SEEK_TARGET_SECS).abs() < SEEK_TOLERANCE_SECS,
-        "LABA-425: seek to {SEEK_TARGET_SECS:.1}s landed at {landed:.3}s after the switch storm"
+        "seek to {SEEK_TARGET_SECS:.1}s landed at {landed:.3}s after the switch storm"
     );
 
     queue.pause();
     wait_for_playing(&queue, false, Duration::from_secs(30))
         .await
-        .unwrap_or_else(|error| {
-            panic!("LABA-425: pause was swallowed after the switch storm: {error}")
-        });
+        .unwrap_or_else(|error| panic!("pause was swallowed after the switch storm: {error}"));
     queue.play();
     wait_for_playing(&queue, true, Duration::from_secs(30))
         .await
-        .unwrap_or_else(|error| {
-            panic!("LABA-425: play was swallowed after the switch storm: {error}")
-        });
+        .unwrap_or_else(|error| panic!("play was swallowed after the switch storm: {error}"));
 
     let resume_target = landed + MIN_RESUME_PROGRESS_SECS;
     wait_for_event(
@@ -234,7 +230,7 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
     .await
     .unwrap_or_else(|error| {
         panic!(
-            "LABA-425: the queue reports playing after the storm, but the sink never carried \
+            "the queue reports playing after the storm, but the sink never carried \
              past {resume_target:.3}s from the seek landing at {landed:.3}s: {error}"
         )
     });

@@ -164,7 +164,7 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
     .await;
     assert!(
         handles[0].request_count() > 0 && first.saw_first_byte && first.completed_bytes > 0,
-        "LABA-413 precondition: first throttled transfer did not complete with bytes \
+        "precondition: first throttled transfer did not complete with bytes \
          (requests={}, first_byte={}, bytes={})",
         handles[0].request_count(),
         first.saw_first_byte,
@@ -172,14 +172,14 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
     );
     let first_commit = first.committed_len.unwrap_or_else(|| {
         panic!(
-            "LABA-413: first transfer completed {} bytes but no AssetEvent::Committed arrived",
+            "first transfer completed {} bytes but no AssetEvent::Committed arrived",
             first.completed_bytes
         )
     });
     let after_first = dir_size_bytes(temp_dir.path());
     assert!(
         after_first > before,
-        "LABA-413: first asset committed {first_commit} bytes but cache root did not grow \
+        "first asset committed {first_commit} bytes but cache root did not grow \
          ({before} -> {after_first} bytes)"
     );
 
@@ -194,7 +194,7 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
     .await;
     assert!(
         handles[1].request_count() > 0 && second.saw_first_byte && second.completed_bytes > 0,
-        "LABA-413 precondition: second throttled transfer did not complete with bytes \
+        "precondition: second throttled transfer did not complete with bytes \
          (requests={}, first_byte={}, bytes={})",
         handles[1].request_count(),
         second.saw_first_byte,
@@ -202,14 +202,14 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
     );
     let second_commit = second.committed_len.unwrap_or_else(|| {
         panic!(
-            "LABA-413: second transfer completed {} bytes but no AssetEvent::Committed arrived",
+            "second transfer completed {} bytes but no AssetEvent::Committed arrived",
             second.completed_bytes
         )
     });
     let after_second = dir_size_bytes(temp_dir.path());
     assert!(
         after_second > after_first,
-        "LABA-413: second asset committed {second_commit} bytes but cache did not grow \
+        "second asset committed {second_commit} bytes but cache did not grow \
          ({after_first} -> {after_second} bytes)"
     );
 

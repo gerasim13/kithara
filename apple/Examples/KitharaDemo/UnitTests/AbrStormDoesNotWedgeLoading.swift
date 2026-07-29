@@ -3,21 +3,21 @@ import Foundation
 import Kithara
 import Testing
 
-extension LabaIOSTraps {
-    @Test("LABA-429 does not wedge loading after an ABR mode storm")
-    func laba429AbrStormNoInfiniteBuffering() async throws {
+extension IntegrationRegressionsIOS {
+    @Test("An ABR mode storm does not wedge loading")
+    func abrStormDoesNotWedgeLoading() async throws {
         let cacheURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("laba-429-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("abr-storm-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
             at: cacheURL,
             withIntermediateDirectories: true
         )
 
-        let player = KitharaPlayer(config: .init(cacheDir: cacheURL.path))
+        let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
         let item = KitharaPlayerItem(
-            url: try await buffered429MasterURL().absoluteString
+            url: try await throttledAbrMasterURL().absoluteString
         )
-        let facts = Laba429Facts()
+        let facts = AbrFacts()
         let variantsCancellable = item.variantsDiscovered.sink { variants in
             facts.record(variants)
         }
@@ -33,7 +33,7 @@ extension LabaIOSTraps {
 
         try player.insert(item)
         player.play()
-        try await waitFor429Fact("the four HLS variants to be discovered") {
+        try await waitForAbrFact("the four HLS variants to be discovered") {
             facts.variants.count == 4
         }
 
@@ -41,7 +41,7 @@ extension LabaIOSTraps {
         try #require(
             !facts.isReady && player.currentTime <= 0.1,
             """
-            LABA-429 precondition: the throttled media playlist finished \
+            precondition: the throttled media playlist finished \
             loading before the ABR storm; ready=\(facts.isReady), \
             current=\(player.currentTime)s
             """
@@ -57,13 +57,13 @@ extension LabaIOSTraps {
         }
         player.setAbrMode(.auto)
 
-        let advanced = await reached429Fact(deadline: .seconds(60)) {
+        let advanced = await reachedAbrFact(deadline: .seconds(60)) {
             player.currentTime > 0.5
         }
         #expect(
             advanced,
             """
-            LABA-429: playback never advanced after the ABR auto/manual storm \
+            playback never advanced after the ABR auto/manual storm \
             landed during HLS loading; current=\(player.currentTime)s, \
             rate=\(player.currentRate), ready=\(facts.isReady)
             """
@@ -71,32 +71,32 @@ extension LabaIOSTraps {
         guard advanced else {
             return
         }
-        try await waitFor429Fact("the long HLS duration to settle after playback advanced") {
+        try await waitForAbrFact("the long HLS duration to settle after playback advanced") {
             (player.duration ?? 0) >= 180
         }
     }
 
-    private func buffered429MasterURL() async throws -> URL {
+    private func throttledAbrMasterURL() async throws -> URL {
         let specs = [
-            Laba429VariantSpec(
+            AbrVariantSpec(
                 bandwidth: 66_005,
                 codecs: "mp4a.40.2",
                 playlist: "index-slq-a1.m3u8",
                 initialization: "init-slq-a1.mp4"
             ),
-            Laba429VariantSpec(
+            AbrVariantSpec(
                 bandwidth: 134_107,
                 codecs: "mp4a.40.2",
                 playlist: "index-smq-a1.m3u8",
                 initialization: "init-smq-a1.mp4"
             ),
-            Laba429VariantSpec(
+            AbrVariantSpec(
                 bandwidth: 269_930,
                 codecs: "mp4a.40.2",
                 playlist: "index-shq-a1.m3u8",
                 initialization: "init-shq-a1.mp4"
             ),
-            Laba429VariantSpec(
+            AbrVariantSpec(
                 bandwidth: 988_758,
                 codecs: "fLaC",
                 playlist: "index-slossless-a1.m3u8",
@@ -107,8 +107,8 @@ extension LabaIOSTraps {
         var playlistURLs: [URL] = []
         for spec in specs {
             let sourceURL = try TestServerFixture.asset("hls/\(spec.playlist)")
-            let playlist = try await text429(at: sourceURL)
-            let rewritten = try rewrite429Playlist(playlist, spec: spec)
+            let playlist = try await abrPlaylistText(at: sourceURL)
+            let rewritten = try rewriteAbrPlaylist(playlist, spec: spec)
             let handle = try await TestServerFixture.registerBehavior(
                 .init(
                     content: .bytes(
@@ -142,28 +142,28 @@ extension LabaIOSTraps {
         return masterHandle.childURL("master.m3u8")
     }
 
-    private func text429(at url: URL) async throws -> String {
+    private func abrPlaylistText(at url: URL) async throws -> String {
         let (data, response) = try await URLSession.shared.data(from: url)
         let http = try #require(
             response as? HTTPURLResponse,
-            "LABA-429 precondition: \(url.lastPathComponent) returned a non-HTTP response"
+            "precondition: \(url.lastPathComponent) returned a non-HTTP response"
         )
         try #require(
             http.statusCode == 200,
             """
-            LABA-429 precondition: \(url.lastPathComponent) returned HTTP \
+            precondition: \(url.lastPathComponent) returned HTTP \
             \(http.statusCode)
             """
         )
         return try #require(
             String(data: data, encoding: .utf8),
-            "LABA-429 precondition: \(url.lastPathComponent) was not UTF-8"
+            "precondition: \(url.lastPathComponent) was not UTF-8"
         )
     }
 
-    private func rewrite429Playlist(
+    private func rewriteAbrPlaylist(
         _ playlist: String,
-        spec: Laba429VariantSpec
+        spec: AbrVariantSpec
     ) throws -> String {
         let initializationURL = try TestServerFixture.asset(
             "hls/\(spec.initialization)"
@@ -193,7 +193,7 @@ extension LabaIOSTraps {
         return rewritten.joined(separator: "\n")
     }
 
-    private func reached429Fact(
+    private func reachedAbrFact(
         deadline duration: Duration,
         condition: () -> Bool
     ) async -> Bool {
@@ -208,7 +208,7 @@ extension LabaIOSTraps {
         return condition()
     }
 
-    private func waitFor429Fact(
+    private func waitForAbrFact(
         _ description: String,
         condition: () -> Bool
     ) async throws {
@@ -216,21 +216,21 @@ extension LabaIOSTraps {
         let deadline = clock.now.advanced(by: .seconds(30))
         while !condition() {
             guard clock.now < deadline else {
-                throw Laba429FactTimeout(description)
+                throw AbrFactTimeout(description)
             }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
     }
 }
 
-private struct Laba429VariantSpec {
+private struct AbrVariantSpec {
     let bandwidth: Int
     let codecs: String
     let playlist: String
     let initialization: String
 }
 
-private final class Laba429Facts: @unchecked Sendable {
+private final class AbrFacts: @unchecked Sendable {
     private let lock = NSLock()
     private var discovered: [Variant] = []
     private var ready = false
@@ -260,7 +260,7 @@ private final class Laba429Facts: @unchecked Sendable {
     }
 }
 
-private struct Laba429FactTimeout: Error, CustomStringConvertible {
+private struct AbrFactTimeout: Error, CustomStringConvertible {
     let description: String
 
     init(_ description: String) {

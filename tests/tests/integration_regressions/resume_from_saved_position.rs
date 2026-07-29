@@ -99,7 +99,7 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
         Duration::from_secs(30),
     )
     .await
-    .unwrap_or_else(|error| panic!("LABA-408 precondition: {error}"));
+    .unwrap_or_else(|error| panic!("precondition: {error}"));
 
     // Without this the first session never advances and no position worth
     // saving is ever reached.
@@ -112,10 +112,10 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
         Duration::from_secs(15),
     )
     .await
-    .unwrap_or_else(|error| panic!("LABA-408 precondition: {error}"));
+    .unwrap_or_else(|error| panic!("precondition: {error}"));
     assert!(
         played >= SAVE_AFTER_SECS,
-        "LABA-408 precondition: playback reached only {played:.2}s"
+        "precondition: playback reached only {played:.2}s"
     );
     first_queue.pause();
     let saved = played;
@@ -140,13 +140,13 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
         Duration::from_secs(30),
     )
     .await
-    .unwrap_or_else(|error| panic!("LABA-408 precondition: {error}"));
+    .unwrap_or_else(|error| panic!("precondition: {error}"));
     // The app restores the saved position on a freshly loaded, not-yet-playing
     // track and only then starts playback.
     let outcome = second_queue.seek(saved);
     assert!(
         outcome.is_ok(),
-        "LABA-408 precondition: seek to saved position {saved:.2}s failed: {:?}",
+        "precondition: seek to saved position {saved:.2}s failed: {:?}",
         outcome.err()
     );
     // `SeekComplete` is published by the decoder once it reads at the new
@@ -165,7 +165,7 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
         Duration::from_secs(30),
     )
     .await
-    .unwrap_or_else(|error| panic!("LABA-408 precondition: {error}"));
+    .unwrap_or_else(|error| panic!("precondition: {error}"));
 
     let mut resumed_at = None;
     wait_for_event(
@@ -181,11 +181,11 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
         Duration::from_secs(10),
     )
     .await
-    .unwrap_or_else(|error| panic!("LABA-408: {error}"));
+    .unwrap_or_else(|error| panic!("playback did not resume from the saved position: {error}"));
     let resumed_at = resumed_at.expect("matched playback progress carries a position");
     assert!(
         resumed_at >= saved - 1.0,
-        "LABA-408: playback fell back to {resumed_at:.2}s after seeking to \
+        "playback fell back to {resumed_at:.2}s after seeking to \
          saved position {saved:.2}s"
     );
 

@@ -182,8 +182,8 @@ prefix_args = [
 default_features = ["e2e", "kithara/resample-glide"]
 default_flash = false
 
-# LABA-* regression traps are red by design and stay outside the main gate.
-[test.lanes.laba]
+# Integration regression tests are red by design and stay outside the main gate.
+[test.lanes.integration-regressions]
 program = "cargo"
 prefix_args = [
   "nextest",
@@ -193,9 +193,9 @@ prefix_args = [
   "--cargo-profile",
   "test-release",
   "--test",
-  "suite_laba",
+  "suite_integration_regressions",
 ]
-default_features = ["laba"]
+default_features = ["integration-regressions"]
 default_flash = true
 
 [test.lanes.selenium]

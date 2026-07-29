@@ -3,28 +3,28 @@ import Foundation
 import Kithara
 import Testing
 
-extension LabaIOSTraps {
-    @Test("LABA-430 loadedRanges covers a fully downloaded fixture")
-    func laba430LoadedRanges() async throws {
+extension IntegrationRegressionsIOS {
+    @Test("Loaded ranges cover a fully downloaded fixture")
+    func loadedRangesCoverDownloadedFixture() async throws {
         let fixtureURL = try TestServerFixture.asset("test.mp3")
         let bodyLength = try await fixtureContentLength(at: fixtureURL)
         try #require(
             bodyLength > 0,
-            "LABA-430 precondition: fixture Content-Length is missing"
+            "precondition: fixture Content-Length is missing"
         )
 
         let cacheURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("laba-430-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("loaded-ranges-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
             at: cacheURL,
             withIntermediateDirectories: true
         )
 
         let player = KitharaPlayer(
-            config: .init(cacheDir: cacheURL.path)
+            config: .init(store: AssetStore(root: cacheURL.path))
         )
         let item = KitharaPlayerItem(url: fixtureURL.absoluteString)
-        let ranges = Laba430Ranges()
+        let ranges = LoadedRangesProbe()
         let cancellable = item.loadedRanges.sink { value in
             ranges.replace(with: value)
         }
@@ -39,29 +39,29 @@ extension LabaIOSTraps {
         // Advance first: `item.durationSec` stays 0 until the item's own
         // resource reports one, so the player-side duration is the value that
         // actually settles here.
-        try await waitFor430Fact("fixture playback to advance") {
+        try await waitForLoadedRangesFact("fixture playback to advance") {
             player.currentTime > 0.1
         }
-        try await waitFor430Fact("the fixture duration to settle") {
+        try await waitForLoadedRangesFact("the fixture duration to settle") {
             (player.duration ?? 0) >= 180
         }
-        try await waitFor430Fact("the complete fixture body to reach Kithara's cache") {
+        try await waitForLoadedRangesFact("the complete fixture body to reach Kithara's cache") {
             cacheContainsFile(ofSize: bodyLength, under: cacheURL)
         }
-        try await waitFor430Fact("loadedRanges to publish a non-empty range") {
+        try await waitForLoadedRangesFact("loadedRanges to publish a non-empty range") {
             ranges.maximumEnd > 0
         }
         player.pause()
 
         let duration = try #require(
             player.duration,
-            "LABA-430 precondition: duration is unknown after the body downloaded"
+            "precondition: duration is unknown after the body downloaded"
         )
         let position = player.currentTime
         try #require(
             position < duration * 0.25,
             """
-            LABA-430 precondition: playback had already consumed \(position)s \
+            precondition: playback had already consumed \(position)s \
             of \(duration)s, leaving no useful downloaded-but-unplayed span
             """
         )
@@ -70,7 +70,7 @@ extension LabaIOSTraps {
         #expect(
             loadedEnd >= duration * 0.9,
             """
-            LABA-430: a \(bodyLength)-byte fixture is fully cached, but \
+            a \(bodyLength)-byte fixture is fully cached, but \
             loadedRanges covers only \(loadedEnd)s of \(duration)s at \
             playback position \(position)s
             """
@@ -83,11 +83,11 @@ extension LabaIOSTraps {
         let (_, response) = try await URLSession.shared.data(for: request)
         let http = try #require(
             response as? HTTPURLResponse,
-            "LABA-430 precondition: fixture HEAD returned a non-HTTP response"
+            "precondition: fixture HEAD returned a non-HTTP response"
         )
         try #require(
             (200..<300).contains(http.statusCode),
-            "LABA-430 precondition: fixture HEAD returned HTTP \(http.statusCode)"
+            "precondition: fixture HEAD returned HTTP \(http.statusCode)"
         )
         return UInt64(max(0, http.expectedContentLength))
     }
@@ -121,7 +121,7 @@ extension LabaIOSTraps {
         return false
     }
 
-    private func waitFor430Fact(
+    private func waitForLoadedRangesFact(
         _ description: String,
         condition: () -> Bool
     ) async throws {
@@ -129,14 +129,14 @@ extension LabaIOSTraps {
         let deadline = clock.now.advanced(by: .seconds(45))
         while !condition() {
             guard clock.now < deadline else {
-                throw Laba430FactTimeout(description)
+                throw LoadedRangesFactTimeout(description)
             }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
     }
 }
 
-private final class Laba430Ranges: @unchecked Sendable {
+private final class LoadedRangesProbe: @unchecked Sendable {
     private let lock = NSLock()
     private var ranges: [ItemLoadedRange] = []
 
@@ -153,7 +153,7 @@ private final class Laba430Ranges: @unchecked Sendable {
     }
 }
 
-private struct Laba430FactTimeout: Error, CustomStringConvertible {
+private struct LoadedRangesFactTimeout: Error, CustomStringConvertible {
     let description: String
 
     init(_ description: String) {

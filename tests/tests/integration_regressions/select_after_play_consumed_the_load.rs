@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-//! LABA-425. `Queue::play` loads the current item through the player, which
+//! `Queue::play` loads the current item through the player, which
 //! starts the audio engine first — 130-400 ms against a real output device.
 //! A track load completing inside that window fills the queue slot and is
 //! picked up by the same call, so the consumption has to be read back from
@@ -146,14 +146,14 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
         Duration::from_secs(60),
     )
     .await
-    .unwrap_or_else(|error| panic!("LABA-425 precondition: {error}"));
+    .unwrap_or_else(|error| panic!("precondition: {error}"));
 
     release_tx.send(()).expect("gate is still parked");
     playing.await.expect("play must join");
 
     assert!(
         !player.item_has_resource(0),
-        "LABA-425 precondition: play did not consume the load that landed inside the engine \
+        "precondition: play did not consume the load that landed inside the engine \
          start, so the reported window was never opened"
     );
 
@@ -172,13 +172,13 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
         Duration::from_secs(60),
     )
     .await
-    .unwrap_or_else(|error| panic!("LABA-425 precondition: {error}"));
+    .unwrap_or_else(|error| panic!("precondition: {error}"));
 
     queue
         .select(ids[0], Transition::None)
         .unwrap_or_else(|error| {
             panic!(
-                "LABA-425: switching back to the track `play` consumed was rejected: {error} — the \
+                "switching back to the track `play` consumed was rejected: {error} — the \
              queue still reports it as holding a resource the player no longer has"
             )
         });

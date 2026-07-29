@@ -121,7 +121,7 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
         .expect("select target track");
     wait_for_loader_done_event(&mut rx, &queue, target, Duration::from_secs(30))
         .await
-        .unwrap_or_else(|error| panic!("LABA-428 precondition: target load failed: {error}"));
+        .unwrap_or_else(|error| panic!("precondition: target load failed: {error}"));
     queue.play();
 
     let before_failure = wait_for_position_event(
@@ -131,7 +131,7 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
         Duration::from_secs(30),
     )
     .await
-    .unwrap_or_else(|error| panic!("LABA-428 precondition: {error}"));
+    .unwrap_or_else(|error| panic!("precondition: {error}"));
 
     // A blip, not an outage: the server goes away only long enough for one
     // in-flight segment fetch to fail, then comes straight back.
@@ -155,7 +155,7 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
     .await
     .unwrap_or_else(|error| {
         panic!(
-            "LABA-428 precondition: {error}; no fetch was in flight when the server went \
+            "precondition: {error}; no fetch was in flight when the server went \
              away, so no transient failure was injected"
         )
     });
@@ -190,12 +190,12 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
 
     assert!(
         skipped_to.is_none(),
-        "LABA-428: a transient failure at {before_failure:.3}s permanently failed the current \
+        "a transient failure at {before_failure:.3}s permanently failed the current \
          track and the queue auto-skipped away from it"
     );
     outcome.unwrap_or_else(|error| {
         panic!(
-            "LABA-428: the track survived a transient failure at {before_failure:.3}s but \
+            "the track survived a transient failure at {before_failure:.3}s but \
              playback never reached {recovery_target:.3}s: {error}"
         )
     });
