@@ -136,8 +136,23 @@ pub(super) mod lifecycle {
             }
             player.started = false;
         }
+        shutdown_if_idle(state);
         debug!("[KITHARA-ROUTE] player stopped");
         Ok(())
+    }
+    /// Release the output device once no player is left to feed it. A media
+    /// app that has stopped playing must not keep the platform's output
+    /// engaged; the next `start_player` builds a fresh context.
+    fn shutdown_if_idle<B: AudioBackend>(state: &mut SessionState<B>) {
+        if state.players.iter().all(|player| !player.started) {
+            debug!("[KITHARA-ROUTE] shutting down idle session stream");
+            if let Some(ref mut fw_ctx) = state.ctx {
+                fw_ctx.stop_stream();
+            }
+            state.ctx = None;
+            state.session_output_node_id = None;
+            state.session_output_memo = None;
+        }
     }
     pub(super) fn remove_player_graph<B: AudioBackend>(
         fw_ctx: &mut FirewheelCtx<B>,
@@ -599,21 +614,8 @@ mod tests {
         unregister(&mut state, first);
 
         assert!(
-            state.ctx.is_some(),
-            "the session must keep its audio context when the last player leaves: \
-             rebuilding one makes a second owner of the same output device"
-        );
-        assert!(
-            state.session_output_node_id.is_some(),
-            "the session output graph must survive an idle window"
-        );
-        assert!(
-            state
-                .ctx
-                .as_ref()
-                .is_some_and(FirewheelCtx::is_audio_stream_running),
-            "the session must keep its output stream running across an idle window: \
-             a stream stopped and started again in one process never calls back"
+            state.ctx.is_none(),
+            "the session must release the output device once no player feeds it"
         );
 
         let second = register(&mut state);
