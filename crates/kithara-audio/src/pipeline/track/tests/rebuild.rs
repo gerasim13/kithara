@@ -19,10 +19,10 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    Activity, AudioCodec, ChunkPosition, ContainerFormat, MediaInfo, PlayheadRead, PlayheadState,
-    PlayheadWrite, PrerollHint, ReadOutcome, SeekControl, SeekObserve, SeekState, Source,
-    SourceError, SourcePhase, Stream, StreamError, StreamResult, StreamType, VariantControl,
-    WorkerWake,
+    Activity, AudioCodec, ByteMap, ChunkPosition, ContainerFormat, MediaInfo, PlayheadRead,
+    PlayheadState, PlayheadWrite, PrerollHint, ReadOutcome, SeekControl, SeekObserve, SeekState,
+    SegmentDescriptor, Source, SourceError, SourcePhase, SourceSeekAnchor, Stream, StreamError,
+    StreamResult, StreamType, VariantControl, WorkerWake,
 };
 use kithara_test_utils::kithara;
 
@@ -297,7 +297,66 @@ impl VariantControl for TestControl {
     }
 }
 
+/// Segmented layout of the shape HLS vends: an init header the demuxer has
+/// to be rooted at, followed by fixed-size media segments. A flat source
+/// vends no byte map at all, so `seek_time_anchor` resolves nothing on it.
+struct TestByteMap;
+
+impl TestByteMap {
+    const CONTAINER_ORIGIN: u64 = 0;
+    const INIT_BYTES: u64 = 627;
+    const SEGMENT_BYTES: u64 = 4096;
+    const SEGMENT_SECS: u64 = 4;
+
+    fn descriptor(index: u64) -> SegmentDescriptor {
+        let start = Self::INIT_BYTES.saturating_add(index.saturating_mul(Self::SEGMENT_BYTES));
+        SegmentDescriptor::new(
+            start..start.saturating_add(Self::SEGMENT_BYTES),
+            Duration::from_secs(index.saturating_mul(Self::SEGMENT_SECS)),
+            Duration::from_secs(Self::SEGMENT_SECS),
+            u32::try_from(index).unwrap_or(u32::MAX),
+            0,
+        )
+    }
+}
+
+impl ByteMap for TestByteMap {
+    fn anchor_at_time(&self, position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
+        let segment = Self::descriptor(position.as_secs() / Self::SEGMENT_SECS);
+        Ok(Some(
+            SourceSeekAnchor::builder()
+                .segment_start(segment.decode_time)
+                .segment_end(segment.decode_time.saturating_add(segment.duration))
+                .segment_index(segment.segment_index)
+                .variant_index(segment.variant_index)
+                .byte_offset(segment.byte_range.start)
+                .build(),
+        ))
+    }
+
+    fn init_segment_range(&self) -> Range<u64> {
+        Self::CONTAINER_ORIGIN..Self::INIT_BYTES
+    }
+
+    fn len(&self) -> Option<u64> {
+        Some(Self::INIT_BYTES.saturating_add(Self::SEGMENT_BYTES))
+    }
+
+    fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
+        (byte_offset < Self::INIT_BYTES).then(|| Self::descriptor(0))
+    }
+
+    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
+        Some(Self::descriptor(t.as_secs() / Self::SEGMENT_SECS))
+    }
+
+    fn segment_count(&self) -> Option<u32> {
+        Some(1)
+    }
+}
+
 struct TestSource {
+    byte_map: Option<Arc<TestByteMap>>,
     control: Arc<TestControl>,
     playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
@@ -307,10 +366,18 @@ struct TestSource {
 impl TestSource {
     fn new(control: Arc<TestControl>) -> Self {
         Self {
+            byte_map: None,
             control,
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             seek: Arc::new(SeekState::new()),
+        }
+    }
+
+    fn segmented(control: Arc<TestControl>) -> Self {
+        Self {
+            byte_map: Some(Arc::new(TestByteMap)),
+            ..Self::new(control)
         }
     }
 }
@@ -322,6 +389,12 @@ impl Source for TestSource {
 
     fn advance(&self, n: u64) {
         self.position.fetch_add(n, Ordering::AcqRel);
+    }
+
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        self.byte_map
+            .as_ref()
+            .map(|map| Arc::clone(map) as Arc<dyn ByteMap>)
     }
 
     fn len(&self) -> Option<u64> {
@@ -474,12 +547,35 @@ async fn test_source(variant: u32) -> RebuildFixture {
     }
 }
 
+/// `segmented` vends the byte map HLS supplies plus an init-bearing
+/// decoder factory: the rebuilt demuxer parses only when it is rooted at
+/// the container origin, exactly like the Apple fMP4 segment path. A flat
+/// source has neither, so no recreate origin other than `base_offset` is
+/// even reachable on it.
+struct RouteParams {
+    initial_host_rate: u32,
+    segmented: bool,
+}
+
 async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
+    route_source(RouteParams {
+        initial_host_rate,
+        segmented: false,
+    })
+    .await
+}
+
+async fn route_source(params: RouteParams) -> RouteFixture {
     let control = Arc::new(TestControl::new(media_info(0)));
     let drops = Arc::new(Mutex::new(Vec::new()));
-    let host_sample_rate = Arc::new(AtomicU32::new(initial_host_rate));
+    let host_sample_rate = Arc::new(AtomicU32::new(params.initial_host_rate));
+    let segmented = params.segmented;
     let stream = match Stream::<TestStream>::new(TestConfig {
-        source: TestSource::new(control),
+        source: if segmented {
+            TestSource::segmented(control)
+        } else {
+            TestSource::new(control)
+        },
     })
     .await
     {
@@ -489,7 +585,12 @@ async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
     let shared_stream = SharedStream::new(stream);
     let factory_drops = drops.clone();
     let factory_host_rate = host_sample_rate.clone();
-    let decoder_factory: DecoderFactory<TestStream> = Arc::new(move |_stream, _info, _offset| {
+    let decoder_factory: DecoderFactory<TestStream> = Arc::new(move |_stream, _info, offset| {
+        if segmented && offset != TestByteMap::CONTAINER_ORIGIN {
+            return Err(DecodeError::InvalidData {
+                detail: "init-bearing container demuxed from a media byte",
+            });
+        }
         let rate = factory_host_rate.load(Ordering::Acquire);
         Ok(Box::new(RouteSignalDecoder::new(
             99,
@@ -786,6 +887,64 @@ async fn route_change_recreate_preserves_position_and_output_rate_continuity_met
     assert!(
         ratio < 2.0,
         "route-change discontinuity {route_peak:.6} is {ratio:.1}x the control boundary {control_peak:.6}",
+    );
+}
+
+/// A route change swaps the resampler over the SAME container, so the
+/// rebuilt demuxer has to be rooted where the live one is — the container
+/// origin the running session was installed at. Deriving that origin from
+/// the seek anchor instead hands an init-bearing demuxer a media byte; the
+/// recreate then fails outright and takes the track with it.
+#[kithara::test(tokio)]
+async fn route_change_recreate_roots_the_demuxer_at_the_container_origin() {
+    let RouteFixture {
+        host_sample_rate,
+        mut source,
+    } = route_source(RouteParams {
+        initial_host_rate: Consts::SAMPLE_RATE,
+        segmented: true,
+    })
+    .await;
+
+    let mut route_recreated = false;
+    for _ in 0..4 {
+        let chunk = next_test_chunk(&mut source, &mut route_recreated);
+        source.playhead.advance(&ChunkPosition::from(&chunk.meta));
+    }
+    let resume_anchor = source
+        .shared_stream
+        .seek_time_anchor(source.playhead.position())
+        .ok()
+        .flatten()
+        .expect("segmented source resolves an anchor for the resume position");
+    assert_ne!(
+        resume_anchor.byte_offset,
+        source.decode.session().base_offset,
+        "fixture precondition: the resume anchor must be a media byte, not the container origin"
+    );
+
+    host_sample_rate.store(Consts::ROUTE_SAMPLE_RATE, Ordering::Release);
+
+    assert!(matches!(source.step_track(), TrackStep::StateChanged));
+    let CurrentFsm::RecreatingDecoder(handle) = &source.state else {
+        panic!("expected route-change recreate");
+    };
+    assert_eq!(handle.data().cause, RecreateCause::RouteChange);
+    assert_eq!(
+        handle.data().offset,
+        source.decode.session().base_offset,
+        "route change keeps the container, so the recreate must reuse its origin"
+    );
+
+    let mut saw_new_rate = false;
+    for _ in 0..4 {
+        let chunk = next_test_chunk(&mut source, &mut route_recreated);
+        saw_new_rate |= chunk.meta.spec.sample_rate.get() == Consts::ROUTE_SAMPLE_RATE;
+        source.playhead.advance(&ChunkPosition::from(&chunk.meta));
+    }
+    assert!(
+        saw_new_rate,
+        "the rebuilt decoder must deliver the new host rate"
     );
 }
 
