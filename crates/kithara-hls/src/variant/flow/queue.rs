@@ -1,8 +1,100 @@
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
-use super::{PlanCtx, ReadLease, SegmentActivateParams, offsets::ActivateParams};
-use crate::segment::PlannedFetch;
+use super::{HlsVariant, PlanCtx, ReadLease, SegmentActivateParams, offsets::ActivateParams};
+use crate::segment::{PlannedFetch, Segment};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TargetBodyReadiness {
+    Pending,
+    Ready,
+    Failed,
+}
+
+/// Canonical decoder-body order: init, segment-zero probe, then the exact
+/// media window. The iterator owns no collection, so rebuilding a lease's
+/// preallocated queue cannot allocate or require a sort.
+struct TargetBodyEntries {
+    init: bool,
+    probe: bool,
+    next_segment: Option<u32>,
+    through_segment: u32,
+}
+
+impl Iterator for TargetBodyEntries {
+    type Item = PlannedFetch;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.init {
+            self.init = false;
+            return Some(PlannedFetch::Init);
+        }
+        if self.probe {
+            self.probe = false;
+            return Some(PlannedFetch::Segment(0));
+        }
+        let segment = self.next_segment?;
+        if segment > self.through_segment {
+            self.next_segment = None;
+            return None;
+        }
+        self.next_segment = segment.checked_add(1);
+        Some(PlannedFetch::Segment(segment))
+    }
+}
+
+impl HlsVariant {
+    fn target_body_entries(
+        &self,
+        first_segment: u32,
+        through_segment: u32,
+    ) -> Option<TargetBodyEntries> {
+        if first_segment > through_segment || through_segment >= self.num_segments() {
+            return None;
+        }
+        let start = self.seek_readahead_start_segment(first_segment);
+        Some(TargetBodyEntries {
+            init: self.init().is_some(),
+            probe: start > 0,
+            next_segment: Some(start),
+            through_segment,
+        })
+    }
+
+    fn target_body_segment(&self, planned: PlannedFetch) -> Option<&Segment> {
+        match planned {
+            PlannedFetch::Init => self.init(),
+            PlannedFetch::Segment(index) => self.segments.get(index as usize),
+        }
+    }
+
+    /// Decoder construction can start only after every segment in the exact
+    /// canonical target body has settled successfully.
+    pub(crate) fn target_body_readiness(
+        &self,
+        first_segment: u32,
+        through_segment: u32,
+    ) -> TargetBodyReadiness {
+        let Some(entries) = self.target_body_entries(first_segment, through_segment) else {
+            return TargetBodyReadiness::Failed;
+        };
+        let mut pending = false;
+        for planned in entries {
+            let Some(segment) = self.target_body_segment(planned) else {
+                return TargetBodyReadiness::Failed;
+            };
+            if segment.state().is_failed() {
+                return TargetBodyReadiness::Failed;
+            }
+            pending |= !segment.state().is_loaded();
+        }
+        if pending {
+            TargetBodyReadiness::Pending
+        } else {
+            TargetBodyReadiness::Ready
+        }
+    }
+}
 
 impl ReadLease {
     /// Auto-mode switch activation. Two byte positions matter:
@@ -109,5 +201,43 @@ impl ReadLease {
         let mut queue = self.queue.lock();
         queue.clear();
         queue.extend(init.chain(probe_seg).chain(tail));
+    }
+
+    /// Replace the fetch plan with one exact decoder-body coverage version.
+    pub(crate) fn start_target_body(&self, first_segment: u32, through_segment: u32) -> bool {
+        if self.variant.cancel_handle().is_cancelled() {
+            self.variant.rearm_cancel();
+        }
+        let Some(entries) = self
+            .variant
+            .target_body_entries(first_segment, through_segment)
+        else {
+            return false;
+        };
+        if let Some(anchor) = self.variant.segment_byte_offset_natural(first_segment) {
+            self.set_prefetch_anchor(anchor);
+        }
+
+        let mut queue = self.queue.lock();
+        queue.clear();
+        queue.extend(entries.filter(|planned| {
+            self.variant
+                .target_body_segment(*planned)
+                .is_some_and(|segment| {
+                    let state = segment.state();
+                    !state.is_downloading() && !state.is_loaded() && !state.is_failed()
+                })
+        }));
+        true
+    }
+
+    /// Rebuild a newer immutable coverage version in canonical order.
+    ///
+    /// Slot state remains the only source of truth for queued versus in-flight
+    /// work. Rebuilding therefore preserves an existing download by omitting
+    /// its claimed slot, while an evicted `Missing` prefix is naturally put
+    /// back ahead of the suffix.
+    pub(crate) fn extend_target_body(&self, first_segment: u32, through_segment: u32) -> bool {
+        self.start_target_body(first_segment, through_segment)
     }
 }
