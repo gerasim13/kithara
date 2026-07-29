@@ -112,56 +112,187 @@ Symphonia adapters and never appear as codec-enum branches in
 
 ## Decoder Profile Contract
 
-Every runtime decoder implements one standard profile provider. The aggregate
-profile has three projections with different consumers:
+Every runtime decoder implements one standard profile provider. These are the
+exact public shapes; implementation does not add backend-specific public
+methods alongside them:
 
 ```rust
-trait DecoderProfile {
+pub trait DecoderProfile {
     fn reader_profile(&self) -> ReaderProfile;
-    fn output_profile(&self) -> OutputProfileState;
+    fn output_profile(&self) -> DecodeResult<OutputProfileState>;
 }
 
-enum OutputProfileState {
+pub trait Decoder: DecoderProfile + Send + 'static {
+    fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome>;
+    fn seek(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome>;
+    fn reader_action(&mut self, action: ReaderAction) -> DecodeResult<ReaderActionResult>;
+    fn flush_reader_signals(&mut self);
+    fn duration(&self) -> Option<Duration>;
+    fn metadata(&self) -> TrackMetadata;
+    fn update_byte_len(&self, len: u64);
+}
+
+#[non_exhaustive]
+pub enum OutputProfileState {
     Pending,
     Ready(DecoderOutputProfile),
 }
 
-struct DecoderOutputProfile {
+#[non_exhaustive]
+pub struct DecoderOutputProfile {
     trim: TrimProfile,
     timeline: TimelineProfile,
+    tail: TailProfile,
+}
+
+#[non_exhaustive]
+pub enum TrimProfile {
+    Identity,
+    Exact(GaplessInfo),
+    Priming { leading_frames: u64 },
+    Silence(SilenceTrimParams),
+}
+
+#[non_exhaustive]
+pub struct TimelineProfile {
+    spec: PcmSpec,
+    presentation_offset_frames: i64,
+}
+
+#[non_exhaustive]
+pub enum TailProfile {
+    None,
+    TerminalIdealRequired,
+}
+
+#[non_exhaustive]
+pub struct DecoderEof {
+    tail: DecoderTail,
+}
+
+#[non_exhaustive]
+pub enum DecoderTail {
+    None,
+    IdealPreTrimFrames(u64),
+}
+
+pub enum DecoderChunkOutcome {
+    Chunk(PcmChunk),
+    Pending(PendingReason),
+    Eof(DecoderEof),
 }
 ```
 
-The names above describe ownership and may reuse existing domain types during
-implementation. Their semantics are frozen:
+`TrimProfile`, `DecoderOutputProfile`, and `OutputProfileState` implement
+`PartialEq`, not `Eq`, because `SilenceTrimParams` contains an `f32`. All
+fields remain private and are exposed through checked constructors and
+read-only accessors.
+
+The contract semantics are frozen:
 
 - `ReaderProfile` contains only transport-neutral byte-domain requirements:
   demux construction shape, init/header requirement, bounded read-ahead, and
   decoder warm-up requirements. Its canonical type lives in
   `kithara-stream`, so the base stream never depends on `kithara-decode`.
-- `TrimProfile` contains the fully resolved leading/trailing content trim and
-  output-domain tail compensation for this decoder generation.
+- `TrimProfile` is the one immutable trimmer plan. `Exact` carries measured
+  leading/trailing trim, `Priming` carries a backend-resolved leading trim,
+  `Silence` carries the configured scan strategy, and `Identity` is explicit
+  passthrough. Audio does not inspect `AudioCodec` or `GaplessMode` after the
+  profile resolver has selected this variant.
 - `TimelineProfile` is the blender-facing decoder profile. It contains an
-  exact anchor from the generation-local emitted
-  PCM frame clock to the canonical post-trim presentation-frame clock, plus
-  the PCM specification in which that anchor is expressed.
+  exact signed integer offset from the generation-local emitted PCM frame
+  clock to the canonical post-trim presentation-frame clock, plus the exact
+  output `PcmSpec` in which both values are expressed. Mapping uses checked
+  integer arithmetic. A negative pre-trim result may exist only inside the
+  generation bootstrap/trimmer; no negative coordinate leaves the generation.
+  The mapping cannot produce `NaN`.
 - `TimelineProfile` does not contain gain law, overlap duration, fallback policy,
   or HLS state. Those are audio transition policy.
+- `TailProfile` declares whether the immutable profile requires one dynamic
+  terminal fact. The concrete ideal pre-trim frame count is not mutable profile
+  state: it arrives exactly once in `DecoderChunkOutcome::Eof(DecoderEof)`.
 - `Pending -> Ready` is a one-way transition. A ready profile is immutable.
-  A later change is a typed decoder contract failure.
+  A later change returns `ProfileChangedAfterReady`.
 - A decoder may consume input while its output profile is pending, but the
   canonical staged-PCM queue remains empty. At most the first unprofiled
   output is held in a decoder/bootstrap slot. When a decode call both resolves
   late Apple metadata and returns PCM, the profile is frozen before that PCM
   enters the trimmer.
-- `ComposedDecoder` combines demux/container metadata with codec-adapter facts
-  and delegates the standard trait. It does not guess from `AudioCodec`.
-- `ResampledDecoder` delegates the profile and transforms every frame-domain
-  value into its actual output rate exactly once.
+- A `Silence` trimmer may retain its configured scan window after the profile
+  is ready. That is trimmer state owned by the generation, not unresolved
+  profile state and not preparation audio held by the blender.
+- `ComposedDecoder` combines its stored reader plan with private codec-adapter
+  facts and freezes one public `DecoderOutputProfile`. It does not guess from
+  `AudioCodec`.
+- `ResampledDecoder` owns one transformed output-profile snapshot. It scales
+  every frame-domain field and the terminal tail exactly once into its actual
+  output rate with checked arithmetic.
 - `DecoderTrackInfo`, `default_priming_frames`, `content_origin_frames`, and
   `DecoderHandoff` must not remain parallel mutable or fallback sources. The
-  profile becomes canonical in one staged migration and the old accessors are
-  removed.
+  profile becomes canonical in one atomic migration slice and the old
+  accessors are removed before that slice is committed.
+
+### Factory plan and private backend contract
+
+`ReaderProfile` is resolved before the decoder can exist, so it is created
+once as part of the construction plan rather than recomputed by the readiness
+gate and runtime:
+
+```rust
+pub struct DecoderPlan {
+    reader_profile: ReaderProfile,
+    media_info: MediaInfo,
+    byte_map: Option<Arc<dyn ByteMap>>,
+    trim_mode: GaplessMode,
+}
+
+impl DecoderFactory {
+    fn plan_from_media_info(
+        media_info: MediaInfo,
+        byte_map: Option<Arc<dyn ByteMap>>,
+        trim_mode: GaplessMode,
+    ) -> DecodeResult<DecoderPlan>;
+
+    fn create_from_plan<B>(
+        source: Box<dyn DecoderInput>,
+        plan: DecoderPlan,
+        config: DecoderConfig<B>,
+    ) -> DecodeResult<Box<dyn Decoder>>;
+}
+```
+
+The source-readiness gate borrows `DecoderPlan::reader_profile()`. Decoder
+construction consumes that same plan, and `ComposedDecoder` stores that exact
+`ReaderProfile` value for `DecoderProfile::reader_profile()`. The selected
+`GaplessMode` exists only inside the consumed plan and is resolved into one
+`TrimProfile`; it is removed from `DecoderConfig`, so initial and recreation
+construction cannot silently use different defaults. Blend/holdback policy is
+also absent from `DecoderConfig`; it belongs to the one audio-owned blender.
+The selected `byte_map` is likewise plan-owned and is not repeated in config.
+
+Every concrete Apple, Symphonia, Android, and WebCodecs adapter implements the
+same private `FrameCodec` profile method:
+
+```rust
+trait FrameCodec {
+    fn output_profile(&self) -> DecodeResult<OutputProfileState>;
+    fn decode_packet(/* existing packet/provenance arguments */)
+        -> DecodeResult<PacketStep>;
+    fn drain(/* existing drain arguments */) -> DecodeResult<DrainStep>;
+    fn flush(&mut self) -> DecodeResult<SourceProgress>;
+}
+```
+
+- Apple AAC is `Pending` until post-decode PrimeInfo and the first emitted PCM
+  establish the immutable profile. That profile is frozen before the first
+  chunk is returned.
+- Symphonia FDK AAC is `Pending` until its first non-empty delayed emission
+  establishes the queued-input to emitted-output mapping.
+- Apple FLAC, Symphonia FLAC, and every immediate backend publish an explicit
+  `Ready(identity-or-exact)` value. Identity is never inherited from a default.
+- Backend profile state is private. Only `ComposedDecoder` publishes the
+  frozen public snapshot, and `ResampledDecoder` publishes its one checked
+  transformed snapshot.
 
 ### Boundary semantics
 
@@ -184,20 +315,102 @@ The existing single-owner decoder-to-reader hook becomes the only feedback and
 reader-session lifecycle boundary. It replaces the historical
 `Arc<dyn VariantReaderControl>` exposed by `Decoder`.
 
-The hook has one concrete delegation path:
+The hook is one single-owner value whose ownership moves exactly once:
 
 ```text
-DecoderGeneration
-    -> Decoder::reader_action(action)
-    -> ComposedDecoder
-    -> its owned ReaderEventSink
-    -> the exact HLS/file reader session
+reader open
+    -> IncomingSession owns BoxedReaderSessionHook
+    -> decoder construction consumes the hook
+    -> ComposedDecoder owns it
+    -> DecoderGeneration reaches it only through Decoder::reader_action
 ```
 
-`Decoder::reader_action` is one typed delegation method, not a returned handle.
+Before decoder construction, only the off-RT scheduler may apply `Abort` or
+`Retire` through `IncomingSession`. After construction, that capability has
+been moved and `Decoder::reader_action` is the only typed delegation method.
+There is never an `Arc`, clone, returned handle, or second mutable path.
 Decoder-originated `profile/chunk/seek` facts travel in the opposite direction
 through the same owned hook. Audio never receives the hook or HLS session
 object itself.
+
+The cross-layer types are closed and transport-neutral:
+
+```rust
+#[non_exhaustive]
+pub struct TransitionIdentity {
+    handoff: VariantHandoff,
+    seek_epoch: u64,
+}
+
+#[non_exhaustive]
+pub enum ReaderAction {
+    PinOutgoing {
+        transition: TransitionIdentity,
+    },
+    ConstructionReady {
+        transition: TransitionIdentity,
+    },
+    CommitIncoming {
+        transition: TransitionIdentity,
+    },
+    Abort {
+        transition: TransitionIdentity,
+    },
+    Retire,
+}
+
+#[non_exhaustive]
+pub enum ReaderActionResult {
+    Applied(ReaderAction),
+    Rejected {
+        action: ReaderAction,
+        reason: ReaderActionReject,
+    },
+}
+
+#[non_exhaustive]
+pub enum ReaderActionReject {
+    TicketStale,
+    EpochStale,
+    WrongSession,
+}
+
+pub trait ReaderEventSink: Send {
+    fn on_profile(&mut self, profile: ReaderProfile);
+    fn on_chunk(&mut self, signal: ReaderChunkSignal, position: Option<ChunkPosition>);
+    fn on_seek(&mut self, signal: ReaderSeekSignal);
+    fn apply(&mut self, action: ReaderAction) -> ReaderActionResult;
+    fn flush(&mut self);
+}
+
+pub type BoxedReaderSessionHook = Box<dyn ReaderEventSink>;
+```
+
+`TransitionIdentity` is the canonical `kithara-stream` value pairing one
+`VariantHandoff` with the seek epoch in which it was issued. The fields are
+never passed separately. There is no unscoped "current transition" action.
+`ReaderActionResult` acknowledges that same identity; audio cannot promote a
+generation from a boolean or from a later global reader state. Lifecycle
+actions are invoked only from the off-RT scheduler shell and return their typed
+result synchronously. Per-chunk signals may enqueue into the sink's fixed
+deferred slot and are published by `flush_reader_signals`; no lifecycle
+completion is placed in a lossy queue.
+
+`IncomingSession` is not a second reader-control abstraction. It is the
+single-use construction envelope:
+
+```rust
+struct IncomingSession {
+    input: Box<dyn DecoderInput>,
+    plan: DecoderPlan,
+    hook: BoxedReaderSessionHook,
+    transition: TransitionIdentity,
+    cancel: CancelToken,
+}
+```
+
+Successful construction consumes the complete envelope into the new decoder
+generation. Abort consumes the exact action and drops the envelope.
 
 The hook carries two classes of typed messages:
 
@@ -220,12 +433,11 @@ messages cannot accidentally target a later global "current reader".
 RT rules:
 
 - Per-chunk and per-seek calls perform only fixed-size, lock-free state updates
-  or enqueue one typed deferred action.
+  or enqueue one typed deferred signal.
 - Resource retention, publication, cancellation, and destruction run from the
-  existing off-RT `flush`/scheduler shell.
-- No lossy queue is allowed for lifecycle messages. At most one exact
-  transition is owned by a generation, so a fixed state slot or typed
-  backpressure is sufficient.
+  existing off-RT scheduler shell.
+- No lossy queue is allowed for lifecycle messages. They are exact synchronous
+  scheduler actions, not broadcast notifications.
 
 The hook transmits only the reader projection of the decoder profile. Trim
 frames, blend anchors, and gain policy never flow into the base byte stream.
@@ -241,6 +453,13 @@ Three clocks exist. Treating them as one caused the reverted AAC regression.
 | Emitted PCM clock | Frames actually returned by this codec instance, including queued-output behavior | Concrete codec adapter and its decoder generation | Profile resolution and per-generation trim |
 | Presentation clock | Audible logical-track frames after decoder-specific trim | `DecoderGeneration` | Blender, effects, playhead, and output |
 
+The emitted clock is generation-owned but not required to start at zero. Its
+first integer frame is derived once from the backend's actual first-output
+position at the output sample rate. `TimelineProfile::presentation_offset_frames`
+maps that coordinate to the logical track. A seek or format-boundary successor
+creates a new emitted clock and a new immutable mapping; neither changes the
+demuxer's duration or seek coordinate.
+
 Translation is one-way:
 
 ```text
@@ -253,8 +472,74 @@ container packet
 ```
 
 `PcmMeta` leaving `DecoderGeneration` names the canonical presentation span.
+Its authoritative coordinates are integer `frame_offset` and `frames`;
+`timestamp` and `end_timestamp` are derived from those integers only at the
+public/playhead boundary. Blend readiness and alignment never convert through
+floating-point seconds.
 The demuxer retains its own container duration and seek state. No presentation
 counter is written back into the demuxer or global decoder duration.
+
+## Decoder Generation Contract
+
+`DecoderGeneration` is the only audio-layer owner of a decoder instance and
+all state derived from it:
+
+```rust
+struct DecoderGeneration {
+    id: GenerationId,
+    cause: GenerationCause,
+    cancel: CancelToken,
+    decoder: Box<dyn Decoder>,
+    output: GenerationOutput,
+}
+
+enum GenerationCause {
+    TrackStart {
+        seek_epoch: u64,
+    },
+    Transition(TransitionIdentity),
+    Replace {
+        seek_epoch: u64,
+    },
+}
+
+enum GenerationOutput {
+    Profiling {
+        bootstrap: Option<PcmChunk>,
+    },
+    Ready {
+        profile: DecoderOutputProfile,
+        trimmer: GaplessStage,
+        staged: StagedPcm,
+    },
+    Terminal,
+}
+```
+
+- The reader binding is owned inside `decoder`; generation lifecycle reaches it
+  only through `Decoder::reader_action`.
+- `GenerationCause` is the only source of the generation's seek epoch and
+  transition identity. A seek replacement cannot accidentally carry a
+  transition ticket.
+- `Profiling -> Ready -> Terminal` is monotonic. There is no accessor that
+  manufactures a default profile while profiling.
+- `bootstrap` contains at most the first backend PCM chunk. It moves into the
+  newly created per-generation trimmer in the same operation that freezes the
+  profile.
+- Every generation constructs exactly one `GaplessStage` from
+  `profile.trim()`. A successor never inherits or mutates its predecessor's
+  trimmer.
+- `FormatBoundary` finishes only the outgoing generation's trimmer.
+  `TrackEof` applies the typed `DecoderEof` tail to that same generation before
+  finishing it.
+- `PcmMeta` becomes presentation-domain metadata inside
+  `DecoderGeneration`; no consumer downstream rebases by codec.
+- Dropping or retiring a generation drops its decoder, profile, trimmer,
+  bootstrap, staged PCM, reader binding, and cancellation scope as one unit.
+  Destruction is scheduled off the sample-mixing path.
+
+`DecoderSession`, `BlendSide`, and a separately stored `GaplessStage` do not
+coexist with this owner after the migration.
 
 ## Canonical Owners
 
@@ -264,8 +549,8 @@ counter is written back into the demuxer or global decoder duration.
 | HLS transition owner | Exact ticket, outgoing and incoming `ReadSession`, target byte preparation, retention, publication, abort | Decoder state, trim, PCM, gain |
 | Decoder adapter | Backend packet/output mapping and decoder profile resolution | HLS sessions or transition policy |
 | `DecoderGeneration` | Decoder, one reader hook/session binding, child cancellation scope, resolved profile, local trimmer, staged canonical PCM | ABR decision state or global publication |
-| `DecodeCore` | Exactly one `ActiveDecode` state and its generation lifecycle | Protocol-specific byte planning |
-| `ActiveDecode` | `Single` or exact two-generation `Blend`, rolling overlap window, equal-gain DSP | Decoder construction, HLS, seek intent |
+| `DecodeCore` | Exactly one `ActiveDecode` owner | Protocol-specific byte planning |
+| `ActiveDecode` | One always-present blender and `Single`, `Preparing`, `Priming`, or `Blending` state | Decoder construction policy, HLS byte planning, seek intent |
 | `SeekEngine` | Seek target and producer epoch | Transition promotion or blending |
 | Scheduler shell | Deferred reader actions and off-RT retired-generation destruction | Domain state duplicated from the owners above |
 
@@ -291,8 +576,9 @@ incoming decoder -> output profile -> per-generation trimmer --         v
 - Target construction and catch-up do not enlarge this window.
 - The incoming generation decodes from its pinned target session and catches
   the outgoing presentation frontier off output.
-- `ReadyToBlend` is a proof containing one ticket, one seek epoch, one
-  `PcmSpec`, and one exact canonical frame range covered by both generations.
+- `ReadyToBlend` is a proof containing one transition identity, the exact
+  outgoing/incoming generation IDs, one `PcmSpec`, and one exact canonical
+  frame range covered by both generations.
 - `Blend` consumes only that range. A range/spec/epoch mismatch emits nothing
   and returns a typed error.
 - The ramp is equal-gain because both inputs are correlated versions of the
@@ -302,6 +588,53 @@ incoming decoder -> output profile -> per-generation trimmer --         v
   resampling occur once downstream.
 - No allocation, sorting, locking, decoder construction, resource release, or
   destructor runs in the sample-mixing path.
+
+The owner shapes are exact:
+
+```rust
+struct ActiveDecode {
+    blender: PcmBlender,
+    state: ActiveState,
+}
+
+enum ActiveState {
+    Single {
+        generation: DecoderGeneration,
+    },
+    Preparing {
+        outgoing: DecoderGeneration,
+        incoming: IncomingSession,
+    },
+    Priming {
+        outgoing: DecoderGeneration,
+        incoming: DecoderGeneration,
+    },
+    Blending {
+        outgoing: DecoderGeneration,
+        incoming: DecoderGeneration,
+        proof: ReadyToBlend,
+    },
+}
+
+struct ReadyToBlend {
+    transition: TransitionIdentity,
+    outgoing: GenerationId,
+    incoming: GenerationId,
+    spec: PcmSpec,
+    range: NonEmptyFrameRange,
+}
+
+struct NonEmptyFrameRange {
+    start: u64,
+    frames: NonZeroU64,
+}
+```
+
+`PcmBlender` is constructed once with `ActiveDecode`. In `Single`,
+`Preparing`, and `Priming`, it consumes one outgoing presentation stream
+through its identity arm while retaining only the configured overlap window.
+In `Blending`, it accepts both generations only over `proof.range`. Neither
+preparation latency nor decoder read-ahead can increase that rolling window.
 
 ## Transition State Machine
 
@@ -341,6 +674,22 @@ State rules:
 - Outgoing retirement begins only after both blend completion and exact HLS
   publication succeed.
 - A stale ticket or seek epoch can never publish.
+
+### Cancellation tree
+
+```text
+track scope
+├── outgoing generation scope
+├── transition scope
+│   └── incoming construction/generation scope
+└── replacement generation scope (created only after seek epoch advances)
+```
+
+Aborting a non-seek transition cancels only the transition scope and incoming
+descendants; the audible outgoing generation remains live. A seek cancels the
+transition scope first, then cancels and retires every old-epoch generation.
+The replacement receives a new child scope after the epoch advances. No
+generation constructs `CancelToken::root()` or `CancelToken::never()`.
 
 ## Seek Is Replace
 
@@ -395,6 +744,14 @@ state, sentinel values, and fallback codec/origin tables are forbidden.
   preparation reserve.
 - Audio-layer codec-origin tables, `anchor_codec`, and
   `AudioCodec::encoder_priming_frames` as a blend coordinate.
+- `ComposedDecoder::output_origin` as a hidden substitute for
+  `TimelineProfile`.
+- `DecoderTrackInfo`, `Decoder::default_priming_frames`, and repeated
+  `decoder.track_info()` snapshots.
+- A `GaplessStage` that survives decoder replacement or is stored separately
+  from its owning generation.
+- Independently defaulted `GaplessMode` values in audio and decoder factory
+  construction.
 - Historical `Decoder::content_origin_frames`, `blend_duration`, and
   `variant_reader_control` as unrelated methods.
 - Direct `Arc<dyn VariantReaderControl>` access from audio.
@@ -471,6 +828,8 @@ Apple RIFF accounting are outside every production slice.
 - Hot-path work is bounded, allocation-free after warm-up, unsorted, and
   lock-free.
 - Effects are applied once.
+- The exact trait/type graph in this document is committed before another
+  production file is changed or another target-oracle diagnosis is attempted.
 
 ## Commit Sequence
 
@@ -499,12 +858,14 @@ reverted; no later situational fixes are stacked on it.
 - Validate the two existing target-body owner tests and compile the complete
   integration-test graph before adding any new test.
 
-### P1. `test: require live PCM after decoder transition`
+### P0.75. `docs: lock decoder generation contracts`
 
-- Add only missing non-vacuity assertions to the already committed oracles.
-- Do not change thresholds or expected behavior.
-- Validate the focused oracle set, then classify the complete `just test`
-  result against the preserved target-red set.
+- Freeze the exact `DecoderProfile`, `FrameCodec`, reader hook,
+  `DecoderGeneration`, `ActiveDecode`, `ReadyToBlend`, terminal-tail, and seek
+  contracts before implementation.
+- Name every canonical owner and every obsolete parallel source that P2-P7
+  must remove.
+- This is a documentation-only commit. It makes no runtime or test-green claim.
 
 ### P2. `refactor(decode): expose one decoder transition profile`
 
@@ -558,6 +919,14 @@ reverted; no later situational fixes are stacked on it.
 - Remove any duplicate per-side playback effects/host-rate resampling.
 - Retain only decoder-internal output normalization required by the profile.
 - Validate the `kithara-app`-shaped Apple path and route-change behavior.
+
+### P8.5. `test: require live PCM after decoder transition`
+
+- Only after the production topology exists, add any still-missing
+  non-vacuity assertions to the already committed strict oracles.
+- Do not change thresholds or expected behavior.
+- Validate the focused oracle set, then classify the complete `just test`
+  result against the preserved target-red set.
 
 ### P9. `refactor: remove obsolete transition scaffolding`
 
