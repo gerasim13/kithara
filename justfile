@@ -822,7 +822,7 @@ android MODE="build" *ARGS:
 #   just apple xcode                    # XCFramework + open xcodeproj
 #   just apple ios SCHEME [DESTINATION] # build for iOS Simulator
 #   just apple test                     # test hosted unit target on iOS Simulator
-#   just apple laba [TRAP]              # LABA traps, one test process per trap
+#   just apple laba [TRAP]              # LABA traps, one shared test process
 #   just apple doc                      # combined Kithara+KitharaRx .doccarchive
 #   just apple release                  # XCFramework + strip + zip + checksum
 [positional-arguments]
@@ -888,12 +888,8 @@ apple MODE="xcframework" *ARGS:
             -destination "$destination"
         ;;
       laba)
-        # One `xcodebuild` invocation per trap, and therefore one test process
-        # per trap. Sharing a process is not an option today: after the first
-        # player releases the session output stream, a stream started for the
-        # next player reports success in a millisecond and never delivers a
-        # callback, so every trap but the first would fail on its precondition
-        # rather than on its bug.
+        # One `xcodebuild` invocation for the whole suite: the traps share a
+        # process. Naming a trap runs only that one.
         only_trap="${2:-}"
         destination=$(ios_destination) || exit 1
         test_server_url="${KITHARA_TEST_SERVER_URL:-}"
@@ -918,23 +914,27 @@ apple MODE="xcframework" *ARGS:
             -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
             -scheme KitharaDemoUnitTests_iOS \
             -destination "$destination" || exit 1
-        failed=""
-        for name in $traps; do
-          echo "=== $name ==="
-          KITHARA_LOCAL_DEV=1 TEST_RUNNER_KITHARA_TEST_SERVER_URL="$test_server_url" \
-            xcodebuild test-without-building \
-              -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
-              -scheme KitharaDemoUnitTests_iOS \
-              -destination "$destination" \
-              "-only-testing:KitharaDemoUnitTests_iOS/LabaIOSTraps/${name}()" \
-            > "$TMPDIR/kithara-laba-$name.log" 2>&1 || failed="$failed $name"
-          grep -E '✔ Test "|✘ Test "|↳ ' "$TMPDIR/kithara-laba-$name.log" || true
-        done
+        selection=(-only-testing:KitharaDemoUnitTests_iOS/LabaIOSTraps)
+        log="$TMPDIR/kithara-laba.log"
+        if [[ -n "$only_trap" ]]; then
+          selection=("-only-testing:KitharaDemoUnitTests_iOS/LabaIOSTraps/${only_trap}()")
+          log="$TMPDIR/kithara-laba-$only_trap.log"
+        fi
+        rc=0
+        KITHARA_LOCAL_DEV=1 TEST_RUNNER_KITHARA_TEST_SERVER_URL="$test_server_url" \
+          xcodebuild test-without-building \
+            -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
+            -scheme KitharaDemoUnitTests_iOS \
+            -destination "$destination" \
+            "${selection[@]}" \
+          > "$log" 2>&1 || rc=1
+        grep -E '✔ Test "|✘ Test "|↳ ' "$log" || true
         echo "=== summary ==="
-        if [[ -z "$failed" ]]; then
+        echo "log: $log"
+        if [[ $rc -eq 0 ]]; then
           echo "all traps green"
         else
-          echo "red:$failed"
+          echo "red — see the ✘ lines above"
           exit 1
         fi
         ;;
