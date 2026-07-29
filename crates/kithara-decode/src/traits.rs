@@ -15,7 +15,7 @@ mod kithara {
 
 use crate::{
     error::DecodeResult,
-    types::{PcmChunk, PcmSpec, TrackMetadata},
+    types::{BlenderProfile, GaplessProfile, PcmChunk, PcmSpec, TrackMetadata},
 };
 
 /// Outcome of a [`DecoderInput::try_read`] call.
@@ -175,6 +175,29 @@ pub(crate) type BoxedSource = Box<dyn DecoderInput>;
 /// decoder type is determined at runtime (e.g., based on media info).
 #[kithara::mock(api = DecoderMock)]
 pub trait Decoder: Send + 'static {
+    /// Snapshot the existing decoder facts needed to configure gapless trim.
+    ///
+    /// The default is deliberately an adapter over the established
+    /// `spec`/`track_info`/`default_priming_frames` contract, so adding the
+    /// profile does not change playback behaviour.
+    fn gapless_profile(&self, codec: Option<AudioCodec>) -> GaplessProfile {
+        let track_info = self.track_info();
+        GaplessProfile::new(
+            self.spec(),
+            track_info.gapless,
+            track_info.gapless_tail,
+            codec.map_or(0, |codec| self.default_priming_frames(codec)),
+        )
+    }
+
+    /// Snapshot the existing decoder facts needed to configure PCM blending.
+    ///
+    /// The default exposes the same output specification already returned by
+    /// [`Self::spec`] and is not consumed by the playback path yet.
+    fn blender_profile(&self) -> BlenderProfile {
+        BlenderProfile::new(self.spec())
+    }
+
     /// Default leading-silence frame count for `codec` when no
     /// container-/encoder-level gapless metadata is available.
     ///
