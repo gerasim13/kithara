@@ -132,7 +132,7 @@ mod tests {
         assert_eq!(
             families,
             ["Inter", "JetBrains Mono", "Space Grotesk"],
-            "system font families must not enter the base collection"
+            "the collection is embedded-only until system fallback is owned"
         );
     }
 

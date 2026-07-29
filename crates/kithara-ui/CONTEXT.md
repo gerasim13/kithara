@@ -58,10 +58,19 @@ dependency yet: masonry 0.4 hands a widget a `Scene` from its own Vello 0.6, and
 different Vello version is an unrelated type. Vello's `wgpu` feature stays off because the painter
 encodes and rasterises nothing; enabling it would add a second wgpu major beside iced's 27.
 
-`text::TextContext` is the canonical shaping owner. It owns Parley's font and layout contexts,
-registers only the embedded Inter, JetBrains Mono, and Space Grotesk faces, and disables Fontique
-system-font access. A context is a caller-owned value injected where shaping occurs; there is no
-process-global font context.
+`text::TextContext` is the canonical shaping owner. It owns Parley's font and layout contexts and
+registers the embedded Inter, JetBrains Mono, and Space Grotesk faces. A context is a caller-owned
+value injected where shaping occurs; there is no process-global font context.
+
+Fontique system-font access is off, and that is a known gap rather than a contract. Embedded
+coverage is narrower than the face count suggests: Inter and JetBrains Mono carry Latin, Cyrillic
+and Greek, while Space Grotesk is Latin-only, and the skin spends Space Grotesk on `track_title`,
+`title`, `deck_letter` and `brand`. Text outside that coverage shapes to `.notdef` here, while the
+iced host's own text stack still falls back through cosmic-text, so the gap becomes user-visible
+exactly when the base takes over all text. Closing it needs two things this crate does not have
+yet: a `GlyphRun` that can name a face outside `FontId`, and a single document-scoped context, so
+that enabling system fonts does not repeat a platform font-directory scan per widget. Until then
+the collection stays embedded-only.
 
 Where that owner sits is transitional and is stated here so it does not become permanent by
 default. Each canvas adapter currently builds its own context, so a document holds as many font
