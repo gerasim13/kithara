@@ -7,7 +7,7 @@ use kithara_test_utils::kithara;
 
 use crate::{
     controller::{AbrController, AbrPeerId},
-    state::{AbrDecision, AbrError, AbrState},
+    state::{AbrDecision, AbrError, AbrState, AbrTicket, PendingAbrDecision},
 };
 
 /// Clone-able handle returned by [`AbrController::register`].
@@ -53,6 +53,35 @@ impl AbrHandle {
         if let Some(state) = self.inner.state.as_ref() {
             state.apply_decision(decision, now);
         }
+    }
+
+    /// Drop the pending request only when `ticket` still identifies it.
+    ///
+    /// Returns `false` for stateless handles and stale tickets.
+    #[must_use]
+    pub fn abort_pending(&self, ticket: AbrTicket) -> bool {
+        self.inner
+            .state
+            .as_ref()
+            .is_some_and(|state| state.abort_pending(ticket))
+    }
+
+    /// Claim the exact pending request without consuming it.
+    #[must_use]
+    pub fn claim_pending_decision(&self) -> Option<PendingAbrDecision> {
+        let state = self.inner.state.as_ref()?;
+        state.claim_pending_decision(state.current_variant_index())
+    }
+
+    /// Publish `claim` only when it still identifies the pending request.
+    ///
+    /// Returns `false` for stateless handles and stale claims.
+    #[must_use]
+    pub fn commit_pending(&self, claim: PendingAbrDecision, now: Instant) -> bool {
+        self.inner
+            .state
+            .as_ref()
+            .is_some_and(|state| state.commit_pending(claim, now))
     }
 
     /// Clear the escape condition — see [`AbrState::clear_escape`]. No-op for
@@ -162,8 +191,8 @@ impl AbrHandle {
     #[must_use]
     #[kithara::probe]
     pub fn peek_pending_decision(&self) -> Option<AbrDecision> {
-        let state = self.inner.state.as_ref()?;
-        state.peek_pending_decision(state.current_variant_index())
+        self.claim_pending_decision()
+            .map(PendingAbrDecision::decision)
     }
 
     #[must_use]
@@ -350,6 +379,29 @@ mod tests {
 
         handle.apply_decision(&decision, Instant::now());
         assert_eq!(state.current_variant_index(), VariantIndex::new(2));
+    }
+
+    #[kithara::test(tokio)]
+    async fn claim_then_commit_happy_path() {
+        let controller = AbrController::with_estimator(
+            settings_fast(),
+            Arc::new(ThroughputEstimator::new()) as Arc<_>,
+            CancelToken::never(),
+        );
+        let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+        let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
+            state: Arc::clone(&state),
+        });
+        let handle = controller.register(&peer);
+
+        state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+        let claim = handle
+            .claim_pending_decision()
+            .expect("pending request must be claimable");
+
+        assert!(handle.commit_pending(claim, Instant::now()));
+        assert_eq!(state.current_variant_index(), VariantIndex::new(2));
+        assert!(handle.claim_pending_decision().is_none());
     }
 
     #[kithara::test(tokio)]

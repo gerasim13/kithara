@@ -16,6 +16,7 @@
 mod core;
 mod decision;
 mod error;
+mod pending;
 mod view;
 
 #[cfg(test)]
@@ -25,4 +26,5 @@ pub use core::AbrState;
 
 pub use decision::AbrDecision;
 pub use error::AbrError;
+pub use pending::{AbrTicket, PendingAbrDecision};
 pub use view::AbrView;

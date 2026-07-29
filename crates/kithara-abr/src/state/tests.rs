@@ -9,7 +9,7 @@ use kithara_platform::{
 use kithara_test_utils::kithara;
 use proptest::prelude::*;
 
-use super::{AbrDecision, AbrState, AbrView};
+use super::{AbrDecision, AbrState, AbrView, PendingAbrDecision};
 use crate::{Abr, AbrController, AbrSettings, ThroughputEstimator};
 
 /// Canonical 3-variant fixture used by every test in this module. Private
@@ -244,6 +244,103 @@ fn request_target_replace_pending_latest_wins() {
         Some(VariantIndex::new(2)),
         "second request_target must replace the first (latest-wins semantics)"
     );
+}
+
+#[kithara::test]
+fn stale_claim_cannot_commit_after_same_target_aba() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    let stale = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("first request must be claimable");
+
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    let current = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("replacement request must be claimable");
+
+    assert_ne!(stale.ticket(), current.ticket());
+    assert_eq!(stale.decision(), current.decision());
+    assert!(!state.commit_pending(stale, Instant::now()));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(0));
+    assert_eq!(
+        state
+            .claim_pending_decision(VariantIndex::new(0))
+            .map(PendingAbrDecision::ticket),
+        Some(current.ticket()),
+        "stale commit must preserve the replacement request"
+    );
+    assert!(state.commit_pending(current, Instant::now()));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(2));
+    assert_eq!(state.pending_target(), None);
+}
+
+#[kithara::test]
+fn claim_from_old_current_cannot_commit_after_variant_changes() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    let stale = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("request must be claimable from the initial variant");
+
+    state.apply_decision(
+        &AbrDecision::UpSwitch {
+            from: VariantIndex::new(0),
+            to: VariantIndex::new(1),
+            reason: AbrReason::UpSwitch,
+        },
+        Instant::now(),
+    );
+
+    assert!(!state.commit_pending(stale, Instant::now()));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(1));
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
+
+    let current = state
+        .claim_pending_decision(VariantIndex::new(1))
+        .expect("pending request must be reclaimable from the live variant");
+    assert!(state.commit_pending(current, Instant::now()));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(2));
+}
+
+#[kithara::test]
+fn claim_before_lock_cannot_commit_until_reclaimed_after_unlock() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    let before_lock = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("request must be claimable before lock");
+
+    state.lock();
+    assert!(!state.commit_pending(before_lock, Instant::now()));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(0));
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
+
+    state.unlock();
+    let after_unlock = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("pending request must be reclaimable after unlock");
+    assert!(state.commit_pending(after_unlock, Instant::now()));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(2));
+}
+
+#[kithara::test]
+fn abort_pending_only_clears_matching_ticket() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(1), AbrReason::UpSwitch);
+    let stale = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("first request must be claimable");
+
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    let current = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("replacement request must be claimable");
+
+    assert!(!state.abort_pending(stale.ticket()));
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
+    assert!(state.abort_pending(current.ticket()));
+    assert_eq!(state.pending_target(), None);
 }
 
 #[kithara::test]
