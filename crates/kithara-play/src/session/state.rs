@@ -16,7 +16,7 @@ use super::{
 use crate::{
     api::{SessionDuckingMode, SlotId},
     bridge::SharedEq,
-    rt::MasterEqNode,
+    rt::{LimiterNode, MasterEqNode},
 };
 
 #[derive(Debug)]
@@ -66,6 +66,7 @@ pub struct SessionState<B: AudioBackend> {
     pub(super) ctx: Option<FirewheelCtx<B>>,
     pub(super) session_output_memo: Option<Memo<VolumePanNode>>,
     pub(super) session_output_node_id: Option<NodeID>,
+    pub(super) session_limiter_node_id: Option<NodeID>,
     pub(super) next_player_id: PlayerId,
     pub(super) session_ducking: SessionDuckingMode,
     pub(super) start_stream_fn: StartStreamFn<B>,
@@ -88,6 +89,7 @@ impl<B: AudioBackend> SessionState<B> {
             session_ducking: SessionDuckingMode::Off,
             session_output_memo: None,
             session_output_node_id: None,
+            session_limiter_node_id: None,
             stream_needs_restart: false,
         }
     }
@@ -178,17 +180,28 @@ fn create_session_output<B: AudioBackend>(state: &mut SessionState<B>) -> Result
         VolumePanNode::from_volume(Volume::Linear(ducking_gain(state.session_ducking)));
     let session_memo = Memo::new(session_node);
     let session_id = fw_ctx.add_node(session_node, None);
+    let limiter_id = fw_ctx.add_node(LimiterNode, None);
     let graph_out = fw_ctx.graph_out_node_id();
     fw_ctx
-        .connect(session_id, graph_out, &[(0, 0), (1, 1)], false)
+        .connect(session_id, limiter_id, &[(0, 0), (1, 1)], false)
         .map_err(|err| {
-            SessionError::Graph(format!("connect session output to graph_out failed: {err}"))
+            SessionError::Graph(format!("connect session output to limiter failed: {err}"))
+        })?;
+    fw_ctx
+        .connect(limiter_id, graph_out, &[(0, 0), (1, 1)], false)
+        .map_err(|err| {
+            SessionError::Graph(format!("connect limiter to graph_out failed: {err}"))
         })?;
     if let Err(err) = fw_ctx.update() {
         warn!("session graph update after output init failed: {err:?}");
     }
     state.session_output_node_id = Some(session_id);
     state.session_output_memo = Some(session_memo);
-    debug!(?session_id, "[KITHARA-ROUTE] session output graph ready");
+    state.session_limiter_node_id = Some(limiter_id);
+    debug!(
+        ?session_id,
+        ?limiter_id,
+        "[KITHARA-ROUTE] session output graph ready"
+    );
     Ok(())
 }

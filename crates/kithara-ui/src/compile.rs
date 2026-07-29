@@ -1,6 +1,6 @@
 use crate::{
     error::UiDocError,
-    expand::{Binding, Budget, ControlSite, ExpandedNode, Expander},
+    expand::{Binding, Budget, ControlSite, DropSpec, ExpandedNode, Expander, intern_binding},
     ids::{InternId, Interner, SourceUri, StrArena},
     layout::{Axis, FrameSides, LayoutNode, parse_layout},
     module::ChromeStyle,
@@ -17,6 +17,10 @@ use crate::{
 pub struct CompiledUi {
     pub root: CompiledNode,
     pub size: SizeSpec,
+    /// The layout asked to be framed by its own resize edges.
+    pub resize_edges: bool,
+    /// Names the item the pointer is carrying; drawn at the pointer.
+    pub dragged: Option<Binding>,
     arena: StrArena,
 }
 
@@ -48,6 +52,7 @@ pub enum CompiledNode {
         frame: FrameSides,
         corners: bool,
         footer: Option<Binding>,
+        drop: Option<DropSpec>,
         collapsed: InternId,
         root: Box<ExpandedNode>,
         size: SizeSpec,
@@ -76,6 +81,7 @@ pub fn compile(
     }
     let document = parse_layout(&loaded.text, &loaded.uri)?;
     validate::check_layout_instances(&document, &loaded.uri)?;
+    validate::check_layout_dragged(&document, &loaded.uri, endpoints)?;
     let mut budget = Budget::new(config.limits.max_nodes);
     let mut interner = Interner::new(config.max_arena_bytes);
     let root = Compiler {
@@ -88,8 +94,19 @@ pub fn compile(
     }
     .build(&document.root, &loaded.uri)?;
     let size = compiled_node_size(&root);
+    let dragged = document
+        .dragged
+        .as_ref()
+        .map(|binding| intern_binding(&mut interner, binding, &loaded.uri))
+        .transpose()?;
     let arena = interner.finish();
-    Ok(CompiledUi { root, size, arena })
+    Ok(CompiledUi {
+        root,
+        size,
+        resize_edges: document.resize_edges,
+        dragged,
+        arena,
+    })
 }
 
 struct Compiler<'a> {
@@ -170,6 +187,7 @@ impl Compiler<'_> {
                         rel: module_uri.0.clone(),
                     })?;
                 validate::check_module_footer(document, &module_uri, self.endpoints)?;
+                validate::check_module_drop(document, &module_uri, self.endpoints)?;
                 let expanded = Expander::new(
                     self.config.limits.max_depth,
                     self.budget,
@@ -195,6 +213,7 @@ impl Compiler<'_> {
                     frame: *frame,
                     corners: *corners,
                     footer: expanded.footer,
+                    drop: expanded.drop,
                     collapsed: expanded.collapsed,
                     root: Box::new(expanded.root),
                     size,

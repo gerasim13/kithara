@@ -187,6 +187,56 @@ cross-platform core (`session/{state,dispatch,protocol}.rs`) carries zero
 `#[cfg]`; the structural gates are the cfg lines around `mod native`, `mod web`,
 and their re-exports in `mod.rs`.
 
+## Session mixing
+
+Session-input gain has two distinct owners. Each `EngineImpl` owns its *desired*
+input level (`master_volume`, read by `start`). The session `SessionState` owns
+the *applied* graph gain (each `PlayerState.master_volume` and its
+`VolumePanNode` memo). The only transition between them is one batch command,
+`Cmd::SetPlayerMasterVolumes`, which validates the whole vector — every level
+finite and in `0.0..=1.0`, every player present, no player repeated — before
+mutating any stored volume or memo. Omitted players are unchanged; an invalid
+entry leaves the whole batch untouched. This is the single session gain path;
+there is no singular per-player gain command.
+
+Session-input levels are linear **amplitudes**: a level of `0.5` halves the
+player's amplitude, and the sub-ceiling session output is the exact weighted sum
+`Σ levelᵢ · signalᵢ`. Firewheel's `Volume::Linear` is a fader taper (it squares
+its argument), so `master_gain` converts a level to that taper before it reaches
+the player's `VolumePanNode`. Feeding a level in directly would land `0.5` at
+`0.25` amplitude and, worse, turn the equal-power crossfader's `cos`/`sin`
+coefficients into `cos²`/`sin²` — no longer equal-power. Slot/content volume and
+session ducking keep their own existing taper; they are separate controls.
+
+`apply_mix` (`engine/mix.rs`) is a free function: it actuates the final levels
+of a set of players in one batch. The session is taken from the first input; it
+validates levels, same-session membership (`Arc::ptr_eq` on the dispatcher), and
+per-batch uniqueness, then takes every input engine's `start_lock` in a stable
+address order — so a batch cannot interleave with a concurrent `start`, and two
+batches sharing players cannot deadlock. Only already-registered engines (those
+with a session `PlayerId`) enter the dispatched subset; a never-started engine
+has its desired level stored so its first `start` adopts it, without speculative
+registration. Desired levels are committed only after the dispatch succeeds.
+Committing publishes no event: the mix level is not content volume
+(`PlayerEvent::VolumeChanged` stays the only volume event), and the desired
+level is readable through `EngineImpl::master_volume`.
+
+The crossfader is pure policy (`api/mix.rs::crossfader_gain`), not state:
+consumers fold `trim * mute * crossfader_gain * group_master` into each member
+level before calling `apply_mix`. `group_master` is folded per member, never
+stored as process-wide state, so one logical group cannot change another
+group's master.
+
+The session graph carries exactly one peak limiter (`rt/limiter.rs`, wrapping
+`kithara_audio::PeakLimiter`) at the final sum, after session ducking and before
+the graph output. It is created once per session context in
+`create_session_output`; recreating the context (route change, idle teardown)
+rebuilds it with a fresh envelope. Player start/stop only connects or
+disconnects player master nodes and never creates a per-player limiter. The
+session constants (ceiling `0.98`, release `50 ms`, stereo) are const-asserted
+valid, so limiter construction cannot fail and the processor holds the DSP
+directly.
+
 ## Route Changes
 
 `PlayerNodeProcessor::new_stream` is the host-rate bridge. A platform route

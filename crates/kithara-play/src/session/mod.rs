@@ -15,8 +15,8 @@ pub mod web;
 
 pub use dispatch::run_cmd;
 pub use protocol::{
-    AllocatedSlot, Cmd, CmdMsg, PlayerId, Reply, SessionDispatcher, SessionError, SessionHandle,
-    StartStreamFn,
+    AllocatedSlot, Cmd, CmdMsg, PlayerId, PlayerLevel, Reply, SessionDispatcher, SessionError,
+    SessionHandle, StartStreamFn,
 };
 pub use state::SessionState;
 #[cfg(target_arch = "wasm32")]

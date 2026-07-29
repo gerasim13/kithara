@@ -71,14 +71,12 @@ schema_version = 1
 "crates/kithara-stream/src/dl/peer.rs:PeerInner::cancel" = 1
 
 [file_density]
-"crates/kithara-app/src/gui/view.rs" = 1
 "crates/kithara-ffi/src/player/facade.rs" = 1
 "crates/kithara-ffi/src/web/surface.rs" = 1
 "crates/kithara-storage/src/unified.rs" = 1
 "crates/kithara-stream/src/timeline.rs" = 1
 
 [file_size]
-"crates/kithara-app/src/gui/view.rs" = 1
 "crates/kithara-app/src/state.rs" = 1
 "crates/kithara-app/src/tui/dashboard.rs" = 1
 "crates/kithara-app/src/tui/runner.rs" = 1
@@ -109,7 +107,6 @@ schema_version = 1
 [flat_directory]
 "crates/kithara-app/src" = 1
 "crates/kithara-app/src/gui" = 1
-"crates/kithara-app/src/gui/studio" = 1
 "crates/kithara-assets/src" = 1
 "crates/kithara-decode/src" = 1
 "crates/kithara-decode/src/android" = 1
@@ -125,9 +122,6 @@ schema_version = 1
 "crates/kithara-stream/src/dl" = 1
 
 [fn_arg_count]
-"crates/kithara-app/src/gui/widgets/speed_slider.rs::SpeedSlider::draw" = 1
-"crates/kithara-app/src/gui/widgets/vfader.rs::VFader::draw" = 1
-"crates/kithara-app/src/gui/widgets/waveform.rs::Waveform::draw" = 1
 "crates/kithara-decode/src/apple/audio_file.rs::read_callback" = 1
 "crates/kithara-decode/src/apple/converter.rs::converter_input_callback" = 1
 "crates/kithara-decode/src/gapless/mp4.rs::tests::track_with_elst" = 1
@@ -367,9 +361,6 @@ schema_version = 1
 "crates/kithara-stream/src/timeline.rs::impl Timeline" = 1
 
 [single_word_filenames]
-"crates/kithara-app/src/gui/url_bar.rs" = 1
-"crates/kithara-app/src/gui/widgets/play_button.rs" = 1
-"crates/kithara-app/src/gui/widgets/speed_slider.rs" = 1
 "crates/kithara-app/src/tracing_init.rs" = 1
 "crates/kithara-assets/src/disk_store.rs" = 1
 "crates/kithara-assets/src/flush/worker_stub.rs" = 1

@@ -28,6 +28,7 @@ pub use audio::Audio;
 pub use blob::frame::BlobError;
 pub use effects::{
     eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands},
+    limiter::{LimiterError, PeakLimiter},
     timestretch::StretchControls,
 };
 pub use exports::*;

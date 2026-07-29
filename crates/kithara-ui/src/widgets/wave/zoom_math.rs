@@ -4,39 +4,59 @@ use num_traits::cast::AsPrimitive;
 
 use crate::render::WaveBucket;
 
-pub(crate) const DEFAULT_ZOOM: f32 = 0.12;
+pub const DEFAULT_ZOOM: f32 = 0.12;
 pub(crate) const MAX_ZOOM: f32 = 0.5;
 pub(crate) const MIN_ZOOM: f32 = 0.015;
+
+const BUTTON_FACTOR: f32 = 0.7;
 
 pub(crate) fn clamp_zoom(zoom: f32) -> f32 {
     zoom.clamp(MIN_ZOOM, MAX_ZOOM)
 }
 
-pub(crate) fn column_bucket_range(
-    column: usize,
-    columns: usize,
-    bucket_count: usize,
-    window: &Range<f32>,
-) -> Range<usize> {
-    if columns == 0 || bucket_count == 0 || column >= columns {
-        return 0..0;
+/// Bars tile the track from its origin, so a bar's content never depends on
+/// the playhead; the window only selects which bars are visible and where
+/// they land on screen. This is what makes playback scroll instead of
+/// resampling: bar heights stay constant while their pixel positions glide.
+#[derive(Clone, Copy)]
+pub(crate) struct BarGrid {
+    pub(crate) norm_width: f32,
+    pub(crate) first: i64,
+    pub(crate) last: i64,
+}
+
+pub(crate) fn bar_grid(columns: usize, zoom: f32, window: &Range<f32>) -> Option<BarGrid> {
+    if columns == 0 {
+        return None;
     }
-    let window_width = window.end - window.start;
     let columns_f: f32 = columns.as_();
-    let column_f: f32 = column.as_();
-    let next_column_f: f32 = (column + 1).as_();
-    let column_start = window.start + window_width * column_f / columns_f;
-    let column_end = window.start + window_width * next_column_f / columns_f;
-    let track_start = column_start.max(0.0);
-    let track_end = column_end.min(1.0);
-    if track_start >= track_end {
+    let norm_width = clamp_zoom(zoom) / columns_f;
+    let first: i64 = (window.start / norm_width).floor().as_();
+    let last: i64 = (window.end / norm_width).ceil().as_();
+    Some(BarGrid {
+        norm_width,
+        first,
+        last,
+    })
+}
+
+pub(crate) fn bar_bucket_range(bar: i64, norm_width: f32, bucket_count: usize) -> Range<usize> {
+    if bar < 0 || bucket_count == 0 || norm_width <= 0.0 {
         return 0..0;
     }
-    let bucket_count_f: f32 = bucket_count.as_();
-    let start: usize = (track_start * bucket_count_f).floor().as_();
-    let end: usize = (track_end * bucket_count_f).ceil().as_();
-    let start = start.min(bucket_count);
-    let end = end.min(bucket_count);
+    let bucket_count_f: f64 = bucket_count.as_();
+    let bar_f: f64 = bar.as_();
+    let norm_width_f = f64::from(norm_width);
+    let lo = (bar_f * norm_width_f * bucket_count_f).floor();
+    let hi = ((bar_f + 1.0) * norm_width_f * bucket_count_f).floor();
+    let hi = hi.max(lo + 1.0);
+    let start = lo.clamp(0.0, bucket_count_f);
+    let end = hi.clamp(0.0, bucket_count_f);
+    if start >= end {
+        return 0..0;
+    }
+    let start: usize = start.as_();
+    let end: usize = end.as_();
     start..end
 }
 
@@ -81,6 +101,18 @@ pub(crate) fn zoom_for_wheel(zoom: f32, delta_y: f32) -> f32 {
     clamp_zoom(zoom * factor)
 }
 
+/// Narrows the visible window by one button press.
+#[must_use]
+pub fn zoom_in(zoom: f32) -> f32 {
+    clamp_zoom(zoom * BUTTON_FACTOR)
+}
+
+/// Widens the visible window by one button press.
+#[must_use]
+pub fn zoom_out(zoom: f32) -> f32 {
+    clamp_zoom(zoom / BUTTON_FACTOR)
+}
+
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
@@ -119,14 +151,55 @@ mod tests {
     }
 
     #[kithara::test]
-    fn columns_outside_track_map_to_empty_bucket_ranges() {
-        let window = window_bounds(0.01, DEFAULT_ZOOM);
+    fn bar_content_is_anchored_to_the_track_not_the_window() {
+        let near_start = bar_grid(10, 0.25, &window_bounds(0.2, 0.25)).unwrap();
+        let near_end = bar_grid(10, 0.25, &window_bounds(0.9, 0.25)).unwrap();
 
-        assert_eq!(column_bucket_range(0, 12, 120, &window), 0..0);
-        assert_eq!(column_bucket_range(5, 12, 120, &window), 0..2);
-        assert_eq!(column_bucket_range(11, 12, 120, &window), 7..9);
-        assert_eq!(column_bucket_range(0, 0, 120, &window), 0..0);
-        assert_eq!(column_bucket_range(0, 12, 0, &window), 0..0);
+        assert_eq!(near_start.norm_width, near_end.norm_width);
+        for bar in near_start.first.max(0)..near_start.last {
+            assert_eq!(
+                bar_bucket_range(bar, near_start.norm_width, 128),
+                bar_bucket_range(bar, near_end.norm_width, 128),
+                "bar {bar}"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn bar_grid_covers_the_window_and_only_the_window() {
+        let window = window_bounds(0.5, 0.25);
+        let grid = bar_grid(10, 0.25, &window).unwrap();
+
+        assert_near(grid.norm_width, 0.025);
+        let first: f32 = grid.first.as_();
+        let last: f32 = grid.last.as_();
+        assert!(first * grid.norm_width <= window.start + EPSILON);
+        assert!(last * grid.norm_width >= window.end - EPSILON);
+        assert!((first + 1.0) * grid.norm_width > window.start);
+        assert!((last - 1.0) * grid.norm_width < window.end);
+        assert!(bar_grid(0, 0.25, &window).is_none());
+    }
+
+    #[kithara::test]
+    fn downsampled_bars_partition_the_track_without_overlap() {
+        let norm_width = 0.025;
+        let mut previous_end = None;
+        for bar in 0..40 {
+            let range = bar_bucket_range(bar, norm_width, 128);
+            assert!(range.end > range.start, "bar {bar} is empty");
+            if let Some(previous) = previous_end {
+                assert_eq!(range.start, previous, "bar {bar} overlaps");
+            }
+            previous_end = Some(range.end);
+        }
+        assert_eq!(previous_end, Some(128));
+    }
+
+    #[kithara::test]
+    fn off_track_bars_map_to_empty_bucket_ranges() {
+        assert_eq!(bar_bucket_range(-3, 0.025, 128), 0..0);
+        assert_eq!(bar_bucket_range(41, 0.025, 128), 0..0);
+        assert_eq!(bar_bucket_range(2, 0.025, 0), 0..0);
     }
 
     #[kithara::test]
@@ -192,5 +265,13 @@ mod tests {
         assert_near(zoom_for_wheel(0.12, -1.0), 0.096);
         assert_near(zoom_for_wheel(MAX_ZOOM, 1.0), MAX_ZOOM);
         assert_near(zoom_for_wheel(MIN_ZOOM, -1.0), MIN_ZOOM);
+    }
+
+    #[kithara::test]
+    fn buttons_step_wider_than_a_detent_and_clamp() {
+        assert_near(zoom_in(DEFAULT_ZOOM), 0.084);
+        assert_near(zoom_out(DEFAULT_ZOOM), 0.171_428_57);
+        assert_near(zoom_in(MIN_ZOOM), MIN_ZOOM);
+        assert_near(zoom_out(MAX_ZOOM), MAX_ZOOM);
     }
 }

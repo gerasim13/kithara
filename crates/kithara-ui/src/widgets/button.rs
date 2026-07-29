@@ -1,5 +1,5 @@
 use iced::{
-    Alignment, Background, Element, Length, Theme,
+    Alignment, Background, Border, Color, Element, Length, Theme,
     widget::{
         button,
         button::{Status as ButtonStatus, Style as IcedButtonStyle},
@@ -8,10 +8,11 @@ use iced::{
 };
 
 use crate::{
+    layout::FrameSides,
     module::ButtonStyle,
     render::{ControlAction, Icon, ReadValue, Skin, UiEvent, fonts, shaped_text},
     skin::FontSkin,
-    widgets::Widget,
+    widgets::{Widget, frame_overlay},
 };
 
 #[derive(bon::Builder)]
@@ -21,6 +22,7 @@ pub(crate) struct ControlButton<'a, 'value, 'data, 'skin> {
     icon: Option<Icon>,
     active_label: Option<&'a str>,
     style: ButtonStyle,
+    frame: Option<FrameSides>,
     value: Option<&'value ReadValue<'data>>,
     skin: &'skin Skin,
 }
@@ -33,8 +35,8 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
         } else {
             self.label
         };
-        let highlighted = is_primary(self.style) || active;
-        let font = if highlighted {
+        let highlighted = is_filled(self.style, active);
+        let font = if is_primary(self.style) || active {
             self.skin.button.primary_text
         } else if self.style == ButtonStyle::VisNav {
             self.skin.vis.nav_text
@@ -62,13 +64,6 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
                 },
             ),
         };
-        let height = if self.style == ButtonStyle::MicroPrimary {
-            self.skin.button.micro_size
-        } else if self.style == ButtonStyle::VisNav {
-            self.skin.vis.nav_cell_size
-        } else {
-            self.skin.button.height
-        };
         let centered = container(content)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -80,7 +75,7 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
             [self.skin.button.padding_y, self.skin.button.padding_x]
         };
         let control = button(centered)
-            .height(Length::Fixed(height))
+            .height(Length::Fill)
             .padding(padding)
             .style(control_button_style(self.skin, self.style, active))
             .on_press(UiEvent::Control {
@@ -88,12 +83,19 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
                 action: ControlAction::Activate,
             });
         match self.style {
-            ButtonStyle::Transport => control
-                .width(Length::FillPortion(self.skin.button.transport_fill))
-                .into(),
-            ButtonStyle::TransportPrimary => control
-                .width(Length::FillPortion(self.skin.button.primary_fill))
-                .into(),
+            ButtonStyle::Transport | ButtonStyle::TransportPrimary => {
+                let fill = if is_primary(self.style) {
+                    self.skin.button.primary_fill
+                } else {
+                    self.skin.button.transport_fill
+                };
+                frame_overlay(
+                    control.width(Length::FillPortion(fill)).into(),
+                    self.frame.unwrap_or(self.skin.button.transport_sides),
+                    (Length::Fill, Length::Fill),
+                    self.skin,
+                )
+            }
             ButtonStyle::MicroPrimary => control
                 .width(Length::Fixed(self.skin.button.micro_size))
                 .into(),
@@ -142,7 +144,7 @@ fn icon_label<'a>(
     icon: Icon,
     label: &'a str,
     font: FontSkin,
-    color: iced::Color,
+    color: Color,
     skin: &Skin,
 ) -> Element<'a, UiEvent> {
     row![
@@ -163,23 +165,35 @@ fn is_primary(style: ButtonStyle) -> bool {
     )
 }
 
+/// Accent fill follows the read value: a transport button is filled while its
+/// state is on. The micro play button is the exception - it is a solid accent
+/// cell that only swaps its glyph.
+fn is_filled(style: ButtonStyle, active: bool) -> bool {
+    active || style == ButtonStyle::MicroPrimary
+}
+
 fn control_button_style(
     skin: &Skin,
     style: ButtonStyle,
     active: bool,
 ) -> impl Fn(&Theme, ButtonStatus) -> IcedButtonStyle + 'static {
     let palette = skin.palette;
-    let highlighted = is_primary(style) || active;
-    let mut border = skin.border(if style == ButtonStyle::VisNav {
-        skin.vis.nav_frame
-    } else if is_primary(style) {
-        skin.button.primary_frame
+    let highlighted = is_filled(style, active);
+    let is_transport = matches!(
+        style,
+        ButtonStyle::Transport | ButtonStyle::TransportPrimary
+    );
+    let border = if is_transport {
+        Border::default()
     } else {
-        skin.button.frame
-    });
-    if style == ButtonStyle::Transport {
-        border.color = palette.line_inner;
-    }
+        skin.border(if style == ButtonStyle::VisNav {
+            skin.vis.nav_frame
+        } else if is_primary(style) {
+            skin.button.primary_frame
+        } else {
+            skin.button.frame
+        })
+    };
     let vis_background = skin.color(skin.vis.nav_background);
     let vis_text = skin.color(skin.vis.nav_text_color);
     move |_theme, status| {
@@ -194,6 +208,12 @@ fn control_button_style(
                 ButtonStatus::Hovered => palette.accent_strong,
                 ButtonStatus::Pressed => palette.accent_soft,
                 ButtonStatus::Active | ButtonStatus::Disabled => palette.accent,
+            }
+        } else if is_transport {
+            match status {
+                ButtonStatus::Hovered => palette.bg_panel_2,
+                ButtonStatus::Pressed => palette.accent_soft,
+                ButtonStatus::Active | ButtonStatus::Disabled => Color::TRANSPARENT,
             }
         } else {
             match status {
@@ -224,20 +244,45 @@ mod tests {
     use super::*;
     use crate::{builtin, ids::SourceUri};
 
-    #[kithara::test]
-    fn active_transport_keeps_line_inner_separator() {
+    fn dark_skin() -> Skin {
         let origin = SourceUri("button.kskin.ron".to_owned());
-        let skin = Skin::resolve(builtin::skin_doc().clone(), &origin).unwrap();
-        let style = control_button_style(&skin, ButtonStyle::Transport, true)(
-            &Theme::Dark,
-            ButtonStatus::Active,
-        );
+        Skin::resolve(builtin::skin_doc().clone(), &origin).unwrap()
+    }
 
+    #[kithara::test]
+    fn transport_cells_fill_with_accent_only_while_active() {
+        let skin = dark_skin();
+        let style = |button, active| {
+            control_button_style(&skin, button, active)(&Theme::Dark, ButtonStatus::Active)
+        };
+
+        for button in [ButtonStyle::Transport, ButtonStyle::TransportPrimary] {
+            assert_eq!(
+                style(button, false).background,
+                Some(Background::Color(Color::TRANSPARENT)),
+                "{button:?} must let the wave through while it is off",
+            );
+            assert_eq!(style(button, false).text_color, skin.palette.text);
+            assert_eq!(
+                style(button, true).background,
+                Some(Background::Color(skin.palette.accent))
+            );
+            assert_eq!(style(button, true).text_color, skin.palette.bg);
+        }
+    }
+
+    #[kithara::test]
+    fn transport_cells_draw_no_border_of_their_own() {
+        let skin = dark_skin();
+        let border = |button| {
+            control_button_style(&skin, button, false)(&Theme::Dark, ButtonStatus::Active).border
+        };
+
+        assert_eq!(border(ButtonStyle::Transport).width, 0.0);
+        assert_eq!(border(ButtonStyle::TransportPrimary).width, 0.0);
         assert_eq!(
-            style.background,
-            Some(Background::Color(skin.palette.accent))
+            border(ButtonStyle::Default).width,
+            skin.button.frame.border_width
         );
-        assert_eq!(style.border.color, skin.palette.line_inner);
-        assert_eq!(style.border.width, 1.0);
     }
 }

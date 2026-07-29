@@ -11,8 +11,12 @@ use iced::{
 };
 use num_traits::cast::AsPrimitive;
 
-use super::zoom_math::{
-    column_bucket_range, max_bucket, norm_to_x, visible_mark_range, visible_marks, window_bounds,
+use super::{
+    bars,
+    zoom_math::{
+        bar_bucket_range, bar_grid, max_bucket, norm_to_x, visible_mark_range, visible_marks,
+        window_bounds,
+    },
 };
 use crate::{
     render::{WaveBucket, fonts, theme::RenderPalette},
@@ -45,12 +49,26 @@ pub(crate) fn draw(
     palette: HeroPalette,
 ) {
     let window = window_bounds(data.position, data.zoom);
-    draw_bars(frame, bounds, data.buckets, &window, metrics, palette.base);
+    draw_bars(
+        frame,
+        bounds,
+        data.buckets,
+        data.zoom,
+        &window,
+        metrics,
+        palette.base,
+    );
     draw_grid(frame, bounds, data, &window, metrics, palette.base);
     if let Some(region) = data.loop_region {
         draw_loop(frame, bounds, region, &window, metrics, palette.base);
     }
-    draw_played(frame, bounds, data.position, &window, metrics, palette.base);
+    bars::draw_played(
+        frame,
+        bounds,
+        norm_to_x(data.position.clamp(0.0, 1.0), &window, bounds.width),
+        metrics.played_alpha,
+        palette.base,
+    );
     draw_cues(frame, bounds, data.cues, &window, metrics, palette);
     draw_playhead(frame, bounds, data.position, &window, metrics, palette.base);
 }
@@ -59,54 +77,33 @@ fn draw_bars(
     frame: &mut Frame,
     bounds: Rectangle,
     buckets: &[WaveBucket],
+    zoom: f32,
     window: &Range<f32>,
     metrics: WaveSkin,
     palette: RenderPalette,
 ) {
-    let step = metrics.low_bar_width + metrics.bar_gap;
+    let step = bars::step(metrics);
     let content_width = (bounds.width - metrics.content_inset * 2.0).max(0.0);
     let columns: usize = ((content_width + metrics.bar_gap) / step).floor().as_();
+    let Some(grid) = bar_grid(columns, zoom, window) else {
+        return;
+    };
     let available_height = (bounds.height - metrics.content_inset * 2.0).max(0.0);
-    for column in 0..columns {
-        let range = column_bucket_range(column, columns, buckets.len(), window);
+    for bar in grid.first..grid.last {
+        let range = bar_bucket_range(bar, grid.norm_width, buckets.len());
         let Some(bucket) = max_bucket(buckets, range) else {
             continue;
         };
-        let column_x: f32 = column.as_();
-        let center_x = metrics.content_inset + column_x * step + metrics.low_bar_width / 2.0;
-        for (level, width, color) in [
-            (bucket.low, metrics.low_bar_width, palette.wave_low),
-            (bucket.mid, metrics.mid_bar_width, palette.wave_mid),
-            (bucket.high, metrics.high_bar_width, palette.wave_high),
-        ] {
-            draw_band(
-                frame,
-                bounds,
-                center_x,
-                level,
-                available_height,
-                width,
-                color,
-            );
-        }
-    }
-}
-
-fn draw_band(
-    frame: &mut Frame,
-    bounds: Rectangle,
-    center_x: f32,
-    level: f32,
-    available_height: f32,
-    width: f32,
-    color: Color,
-) {
-    let height = level.clamp(0.0, 1.0) * available_height;
-    if height > 0.0 {
-        frame.fill_rectangle(
-            Point::new(center_x - width / 2.0, (bounds.height - height) / 2.0),
-            Size::new(width, height),
-            color,
+        let bar_f: f32 = bar.as_();
+        let center_x = norm_to_x((bar_f + 0.5) * grid.norm_width, window, bounds.width);
+        bars::draw_column(
+            frame,
+            bounds,
+            center_x,
+            bucket,
+            available_height,
+            metrics,
+            palette,
         );
     }
 }
@@ -185,22 +182,6 @@ fn draw_loop(
             );
         }
     }
-}
-
-fn draw_played(
-    frame: &mut Frame,
-    bounds: Rectangle,
-    position: f32,
-    window: &Range<f32>,
-    metrics: WaveSkin,
-    palette: RenderPalette,
-) {
-    let width = norm_to_x(position.clamp(0.0, 1.0), window, bounds.width).clamp(0.0, bounds.width);
-    frame.fill_rectangle(
-        Point::ORIGIN,
-        Size::new(width, bounds.height),
-        with_alpha(palette.bg_deep, metrics.played_alpha),
-    );
 }
 
 fn draw_cues(

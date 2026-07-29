@@ -1,61 +1,34 @@
+use kithara_ui::render::{UiEvent, WindowCommand};
+
+use crate::deck::DeckId;
+
 /// All GUI events flow through this enum.
+///
+/// Deck-scoped events carry the deck they address; blocks themselves emit
+/// [`super::deck::DeckMsg`] and know nothing about deck identity.
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
-    /// Toggle play / pause.
-    TogglePlayPause,
-    /// Skip to next track.
-    Next,
-    /// Skip to previous track.
-    Prev,
-    /// Seek slider moved (position in seconds).
-    SeekChanged(f64),
-    /// Seek slider released — commit the seek.
-    SeekReleased,
-    /// One-shot seek to an absolute position (seconds) — a waveform click.
-    SeekTo(f64),
-    /// Volume slider changed (0.0 – 1.0).
-    VolumeChanged(f32),
-    /// EQ band gain changed (band index, dB value).
-    EqBandChanged(usize, f32),
-    /// Playback rate changed.
-    PlayRateChanged(f32),
-    /// Crossfade duration changed (seconds).
-    CrossfadeChanged(f32),
-    /// URL bar control event (grouped to keep this enum thin).
-    Url(super::url_bar::UrlMsg),
-    /// Toggle mute state.
-    ToggleMute,
-    /// Toggle shuffle on / off.
-    ToggleShuffle,
-    /// Cycle repeat mode (Off -> All -> One -> Off).
-    ToggleRepeat,
-    /// Reset all EQ bands to 0 dB.
-    EqResetAll,
-    /// Select a track from the playlist by index. First click just
-    /// highlights the row (no playback); a second click on the already-
-    /// selected row plays it. Matches common file-browser UX.
-    SelectTrack(usize),
-    /// Delete the currently-highlighted track (or current one if none
-    /// is highlighted). Wired to the Delete / Backspace key.
-    DeleteTrack,
-    /// Switch the active tab.
-    TabSelected(Tab),
-    /// Switch ABR mode (None = Auto).
-    SetAbrMode(Option<usize>),
-    /// Periodic tick from the subscription (100 ms).
+    /// Raw event from the compiled studio UI; translated by
+    /// [`super::studio_ui::translate`].
+    Ui(UiEvent),
+    /// Event addressed to one deck.
+    Deck(DeckId, super::deck::DeckMsg),
+    /// Session-mix edit (crossfader, trim).
+    Mix(super::mix::MixMsg),
+    /// Delete the current track of the focused deck (keyboard shortcut;
+    /// the subscription has no access to the focus).
+    DeleteFocusedTrack,
+    /// Highlight a catalog row.
+    SelectCatalogTrack(usize),
+    /// Load catalog row `.0` onto deck `.1`.
+    LoadOntoDeck(usize, DeckId),
+    /// Pause every deck the current studio layout does not lay out.
+    PauseHiddenDecks,
+    /// Periodic tick from the subscription.
     Tick,
-    /// DJ Studio control event (grouped to keep this enum thin).
-    Dj(super::dj::DjMsg),
-    /// System close button on a window. Exits the app only for the live
-    /// window; the mode-swap window is closed programmatically.
-    WindowCloseRequested(iced::window::Id),
-}
-
-/// Tabs in the main content area. Mirrors the iOS reference layout
-/// (Playlist / EQ / Settings).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Tab {
-    Playlist,
-    Equalizer,
-    Settings,
+    /// Window chrome the studio bar draws itself; executed against the
+    /// studio window this app owns.
+    Window(WindowCommand),
+    /// The window manager asked the studio window to close; exits the app.
+    WindowCloseRequested,
 }

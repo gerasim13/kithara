@@ -28,6 +28,10 @@ mod wire {
         NoContext,
         #[error("eq band out of range: {band} (bands: {bands})")]
         EqBandOutOfRange { band: usize, bands: usize },
+        #[error("master volume {level} out of range for player {player_id}")]
+        MasterVolumeOutOfRange { player_id: PlayerId, level: f32 },
+        #[error("duplicate player in master volume batch: {0}")]
+        DuplicatePlayer(PlayerId),
         #[error("stream start failed: {0}")]
         StreamStart(String),
         #[error("graph edit failed: {0}")]
@@ -60,9 +64,8 @@ mod wire {
             player_id: PlayerId,
             slot: SlotId,
         },
-        SetPlayerMasterVolume {
-            player_id: PlayerId,
-            volume: f32,
+        SetPlayerMasterVolumes {
+            levels: Vec<PlayerLevel>,
         },
         SetPlayerSlotVolume {
             player_id: PlayerId,
@@ -90,6 +93,22 @@ mod wire {
         pub reply_tx: mpsc::Sender<Reply>,
     }
 
+    /// One player's session-input level in a batch update. `level` is a linear
+    /// amplitude in `0.0..=1.0`.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    #[non_exhaustive]
+    pub struct PlayerLevel {
+        pub player_id: PlayerId,
+        pub level: f32,
+    }
+
+    impl PlayerLevel {
+        #[must_use]
+        pub fn new(player_id: PlayerId, level: f32) -> Self {
+            Self { player_id, level }
+        }
+    }
+
     #[non_exhaustive]
     pub enum Reply {
         Ok,
@@ -112,7 +131,7 @@ mod handle {
     use kithara_bufpool::PcmPool;
     use kithara_platform::sync::Arc;
 
-    use super::wire::{AllocatedSlot, Cmd, PlayerId, Reply};
+    use super::wire::{AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply};
     use crate::{api::SlotId, error::PlayError};
 
     pub trait SessionDispatcher: Send + Sync + 'static {
@@ -207,12 +226,11 @@ mod handle {
             .map(|_| ())
         }
 
-        pub fn set_player_master_volume(
-            &self,
-            player_id: PlayerId,
-            volume: f32,
-        ) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::SetPlayerMasterVolume { player_id, volume })
+        pub fn set_player_master_volumes(&self, levels: Vec<PlayerLevel>) -> Result<(), PlayError> {
+            if levels.is_empty() {
+                return Ok(());
+            }
+            self.exec_ok(Cmd::SetPlayerMasterVolumes { levels })
                 .map(|_| ())
         }
 
@@ -260,4 +278,6 @@ mod handle {
 }
 
 pub use handle::{SessionDispatcher, SessionHandle};
-pub use wire::{AllocatedSlot, Cmd, CmdMsg, PlayerId, Reply, SessionError, StartStreamFn};
+pub use wire::{
+    AllocatedSlot, Cmd, CmdMsg, PlayerId, PlayerLevel, Reply, SessionError, StartStreamFn,
+};

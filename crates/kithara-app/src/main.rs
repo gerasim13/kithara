@@ -9,10 +9,9 @@ use std::{
 use clap::Parser;
 use kithara::{
     assets::{AssetStoreBuilder, FlushHub, FlushPolicy, StorageBackend},
-    audio::generate_log_spaced_bands,
     bufpool::Region,
     net::{HttpClient, NetOptions},
-    play::{PlayerConfig, PlayerImpl, SessionHandle, StretchControls},
+    play::SessionHandle,
     stream::dl::{Downloader, DownloaderConfig},
 };
 #[cfg(not(feature = "tui"))]
@@ -21,9 +20,14 @@ use kithara_app::gui;
 use kithara_app::gui::GuiFrontend;
 #[cfg(feature = "tui")]
 use kithara_app::tui::TuiFrontend;
-use kithara_app::{baked, config::AppConfig, frontend::Frontend, tracing_init::init_tracing};
-use kithara_platform::{CancelToken, sync::Arc};
-use kithara_queue::{Queue, QueueConfig};
+use kithara_app::{
+    baked,
+    config::AppConfig,
+    deck::{Deck, DeckId, DeckSet},
+    frontend::Frontend,
+    tracing_init::init_tracing,
+};
+use kithara_platform::CancelToken;
 
 /// Kithara — audio player application.
 #[derive(Parser)]
@@ -137,37 +141,29 @@ fn main() -> AppResult {
         .should_accept_invalid_certs(args.insecure)
         .build();
 
-    let timestretch = StretchControls::new(1.0);
-    let player_config = PlayerConfig::builder()
-        .cancel(shutdown.child())
-        .crossfade_duration(config.crossfade_seconds)
-        .eq_layout(generate_log_spaced_bands(config.eq_band_count))
-        .byte_pool(region.byte_pool())
-        .pcm_pool(region.pcm_pool())
-        .session(app_session_handle().dispatcher())
-        .timestretch(Arc::clone(&timestretch))
-        .build();
-    let player = Arc::new(PlayerImpl::new(player_config));
-    let queue_config = QueueConfig::default()
-        .with_player(player)
-        .with_store(config.store.clone())
-        .with_cancel(shutdown.child());
-
-    let queue = Arc::new(Queue::new(queue_config));
+    let session = app_session_handle();
+    let deck_set = DeckSet::new(vec![
+        Deck::build(DeckId(0), &config, &session),
+        Deck::build(DeckId(1), &config, &session),
+    ]);
 
     match mode {
         #[cfg(feature = "tui")]
         Mode::Tui | Mode::Auto => {
             let mut frontend = TuiFrontend::new(&config)?;
-            frontend.start(Arc::clone(&queue))?;
-            frontend.run_loop(Arc::clone(&queue), Arc::clone(&timestretch))?;
+            frontend.start(&deck_set)?;
+            frontend.run_loop(deck_set)?;
             frontend.shutdown()?;
         }
         #[cfg(feature = "gui")]
         Mode::Gui => {
+            // The DJ mix drives deck gains only in the GUI; the TUI plays its
+            // single deck at unity.
+            let mut deck_set = deck_set;
+            deck_set.commit(deck_set.mix().clone())?;
             let mut frontend = GuiFrontend::new(&config)?;
-            frontend.start(Arc::clone(&queue))?;
-            frontend.run_loop(Arc::clone(&queue), Arc::clone(&timestretch))?;
+            frontend.start(&deck_set)?;
+            frontend.run_loop(deck_set)?;
             frontend.shutdown()?;
         }
         #[cfg(not(feature = "gui"))]

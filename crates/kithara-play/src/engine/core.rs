@@ -239,6 +239,24 @@ impl EngineImpl {
         self.master_volume.load(Ordering::Relaxed)
     }
 
+    pub(super) fn start_lock(&self) -> &Mutex<()> {
+        &self.start_lock
+    }
+
+    pub(super) fn registered_player_id(&self) -> Option<PlayerId> {
+        *self.player_id.lock()
+    }
+
+    pub(super) fn session_handle(&self) -> &SessionHandle {
+        &self.session
+    }
+
+    /// Store the desired gain without dispatching: the mixer batch already
+    /// actuated the graph.
+    pub(super) fn commit_desired_master_volume(&self, level: f32) {
+        self.master_volume.store(level, Ordering::Relaxed);
+    }
+
     pub fn max_slots(&self) -> usize {
         self.config.max_slots
     }

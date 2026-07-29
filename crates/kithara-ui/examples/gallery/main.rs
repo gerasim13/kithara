@@ -4,7 +4,6 @@ mod mock_mixer;
 mod mock_stress;
 mod mock_transport;
 mod sections;
-mod shot;
 
 use iced::{Element, Size, Subscription, Task, Theme, time as iced_time, window, window::Settings};
 use kithara_platform::time::Duration;
@@ -23,7 +22,6 @@ use self::{
 struct Consts;
 
 impl Consts {
-    const CAPTURE_TICK_MS: u64 = 100;
     const HEIGHT: f32 = 720.0;
     const STRESS_TICK_MS: u64 = 16;
     const WIDTH: f32 = 1100.0;
@@ -191,10 +189,6 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/modules/tabs/chrome-join-right.kmodule.ron"),
     ),
     (
-        "modules/tabs/chrome-no-corners.kmodule.ron",
-        include_str!("assets/modules/tabs/chrome-no-corners.kmodule.ron"),
-    ),
-    (
         "modules/tabs/chrome-open-top.kmodule.ron",
         include_str!("assets/modules/tabs/chrome-open-top.kmodule.ron"),
     ),
@@ -295,7 +289,6 @@ const ASSETS: &[(&str, &str)] = &[
 #[derive(Clone, Debug)]
 enum Message {
     Close(window::Id),
-    Shot(&'static str, window::Screenshot),
     Tick,
     Ui(UiEvent),
 }
@@ -305,7 +298,6 @@ struct Gallery {
     module_layouts: [CompiledUi; ModuleDemo::ALL.len()],
     skin: &'static Skin,
     reads: MockReads,
-    shot: Option<shot::ShotPlan>,
     window_id: window::Id,
 }
 
@@ -357,7 +349,6 @@ impl Gallery {
                 module_layouts,
                 skin: builtin::skin(),
                 reads: MockReads::default(),
-                shot: shot::ShotPlan::read(),
                 window_id,
             },
             open.discard(),
@@ -393,10 +384,9 @@ fn update(state: &mut Gallery, message: Message) -> Task<Message> {
     match message {
         Message::Close(id) if id == state.window_id => iced::exit(),
         Message::Close(id) => window::close(id),
-        Message::Shot(name, screenshot) => shot::save(state, name, &screenshot),
         Message::Tick => {
             state.reads.tick();
-            shot::drive(state)
+            Task::none()
         }
         Message::Ui(UiEvent::Control { path, action }) => {
             if let Ok(tab) = Tab::try_from(path.as_str()) {
@@ -418,7 +408,7 @@ fn update(state: &mut Gallery, message: Message) -> Task<Message> {
             WindowCommand::Drag => window::drag(state.window_id),
             WindowCommand::Minimize => window::minimize(state.window_id, true),
             WindowCommand::ToggleMaximize => window::toggle_maximize(state.window_id),
-            WindowCommand::Close => window::close(state.window_id),
+            WindowCommand::Close => iced::exit(),
             _ => Task::none(),
         },
         Message::Ui(_) => Task::none(),
@@ -437,16 +427,10 @@ fn view(state: &Gallery, _window: window::Id) -> Element<'_, Message> {
 
 fn subscription(state: &Gallery) -> Subscription<Message> {
     let close = window::close_requests().map(Message::Close);
-    let animated = matches!(state.reads.active_tab(), Tab::Stress | Tab::Vis);
-    if state.shot.is_some() || animated {
-        let period = if animated {
-            Consts::STRESS_TICK_MS
-        } else {
-            Consts::CAPTURE_TICK_MS
-        };
+    if matches!(state.reads.active_tab(), Tab::Stress | Tab::Vis) {
         Subscription::batch([
             close,
-            iced_time::every(Duration::from_millis(period)).map(|_| Message::Tick),
+            iced_time::every(Duration::from_millis(Consts::STRESS_TICK_MS)).map(|_| Message::Tick),
         ])
     } else {
         close
@@ -481,7 +465,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use kithara_ui::{
         compile::CompiledNode,
-        expand::{Binding, ControlSpec, ExpandedNode},
+        expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
         module::ChromeStyle,
         render::ControlAction,
     };
@@ -679,7 +663,12 @@ mod tests {
             ExpandedNode::Control {
                 spec:
                     ControlSpec::Tree {
-                        query: Some(Binding::Model { id, .. }),
+                        query:
+                            Some(Binding {
+                                kind: BindingKind::Model,
+                                id,
+                                ..
+                            }),
                     },
                 ..
             } => queries.push(ui.resolve(*id)),
@@ -724,9 +713,19 @@ mod tests {
                 spec:
                     ControlSpec::ContextBar {
                         scope_items,
-                        scope: Some(Binding::Model { id: scope, .. }),
+                        scope:
+                            Some(Binding {
+                                kind: BindingKind::Model,
+                                id: scope,
+                                ..
+                            }),
                     },
-                write: Some(Binding::Model { id: write, .. }),
+                write:
+                    Some(Binding {
+                        kind: BindingKind::Model,
+                        id: write,
+                        ..
+                    }),
                 ..
             } => contexts.push((
                 ui.resolve(*path),

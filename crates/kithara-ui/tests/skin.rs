@@ -17,6 +17,13 @@ fn builtin_skin_parses_every_required_section() {
     let document = parse_skin(builtin::DARK_SKIN, &origin()).unwrap();
 
     assert_eq!(document.id, DocId("kithara-dark".to_owned()));
+    assert_eq!(builtin::skin_doc(), &document);
+}
+
+#[kithara::test]
+fn builtin_skin_pins_the_design_canon() {
+    let document = parse_skin(builtin::DARK_SKIN, &origin()).unwrap();
+
     assert_eq!(document.palette.bg, "#12121f");
     assert_eq!(document.layout.grid_gap, 1.0);
     assert_eq!(document.layout.size_gap, 0.0);
@@ -32,7 +39,12 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.chrome.footer_text_size, 9.0);
     assert_eq!(document.chrome.inner_line, ColorRole::LineInner);
     assert_eq!(document.chrome.footer_background, ColorRole::BgFooter);
+    assert_eq!(document.chrome.corner_size, 10.0);
+    assert_eq!(document.chrome.corner_width, 2.0);
+    assert_eq!(document.chrome.corner_offset, 0.0);
+    assert_eq!(document.chrome.corner_color, ColorRole::Accent);
     assert_eq!(document.text_input.idle_border_width, 0.0);
+    assert_eq!(document.window.resize_edge, 4.0);
     assert_eq!(document.knob.body_fill, ColorRole::BgSelect);
     assert_eq!(document.knob.body_border, ColorRole::Line);
     assert_eq!(document.knob.track_color, ColorRole::Line);
@@ -40,13 +52,42 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.knob.indicator_color, ColorRole::Text);
     assert_eq!(document.knob.track_alpha, 1.0);
     assert_eq!(document.knob.drag_range, 140.0);
+    assert_eq!(document.knob.wheel_step, 0.02);
     assert_eq!(document.crossfader.rail_height, 6.0);
+    assert_eq!(document.crossfader.padding_x, 14.0);
     assert_eq!(document.crossfader.thumb_width, 10.0);
     assert_eq!(document.crossfader.thumb_height, 16.0);
-    assert_eq!(document.crossfader.left_label, "A \u{2039}");
+    assert_eq!(document.crossfader.left_label, "A");
     assert_eq!(document.crossfader.center_label, "XFADE");
-    assert_eq!(document.crossfader.right_label, "\u{203a} B");
+    assert_eq!(document.crossfader.right_label, "B");
+    let horizontal_ticks = document.crossfader.ticks;
+    assert_eq!(horizontal_ticks.count, 11);
+    assert_eq!(horizontal_ticks.thickness, 1.0);
+    assert_eq!(horizontal_ticks.length, 6.0);
+    assert_eq!(horizontal_ticks.center_length, 10.0);
+    assert_eq!(horizontal_ticks.gap, 5.0);
+    assert_eq!(horizontal_ticks.inset, 2.0);
+    assert_eq!(horizontal_ticks.color, ColorRole::Line);
+    assert_eq!(horizontal_ticks.center_color, ColorRole::TextDim);
+    assert_eq!(
+        document.meter.size,
+        SizeSpec::new(Dim::Fixed(40.0), Dim::Fixed(7.0))
+    );
+    assert_eq!(document.meter.frame.border_width, 1.0);
+    assert_eq!(document.meter.frame.border, ColorRole::LineInner);
+    assert_eq!(document.meter.background, ColorRole::BgInset);
+    assert_eq!(document.meter.fill, ColorRole::Accent);
     assert_eq!(document.vu_stereo.segment_count, 16);
+    assert_eq!(document.vu_vertical.fader_width, 18.0);
+    let vertical_ticks = document.vu_vertical.ticks;
+    assert_eq!(vertical_ticks.count, 11);
+    assert_eq!(vertical_ticks.thickness, 1.0);
+    assert_eq!(vertical_ticks.length, 8.0);
+    assert_eq!(vertical_ticks.center_length, 14.0);
+    assert_eq!(vertical_ticks.gap, 6.0);
+    assert_eq!(vertical_ticks.inset, 2.0);
+    assert_eq!(vertical_ticks.color, ColorRole::Line);
+    assert_eq!(vertical_ticks.center_color, ColorRole::TextDim);
     assert_eq!(document.vu_vertical.warning_threshold, 0.66);
     assert_eq!(
         document.toggle.size,
@@ -62,9 +103,8 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.chip.inactive_frame.border, ColorRole::Line);
     assert_eq!(document.chip.deck_text.size, 9.0);
     assert_eq!(document.chip.routing_text.size, 7.0);
-    assert_eq!(document.button.primary_text.weight, FontWeight::Bold);
-    assert_eq!(document.button.height, 30.0);
-    assert_eq!(document.button.transport_icon_size, 12.0);
+    assert_eq!(document.button.primary_text.weight, FontWeight::Normal);
+    assert_eq!(document.button.transport_icon_size, 10.0);
     assert_eq!(document.nav.item_height, 30.0);
     assert_eq!(document.nav.marker_width, 2.0);
     assert_eq!(document.nav.icon_size, 14.0);
@@ -81,6 +121,7 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.text.body.size, 11.0);
     assert_eq!(document.text.telemetry.font, FontFamily::Mono);
     assert_eq!(document.text.telemetry.color, ColorRole::Accent);
+    assert_eq!(document.text.micro_label.size, 8.0);
     assert_eq!(document.text.micro_label.spacing, 0.12);
     assert_eq!(document.text.micro_label.color, ColorRole::Muted);
     assert_eq!(document.segmented.frame.border_width, 1.0);
@@ -99,6 +140,8 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.fader.label_width, 28.0);
     assert_eq!(document.vu_vertical.thumb_height, 9.0);
     assert_eq!(document.vu_vertical.thumb_color, ColorRole::Accent);
+    assert_eq!(document.vu_vertical.thumb_notch_offset, 4.0);
+    assert_eq!(document.vu_vertical.thumb_notch_height, 1.0);
     assert_eq!(document.vis.header_height, 26.0);
     assert_eq!(document.vis.size.h, Dim::Fixed(300.0));
     assert_eq!(document.vis.footer_height, 22.0);
@@ -108,7 +151,7 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.wave.loop_fill_alpha, 0.22);
     assert_eq!(document.wave.overlay.background, ColorRole::BgDeep);
     assert_eq!(document.wave.overlay.background_alpha, 0.84);
-    assert_eq!(document.wave.overlay.key_color, ColorRole::Success);
+    assert_eq!(document.wave.overlay.key_color, ColorRole::Accent);
     assert_eq!(document.wave.played_alpha, 0.35);
     assert_eq!(document.wave.playhead_width, 1.5);
     assert_eq!(document.global_bar.brand_width, 112.0);
@@ -120,14 +163,14 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.tree.context_height, 26.0);
     let track_list = &document.track_list;
     assert_eq!(track_list.header_height, 22.0);
-    assert_eq!(track_list.row_height, 28.0);
+    assert_eq!(track_list.row_height, 30.0);
     assert_eq!(track_list.footer_height, 22.0);
     assert_eq!(track_list.index_width, 28.0);
-    assert_eq!(track_list.deck_width, 40.0);
-    assert_eq!(track_list.artist_width, 180.0);
-    assert_eq!(track_list.bpm_width, 64.0);
-    assert_eq!(track_list.key_width, 46.0);
-    assert_eq!(track_list.time_width, 60.0);
+    assert_eq!(track_list.deck_width, 64.0);
+    assert_eq!(track_list.artist_width, 200.0);
+    assert_eq!(track_list.bpm_width, 70.0);
+    assert_eq!(track_list.key_width, 56.0);
+    assert_eq!(track_list.time_width, 70.0);
     assert_eq!(track_list.energy_width, 110.0);
     assert_eq!(track_list.transition_width, 130.0);
     assert_eq!(track_list.deck_text.size, 9.0);
@@ -136,7 +179,6 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(track_list.energy_bar_height, 4.0);
     assert_eq!(track_list.footer_text.size, 9.0);
     assert_eq!(document.layout_preview.height, 92.0);
-    assert_eq!(builtin::skin_doc(), &document);
 }
 
 #[kithara::test]

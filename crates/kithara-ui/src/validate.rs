@@ -92,6 +92,18 @@ pub(crate) fn check_id(id: &str, origin: &SourceUri) -> Result<(), UiDocError> {
     Ok(())
 }
 
+pub(crate) fn check_module_id(doc: &ModuleDoc, origin: &SourceUri) -> Result<(), UiDocError> {
+    check_id(&doc.id.0, origin)?;
+    if doc.id.0.contains('.') {
+        return Err(UiDocError::InvalidId {
+            origin: origin.clone(),
+            id: doc.id.0.clone(),
+            reason: "module id addresses its collapsed state and must not contain '.'".to_owned(),
+        });
+    }
+    Ok(())
+}
+
 pub(crate) fn check_module_node_ids(doc: &ModuleDoc, origin: &SourceUri) -> Result<(), UiDocError> {
     let mut seen = BTreeSet::new();
     walk_module(&doc.root, &NodePath::default(), origin, &mut seen)
@@ -121,7 +133,24 @@ fn walk_module(
     seen: &mut BTreeSet<String>,
 ) -> Result<(), UiDocError> {
     match node {
-        ControlNode::Row { id, children, .. } | ControlNode::Column { id, children, .. } => {
+        ControlNode::Row {
+            id,
+            write,
+            children,
+            ..
+        }
+        | ControlNode::Column {
+            id,
+            write,
+            children,
+            ..
+        } => {
+            if id.is_none() && write.is_some() {
+                return Err(UiDocError::UnaddressedSurface {
+                    origin: origin.clone(),
+                    path: path.render(),
+                });
+            }
             let here = match id {
                 Some(id) => {
                     let here = path.push(format!("Group({id})"));
@@ -164,8 +193,10 @@ fn control_id(node: &ControlNode) -> Option<&NodeId> {
         ControlNode::DeckSummary { id, .. }
         | ControlNode::Brand { id, .. }
         | ControlNode::Spacer { id, .. }
+        | ControlNode::Divider { id, .. }
         | ControlNode::PresetSelector { id, .. }
         | ControlNode::SettingsButton { id, .. }
+        | ControlNode::WindowDrag { id, .. }
         | ControlNode::TitleBar { id, .. }
         | ControlNode::WindowControls { id, .. }
         | ControlNode::Text { id, .. }
@@ -194,7 +225,8 @@ fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Chip { id, .. }
         | ControlNode::Knob { id, .. }
         | ControlNode::VuStereo { id, .. }
-        | ControlNode::VuVertical { id, .. } => Some(id),
+        | ControlNode::VuVertical { id, .. }
+        | ControlNode::Meter { id, .. } => Some(id),
     }
 }
 
@@ -232,6 +264,16 @@ pub(crate) fn check_controls(
             zoom,
             BindingSide::Read,
             Some(ValueKind::Scalar),
+            site.path,
+            origin,
+            endpoints,
+        )?;
+    }
+    if let Some(active) = site.active {
+        check_binding(
+            active,
+            BindingSide::Read,
+            Some(ValueKind::Bool),
             site.path,
             origin,
             endpoints,
@@ -368,6 +410,50 @@ pub(crate) fn check_module_footer(
     )
 }
 
+pub(crate) fn check_layout_dragged(
+    doc: &LayoutDoc,
+    origin: &SourceUri,
+    endpoints: &dyn EndpointRegistry,
+) -> Result<(), UiDocError> {
+    let Some(binding) = doc.dragged.as_ref() else {
+        return Ok(());
+    };
+    check_binding(
+        binding,
+        BindingSide::Read,
+        Some(ValueKind::Text),
+        "root/dragged",
+        origin,
+        endpoints,
+    )
+}
+
+pub(crate) fn check_module_drop(
+    doc: &ModuleDoc,
+    origin: &SourceUri,
+    endpoints: &dyn EndpointRegistry,
+) -> Result<(), UiDocError> {
+    let Some(drop) = doc.drop.as_ref() else {
+        return Ok(());
+    };
+    check_binding(
+        &drop.write,
+        BindingSide::Write,
+        Some(ValueKind::Trigger),
+        "root/drop",
+        origin,
+        endpoints,
+    )?;
+    check_binding(
+        &drop.read,
+        BindingSide::Read,
+        Some(ValueKind::Bool),
+        "root/drop",
+        origin,
+        endpoints,
+    )
+}
+
 #[derive(Clone, Copy)]
 enum BindingSide {
     Read,
@@ -388,7 +474,9 @@ pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<V
         | ControlNode::Toggle { .. }
         | ControlNode::Checkbox { .. }
         | ControlNode::Chip { .. } => (Some(ValueKind::Bool), Some(ValueKind::Trigger)),
-        ControlNode::Time { .. } | ControlNode::Scalar { .. } => (Some(ValueKind::Scalar), None),
+        ControlNode::Time { .. } | ControlNode::Scalar { .. } | ControlNode::Meter { .. } => {
+            (Some(ValueKind::Scalar), None)
+        }
         ControlNode::Crossfader { .. }
         | ControlNode::Fader { .. }
         | ControlNode::Knob { .. }
@@ -400,14 +488,15 @@ pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<V
         ControlNode::VuStereo { .. } | ControlNode::VuVertical { .. } => {
             (Some(ValueKind::Stereo), Some(ValueKind::Scalar))
         }
-        ControlNode::Row { .. }
-        | ControlNode::Column { .. }
-        | ControlNode::Include { .. }
+        ControlNode::Row { .. } | ControlNode::Column { .. } => (None, Some(ValueKind::Scalar)),
+        ControlNode::Include { .. }
         | ControlNode::Slot { .. }
         | ControlNode::Brand { .. }
         | ControlNode::Spacer { .. }
+        | ControlNode::Divider { .. }
         | ControlNode::PresetSelector { .. }
         | ControlNode::SettingsButton { .. }
+        | ControlNode::WindowDrag { .. }
         | ControlNode::TitleBar { .. }
         | ControlNode::WindowControls { .. }
         | ControlNode::Glyph { .. }
@@ -619,6 +708,33 @@ mod tests {
     }
 
     #[kithara::test]
+    fn module_id_with_an_address_separator_is_rejected() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "studio.strip",
+            root: Button(id: "play", label: "PLAY"))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+        let error = check_module_id(&doc, &origin()).unwrap_err();
+        assert!(matches!(
+            error,
+            UiDocError::InvalidId { id, reason, .. }
+                if id == "studio.strip" && reason.contains("'.'")
+        ));
+    }
+
+    #[kithara::test]
+    fn a_container_that_writes_without_an_id_is_rejected() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Row(write: Parameter(id: "deck.tempo.rate"), children: [
+                Button(id: "play", label: "PLAY"),
+            ]))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+        let error = check_module_node_ids(&doc, &origin()).unwrap_err();
+        assert!(matches!(
+            error,
+            UiDocError::UnaddressedSurface { path, .. } if path == "root"
+        ));
+    }
+
+    #[kithara::test]
     fn unique_ids_pass() {
         let text = r#"(schema: "kithara.module", version: 1, id: "m",
             root: Row(children: [
@@ -640,6 +756,10 @@ mod tests {
             ControlNode::Wave { zoom, .. } => zoom.as_ref(),
             _ => None,
         };
+        let active = match &document.root {
+            ControlNode::Text { active, .. } => active.as_ref(),
+            _ => None,
+        };
         check_controls(
             ControlSite {
                 path,
@@ -650,6 +770,7 @@ mod tests {
                 query: None,
                 scope,
                 zoom,
+                active,
             },
             &origin(),
             &registry(),
@@ -719,6 +840,7 @@ mod tests {
                 query: query.as_ref(),
                 scope: None,
                 zoom: None,
+                active: None,
             },
             &origin(),
             &registry(),
@@ -886,6 +1008,7 @@ mod tests {
                 query: None,
                 scope: None,
                 zoom: None,
+                active: None,
             },
             &origin(),
             &registry(),

@@ -20,17 +20,17 @@ pub mod wasm;
 pub mod mock;
 
 pub use api::{
-    DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus, PlayerEvent,
-    PlayerStatus, RouteChangeReason, SessionDuckingMode, SessionEvent, SlotId, TimeControlStatus,
-    TimeRange, WaitingReason,
+    CrossfaderBus, DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus,
+    PlayerEvent, PlayerStatus, RouteChangeReason, SessionDuckingMode, SessionEvent, SlotId,
+    TimeControlStatus, TimeRange, WaitingReason, crossfader_gain,
 };
 pub use bridge::{
     AllocatedSlot, Cmd, CmdMsg, NodeInputs, PlaybackShared, PlaybackSnapshot, PlayerId,
-    PlayerNotification, Reply, SessionDispatcher, SessionError, SessionHandle, SessionState,
-    SharedEq, SlotControl, StartStreamFn, TrackPlaybackStopReason, TrackState, TrackTransition,
-    run_cmd,
+    PlayerLevel, PlayerNotification, Reply, SessionDispatcher, SessionError, SessionHandle,
+    SessionState, SharedEq, SlotControl, StartStreamFn, TrackPlaybackStopReason, TrackState,
+    TrackTransition, run_cmd,
 };
-pub use engine::{EngineConfig, EngineImpl};
+pub use engine::{EngineConfig, EngineImpl, apply_mix};
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::{

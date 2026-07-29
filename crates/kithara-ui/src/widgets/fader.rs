@@ -3,7 +3,7 @@ use iced::{
     alignment::Vertical,
     mouse::{self, Cursor},
     widget::{
-        Canvas, Space, Stack,
+        Canvas, Row, Space, Stack,
         canvas::{self, Action, Frame, Geometry, Path, Stroke},
         container,
         container::Style as ContainerStyle,
@@ -21,7 +21,7 @@ use crate::{
     skin::{FaderSkin, FrameSkin},
     widgets::{
         Widget,
-        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState},
+        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState, WheelStep},
     },
 };
 
@@ -29,6 +29,7 @@ use crate::{
 pub(crate) struct Fader<'path, 'value, 'data, 'skin> {
     path: &'path str,
     style: FaderStyle,
+    label: Option<&'path str>,
     value: Option<&'value ReadValue<'data>>,
     skin: &'skin Skin,
 }
@@ -70,19 +71,24 @@ impl<'a> Widget<'a> for Fader<'_, '_, '_, '_> {
         let rail = Stack::with_children([ticks.into(), slider.into()])
             .height(Length::Fixed(self.skin.fader.ticks_height))
             .width(Length::Fill);
-        let label = container(
-            shaped_text("VOL")
-                .font(fonts::sans(self.skin.fader.label.weight))
-                .size(self.skin.fader.label.size)
-                .color(palette.muted),
-        )
-        .width(Length::Fixed(self.skin.fader.label_width))
-        .height(Length::Fill)
-        .center_y(Length::Fill);
-        let control = row![label, rail]
+        let mut control = Row::new()
             .align_y(Alignment::Center)
             .height(Length::Fixed(self.skin.fader.control_height))
             .width(Length::Fill);
+        if let Some(label) = self.label {
+            control = control.push(
+                container(
+                    shaped_text(label.to_owned())
+                        .font(fonts::sans(self.skin.fader.label.weight))
+                        .size(self.skin.fader.label.size)
+                        .color(palette.muted),
+                )
+                .width(Length::Fixed(self.skin.fader.label_width))
+                .height(Length::Fill)
+                .center_y(Length::Fill),
+            );
+        }
+        let control = control.push(rail);
 
         container(control)
             .padding([
@@ -263,6 +269,10 @@ impl<'a> Widget<'a> for VolumeStrip<'_, '_> {
                 .path(self.path.to_owned())
                 .mode(ScalarDragMode::Horizontal)
                 .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
+                .wheel(WheelStep {
+                    value: self.value.clamp(0.0, 1.0).as_(),
+                    step: self.skin.fader.step.as_(),
+                })
                 .build(),
             metrics: self.skin.fader,
             border_color: self.skin.color(self.skin.fader.strip_frame.border),

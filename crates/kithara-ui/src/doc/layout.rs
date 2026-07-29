@@ -7,6 +7,7 @@ use crate::{
     envelope::{self, DocKind},
     error::UiDocError,
     ids::{DocId, InstanceId, SourceUri},
+    module::BindingRef,
     size::SizeSpec,
 };
 
@@ -17,6 +18,14 @@ pub struct LayoutDoc {
     pub schema: String,
     pub version: u32,
     pub id: DocId,
+    /// A window without system decorations has to be resized by its own edges;
+    /// the renderer frames the root with them when this is set.
+    #[serde(default)]
+    pub resize_edges: bool,
+    /// Names the item the pointer is carrying. While it reads as text, the
+    /// layout draws that text at the pointer, over everything it lays out.
+    #[serde(default)]
+    pub dragged: Option<BindingRef>,
     pub root: LayoutNode,
 }
 
@@ -37,7 +46,9 @@ pub enum LayoutNode {
         size: Option<SizeSpec>,
         #[serde(default)]
         frame: FrameSides,
-        #[serde(default = "default_corners")]
+        /// Draws the decorative ticks at the top-left and bottom-right of the
+        /// module frame.
+        #[serde(default)]
         corners: bool,
     },
 }
@@ -88,10 +99,6 @@ fn default_weight() -> f32 {
 }
 
 fn default_frame_side() -> bool {
-    true
-}
-
-fn default_corners() -> bool {
     true
 }
 

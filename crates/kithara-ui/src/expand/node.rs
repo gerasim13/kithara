@@ -3,10 +3,11 @@ use std::collections::BTreeMap;
 use crate::{
     error::UiDocError,
     ids::{InternId, SourceUri},
+    layout::FrameSides,
     module::{
         AdaptivePolicy, BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode,
-        DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, ScalarFormat, TextStyle, Tone,
-        TrackColumn, WaveStyle, WindowControlsStyle,
+        DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, ScalarFormat, TextAlign, TextStyle,
+        Tone, TrackColumn, WaveStyle, WindowControlsStyle,
     },
     size::SizeSpec,
     skin::ColorRole,
@@ -20,6 +21,12 @@ pub enum ExpandedNode {
         size: Option<SizeSpec>,
         gap: Option<f32>,
         pad: Option<f32>,
+        pad_x: Option<f32>,
+        pad_y: Option<f32>,
+        frame: Option<FrameSides>,
+        background: Option<ColorRole>,
+        background_alpha: Option<f32>,
+        surface: Option<SurfaceSpec>,
         children: Vec<Self>,
     },
     Column {
@@ -27,6 +34,12 @@ pub enum ExpandedNode {
         size: Option<SizeSpec>,
         gap: Option<f32>,
         pad: Option<f32>,
+        pad_x: Option<f32>,
+        pad_y: Option<f32>,
+        frame: Option<FrameSides>,
+        background: Option<ColorRole>,
+        background_alpha: Option<f32>,
+        surface: Option<SurfaceSpec>,
         children: Vec<Self>,
     },
     Slot {
@@ -53,8 +66,10 @@ pub enum ControlSpec {
     },
     Brand,
     Spacer,
+    Divider,
     PresetSelector,
     SettingsButton,
+    WindowDrag,
     TitleBar {
         label: InternId,
     },
@@ -64,6 +79,8 @@ pub enum ControlSpec {
     Text {
         style: TextStyle,
         label: Option<InternId>,
+        active: Option<Binding>,
+        align: TextAlign,
     },
     Glyph {
         icon: IconName,
@@ -81,6 +98,7 @@ pub enum ControlSpec {
         icon: Option<IconName>,
         active_label: Option<InternId>,
         style: ButtonStyle,
+        frame: Option<FrameSides>,
     },
     Bpm {
         placeholder: Option<InternId>,
@@ -88,10 +106,14 @@ pub enum ControlSpec {
     Time,
     Scalar {
         format: ScalarFormat,
+        framed: bool,
     },
-    Crossfader,
+    Crossfader {
+        ticks: bool,
+    },
     Fader {
         style: FaderStyle,
+        label: Option<InternId>,
     },
     Wave {
         style: WaveStyle,
@@ -139,30 +161,36 @@ pub enum ControlSpec {
         label: InternId,
         style: ChipStyle,
     },
-    Knob,
+    Knob {
+        label: Option<InternId>,
+    },
+    Meter,
     VuStereo,
-    VuVertical,
+    VuVertical {
+        ticks: bool,
+    },
 }
 
+/// Which side of the host contract a [`Binding`] addresses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BindingKind {
+    Command,
+    Parameter,
+    Telemetry,
+    Model,
+}
+
+/// Compiled endpoint reference. `id` is the bare endpoint; `key` is the
+/// canonical scope-qualified form `<id>@<scope>=<value>[,...]` (equal to `id`
+/// when the binding has no scope). Renderers and hosts address reads by `key`.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
-pub enum Binding {
-    Command {
-        id: InternId,
-        with: BTreeMap<InternId, InternId>,
-    },
-    Parameter {
-        id: InternId,
-        with: BTreeMap<InternId, InternId>,
-    },
-    Telemetry {
-        id: InternId,
-        with: BTreeMap<InternId, InternId>,
-    },
-    Model {
-        id: InternId,
-        with: BTreeMap<InternId, InternId>,
-    },
+pub struct Binding {
+    pub kind: BindingKind,
+    pub id: InternId,
+    pub key: InternId,
+    pub with: BTreeMap<InternId, InternId>,
 }
 
 #[derive(Debug)]
@@ -173,8 +201,26 @@ pub(crate) struct ExpandedModule {
     pub(crate) assign: Vec<InternId>,
     pub(crate) chrome: ChromeStyle,
     pub(crate) footer: Option<Binding>,
+    pub(crate) drop: Option<DropSpec>,
     pub(crate) collapsed: InternId,
     pub(crate) root: ExpandedNode,
+}
+
+/// Control path a wheel detent publishes on, and the scalar it steps.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct SurfaceSpec {
+    pub path: InternId,
+    pub write: Binding,
+}
+
+/// Compiled drop target of a module: the command the host runs when a drag is
+/// released over it, and the flag that reads true while one hovers it.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct DropSpec {
+    pub write: Binding,
+    pub read: Binding,
 }
 
 #[derive(Clone, Copy)]
@@ -187,6 +233,7 @@ pub(crate) struct ControlSite<'a> {
     pub(crate) query: Option<&'a BindingRef>,
     pub(crate) scope: Option<&'a BindingRef>,
     pub(crate) zoom: Option<&'a BindingRef>,
+    pub(crate) active: Option<&'a BindingRef>,
 }
 
 pub(crate) type ControlVisitor<'v> =

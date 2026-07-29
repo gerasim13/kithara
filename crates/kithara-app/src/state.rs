@@ -1,8 +1,6 @@
 use kithara::{
     abr::AbrHandle,
-    events::{
-        AbrMode, AppEvent, DjEvent, EngineEvent, Event, MediaTime, PlayerEvent, SlotId, VariantInfo,
-    },
+    events::{AbrMode, AppEvent, DjEvent, Event, MediaTime, PlayerEvent, SlotId, VariantInfo},
     play::StretchControls,
     prelude::EngineLoadSnapshot,
     stream::AudioCodec,
@@ -175,7 +173,7 @@ pub struct StateController {
     queue: Arc<Queue>,
     state: Arc<Mutex<UiState>>,
     /// Per-deck time-stretch handle.
-    #[field(get = deck, deref = false)]
+    #[field(get = stretch, deref = false)]
     timestretch: Arc<StretchControls>,
     cancel: CancelToken,
 }
@@ -414,8 +412,9 @@ pub(crate) fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
                 reapply_eq(queue, &eq_bands);
             }
         }
-        Event::Player(PlayerEvent::VolumeChanged { volume })
-        | Event::Engine(EngineEvent::MasterVolumeChanged { volume }) => {
+        // Session-mix gain deliberately has no event mapping here: `st.volume`
+        // is content volume, owned by the player's volume path alone.
+        Event::Player(PlayerEvent::VolumeChanged { volume }) => {
             let mut st = state.lock();
             st.volume = volume;
         }

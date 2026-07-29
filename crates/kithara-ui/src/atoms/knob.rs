@@ -1,25 +1,27 @@
 use iced::{
-    Color, Element, Event, Length, Point, Radians, Rectangle, Renderer, Theme,
+    Alignment, Color, Element, Event, Length, Point, Radians, Rectangle, Renderer, Theme,
     mouse::{self, Cursor},
     widget::{
-        Space,
+        Column, Space,
         canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke, path::Arc},
+        container,
     },
 };
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    render::{ReadValue, Skin, UiEvent},
+    render::{ReadValue, Skin, UiEvent, typography::styled_text},
     skin::KnobSkin,
     widgets::{
         Widget,
-        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState},
+        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState, WheelStep},
     },
 };
 
 #[derive(bon::Builder)]
 pub(crate) struct Knob<'path, 'value, 'data, 'skin> {
     path: &'path str,
+    label: Option<&'data str>,
     value: Option<&'value ReadValue<'data>>,
     skin: &'skin Skin,
 }
@@ -30,7 +32,7 @@ impl<'a> Widget<'a> for Knob<'_, '_, '_, '_> {
             return Space::new().into();
         };
         let value = value.clamp(0.0, 1.0).as_();
-        Canvas::new(KnobCanvas {
+        let dial = Canvas::new(KnobCanvas {
             body_fill: self.skin.color(self.skin.knob.body_fill),
             body_border: self.skin.color(self.skin.knob.body_border),
             track_color: self.skin.color(self.skin.knob.track_color),
@@ -44,13 +46,31 @@ impl<'a> Widget<'a> for Knob<'_, '_, '_, '_> {
                 })
                 .hover(HoverState::new(mouse::Interaction::ResizingVertically))
                 .double_click_value(0.5)
+                .wheel(WheelStep {
+                    value,
+                    step: self.skin.knob.wheel_step,
+                })
                 .build(),
             metrics: self.skin.knob,
             value,
         })
         .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+        .height(Length::Fill);
+        let caption = container(self.label.map_or_else(
+            || Space::new().into(),
+            |label| styled_text(label.to_owned(), self.skin.knob.label_text, self.skin),
+        ))
+        .height(Length::Fixed(self.skin.knob.label_height))
+        .center_x(Length::Fill);
+
+        Column::new()
+            .push(dial)
+            .push(caption)
+            .spacing(self.skin.knob.label_gap)
+            .align_x(Alignment::Center)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 }
 
@@ -168,4 +188,34 @@ fn draw_arc(
         });
     });
     frame.stroke(&path, Stroke::default().with_color(color).with_width(width));
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{builtin, ids::SourceUri};
+
+    #[kithara::test]
+    fn the_knob_reserves_its_caption_row_with_and_without_a_label() {
+        let origin = SourceUri("knob.kskin.ron".to_owned());
+        let skin = Skin::resolve(builtin::skin_doc().clone(), &origin).unwrap();
+        let value = ReadValue::Scalar(0.5);
+        let rows = |label| {
+            Knob::builder()
+                .path("mixer/gain")
+                .maybe_label(label)
+                .value(&value)
+                .skin(&skin)
+                .build()
+                .view()
+                .as_widget()
+                .children()
+                .len()
+        };
+
+        assert_eq!(rows(Some("GAIN")), 2, "a captioned knob is dial plus label");
+        assert_eq!(rows(None), rows(Some("GAIN")));
+    }
 }

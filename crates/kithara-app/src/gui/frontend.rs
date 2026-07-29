@@ -1,51 +1,53 @@
 use iced::{Size, window::Settings};
-use kithara::play::StretchControls;
-use kithara_platform::{sync::Arc, tokio};
-use kithara_queue::Queue;
+use kithara_platform::{
+    sync::{Arc, Mutex},
+    tokio,
+};
+use kithara_ui::render::fonts;
 
-use super::{app::Kithara, fonts, update, view};
+use super::{
+    app::{Decks, Kithara},
+    studio_ui::StudioUi,
+    update, view,
+};
 use crate::{
+    catalog::Catalog,
     config::AppConfig,
+    deck::{DeckId, DeckSet},
     frontend::{Frontend, FrontendError},
+    state::StateController,
     theme::gui,
 };
 
 mod consts {
-    /// Compact-player window size in logical pixels.
-    pub(super) const COMPACT_WIDTH: f32 = 448.0;
-    pub(super) const COMPACT_HEIGHT: f32 = 784.0;
-    pub(super) const COMPACT_MIN_WIDTH: f32 = 420.0;
-    pub(super) const COMPACT_MIN_HEIGHT: f32 = 760.0;
-
-    /// DJ Studio window size in logical pixels.
-    pub(super) const STUDIO_WIDTH: f32 = 980.0;
-    pub(super) const STUDIO_HEIGHT: f32 = 700.0;
-    pub(super) const STUDIO_MIN_WIDTH: f32 = 820.0;
-    pub(super) const STUDIO_MIN_HEIGHT: f32 = 620.0;
+    /// DJ Studio window size in logical pixels. The minimum keeps both deck
+    /// panes wide enough for their fixed transport and timestretch controls.
+    pub(super) const STUDIO_WIDTH: f32 = 1280.0;
+    pub(super) const STUDIO_HEIGHT: f32 = 760.0;
+    pub(super) const STUDIO_MIN_WIDTH: f32 = 1080.0;
+    pub(super) const STUDIO_MIN_HEIGHT: f32 = 640.0;
 }
 use consts::*;
 
-/// Window settings per mode. A mode swap opens a fresh window rather than
-/// resizing the live one. Close is handled via `close_requests()`, so the
-/// programmatic swap-close does not exit the app.
-pub(crate) fn window_settings(dj: bool) -> Settings {
-    let (size, min_size) = if dj {
-        (
-            Size::new(STUDIO_WIDTH, STUDIO_HEIGHT),
-            Size::new(STUDIO_MIN_WIDTH, STUDIO_MIN_HEIGHT),
-        )
-    } else {
-        (
-            Size::new(COMPACT_WIDTH, COMPACT_HEIGHT),
-            Size::new(COMPACT_MIN_WIDTH, COMPACT_MIN_HEIGHT),
-        )
-    };
+/// Settings for the studio window. The bar draws the window chrome itself, so
+/// the system decorations stay off; close goes through `close_requests()`,
+/// whose handler exits the app.
+pub(crate) fn window_settings() -> Settings {
     Settings {
-        size,
-        min_size: Some(min_size),
+        size: Size::new(STUDIO_WIDTH, STUDIO_HEIGHT),
+        min_size: Some(Size::new(STUDIO_MIN_WIDTH, STUDIO_MIN_HEIGHT)),
+        decorations: false,
         exit_on_close_request: false,
         ..Settings::default()
     }
+}
+
+struct Boot {
+    session: DeckSet,
+    decks: Decks,
+    catalog: Catalog,
+    config: AppConfig,
+    studio: StudioUi,
 }
 
 /// GUI frontend using iced.
@@ -62,41 +64,70 @@ impl Frontend for GuiFrontend {
         })
     }
 
-    fn run_loop(
-        &mut self,
-        queue: Arc<Queue>,
-        timestretch: Arc<StretchControls>,
-    ) -> Result<(), FrontendError> {
+    fn run_loop(&mut self, session: DeckSet) -> Result<(), FrontendError> {
         let palette = self.palette;
         let config = self.config.clone();
+        let studio = StudioUi::new()?;
 
         let rt = tokio::runtime::Runtime::new()
             .map_err(Box::<dyn std::error::Error + Send + Sync>::from)?;
         let _guard = rt.enter();
 
-        queue.set_tracks(crate::sources::build_sources(&config));
-        let controller = Arc::new(crate::state::StateController::new(
-            Arc::clone(&queue),
-            timestretch,
-            config.clone(),
-            config.shutdown.child(),
-        ));
+        // The CLI tracks start on the first deck; every deck gets its own
+        // controller, listener and analysis worker.
+        if let Some(first) = session.decks().first() {
+            first
+                .queue
+                .set_tracks(crate::sources::build_sources(&config));
+        }
+        let controllers: Vec<(DeckId, Arc<StateController>)> = session
+            .decks()
+            .iter()
+            .map(|deck| {
+                let controller = Arc::new(StateController::new(
+                    Arc::clone(&deck.queue),
+                    Arc::clone(&deck.timestretch),
+                    config.clone(),
+                    config.shutdown.child(),
+                ));
+                (deck.id, controller)
+            })
+            .collect();
 
-        let result = iced::daemon(
-            move || Kithara::new(Arc::clone(&controller), palette),
+        let boot = Mutex::new(Some(Boot {
+            session,
+            decks: Decks::new(controllers).ok_or("no decks to render")?,
+            catalog: Catalog::new(config.tracks.clone()),
+            config: config.clone(),
+            studio,
+        }));
+
+        let daemon = iced::daemon(
+            move || {
+                let boot = boot
+                    .lock()
+                    .take()
+                    .expect("iced boots the application exactly once");
+                Kithara::new(
+                    boot.session,
+                    boot.decks,
+                    boot.catalog,
+                    boot.config,
+                    boot.studio,
+                    palette,
+                )
+            },
             update::update,
             view::view,
         )
         .title(Kithara::title)
         .theme(Kithara::theme)
         .subscription(Kithara::subscription)
-        .default_font(fonts::SANS)
-        .font(fonts::INTER_BYTES)
-        .font(fonts::SPACE_GROTESK_BYTES)
-        .font(fonts::JETBRAINS_MONO_REGULAR_BYTES)
-        .font(fonts::JETBRAINS_MONO_MEDIUM_BYTES)
-        .font(fonts::JETBRAINS_MONO_SEMIBOLD_BYTES)
-        .run();
+        .default_font(fonts::SANS);
+        let result = fonts::FONT_BYTES
+            .iter()
+            .fold(daemon, |daemon, bytes| daemon.font(*bytes))
+            .run();
 
         config.shutdown.cancel();
         result?;
@@ -108,7 +139,7 @@ impl Frontend for GuiFrontend {
         Ok(())
     }
 
-    fn start(&mut self, _queue: Arc<Queue>) -> Result<(), FrontendError> {
+    fn start(&mut self, _decks: &DeckSet) -> Result<(), FrontendError> {
         Ok(())
     }
 }

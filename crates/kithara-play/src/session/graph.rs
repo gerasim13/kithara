@@ -1,11 +1,11 @@
 use firewheel::{
-    FirewheelCtx, Volume, backend::AudioBackend, diff::Memo, node::NodeID,
-    nodes::volume_pan::VolumePanNode,
+    FirewheelCtx, Volume, backend::AudioBackend, diff::Memo,
+    dsp::volume::amp_to_linear_volume_clamped, node::NodeID, nodes::volume_pan::VolumePanNode,
 };
 use tracing::{debug, warn};
 
 use super::{
-    protocol::{AllocatedSlot, PlayerId, Reply, SessionError},
+    protocol::{AllocatedSlot, PlayerId, PlayerLevel, Reply, SessionError},
     state::{PlayerState, SessionState, SlotNodes, ensure_ctx},
 };
 use crate::{
@@ -19,6 +19,11 @@ pub(super) fn ducking_gain(mode: SessionDuckingMode) -> f32 {
         SessionDuckingMode::Soft => 0.4,
         SessionDuckingMode::Hard => 0.2,
     }
+}
+// A level is a linear amplitude, but `Volume::Linear` is a fader taper that
+// squares its argument, so it must be converted rather than passed through.
+pub(super) fn master_gain(level: f32) -> Volume {
+    Volume::Linear(amp_to_linear_volume_clamped(level, 0.0))
 }
 pub(super) fn player_index<B: AudioBackend>(
     state: &SessionState<B>,
@@ -75,7 +80,7 @@ pub(super) mod lifecycle {
         let master_eq_memo = Memo::new(master_eq.clone());
         let master_eq_id = fw_ctx.add_node(master_eq, None);
         player.master_volume = master_volume.clamp(0.0, 1.0);
-        let master_vol = VolumePanNode::from_volume(Volume::Linear(player.master_volume));
+        let master_vol = VolumePanNode::from_volume(master_gain(player.master_volume));
         let master_vol_memo = Memo::new(master_vol);
         let master_vol_id = fw_ctx.add_node(master_vol, None);
         let eq_to_volume = "connect player master_eq->master_vol";
@@ -135,6 +140,21 @@ pub(super) mod lifecycle {
         debug!("[KITHARA-ROUTE] player stopped");
         Ok(())
     }
+    /// Release the output device once no player is left to feed it. A media
+    /// app that has stopped playing must not keep the platform's output
+    /// engaged; the next `start_player` builds a fresh context.
+    fn shutdown_if_idle<B: AudioBackend>(state: &mut SessionState<B>) {
+        if state.players.iter().all(|player| !player.started) {
+            debug!("[KITHARA-ROUTE] shutting down idle session stream");
+            if let Some(ref mut fw_ctx) = state.ctx {
+                fw_ctx.stop_stream();
+            }
+            state.ctx = None;
+            state.session_output_node_id = None;
+            state.session_output_memo = None;
+            state.session_limiter_node_id = None;
+        }
+    }
     pub(super) fn remove_player_graph<B: AudioBackend>(
         fw_ctx: &mut FirewheelCtx<B>,
         player: &mut PlayerState,
@@ -163,17 +183,6 @@ pub(super) mod lifecycle {
     pub(super) fn clear_player_graph_state(player: &mut PlayerState) {
         player.master_eq_memo = None;
         player.master_vol_pan_memo = None;
-    }
-    fn shutdown_if_idle<B: AudioBackend>(state: &mut SessionState<B>) {
-        if state.players.iter().all(|player| !player.started) {
-            debug!("[KITHARA-ROUTE] shutting down idle session stream");
-            if let Some(ref mut fw_ctx) = state.ctx {
-                fw_ctx.stop_stream();
-            }
-            state.ctx = None;
-            state.session_output_node_id = None;
-            state.session_output_memo = None;
-        }
     }
 }
 
@@ -286,29 +295,51 @@ pub(super) mod slots {
 pub(super) mod controls {
     use super::*;
 
-    pub(in crate::session) fn set_player_master_volume<B: AudioBackend>(
+    // Validates the whole request before mutating anything, so an invalid
+    // entry leaves the batch untouched. Omitted players are unchanged.
+    pub(in crate::session) fn set_player_master_volumes<B: AudioBackend>(
         state: &mut SessionState<B>,
-        player_id: PlayerId,
-        volume: f32,
+        levels: &[PlayerLevel],
     ) -> Result<(), SessionError> {
-        let idx = player_index(state, player_id)?;
-        let master_volume = volume.clamp(0.0, 1.0);
-        state.players[idx].master_volume = master_volume;
-        if !state.players[idx].started {
-            return Ok(());
+        let mut resolved: Vec<(usize, f32)> = Vec::with_capacity(levels.len());
+        for &PlayerLevel { player_id, level } in levels {
+            if !level.is_finite() || !(0.0..=1.0).contains(&level) {
+                return Err(SessionError::MasterVolumeOutOfRange { player_id, level });
+            }
+            let idx = player_index(state, player_id)?;
+            if resolved.iter().any(|&(seen, _)| seen == idx) {
+                return Err(SessionError::DuplicatePlayer(player_id));
+            }
+            // Checked here so the apply pass below is infallible
+            // (all-or-nothing).
+            let player = &state.players[idx];
+            if player.started
+                && (state.ctx.is_none()
+                    || player.master_vol_pan_node_id.is_none()
+                    || player.master_vol_pan_memo.is_none())
+            {
+                return Err(graph_state("player master vol graph is not initialised"));
+            }
+            resolved.push((idx, level));
         }
-        let player = &mut state.players[idx];
-        let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-        let Some(master_id) = player.master_vol_pan_node_id else {
-            return Err(graph_state("player master vol node is not initialised"));
-        };
-        let Some(memo) = &mut player.master_vol_pan_memo else {
-            return Err(graph_state("player master vol memo is not initialised"));
-        };
-        memo.volume = Volume::Linear(master_volume);
-        let mut queue = fw_ctx.event_queue(master_id);
-        memo.update_memo(&mut queue);
+        for &(idx, level) in &resolved {
+            apply_master_volume(state, idx, level);
+        }
         Ok(())
+    }
+
+    fn apply_master_volume<B: AudioBackend>(state: &mut SessionState<B>, idx: usize, volume: f32) {
+        state.players[idx].master_volume = volume;
+        let player = &mut state.players[idx];
+        if let (Some(fw_ctx), Some(master_id), Some(memo)) = (
+            &mut state.ctx,
+            player.master_vol_pan_node_id,
+            &mut player.master_vol_pan_memo,
+        ) {
+            memo.volume = master_gain(volume);
+            let mut queue = fw_ctx.event_queue(master_id);
+            memo.update_memo(&mut queue);
+        }
     }
     pub(in crate::session) fn set_player_slot_volume<B: AudioBackend>(
         state: &mut SessionState<B>,
@@ -376,5 +407,233 @@ pub(super) mod controls {
             let mut queue = fw_ctx.event_queue(session_id);
             memo.update_memo(&mut queue);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, num::NonZeroU32};
+
+    use firewheel::{
+        StreamInfo, backend::BackendProcessInfo, node::StreamStatus, processor::FirewheelProcessor,
+    };
+    use kithara_audio::generate_log_spaced_bands;
+    use kithara_bufpool::PcmPool;
+    use kithara_platform::time::{Duration, Instant};
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::session::{dispatch::run_cmd, protocol::Cmd};
+
+    const BLOCK_FRAMES: usize = 128;
+
+    /// The process-wide output device, held by whichever stream owns it.
+    #[derive(Default)]
+    struct AudioDevice {
+        processor: Option<FirewheelProcessor<TestBackend>>,
+        owner: u64,
+        next_stream: u64,
+    }
+
+    thread_local! {
+        static DEVICE: RefCell<AudioDevice> = RefCell::new(AudioDevice::default());
+    }
+
+    fn device<R>(f: impl FnOnce(&mut AudioDevice) -> R) -> R {
+        DEVICE.with(|cell| f(&mut cell.borrow_mut()))
+    }
+
+    struct TestBackend {
+        stream: u64,
+    }
+
+    impl Drop for TestBackend {
+        fn drop(&mut self) {
+            device(|dev| {
+                if dev.owner == self.stream {
+                    dev.processor = None;
+                }
+            });
+        }
+    }
+
+    #[derive(Clone)]
+    struct TestConfig {
+        sample_rate: u32,
+    }
+
+    impl Default for TestConfig {
+        fn default() -> Self {
+            Self {
+                sample_rate: SessionState::<TestBackend>::DEFAULT_SAMPLE_RATE,
+            }
+        }
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("test backend stream error")]
+    struct TestBackendError;
+
+    impl AudioBackend for TestBackend {
+        type Config = TestConfig;
+        type Enumerator = ();
+        type Instant = Instant;
+        type StartStreamError = TestBackendError;
+        type StreamError = TestBackendError;
+
+        fn delay_from_last_process(&self, _process_timestamp: Self::Instant) -> Option<Duration> {
+            None
+        }
+
+        fn enumerator() -> Self::Enumerator {}
+
+        fn poll_status(&mut self) -> Result<(), Self::StreamError> {
+            Ok(())
+        }
+
+        fn set_processor(&mut self, processor: FirewheelProcessor<Self>) {
+            device(|dev| {
+                dev.owner = self.stream;
+                dev.processor = Some(processor);
+            });
+        }
+
+        fn start_stream(
+            config: Self::Config,
+        ) -> Result<(Self, StreamInfo), Self::StartStreamError> {
+            let stream = device(|dev| {
+                dev.next_stream += 1;
+                dev.next_stream
+            });
+            let sample_rate = NonZeroU32::new(config.sample_rate).ok_or(TestBackendError)?;
+            let max_block_frames = NonZeroU32::new(512).ok_or(TestBackendError)?;
+            let stream_info = StreamInfo {
+                sample_rate,
+                sample_rate_recip: 1.0 / f64::from(config.sample_rate),
+                prev_sample_rate: sample_rate,
+                max_block_frames,
+                num_stream_in_channels: 0,
+                num_stream_out_channels: 2,
+                input_to_output_latency_seconds: 0.0,
+                declick_frames: max_block_frames,
+                output_device_id: String::from("test-output-device"),
+                input_device_id: None,
+            };
+            Ok((Self { stream }, stream_info))
+        }
+    }
+
+    fn start_test_stream(
+        ctx: &mut FirewheelCtx<TestBackend>,
+        sample_rate: u32,
+    ) -> Result<(), String> {
+        ctx.start_stream(TestConfig { sample_rate })
+            .map_err(|err| err.to_string())
+    }
+
+    /// `false` means no stream owns the device, which is what silence looks like.
+    fn deliver_one_block() -> bool {
+        device(|dev| {
+            let Some(processor) = dev.processor.as_mut() else {
+                return false;
+            };
+            let mut output = [0.0_f32; BLOCK_FRAMES * 2];
+            processor.process_interleaved(
+                &[],
+                &mut output,
+                BackendProcessInfo {
+                    num_in_channels: 0,
+                    num_out_channels: 2,
+                    frames: BLOCK_FRAMES,
+                    process_timestamp: Instant::now(),
+                    duration_since_stream_start: Duration::ZERO,
+                    input_stream_status: StreamStatus::empty(),
+                    output_stream_status: StreamStatus::empty(),
+                    dropped_frames: 0,
+                },
+            );
+            true
+        })
+    }
+
+    fn processed_frames(state: &SessionState<TestBackend>) -> i64 {
+        state
+            .ctx
+            .as_ref()
+            .map_or(-1, |fw_ctx| fw_ctx.audio_clock().samples.0)
+    }
+
+    fn register(state: &mut SessionState<TestBackend>) -> PlayerId {
+        match run_cmd(
+            state,
+            Cmd::RegisterPlayer {
+                eq_layout: generate_log_spaced_bands(5),
+                pcm_pool: PcmPool::default().clone(),
+            },
+        ) {
+            Reply::PlayerRegistered(id) => id,
+            Reply::Err(err) => panic!("player registration failed: {err}"),
+            _ => panic!("player registration returned unexpected reply"),
+        }
+    }
+
+    fn start(state: &mut SessionState<TestBackend>, player_id: PlayerId) {
+        match run_cmd(
+            state,
+            Cmd::StartPlayer {
+                player_id,
+                sample_rate: SessionState::<TestBackend>::DEFAULT_SAMPLE_RATE,
+                master_volume: 1.0,
+            },
+        ) {
+            Reply::Ok => {}
+            Reply::Err(err) => panic!("player {player_id} failed to start: {err}"),
+            _ => panic!("player start returned unexpected reply"),
+        }
+    }
+
+    fn unregister(state: &mut SessionState<TestBackend>, player_id: PlayerId) {
+        match run_cmd(state, Cmd::UnregisterPlayer { player_id }) {
+            Reply::Ok => {}
+            Reply::Err(err) => panic!("player {player_id} failed to unregister: {err}"),
+            _ => panic!("player unregister returned unexpected reply"),
+        }
+    }
+
+    #[kithara::test]
+    fn a_second_player_started_after_the_last_one_left_gets_a_processed_stream() {
+        device(|dev| *dev = AudioDevice::default());
+        let mut state = SessionState::<TestBackend>::new(start_test_stream);
+
+        let first = register(&mut state);
+        start(&mut state, first);
+        assert!(
+            deliver_one_block(),
+            "the first player's stream must own the output device"
+        );
+
+        unregister(&mut state, first);
+
+        assert!(
+            state.ctx.is_none(),
+            "the session must release the output device once no player feeds it"
+        );
+
+        let second = register(&mut state);
+        start(&mut state, second);
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::AllocateSlot { player_id: second }),
+            Reply::SlotAllocated(..)
+        ));
+
+        let before = processed_frames(&state);
+        assert!(
+            deliver_one_block(),
+            "the second player's stream must own the output device"
+        );
+        assert!(
+            processed_frames(&state) > before,
+            "the second player's stream delivered no processed callback"
+        );
     }
 }

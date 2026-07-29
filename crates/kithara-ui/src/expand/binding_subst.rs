@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use super::{Binding, machine::Context};
+use super::{Binding, BindingKind, machine::Context};
 use crate::{
     error::UiDocError,
     ids::{InternId, Interner, SourceUri},
@@ -81,29 +81,72 @@ pub(super) fn intern_map(
         .collect()
 }
 
-pub(super) fn intern_binding(
+/// Canonical scope-qualified endpoint key: `<id>@<k>=<v>[,<k2>=<v2>...]`,
+/// scope names in `BTreeMap` order. Hosts key their `Reads` by this form.
+#[must_use]
+pub fn scoped_key(id: &str, with: &BTreeMap<String, String>) -> String {
+    let mut key = String::with_capacity(
+        id.len()
+            + with
+                .iter()
+                .map(|(name, value)| name.len() + value.len() + 2)
+                .sum::<usize>(),
+    );
+    key.push_str(id);
+    let mut sep = '@';
+    for (name, value) in with {
+        key.push(sep);
+        key.push_str(name);
+        key.push('=');
+        key.push_str(value);
+        sep = ',';
+    }
+    key
+}
+
+struct BindingParts {
+    id: InternId,
+    key: InternId,
+    with: BTreeMap<InternId, InternId>,
+}
+
+fn intern_binding_parts(
+    interner: &mut Interner,
+    id: &str,
+    with: &BTreeMap<String, String>,
+    origin: &SourceUri,
+) -> Result<BindingParts, UiDocError> {
+    let id_intern = interner.intern(id, origin)?;
+    let key = if with.is_empty() {
+        id_intern
+    } else {
+        interner.intern(&scoped_key(id, with), origin)?
+    };
+    Ok(BindingParts {
+        id: id_intern,
+        key,
+        with: intern_map(interner, with, origin)?,
+    })
+}
+
+pub(crate) fn intern_binding(
     interner: &mut Interner,
     binding: &BindingRef,
     origin: &SourceUri,
 ) -> Result<Binding, UiDocError> {
-    match binding {
-        BindingRef::Command { id, with } => Ok(Binding::Command {
-            id: interner.intern(&id.0, origin)?,
-            with: intern_map(interner, with, origin)?,
-        }),
-        BindingRef::Parameter { id, with } => Ok(Binding::Parameter {
-            id: interner.intern(&id.0, origin)?,
-            with: intern_map(interner, with, origin)?,
-        }),
-        BindingRef::Telemetry { id, with } => Ok(Binding::Telemetry {
-            id: interner.intern(&id.0, origin)?,
-            with: intern_map(interner, with, origin)?,
-        }),
-        BindingRef::Model { id, with } => Ok(Binding::Model {
-            id: interner.intern(&id.0, origin)?,
-            with: intern_map(interner, with, origin)?,
-        }),
-    }
+    let (kind, id, with) = match binding {
+        BindingRef::Command { id, with } => (BindingKind::Command, id, with),
+        BindingRef::Parameter { id, with } => (BindingKind::Parameter, id, with),
+        BindingRef::Telemetry { id, with } => (BindingKind::Telemetry, id, with),
+        BindingRef::Model { id, with } => (BindingKind::Model, id, with),
+    };
+    let BindingParts { id, key, with } = intern_binding_parts(interner, &id.0, with, origin)?;
+    Ok(Binding {
+        kind,
+        id,
+        key,
+        with,
+    })
 }
 
 pub(super) fn intern_optional_binding(
@@ -149,4 +192,41 @@ pub(super) fn intern_texts(
         .iter()
         .map(|value| intern_text(context, interner, value, path, origin))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    fn with(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect()
+    }
+
+    #[kithara::test]
+    fn scoped_key_is_the_bare_id_without_scopes() {
+        assert_eq!(
+            scoped_key("player.output.volume", &BTreeMap::new()),
+            "player.output.volume"
+        );
+    }
+
+    #[kithara::test]
+    fn scoped_key_appends_sorted_scope_pairs() {
+        assert_eq!(
+            scoped_key("deck.playback.playing", &with(&[("deck", "b")])),
+            "deck.playback.playing@deck=b"
+        );
+        assert_eq!(
+            scoped_key(
+                "deck.playback.playing",
+                &with(&[("layer", "2"), ("deck", "a")])
+            ),
+            "deck.playback.playing@deck=a,layer=2"
+        );
+    }
 }

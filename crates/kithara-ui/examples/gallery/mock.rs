@@ -386,6 +386,9 @@ impl MockReads {
 
 impl Reads for MockReads {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        // The gallery hosts one virtual deck: every scope suffix resolves to
+        // the same state, so the canonical `@scope` qualifier is dropped here.
+        let endpoint = endpoint.split_once('@').map_or(endpoint, |(base, _)| base);
         if let Some(value) = self.mixer.get(endpoint) {
             return Some(value);
         }
@@ -510,7 +513,7 @@ impl Reads for MockReads {
             "library.scope" => ReadValue::Scalar(self.library_scope.as_()),
             "ui.preset" => ReadValue::Text("player"),
             "mock.bpm" => ReadValue::Text(Consts::BPM),
-            "mock.remain" => ReadValue::Text(Consts::REMAIN),
+            "mock.remain" | "deck.playback.remain" => ReadValue::Text(Consts::REMAIN),
             "mock.knob.26" => ReadValue::Scalar(self.knobs[0]),
             "mock.knob.28" => ReadValue::Scalar(self.knobs[1]),
             "mock.knob.34" => ReadValue::Scalar(self.knobs[2]),
@@ -625,6 +628,7 @@ fn insert_deck_endpoints(registry: &mut MockRegistry) {
         ("deck.playback.playing", ValueKind::Bool),
         ("deck.playback.position_normalized", ValueKind::Scalar),
         ("deck.playback.remaining_secs", ValueKind::Scalar),
+        ("deck.playback.remain", ValueKind::Text),
         ("deck.playback.position_secs", ValueKind::Scalar),
         ("deck.playback.duration_secs", ValueKind::Scalar),
         ("deck.playback.looping", ValueKind::Bool),

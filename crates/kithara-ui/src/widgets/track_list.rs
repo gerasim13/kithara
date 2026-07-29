@@ -19,7 +19,9 @@ use num_traits::ToPrimitive;
 
 use super::{
     Widget,
-    behavior::{HorizontalPixelDrag, HorizontalPixelDragState, HoverState},
+    behavior::{
+        HorizontalPixelDrag, HorizontalPixelDragState, HoverState, ItemDrag, ItemDragState,
+    },
 };
 use crate::{
     module::TrackColumn,
@@ -43,7 +45,6 @@ struct ColumnLayout {
 struct TrackListRowData {
     artist: Option<String>,
     bpm: Option<String>,
-    current: bool,
     deck: Option<String>,
     energy: Option<u8>,
     key: Option<String>,
@@ -58,7 +59,6 @@ impl From<&TrackRow<'_>> for TrackListRowData {
         Self {
             artist: track.artist.map(str::to_owned),
             bpm: track.bpm.map(str::to_owned),
-            current: track.current,
             deck: track.deck.map(str::to_owned),
             energy: track.energy,
             key: track.key.map(str::to_owned),
@@ -105,6 +105,7 @@ pub(crate) struct TrackList<'path, 'columns, 'state, 'value, 'data, 'reads, 'ski
     path: &'path str,
     columns: &'columns [TrackColumn],
     columns_state: Option<&'state str>,
+    columns_scope: &'state str,
     value: Option<&'value ReadValue<'data>>,
     reads: &'reads dyn Reads,
     skin: &'skin Skin,
@@ -115,7 +116,10 @@ impl<'a> Widget<'a> for TrackList<'_, '_, '_, '_, '_, '_, '_> {
         let Some(ReadValue::TrackList(tracks)) = self.value else {
             return Space::new().into();
         };
-        let columns = column_layouts(self.columns, self.reads, self.columns_state, self.skin);
+        let state = self
+            .columns_state
+            .map(|prefix| (prefix, self.columns_scope));
+        let columns = column_layouts(self.columns, self.reads, state, self.skin);
         let path = self.path.to_owned();
         let style = TrackListStyle::new(self.skin);
         let tracks: Vec<_> = tracks.iter().map(TrackListRowData::from).collect();
@@ -269,7 +273,8 @@ impl<'a> Widget<'a> for TrackListRow<'_, '_, '_, '_> {
                     cell
                 }
             });
-        button(
+        let height = Length::Fixed(self.style.metrics.row_height);
+        let row = button(
             Row::with_children(cells)
                 .align_y(Alignment::Center)
                 .width(Length::Fill)
@@ -277,13 +282,64 @@ impl<'a> Widget<'a> for TrackListRow<'_, '_, '_, '_> {
         )
         .padding(0)
         .width(Length::Fill)
-        .height(Length::Fixed(self.style.metrics.row_height))
+        .height(height)
         .style(track_button_style(self.style, self.track.selected))
         .on_press(UiEvent::Control {
             path: self.path.to_owned(),
             action: ControlAction::SelectIndex(self.index),
+        });
+        let drag = Canvas::new(RowDrag {
+            drag: ItemDrag::new(self.path.to_owned(), self.index),
         })
-        .into()
+        .width(Length::Fill)
+        .height(height);
+        Stack::with_children([row.into(), drag.into()])
+            .width(Length::Fill)
+            .height(height)
+            .into()
+    }
+}
+
+/// Transparent overlay that turns a press and a pull on the row into a drag of
+/// its track. It paints nothing and captures nothing, so the row keeps its own
+/// click and its hover.
+struct RowDrag {
+    drag: ItemDrag,
+}
+
+impl canvas::Program<UiEvent> for RowDrag {
+    type State = ItemDragState;
+
+    fn draw(
+        &self,
+        _state: &ItemDragState,
+        _renderer: &Renderer,
+        _theme: &Theme,
+        _bounds: Rectangle,
+        _cursor: Cursor,
+    ) -> Vec<Geometry> {
+        Vec::new()
+    }
+
+    fn mouse_interaction(
+        &self,
+        state: &ItemDragState,
+        _bounds: Rectangle,
+        _cursor: Cursor,
+    ) -> mouse::Interaction {
+        state.interaction()
+    }
+
+    delegate::delegate! {
+        to self.drag {
+            fn update(
+                &self,
+                state: &mut ItemDragState,
+                event: &Event,
+                bounds: Rectangle,
+                cursor: Cursor,
+            ) -> Option<Action<UiEvent>>;
+        }
     }
 }
 
@@ -433,22 +489,24 @@ fn text_cell(
     .into()
 }
 
+/// The decks the row is loaded on, as their letters. A row on no deck shows
+/// nothing: the column marks assignment, it does not offer it.
 fn deck_cell(
     track: &TrackListRowData,
     width: Length,
     style: &TrackListStyle,
 ) -> Element<'static, UiEvent> {
-    let value = optional_or_dash(track.deck.as_deref());
-    let active = track.current && track.deck.is_some();
+    let Some(marks) = track.deck.clone() else {
+        return container(Space::new())
+            .width(width)
+            .height(Length::Fill)
+            .into();
+    };
     let chip = container(
-        shaped_text(value)
+        shaped_text(marks)
             .font(fonts::mono(style.metrics.deck_text.weight))
             .size(style.metrics.deck_text.size)
-            .color(if active {
-                style.palette.bg_deep
-            } else {
-                style.palette.text_dim
-            }),
+            .color(style.palette.bg_deep),
     )
     .width(Length::Fixed(style.metrics.deck_chip_width))
     .height(Length::Fixed(style.metrics.deck_chip_height))
@@ -456,11 +514,11 @@ fn deck_cell(
     .align_y(Vertical::Center)
     .style({
         let border = style.deck_chip_frame;
-        let background = active.then_some(Background::Color(style.palette.accent));
-        move |_| ContainerStyle {
-            background,
-            border,
-            ..ContainerStyle::default()
+        let background = Background::Color(style.palette.accent);
+        move |_| {
+            ContainerStyle::default()
+                .background(background)
+                .border(border)
         }
     });
     container(chip)
@@ -614,11 +672,7 @@ fn cell_with_divider(
 }
 
 fn footer(count: usize, style: &TrackListStyle) -> Element<'static, UiEvent> {
-    let left = format!(
-        "{} \u{00b7} {count} {}",
-        style.metrics.labels.footer_component, style.metrics.labels.footer_tracks
-    );
-    let right = style.metrics.labels.footer_usage.clone();
+    let left = format!("{count} {}", style.metrics.labels.footer_tracks);
     let font = style.metrics.footer_text;
     let content = row![
         shaped_text(left)
@@ -626,10 +680,6 @@ fn footer(count: usize, style: &TrackListStyle) -> Element<'static, UiEvent> {
             .size(font.size)
             .color(style.palette.muted),
         Space::new().width(Length::Fill),
-        shaped_text(right)
-            .font(fonts::mono(font.weight))
-            .size(font.size)
-            .color(style.palette.muted),
     ]
     .align_y(Alignment::Center);
     let background = style.palette.bg_footer;
@@ -642,27 +692,27 @@ fn footer(count: usize, style: &TrackListStyle) -> Element<'static, UiEvent> {
         .into()
 }
 
-fn column_visible(reads: &dyn Reads, prefix: Option<&str>, column: TrackColumn) -> bool {
-    let Some(prefix) = prefix else {
+fn column_visible(reads: &dyn Reads, state: Option<(&str, &str)>, column: TrackColumn) -> bool {
+    let Some((prefix, scope)) = state else {
         return true;
     };
-    let endpoint = format!("{prefix}.{}", column.endpoint_name());
+    let endpoint = format!("{prefix}.{}{scope}", column.endpoint_name());
     !matches!(reads.get(&endpoint), Some(ReadValue::Bool(false)))
 }
 
 fn column_layouts(
     columns: &[TrackColumn],
     reads: &dyn Reads,
-    prefix: Option<&str>,
+    state: Option<(&str, &str)>,
     skin: &Skin,
 ) -> Vec<ColumnLayout> {
     columns
         .iter()
         .copied()
-        .filter(|column| column_visible(reads, prefix, *column))
+        .filter(|column| column_visible(reads, state, *column))
         .map(|column| ColumnLayout {
             column,
-            width: effective_column_width(reads, prefix, column, skin),
+            width: effective_column_width(reads, state, column, skin),
         })
         .collect()
 }
@@ -683,15 +733,15 @@ fn default_column_width(column: TrackColumn, skin: &Skin) -> f32 {
 
 fn effective_column_width(
     reads: &dyn Reads,
-    prefix: Option<&str>,
+    state: Option<(&str, &str)>,
     column: TrackColumn,
     skin: &Skin,
 ) -> f32 {
     let default = default_column_width(column, skin);
-    let Some(prefix) = prefix else {
+    let Some((prefix, scope)) = state else {
         return default;
     };
-    let endpoint = format!("{prefix}.width.{}", column.endpoint_name());
+    let endpoint = format!("{prefix}.width.{}{scope}", column.endpoint_name());
     let Some(ReadValue::Scalar(width)) = reads.get(&endpoint) else {
         return default;
     };
@@ -800,7 +850,7 @@ mod tests {
     fn absent_column_endpoint_is_visible() {
         assert!(column_visible(
             &ColumnReads(None),
-            Some("columns"),
+            Some(("columns", "")),
             TrackColumn::Title
         ));
     }
@@ -809,7 +859,7 @@ mod tests {
     fn false_column_endpoint_is_hidden() {
         assert!(!column_visible(
             &ColumnReads(Some(false)),
-            Some("columns"),
+            Some(("columns", "")),
             TrackColumn::Title
         ));
     }
@@ -820,7 +870,7 @@ mod tests {
         let columns = column_layouts(
             &[TrackColumn::Index, TrackColumn::Title, TrackColumn::Artist],
             &WidthReads,
-            Some("columns"),
+            Some(("columns", "")),
             skin,
         );
 

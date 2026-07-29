@@ -35,7 +35,6 @@ const TRACKS: [TrackRow<'static>; 3] = [
         key: Some("7m"),
         energy: Some(76),
         transition: Some("FILTER FADE"),
-        current: true,
         selected: true,
     },
     TrackRow {
@@ -48,7 +47,6 @@ const TRACKS: [TrackRow<'static>; 3] = [
         key: Some("10m"),
         energy: Some(68),
         transition: Some("EQ SWAP"),
-        current: false,
         selected: false,
     },
     TrackRow {
@@ -61,7 +59,6 @@ const TRACKS: [TrackRow<'static>; 3] = [
         key: Some("4m"),
         energy: Some(54),
         transition: Some("LOOP EXIT"),
-        current: false,
         selected: false,
     },
 ];
@@ -395,6 +392,12 @@ fn row(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
         size: None,
         gap: None,
         pad: None,
+        pad_x: None,
+        pad_y: None,
+        frame: None,
+        background: None,
+        background_alpha: None,
+        write: None,
         children,
     }
 }
@@ -405,6 +408,12 @@ fn column(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
         size: None,
         gap: None,
         pad: None,
+        pad_x: None,
+        pad_y: None,
+        frame: None,
+        background: None,
+        background_alpha: None,
+        write: None,
         children,
     }
 }
@@ -426,6 +435,7 @@ fn knob(id: &str, endpoint: &str) -> ControlNode {
         read: Some(model(endpoint)),
         write: None,
         adaptive: AdaptivePolicy::default(),
+        label: None,
     }
 }
 
@@ -437,6 +447,7 @@ fn fader(id: &str, endpoint: &str) -> ControlNode {
         write: None,
         adaptive: AdaptivePolicy::default(),
         style: FaderStyle::default(),
+        label: None,
     }
 }
 
@@ -448,6 +459,7 @@ fn scalar(id: &str, endpoint: &str) -> ControlNode {
         write: None,
         adaptive: AdaptivePolicy::default(),
         format: ScalarFormat::default(),
+        framed: true,
     }
 }
 
@@ -462,6 +474,7 @@ fn button(id: &str, endpoint: &str) -> ControlNode {
         active_label: Some("PAUSE".to_owned()),
         style: ButtonStyle::default(),
         icon: None,
+        frame: None,
     }
 }
 

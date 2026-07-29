@@ -59,6 +59,7 @@ fn load_rec(
         return Ok(loaded.uri);
     }
     let doc = parse_module(&loaded.text, &loaded.uri)?;
+    validate::check_module_id(&doc, &loaded.uri)?;
     validate::check_module_node_ids(&doc, &loaded.uri)?;
     stack.push(loaded.uri.clone());
     walk_includes(resolver, &loaded.uri, &doc.root, limits, set, stack, depth)?;
@@ -105,8 +106,10 @@ fn walk_includes(
         ControlNode::DeckSummary { .. }
         | ControlNode::Brand { .. }
         | ControlNode::Spacer { .. }
+        | ControlNode::Divider { .. }
         | ControlNode::PresetSelector { .. }
         | ControlNode::SettingsButton { .. }
+        | ControlNode::WindowDrag { .. }
         | ControlNode::TitleBar { .. }
         | ControlNode::WindowControls { .. }
         | ControlNode::Text { .. }
@@ -135,7 +138,8 @@ fn walk_includes(
         | ControlNode::Chip { .. }
         | ControlNode::Knob { .. }
         | ControlNode::VuStereo { .. }
-        | ControlNode::VuVertical { .. } => Ok(()),
+        | ControlNode::VuVertical { .. }
+        | ControlNode::Meter { .. } => Ok(()),
     }
 }
 
