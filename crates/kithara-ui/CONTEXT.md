@@ -53,9 +53,14 @@ remains code-owned because it describes font resource availability rather than s
 value types; they are toolkit-neutral and depend on no rendering toolkit. `paint::canvas`
 implements that trait against iced and owns translation, shaping, and canvas calls.
 `paint::scene` implements it against Vello and owns translation, shaping, and scene encoding;
-the painter needs no GPU dependency. A future shell presentation stage will enable Vello's `wgpu`
-feature, which resolves to wgpu 29.x for Vello 0.9. Canonical family/weight-to-face selection and
-the face-to-byte mapping live in toolkit-neutral `fonts` whenever either backend is enabled.
+the painter needs no GPU dependency. Vello is held at 0.6 ahead of the masonry host, which is not a
+dependency yet: masonry 0.4 hands a widget a `Scene` from its own Vello 0.6, and `Scene` from a
+different Vello version is an unrelated type. Vello's `wgpu` feature stays off because the painter
+encodes and rasterises nothing; enabling it would add a second wgpu major beside iced's 27. The
+painter's own `skrifa` is a different crate instance from the one inside Vello, so only plain glyph
+ids may cross that boundary. Canonical
+family/weight-to-face selection and the face-to-byte mapping live in toolkit-neutral `fonts`
+whenever either backend is enabled.
 `render::fonts` is the sole public font-byte path and adds Lucide to those neutral faces. A widget
 owns command order and local geometry, while its render-tree adapter owns toolkit lifecycle,
 interaction state, and the translation from measured bounds to widget rectangles.
