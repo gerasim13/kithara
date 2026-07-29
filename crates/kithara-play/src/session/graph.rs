@@ -152,6 +152,7 @@ pub(super) mod lifecycle {
             state.ctx = None;
             state.session_output_node_id = None;
             state.session_output_memo = None;
+            state.session_limiter_node_id = None;
         }
     }
     pub(super) fn remove_player_graph<B: AudioBackend>(
