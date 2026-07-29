@@ -19,6 +19,7 @@ mod reader;
 mod seek_state;
 mod source;
 mod stream;
+mod transition;
 mod wake;
 
 #[cfg(any(test, feature = "mock"))]
@@ -29,7 +30,7 @@ pub use hooks::{BoxedEventSink, ReaderChunkSignal, ReaderEventSink, ReaderSeekSi
 pub use media::{AudioCodec, ContainerFormat, MediaInfo, needs_exact_byte_sizes};
 pub use playhead::{ChunkPosition, PlayheadRead, PlayheadState, PlayheadWrite};
 pub use preroll::PrerollHint;
-pub use reader::{OpenedReader, SessionReader};
+pub use reader::{OpenedReader, OpenedVariantReader, SessionReader};
 pub use seek_state::{Activity, SeekControl, SeekObserve, SeekState};
 pub use source::{
     ByteMap, NotReadyCause, PendingReason, ReadOutcome, SegmentDescriptor, Source, SourcePhase,
@@ -39,4 +40,5 @@ pub use stream::{
     Stream, StreamPending, StreamReadError, StreamReadOutcome, StreamSeekPastEof, StreamType,
     VariantChangeError,
 };
+pub use transition::{VariantTransition, VariantTransitionId};
 pub use wake::{DeferredWake, WorkerWake};

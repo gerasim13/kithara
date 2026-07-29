@@ -2,7 +2,7 @@ use std::io::{Read, Seek};
 
 use kithara_platform::sync::Arc;
 
-use crate::{BoxedEventSink, ByteMap};
+use crate::{BoxedEventSink, ByteMap, MediaInfo, VariantTransition};
 
 /// Move-only byte input owned by one decoder session.
 pub trait SessionReader: Read + Seek + Send + Sync + 'static {}
@@ -56,5 +56,43 @@ impl OpenedReader {
     #[must_use]
     pub fn into_inner(self) -> Box<dyn SessionReader> {
         self.input
+    }
+}
+
+/// Move-only incoming reader bound to one exact variant transition.
+#[non_exhaustive]
+pub struct OpenedVariantReader {
+    media_info: MediaInfo,
+    reader: OpenedReader,
+    transition: VariantTransition,
+}
+
+impl OpenedVariantReader {
+    /// Bind target media facts and byte capabilities to one transition.
+    #[must_use]
+    pub fn new(transition: VariantTransition, media_info: MediaInfo, reader: OpenedReader) -> Self {
+        Self {
+            media_info,
+            reader,
+            transition,
+        }
+    }
+
+    /// Target media facts captured with the reader.
+    #[must_use]
+    pub const fn media_info(&self) -> &MediaInfo {
+        &self.media_info
+    }
+
+    /// Exact transition that owns this reader.
+    #[must_use]
+    pub const fn transition(&self) -> VariantTransition {
+        self.transition
+    }
+
+    /// Split the move-only bundle for decoder construction.
+    #[must_use]
+    pub fn split(self) -> (VariantTransition, MediaInfo, OpenedReader) {
+        (self.transition, self.media_info, self.reader)
     }
 }
