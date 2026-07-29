@@ -758,7 +758,7 @@ fn walk(
             expand_control(
                 context,
                 control,
-                ControlFields::new(id, control.size(), read, write, adaptive),
+                ControlFields::new(id, control.size().copied(), read, write, adaptive),
                 depth,
                 machine,
             )

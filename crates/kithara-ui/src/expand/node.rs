@@ -200,24 +200,23 @@ pub enum Binding {
 }
 
 impl Binding {
-    #[must_use]
-    pub fn id(&self) -> InternId {
+    fn ids(&self) -> (&InternId, &InternId) {
         match self {
-            Self::Command { id, .. }
-            | Self::Parameter { id, .. }
-            | Self::Telemetry { id, .. }
-            | Self::Model { id, .. } => *id,
+            Self::Command { id, key, .. }
+            | Self::Parameter { id, key, .. }
+            | Self::Telemetry { id, key, .. }
+            | Self::Model { id, key, .. } => (id, key),
         }
     }
 
     #[must_use]
+    pub fn id(&self) -> InternId {
+        *self.ids().0
+    }
+
+    #[must_use]
     pub fn key(&self) -> InternId {
-        match self {
-            Self::Command { key, .. }
-            | Self::Parameter { key, .. }
-            | Self::Telemetry { key, .. }
-            | Self::Model { key, .. } => *key,
-        }
+        *self.ids().1
     }
 }
 

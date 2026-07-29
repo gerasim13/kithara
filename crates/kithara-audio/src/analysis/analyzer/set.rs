@@ -22,19 +22,19 @@ where
 {
     pub(crate) fn build(&self, spec: PcmSpec) -> TrackAnalyzers<B> {
         TrackAnalyzers {
-            beat: self.beat.build(spec, &self.pcm_pool),
+            beat: beat::Config::build(&self.beat, spec, &self.pcm_pool),
             waveform: waveform::build(&self.waveform, spec),
             source_frames: 0,
         }
     }
 
     pub(crate) fn take_detector(&mut self) -> Option<beat::Detector> {
-        self.beat.take_detector()
+        beat::Config::take_detector(&mut self.beat)
     }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        waveform::config_is_empty(&self.waveform) && self.beat.is_empty()
+        waveform::config_is_empty(&self.waveform) && beat::Config::is_empty(&self.beat)
     }
 
     #[must_use]
@@ -44,7 +44,7 @@ where
     {
         let mut builder = self;
         let beat_config = builder.beat_config.clone().unwrap_or_default();
-        builder.beat.with_default(beat_config.clone());
+        beat::Config::with_default(&mut builder.beat, beat_config.clone());
         builder.beat_config = Some(beat_config);
         builder
     }
@@ -53,7 +53,7 @@ where
     pub fn with_beat_config(self, config: BeatAnalysisConfig<B>) -> Self {
         let mut builder = self;
         builder.beat_config = Some(config.clone());
-        builder.beat.set_resampler(config);
+        beat::Config::set_resampler(&mut builder.beat, config);
         builder
     }
 
