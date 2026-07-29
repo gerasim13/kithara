@@ -3,12 +3,7 @@
 
 use kithara::{
     net::{HttpClient, NetOptions},
-    platform::{
-        CancelToken,
-        sync::Arc,
-        time::{self, Duration},
-        tokio,
-    },
+    platform::{CancelToken, sync::Arc, time::Duration, tokio},
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource},
     stream::dl::{Downloader, DownloaderConfig},
