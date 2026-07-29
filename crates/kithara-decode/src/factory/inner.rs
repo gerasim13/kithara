@@ -1,8 +1,14 @@
-use std::io::{Read, Seek};
+use std::{
+    io::{Read, Seek},
+    num::NonZeroU64,
+};
 
 use kithara_platform::sync::Arc;
 use kithara_resampler::ResamplerBackend;
-use kithara_stream::{AudioCodec, ByteMap, ContainerFormat, MediaInfo, needs_exact_byte_sizes};
+use kithara_stream::{
+    AudioCodec, ByteMap, ContainerFormat, MediaInfo, ReaderInput, ReaderProfile, ReaderWarmup,
+    needs_exact_byte_sizes,
+};
 
 use super::{
     backend::DecoderBackend,
@@ -15,10 +21,15 @@ use super::{
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 use crate::GaplessInfo;
 use crate::{
-    Decoder, InputRequirement,
+    Decoder,
     error::{DecodeError, DecodeResult},
     mp4::sniff_mp4_codec,
     traits::BoxedSource,
+};
+
+const READER_READ_AHEAD_BYTES: NonZeroU64 = match NonZeroU64::new(32 * 1_024) {
+    Some(bytes) => bytes,
+    None => unreachable!(),
 };
 
 /// Factory for creating decoders with a single, strict backend selection.
@@ -143,16 +154,12 @@ impl DecoderFactory {
         }
     }
 
-    /// Input contract of the demuxer this factory would build for `media_info`,
-    /// for the kithara-audio readiness gate. Mirrors [`should_use_segment_aware`]:
-    /// only the segment-aware fMP4 path is `InitOnly`. See the crate `CONTEXT.md`
-    /// "Decoder input contract".
+    /// Reader contract of the demuxer this factory would build for
+    /// `media_info`, for the kithara-audio readiness gate. Mirrors
+    /// [`should_use_segment_aware`]: only segment-aware fMP4 is `InitOnly`.
     #[must_use]
-    pub fn input_requirement(
-        media_info: &MediaInfo,
-        byte_map: Option<&dyn ByteMap>,
-    ) -> InputRequirement {
-        match byte_map {
+    pub fn reader_profile(media_info: &MediaInfo, byte_map: Option<&dyn ByteMap>) -> ReaderProfile {
+        let input = match byte_map {
             Some(_)
                 if media_info
                     .codec
@@ -160,8 +167,9 @@ impl DecoderFactory {
             {
                 <crate::fmp4::Fmp4SegmentDemuxer as crate::demuxer::Demuxer>::required_input()
             }
-            _ => InputRequirement::Incremental,
-        }
+            _ => ReaderInput::Incremental,
+        };
+        ReaderProfile::new(input, ReaderWarmup::None, READER_READ_AHEAD_BYTES)
     }
 }
 
@@ -662,7 +670,7 @@ fn should_use_segment_aware(
 }
 
 /// Codec+container half of the segment-aware fMP4 decision, factored out of
-/// [`should_use_segment_aware`] so [`DecoderFactory::input_requirement`] can
+/// [`should_use_segment_aware`] so [`DecoderFactory::reader_profile`] can
 /// ask the same question without a [`DecoderConfig`]. AAC / FLAC in fMP4 is
 /// the only segment-aware path; everything else reads incrementally.
 fn segment_aware_container(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {

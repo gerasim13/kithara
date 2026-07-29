@@ -24,7 +24,6 @@ mod error;
 mod factory;
 mod fmp4;
 mod gapless;
-mod input;
 mod mp4;
 mod pcm_time;
 mod resampled;
@@ -53,7 +52,6 @@ pub use gapless::{
     GaplessEnd, GaplessInfo, GaplessMode, GaplessOutput, GaplessTailCompensation, GaplessTrimmer,
     SilenceTrimParams, probe_mp4_gapless,
 };
-pub use input::InputRequirement;
 pub use pcm_time::{duration_for_frames, frames_for_duration};
 pub use traits::{
     Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome,
