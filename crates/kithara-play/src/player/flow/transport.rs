@@ -34,16 +34,16 @@ impl PlayerImpl {
 
     /// Apply autoplay: resume at the default rate (and move to `Playing`) or
     /// hold at rate 0 (and move to `Paused`).
+    ///
+    /// Resuming goes through [`Self::set_rate`] rather than a bare value
+    /// store: the default rate has to reach the stretch slot and the
+    /// processor's media clock, or the player reports a rate it is not
+    /// playing at.
     fn apply_autoplay(&self, autoplay: bool) {
         if autoplay {
-            let default_rate = self.default_rate();
-            self.core.params.set_rate_value(default_rate);
+            self.set_rate(self.default_rate());
             let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
             self.enter_playing();
-            self.core
-                .engine
-                .bus()
-                .publish(PlayerEvent::RateChanged { rate: default_rate });
             self.set_status(PlayerStatus::ReadyToPlay);
         } else {
             self.core.params.set_paused_rate();

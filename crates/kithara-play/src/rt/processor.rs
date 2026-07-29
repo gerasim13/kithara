@@ -70,6 +70,9 @@ pub struct PlayerNodeProcessor {
     pub(super) tracks_transitions: VecDeque<TrackTransition>,
     pub(super) render: RenderPass,
     pub(super) prefetch_duration: f32,
+    /// Media seconds consumed per output second, applied to every track the
+    /// processor owns and seeded into every track it loads.
+    pub(super) playback_rate: f32,
 }
 
 /// Stream dimensions needed to pre-size RT scratch buffers.
@@ -98,6 +101,7 @@ impl PlayerNodeProcessor {
             render: RenderPass::new(pool, shape.max_block_frames.get().as_()),
             crossfade: CrossfadeSettings::default(),
             prefetch_duration: 0.0,
+            playback_rate: 1.0,
             tracks: ArenaRegistry::with_capacity(Self::MAX_TRACKS),
             tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
         }
