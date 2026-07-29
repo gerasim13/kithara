@@ -130,6 +130,13 @@ impl HlsVariant {
         Some(self.segments.init.as_ref()?.resource_id().clone())
     }
 
+    #[cfg(test)]
+    pub(crate) fn mark_init_loaded(&self) {
+        if let Some(init) = self.segments.init.as_ref() {
+            init.state().mark_loaded();
+        }
+    }
+
     /// Flip the init slot to `Missing`, clearing the Layout seed when the
     /// variant actually carries an init segment.
     pub(crate) fn invalidate_init(&self) {

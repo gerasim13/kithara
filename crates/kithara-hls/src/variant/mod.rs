@@ -51,6 +51,7 @@ pub(in crate::variant) use self::{core::segment_placeholder_size, probe::SizeDem
 pub(crate) use self::{
     core::{HlsVariant, PlanCtx, SegmentActivateParams, VariantParams},
     lease::{ReadLease, ReadSession},
+    queue::TargetBodyReadiness,
 };
 
 #[cfg(test)]

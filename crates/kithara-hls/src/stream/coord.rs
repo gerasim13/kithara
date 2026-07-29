@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    cmp::Reverse,
     ops::Range,
     sync::atomic::{AtomicU64, AtomicUsize, Ordering},
 };
@@ -28,8 +27,16 @@ use kithara_test_utils::kithara;
 use crate::{
     playlist::{PlaylistAccess, PlaylistState},
     signal::SizeSignal,
-    variant::{HlsVariant, PlanCtx, ReadLease, ReadSession, SegmentActivateParams},
+    variant::{
+        HlsVariant, PlanCtx, ReadLease, ReadSession, SegmentActivateParams, TargetBodyReadiness,
+    },
 };
+
+#[derive(Clone, Copy)]
+struct TargetBodyWindow {
+    first_segment: u32,
+    through_segment: u32,
+}
 
 /// Watchdog timeout for the off-RT blocking `wait_range(_, None)`: must exceed
 /// the `kithara-net` per-fetch total timeout so a stalled upstream is failed by
@@ -239,15 +246,17 @@ impl HlsCoord {
             .filter(|(_, v)| v.on_evict(key).is_some())
             .map(|(v_idx, _)| v_idx)
             .collect();
-        // Every SERVING lease on a variant that lost the slot replans, so the
-        // now-`Missing` entry is back in the plan of every reader that can
-        // still ask for it. A lease nobody is reading through is left alone —
-        // its plan is rebuilt when it starts serving.
-        for lease in self
-            .serving_leases()
+        if let Some(active) = self
+            .active_lease()
             .filter(|lease| lost.contains(&lease.variant_index()))
         {
-            lease.rebuild(ctx, seg_at_reader);
+            active.rebuild(ctx, seg_at_reader);
+        }
+        if let Some((target, window)) = self
+            .pending_target_body(ctx)
+            .filter(|(lease, _)| lost.contains(&lease.variant_index()))
+        {
+            target.extend_target_body(window.first_segment, window.through_segment);
         }
     }
 
@@ -394,17 +403,16 @@ impl HlsCoord {
         ctx: &PlanCtx,
         budget: usize,
     ) -> Vec<FetchCmd> {
-        let Some(decision) = self.abr.peek_pending_decision() else {
+        let Some((target, window)) = self.pending_target_body(ctx) else {
             return Vec::new();
         };
-        let target = decision.target().get();
-        if target == self.variant_index() {
+        if !target.extend_target_body(window.first_segment, window.through_segment) {
             return Vec::new();
         }
-        self.variants
-            .get(target)
-            .and_then(|_| self.session.lease(target))
-            .map_or_else(Vec::new, |lease| lease.dispatch_size_only(ctx, budget))
+        match target.target_body_readiness(window.first_segment, window.through_segment) {
+            TargetBodyReadiness::Pending => target.dispatch_size_only(ctx, budget),
+            TargetBodyReadiness::Ready | TargetBodyReadiness::Failed => Vec::new(),
+        }
     }
 
     /// Cross-variant segment lookup. Mirrors [`Self::variant_serving`]'s
@@ -423,11 +431,53 @@ impl HlsCoord {
         None
     }
 
-    /// The leases a reader can currently reach bytes through. One today: the
-    /// audible one. A transition adds the window's lease here, which is what
-    /// makes dispatch and eviction reach both sides at once.
+    fn pending_target_lease(&self) -> Option<&Arc<ReadLease>> {
+        let target = self.abr.peek_pending_decision()?.target().get();
+        if target == self.variant_index() {
+            return None;
+        }
+        self.variants
+            .get(target)
+            .and_then(|_| self.session.lease(target))
+    }
+
+    /// The audible lease followed by the one immutable pending-target window.
+    ///
+    /// There are at most two entries, already in owner order; callers never
+    /// collect or sort them.
     fn serving_leases(&self) -> impl Iterator<Item = &Arc<ReadLease>> {
-        self.active_lease().into_iter()
+        let active = self.active_lease();
+        let target = self
+            .pending_target_lease()
+            .filter(|target| active.is_none_or(|active| !Arc::ptr_eq(active, target)));
+        active.into_iter().chain(target)
+    }
+
+    fn pending_target_body(&self, ctx: &PlanCtx) -> Option<(&Arc<ReadLease>, TargetBodyWindow)> {
+        let seek_epoch = self.seek_obs.epoch();
+        if ctx.seek_epoch != seek_epoch || self.seek_obs.is_pending() || self.seek_obs.is_flushing()
+        {
+            return None;
+        }
+        let target = self.pending_target_lease()?;
+        let target_time = self.playhead_read.position();
+        let (landing, landing_start, landing_end) = self
+            .playlist_state
+            .find_seek_point_for_time(target.variant_index(), target_time)?;
+        if !(landing_start..landing_end).contains(&target_time) {
+            return None;
+        }
+        if self.seek_obs.epoch() != seek_epoch {
+            return None;
+        }
+        let landing = u32::try_from(landing).ok()?;
+        Some((
+            target,
+            TargetBodyWindow {
+                first_segment: landing,
+                through_segment: landing,
+            },
+        ))
     }
 
     /// Leases on variants that a prior ABR commit shrunk out of the active
@@ -651,28 +701,22 @@ impl HlsCoord {
         self.active_lease()?.rebuild_at_time(ctx, target)
     }
 
-    /// Spend one poll's fetch budget across the serving leases, most starved
-    /// first. One lease takes all of it, as it always has; the ordering is
-    /// what keeps a second one from being talked over once a transition opens.
+    /// Spend one poll's fetch budget across the audible and pending-target
+    /// owners without collecting or sorting.
     pub(crate) fn dispatch(&self, ctx: &PlanCtx, budget: usize) -> Vec<FetchCmd> {
-        // A lease can hold priority for at most this many polls after being
-        // unstuck. Derived from the budget rather than a constant of its own:
-        // the debt that matters is measured in polls' worth of commands.
         let cap = ctx.prefetch_budget.saturating_mul(2);
-        let audible = self.variant_index();
-        let mut serving: Vec<&Arc<ReadLease>> = self.serving_leases().collect();
-        // Most starved first; at equal starvation the ear wins, then the
-        // lower variant index — deterministic for any number of leases.
-        serving.sort_by_key(|lease| {
-            (
-                Reverse(lease.deficit()),
-                lease.variant_index() != audible,
-                lease.variant_index(),
-            )
-        });
+        let mut serving = self.serving_leases();
+        let first = serving.next();
+        let second = serving.next();
+        let (first, second) = match (first, second) {
+            (Some(audible), Some(target)) if target.deficit() > audible.deficit() => {
+                (Some(target), Some(audible))
+            }
+            pair => pair,
+        };
         let mut remaining = budget;
         let mut out = Vec::new();
-        for lease in serving {
+        for lease in [first, second].into_iter().flatten() {
             let eligible = lease.has_eligible_work();
             if !eligible {
                 continue;
