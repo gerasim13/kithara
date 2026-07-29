@@ -25,8 +25,9 @@ These are suitable for local pre-commit feedback.
   for automatic LOD 2 abstractions; `just arch viz --crate <package> --lod 3`
   for constructors, boundary methods, resources, messages, and tasks; and
   `just arch viz --crate <package> --module <path> --lod 4` for the complete
-  focused call graph. A crate scope keeps immediate incoming and outgoing
-  workspace neighbors and needs no discovery command.
+  focused call graph. A crate scope hides Cargo dependencies and incoming
+  callers while keeping concrete outgoing public interactions as compact
+  external ports.
 - `--view hierarchy|ownership` changes only the projection. `--semantic
   off|required`, `--runtime off`, `--scenario <name>`, and `--trace <jsonl>`
   control evidence collection.
@@ -67,6 +68,35 @@ These are suitable for local pre-commit feedback.
   stages may report SKIP.
 - Audit and health consume one canonical argv source for their shared stages and
   validate each xtask command shape in the `kithara-devtools` unit tests.
+
+## Decision-Oriented Assessment
+
+- `just quality assess` rebuilds the standard product evidence and writes
+  `manifest.json`, `assessment.json`, and `assessment.md` below
+  `target/quality-assessment/<revision>/product-standard/`.
+- Standard runs the portable format, compiler/lint, quality, unused-public,
+  test, similarity, and architecture stages independently. Full `health` and
+  dependency/API/security sweeps belong to `--depth deep`.
+- `--profile complete` includes integration tests, test/tooling crates, xtask,
+  devtools, and other project-default exclusions. `--depth deep` runs the
+  configured heavyweight analyzers and project/platform scenarios.
+- Scope with `--crate <package>` or
+  `--module <package>::<module-path>`. Compare with an earlier report using
+  `--baseline <assessment.json-or-directory>`. `--reuse-existing` deliberately
+  skips refresh and only federates compatible existing artifacts.
+- A global unversioned report is not treated as reusable evidence merely
+  because the file exists. Fresh stages must create or update their declared
+  artifacts; otherwise the assessment is `partial`.
+- Start with the assessment manifest. `partial` means at least one required
+  stage is broken; preserved logs are evidence of the gap, not a complete
+  result. A `refactor` verdict is advisory and still exits successfully when
+  analysis is complete.
+- Baseline entries are debt. The target is zero, the workspace refactor
+  threshold is 100, and smaller scopes use the LOC-proportional threshold
+  recorded in the report. ACI is diagnostic; use it to rank contours and seek
+  corroboration rather than inventing a score gate.
+- For source-aware synthesis and deep-report behavior, use
+  `docs/skills/quality-assessment/SKILL.md`.
 
 ## Similarity Analysis
 

@@ -60,8 +60,9 @@ routine work:
   (automatic LOD 2);
   crate boundaries/resources: `just arch viz --crate <package> --lod 3`;
   complete module call graph: `just arch viz --crate <package> --module <path>
-  --lod 4`. A crate view includes its immediate workspace neighbors without a
-  discovery command. Use `--view ownership` for the ownership lens and
+  --lod 4`. A crate view isolates the selected crate, hides Cargo dependencies
+  and incoming callers, and terminates concrete outgoing interactions at
+  compact public external ports. Use `--view ownership` for the ownership lens and
   `--scenario <name>` for one configured runtime flow. Project defaults under
   `[architecture.filters]` and repeatable `--exclude-crate <glob>` /
   `--exclude-module <glob>` remove non-product contours from semantic
@@ -72,6 +73,13 @@ routine work:
 - `just quality lab list`; manual/scheduled analyzer run:
   `just quality lab run <profile-or-tool>`; coverage risk:
   `just quality coverage-risk`.
+- Decision-oriented repository assessment: `just quality assess`; every source
+  surface: `just quality assess --profile complete`; heavyweight evidence:
+  `just quality assess --depth deep`; one crate:
+  `just quality assess --crate <package>`; one module:
+  `just quality assess --module <package>::<module>`. Read the printed
+  `manifest.json` before the report. For contextual interpretation follow
+  `docs/skills/quality-assessment/SKILL.md`; do not rediscover these routes.
 - Platform entrypoints are `just platform apple ...`,
   `just platform android ...`, and `just platform wasm ...`.
 - Direct cached xtask access is exceptional and uses

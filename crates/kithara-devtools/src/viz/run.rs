@@ -16,7 +16,7 @@ use super::{
     semantic, source,
     view::{DetailLevel, Projector, ViewKind, ViewRequest},
 };
-use crate::Ctx;
+use crate::{Ctx, common::project::ArchitectureFilterConfig};
 
 pub(crate) fn run(args: &VizArgs, ctx: &Ctx) -> Result<()> {
     let metadata = ctx.metadata()?;
@@ -28,8 +28,14 @@ pub(crate) fn run(args: &VizArgs, ctx: &Ctx) -> Result<()> {
     {
         bail!("workspace package not found: {package}");
     }
+    let complete_filters = ArchitectureFilterConfig::default();
+    let configured_filters = if args.include_default_excluded {
+        &complete_filters
+    } else {
+        &ctx.config.architecture.filters
+    };
     let filter = ArchitectureFilter::new(
-        &ctx.config.architecture.filters,
+        configured_filters,
         &args.exclude_crates,
         &args.exclude_modules,
         metadata,

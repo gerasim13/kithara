@@ -146,6 +146,9 @@ impl Profile {
 pub struct SimilarityArgs {
     #[arg(long, value_enum, default_value_t = Profile::Advisory)]
     pub profile: Profile,
+    /// Ignore project-default crate exclusions for a complete or explicit scan.
+    #[arg(long)]
+    pub include_default_excluded: bool,
     /// Optional roots to scan. Empty = all production crate `src/` dirs
     /// (excluding test-utils and proc-macro crates).
     pub paths: Vec<String>,
@@ -161,10 +164,16 @@ pub(crate) fn run(args: &SimilarityArgs, ctx: &Ctx) -> Result<()> {
     let metadata = ctx.metadata()?;
     let mut config = ctx.similarity.clone();
     activate_dependencies(&mut config, metadata);
-    let excluded = &config.excluded_crates;
+    let no_exclusions = Vec::new();
+    let excluded = if args.include_default_excluded {
+        &no_exclusions
+    } else {
+        &config.excluded_crates
+    };
+    let include_tests = matches!(args.profile, Profile::Strict);
 
     let roots = if args.paths.is_empty() {
-        default_roots(metadata, excluded)
+        default_roots(metadata, excluded, include_tests)
     } else {
         args.paths
             .iter()
@@ -175,12 +184,18 @@ pub(crate) fn run(args: &SimilarityArgs, ctx: &Ctx) -> Result<()> {
     if roots.is_empty() {
         return Ok(());
     }
-    let include_tests = matches!(args.profile, Profile::Strict);
     let files = source_files(&ctx.root, &roots, include_tests)?;
     let native = analysis::analyze_files(&files, &config, include_tests)?;
     let revision = revision(&ctx.root);
     let output = ctx.root.join("target/similarity").join(&revision);
-    let artifacts = report::write(&output, &revision, args.profile, &native)?;
+    let artifacts = report::write(
+        &output,
+        &revision,
+        args.profile,
+        &roots,
+        args.include_default_excluded,
+        &native,
+    )?;
     writeln!(io::stdout().lock(), "==> {}", artifacts.document.display())?;
 
     check_tool("similarity-rs", &["--version"], Consts::INSTALL_HINT)?;
@@ -229,6 +244,12 @@ fn source_files(
                 .extension()
                 .and_then(|extension| extension.to_str())
                 != Some("rs")
+                || candidate.components().any(|component| {
+                    matches!(
+                        component,
+                        Component::Normal(name) if name == "target" || name == ".git"
+                    )
+                })
                 || !include_tests && is_test_path(&candidate)
             {
                 continue;
@@ -275,7 +296,7 @@ fn path_is_in_excluded_crate(path: &str, excluded: &[String]) -> bool {
     })
 }
 
-fn default_roots(metadata: &Metadata, excluded: &[String]) -> Vec<String> {
+fn default_roots(metadata: &Metadata, excluded: &[String], include_tests: bool) -> Vec<String> {
     let workspace_root = metadata.workspace_root.as_std_path();
     let mut out = Vec::new();
     for pkg in metadata.workspace_packages() {
@@ -283,9 +304,21 @@ fn default_roots(metadata: &Metadata, excluded: &[String]) -> Vec<String> {
         if excluded.iter().any(|e| e == name) {
             continue;
         }
-        let src = workspace_root.join("crates").join(name).join("src");
-        if src.is_dir() {
-            out.push(format!("crates/{name}/src"));
+        let Some(package_root) = pkg.manifest_path.parent() else {
+            continue;
+        };
+        let root = if include_tests {
+            package_root.as_std_path().to_path_buf()
+        } else {
+            package_root.join("src").into_std_path_buf()
+        };
+        if root.is_dir() {
+            out.push(
+                root.strip_prefix(workspace_root)
+                    .unwrap_or(&root)
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
         }
     }
     out.sort();
@@ -311,5 +344,21 @@ mod tests {
 
         assert_eq!(production.len(), 1);
         assert_eq!(strict.len(), 2);
+    }
+
+    #[test]
+    fn similarity_can_include_project_default_exclusions() {
+        let command = SimilarityArgs::augment_args(clap::Command::new("similarity"));
+        let matches = command.try_get_matches_from([
+            "similarity",
+            "--include-default-excluded",
+            "--profile",
+            "strict",
+        ]);
+
+        assert!(
+            matches.is_ok(),
+            "complete profile override should parse: {matches:?}"
+        );
     }
 }

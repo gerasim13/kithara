@@ -18,6 +18,7 @@ pub mod orphans;
 pub mod perf;
 pub mod perf_compare;
 pub mod quality;
+pub mod quality_assessment;
 pub mod quality_lab;
 pub mod scope;
 pub mod similarity;

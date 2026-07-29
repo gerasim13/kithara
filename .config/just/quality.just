@@ -5,6 +5,10 @@ set working-directory := "../.."
 report *ARGS:
     just _xtask quality report "$@"
 
+[positional-arguments]
+assess *ARGS:
+    just _xtask quality assess "$@"
+
 unimock-check:
     just _xtask quality unimock-check
 
@@ -25,8 +29,22 @@ lab *ARGS:
 # Run cargo-crap against the LCOV report.
 [positional-arguments]
 coverage-risk *ARGS:
-    just test coverage
-    just quality lab run coverage --lcov "${COVERAGE_OUTPUT_DIR:-./coverage}/lcov.info" "$@"
+    #!/usr/bin/env bash
+    set -uo pipefail
+    LCOV="${COVERAGE_OUTPUT_DIR:-./coverage}/lcov.info"
+    coverage_rc=0
+    just test coverage || coverage_rc=$?
+    risk_rc=0
+    if [[ -f "$LCOV" ]]; then
+      just quality lab run coverage --lcov "$LCOV" "$@" || risk_rc=$?
+    else
+      echo "coverage-risk: LCOV artifact was not produced: $LCOV" >&2
+      risk_rc=1
+    fi
+    if (( coverage_rc != 0 )); then
+      exit "$coverage_rc"
+    fi
+    exit "$risk_rc"
 
 # CI-tuned quality report; thresholds come from QUALITY_* variables.
 report-ci:

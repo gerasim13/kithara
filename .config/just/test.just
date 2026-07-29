@@ -26,29 +26,43 @@ e2e-resamplers *ARGS:
 
 # Cobertura and LCOV reports from one instrumented test run.
 coverage:
-    OUTPUT_DIR="${COVERAGE_OUTPUT_DIR:-./coverage}"; \
-    COVERAGE_MIN="${COVERAGE_MIN:-80}"; \
-    IGNORE_REGEX='(tests/|examples/|benches/)'; \
-    mkdir -p "$OUTPUT_DIR"; \
-    cargo llvm-cov clean --workspace; \
+    #!/usr/bin/env bash
+    set -uo pipefail
+    OUTPUT_DIR="${COVERAGE_OUTPUT_DIR:-./coverage}"
+    COVERAGE_MIN="${COVERAGE_MIN:-80}"
+    IGNORE_REGEX='(tests/|examples/|benches/)'
+    COBERTURA="$OUTPUT_DIR/cobertura.xml"
+    LCOV="$OUTPUT_DIR/lcov.info"
+    mkdir -p "$OUTPUT_DIR"
+    rm -f "$COBERTURA" "$LCOV"
+    cargo llvm-cov clean --workspace
+    test_rc=0
     cargo llvm-cov nextest --no-report \
       --workspace --exclude kithara-fuzz \
-      --cargo-profile test-release; \
+      --cargo-profile test-release || test_rc=$?
+    report_rc=0
     cargo llvm-cov report \
+      --profile test-release \
       --cobertura \
-      --output-path "$OUTPUT_DIR/cobertura.xml" \
-      --ignore-filename-regex "$IGNORE_REGEX"; \
+      --output-path "$COBERTURA" \
+      --ignore-filename-regex "$IGNORE_REGEX" || report_rc=$?
     cargo llvm-cov report \
+      --profile test-release \
       --lcov \
-      --output-path "$OUTPUT_DIR/lcov.info" \
-      --ignore-filename-regex "$IGNORE_REGEX"; \
+      --output-path "$LCOV" \
+      --ignore-filename-regex "$IGNORE_REGEX" || report_rc=$?
     cargo llvm-cov report \
+      --profile test-release \
       --summary-only \
       --ignore-filename-regex "$IGNORE_REGEX" \
-      --fail-under-lines "$COVERAGE_MIN"; \
-    echo "==> coverage report written to $OUTPUT_DIR/cobertura.xml"; \
-    echo "==> LCOV report written to $OUTPUT_DIR/lcov.info"; \
+      --fail-under-lines "$COVERAGE_MIN" || report_rc=$?
+    echo "==> coverage report written to $COBERTURA"
+    echo "==> LCOV report written to $LCOV"
     echo "==> line coverage threshold: $COVERAGE_MIN%"
+    if (( test_rc != 0 )); then
+      exit "$test_rc"
+    fi
+    exit "$report_rc"
 
 # Show lines not executed by any test.
 uncovered:

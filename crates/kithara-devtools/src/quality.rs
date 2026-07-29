@@ -11,13 +11,15 @@ use regex::Regex;
 use crate::{
     Ctx,
     common::{project::ProjectConfig, timestamp::utc_timestamp, walker::walk_rs_files},
-    quality_lab,
+    quality_assessment, quality_lab,
 };
 
 const MOCK_COVERAGE_PATTERN: &str = r"(unimock::unimock\(|#\[\s*kithara::mock)";
 
 #[derive(Debug, Subcommand)]
 pub enum QualityCommand {
+    /// Build a decision-oriented repository quality assessment.
+    Assess(quality_assessment::AssessArgs),
     /// Generate a quality report.
     Report {
         #[arg(long)]
@@ -107,6 +109,7 @@ fn count_rs_files_in(dir: &Path) -> Result<usize> {
 
 pub(crate) fn run(cmd: &QualityCommand, ctx: &Ctx) -> Result<()> {
     match cmd {
+        QualityCommand::Assess(args) => quality_assessment::run(args, ctx),
         QualityCommand::Report {
             min_unimock_traits,
             min_rstest_cases,
@@ -586,6 +589,14 @@ fn run_unimock_check() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn assess_command_accepts_default_profile_and_depth() {
+        let command = QualityCommand::augment_subcommands(clap::Command::new("quality"));
+        let matches = command.try_get_matches_from(["quality", "assess"]);
+
+        assert!(matches.is_ok(), "quality assess should parse: {matches:?}");
+    }
 
     #[test]
     fn walk_rs_files_returns_sorted() {

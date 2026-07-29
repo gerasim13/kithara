@@ -5,6 +5,11 @@
 [project]
 name = "kithara"
 
+[workspace-scan]
+# Cargo build output can also live below an individual crate (for example the
+# multi-target FFI builds). Generated bindings are not workspace source.
+exclude = ["target/**", "**/target/**"]
+
 [architecture.filters]
 exclude_crates = [
   "kithara-devtools",
@@ -316,6 +321,162 @@ js_artifact = "kithara-ffi.js"
 [quality]
 # Trait directory whose every `pub trait` must carry `#[unimock]`.
 unimock_traits_dir = "crates/kithara-play/src/api"
+
+[[quality.assessment.not_applicable_tools]]
+tool = "cargo-mutants"
+reason = "Workspace-wide mutation testing is prohibitively expensive and does not provide actionable signal."
+
+[[quality.assessment.deep_stages]]
+name = "extended-clippy"
+command = ["just", "lint", "audit-clippy"]
+tools = ["extended-clippy"]
+hard_invariant = true
+
+[[quality.assessment.deep_stages]]
+name = "quality-lab"
+command = ["just", "quality", "lab", "run", "manual"]
+tools = ["cha", "rustqual", "cargo-dupes", "pmat"]
+expected_artifacts = ["target/quality-lab/{revision}/manual-summary.json"]
+
+[[quality.assessment.deep_stages]]
+name = "coverage-risk"
+command = ["just", "quality", "coverage-risk"]
+tools = ["cargo-llvm-cov", "cargo-crap"]
+hard_invariant = true
+expected_artifacts = [
+  "coverage/lcov.info",
+  "target/quality-lab/{revision}/coverage-summary.json",
+]
+
+[[quality.assessment.deep_stages]]
+name = "public-api"
+command = ["cargo", "public-api", "-p", "kithara"]
+tools = ["cargo-public-api"]
+
+[[quality.assessment.deep_stages]]
+name = "binary-bloat"
+command = [
+  "cargo",
+  "bloat",
+  "-p",
+  "kithara-app",
+  "--release",
+  "--message-format",
+  "json",
+]
+tools = ["cargo-bloat"]
+
+[[quality.assessment.deep_stages]]
+name = "e2e"
+command = ["just", "test", "run", "--lane=e2e"]
+tools = ["e2e-tests"]
+hard_invariant = true
+complete_only = true
+
+[[quality.assessment.deep_stages]]
+name = "e2e-resamplers"
+command = ["just", "test", "e2e-resamplers"]
+tools = ["e2e-resamplers"]
+hard_invariant = true
+complete_only = true
+
+[[quality.assessment.deep_stages]]
+name = "selenium"
+command = ["just", "test", "run", "--lane=selenium"]
+tools = ["selenium-tests"]
+hard_invariant = true
+complete_only = true
+
+[[quality.assessment.deep_stages]]
+name = "feature-gate"
+command = ["just", "ci", "gate"]
+tools = ["feature-gate"]
+hard_invariant = true
+complete_only = true
+
+[[quality.assessment.deep_stages]]
+name = "loom"
+command = ["just", "test", "run", "--loom=on"]
+tools = ["loom"]
+hard_invariant = true
+
+[[quality.assessment.deep_stages]]
+name = "rtsan"
+command = ["just", "test", "rtsan"]
+tools = ["rtsan"]
+hard_invariant = true
+platforms = ["macos"]
+
+[[quality.assessment.deep_stages]]
+name = "perf-suite"
+command = ["just", "perf"]
+tools = ["perf-suite"]
+hard_invariant = true
+expected_artifacts = ["perf-results.txt"]
+
+[[quality.assessment.deep_stages]]
+name = "benchmarks"
+command = ["just", "perf", "bench", "build"]
+tools = ["benchmarks"]
+hard_invariant = true
+
+[[quality.assessment.deep_stages]]
+name = "memory"
+command = ["just", "perf", "memory"]
+tools = ["memory"]
+hard_invariant = true
+
+[[quality.assessment.deep_stages]]
+name = "wasm-check"
+command = ["just", "platform", "wasm", "check"]
+tools = ["wasm-check"]
+hard_invariant = true
+
+[[quality.assessment.deep_stages]]
+name = "wasm-tests"
+command = ["just", "platform", "wasm", "test"]
+tools = ["wasm-tests"]
+hard_invariant = true
+
+[[quality.assessment.deep_stages]]
+name = "wasm-size"
+command = ["just", "platform", "wasm", "size-check"]
+tools = ["wasm-build", "wasm-size", "wasm-slim"]
+hard_invariant = true
+expected_artifacts = ["target/wasm-slim-result.json"]
+
+[[quality.assessment.deep_stages]]
+name = "apple-xcframework"
+command = ["just", "platform", "apple", "xcframework", "--profile", "debug"]
+tools = ["apple-xcframework"]
+hard_invariant = true
+platforms = ["macos"]
+
+[[quality.assessment.deep_stages]]
+name = "apple-build"
+command = ["just", "platform", "apple", "single"]
+tools = ["apple-build"]
+hard_invariant = true
+platforms = ["macos"]
+
+[[quality.assessment.deep_stages]]
+name = "apple-docs"
+command = ["just", "tooling", "xtask", "apple", "docgen", "--check"]
+tools = ["apple-docs"]
+hard_invariant = true
+platforms = ["macos"]
+
+[[quality.assessment.deep_stages]]
+name = "android-build"
+command = ["just", "platform", "android", "build"]
+tools = ["android-build"]
+hard_invariant = true
+
+[[quality.assessment.deep_stages]]
+name = "android-aar"
+command = ["just", "platform", "android", "aar"]
+tools = ["android-aar"]
+hard_invariant = true
 
 [ext.apple]
 # Demo app launched by `just platform apple demo`.

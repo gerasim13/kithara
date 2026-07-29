@@ -300,6 +300,9 @@ fn module_contains(parent: &str, candidate: &str) -> bool {
 }
 
 fn edge_touches_scope(edge: &Edge, request: &MetricsRequest<'_>) -> bool {
+    if request.package.is_some() && request.module.is_none() {
+        return id_in_source_scope(&edge.source, request);
+    }
     request.package.is_none()
         || id_in_source_scope(&edge.source, request)
         || id_in_source_scope(&edge.target, request)

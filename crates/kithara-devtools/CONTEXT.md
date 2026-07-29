@@ -38,6 +38,11 @@ single parsed configuration for the run.
   attribution, and `nextest_profile` (default `perf`). The selected nextest
   profile must expose `[profile.<name>.junit] path = "junit.xml"` because
   `perf matrix` copies `target/nextest/<name>/junit.xml` into the run data.
+- `[quality.assessment]` owns only project-specific deep-stage execution:
+  structured argv, owned tool names, expected artifacts, optional platform
+  selection, and whether a stage belongs only to the complete profile. It does
+  not declare source relationships or metric values. Delegated commands retain
+  ownership of their existing budgets and output schemas.
 
 ## CLI surface
 
@@ -67,11 +72,12 @@ truncation: every source contour remains in `contours.json`.
 Explicit workspace LOD 1 uses the same index-plus-pages shape rather than
 placing every workspace module in one Mermaid block.
 
-`--crate <package>` also projects the same full workspace graph. It retains the
-selected package, immediate incoming and outgoing normal Cargo neighbors, and
-resolved cross-package call endpoints. Neighbor-to-neighbor edges are excluded
-from the focused model. This static neighborhood requires neither a configured
-runtime scenario nor an extra discovery command.
+`--crate <package>` also projects the same full workspace graph. It isolates
+the selected package, removes inter-package Cargo dependencies and incoming
+callers, and retains concrete outgoing cross-package interactions as compact
+ports labelled with the public target symbol. External packages are not
+expanded. The projection requires neither a configured runtime scenario nor an
+extra discovery command.
 
 When a relation endpoint is hidden by LOD, the endpoint lifts to its nearest
 visible owner. Equal visible endpoint/kind pairs aggregate while retaining the
@@ -128,6 +134,45 @@ optional rust-analyzer yields static/runtime output unless
 `--semantic required` was requested. Truncation is explicit, applies only to
 evidence collection, and never removes nodes because of diagram size.
 
+## Quality assessment contract
+
+`quality assess` is an artifact federation layer. Existing linters,
+architecture, similarity, health, Quality Lab, test, dependency, concurrency,
+performance, and platform commands remain canonical owners; the assessment
+normalizes and correlates their output without reimplementing their metrics.
+
+The default profile is `product`; `complete` disables project-default
+architecture and similarity exclusions and includes integration tests,
+test/tooling crates, and other workspace surfaces. An explicitly selected
+crate or canonical `package::module` scope is included even when defaults
+exclude it. The default depth is `standard`; `deep` adds configured
+heavyweight stages. Standard executes each portable gate separately so its
+stage evidence is attributable and does not pay for the heavyweight sections
+of `health`; deep runs the full health pipeline plus the registered rare
+stages. Configured stages are advisory unless `hard_invariant = true` records
+an already-established project gate.
+
+Artifacts are deterministic JSON/Markdown plus a manifest under
+`target/quality-assessment/<revision>/<profile>-<depth>/`, with stage JSON and
+logs in sibling directories. A dirty worktree revision carries a content/diff
+digest. Committed Quality Lab output, especially Cha, must not claim coverage
+of dirty content.
+
+The workspace debt target is zero and the refactor threshold is 100. A smaller
+scope uses `max(1, ceil(100 * scope_LOC / workspace_LOC))`. Existing lint
+baseline entries count as debt; baseline growth is a regression. A hard
+invariant, debt threshold/regression, or same-location corroboration by two
+independent tools can produce `refactor`. One diagnostic tool produces
+`investigate`. ACI remains diagnostic and has no invented gate.
+
+Verdicts are advisory and do not make a complete command fail. Invalid input
+or broken required analysis preserves a partial artifact and returns an error.
+The tool coverage matrix must account for every known signal as `executed`,
+`reused`, `covered-by`, `not-applicable`, or `evidence-gap`.
+Project policy may classify an impractical tool under
+`[[quality.assessment.not_applicable_tools]]`; such a tool remains visible in
+the matrix with its reason and is never scheduled as a deep stage.
+
 ## Behavioral similarity ownership
 
 `similarity` owns native source-level comparison of Rust abstractions. The
@@ -155,12 +200,14 @@ separate files attach only when their owner resolves uniquely in the workspace
 or crate. Partial state overlap without matching behavior is a review finding;
 composition is recommended only when aligned `impl` behavior supports it.
 
-`report.json` and `graph.json` are exhaustive. The Mermaid view aggregates
-candidates by crate pair, so rendering remains useful without imposing a node
-or finding limit. Strict includes test paths and `#[cfg(test)]` items; audit and
-advisory keep the established production-only policy. Proc-macro output is not
-expanded, similarity never proves substitutability, and caveats must be checked
-before refactoring.
+`report.json` and `graph.json` are exhaustive. Manifest schema v2 records the
+exact roots and whether project-default exclusions were disabled, so an
+assessment never reuses evidence from another profile or scope. The Mermaid
+view aggregates candidates by crate pair, so rendering remains useful without
+imposing a node or finding limit. Strict includes test paths and `#[cfg(test)]`
+items; audit and advisory keep the established production-only policy.
+Proc-macro output is not expanded, similarity never proves substitutability,
+and caveats must be checked before refactoring.
 
 ## Quality Lab ownership
 
@@ -173,7 +220,9 @@ strict schema independent of the general `.config/xtask.toml`.
   `--baseline` emits the absolute JSON artifact; a pull-request run supplies
   that artifact and gates regressed entries plus new functions above CRAP 30.
   The wrapper checks delta JSON because cargo-crap's `--fail-regression` exit
-  code does not include new functions.
+  code does not include new functions. A failing instrumented test run still
+  writes Cobertura and LCOV and runs cargo-crap; the combined stage preserves
+  the test exit as findings instead of losing the risk evidence.
 - `scheduled` runs Cha history/layers/smells, rustqual test-quality checks, and
   cargo-dupes sub-function duplication. Findings are advisory; missing tools,
   invalid reports, version mismatches, and timeouts are tool errors.

@@ -74,7 +74,7 @@ pub struct VizArgs {
     #[arg(long, value_enum, default_value_t)]
     pub(crate) lod: Lod,
 
-    /// Focus on one Cargo package and its immediate workspace neighbors.
+    /// Focus on one Cargo package and its outgoing public boundary.
     #[arg(long = "crate")]
     pub(crate) krate: Option<String>,
 
@@ -89,6 +89,10 @@ pub struct VizArgs {
     /// Exclude canonical `package::module` subtrees from the visible projection.
     #[arg(long = "exclude-module")]
     pub(crate) exclude_modules: Vec<String>,
+
+    /// Ignore project-default exclusions while preserving explicit filters.
+    #[arg(long)]
+    pub(crate) include_default_excluded: bool,
 
     /// Semantic call resolution policy.
     #[arg(long, value_enum, default_value_t)]
@@ -179,5 +183,15 @@ mod tests {
         let Command::Viz(args) = cli.command;
         assert_eq!(args.exclude_crates, ["test-*", "xtask"]);
         assert_eq!(args.exclude_modules, ["*::tests", "*::fixtures"]);
+    }
+
+    #[test]
+    fn viz_can_include_scopes_excluded_by_project_defaults() {
+        let cli = Cli::try_parse_from(["xtask", "viz", "--include-default-excluded"]);
+
+        assert!(
+            cli.is_ok(),
+            "complete profile override should parse: {cli:?}"
+        );
     }
 }

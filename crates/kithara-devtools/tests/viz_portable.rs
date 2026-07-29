@@ -125,6 +125,14 @@ fn workspace_lod_zero_shows_every_crate_without_internal_nodes() {
         .path()
         .join("target/architecture/working-tree/architecture.md");
     let document = fs::read_to_string(&output).expect("architecture document");
+    let crate_document = fs::read_to_string(
+        output
+            .parent()
+            .expect("architecture output")
+            .join("crates/flow")
+            .with_extension("md"),
+    )
+    .expect("flow crate document");
     let manifest: serde_json::Value = serde_json::from_slice(
         &fs::read(output.with_file_name("manifest.json")).expect("manifest"),
     )
@@ -139,6 +147,8 @@ fn workspace_lod_zero_shows_every_crate_without_internal_nodes() {
     assert!(document.contains("support"));
     assert!(document.contains("unrelated"));
     assert!(document.contains("depends on"));
+    assert!(!crate_document.contains("depends on"));
+    assert!(!crate_document.contains("[\"consumer\"]"));
     assert!(!document.contains("[\"start\"]"));
     assert!(!document.contains("[\"worker\"]"));
     assert!(!document.contains("Arc&lt;"));
@@ -155,6 +165,48 @@ fn workspace_lod_zero_shows_every_crate_without_internal_nodes() {
                     && edge["style"] == "conditional"
             })
     );
+}
+
+#[test]
+fn focused_crate_hides_workspace_dependencies_and_incoming_neighbors() {
+    let temp = tempdir().expect("tempdir");
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/architecture-workspace");
+    copy_tree(&fixture, temp.path());
+    let manifest = temp.path().join("Cargo.toml");
+    let ctx = Ctx::load_from_manifest(&manifest).expect("load fixture context");
+
+    kithara_devtools::run(&crate_lod_command("flow", "1"), &ctx).expect("crate LOD 1 run");
+
+    let output = temp
+        .path()
+        .join("target/architecture/working-tree/architecture.md");
+    let document = fs::read_to_string(&output).expect("architecture document");
+    let projection: serde_json::Value = serde_json::from_slice(
+        &fs::read(output.with_file_name("projection.json")).expect("projection"),
+    )
+    .expect("projection JSON");
+    let metrics: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.with_file_name("metrics.json")).expect("metrics"))
+            .expect("metrics JSON");
+
+    assert!(!document.contains("depends on"));
+    assert!(!document.contains("[\"consumer\"]"));
+    assert!(
+        projection["nodes"]
+            .as_array()
+            .expect("projection nodes")
+            .iter()
+            .all(|node| node["id"]["package"] != "consumer")
+    );
+    assert!(
+        projection["edges"]
+            .as_array()
+            .expect("projection edges")
+            .iter()
+            .all(|edge| edge["kind"] != "depends_on")
+    );
+    assert_eq!(metrics["including_candidates"]["incoming_relations"], 0);
 }
 
 #[test]
@@ -362,11 +414,8 @@ fn crate_lod_one_contracts_modules_into_subsystems() {
     .expect("subsystem document");
     assert!(subsystem_document.contains("## Architectural complexity"));
     assert!(subsystem_document.contains("### Metric findings"));
-    assert!(
-        metrics["confirmed"]["outgoing_relations"]
-            .as_u64()
-            .is_some_and(|relations| relations > 0)
-    );
+    assert_eq!(metrics["confirmed"]["incoming_relations"], 0);
+    assert_eq!(metrics["confirmed"]["outgoing_relations"], 0);
 }
 
 #[test]
@@ -618,10 +667,10 @@ fn portable_workspace_produces_stable_mermaid_artifacts() {
         .join("target/architecture/working-tree/architecture.md");
     let first = fs::read_to_string(&output).expect("architecture document");
     assert!(first.contains("flowchart LR"));
-    assert!(first.contains("consumer"));
     assert!(first.contains("flow"));
-    assert!(first.contains("support"));
-    assert!(first.contains("depends on"));
+    assert!(!first.contains("consumer"));
+    assert!(!first.contains("support"));
+    assert!(!first.contains("depends on"));
     assert!(!first.contains("unrelated"));
     assert!(first.contains("start"));
     assert!(first.contains("worker"));

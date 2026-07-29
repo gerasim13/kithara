@@ -123,9 +123,6 @@ pub(crate) struct DiagramModel {
 
 #[cfg(test)]
 pub(crate) fn project(graph: &EvidenceGraph, request: &ViewRequest) -> DiagramModel {
-    if request.lod == DetailLevel::Crates {
-        return project_crates(graph, request);
-    }
     Projector::new(graph).project(request)
 }
 
@@ -135,6 +132,9 @@ fn project_with_contours(
     contours: &ContourIndex,
 ) -> DiagramModel {
     if request.lod == DetailLevel::Crates {
+        if request.package.is_some() {
+            return project_focused_crate(graph, request, contours);
+        }
         return project_crates(graph, request);
     }
 
@@ -171,20 +171,24 @@ fn project_with_contours(
         .cloned()
         .collect::<BTreeSet<_>>();
 
-    if request.package.is_some() {
-        include_immediate_neighbors(graph, request.kind, &eligible, &mut candidates);
-    }
-
     if request.module.is_some() {
         include_connected_resources(graph, request.kind, &mut candidates);
     }
     include_visible_ancestors(parents, &eligible, &mut candidates);
+    let external_ports = outgoing_public_ports(graph, request, &candidates, parents);
+    candidates.extend(external_ports.iter().cloned());
 
     let visible = candidates;
     let nodes = graph
         .nodes()
         .filter(|node| visible.contains(&node.id))
-        .map(|node| diagram_node(node, visible_parent(&node.id, &visible, parents)))
+        .map(|node| {
+            if external_ports.contains(&node.id) {
+                external_port_node(node)
+            } else {
+                diagram_node(node, visible_parent(&node.id, &visible, parents))
+            }
+        })
         .collect();
     let edges = lifted_edges(graph, request, &visible, parents);
 
@@ -235,6 +239,7 @@ fn lifted_edges(
         .edges()
         .filter(|edge| edge_in_view(edge, request.kind))
         .filter(|edge| package_edge_matches(edge, request))
+        .filter(|edge| focused_edge_matches(edge, request))
         .filter(|edge| module_edge_matches(edge, request))
         .filter(|edge| {
             !request.filter.excludes(&edge.source) && !request.filter.excludes(&edge.target)
@@ -418,7 +423,7 @@ fn id_module_matches(id: &NodeId, module: &str) -> bool {
 }
 
 fn project_crates(graph: &EvidenceGraph, request: &ViewRequest) -> DiagramModel {
-    let mut visible = graph
+    let visible = graph
         .nodes()
         .filter(|node| node.kind == NodeKind::Package)
         .filter(|node| !request.filter.excludes(&node.id))
@@ -430,24 +435,6 @@ fn project_crates(graph: &EvidenceGraph, request: &ViewRequest) -> DiagramModel 
         })
         .map(|node| node.id.clone())
         .collect::<BTreeSet<_>>();
-
-    if request.package.is_some() {
-        let selected = visible.clone();
-        for edge in graph
-            .edges()
-            .filter(|edge| edge.kind == EdgeKind::DependsOn)
-            .filter(|edge| {
-                !request.filter.excludes(&edge.source) && !request.filter.excludes(&edge.target)
-            })
-        {
-            if selected.contains(&edge.source) {
-                visible.insert(edge.target.clone());
-            }
-            if selected.contains(&edge.target) {
-                visible.insert(edge.source.clone());
-            }
-        }
-    }
 
     DiagramModel {
         kind: request.kind,
@@ -472,6 +459,47 @@ fn project_crates(graph: &EvidenceGraph, request: &ViewRequest) -> DiagramModel 
     }
 }
 
+fn project_focused_crate(
+    graph: &EvidenceGraph,
+    request: &ViewRequest,
+    contours: &ContourIndex,
+) -> DiagramModel {
+    let parents = contours.parents();
+    let mut visible = graph
+        .nodes()
+        .filter(|node| node.kind == NodeKind::Package)
+        .filter(|node| !request.filter.excludes(&node.id))
+        .filter(|node| {
+            request
+                .package
+                .as_ref()
+                .is_some_and(|package| node.id.package == *package)
+        })
+        .map(|node| node.id.clone())
+        .collect::<BTreeSet<_>>();
+    let external_ports = outgoing_public_ports(graph, request, &visible, parents);
+    visible.extend(external_ports.iter().cloned());
+
+    DiagramModel {
+        kind: request.kind,
+        lod: request.lod,
+        nodes: graph
+            .nodes()
+            .filter(|node| visible.contains(&node.id))
+            .map(|node| {
+                if external_ports.contains(&node.id) {
+                    external_port_node(node)
+                } else {
+                    diagram_node(node, None)
+                }
+            })
+            .collect(),
+        edges: lifted_edges(graph, request, &visible, parents),
+        groups: Vec::new(),
+        hidden_nodes: 0,
+    }
+}
+
 fn package_edge_matches(edge: &Edge, request: &ViewRequest) -> bool {
     request
         .package
@@ -479,21 +507,57 @@ fn package_edge_matches(edge: &Edge, request: &ViewRequest) -> bool {
         .is_none_or(|package| edge.source.package == *package || edge.target.package == *package)
 }
 
-fn include_immediate_neighbors(
+fn focused_edge_matches(edge: &Edge, request: &ViewRequest) -> bool {
+    request
+        .package
+        .as_ref()
+        .is_none_or(|package| edge.source.package == *package)
+}
+
+fn outgoing_public_ports(
     graph: &EvidenceGraph,
-    kind: ViewKind,
-    eligible: &BTreeSet<NodeId>,
-    candidates: &mut BTreeSet<NodeId>,
-) {
-    let selected = candidates.clone();
-    for edge in graph.edges().filter(|edge| edge_in_view(edge, kind)) {
-        if selected.contains(&edge.source) && eligible.contains(&edge.target) {
-            candidates.insert(edge.target.clone());
-        }
-        if selected.contains(&edge.target) && eligible.contains(&edge.source) {
-            candidates.insert(edge.source.clone());
-        }
-    }
+    request: &ViewRequest,
+    internal: &BTreeSet<NodeId>,
+    parents: &BTreeMap<NodeId, NodeId>,
+) -> BTreeSet<NodeId> {
+    let Some(package) = request.package.as_deref() else {
+        return BTreeSet::new();
+    };
+    graph
+        .edges()
+        .filter(|edge| edge_in_view(edge, request.kind))
+        .filter(|edge| edge.kind != EdgeKind::DependsOn)
+        .filter(|edge| edge.source.package == package && edge.target.package != package)
+        .filter(|edge| {
+            request
+                .module
+                .as_deref()
+                .is_none_or(|module| id_module_matches(&edge.source, module))
+        })
+        .filter(|edge| {
+            !request.filter.excludes(&edge.source) && !request.filter.excludes(&edge.target)
+        })
+        .filter(|edge| nearest_visible(&edge.source, internal, parents).is_some())
+        .filter_map(|edge| {
+            graph
+                .node(&edge.target)
+                .filter(|node| public_external_target(node, edge))
+                .map(|node| node.id.clone())
+        })
+        .collect()
+}
+
+fn public_external_target(node: &Node, edge: &Edge) -> bool {
+    matches!(
+        node.kind,
+        NodeKind::PublicItem | NodeKind::PublicFunction | NodeKind::TraitMethod
+    ) || node.kind == NodeKind::Constructor && edge.certainty() == MergedCertainty::Resolved
+}
+
+fn external_port_node(node: &Node) -> DiagramNode {
+    let mut projected = diagram_node(node, None);
+    projected.label = format!("external: {}::{}", node.id.package, node.label);
+    projected
 }
 
 fn node_in_view(node: &Node, kind: ViewKind) -> bool {
@@ -844,96 +908,37 @@ mod tests {
     }
 
     #[test]
-    fn package_projection_includes_only_immediate_cross_package_neighbors() {
+    fn package_projection_keeps_only_outgoing_public_ports() {
         let mut graph = EvidenceGraph::default();
-        let core = NodeId::symbol("core", "core", "crate", "start");
-        let helper = NodeId::symbol("core", "core", "crate", "helper");
-        let dependency = NodeId::symbol("dependency", "dependency", "crate", "serve");
-        let caller = NodeId::symbol("caller", "caller", "crate", "run");
-        let transitive = NodeId::symbol("transitive", "transitive", "crate", "deeper");
-        let unrelated = NodeId::symbol("unrelated", "unrelated", "crate", "idle");
-        for id in [
-            &core,
-            &helper,
-            &dependency,
-            &caller,
-            &transitive,
-            &unrelated,
+        let core_package = NodeId::package("core");
+        let core_module = NodeId::module("core", "core", "runtime");
+        let core = NodeId::symbol("core", "core", "runtime", "start");
+        let dependency_package = NodeId::package("dependency");
+        let dependency = NodeId::symbol("dependency", "dependency", "api", "serve");
+        let private_dependency = NodeId::symbol("dependency", "dependency", "internal", "helper");
+        let caller = NodeId::symbol("caller", "caller", "api", "run");
+        for (id, kind) in [
+            (&core_package, NodeKind::Package),
+            (&core_module, NodeKind::Module),
+            (&core, NodeKind::PublicFunction),
+            (&dependency_package, NodeKind::Package),
+            (&dependency, NodeKind::PublicFunction),
+            (&private_dependency, NodeKind::Function),
+            (&caller, NodeKind::PublicFunction),
         ] {
             graph.merge_node(Node::new(
                 id.clone(),
-                NodeKind::Function,
+                kind,
                 &id.symbol,
                 evidence(&id.symbol),
             ));
         }
-        for (source, target) in [
-            (&core, &helper),
-            (&core, &dependency),
-            (&caller, &core),
-            (&dependency, &transitive),
-        ] {
+        for (source, target) in [(&core_package, &core_module), (&core_module, &core)] {
             graph.merge_edge(Edge::new(
                 source.clone(),
                 target.clone(),
-                EdgeKind::Calls,
-                evidence("call"),
-            ));
-        }
-        graph.merge_edge(Edge::new(
-            dependency.clone(),
-            caller.clone(),
-            EdgeKind::Sends,
-            evidence("neighbor-neighbor"),
-        ));
-
-        let model = project(
-            &graph,
-            &ViewRequest {
-                kind: ViewKind::Overview,
-                package: Some("core".to_string()),
-                module: None,
-                scenario: None,
-                lod: DetailLevel::Full,
-                filter: ArchitectureFilter::default(),
-            },
-        );
-        let visible = model
-            .nodes
-            .iter()
-            .map(|node| node.id.clone())
-            .collect::<BTreeSet<_>>();
-
-        assert_eq!(visible, BTreeSet::from([core, helper, dependency, caller]));
-        assert!(!visible.contains(&transitive));
-        assert!(!visible.contains(&unrelated));
-        assert!(
-            model
-                .edges
-                .iter()
-                .all(|edge| { edge.source.package == "core" || edge.target.package == "core" })
-        );
-    }
-
-    #[test]
-    fn package_projection_includes_neighbor_summaries_without_a_budget() {
-        let mut graph = EvidenceGraph::default();
-        let core_package = NodeId::package("core");
-        let dependency_package = NodeId::package("dependency");
-        for (id, label) in [(&core_package, "core"), (&dependency_package, "dependency")] {
-            graph.merge_node(Node::new(
-                id.clone(),
-                NodeKind::Package,
-                label,
-                evidence(label),
-            ));
-        }
-        for label in ["alpha", "beta", "gamma"] {
-            graph.merge_node(Node::new(
-                NodeId::symbol("core", "core", "crate", label),
-                NodeKind::Function,
-                label,
-                evidence(label),
+                EdgeKind::Contains,
+                evidence("contains"),
             ));
         }
         graph.merge_edge(Edge::new(
@@ -942,6 +947,26 @@ mod tests {
             EdgeKind::DependsOn,
             evidence("cargo"),
         ));
+        for origin in ["outgoing-a", "outgoing-b"] {
+            graph.merge_edge(Edge::new(
+                core.clone(),
+                dependency.clone(),
+                EdgeKind::Calls,
+                evidence(origin),
+            ));
+        }
+        graph.merge_edge(Edge::new(
+            core.clone(),
+            private_dependency.clone(),
+            EdgeKind::Calls,
+            evidence("private-candidate"),
+        ));
+        graph.merge_edge(Edge::new(
+            caller.clone(),
+            core.clone(),
+            EdgeKind::Calls,
+            evidence("incoming"),
+        ));
 
         let model = project(
             &graph,
@@ -950,7 +975,7 @@ mod tests {
                 package: Some("core".to_string()),
                 module: None,
                 scenario: None,
-                lod: DetailLevel::Full,
+                lod: DetailLevel::Modules,
                 filter: ArchitectureFilter::default(),
             },
         );
@@ -962,13 +987,109 @@ mod tests {
 
         assert_eq!(
             visible,
-            BTreeSet::from([
-                core_package,
-                dependency_package,
-                NodeId::symbol("core", "core", "crate", "alpha"),
-                NodeId::symbol("core", "core", "crate", "beta"),
-                NodeId::symbol("core", "core", "crate", "gamma"),
-            ])
+            BTreeSet::from([core_package, core_module.clone(), dependency.clone()])
         );
+        assert!(!visible.contains(&dependency_package));
+        assert!(!visible.contains(&private_dependency));
+        assert!(!visible.contains(&caller));
+        let port = model
+            .nodes
+            .iter()
+            .find(|node| node.id == dependency)
+            .expect("outgoing public port");
+        assert_eq!(port.label, "external: dependency::serve");
+        assert_eq!(port.parent, None);
+        let outgoing = model
+            .edges
+            .iter()
+            .find(|edge| edge.source == core_module && edge.target == port.id)
+            .expect("outgoing public call");
+        assert_eq!(outgoing.kind, EdgeKind::Calls);
+        assert_eq!(outgoing.count, 2);
+        assert!(
+            model
+                .edges
+                .iter()
+                .all(|edge| edge.kind != EdgeKind::DependsOn)
+        );
+    }
+
+    #[test]
+    fn package_lod_zero_uses_public_ports_instead_of_dependency_neighbors() {
+        let mut graph = EvidenceGraph::default();
+        let core_package = NodeId::package("core");
+        let dependency_package = NodeId::package("dependency");
+        let start = NodeId::symbol("core", "core", "crate", "start");
+        let serve = NodeId::symbol("dependency", "dependency", "crate", "serve");
+        for (id, label) in [(&core_package, "core"), (&dependency_package, "dependency")] {
+            graph.merge_node(Node::new(
+                id.clone(),
+                NodeKind::Package,
+                label,
+                evidence(label),
+            ));
+        }
+        for (id, label) in [(&start, "start"), (&serve, "serve")] {
+            graph.merge_node(Node::new(
+                id.clone(),
+                NodeKind::PublicFunction,
+                label,
+                evidence(label),
+            ));
+        }
+        graph.merge_edge(Edge::new(
+            core_package.clone(),
+            dependency_package.clone(),
+            EdgeKind::DependsOn,
+            evidence("cargo"),
+        ));
+        graph.merge_edge(Edge::new(
+            core_package.clone(),
+            start.clone(),
+            EdgeKind::Contains,
+            evidence("core-contains"),
+        ));
+        graph.merge_edge(Edge::new(
+            start,
+            serve.clone(),
+            EdgeKind::Calls,
+            evidence("outgoing"),
+        ));
+
+        let model = project(
+            &graph,
+            &ViewRequest {
+                kind: ViewKind::Overview,
+                package: Some("core".to_string()),
+                module: None,
+                scenario: None,
+                lod: DetailLevel::Crates,
+                filter: ArchitectureFilter::default(),
+            },
+        );
+        let visible = model
+            .nodes
+            .iter()
+            .map(|node| node.id.clone())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            visible,
+            BTreeSet::from([core_package.clone(), serve.clone()])
+        );
+        assert!(!visible.contains(&dependency_package));
+        assert_eq!(
+            model
+                .nodes
+                .iter()
+                .find(|node| node.id == serve)
+                .expect("public port")
+                .label,
+            "external: dependency::serve"
+        );
+        assert_eq!(model.edges.len(), 1);
+        assert_eq!(model.edges[0].source, core_package);
+        assert_eq!(model.edges[0].target, serve);
+        assert_eq!(model.edges[0].kind, EdgeKind::Calls);
     }
 }

@@ -12,7 +12,7 @@ use super::{
     analysis::{AbstractionRef, AnalysisReport, Candidate, Recommendation},
 };
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 
 pub(super) struct ArtifactSet {
     pub(super) document: PathBuf,
@@ -46,6 +46,8 @@ struct Manifest<'a> {
     schema_version: u32,
     revision: &'a str,
     profile: Profile,
+    roots: &'a [String],
+    include_default_excluded: bool,
     status: &'static str,
     scanned_files: usize,
     abstractions: usize,
@@ -59,6 +61,8 @@ pub(super) fn write(
     output: &Path,
     revision: &str,
     profile: Profile,
+    roots: &[String],
+    include_default_excluded: bool,
     report: &AnalysisReport,
 ) -> Result<ArtifactSet> {
     fs::create_dir_all(output)
@@ -71,6 +75,8 @@ pub(super) fn write(
             schema_version: SCHEMA_VERSION,
             revision,
             profile,
+            roots,
+            include_default_excluded,
             status: if report.candidates.is_empty() {
                 "clean"
             } else {
@@ -358,8 +364,16 @@ mod tests {
         .expect("analysis report");
         let temp = tempfile::tempdir().expect("tempdir");
 
-        let artifacts =
-            write(temp.path(), "abc123", Profile::Advisory, &report).expect("write artifacts");
+        let roots = vec!["crates/demo/src".to_owned()];
+        let artifacts = write(
+            temp.path(),
+            "abc123",
+            Profile::Advisory,
+            &roots,
+            false,
+            &report,
+        )
+        .expect("write artifacts");
 
         assert_eq!(artifacts.document, temp.path().join("report.md"));
         for file in ["report.md", "report.json", "graph.json", "manifest.json"] {
@@ -370,5 +384,12 @@ mod tests {
         assert!(markdown.contains("Right"));
         assert!(markdown.contains("Type substitutions"));
         assert!(markdown.contains("```mermaid"));
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &fs::read(temp.path().join("manifest.json")).expect("read manifest"),
+        )
+        .expect("manifest JSON");
+        assert_eq!(manifest["schema_version"], 2);
+        assert_eq!(manifest["roots"][0], "crates/demo/src");
+        assert_eq!(manifest["include_default_excluded"], false);
     }
 }

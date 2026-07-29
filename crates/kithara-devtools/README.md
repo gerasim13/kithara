@@ -37,8 +37,9 @@ Exposed through the `CoreCommand` subcommand enum:
 - `test` — workspace tests through `cargo nextest` with lane / backend / feature
   selection.
 - `health` — aggregated workspace health report.
-- `quality` — rstest / unimock / trait-mock audits plus the opt-in Quality Lab
-  for heavyweight external analyzers.
+- `quality` — deterministic workspace/crate/module assessment, rstest / unimock
+  / trait-mock audits, and the opt-in Quality Lab for heavyweight external
+  analyzers.
 - `scope` — translate scope tokens to tool-specific flags.
 - `perf-compare` — compare hotpath timing tables against a baseline.
 - `perf` — test-suite performance pipeline: matrix, slow aggregation, samply
@@ -48,11 +49,12 @@ Exposed through the `CoreCommand` subcommand enum:
   and rust-analyzer semantic evidence enrich the same graph automatically.
   A workspace run links crate and hotspot-subsystem diagrams and writes explainable
   per-contour complexity metrics derived from the same contracted graph.
-  `--crate <package>` keeps the selected crate and its immediate incoming and
-  outgoing workspace neighbors; it needs no runtime scenario. Automatic detail
-  is crates for a workspace, top-level subsystems for a crate, and abstractions
-  for a module. `--lod auto|0|1|2|3|4` moves from crates through subsystems,
-  modules, and abstractions to the complete call graph. Repeatable
+  `--crate <package>` isolates the selected crate, hides Cargo dependencies and
+  incoming callers, and renders concrete outgoing interactions as compact
+  public external ports. Automatic detail is crates for a workspace, top-level
+  subsystems for a crate, and abstractions for a module.
+  `--lod auto|0|1|2|3|4` moves from crates through subsystems, modules, and
+  abstractions to the complete call graph. Repeatable
   `--exclude-crate <glob>` and
   `--exclude-module <glob>` filters remove non-product contours from the
   projection and report.
@@ -96,6 +98,43 @@ sections under `[ext.*]`, which the core passes through untouched.
 The shared `[workspace-scan] exclude` globs drop directories (media trees,
 virtualenvs, …) from the scanning commands.
 
+`quality assess` federates the canonical architecture, similarity, health,
+lint-baseline, test, dependency, Quality Lab, performance, concurrency, and
+platform artifacts. The default `product` / `standard` run rebuilds the
+portable core evidence. `--profile complete` includes source surfaces excluded
+by project defaults; `--depth deep` also runs the project-configured rare
+stages. `--crate` and canonical `--module package::path` scopes reuse the same
+policy with a LOC-proportional debt threshold. Artifacts live below
+`target/quality-assessment/<revision>/<profile>-<depth>/`.
+
+Projects register only their own heavyweight commands under
+`[[quality.assessment.deep_stages]]`; the core supplies orchestration, logs,
+status, normalization, and coverage accounting:
+
+```toml
+[[quality.assessment.deep_stages]]
+name = "binary-bloat"
+command = ["cargo", "bloat", "--release"]
+tools = ["cargo-bloat"]
+hard_invariant = false
+complete_only = true
+```
+
+Tools deliberately excluded by project policy remain visible in the coverage
+matrix without being executed:
+
+```toml
+[[quality.assessment.not_applicable_tools]]
+tool = "cargo-mutants"
+reason = "Workspace-wide mutation testing is not actionable for this project."
+```
+
+`platforms` optionally restricts a stage to `std::env::consts::OS`.
+`{revision}` and `{short_revision}` placeholders are expanded in commands and
+expected artifact paths. Set `hard_invariant = true` only for an existing gate
+whose failure already requires action; advisory analyzers keep the default
+`false`. Existing tool budgets remain owned by the delegated commands.
+
 `[architecture.filters]` provides additive project defaults for the same
 repeatable CLI filters:
 
@@ -136,10 +175,11 @@ manual evidence. `--semantic off|required` and `--runtime off` control optional
 enrichment without changing the artifact layout.
 
 The crate selector is a projection over the full workspace graph, not a
-package-only scan. It includes direct normal Cargo dependencies, direct
-workspace dependents, and resolved cross-package call endpoints. Relations
-between neighboring packages are hidden so the view does not expand into a
-second dependency level.
+package-only scan. It omits inter-crate Cargo `depends on` relations and
+incoming workspace callers. Concrete outgoing cross-package interactions end
+at compact ports labelled with the public target symbol; the target crate is
+not expanded. Repeated relations retain their count, origins, evidence style,
+and method pairs.
 
 The canonical graph groups concrete types and their methods, trait contracts,
 and each module's free functions. Hidden method relations lift to the nearest
