@@ -1,6 +1,6 @@
 use kithara_bufpool::BytePool;
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_stream::{AudioCodec, ByteMap};
+use kithara_stream::{AudioCodec, ByteMap, ReaderInput};
 use kithara_test_utils::kithara;
 
 use super::{
@@ -8,7 +8,6 @@ use super::{
     source_io::{FillStatus, LiveRange, SegmentReadState, fill_segment_buffer},
 };
 use crate::{
-    InputRequirement,
     codec::{CodecPriming, access_unit_frames},
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, PrerollHint, TrackInfo},
     error::{DecodeError, DecodeResult},
@@ -215,8 +214,8 @@ impl Demuxer for Fmp4SegmentDemuxer {
     /// fMP4 construction reads only the init segment (moov/esds/STREAMINFO); the
     /// landing media segment is read later by the first `next_frame`, so it is
     /// not a construction prerequisite.
-    fn required_input() -> InputRequirement {
-        InputRequirement::InitOnly
+    fn required_input() -> ReaderInput {
+        ReaderInput::InitOnly
     }
 
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
