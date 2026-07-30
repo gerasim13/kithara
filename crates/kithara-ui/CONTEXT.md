@@ -162,6 +162,30 @@ external shell can produce or consume the toolkit-neutral contract. The iced bac
 crate-owned.
 `Rgba`, `Pt`, `Rect`, and `Transform` are directly constructible stable value contracts.
 
+## Layout Parity Harness
+
+iced owns layout. Nothing in this crate resolves a rectangle, so the only way to hold a future
+layout owner to iced's answers is to record them. `tests/layout_parity.rs` compiles the two builtin
+presets, renders them through the render-tree adapter, resolves the tree against a headless
+`iced_tiny_skia` renderer at two viewports, and pins the absolute rect tree in
+`tests/fixtures/layout/*.rects` - one line per node, indented by depth. The reads fixture answers
+with constant values rather than `None` so text intrinsic sizing participates; a corpus of empty
+strings would measure nothing and pin nothing. Fixtures are re-recorded only when a document
+deliberately changes, in the same commit, via `KITHARA_UI_UPDATE_LAYOUT_FIXTURES`.
+
+Reproducibility rests on one non-obvious fact. iced measures text during layout through a
+process-global cosmic-text font system, not through anything this crate owns, so the harness loads
+the embedded faces into `iced::advanced::graphics::text::font_system` before it lays anything out.
+Without that load the skin's family names resolve to whatever the host machine happens to have
+installed and the committed rects stop being reproducible.
+
+Two residues of that global remain, and neither is closed here. Its font database still holds the
+machine's system faces, so a host carrying its own face under one of the skin's family names can
+win the query ahead of the embedded one; and a string outside embedded coverage would reach a
+system fallback face. The Latin-only corpus keeps the second one out of reach, and the first is
+inherent to the iced path being pinned - the harness reproduces what the shipped iced host does,
+including this. Closing either belongs to the wave that takes font policy off the global.
+
 ## Wave View Ownership
 
 Hero-wave zoom and playback position are host-owned scalar state. An optional `Wave.zoom` binding
