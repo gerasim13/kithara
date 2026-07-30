@@ -7,17 +7,19 @@ use super::{
     runners::RunnerManager, services::ServiceInstaller, storage::HostStorage, system::SystemSetup,
     toolchain::ToolchainInstaller,
 };
-use crate::ci::{config::CiConfig, process::Process};
+use crate::ci::{
+    config::{CiConfig, PINS_PATH},
+    process::Process,
+};
 
 #[derive(Debug, Args)]
 pub(crate) struct HostArgs {
-    /// Standalone host configuration copied beside the installed CI binary.
-    #[arg(
-        long,
-        env = "KITHARA_CI_HOST_CONFIG",
-        default_value = ".config/ci-host.json"
-    )]
+    /// Machine profile of this CI host, provisioned outside the repository.
+    #[arg(long, env = "KITHARA_CI_HOST_CONFIG")]
     config: PathBuf,
+    /// Reviewed build pins tracked in the repository.
+    #[arg(long, env = "KITHARA_CI_PINS", default_value = PINS_PATH)]
+    pins: PathBuf,
     #[command(subcommand)]
     command: HostCommand,
 }
@@ -62,15 +64,15 @@ enum HostCommand {
 }
 
 pub(crate) fn run(args: &HostArgs) -> Result<()> {
-    let config = CiConfig::load(&args.config)?;
-    config.validate_host()?;
+    let config = CiConfig::load(&args.config, &args.pins)?;
+    config.validate_macos_layout()?;
     let root = std::env::current_dir()?;
     let process = Process::new(&root, BTreeMap::new());
     match &args.command {
         HostCommand::Bootstrap => SystemSetup::new(&config, &process).bootstrap(),
         HostCommand::Finish => {
             SystemSetup::new(&config, &process).finish()?;
-            ServiceInstaller::new(&config, &process).install(&args.config)
+            ServiceInstaller::new(&config, &process).install(&args.config, &args.pins)
         }
         HostCommand::InstallHostTools => {
             ToolchainInstaller::new(&config, &process).install_host_tools()
@@ -79,7 +81,7 @@ pub(crate) fn run(args: &HostArgs) -> Result<()> {
             ToolchainInstaller::new(&config, &process).install_user_tools()
         }
         HostCommand::InstallServices => {
-            ServiceInstaller::new(&config, &process).install(&args.config)
+            ServiceInstaller::new(&config, &process).install(&args.config, &args.pins)
         }
         HostCommand::ActivateBridge => ServiceInstaller::new(&config, &process).activate_bridge(),
         HostCommand::ConfigureRunners => RunnerManager::new(&config, &process).configure(),
@@ -103,33 +105,40 @@ mod tests {
 
     use crate::Cli;
 
+    fn parse(command: &[&str]) -> Result<Cli, clap::Error> {
+        let mut argv = vec![
+            "xtask",
+            "ci",
+            "host",
+            "--config",
+            "/etc/kithara-ci/host.json",
+        ];
+        argv.extend_from_slice(command);
+        Cli::try_parse_from(argv)
+    }
+
     #[test]
     fn host_maintenance_commands_are_typed() {
-        assert!(Cli::try_parse_from(["xtask", "ci", "host", "bootstrap"]).is_ok());
-        assert!(Cli::try_parse_from(["xtask", "ci", "host", "finish"]).is_ok());
-        assert!(Cli::try_parse_from(["xtask", "ci", "host", "install-host-tools"]).is_ok());
-        assert!(Cli::try_parse_from(["xtask", "ci", "host", "install-user-tools"]).is_ok());
-        assert!(Cli::try_parse_from(["xtask", "ci", "host", "install-services"]).is_ok());
-        assert!(Cli::try_parse_from(["xtask", "ci", "host", "activate-bridge"]).is_ok());
-        assert!(Cli::try_parse_from(["xtask", "ci", "host", "configure-runners"]).is_ok());
-        assert!(Cli::try_parse_from(["xtask", "ci", "host", "activate"]).is_ok());
-        assert!(Cli::try_parse_from(["xtask", "ci", "host", "guest-prepare"]).is_ok());
-        assert!(
-            Cli::try_parse_from([
-                "xtask",
-                "ci",
-                "host",
-                "build-linux-image",
-                "docker/ci.Dockerfile"
-            ])
-            .is_ok()
-        );
-        assert!(Cli::try_parse_from(["xtask", "ci", "host", "smoke-linux"]).is_ok());
-        assert!(Cli::try_parse_from(["xtask", "ci", "host", "smoke-android"]).is_ok());
-        assert!(Cli::try_parse_from(["xtask", "ci", "host", "start-cilicon"]).is_ok());
-        assert!(Cli::try_parse_from(["xtask", "ci", "host", "preflight"]).is_ok());
-        assert!(Cli::try_parse_from(["xtask", "ci", "host", "cleanup"]).is_ok());
-        assert!(Cli::try_parse_from(["xtask", "ci", "host", "health"]).is_ok());
-        assert!(Cli::try_parse_from(["xtask", "ci", "host", "rm"]).is_err());
+        for command in [
+            ["bootstrap"].as_slice(),
+            ["finish"].as_slice(),
+            ["install-host-tools"].as_slice(),
+            ["install-user-tools"].as_slice(),
+            ["install-services"].as_slice(),
+            ["activate-bridge"].as_slice(),
+            ["configure-runners"].as_slice(),
+            ["activate"].as_slice(),
+            ["guest-prepare"].as_slice(),
+            ["build-linux-image", "docker/ci.Dockerfile"].as_slice(),
+            ["smoke-linux"].as_slice(),
+            ["smoke-android"].as_slice(),
+            ["start-cilicon"].as_slice(),
+            ["preflight"].as_slice(),
+            ["cleanup"].as_slice(),
+            ["health"].as_slice(),
+        ] {
+            assert!(parse(command).is_ok(), "{command:?} must parse");
+        }
+        assert!(parse(&["rm"]).is_err());
     }
 }

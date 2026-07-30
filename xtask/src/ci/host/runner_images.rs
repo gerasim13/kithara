@@ -24,6 +24,7 @@ impl RunnerManager<'_> {
         let home = self.ci_home();
         let context = self
             .config
+            .host
             .host_root
             .join(format!("workspaces/tmp/linux-image.{}", std::process::id()));
         if context.exists() {
@@ -35,7 +36,7 @@ impl RunnerManager<'_> {
         fs::create_dir(&context)
             .with_context(|| format!("creating Docker build context {}", context.display()))?;
         let result = (|| {
-            let mut command = self.process.command(self.config.brew_tool("docker"));
+            let mut command = self.process.command(self.config.host.brew_tool("docker"));
             command.env("DOCKER_HOST", docker_host(&home)).args([
                 "buildx",
                 "build",
@@ -48,7 +49,7 @@ impl RunnerManager<'_> {
                 "plain",
                 "--provenance=false",
                 "--tag",
-                &self.config.linux_image,
+                &self.config.pins.linux_image,
             ]);
             for (name, value) in self.linux_build_args()? {
                 command.arg("--build-arg").arg(format!("{name}={value}"));
@@ -66,7 +67,7 @@ impl RunnerManager<'_> {
                 &config_root.join("linux-image.digest"),
                 &format!("{digest}\n"),
             )?;
-            info!(image = self.config.linux_image, %digest, "Linux CI image built");
+            info!(image = self.config.pins.linux_image, %digest, "Linux CI image built");
             Ok(())
         })();
         let cleanup = fs::remove_dir_all(&context)
@@ -76,21 +77,31 @@ impl RunnerManager<'_> {
 
     fn linux_build_args(&self) -> Result<Vec<(&'static str, &str)>> {
         let mut args = vec![
-            ("RUST_IMAGE", self.config.linux_base_image.as_str()),
-            ("MSRV_TOOLCHAIN", self.config.msrv_toolchain.as_str()),
-            ("NIGHTLY_TOOLCHAIN", self.config.nightly_toolchain.as_str()),
+            ("RUST_VERSION", self.config.pins.stable_toolchain.as_str()),
+            (
+                "RUST_BASE_DIGEST",
+                self.config.pins.linux_base_digest.as_str(),
+            ),
+            ("MSRV_TOOLCHAIN", self.config.pins.msrv_toolchain.as_str()),
+            (
+                "NIGHTLY_TOOLCHAIN",
+                self.config.pins.nightly_toolchain.as_str(),
+            ),
             (
                 "GECKODRIVER_VERSION",
-                self.config.geckodriver_version.as_str(),
+                self.config.pins.geckodriver_version.as_str(),
             ),
             (
                 "GECKODRIVER_SHA256",
-                self.config.geckodriver_linux_arm64_sha256.as_str(),
+                self.config.pins.geckodriver_linux_arm64_sha256.as_str(),
             ),
-            ("GITLEAKS_VERSION", self.config.gitleaks_version.as_str()),
+            (
+                "GITLEAKS_VERSION",
+                self.config.pins.gitleaks_version.as_str(),
+            ),
             (
                 "GITLEAKS_SHA256",
-                self.config.gitleaks_linux_arm64_sha256.as_str(),
+                self.config.pins.gitleaks_linux_arm64_sha256.as_str(),
             ),
         ];
         for (name, tool) in [
@@ -115,7 +126,7 @@ impl RunnerManager<'_> {
             ("WASM_PACK_VERSION", "wasm-pack"),
             ("WASM_SLIM_VERSION", "wasm-slim"),
         ] {
-            args.push((name, self.config.cargo_tool_version(tool)?));
+            args.push((name, self.config.pins.cargo_tool_version(tool)?));
         }
         Ok(args)
     }
@@ -133,12 +144,12 @@ impl RunnerManager<'_> {
             vec!["rustc".to_owned(), "--version".to_owned()],
             vec![
                 "rustc".to_owned(),
-                format!("+{}", self.config.msrv_toolchain),
+                format!("+{}", self.config.pins.msrv_toolchain),
                 "--version".to_owned(),
             ],
             vec![
                 "rustc".to_owned(),
-                format!("+{}", self.config.nightly_toolchain),
+                format!("+{}", self.config.pins.nightly_toolchain),
                 "--version".to_owned(),
             ],
             vec![
@@ -167,16 +178,16 @@ impl RunnerManager<'_> {
             vec!["chromium".to_owned(), "--version".to_owned()],
         ];
         for check in checks {
-            let mut command = self.process.command(self.config.brew_tool("docker"));
+            let mut command = self.process.command(self.config.host.brew_tool("docker"));
             command
                 .env("DOCKER_HOST", docker_host(&home))
-                .args(["run", "--rm", &self.config.linux_image])
+                .args(["run", "--rm", &self.config.pins.linux_image])
                 .args(&check);
             self.process
                 .run_command(&mut command, "verify Linux CI image tool")?;
         }
         info!(
-            image = self.config.linux_image,
+            image = self.config.pins.linux_image,
             digest = actual,
             "Linux image smoke passed"
         );
@@ -186,10 +197,11 @@ impl RunnerManager<'_> {
     pub(super) fn smoke_android(&self) -> Result<()> {
         require_macos()?;
         self.require_ci_user()?;
-        let emulator = self.config.android_home.join("emulator/emulator");
-        let adb = self.config.android_home.join("platform-tools/adb");
+        let emulator = self.config.host.android_home.join("emulator/emulator");
+        let adb = self.config.host.android_home.join("platform-tools/adb");
         let log_path = self
             .config
+            .host
             .host_root
             .join("logs/android-emulator-smoke.log");
         self.process.run(
@@ -204,18 +216,21 @@ impl RunnerManager<'_> {
         let mut child = self
             .process
             .command(&emulator)
-            .env("ANDROID_HOME", &self.config.android_home)
+            .env("ANDROID_HOME", &self.config.host.android_home)
             .env(
                 "ANDROID_USER_HOME",
-                self.config.host_root.join("toolchains/android-user"),
+                self.config.host.host_root.join("toolchains/android-user"),
             )
             .env(
                 "ANDROID_AVD_HOME",
-                self.config.host_root.join("toolchains/android-user/avd"),
+                self.config
+                    .host
+                    .host_root
+                    .join("toolchains/android-user/avd"),
             )
             .args([
                 "-avd",
-                &self.config.android_avd,
+                &self.config.pins.android_avd,
                 "-gpu",
                 "swiftshader_indirect",
                 "-no-audio",
@@ -268,10 +283,10 @@ impl RunnerManager<'_> {
                 .join(".config/kithara-ci/cilicon-image.digest"),
         )?;
         let actual = self.remote_cilicon_digest()?;
-        if expected != self.config.cilicon_image_digest || actual != expected {
+        if expected != self.config.pins.cilicon_image_digest || actual != expected {
             bail!(
                 "Cilicon image digest changed: configured {}, pinned {expected}, remote {actual}",
-                self.config.cilicon_image_digest
+                self.config.pins.cilicon_image_digest
             );
         }
         self.process.run(
@@ -286,13 +301,13 @@ impl RunnerManager<'_> {
     }
 
     pub(super) fn linux_image_digest(&self, home: &Path) -> Result<String> {
-        let mut command = self.process.command(self.config.brew_tool("docker"));
+        let mut command = self.process.command(self.config.host.brew_tool("docker"));
         command.env("DOCKER_HOST", docker_host(home)).args([
             "image",
             "inspect",
             "--format",
             "{{.Id}}",
-            &self.config.linux_image,
+            &self.config.pins.linux_image,
         ]);
         let output = command
             .output()
@@ -311,6 +326,7 @@ impl RunnerManager<'_> {
     fn remote_cilicon_digest(&self) -> Result<String> {
         let image = self
             .config
+            .pins
             .cilicon_image
             .strip_prefix("oci://ghcr.io/")
             .context("cilicon_image must use oci://ghcr.io/")?;
@@ -368,7 +384,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
-    use crate::ci::{config::CiConfig, process::Process};
+    use crate::ci::{config::fixture, process::Process};
 
     #[test]
     fn image_digest_is_strict() {
@@ -383,7 +399,7 @@ mod tests {
             .parent()
             .unwrap()
             .to_path_buf();
-        let config = CiConfig::load(&root.join(".config/ci-host.json")).unwrap();
+        let config = fixture();
         let process = Process::new(&root, BTreeMap::new());
         let manager = RunnerManager::new(&config, &process);
         let configured = manager

@@ -70,10 +70,10 @@ impl CiEnvironment {
             .with_context(|| format!("creating CI cache root {}", shared_root.display()))?;
 
         let used_bytes = used_bytes(&shared_root)?;
-        if is_ci() && used_bytes >= config.reject_bytes {
+        if is_ci() && used_bytes >= config.host.reject_bytes {
             bail!(
                 "CI volume uses {used_bytes} bytes; new jobs are blocked at {} bytes",
-                config.reject_bytes
+                config.host.reject_bytes
             );
         }
 
@@ -125,7 +125,7 @@ impl CiEnvironment {
         insert(
             &mut vars,
             "KITHARA_NIGHTLY_TOOLCHAIN",
-            &config.nightly_toolchain,
+            &config.pins.nightly_toolchain,
         );
         insert(&mut vars, "npm_config_cache", npm_cache);
         insert(&mut vars, "RUSTC_WRAPPER", "sccache");
@@ -135,30 +135,35 @@ impl CiEnvironment {
             env::var_os("RUSTUP_HOME").unwrap_or_else(|| home.join(".rustup").into_os_string()),
         );
         insert(&mut vars, "SCCACHE_BASEDIRS", &project_root);
-        insert(&mut vars, "SCCACHE_CACHE_SIZE", &config.sccache_size);
+        insert(&mut vars, "SCCACHE_CACHE_SIZE", &config.host.sccache_size);
         insert(&mut vars, "SCCACHE_DIR", sccache_dir);
         insert(&mut vars, "SWIFTPM_CACHE_PATH", &swiftpm_cache);
         insert(&mut vars, "TMPDIR", &temp);
-        insert(&mut vars, "WASM_SLIM_TOOLCHAIN", &config.nightly_toolchain);
+        insert(
+            &mut vars,
+            "WASM_SLIM_TOOLCHAIN",
+            &config.pins.nightly_toolchain,
+        );
         if cfg!(windows) {
             insert(&mut vars, "TEMP", &temp);
             insert(&mut vars, "TMP", &temp);
         }
 
         if cfg!(target_os = "macos") {
-            let android_user_home = config.host_root.join("toolchains/android-user");
-            insert(&mut vars, "ANDROID_HOME", &config.android_home);
+            let android_user_home = config.host.host_root.join("toolchains/android-user");
+            insert(&mut vars, "ANDROID_HOME", &config.host.android_home);
             insert(
                 &mut vars,
                 "ANDROID_NDK_HOME",
                 config
+                    .host
                     .android_home
                     .join("ndk")
-                    .join(&config.android_ndk_version),
+                    .join(&config.pins.android_ndk_version),
             );
             insert(&mut vars, "ANDROID_USER_HOME", &android_user_home);
             insert(&mut vars, "ANDROID_AVD_HOME", android_user_home.join("avd"));
-            let java_home = config.java_home();
+            let java_home = config.host.java_home();
             if java_home.is_dir() {
                 insert(&mut vars, "JAVA_HOME", &java_home);
             }
@@ -189,11 +194,11 @@ fn shared_root(config: &CiConfig, lane: Lane) -> PathBuf {
         return PathBuf::from(root);
     }
     match lane {
-        Lane::Apple | Lane::Deep | Lane::ReleaseApple => config.cache_root_cilicon.clone(),
-        Lane::Linux | Lane::Web | Lane::Weekly => config.cache_root_linux.clone(),
-        Lane::Windows => config.cache_root_windows.clone(),
+        Lane::Apple | Lane::Deep | Lane::ReleaseApple => config.host.cache_root_cilicon.clone(),
+        Lane::Linux | Lane::Web | Lane::Weekly => config.host.cache_root_linux.clone(),
+        Lane::Windows => config.host.cache_root_windows.clone(),
         Lane::Android | Lane::ReleaseAndroid | Lane::ReleasePublish => {
-            config.host_root.join("cache")
+            config.host.host_root.join("cache")
         }
     }
 }
@@ -214,10 +219,10 @@ fn set_path(vars: &mut BTreeMap<OsString, OsString>, home: &Path, config: &CiCon
     let mut paths = vec![home.join(".cargo/bin")];
     if cfg!(target_os = "macos") {
         paths.extend([
-            config.android_home.join("cmdline-tools/latest/bin"),
-            config.android_home.join("emulator"),
-            config.android_home.join("platform-tools"),
-            config.brew_root.join("bin"),
+            config.host.android_home.join("cmdline-tools/latest/bin"),
+            config.host.android_home.join("emulator"),
+            config.host.android_home.join("platform-tools"),
+            config.host.brew_root.join("bin"),
         ]);
     }
     if let Some(existing) = env::var_os("PATH") {

@@ -4,31 +4,63 @@ The Mac mini is a CI-owned machine. Repository automation has one executable
 owner: `xtask ci`. GitLab YAML and `just` recipes only select a typed Rust
 command.
 
+## Two configurations
+
+CI reads two strict JSON files, and they have different owners:
+
+| File | Owner | Tracked |
+| --- | --- | --- |
+| `.config/ci-pins.json` | the repository | yes, reviewed with the code it pins |
+| host profile (`host.json`) | the machine | no, provisioned per host |
+
+The pins hold everything a build depends on: toolchains, Xcode and Android
+versions, `cargo install` versions, image tags and digests, download checksums.
+The host profile holds what is true only for one machine: volume and cache
+roots, disk thresholds, account names and UIDs, Homebrew and Xcode locations,
+and the GitLab origin.
+
+Every command takes `--config <host profile>`; `--pins` defaults to
+`.config/ci-pins.json` inside a checkout. Both accept the environment variables
+`KITHARA_CI_HOST_CONFIG` and `KITHARA_CI_PINS`. Lanes read the host profile
+only through `KITHARA_CI_HOST_CONFIG`, which every executor sets to
+`/etc/kithara-ci/host.json` (`C:/KitharaCI/host.json` on Windows).
+
 ## Host installation
 
-Build the installer from a reviewed GitLab commit:
+Write the machine profile for this host first — start from the field list in
+`xtask/tests/fixtures/ci-host.json` — and keep it outside the repository.
+Then build the installer from a reviewed GitLab commit:
 
 ```text
+export KITHARA_CI_HOST_CONFIG=/path/to/ci-host.json
 cargo build --locked --release -p xtask
-sudo target/release/xtask ci host --config .config/ci-host.json bootstrap
-target/release/xtask ci host --config .config/ci-host.json install-host-tools
-sudo target/release/xtask ci host --config .config/ci-host.json finish
+sudo -E target/release/xtask ci host bootstrap
+target/release/xtask ci host install-host-tools
+sudo -E target/release/xtask ci host finish
 ```
 
 `bootstrap` is idempotent. It validates the case-sensitive APFS volume, its
 quota, user IDs, automatic login, SSH access, and the power policy before it
 changes anything that already exists. `finish` validates Xcode and installs the
-current Rust binary plus its strict JSON configuration under
-`/Volumes/KitharaCI/services`.
+current Rust binary, the host profile, and the pins under
+`/Volumes/KitharaCI/services`, and publishes the host profile to
+`/etc/kithara-ci/host.json` for the lanes.
 
-Run the remaining commands in the logged-in `kithara-ci` GUI session:
+Run the remaining commands in the logged-in `kithara-ci` GUI session, where the
+installed copies are the source of truth:
 
 ```text
-/Volumes/KitharaCI/services/bin/kithara-ci ci host --config /Volumes/KitharaCI/services/host.json install-user-tools
-/Volumes/KitharaCI/services/bin/kithara-ci ci host --config /Volumes/KitharaCI/services/host.json build-linux-image /path/to/kithara/docker/ci.Dockerfile
-/Volumes/KitharaCI/services/bin/kithara-ci ci host --config /Volumes/KitharaCI/services/host.json smoke-linux
-/Volumes/KitharaCI/services/bin/kithara-ci ci host --config /Volumes/KitharaCI/services/host.json smoke-android
+export KITHARA_CI_HOST_CONFIG=/Volumes/KitharaCI/services/host.json
+export KITHARA_CI_PINS=/Volumes/KitharaCI/services/pins.json
+/Volumes/KitharaCI/services/bin/kithara-ci ci host install-user-tools
+/Volumes/KitharaCI/services/bin/kithara-ci ci host build-linux-image /path/to/kithara/docker/ci.Dockerfile
+/Volumes/KitharaCI/services/bin/kithara-ci ci host smoke-linux
+/Volumes/KitharaCI/services/bin/kithara-ci ci host smoke-android
 ```
+
+The Linux image is built from the pins alone: `RUST_VERSION` and
+`RUST_BASE_DIGEST` select the base image, and every tool version reaches the
+Dockerfile as a build argument. No version is written twice.
 
 ## GitLab runners
 
@@ -48,8 +80,8 @@ pinned Cilicon image and mode `0600`; this value is written only to the local
 `~/.config/kithara-ci/gitlab-ca.crt`, then run:
 
 ```text
-/Volumes/KitharaCI/services/bin/kithara-ci ci host --config /Volumes/KitharaCI/services/host.json configure-runners
-/Volumes/KitharaCI/services/bin/kithara-ci ci host --config /Volumes/KitharaCI/services/host.json activate
+/Volumes/KitharaCI/services/bin/kithara-ci ci host configure-runners
+/Volumes/KitharaCI/services/bin/kithara-ci ci host activate
 ```
 
 The generated runner configuration has `concurrent = 1`. The parent pipeline
@@ -66,7 +98,8 @@ official GitLab Runner inside the Windows 11 ARM guest with:
 - tag `kithara-windows`;
 - `concurrent = 1`;
 - builds under `C:\KitharaCI\workspaces`;
-- cache under `C:\KitharaCI\cache`.
+- cache under `C:\KitharaCI\cache`;
+- a copy of the host profile at `C:\KitharaCI\host.json`.
 
 The Windows installation media and license are intentionally not automated.
 After the guest is registered, its job invokes the Rust CI command through
@@ -88,7 +121,7 @@ The GitLab CA may be read-only. Validate without network mutation:
 Activate the staged launch daemon only after validation:
 
 ```text
-sudo /Volumes/KitharaCI/services/bin/kithara-ci ci host --config /Volumes/KitharaCI/services/host.json activate-bridge
+sudo -E /Volumes/KitharaCI/services/bin/kithara-ci ci host activate-bridge
 ```
 
 GitLab `main` fast-forwards to GitHub only after the exact commit has a
@@ -108,8 +141,8 @@ lease, while sccache enforces its own 50 GB LRU limit.
 Health and cleanup run through launchd. They can also be checked directly:
 
 ```text
-/Volumes/KitharaCI/services/bin/kithara-ci ci host --config /Volumes/KitharaCI/services/host.json health
-/Volumes/KitharaCI/services/bin/kithara-ci ci host --config /Volumes/KitharaCI/services/host.json cleanup
+/Volumes/KitharaCI/services/bin/kithara-ci ci host health
+/Volumes/KitharaCI/services/bin/kithara-ci ci host cleanup
 ```
 
 ## GitLab project settings

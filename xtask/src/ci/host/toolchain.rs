@@ -24,8 +24,8 @@ impl<'a> ToolchainInstaller<'a> {
 
     pub(super) fn install_host_tools(&self) -> Result<()> {
         require_macos()?;
-        self.require_user(&self.config.admin_user)?;
-        let brew = self.config.brew_tool("brew");
+        self.require_user(&self.config.host.admin_user)?;
+        let brew = self.config.host.brew_tool("brew");
         if !brew.is_file() {
             bail!("Homebrew is not installed at {}", brew.display());
         }
@@ -40,10 +40,10 @@ impl<'a> ToolchainInstaller<'a> {
         install
             .env("HOMEBREW_NO_AUTO_UPDATE", "1")
             .arg("install")
-            .args(&self.config.brew_formulae);
+            .args(&self.config.pins.brew_formulae);
         self.process
             .run_command(&mut install, "install CI host formulae")?;
-        for cask in &self.config.brew_casks {
+        for cask in &self.config.pins.brew_casks {
             let installed = self
                 .process
                 .command(&brew)
@@ -59,16 +59,16 @@ impl<'a> ToolchainInstaller<'a> {
                     .run_command(&mut command, "install CI host cask")?;
             }
         }
-        let runner_path = self.config.brew_tool("gitlab-runner");
+        let runner_path = self.config.host.brew_tool("gitlab-runner");
         let runner = self.process.capture(
             path_text(&runner_path)?,
             &["--version"],
             "GitLab Runner version",
         )?;
-        if !runner.contains(&self.config.gitlab_runner_version) {
+        if !runner.contains(&self.config.pins.gitlab_runner_version) {
             bail!(
                 "GitLab Runner {} is required, found {runner}",
-                self.config.gitlab_runner_version
+                self.config.pins.gitlab_runner_version
             );
         }
         info!("CI host tools installed");
@@ -77,7 +77,7 @@ impl<'a> ToolchainInstaller<'a> {
 
     pub(super) fn install_user_tools(&self) -> Result<()> {
         require_macos()?;
-        self.require_user(&self.config.ci_user)?;
+        self.require_user(&self.config.host.ci_user)?;
         self.install_rust()?;
         self.install_cargo_tools()?;
         self.install_android()?;
@@ -93,7 +93,11 @@ impl<'a> ToolchainInstaller<'a> {
         let rustup_home = home.join(".rustup");
         let cargo_bin = cargo_home.join("bin");
         fs::create_dir_all(&cargo_bin)?;
-        let rustup_source = self.config.brew_root.join("opt/rustup/libexec/bin/rustup");
+        let rustup_source = self
+            .config
+            .host
+            .brew_root
+            .join("opt/rustup/libexec/bin/rustup");
         if !rustup_source.is_file() {
             bail!("missing Homebrew rustup proxy: {}", rustup_source.display());
         }
@@ -124,18 +128,18 @@ impl<'a> ToolchainInstaller<'a> {
             "set Rust installation profile",
         )?;
         run(
-            &["toolchain", "install", &self.config.stable_toolchain],
+            &["toolchain", "install", &self.config.pins.stable_toolchain],
             "install stable Rust",
         )?;
         run(
-            &["toolchain", "install", &self.config.msrv_toolchain],
+            &["toolchain", "install", &self.config.pins.msrv_toolchain],
             "install project MSRV",
         )?;
         run(
             &[
                 "toolchain",
                 "install",
-                &self.config.nightly_toolchain,
+                &self.config.pins.nightly_toolchain,
                 "--component",
                 "rust-src",
                 "--component",
@@ -144,7 +148,7 @@ impl<'a> ToolchainInstaller<'a> {
             "install pinned nightly Rust",
         )?;
         run(
-            &["default", &self.config.stable_toolchain],
+            &["default", &self.config.pins.stable_toolchain],
             "select stable Rust",
         )?;
         run(
@@ -171,7 +175,7 @@ impl<'a> ToolchainInstaller<'a> {
                     "add",
                     target,
                     "--toolchain",
-                    &self.config.stable_toolchain,
+                    &self.config.pins.stable_toolchain,
                 ],
                 "install stable Rust target",
             )?;
@@ -182,7 +186,7 @@ impl<'a> ToolchainInstaller<'a> {
                 "add",
                 "wasm32-unknown-unknown",
                 "--toolchain",
-                &self.config.nightly_toolchain,
+                &self.config.pins.nightly_toolchain,
             ],
             "install nightly WASM target",
         )
@@ -191,7 +195,7 @@ impl<'a> ToolchainInstaller<'a> {
     fn install_cargo_tools(&self) -> Result<()> {
         let home = self.ci_home();
         let cargo = home.join(".cargo/bin/cargo");
-        for (package, version) in &self.config.cargo_tools {
+        for (package, version) in &self.config.pins.cargo_tools {
             let mut command = self.process.command(&cargo);
             command
                 .env("CARGO_HOME", home.join(".cargo"))
@@ -204,17 +208,17 @@ impl<'a> ToolchainInstaller<'a> {
     }
 
     fn install_android(&self) -> Result<()> {
-        let root = self.config.host_root.join("toolchains");
+        let root = self.config.host.host_root.join("toolchains");
         let user_home = root.join("android-user");
-        let commandline = self.config.android_home.join("cmdline-tools/latest");
+        let commandline = self.config.host.android_home.join("cmdline-tools/latest");
         let sdkmanager = commandline.join("bin/sdkmanager");
         let archive = root.join(format!(
             "commandlinetools-mac_arm64-{}.zip",
-            self.config.android_commandline_tools_version
+            self.config.pins.android_commandline_tools_version
         ));
         for path in [
             &root,
-            &self.config.android_home,
+            &self.config.host.android_home,
             &user_home,
             &user_home.join("avd"),
         ] {
@@ -223,11 +227,11 @@ impl<'a> ToolchainInstaller<'a> {
         if !archive.is_file() {
             let url = format!(
                 "https://dl.google.com/android/repository/commandlinetools-mac_arm64-{}_latest.zip",
-                self.config.android_commandline_tools_version
+                self.config.pins.android_commandline_tools_version
             );
             download(&url, &archive)?;
         }
-        verify_sha256(&archive, &self.config.android_commandline_tools_sha256)?;
+        verify_sha256(&archive, &self.config.pins.android_commandline_tools_sha256)?;
         if !sdkmanager.is_file() {
             let temporary = root.join(format!("android-install.{}", std::process::id()));
             fs::create_dir(&temporary)?;
@@ -253,10 +257,10 @@ impl<'a> ToolchainInstaller<'a> {
         }
         let environment = |command: &mut std::process::Command| {
             command
-                .env("ANDROID_HOME", &self.config.android_home)
+                .env("ANDROID_HOME", &self.config.host.android_home)
                 .env("ANDROID_USER_HOME", &user_home)
                 .env("ANDROID_AVD_HOME", user_home.join("avd"))
-                .env("JAVA_HOME", self.config.java_home());
+                .env("JAVA_HOME", self.config.host.java_home());
         };
         let mut licenses = self.process.command(&sdkmanager);
         environment(&mut licenses);
@@ -273,11 +277,14 @@ impl<'a> ToolchainInstaller<'a> {
         if !child.wait()?.success() {
             bail!("Android SDK license acceptance failed");
         }
-        let platform = self.config.android_platform_version.to_string();
+        let platform = self.config.pins.android_platform_version.to_string();
         let packages = [
-            format!("build-tools;{}", self.config.android_build_tools_version),
+            format!(
+                "build-tools;{}",
+                self.config.pins.android_build_tools_version
+            ),
             "emulator".to_owned(),
-            format!("ndk;{}", self.config.android_ndk_version),
+            format!("ndk;{}", self.config.pins.android_ndk_version),
             "platform-tools".to_owned(),
             format!("platforms;android-{platform}"),
             format!("system-images;android-{platform};google_apis;arm64-v8a"),
@@ -302,7 +309,7 @@ impl<'a> ToolchainInstaller<'a> {
         };
         if !current
             .lines()
-            .any(|line| line.trim() == format!("Name: {}", self.config.android_avd))
+            .any(|line| line.trim() == format!("Name: {}", self.config.pins.android_avd))
         {
             let mut command = self.process.command(&avdmanager);
             environment(&mut command);
@@ -312,7 +319,7 @@ impl<'a> ToolchainInstaller<'a> {
                     "avd",
                     "--force",
                     "--name",
-                    &self.config.android_avd,
+                    &self.config.pins.android_avd,
                     "--package",
                     &format!("system-images;android-{platform};google_apis;arm64-v8a"),
                     "--device",
@@ -347,16 +354,17 @@ impl<'a> ToolchainInstaller<'a> {
                 ],
                 "installed Cilicon version",
             )?;
-            if version != self.config.cilicon_version {
+            if version != self.config.pins.cilicon_version {
                 bail!(
                     "Cilicon {version} is installed; {} is required",
-                    self.config.cilicon_version
+                    self.config.pins.cilicon_version
                 );
             }
             return Ok(());
         }
         let temporary = self
             .config
+            .host
             .host_root
             .join(format!("toolchains/cilicon-install.{}", std::process::id()));
         fs::create_dir(&temporary)?;
@@ -365,11 +373,11 @@ impl<'a> ToolchainInstaller<'a> {
             download(
                 &format!(
                     "https://github.com/traderepublic/Cilicon/releases/download/v{0}/Cilicon_{0}_25_adhoc.zip",
-                    self.config.cilicon_version
+                    self.config.pins.cilicon_version
                 ),
                 &archive,
             )?;
-            verify_sha256(&archive, &self.config.cilicon_sha256)?;
+            verify_sha256(&archive, &self.config.pins.cilicon_sha256)?;
             let unpacked = temporary.join("unpacked");
             self.process.run(
                 "/usr/bin/ditto",
@@ -396,7 +404,7 @@ impl<'a> ToolchainInstaller<'a> {
         let directory = self.ci_home().join(".docker");
         fs::create_dir_all(&directory)?;
         let bytes = serde_json::to_vec_pretty(&serde_json::json!({
-            "cliPluginsExtraDirs": [self.config.brew_root.join("lib/docker/cli-plugins")],
+            "cliPluginsExtraDirs": [self.config.host.brew_root.join("lib/docker/cli-plugins")],
         }))
         .context("serializing Docker CLI configuration")?;
         write_private(
@@ -417,9 +425,10 @@ impl<'a> ToolchainInstaller<'a> {
 
     fn ci_home(&self) -> PathBuf {
         self.config
+            .host
             .host_root
             .join("home")
-            .join(&self.config.ci_user)
+            .join(&self.config.host.ci_user)
     }
 }
 

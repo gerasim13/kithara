@@ -7,7 +7,10 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use tracing::info;
 
-use crate::ci::{config::CiConfig, process::Process};
+use crate::ci::{
+    config::{CiConfig, LANE_CONFIG_DIR, LANE_CONFIG_PATH},
+    process::Process,
+};
 
 #[derive(Deserialize)]
 struct BridgeSecrets {
@@ -23,18 +26,19 @@ pub(super) struct ServiceInstaller<'a> {
 impl<'a> ServiceInstaller<'a> {
     const BINARY_NAME: &'static str = "kithara-ci";
     const HOST_CONFIG_NAME: &'static str = "host.json";
+    const PINS_NAME: &'static str = "pins.json";
 
     pub(super) fn new(config: &'a CiConfig, process: &'a Process) -> Self {
         Self { config, process }
     }
 
-    pub(super) fn install(&self, config_path: &Path) -> Result<()> {
+    pub(super) fn install(&self, config_path: &Path, pins_path: &Path) -> Result<()> {
         require_macos()?;
         self.require_root()?;
         self.ensure_sync_user()?;
         self.ensure_layout()?;
         self.install_binary()?;
-        self.install_config(config_path)?;
+        self.install_config(config_path, pins_path)?;
         self.install_maintenance_agents()?;
         self.stage_bridge_agent()?;
         info!(
@@ -107,8 +111,8 @@ impl<'a> ServiceInstaller<'a> {
     }
 
     fn ensure_sync_user(&self) -> Result<()> {
-        let user = &self.config.sync_user;
-        let uid = self.config.sync_uid.to_string();
+        let user = &self.config.host.sync_user;
+        let uid = self.config.host.sync_uid.to_string();
         let home = self.sync_home();
         let owner = self
             .process
@@ -121,7 +125,10 @@ impl<'a> ServiceInstaller<'a> {
         if let Some(existing) = owner.split_whitespace().next()
             && existing != user
         {
-            bail!("UID {} already belongs to {existing}", self.config.sync_uid);
+            bail!(
+                "UID {} already belongs to {existing}",
+                self.config.host.sync_uid
+            );
         }
         let exists = self
             .process
@@ -169,21 +176,25 @@ impl<'a> ServiceInstaller<'a> {
             (
                 self.service_root().join("bridge/secrets"),
                 "0700",
-                self.config.sync_user.as_str(),
+                self.config.host.sync_user.as_str(),
             ),
             (
                 self.service_root().join("bridge/state"),
                 "0700",
-                self.config.sync_user.as_str(),
+                self.config.host.sync_user.as_str(),
             ),
-            (self.sync_home(), "0700", self.config.sync_user.as_str()),
-            (self.agent_root(), "0755", self.config.ci_user.as_str()),
+            (
+                self.sync_home(),
+                "0700",
+                self.config.host.sync_user.as_str(),
+            ),
+            (self.agent_root(), "0755", self.config.host.ci_user.as_str()),
         ] {
             self.install_directory(&path, mode, owner)?;
         }
-        let log = self.config.host_root.join("logs/bridge.log");
+        let log = self.config.host.host_root.join("logs/bridge.log");
         if !log.exists() {
-            self.install_empty_file(&log, "0640", &self.config.sync_user)?;
+            self.install_empty_file(&log, "0640", &self.config.host.sync_user)?;
         }
         Ok(())
     }
@@ -191,52 +202,70 @@ impl<'a> ServiceInstaller<'a> {
     fn install_binary(&self) -> Result<()> {
         let source = std::env::current_exe().context("resolving current CI executable")?;
         self.install_file(&source, &self.installed_binary(), "0755", "root")?;
-        let shared = self.config.host_root.join("toolchains/shared-bin");
-        self.install_directory(&shared, "0755", &self.config.ci_user)?;
+        let shared = self.config.host.host_root.join("toolchains/shared-bin");
+        self.install_directory(&shared, "0755", &self.config.host.ci_user)?;
         self.install_file(
             &source,
             &shared.join(Self::BINARY_NAME),
             "0755",
-            &self.config.ci_user,
+            &self.config.host.ci_user,
         )
     }
 
-    fn install_config(&self, config_path: &Path) -> Result<()> {
-        if !config_path.is_file() {
-            bail!("missing CI host config: {}", config_path.display());
+    fn install_config(&self, config_path: &Path, pins_path: &Path) -> Result<()> {
+        for (label, path) in [
+            ("CI host profile", config_path),
+            ("CI build pins", pins_path),
+        ] {
+            if !path.is_file() {
+                bail!("missing {label}: {}", path.display());
+            }
         }
-        let destination = self.installed_config();
-        self.config.write(&destination)?;
-        self.process.run(
-            "/usr/sbin/chown",
-            &["root:wheel", path_text(&destination)?],
-            "set installed CI config ownership",
-        )?;
-        self.process.run(
-            "/bin/chmod",
-            &["0644", path_text(&destination)?],
-            "set installed CI config permissions",
-        )?;
-        let shared = self
-            .config
-            .host_root
-            .join("toolchains/shared-bin/host.json");
-        self.install_file(&destination, &shared, "0644", &self.config.ci_user)
+        let host = self.installed_config();
+        let pins = self.installed_pins();
+        self.config.host.write(&host)?;
+        self.config.pins.write(&pins)?;
+        let shared = self.config.host.host_root.join("toolchains/shared-bin");
+        for (source, name) in [(&host, Self::HOST_CONFIG_NAME), (&pins, Self::PINS_NAME)] {
+            self.process.run(
+                "/usr/sbin/chown",
+                &["root:wheel", path_text(source)?],
+                "set installed CI config ownership",
+            )?;
+            self.process.run(
+                "/bin/chmod",
+                &["0644", path_text(source)?],
+                "set installed CI config permissions",
+            )?;
+            self.install_file(
+                source,
+                &shared.join(name),
+                "0644",
+                &self.config.host.ci_user,
+            )?;
+        }
+        self.install_directory(Path::new(LANE_CONFIG_DIR), "0755", "root")?;
+        self.install_file(&host, Path::new(LANE_CONFIG_PATH), "0644", "root")
     }
 
     fn install_maintenance_agents(&self) -> Result<()> {
         let binary = self.installed_binary().display().to_string();
         let config = self.installed_config().display().to_string();
-        let logs = &self.config.host_root.join("logs");
+        let pins = self.installed_pins().display().to_string();
+        let logs = &self.config.host.host_root.join("logs");
         let cleanup = launchd(
             "com.zvuk.kithara-ci.cleanup",
-            &[&binary, "ci", "host", "--config", &config, "cleanup"],
+            &[
+                &binary, "ci", "host", "--config", &config, "--pins", &pins, "cleanup",
+            ],
             &logs.join("cleanup.log"),
             "<key>StartCalendarInterval</key><dict><key>Minute</key><integer>17</integer></dict>",
         );
         let health = launchd(
             "com.zvuk.kithara-ci.health",
-            &[&binary, "ci", "host", "--config", &config, "health"],
+            &[
+                &binary, "ci", "host", "--config", &config, "--pins", &pins, "health",
+            ],
             &logs.join("health.log"),
             "<key>StartInterval</key><integer>300</integer>",
         );
@@ -251,10 +280,10 @@ impl<'a> ServiceInstaller<'a> {
             .join("bridge/config.json")
             .display()
             .to_string();
-        let log = self.config.host_root.join("logs/bridge.log");
+        let log = self.config.host.host_root.join("logs/bridge.log");
         let extra = format!(
             "<key>StartInterval</key><integer>60</integer><key>UserName</key><string>{}</string>",
-            xml(&self.config.sync_user)
+            xml(&self.config.host.sync_user)
         );
         let plist = launchd(
             "com.zvuk.kithara-ci.bridge",
@@ -279,11 +308,11 @@ impl<'a> ServiceInstaller<'a> {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
         let metadata = fs::metadata(path).with_context(|| format!("reading {}", path.display()))?;
-        if metadata.uid() != self.config.sync_uid {
+        if metadata.uid() != self.config.host.sync_uid {
             bail!(
                 "{} must be owned by UID {}",
                 path.display(),
-                self.config.sync_uid
+                self.config.host.sync_uid
             );
         }
         if metadata.permissions().mode() & 0o077 != 0 {
@@ -308,7 +337,10 @@ impl<'a> ServiceInstaller<'a> {
             .with_context(|| format!("writing launch agent {}", path.display()))?;
         self.process.run(
             "/usr/sbin/chown",
-            &[&format!("{}:staff", self.config.ci_user), path_text(&path)?],
+            &[
+                &format!("{}:staff", self.config.host.ci_user),
+                path_text(&path)?,
+            ],
             "set launch agent ownership",
         )?;
         self.process.run(
@@ -357,7 +389,7 @@ impl<'a> ServiceInstaller<'a> {
     }
 
     fn service_root(&self) -> PathBuf {
-        self.config.host_root.join("services")
+        self.config.host.host_root.join("services")
     }
 
     fn installed_binary(&self) -> PathBuf {
@@ -368,18 +400,24 @@ impl<'a> ServiceInstaller<'a> {
         self.service_root().join(Self::HOST_CONFIG_NAME)
     }
 
+    fn installed_pins(&self) -> PathBuf {
+        self.service_root().join(Self::PINS_NAME)
+    }
+
     fn ci_home(&self) -> PathBuf {
         self.config
+            .host
             .host_root
             .join("home")
-            .join(&self.config.ci_user)
+            .join(&self.config.host.ci_user)
     }
 
     fn sync_home(&self) -> PathBuf {
         self.config
+            .host
             .host_root
             .join("home")
-            .join(&self.config.sync_user)
+            .join(&self.config.host.sync_user)
     }
 
     fn agent_root(&self) -> PathBuf {

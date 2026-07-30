@@ -23,19 +23,19 @@ pub(crate) struct KitharaExt {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct CiProjectConfig {
-    pub(crate) host_config: PathBuf,
+    pub(crate) pins: PathBuf,
 }
 
 impl CiProjectConfig {
     pub(crate) fn validate(&self) -> Result<()> {
-        if self.host_config.as_os_str().is_empty()
-            || self.host_config.is_absolute()
+        if self.pins.as_os_str().is_empty()
+            || self.pins.is_absolute()
             || self
-                .host_config
+                .pins
                 .components()
                 .any(|component| !matches!(component, Component::Normal(_)))
         {
-            bail!("ext.ci.host_config must be a project-relative file");
+            bail!("ext.ci.pins must be a project-relative file");
         }
         Ok(())
     }

@@ -6,6 +6,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 
 use super::runners::{RunnerManager, path_text, require_macos};
+use crate::ci::config::{LANE_CONFIG_DIR, LANE_CONFIG_PATH};
 
 impl RunnerManager<'_> {
     pub(super) fn prepare_guest(&self) -> Result<()> {
@@ -13,7 +14,7 @@ impl RunnerManager<'_> {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .context("guest HOME is not set")?;
-        let shared = &self.config.cilicon_guest_shared_root;
+        let shared = &self.config.host.cilicon_guest_shared_root;
         for (name, source) in [
             (".cargo", shared.join("kithara-cargo")),
             (".rustup", shared.join("kithara-rustup")),
@@ -26,7 +27,7 @@ impl RunnerManager<'_> {
             &[
                 "xcode-select",
                 "-s",
-                path_text(&self.config.cilicon_xcode_developer_dir)?,
+                path_text(&self.config.host.cilicon_xcode_developer_dir)?,
             ],
             "select guest Xcode",
         )?;
@@ -41,10 +42,24 @@ impl RunnerManager<'_> {
             "install guest xcodegen",
         )?;
         sudo(
+            &["install", "-d", "-m", "0755", LANE_CONFIG_DIR],
+            "create guest lane configuration directory",
+        )?;
+        sudo(
+            &[
+                "install",
+                "-m",
+                "0644",
+                path_text(&shared.join("kithara-tools/host.json"))?,
+                LANE_CONFIG_PATH,
+            ],
+            "install guest host profile",
+        )?;
+        sudo(
             &["install", "-d", "-m", "0755", "/etc/gitlab-runner/certs"],
             "create guest runner CA directory",
         )?;
-        let ca_name = format!("{}.crt", self.config.gitlab_host()?);
+        let ca_name = format!("{}.crt", self.config.host.gitlab_host()?);
         sudo(
             &[
                 "install",
@@ -58,10 +73,13 @@ impl RunnerManager<'_> {
         let xcode =
             self.process
                 .capture("/usr/bin/xcodebuild", &["-version"], "guest Xcode version")?;
-        if !xcode.starts_with(&format!("Xcode {}\n", self.config.expected_xcode_version)) {
+        if !xcode.starts_with(&format!(
+            "Xcode {}\n",
+            self.config.pins.expected_xcode_version
+        )) {
             bail!(
                 "guest Xcode does not match {}",
-                self.config.expected_xcode_version
+                self.config.pins.expected_xcode_version
             );
         }
         self.process

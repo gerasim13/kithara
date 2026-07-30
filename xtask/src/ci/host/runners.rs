@@ -8,7 +8,10 @@ use serde::Serialize;
 use tracing::info;
 
 use super::services::launchd;
-use crate::ci::{config::CiConfig, process::Process};
+use crate::ci::{
+    config::{CiConfig, LANE_CONFIG_PATH},
+    process::Process,
+};
 
 pub(super) struct RunnerManager<'a> {
     pub(super) config: &'a CiConfig,
@@ -43,22 +46,23 @@ impl<'a> RunnerManager<'a> {
             &config_root,
             &runner_root,
             &runner_root.join("certs"),
-            &self.config.host_root.join("cache/gitlab-runner"),
-            &self.config.host_root.join("toolchains/shared-certs"),
-            &self.config.host_root.join("toolchains/shared-bin"),
-            &self.config.host_root.join("vm/cilicon-clone"),
-            &self.config.host_root.join("workspaces/gitlab"),
+            &self.config.host.host_root.join("cache/gitlab-runner"),
+            &self.config.host.host_root.join("toolchains/shared-certs"),
+            &self.config.host.host_root.join("toolchains/shared-bin"),
+            &self.config.host.host_root.join("vm/cilicon-clone"),
+            &self.config.host.host_root.join("workspaces/gitlab"),
             &self.agent_root(),
         ] {
             fs::create_dir_all(path)
                 .with_context(|| format!("creating runner directory {}", path.display()))?;
         }
-        let ca_name = format!("{}.crt", self.config.gitlab_host()?);
+        let ca_name = format!("{}.crt", self.config.host.gitlab_host()?);
         fs::copy(&ca, runner_root.join("certs").join(&ca_name))
             .context("installing GitLab runner CA")?;
         fs::copy(
             &ca,
             self.config
+                .host
                 .host_root
                 .join("toolchains/shared-certs")
                 .join(&ca_name),
@@ -69,17 +73,22 @@ impl<'a> RunnerManager<'a> {
         fs::copy(
             current,
             self.config
+                .host
                 .host_root
                 .join("toolchains/shared-bin/kithara-ci"),
         )
         .context("installing CI executable for Cilicon guests")?;
-        fs::copy(
-            self.config.host_root.join("services/host.json"),
-            self.config
-                .host_root
-                .join("toolchains/shared-bin/host.json"),
-        )
-        .context("installing Cilicon guest config")?;
+        for name in ["host.json", "pins.json"] {
+            fs::copy(
+                self.config.host.host_root.join("services").join(name),
+                self.config
+                    .host
+                    .host_root
+                    .join("toolchains/shared-bin")
+                    .join(name),
+            )
+            .with_context(|| format!("installing Cilicon guest {name}"))?;
+        }
 
         write_secure(
             &runner_root.join("config.toml"),
@@ -91,11 +100,11 @@ impl<'a> RunnerManager<'a> {
         )?;
         write_secure(
             &config_root.join("cilicon-image.digest"),
-            &format!("{}\n", self.config.cilicon_image_digest),
+            &format!("{}\n", self.config.pins.cilicon_image_digest),
         )?;
         self.install_runner_agents(&home)?;
         self.process.run(
-            path_text(&self.config.brew_tool("gitlab-runner"))?,
+            path_text(&self.config.host.brew_tool("gitlab-runner"))?,
             &[
                 "verify",
                 "--config",
@@ -121,7 +130,7 @@ impl<'a> RunnerManager<'a> {
         if !status.success() {
             bail!(
                 "the {} GUI session is not active; log in locally first",
-                self.config.ci_user
+                self.config.host.ci_user
             );
         }
         for name in ["cleanup", "health", "colima", "gitlab-runner", "cilicon"] {
@@ -156,22 +165,23 @@ impl<'a> RunnerManager<'a> {
     }
 
     fn runner_config(&self, home: &Path, runner_root: &Path, tokens: &Tokens) -> Result<String> {
-        let root = self.config.host_root.display();
-        let url = self.config.gitlab_origin();
-        let cache = self.config.cache_root_linux.display();
+        let root = self.config.host.host_root.display();
+        let url = self.config.host.gitlab_origin();
+        let cache = self.config.host.cache_root_linux.display();
+        let lane_config = LANE_CONFIG_PATH;
         let ca = runner_root
             .join("certs")
-            .join(format!("{}.crt", self.config.gitlab_host()?));
+            .join(format!("{}.crt", self.config.host.gitlab_host()?));
         Ok(format!(
             "concurrent = 1\ncheck_interval = 3\nshutdown_timeout = 30\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  tls-ca-file = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={cache}\", \"RUSTUP_HOME=/usr/local/rustup\"]\n\
-             [runners.docker]\n    host = \"{}\"\n    image = \"{}\"\n    pull_policy = \"if-not-present\"\n    allowed_pull_policies = [\"if-not-present\"]\n    allowed_images = [\"kithara-ci:*\"]\n    cpus = \"5\"\n    memory = \"5g\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\"]\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  tls-ca-file = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  tls-ca-file = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n",
+             [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  tls-ca-file = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"RUSTUP_HOME=/usr/local/rustup\"]\n\
+             [runners.docker]\n    host = \"{}\"\n    image = \"{}\"\n    pull_policy = \"if-not-present\"\n    allowed_pull_policies = [\"if-not-present\"]\n    allowed_images = [\"kithara-ci:*\"]\n    cpus = \"5\"\n    memory = \"5g\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/host.json:{lane_config}:ro\"]\n\n\
+             [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  tls-ca-file = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_HOST_CONFIG={lane_config}\"]\n\n\
+             [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  tls-ca-file = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_HOST_CONFIG={lane_config}\"]\n",
             tokens.linux,
             ca.display(),
             docker_host(home),
-            self.config.linux_image,
+            self.config.pins.linux_image,
             tokens.android,
             ca.display(),
             tokens.release,
@@ -180,21 +190,22 @@ impl<'a> RunnerManager<'a> {
     }
 
     fn cilicon_config(&self, home: &Path, tokens: &Tokens, ssh_password: &str) -> Result<String> {
-        let root = &self.config.host_root;
-        let shared = self.config.cilicon_guest_shared_root.display();
+        let root = &self.config.host.host_root;
+        let shared = self.config.host.cilicon_guest_shared_root.display();
         let pre_run = format!(
             "\"{shared}/kithara-tools/kithara-ci\" ci host --config \
-             \"{shared}/kithara-tools/host.json\" guest-prepare"
+             \"{shared}/kithara-tools/host.json\" --pins \
+             \"{shared}/kithara-tools/pins.json\" guest-prepare"
         );
         let config = CiliconConfig {
-            source: &self.config.cilicon_image,
+            source: &self.config.pins.cilicon_image,
             runner_name: "kithara-mac-mini-macos",
             vm_clone_path: root.join("vm/cilicon-clone"),
             retry_delay: 30,
             ssh_connect_max_retries: 30,
             console_devices: ["tart-version-2"],
             ssh_credentials: SshCredentials {
-                username: &self.config.cilicon_ssh_user,
+                username: &self.config.host.cilicon_ssh_user,
                 password: ssh_password,
             },
             hardware: Hardware {
@@ -238,7 +249,7 @@ impl<'a> RunnerManager<'a> {
             provisioner: Provisioner {
                 kind: "gitlab",
                 config: GitlabProvisioner {
-                    gitlab_url: self.config.gitlab_origin(),
+                    gitlab_url: self.config.host.gitlab_origin(),
                     runner_token: &tokens.macos,
                     executor: "shell",
                     max_number_of_builds: 1,
@@ -246,7 +257,7 @@ impl<'a> RunnerManager<'a> {
                     download_url: format!(
                         "https://gitlab-runner-downloads.s3.amazonaws.com/v{}/binaries/\
                          gitlab-runner-darwin-arm64",
-                        self.config.gitlab_runner_version
+                        self.config.pins.gitlab_runner_version
                     ),
                 },
             },
@@ -255,9 +266,14 @@ impl<'a> RunnerManager<'a> {
     }
 
     fn install_runner_agents(&self, home: &Path) -> Result<()> {
-        let logs = self.config.host_root.join("logs");
-        let colima = self.config.brew_tool("colima").display().to_string();
-        let gitlab_runner = self.config.brew_tool("gitlab-runner").display().to_string();
+        let logs = self.config.host.host_root.join("logs");
+        let colima = self.config.host.brew_tool("colima").display().to_string();
+        let gitlab_runner = self
+            .config
+            .host
+            .brew_tool("gitlab-runner")
+            .display()
+            .to_string();
         let agents = [
             (
                 "colima",
@@ -300,6 +316,7 @@ impl<'a> RunnerManager<'a> {
                         "--working-directory",
                         &self
                             .config
+                            .host
                             .host_root
                             .join("workspaces/gitlab")
                             .display()
@@ -316,6 +333,7 @@ impl<'a> RunnerManager<'a> {
                     &[
                         &self
                             .config
+                            .host
                             .host_root
                             .join("services/bin/kithara-ci")
                             .display()
@@ -325,8 +343,17 @@ impl<'a> RunnerManager<'a> {
                         "--config",
                         &self
                             .config
+                            .host
                             .host_root
                             .join("services/host.json")
+                            .display()
+                            .to_string(),
+                        "--pins",
+                        &self
+                            .config
+                            .host
+                            .host_root
+                            .join("services/pins.json")
                             .display()
                             .to_string(),
                         "start-cilicon",
@@ -349,8 +376,9 @@ impl<'a> RunnerManager<'a> {
 
     fn copy_shared_tool(&self, name: &str) -> Result<()> {
         fs::copy(
-            self.config.brew_tool(name),
+            self.config.host.brew_tool(name),
             self.config
+                .host
                 .host_root
                 .join("toolchains/shared-bin")
                 .join(name),
@@ -363,17 +391,21 @@ impl<'a> RunnerManager<'a> {
         let user = self
             .process
             .capture("/usr/bin/id", &["-un"], "current user")?;
-        if user != self.config.ci_user {
-            bail!("run this command as {}, without sudo", self.config.ci_user);
+        if user != self.config.host.ci_user {
+            bail!(
+                "run this command as {}, without sudo",
+                self.config.host.ci_user
+            );
         }
         Ok(())
     }
 
     pub(super) fn ci_home(&self) -> PathBuf {
         self.config
+            .host
             .host_root
             .join("home")
-            .join(&self.config.ci_user)
+            .join(&self.config.host.ci_user)
     }
 
     fn agent_root(&self) -> PathBuf {
@@ -536,6 +568,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::ci::config::fixture;
 
     #[test]
     fn rendered_runner_configs_are_valid_toml_and_yaml() {
@@ -543,10 +576,14 @@ mod tests {
             .parent()
             .unwrap()
             .to_path_buf();
-        let config = CiConfig::load(&root.join(".config/ci-host.json")).unwrap();
+        let config = fixture();
         let process = Process::new(&root, BTreeMap::new());
         let manager = RunnerManager::new(&config, &process);
-        let home = config.host_root.join("home").join(&config.ci_user);
+        let home = config
+            .host
+            .host_root
+            .join("home")
+            .join(&config.host.ci_user);
         let runner_root = home.join(".gitlab-runner");
         let tokens = Tokens {
             macos: "glrt-macos".into(),

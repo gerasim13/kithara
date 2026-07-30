@@ -115,3 +115,6 @@ docs-build/
 .baseline/
 .target
 release-artifacts/
+
+# Machine profile of a CI host, provisioned per machine
+.config/ci-host.json

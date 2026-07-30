@@ -41,7 +41,7 @@ impl<'a> HostStorage<'a> {
     const REMOVABLE_ROOTS: &'static [&'static str] = &["cache", "logs", "vm", "workspaces"];
 
     pub(super) fn new(config: &'a CiConfig, process: &'a Process) -> Result<Self> {
-        let root = config.host_root.clone();
+        let root = config.host.host_root.clone();
         validate_root(&root)?;
         Ok(Self {
             root,
@@ -66,7 +66,7 @@ impl<'a> HostStorage<'a> {
         match pressure {
             Pressure::Reject => bail!(
                 "CI volume uses {used} bytes; new jobs stop at {}",
-                self.config.reject_bytes
+                self.config.host.reject_bytes
             ),
             Pressure::Soft | Pressure::Aggressive => {
                 warn!(used_bytes = used, ?pressure, "CI volume is under pressure");
@@ -121,7 +121,7 @@ impl<'a> HostStorage<'a> {
         }
 
         let mut final_used = self.used_bytes()?;
-        if final_used >= self.config.reject_bytes {
+        if final_used >= self.config.host.reject_bytes {
             self.prune_old_trees("cache/trusted", Duration::ZERO)?;
             self.prune_old_trees("cache/bootstrap/trusted", Duration::ZERO)?;
             final_used = self.used_bytes()?;
@@ -175,9 +175,9 @@ impl<'a> HostStorage<'a> {
     fn pressure(&self, used: u64) -> Pressure {
         pressure_for(
             used,
-            self.config.soft_cleanup_bytes,
-            self.config.aggressive_cleanup_bytes,
-            self.config.reject_bytes,
+            self.config.host.soft_cleanup_bytes,
+            self.config.host.aggressive_cleanup_bytes,
+            self.config.host.reject_bytes,
         )
     }
 
@@ -309,9 +309,9 @@ impl<'a> HostStorage<'a> {
     }
 
     fn prune_docker_cache(&self, age: &str) {
-        let home = self.root.join("home").join(&self.config.ci_user);
+        let home = self.root.join("home").join(&self.config.host.ci_user);
         let socket = home.join(".colima/kithara/docker.sock");
-        let docker = self.config.brew_tool("docker");
+        let docker = self.config.host.brew_tool("docker");
         if !socket.exists() || !docker.is_file() {
             return;
         }
@@ -329,7 +329,7 @@ impl<'a> HostStorage<'a> {
     }
 
     fn runner_state(&self) -> &'static str {
-        if !self.config.brew_tool("gitlab-runner").is_file() {
+        if !self.config.host.brew_tool("gitlab-runner").is_file() {
             return "not-installed";
         }
         let uid = self
@@ -422,55 +422,19 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::ci::config::fixture;
 
     fn config(root: &Path) -> CiConfig {
-        CiConfig {
-            cache_root_cilicon: root.join("cache"),
-            cache_root_linux: root.join("cache"),
-            cache_root_windows: root.join("cache"),
-            host_root: root.to_path_buf(),
-            quota_bytes: 300,
-            reject_bytes: 285,
-            soft_cleanup_bytes: 240,
-            aggressive_cleanup_bytes: 270,
-            stable_toolchain: "stable".into(),
-            msrv_toolchain: "1.89".into(),
-            nightly_toolchain: "nightly".into(),
-            expected_xcode_version: "26.6".into(),
-            android_home: root.join("toolchains/android"),
-            android_build_tools_version: "36.0.0".into(),
-            android_commandline_tools_sha256: "a".repeat(64),
-            android_commandline_tools_version: "1".into(),
-            android_ndk_version: "27".into(),
-            android_platform_version: 36,
-            android_avd: "Kithara".into(),
-            brew_root: root.join("brew"),
-            brew_formulae: vec!["gitlab-runner".into()],
-            brew_casks: Vec::new(),
-            cargo_tools: BTreeMap::from([("just".into(), "1".into())]),
-            cilicon_guest_shared_root: root.join("shared"),
-            cilicon_version: "2.4.2".into(),
-            cilicon_sha256: "b".repeat(64),
-            cilicon_ssh_user: "admin".into(),
-            sccache_size: "50G".into(),
-            ci_user: "kithara-ci".into(),
-            ci_uid: 503,
-            sync_user: "kithara-sync".into(),
-            sync_uid: 504,
-            admin_user: "tresor".into(),
-            gitlab_url: "https://gitlab.example.com".parse().unwrap(),
-            gitlab_runner_version: "19.2.1".into(),
-            geckodriver_linux_arm64_sha256: "c".repeat(64),
-            geckodriver_version: "0.36.0".into(),
-            gitleaks_linux_arm64_sha256: "d".repeat(64),
-            gitleaks_version: "8.30.1".into(),
-            linux_base_image: format!("rust:stable-bookworm@sha256:{}", "e".repeat(64)),
-            linux_image: "kithara-ci:test".into(),
-            cilicon_image: "oci://example.test/image".into(),
-            cilicon_image_digest: "sha256:test".into(),
-            cilicon_xcode_developer_dir: root.join("Xcode/Cilicon"),
-            host_xcode_developer_dir: root.join("Xcode/Host"),
-        }
+        let mut config = fixture();
+        config.host.host_root = root.to_path_buf();
+        config.host.cache_root_cilicon = root.join("cache");
+        config.host.cache_root_linux = root.join("cache");
+        config.host.cache_root_windows = root.join("cache");
+        config.host.quota_bytes = 300;
+        config.host.reject_bytes = 285;
+        config.host.aggressive_cleanup_bytes = 270;
+        config.host.soft_cleanup_bytes = 240;
+        config
     }
 
     #[test]

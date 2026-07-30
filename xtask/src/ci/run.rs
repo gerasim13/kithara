@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
@@ -49,7 +49,12 @@ pub(crate) struct RunArgs {
 pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
     ext.ci.validate()?;
-    let ci_config = CiConfig::load(&ctx.root.join(&ext.ci.host_config))?;
+    let host_config = env::var_os("KITHARA_CI_HOST_CONFIG")
+        .map(PathBuf::from)
+        .context(
+            "KITHARA_CI_HOST_CONFIG must point at the host profile installed on this executor",
+        )?;
+    let ci_config = CiConfig::load(&host_config, &ctx.root.join(&ext.ci.pins))?;
     let environment = CiEnvironment::prepare(ctx, &ci_config, args.lane)?;
     info!(
         lane = ?args.lane,
@@ -98,17 +103,17 @@ fn run_apple(
         .next()
         .and_then(|line| line.strip_prefix("Xcode "))
         .context("xcodebuild -version did not report an Xcode version")?;
-    if actual != config.expected_xcode_version {
+    if actual != config.pins.expected_xcode_version {
         bail!(
             "Xcode {} is required, found {actual}",
-            config.expected_xcode_version
+            config.pins.expected_xcode_version
         );
     }
 
     process.run("just", &["lint", "full"], "full lint gate")?;
     let mut check = process.command("just");
     check
-        .env("RUSTUP_TOOLCHAIN", &config.msrv_toolchain)
+        .env("RUSTUP_TOOLCHAIN", &config.pins.msrv_toolchain)
         .args(["check", "workspace"]);
     process.run_command(&mut check, "MSRV workspace check")?;
 
@@ -228,7 +233,7 @@ fn run_android(process: &Process, config: &CiConfig) -> Result<()> {
             "android",
             "run",
             "--avd",
-            &config.android_avd,
+            &config.pins.android_avd,
             "--skip-build",
         ],
         "Android emulator launch",

@@ -29,10 +29,10 @@ impl<'a> SystemSetup<'a> {
         self.install_rosetta()?;
         self.verify_volume()?;
         info!(
-            user = self.config.ci_user,
-            uid = self.config.ci_uid,
-            root = %self.config.host_root.display(),
-            quota_bytes = self.config.quota_bytes,
+            user = self.config.host.ci_user,
+            uid = self.config.host.ci_uid,
+            root = %self.config.host.host_root.display(),
+            quota_bytes = self.config.host.quota_bytes,
             "privileged CI bootstrap completed"
         );
         Ok(())
@@ -41,7 +41,7 @@ impl<'a> SystemSetup<'a> {
     pub(super) fn finish(&self) -> Result<()> {
         require_macos()?;
         self.require_root()?;
-        let developer = &self.config.host_xcode_developer_dir;
+        let developer = &self.config.host.host_xcode_developer_dir;
         if !developer.is_dir() {
             bail!(
                 "install Xcode before finishing CI setup: {}",
@@ -61,10 +61,10 @@ impl<'a> SystemSetup<'a> {
             .next()
             .and_then(|line| line.strip_prefix("Xcode "))
             .context("xcodebuild did not return an Xcode version")?;
-        if actual != self.config.expected_xcode_version {
+        if actual != self.config.pins.expected_xcode_version {
             bail!(
                 "Xcode {} is required, found {actual}",
-                self.config.expected_xcode_version
+                self.config.pins.expected_xcode_version
             );
         }
         self.process.run(
@@ -102,7 +102,7 @@ impl<'a> SystemSetup<'a> {
     }
 
     fn ensure_volume(&self) -> Result<()> {
-        if self.config.host_root.is_dir() {
+        if self.config.host.host_root.is_dir() {
             return self.verify_volume();
         }
         let info = self.process.capture(
@@ -115,11 +115,12 @@ impl<'a> SystemSetup<'a> {
             .context("cannot resolve the root APFS container")?;
         let name = self
             .config
+            .host
             .host_root
             .file_name()
             .and_then(|name| name.to_str())
             .context("CI volume path has no UTF-8 volume name")?;
-        let quota = format!("{}b", self.config.quota_bytes);
+        let quota = format!("{}b", self.config.host.quota_bytes);
         self.process.run(
             "/usr/sbin/diskutil",
             &[
@@ -138,6 +139,7 @@ impl<'a> SystemSetup<'a> {
             &[
                 "enableOwnership",
                 self.config
+                    .host
                     .host_root
                     .to_str()
                     .context("CI volume path is not UTF-8")?,
@@ -147,14 +149,15 @@ impl<'a> SystemSetup<'a> {
     }
 
     fn verify_volume(&self) -> Result<()> {
-        if !self.config.host_root.is_dir() {
+        if !self.config.host.host_root.is_dir() {
             bail!(
                 "CI volume is not mounted: {}",
-                self.config.host_root.display()
+                self.config.host.host_root.display()
             );
         }
         let volume = self
             .config
+            .host
             .host_root
             .to_str()
             .context("CI volume path is not UTF-8")?;
@@ -172,12 +175,12 @@ impl<'a> SystemSetup<'a> {
                 .capture("/usr/sbin/diskutil", &["apfs", "list"], "APFS volume list")?;
         let quota =
             parse_volume_quota(&apfs, device).context("CI volume has no APFS capacity quota")?;
-        if quota < self.config.quota_bytes
-            || quota.saturating_sub(self.config.quota_bytes) >= allocation
+        if quota < self.config.host.quota_bytes
+            || quota.saturating_sub(self.config.host.quota_bytes) >= allocation
         {
             bail!(
                 "CI volume quota must round from {} by less than one {allocation}-byte block, found {quota}",
-                self.config.quota_bytes
+                self.config.host.quota_bytes
             );
         }
         self.verify_case_sensitive()
@@ -186,6 +189,7 @@ impl<'a> SystemSetup<'a> {
     fn verify_case_sensitive(&self) -> Result<()> {
         let probe = self
             .config
+            .host
             .host_root
             .join(format!(".case-check.{}", std::process::id()));
         fs::create_dir(&probe)
@@ -207,8 +211,8 @@ impl<'a> SystemSetup<'a> {
     }
 
     fn ensure_ci_user(&self) -> Result<()> {
-        let user = &self.config.ci_user;
-        let uid = self.config.ci_uid.to_string();
+        let user = &self.config.host.ci_user;
+        let uid = self.config.host.ci_uid.to_string();
         let home = self.ci_home();
         let uid_owner = self
             .process
@@ -221,7 +225,7 @@ impl<'a> SystemSetup<'a> {
         if let Some(owner) = uid_owner.split_whitespace().next()
             && owner != user
         {
-            bail!("UID {} already belongs to {owner}", self.config.ci_uid);
+            bail!("UID {} already belongs to {owner}", self.config.host.ci_uid);
         }
         let exists = self
             .process
@@ -300,19 +304,23 @@ impl<'a> SystemSetup<'a> {
             "workspaces/tmp",
         ] {
             self.install_directory(
-                &self.config.host_root.join(name),
+                &self.config.host.host_root.join(name),
                 "0750",
-                &self.config.ci_user,
+                &self.config.host.ci_user,
             )?;
         }
-        self.install_directory(&self.config.host_root.join("services"), "0755", "root")?;
-        self.install_directory(&self.ci_home().join(".ssh"), "0700", &self.config.ci_user)?;
+        self.install_directory(&self.config.host.host_root.join("services"), "0755", "root")?;
+        self.install_directory(
+            &self.ci_home().join(".ssh"),
+            "0700",
+            &self.config.host.ci_user,
+        )?;
         let admin_record = self.process.capture(
             "/usr/bin/dscl",
             &[
                 ".",
                 "-read",
-                &format!("/Users/{}", self.config.admin_user),
+                &format!("/Users/{}", self.config.host.admin_user),
                 "NFSHomeDirectory",
             ],
             "read administrator home",
@@ -327,7 +335,7 @@ impl<'a> SystemSetup<'a> {
             bail!("missing {}", authorized.display());
         }
         let target = self.ci_home().join(".ssh/authorized_keys");
-        self.install_file(&authorized, &target, "0600", &self.config.ci_user)
+        self.install_file(&authorized, &target, "0600", &self.config.host.ci_user)
     }
 
     fn configure_power(&self) -> Result<()> {
@@ -374,10 +382,10 @@ impl<'a> SystemSetup<'a> {
                 "automatic login user",
             )
             .unwrap_or_default();
-        if auto_user != self.config.ci_user || !Path::new("/etc/kcpassword").is_file() {
+        if auto_user != self.config.host.ci_user || !Path::new("/etc/kcpassword").is_file() {
             bail!(
                 "enable automatic login for {} in System Settings, then rerun",
-                self.config.ci_user
+                self.config.host.ci_user
             );
         }
         Ok(())
@@ -402,9 +410,10 @@ impl<'a> SystemSetup<'a> {
 
     fn ci_home(&self) -> PathBuf {
         self.config
+            .host
             .host_root
             .join("home")
-            .join(&self.config.ci_user)
+            .join(&self.config.host.ci_user)
     }
 
     fn install_directory(&self, path: &Path, mode: &str, owner: &str) -> Result<()> {
