@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 pub(super) const CONTROL_PATHS: &[&str] = &[
     ".gitlab-ci.yml",
     ".gitlab/",
-    ".config/ci-pins.json",
+    ".config/ci-pins.toml",
     ".config/just/",
     ".config/mutation-suites.toml",
     ".config/nextest.toml",

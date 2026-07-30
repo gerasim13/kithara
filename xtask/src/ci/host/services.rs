@@ -25,8 +25,8 @@ pub(super) struct ServiceInstaller<'a> {
 
 impl<'a> ServiceInstaller<'a> {
     const BINARY_NAME: &'static str = "kithara-ci";
-    const HOST_CONFIG_NAME: &'static str = "host.json";
-    const PINS_NAME: &'static str = "pins.json";
+    const HOST_CONFIG_NAME: &'static str = "host.toml";
+    const PINS_NAME: &'static str = "pins.toml";
 
     pub(super) fn new(config: &'a CiConfig, process: &'a Process) -> Self {
         Self { config, process }
@@ -52,7 +52,7 @@ impl<'a> ServiceInstaller<'a> {
         require_macos()?;
         self.require_root()?;
         let bridge = self.service_root().join("bridge");
-        let config = bridge.join("config.json");
+        let config = bridge.join("config.toml");
         let pending = bridge.join("com.zvuk.kithara-ci.bridge.plist.pending");
         if !config.is_file() {
             bail!("missing bridge configuration: {}", config.display());
@@ -61,8 +61,9 @@ impl<'a> ServiceInstaller<'a> {
             bail!("missing staged bridge service: {}", pending.display());
         }
         self.require_private_sync_file(&config)?;
-        let secrets: BridgeSecrets = serde_json::from_slice(
-            &fs::read(&config).with_context(|| format!("reading {}", config.display()))?,
+        let secrets: BridgeSecrets = toml::from_str(
+            &fs::read_to_string(&config)
+                .with_context(|| format!("reading {}", config.display()))?,
         )
         .with_context(|| format!("parsing {}", config.display()))?;
         self.require_private_sync_file(&secrets.github_private_key)?;
@@ -277,7 +278,7 @@ impl<'a> ServiceInstaller<'a> {
         let binary = self.installed_binary().display().to_string();
         let config = self
             .service_root()
-            .join("bridge/config.json")
+            .join("bridge/config.toml")
             .display()
             .to_string();
         let log = self.config.host.host_root.join("logs/bridge.log");

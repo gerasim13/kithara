@@ -10,8 +10,8 @@ CI reads two strict JSON files, and they have different owners:
 
 | File | Owner | Tracked |
 | --- | --- | --- |
-| `.config/ci-pins.json` | the repository | yes, reviewed with the code it pins |
-| host profile (`host.json`) | the machine | no, provisioned per host |
+| `.config/ci-pins.toml` | the repository | yes, reviewed with the code it pins |
+| host profile (`host.toml`) | the machine | no, provisioned per host |
 
 The pins hold everything a build depends on: toolchains, Xcode and Android
 versions, `cargo install` versions, image tags and digests, download checksums.
@@ -20,19 +20,19 @@ roots, disk thresholds, account names and UIDs, Homebrew and Xcode locations,
 and the GitLab origin.
 
 Every command takes `--config <host profile>`; `--pins` defaults to
-`.config/ci-pins.json` inside a checkout. Both accept the environment variables
+`.config/ci-pins.toml` inside a checkout. Both accept the environment variables
 `KITHARA_CI_HOST_CONFIG` and `KITHARA_CI_PINS`. Lanes read the host profile
 only through `KITHARA_CI_HOST_CONFIG`, which every executor sets to
-`/etc/kithara-ci/host.json` (`C:/KitharaCI/host.json` on Windows).
+`/etc/kithara-ci/host.toml` (`C:/KitharaCI/host.toml` on Windows).
 
 ## Host installation
 
 Write the machine profile for this host first — start from the field list in
-`xtask/tests/fixtures/ci-host.json` — and keep it outside the repository.
+`xtask/tests/fixtures/ci-host.toml` — and keep it outside the repository.
 Then build the installer from a reviewed GitLab commit:
 
 ```text
-export KITHARA_CI_HOST_CONFIG=/path/to/ci-host.json
+export KITHARA_CI_HOST_CONFIG=/path/to/ci-host.toml
 cargo build --locked --release -p xtask
 sudo -E target/release/xtask ci host bootstrap
 target/release/xtask ci host install-host-tools
@@ -44,14 +44,14 @@ quota, user IDs, automatic login, SSH access, and the power policy before it
 changes anything that already exists. `finish` validates Xcode and installs the
 current Rust binary, the host profile, and the pins under
 `/Volumes/KitharaCI/services`, and publishes the host profile to
-`/etc/kithara-ci/host.json` for the lanes.
+`/etc/kithara-ci/host.toml` for the lanes.
 
 Run the remaining commands in the logged-in `kithara-ci` GUI session, where the
 installed copies are the source of truth:
 
 ```text
-export KITHARA_CI_HOST_CONFIG=/Volumes/KitharaCI/services/host.json
-export KITHARA_CI_PINS=/Volumes/KitharaCI/services/pins.json
+export KITHARA_CI_HOST_CONFIG=/Volumes/KitharaCI/services/host.toml
+export KITHARA_CI_PINS=/Volumes/KitharaCI/services/pins.toml
 /Volumes/KitharaCI/services/bin/kithara-ci ci host install-user-tools
 /Volumes/KitharaCI/services/bin/kithara-ci ci host build-linux-image /path/to/kithara/docker/ci.Dockerfile
 /Volumes/KitharaCI/services/bin/kithara-ci ci host smoke-linux
@@ -99,7 +99,7 @@ official GitLab Runner inside the Windows 11 ARM guest with:
 - `concurrent = 1`;
 - builds under `C:\KitharaCI\workspaces`;
 - cache under `C:\KitharaCI\cache`;
-- a copy of the host profile at `C:\KitharaCI\host.json`.
+- a copy of the host profile at `C:\KitharaCI\host.toml`.
 
 The Windows installation media and license are intentionally not automated.
 After the guest is registered, its job invokes the Rust CI command through
@@ -109,13 +109,13 @@ Android, and web checks.
 
 ## Repository bridge
 
-Copy `ci/bridge/config.example.json` to
-`/Volumes/KitharaCI/services/bridge/config.json`. The config, GitHub App key,
+Copy `ci/bridge/config.example.toml` to
+`/Volumes/KitharaCI/services/bridge/config.toml`. The config, GitHub App key,
 and GitLab token must belong to UID 504 (`kithara-sync`) and have mode `0600`.
 The GitLab CA may be read-only. Validate without network mutation:
 
 ```text
-/Volumes/KitharaCI/services/bin/kithara-ci ci bridge validate --config /Volumes/KitharaCI/services/bridge/config.json
+/Volumes/KitharaCI/services/bin/kithara-ci ci bridge validate --config /Volumes/KitharaCI/services/bridge/config.toml
 ```
 
 Activate the staged launch daemon only after validation:

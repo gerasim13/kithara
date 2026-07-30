@@ -21,7 +21,7 @@ stages:
 variables:
   CARGO_INCREMENTAL: "0"
   GIT_DEPTH: "0"
-  KITHARA_CI_HOST_CONFIG: /etc/kithara-ci/host.json
+  KITHARA_CI_HOST_CONFIG: /etc/kithara-ci/host.toml
   RUST_BACKTRACE: "1"
   SCCACHE_CACHE_SIZE: 50G
 

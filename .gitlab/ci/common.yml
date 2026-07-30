@@ -13,7 +13,7 @@
 
 .windows-job:
   variables:
-    KITHARA_CI_HOST_CONFIG: C:/KitharaCI/host.json
+    KITHARA_CI_HOST_CONFIG: C:/KitharaCI/host.toml
   tags:
     - kithara-windows
 

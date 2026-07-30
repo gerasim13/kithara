@@ -78,7 +78,7 @@ impl<'a> RunnerManager<'a> {
                 .join("toolchains/shared-bin/kithara-ci"),
         )
         .context("installing CI executable for Cilicon guests")?;
-        for name in ["host.json", "pins.json"] {
+        for name in ["host.toml", "pins.toml"] {
             fs::copy(
                 self.config.host.host_root.join("services").join(name),
                 self.config
@@ -175,7 +175,7 @@ impl<'a> RunnerManager<'a> {
         Ok(format!(
             "concurrent = 1\ncheck_interval = 3\nshutdown_timeout = 30\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  tls-ca-file = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"RUSTUP_HOME=/usr/local/rustup\"]\n\
-             [runners.docker]\n    host = \"{}\"\n    image = \"{}\"\n    pull_policy = \"if-not-present\"\n    allowed_pull_policies = [\"if-not-present\"]\n    allowed_images = [\"kithara-ci:*\"]\n    cpus = \"5\"\n    memory = \"5g\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/host.json:{lane_config}:ro\"]\n\n\
+             [runners.docker]\n    host = \"{}\"\n    image = \"{}\"\n    pull_policy = \"if-not-present\"\n    allowed_pull_policies = [\"if-not-present\"]\n    allowed_images = [\"kithara-ci:*\"]\n    cpus = \"5\"\n    memory = \"5g\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/host.toml:{lane_config}:ro\"]\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  tls-ca-file = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_HOST_CONFIG={lane_config}\"]\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  tls-ca-file = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_HOST_CONFIG={lane_config}\"]\n",
             tokens.linux,
@@ -194,8 +194,8 @@ impl<'a> RunnerManager<'a> {
         let shared = self.config.host.cilicon_guest_shared_root.display();
         let pre_run = format!(
             "\"{shared}/kithara-tools/kithara-ci\" ci host --config \
-             \"{shared}/kithara-tools/host.json\" --pins \
-             \"{shared}/kithara-tools/pins.json\" guest-prepare"
+             \"{shared}/kithara-tools/host.toml\" --pins \
+             \"{shared}/kithara-tools/pins.toml\" guest-prepare"
         );
         let config = CiliconConfig {
             source: &self.config.pins.cilicon_image,
@@ -345,7 +345,7 @@ impl<'a> RunnerManager<'a> {
                             .config
                             .host
                             .host_root
-                            .join("services/host.json")
+                            .join("services/host.toml")
                             .display()
                             .to_string(),
                         "--pins",
@@ -353,7 +353,7 @@ impl<'a> RunnerManager<'a> {
                             .config
                             .host
                             .host_root
-                            .join("services/pins.json")
+                            .join("services/pins.toml")
                             .display()
                             .to_string(),
                         "start-cilicon",

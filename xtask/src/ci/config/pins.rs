@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 /// Repository-relative location of the reviewed build pins.
-pub(crate) const PINS_PATH: &str = ".config/ci-pins.json";
+pub(crate) const PINS_PATH: &str = ".config/ci-pins.toml";
 
 /// Reviewed build contract: everything a CI job installs, pulls, or pins.
 /// Machine-specific paths and accounts live in [`super::CiHost`].
@@ -19,7 +19,6 @@ pub(crate) struct CiPins {
     pub(crate) android_platform_version: u32,
     pub(crate) brew_casks: Vec<String>,
     pub(crate) brew_formulae: Vec<String>,
-    pub(crate) cargo_tools: BTreeMap<String, String>,
     pub(crate) cilicon_image: String,
     pub(crate) cilicon_image_digest: String,
     pub(crate) cilicon_sha256: String,
@@ -35,22 +34,23 @@ pub(crate) struct CiPins {
     pub(crate) msrv_toolchain: String,
     pub(crate) nightly_toolchain: String,
     pub(crate) stable_toolchain: String,
+    /// Serialised last: TOML requires tables after plain values.
+    pub(crate) cargo_tools: BTreeMap<String, String>,
 }
 
 impl CiPins {
     pub(crate) fn load(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("reading CI pins {}", path.display()))?;
-        let pins: Self = serde_json::from_str(&text)
-            .with_context(|| format!("parsing CI pins {}", path.display()))?;
+        let pins: Self =
+            toml::from_str(&text).with_context(|| format!("parsing CI pins {}", path.display()))?;
         pins.validate()?;
         Ok(pins)
     }
 
     pub(crate) fn write(&self, path: &Path) -> Result<()> {
-        let bytes = serde_json::to_vec_pretty(self).context("serializing CI pins")?;
-        fs::write(path, [bytes.as_slice(), b"\n"].concat())
-            .with_context(|| format!("writing CI pins {}", path.display()))
+        let text = toml::to_string_pretty(self).context("serializing CI pins")?;
+        fs::write(path, text).with_context(|| format!("writing CI pins {}", path.display()))
     }
 
     pub(crate) fn validate(&self) -> Result<()> {

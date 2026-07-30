@@ -61,7 +61,7 @@ impl BridgeConfig {
     fn load(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("reading bridge config {}", path.display()))?;
-        let config: Self = serde_json::from_str(&text)
+        let config: Self = toml::from_str(&text)
             .with_context(|| format!("parsing bridge config {}", path.display()))?;
         config.validate()?;
         Ok(config)

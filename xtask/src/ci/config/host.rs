@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) const LANE_CONFIG_DIR: &str = "/etc/kithara-ci";
 
 /// Installed host profile every CI lane reads through `KITHARA_CI_HOST_CONFIG`.
-pub(crate) const LANE_CONFIG_PATH: &str = "/etc/kithara-ci/host.json";
+pub(crate) const LANE_CONFIG_PATH: &str = "/etc/kithara-ci/host.toml";
 
 /// Machine profile of one CI host: volumes, accounts, and installed roots.
 /// It is provisioned per machine and never tracked in the repository; the
@@ -46,16 +46,15 @@ impl CiHost {
     pub(crate) fn load(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("reading CI host profile {}", path.display()))?;
-        let host: Self = serde_json::from_str(&text)
+        let host: Self = toml::from_str(&text)
             .with_context(|| format!("parsing CI host profile {}", path.display()))?;
         host.validate()?;
         Ok(host)
     }
 
     pub(crate) fn write(&self, path: &Path) -> Result<()> {
-        let bytes = serde_json::to_vec_pretty(self).context("serializing CI host profile")?;
-        fs::write(path, [bytes.as_slice(), b"\n"].concat())
-            .with_context(|| format!("writing CI host profile {}", path.display()))
+        let text = toml::to_string_pretty(self).context("serializing CI host profile")?;
+        fs::write(path, text).with_context(|| format!("writing CI host profile {}", path.display()))
     }
 
     pub(crate) fn validate(&self) -> Result<()> {

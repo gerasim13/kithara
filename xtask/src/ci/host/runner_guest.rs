@@ -50,7 +50,7 @@ impl RunnerManager<'_> {
                 "install",
                 "-m",
                 "0644",
-                path_text(&shared.join("kithara-tools/host.json"))?,
+                path_text(&shared.join("kithara-tools/host.toml"))?,
                 LANE_CONFIG_PATH,
             ],
             "install guest host profile",

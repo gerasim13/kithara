@@ -117,4 +117,4 @@ docs-build/
 release-artifacts/
 
 # Machine profile of a CI host, provisioned per machine
-.config/ci-host.json
+.config/ci-host.toml

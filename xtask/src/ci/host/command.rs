@@ -111,7 +111,7 @@ mod tests {
             "ci",
             "host",
             "--config",
-            "/etc/kithara-ci/host.json",
+            "/etc/kithara-ci/host.toml",
         ];
         argv.extend_from_slice(command);
         Cli::try_parse_from(argv)

@@ -277,7 +277,7 @@ tool_kind = "file-edit"
 handler = "format-edited-paths"
 
 [ext.ci]
-pins = ".config/ci-pins.json"
+pins = ".config/ci-pins.toml"
 
 [ext.publish]
 workspace_hack_crate = "kithara-workspace-hack"
