@@ -351,14 +351,6 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
 /// mutability, so callers hold an `Arc<dyn VariantControl>` and never
 /// need `&mut`.
 pub trait VariantControl: Send + Sync + 'static {
-    /// Select exact dual-session ownership before any variant intent can be
-    /// published. Activation fails when an intent is already pending.
-    ///
-    /// # Errors
-    ///
-    /// Returns a source error when activation would race an existing intent.
-    fn enable_variant_sessions(&self) -> StreamResult<()>;
-
     /// Capture the exact target media facts needed to select a decoder and
     /// compute its reader profile before an incoming session is opened.
     ///

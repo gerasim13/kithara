@@ -65,6 +65,13 @@ impl GaplessStage {
         next
     }
 
+    #[must_use]
+    pub(crate) fn has_output(&self) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(|pending| pending.len() != 0)
+    }
+
     /// Drop pending output and reset seek-sensitive trimming state.
     pub(crate) fn notify_seek(&mut self) {
         self.trimmer.notify_seek();

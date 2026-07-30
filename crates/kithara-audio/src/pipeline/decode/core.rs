@@ -18,7 +18,10 @@ use tracing::{debug, warn};
 use crate::{
     pipeline::{
         blend::PcmBlender,
-        decode::{drain::EofDrain, generation::DecoderGeneration, resume::ResumeCursor},
+        decode::{
+            drain::EofDrain, generation::DecoderGeneration, resume::ResumeCursor,
+            transition::IncomingDecode,
+        },
         fetch::Fetch,
         rebuild::RecreateState,
         seek::{ResumeState, SeekEngine, emit::commit_outcome},
@@ -96,9 +99,10 @@ impl DecodeInit {
 }
 
 pub(crate) struct ActiveDecode {
-    active: DecoderGeneration,
+    pub(super) active: DecoderGeneration,
+    pub(super) incoming: Option<IncomingDecode>,
     gapless_mode: GaplessMode,
-    blender: PcmBlender,
+    pub(super) blender: PcmBlender,
     effects: Vec<Box<dyn AudioEffect>>,
     drain: EofDrain,
 }
@@ -132,6 +136,7 @@ impl ActiveDecode {
         let blender = PcmBlender::new(active.blender_profile());
         Self {
             active,
+            incoming: None,
             gapless_mode,
             blender,
             effects,
@@ -193,16 +198,7 @@ impl ActiveDecode {
 
     #[kithara::rtsan_allow_blocking]
     pub(crate) fn next_chunk(&mut self, stream_position: u64) -> DecodeResult<DecoderChunkOutcome> {
-        let outcome =
-            match catch_unwind(AssertUnwindSafe(|| self.active.decoder_mut().next_chunk())) {
-                Ok(result) => result,
-                Err(payload) => {
-                    warn!(panic = %panic_message(payload), "decoder panicked during next_chunk");
-                    Err(DecodeError::InvalidData {
-                        detail: "decoder panicked during next_chunk",
-                    })
-                }
-            };
+        let outcome = self.active.next_chunk();
         let (chunks, samples) = self.stats();
         match &outcome {
             Ok(DecoderChunkOutcome::Eof) => {
@@ -264,6 +260,7 @@ impl ActiveDecode {
 
     pub(crate) fn flush_reader_signals(&mut self) {
         self.active.decoder_mut().flush_reader_signals();
+        self.flush_incoming_reader_signals();
     }
 }
 

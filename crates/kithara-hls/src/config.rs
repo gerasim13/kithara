@@ -58,6 +58,18 @@ pub enum SizeProbeMethod {
     RangeGet,
 }
 
+/// Which variant-session ownership model this HLS stream is constructed with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum VariantSessionMode {
+    /// Boundary variant switching owned by HLS. Used when no decoder-side
+    /// promoter exists.
+    #[default]
+    Legacy,
+    /// Exact active/incoming dual sessions promoted by the audio consumer.
+    Exact,
+}
+
 /// Configuration for HLS streaming.
 ///
 /// Used with `Stream::<Hls>::new(config)`.
@@ -112,6 +124,9 @@ pub struct HlsConfig {
     /// exact prefix offsets.
     #[builder(default)]
     pub size_probe_method: SizeProbeMethod,
+    /// Variant-session ownership fixed before the stream transport starts.
+    #[builder(default)]
+    pub variant_sessions: VariantSessionMode,
     /// Shared asset store.
     pub store: AssetStore,
     /// Master playlist URL.
@@ -166,6 +181,7 @@ impl fmt::Debug for HlsConfig {
             .field("download_batch_size", &self.download_batch_size)
             .field("event_channel_capacity", &self.event_channel_capacity)
             .field("size_probe_method", &self.size_probe_method)
+            .field("variant_sessions", &self.variant_sessions)
             .field("net_options", &self.net_options)
             .finish_non_exhaustive()
     }

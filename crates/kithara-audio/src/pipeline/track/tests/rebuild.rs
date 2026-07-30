@@ -1,4 +1,5 @@
 use std::{
+    io::Cursor,
     num::NonZeroU32,
     ops::Range,
     sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
@@ -19,11 +20,11 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    Activity, AudioCodec, ChunkPosition, ContainerFormat, MediaInfo, PlayheadRead, PlayheadState,
-    PlayheadWrite, PrerollHint, ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekState,
-    Source, SourceError, SourcePhase, Stream, StreamError, StreamResult, StreamType,
-    VariantControl, VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
-    WorkerWake,
+    Activity, AudioCodec, ByteMap, ChunkPosition, ContainerFormat, MediaInfo, OpenedReader,
+    OpenedVariantReader, PlayheadRead, PlayheadState, PlayheadWrite, PrerollHint, ReadOutcome,
+    ReaderProfile, SeekControl, SeekObserve, SeekState, SegmentDescriptor, Source, SourceError,
+    SourcePhase, Stream, StreamError, StreamResult, StreamType, VariantControl, VariantPromotion,
+    VariantReaderPlan, VariantReaderTake, VariantTransition, WorkerWake,
 };
 use kithara_test_utils::kithara;
 
@@ -36,8 +37,10 @@ use crate::{
         fetch::Fetch,
         parts::SourceParts,
         rebuild::{
-            DecoderRebuildComplete, RebuildState, RecreateCause, RecreateNext, RecreateState,
+            DecoderBuildComplete, DecoderBuildPurpose, RebuildState, RecreateCause, RecreateNext,
+            RecreateState,
             port::{RebuildPort, RebuildRuntime},
+            state::BuildId,
         },
         seek::{SeekContext, SeekRequest},
         source::StreamAudioSource,
@@ -49,30 +52,30 @@ use crate::{
     renderer::AudioWorkerSource,
 };
 
-fn produced_data(fetch: Fetch<PcmChunk>) -> PcmChunk {
+pub(super) fn produced_data(fetch: Fetch<PcmChunk>) -> PcmChunk {
     let Fetch::Data { data, .. } = fetch else {
         panic!("TrackStep::Produced must carry PCM data");
     };
     data
 }
 
-struct Consts;
+pub(super) struct Consts;
 
 impl Consts {
     const CHANNELS: u16 = 2;
-    const ROUTE_CHUNK_FRAMES: usize = 256;
+    pub(super) const ROUTE_CHUNK_FRAMES: usize = 256;
     const ROUTE_SAMPLE_RATE: u32 = 48_000;
-    const SAMPLE_RATE: u32 = 44_100;
+    pub(super) const SAMPLE_RATE: u32 = 44_100;
     const TONE_HZ: f64 = 440.0;
 }
 
-struct TestDecoder {
+pub(super) struct TestDecoder {
     id: u64,
     drops: Arc<Mutex<Vec<u64>>>,
 }
 
 impl TestDecoder {
-    fn new(id: u64, drops: Arc<Mutex<Vec<u64>>>) -> Self {
+    pub(super) fn new(id: u64, drops: Arc<Mutex<Vec<u64>>>) -> Self {
         Self { id, drops }
     }
 }
@@ -285,8 +288,18 @@ impl WorkerWake for CountingWake {
     }
 }
 
-struct TestControl {
+pub(super) struct TestControl {
+    byte_map_enabled: AtomicBool,
+    exact_plan: Mutex<Option<VariantReaderPlan>>,
+    exact_reader_ready: AtomicBool,
+    exact_reader_taken: AtomicBool,
     media_info: Mutex<Option<MediaInfo>>,
+    plan_calls: AtomicU64,
+    prepare_calls: AtomicU64,
+    prepared_profile: Mutex<Option<ReaderProfile>>,
+    promote_calls: AtomicU64,
+    promotion: Mutex<VariantPromotion>,
+    take_calls: AtomicU64,
     variant_pending: AtomicBool,
     variant_target: Mutex<Option<usize>>,
     format_range: Mutex<Option<Range<u64>>>,
@@ -295,11 +308,60 @@ struct TestControl {
 impl TestControl {
     fn new(media_info: MediaInfo) -> Self {
         Self {
+            byte_map_enabled: AtomicBool::new(false),
+            exact_plan: Mutex::new(None),
+            exact_reader_ready: AtomicBool::new(false),
+            exact_reader_taken: AtomicBool::new(false),
             media_info: Mutex::new(Some(media_info)),
+            plan_calls: AtomicU64::new(0),
+            prepare_calls: AtomicU64::new(0),
+            prepared_profile: Mutex::new(None),
+            promote_calls: AtomicU64::new(0),
+            promotion: Mutex::new(VariantPromotion::Stale),
+            take_calls: AtomicU64::new(0),
             variant_pending: AtomicBool::new(false),
             variant_target: Mutex::new(None),
             format_range: Mutex::new(Some(0..32)),
         }
+    }
+
+    pub(super) fn set_exact_plan(&self, plan: VariantReaderPlan) {
+        *self.exact_plan.lock() = Some(plan);
+        *self.prepared_profile.lock() = None;
+        self.exact_reader_ready.store(false, Ordering::Release);
+        self.exact_reader_taken.store(false, Ordering::Release);
+    }
+
+    pub(super) fn enable_byte_map(&self) {
+        self.byte_map_enabled.store(true, Ordering::Release);
+    }
+
+    pub(super) fn set_exact_reader_ready(&self) {
+        self.exact_reader_ready.store(true, Ordering::Release);
+    }
+
+    pub(super) fn set_promotion(&self, promotion: VariantPromotion) {
+        *self.promotion.lock() = promotion;
+    }
+
+    pub(super) fn plan_calls(&self) -> u64 {
+        self.plan_calls.load(Ordering::Acquire)
+    }
+
+    pub(super) fn prepare_calls(&self) -> u64 {
+        self.prepare_calls.load(Ordering::Acquire)
+    }
+
+    pub(super) fn prepared_profile(&self) -> Option<ReaderProfile> {
+        *self.prepared_profile.lock()
+    }
+
+    pub(super) fn promote_calls(&self) -> u64 {
+        self.promote_calls.load(Ordering::Acquire)
+    }
+
+    pub(super) fn take_calls(&self) -> u64 {
+        self.take_calls.load(Ordering::Acquire)
     }
 
     fn set_media_info(&self, media_info: MediaInfo) {
@@ -314,31 +376,61 @@ impl TestControl {
 }
 
 impl VariantControl for TestControl {
-    fn enable_variant_sessions(&self) -> StreamResult<()> {
-        Ok(())
-    }
-
     fn plan_variant_reader(&self) -> StreamResult<Option<VariantReaderPlan>> {
-        Ok(None)
+        self.plan_calls.fetch_add(1, Ordering::AcqRel);
+        Ok(self.exact_plan.lock().clone())
     }
 
     fn prepare_variant_reader(
         &self,
-        _plan: VariantReaderPlan,
-        _profile: ReaderProfile,
+        plan: VariantReaderPlan,
+        profile: ReaderProfile,
     ) -> StreamResult<Option<VariantTransition>> {
-        Ok(None)
+        self.prepare_calls.fetch_add(1, Ordering::AcqRel);
+        *self.prepared_profile.lock() = Some(profile);
+        Ok((self.exact_plan.lock().as_ref() == Some(&plan)).then(|| plan.transition()))
     }
 
     fn take_prepared_variant_reader(
         &self,
-        _transition: VariantTransition,
+        transition: VariantTransition,
     ) -> StreamResult<VariantReaderTake> {
-        Ok(VariantReaderTake::Stale)
+        self.take_calls.fetch_add(1, Ordering::AcqRel);
+        let Some(plan) = self
+            .exact_plan
+            .lock()
+            .clone()
+            .filter(|plan| plan.transition() == transition)
+        else {
+            return Ok(VariantReaderTake::Stale);
+        };
+        if !self.exact_reader_ready.load(Ordering::Acquire) {
+            return Ok(VariantReaderTake::Preparing);
+        }
+        if self.exact_reader_taken.swap(true, Ordering::AcqRel) {
+            return Ok(VariantReaderTake::Taken);
+        }
+        let reader = OpenedReader::new(Cursor::new(Vec::new()), Some(0), None, None);
+        Ok(VariantReaderTake::Ready(OpenedVariantReader::new(
+            plan, reader,
+        )))
     }
 
-    fn promote_variant(&self, _transition: VariantTransition) -> VariantPromotion {
-        VariantPromotion::Stale
+    fn promote_variant(&self, transition: VariantTransition) -> VariantPromotion {
+        self.promote_calls.fetch_add(1, Ordering::AcqRel);
+        if !self
+            .exact_plan
+            .lock()
+            .as_ref()
+            .is_some_and(|plan| plan.transition() == transition)
+        {
+            return VariantPromotion::Stale;
+        }
+        let promotion = *self.promotion.lock();
+        if promotion == VariantPromotion::Promoted {
+            *self.exact_plan.lock() = None;
+        }
+        promotion
     }
 
     fn abort_variant(&self, _transition: VariantTransition) -> bool {
@@ -370,7 +462,8 @@ impl VariantControl for TestControl {
     }
 }
 
-struct TestSource {
+pub(super) struct TestSource {
+    byte_map: Arc<TestByteMap>,
     control: Arc<TestControl>,
     playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
@@ -380,6 +473,7 @@ struct TestSource {
 impl TestSource {
     fn new(control: Arc<TestControl>) -> Self {
         Self {
+            byte_map: Arc::new(TestByteMap),
             control,
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
@@ -395,6 +489,14 @@ impl Source for TestSource {
 
     fn advance(&self, n: u64) {
         self.position.fetch_add(n, Ordering::AcqRel);
+    }
+
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        if self.control.byte_map_enabled.load(Ordering::Acquire) {
+            Some(self.byte_map.clone() as Arc<dyn ByteMap>)
+        } else {
+            None
+        }
     }
 
     fn len(&self) -> Option<u64> {
@@ -450,7 +552,31 @@ impl Source for TestSource {
     }
 }
 
-struct TestConfig {
+struct TestByteMap;
+
+impl ByteMap for TestByteMap {
+    fn init_segment_range(&self) -> Range<u64> {
+        0..1
+    }
+
+    fn len(&self) -> Option<u64> {
+        Some(1)
+    }
+
+    fn segment_after_byte(&self, _byte_offset: u64) -> Option<SegmentDescriptor> {
+        None
+    }
+
+    fn segment_at_time(&self, _position: Duration) -> Option<SegmentDescriptor> {
+        None
+    }
+
+    fn segment_count(&self) -> Option<u32> {
+        Some(0)
+    }
+}
+
+pub(super) struct TestConfig {
     source: TestSource,
 }
 
@@ -462,7 +588,7 @@ impl Default for TestConfig {
     }
 }
 
-struct TestStream;
+pub(super) struct TestStream;
 
 impl StreamType for TestStream {
     type Config = TestConfig;
@@ -474,7 +600,7 @@ impl StreamType for TestStream {
     }
 }
 
-fn media_info(variant: u32) -> MediaInfo {
+pub(super) fn media_info(variant: u32) -> MediaInfo {
     let mut info = MediaInfo::new(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4));
     info.variant_index = Some(variant);
     info
@@ -495,9 +621,11 @@ struct RebuildFixture {
     source: StreamAudioSource<TestStream>,
 }
 
-struct RouteFixture {
-    host_sample_rate: Arc<AtomicU32>,
-    source: StreamAudioSource<TestStream>,
+pub(super) struct RouteFixture {
+    pub(super) control: Arc<TestControl>,
+    pub(super) drops: Arc<Mutex<Vec<u64>>>,
+    pub(super) host_sample_rate: Arc<AtomicU32>,
+    pub(super) source: StreamAudioSource<TestStream>,
 }
 
 async fn test_source(variant: u32) -> RebuildFixture {
@@ -542,6 +670,7 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
             handle: runtime_handle,
             wake: Arc::new(TestWake),
         },
+        Some(control.clone() as Arc<dyn VariantControl>),
     );
     RebuildFixture {
         control,
@@ -550,12 +679,12 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
     }
 }
 
-async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
+pub(super) async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
     let control = Arc::new(TestControl::new(media_info(0)));
     let drops = Arc::new(Mutex::new(Vec::new()));
     let host_sample_rate = Arc::new(AtomicU32::new(initial_host_rate));
     let stream = match Stream::<TestStream>::new(TestConfig {
-        source: TestSource::new(control),
+        source: TestSource::new(control.clone()),
     })
     .await
     {
@@ -578,7 +707,11 @@ async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
         Err(err) => panic!("test requires tokio runtime: {err}"),
     };
     let decode = DecodeInit {
-        decoder: Box::new(RouteSignalDecoder::new(1, Consts::SAMPLE_RATE, drops)),
+        decoder: Box::new(RouteSignalDecoder::new(
+            1,
+            Consts::SAMPLE_RATE,
+            drops.clone(),
+        )),
         decoder_factory,
         decoder_backend: kithara_decode::DecoderBackend::default(),
         gapless_mode: GaplessMode::Disabled,
@@ -596,8 +729,11 @@ async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
             handle: runtime_handle,
             wake: Arc::new(TestWake),
         },
+        Some(control.clone() as Arc<dyn VariantControl>),
     );
     RouteFixture {
+        control,
+        drops,
         host_sample_rate,
         source: StreamAudioSource::new(shared_stream, parts),
     }
@@ -605,6 +741,7 @@ async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
 
 fn run_pending_rebuild_inline(source: &mut StreamAudioSource<TestStream>) {
     source.rebuild.run_inline();
+    source.flush_deferred();
 }
 
 fn append_left_channel(left: &mut Vec<f32>, chunk: &PcmChunk) {
@@ -659,10 +796,9 @@ fn enter_rebuilding(
     recreate: RecreateState,
 ) {
     source.state = Track::<RebuildingDecoder>::new(RebuildState {
-        ticket,
+        build: BuildId::fixture(ticket),
         recreate,
         started_seek_epoch: source.seek_obs.epoch(),
-        completion: source.rebuild.completion(),
         superseded_seek: None,
     })
     .erase();
@@ -682,7 +818,9 @@ fn push_completion_with_drops(
         ),
         _ => panic!("completion fixture requires RebuildingDecoder state"),
     };
-    let pushed = source.rebuild.completion().push(DecoderRebuildComplete {
+    let pushed = source.rebuild.completion().push(DecoderBuildComplete {
+        build: BuildId::fixture(ticket),
+        purpose: DecoderBuildPurpose::Replacement,
         result: Ok(DecoderGeneration::new(
             Box::new(TestDecoder::new(decoder_id, drops)),
             Some(media_info),
@@ -690,7 +828,6 @@ fn push_completion_with_drops(
             seek_epoch,
             GaplessMode::Disabled,
         )),
-        ticket,
     });
     assert!(pushed.is_ok());
 }
@@ -739,6 +876,7 @@ async fn rebuild_prepares_generation_profiles_before_rt_install() {
     assert_eq!(profile_reads.load(Ordering::Acquire), 0);
     source.rebuild.run_inline();
     assert_eq!(profile_reads.load(Ordering::Acquire), 1);
+    source.flush_deferred();
 
     assert!(matches!(source.step_track(), TrackStep::StateChanged));
     assert_eq!(profile_reads.load(Ordering::Acquire), 1);
@@ -750,7 +888,8 @@ async fn rebuilding_decoder_completion_installs_once() {
         drops, mut source, ..
     } = test_source(1).await;
     enter_rebuilding(&mut source, 7, recreate_state(1));
-    push_completion_with_drops(&source, 7, 2, drops.clone());
+    push_completion_with_drops(&mut source, 7, 2, drops.clone());
+    source.flush_deferred();
 
     assert!(matches!(source.step_track(), TrackStep::StateChanged));
     assert_eq!(
@@ -777,7 +916,8 @@ async fn rebuilding_decoder_completion_emits_decoder_changed_cause() {
     let mut events = bus.subscribe();
     source = source.with_emit(Arc::new(DeferredBus::new(bus, 16)));
     enter_rebuilding(&mut source, 7, recreate_state(1));
-    push_completion_with_drops(&source, 7, 2, drops);
+    push_completion_with_drops(&mut source, 7, 2, drops);
+    source.flush_deferred();
 
     assert!(matches!(source.step_track(), TrackStep::StateChanged));
     source.flush_deferred();
@@ -832,6 +972,7 @@ async fn route_change_host_rate_delta_starts_decoder_recreate() {
     let RouteFixture {
         host_sample_rate,
         mut source,
+        ..
     } = route_signal_source(Consts::SAMPLE_RATE).await;
 
     host_sample_rate.store(48_000, Ordering::Release);
@@ -861,6 +1002,7 @@ async fn route_change_recreate_preserves_position_and_output_rate_continuity_met
     let RouteFixture {
         host_sample_rate,
         mut source,
+        ..
     } = route_signal_source(Consts::SAMPLE_RATE).await;
     let mut left = Vec::new();
     let mut route_recreated = false;
@@ -933,6 +1075,7 @@ async fn first_matching_host_rate_latches_without_route_recreate() {
     let RouteFixture {
         host_sample_rate,
         mut source,
+        ..
     } = route_signal_source(0).await;
 
     host_sample_rate.store(Consts::SAMPLE_RATE, Ordering::Release);
@@ -947,6 +1090,7 @@ async fn first_mismatched_host_rate_still_starts_route_recreate() {
     let RouteFixture {
         host_sample_rate,
         mut source,
+        ..
     } = route_signal_source(0).await;
 
     host_sample_rate.store(Consts::ROUTE_SAMPLE_RATE, Ordering::Release);
@@ -968,7 +1112,8 @@ async fn rebuilding_decoder_seek_epoch_supersedes_completion() {
     } = test_source(1).await;
     enter_rebuilding(&mut source, 7, recreate_state(1));
     let epoch = source.seek.begin(Duration::from_secs(3));
-    push_completion_with_drops(&source, 7, 2, drops.clone());
+    push_completion_with_drops(&mut source, 7, 2, drops.clone());
+    source.flush_deferred();
 
     assert!(matches!(source.step_track(), TrackStep::StateChanged));
     match &source.state {
@@ -1001,7 +1146,8 @@ async fn rebuilding_decoder_variant_fence_supersedes_completion() {
     } = test_source(1).await;
     enter_rebuilding(&mut source, 7, recreate_state(1));
     control.raise_variant_fence(2, media_info(2));
-    push_completion_with_drops(&source, 7, 2, drops.clone());
+    push_completion_with_drops(&mut source, 7, 2, drops.clone());
+    source.flush_deferred();
 
     assert!(matches!(source.step_track(), TrackStep::StateChanged));
     match &source.state {
@@ -1049,7 +1195,8 @@ async fn rebuilding_decoder_variant_fence_preserves_inflight_seek() {
         },
     );
     control.raise_variant_fence(2, media_info(2));
-    push_completion_with_drops(&source, 7, 2, drops.clone());
+    push_completion_with_drops(&mut source, 7, 2, drops.clone());
+    source.flush_deferred();
 
     assert!(matches!(source.step_track(), TrackStep::StateChanged));
     match &source.state {
@@ -1076,17 +1223,16 @@ async fn stale_rebuild_completion_retires_decoder_shell_side() {
         drops, mut source, ..
     } = test_source(1).await;
     enter_rebuilding(&mut source, 7, recreate_state(1));
-    push_completion_with_drops(&source, 6, 3, drops.clone());
+    push_completion_with_drops(&mut source, 6, 3, drops.clone());
+    assert!(drops.lock().is_empty());
 
+    source.flush_deferred();
+    assert_eq!(drops.lock().as_slice(), &[3]);
     assert!(matches!(
         source.step_track(),
         TrackStep::Blocked(WaitingReason::Waiting)
     ));
     assert!(matches!(source.state, CurrentFsm::RebuildingDecoder(_)));
-    assert!(drops.lock().is_empty());
-
-    source.flush_deferred();
-    assert_eq!(drops.lock().as_slice(), &[3]);
 }
 
 // A decoder factory that panics during construction must not strand the
@@ -1120,6 +1266,7 @@ async fn rebuild_factory_panic_fails_track_without_hang() {
     // stranding the FSM in `RebuildingDecoder`.
     source.rebuild.run_inline();
     assert_eq!(wake.count(), 1, "factory panic must wake the worker");
+    source.flush_deferred();
 
     // The worker's next step must reach the terminal recreate failure,
     // not loop on `Blocked(Waiting)`.

@@ -1,5 +1,11 @@
-use kithara_decode::{BlenderProfile, Decoder, GaplessMode, GaplessProfile, PcmChunk};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
+use kithara_decode::{
+    BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, GaplessMode,
+    GaplessProfile, PcmChunk,
+};
 use kithara_stream::MediaInfo;
+use tracing::warn;
 
 use crate::pipeline::gapless::GaplessStage;
 
@@ -44,6 +50,18 @@ impl DecoderGeneration {
         self.decoder.as_mut()
     }
 
+    pub(crate) fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        match catch_unwind(AssertUnwindSafe(|| self.decoder.next_chunk())) {
+            Ok(result) => result,
+            Err(payload) => {
+                warn!(panic = %panic_message(payload), "decoder panicked during next_chunk");
+                Err(DecodeError::InvalidData {
+                    detail: "decoder panicked during next_chunk",
+                })
+            }
+        }
+    }
+
     pub(crate) fn media_info(&self) -> Option<&MediaInfo> {
         self.media_info.as_ref()
     }
@@ -76,8 +94,22 @@ impl DecoderGeneration {
         self.gapless.next()
     }
 
+    pub(crate) fn has_output(&self) -> bool {
+        self.gapless.has_output()
+    }
+
     pub(crate) fn finish(&mut self) {
         self.gapless.set_tail_compensation(self.gapless_profile());
         self.gapless.flush();
+    }
+}
+
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    match payload.downcast::<String>() {
+        Ok(message) => *message,
+        Err(payload) => payload.downcast::<&'static str>().map_or_else(
+            |_| "unknown panic payload".to_string(),
+            |message| (*message).to_string(),
+        ),
     }
 }

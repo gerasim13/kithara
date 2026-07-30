@@ -15,6 +15,7 @@ use kithara_stream::{
 };
 
 use super::{coord::HlsCoord, session::HlsSession};
+use crate::config::VariantSessionMode;
 
 pub(super) struct SessionSlots {
     publication: ArcSwap<SessionPublication>,
@@ -57,10 +58,22 @@ impl ResidentSessions {
 }
 
 impl SessionSlots {
-    pub(super) fn new(active: Arc<HlsSession>) -> Self {
+    pub(super) fn new(active: Arc<HlsSession>, mode: VariantSessionMode) -> Self {
+        let (publication, exact) = match mode {
+            VariantSessionMode::Legacy => (SessionPublication::Legacy { active }, false),
+            VariantSessionMode::Exact => (
+                SessionPublication::Exact {
+                    residents: ResidentSessions::one(active),
+                },
+                true,
+            ),
+        };
         Self {
-            publication: ArcSwap::from_pointee(SessionPublication::Legacy { active }),
-            transition: Mutex::new(TransitionState::default()),
+            publication: ArcSwap::from_pointee(publication),
+            transition: Mutex::new(TransitionState {
+                exact,
+                incoming: None,
+            }),
         }
     }
 
@@ -137,7 +150,6 @@ impl SessionSlots {
     }
 }
 
-#[derive(Default)]
 struct TransitionState {
     exact: bool,
     incoming: Option<IncomingSlot>,
@@ -162,26 +174,6 @@ impl HlsCoord {
         if abort_intent {
             let _ = self.abr_publisher.abort_pending(slot.claim.ticket());
         }
-    }
-
-    pub(super) fn enable_variant_sessions(&self) -> StreamResult<()> {
-        let mut state = self.sessions.transition.lock();
-        if state.exact {
-            return Ok(());
-        }
-        if state.incoming.is_some() || !matches!(self.abr.pending_claim(), PendingAbrClaim::Absent)
-        {
-            return Err(StreamError::Source(SourceError::Io(IoError::new(
-                ErrorKind::InvalidInput,
-                "exact variant sessions must be enabled before selection intent",
-            ))));
-        }
-        let active = self.active_session();
-        active.disable_legacy_cursor_projection();
-        self.sessions.publish_exact_one(active);
-        state.exact = true;
-        drop(state);
-        Ok(())
     }
 
     pub(super) fn plan_variant_reader(&self) -> StreamResult<Option<VariantReaderPlan>> {
@@ -401,12 +393,8 @@ impl HlsCoord {
             Some(true) => {}
         }
         drop(state);
-        self.abr.notify_commit(
-            slot.claim.decision(),
-            transition.active_variant().get(),
-            self.playhead_read().position(),
-            now,
-        );
+        self.abr
+            .notify_exact_commit(slot.claim.decision(), transition.active_variant().get());
         self.signal().fire();
         VariantPromotion::Promoted
     }

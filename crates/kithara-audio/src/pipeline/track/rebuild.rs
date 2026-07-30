@@ -69,13 +69,8 @@ impl Track<RebuildingDecoder> {
     pub(crate) fn step<T: StreamType>(self, src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
         let mut rebuild = self.into_inner();
         rebuild.record_seek_preempt(src.seek_obs.as_ref(), src.seek_engine.epoch());
-        while let Some(complete) = rebuild.completion.pop() {
-            if complete.ticket == rebuild.ticket {
-                return finish_rebuild(src, rebuild, complete);
-            }
-            if let Ok(generation) = complete.result {
-                src.retired.retire_generation(generation);
-            }
+        if let Some(complete) = src.rebuild.take_replacement(rebuild.build) {
+            return finish_rebuild(src, rebuild, complete);
         }
         src.update_state(Self::new(rebuild).erase());
         TrackStep::Blocked(WaitingReason::Waiting)

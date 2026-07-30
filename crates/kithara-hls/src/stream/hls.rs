@@ -21,7 +21,7 @@ use super::{
     source::HlsSource,
 };
 use crate::{
-    config::HlsConfig,
+    config::{HlsConfig, VariantSessionMode},
     handle::StreamPeer,
     peer::HlsPeer,
     playlist::{
@@ -179,6 +179,7 @@ impl StreamType for Hls {
                 scope: stream_peer.scope(),
                 headers: config.headers.clone(),
                 emit: Arc::clone(&emit),
+                variant_sessions: config.variant_sessions,
             },
             playhead,
             seek,
@@ -208,6 +209,10 @@ impl StreamType for Hls {
 
     fn event_bus(config: &Self::Config) -> Option<Self::Events> {
         config.bus.clone()
+    }
+
+    fn use_exact_variant_sessions(config: &mut Self::Config) {
+        config.variant_sessions = VariantSessionMode::Exact;
     }
 }
 

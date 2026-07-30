@@ -16,7 +16,9 @@ use kithara_platform::{
     tokio::{runtime::Handle as RuntimeHandle, task::spawn_blocking},
 };
 use kithara_resampler::ResamplerBackend;
-use kithara_stream::{MediaInfo, OpenedReader, PlayheadRead, Stream, StreamType, WorkerWake};
+use kithara_stream::{
+    MediaInfo, OpenedReader, PlayheadRead, Stream, StreamType, VariantControl, WorkerWake,
+};
 use portable_atomic::AtomicF32;
 use tracing::{debug, info, warn};
 
@@ -117,6 +119,7 @@ struct StreamSourceRegistration<'a, T: StreamType> {
     recreate_on_host_rate_change: bool,
     runtime_handle: RuntimeHandle,
     shared_stream: SharedStream<T>,
+    variant_control: Option<Arc<dyn VariantControl>>,
     worker: Option<AudioWorkerHandle>,
 }
 
@@ -159,7 +162,7 @@ where
             decoder,
             preload_chunks,
             block_on_underrun,
-            stream: stream_config,
+            stream: mut stream_config,
             bus: config_bus,
             effects: custom_effects,
             worker: config_worker,
@@ -173,6 +176,7 @@ where
         })?;
 
         let bus = resolve_event_bus::<T>(&stream_config, config_bus);
+        T::use_exact_variant_sessions(&mut stream_config);
         let stream = create_stream_with_probe::<T>(stream_config, byte_pool.clone()).await?;
         let playhead = stream.playhead_write();
         let seek = stream.seek_control();
@@ -181,6 +185,7 @@ where
             merge_user_and_stream_media_info(user_media_info, stream.media_info());
         debug!(?initial_media_info, "Initial MediaInfo from stream");
 
+        let variant_control = stream.variant_control();
         let shared_stream = SharedStream::new(stream);
         let host_sample_rate = Arc::new(AtomicU32::new(config_host_sr.map_or(0, NonZeroU32::get)));
         warm_pcm_pool(
@@ -234,6 +239,7 @@ where
             recreate_on_host_rate_change: deps.recreates_on_host_rate_change(),
             runtime_handle,
             shared_stream,
+            variant_control,
             worker: config_worker,
         });
         publish_initial_decoder_events(
@@ -394,6 +400,7 @@ where
             handle: registration.runtime_handle,
             wake: worker_wake.clone(),
         },
+        registration.variant_control,
     );
     let source = StreamAudioSource::new(registration.shared_stream, parts)
         .with_emit(Arc::clone(&registration.emit));

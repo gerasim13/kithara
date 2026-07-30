@@ -216,15 +216,14 @@ pub(crate) fn dispatch<T: StreamType>(src: &mut StreamAudioSource<T>) -> TrackSt
 
 #[cfg(test)]
 mod tests {
-    use crossbeam_queue::ArrayQueue;
-    use kithara_platform::{sync::Arc, time::Duration};
+    use kithara_platform::time::Duration;
     use kithara_stream::MediaInfo;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::pipeline::{
         consumer::ConsumerPhase,
-        rebuild::{RebuildState, RecreateCause, RecreateNext, RecreateState},
+        rebuild::{RebuildState, RecreateCause, RecreateNext, RecreateState, state::BuildId},
         seek::{ApplySeekState, ResumeState, SeekContext, SeekMode, SeekRequest},
         track::{Track, TrackFailure, WaitContext, WaitState},
     };
@@ -250,10 +249,9 @@ mod tests {
 
     fn rebuild_state() -> RebuildState {
         RebuildState {
-            ticket: 1,
+            build: BuildId::fixture(1),
             recreate: recreate_state(),
             started_seek_epoch: 0,
-            completion: Arc::new(ArrayQueue::new(1)),
             superseded_seek: None,
         }
     }

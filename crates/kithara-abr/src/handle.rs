@@ -160,6 +160,25 @@ impl AbrHandle {
         reader_pt: Duration,
         now: Instant,
     ) {
+        self.publish_variant_applied(decision, current_before);
+        self.inner
+            .controller
+            .schedule_incoherence_watch(self.inner.peer_id, reader_pt, now);
+    }
+
+    /// Side-effects after an exact transition promoted its incoming
+    /// generation: emits `VariantApplied` via bus and nothing else.
+    ///
+    /// The caller is the audio worker, which is not a runtime thread, so this
+    /// path must not schedule async work. The stuck-reader watchdog is a
+    /// boundary-switch diagnostic and does not apply here: exact promotion
+    /// already proved the incoming reader produced staged PCM.
+    #[kithara::probe(current_before)]
+    pub fn notify_exact_commit(&self, decision: AbrDecision, current_before: usize) {
+        self.publish_variant_applied(decision, current_before);
+    }
+
+    fn publish_variant_applied(&self, decision: AbrDecision, current_before: usize) {
         let bus = self.inner.bus.read().clone();
         if let Some(bus) = bus {
             bus.publish(AbrEvent::VariantApplied {
@@ -168,9 +187,6 @@ impl AbrHandle {
                 reason: decision.reason(),
             });
         }
-        self.inner
-            .controller
-            .schedule_incoherence_watch(self.inner.peer_id, reader_pt, now);
     }
 
     /// Read-only: peek at the pending boundary commit. Mirrors
@@ -498,6 +514,46 @@ mod tests {
             reason: AbrReason::UpSwitch,
         };
         handle.notify_commit(decision, 0, Duration::ZERO, Instant::now());
+
+        let found =
+            std::iter::from_fn(|| rx.try_recv().ok()).find_map(|Envelope { event, .. }| {
+                if let Event::Abr(AbrEvent::VariantApplied { from, to, reason }) = event {
+                    assert_eq!(from, VariantIndex::new(0));
+                    assert_eq!(to, VariantIndex::new(2));
+                    assert_eq!(reason, AbrReason::UpSwitch);
+                    Some(())
+                } else {
+                    None
+                }
+            });
+        assert!(found.is_some(), "expected VariantApplied event on the bus");
+    }
+
+    /// Exact promotion runs on the audio worker, which is not a runtime
+    /// thread. Deliberately *not* a `tokio` test: a reactor here would hide a
+    /// `task::spawn` creeping back into this path.
+    #[kithara::test]
+    fn notify_exact_commit_emits_variant_applied_without_a_runtime() {
+        let controller = AbrController::with_estimator(
+            settings_fast(),
+            Arc::new(ThroughputEstimator::new()) as Arc<_>,
+            CancelToken::never(),
+        );
+        let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+        let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
+            state: Arc::clone(&state),
+        });
+
+        let bus = EventBus::new(DEFAULT_EVENT_BUS_CAPACITY);
+        let mut rx = bus.subscribe();
+        let handle = controller.register(&peer).with_bus(bus);
+
+        let decision = AbrDecision::UpSwitch {
+            from: VariantIndex::new(0),
+            to: VariantIndex::new(2),
+            reason: AbrReason::UpSwitch,
+        };
+        handle.notify_exact_commit(decision, 0);
 
         let found =
             std::iter::from_fn(|| rx.try_recv().ok()).find_map(|Envelope { event, .. }| {

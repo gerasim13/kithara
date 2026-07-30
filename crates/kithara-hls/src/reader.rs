@@ -243,7 +243,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::SizeProbeMethod,
+        config::{SizeProbeMethod, VariantSessionMode},
         playlist::{PlaylistState, SegmentState, VariantState},
         segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
         signal::SizeSignal,
@@ -369,6 +369,7 @@ mod tests {
                 headers: None,
                 emit: Arc::new(DeferredBus::new(bus.clone(), 8)),
                 signal: ctx.signal.clone(),
+                variant_sessions: VariantSessionMode::Legacy,
             },
             Arc::new(PlayheadState::new()),
             Arc::new(SeekState::new()),

@@ -1,7 +1,9 @@
 use std::sync::atomic::AtomicU64;
 
 use kithara_platform::sync::Arc;
-use kithara_stream::{Activity, PlayheadWrite, SeekControl, SeekObserve, StreamType};
+use kithara_stream::{
+    Activity, PlayheadWrite, SeekControl, SeekObserve, StreamType, VariantControl,
+};
 
 use crate::pipeline::{
     decode::{
@@ -26,6 +28,7 @@ pub(crate) struct SourceParts<T: StreamType> {
     pub(crate) seek: Arc<dyn SeekControl>,
     pub(crate) seek_engine: SeekEngine,
     pub(crate) seek_obs: Arc<dyn SeekObserve>,
+    pub(crate) variant_control: Option<Arc<dyn VariantControl>>,
 }
 
 impl<T: StreamType> SourceParts<T> {
@@ -34,6 +37,7 @@ impl<T: StreamType> SourceParts<T> {
         decode: DecodeParts,
         epoch: Arc<AtomicU64>,
         rebuild: RebuildRuntime,
+        variant_control: Option<Arc<dyn VariantControl>>,
     ) -> Self {
         let DecodeParts {
             active,
@@ -61,6 +65,7 @@ impl<T: StreamType> SourceParts<T> {
             seek: stream.seek_control(),
             seek_engine: SeekEngine::new(epoch),
             seek_obs: stream.seek_observe(),
+            variant_control,
         }
     }
 }

@@ -106,10 +106,6 @@ impl SpliceState {
 }
 
 impl VariantControl for SpliceState {
-    fn enable_variant_sessions(&self) -> StreamResult<()> {
-        Ok(())
-    }
-
     fn plan_variant_reader(&self) -> StreamResult<Option<VariantReaderPlan>> {
         Ok(None)
     }
@@ -489,6 +485,7 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
             handle: RuntimeHandle::try_current().expect("test requires tokio runtime"),
             wake: Arc::new(TestWake),
         },
+        Some(state.clone() as Arc<dyn VariantControl>),
     );
     SpliceFixture {
         source: StreamAudioSource::new(shared_stream, parts),
@@ -498,6 +495,7 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
 
 fn run_pending_rebuild_inline(source: &mut StreamAudioSource<SpliceStream>) {
     source.rebuild.run_inline();
+    source.flush_deferred();
 }
 
 fn append_left_channel(left: &mut Vec<f32>, chunk: &PcmChunk) {

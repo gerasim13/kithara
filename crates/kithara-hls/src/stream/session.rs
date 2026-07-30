@@ -19,6 +19,7 @@ use kithara_stream::{
 use self::cancel::SessionCancel;
 pub(super) use self::reader::HlsSessionReader;
 use crate::{
+    config::VariantSessionMode,
     signal::SizeSignal,
     variant::{HlsVariant, ResolvedSeekProjection, VariantReaderPreparation},
 };
@@ -26,7 +27,7 @@ use crate::{
 pub(crate) struct HlsSession {
     active: AtomicBool,
     cancel: SessionCancel,
-    legacy_cursor_projection: AtomicBool,
+    legacy_cursor_projection: bool,
     position: AtomicU64,
     readiness: SessionReadiness,
     seek: Arc<dyn SeekObserve>,
@@ -55,6 +56,7 @@ impl HlsSession {
         cancel: CancelToken,
         seek: Arc<dyn SeekObserve>,
         signal: SizeSignal,
+        mode: VariantSessionMode,
         variant_index: usize,
         variant: Arc<HlsVariant>,
         position: u64,
@@ -62,7 +64,7 @@ impl HlsSession {
         Self {
             active: AtomicBool::new(true),
             cancel: SessionCancel::new(cancel),
-            legacy_cursor_projection: AtomicBool::new(true),
+            legacy_cursor_projection: matches!(mode, VariantSessionMode::Legacy),
             position: AtomicU64::new(position),
             readiness: SessionReadiness::Active,
             seek,
@@ -86,7 +88,7 @@ impl HlsSession {
         Ok(Self {
             active: AtomicBool::new(false),
             cancel: SessionCancel::new(cancel),
-            legacy_cursor_projection: AtomicBool::new(false),
+            legacy_cursor_projection: false,
             position: AtomicU64::new(preparation.anchor().byte_offset),
             readiness: SessionReadiness::Profiled {
                 preparation: Mutex::new(preparation),
@@ -162,11 +164,6 @@ impl HlsSession {
         self.advance_from(position, bytes);
     }
 
-    pub(crate) fn disable_legacy_cursor_projection(&self) {
-        self.legacy_cursor_projection
-            .store(false, Ordering::Release);
-    }
-
     fn projected_position(&self) -> SessionPosition {
         let provisional = self.position.load(Ordering::Acquire);
         let Some(projection) = self.variant.resolved_seek_projection(provisional) else {
@@ -240,7 +237,7 @@ impl HlsSession {
     pub(crate) fn seek_to_byte(&self, position: u64) {
         let previous = self.position.swap(position, Ordering::AcqRel);
         let moved = previous != position;
-        if self.legacy_cursor_projection.load(Ordering::Acquire) {
+        if self.legacy_cursor_projection {
             self.variant.project_session_seek(position, moved);
         } else {
             self.variant.register_session_seek(position, moved);
@@ -251,7 +248,7 @@ impl HlsSession {
         &self,
         position: Duration,
     ) -> StreamResult<Option<SourceSeekAnchor>> {
-        let anchor = if self.legacy_cursor_projection.load(Ordering::Acquire) {
+        let anchor = if self.legacy_cursor_projection {
             self.variant.seek_time_anchor(position)?
         } else {
             self.variant.prepare_seek_time_anchor(position)?

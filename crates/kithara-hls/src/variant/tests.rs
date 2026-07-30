@@ -30,7 +30,7 @@ use super::{
     HlsVariant, PlanCtx, SegmentActivateParams, SizeDemand, VariantParts, segment_placeholder_size,
 };
 use crate::{
-    config::SizeProbeMethod,
+    config::{SizeProbeMethod, VariantSessionMode},
     ids::SegmentIndex,
     playlist::{PlaylistState, SegmentState, VariantState},
     segment::{
@@ -1307,6 +1307,7 @@ fn exact_seek_session() -> (Arc<HlsVariant>, HlsSession, u64) {
         CancelToken::never(),
         seek,
         ctx.signal.clone(),
+        VariantSessionMode::Exact,
         0,
         Arc::clone(&v),
         stale_anchor,
@@ -1436,6 +1437,7 @@ fn late_rebuild_at_time_does_not_reopen_consumed_exact_seek_projection() {
         CancelToken::never(),
         seek,
         ctx.signal.clone(),
+        VariantSessionMode::Exact,
         0,
         Arc::clone(&v),
         stale_anchor,
@@ -1688,11 +1690,11 @@ fn exact_session_seek_uses_the_session_cursor_to_detect_movement() {
         CancelToken::never(),
         seek,
         ctx.signal.clone(),
+        VariantSessionMode::Exact,
         0,
         Arc::clone(&v),
         stale_projection,
     );
-    session.disable_legacy_cursor_projection();
     session.advance(1);
 
     session.seek_to_byte(stale_projection);
@@ -1721,12 +1723,11 @@ fn exact_session_time_seek_does_not_project_the_legacy_variant_cursor() {
         CancelToken::never(),
         Arc::new(SeekState::new()),
         ctx.signal.clone(),
+        VariantSessionMode::Exact,
         0,
         Arc::clone(&v),
         legacy_position,
     );
-    session.disable_legacy_cursor_projection();
-
     let anchor = session
         .seek_time_anchor(Duration::from_secs(4))
         .expect("seek anchor")

@@ -26,6 +26,7 @@ use kithara_test_utils::kithara;
 
 use super::{session::HlsSession, transition::SessionSlots};
 use crate::{
+    config::VariantSessionMode,
     playlist::{PlaylistAccess, PlaylistState},
     signal::SizeSignal,
     variant::{HlsVariant, PlanCtx, SegmentActivateParams},
@@ -57,6 +58,8 @@ pub(crate) struct HlsCoordEnv {
     /// signals use [`SizeSignal::fire_ready_only`]. See `CONTEXT.md`
     /// "Event-driven read wait".
     pub(crate) signal: SizeSignal,
+    /// Variant-session ownership fixed before downloader registration.
+    pub(crate) variant_sessions: VariantSessionMode,
 }
 
 /// Coordinator over fixed variants and one authoritative active reader session.
@@ -155,6 +158,7 @@ impl HlsCoord {
             env.cancel.child(),
             Arc::clone(&seek_obs),
             env.signal.clone(),
+            env.variant_sessions,
             active_index,
             Arc::clone(&active_variant),
             active_variant.get_position(),
@@ -175,7 +179,7 @@ impl HlsCoord {
             variant_generation: AtomicU64::new(0),
             fence_at: AtomicU64::new(0),
             fence_target: AtomicUsize::new(0),
-            sessions: SessionSlots::new(active_session),
+            sessions: SessionSlots::new(active_session, env.variant_sessions),
             signal: env.signal,
         }
     }
@@ -330,6 +334,7 @@ impl HlsCoord {
             self.cancel.child(),
             Arc::clone(&self.seek_obs),
             self.signal.clone(),
+            VariantSessionMode::Legacy,
             new_v,
             Arc::clone(v_new),
             active_position,
@@ -848,10 +853,6 @@ fn variant_switch_uses_byte_continuity(
 /// methods — non-adaptive sources vend `None` instead of implementing
 /// these.
 impl VariantControl for HlsCoord {
-    fn enable_variant_sessions(&self) -> StreamResult<()> {
-        Self::enable_variant_sessions(self)
-    }
-
     fn plan_variant_reader(&self) -> StreamResult<Option<VariantReaderPlan>> {
         Self::plan_variant_reader(self)
     }
@@ -954,7 +955,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::SizeProbeMethod,
+        config::{SizeProbeMethod, VariantSessionMode},
         playlist::{PlaylistState, SegmentState, VariantState},
         segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
         variant::{PlanCtx, VariantParts},
@@ -975,7 +976,9 @@ mod tests {
         }
     }
 
-    fn switch_coord() -> (Arc<HlsCoord>, EventBus, PlanCtx, Arc<AbrState>) {
+    fn switch_coord_with_mode(
+        mode: VariantSessionMode,
+    ) -> (Arc<HlsCoord>, EventBus, PlanCtx, Arc<AbrState>) {
         let bus = EventBus::new(8);
         let cancel = CancelToken::never();
         let store = Arc::new(
@@ -1104,9 +1107,7 @@ mod tests {
             CancelToken::never(),
         ));
         let handle = controller.register(&peer);
-        handle
-            .set_mode(AbrMode::Manual(VariantIndex::new(1)))
-            .expect("manual target in range");
+        abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
         let coord = Arc::new(HlsCoord::new(
             HlsCoordEnv {
                 scope: ctx.scope.clone(),
@@ -1114,6 +1115,7 @@ mod tests {
                 headers: None,
                 emit: Arc::new(DeferredBus::new(bus.clone(), 8)),
                 signal,
+                variant_sessions: mode,
             },
             Arc::new(PlayheadState::new()),
             Arc::new(SeekState::new()),
@@ -1123,6 +1125,14 @@ mod tests {
             playlist,
         ));
         (coord, bus, ctx, abr_state)
+    }
+
+    fn switch_coord() -> (Arc<HlsCoord>, EventBus, PlanCtx, Arc<AbrState>) {
+        switch_coord_with_mode(VariantSessionMode::Exact)
+    }
+
+    fn legacy_switch_coord() -> (Arc<HlsCoord>, EventBus, PlanCtx, Arc<AbrState>) {
+        switch_coord_with_mode(VariantSessionMode::Legacy)
     }
 
     fn incremental_profile(read_ahead_bytes: u64) -> ReaderProfile {
@@ -1141,20 +1151,6 @@ mod tests {
             return Ok(None);
         };
         VariantControl::prepare_variant_reader(coord, plan, profile)
-    }
-
-    fn enable_exact_sessions(coord: &HlsCoord) {
-        if let Some(pending) = coord.abr.claim_pending_decision() {
-            assert!(coord.abr_publisher.abort_pending(pending.ticket()));
-        }
-        coord
-            .enable_variant_sessions()
-            .expect("enable exact sessions before intent");
-    }
-
-    fn enable_exact_target(coord: &HlsCoord, abr_state: &AbrState) {
-        enable_exact_sessions(coord);
-        abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
     }
 
     fn take_ready_incremental_reader(
@@ -1238,7 +1234,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn variant_switch_fence_and_ack_publish_events() {
-        let (coord, bus, ctx, _abr_state) = switch_coord();
+        let (coord, bus, ctx, _abr_state) = legacy_switch_coord();
         let mut events = bus.subscribe();
 
         assert!(coord.commit_variant_switch_at_segment(&ctx, 0));
@@ -1263,9 +1259,33 @@ mod tests {
     }
 
     #[kithara::test]
+    fn exact_session_mode_starts_with_one_resident_and_rejects_legacy_commit() {
+        let (coord, _bus, ctx, _abr_state) = switch_coord();
+
+        assert_eq!(coord.sessions.resident_count(), 1);
+        assert!(!coord.commit_variant_switch_at_segment(&ctx, 0));
+        assert_eq!(coord.variant_index(), 0);
+    }
+
+    #[kithara::test(tokio)]
+    async fn legacy_session_mode_commits_boundary_switch_and_rejects_exact_plan() {
+        let (coord, _bus, ctx, _abr_state) = legacy_switch_coord();
+
+        let error = coord
+            .plan_variant_reader()
+            .expect_err("legacy mode must reject exact reader planning");
+        assert!(matches!(
+            error,
+            StreamError::Source(SourceError::Io(ref error))
+                if error.kind() == ErrorKind::InvalidInput
+        ));
+        assert!(coord.commit_variant_switch_at_segment(&ctx, 0));
+        assert_eq!(coord.variant_index(), 1);
+    }
+
+    #[kithara::test]
     fn variant_reader_plan_exposes_target_facts_before_session_creation() {
-        let (coord, _bus, _ctx, abr_state) = switch_coord();
-        enable_exact_target(&coord, &abr_state);
+        let (coord, _bus, _ctx, _abr_state) = switch_coord();
 
         let plan = coord
             .plan_variant_reader()
@@ -1291,7 +1311,6 @@ mod tests {
     #[kithara::test]
     fn stale_variant_reader_plan_cannot_open_a_newer_intent() {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
-        enable_exact_target(&coord, &abr_state);
         let stale = coord
             .plan_variant_reader()
             .expect("plan first incoming")
@@ -1324,7 +1343,6 @@ mod tests {
     #[kithara::test]
     fn promotion_distinguishes_deferred_from_stale_transition() {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
-        enable_exact_target(&coord, &abr_state);
         let plan = coord
             .plan_variant_reader()
             .expect("plan incoming")
@@ -1351,8 +1369,7 @@ mod tests {
 
     #[kithara::test]
     fn incoming_session_does_not_publish_variant_or_cursor_before_promotion() {
-        let (coord, _bus, _ctx, abr_state) = switch_coord();
-        enable_exact_target(&coord, &abr_state);
+        let (coord, _bus, _ctx, _abr_state) = switch_coord();
         coord.set_position(17);
 
         let transition = prepare_incoming(&coord, incremental_profile(32))
@@ -1376,8 +1393,7 @@ mod tests {
 
     #[kithara::test]
     fn exact_session_resolution_follows_the_committed_abr_selector_before_collapse() {
-        let (coord, _bus, _ctx, abr_state) = switch_coord();
-        enable_exact_target(&coord, &abr_state);
+        let (coord, _bus, _ctx, _abr_state) = switch_coord();
         prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
@@ -1397,8 +1413,7 @@ mod tests {
 
     #[kithara::test]
     fn exact_session_resolution_retries_a_stale_selector_snapshot() {
-        let (coord, _bus, _ctx, abr_state) = switch_coord();
-        enable_exact_target(&coord, &abr_state);
+        let (coord, _bus, _ctx, _abr_state) = switch_coord();
         prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
@@ -1416,8 +1431,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn incoming_readiness_tracks_required_bytes_not_delivery_chunks() {
-        let (coord, _bus, ctx, abr_state) = switch_coord();
-        enable_exact_target(&coord, &abr_state);
+        let (coord, _bus, ctx, _abr_state) = switch_coord();
         coord.set_position(17);
         let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
@@ -1481,8 +1495,7 @@ mod tests {
 
     #[kithara::test]
     fn promotion_requires_the_exact_taken_reader() {
-        let (coord, _bus, _ctx, abr_state) = switch_coord();
-        enable_exact_target(&coord, &abr_state);
+        let (coord, _bus, _ctx, _abr_state) = switch_coord();
         let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
@@ -1497,8 +1510,7 @@ mod tests {
 
     #[kithara::test]
     fn one_transition_rejects_a_different_reader_profile() {
-        let (coord, _bus, _ctx, abr_state) = switch_coord();
-        enable_exact_target(&coord, &abr_state);
+        let (coord, _bus, _ctx, _abr_state) = switch_coord();
         let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
@@ -1522,7 +1534,6 @@ mod tests {
     #[kithara::test]
     fn stale_same_target_identity_cannot_disturb_newer_incoming() {
         let (coord, _bus, ctx, abr_state) = switch_coord();
-        enable_exact_target(&coord, &abr_state);
         let stale = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare first incoming")
             .expect("first pending switch");
@@ -1574,7 +1585,6 @@ mod tests {
     #[kithara::test]
     fn exact_session_mode_never_falls_back_to_legacy_commit() {
         let (coord, _bus, ctx, abr_state) = switch_coord();
-        enable_exact_target(&coord, &abr_state);
         let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
@@ -1589,8 +1599,7 @@ mod tests {
 
     #[kithara::test]
     fn locked_exact_intent_keeps_its_incoming_session() {
-        let (coord, _bus, _ctx, abr_state) = switch_coord();
-        enable_exact_target(&coord, &abr_state);
+        let (coord, _bus, _ctx, _abr_state) = switch_coord();
         let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
@@ -1611,8 +1620,7 @@ mod tests {
 
     #[kithara::test]
     fn locked_exact_intent_rejects_a_reader_profile_change() {
-        let (coord, _bus, _ctx, abr_state) = switch_coord();
-        enable_exact_target(&coord, &abr_state);
+        let (coord, _bus, _ctx, _abr_state) = switch_coord();
         prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
@@ -1631,8 +1639,7 @@ mod tests {
 
     #[kithara::test]
     fn locked_exact_intent_rejects_a_different_reader_plan() {
-        let (coord, _bus, _ctx, abr_state) = switch_coord();
-        enable_exact_target(&coord, &abr_state);
+        let (coord, _bus, _ctx, _abr_state) = switch_coord();
         let plan = coord
             .plan_variant_reader()
             .expect("plan incoming")
@@ -1660,8 +1667,7 @@ mod tests {
 
     #[kithara::test]
     fn locked_plan_drops_an_incoming_from_an_old_seek_epoch() {
-        let (coord, _bus, _ctx, abr_state) = switch_coord();
-        enable_exact_target(&coord, &abr_state);
+        let (coord, _bus, _ctx, _abr_state) = switch_coord();
         let plan = coord
             .plan_variant_reader()
             .expect("plan incoming")
@@ -1681,8 +1687,7 @@ mod tests {
 
     #[kithara::test]
     fn ready_stale_plan_drops_old_epoch_incoming_without_deleting_selection() {
-        let (coord, _bus, _ctx, abr_state) = switch_coord();
-        enable_exact_target(&coord, &abr_state);
+        let (coord, _bus, _ctx, _abr_state) = switch_coord();
         let plan = coord
             .plan_variant_reader()
             .expect("plan incoming")
@@ -1711,42 +1716,22 @@ mod tests {
     }
 
     #[kithara::test]
-    fn exact_session_mode_is_enabled_before_selection_intent() {
-        let (coord, _bus, ctx, abr_state) = switch_coord();
-        let pending = coord
-            .abr
-            .claim_pending_decision()
-            .expect("fixture pending intent");
+    fn exact_session_mode_accepts_intent_created_before_coord() {
+        let (coord, _bus, ctx, _abr_state) = switch_coord();
+        let plan = coord
+            .plan_variant_reader()
+            .expect("plan pre-existing exact intent")
+            .expect("fixture requested target before coord construction");
 
-        let error = coord
-            .enable_variant_sessions()
-            .expect_err("late activation must not race a pending intent");
-        assert!(matches!(
-            error,
-            StreamError::Source(SourceError::Io(ref error))
-                if error.kind() == ErrorKind::InvalidInput
-        ));
-        assert_eq!(coord.abr.claim_pending_decision(), Some(pending));
-
-        assert!(coord.abr_publisher.abort_pending(pending.ticket()));
-        coord
-            .enable_variant_sessions()
-            .expect("enable before selection");
-        abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
-
+        assert_eq!(plan.transition().active_variant(), VariantIndex::new(0));
+        assert_eq!(plan.transition().incoming_variant(), VariantIndex::new(1));
         assert!(!coord.commit_variant_switch_at_segment(&ctx, 0));
         assert_eq!(coord.variant_index(), 0);
-        assert!(
-            prepare_incoming(&coord, incremental_profile(32))
-                .expect("claim exact transition")
-                .is_some()
-        );
     }
 
     #[kithara::test]
     fn terminal_exact_preparation_error_aborts_its_claim() {
         let (coord, _bus, ctx, abr_state) = switch_coord();
-        enable_exact_sessions(&coord);
         abr_state.set_mode(AbrMode::Auto(Some(VariantIndex::new(0))));
         abr_state.request_target(VariantIndex::new(9), AbrReason::UpSwitch);
 
@@ -1776,8 +1761,7 @@ mod tests {
 
     #[kithara::test]
     fn seek_aborts_the_exact_incoming_session() {
-        let (coord, _bus, _ctx, abr_state) = switch_coord();
-        enable_exact_target(&coord, &abr_state);
+        let (coord, _bus, _ctx, _abr_state) = switch_coord();
         let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
@@ -1796,8 +1780,7 @@ mod tests {
 
     #[kithara::test]
     fn seek_replaces_the_session_without_deleting_manual_selection() {
-        let (coord, _bus, _ctx, abr_state) = switch_coord();
-        enable_exact_target(&coord, &abr_state);
+        let (coord, _bus, _ctx, _abr_state) = switch_coord();
         let claim = coord
             .abr
             .claim_pending_decision()
@@ -1821,7 +1804,6 @@ mod tests {
     #[kithara::test]
     fn seek_replaces_the_session_without_deleting_automatic_selection() {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
-        enable_exact_sessions(&coord);
         abr_state.set_mode(AbrMode::Auto(Some(VariantIndex::new(0))));
         abr_state.request_target(VariantIndex::new(1), AbrReason::UpSwitch);
         let claim = coord
@@ -1847,7 +1829,6 @@ mod tests {
     #[kithara::test]
     fn seek_selection_reads_the_pending_target_while_abr_is_locked() {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
-        enable_exact_sessions(&coord);
         abr_state.set_mode(AbrMode::Auto(Some(VariantIndex::new(0))));
         abr_state.request_target(VariantIndex::new(1), AbrReason::UpSwitch);
         coord.abr.lock();
@@ -1861,8 +1842,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn seek_epoch_rejects_taken_generation_and_preserves_its_selection() {
-        let (coord, _bus, ctx, abr_state) = switch_coord();
-        enable_exact_target(&coord, &abr_state);
+        let (coord, _bus, ctx, _abr_state) = switch_coord();
         let claim = coord
             .abr
             .claim_pending_decision()

@@ -1,5 +1,5 @@
 use kithara_decode::PcmChunk;
-use kithara_events::{AudioEvent, DecoderChangeCause, DecoderEvent, FrameDomain};
+use kithara_events::{AudioEvent, DecoderChangeCause};
 use kithara_stream::{SourcePhase, StreamType};
 use tracing::{debug, warn};
 
@@ -8,25 +8,20 @@ use super::{
     TrackStep, WaitContext, WaitState, WaitingForSource, WaitingReason, fsm::apply_seek_transition,
     rebuild::start_recreating_decoder,
 };
-use crate::{
-    audio::event::{
-        DecoderChangedEventData, decoder_changed_event, decoder_gapless_event,
-        map_playback_resampler_kind, map_resampler_kind,
+use crate::pipeline::{
+    decode::{
+        event::{GenerationInstalled, enqueue_generation_installed},
+        format::{FormatDecision, detect},
+        gate::recreate_phase,
+        resume::seek_position,
     },
-    pipeline::{
-        decode::{
-            format::{FormatDecision, detect},
-            gate::recreate_phase,
-            resume::seek_position,
-        },
-        rebuild::{
-            DecoderRebuildComplete, RebuildState, RecreateCause, RecreateNext, RecreateOutcome,
-            RecreateState,
-            policy::{classify, observed_seek, superseded},
-        },
-        seek::{ResumeState, SeekRequest, engine::SeekTransition},
-        source::StreamAudioSource,
+    rebuild::{
+        DecoderBuildComplete, RebuildState, RecreateCause, RecreateNext, RecreateOutcome,
+        RecreateState,
+        policy::{classify, observed_seek, superseded},
     },
+    seek::{ResumeState, SeekRequest, engine::SeekTransition},
+    source::StreamAudioSource,
 };
 
 fn decoder_change_cause(cause: RecreateCause) -> DecoderChangeCause {
@@ -35,50 +30,6 @@ fn decoder_change_cause(cause: RecreateCause) -> DecoderChangeCause {
         RecreateCause::RouteChange => DecoderChangeCause::HostRateChange,
         RecreateCause::VariantSwitch => DecoderChangeCause::VariantSwitch,
     }
-}
-
-fn decoder_resampler_event<T: StreamType>(
-    src: &StreamAudioSource<T>,
-    media_info: &kithara_stream::MediaInfo,
-    spec: kithara_decode::PcmSpec,
-) -> Option<DecoderEvent> {
-    if !src.resume.recreates_on_route() {
-        return None;
-    }
-    let output_rate = src.resume.host_rate();
-    if output_rate == 0 {
-        return None;
-    }
-    let input_rate = media_info
-        .sample_rate
-        .or_else(|| (spec.sample_rate.get() == output_rate).then_some(spec.sample_rate.get()))?;
-    Some(DecoderEvent::ResamplerConfigured {
-        backend: map_resampler_kind(src.playback_resampler_backend),
-        input_rate,
-        output_rate,
-        channels: spec.channels,
-        bypassed: input_rate == output_rate,
-    })
-}
-
-fn playback_resampler_event<T: StreamType>(
-    src: &StreamAudioSource<T>,
-    media_info: &kithara_stream::MediaInfo,
-    spec: kithara_decode::PcmSpec,
-) -> Option<AudioEvent> {
-    let host_sample_rate = src.resume.host_rate();
-    if host_sample_rate == 0 {
-        return None;
-    }
-    let source_sample_rate = media_info.sample_rate.or_else(|| {
-        (spec.sample_rate.get() == host_sample_rate).then_some(spec.sample_rate.get())
-    })?;
-    Some(AudioEvent::PlaybackResamplerConfigured {
-        backend: map_playback_resampler_kind(src.playback_resampler_backend),
-        host_sample_rate,
-        source_sample_rate,
-        active: host_sample_rate != source_sample_rate && src.playback_resampler_backend != "none",
-    })
 }
 
 fn finish_route_change_after_recreate<T: StreamType>(
@@ -221,7 +172,7 @@ pub(super) fn finish_recreate_outcome<T: StreamType>(
 pub(super) fn finish_rebuild<T: StreamType>(
     src: &mut StreamAudioSource<T>,
     rebuild: RebuildState,
-    complete: DecoderRebuildComplete,
+    complete: DecoderBuildComplete,
 ) -> TrackStep<PcmChunk> {
     if superseded(&src.shared_stream, src.seek_obs.as_ref(), &rebuild) {
         if let Ok(generation) = complete.result {
@@ -235,8 +186,6 @@ pub(super) fn finish_rebuild<T: StreamType>(
         Err(outcome) => return finish_recreate_outcome(src, recreate, outcome),
     };
     let duration = generation.decoder().duration();
-    let spec = generation.decoder().spec();
-    let track_info = generation.decoder().track_info();
     let old = src.decode.replace_active(generation);
     src.retired.retire_generation(old);
     debug!(
@@ -245,33 +194,18 @@ pub(super) fn finish_rebuild<T: StreamType>(
         "Decoder recreated successfully"
     );
     if let Some(ref emit) = src.emit {
-        emit.enqueue(
-            decoder_changed_event(DecoderChangedEventData {
+        enqueue_generation_installed(
+            emit,
+            &GenerationInstalled {
                 backend: src.decoder_backend,
-                media_info: Some(&recreate.media_info),
-                spec,
-                track_info: &track_info,
-                epoch: src.seek_obs.epoch(),
                 cause: decoder_change_cause(recreate.cause),
-                base_offset: recreate.offset,
-                duration,
-            })
-            .into(),
+                epoch: src.seek_obs.epoch(),
+                generation: src.decode.active(),
+                host_sample_rate: src.resume.host_rate(),
+                playback_resampler_backend: src.playback_resampler_backend,
+                recreates_on_route: src.resume.recreates_on_route(),
+            },
         );
-        if let Some(event) = decoder_gapless_event(
-            Some(&recreate.media_info),
-            spec,
-            &track_info,
-            FrameDomain::Output,
-        ) {
-            emit.enqueue(kithara_events::Event::from(event));
-        }
-        if let Some(event) = decoder_resampler_event(src, &recreate.media_info, spec) {
-            emit.enqueue(kithara_events::Event::from(event));
-        }
-        if let Some(event) = playback_resampler_event(src, &recreate.media_info, spec) {
-            emit.enqueue(kithara_events::Event::from(event));
-        }
     }
     let outcome = if recreate_resumes_decode_head(&recreate) {
         finish_format_boundary_rebuild(src)

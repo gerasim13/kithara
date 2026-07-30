@@ -4,6 +4,6 @@ pub(crate) mod retire;
 pub(crate) mod state;
 
 pub(crate) use state::{
-    DecoderRebuildComplete, RebuildState, RecreateCause, RecreateNext, RecreateOutcome,
-    RecreateState,
+    DecoderBuildComplete, DecoderBuildPurpose, RebuildState, RecreateCause, RecreateNext,
+    RecreateOutcome, RecreateState,
 };
