@@ -3486,6 +3486,75 @@ public func FfiConverterTypeSeekCallback_lower(_ value: SeekCallback) -> UInt64 
 
 
 /**
+ * Domain-scoped query parameters that identify progressive-file content.
+ */
+public struct FfiCacheIdentityRule: Equatable, Hashable {
+    /**
+     * Exact hosts, `*.domain` subdomain patterns, or `*`.
+     */
+    public let domains: [String]
+    /**
+     * Query parameter names included in the cache identity.
+     */
+    public let queryParameters: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Exact hosts, `*.domain` subdomain patterns, or `*`.
+         */domains: [String],
+        /**
+         * Query parameter names included in the cache identity.
+         */queryParameters: [String]) {
+        self.domains = domains
+        self.queryParameters = queryParameters
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiCacheIdentityRule: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiCacheIdentityRule: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiCacheIdentityRule {
+        return
+            try FfiCacheIdentityRule(
+                domains: FfiConverterSequenceString.read(from: &buf),
+                queryParameters: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiCacheIdentityRule, into buf: inout [UInt8]) {
+        FfiConverterSequenceString.write(value.domains, into: &buf)
+        FfiConverterSequenceString.write(value.queryParameters, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiCacheIdentityRule_lift(_ buf: RustBuffer) throws -> FfiCacheIdentityRule {
+    return try FfiConverterTypeFfiCacheIdentityRule.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiCacheIdentityRule_lower(_ value: FfiCacheIdentityRule) -> RustBuffer {
+    return FfiConverterTypeFfiCacheIdentityRule.lower(value)
+}
+
+
+/**
  * FFI-friendly per-item configuration. All fields immutable after
  * [`crate::item::AudioPlayerItem::new`].
  */
@@ -8196,6 +8265,31 @@ fileprivate struct FfiConverterSequenceTypeAudioPlayerItem: FfiConverterRustBuff
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeFfiCacheIdentityRule: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiCacheIdentityRule]
+
+    public static func write(_ value: [FfiCacheIdentityRule], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiCacheIdentityRule.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiCacheIdentityRule] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiCacheIdentityRule]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiCacheIdentityRule.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeFfiKeyRule: FfiConverterRustBuffer {
     typealias SwiftType = [FfiKeyRule]
 
@@ -8337,6 +8431,19 @@ public func FfiConverterTypeTrackId_lower(_ value: TrackId) -> UInt64 {
     return FfiConverterTypeTrackId.lower(value)
 }
 
+/**
+ * Create a Rust-owned query-aware layout.
+ *
+ * Register the returned layout through the ordinary asset-layout registry
+ * for each playback protocol that should use it.
+ */
+public func queryIdentityLayout(rules: [FfiCacheIdentityRule]) -> FfiAssetLayout  {
+    return try!  FfiConverterTypeFfiAssetLayout_lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_func_query_identity_layout(
+        FfiConverterSequenceTypeFfiCacheIdentityRule.lower(rules),$0
+    )
+})
+}
 public func initLogging(level: UInt8)  {try! rustCall() {
     uniffi_kithara_ffi_fn_func_init_logging(
         FfiConverterUInt8.lower(level),$0
@@ -8376,6 +8483,9 @@ private let initializationResult: InitializationResult = {
     let scaffolding_contract_version = ffi_kithara_ffi_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_func_query_identity_layout() != 9390) {
+        return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_func_init_logging() != 43995) {
         return InitializationResult.apiChecksumMismatch

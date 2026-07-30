@@ -54,7 +54,9 @@ The crate's public surface is `Hls`, `HlsConfig`, `HlsSource`, the playlist pars
 <tr><td><code>PlaylistState</code>, <code>SegmentState</code>, <code>VariantState</code></td><td>types</td><td>Runtime view into playlist and segment state for the player / ABR</td></tr>
 </table>
 
-Re-exports: `AbrMode` from `kithara-abr`; `KeyProcessor`, `KeyProcessorRegistry`, `KeyProcessorRule` from `kithara-drm`.
+Re-exports: `AbrMode` from `kithara-abr`; `KeyProcessor`,
+`KeyProcessorRegistry`, `KeyRequestResolver`, and `PreparedKeyRequest` from
+`kithara-drm`.
 
 ## ABR and Variant Switching
 
@@ -137,10 +139,18 @@ It returns `Err(FormatChangeNotApplicable)` when the variant was activated by `a
 ## Encryption (AES-128-CBC)
 
 Encrypted segments parse `#EXT-X-KEY` from the media playlist; `KeyStore`
-resolves the key URL (with `KeyProcessorRule`-driven rewriting if configured)
-and the asset store decrypts ciphertext during the writer's commit before a
-reader becomes ready. URIs in `#EXT-X-KEY` are resolved relative to the
-**segment** URL, not the media-playlist URL.
+resolves the key URL and asks `KeyProcessorRegistry` for an optional
+`PreparedKeyRequest`. The registry contains opaque resolvers and knows nothing
+about domains or providers. Domain matching and request shaping are supplied by
+the higher-level `kithara-play` policy. The asset store decrypts segment
+ciphertext during the writer's commit before a reader becomes ready. URIs in
+`#EXT-X-KEY` are resolved relative to the **segment** URL, not the
+media-playlist URL.
+
+The original key URL owns memory and persistent cache identity. A prepared URL
+is used only for the wire request. Resolver preparation happens inside the
+per-resource transaction after memory and persistent-cache rechecks, so a
+cache hit never creates fresh salt or processor state.
 
 Every final AES-128 key, whether used directly or produced by a provider
 processor, is validated as exactly 16 bytes before it enters session memory or

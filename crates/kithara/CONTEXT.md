@@ -175,7 +175,7 @@ coordination shapes) · [`docs/workflows/rust-ai.md`](../../docs/workflows/rust-
 | [`kithara-storage`](../kithara-storage/CONTEXT.md) | blocking-coordination diagram, Mmap-vs-Mem table, chunked atomic claim, Condvar/RangeSet sync, redundant_reexport audit |
 | [`kithara-assets`](../kithara-assets/CONTEXT.md) | key-mapping rules, decorator chain + sequence diagram, index persistence (pins/LRU/availability), byte-availability SSoT, Pending/Ready gate, consumer-demand single-producer |
 | [`kithara-net`](../kithara-net/CONTEXT.md) | decorator/`NetExt` composition, `NetOptions` timeout semantics + defaults, four trait-bridge conversions |
-| [`kithara-drm`](../kithara-drm/CONTEXT.md) | in-place AES-128-CBC chunk/PKCS7 commit lifecycle, KeyStore IV-derivation/key-unwrap, DomainMatcher table + registry ordering |
+| [`kithara-drm`](../kithara-drm/CONTEXT.md) | in-place AES-128-CBC chunk/PKCS7 commit lifecycle, KeyStore IV derivation/key unwrap, and opaque key-request resolver registry |
 | [`kithara-events`](../kithara-events/CONTEXT.md) | per-feature gating table, trait-bridge conversions, integration/consumer list |
 | [`kithara-abr`](../kithara-abr/CONTEXT.md) | ABR decision rules, EWMA throughput, initial-seed contract, `current_variant_index` two-writer invariant, decision-flow diagram, bench |
 | [`kithara-file`](../kithara-file/CONTEXT.md) | arch diagram, peer/writer/EOF readiness-probe contract, local/remote source orchestration |

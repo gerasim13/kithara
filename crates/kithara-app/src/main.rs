@@ -130,6 +130,7 @@ fn main() -> AppResult {
         .backend(StorageBackend::default())
         .pool(byte_pool.clone())
         .flush_hub(flush_hub)
+        .layouts(baked::build_baked_asset_layouts())
         .build();
     let config = AppConfig::builder()
         .downloader(downloader)

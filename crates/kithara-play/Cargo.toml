@@ -88,6 +88,7 @@ kithara-assets = { workspace = true }
 kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
+kithara-drm = { workspace = true }
 kithara-events = { workspace = true }
 kithara-file = { workspace = true, default-features = false }
 kithara-hls = { workspace = true, default-features = false }
@@ -105,11 +106,13 @@ fieldwork = { workspace = true }
 
 # Audio engine
 firewheel = { workspace = true }
+hex = { workspace = true }
 num-traits = { workspace = true }
 portable-atomic = { workspace = true }
 
 # Async & channels
 ringbuf = { workspace = true }
+sha2 = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 thunderdome = { workspace = true }
@@ -129,6 +132,8 @@ firewheel-web-audio = { workspace = true, optional = true }
 kithara-audio = { workspace = true, features = ["probe"] }
 kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "probe"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+
+bytes = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

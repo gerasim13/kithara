@@ -7,7 +7,7 @@ use kithara::{
     audio::generate_log_spaced_bands,
     bufpool::Region,
     events::ScopeLabel,
-    hls::{KeyOptions, KeyProcessorRegistry, KeyProcessorRule},
+    hls::{KeyOptions, KeyProcessorRegistry},
     net::{HttpClient, NetOptions},
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
@@ -18,6 +18,7 @@ use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
 };
+use kithara_play::policy::{DomainKeyPolicy, DomainKeyRule};
 use kithara_queue::{Queue, QueueConfig, QueueError, RepeatMode, TrackSource, Transition};
 
 use super::salt;
@@ -53,14 +54,9 @@ fn default_net_options(byte_pool: BytePool) -> NetOptions {
         .build()
 }
 
-/// Build a core-level [`KeyProcessorRule`] from an FFI rule. Wraps
-/// the rule's salt into a [`KeyRequestFactory`] so each fetch
-/// produces the salt + processor pair atomically. If the FFI caller
-/// pinned a salt via [`FfiKeyRule::salt`], we honour it (legacy
-/// behaviour — same salt every time); otherwise we synthesise an
-/// empty salt and leave per-request rotation to a higher layer.
-fn build_processor_rule(rule: FfiKeyRule) -> KeyProcessorRule {
+fn build_processor_rule(rule: FfiKeyRule) -> DomainKeyRule {
     let processor = rule.processor;
+    // A caller-provided salt remains fixed for legacy FFI compatibility.
     let salt_template = rule.salt.unwrap_or_default();
     let factory: KeyRequestFactory = Arc::new(move || {
         let salt = salt_template.clone();
@@ -69,7 +65,7 @@ fn build_processor_rule(rule: FfiKeyRule) -> KeyProcessorRule {
         let proc = build_processor_closure(Arc::clone(&processor), salt);
         KeyRequest::new(headers, proc)
     });
-    KeyProcessorRule::for_domains(&rule.domains, factory)
+    DomainKeyRule::for_domains(&rule.domains, factory)
         .maybe_headers(rule.headers)
         .maybe_query_params(rule.query_params)
         .build()
@@ -86,6 +82,7 @@ fn build_initial_key_state(
     }
     let mut registry = KeyProcessorRegistry::new();
     let mut player_headers: HashMap<String, String> = HashMap::new();
+    let mut rules = Vec::with_capacity(ffi.rules.len());
     for r in ffi.rules {
         if let Some(headers) = r.headers.as_ref() {
             for (k, v) in headers {
@@ -95,8 +92,9 @@ fn build_initial_key_state(
         if let Some(salt) = r.salt.as_ref() {
             player_headers.insert(SALT_HEADER.to_string(), salt.clone());
         }
-        registry.add(build_processor_rule(r));
+        rules.push(build_processor_rule(r));
     }
+    registry.register(Arc::new(DomainKeyPolicy::new(rules)));
     let key_options = KeyOptions::builder().key_registry(registry).build();
     (key_options, player_headers)
 }
@@ -516,7 +514,7 @@ impl NativeInner {
         let processor_rule = build_processor_rule(rule);
         let mut opts = self.key_options.lock();
         let mut registry = opts.key_registry.take().unwrap_or_default();
-        registry.add(processor_rule);
+        registry.register(Arc::new(DomainKeyPolicy::new([processor_rule])));
         *opts = KeyOptions::builder().key_registry(registry).build();
     }
 
@@ -636,6 +634,24 @@ mod tests {
     use super::*;
     use crate::observer::FfiKeyProcessor;
 
+    struct TaggedProcessor(u8);
+
+    impl FfiKeyProcessor for TaggedProcessor {
+        fn process_key(&self, _key: Vec<u8>, _salt: String) -> Vec<u8> {
+            vec![self.0]
+        }
+    }
+
+    fn tagged_rule(tag: u8, salt: &str, domains: &[&str]) -> FfiKeyRule {
+        FfiKeyRule {
+            processor: Arc::new(TaggedProcessor(tag)),
+            headers: Some(HashMap::from([("X-Provider".to_string(), tag.to_string())])),
+            query_params: None,
+            domains: domains.iter().map(ToString::to_string).collect(),
+            salt: Some(salt.to_string()),
+        }
+    }
+
     #[kithara::test]
     fn shared_store_outlives_each_player() {
         let store = Arc::new(FfiAssetStore::default());
@@ -657,6 +673,79 @@ mod tests {
 
         drop(second);
         assert!(cancel.is_cancelled());
+    }
+
+    #[kithara::test]
+    fn initial_key_rules_keep_policy_order_and_global_header_semantics() {
+        let ffi = crate::types::FfiKeyOptions {
+            rules: vec![
+                tagged_rule(1, "first-salt", &["keys.example.com"]),
+                tagged_rule(2, "second-salt", &["*"]),
+            ],
+        };
+
+        let (options, player_headers) = build_initial_key_state(ffi);
+
+        assert_eq!(
+            player_headers.get(SALT_HEADER).map(String::as_str),
+            Some("second-salt"),
+            "player-wide headers retain their existing last-rule-wins merge"
+        );
+        assert_eq!(
+            player_headers.get("X-Provider").map(String::as_str),
+            Some("2")
+        );
+
+        let registry = options.key_registry.expect("registry populated");
+        let url = url::Url::parse("https://keys.example.com/key").expect("valid key URL");
+        let request = registry.prepare(&url).expect("matching key request");
+
+        assert_eq!(
+            request.headers.get(SALT_HEADER).map(String::as_str),
+            Some("first-salt"),
+            "the first matching domain rule prepares the key request"
+        );
+        assert_eq!(
+            request.headers.get("X-Provider").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            (request.processor)(Bytes::from_static(b"encrypted")).expect("processor succeeds"),
+            Bytes::from_static(&[1])
+        );
+    }
+
+    #[kithara::test]
+    fn runtime_key_rules_append_in_registration_order() {
+        let inner = NativeInner::new(FfiPlayerConfig::default());
+        inner.setup_hls_aes_with_rule(tagged_rule(1, "first-salt", &["keys.example.com"]));
+        inner.setup_hls_aes_with_rule(tagged_rule(2, "second-salt", &["*"]));
+
+        let registry = inner
+            .key_options
+            .lock()
+            .key_registry
+            .clone()
+            .expect("registry populated");
+        let url = url::Url::parse("https://keys.example.com/key").expect("valid key URL");
+        let request = registry.prepare(&url).expect("matching key request");
+
+        assert_eq!(
+            request.headers.get(SALT_HEADER).map(String::as_str),
+            Some("first-salt")
+        );
+        assert_eq!(
+            (request.processor)(Bytes::from_static(b"encrypted")).expect("processor succeeds"),
+            Bytes::from_static(&[1])
+        );
+        assert_eq!(
+            inner
+                .player_headers
+                .get(SALT_HEADER)
+                .map(|header| header.value().clone())
+                .as_deref(),
+            Some("second-salt")
+        );
     }
 
     #[kithara::test]

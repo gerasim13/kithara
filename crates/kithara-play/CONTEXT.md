@@ -2,6 +2,29 @@
 
 Detailed contracts and invariants for the kithara-play crate; the README is the overview.
 
+## Domain Policies
+
+`policy` is the orchestration-level owner of domain matching. Its private
+matcher supports exact hosts, `*.domain` subdomains, and `*`; rules are ordered
+and the first matching rule wins. Neither `kithara-assets`,
+`kithara-platform`, nor `kithara-drm` owns these network-origin rules.
+
+`QueryIdentityLayout` implements the ordinary `AssetLayout` contract. A
+`QueryIdentityRule` lists application-defined, case-sensitive query keys for
+one or more domain patterns. Configured values contribute to the asset-root
+identity in declared-key order; repeated values retain URL order. Unlisted
+signatures, expiry values, fragments, and query-pair ordering do not fragment
+the cache, and raw query text is never written into a path. The same layout can
+be registered normally for `File`, `Hls`, or both.
+
+`DomainKeyPolicy` implements `KeyRequestResolver` and is registered normally in
+`KeyProcessorRegistry`. A matching `DomainKeyRule` combines its static headers
+and query parameters with fresh request-factory output into one
+`PreparedKeyRequest`; factory headers take precedence. The opaque DRM registry
+does not expose domain rules or resource headers. Callers that also need
+playlist/segment headers retain the same immutable `Arc<DomainKeyPolicy>` and
+ask it directly, avoiding a second policy source of truth.
+
 ## Tempo & Key-Lock
 
 `kithara-audio`'s `StretchControls` (one per deck, in `PlayerConfig.timestretch`)

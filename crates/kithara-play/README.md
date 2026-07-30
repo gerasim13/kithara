@@ -40,6 +40,8 @@ to the single `decoder` field.
   item handover.
 - `Resource` opens file, HLS, and reader sources from `ResourceConfig`.
 - `PlayerNode` is the public real-time audio graph node.
+- `policy` owns domain-aware cache identity and DRM request routing above the
+  filesystem, network, and cryptography crates.
 - `Equalizer` is the remaining mockable trait surface.
 
 ## Orientation

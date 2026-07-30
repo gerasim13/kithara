@@ -117,6 +117,32 @@ Invalid callback output is rejected rather than rewritten or replaced with a
 default path; see the `AssetLayout` API contract for the portable component
 rules.
 
+For signed media URLs whose path is shared by several tracks or variants,
+create the built-in query-identity layout and register the same layout for each
+protocol that uses those URLs:
+
+```kotlin
+val queryIdentity = AssetLayouts.queryIdentity(
+    rules = listOf(
+        CacheIdentityRule(
+            domains = listOf("media.example.com", "*.cdn.example.com"),
+            queryParameters = listOf("track_id", "variant"),
+        ),
+    ),
+)
+val layouts = AssetLayoutRegistry().apply {
+    register(queryIdentity, AssetLayoutTarget.File)
+    register(queryIdentity, AssetLayoutTarget.Hls)
+}
+```
+
+Rules are checked in order. Domain patterns support exact hosts,
+`*.example.com` for subdomains only, and `*` for every host. Only the configured
+parameter names contribute to cache identity; rotating signatures, expiry
+timestamps, and other unlisted parameters do not split the cache. Selected
+values are hashed into safe cache components and are never written as raw query
+text.
+
 ### Seek
 
 ```kotlin

@@ -1,6 +1,8 @@
+use std::fmt;
+
 use kithara::{
     hls::KeyOptions,
-    net::Headers,
+    play::Headers,
     prelude::{PlaybackResamplerBackend, ResourceConfig},
 };
 use kithara_queue::TrackSource;
@@ -8,19 +10,8 @@ use url::Url;
 
 use crate::config::AppConfig;
 
-/// Build a [`TrackSource`] for `url`.
-///
-/// Attaches the shared [`Downloader`](kithara::stream::dl::Downloader)
-/// and the app's [`KeyProcessorRegistry`](kithara_drm::KeyProcessorRegistry)
-/// so DRM keys are routed to the correct processor by URL domain. Key
-/// URLs that don't match any rule in the registry get the raw bytes
-/// (e.g. silvercomet keys, which need no unwrap).
-///
-/// When the track URL itself matches a registry rule (same host as the
-/// DRM key), the rule's request headers are also forwarded to playlist
-/// and segment fetches — providers that gate the playlist on the same
-/// `X-Auth-Token` would otherwise redirect/403 before any key request
-/// ever fires.
+/// Build a [`TrackSource`] with the app's shared network, asset, and DRM state.
+/// Matching policy headers also apply to playlist and segment requests.
 #[must_use]
 pub fn build_source(url: &str, config: &AppConfig) -> TrackSource {
     build_resource_config(url, config).map_or_else(
@@ -40,38 +31,33 @@ pub(crate) fn build_resource_config(
     let builder = match ResourceConfig::for_src(url) {
         Ok(builder) => builder,
         Err(e) => {
-            tracing::error!(%url, %e, "failed to build ResourceConfig");
+            tracing::error!(%e, "failed to build ResourceConfig");
             return None;
         }
     };
-    let keys = if config.key_registry.is_empty() {
+    let registry = config.drm.registry();
+    let keys = if registry.is_empty() {
         KeyOptions::default()
     } else {
-        KeyOptions::builder()
-            .key_registry(config.key_registry.clone())
-            .build()
+        KeyOptions::builder().key_registry(registry.clone()).build()
     };
     let headers = Url::parse(url).ok().and_then(|parsed| {
         let host = parsed.host_str().unwrap_or("");
-        let rule = config.key_registry.find(&parsed);
-        rule.and_then(|r| r.headers.clone()).map_or_else(
+        config.drm.resource_headers(&parsed).map_or_else(
             || {
                 tracing::debug!(
-                    %url,
                     host,
                     "drm: no registry rule for host -- plain (non-DRM) resource path"
                 );
                 None
             },
             |h| {
-                let names: Vec<&String> = h.keys().collect();
                 tracing::info!(
-                    %url,
                     host,
-                    header_names = ?names,
+                    header_names = ?HeaderNames(&h),
                     "drm: registry rule matched, forwarding headers to resource"
                 );
-                Some(Headers::from(h))
+                Some(h)
             },
         )
     });
@@ -96,4 +82,14 @@ pub fn build_sources(config: &AppConfig) -> Vec<TrackSource> {
         .iter()
         .map(|url| build_source(url, config))
         .collect()
+}
+
+struct HeaderNames<'a>(&'a Headers);
+
+impl fmt::Debug for HeaderNames<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list()
+            .entries(self.0.iter().map(|(name, _)| name))
+            .finish()
+    }
 }

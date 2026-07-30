@@ -147,9 +147,9 @@ typos = ".config/typos.toml"
 framework-name = "Kithara"
 bundle-id = "io.zvuk.Kithara"
 short-version = "0.0.1"
-# iOS 15 floor: consumer apps (e.g. Zvuk) still ship an iOS 15 minimum, and a
-# module built for iOS 16 cannot be imported by an iOS 15 target.
-deployment-target = "15.0"
+# Consumer apps still ship an iOS 15.6 minimum, and a module built for a newer
+# iOS version cannot be imported by those targets.
+deployment-target = "15.6"
 autolink-frameworks = ["AudioToolbox", "CoreAudio", "AVFoundation", "Security", "SystemConfiguration"]
 
 [workspace.package]
