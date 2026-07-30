@@ -4,6 +4,7 @@ use std::{
 };
 
 use crossbeam_queue::ArrayQueue;
+use kithara_decode::GaplessMode;
 use kithara_platform::{
     sync::Arc,
     tokio::{runtime::Handle as RuntimeHandle, task::spawn_blocking_on},
@@ -12,7 +13,7 @@ use kithara_stream::{MediaInfo, StreamType, WorkerWake};
 use tracing::warn;
 
 use crate::pipeline::{
-    decode::core::DecoderFactory,
+    decode::{core::DecoderFactory, generation::DecoderGeneration},
     rebuild::{
         policy::classify,
         state::{
@@ -26,6 +27,7 @@ use crate::pipeline::{
 struct JobDeps {
     completion: Arc<ArrayQueue<DecoderRebuildComplete>>,
     factory: DecoderFactory,
+    gapless_mode: GaplessMode,
     wake: Arc<dyn WorkerWake>,
 }
 
@@ -34,6 +36,7 @@ impl Clone for JobDeps {
         Self {
             completion: self.completion.clone(),
             factory: self.factory.clone(),
+            gapless_mode: self.gapless_mode,
             wake: self.wake.clone(),
         }
     }
@@ -44,6 +47,7 @@ struct PendingJob<T: StreamType> {
     stream: SharedStream<T>,
     media_info: MediaInfo,
     offset: u64,
+    seek_epoch: u64,
     ticket: u64,
 }
 
@@ -60,11 +64,16 @@ pub(crate) struct RebuildRuntime {
 }
 
 impl<T: StreamType> RebuildPort<T> {
-    pub(crate) fn new(factory: DecoderFactory, runtime: RebuildRuntime) -> Self {
+    pub(crate) fn new(
+        factory: DecoderFactory,
+        gapless_mode: GaplessMode,
+        runtime: RebuildRuntime,
+    ) -> Self {
         Self {
             deps: JobDeps {
                 completion: Arc::new(ArrayQueue::new(2)),
                 factory,
+                gapless_mode,
                 wake: runtime.wake,
             },
             next_ticket: 1,
@@ -101,6 +110,7 @@ impl<T: StreamType> RebuildPort<T> {
             stream: stream.clone(),
             media_info: recreate.media_info.clone(),
             offset: recreate.offset,
+            seek_epoch: started_seek_epoch,
             ticket,
         });
         Ok(RebuildState {
@@ -142,11 +152,19 @@ fn run<T: StreamType>(job: PendingJob<T>) {
         stream,
         media_info,
         offset,
+        seek_epoch,
         ticket,
     } = job;
     let result = match catch_unwind(AssertUnwindSafe(|| {
         let reader = stream.open_rebuild_reader(offset);
-        (deps.factory)(reader, media_info)
+        let decoder = (deps.factory)(reader, media_info.clone())?;
+        Ok(DecoderGeneration::new(
+            decoder,
+            Some(media_info),
+            offset,
+            seek_epoch,
+            deps.gapless_mode,
+        ))
     })) {
         Ok(result) => result.map_err(|error| classify(&error)),
         Err(payload) => {

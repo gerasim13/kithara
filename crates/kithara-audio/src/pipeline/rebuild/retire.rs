@@ -4,38 +4,39 @@ use std::{
 };
 
 use crossbeam_queue::ArrayQueue;
-use kithara_decode::Decoder;
 use tracing::warn;
 
-pub(crate) struct RetiredDecoders {
-    decoders: ArrayQueue<Box<dyn Decoder>>,
+use crate::pipeline::decode::DecoderGeneration;
+
+pub(crate) struct RetiredGenerations {
+    generations: ArrayQueue<DecoderGeneration>,
     overflowed: AtomicBool,
 }
 
-impl RetiredDecoders {
+impl RetiredGenerations {
     pub(crate) fn new(capacity: usize) -> Self {
         Self {
-            decoders: ArrayQueue::new(capacity),
+            generations: ArrayQueue::new(capacity),
             overflowed: AtomicBool::new(false),
         }
     }
 
-    pub(crate) fn retire(&self, decoder: Box<dyn Decoder>) {
-        if let Err(decoder) = self.decoders.push(decoder) {
+    pub(crate) fn retire_generation(&self, generation: DecoderGeneration) {
+        if let Err(generation) = self.generations.push(generation) {
             self.overflowed.store(true, Ordering::Release);
-            mem::forget(decoder);
+            mem::forget(generation);
         }
     }
 
     pub(crate) fn drain(&self) {
-        while self.decoders.pop().is_some() {}
+        while self.generations.pop().is_some() {}
         if self.overflowed.swap(false, Ordering::AcqRel) {
-            warn!("decoder retire queue overflowed; leaked decoder to keep RT core free");
+            warn!("decode retire queue overflowed; leaked retired state to keep RT core free");
         }
     }
 
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
-        self.decoders.len()
+        self.generations.len()
     }
 }

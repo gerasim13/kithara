@@ -5,14 +5,14 @@ use kithara_platform::sync::Arc;
 use kithara_stream::{Activity, PlayheadWrite, SeekControl, SeekObserve, StreamType};
 
 pub(crate) use crate::pipeline::{
-    decode::core::{DecodeCore, DecodeInit, DecoderFactory},
+    decode::core::{ActiveDecode, DecodeInit, DecoderFactory},
     stream::shared::SharedStream,
 };
 use crate::{
     pipeline::{
         decode::{gate::ReadinessGate, resume::ResumeCursor},
         parts::SourceParts,
-        rebuild::{port::RebuildPort, retire::RetiredDecoders},
+        rebuild::{port::RebuildPort, retire::RetiredGenerations},
         seek::SeekEngine,
         track::{self, CurrentFsm, Decoding, Track, TrackStep},
     },
@@ -30,7 +30,7 @@ use crate::{
 pub(crate) struct StreamAudioSource<T: StreamType> {
     /// Explicit FSM state — single source of truth for track phase.
     pub(crate) state: CurrentFsm,
-    pub(crate) decode: DecodeCore,
+    pub(crate) decode: ActiveDecode,
     pub(crate) decoder_backend: kithara_decode::DecoderBackend,
     /// Narrow activity handle — set/query the `PLAYING` flag.
     pub(crate) activity: Arc<dyn Activity>,
@@ -75,16 +75,16 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// start. Tagged with the seek epoch so a later seek (especially a
     /// backward one) never resumes against a stale forward target. See
     /// `execute_recreation`.
-    /// Decoders displaced on the produce core. They are dropped from
-    /// `flush_deferred`, outside the forbid-blocking region.
-    pub(crate) retired: RetiredDecoders,
+    /// Decode generations displaced on the produce core. They are dropped
+    /// from `flush_deferred`, outside the forbid-blocking region.
+    pub(crate) retired: RetiredGenerations,
     pub(crate) shared_stream: SharedStream<T>,
 }
 
 // Construction, lifecycle, and state access
 impl<T: StreamType> StreamAudioSource<T> {
-    /// Bounded off-RT retire queue for decoders displaced on the produce core.
-    const DECODER_RETIRE_CAPACITY: usize = 4;
+    /// Bounded off-RT retire queue for decode state displaced on the produce core.
+    const GENERATION_RETIRE_CAPACITY: usize = 4;
 
     pub(crate) fn new(shared_stream: SharedStream<T>, parts: SourceParts<T>) -> Self {
         let SourceParts {
@@ -116,7 +116,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             resume,
             state: Track::<Decoding>::new(()).erase(),
             emit: None,
-            retired: RetiredDecoders::new(Self::DECODER_RETIRE_CAPACITY),
+            retired: RetiredGenerations::new(Self::GENERATION_RETIRE_CAPACITY),
         }
     }
 

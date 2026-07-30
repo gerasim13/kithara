@@ -6,7 +6,7 @@ use kithara_stream::{SourceSeekAnchor, StreamType};
 use tracing::warn;
 
 use crate::pipeline::{
-    decode::DecoderSession,
+    decode::DecoderGeneration,
     rebuild::{RecreateCause, RecreateNext, RecreateState},
     seek::{SeekContext, SeekEngine, SeekRequest},
     stream::shared::SharedStream,
@@ -23,7 +23,7 @@ pub(crate) struct RouteCtx<'a, T: StreamType> {
     pub(crate) committed: Duration,
     pub(crate) seek: &'a SeekEngine,
     pub(crate) seek_active: bool,
-    pub(crate) session: &'a DecoderSession,
+    pub(crate) active: &'a DecoderGeneration,
     pub(crate) stream: &'a SharedStream<T>,
 }
 
@@ -101,7 +101,7 @@ impl ResumeCursor {
         if host_rate == 0 {
             return None;
         }
-        if self.decoder_rate == 0 && ctx.session.decoder.spec().sample_rate.get() == host_rate {
+        if self.decoder_rate == 0 && ctx.active.decoder().spec().sample_rate.get() == host_rate {
             self.decoder_rate = host_rate;
             return None;
         }
@@ -109,22 +109,22 @@ impl ResumeCursor {
             return None;
         }
         let media_info = ctx
-            .session
-            .media_info
-            .clone()
+            .active
+            .media_info()
+            .cloned()
             .or_else(|| ctx.stream.media_info())?;
         let epoch = ctx.seek.epoch();
         let target = self.resume_position(epoch, ctx.committed, None);
         let offset = match ctx.stream.seek_time_anchor(target) {
             Ok(Some(SourceSeekAnchor { byte_offset, .. })) => byte_offset,
-            Ok(None) => ctx.session.base_offset,
+            Ok(None) => ctx.active.base_offset(),
             Err(err) => {
                 warn!(
                     ?err,
                     ?target,
                     "route-change recreate anchor resolution failed"
                 );
-                ctx.session.base_offset
+                ctx.active.base_offset()
             }
         };
         self.decoder_rate = host_rate;

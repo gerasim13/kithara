@@ -4,7 +4,7 @@ use kithara_platform::time::Duration;
 use kithara_stream::{PlayheadWrite, SeekObserve, StreamType};
 
 use crate::pipeline::{
-    decode::{DecoderSession, core::DecodeCore},
+    decode::{DecoderGeneration, core::ActiveDecode},
     rebuild::{RecreateNext, RecreateState},
     seek::SeekEngine,
     stream::shared::SharedStream,
@@ -12,12 +12,12 @@ use crate::pipeline::{
 };
 
 pub(crate) fn commit_outcome<T: StreamType>(
-    session: &DecoderSession,
+    active: &DecoderGeneration,
     stream: &SharedStream<T>,
     playhead: &dyn PlayheadWrite,
     outcome: &DecoderSeekOutcome,
 ) {
-    let sample_rate = session.decoder.spec().sample_rate.get();
+    let sample_rate = active.decoder().spec().sample_rate.get();
     let (frame_offset, end_position, landed_byte) = match *outcome {
         DecoderSeekOutcome::Landed {
             landed_frame,
@@ -89,11 +89,11 @@ pub(crate) fn preempt_target(
     Some(target)
 }
 
-pub(crate) fn update_len<T: StreamType>(decode: &DecodeCore, stream: &SharedStream<T>) {
+pub(crate) fn update_len<T: StreamType>(decode: &ActiveDecode, stream: &SharedStream<T>) {
     if let Some(len) = stream.len()
         && len > 0
     {
-        decode.update_len(len.saturating_sub(decode.session().base_offset));
+        decode.update_len(len.saturating_sub(decode.active().base_offset()));
     }
 }
 
@@ -126,8 +126,12 @@ pub(crate) fn emit(
     }
 }
 
-pub(crate) fn land_eof(session: &DecoderSession, playhead: &dyn PlayheadWrite, duration: Duration) {
-    let sample_rate = session.decoder.spec().sample_rate.get();
+pub(crate) fn land_eof(
+    active: &DecoderGeneration,
+    playhead: &dyn PlayheadWrite,
+    duration: Duration,
+) {
+    let sample_rate = active.decoder().spec().sample_rate.get();
     let frame_offset =
         num_traits::cast::ToPrimitive::to_u64(&(duration.as_secs_f64() * f64::from(sample_rate)))
             .unwrap_or(u64::MAX);

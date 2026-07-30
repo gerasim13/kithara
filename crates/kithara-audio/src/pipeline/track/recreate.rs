@@ -120,7 +120,7 @@ fn finish_route_change_after_recreate<T: StreamType>(
             );
             src.update_state(
                 Track::<Failed>::new(TrackFailure::RecreateFailed {
-                    offset: src.decode.session().base_offset,
+                    offset: src.decode.active().base_offset(),
                 })
                 .erase(),
             );
@@ -224,26 +224,21 @@ pub(super) fn finish_rebuild<T: StreamType>(
     complete: DecoderRebuildComplete,
 ) -> TrackStep<PcmChunk> {
     if superseded(&src.shared_stream, src.seek_obs.as_ref(), &rebuild) {
-        if let Ok(decoder) = complete.result {
-            src.retired.retire(decoder);
+        if let Ok(generation) = complete.result {
+            src.retired.retire_generation(generation);
         }
         return transition_after_rebuild_superseded(src, &rebuild);
     }
     let recreate = rebuild.recreate;
-    let decoder = match complete.result {
-        Ok(decoder) => decoder,
+    let generation = match complete.result {
+        Ok(generation) => generation,
         Err(outcome) => return finish_recreate_outcome(src, recreate, outcome),
     };
-    let duration = decoder.duration();
-    let spec = decoder.spec();
-    let track_info = decoder.track_info();
-    let old = src.decode.install(
-        decoder,
-        recreate.media_info.clone(),
-        recreate.offset,
-        src.seek_obs.epoch(),
-    );
-    src.retired.retire(old);
+    let duration = generation.decoder().duration();
+    let spec = generation.decoder().spec();
+    let track_info = generation.decoder().track_info();
+    let old = src.decode.replace_active(generation);
+    src.retired.retire_generation(old);
     debug!(
         ?duration,
         offset = recreate.offset,
@@ -313,7 +308,7 @@ fn transition_after_rebuild_superseded<T: StreamType>(
     }
     if let FormatDecision::Recreate(recreate) = detect(
         &src.shared_stream,
-        src.decode.session(),
+        src.decode.active(),
         src.seek_obs.as_ref(),
     ) {
         start_recreating_decoder(src, recreate);

@@ -193,7 +193,8 @@ pub trait Decoder: Send + 'static {
     /// Snapshot the existing decoder facts needed to configure PCM blending.
     ///
     /// The default exposes the same output specification already returned by
-    /// [`Self::spec`] and is not consumed by the playback path yet.
+    /// [`Self::spec`]. The audio pipeline captures it when constructing a
+    /// decoder generation and routes all emitted PCM through the blender.
     fn blender_profile(&self) -> BlenderProfile {
         BlenderProfile::new(self.spec())
     }

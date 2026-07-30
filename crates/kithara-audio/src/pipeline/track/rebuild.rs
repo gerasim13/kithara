@@ -73,8 +73,8 @@ impl Track<RebuildingDecoder> {
             if complete.ticket == rebuild.ticket {
                 return finish_rebuild(src, rebuild, complete);
             }
-            if let Ok(decoder) = complete.result {
-                src.retired.retire(decoder);
+            if let Ok(generation) = complete.result {
+                src.retired.retire_generation(generation);
             }
         }
         src.update_state(Self::new(rebuild).erase());
@@ -112,7 +112,7 @@ pub(crate) fn start_route_change_recreate_if_needed<T: StreamType>(
         committed: src.playhead.position(),
         seek: &src.seek_engine,
         seek_active: active_epoch(&src.state).is_some(),
-        session: src.decode.session(),
+        active: src.decode.active(),
         stream: &src.shared_stream,
     }) else {
         return false;

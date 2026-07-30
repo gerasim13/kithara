@@ -7,7 +7,7 @@ use std::{
 
 use kithara_decode::{
     DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessMode,
-    GaplessProfile, PcmChunk,
+    PcmChunk,
 };
 use kithara_events::{DeferredBus, Event};
 use kithara_platform::sync::Arc;
@@ -17,9 +17,9 @@ use tracing::{debug, warn};
 
 use crate::{
     pipeline::{
-        decode::{drain::EofDrain, resume::ResumeCursor},
+        blend::PcmBlender,
+        decode::{drain::EofDrain, generation::DecoderGeneration, resume::ResumeCursor},
         fetch::Fetch,
-        gapless::GaplessStage,
         rebuild::RecreateState,
         seek::{ResumeState, SeekEngine, emit::commit_outcome},
         stream::shared::SharedStream,
@@ -28,21 +28,6 @@ use crate::{
     renderer::{apply_effects, reset_effects},
     traits::AudioEffect,
 };
-
-/// Decoder and its associated metadata, installed as an atomic unit.
-pub(crate) struct DecoderSession {
-    pub(crate) decoder: Box<dyn Decoder>,
-    pub(crate) media_info: Option<MediaInfo>,
-    pub(crate) base_offset: u64,
-    pub(crate) installed_at_seek_epoch: u64,
-}
-
-impl DecoderSession {
-    pub(crate) fn gapless_profile(&self) -> GaplessProfile {
-        self.decoder
-            .gapless_profile(self.media_info.as_ref().and_then(|info| info.codec))
-    }
-}
 
 /// Factory closure that creates a decoder from an opened reader and media facts.
 pub(crate) type DecoderFactory =
@@ -61,7 +46,7 @@ pub(crate) struct DecodeInit {
 }
 
 pub(crate) struct DecodeParts {
-    pub(crate) core: DecodeCore,
+    pub(crate) active: ActiveDecode,
     pub(crate) factory: DecoderFactory,
     pub(crate) host_sample_rate: Arc<AtomicU32>,
     pub(crate) recreate_on_host_rate_change: bool,
@@ -91,15 +76,15 @@ impl DecodeInit {
             playback_resampler_backend,
             recreate_on_host_rate_change,
         } = self;
-        let session = DecoderSession {
+        let active = DecoderGeneration::new(
             decoder,
-            base_offset: 0,
             media_info,
+            0,
             installed_at_seek_epoch,
-        };
-        let gapless = GaplessStage::build(session.gapless_profile(), gapless_mode);
+            gapless_mode,
+        );
         DecodeParts {
-            core: DecodeCore::new(session, gapless_mode, gapless, effects),
+            active: ActiveDecode::new(active, gapless_mode, effects),
             factory: decoder_factory,
             host_sample_rate,
             recreate_on_host_rate_change,
@@ -110,10 +95,10 @@ impl DecodeInit {
     }
 }
 
-pub(crate) struct DecodeCore {
-    session: DecoderSession,
+pub(crate) struct ActiveDecode {
+    active: DecoderGeneration,
     gapless_mode: GaplessMode,
-    gapless: GaplessStage,
+    blender: PcmBlender,
     effects: Vec<Box<dyn AudioEffect>>,
     drain: EofDrain,
 }
@@ -137,25 +122,25 @@ pub(crate) enum DecodeAction {
     Failed(TrackFailure),
 }
 
-impl DecodeCore {
+impl ActiveDecode {
     fn new(
-        session: DecoderSession,
+        active: DecoderGeneration,
         gapless_mode: GaplessMode,
-        gapless: GaplessStage,
         effects: Vec<Box<dyn AudioEffect>>,
     ) -> Self {
         let drain = EofDrain::new(effects.len());
+        let blender = PcmBlender::new(active.blender_profile());
         Self {
-            session,
+            active,
             gapless_mode,
-            gapless,
+            blender,
             effects,
             drain,
         }
     }
 
-    pub(crate) fn session(&self) -> &DecoderSession {
-        &self.session
+    pub(crate) fn active(&self) -> &DecoderGeneration {
+        &self.active
     }
 
     pub(crate) fn gapless_mode(&self) -> GaplessMode {
@@ -168,17 +153,15 @@ impl DecodeCore {
     }
 
     pub(crate) fn notify_seek(&mut self) {
-        self.gapless.notify_seek();
+        self.active.notify_seek();
     }
 
     pub(crate) fn set_tail_compensation(&mut self) {
-        self.gapless
-            .set_tail_compensation(self.session.gapless_profile());
-        self.gapless.flush();
+        self.active.finish();
     }
 
     pub(crate) fn push(&mut self, chunk: PcmChunk) {
-        self.gapless.push(chunk);
+        self.active.push(chunk);
     }
 
     pub(crate) fn track(
@@ -190,8 +173,9 @@ impl DecodeCore {
         self.drain.track(chunk, playhead, emit);
     }
 
-    pub(crate) fn next_gapless(&mut self) -> Option<PcmChunk> {
-        while let Some(chunk) = self.gapless.next() {
+    pub(crate) fn next_output(&mut self) -> Option<PcmChunk> {
+        while let Some(chunk) = self.active.next() {
+            let chunk = self.blender.process_active(chunk);
             if let Some(output) = apply_effects(&mut self.effects, chunk) {
                 return Some(output);
             }
@@ -209,15 +193,16 @@ impl DecodeCore {
 
     #[kithara::rtsan_allow_blocking]
     pub(crate) fn next_chunk(&mut self, stream_position: u64) -> DecodeResult<DecoderChunkOutcome> {
-        let outcome = match catch_unwind(AssertUnwindSafe(|| self.session.decoder.next_chunk())) {
-            Ok(result) => result,
-            Err(payload) => {
-                warn!(panic = %panic_message(payload), "decoder panicked during next_chunk");
-                Err(DecodeError::InvalidData {
-                    detail: "decoder panicked during next_chunk",
-                })
-            }
-        };
+        let outcome =
+            match catch_unwind(AssertUnwindSafe(|| self.active.decoder_mut().next_chunk())) {
+                Ok(result) => result,
+                Err(payload) => {
+                    warn!(panic = %panic_message(payload), "decoder panicked during next_chunk");
+                    Err(DecodeError::InvalidData {
+                        detail: "decoder panicked during next_chunk",
+                    })
+                }
+            };
         let (chunks, samples) = self.stats();
         match &outcome {
             Ok(DecoderChunkOutcome::Eof) => {
@@ -244,7 +229,9 @@ impl DecodeCore {
         position: kithara_platform::time::Duration,
     ) -> DecodeResult<DecoderSeekOutcome> {
         let before = stream.position();
-        let outcome = match catch_unwind(AssertUnwindSafe(|| self.session.decoder.seek(position))) {
+        let outcome = match catch_unwind(AssertUnwindSafe(|| {
+            self.active.decoder_mut().seek(position)
+        })) {
             Ok(result) => result,
             Err(payload) => {
                 warn!(panic = %panic_message(payload), "decoder panicked during seek");
@@ -254,7 +241,7 @@ impl DecodeCore {
             }
         };
         if let Ok(ref outcome) = outcome {
-            commit_outcome(&self.session, stream, playhead, outcome);
+            commit_outcome(&self.active, stream, playhead, outcome);
         }
         debug!(
             ?position,
@@ -267,28 +254,16 @@ impl DecodeCore {
     }
 
     pub(crate) fn update_len(&self, len: u64) {
-        self.session.decoder.update_byte_len(len);
+        self.active.decoder().update_byte_len(len);
     }
 
-    pub(crate) fn install(
-        &mut self,
-        decoder: Box<dyn Decoder>,
-        media_info: MediaInfo,
-        offset: u64,
-        seek_epoch: u64,
-    ) -> Box<dyn Decoder> {
-        let session = DecoderSession {
-            decoder,
-            media_info: Some(media_info),
-            base_offset: offset,
-            installed_at_seek_epoch: seek_epoch,
-        };
-        let old = mem::replace(&mut self.session, session);
-        old.decoder
+    pub(crate) fn replace_active(&mut self, active: DecoderGeneration) -> DecoderGeneration {
+        self.blender.replace_active(active.blender_profile());
+        mem::replace(&mut self.active, active)
     }
 
     pub(crate) fn flush_reader_signals(&mut self) {
-        self.session.decoder.flush_reader_signals();
+        self.active.decoder_mut().flush_reader_signals();
     }
 }
 

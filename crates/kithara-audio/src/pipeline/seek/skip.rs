@@ -2,7 +2,7 @@ use kithara_decode::{PcmChunk, PcmSpec};
 use kithara_platform::time::Duration;
 use kithara_stream::StreamType;
 
-use crate::pipeline::{decode::DecoderSession, seek::ResumeState, stream::shared::SharedStream};
+use crate::pipeline::{decode::DecoderGeneration, seek::ResumeState, stream::shared::SharedStream};
 
 struct Consts;
 
@@ -32,16 +32,16 @@ pub(crate) fn frames(spec: PcmSpec, duration: Duration) -> usize {
 }
 
 pub(crate) fn estimate_target_byte<T: StreamType>(
-    session: &DecoderSession,
+    active: &DecoderGeneration,
     stream: &SharedStream<T>,
     position: Duration,
 ) -> Option<u64> {
-    let duration = session.decoder.duration()?;
+    let duration = active.decoder().duration()?;
     let len = stream.len()?;
-    if duration.is_zero() || len <= session.base_offset {
+    if duration.is_zero() || len <= active.base_offset() {
         return None;
     }
-    let payload = len - session.base_offset;
+    let payload = len - active.base_offset();
     let relative = u64::try_from(
         position
             .as_nanos()
@@ -50,7 +50,7 @@ pub(crate) fn estimate_target_byte<T: StreamType>(
     )
     .expect("seek target byte fits u64")
     .min(payload);
-    Some(session.base_offset.saturating_add(relative))
+    Some(active.base_offset().saturating_add(relative))
 }
 
 pub(crate) fn apply(

@@ -76,16 +76,19 @@ State has one domain owner:
   decode epoch, through `commit_decode_epoch`.
 - `ResumeCursor` owns `decode_head` and resolves recreate resume positions from
   the current epoch, committed position, and `resume_target`.
-- `DecodeCore` owns the complete `DecoderSession` and replaces it atomically;
-  it also owns gapless processing, time-domain effects, and EOF drain.
+- `ActiveDecode` owns the authoritative `DecoderGeneration`, the always-on
+  `PcmBlender`, time-domain effects, and EOF drain. Each `DecoderGeneration`
+  owns its decoder facts and per-generation gapless stage.
 - `FormatPolicy` makes pure `detect` and `handle_variant_change` decisions and
   returns `RecreateState` without starting recreation itself.
 - `ReadinessGate` is the only owner of byte-range calculations used by both
   gate and wait paths. Those paths must use the same range and source phase.
 - `RebuildPort` owns the two-phase recreation submission boundary: preparation
   produces a pending job, and the coordinator submits it outside the RT step.
-- `RetiredDecoders` owns `retire` and off-RT `drain`; decoder destruction does
-  not occur in the RT region.
+  The job constructs a complete `DecoderGeneration`; RT installation only
+  moves it into `ActiveDecode`.
+- `RetiredGenerations` owns retirement and off-RT drain; generation destruction
+  does not occur in the RT region.
 - `RouteChange` detects real host-rate changes. It enters the same
   `RecreateState` machine as `FormatBoundary` and `VariantSwitch`; it is not a
   separate lightweight recreation path.

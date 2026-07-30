@@ -7,7 +7,7 @@ use std::{
 use kithara_bufpool::PcmPool;
 use kithara_decode::{
     DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessMode,
-    PcmChunk, PcmMeta, PcmSpec, duration_for_frames, frames_for_duration,
+    GaplessProfile, PcmChunk, PcmMeta, PcmSpec, duration_for_frames, frames_for_duration,
 };
 use kithara_events::{
     AudioEvent, DecoderChangeCause, DecoderEvent, DeferredBus, Event, EventBus, TrackFailureKind,
@@ -28,7 +28,10 @@ use kithara_test_utils::kithara;
 
 use crate::{
     pipeline::{
-        decode::core::{DecodeInit, DecoderFactory},
+        decode::{
+            DecoderGeneration,
+            core::{DecodeInit, DecoderFactory},
+        },
         fetch::Fetch,
         parts::SourceParts,
         rebuild::{
@@ -120,6 +123,40 @@ impl Decoder for FailingDecoder {
     fn seek(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
         Ok(DecoderSeekOutcome::Landed {
             landed_at: position,
+            landed_frame: 0,
+            landed_byte: None,
+            preroll: PrerollHint::NotNeeded,
+        })
+    }
+
+    fn spec(&self) -> PcmSpec {
+        PcmSpec::new(2, NonZeroU32::MIN)
+    }
+
+    fn update_byte_len(&self, _len: u64) {}
+}
+
+struct ProfileCountingDecoder {
+    gapless_profile_reads: Arc<AtomicU64>,
+}
+
+impl Decoder for ProfileCountingDecoder {
+    fn gapless_profile(&self, _codec: Option<AudioCodec>) -> GaplessProfile {
+        self.gapless_profile_reads.fetch_add(1, Ordering::AcqRel);
+        GaplessProfile::new(self.spec(), None, None, 0)
+    }
+
+    fn duration(&self) -> Option<Duration> {
+        Some(Duration::from_secs(60))
+    }
+
+    fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        Ok(DecoderChunkOutcome::Eof)
+    }
+
+    fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        Ok(DecoderSeekOutcome::Landed {
+            landed_at: pos,
             landed_frame: 0,
             landed_byte: None,
             preroll: PrerollHint::NotNeeded,
@@ -458,6 +495,10 @@ struct RouteFixture {
 }
 
 async fn test_source(variant: u32) -> RebuildFixture {
+    test_source_with_mode(variant, GaplessMode::Disabled).await
+}
+
+async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> RebuildFixture {
     let control = Arc::new(TestControl::new(media_info(variant)));
     let drops = Arc::new(Mutex::new(Vec::new()));
     let stream = match Stream::<TestStream>::new(TestConfig {
@@ -480,7 +521,7 @@ async fn test_source(variant: u32) -> RebuildFixture {
         decoder: Box::new(TestDecoder::new(1, drops.clone())),
         decoder_factory,
         decoder_backend: kithara_decode::DecoderBackend::default(),
-        gapless_mode: GaplessMode::Disabled,
+        gapless_mode,
         host_sample_rate: Arc::new(AtomicU32::new(Consts::SAMPLE_RATE)),
         media_info: Some(media_info(0)),
         playback_resampler_backend: "none",
@@ -627,8 +668,22 @@ fn push_completion_with_drops(
     decoder_id: u64,
     drops: Arc<Mutex<Vec<u64>>>,
 ) {
+    let (media_info, offset, seek_epoch) = match &source.state {
+        CurrentFsm::RebuildingDecoder(handle) => (
+            handle.data().recreate.media_info.clone(),
+            handle.data().recreate.offset,
+            handle.data().started_seek_epoch,
+        ),
+        _ => panic!("completion fixture requires RebuildingDecoder state"),
+    };
     let pushed = source.rebuild.completion().push(DecoderRebuildComplete {
-        result: Ok(Box::new(TestDecoder::new(decoder_id, drops))),
+        result: Ok(DecoderGeneration::new(
+            Box::new(TestDecoder::new(decoder_id, drops)),
+            Some(media_info),
+            offset,
+            seek_epoch,
+            GaplessMode::Disabled,
+        )),
         ticket,
     });
     assert!(pushed.is_ok());
@@ -647,6 +702,43 @@ async fn rebuilding_decoder_pending_poll_blocks() {
 }
 
 #[kithara::test(tokio)]
+async fn rebuild_prepares_generation_profiles_before_rt_install() {
+    let RebuildFixture { mut source, .. } =
+        test_source_with_mode(1, GaplessMode::SilenceTrim(Default::default())).await;
+    let profile_reads = Arc::new(AtomicU64::new(0));
+    let factory_reads = profile_reads.clone();
+    let factory: DecoderFactory = Arc::new(move |_reader, _info| {
+        Ok(Box::new(ProfileCountingDecoder {
+            gapless_profile_reads: factory_reads.clone(),
+        }))
+    });
+    source.rebuild = RebuildPort::new(
+        factory,
+        source.decode.gapless_mode(),
+        RebuildRuntime {
+            handle: source.rebuild.runtime().clone(),
+            wake: Arc::new(TestWake),
+        },
+    );
+    let rebuild = source
+        .rebuild
+        .prepare(
+            &source.shared_stream,
+            recreate_state(1),
+            source.seek_obs.epoch(),
+        )
+        .expect("profile test rebuild must prepare");
+    source.state = Track::<RebuildingDecoder>::new(rebuild).erase();
+
+    assert_eq!(profile_reads.load(Ordering::Acquire), 0);
+    source.rebuild.run_inline();
+    assert_eq!(profile_reads.load(Ordering::Acquire), 1);
+
+    assert!(matches!(source.step_track(), TrackStep::StateChanged));
+    assert_eq!(profile_reads.load(Ordering::Acquire), 1);
+}
+
+#[kithara::test(tokio)]
 async fn rebuilding_decoder_completion_installs_once() {
     let RebuildFixture {
         drops, mut source, ..
@@ -658,9 +750,8 @@ async fn rebuilding_decoder_completion_installs_once() {
     assert_eq!(
         source
             .decode
-            .session()
-            .media_info
-            .as_ref()
+            .active()
+            .media_info()
             .and_then(|i| i.variant_index),
         Some(1)
     );
@@ -700,10 +791,15 @@ async fn decode_error_precedes_track_failure_on_event_bus() {
     let bus = EventBus::new(16);
     let mut events = bus.subscribe();
     source = source.with_emit(Arc::new(DeferredBus::new(bus, 16)));
-    let old = source
-        .decode
-        .install(Box::new(FailingDecoder), media_info(0), 0, 0);
-    source.retired.retire(old);
+    let replacement = DecoderGeneration::new(
+        Box::new(FailingDecoder),
+        Some(media_info(0)),
+        0,
+        0,
+        GaplessMode::Disabled,
+    );
+    let old = source.decode.replace_active(replacement);
+    source.retired.retire_generation(old);
 
     assert!(matches!(source.step_track(), TrackStep::Failed));
     assert!(events.try_recv().is_err());
@@ -747,7 +843,7 @@ async fn route_change_host_rate_delta_starts_decoder_recreate() {
                 }
                 _ => panic!("expected route-change recreate to resume via ApplySeek"),
             }
-            assert_eq!(recreate.offset, source.decode.session().base_offset);
+            assert_eq!(recreate.offset, source.decode.active().base_offset());
             assert_eq!(recreate.media_info.variant_index, Some(0));
         }
         _ => panic!("expected route-change recreate"),
@@ -795,7 +891,7 @@ async fn route_change_recreate_preserves_position_and_output_rate_continuity_met
         "route-change output chunks must report the new host rate"
     );
     assert_eq!(
-        source.decode.session().decoder.spec().sample_rate.get(),
+        source.decode.active().decoder().spec().sample_rate.get(),
         Consts::ROUTE_SAMPLE_RATE
     );
     let first_route_timestamp =
@@ -879,9 +975,8 @@ async fn rebuilding_decoder_seek_epoch_supersedes_completion() {
     assert_eq!(
         source
             .decode
-            .session()
-            .media_info
-            .as_ref()
+            .active()
+            .media_info()
             .and_then(|i| i.variant_index),
         Some(0)
     );
@@ -912,9 +1007,8 @@ async fn rebuilding_decoder_variant_fence_supersedes_completion() {
     assert_eq!(
         source
             .decode
-            .session()
-            .media_info
-            .as_ref()
+            .active()
+            .media_info()
             .and_then(|i| i.variant_index),
         Some(0)
     );
@@ -959,9 +1053,8 @@ async fn rebuilding_decoder_variant_fence_preserves_inflight_seek() {
     assert_eq!(
         source
             .decode
-            .session()
-            .media_info
-            .as_ref()
+            .active()
+            .media_info()
             .and_then(|i| i.variant_index),
         Some(0)
     );
@@ -1002,6 +1095,7 @@ async fn rebuild_factory_panic_fails_track_without_hang() {
         Arc::new(|_reader, _info| panic!("decoder construction blew up"));
     source.rebuild = RebuildPort::new(
         panicking_factory,
+        GaplessMode::Disabled,
         RebuildRuntime {
             handle: source.rebuild.runtime().clone(),
             wake: Arc::clone(&wake) as Arc<dyn WorkerWake>,

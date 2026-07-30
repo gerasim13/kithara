@@ -79,7 +79,7 @@ impl SeekRecovery {
         let Some(media_info) = ctx
             .stream
             .media_info()
-            .or_else(|| ctx.decode.session().media_info.clone())
+            .or_else(|| ctx.decode.active().media_info().cloned())
         else {
             return SeekTransition::Failed {
                 request: self.request,

@@ -1,9 +1,11 @@
 use crossbeam_queue::ArrayQueue;
-use kithara_decode::Decoder;
 use kithara_platform::sync::Arc;
 use kithara_stream::{MediaInfo, SeekObserve};
 
-use crate::pipeline::seek::{SeekContext, SeekRequest};
+use crate::pipeline::{
+    decode::DecoderGeneration,
+    seek::{SeekContext, SeekRequest},
+};
 
 /// What to do once decoder recreation succeeds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,7 +58,7 @@ impl RebuildState {
 }
 
 pub(crate) struct DecoderRebuildComplete {
-    pub(crate) result: Result<Box<dyn Decoder>, RecreateOutcome>,
+    pub(crate) result: Result<DecoderGeneration, RecreateOutcome>,
     pub(crate) ticket: u64,
 }
 
