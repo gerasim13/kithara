@@ -34,6 +34,9 @@ leak-timeout = "2s"
 
 [profile.ci]
 fail-fast = false
+
+[profile.ci.junit]
+path = "target/nextest/ci/junit.xml"
 test-threads = "num-cpus"
 leak-timeout = "2s"
 

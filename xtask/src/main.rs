@@ -5,7 +5,9 @@ mod agent_hook;
 mod android;
 mod apple;
 mod apple_docgen;
+mod ci;
 mod config;
+mod mutants;
 mod publish;
 mod release;
 mod self_cache;
@@ -13,6 +15,8 @@ mod wasm;
 
 use android::AndroidCommand;
 use apple::AppleCommand;
+use ci::CiArgs;
+use mutants::MutantsArgs;
 use publish::PublishArgs;
 use release::ReleaseArgs;
 use self_cache::SelfCacheArgs;
@@ -57,8 +61,12 @@ enum Command {
         #[command(subcommand)]
         command: WasmCommand,
     },
+    /// Dedicated `GitLab` CI automation.
+    Ci(CiArgs),
     /// Publish all public crates to crates.io in dependency order.
     Publish(PublishArgs),
+    /// Run explicitly scoped mutation suites.
+    Mutants(MutantsArgs),
     /// Apple release flow: prepare (stamp manifests) and publish
     /// (GitHub release + `GitLab` mirror).
     Release(ReleaseArgs),
@@ -71,11 +79,17 @@ enum Command {
 }
 
 fn main() -> anyhow::Result<()> {
+    let _ = tracing_subscriber::fmt()
+        .with_target(false)
+        .without_time()
+        .compact()
+        .try_init();
     let _lease: Option<self_cache::GenerationLease> = self_cache::lease_current()?;
     let cli = Cli::parse();
     match &cli.command {
         Command::AgentHook => return agent_hook::run(),
         Command::SelfCache(args) => return self_cache::run(args),
+        Command::Ci(args) if ci::is_standalone(args) => return ci::run_standalone(args),
         _ => {}
     }
     let ctx = Ctx::load()?;
@@ -84,7 +98,9 @@ fn main() -> anyhow::Result<()> {
         Command::Android { command } => android::run(command, &ctx),
         Command::Apple { command } => apple::run(command, &ctx),
         Command::Wasm { command } => wasm::run(command, &ctx),
+        Command::Ci(ref args) => ci::run(args, &ctx),
         Command::Publish(ref args) => publish::run(args, &ctx),
+        Command::Mutants(ref args) => mutants::run(args, &ctx),
         Command::Release(ref args) => release::run(args, &ctx),
         Command::AgentHook => agent_hook::run(),
         Command::SelfCache(ref args) => self_cache::run(args),

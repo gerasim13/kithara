@@ -13,10 +13,32 @@ pub(crate) struct KitharaExt {
     pub(crate) android: AndroidConfig,
     pub(crate) wasm: WasmConfig,
     pub(crate) apple: AppleConfig,
+    pub(crate) ci: CiProjectConfig,
     pub(crate) release: ReleaseConfig,
     pub(crate) publish: PublishConfig,
     xtask: Option<XtaskConfig>,
     agent_hook: Option<AgentHookConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct CiProjectConfig {
+    pub(crate) host_config: PathBuf,
+}
+
+impl CiProjectConfig {
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.host_config.as_os_str().is_empty()
+            || self.host_config.is_absolute()
+            || self
+                .host_config
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            bail!("ext.ci.host_config must be a project-relative file");
+        }
+        Ok(())
+    }
 }
 
 impl KitharaExt {
@@ -220,6 +242,9 @@ pub(crate) struct ReleaseConfig {
     /// Optional single self-contained framework zip for manual drag-in. Empty
     /// disables that channel.
     pub(crate) single_asset: String,
+    /// Additional required CI-built artifacts published with the Apple
+    /// frameworks, such as Android AARs.
+    pub(crate) platform_assets: Vec<String>,
     /// Documentation channel: zip name for the DocC archive uploaded as a
     /// release asset. Empty disables the docs channel.
     pub(crate) docs_asset: String,

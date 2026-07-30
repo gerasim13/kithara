@@ -276,6 +276,9 @@ event = "post-tool-use"
 tool_kind = "file-edit"
 handler = "format-edited-paths"
 
+[ext.ci]
+host_config = ".config/ci-host.json"
+
 [ext.publish]
 workspace_hack_crate = "kithara-workspace-hack"
 delay_secs = 20
@@ -292,6 +295,7 @@ gitlab_project = "disrupt/kithara"
 gitlab_package = "kithara"
 asset = "KitharaFFIInternal.xcframework.zip"
 single_asset = "Kithara.xcframework.zip"
+platform_assets = ["kithara.aar", "rust-tls.aar"]
 http_timeout_secs = 60
 upload_timeout_secs = 600
 # Documentation channel: DocC archive (`just platform apple doc`) zipped + uploaded as a

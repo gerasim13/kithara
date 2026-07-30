@@ -1,0 +1,20 @@
+.macos-job:
+  tags:
+    - kithara-macos
+
+.linux-job:
+  image: kithara-ci:linux-20260729
+  tags:
+    - kithara-linux
+
+.android-job:
+  tags:
+    - kithara-android
+
+.windows-job:
+  tags:
+    - kithara-windows
+
+.release-job:
+  tags:
+    - kithara-release

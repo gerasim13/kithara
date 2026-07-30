@@ -1,6 +1,21 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set working-directory := "../.."
 
+# Execute one typed CI lane. GitLab jobs should only route through this recipe.
+[positional-arguments]
+run *ARGS:
+    just _xtask ci run "$@"
+
+# Provision or maintain the dedicated CI host.
+[positional-arguments]
+host *ARGS:
+    just _xtask ci host "$@"
+
+# Reconcile the private GitLab repository with the public GitHub repository.
+[positional-arguments]
+bridge *ARGS:
+    just _xtask ci bridge "$@"
+
 # Run all linters scoped to a crate, path, or workspace.
 [positional-arguments]
 audit *ARGS:
@@ -41,6 +56,6 @@ full OUTPUT:
     run_stage lint    just lint fast
     run_stage test    just test
     run_stage e2e     just test run --lane=e2e
-    run_stage mutants just test mutants ci "{{ OUTPUT }}/mutants"
+    run_stage mutants just test mutants run-all --output "{{ OUTPUT }}/mutants"
 
     echo "=== ci full $RUN_ID done at $(date -u -Iseconds) ==="

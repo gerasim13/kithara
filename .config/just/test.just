@@ -78,44 +78,10 @@ uncovered:
       --ignore-filename-regex '(tests/|examples/|benches/)' \
       --show-missing-lines
 
-# Mutation testing. TARGET may be a crate name or `ci`.
+# Focused mutation testing. Only suites declared in mutation-suites.toml are accepted.
 [positional-arguments]
-mutants TARGET="" *ARGS:
-    #!/usr/bin/env bash
-    set -uo pipefail
-    target=$1
-    shift
-    if [[ "$target" == "ci" ]]; then
-      OUTPUT="${1:-target/mutants-ci}"
-      DEFAULT_JOBS=$(( $(nproc) - 1 ))
-      if [ "$DEFAULT_JOBS" -gt 12 ]; then DEFAULT_JOBS=12; fi
-      if [ "$DEFAULT_JOBS" -lt 1 ]; then DEFAULT_JOBS=1; fi
-      JOBS="${MUTANTS_JOBS:-$DEFAULT_JOBS}"
-      mkdir -p "$OUTPUT"
-      RESUME_FLAG=""
-      if [ -f "$OUTPUT/mutants.out/outcomes.json" ]; then
-        RESUME_FLAG="--resume"
-        echo "==> resuming from previous run at $OUTPUT/mutants.out"
-      fi
-      cargo mutants --workspace --test-workspace=true --baseline=skip \
-        --test-tool=nextest --profile test-release \
-        --exclude 'crates/kithara-test-utils/**' \
-        --exclude 'crates/kithara-test-macros/**' \
-        --exclude 'tests/**' \
-        --exclude 'crates/kithara-ffi/**' \
-        --exclude 'crates/kithara-app/**' \
-        --exclude 'crates/kithara-devtools/**' \
-        --exclude 'xtask/**' \
-        --exclude-re 'src/.*test.*\.rs' \
-        -j "$JOBS" --timeout 900 --minimum-test-timeout 300 \
-        --no-shuffle $RESUME_FLAG --output "$OUTPUT"
-    elif [[ -z "$target" ]]; then
-      cargo mutants --workspace --test-workspace=true --profile test-release \
-        --test-tool=nextest --timeout 120 --no-shuffle "$@"
-    else
-      cargo mutants -p "$target" --test-workspace=true --profile test-release \
-        --test-tool=nextest --timeout 120 --no-shuffle "$@"
-    fi
+mutants *ARGS:
+    just _xtask mutants "$@"
 
 [positional-arguments]
 loom-checkpoint FILE *ARGS:

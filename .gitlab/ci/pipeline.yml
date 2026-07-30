@@ -1,0 +1,28 @@
+include:
+  - local: .gitlab/ci/common.yml
+  - local: .gitlab/ci/apple.yml
+  - local: .gitlab/ci/linux.yml
+  - local: .gitlab/ci/android.yml
+  - local: .gitlab/ci/web.yml
+  - local: .gitlab/ci/windows.yml
+  - local: .gitlab/ci/deep.yml
+  - local: .gitlab/ci/release.yml
+
+stages:
+  - apple
+  - linux
+  - android
+  - web
+  - windows
+  - deep
+  - release-build
+  - release-publish
+
+variables:
+  CARGO_INCREMENTAL: "0"
+  GIT_DEPTH: "0"
+  RUST_BACKTRACE: "1"
+  SCCACHE_CACHE_SIZE: 50G
+
+default:
+  cache: []
