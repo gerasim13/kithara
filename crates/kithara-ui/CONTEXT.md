@@ -73,13 +73,17 @@ that enabling system fonts does not repeat a platform font-directory scan per wi
 the collection stays embedded-only.
 
 Where that owner sits is transitional and is stated here so it does not become permanent by
-default. Each canvas adapter currently builds its own context, so a document holds as many font
-collections as it has shaped widgets: cloning a `Collection` duplicates the family index, the query
-state and the fallback cache, and every context carries its own Parley scratch buffers. Only the
-face bytes are shared, through `Blob`. The single owner arrives with the render engine, which owns
-one context for the whole document; until then the count is bounded by the widgets that draw text.
-For the same reason the Vello backend builds a `FontData` per text call — it has no route to the
-resources — and that ends when `Backend` gains a backend-owned font type.
+default. Each text-drawing widget still owns one `TextContext`, so a document holds as many Parley
+shaping scratch buffers and font collections as it has shaped widgets. Consolidating those
+contexts needs a document-scoped owner that does not exist yet. Font-derived paint resources no
+longer follow that per-widget lifetime: `TextResources` builds the nine skrifa outline collections
+once and lends them to iced painters, and adapters borrow the resources from `Skin` rather than
+cloning them per view build.
+
+The Vello painter still builds a `FontData` per text call. Caching them would mean an exported
+font-cache type whose only caller is a test, because no shipped host encodes a Vello scene yet —
+the architectural ratchet refuses that, and it is right to. The allocation ends when a Vello host
+exists or when the draw seam gains a backend-owned font type, whichever lands first.
 
 `text::FontId` owns family/weight-to-face selection and the
 face-to-byte mapping. `render::fonts` re-exports those bytes for iced host registration and adds

@@ -13,8 +13,6 @@ use crate::skin::{FontFamily, FontWeight};
 pub struct TextContext {
     fonts: FontContext,
     layout: LayoutContext<()>,
-    #[cfg(feature = "render")]
-    resources: TextResources,
 }
 
 impl TextContext {
@@ -24,7 +22,7 @@ impl TextContext {
     ///
     /// Returns [`TextError`] when a compile-time embedded face is invalid.
     pub fn new() -> Result<Self, TextError> {
-        Ok(TextResources::new()?.into())
+        Ok(Self::from(&TextResources::new()?))
     }
 
     #[cfg(test)]
@@ -37,26 +35,19 @@ impl TextContext {
     }
 }
 
-impl From<TextResources> for TextContext {
-    fn from(resources: TextResources) -> Self {
+impl From<&TextResources> for TextContext {
+    fn from(resources: &TextResources) -> Self {
         Self {
             fonts: FontContext {
                 collection: resources.collection(),
                 source_cache: SourceCache::default(),
             },
             layout: LayoutContext::new(),
-            #[cfg(feature = "render")]
-            resources,
         }
     }
 }
 
 impl TextContext {
-    #[cfg(feature = "render")]
-    pub(crate) fn resources(&self) -> &TextResources {
-        &self.resources
-    }
-
     /// Shapes and measures text with the selected embedded face.
     ///
     /// `tracking` is additional letter spacing relative to `size`. `max_width`
@@ -95,15 +86,7 @@ impl TextContext {
                 }));
             }
         }
-        GlyphRun::new(
-            font,
-            glyphs,
-            layout.height(),
-            #[cfg(feature = "render")]
-            self.resources.outline_font(font),
-            size,
-            layout.width(),
-        )
+        GlyphRun::new(font, glyphs, layout.height(), size, layout.width())
     }
 }
 

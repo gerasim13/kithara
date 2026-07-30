@@ -7,7 +7,7 @@ use iced::{
     },
 };
 use skrifa::{
-    GlyphId, MetadataProvider,
+    GlyphId,
     instance::{LocationRef, Size},
     outline::{DrawSettings, OutlinePen},
 };
@@ -15,16 +15,17 @@ use skrifa::{
 use super::{Painter, Pt, Rgba, Transform};
 use crate::{
     skin::{FontFamily, FontWeight},
-    text::{GlyphRun, select},
+    text::{GlyphRun, TextResources, select},
 };
 
 pub(crate) struct IcedPainter<'frame> {
     frame: &'frame mut Frame,
+    resources: &'frame TextResources,
 }
 
 impl<'frame> IcedPainter<'frame> {
-    pub(crate) const fn new(frame: &'frame mut Frame) -> Self {
-        Self { frame }
+    pub(crate) const fn new(frame: &'frame mut Frame, resources: &'frame TextResources) -> Self {
+        Self { frame, resources }
     }
 }
 
@@ -65,7 +66,7 @@ impl Painter for IcedPainter<'_> {
     }
 
     fn text(&mut self, run: &GlyphRun, _content: &str, transform: Transform, color: Rgba) {
-        let outlines = run.outline_font().outline_glyphs();
+        let outlines = self.resources.outlines(run.font());
         let path = Path::new(|builder| {
             for glyph in run.glyphs() {
                 let Some(outline) = outlines.get(GlyphId::new(glyph.id)) else {

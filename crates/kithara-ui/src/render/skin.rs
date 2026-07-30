@@ -13,7 +13,7 @@ use crate::{
         ToggleSkin, TrackListSkin, TreeSkin, VisSkin, VuStereoSkin, VuVerticalSkin, WaveSkin,
         WindowSkin, parse_color,
     },
-    text::{TextContext, TextResources},
+    text::TextResources,
 };
 
 /// Resolved skin consumed by iced renderers.
@@ -64,7 +64,6 @@ impl Skin {
     /// # Errors
     /// Returns [`UiDocError`] when a palette value or embedded font is invalid.
     pub fn resolve(document: SkinDoc, origin: &SourceUri) -> Result<Self, UiDocError> {
-        let text = TextContext::new()?;
         Ok(Self {
             palette: RenderPalette {
                 bg: color(&document.palette.bg, origin)?,
@@ -124,7 +123,7 @@ impl Skin {
             tree: document.tree.clone(),
             track_list: document.track_list.clone(),
             layout_preview: document.layout_preview,
-            text_resources: text.resources().clone(),
+            text_resources: TextResources::new()?,
             document,
         })
     }

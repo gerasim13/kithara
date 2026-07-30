@@ -3,7 +3,7 @@ use std::fmt;
 use kithara_platform::sync::Arc;
 use parley::fontique::{Blob, Collection, CollectionOptions};
 #[cfg(feature = "render")]
-use skrifa::{FontRef, raw::ReadError};
+use skrifa::{FontRef, outline::OutlineGlyphCollection, raw::ReadError};
 use thiserror::Error;
 
 use super::FontId;
@@ -28,11 +28,11 @@ pub(crate) struct TextResources {
     collection: Collection,
     fonts: [FontId; 9],
     #[cfg(feature = "render")]
-    outline_fonts: [FontRef<'static>; 9],
+    outlines: Vec<OutlineGlyphCollection<'static>>,
 }
 
 impl TextResources {
-    pub(super) fn new() -> Result<Self, TextError> {
+    pub(crate) fn new() -> Result<Self, TextError> {
         let mut collection = Collection::new(CollectionOptions {
             shared: false,
             system_fonts: false,
@@ -47,17 +47,10 @@ impl TextResources {
             collection,
             fonts: FontId::ALL,
             #[cfg(feature = "render")]
-            outline_fonts: [
-                outline_font(FontId::InterRegular)?,
-                outline_font(FontId::InterSemibold)?,
-                outline_font(FontId::JetBrainsMonoRegular)?,
-                outline_font(FontId::JetBrainsMonoMedium)?,
-                outline_font(FontId::JetBrainsMonoSemibold)?,
-                outline_font(FontId::SpaceGroteskRegular)?,
-                outline_font(FontId::SpaceGroteskMedium)?,
-                outline_font(FontId::SpaceGroteskSemibold)?,
-                outline_font(FontId::SpaceGroteskBold)?,
-            ],
+            outlines: FontId::ALL
+                .into_iter()
+                .map(outline_collection)
+                .collect::<Result<_, _>>()?,
         })
     }
 
@@ -66,8 +59,8 @@ impl TextResources {
     }
 
     #[cfg(feature = "render")]
-    pub(super) fn outline_font(&self, font: FontId) -> FontRef<'static> {
-        self.outline_fonts[font.index()].clone()
+    pub(crate) fn outlines(&self, font: FontId) -> &OutlineGlyphCollection<'static> {
+        &self.outlines[font.index()]
     }
 }
 
@@ -87,6 +80,8 @@ impl PartialEq for TextResources {
 }
 
 #[cfg(feature = "render")]
-fn outline_font(font: FontId) -> Result<FontRef<'static>, TextError> {
-    FontRef::new(font.bytes()).map_err(|source| TextError::InvalidFont { font, source })
+fn outline_collection(font: FontId) -> Result<OutlineGlyphCollection<'static>, TextError> {
+    let font_ref =
+        FontRef::new(font.bytes()).map_err(|source| TextError::InvalidFont { font, source })?;
+    Ok(OutlineGlyphCollection::new(&font_ref))
 }

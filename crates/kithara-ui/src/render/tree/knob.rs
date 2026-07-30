@@ -19,7 +19,7 @@ pub(super) struct KnobProgram<'data, 'skin> {
     knob: Knob<'data, 'skin>,
     metrics: KnobSkin,
     drag: ScalarDrag,
-    text_resources: TextResources,
+    text_resources: &'skin TextResources,
 }
 
 impl<'data, 'skin> KnobProgram<'data, 'skin> {
@@ -48,7 +48,7 @@ impl<'data, 'skin> KnobProgram<'data, 'skin> {
                     step: metrics.wheel_step,
                 })
                 .build(),
-            text_resources: skin.text_resources().clone(),
+            text_resources: skin.text_resources(),
         }
     }
 
@@ -77,9 +77,13 @@ impl canvas::Program<UiEvent> for KnobProgram<'_, '_> {
         let mut frame = Frame::new(renderer, bounds.size());
         let (dial, caption) = self.rects(bounds);
         let mut text = state.text.borrow_mut();
-        let text = text.get_or_insert_with(|| self.text_resources.clone().into());
-        self.knob
-            .paint(&mut IcedPainter::new(&mut frame), text, dial, caption);
+        let text = text.get_or_insert_with(|| self.text_resources.into());
+        self.knob.paint(
+            &mut IcedPainter::new(&mut frame, self.text_resources),
+            text,
+            dial,
+            caption,
+        );
         vec![frame.into_geometry()]
     }
 
