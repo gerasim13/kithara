@@ -85,18 +85,16 @@ where
 struct FactoryDeps<B> {
     decoder: DecoderDeps<B>,
     epoch: Arc<AtomicU64>,
-    byte_len: Arc<AtomicU64>,
 }
 
 impl<B> FactoryDeps<B>
 where
     B: ResamplerBackend,
 {
-    fn new(decoder: &DecoderDeps<B>, epoch: &Arc<AtomicU64>, byte_len: &Arc<AtomicU64>) -> Self {
+    fn new(decoder: &DecoderDeps<B>, epoch: &Arc<AtomicU64>) -> Self {
         Self {
             decoder: DecoderDeps::clone(decoder),
             epoch: Arc::clone(epoch),
-            byte_len: Arc::clone(byte_len),
         }
     }
 }
@@ -176,7 +174,6 @@ where
 
         let bus = resolve_event_bus::<T>(&stream_config, config_bus);
         let stream = create_stream_with_probe::<T>(stream_config, byte_pool.clone()).await?;
-        let initial_byte_len = stream.len().unwrap_or(0);
         let playhead = stream.playhead_write();
         let seek = stream.seek_control();
         let seek_obs = stream.seek_observe();
@@ -185,7 +182,6 @@ where
         debug!(?initial_media_info, "Initial MediaInfo from stream");
 
         let shared_stream = SharedStream::new(stream);
-        let byte_len = Arc::new(AtomicU64::new(initial_byte_len));
         let host_sample_rate = Arc::new(AtomicU32::new(config_host_sr.map_or(0, NonZeroU32::get)));
         warm_pcm_pool(
             &pcm_pool,
@@ -224,7 +220,7 @@ where
             cancel: &cancel,
             decoder,
             decoder_backend: deps.backend(),
-            decoder_factory: create_decoder_factory(&deps, &epoch, &byte_len),
+            decoder_factory: create_decoder_factory(&deps, &epoch),
             effects,
             emit: Arc::clone(&emit),
             engine_load,
@@ -433,18 +429,17 @@ where
 fn create_decoder_factory<B>(
     decoder: &DecoderDeps<B>,
     epoch: &Arc<AtomicU64>,
-    byte_len: &Arc<AtomicU64>,
 ) -> StreamDecoderFactory
 where
     B: ResamplerBackend,
 {
-    let deps = FactoryDeps::new(decoder, epoch, byte_len);
+    let deps = FactoryDeps::new(decoder, epoch);
     Arc::new(move |mut reader, info| {
         let byte_len = reader.byte_len().unwrap_or(0);
-        deps.byte_len.store(byte_len, Ordering::Release);
+        let byte_len_handle = Arc::new(AtomicU64::new(byte_len));
         let config = DecoderConfig::builder()
             .backend(deps.decoder.decoder.backend())
-            .byte_len_handle(Arc::clone(&deps.byte_len))
+            .byte_len_handle(byte_len_handle)
             .pcm_pool(deps.decoder.pcm_pool.clone())
             .byte_pool(deps.decoder.byte_pool.clone())
             .epoch(deps.epoch.load(Ordering::Acquire))
