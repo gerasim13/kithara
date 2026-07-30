@@ -28,6 +28,11 @@ futures-executor = { version = "0.3", default-features = false, features = ["thr
 half = { version = "2" }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
+iced_core = { version = "0.14", default-features = false, features = ["advanced", "crisp"] }
+iced_futures = { version = "0.14", default-features = false, features = ["thread-pool", "tokio"] }
+iced_graphics = { version = "0.14", default-features = false, features = ["geometry", "svg", "web-colors"] }
+iced_renderer = { version = "0.14", default-features = false, features = ["geometry", "svg", "tiny-skia", "wayland", "web-colors", "wgpu", "wgpu-bare", "x11"] }
+iced_tiny_skia = { version = "0.14", features = ["geometry", "svg"] }
 icu_locale_core = { version = "2", default-features = false, features = ["alloc", "zerovec"] }
 litemap = { version = "0.8", default-features = false, features = ["alloc"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
@@ -38,18 +43,23 @@ once_cell = { version = "1" }
 parking_lot = { version = "0.12" }
 portable-atomic = { version = "1", default-features = false, features = ["fallback", "float", "require-cas", "std"] }
 rangemap = { version = "1", default-features = false, features = ["serde1"] }
+read-fonts = { version = "0.35", default-features = false, features = ["experimental_traverse", "libm"] }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "meta", "std"] }
 regex-syntax = { version = "0.8" }
 ringbuf = { version = "0.4", features = ["portable-atomic"] }
 serde = { version = "1", features = ["alloc", "derive"] }
 serde_core = { version = "1", default-features = false, features = ["alloc", "result", "std"] }
 serde_json = { version = "1", features = ["alloc"] }
+skrifa = { version = "0.37" }
 smallvec = { version = "1", default-features = false, features = ["const_new", "union"] }
-thiserror = { version = "2" }
+strict-num = { version = "0.1" }
 thunderdome = { version = "0.6", default-features = false, features = ["std"] }
+tiny-skia = { version = "0.11" }
+tiny-skia-path = { version = "0.11" }
 tinystr = { version = "0.8", default-features = false, features = ["alloc", "zerovec"] }
 tracing-core = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+unicode-bidi = { version = "0.3" }
 writeable = { version = "0.6", default-features = false, features = ["alloc"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
 zerovec = { version = "0.11", default-features = false, features = ["alloc", "derive", "yoke"] }
@@ -226,6 +236,7 @@ futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", default-features = false, features = ["num-traits"] }
+hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15" }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
@@ -255,7 +266,11 @@ tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
+ttf-parser = { version = "0.25", default-features = false, features = ["apple-layout", "glyph-names", "gvar-alloc", "no-std-float", "opentype-layout", "variable-fonts"] }
+wayland-backend = { version = "0.3", default-features = false, features = ["client_system", "dlopen"] }
 winnow = { version = "1" }
+x11rb = { version = "0.13", default-features = false, features = ["dl-libxcb", "randr", "resource_manager", "shm", "xinput", "xkb"] }
+x11rb-protocol = { version = "0.13", default-features = false, features = ["randr", "resource_manager", "shm", "xinput", "xkb"] }
 zstd = { version = "0.13" }
 zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
 zstd-sys = { version = "2", default-features = false, features = ["legacy", "std", "zdict_builder"] }
@@ -275,6 +290,11 @@ futures-executor = { version = "0.3", default-features = false, features = ["thr
 half = { version = "2" }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
+iced_core = { version = "0.14", default-features = false, features = ["advanced", "crisp"] }
+iced_futures = { version = "0.14", default-features = false, features = ["thread-pool", "tokio"] }
+iced_graphics = { version = "0.14", default-features = false, features = ["geometry", "svg", "web-colors"] }
+iced_renderer = { version = "0.14", default-features = false, features = ["geometry", "svg", "tiny-skia", "wayland", "web-colors", "wgpu", "wgpu-bare", "x11"] }
+iced_tiny_skia = { version = "0.14", features = ["geometry", "svg"] }
 icu_locale_core = { version = "2", default-features = false, features = ["alloc", "zerovec"] }
 indexmap = { version = "2", features = ["serde"] }
 litemap = { version = "0.8", default-features = false, features = ["alloc"] }
@@ -286,19 +306,24 @@ once_cell = { version = "1" }
 parking_lot = { version = "0.12" }
 portable-atomic = { version = "1", default-features = false, features = ["fallback", "float", "require-cas", "std"] }
 rangemap = { version = "1", default-features = false, features = ["serde1"] }
+read-fonts = { version = "0.35", default-features = false, features = ["experimental_traverse", "libm"] }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "meta", "std"] }
 regex-syntax = { version = "0.8" }
 ringbuf = { version = "0.4", features = ["portable-atomic"] }
 serde = { version = "1", features = ["alloc", "derive"] }
 serde_core = { version = "1", default-features = false, features = ["alloc", "result", "std"] }
 serde_json = { version = "1", features = ["alloc"] }
+skrifa = { version = "0.37" }
 smallvec = { version = "1", default-features = false, features = ["const_new", "union"] }
+strict-num = { version = "0.1" }
 syn = { version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
-thiserror = { version = "2" }
 thunderdome = { version = "0.6", default-features = false, features = ["std"] }
+tiny-skia = { version = "0.11" }
+tiny-skia-path = { version = "0.11" }
 tinystr = { version = "0.8", default-features = false, features = ["alloc", "zerovec"] }
 tracing-core = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+unicode-bidi = { version = "0.3" }
 writeable = { version = "0.6", default-features = false, features = ["alloc"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
 zerovec = { version = "0.11", default-features = false, features = ["alloc", "derive", "yoke"] }
@@ -487,6 +512,7 @@ futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", default-features = false, features = ["num-traits"] }
+hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15" }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 hotpath-macros = { version = "0.19", features = ["hotpath"] }
@@ -516,7 +542,11 @@ tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
+ttf-parser = { version = "0.25", default-features = false, features = ["apple-layout", "glyph-names", "gvar-alloc", "no-std-float", "opentype-layout", "variable-fonts"] }
+wayland-backend = { version = "0.3", default-features = false, features = ["client_system", "dlopen"] }
 winnow = { version = "1" }
+x11rb = { version = "0.13", default-features = false, features = ["dl-libxcb", "randr", "resource_manager", "shm", "xinput", "xkb"] }
+x11rb-protocol = { version = "0.13", default-features = false, features = ["randr", "resource_manager", "shm", "xinput", "xkb"] }
 zstd = { version = "0.13" }
 zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
 zstd-sys = { version = "2", default-features = false, features = ["legacy", "std", "zdict_builder"] }
