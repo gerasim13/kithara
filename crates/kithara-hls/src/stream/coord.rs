@@ -19,7 +19,8 @@ use kithara_stream::{
     Activity, ByteMap, ContainerFormat, DeferredWake, MediaInfo, PendingReason, PlayheadRead,
     PlayheadState, PlayheadWrite, ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekState,
     SegmentDescriptor, SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult,
-    VariantControl, VariantReaderTake, VariantTransition, dl::FetchCmd,
+    VariantControl, VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
+    dl::FetchCmd,
 };
 use kithara_test_utils::kithara;
 
@@ -851,11 +852,16 @@ impl VariantControl for HlsCoord {
         Self::enable_variant_sessions(self)
     }
 
+    fn plan_variant_reader(&self) -> StreamResult<Option<VariantReaderPlan>> {
+        Self::plan_variant_reader(self)
+    }
+
     fn prepare_variant_reader(
         &self,
+        plan: VariantReaderPlan,
         profile: ReaderProfile,
     ) -> StreamResult<Option<VariantTransition>> {
-        Self::prepare_variant_reader(self, profile)
+        Self::prepare_planned_variant_reader(self, plan, profile)
     }
 
     fn take_prepared_variant_reader(
@@ -865,8 +871,8 @@ impl VariantControl for HlsCoord {
         Self::take_prepared_variant_reader(self, transition)
     }
 
-    fn promote_variant(&self, transition: VariantTransition) -> bool {
-        Self::promote_variant(self, transition)
+    fn promote_variant(&self, transition: VariantTransition) -> VariantPromotion {
+        Self::promote_planned_variant(self, transition)
     }
 
     fn abort_variant(&self, transition: VariantTransition) -> bool {
@@ -1127,6 +1133,16 @@ mod tests {
         )
     }
 
+    fn prepare_incoming(
+        coord: &HlsCoord,
+        profile: ReaderProfile,
+    ) -> StreamResult<Option<VariantTransition>> {
+        let Some(plan) = VariantControl::plan_variant_reader(coord)? else {
+            return Ok(None);
+        };
+        VariantControl::prepare_variant_reader(coord, plan, profile)
+    }
+
     fn enable_exact_sessions(coord: &HlsCoord) {
         if let Some(pending) = coord.abr.claim_pending_decision() {
             assert!(coord.abr_publisher.abort_pending(pending.ticket()));
@@ -1247,13 +1263,99 @@ mod tests {
     }
 
     #[kithara::test]
+    fn variant_reader_plan_exposes_target_facts_before_session_creation() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        enable_exact_target(&coord, &abr_state);
+
+        let plan = coord
+            .plan_variant_reader()
+            .expect("plan incoming")
+            .expect("pending switch");
+
+        assert_eq!(plan.transition().active_variant(), VariantIndex::new(0));
+        assert_eq!(plan.transition().incoming_variant(), VariantIndex::new(1));
+        assert_eq!(plan.media_info().codec, Some(AudioCodec::Mp3));
+        assert_eq!(
+            plan.media_info().container,
+            Some(ContainerFormat::MpegAudio)
+        );
+        assert_eq!(plan.media_info().variant_index, Some(1));
+        assert_eq!(plan.base_offset(), 0);
+        assert_eq!(
+            coord.sessions.resident_count(),
+            1,
+            "planning must not open the incoming session"
+        );
+    }
+
+    #[kithara::test]
+    fn stale_variant_reader_plan_cannot_open_a_newer_intent() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        enable_exact_target(&coord, &abr_state);
+        let stale = coord
+            .plan_variant_reader()
+            .expect("plan first incoming")
+            .expect("first pending switch");
+
+        abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        let current = coord
+            .plan_variant_reader()
+            .expect("plan replacement incoming")
+            .expect("replacement pending switch");
+
+        assert_ne!(stale.transition().id(), current.transition().id());
+        assert_eq!(
+            coord
+                .prepare_planned_variant_reader(stale, incremental_profile(32))
+                .expect("reject stale plan"),
+            None
+        );
+        assert_eq!(coord.sessions.resident_count(), 1);
+        assert_eq!(
+            coord
+                .prepare_planned_variant_reader(current.clone(), incremental_profile(32))
+                .expect("prepare current plan"),
+            Some(current.transition())
+        );
+        assert_eq!(coord.sessions.resident_count(), 2);
+        assert!(coord.abort_variant(current.transition()));
+    }
+
+    #[kithara::test]
+    fn promotion_distinguishes_deferred_from_stale_transition() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        enable_exact_target(&coord, &abr_state);
+        let plan = coord
+            .plan_variant_reader()
+            .expect("plan incoming")
+            .expect("pending switch");
+        let transition = plan.transition();
+        coord
+            .prepare_planned_variant_reader(plan, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+
+        assert_eq!(
+            coord.promote_planned_variant(transition),
+            VariantPromotion::Deferred
+        );
+
+        abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        assert_eq!(
+            coord.promote_planned_variant(transition),
+            VariantPromotion::Stale
+        );
+        assert_eq!(coord.sessions.resident_count(), 1);
+        assert_eq!(coord.variant_index(), 0);
+    }
+
+    #[kithara::test]
     fn incoming_session_does_not_publish_variant_or_cursor_before_promotion() {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
         enable_exact_target(&coord, &abr_state);
         coord.set_position(17);
 
-        let transition = coord
-            .prepare_variant_reader(incremental_profile(32))
+        let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
         assert_eq!(coord.sessions.resident_count(), 2);
@@ -1276,8 +1378,7 @@ mod tests {
     fn exact_session_resolution_follows_the_committed_abr_selector_before_collapse() {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
         enable_exact_target(&coord, &abr_state);
-        coord
-            .prepare_variant_reader(incremental_profile(32))
+        prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
         let claim = coord
@@ -1298,8 +1399,7 @@ mod tests {
     fn exact_session_resolution_retries_a_stale_selector_snapshot() {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
         enable_exact_target(&coord, &abr_state);
-        coord
-            .prepare_variant_reader(incremental_profile(32))
+        prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
         let mut selector_observations = [0, 1, 1, 1].into_iter();
@@ -1319,8 +1419,7 @@ mod tests {
         let (coord, _bus, ctx, abr_state) = switch_coord();
         enable_exact_target(&coord, &abr_state);
         coord.set_position(17);
-        let transition = coord
-            .prepare_variant_reader(incremental_profile(32))
+        let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
         let mut commands = coord.dispatch_incoming(&ctx, 1);
@@ -1346,7 +1445,11 @@ mod tests {
         };
         assert_eq!(reader.transition(), transition);
         assert_eq!(reader.media_info().variant_index, Some(1));
-        let (_transition, _media_info, reader) = reader.split();
+        assert_eq!(reader.base_offset(), 0);
+        let (plan, reader) = reader.split();
+        assert_eq!(plan.transition(), transition);
+        assert_eq!(plan.media_info().variant_index, Some(1));
+        assert_eq!(plan.base_offset(), 0);
         let mut input = reader.into_inner();
         assert!(matches!(
             coord
@@ -1360,7 +1463,10 @@ mod tests {
         let mut first = [0_u8; 8];
         assert_eq!(input.read(&mut first).expect("read incoming"), first.len());
         assert_eq!(coord.position(), 17);
-        assert!(coord.promote_variant(transition));
+        assert_eq!(
+            coord.promote_planned_variant(transition),
+            VariantPromotion::Promoted
+        );
         assert_eq!(coord.sessions.resident_count(), 1);
         assert_eq!(coord.variant_index(), 1);
         assert_eq!(coord.position(), first.len() as u64);
@@ -1377,12 +1483,14 @@ mod tests {
     fn promotion_requires_the_exact_taken_reader() {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
         enable_exact_target(&coord, &abr_state);
-        let transition = coord
-            .prepare_variant_reader(incremental_profile(32))
+        let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
 
-        assert!(!coord.promote_variant(transition));
+        assert_eq!(
+            coord.promote_planned_variant(transition),
+            VariantPromotion::Deferred
+        );
         assert_eq!(coord.variant_index(), 0);
         assert!(coord.abort_variant(transition));
     }
@@ -1391,13 +1499,11 @@ mod tests {
     fn one_transition_rejects_a_different_reader_profile() {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
         enable_exact_target(&coord, &abr_state);
-        let transition = coord
-            .prepare_variant_reader(incremental_profile(32))
+        let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
 
-        let error = coord
-            .prepare_variant_reader(incremental_profile(64))
+        let error = prepare_incoming(&coord, incremental_profile(64))
             .expect_err("profile mismatch must fail");
         assert!(matches!(
             error,
@@ -1417,8 +1523,7 @@ mod tests {
     fn stale_same_target_identity_cannot_disturb_newer_incoming() {
         let (coord, _bus, ctx, abr_state) = switch_coord();
         enable_exact_target(&coord, &abr_state);
-        let stale = coord
-            .prepare_variant_reader(incremental_profile(32))
+        let stale = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare first incoming")
             .expect("first pending switch");
         let mut stale_command = coord
@@ -1433,8 +1538,7 @@ mod tests {
         assert!(!stale_cancel.is_cancelled());
 
         abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
-        let current = coord
-            .prepare_variant_reader(incremental_profile(32))
+        let current = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare replacement incoming")
             .expect("replacement pending switch");
 
@@ -1451,7 +1555,10 @@ mod tests {
             .expect("replacement fetch cancel")
             .clone();
         assert!(!current_cancel.is_cancelled());
-        assert!(!coord.promote_variant(stale));
+        assert_eq!(
+            coord.promote_planned_variant(stale),
+            VariantPromotion::Stale
+        );
         assert!(!coord.abort_variant(stale));
         assert!(!current_cancel.is_cancelled());
         assert!(matches!(
@@ -1468,8 +1575,7 @@ mod tests {
     fn exact_session_mode_never_falls_back_to_legacy_commit() {
         let (coord, _bus, ctx, abr_state) = switch_coord();
         enable_exact_target(&coord, &abr_state);
-        let transition = coord
-            .prepare_variant_reader(incremental_profile(32))
+        let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
         assert!(coord.abort_variant(transition));
@@ -1485,25 +1591,20 @@ mod tests {
     fn locked_exact_intent_keeps_its_incoming_session() {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
         enable_exact_target(&coord, &abr_state);
-        let transition = coord
-            .prepare_variant_reader(incremental_profile(32))
+        let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
 
         coord.abr.lock();
         assert_eq!(
-            coord
-                .prepare_variant_reader(incremental_profile(32))
-                .expect("locked preparation probe"),
+            prepare_incoming(&coord, incremental_profile(32)).expect("locked preparation probe"),
             Some(transition)
         );
         assert!(coord.has_incoming());
 
         coord.abr.unlock();
         assert_eq!(
-            coord
-                .prepare_variant_reader(incremental_profile(32))
-                .expect("unlocked preparation probe"),
+            prepare_incoming(&coord, incremental_profile(32)).expect("unlocked preparation probe"),
             Some(transition)
         );
     }
@@ -1512,14 +1613,12 @@ mod tests {
     fn locked_exact_intent_rejects_a_reader_profile_change() {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
         enable_exact_target(&coord, &abr_state);
-        coord
-            .prepare_variant_reader(incremental_profile(32))
+        prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
         coord.abr.lock();
 
-        let error = coord
-            .prepare_variant_reader(incremental_profile(64))
+        let error = prepare_incoming(&coord, incremental_profile(64))
             .expect_err("one transition cannot change reader profile while locked");
 
         assert!(matches!(
@@ -1528,6 +1627,87 @@ mod tests {
                 if error.kind() == ErrorKind::InvalidInput
         ));
         assert!(coord.has_incoming());
+    }
+
+    #[kithara::test]
+    fn locked_exact_intent_rejects_a_different_reader_plan() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        enable_exact_target(&coord, &abr_state);
+        let plan = coord
+            .plan_variant_reader()
+            .expect("plan incoming")
+            .expect("pending switch");
+        let transition = plan.transition();
+        let media_info = plan.media_info().clone();
+        coord
+            .prepare_planned_variant_reader(plan, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+        coord.abr.lock();
+
+        let mismatched = VariantReaderPlan::new(transition, media_info, 1);
+        let error = coord
+            .prepare_planned_variant_reader(mismatched, incremental_profile(32))
+            .expect_err("one transition cannot change reader plan while locked");
+
+        assert!(matches!(
+            error,
+            StreamError::Source(SourceError::Io(ref error))
+                if error.kind() == ErrorKind::InvalidInput
+        ));
+        assert!(coord.has_incoming());
+    }
+
+    #[kithara::test]
+    fn locked_plan_drops_an_incoming_from_an_old_seek_epoch() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        enable_exact_target(&coord, &abr_state);
+        let plan = coord
+            .plan_variant_reader()
+            .expect("plan incoming")
+            .expect("pending switch");
+        coord
+            .prepare_planned_variant_reader(plan, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+        coord.abr.lock();
+
+        let _epoch = coord.seek_control().begin(Duration::from_secs(1));
+
+        assert_eq!(coord.plan_variant_reader().expect("reject old epoch"), None);
+        assert_eq!(coord.sessions.resident_count(), 1);
+        assert_eq!(coord.selected_variant_for_seek(), 1);
+    }
+
+    #[kithara::test]
+    fn ready_stale_plan_drops_old_epoch_incoming_without_deleting_selection() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        enable_exact_target(&coord, &abr_state);
+        let plan = coord
+            .plan_variant_reader()
+            .expect("plan incoming")
+            .expect("pending switch");
+        let stale = plan.clone();
+        coord
+            .prepare_planned_variant_reader(plan, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+        let claim = coord
+            .abr
+            .claim_pending_decision()
+            .expect("selection remains pending until promotion");
+
+        let _epoch = coord.seek_control().begin(Duration::from_secs(1));
+
+        assert_eq!(
+            coord
+                .prepare_planned_variant_reader(stale, incremental_profile(32))
+                .expect("reject old epoch"),
+            None
+        );
+        assert_eq!(coord.sessions.resident_count(), 1);
+        assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
+        assert_eq!(coord.selected_variant_for_seek(), 1);
     }
 
     #[kithara::test]
@@ -1557,8 +1737,7 @@ mod tests {
         assert!(!coord.commit_variant_switch_at_segment(&ctx, 0));
         assert_eq!(coord.variant_index(), 0);
         assert!(
-            coord
-                .prepare_variant_reader(incremental_profile(32))
+            prepare_incoming(&coord, incremental_profile(32))
                 .expect("claim exact transition")
                 .is_some()
         );
@@ -1571,8 +1750,7 @@ mod tests {
         abr_state.set_mode(AbrMode::Auto(Some(VariantIndex::new(0))));
         abr_state.request_target(VariantIndex::new(9), AbrReason::UpSwitch);
 
-        let error = coord
-            .prepare_variant_reader(incremental_profile(32))
+        let error = prepare_incoming(&coord, incremental_profile(32))
             .expect_err("unknown target must fail");
         assert!(matches!(
             error,
@@ -1600,8 +1778,7 @@ mod tests {
     fn seek_aborts_the_exact_incoming_session() {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
         enable_exact_target(&coord, &abr_state);
-        let transition = coord
-            .prepare_variant_reader(incremental_profile(32))
+        let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
 
@@ -1625,8 +1802,7 @@ mod tests {
             .abr
             .claim_pending_decision()
             .expect("manual selection claim");
-        let stale = coord
-            .prepare_variant_reader(incremental_profile(32))
+        let stale = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
 
@@ -1634,8 +1810,7 @@ mod tests {
         coord.prepare_for_seek();
 
         assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
-        let replacement = coord
-            .prepare_variant_reader(incremental_profile(32))
+        let replacement = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare replacement")
             .expect("manual selection survives seek");
         assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());
@@ -1653,8 +1828,7 @@ mod tests {
             .abr
             .claim_pending_decision()
             .expect("automatic selection claim");
-        let stale = coord
-            .prepare_variant_reader(incremental_profile(32))
+        let stale = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
 
@@ -1662,8 +1836,7 @@ mod tests {
         coord.prepare_for_seek();
 
         assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
-        let replacement = coord
-            .prepare_variant_reader(incremental_profile(32))
+        let replacement = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare replacement")
             .expect("automatic selection survives seek");
         assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());
@@ -1694,19 +1867,20 @@ mod tests {
             .abr
             .claim_pending_decision()
             .expect("manual selection claim");
-        let stale = coord
-            .prepare_variant_reader(incremental_profile(32))
+        let stale = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
         take_ready_incremental_reader(&coord, &ctx, stale);
 
         let next_epoch = coord.seek_control().begin(Duration::from_secs(1));
 
-        assert!(!coord.promote_variant(stale));
+        assert_eq!(
+            coord.promote_planned_variant(stale),
+            VariantPromotion::Stale
+        );
         assert_eq!(coord.variant_index(), 0);
         assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
-        let replacement = coord
-            .prepare_variant_reader(incremental_profile(32))
+        let replacement = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare replacement")
             .expect("manual selection survives epoch change");
         assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());

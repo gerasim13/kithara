@@ -59,41 +59,93 @@ impl OpenedReader {
     }
 }
 
-/// Move-only incoming reader bound to one exact variant transition.
+/// Target facts needed to choose a decoder and its reader requirements before
+/// an incoming session is opened.
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub struct OpenedVariantReader {
+pub struct VariantReaderPlan {
+    base_offset: u64,
     media_info: MediaInfo,
-    reader: OpenedReader,
     transition: VariantTransition,
 }
 
-impl OpenedVariantReader {
-    /// Bind target media facts and byte capabilities to one transition.
+impl VariantReaderPlan {
+    /// Bind target media facts and the reader coordinate origin to one exact
+    /// transition.
     #[must_use]
-    pub fn new(transition: VariantTransition, media_info: MediaInfo, reader: OpenedReader) -> Self {
+    pub const fn new(
+        transition: VariantTransition,
+        media_info: MediaInfo,
+        base_offset: u64,
+    ) -> Self {
         Self {
+            base_offset,
             media_info,
-            reader,
             transition,
         }
     }
 
-    /// Target media facts captured with the reader.
-    #[must_use]
-    pub const fn media_info(&self) -> &MediaInfo {
-        &self.media_info
-    }
-
-    /// Exact transition that owns this reader.
+    /// Exact transition that owns the planned reader.
     #[must_use]
     pub const fn transition(&self) -> VariantTransition {
         self.transition
     }
 
+    /// Media facts used to select the decoder and reader profile.
+    #[must_use]
+    pub const fn media_info(&self) -> &MediaInfo {
+        &self.media_info
+    }
+
+    /// Coordinate origin of the reader passed to the decoder.
+    #[must_use]
+    pub const fn base_offset(&self) -> u64 {
+        self.base_offset
+    }
+}
+
+/// Move-only incoming reader bound to one exact variant reader plan.
+#[non_exhaustive]
+pub struct OpenedVariantReader {
+    plan: VariantReaderPlan,
+    reader: OpenedReader,
+}
+
+impl OpenedVariantReader {
+    /// Bind byte capabilities to the exact facts used to prepare the session.
+    #[must_use]
+    pub fn new(plan: VariantReaderPlan, reader: OpenedReader) -> Self {
+        Self { plan, reader }
+    }
+
+    /// Exact pre-open plan used to construct this reader.
+    #[must_use]
+    pub const fn plan(&self) -> &VariantReaderPlan {
+        &self.plan
+    }
+
+    /// Target media facts captured with the reader.
+    #[must_use]
+    pub const fn media_info(&self) -> &MediaInfo {
+        self.plan.media_info()
+    }
+
+    /// Exact transition that owns this reader.
+    #[must_use]
+    pub const fn transition(&self) -> VariantTransition {
+        self.plan.transition()
+    }
+
+    /// Coordinate origin of the reader passed to the decoder.
+    #[must_use]
+    pub const fn base_offset(&self) -> u64 {
+        self.plan.base_offset()
+    }
+
     /// Split the move-only bundle for decoder construction.
     #[must_use]
-    pub fn split(self) -> (VariantTransition, MediaInfo, OpenedReader) {
-        (self.transition, self.media_info, self.reader)
+    pub fn split(self) -> (VariantReaderPlan, OpenedReader) {
+        (self.plan, self.reader)
     }
 }
 

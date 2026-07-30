@@ -1,3 +1,5 @@
+mod prepare;
+
 use std::io::{Error as IoError, ErrorKind};
 
 use arc_swap::ArcSwap;
@@ -8,15 +10,11 @@ use kithara_platform::{
     time::Instant,
 };
 use kithara_stream::{
-    ByteMap, OpenedReader, OpenedVariantReader, ReaderProfile, SourceError, StreamError,
-    StreamResult, VariantReaderTake, VariantTransition, VariantTransitionId,
+    OpenedVariantReader, ReaderProfile, SourceError, StreamError, StreamResult, VariantPromotion,
+    VariantReaderPlan, VariantReaderTake, VariantTransition, VariantTransitionId,
 };
 
-use super::{
-    coord::{HlsCoord, variant_switch_target_time},
-    session::{HlsSession, HlsSessionReader},
-};
-use crate::reader::HlsReaderEventSink;
+use super::{coord::HlsCoord, session::HlsSession};
 
 pub(super) struct SessionSlots {
     publication: ArcSwap<SessionPublication>,
@@ -186,10 +184,7 @@ impl HlsCoord {
         Ok(())
     }
 
-    pub(super) fn prepare_variant_reader(
-        &self,
-        profile: ReaderProfile,
-    ) -> StreamResult<Option<VariantTransition>> {
+    pub(super) fn plan_variant_reader(&self) -> StreamResult<Option<VariantReaderPlan>> {
         let mut state = self.sessions.transition.lock();
         if !state.exact {
             return Err(StreamError::Source(SourceError::Io(IoError::new(
@@ -206,13 +201,19 @@ impl HlsCoord {
                 if let Some(slot) = state.incoming.as_ref()
                     && slot.claim == claim
                 {
-                    if slot.profile != profile {
-                        return Err(StreamError::Source(SourceError::Io(IoError::new(
-                            ErrorKind::InvalidInput,
-                            "reader profile changed within one variant transition",
-                        ))));
+                    let epoch_matches =
+                        self.seek_observe().epoch() == slot.transition.id().seek_epoch();
+                    let active_matches =
+                        self.variant_index() == slot.transition.active_variant().get();
+                    if !epoch_matches || !active_matches {
+                        self.discard_incoming(&mut state, false);
+                        return Ok(None);
                     }
-                    return Ok(Some(slot.transition));
+                    return Ok(Some(VariantReaderPlan::new(
+                        slot.transition,
+                        slot.session.media_info(),
+                        0,
+                    )));
                 }
                 self.discard_incoming(&mut state, true);
                 return Ok(None);
@@ -220,24 +221,20 @@ impl HlsCoord {
             PendingAbrClaim::Ready(claim) => claim,
             _ => return Err(unsupported_pending_claim()),
         };
-        let active_variant = VariantIndex::new(self.variant_index());
-        let incoming_variant = claim.decision().target();
         let transition = VariantTransition::new(
             VariantTransitionId::new(claim.ticket(), self.seek_observe().epoch()),
-            active_variant,
-            incoming_variant,
+            VariantIndex::new(self.variant_index()),
+            claim.decision().target(),
         );
 
         if let Some(slot) = state.incoming.as_ref()
             && slot.transition == transition
         {
-            if slot.profile != profile {
-                return Err(StreamError::Source(SourceError::Io(IoError::new(
-                    ErrorKind::InvalidInput,
-                    "reader profile changed within one variant transition",
-                ))));
-            }
-            return Ok(Some(transition));
+            return Ok(Some(VariantReaderPlan::new(
+                transition,
+                slot.session.media_info(),
+                0,
+            )));
         }
         if state.incoming.is_some() {
             let abort_intent = state
@@ -246,30 +243,15 @@ impl HlsCoord {
                 .is_some_and(|slot| slot.claim != claim);
             self.discard_incoming(&mut state, abort_intent);
         }
+        drop(state);
 
-        let Some(target) = self.variants.get(incoming_variant.get()).cloned() else {
+        let Some(target) = self.variants.get(transition.incoming_variant().get()) else {
             let _ = self.abr_publisher.abort_pending(claim.ticket());
             return Err(StreamError::Source(SourceError::VariantNotFound(format!(
                 "incoming variant {}",
-                incoming_variant.get()
+                transition.incoming_variant().get()
             ))));
         };
-        let session = match HlsSession::incoming(
-            self.cancel.child(),
-            profile,
-            self.seek_observe(),
-            self.signal(),
-            transition,
-            target,
-            variant_switch_target_time(self.seek_observe().as_ref(), self.playhead_read().as_ref()),
-        ) {
-            Ok(session) => Arc::new(session),
-            Err(error) => {
-                let _ = self.abr_publisher.abort_pending(claim.ticket());
-                return Err(error);
-            }
-        };
-
         let epoch_matches = self.seek_observe().epoch() == transition.id().seek_epoch();
         let claim_matches = match self.abr.pending_claim() {
             PendingAbrClaim::Ready(current) | PendingAbrClaim::Locked(current) => current == claim,
@@ -279,37 +261,17 @@ impl HlsCoord {
             || !claim_matches
             || self.variant_index() != transition.active_variant().get()
         {
-            session.abort();
             if epoch_matches {
                 let _ = self.abr_publisher.abort_pending(claim.ticket());
             }
             return Ok(None);
         }
 
-        let reader = OpenedReader::new(
-            HlsSessionReader::new(Arc::clone(&session)),
-            session.len(),
-            Some(Arc::clone(&session) as Arc<dyn ByteMap>),
-            Some(Box::new(HlsReaderEventSink::for_session(
-                Arc::clone(&self.emit),
-                Arc::clone(&session),
-                self.seek_epoch_handle(),
-            ))),
-        );
-        let reader = OpenedVariantReader::new(transition, session.media_info(), reader);
-        let outgoing = self.active_session();
-        self.sessions
-            .publish_exact_two(outgoing, Arc::clone(&session));
-        state.incoming = Some(IncomingSlot {
-            claim,
-            profile,
-            reader: Some(reader),
-            session,
+        Ok(Some(VariantReaderPlan::new(
             transition,
-        });
-        drop(state);
-        self.signal().wake_peer();
-        Ok(Some(transition))
+            target.media_info(),
+            0,
+        )))
     }
 
     pub(super) fn take_prepared_variant_reader(
@@ -363,36 +325,44 @@ impl HlsCoord {
         result
     }
 
-    pub(super) fn promote_variant(&self, transition: VariantTransition) -> bool {
+    pub(super) fn promote_planned_variant(
+        &self,
+        transition: VariantTransition,
+    ) -> VariantPromotion {
         let mut state = self.sessions.transition.lock();
         let Some(slot) = state.incoming.as_ref() else {
-            return false;
+            return VariantPromotion::Stale;
         };
-        if slot.transition != transition || slot.reader.is_some() {
-            return false;
+        if slot.transition != transition {
+            return VariantPromotion::Stale;
         }
         if self.seek_observe().epoch() != transition.id().seek_epoch() {
             self.discard_incoming(&mut state, false);
-            return false;
+            return VariantPromotion::Stale;
         }
         match self.abr.pending_claim() {
-            PendingAbrClaim::Locked(claim) if claim == slot.claim => return false,
+            PendingAbrClaim::Locked(claim) if claim == slot.claim => {
+                return VariantPromotion::Deferred;
+            }
             PendingAbrClaim::Locked(_) | PendingAbrClaim::Absent => {
                 self.discard_incoming(&mut state, true);
-                return false;
+                return VariantPromotion::Stale;
             }
             PendingAbrClaim::Ready(claim)
                 if claim != slot.claim
                     || self.variant_index() != transition.active_variant().get() =>
             {
                 self.discard_incoming(&mut state, true);
-                return false;
+                return VariantPromotion::Stale;
             }
             PendingAbrClaim::Ready(_) => {}
-            _ => return false,
+            _ => return VariantPromotion::Stale,
+        }
+        if slot.reader.is_some() {
+            return VariantPromotion::Deferred;
         }
         let Some(slot) = state.incoming.take() else {
-            return false;
+            return VariantPromotion::Stale;
         };
         let outgoing = self.active_session();
         let now = Instant::now();
@@ -409,11 +379,24 @@ impl HlsCoord {
             None => {
                 self.sessions.publish_exact_one(outgoing);
                 slot.session.abort();
-                return false;
+                return VariantPromotion::Stale;
             }
             Some(false) => {
-                state.incoming = Some(slot);
-                return false;
+                let claim_matches = match self.abr.pending_claim() {
+                    PendingAbrClaim::Ready(current) | PendingAbrClaim::Locked(current) => {
+                        current == slot.claim
+                    }
+                    _ => false,
+                };
+                let epoch_matches = self.seek_observe().epoch() == transition.id().seek_epoch();
+                let active_matches = self.variant_index() == transition.active_variant().get();
+                if claim_matches && epoch_matches && active_matches {
+                    state.incoming = Some(slot);
+                    return VariantPromotion::Deferred;
+                }
+                self.sessions.publish_exact_one(outgoing);
+                slot.session.abort();
+                return VariantPromotion::Stale;
             }
             Some(true) => {}
         }
@@ -425,7 +408,7 @@ impl HlsCoord {
             now,
         );
         self.signal().fire();
-        true
+        VariantPromotion::Promoted
     }
 
     pub(super) fn abort_variant(&self, transition: VariantTransition) -> bool {

@@ -15,9 +15,9 @@ use crate::{
     media::MediaInfo,
     playhead::{PlayheadRead, PlayheadWrite},
     profile::ReaderProfile,
-    reader::VariantReaderTake,
+    reader::{VariantReaderPlan, VariantReaderTake},
     seek_state::{Activity, SeekControl, SeekObserve},
-    transition::VariantTransition,
+    transition::{VariantPromotion, VariantTransition},
     wake::{DeferredWake, WorkerWake},
 };
 
@@ -359,6 +359,14 @@ pub trait VariantControl: Send + Sync + 'static {
     /// Returns a source error when activation would race an existing intent.
     fn enable_variant_sessions(&self) -> StreamResult<()>;
 
+    /// Capture the exact target media facts needed to select a decoder and
+    /// compute its reader profile before an incoming session is opened.
+    ///
+    /// # Errors
+    ///
+    /// Returns a source error when the pending target cannot be resolved.
+    fn plan_variant_reader(&self) -> StreamResult<Option<VariantReaderPlan>>;
+
     /// Claim the current exact ABR intent and start preparing its independent
     /// reader session. Repeated calls for the same intent return the same
     /// transition; a newer intent supersedes the previous incoming session.
@@ -368,6 +376,7 @@ pub trait VariantControl: Send + Sync + 'static {
     /// Returns a source error when the target session cannot be prepared.
     fn prepare_variant_reader(
         &self,
+        plan: VariantReaderPlan,
         profile: ReaderProfile,
     ) -> StreamResult<Option<VariantTransition>>;
 
@@ -384,8 +393,7 @@ pub trait VariantControl: Send + Sync + 'static {
 
     /// Publish the incoming variant only when `transition` still identifies
     /// the exact pending ABR intent in the same seek epoch.
-    #[must_use]
-    fn promote_variant(&self, transition: VariantTransition) -> bool;
+    fn promote_variant(&self, transition: VariantTransition) -> VariantPromotion;
 
     /// Cancel one exact incoming session without disturbing the authoritative
     /// outgoing variant or a newer ABR intent.

@@ -17,7 +17,8 @@ use kithara_stream::{
     Activity, AudioCodec, ByteMap, ChunkPosition, ContainerFormat, MediaInfo, PlayheadRead,
     PlayheadState, PlayheadWrite, ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekState,
     SegmentDescriptor, Source, SourceError, SourcePhase, SourceSeekAnchor, Stream, StreamError,
-    StreamResult, StreamType, VariantControl, VariantReaderTake, VariantTransition, WorkerWake,
+    StreamResult, StreamType, VariantControl, VariantPromotion, VariantReaderPlan,
+    VariantReaderTake, VariantTransition, WorkerWake,
 };
 use kithara_test_utils::kithara;
 
@@ -109,8 +110,13 @@ impl VariantControl for SpliceState {
         Ok(())
     }
 
+    fn plan_variant_reader(&self) -> StreamResult<Option<VariantReaderPlan>> {
+        Ok(None)
+    }
+
     fn prepare_variant_reader(
         &self,
+        _plan: VariantReaderPlan,
         _profile: ReaderProfile,
     ) -> StreamResult<Option<VariantTransition>> {
         Ok(None)
@@ -123,8 +129,8 @@ impl VariantControl for SpliceState {
         Ok(VariantReaderTake::Stale)
     }
 
-    fn promote_variant(&self, _transition: VariantTransition) -> bool {
-        false
+    fn promote_variant(&self, _transition: VariantTransition) -> VariantPromotion {
+        VariantPromotion::Stale
     }
 
     fn abort_variant(&self, _transition: VariantTransition) -> bool {

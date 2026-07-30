@@ -1,6 +1,21 @@
 use kithara_abr::AbrTicket;
 use kithara_events::{SeekEpoch, VariantIndex};
 
+/// Result of publishing an audio-approved incoming variant.
+#[must_use]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum VariantPromotion {
+    /// The exact ABR ticket and source session were published.
+    Promoted,
+    /// The transition is still exact, but publication is temporarily locked or
+    /// its move-only reader has not been transferred yet.
+    Deferred,
+    /// The transition was superseded, aborted, promoted, or invalidated by a
+    /// seek epoch change.
+    Stale,
+}
+
 /// Exact identity of one variant transition in one seek epoch.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
