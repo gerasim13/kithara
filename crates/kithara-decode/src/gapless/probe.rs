@@ -97,7 +97,10 @@ pub(crate) fn probe_codec_gapless(
 fn read_mp3_probe_prefix(source: &mut dyn DecoderInput) -> Vec<u8> {
     let buffer = read_probe_window(source);
     let audio_start = skip_id3v2(&buffer);
-    if audio_start == 0 || audio_start < buffer.len() {
+    // A short window means the source ran out of ready bytes, not that the tag
+    // is long, and seeking past the download frontier reads back as EOF. Only a
+    // full window proves the tag really outgrows it.
+    if buffer.len() < Consts::WINDOW_BYTES || audio_start < Consts::WINDOW_BYTES {
         return buffer;
     }
 
@@ -107,9 +110,16 @@ fn read_mp3_probe_prefix(source: &mut dyn DecoderInput) -> Vec<u8> {
         .map_or(buffer, |_| read_probe_window(source))
 }
 
-fn read_probe_window(source: &mut dyn DecoderInput) -> Vec<u8> {
-    const WINDOW_BYTES: usize = 16 * 1024;
+struct Consts;
+
+impl Consts {
     const CHUNK_BYTES: usize = 1024;
+    const WINDOW_BYTES: usize = 16 * 1024;
+}
+
+fn read_probe_window(source: &mut dyn DecoderInput) -> Vec<u8> {
+    const WINDOW_BYTES: usize = Consts::WINDOW_BYTES;
+    const CHUNK_BYTES: usize = Consts::CHUNK_BYTES;
 
     let mut buffer = Vec::with_capacity(WINDOW_BYTES);
     let mut scratch = [0u8; CHUNK_BYTES];
@@ -155,6 +165,18 @@ mod tests {
 
         assert_eq!(buffer.first().copied(), Some(0xFF));
         assert_eq!(buffer.get(1).copied(), Some(0xFB));
+    }
+
+    #[test]
+    fn probe_window_stays_put_when_the_source_ends_inside_the_tag() {
+        let mut data = mp3_behind_id3(32 * 1024);
+        data.truncate(4 * 1024);
+        let mut source = Cursor::new(data);
+
+        let buffer = read_mp3_probe_prefix(&mut source);
+
+        assert_eq!(buffer.first().copied(), Some(b'I'));
+        assert_eq!(buffer.len(), 4 * 1024);
     }
 
     #[test]
