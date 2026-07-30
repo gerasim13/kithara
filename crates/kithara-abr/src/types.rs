@@ -5,7 +5,7 @@ pub use kithara_events::{
 
 pub use crate::{
     controller::{AbrPeerId, AbrSettings},
-    state::{AbrDecision, AbrTicket, PendingAbrDecision},
+    state::{AbrDecision, AbrTicket, PendingAbrClaim, PendingAbrDecision},
 };
 
 #[cfg(test)]

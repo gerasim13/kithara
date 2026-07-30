@@ -7,7 +7,7 @@ use kithara_test_utils::kithara;
 
 use crate::{
     controller::{AbrController, AbrPeerId},
-    state::{AbrDecision, AbrError, AbrState, AbrTicket, PendingAbrDecision},
+    state::{AbrDecision, AbrError, AbrState, PendingAbrClaim, PendingAbrDecision},
 };
 
 /// Clone-able handle returned by [`AbrController::register`].
@@ -45,27 +45,6 @@ impl AbrHandle {
         }
     }
 
-    /// Apply a decision previously obtained from
-    /// [`peek_pending_decision`](Self::peek_pending_decision). Mirrors
-    /// [`AbrState::apply_decision`]. No-op for stateless handles.
-    #[kithara::probe(decision)]
-    pub fn apply_decision(&self, decision: &AbrDecision, now: Instant) {
-        if let Some(state) = self.inner.state.as_ref() {
-            state.apply_decision(decision, now);
-        }
-    }
-
-    /// Drop the pending request only when `ticket` still identifies it.
-    ///
-    /// Returns `false` for stateless handles and stale tickets.
-    #[must_use]
-    pub fn abort_pending(&self, ticket: AbrTicket) -> bool {
-        self.inner
-            .state
-            .as_ref()
-            .is_some_and(|state| state.abort_pending(ticket))
-    }
-
     /// Claim the exact pending request without consuming it.
     #[must_use]
     pub fn claim_pending_decision(&self) -> Option<PendingAbrDecision> {
@@ -73,15 +52,23 @@ impl AbrHandle {
         state.claim_pending_decision(state.current_variant_index())
     }
 
-    /// Publish `claim` only when it still identifies the pending request.
-    ///
-    /// Returns `false` for stateless handles and stale claims.
+    /// Observe whether the exact pending intent is absent, locked, or ready.
     #[must_use]
-    pub fn commit_pending(&self, claim: PendingAbrDecision, now: Instant) -> bool {
+    pub fn pending_claim(&self) -> PendingAbrClaim {
+        let Some(state) = self.inner.state.as_ref() else {
+            return PendingAbrClaim::Absent;
+        };
+        state.pending_claim(state.current_variant_index())
+    }
+
+    /// Variant selected for a seek replacement, including a locked pending
+    /// intent. Stateless handles return `None`.
+    #[must_use]
+    pub fn selected_variant_for_seek(&self) -> Option<usize> {
         self.inner
             .state
             .as_ref()
-            .is_some_and(|state| state.commit_pending(claim, now))
+            .map(|state| state.selected_variant_for_seek().get())
     }
 
     /// Clear the escape condition — see [`AbrState::clear_escape`]. No-op for
@@ -351,13 +338,14 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn peek_then_apply_happy_path() {
+    async fn handle_observes_legacy_publication_from_the_state_owner() {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
             CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+        let publisher = state.publisher();
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
         });
@@ -377,18 +365,19 @@ mod tests {
             "peek must not mutate"
         );
 
-        handle.apply_decision(&decision, Instant::now());
+        publisher.apply_legacy_decision(&decision, Instant::now());
         assert_eq!(state.current_variant_index(), VariantIndex::new(2));
     }
 
     #[kithara::test(tokio)]
-    async fn claim_then_commit_happy_path() {
+    async fn handle_observes_exact_publication_from_the_state_owner() {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
             CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+        let publisher = state.publisher();
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
         });
@@ -399,7 +388,7 @@ mod tests {
             .claim_pending_decision()
             .expect("pending request must be claimable");
 
-        assert!(handle.commit_pending(claim, Instant::now()));
+        assert!(publisher.commit_pending(claim, Instant::now()));
         assert_eq!(state.current_variant_index(), VariantIndex::new(2));
         assert!(handle.claim_pending_decision().is_none());
     }

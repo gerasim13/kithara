@@ -96,3 +96,16 @@ impl OpenedVariantReader {
         (self.transition, self.media_info, self.reader)
     }
 }
+
+/// Result of taking the reader owned by one exact variant transition.
+#[non_exhaustive]
+pub enum VariantReaderTake {
+    /// The transition is live, but its construction bytes are not ready yet.
+    Preparing,
+    /// The move-only reader is ready and transferred to the caller.
+    Ready(OpenedVariantReader),
+    /// The exact transition is live, but its reader was already transferred.
+    Taken,
+    /// The transition was superseded, aborted, promoted, or never existed.
+    Stale,
+}

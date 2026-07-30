@@ -5,9 +5,38 @@ use kithara_test_utils::kithara;
 use super::HlsVariant;
 
 impl HlsVariant {
+    fn eof_at_with(&self, offset: u64, before_ready: impl FnOnce()) -> bool {
+        self.layout
+            .try_published(|| {
+                let total = self.total_bytes();
+                before_ready();
+                Some(self.eof_at_published(offset, total))
+            })
+            .unwrap_or(false)
+    }
+
+    pub(in crate::variant) fn eof_at_published(&self, offset: u64, total: u64) -> bool {
+        total > 0 && offset >= total && self.eof_ready()
+    }
+
+    pub(crate) fn eof_at(&self, offset: u64) -> bool {
+        self.eof_at_with(offset, || {})
+    }
+
+    #[cfg(test)]
+    pub(crate) fn eof_at_before_ready_check(
+        &self,
+        offset: u64,
+        before_ready: impl FnOnce(),
+    ) -> bool {
+        self.eof_at_with(offset, before_ready)
+    }
+
     pub(crate) fn authoritative_len(&self) -> Option<u64> {
-        let total = self.total_bytes();
-        (total > 0 && self.sizes_complete()).then_some(total)
+        self.layout.try_published(|| {
+            let total = self.total_bytes();
+            (total > 0 && self.sizes_complete()).then_some(total)
+        })
     }
 
     pub(crate) fn eof_ready(&self) -> bool {

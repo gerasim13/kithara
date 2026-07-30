@@ -6,6 +6,19 @@ use kithara_stream::{SourceSeekAnchor, StreamError, StreamResult, needs_exact_by
 use super::{HlsVariant, seqlock::AliasSnapshot, size::ExactSeekDemand};
 use crate::HlsError;
 
+#[derive(Clone, Copy)]
+pub(crate) struct ResolvedSeekProjection {
+    alias_generation: u64,
+    demand_generation: Option<u64>,
+    exact_anchor: u64,
+}
+
+impl ResolvedSeekProjection {
+    pub(crate) const fn exact_anchor(self) -> u64 {
+        self.exact_anchor
+    }
+}
+
 impl HlsVariant {
     delegate::delegate! {
         to self.seek.alias {
@@ -26,7 +39,7 @@ impl HlsVariant {
         }
     }
 
-    pub(super) fn clear_seek_alias_if_moved(&self, pos: u64) {
+    pub(crate) fn retire_seek_projection_if_moved(&self, pos: u64) {
         // RT-reachable (via `advance`): a lock-free, alloc-free load + atomic
         // clear. The base is single-writer (on-core), so the `Some -> None`
         // store never races a concurrent base writer.
@@ -37,7 +50,13 @@ impl HlsVariant {
             .is_some_and(|alias| !alias.covers_position(pos))
         {
             self.seek.alias.clear();
+            self.clear_exact_seek();
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn seek_projection_is_live(&self) -> bool {
+        self.seek.alias.load().is_some() || self.seek.exact_seek.load().is_some()
     }
 
     fn clear_segment_aware_seek_tail(&self) {
@@ -72,6 +91,46 @@ impl HlsVariant {
             .resolve(demand.segment, demand.anchor, exact_anchor);
     }
 
+    pub(crate) fn resolved_seek_anchor(&self, anchor: u64) -> Option<u64> {
+        self.seek
+            .alias
+            .load()
+            .filter(|alias| alias.anchor == anchor)
+            .and_then(|alias| alias.exact_anchor)
+    }
+
+    pub(crate) fn resolved_seek_projection(&self, anchor: u64) -> Option<ResolvedSeekProjection> {
+        let alias = self
+            .seek
+            .alias
+            .load()
+            .filter(|alias| alias.anchor == anchor)?;
+        let demand_generation = self
+            .seek
+            .exact_seek
+            .load()
+            .filter(|demand| demand.segment == alias.segment && demand.anchor == alias.anchor)
+            .map(|demand| demand.generation);
+        Some(ResolvedSeekProjection {
+            alias_generation: alias.generation,
+            demand_generation,
+            exact_anchor: alias.exact_anchor?,
+        })
+    }
+
+    pub(crate) fn retire_seek_projection(&self, projection: ResolvedSeekProjection) {
+        if !self
+            .seek
+            .alias
+            .clear_if_generation(projection.alias_generation)
+        {
+            return;
+        }
+        if let Some(generation) = projection.demand_generation {
+            let _ = self.seek.exact_seek.clear_if_generation(generation);
+        }
+    }
+
     pub(super) fn seek_alias_at(&self, byte: u64) -> Option<(u32, u64, u64)> {
         let alias = self.seek.alias.load()?;
         if byte < alias.anchor {
@@ -97,6 +156,17 @@ impl HlsVariant {
         &self,
         position: Duration,
     ) -> StreamResult<Option<SourceSeekAnchor>> {
+        let anchor = self.prepare_seek_time_anchor(position)?;
+        if let Some(anchor) = anchor {
+            self.set_position_without_byte_demand(anchor.byte_offset);
+        }
+        Ok(anchor)
+    }
+
+    pub(crate) fn prepare_seek_time_anchor(
+        &self,
+        position: Duration,
+    ) -> StreamResult<Option<SourceSeekAnchor>> {
         let variant = self.variant;
         let Some((seg_idx_u32, segment_start, segment_end)) = self.seek_point_at_time(position)
         else {
@@ -117,7 +187,14 @@ impl HlsVariant {
             )
         })?;
         let fetch_start = self.seek_readahead_start_segment(seg_idx_u32);
-        let prefetch_anchor = self.segment_byte_offset(fetch_start).unwrap_or(byte_offset);
+        let prefetch_anchor = self.segment_byte_offset(fetch_start).ok_or_else(|| {
+            StreamError::Source(
+                HlsError::SegmentNotFound(format!(
+                    "seek prefetch offset not found: variant={variant} segment={fetch_start}"
+                ))
+                .into(),
+            )
+        })?;
         let anchor = SourceSeekAnchor::builder()
             .byte_offset(byte_offset)
             .segment_start(segment_start)
@@ -125,7 +202,6 @@ impl HlsVariant {
             .segment_index(seg_idx_u32)
             .variant_index(variant)
             .build();
-        self.set_position_without_byte_demand(byte_offset);
         self.set_prefetch_anchor(prefetch_anchor);
         self.set_seek_alias(byte_offset, seg_idx_u32);
         self.set_segment_aware_seek_tail(fetch_start);

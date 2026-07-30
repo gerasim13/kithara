@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     task::{Context, Poll, Waker},
 };
 
-use kithara_abr::{Abr, AbrState};
+use kithara_abr::{Abr, AbrPublisher, AbrState};
 use kithara_assets::ResourceKey;
 use kithara_events::{AbrMode, AbrProgressSnapshot, VariantDuration, VariantInfo};
 use kithara_platform::{
@@ -65,12 +65,51 @@ struct HlsTrackState {
     reader_variant: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SessionSlot {
+    Active,
+    Incoming,
+}
+
+impl SessionSlot {
+    const fn other(self) -> Self {
+        match self {
+            Self::Active => Self::Incoming,
+            Self::Incoming => Self::Active,
+        }
+    }
+}
+
+#[derive(Default)]
+struct SessionTurns {
+    incoming: AtomicBool,
+}
+
+impl SessionTurns {
+    fn next(&self, has_incoming: bool) -> SessionSlot {
+        if !has_incoming {
+            self.incoming.store(false, Ordering::Relaxed);
+            return SessionSlot::Active;
+        }
+        if self.incoming.fetch_xor(true, Ordering::Relaxed) {
+            SessionSlot::Incoming
+        } else {
+            SessionSlot::Active
+        }
+    }
+
+    fn reset(&self) {
+        self.incoming.store(false, Ordering::Relaxed);
+    }
+}
+
 /// HLS peer — one per track. Pre-init: `poll_next` returns Pending.
 /// After [`activate`](Self::activate): each `poll_next` drains seek/ABR
 /// commit/eviction events and asks the active [`HlsVariant`] for the
 /// next batch of `FetchCmd`s (thin event router per spec).
 pub(crate) struct HlsPeer {
     abr: Arc<AbrState>,
+    abr_publisher: AbrPublisher,
     /// Narrow activity handle. Used by `priority()` to check whether
     /// the track is currently playing.
     activity: Arc<dyn Activity>,
@@ -81,6 +120,7 @@ pub(crate) struct HlsPeer {
     /// of the peer, not of shared state.
     reader_advanced: Arc<DeferredWake>,
     reader_segment: Arc<AtomicUsize>,
+    session_turns: SessionTurns,
     /// Narrow seek-observe handle. Used by `poll_next`'s inner logic
     /// (via `HlsTrackState`) to read the current epoch/target without
     /// holding a wide seek/playhead aggregate.
@@ -106,17 +146,25 @@ impl HlsPeer {
         activity: Arc<dyn Activity>,
         initial_mode: AbrMode,
     ) -> Self {
+        let abr = Arc::new(AbrState::new(initial_mode));
+        let abr_publisher = abr.publisher();
         Self {
             seek_obs,
             activity,
             state: Arc::new(Mutex::new(None)),
             pending_waker: Mutex::default(),
             wake_signal: CancelToken::never(),
-            abr: Arc::new(AbrState::new(initial_mode)),
+            abr,
+            abr_publisher,
             variants: Mutex::default(),
             reader_segment: Arc::new(AtomicUsize::new(0)),
             reader_advanced: Arc::new(DeferredWake::default()),
+            session_turns: SessionTurns::default(),
         }
+    }
+
+    pub(crate) fn abr_publisher(&self) -> AbrPublisher {
+        self.abr_publisher.clone()
     }
 
     pub(crate) fn activate(
@@ -138,21 +186,20 @@ impl HlsPeer {
         let initial_seg = coord
             .find_at_offset(coord.position())
             .map_or(0, |(idx, _, _)| idx);
-        if let Some(active) = coord.active() {
-            let plan_ctx = PlanCtx {
-                bus: active.event_bus(),
-                prefetch_budget,
-                look_ahead_bytes,
-                size_probe_method,
-                look_ahead_segments,
-                master_cancel: coord.cancel.clone(),
-                scope: coord.scope.clone(),
-                headers: coord.headers.clone(),
-                seek_epoch: self.seek_obs.epoch(),
-                signal: coord.signal(),
-            };
-            active.rebuild(&plan_ctx, initial_seg);
-        }
+        let active = coord.active();
+        let plan_ctx = PlanCtx {
+            bus: active.event_bus(),
+            prefetch_budget,
+            look_ahead_bytes,
+            size_probe_method,
+            look_ahead_segments,
+            master_cancel: coord.cancel.clone(),
+            scope: coord.scope.clone(),
+            headers: coord.headers.clone(),
+            seek_epoch: self.seek_obs.epoch(),
+            signal: coord.signal(),
+        };
+        active.rebuild(&plan_ctx, initial_seg);
         self.reader_segment
             .store(initial_seg as usize, Ordering::Release);
 
@@ -322,13 +369,48 @@ impl Peer for HlsPeer {
             .dispatch_pending_size_demands(&outcome.ctx, outcome.ctx.prefetch_budget);
         let remaining = outcome.ctx.prefetch_budget.saturating_sub(cmds.len());
         if remaining > 0 {
+            let has_incoming = outcome.coord.has_incoming();
+            if has_incoming && remaining == 1 {
+                let first = self.session_turns.next(true);
+                cmds.extend(dispatch_session(&outcome.coord, &outcome.ctx, first, 1));
+                if cmds.len() < outcome.ctx.prefetch_budget {
+                    cmds.extend(dispatch_session(
+                        &outcome.coord,
+                        &outcome.ctx,
+                        first.other(),
+                        1,
+                    ));
+                }
+                if cmds.is_empty() {
+                    return Poll::Pending;
+                }
+                return Poll::Ready(Some(cmds));
+            }
+            self.session_turns.reset();
+            let active_budget = if has_incoming && remaining > 1 {
+                remaining - 1
+            } else {
+                remaining
+            };
             cmds.extend(
                 outcome
                     .coord
-                    .active()
-                    .map(|active| active.dispatch(&outcome.ctx, remaining))
-                    .unwrap_or_default(),
+                    .active_session()
+                    .dispatch(&outcome.ctx, active_budget),
             );
+            let mut remaining = outcome.ctx.prefetch_budget.saturating_sub(cmds.len());
+            if has_incoming && remaining > 0 {
+                cmds.extend(outcome.coord.dispatch_incoming(&outcome.ctx, 1));
+                remaining = outcome.ctx.prefetch_budget.saturating_sub(cmds.len());
+            }
+            if remaining > 0 {
+                cmds.extend(
+                    outcome
+                        .coord
+                        .active_session()
+                        .dispatch(&outcome.ctx, remaining),
+                );
+            }
         }
         if cmds.is_empty() {
             return Poll::Pending;
@@ -342,6 +424,18 @@ impl Peer for HlsPeer {
         } else {
             RequestPriority::Low
         }
+    }
+}
+
+fn dispatch_session(
+    coord: &HlsCoord,
+    ctx: &PlanCtx,
+    slot: SessionSlot,
+    budget: usize,
+) -> Vec<FetchCmd> {
+    match slot {
+        SessionSlot::Active => coord.active_session().dispatch(ctx, budget),
+        SessionSlot::Incoming => coord.dispatch_incoming(ctx, budget),
     }
 }
 
@@ -454,7 +548,9 @@ impl HlsTrackState {
             // for the re-key suppression. Auto never matches (no `Manual`), so
             // the seek-no-switch freeze contract is untouched; a single-variant
             // `Manual(N)` with no pending decision is a no-op.
-            if matches!(self.coord.abr.mode(), Some(AbrMode::Manual(_))) {
+            if !coord.exact_sessions_enabled()
+                && matches!(self.coord.abr.mode(), Some(AbrMode::Manual(_)))
+            {
                 coord.commit_variant_switch_at_segment(ctx, floor);
             }
             if demand_segment.is_some_and(|idx| idx >= floor) {
@@ -477,9 +573,7 @@ impl HlsTrackState {
                 // the codec preroll bound: a stale *lagging* cursor resolves
                 // many segments below the floor and stays suppressed (the
                 // prefix re-download guard the floor was built for is intact).
-                if let Some(active) = coord.active() {
-                    active.rebuild(ctx, landing);
-                }
+                coord.active().rebuild(ctx, landing);
                 self.seek_settle_floor = Some(landing);
                 return landing;
             } else {
@@ -494,17 +588,23 @@ impl HlsTrackState {
             self.reader_segment.store(resolved_us, Ordering::Release);
         }
         let manual_mode = matches!(self.coord.abr.mode(), Some(AbrMode::Manual(_)));
-        let switch_landed = match coord.urgent_rescue_boundary(resolved) {
-            Some(rescue_seg) => coord.commit_variant_switch(ctx, rescue_seg),
-            // Reader pinned at a clean boundary on a non-delivering segment with
-            // a pending switch — the current variant cannot cross the boundary,
-            // so commit the target AT the stalled segment instead of waiting for
-            // a reader advance that can never happen (startup/stall livelock).
-            None if coord.stalled_escape(resolved) => {
-                coord.commit_variant_switch_at_segment(ctx, resolved)
+        let switch_landed = if coord.exact_sessions_enabled() {
+            false
+        } else {
+            match coord.urgent_rescue_boundary(resolved) {
+                Some(rescue_seg) => coord.commit_variant_switch(ctx, rescue_seg),
+                // Reader pinned at a clean boundary on a non-delivering segment with
+                // a pending switch — the current variant cannot cross the boundary,
+                // so commit the target AT the stalled segment instead of waiting for
+                // a reader advance that can never happen (startup/stall livelock).
+                None if coord.stalled_escape(resolved) => {
+                    coord.commit_variant_switch_at_segment(ctx, resolved)
+                }
+                None if boundary_crossed || manual_mode => {
+                    coord.commit_variant_switch(ctx, resolved)
+                }
+                None => false,
             }
-            None if boundary_crossed || manual_mode => coord.commit_variant_switch(ctx, resolved),
-            None => false,
         };
         let prev_u32 = u32::try_from(prev).unwrap_or(0);
         let discontinuous_advance = boundary_crossed && resolved != prev_u32.saturating_add(1);
@@ -525,16 +625,11 @@ impl HlsTrackState {
         let aligned_rescue = variant_changed
             && !switch_landed
             && demand_segment.is_some()
-            && coord.active().is_some_and(|a| a.served_from() == 0);
+            && coord.active().served_from() == 0;
         if aligned_rescue {
-            if let Some(active) = coord.active() {
-                active.rebuild_with_decoder_probe(ctx, resolved);
-            }
-        } else if discontinuous_advance
-            && !switch_landed
-            && let Some(active) = coord.active()
-        {
-            active.rebuild(ctx, resolved);
+            coord.active().rebuild_with_decoder_probe(ctx, resolved);
+        } else if discontinuous_advance && !switch_landed {
+            coord.active().rebuild(ctx, resolved);
         }
         resolved
     }
@@ -596,12 +691,36 @@ impl HlsTrackState {
     )]
     fn seek_epoch_reset(&mut self, coord: &HlsCoord, ctx: &PlanCtx) {
         if let Some(target) = self.seek_obs.target()
-            && let Some(active) = coord.active()
-            && let Some(seg) = active.rebuild_at_time(ctx, target)
+            && let Some(seg) = coord.active().rebuild_at_time(ctx, target)
         {
             self.reader_segment.store(seg as usize, Ordering::Release);
             self.reader_variant = coord.variant_index();
             self.seek_settle_floor = Some(seg);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[kithara::test]
+    fn one_slot_scheduler_alternates_active_and_incoming() {
+        let turns = SessionTurns::default();
+
+        assert_eq!(turns.next(true), SessionSlot::Active);
+        assert_eq!(turns.next(true), SessionSlot::Incoming);
+        assert_eq!(turns.next(true), SessionSlot::Active);
+        assert_eq!(turns.next(true), SessionSlot::Incoming);
+    }
+
+    #[kithara::test]
+    fn one_slot_scheduler_resets_when_no_incoming_session_exists() {
+        let turns = SessionTurns::default();
+        assert_eq!(turns.next(true), SessionSlot::Active);
+        assert_eq!(turns.next(true), SessionSlot::Incoming);
+
+        assert_eq!(turns.next(false), SessionSlot::Active);
+        assert_eq!(turns.next(true), SessionSlot::Active);
     }
 }

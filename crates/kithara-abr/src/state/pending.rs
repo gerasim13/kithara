@@ -10,6 +10,18 @@ impl AbrTicket {
     }
 }
 
+/// Observable state of the exact pending ABR claim.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum PendingAbrClaim {
+    /// No switch intent exists for the current audible variant.
+    Absent,
+    /// The intent exists but ABR publication is temporarily locked.
+    Locked(PendingAbrDecision),
+    /// The exact intent can be prepared or committed.
+    Ready(PendingAbrDecision),
+}
+
 /// Read-only claim of one exact pending ABR decision.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]

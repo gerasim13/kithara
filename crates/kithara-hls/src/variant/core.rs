@@ -146,11 +146,11 @@ pub(super) struct VariantSeek {
     pub(super) segment_aware_tail: AtomicU32,
     /// Lock-free, allocation-free exact-seek demand, read on the produce-core
     /// metadata-phase gate ([`HlsVariant::exact_seek_metadata_phase`]). Body is
-    /// MULTI-writer: the on-core seek path (`seek_time_anchor`) and the off-RT
-    /// downloader seek-epoch reset (`rebuild_at_time`) both SET it with no lock
-    /// between them, so the cell serializes writers with a CAS-acquired version
-    /// and the RT reader bails to not-ready (never spins) on a write-in-flight.
-    /// Off-RT completers CAS-consume the generation.
+    /// MULTI-writer: the on-core seek path (`seek_time_anchor`) and profiled
+    /// reader preparation both SET it with no shared lock, so the cell
+    /// serializes writers with a CAS-acquired version and the RT reader bails
+    /// to not-ready (never spins) on a write-in-flight. Off-RT completers
+    /// CAS-consume the generation.
     pub(super) exact_seek: CasAnchorCell,
     pub(super) size_demand: Mutex<SizeDemandState>,
 }

@@ -96,9 +96,6 @@ impl HlsVariant {
             self.set_prefetch_anchor(byte);
         }
         self.rebuild(ctx, fetch_start);
-        if let Some(byte) = self.segment_byte_offset(seg) {
-            self.set_exact_seek_demand(byte, seg);
-        }
         Some(seg)
     }
 

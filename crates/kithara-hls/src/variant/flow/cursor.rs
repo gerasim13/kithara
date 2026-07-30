@@ -5,11 +5,12 @@ use kithara_test_utils::kithara;
 use super::HlsVariant;
 
 impl HlsVariant {
+    #[cfg(test)]
     #[kithara::probe(variant = self.variant as u64, n)]
     pub(crate) fn advance(&self, n: u64) {
         self.flow.reader.advance(n);
         if !self.flow.reader.is_seek_active() {
-            self.clear_seek_alias_if_moved(self.flow.reader.position());
+            self.retire_seek_projection_if_moved(self.flow.reader.position());
         }
     }
 
@@ -25,7 +26,20 @@ impl HlsVariant {
     #[kithara::probe(variant = self.variant as u64, pos)]
     pub(crate) fn set_position(&self, pos: u64) {
         let moved = self.flow.reader.position() != pos;
+        self.project_session_seek(pos, moved);
+    }
+
+    pub(crate) fn project_session_seek(&self, pos: u64, moved: bool) {
         self.set_position_without_byte_demand(pos);
+        if moved {
+            self.set_exact_byte_seek_demand(pos);
+        }
+    }
+
+    pub(crate) fn register_session_seek(&self, pos: u64, moved: bool) {
+        if !self.flow.reader.is_seek_active() {
+            self.retire_seek_projection_if_moved(pos);
+        }
         if moved {
             self.set_exact_byte_seek_demand(pos);
         }
@@ -33,7 +47,7 @@ impl HlsVariant {
 
     pub(super) fn set_position_without_byte_demand(&self, pos: u64) {
         if !self.flow.reader.is_seek_active() {
-            self.clear_seek_alias_if_moved(pos);
+            self.retire_seek_projection_if_moved(pos);
         }
         self.flow.reader.set_position(pos);
     }

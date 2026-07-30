@@ -9,7 +9,7 @@ use kithara_platform::{
 use kithara_test_utils::kithara;
 use proptest::prelude::*;
 
-use super::{AbrDecision, AbrState, AbrView, PendingAbrDecision};
+use super::{AbrDecision, AbrState, AbrView, PendingAbrClaim, PendingAbrDecision};
 use crate::{Abr, AbrController, AbrSettings, ThroughputEstimator};
 
 /// Canonical 3-variant fixture used by every test in this module. Private
@@ -322,6 +322,28 @@ fn claim_before_lock_cannot_commit_until_reclaimed_after_unlock() {
         .expect("pending request must be reclaimable after unlock");
     assert!(state.commit_pending(after_unlock, Instant::now()));
     assert_eq!(state.current_variant_index(), VariantIndex::new(2));
+}
+
+#[kithara::test]
+fn pending_claim_distinguishes_absent_from_locked() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    assert_eq!(
+        state.pending_claim(VariantIndex::new(0)),
+        PendingAbrClaim::Absent
+    );
+
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    assert!(matches!(
+        state.pending_claim(VariantIndex::new(0)),
+        PendingAbrClaim::Ready(_)
+    ));
+
+    state.lock();
+    assert!(matches!(
+        state.pending_claim(VariantIndex::new(0)),
+        PendingAbrClaim::Locked(_)
+    ));
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
 }
 
 #[kithara::test]

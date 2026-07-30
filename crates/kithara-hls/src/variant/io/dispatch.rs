@@ -1,4 +1,4 @@
-use kithara_platform::sync::Arc;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::dl::FetchCmd;
 use kithara_test_utils::kithara;
 use tracing::debug;
@@ -7,13 +7,24 @@ use super::{HlsVariant, PlanCtx};
 use crate::segment::{Downloading, FetchClaim, PlannedFetch};
 
 impl HlsVariant {
+    #[cfg(test)]
+    pub(crate) fn dispatch(self: &Arc<Self>, ctx: &PlanCtx, budget: usize) -> Vec<FetchCmd> {
+        self.dispatch_from(ctx, budget, self.get_position(), self.cancel_handle())
+    }
+
     #[kithara::probe(
         variant = self.variant as u64,
         budget = budget as u64,
         queue_len = self.flow.queue.lock().len() as u64
     )]
     #[kithara::hang_watchdog]
-    pub(crate) fn dispatch(self: &Arc<Self>, ctx: &PlanCtx, budget: usize) -> Vec<FetchCmd> {
+    pub(crate) fn dispatch_from(
+        self: &Arc<Self>,
+        ctx: &PlanCtx,
+        budget: usize,
+        position: u64,
+        cancel: CancelToken,
+    ) -> Vec<FetchCmd> {
         let mut out = Vec::new();
         // Popped segments that could not be dispatched this pass but are NOT
         // terminal (a slot still `Downloading` under an orphaned/in-flight
@@ -26,8 +37,8 @@ impl HlsVariant {
         // `player_worker_hls_then_unavailable_mp3_then_mp3_recovery` deadlock).
         let mut deferred: Vec<PlannedFetch> = Vec::new();
         let mut remaining = budget;
-        self.dispatch_size_demands(ctx, &mut out, &mut remaining);
-        let prefetch_base = self.get_position().max(self.prefetch_anchor());
+        self.dispatch_size_demands(ctx, &mut out, &mut remaining, &cancel);
+        let prefetch_base = position.max(self.prefetch_anchor());
         let prefetch_byte_cap = ctx
             .look_ahead_bytes
             .map(|n| prefetch_base.saturating_add(n));
@@ -78,7 +89,7 @@ impl HlsVariant {
                         ctx.signal.fire();
                         continue;
                     }
-                    let Some(cmd) = self.build_init_cmd(ctx, handle) else {
+                    let Some(cmd) = self.build_init_cmd(ctx, handle, cancel.clone()) else {
                         if self
                             .init()
                             .is_some_and(|i| !i.state().is_loaded() && !i.state().is_failed())
@@ -111,7 +122,8 @@ impl HlsVariant {
                         ctx.signal.fire();
                         continue;
                     }
-                    let Some(cmd) = self.emit_fetch_cmd(ctx, seg_idx, handle) else {
+                    let Some(cmd) = self.emit_fetch_cmd(ctx, seg_idx, handle, cancel.clone())
+                    else {
                         // Acquire raced (the claim was reverted to `Missing`
                         // inside `emit_fetch_cmd`): re-queue, don't drop it.
                         deferred.push(planned);
@@ -141,6 +153,7 @@ impl HlsVariant {
         ctx: &PlanCtx,
         seg_idx: u32,
         handle: FetchClaim<Downloading>,
+        cancel: CancelToken,
     ) -> Option<FetchCmd> {
         let entry = &self.segments[seg_idx as usize];
         let Some(resource_handle) = self.segment_handle(seg_idx) else {
@@ -165,6 +178,7 @@ impl HlsVariant {
             resource,
             handle,
             ctx.signal.clone(),
+            cancel,
         )
     }
 

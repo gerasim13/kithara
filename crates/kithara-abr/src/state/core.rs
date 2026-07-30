@@ -10,7 +10,8 @@ use num_traits::ToPrimitive;
 
 use super::{
     decision::AbrDecision,
-    pending::{AbrTicket, PendingAbrDecision},
+    pending::{AbrTicket, PendingAbrClaim, PendingAbrDecision},
+    publisher::AbrPublisher,
     view::AbrView,
 };
 
@@ -127,6 +128,12 @@ impl AbrState {
             reference_instant: Instant::now(),
             pending: Mutex::default(),
         }
+    }
+
+    /// Mint the publication capability retained by this state's source owner.
+    #[must_use]
+    pub fn publisher(self: &Arc<Self>) -> AbrPublisher {
+        AbrPublisher::new(Arc::clone(self))
     }
 
     /// Publish the switch: a [`AbrDecision::Stay`] is a no-op; otherwise
@@ -349,26 +356,39 @@ impl AbrState {
             .map(PendingAbrDecision::decision)
     }
 
+    /// Observe whether an exact pending intent is absent, temporarily locked,
+    /// or ready to claim.
+    #[must_use]
+    pub fn pending_claim(&self, current: VariantIndex) -> PendingAbrClaim {
+        let state = self.pending.lock();
+        let Some(pending) = state.pending else {
+            return PendingAbrClaim::Absent;
+        };
+        if pending.target == current {
+            return PendingAbrClaim::Absent;
+        }
+        let claim = PendingAbrDecision::new(
+            pending.ticket,
+            pending_decision(current, pending.target, pending.reason),
+        );
+        let locked = self.is_locked();
+        drop(state);
+        if locked {
+            return PendingAbrClaim::Locked(claim);
+        }
+        PendingAbrClaim::Ready(claim)
+    }
+
     /// Claim the exact pending request without consuming it.
     ///
     /// Returns `None` while locked, when no request exists, or when the
     /// pending target already equals `current`.
     #[must_use]
     pub fn claim_pending_decision(&self, current: VariantIndex) -> Option<PendingAbrDecision> {
-        let state = self.pending.lock();
-        if self.is_locked() {
-            return None;
+        match self.pending_claim(current) {
+            PendingAbrClaim::Ready(claim) => Some(claim),
+            PendingAbrClaim::Absent | PendingAbrClaim::Locked(_) => None,
         }
-        let pending = state.pending?;
-        if pending.target == current {
-            return None;
-        }
-        let claim = PendingAbrDecision::new(
-            pending.ticket,
-            pending_decision(current, pending.target, pending.reason),
-        );
-        drop(state);
-        Some(claim)
     }
 
     /// Phase 2 read-only view of the unobserved pending switch (if any).
@@ -380,6 +400,17 @@ impl AbrState {
             .pending
             .as_ref()
             .map(|pending| pending.target)
+    }
+
+    /// Variant a seek replacement must open. A pending selection intent wins
+    /// even while ABR publication is locked.
+    #[must_use]
+    pub fn selected_variant_for_seek(&self) -> VariantIndex {
+        self.pending
+            .lock()
+            .pending
+            .as_ref()
+            .map_or_else(|| self.current_variant_index(), |pending| pending.target)
     }
 
     fn record_switch(&self, now: Instant) {

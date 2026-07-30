@@ -23,6 +23,7 @@ impl CancelEpoch {
     delegate::delegate! {
         to self.current.read() {
             /// Cancel the current epoch token (variant deactivation).
+            #[cfg(test)]
             pub(super) fn cancel(&self);
             /// Clone the current epoch token — attached to every emitted `FetchCmd`.
             #[call(clone)]

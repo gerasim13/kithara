@@ -20,9 +20,9 @@ use kithara_platform::{
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, AudioCodec, ChunkPosition, ContainerFormat, MediaInfo, PlayheadRead, PlayheadState,
-    PlayheadWrite, PrerollHint, ReadOutcome, SeekControl, SeekObserve, SeekState, Source,
-    SourceError, SourcePhase, Stream, StreamError, StreamResult, StreamType, VariantControl,
-    WorkerWake,
+    PlayheadWrite, PrerollHint, ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekState,
+    Source, SourceError, SourcePhase, Stream, StreamError, StreamResult, StreamType,
+    VariantControl, VariantReaderTake, VariantTransition, WorkerWake,
 };
 use kithara_test_utils::kithara;
 
@@ -276,6 +276,36 @@ impl TestControl {
 }
 
 impl VariantControl for TestControl {
+    fn enable_variant_sessions(&self) -> StreamResult<()> {
+        Ok(())
+    }
+
+    fn prepare_variant_reader(
+        &self,
+        _profile: ReaderProfile,
+    ) -> StreamResult<Option<VariantTransition>> {
+        Ok(None)
+    }
+
+    fn take_prepared_variant_reader(
+        &self,
+        _transition: VariantTransition,
+    ) -> StreamResult<VariantReaderTake> {
+        Ok(VariantReaderTake::Stale)
+    }
+
+    fn promote_variant(&self, _transition: VariantTransition) -> bool {
+        false
+    }
+
+    fn abort_variant(&self, _transition: VariantTransition) -> bool {
+        false
+    }
+
+    fn selected_variant_for_seek(&self) -> usize {
+        0
+    }
+
     fn clear_variant_fence(&self) {
         self.variant_pending.store(false, Ordering::Release);
         *self.variant_target.lock() = None;

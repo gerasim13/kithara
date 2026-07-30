@@ -1,6 +1,10 @@
-use std::sync::{
-    Barrier, OnceLock,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    num::NonZeroU64,
+    sync::{
+        Barrier, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+    thread,
 };
 
 use kithara_assets::{
@@ -16,8 +20,8 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    AudioCodec, ContainerFormat, ReadOutcome, SeekControl, SeekObserve, SeekState, SourceError,
-    SourcePhase, StreamError,
+    AudioCodec, ContainerFormat, ReadOutcome, ReaderInput, ReaderProfile, ReaderWarmup,
+    SeekControl, SeekObserve, SeekState, SourceError, SourcePhase, StreamError,
 };
 use kithara_test_utils::kithara;
 use url::Url;
@@ -34,6 +38,7 @@ use crate::{
         SegmentSlotState,
     },
     signal::SizeSignal,
+    stream::HlsSession,
 };
 
 fn test_ctx(prefetch_budget: usize) -> PlanCtx {
@@ -78,6 +83,20 @@ fn make_init(size: u64, scope: &AssetScope) -> Option<Segment> {
         size: SegmentSize::seed(size),
         content: SegmentContent::Plain,
     }))
+}
+
+fn make_placeholder_init(size: u64, scope: &AssetScope) -> Segment {
+    let url: Url = "https://example.com/init.mp4".parse().expect("valid url");
+    let resource_id = scope
+        .key(&AssetResource::Url(url.clone()))
+        .expect("init key");
+    Segment::Init(InitSegment {
+        url,
+        resource_id,
+        state: SegmentSlotState::missing(),
+        size: SegmentSize::placeholder(size),
+        content: SegmentContent::Plain,
+    })
 }
 
 fn make_seg(idx: u32, size: u64, scope: &AssetScope) -> Segment {
@@ -516,7 +535,7 @@ fn concurrent_switch_keeps_coordinate_reads_coherent() {
     let barrier = Barrier::new(2);
     let torn = AtomicUsize::new(0);
 
-    std::thread::scope(|s| {
+    thread::scope(|s| {
         s.spawn(|| {
             barrier.wait();
             for i in 0..ITERS {
@@ -586,6 +605,33 @@ fn demand_segment_at_offset_inside_init_prefix_is_segment_zero() {
     let v = make_var(0, 200, &[400, 400], &ctx);
     assert_eq!(v.demand_segment_at_offset(0), Some(0));
     assert_eq!(v.demand_segment_at_offset(199), Some(0));
+}
+
+#[kithara::test]
+fn reader_warmup_starting_in_init_prefix_rebuilds_from_segment_zero() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 48, &[64, 64, 64], &ctx);
+    let profile = ReaderProfile::new(
+        ReaderInput::Incremental,
+        ReaderWarmup::ReadBehind {
+            max_bytes: NonZeroU64::new(100).expect("non-zero warmup"),
+        },
+        NonZeroU64::new(64).expect("non-zero read ahead"),
+    );
+
+    v.prepare_reader(profile, Duration::from_secs(2))
+        .expect("reader preparation");
+
+    let queue: Vec<_> = v.flow.queue.lock().iter().copied().collect();
+    assert_eq!(
+        queue,
+        vec![
+            PlannedFetch::Init,
+            PlannedFetch::Segment(0),
+            PlannedFetch::Segment(1),
+            PlannedFetch::Segment(2),
+        ]
+    );
 }
 
 #[kithara::test]
@@ -1011,6 +1057,37 @@ fn segment_aware_seek_time_anchor_fetches_preroll_segment() {
 }
 
 #[kithara::test]
+fn segment_aware_seek_rejects_an_unmapped_preroll_offset() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: None,
+        segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    v.activate_at_segment_with_shift(
+        &ctx,
+        SegmentActivateParams {
+            from_seg: 2,
+            seg_boundary: 50,
+            reader_pos: 50,
+        },
+    );
+
+    let error = v
+        .prepare_seek_time_anchor(Duration::from_secs(4))
+        .expect_err("unmapped preroll geometry must fail");
+
+    assert!(matches!(
+        error,
+        StreamError::Source(SourceError::SegmentNotFound(message))
+            if message.contains("seek prefetch offset not found")
+    ));
+}
+
+#[kithara::test]
 fn segment_aware_rebuild_with_decoder_probe_fetches_recreate_preroll_segment() {
     let ctx = test_ctx(3);
     let v = VariantParts {
@@ -1206,16 +1283,16 @@ fn phase_at_reports_waiting_demand_for_queued_segment() {
     assert_eq!(v.phase_at(0..16), SourcePhase::WaitingDemand);
 }
 
-#[kithara::test]
-fn exact_seek_completion_keeps_stale_anchor_alias_until_reader_moves() {
+fn exact_seek_session() -> (Arc<HlsVariant>, HlsSession, u64) {
     let ctx = test_ctx(3);
+    let seek = Arc::new(SeekState::new());
     let segments: Vec<Segment> = (0..3)
         .map(|idx| make_placeholder_seg(idx, 256, &ctx.scope))
         .collect();
     let v = VariantParts {
         segments,
         init: None,
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
@@ -1226,23 +1303,437 @@ fn exact_seek_completion_keeps_stale_anchor_alias_until_reader_moves() {
     v.set_seek_alias(stale_anchor, 2);
     v.rebuild(&ctx, 2);
     v.set_exact_seek_demand(stale_anchor, 2);
-    v.set_exact_seek_demand(stale_anchor + 64, 2);
+    let session = HlsSession::active(
+        CancelToken::never(),
+        seek,
+        ctx.signal.clone(),
+        0,
+        Arc::clone(&v),
+        stale_anchor,
+    );
+    (v, session, stale_anchor)
+}
+
+fn publish_exact_size_while_paused(
+    variant: Arc<HlsVariant>,
+    demand: SizeDemand,
+    stored: Arc<Barrier>,
+    resume: Arc<Barrier>,
+) -> thread::JoinHandle<bool> {
+    thread::spawn(move || {
+        variant.apply_resolved_size_before_layout_publication(demand, 100, || {
+            stored.wait();
+            resume.wait();
+        })
+    })
+}
+
+#[kithara::test]
+fn exact_seek_completion_corrects_the_session_cursor_before_first_read() {
+    let (v, session, _stale_anchor) = exact_seek_session();
 
     v.apply_resolved_size(SizeDemand::Segment(0), 100);
     v.apply_resolved_size(SizeDemand::Segment(1), 100);
     v.apply_resolved_size(SizeDemand::Segment(2), 100);
 
-    assert_eq!(v.get_position(), 200);
-    v.advance(0);
-    assert_eq!(v.find_at_offset(stale_anchor), Some((2, stale_anchor, 100)));
+    assert_eq!(session.position(), 200);
+}
+
+#[kithara::test]
+fn exact_seek_completion_invalidates_a_stale_session_read_snapshot() {
+    let (v, session, stale_anchor) = exact_seek_session();
+    let observed = session.position();
+    assert_eq!(observed, stale_anchor);
+
+    v.apply_resolved_size(SizeDemand::Segment(0), 100);
+    v.apply_resolved_size(SizeDemand::Segment(1), 100);
+    v.apply_resolved_size(SizeDemand::Segment(2), 100);
+
+    let wait = v.wait_range(observed..observed + 1, Some(Duration::ZERO));
+    assert!(!matches!(wait, Ok(WaitOutcome::Eof)));
+
+    let mut sample = [0_u8; 1];
+    let outcome = v.read_at(observed, &mut sample).expect("stale alias read");
+    assert!(!matches!(outcome, ReadOutcome::Eof));
+
+    session.advance(1);
+    assert_eq!(session.position(), 201);
+}
+
+#[kithara::test]
+fn exact_seek_metadata_gate_publishes_the_resolved_alias_before_opening() {
+    let (v, session, stale_anchor) = exact_seek_session();
+
+    v.apply_resolved_size(SizeDemand::Segment(0), 100);
+    v.apply_resolved_size(SizeDemand::Segment(1), 100);
+    assert!(v.apply_resolved_size_without_seek_completion(SizeDemand::Segment(2), 100));
+    assert_eq!(session.position(), stale_anchor);
+
+    assert_eq!(v.exact_seek_metadata_phase(), None);
+
+    assert_eq!(session.position(), 200);
+}
+
+#[kithara::test]
+fn exact_seek_projection_tracks_size_revisions_until_reader_moves() {
+    let (v, session, _stale_anchor) = exact_seek_session();
+    v.apply_resolved_size(SizeDemand::Segment(2), 100);
+    v.apply_resolved_size(SizeDemand::Segment(0), 100);
+    v.apply_resolved_size(SizeDemand::Segment(1), 100);
+    assert_eq!(session.position(), 200);
+
+    v.layout.apply_commit(v.segments(), || {
+        v.apply_loaded_size(PlannedFetch::Segment(0), 150);
+        v.init_route_size()
+    });
+    v.complete_exact_seek_if_ready();
+
+    assert_eq!(v.exact_seek_metadata_phase(), None);
+    assert_eq!(session.position(), 250);
+}
+
+#[kithara::test]
+fn exact_seek_projection_retires_after_the_first_consumed_byte() {
+    let (v, session, _stale_anchor) = exact_seek_session();
+    v.apply_resolved_size(SizeDemand::Segment(2), 100);
+    v.apply_resolved_size(SizeDemand::Segment(0), 100);
+    v.apply_resolved_size(SizeDemand::Segment(1), 100);
+    assert_eq!(session.position(), 200);
+
+    v.layout.apply_commit(v.segments(), || {
+        v.apply_loaded_size(PlannedFetch::Segment(0), 101);
+        v.init_route_size()
+    });
+    v.complete_exact_seek_if_ready();
+    assert_eq!(session.position(), 201);
+
+    session.advance(1);
+
+    assert_eq!(session.position(), 202);
+    assert!(!v.seek_projection_is_live());
+}
+
+#[kithara::test]
+fn late_rebuild_at_time_does_not_reopen_consumed_exact_seek_projection() {
+    let ctx = test_ctx(3);
+    let seek = Arc::new(SeekState::new());
+    let v = VariantParts {
+        segments: (0..4)
+            .map(|idx| make_placeholder_seg(idx, 256, &ctx.scope))
+            .collect(),
+        init: None,
+        seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::Pcm),
+        container: Some(ContainerFormat::Wav),
+    }
+    .into_variant(0, &ctx);
+    let stale_anchor = 512;
+    v.set_position(stale_anchor);
+    v.set_prefetch_anchor(stale_anchor);
+    v.set_seek_alias(stale_anchor, 2);
+    v.set_exact_seek_demand(stale_anchor, 2);
+    let session = HlsSession::active(
+        CancelToken::never(),
+        seek,
+        ctx.signal.clone(),
+        0,
+        Arc::clone(&v),
+        stale_anchor,
+    );
+    for segment in 0..=2 {
+        v.apply_resolved_size(SizeDemand::Segment(segment), 100);
+    }
+    assert_eq!(session.position(), 200);
+
+    session.advance(1);
+    assert_eq!(session.position(), 201);
+    assert!(!v.seek_projection_is_live());
+
+    assert_eq!(v.rebuild_at_time(&ctx, Duration::from_secs(4)), Some(2));
+    assert_eq!(session.position(), 201);
+    assert_eq!(v.exact_seek_metadata_phase(), None);
+    assert!(!v.seek_projection_is_live());
+}
+
+#[kithara::test]
+fn exact_seek_gate_stays_closed_until_exact_layout_is_published() {
+    let (v, session, stale_anchor) = exact_seek_session();
+    v.apply_resolved_size(SizeDemand::Segment(2), 100);
+    v.apply_resolved_size(SizeDemand::Segment(0), 100);
+
+    let stored = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    let publisher = publish_exact_size_while_paused(
+        Arc::clone(&v),
+        SizeDemand::Segment(1),
+        Arc::clone(&stored),
+        Arc::clone(&resume),
+    );
+    stored.wait();
+
+    let phase_during_publication = v.exact_seek_metadata_phase();
+    let position_during_publication = session.position();
+
+    resume.wait();
+    assert!(publisher.join().expect("size publisher"));
+
+    assert_eq!(phase_during_publication, Some(SourcePhase::WaitingDemand));
+    assert_eq!(position_during_publication, stale_anchor);
+    assert_eq!(v.exact_seek_metadata_phase(), None);
+    assert_eq!(session.position(), 200);
+}
+
+#[kithara::test]
+fn exact_byte_gate_stays_closed_until_exact_layout_is_published() {
+    let (v, _session, _stale_anchor) = exact_seek_session();
+    let observed_byte = 400;
+    v.clear_exact_seek();
+    v.set_exact_byte_seek_demand(observed_byte);
+    v.apply_resolved_size(SizeDemand::Segment(2), 100);
+    v.apply_resolved_size(SizeDemand::Segment(0), 100);
+
+    let stored = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    let publisher = publish_exact_size_while_paused(
+        Arc::clone(&v),
+        SizeDemand::Segment(1),
+        Arc::clone(&stored),
+        Arc::clone(&resume),
+    );
+    stored.wait();
+
+    let phase_during_publication = v.exact_byte_metadata_phase();
+
+    resume.wait();
+    assert!(publisher.join().expect("size publisher"));
+
+    assert_eq!(phase_during_publication, Some(SourcePhase::WaitingDemand));
+    assert_eq!(v.exact_byte_metadata_phase(), None);
+}
+
+#[kithara::test]
+fn exact_init_boundary_stays_closed_until_layout_is_published() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: Some(make_placeholder_init(256, &ctx.scope)),
+        segments: vec![make_seg(0, 100, &ctx.scope)],
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: None,
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    assert!(!v.prepare_exact_prefix_for_boundary(0));
+
+    let stored = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    let publisher = publish_exact_size_while_paused(
+        Arc::clone(&v),
+        SizeDemand::Init,
+        Arc::clone(&stored),
+        Arc::clone(&resume),
+    );
+    stored.wait();
+
+    let ready_during_publication = v.prepare_exact_prefix_for_boundary(0);
+
+    resume.wait();
+    assert!(publisher.join().expect("init size publisher"));
+
+    assert!(!ready_during_publication);
+    assert!(v.prepare_exact_prefix_for_boundary(0));
+}
+
+#[kithara::test]
+fn eof_gate_rejects_a_torn_layout_publication() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: None,
+        segments: (0..2)
+            .map(|idx| make_placeholder_seg(idx, 100, &ctx.scope))
+            .collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::Pcm),
+        container: Some(ContainerFormat::Wav),
+    }
+    .into_variant(0, &ctx);
+    let writer_started = Arc::new(Barrier::new(2));
+    let writer_finished = Arc::new(Barrier::new(2));
+    let publisher = {
+        let v = Arc::clone(&v);
+        let writer_started = Arc::clone(&writer_started);
+        let writer_finished = Arc::clone(&writer_finished);
+        thread::spawn(move || {
+            writer_started.wait();
+            v.layout.apply_commit(v.segments(), || {
+                for segment in v.segments() {
+                    segment.set_loaded_size(256);
+                }
+                v.init_route_size()
+            });
+            writer_finished.wait();
+        })
+    };
+
+    let torn_eof = v.eof_at_before_ready_check(250, || {
+        writer_started.wait();
+        writer_finished.wait();
+    });
+    publisher.join().expect("layout publisher");
+
+    assert!(!torn_eof);
+    assert_ne!(v.phase_at(250..251), SourcePhase::Eof);
+}
+
+#[kithara::test]
+fn ready_gate_rejects_a_torn_layout_publication() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: None,
+        segments: (0..2)
+            .map(|idx| make_placeholder_seg(idx, 100, &ctx.scope))
+            .collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::Pcm),
+        container: Some(ContainerFormat::Wav),
+    }
+    .into_variant(0, &ctx);
+    let writer_started = Arc::new(Barrier::new(2));
+    let writer_finished = Arc::new(Barrier::new(2));
+    let publisher = {
+        let v = Arc::clone(&v);
+        let writer_started = Arc::clone(&writer_started);
+        let writer_finished = Arc::clone(&writer_finished);
+        thread::spawn(move || {
+            writer_started.wait();
+            v.layout.apply_commit(v.segments(), || {
+                for segment in v.segments() {
+                    segment.set_loaded_size(256);
+                }
+                v.init_route_size()
+            });
+            writer_finished.wait();
+        })
+    };
+    let range = 250..251;
+
+    let torn_ready = v.range_ready_after_total(&range, || {
+        writer_started.wait();
+        writer_finished.wait();
+    });
+    publisher.join().expect("layout publisher");
+
+    assert!(!torn_ready);
+    assert_ne!(v.phase_at(range), SourcePhase::Ready);
+}
+
+#[kithara::test]
+fn range_gate_rejects_eof_ready_cross_publication() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: None,
+        segments: (0..2)
+            .map(|idx| make_placeholder_seg(idx, 256, &ctx.scope))
+            .collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::Pcm),
+        container: Some(ContainerFormat::Wav),
+    }
+    .into_variant(0, &ctx);
+    let writer_started = Arc::new(Barrier::new(2));
+    let writer_finished = Arc::new(Barrier::new(2));
+    let publisher = {
+        let v = Arc::clone(&v);
+        let writer_started = Arc::clone(&writer_started);
+        let writer_finished = Arc::clone(&writer_finished);
+        thread::spawn(move || {
+            writer_started.wait();
+            v.layout.apply_commit(v.segments(), || {
+                for segment in v.segments() {
+                    segment.set_loaded_size(100);
+                }
+                v.init_route_size()
+            });
+            writer_finished.wait();
+        })
+    };
+
+    let phase = v.phase_at_after_eof(250..251, || {
+        writer_started.wait();
+        writer_finished.wait();
+    });
+    publisher.join().expect("layout publisher");
+
+    assert_eq!(phase, SourcePhase::WaitingDemand);
+}
+
+#[kithara::test]
+fn exact_session_seek_uses_the_session_cursor_to_detect_movement() {
+    let ctx = test_ctx(3);
+    let segments: Vec<Segment> = (0..10)
+        .map(|idx| make_placeholder_seg(idx, 64, &ctx.scope))
+        .collect();
+    let seek = Arc::new(SeekState::new());
+    let v = VariantParts {
+        segments,
+        init: None,
+        seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::Pcm),
+        container: Some(ContainerFormat::Wav),
+    }
+    .into_variant(0, &ctx);
+    let stale_projection = 512;
+    v.set_position(stale_projection);
+    v.clear_exact_byte_seek();
+    let session = HlsSession::active(
+        CancelToken::never(),
+        seek,
+        ctx.signal.clone(),
+        0,
+        Arc::clone(&v),
+        stale_projection,
+    );
+    session.disable_legacy_cursor_projection();
+    session.advance(1);
+
+    session.seek_to_byte(stale_projection);
+
+    assert_eq!(session.position(), stale_projection);
     assert_eq!(
-        v.phase_at(stale_anchor..stale_anchor + 16),
+        v.phase_at(stale_projection..stale_projection + 1),
         SourcePhase::WaitingDemand
     );
+}
 
-    v.advance(1);
-    assert_eq!(v.get_position(), 201);
-    assert_eq!(v.find_at_offset(stale_anchor), None);
+#[kithara::test]
+fn exact_session_time_seek_does_not_project_the_legacy_variant_cursor() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: None,
+        segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    let legacy_position = 17;
+    v.set_position(legacy_position);
+    let session = HlsSession::active(
+        CancelToken::never(),
+        Arc::new(SeekState::new()),
+        ctx.signal.clone(),
+        0,
+        Arc::clone(&v),
+        legacy_position,
+    );
+    session.disable_legacy_cursor_projection();
+
+    let anchor = session
+        .seek_time_anchor(Duration::from_secs(4))
+        .expect("seek anchor")
+        .expect("segment-aware anchor");
+
+    assert_eq!(session.position(), anchor.byte_offset);
+    assert_eq!(v.get_position(), legacy_position);
 }
 
 #[kithara::test]

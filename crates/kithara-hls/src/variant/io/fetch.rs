@@ -1,5 +1,5 @@
 use kithara_assets::{AcquisitionResult, ReadSide, ResourceAcquisition, WriteSide};
-use kithara_platform::sync::Arc;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::ResourceStatus;
 use kithara_stream::dl::{FetchCmd, OnCompleteFn, OnSlowFn, WriterFn};
 use url::Url;
@@ -21,6 +21,7 @@ impl HlsVariant {
         acq: ResourceAcquisition,
         handle: FetchClaim<Downloading>,
         signal: SizeSignal,
+        cancel: CancelToken,
     ) -> Option<FetchCmd> {
         let writer = match acq {
             AcquisitionResult::Pending(writer) => writer,
@@ -44,7 +45,6 @@ impl HlsVariant {
                 return None;
             }
         };
-        let cancel = self.cancel_handle();
         let slot = FetchSlot {
             handle,
             reader: writer.reader(),

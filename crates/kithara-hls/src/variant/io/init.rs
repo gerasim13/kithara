@@ -4,7 +4,7 @@ use kithara_assets::AssetResource;
 #[cfg(test)]
 use kithara_assets::ResourceKey;
 use kithara_drm::DecryptContext;
-use kithara_platform::sync::Arc;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::{StreamResult, dl::FetchCmd, needs_exact_byte_sizes};
 
 use super::{HlsVariant, PlanCtx, core::INIT_PLACEHOLDER_BYTES};
@@ -23,6 +23,7 @@ impl HlsVariant {
         self: &Arc<Self>,
         ctx: &PlanCtx,
         handle: FetchClaim<Downloading>,
+        cancel: CancelToken,
     ) -> Option<FetchCmd> {
         let init = self.init()?;
         let resource_handle = self.init_handle()?;
@@ -43,6 +44,7 @@ impl HlsVariant {
             resource,
             handle,
             ctx.signal.clone(),
+            cancel,
         )
     }
 

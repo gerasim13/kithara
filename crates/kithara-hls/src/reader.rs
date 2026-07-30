@@ -6,18 +6,52 @@ use kithara_events::{DeferredBus, HlsEvent};
 use kithara_platform::sync::Arc;
 use kithara_stream::{PrerollHint, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
 
-use crate::stream::HlsCoord;
+use crate::stream::{HlsCoord, HlsSession};
+
+enum HlsReaderRoute {
+    Active(Arc<HlsCoord>),
+    Session(Arc<HlsSession>),
+}
+
+impl HlsReaderRoute {
+    fn map<T>(
+        &self,
+        on_active: impl FnOnce(&HlsCoord) -> T,
+        on_session: impl FnOnce(&HlsSession) -> T,
+    ) -> T {
+        match self {
+            Self::Active(coord) => on_active(coord),
+            Self::Session(session) => on_session(session),
+        }
+    }
+
+    fn find_at_offset(&self, cursor: u64) -> Option<(u32, u64, u64)> {
+        self.map(
+            |coord| coord.find_at_offset(cursor),
+            |session| session.find_at_offset(cursor),
+        )
+    }
+
+    fn len(&self) -> Option<u64> {
+        self.map(HlsCoord::len, HlsSession::len)
+    }
+
+    fn position(&self) -> u64 {
+        self.map(HlsCoord::position, HlsSession::position)
+    }
+
+    fn variant_index(&self) -> usize {
+        self.map(HlsCoord::variant_index, HlsSession::variant_index)
+    }
+}
 
 /// Decoder→HLS reader hook bridge: turns the decoder's per-chunk and
 /// per-seek signals into [`HlsEvent`]s on the track's [`EventBus`].
 ///
-/// Mirrors `kithara-file`'s `FileReaderEventSink` but resolves the
-/// landed byte to its `(variant, segment_index, byte_in_segment)` triple
-/// via the variant-aware [`HlsCoord::find_at_offset`] — this is what
-/// makes the integration tests' `HlsEvent::ReaderSeek { segment_index,
-/// .. }` assertion observable.
+/// Mirrors `kithara-file`'s `FileReaderEventSink` but resolves the landed byte
+/// against the active or fixed incoming session captured at construction.
 pub(crate) struct HlsReaderEventSink {
-    coord: Arc<HlsCoord>,
+    route: HlsReaderRoute,
     seek_epoch_handle: Arc<AtomicU64>,
     bus: Arc<DeferredBus<HlsEvent>>,
     /// `(variant_index, segment_index)` of the last segment the
@@ -44,10 +78,26 @@ impl HlsReaderEventSink {
         coord: Arc<HlsCoord>,
         seek_epoch_handle: Arc<AtomicU64>,
     ) -> Self {
-        let last_cursor = coord.position();
+        Self::with_route(bus, HlsReaderRoute::Active(coord), seek_epoch_handle)
+    }
+
+    pub(crate) fn for_session(
+        bus: Arc<DeferredBus<HlsEvent>>,
+        session: Arc<HlsSession>,
+        seek_epoch_handle: Arc<AtomicU64>,
+    ) -> Self {
+        Self::with_route(bus, HlsReaderRoute::Session(session), seek_epoch_handle)
+    }
+
+    fn with_route(
+        bus: Arc<DeferredBus<HlsEvent>>,
+        route: HlsReaderRoute,
+        seek_epoch_handle: Arc<AtomicU64>,
+    ) -> Self {
+        let last_cursor = route.position();
         Self {
             bus,
-            coord,
+            route,
             last_cursor,
             last_segment_start_cursor: last_cursor,
             seek_epoch_handle,
@@ -62,10 +112,10 @@ impl HlsReaderEventSink {
     /// `cursor` lands in a different `(variant, segment_index)` than
     /// the previously observed one.
     fn maybe_publish_segment_start(&mut self, cursor: u64) {
-        let Some((seg_idx, seg_start, _size)) = self.coord.find_at_offset(cursor) else {
+        let Some((seg_idx, seg_start, _size)) = self.route.find_at_offset(cursor) else {
             return;
         };
-        let variant = self.coord.variant_index();
+        let variant = self.route.variant_index();
         let seg_us = seg_idx as usize;
         let key = (variant, seg_us);
         if self.last_segment == Some(key) {
@@ -96,7 +146,7 @@ impl HlsReaderEventSink {
         self.last_progress_cursor = cursor;
         self.bus.enqueue(HlsEvent::ReadProgress {
             position: cursor,
-            total: self.coord.len(),
+            total: self.route.len(),
         });
     }
 
@@ -113,9 +163,9 @@ impl HlsReaderEventSink {
     }
 
     fn publish_seek(&self, from: u64, to: u64) {
-        let (variant, segment_index, byte_in_segment) = match self.coord.find_at_offset(to) {
+        let (variant, segment_index, byte_in_segment) = match self.route.find_at_offset(to) {
             Some((seg, seg_start, _size)) => (
-                Some(self.coord.variant_index()),
+                Some(self.route.variant_index()),
                 Some(seg as usize),
                 Some(to.saturating_sub(seg_start)),
             ),
@@ -139,7 +189,7 @@ impl ReaderEventSink for HlsReaderEventSink {
     }
 
     fn on_chunk(&mut self, signal: ReaderChunkSignal) {
-        let cursor = self.coord.position();
+        let cursor = self.route.position();
         match signal {
             ReaderChunkSignal::Chunk => {
                 self.publish_initial_seek(cursor);
@@ -306,6 +356,7 @@ mod tests {
         let state = Arc::new(AbrState::new(kithara_events::AbrMode::Auto(Some(
             kithara_events::VariantIndex::new(0),
         ))));
+        let publisher = state.publisher();
         let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer { state });
         let controller = Arc::new(AbrController::new(
             AbrSettings::default(),
@@ -322,6 +373,7 @@ mod tests {
             Arc::new(PlayheadState::new()),
             Arc::new(SeekState::new()),
             controller.register(&peer),
+            publisher,
             Arc::from(vec![variant]),
             playlist,
         ))

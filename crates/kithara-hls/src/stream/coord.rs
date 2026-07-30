@@ -6,7 +6,7 @@ use std::{
 };
 
 use delegate::delegate;
-use kithara_abr::AbrHandle;
+use kithara_abr::{AbrHandle, AbrPublisher};
 use kithara_assets::{AssetScope, ResourceKey};
 use kithara_events::{AbrReason, DeferredBus, HlsEvent};
 use kithara_platform::{
@@ -17,12 +17,13 @@ use kithara_platform::{
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, ByteMap, ContainerFormat, DeferredWake, MediaInfo, PendingReason, PlayheadRead,
-    PlayheadState, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SeekState,
+    PlayheadState, PlayheadWrite, ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekState,
     SegmentDescriptor, SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult,
-    VariantControl, dl::FetchCmd,
+    VariantControl, VariantReaderTake, VariantTransition, dl::FetchCmd,
 };
 use kithara_test_utils::kithara;
 
+use super::{session::HlsSession, transition::SessionSlots};
 use crate::{
     playlist::{PlaylistAccess, PlaylistState},
     signal::SizeSignal,
@@ -57,15 +58,11 @@ pub(crate) struct HlsCoordEnv {
     pub(crate) signal: SizeSignal,
 }
 
-/// Thin router over a fixed slice of [`HlsVariant`] handles. Every `Source`-side
-/// reader op is delegated to `self.active()` (the variant whose index
-/// `AbrState::current_variant_index` resolves to). The coord owns only
-/// what is genuinely cross-variant: the ABR handle (single source of
-/// truth for variant index), the cancel-hierarchy parent, the
-/// variant-change fence, and the per-track playlist/asset/timeline
-/// references it hands to variants and to peer `PlanCtx`-builders.
+/// Coordinator over fixed variants and one authoritative active reader session.
+/// The optional incoming session stays private until exact audio promotion.
 pub(crate) struct HlsCoord {
     pub(crate) abr: AbrHandle,
+    pub(super) abr_publisher: AbrPublisher,
     pub(crate) variants: Arc<[Arc<HlsVariant>]>,
     pub(crate) scope: AssetScope,
     pub(crate) cancel: CancelToken,
@@ -83,6 +80,8 @@ pub(crate) struct HlsCoord {
     /// Narrow seek-observe handle — derived from `seek` at construction.
     /// Used by internal methods that only need epoch/target/pending reads.
     seek_obs: Arc<dyn SeekObserve>,
+    /// One authoritative active session and at most one exact incoming session.
+    pub(super) sessions: SessionSlots,
     /// Last generation acknowledged by the reader. When `<
     /// variant_generation` the read gate is closed; when equal the gate
     /// is open. [`Self::clear_variant_fence`] copies the current
@@ -129,6 +128,7 @@ impl HlsCoord {
         playhead: Arc<PlayheadState>,
         seek: Arc<SeekState>,
         abr: AbrHandle,
+        abr_publisher: AbrPublisher,
         variants: Arc<[Arc<HlsVariant>]>,
         playlist_state: Arc<PlaylistState>,
     ) -> Self {
@@ -142,12 +142,29 @@ impl HlsCoord {
         );
         let seek_obs = Arc::clone(&seek) as Arc<dyn SeekObserve>;
         let playhead_read = Arc::clone(&playhead) as Arc<dyn PlayheadRead>;
+        let active_index = abr
+            .current_variant_index()
+            .expect("stateful ABR handle checked above");
+        let active_variant = Arc::clone(
+            variants
+                .get(active_index)
+                .expect("ABR current variant must exist in HLS variants"),
+        );
+        let active_session = Arc::new(HlsSession::active(
+            env.cancel.child(),
+            Arc::clone(&seek_obs),
+            env.signal.clone(),
+            active_index,
+            Arc::clone(&active_variant),
+            active_variant.get_position(),
+        ));
         Self {
             playhead,
             seek,
             seek_obs,
             playhead_read,
             abr,
+            abr_publisher,
             variants,
             playlist_state,
             cancel: env.cancel,
@@ -157,22 +174,13 @@ impl HlsCoord {
             variant_generation: AtomicU64::new(0),
             fence_at: AtomicU64::new(0),
             fence_target: AtomicUsize::new(0),
+            sessions: SessionSlots::new(active_session),
             signal: env.signal,
         }
     }
 
-    pub(crate) fn active(&self) -> Option<&Arc<HlsVariant>> {
-        self.variants.get(self.variant_index())
-    }
-
-    /// `AbrState` always returns a valid index (constructor asserts
-    /// stateful handle), and `variants` is non-empty (asserted in
-    /// [`Self::new`]). This lookup therefore always succeeds. Used by
-    /// `delegate!` targets so trait methods don't need to thread
-    /// `Option`s.
-    fn active_required(&self) -> &Arc<HlsVariant> {
-        self.active()
-            .expect("HlsCoord constructed without variants — bug")
+    pub(crate) fn active(&self) -> Arc<HlsVariant> {
+        self.active_session().variant()
     }
 
     pub(crate) fn activity(&self) -> Arc<dyn Activity> {
@@ -196,8 +204,8 @@ impl HlsCoord {
                 let hit = v.on_evict(key).is_some() && v_idx == active_idx;
                 acc || hit
             });
-        if active_lost && let Some(active) = self.active() {
-            active.rebuild(ctx, seg_at_reader);
+        if active_lost {
+            self.active().rebuild(ctx, seg_at_reader);
         }
     }
 
@@ -246,6 +254,11 @@ impl HlsCoord {
     }
 
     fn commit_variant_switch_starting_at(&self, ctx: &PlanCtx, switch_at: u32) -> bool {
+        self.sessions
+            .commit_legacy(|| self.commit_legacy_variant_switch(ctx, switch_at))
+    }
+
+    fn commit_legacy_variant_switch(&self, ctx: &PlanCtx, switch_at: u32) -> bool {
         let current_before = self.variant_index();
         let Some(decision) = self.abr.peek_pending_decision() else {
             return false;
@@ -263,7 +276,7 @@ impl HlsCoord {
             same_codec,
             self.playlist_state.variant_container(new_v),
         );
-        if needs_byte_continuity {
+        let active_position = if needs_byte_continuity {
             let switch_at = switch_at.min(v_new.num_segments());
             if !v_new.prepare_exact_prefix_for_boundary(switch_at) {
                 return false;
@@ -273,7 +286,6 @@ impl HlsCoord {
                 .and_then(|v| v.segment_byte_offset(switch_at))
                 .unwrap_or(reader_pos);
             if let Some(v_old) = v_old {
-                v_old.cancel();
                 v_old.set_served_until(switch_at);
             }
             v_new.activate_at_segment_with_shift(
@@ -284,11 +296,10 @@ impl HlsCoord {
                     from_seg: switch_at,
                 },
             );
-            self.abr.apply_decision(&decision, Instant::now());
+            self.abr_publisher
+                .apply_legacy_decision(&decision, Instant::now());
+            reader_pos
         } else {
-            if let Some(v_old) = v_old {
-                v_old.cancel();
-            }
             v_new.reset_to_full_range();
             if is_cross_codec {
                 v_new.invalidate_init();
@@ -309,9 +320,20 @@ impl HlsCoord {
                 to_variant: new_v,
                 cross_codec: is_cross_codec,
             });
-            self.abr.apply_decision(&decision, Instant::now());
+            self.abr_publisher
+                .apply_legacy_decision(&decision, Instant::now());
             v_new.rebuild_with_decoder_probe(ctx, target_seg);
-        }
+            target_byte
+        };
+        let active_session = Arc::new(HlsSession::active(
+            self.cancel.child(),
+            Arc::clone(&self.seek_obs),
+            self.signal.clone(),
+            new_v,
+            Arc::clone(v_new),
+            active_position,
+        ));
+        self.sessions.replace_legacy(active_session);
         let reader_pt = self.playhead_read.position();
         self.abr
             .notify_commit(decision, current_before, reader_pt, Instant::now());
@@ -331,7 +353,7 @@ impl HlsCoord {
     /// lookups keep the existing `find_at_offset` routing for shrunk outgoing
     /// variants.
     pub(crate) fn demand_segment_at_offset(&self, byte_offset: u64) -> Option<u32> {
-        let active = self.active_required();
+        let active = self.active();
         active
             .demand_segment_at_offset(byte_offset)
             .or_else(|| self.find_at_offset(byte_offset).map(|(idx, _, _)| idx))
@@ -342,6 +364,9 @@ impl HlsCoord {
         ctx: &PlanCtx,
         budget: usize,
     ) -> Vec<FetchCmd> {
+        if self.exact_sessions_enabled() {
+            return Vec::new();
+        }
         let Some(decision) = self.abr.peek_pending_decision() else {
             return Vec::new();
         };
@@ -358,12 +383,12 @@ impl HlsCoord {
     /// priority: active first, then shrunk `v_old`s. Returns `None` if no
     /// engaged variant claims the offset.
     pub(crate) fn find_at_offset(&self, byte_offset: u64) -> Option<(u32, u64, u64)> {
-        let active = self.active_required();
+        let active = self.active();
         if let Some(found) = active.find_at_offset(byte_offset) {
             return Some(found);
         }
         for v in self.variants.iter() {
-            if Arc::ptr_eq(v, active) {
+            if Arc::ptr_eq(v, &active) {
                 continue;
             }
             let shrunk = v.is_shrunk();
@@ -386,7 +411,7 @@ impl HlsCoord {
 
     /// Total bytes are >0 — the value used by `Source::len` accessor.
     pub(crate) fn len(&self) -> Option<u64> {
-        self.active()?.stream_len()
+        self.active().stream_len()
     }
 
     /// Active variant's media info. `HlsCoord` is constructed
@@ -394,7 +419,7 @@ impl HlsCoord {
     /// the `Source` trait's `Option<MediaInfo>` shape is restored at
     /// the [`HlsSource`](crate::stream::HlsSource) façade.
     pub(crate) fn media_info(&self) -> MediaInfo {
-        self.active_required().media_info()
+        self.active().media_info()
     }
 
     /// Track-level phase. Master-cancel takes precedence (terminal
@@ -417,7 +442,7 @@ impl HlsCoord {
     }
 
     /// Seek entry point. Collapses cross-variant byte-continuity layering,
-    /// drops a stale ABR boundary decision, and wakes a parked reader.
+    /// cancels the incoming exact session, and wakes a parked reader.
     ///
     /// The expensive layout collapse ([`Self::reset_for_seek`]) runs only
     /// when the active variant's offset table is not already the canonical
@@ -427,19 +452,19 @@ impl HlsCoord {
     /// unconditional, so the seek's cancel/wake semantics are unchanged for
     /// every track (cross-variant, partial-download, or fully cached).
     ///
-    /// Dropping the pending boundary decision matters because a pending
-    /// up-switch chosen against pre-seek throughput is stale once the reader
-    /// jumps and would otherwise commit on the first boundary after the seek
-    /// lands, forcing a decoder recreate before the new-variant cache is warm
-    /// (a `HangDetector` trip).
+    /// Legacy boundary switching drops a throughput-driven decision because it
+    /// could commit immediately after the seek against a cold target. Exact
+    /// sessions preserve the ticket and rebuild its incoming session in the new
+    /// seek epoch; publication remains impossible until that replacement is
+    /// ready.
     pub(crate) fn prepare_for_seek(&self) {
-        if self
-            .active()
-            .is_none_or(|active| !active.layout_seek_invariant())
-        {
+        self.cancel_incoming_for_seek();
+        if !self.active().layout_seek_invariant() {
             self.reset_for_seek();
         }
-        self.abr.invalidate_pending();
+        if !self.exact_sessions_enabled() {
+            self.abr.invalidate_pending();
+        }
         // A seek repositioned the active variant: wake a reader parked on the
         // pre-seek range so it re-probes against the new position / flush gate.
         self.signal.fire_ready_only();
@@ -490,7 +515,7 @@ impl HlsCoord {
     pub(crate) fn reconcile_escape(&self, reader_seg: u32) -> bool {
         let stalled = self
             .active()
-            .is_some_and(|active| active.segment_stalled_at_boundary(reader_seg, self.position()));
+            .segment_stalled_at_boundary(reader_seg, self.position());
         let was = self.abr.is_escaping();
         if stalled && !was {
             self.abr.mark_escape();
@@ -511,13 +536,18 @@ impl HlsCoord {
     /// entered when the layout is already canonical.
     #[kithara::probe]
     pub(crate) fn reset_for_seek(&self) {
-        if let Some(active) = self.active() {
-            active.reset_for_seek();
-        }
+        self.active().reset_for_seek();
     }
 
     pub(crate) fn seek_control(&self) -> Arc<dyn SeekControl> {
         Arc::clone(&self.seek) as Arc<dyn SeekControl>
+    }
+
+    pub(super) fn commit_if_seek_epoch<T, F>(&self, epoch: u64, commit: F) -> Option<T>
+    where
+        F: FnOnce() -> T,
+    {
+        self.seek.commit_if_epoch(epoch, commit)
     }
 
     pub(crate) fn seek_epoch_handle(&self) -> Arc<AtomicU64> {
@@ -560,9 +590,9 @@ impl HlsCoord {
     /// `soft_timeout` and the slow flag never sets.
     pub(crate) fn stalled_escape(&self, reader_seg: u32) -> bool {
         self.abr.peek_pending_decision().is_some()
-            && self.active().is_some_and(|active| {
-                active.segment_stalled_at_boundary(reader_seg, self.position())
-            })
+            && self
+                .active()
+                .segment_stalled_at_boundary(reader_seg, self.position())
     }
 
     /// Mirror `abr.lock()` state to `seek_obs.is_pending()`.
@@ -614,7 +644,7 @@ impl HlsCoord {
             return None;
         }
         let head = self.download_head();
-        let active = self.active()?;
+        let active = self.active();
         if head >= active.num_segments() {
             return None;
         }
@@ -640,21 +670,14 @@ impl HlsCoord {
             .then(|| self.fence_target.load(Ordering::Acquire))
     }
 
-    /// Single source of truth: the variant index lives in
-    /// [`AbrState::current_variant`]. The previous duplicate
-    /// `HlsCoord::active_variant` was removed — `apply_decision`
-    /// publishes the switch after `v_new` is fully prepared, so a
-    /// reader observing `current_variant := new` is guaranteed to see
-    /// `v_new` ready.
+    /// Variant index of the authoritative active source session.
     pub(crate) fn variant_index(&self) -> usize {
-        self.abr
-            .current_variant_index()
-            .expect("HlsCoord requires AbrHandle with state — checked in new()")
+        self.active_session().variant_index()
     }
 
     /// Find the variant whose served range covers `offset`. Priority:
     ///
-    /// 1. The ABR-active variant — the normal steady-state hit.
+    /// 1. The active session's variant — the normal steady-state hit.
     /// 2. Any non-active variant whose served range has been *shrunk*
     ///    from its default span by a prior ABR commit (i.e.
     ///    `served_from > 0` or `served_until < num_segments`). These
@@ -666,13 +689,13 @@ impl HlsCoord {
     /// excluded: their layout overlaps the active range but their
     /// resources were never fetched, so routing to them would return
     /// `NotFound` / `Pending(Retry)`.
-    pub(crate) fn variant_serving(&self, offset: u64) -> &Arc<HlsVariant> {
-        let active = self.active_required();
+    pub(crate) fn variant_serving(&self, offset: u64) -> Arc<HlsVariant> {
+        let active = self.active();
         if active.init_descriptor_at(offset).is_some() || active.find_at_offset(offset).is_some() {
             return active;
         }
         for v in self.variants.iter() {
-            if Arc::ptr_eq(v, active) {
+            if Arc::ptr_eq(v, &active) {
                 continue;
             }
             let shrunk = v.is_shrunk();
@@ -680,7 +703,7 @@ impl HlsCoord {
                 continue;
             }
             if v.init_descriptor_at(offset).is_some() || v.find_at_offset(offset).is_some() {
-                return v;
+                return Arc::clone(v);
             }
         }
         active
@@ -751,23 +774,40 @@ impl HlsCoord {
         }
     }
 
+    pub(crate) fn position(&self) -> u64 {
+        self.active_session().position()
+    }
+
+    pub(crate) fn advance(&self, n: u64) {
+        self.active_session().advance(n);
+    }
+
+    pub(crate) fn set_position(&self, pos: u64) {
+        self.active_session().seek_to_byte(pos);
+    }
+
+    pub(crate) fn seek_time_anchor(
+        &self,
+        position: Duration,
+    ) -> StreamResult<Option<SourceSeekAnchor>> {
+        self.active_session().seek_time_anchor(position)
+    }
+
+    pub(crate) fn selected_variant_for_seek(&self) -> usize {
+        self.abr
+            .selected_variant_for_seek()
+            .expect("HlsCoord always owns a stateful ABR handle")
+    }
+
     delegate! {
-        to self.active_required().as_ref() {
-            #[call(get_position)]
-            pub(crate) fn position(&self) -> u64;
-            pub(crate) fn advance(&self, n: u64);
-            pub(crate) fn set_position(&self, pos: u64);
+        to self.active().as_ref() {
             pub(crate) fn download_head(&self) -> u32;
             pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
-            pub(crate) fn seek_time_anchor(
-                &self,
-                position: Duration,
-            ) -> StreamResult<Option<SourceSeekAnchor>>;
         }
     }
 }
 
-fn variant_switch_target_time(
+pub(super) fn variant_switch_target_time(
     seek_obs: &dyn SeekObserve,
     playhead_read: &dyn PlayheadRead,
 ) -> Duration {
@@ -807,6 +847,36 @@ fn variant_switch_uses_byte_continuity(
 /// methods — non-adaptive sources vend `None` instead of implementing
 /// these.
 impl VariantControl for HlsCoord {
+    fn enable_variant_sessions(&self) -> StreamResult<()> {
+        Self::enable_variant_sessions(self)
+    }
+
+    fn prepare_variant_reader(
+        &self,
+        profile: ReaderProfile,
+    ) -> StreamResult<Option<VariantTransition>> {
+        Self::prepare_variant_reader(self, profile)
+    }
+
+    fn take_prepared_variant_reader(
+        &self,
+        transition: VariantTransition,
+    ) -> StreamResult<VariantReaderTake> {
+        Self::take_prepared_variant_reader(self, transition)
+    }
+
+    fn promote_variant(&self, transition: VariantTransition) -> bool {
+        Self::promote_variant(self, transition)
+    }
+
+    fn abort_variant(&self, transition: VariantTransition) -> bool {
+        Self::abort_variant(self, transition)
+    }
+
+    fn selected_variant_for_seek(&self) -> usize {
+        Self::selected_variant_for_seek(self)
+    }
+
     fn clear_variant_fence(&self) {
         Self::clear_variant_fence(self);
     }
@@ -824,54 +894,57 @@ impl VariantControl for HlsCoord {
     }
 }
 
-/// `ByteMap` delegates to whichever variant is currently active —
-/// `HlsCoord` already owns the variants and the active index, so we
-/// implement the trait here instead of a separate view wrapper.
+/// `ByteMap` delegates to the authoritative active session's variant.
 impl ByteMap for HlsCoord {
     fn anchor_at_time(&self, position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
         self.prepare_for_seek();
         self.seek_time_anchor(position)
     }
 
-    delegate! {
-        to self {
-            #[expr($.map(|v| v.init_byte_range()).unwrap_or(0..0))]
-            #[call(active)]
-            fn init_segment_range(&self) -> Range<u64>;
-            #[expr($?.stream_len())]
-            #[call(active)]
-            fn len(&self) -> Option<u64>;
-            #[expr($.descriptor_at_byte(byte))]
-            #[call(variant_serving)]
-            fn segment_at_byte(&self, byte: u64) -> Option<SegmentDescriptor>;
-            #[expr(Some($?.num_segments()))]
-            #[call(active)]
-            fn segment_count(&self) -> Option<u32>;
-        }
+    fn init_segment_range(&self) -> Range<u64> {
+        self.active().init_byte_range()
+    }
+
+    fn len(&self) -> Option<u64> {
+        self.active().stream_len()
+    }
+
+    fn segment_at_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
+        self.variant_serving(byte).descriptor_at_byte(byte)
+    }
+
+    fn segment_count(&self) -> Option<u32> {
+        Some(self.active().num_segments())
     }
 
     fn segment_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
-        self.active()?.descriptor_after_byte(byte)
+        self.active().descriptor_after_byte(byte)
     }
 
     fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
-        self.active()?.descriptor(segment_index as usize)
+        self.active().descriptor(segment_index as usize)
     }
 
     fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
-        self.active()?.descriptor_at_time(t)
+        self.active().descriptor_at_time(t)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
+    use std::{
+        io::{ErrorKind, Read},
+        num::NonZeroU64,
+        sync::OnceLock,
+    };
 
-    use kithara_abr::{Abr, AbrController, AbrSettings, AbrState};
+    use kithara_abr::{Abr, AbrController, AbrSettings, AbrState, PendingAbrClaim};
     use kithara_assets::{AssetResource, AssetSource, AssetStoreBuilder, StorageBackend};
-    use kithara_events::{AbrMode, Event, EventBus, VariantIndex};
+    use kithara_events::{AbrMode, AbrReason, Event, EventBus, VariantIndex};
     use kithara_platform::sync::{Arc, ThreadGate};
-    use kithara_stream::{AudioCodec, ContainerFormat, PlayheadWrite, SeekControl};
+    use kithara_stream::{
+        AudioCodec, ContainerFormat, PlayheadWrite, ReaderInput, ReaderWarmup, SeekControl,
+    };
 
     use super::*;
     use crate::{
@@ -896,7 +969,7 @@ mod tests {
         }
     }
 
-    fn switch_coord() -> (Arc<HlsCoord>, EventBus, PlanCtx) {
+    fn switch_coord() -> (Arc<HlsCoord>, EventBus, PlanCtx, Arc<AbrState>) {
         let bus = EventBus::new(8);
         let cancel = CancelToken::never();
         let store = Arc::new(
@@ -994,6 +1067,7 @@ mod tests {
             .into_variant(1, &ctx),
         ]);
         let abr_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+        let abr_publisher = abr_state.publisher();
         let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer {
             state: Arc::clone(&abr_state),
             variants: vec![
@@ -1038,10 +1112,51 @@ mod tests {
             Arc::new(PlayheadState::new()),
             Arc::new(SeekState::new()),
             handle,
+            abr_publisher,
             variants,
             playlist,
         ));
-        (coord, bus, ctx)
+        (coord, bus, ctx, abr_state)
+    }
+
+    fn incremental_profile(read_ahead_bytes: u64) -> ReaderProfile {
+        ReaderProfile::new(
+            ReaderInput::Incremental,
+            ReaderWarmup::None,
+            NonZeroU64::new(read_ahead_bytes).expect("non-zero read ahead"),
+        )
+    }
+
+    fn enable_exact_sessions(coord: &HlsCoord) {
+        if let Some(pending) = coord.abr.claim_pending_decision() {
+            assert!(coord.abr_publisher.abort_pending(pending.ticket()));
+        }
+        coord
+            .enable_variant_sessions()
+            .expect("enable exact sessions before intent");
+    }
+
+    fn enable_exact_target(coord: &HlsCoord, abr_state: &AbrState) {
+        enable_exact_sessions(coord);
+        abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+    }
+
+    fn take_ready_incremental_reader(
+        coord: &HlsCoord,
+        ctx: &PlanCtx,
+        transition: VariantTransition,
+    ) {
+        let mut command = coord
+            .dispatch_incoming(ctx, 1)
+            .pop()
+            .expect("incoming fetch");
+        command.writer.take().expect("streaming writer")(&[1; 32]).expect("construction bytes");
+        assert!(matches!(
+            coord
+                .take_prepared_variant_reader(transition)
+                .expect("take ready reader"),
+            VariantReaderTake::Ready(_)
+        ));
     }
 
     #[kithara::test]
@@ -1107,7 +1222,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn variant_switch_fence_and_ack_publish_events() {
-        let (coord, bus, ctx) = switch_coord();
+        let (coord, bus, ctx, _abr_state) = switch_coord();
         let mut events = bus.subscribe();
 
         assert!(coord.commit_variant_switch_at_segment(&ctx, 0));
@@ -1129,5 +1244,472 @@ mod tests {
                 generation: 1,
             }))
         ));
+    }
+
+    #[kithara::test]
+    fn incoming_session_does_not_publish_variant_or_cursor_before_promotion() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        enable_exact_target(&coord, &abr_state);
+        coord.set_position(17);
+
+        let transition = coord
+            .prepare_variant_reader(incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+        assert_eq!(coord.sessions.resident_count(), 2);
+
+        assert_eq!(coord.variant_index(), 0);
+        assert_eq!(coord.position(), 17);
+        assert!(matches!(
+            coord
+                .take_prepared_variant_reader(transition)
+                .expect("probe incoming"),
+            VariantReaderTake::Preparing
+        ));
+        assert!(coord.abort_variant(transition));
+        assert_eq!(coord.sessions.resident_count(), 1);
+        assert_eq!(coord.variant_index(), 0);
+        assert_eq!(coord.position(), 17);
+    }
+
+    #[kithara::test]
+    fn exact_session_resolution_follows_the_committed_abr_selector_before_collapse() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        enable_exact_target(&coord, &abr_state);
+        coord
+            .prepare_variant_reader(incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+        let claim = coord
+            .abr
+            .claim_pending_decision()
+            .expect("prepared transition keeps its exact claim");
+
+        assert!(coord.abr_publisher.commit_pending(claim, Instant::now()));
+
+        assert_eq!(
+            coord.active_session().variant_index(),
+            1,
+            "the committed ABR selector must resolve through the resident pair before collapse"
+        );
+    }
+
+    #[kithara::test]
+    fn exact_session_resolution_retries_a_stale_selector_snapshot() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        enable_exact_target(&coord, &abr_state);
+        coord
+            .prepare_variant_reader(incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+        let mut selector_observations = [0, 1, 1, 1].into_iter();
+
+        let resolved = coord.sessions.active(|| {
+            selector_observations
+                .next()
+                .expect("resolver performs two selector reads per attempt")
+        });
+
+        assert_eq!(resolved.variant_index(), 1);
+        assert_eq!(selector_observations.next(), None);
+    }
+
+    #[kithara::test(tokio)]
+    async fn incoming_readiness_tracks_required_bytes_not_delivery_chunks() {
+        let (coord, _bus, ctx, abr_state) = switch_coord();
+        enable_exact_target(&coord, &abr_state);
+        coord.set_position(17);
+        let transition = coord
+            .prepare_variant_reader(incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+        let mut commands = coord.dispatch_incoming(&ctx, 1);
+        assert_eq!(commands.len(), 1);
+        let mut command = commands.pop().expect("target fetch");
+        assert_eq!(command.url.as_str(), "https://example.com/v1-seg0.m4s");
+        let mut writer = command.writer.take().expect("streaming writer");
+
+        writer(&[1; 7]).expect("first delivery chunk");
+        assert!(matches!(
+            coord
+                .take_prepared_variant_reader(transition)
+                .expect("probe partial incoming"),
+            VariantReaderTake::Preparing
+        ));
+
+        writer(&[2; 25]).expect("second delivery chunk");
+        let VariantReaderTake::Ready(reader) = coord
+            .take_prepared_variant_reader(transition)
+            .expect("take ready incoming")
+        else {
+            panic!("reader must become ready at the declared byte requirement");
+        };
+        assert_eq!(reader.transition(), transition);
+        assert_eq!(reader.media_info().variant_index, Some(1));
+        let (_transition, _media_info, reader) = reader.split();
+        let mut input = reader.into_inner();
+        assert!(matches!(
+            coord
+                .take_prepared_variant_reader(transition)
+                .expect("take reader twice"),
+            VariantReaderTake::Taken
+        ));
+
+        writer(&[3; 68]).expect("remaining delivery body");
+        command.on_complete.take().expect("completion handler")(100, None, None);
+        let mut first = [0_u8; 8];
+        assert_eq!(input.read(&mut first).expect("read incoming"), first.len());
+        assert_eq!(coord.position(), 17);
+        assert!(coord.promote_variant(transition));
+        assert_eq!(coord.sessions.resident_count(), 1);
+        assert_eq!(coord.variant_index(), 1);
+        assert_eq!(coord.position(), first.len() as u64);
+
+        let mut second = [0_u8; 8];
+        assert_eq!(
+            input.read(&mut second).expect("read promoted session"),
+            second.len()
+        );
+        assert_eq!(coord.position(), (first.len() + second.len()) as u64);
+    }
+
+    #[kithara::test]
+    fn promotion_requires_the_exact_taken_reader() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        enable_exact_target(&coord, &abr_state);
+        let transition = coord
+            .prepare_variant_reader(incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+
+        assert!(!coord.promote_variant(transition));
+        assert_eq!(coord.variant_index(), 0);
+        assert!(coord.abort_variant(transition));
+    }
+
+    #[kithara::test]
+    fn one_transition_rejects_a_different_reader_profile() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        enable_exact_target(&coord, &abr_state);
+        let transition = coord
+            .prepare_variant_reader(incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+
+        let error = coord
+            .prepare_variant_reader(incremental_profile(64))
+            .expect_err("profile mismatch must fail");
+        assert!(matches!(
+            error,
+            StreamError::Source(SourceError::Io(ref error))
+                if error.kind() == ErrorKind::InvalidInput
+        ));
+        assert!(matches!(
+            coord
+                .take_prepared_variant_reader(transition)
+                .expect("original transition remains live"),
+            VariantReaderTake::Preparing
+        ));
+        assert!(coord.abort_variant(transition));
+    }
+
+    #[kithara::test]
+    fn stale_same_target_identity_cannot_disturb_newer_incoming() {
+        let (coord, _bus, ctx, abr_state) = switch_coord();
+        enable_exact_target(&coord, &abr_state);
+        let stale = coord
+            .prepare_variant_reader(incremental_profile(32))
+            .expect("prepare first incoming")
+            .expect("first pending switch");
+        let mut stale_command = coord
+            .dispatch_incoming(&ctx, 1)
+            .pop()
+            .expect("first session fetch");
+        let stale_cancel = stale_command
+            .cancel
+            .as_ref()
+            .expect("session fetch cancel")
+            .clone();
+        assert!(!stale_cancel.is_cancelled());
+
+        abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        let current = coord
+            .prepare_variant_reader(incremental_profile(32))
+            .expect("prepare replacement incoming")
+            .expect("replacement pending switch");
+
+        assert_ne!(stale.id(), current.id());
+        assert!(stale_cancel.is_cancelled());
+        stale_command.on_complete.take().expect("stale completion")(0, None, None);
+        let current_command = coord
+            .dispatch_incoming(&ctx, 1)
+            .pop()
+            .expect("replacement session fetch");
+        let current_cancel = current_command
+            .cancel
+            .as_ref()
+            .expect("replacement fetch cancel")
+            .clone();
+        assert!(!current_cancel.is_cancelled());
+        assert!(!coord.promote_variant(stale));
+        assert!(!coord.abort_variant(stale));
+        assert!(!current_cancel.is_cancelled());
+        assert!(matches!(
+            coord
+                .take_prepared_variant_reader(current)
+                .expect("replacement remains live"),
+            VariantReaderTake::Preparing
+        ));
+        assert!(coord.abort_variant(current));
+        assert!(current_cancel.is_cancelled());
+    }
+
+    #[kithara::test]
+    fn exact_session_mode_never_falls_back_to_legacy_commit() {
+        let (coord, _bus, ctx, abr_state) = switch_coord();
+        enable_exact_target(&coord, &abr_state);
+        let transition = coord
+            .prepare_variant_reader(incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+        assert!(coord.abort_variant(transition));
+
+        abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        assert!(!coord.has_incoming());
+        assert!(!coord.commit_variant_switch_at_segment(&ctx, 0));
+        assert_eq!(coord.variant_index(), 0);
+        assert!(coord.abr.claim_pending_decision().is_some());
+    }
+
+    #[kithara::test]
+    fn locked_exact_intent_keeps_its_incoming_session() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        enable_exact_target(&coord, &abr_state);
+        let transition = coord
+            .prepare_variant_reader(incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+
+        coord.abr.lock();
+        assert_eq!(
+            coord
+                .prepare_variant_reader(incremental_profile(32))
+                .expect("locked preparation probe"),
+            Some(transition)
+        );
+        assert!(coord.has_incoming());
+
+        coord.abr.unlock();
+        assert_eq!(
+            coord
+                .prepare_variant_reader(incremental_profile(32))
+                .expect("unlocked preparation probe"),
+            Some(transition)
+        );
+    }
+
+    #[kithara::test]
+    fn locked_exact_intent_rejects_a_reader_profile_change() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        enable_exact_target(&coord, &abr_state);
+        coord
+            .prepare_variant_reader(incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+        coord.abr.lock();
+
+        let error = coord
+            .prepare_variant_reader(incremental_profile(64))
+            .expect_err("one transition cannot change reader profile while locked");
+
+        assert!(matches!(
+            error,
+            StreamError::Source(SourceError::Io(ref error))
+                if error.kind() == ErrorKind::InvalidInput
+        ));
+        assert!(coord.has_incoming());
+    }
+
+    #[kithara::test]
+    fn exact_session_mode_is_enabled_before_selection_intent() {
+        let (coord, _bus, ctx, abr_state) = switch_coord();
+        let pending = coord
+            .abr
+            .claim_pending_decision()
+            .expect("fixture pending intent");
+
+        let error = coord
+            .enable_variant_sessions()
+            .expect_err("late activation must not race a pending intent");
+        assert!(matches!(
+            error,
+            StreamError::Source(SourceError::Io(ref error))
+                if error.kind() == ErrorKind::InvalidInput
+        ));
+        assert_eq!(coord.abr.claim_pending_decision(), Some(pending));
+
+        assert!(coord.abr_publisher.abort_pending(pending.ticket()));
+        coord
+            .enable_variant_sessions()
+            .expect("enable before selection");
+        abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+
+        assert!(!coord.commit_variant_switch_at_segment(&ctx, 0));
+        assert_eq!(coord.variant_index(), 0);
+        assert!(
+            coord
+                .prepare_variant_reader(incremental_profile(32))
+                .expect("claim exact transition")
+                .is_some()
+        );
+    }
+
+    #[kithara::test]
+    fn terminal_exact_preparation_error_aborts_its_claim() {
+        let (coord, _bus, ctx, abr_state) = switch_coord();
+        enable_exact_sessions(&coord);
+        abr_state.set_mode(AbrMode::Auto(Some(VariantIndex::new(0))));
+        abr_state.request_target(VariantIndex::new(9), AbrReason::UpSwitch);
+
+        let error = coord
+            .prepare_variant_reader(incremental_profile(32))
+            .expect_err("unknown target must fail");
+        assert!(matches!(
+            error,
+            StreamError::Source(SourceError::VariantNotFound(_))
+        ));
+        assert!(coord.abr.claim_pending_decision().is_none());
+        assert!(!coord.commit_variant_switch_at_segment(&ctx, 0));
+        assert_eq!(coord.variant_index(), 0);
+    }
+
+    #[kithara::test]
+    fn active_seek_anchor_updates_the_session_cursor() {
+        let (coord, _bus, _ctx, _abr_state) = switch_coord();
+        coord.set_position(17);
+
+        let anchor = ByteMap::anchor_at_time(coord.as_ref(), Duration::from_secs(1))
+            .expect("resolve seek anchor")
+            .expect("segmented source anchor");
+
+        assert_eq!(anchor.byte_offset, 0);
+        assert_eq!(coord.position(), anchor.byte_offset);
+    }
+
+    #[kithara::test]
+    fn seek_aborts_the_exact_incoming_session() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        enable_exact_target(&coord, &abr_state);
+        let transition = coord
+            .prepare_variant_reader(incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+
+        let _epoch = coord.seek_control().begin(Duration::from_secs(1));
+        coord.prepare_for_seek();
+
+        assert!(matches!(
+            coord
+                .take_prepared_variant_reader(transition)
+                .expect("probe stale incoming"),
+            VariantReaderTake::Stale
+        ));
+        assert_eq!(coord.variant_index(), 0);
+    }
+
+    #[kithara::test]
+    fn seek_replaces_the_session_without_deleting_manual_selection() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        enable_exact_target(&coord, &abr_state);
+        let claim = coord
+            .abr
+            .claim_pending_decision()
+            .expect("manual selection claim");
+        let stale = coord
+            .prepare_variant_reader(incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+
+        let next_epoch = coord.seek_control().begin(Duration::from_secs(1));
+        coord.prepare_for_seek();
+
+        assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
+        let replacement = coord
+            .prepare_variant_reader(incremental_profile(32))
+            .expect("prepare replacement")
+            .expect("manual selection survives seek");
+        assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());
+        assert_eq!(replacement.id().seek_epoch(), next_epoch);
+        assert_ne!(replacement, stale);
+    }
+
+    #[kithara::test]
+    fn seek_replaces_the_session_without_deleting_automatic_selection() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        enable_exact_sessions(&coord);
+        abr_state.set_mode(AbrMode::Auto(Some(VariantIndex::new(0))));
+        abr_state.request_target(VariantIndex::new(1), AbrReason::UpSwitch);
+        let claim = coord
+            .abr
+            .claim_pending_decision()
+            .expect("automatic selection claim");
+        let stale = coord
+            .prepare_variant_reader(incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+
+        let next_epoch = coord.seek_control().begin(Duration::from_secs(1));
+        coord.prepare_for_seek();
+
+        assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
+        let replacement = coord
+            .prepare_variant_reader(incremental_profile(32))
+            .expect("prepare replacement")
+            .expect("automatic selection survives seek");
+        assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());
+        assert_eq!(replacement.id().seek_epoch(), next_epoch);
+        assert_ne!(replacement, stale);
+    }
+
+    #[kithara::test]
+    fn seek_selection_reads_the_pending_target_while_abr_is_locked() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        enable_exact_sessions(&coord);
+        abr_state.set_mode(AbrMode::Auto(Some(VariantIndex::new(0))));
+        abr_state.request_target(VariantIndex::new(1), AbrReason::UpSwitch);
+        coord.abr.lock();
+
+        assert_eq!(coord.selected_variant_for_seek(), 1);
+        assert!(matches!(
+            coord.abr.pending_claim(),
+            PendingAbrClaim::Locked(_)
+        ));
+    }
+
+    #[kithara::test(tokio)]
+    async fn seek_epoch_rejects_taken_generation_and_preserves_its_selection() {
+        let (coord, _bus, ctx, abr_state) = switch_coord();
+        enable_exact_target(&coord, &abr_state);
+        let claim = coord
+            .abr
+            .claim_pending_decision()
+            .expect("manual selection claim");
+        let stale = coord
+            .prepare_variant_reader(incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+        take_ready_incremental_reader(&coord, &ctx, stale);
+
+        let next_epoch = coord.seek_control().begin(Duration::from_secs(1));
+
+        assert!(!coord.promote_variant(stale));
+        assert_eq!(coord.variant_index(), 0);
+        assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
+        let replacement = coord
+            .prepare_variant_reader(incremental_profile(32))
+            .expect("prepare replacement")
+            .expect("manual selection survives epoch change");
+        assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());
+        assert_eq!(replacement.id().seek_epoch(), next_epoch);
     }
 }

@@ -183,6 +183,7 @@ impl StreamType for Hls {
             playhead,
             seek,
             stream_peer.peer_handle().abr().clone(),
+            hls_peer.abr_publisher(),
             Arc::clone(&variants),
             Arc::clone(&playlist_state),
         ));

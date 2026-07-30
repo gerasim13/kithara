@@ -23,6 +23,7 @@ impl ReaderRuntime {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn advance(&self, n: u64) {
         self.position.fetch_add(n, Ordering::AcqRel);
     }

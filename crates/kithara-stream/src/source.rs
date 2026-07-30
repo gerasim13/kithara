@@ -14,7 +14,10 @@ use crate::{
     error::StreamResult,
     media::MediaInfo,
     playhead::{PlayheadRead, PlayheadWrite},
+    profile::ReaderProfile,
+    reader::VariantReaderTake,
     seek_state::{Activity, SeekControl, SeekObserve},
+    transition::VariantTransition,
     wake::{DeferredWake, WorkerWake},
 };
 
@@ -348,6 +351,51 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
 /// mutability, so callers hold an `Arc<dyn VariantControl>` and never
 /// need `&mut`.
 pub trait VariantControl: Send + Sync + 'static {
+    /// Select exact dual-session ownership before any variant intent can be
+    /// published. Activation fails when an intent is already pending.
+    ///
+    /// # Errors
+    ///
+    /// Returns a source error when activation would race an existing intent.
+    fn enable_variant_sessions(&self) -> StreamResult<()>;
+
+    /// Claim the current exact ABR intent and start preparing its independent
+    /// reader session. Repeated calls for the same intent return the same
+    /// transition; a newer intent supersedes the previous incoming session.
+    ///
+    /// # Errors
+    ///
+    /// Returns a source error when the target session cannot be prepared.
+    fn prepare_variant_reader(
+        &self,
+        profile: ReaderProfile,
+    ) -> StreamResult<Option<VariantTransition>>;
+
+    /// Transfer the prepared reader exactly once. The typed result keeps
+    /// readiness, prior transfer, and stale identity distinct.
+    ///
+    /// # Errors
+    ///
+    /// Returns a source error when preparation ended in a terminal failure.
+    fn take_prepared_variant_reader(
+        &self,
+        transition: VariantTransition,
+    ) -> StreamResult<VariantReaderTake>;
+
+    /// Publish the incoming variant only when `transition` still identifies
+    /// the exact pending ABR intent in the same seek epoch.
+    #[must_use]
+    fn promote_variant(&self, transition: VariantTransition) -> bool;
+
+    /// Cancel one exact incoming session without disturbing the authoritative
+    /// outgoing variant or a newer ABR intent.
+    #[must_use]
+    fn abort_variant(&self, transition: VariantTransition) -> bool;
+
+    /// Variant that a seek replacement must open. A pending manual or
+    /// automatic selection wins even while transition publication is locked.
+    fn selected_variant_for_seek(&self) -> usize;
+
     /// Clear the variant fence after a decoder recreate acks an ABR switch.
     fn clear_variant_fence(&self);
 

@@ -47,6 +47,7 @@ impl HlsVariant {
 
     delegate::delegate! {
         to self.flow.cancel_epoch {
+            #[cfg(test)]
             pub(crate) fn cancel(&self);
             #[call(handle)]
             pub(crate) fn cancel_handle(&self) -> CancelToken;

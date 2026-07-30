@@ -32,7 +32,7 @@ pub use media::{AudioCodec, ContainerFormat, MediaInfo, needs_exact_byte_sizes};
 pub use playhead::{ChunkPosition, PlayheadRead, PlayheadState, PlayheadWrite};
 pub use preroll::PrerollHint;
 pub use profile::{ReaderInput, ReaderProfile, ReaderWarmup};
-pub use reader::{OpenedReader, OpenedVariantReader, SessionReader};
+pub use reader::{OpenedReader, OpenedVariantReader, SessionReader, VariantReaderTake};
 pub use seek_state::{Activity, SeekControl, SeekObserve, SeekState};
 pub use source::{
     ByteMap, NotReadyCause, PendingReason, ReadOutcome, SegmentDescriptor, Source, SourcePhase,

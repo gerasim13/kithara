@@ -138,4 +138,12 @@ impl SizeSignal {
             wake.notify_now();
         }
     }
+
+    /// Arm the peer wake from a non-blocking decoder reader. The scheduler
+    /// shell flushes the stored wake off the real-time path.
+    pub(crate) fn arm_peer(&self) {
+        if let Some(wake) = self.peer_wake.get() {
+            wake.arm();
+        }
+    }
 }
