@@ -6,7 +6,7 @@ command.
 
 ## Two configurations
 
-CI reads two strict JSON files, and they have different owners:
+CI reads two strict TOML files, and they have different owners:
 
 | File | Owner | Tracked |
 | --- | --- | --- |

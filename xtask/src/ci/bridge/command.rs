@@ -173,7 +173,7 @@ mod tests {
                 "bridge",
                 "validate",
                 "--config",
-                "bridge.json"
+                "bridge.toml"
             ])
             .is_ok()
         );
@@ -184,7 +184,7 @@ mod tests {
                 "bridge",
                 "reconcile",
                 "--config",
-                "bridge.json"
+                "bridge.toml"
             ])
             .is_ok()
         );
