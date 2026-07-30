@@ -2,12 +2,15 @@
 
 #[cfg(feature = "render")]
 pub(crate) mod atoms;
+#[cfg(any(feature = "render", feature = "vello-backend"))]
+pub mod backends;
 pub mod builtin;
 pub mod compile;
+#[cfg(any(feature = "render", feature = "vello-backend"))]
+pub mod draw;
 pub mod error;
 pub mod expand;
 pub mod ids;
-pub mod paint;
 pub mod registry;
 #[cfg(feature = "render")]
 pub mod render;

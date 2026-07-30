@@ -1,5 +1,5 @@
 use crate::{
-    paint::{Painter, Pt, Rect, Rgba, Transform},
+    draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
     skin::ColorRole,
     text::TextContext,
@@ -20,9 +20,9 @@ impl<'data, 'skin> Knob<'data, 'skin> {
         self.skin.rgba(role)
     }
 
-    pub(crate) fn paint<P: Painter>(
+    pub(crate) fn paint(
         &self,
-        painter: &mut P,
+        list: &mut DrawListBuilder,
         text: &mut TextContext,
         dial: Rect,
         caption: Rect,
@@ -38,7 +38,7 @@ impl<'data, 'skin> Knob<'data, 'skin> {
 
         if radius > 0.0 {
             let track = self.color(metrics.track_color);
-            painter.stroke_arc(
+            list.stroke_arc(
                 center,
                 radius,
                 metrics.start_angle,
@@ -49,7 +49,7 @@ impl<'data, 'skin> Knob<'data, 'skin> {
                 },
                 metrics.track_width,
             );
-            painter.stroke_arc(
+            list.stroke_arc(
                 center,
                 radius,
                 metrics.neutral_angle,
@@ -59,14 +59,14 @@ impl<'data, 'skin> Knob<'data, 'skin> {
             );
 
             let body_radius = metrics.body_ratio * radius;
-            painter.fill_circle(center, body_radius, self.color(metrics.body_fill));
-            painter.stroke_circle(
+            list.fill_circle(center, body_radius, self.color(metrics.body_fill));
+            list.stroke_circle(
                 center,
                 body_radius,
                 self.color(metrics.body_border),
                 metrics.body_border_width,
             );
-            painter.stroke_line(
+            list.stroke_line(
                 center,
                 Pt {
                     x: center.x + angle.cos() * body_radius,
@@ -87,7 +87,7 @@ impl<'data, 'skin> Knob<'data, 'skin> {
                 role.spacing,
                 Some(caption.w),
             );
-            painter.text(
+            list.text(
                 &run,
                 label,
                 Transform::translate(Pt {
@@ -107,8 +107,8 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
+        draw::{DrawCmd, DrawList, Geom},
         ids::SourceUri,
-        paint::record::{Cmd, RecordPainter},
     };
 
     #[derive(Clone, Copy, Debug, PartialEq)]
@@ -118,6 +118,7 @@ mod tests {
         StrokeArc,
         StrokeLine,
         Text,
+        Other,
     }
 
     #[kithara::test]
@@ -149,17 +150,17 @@ mod tests {
             ]
         );
         assert_eq!(
-            &labelled[..labelled.len() - 1],
-            unlabelled,
+            &labelled.commands()[..labelled.commands().len() - 1],
+            unlabelled.commands(),
             "the dial recording must not depend on caption presence"
         );
         assert!(matches!(
-            labelled.last(),
-            Some(Cmd::Text { content, .. }) if content == "GAIN"
+            labelled.commands().last(),
+            Some(DrawCmd::Text { content, .. }) if content == "GAIN"
         ));
     }
 
-    fn record(label: Option<&str>, skin: &Skin) -> Vec<Cmd> {
+    fn record(label: Option<&str>, skin: &Skin) -> DrawList {
         const DIAL: Rect = Rect {
             h: 22.0,
             w: 22.0,
@@ -174,25 +175,34 @@ mod tests {
         };
 
         let knob = Knob::new(label, 0.25, skin);
-        let mut painter = RecordPainter::default();
-        knob.paint(
-            &mut painter,
-            &mut TextContext::new().unwrap(),
-            DIAL,
-            CAPTION,
-        );
-        painter.finish()
+        let mut list = DrawListBuilder::default();
+        knob.paint(&mut list, &mut TextContext::new().unwrap(), DIAL, CAPTION);
+        list.finish()
     }
 
-    fn kinds(commands: &[Cmd]) -> Vec<Kind> {
+    fn kinds(list: &DrawList) -> Vec<Kind> {
+        let commands = list.commands();
         commands
             .iter()
             .map(|command| match command {
-                Cmd::FillCircle { .. } => Kind::FillCircle,
-                Cmd::StrokeCircle { .. } => Kind::StrokeCircle,
-                Cmd::StrokeArc { .. } => Kind::StrokeArc,
-                Cmd::StrokeLine { .. } => Kind::StrokeLine,
-                Cmd::Text { .. } => Kind::Text,
+                DrawCmd::Fill {
+                    geom: Geom::Circle { .. },
+                    ..
+                } => Kind::FillCircle,
+                DrawCmd::Stroke {
+                    geom: Geom::Circle { .. },
+                    ..
+                } => Kind::StrokeCircle,
+                DrawCmd::Stroke {
+                    geom: Geom::Arc { .. },
+                    ..
+                } => Kind::StrokeArc,
+                DrawCmd::Stroke {
+                    geom: Geom::Line { .. },
+                    ..
+                } => Kind::StrokeLine,
+                DrawCmd::Text { .. } => Kind::Text,
+                _ => Kind::Other,
             })
             .collect()
     }

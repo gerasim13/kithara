@@ -8,7 +8,8 @@ use iced::{
 
 use crate::{
     atoms::knob::Knob,
-    paint::{Rect, canvas::IcedPainter},
+    backends::IcedBackend,
+    draw::{DrawListBuilder, Rect, replay},
     render::{Skin, UiEvent},
     skin::KnobSkin,
     text::{TextContext, TextResources},
@@ -78,11 +79,11 @@ impl canvas::Program<UiEvent> for KnobProgram<'_, '_> {
         let (dial, caption) = self.rects(bounds);
         let mut text = state.text.borrow_mut();
         let text = text.get_or_insert_with(|| self.text_resources.into());
-        self.knob.paint(
-            &mut IcedPainter::new(&mut frame, self.text_resources),
-            text,
-            dial,
-            caption,
+        let mut builder = DrawListBuilder::default();
+        self.knob.paint(&mut builder, text, dial, caption);
+        replay(
+            &builder.finish(),
+            &mut IcedBackend::new(&mut frame, self.text_resources),
         );
         vec![frame.into_geometry()]
     }

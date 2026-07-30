@@ -11,7 +11,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::Widget;
 use crate::{
-    paint::canvas::font,
+    backends::font,
     render::{Skin, UiEvent},
     skin::DragSkin,
 };

@@ -1,5 +1,5 @@
 use iced::{
-    Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
+    Element, Event, Length, Rectangle, Renderer, Theme,
     mouse::{self, Cursor},
     widget::{
         Space,
@@ -9,8 +9,11 @@ use iced::{
 use num_traits::cast::AsPrimitive;
 
 use crate::{
+    backends::IcedBackend,
+    draw::{DrawListBuilder, Rect, replay},
     render::{ReadValue, Skin, StereoLevels, UiEvent, theme::RenderPalette},
     skin::VuStereoSkin,
+    text::TextResources,
     widgets::{
         Widget,
         behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState},
@@ -24,7 +27,7 @@ pub(crate) struct StereoMeter<'path, 'value, 'data, 'skin> {
     skin: &'skin Skin,
 }
 
-impl<'a> Widget<'a> for StereoMeter<'_, '_, '_, '_> {
+impl<'a> Widget<'a> for StereoMeter<'_, '_, '_, 'a> {
     fn view(self) -> Element<'a, UiEvent> {
         let Some(ReadValue::Stereo(levels)) = self.value else {
             return Space::new().into();
@@ -38,6 +41,7 @@ impl<'a> Widget<'a> for StereoMeter<'_, '_, '_, '_> {
             metrics: self.skin.vu_stereo,
             levels: *levels,
             palette: self.skin.palette,
+            text_resources: self.skin.text_resources(),
         })
         .width(Length::Fill)
         .height(Length::Fill)
@@ -45,14 +49,15 @@ impl<'a> Widget<'a> for StereoMeter<'_, '_, '_, '_> {
     }
 }
 
-struct StereoMeterCanvas {
+struct StereoMeterCanvas<'skin> {
     drag: ScalarDrag,
     metrics: VuStereoSkin,
     levels: StereoLevels,
     palette: RenderPalette,
+    text_resources: &'skin TextResources,
 }
 
-impl canvas::Program<UiEvent> for StereoMeterCanvas {
+impl canvas::Program<UiEvent> for StereoMeterCanvas<'_> {
     type State = ScalarDragState;
 
     fn draw(
@@ -64,20 +69,37 @@ impl canvas::Program<UiEvent> for StereoMeterCanvas {
         _cursor: Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.palette.bg_deep);
+        let mut builder = DrawListBuilder::default();
+        builder.fill_rect(
+            Rect {
+                h: bounds.height,
+                w: bounds.width,
+                x: 0.0,
+                y: 0.0,
+            },
+            self.palette.bg_deep.into(),
+        );
 
         for (level, y) in [self.levels.l, self.levels.r]
             .into_iter()
             .zip([self.metrics.channel_l_y, self.metrics.channel_r_y])
         {
-            draw_channel(&mut frame, y, level, self.metrics, self.palette);
+            draw_channel(&mut builder, y, level, self.metrics, self.palette);
         }
 
         let x = self.levels.volume.clamp(0.0, 1.0) * bounds.width;
-        frame.fill_rectangle(
-            Point::new(x, 0.0),
-            Size::new(self.metrics.carriage_width, bounds.height),
-            self.palette.accent,
+        builder.fill_rect(
+            Rect {
+                h: bounds.height,
+                w: self.metrics.carriage_width,
+                x,
+                y: 0.0,
+            },
+            self.palette.accent.into(),
+        );
+        replay(
+            &builder.finish(),
+            &mut IcedBackend::new(&mut frame, self.text_resources),
         );
         vec![frame.into_geometry()]
     }
@@ -102,7 +124,7 @@ impl canvas::Program<UiEvent> for StereoMeterCanvas {
 }
 
 fn draw_channel(
-    frame: &mut Frame,
+    builder: &mut DrawListBuilder,
     y: f32,
     level: f32,
     metrics: VuStereoSkin,
@@ -124,10 +146,14 @@ fn draw_channel(
         } else {
             palette.success
         };
-        frame.fill_rectangle(
-            Point::new(x, y),
-            Size::new(metrics.segment_width, metrics.segment_height),
-            color,
+        builder.fill_rect(
+            Rect {
+                h: metrics.segment_height,
+                w: metrics.segment_width,
+                x,
+                y,
+            },
+            color.into(),
         );
     }
 }

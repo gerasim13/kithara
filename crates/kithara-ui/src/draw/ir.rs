@@ -66,24 +66,45 @@ impl Transform {
     }
 }
 
-/// Minimal drawing port implemented by rendering backends.
-pub trait Painter {
-    fn fill_circle(&mut self, center: Pt, radius: f32, color: Rgba);
-
-    /// Strokes an arc whose angles are expressed in radians.
-    fn stroke_arc(
-        &mut self,
+/// Native geometry retained by a draw list.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum Geom {
+    /// A circular arc whose angles are expressed in radians.
+    Arc {
         center: Pt,
         radius: f32,
         start: f32,
         end: f32,
+    },
+    Circle {
+        center: Pt,
+        radius: f32,
+    },
+    Line {
+        from: Pt,
+        to: Pt,
+    },
+    Rect(Rect),
+}
+
+/// A retained drawing command.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum DrawCmd {
+    Fill {
+        geom: Geom,
+        color: Rgba,
+    },
+    Stroke {
+        geom: Geom,
         color: Rgba,
         width: f32,
-    );
-
-    fn stroke_circle(&mut self, center: Pt, radius: f32, color: Rgba, width: f32);
-
-    fn stroke_line(&mut self, from: Pt, to: Pt, color: Rgba, width: f32);
-
-    fn text(&mut self, run: &GlyphRun, content: &str, transform: Transform, color: Rgba);
+    },
+    Text {
+        run: GlyphRun,
+        content: String,
+        transform: Transform,
+        color: Rgba,
+    },
 }

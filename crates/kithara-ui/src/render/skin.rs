@@ -2,9 +2,9 @@ use iced::{Border, Color};
 
 use super::theme::RenderPalette;
 use crate::{
+    draw::Rgba,
     error::UiDocError,
     ids::SourceUri,
-    paint::Rgba,
     skin::{
         ButtonSkin, CellSkin, CheckboxSkin, ChipSkin, ChromeSkin, ColorRole, CrossfaderSkin,
         DeckSkin, DividerSkin, DragSkin, FaderSkin, FrameSkin, GlobalBarSkin, KnobSkin,

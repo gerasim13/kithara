@@ -1,7 +1,7 @@
 use iced::Font;
 
 use crate::{
-    paint::canvas::font,
+    backends::font,
     skin::{FontFamily, FontWeight},
     text::FontId,
 };

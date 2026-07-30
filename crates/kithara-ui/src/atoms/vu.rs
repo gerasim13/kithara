@@ -1,5 +1,5 @@
 use iced::{
-    Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
+    Color, Element, Event, Length, Rectangle, Renderer, Theme,
     mouse::{self, Cursor},
     widget::{
         Space,
@@ -10,8 +10,11 @@ use num_traits::cast::AsPrimitive;
 
 use crate::{
     atoms::design::crossfader::{TickAxis, TickRail},
+    backends::IcedBackend,
+    draw::{DrawListBuilder, Rect, replay},
     render::{ReadValue, Skin, StereoLevels, UiEvent, theme::RenderPalette},
     skin::VuVerticalSkin,
+    text::TextResources,
     widgets::{
         Widget,
         behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState},
@@ -26,7 +29,7 @@ pub(crate) struct VerticalVu<'path, 'value, 'data, 'skin> {
     skin: &'skin Skin,
 }
 
-impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, '_> {
+impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, 'a> {
     fn view(self) -> Element<'a, UiEvent> {
         let Some(ReadValue::Stereo(levels)) = self.value else {
             return Space::new().into();
@@ -45,6 +48,7 @@ impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, '_> {
             palette: self.skin.palette,
             thumb_color: self.skin.color(self.skin.vu_vertical.thumb_color),
             thumb_notch_color: self.skin.color(self.skin.vu_vertical.thumb_notch_color),
+            text_resources: self.skin.text_resources(),
         })
         .width(Length::Fill)
         .height(Length::Fill)
@@ -52,7 +56,7 @@ impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, '_> {
     }
 }
 
-struct VerticalVuCanvas {
+struct VerticalVuCanvas<'skin> {
     drag: ScalarDrag,
     metrics: VuVerticalSkin,
     ticks: Option<TickRail>,
@@ -60,9 +64,10 @@ struct VerticalVuCanvas {
     palette: RenderPalette,
     thumb_color: Color,
     thumb_notch_color: Color,
+    text_resources: &'skin TextResources,
 }
 
-impl canvas::Program<UiEvent> for VerticalVuCanvas {
+impl canvas::Program<UiEvent> for VerticalVuCanvas<'_> {
     type State = ScalarDragState;
 
     fn draw(
@@ -90,14 +95,19 @@ impl canvas::Program<UiEvent> for VerticalVuCanvas {
                 tick_rail_bounds(canvas_bounds, fader.x, self.metrics.ticks.gap),
             );
         }
-        draw_segments(&mut frame, fader, self.levels, self.metrics, self.palette);
+        let mut builder = DrawListBuilder::default();
+        draw_segments(&mut builder, fader, self.levels, self.metrics, self.palette);
         draw_thumb(
-            &mut frame,
+            &mut builder,
             fader,
             self.levels.volume,
             self.metrics,
             self.thumb_color,
             self.thumb_notch_color,
+        );
+        replay(
+            &builder.finish(),
+            &mut IcedBackend::new(&mut frame, self.text_resources),
         );
         vec![frame.into_geometry()]
     }
@@ -139,7 +149,7 @@ fn tick_rail_bounds(bounds: Rectangle, fader_x: f32, gap: f32) -> Rectangle {
 }
 
 fn draw_segments(
-    frame: &mut Frame,
+    builder: &mut DrawListBuilder,
     bounds: Rectangle,
     levels: StereoLevels,
     metrics: VuVerticalSkin,
@@ -168,16 +178,20 @@ fn draw_segments(
             palette.success
         };
         let y = bounds.y + bounds.height - metrics.segment_height - index * step;
-        frame.fill_rectangle(
-            Point::new(bounds.x + metrics.segment_inset_x, y),
-            Size::new(width, metrics.segment_height),
-            color,
+        builder.fill_rect(
+            Rect {
+                h: metrics.segment_height,
+                w: width,
+                x: bounds.x + metrics.segment_inset_x,
+                y,
+            },
+            color.into(),
         );
     }
 }
 
 fn draw_thumb(
-    frame: &mut Frame,
+    builder: &mut DrawListBuilder,
     bounds: Rectangle,
     volume: f32,
     metrics: VuVerticalSkin,
@@ -186,16 +200,24 @@ fn draw_thumb(
 ) {
     let travel = (bounds.height - metrics.thumb_height).max(0.0);
     let y = bounds.y + ((1.0 - volume.clamp(0.0, 1.0)) * travel).round();
-    frame.fill_rectangle(
-        Point::new(bounds.x, y),
-        Size::new(bounds.width, metrics.thumb_height),
-        color,
+    builder.fill_rect(
+        Rect {
+            h: metrics.thumb_height,
+            w: bounds.width,
+            x: bounds.x,
+            y,
+        },
+        color.into(),
     );
     if metrics.thumb_notch_offset < metrics.thumb_height {
-        frame.fill_rectangle(
-            Point::new(bounds.x, y + metrics.thumb_notch_offset),
-            Size::new(bounds.width, metrics.thumb_notch_height),
-            notch_color,
+        builder.fill_rect(
+            Rect {
+                h: metrics.thumb_notch_height,
+                w: bounds.width,
+                x: bounds.x,
+                y: y + metrics.thumb_notch_offset,
+            },
+            notch_color.into(),
         );
     }
 }

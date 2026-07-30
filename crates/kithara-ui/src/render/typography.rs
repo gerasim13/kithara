@@ -4,7 +4,7 @@ use iced::{
 };
 
 use crate::{
-    paint::canvas::font,
+    backends::font,
     render::{Skin, UiEvent},
     skin::TextRoleSkin,
 };

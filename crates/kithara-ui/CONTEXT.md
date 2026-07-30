@@ -47,16 +47,27 @@ painting is toolkit-neutral, but `atoms` remains render-gated because the knob c
 `render::Skin` and its adapter is an iced canvas program. The platform-specific monospace family
 remains code-owned because it describes font resource availability rather than skin design.
 
-## Painter Ownership
+## Draw Ownership
 
-`SkinDoc` owns document-level paint roles and metrics. `paint::painter` owns the minimal trait and
-value types; they are toolkit-neutral and depend on no rendering toolkit. `paint::canvas`
-implements that trait against iced and owns translation, glyph-outline filling, and canvas calls.
-`paint::scene` implements it against Vello and owns translation and scene encoding;
-the painter needs no GPU dependency. Vello is held at 0.6 ahead of the masonry host, which is not a
-dependency yet: masonry 0.4 hands a widget a `Scene` from its own Vello 0.6, and `Scene` from a
-different Vello version is an unrelated type. Vello's `wgpu` feature stays off because the painter
-encodes and rasterises nothing; enabling it would add a second wgpu major beside iced's 27.
+`SkinDoc` owns document-level draw roles and metrics. `draw` owns the toolkit-neutral native
+geometry primitives, retained commands, ordered `DrawList` value, builder, backend trait, and
+replay. A widget owns command order and local geometry. A backend owns conversion from `Geom` into
+its toolkit vocabulary, text submission, and encoding into its target. Geometry crosses the seam
+as arcs, circles, lines, and rectangles rather than pre-flattened paths, so every backend
+rasterises curves at its own device scale.
+
+The retained list is a cloneable, comparable value. Cross-backend identity is therefore asserted
+against the same list rather than promised by two call-through implementations. Pooling is
+deliberately absent. A kithara-bufpool byte budget would not enforce a retained-command ceiling:
+`Pool::track_byte_delta` runs only inside `Pool::acquire`, never when a caller grows a vector with
+`push`. Any future cap must be a builder-side contract, not a pool property.
+
+`backends::iced_canvas` owns iced translation, glyph-outline filling, and canvas calls.
+`backends::vello` owns Vello translation and scene encoding; the draw list needs no GPU dependency.
+Vello is held at 0.6 ahead of the masonry host, which is not a dependency yet: masonry 0.4 hands a
+widget a `Scene` from its own Vello 0.6, and `Scene` from a different Vello version is an unrelated
+type. Vello's `wgpu` feature stays off because the backend encodes commands but rasterises nothing;
+enabling it would add a second wgpu major beside iced's 27.
 
 `text::TextContext` is the canonical shaping owner. It owns Parley's font and layout contexts and
 registers the embedded Inter, JetBrains Mono, and Space Grotesk faces. A context is a caller-owned
@@ -75,12 +86,12 @@ the collection stays embedded-only.
 Where that owner sits is transitional and is stated here so it does not become permanent by
 default. Each text-drawing widget still owns one `TextContext`, so a document holds as many Parley
 shaping scratch buffers and font collections as it has shaped widgets. Consolidating those
-contexts needs a document-scoped owner that does not exist yet. Font-derived paint resources no
+contexts needs a document-scoped owner that does not exist yet. Font-derived draw resources no
 longer follow that per-widget lifetime: `TextResources` builds the nine skrifa outline collections
-once and lends them to iced painters, and adapters borrow the resources from `Skin` rather than
+once and lends them to the iced backend, and adapters borrow the resources from `Skin` rather than
 cloning them per view build.
 
-The Vello painter still builds a `FontData` per text call. Caching them would mean an exported
+The Vello backend still builds a `FontData` per text call. Caching them would mean an exported
 font-cache type whose only caller is a test, because no shipped host encodes a Vello scene yet —
 the architectural ratchet refuses that, and it is right to. The allocation ends when a Vello host
 exists or when the draw seam gains a backend-owned font type, whichever lands first.
@@ -89,7 +100,7 @@ exists or when the draw seam gains a backend-owned font type, whichever lands fi
 face-to-byte mapping. `render::fonts` re-exports those bytes for iced host registration and adds
 Lucide. Invalid compile-time embedded font data is a fail-fast construction error.
 
-Text crosses the painter seam as the source string, a neutral `GlyphRun`, a transform, and a
+Text crosses the draw seam as the source string, a neutral `GlyphRun`, a transform, and a
 colour. `GlyphRun` carries the selected `FontId`, font size, measured width and height, and visual
 order glyphs as id plus positioned x/y. Backends do not shape: Vello submits those positions to
 `draw_glyphs`, while iced canvas extracts the corresponding outlines with skrifa and fills one
@@ -100,12 +111,10 @@ positioned glyph data may cross between shaping and rendering; there is no bare-
 boundary. Direct skrifa use belongs only to the iced outline adapter because Parley does not expose
 glyph outlines.
 
-A widget owns command order and local geometry, while its render-tree adapter owns toolkit
-lifecycle, interaction state, and the translation from measured bounds to widget rectangles.
-
-The painter seam and `ScenePainter` are public so an external shell can implement or consume the
-toolkit-neutral contract. The iced implementation remains crate-owned, and the recording
-implementation remains test-only.
+A render-tree adapter owns toolkit lifecycle, interaction state, and the translation from measured
+bounds to widget rectangles. `DrawList`, `Backend`, `replay`, and `VelloBackend` are public so an
+external shell can produce or consume the toolkit-neutral contract. The iced backend remains
+crate-owned.
 `Rgba`, `Pt`, `Rect`, and `Transform` are directly constructible stable value contracts.
 
 ## Wave View Ownership

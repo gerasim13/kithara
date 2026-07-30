@@ -1,5 +1,5 @@
 use iced::{
-    Color, Font, Point, Radians,
+    Color, Font, Point, Radians, Size,
     font::{Family, Stretch, Style, Weight},
     widget::canvas::{
         Frame, Path, Stroke,
@@ -8,61 +8,42 @@ use iced::{
 };
 use skrifa::{
     GlyphId,
-    instance::{LocationRef, Size},
+    instance::{LocationRef, Size as FontSize},
     outline::{DrawSettings, OutlinePen},
 };
 
-use super::{Painter, Pt, Rgba, Transform};
 use crate::{
+    draw::{Backend, Geom, Pt, Rgba, Transform},
     skin::{FontFamily, FontWeight},
     text::{GlyphRun, TextResources, select},
 };
 
-pub(crate) struct IcedPainter<'frame> {
+pub(crate) struct IcedBackend<'frame> {
     frame: &'frame mut Frame,
     resources: &'frame TextResources,
 }
 
-impl<'frame> IcedPainter<'frame> {
+impl<'frame> IcedBackend<'frame> {
     pub(crate) const fn new(frame: &'frame mut Frame, resources: &'frame TextResources) -> Self {
         Self { frame, resources }
     }
 }
 
-impl Painter for IcedPainter<'_> {
-    fn fill_circle(&mut self, center: Pt, radius: f32, color: Rgba) {
-        self.frame
-            .fill(&Path::circle(center.into(), radius), Color::from(color));
+impl Backend for IcedBackend<'_> {
+    fn fill(&mut self, geom: Geom, color: Rgba) {
+        if let Geom::Rect(rect) = geom {
+            self.frame.fill_rectangle(
+                Point::new(rect.x, rect.y),
+                Size::new(rect.w, rect.h),
+                Color::from(color),
+            );
+        } else {
+            self.frame.fill(&path(geom), Color::from(color));
+        }
     }
 
-    fn stroke_arc(
-        &mut self,
-        center: Pt,
-        radius: f32,
-        start: f32,
-        end: f32,
-        color: Rgba,
-        width: f32,
-    ) {
-        let path = Path::new(|builder| {
-            builder.arc(Arc {
-                radius,
-                center: center.into(),
-                start_angle: Radians(start),
-                end_angle: Radians(end),
-            });
-        });
-        self.frame.stroke(&path, stroke(color, width));
-    }
-
-    fn stroke_circle(&mut self, center: Pt, radius: f32, color: Rgba, width: f32) {
-        self.frame
-            .stroke(&Path::circle(center.into(), radius), stroke(color, width));
-    }
-
-    fn stroke_line(&mut self, from: Pt, to: Pt, color: Rgba, width: f32) {
-        self.frame
-            .stroke(&Path::line(from.into(), to.into()), stroke(color, width));
+    fn stroke(&mut self, geom: Geom, color: Rgba, width: f32) {
+        self.frame.stroke(&path(geom), stroke(color, width));
     }
 
     fn text(&mut self, run: &GlyphRun, _content: &str, transform: Transform, color: Rgba) {
@@ -81,7 +62,7 @@ impl Painter for IcedPainter<'_> {
                     transform,
                 };
                 let settings =
-                    DrawSettings::unhinted(Size::new(run.size()), LocationRef::default());
+                    DrawSettings::unhinted(FontSize::new(run.size()), LocationRef::default());
                 if let Err(error) = outline.draw(settings, &mut pen) {
                     tracing::warn!(
                         face = ?run.font(),
@@ -109,6 +90,27 @@ pub(crate) const fn font(family: FontFamily, weight: FontWeight) -> Font {
         weight,
         stretch: Stretch::Normal,
         style: Style::Normal,
+    }
+}
+
+fn path(geom: Geom) -> Path {
+    match geom {
+        Geom::Arc {
+            center,
+            radius,
+            start,
+            end,
+        } => Path::new(|builder| {
+            builder.arc(Arc {
+                radius,
+                center: center.into(),
+                start_angle: Radians(start),
+                end_angle: Radians(end),
+            });
+        }),
+        Geom::Circle { center, radius } => Path::circle(center.into(), radius),
+        Geom::Line { from, to } => Path::line(from.into(), to.into()),
+        Geom::Rect(rect) => Path::rectangle(Point::new(rect.x, rect.y), Size::new(rect.w, rect.h)),
     }
 }
 
