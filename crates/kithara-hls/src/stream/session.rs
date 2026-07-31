@@ -194,12 +194,18 @@ impl HlsSession {
         // user asked for. The tag has to outlive the construction window — a
         // priming decoder starves behind the audible variant's look-ahead
         // exactly the way a constructing one does.
+        //
+        // An unresolved seek is the same shape on the audible session: until the
+        // reader lands, the queue head is the target the user asked for, not
+        // look-ahead. It reverts to speculation the moment the projection
+        // retires.
+        let demand = !self.active.load(Ordering::Acquire) || self.variant.seek_projection_is_live();
         self.variant.dispatch_from(
             ctx,
             budget,
             self.projected_position().byte,
             construction_segment_end,
-            !self.active.load(Ordering::Acquire),
+            demand,
             self.cancel.handle(),
         )
     }
