@@ -183,10 +183,12 @@ fn render_node<'a>(
                 bordered(
                     filled(
                         container(
-                            Flex::row(
-                                visible(children, hidden)
-                                    .map(|child| render_node(child, ui, reads, skin)),
-                            )
+                            Flex::row(visible(children, hidden).map(|child| {
+                                (
+                                    render_node(child, ui, reads, skin),
+                                    main_minimum(child, Axis::Horizontal, skin),
+                                )
+                            }))
                             .spacing(gap.unwrap_or(skin.layout.grid_gap))
                             .align(Alignment::Center)
                             .width(size.0)
@@ -224,10 +226,12 @@ fn render_node<'a>(
             bordered(
                 filled(
                     container(
-                        Flex::column(
-                            visible(children, hidden)
-                                .map(|child| render_node(child, ui, reads, skin)),
-                        )
+                        Flex::column(visible(children, hidden).map(|child| {
+                            (
+                                render_node(child, ui, reads, skin),
+                                main_minimum(child, Axis::Vertical, skin),
+                            )
+                        }))
                         .spacing(gap.unwrap_or(skin.layout.grid_gap))
                         .align(Alignment::Start)
                         .width(size.0),
@@ -304,6 +308,18 @@ fn control_event(path: &str, action: ControlAction) -> UiEvent {
     UiEvent::Control {
         path: path.to_owned(),
         action,
+    }
+}
+
+fn main_minimum(node: &ExpandedNode, axis: Axis, skin: &Skin) -> Option<f32> {
+    let size = effective_size(node, skin)?;
+    let dim = match axis {
+        Axis::Horizontal => size.w,
+        Axis::Vertical => size.h,
+    };
+    match dim {
+        Dim::Range { min, .. } => Some(min),
+        _ => None,
     }
 }
 

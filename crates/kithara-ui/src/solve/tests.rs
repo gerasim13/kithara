@@ -8,6 +8,7 @@ use crate::layout::Axis;
 struct TestItem {
     declared: Size<Length>,
     intrinsic: Size,
+    main_minimum: Option<f32>,
 }
 
 impl TestItem {
@@ -15,6 +16,7 @@ impl TestItem {
         Self {
             declared: Size::new(Length::Fixed(width), Length::Fixed(height)),
             intrinsic: Size::new(width, height),
+            main_minimum: None,
         }
     }
 
@@ -22,7 +24,27 @@ impl TestItem {
         Self {
             declared,
             intrinsic,
+            main_minimum: None,
         }
+    }
+
+    const fn fill(weight: u16) -> Self {
+        Self::new(
+            Size::new(Length::FillPortion(weight), Length::Fixed(5.0)),
+            Size::new(0.0, 5.0),
+        )
+    }
+
+    const fn vertical_fill(weight: u16) -> Self {
+        Self::new(
+            Size::new(Length::Fixed(5.0), Length::FillPortion(weight)),
+            Size::new(5.0, 0.0),
+        )
+    }
+
+    const fn with_main_minimum(mut self, main_minimum: f32) -> Self {
+        self.main_minimum = Some(main_minimum);
+        self
     }
 }
 
@@ -64,11 +86,24 @@ impl Case {
         }
     }
 
+    fn vertical(max: Size, width: Length, height: Length, items: Vec<TestItem>) -> Self {
+        Self {
+            axis: Axis::Vertical,
+            max,
+            width,
+            height,
+            padding: Padding::ZERO,
+            spacing: 0.0,
+            align_items: Alignment::Start,
+            items,
+        }
+    }
+
     fn run(&self) -> (Distribution, Vec<(usize, Limits)>) {
         let declared = self
             .items
             .iter()
-            .map(|item| Item::new(item.declared))
+            .map(|item| Item::new(item.declared, item.main_minimum))
             .collect::<Vec<_>>();
         let limits = Limits::new(Size::ZERO, self.max);
         let mut measure = TestMeasure {
@@ -296,6 +331,173 @@ fn fill_portions_weight_the_remaining_extent() {
             item(Point::new(0.0, 0.0), Size::new(20.0, 5.0)),
             item(Point::new(20.0, 0.0), Size::new(25.0, 5.0)),
             item(Point::new(45.0, 0.0), Size::new(75.0, 5.0)),
+        ]
+    );
+}
+
+#[kithara::test]
+fn fluid_minimum_pins_item_and_reshares_remaining_extent() {
+    let case = Case::horizontal(
+        Size::new(100.0, 10.0),
+        Length::Fill,
+        Length::Shrink,
+        vec![
+            TestItem::fill(1).with_main_minimum(40.0),
+            TestItem::fill(1),
+            TestItem::fill(2),
+        ],
+    );
+
+    let (distribution, _) = case.run();
+
+    assert_eq!(
+        placements(&distribution),
+        vec![
+            item(Point::new(0.0, 0.0), Size::new(40.0, 5.0)),
+            item(Point::new(40.0, 0.0), Size::new(20.0, 5.0)),
+            item(Point::new(60.0, 0.0), Size::new(40.0, 5.0)),
+        ]
+    );
+}
+
+#[kithara::test]
+fn fluid_minimums_below_weighted_shares_keep_proportions() {
+    let case = Case::horizontal(
+        Size::new(100.0, 10.0),
+        Length::Fill,
+        Length::Shrink,
+        vec![
+            TestItem::fill(1).with_main_minimum(10.0),
+            TestItem::fill(3).with_main_minimum(40.0),
+        ],
+    );
+
+    let (distribution, _) = case.run();
+
+    assert_eq!(
+        placements(&distribution),
+        vec![
+            item(Point::new(0.0, 0.0), Size::new(25.0, 5.0)),
+            item(Point::new(25.0, 0.0), Size::new(75.0, 5.0)),
+        ]
+    );
+}
+
+#[kithara::test]
+fn fluid_minimums_cascade_when_an_earlier_pin_reduces_later_shares() {
+    let case = Case::horizontal(
+        Size::new(100.0, 10.0),
+        Length::Fill,
+        Length::Shrink,
+        vec![
+            TestItem::fill(1).with_main_minimum(30.0),
+            TestItem::fill(1).with_main_minimum(24.0),
+            TestItem::fill(2),
+        ],
+    );
+
+    let (distribution, _) = case.run();
+
+    assert_eq!(
+        placements(&distribution),
+        vec![
+            item(Point::new(0.0, 0.0), Size::new(30.0, 5.0)),
+            item(Point::new(30.0, 0.0), Size::new(24.0, 5.0)),
+            item(Point::new(54.0, 0.0), Size::new(46.0, 5.0)),
+        ]
+    );
+}
+
+#[kithara::test]
+fn infeasible_fluid_minimums_scale_by_one_common_factor() {
+    let case = Case::horizontal(
+        Size::new(60.0, 10.0),
+        Length::Fill,
+        Length::Shrink,
+        vec![
+            TestItem::fill(1).with_main_minimum(80.0),
+            TestItem::fill(3).with_main_minimum(40.0),
+        ],
+    );
+
+    let (distribution, _) = case.run();
+
+    assert_eq!(
+        placements(&distribution),
+        vec![
+            item(Point::new(0.0, 0.0), Size::new(40.0, 5.0)),
+            item(Point::new(40.0, 0.0), Size::new(20.0, 5.0)),
+        ]
+    );
+}
+
+#[kithara::test]
+fn infeasible_negative_fluid_minimum_does_not_create_negative_extent() {
+    let case = Case::horizontal(
+        Size::new(10.0, 10.0),
+        Length::Fill,
+        Length::Shrink,
+        vec![
+            TestItem::fill(1).with_main_minimum(-10.0),
+            TestItem::fill(1).with_main_minimum(30.0),
+        ],
+    );
+
+    let (distribution, _) = case.run();
+
+    assert_eq!(
+        placements(&distribution),
+        vec![
+            item(Point::new(0.0, 0.0), Size::new(0.0, 5.0)),
+            item(Point::new(0.0, 0.0), Size::new(10.0, 5.0)),
+        ]
+    );
+}
+
+#[kithara::test]
+fn zero_fluid_minimum_reshares_with_constrained_items() {
+    let case = Case::horizontal(
+        Size::new(90.0, 10.0),
+        Length::Fill,
+        Length::Shrink,
+        vec![
+            TestItem::fill(1).with_main_minimum(0.0),
+            TestItem::fill(1).with_main_minimum(50.0),
+            TestItem::fill(1).with_main_minimum(10.0),
+        ],
+    );
+
+    let (distribution, _) = case.run();
+
+    assert_eq!(
+        placements(&distribution),
+        vec![
+            item(Point::new(0.0, 0.0), Size::new(20.0, 5.0)),
+            item(Point::new(20.0, 0.0), Size::new(50.0, 5.0)),
+            item(Point::new(70.0, 0.0), Size::new(20.0, 5.0)),
+        ]
+    );
+}
+
+#[kithara::test]
+fn fluid_minimums_equal_to_remaining_extent_are_satisfied_exactly() {
+    let case = Case::vertical(
+        Size::new(10.0, 100.0),
+        Length::Shrink,
+        Length::Fill,
+        vec![
+            TestItem::vertical_fill(1).with_main_minimum(30.0),
+            TestItem::vertical_fill(1).with_main_minimum(70.0),
+        ],
+    );
+
+    let (distribution, _) = case.run();
+
+    assert_eq!(
+        placements(&distribution),
+        vec![
+            item(Point::new(0.0, 0.0), Size::new(5.0, 30.0)),
+            item(Point::new(0.0, 30.0), Size::new(5.0, 70.0)),
         ]
     );
 }
