@@ -58,7 +58,19 @@ impl HlsVariant {
         })?;
 
         self.set_prefetch_anchor(warmup_start);
-        let tail_start = self.seek_readahead_start_segment(forward_segment);
+        // The plan reaches one segment behind the landing, whatever the
+        // container. A demuxer handed a landing time parks at the packet
+        // boundary at or before it, and the landing is a segment start — so the
+        // first packet it reads begins in the segment before. Exact byte sizes
+        // say nothing about where the codec's packet grid falls, so this backoff
+        // cannot be conditional on them: without it the decoder is handed a
+        // reader that cannot reach its own first packet, produces one chunk, and
+        // stalls with the transition still pending.
+        //
+        // Only the *plan* reaches back. Readiness still waits on the landing
+        // window: making it wait for the whole preceding segment delays every
+        // switch for bytes no decoder reads.
+        let tail_start = forward_segment.saturating_sub(1);
         let probe_segment = (landing_segment > 0).then_some(0);
         self.set_segment_aware_seek_tail(tail_start);
         if !self.fetch_plan_satisfied(tail_start, probe_segment) {

@@ -994,8 +994,13 @@ fn incoming_reader_preparation_keeps_the_landing_fetch_anchor() {
     assert_eq!(preparation.anchor().segment_index, Some(2));
     assert_eq!(preparation.anchor().byte_offset, 248);
     assert!(queue_has_init(&v));
-    assert_eq!(queue_seg_indices(&v), vec![0, 2, 3, 4]);
-    assert!(!queue_seg_indices(&v).contains(&1));
+    // The plan reaches one segment behind the landing even here, where byte
+    // sizes are exact: a demuxer parks at the packet boundary at or before the
+    // landing, and the landing is a segment start, so its first packet begins in
+    // segment 1. Exactness of byte sizes says nothing about the packet grid.
+    assert_eq!(queue_seg_indices(&v), vec![0, 1, 2, 3, 4]);
+    // Only the plan reaches back — the anchor the reader is opened at, and the
+    // prefetch it drives, both stay on the landing.
     assert_eq!(v.prefetch_anchor(), 248);
 }
 
