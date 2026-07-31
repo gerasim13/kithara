@@ -144,24 +144,51 @@ impl HlsSession {
         }
     }
 
+    /// Fetches for a session that owns a live reader.
+    ///
+    /// Bounded by that reader's own position and the peer's look-ahead, the
+    /// same way the audible session is bounded.
     pub(crate) fn dispatch(
         &self,
         ctx: &crate::variant::PlanCtx,
         budget: usize,
     ) -> Vec<kithara_stream::dl::FetchCmd> {
+        self.dispatch_capped(ctx, budget, None)
+    }
+
+    /// Fetches for an incoming session whose reader has not been handed to a
+    /// decoder yet.
+    ///
+    /// Capped at the construction window, because until the transfer the
+    /// session has no reader position to follow and would otherwise queue the
+    /// whole variant against the audible one. The cap ends at the transfer:
+    /// that window is sized to *build* a decoder, not to feed one, and a
+    /// priming decoder that must stage seconds of audio starves behind it —
+    /// its reads stop being served, the staged span stops growing, and the
+    /// outgoing frontier it is chasing walks away for good.
+    pub(crate) fn dispatch_constructing(
+        &self,
+        ctx: &crate::variant::PlanCtx,
+        budget: usize,
+    ) -> Vec<kithara_stream::dl::FetchCmd> {
+        let cap = match &self.readiness {
+            SessionReadiness::Active => None,
+            SessionReadiness::Profiled { preparation, .. } => {
+                Some(self.variant.construction_segment_end(&preparation.lock()))
+            }
+        };
+        self.dispatch_capped(ctx, budget, cap)
+    }
+
+    fn dispatch_capped(
+        &self,
+        ctx: &crate::variant::PlanCtx,
+        budget: usize,
+        construction_segment_end: Option<u32>,
+    ) -> Vec<kithara_stream::dl::FetchCmd> {
         if self.cancel.is_cancelled() {
             return Vec::new();
         }
-        let construction_segment_end = if self.active.load(Ordering::Acquire) {
-            None
-        } else {
-            match &self.readiness {
-                SessionReadiness::Active => None,
-                SessionReadiness::Profiled { preparation, .. } => {
-                    Some(self.variant.construction_segment_end(&preparation.lock()))
-                }
-            }
-        };
         self.variant.dispatch_from(
             ctx,
             budget,

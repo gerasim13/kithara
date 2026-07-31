@@ -384,19 +384,29 @@ impl HlsCoord {
     /// downloader's queue — tagging preparation `High` starves the audible
     /// stream, tagging it `Low` starves the switch behind an active variant
     /// that never stops prefetching.
+    ///
+    /// The slot owning the reader is what says whether the session is still
+    /// under construction: while `reader` is held the session has no reader
+    /// position to plan against and stays capped at its construction window;
+    /// once the reader is transferred its decoder is priming and the session
+    /// must serve that decoder's reads.
     pub(crate) fn dispatch_incoming(
         &self,
         ctx: &crate::variant::PlanCtx,
         budget: usize,
     ) -> Vec<kithara_stream::dl::FetchCmd> {
-        let session = self
+        let incoming = self
             .sessions
             .transition
             .lock()
             .incoming
             .as_ref()
-            .map(|slot| Arc::clone(&slot.session));
-        session.map_or_else(Vec::new, |session| session.dispatch(ctx, budget))
+            .map(|slot| (Arc::clone(&slot.session), slot.reader.is_some()));
+        match incoming {
+            None => Vec::new(),
+            Some((session, true)) => session.dispatch_constructing(ctx, budget),
+            Some((session, false)) => session.dispatch(ctx, budget),
+        }
     }
 
     pub(crate) fn has_incoming(&self) -> bool {

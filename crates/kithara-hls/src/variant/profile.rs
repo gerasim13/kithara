@@ -5,6 +5,7 @@ use kithara_storage::WaitOutcome;
 use kithara_stream::{
     ReaderInput, ReaderProfile, SourceError, SourceSeekAnchor, StreamError, StreamResult,
 };
+use tracing::{debug, trace};
 
 use super::HlsVariant;
 use crate::HlsError;
@@ -78,6 +79,13 @@ impl HlsVariant {
                     .min(len)
             },
         );
+        debug!(
+            variant = self.variant,
+            content_time_ms = content_time.as_millis(),
+            segment_idx = landing_segment,
+            bytes = landing_byte,
+            "variant reader landed"
+        );
         Ok(VariantReaderPreparation {
             anchor,
             first_segment: forward_segment,
@@ -111,7 +119,21 @@ impl HlsVariant {
         } else {
             true
         };
-        Ok(header_ready && self.reader_range_is_ready(preparation.forward.clone())?)
+        let forward_ready = self.reader_range_is_ready(preparation.forward.clone())?;
+        // Polled every transition pass, so `trace!`: the pair of flags plus the
+        // window they are asked about is the difference between "the header
+        // never arrived" and "the window is not covered yet", which no other
+        // signal distinguishes.
+        trace!(
+            variant = self.variant,
+            header_ready,
+            forward_ready,
+            forward_start = preparation.forward.start,
+            forward_end = preparation.forward.end,
+            ceiling = self.construction_segment_end(preparation),
+            "variant reader readiness"
+        );
+        Ok(header_ready && forward_ready)
     }
 
     fn reader_range_is_ready(&self, range: Range<u64>) -> StreamResult<bool> {

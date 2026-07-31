@@ -397,9 +397,9 @@ impl Peer for HlsPeer {
             // Whatever the active session declined is idle capacity, not
             // contention: hand it to the incoming session so a switch the user
             // asked for is not serviced one fetch per poll while the active
-            // variant sits fully cached. The incoming can only draw on the plan
-            // `prepare_reader` built for it, so this changes when its window
-            // arrives, never how much is fetched.
+            // variant sits fully cached. The incoming never draws past its own
+            // reader position and look-ahead, so this changes when its bytes
+            // arrive, never how far ahead of itself it fetches.
             let mut remaining = outcome.ctx.prefetch_budget.saturating_sub(cmds.len());
             if has_incoming && remaining > 0 {
                 cmds.extend(outcome.coord.dispatch_incoming(&outcome.ctx, remaining));

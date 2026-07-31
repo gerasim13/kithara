@@ -1089,11 +1089,19 @@ fn incoming_session_dispatches_only_the_decoder_construction_window() {
     )
     .expect("incoming session");
 
-    let commands = session.dispatch(&ctx, 10);
+    let commands = session.dispatch_constructing(&ctx, 10);
 
     assert_eq!(commands.len(), 4, "init, probe, backoff, and landing");
     assert_eq!(queue_seg_indices(&v), vec![5, 6, 7, 8, 9]);
-    assert!(session.dispatch(&ctx, 10).is_empty());
+    assert!(session.dispatch_constructing(&ctx, 10).is_empty());
+
+    // The cap belongs to construction, not to the session. Once the reader is
+    // transferred the decoder primes through it, and a session still pinned to
+    // the window it was *built* from stops serving those reads: its staged span
+    // freezes and the outgoing frontier it is chasing walks away for good.
+    let after_transfer = session.dispatch(&ctx, 10);
+    assert_eq!(after_transfer.len(), 5, "the rest of the variant");
+    assert!(queue_seg_indices(&v).is_empty());
 }
 
 #[kithara::test]
