@@ -704,7 +704,7 @@ mod tests {
 
     use kithara_abr::{Abr, AbrController, AbrSettings, AbrState, PendingAbrClaim};
     use kithara_assets::{AssetResource, AssetSource, AssetStoreBuilder, StorageBackend};
-    use kithara_events::{AbrMode, AbrReason, EventBus, VariantIndex};
+    use kithara_events::{AbrMode, AbrReason, EventBus, RequestPriority, VariantIndex};
     use kithara_platform::{
         sync::{Arc, ThreadGate},
         time::Instant,
@@ -1157,12 +1157,16 @@ mod tests {
         let mut commands = coord.dispatch_incoming(&ctx, 1);
         assert_eq!(commands.len(), 1);
         let mut command = commands.pop().expect("target fetch");
-        // Preparation carries no command priority. Tagging it `High` put the
-        // downloader's queue in charge of a decision the peer already makes by
-        // budget, and put it in charge the wrong way round: every queued
-        // preparation fetch drained ahead of the untagged fetches the audible
-        // decoder was parked on.
-        assert_eq!(command.priority, None);
+        // Construction fetches outrank speculation. The peer's budget decides
+        // how many a poll may emit; it cannot decide when the downloader runs
+        // them, and that queue is first-in-first-out within a priority slot. The
+        // audible variant appends to it on every poll, so an untagged
+        // construction pack is never reached: measured on a cross-codec switch,
+        // the incoming variant started exactly two fetches all test — its
+        // playlist and its init — while both of its media segments sat queued
+        // until teardown and readiness stayed false on all 216 polls. Tagged,
+        // both segments start and the reader becomes readable.
+        assert_eq!(command.priority, Some(RequestPriority::High));
         assert_eq!(command.url.as_str(), "https://example.com/v1-seg0.m4s");
         let mut writer = command.writer.take().expect("streaming writer");
 

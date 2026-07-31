@@ -133,13 +133,16 @@ impl HlsVariant {
                         ctx.signal.fire();
                         continue;
                     }
-                    let Some(cmd) = self.emit_fetch_cmd(ctx, seg_idx, handle, cancel.clone())
+                    let Some(mut cmd) = self.emit_fetch_cmd(ctx, seg_idx, handle, cancel.clone())
                     else {
                         // Acquire raced (the claim was reverted to `Missing`
                         // inside `emit_fetch_cmd`): re-queue, don't drop it.
                         deferred.push(planned);
                         continue;
                     };
+                    if construction_segment_end.is_some() {
+                        cmd.priority = Some(RequestPriority::High);
+                    }
                     out.push(cmd);
                 }
             }

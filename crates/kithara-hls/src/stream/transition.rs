@@ -378,12 +378,13 @@ impl HlsCoord {
 
     /// Fetches for the variant a switch is preparing.
     ///
-    /// Carries no command priority, exactly like the active session's fetches.
-    /// The peer already decides how much of each poll's budget preparation may
-    /// take; a priority tag here would overrule that decision inside the
-    /// downloader's queue — tagging preparation `High` starves the audible
-    /// stream, tagging it `Low` starves the switch behind an active variant
-    /// that never stops prefetching.
+    /// Construction fetches are tagged `High`. The peer's budget decides how
+    /// many a poll may emit; it cannot decide when the downloader runs them, and
+    /// that queue is first-in-first-out within a priority slot. The audible
+    /// variant appends to it every poll, so an untagged construction pack is
+    /// never reached — measured on a cross-codec switch, the incoming variant
+    /// started only its playlist and its init all test while both media segments
+    /// sat queued until teardown.
     ///
     /// The slot owning the reader is what says whether the session is still
     /// under construction: while `reader` is held the session has no reader
