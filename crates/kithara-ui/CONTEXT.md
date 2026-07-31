@@ -107,6 +107,12 @@ deliberately absent. A kithara-bufpool byte budget would not enforce a retained-
 `Pool::track_byte_delta` runs only inside `Pool::acquire`, never when a caller grows a vector with
 `push`. Any future cap must be a builder-side contract, not a pool property.
 
+`TickRail` paints through the builder, so the shared atom names no toolkit and `atoms::vu` draws
+entirely through one seam. The crossfader still reaches for an iced `Frame` after its ticks, and
+that is a `Geom` gap rather than a design choice: its rail is a rounded rectangle with a stroke, and
+`Geom` carries arc, circle, line and rect. It ports whole when that vocabulary lands with a second
+consumer, not before.
+
 `backends::iced_canvas` owns iced translation, glyph-outline filling, and canvas calls.
 `backends::vello` owns Vello translation and scene encoding; the draw list needs no GPU dependency.
 Vello is held at 0.6 ahead of the masonry host, which is not a dependency yet: masonry 0.4 hands a

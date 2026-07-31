@@ -12,12 +12,15 @@ use kithara_platform::time::Instant;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
+    backends::IcedBackend,
+    draw::{DrawListBuilder, Rect, replay},
     interact::{
         CursorShape, Hover, iced as iced_interact,
         recognizers::{Scalar, ScalarState, Track},
     },
     render::{Icon, ReadValue, Skin, UiEvent, fonts, scalar, shaped_text},
     skin::{FrameSkin, TickSkin},
+    text::TextResources,
     widgets::Widget,
 };
 
@@ -103,6 +106,7 @@ where
             thumb_notch_height: metrics.thumb_notch_height,
             thumb_notch_width: metrics.thumb_notch_width,
             ticks,
+            text_resources: self.skin.text_resources(),
             value: value.clamp(0.0, 1.0).as_(),
         })
         .width(Length::Fill)
@@ -129,7 +133,7 @@ where
     }
 }
 
-struct CrossfaderCanvas {
+struct CrossfaderCanvas<'skin> {
     drag: Scalar,
     path: String,
     rail_background: Color,
@@ -143,6 +147,7 @@ struct CrossfaderCanvas {
     thumb_notch_height: f32,
     thumb_notch_width: f32,
     ticks: Option<TickRail>,
+    text_resources: &'skin TextResources,
     value: f32,
 }
 
@@ -182,13 +187,13 @@ impl TickRail {
             .map_or(0.0, |_| self.extent() + self.metrics.gap)
     }
 
-    pub(crate) fn draw(&self, frame: &mut Frame, rail: Rectangle) {
+    pub(crate) fn paint(&self, builder: &mut DrawListBuilder, rail: Rect) {
         let Some(last) = self.last() else {
             return;
         };
         let (span, cross) = match self.axis {
-            TickAxis::Horizontal => (rail.width, rail.height),
-            TickAxis::Vertical => (rail.height, rail.width),
+            TickAxis::Horizontal => (rail.w, rail.h),
+            TickAxis::Vertical => (rail.h, rail.w),
         };
         let cross = cross.max(0.0);
         let travel = (span - self.metrics.inset * 2.0 - self.metrics.thickness).max(0.0);
@@ -209,22 +214,26 @@ impl TickRail {
             } else {
                 self.color
             };
-            let (corner, size) = match self.axis {
-                TickAxis::Horizontal => (
-                    Point::new(rail.x + offset, rail.y + cross - length),
-                    Size::new(self.metrics.thickness, length),
-                ),
-                TickAxis::Vertical => (
-                    Point::new(rail.x + cross - length, rail.y + offset),
-                    Size::new(length, self.metrics.thickness),
-                ),
+            let tick = match self.axis {
+                TickAxis::Horizontal => Rect {
+                    h: length,
+                    w: self.metrics.thickness,
+                    x: rail.x + offset,
+                    y: rail.y + cross - length,
+                },
+                TickAxis::Vertical => Rect {
+                    h: self.metrics.thickness,
+                    w: length,
+                    x: rail.x + cross - length,
+                    y: rail.y + offset,
+                },
             };
-            frame.fill_rectangle(corner, size, color);
+            builder.fill_rect(tick, color.into());
         }
     }
 }
 
-impl canvas::Program<UiEvent> for CrossfaderCanvas {
+impl canvas::Program<UiEvent> for CrossfaderCanvas<'_> {
     type State = ScalarState;
 
     fn draw(
@@ -236,18 +245,23 @@ impl canvas::Program<UiEvent> for CrossfaderCanvas {
         _cursor: Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
+        let mut builder = DrawListBuilder::default();
         let reserved = self.ticks.as_ref().map_or(0.0, |ticks| {
-            ticks.draw(
-                &mut frame,
-                Rectangle {
+            ticks.paint(
+                &mut builder,
+                Rect {
+                    h: ticks.extent(),
+                    w: bounds.width,
                     x: 0.0,
                     y: 0.0,
-                    width: bounds.width,
-                    height: ticks.extent(),
                 },
             );
             ticks.reserved()
         });
+        replay(
+            &builder.finish(),
+            &mut IcedBackend::new(&mut frame, self.text_resources),
+        );
         let track_height = (bounds.height - reserved).max(0.0);
         let rail_height = self.rail_height.min(track_height).max(0.0);
         let rail_point = Point::new(0.0, reserved + (track_height - rail_height) / 2.0);
@@ -309,5 +323,141 @@ impl canvas::Program<UiEvent> for CrossfaderCanvas {
             &self.path,
             self.drag.on_input(state, input, &hit, Instant::now()),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        builtin,
+        draw::{DrawCmd, Geom},
+        skin::ColorRole,
+    };
+
+    fn rail(axis: TickAxis, count: usize) -> TickRail {
+        TickRail {
+            axis,
+            metrics: TickSkin {
+                count,
+                thickness: 2.0,
+                length: 6.0,
+                center_length: 10.0,
+                gap: 4.0,
+                inset: 5.0,
+                color: ColorRole::LineDim,
+                center_color: ColorRole::LineDim,
+            },
+            color: builtin::skin().color(ColorRole::LineDim),
+            center_color: builtin::skin().color(ColorRole::AccentSoft),
+        }
+    }
+
+    fn rects(rail: &TickRail, area: Rect) -> Vec<Rect> {
+        let mut builder = DrawListBuilder::default();
+        rail.paint(&mut builder, area);
+        builder
+            .finish()
+            .commands()
+            .iter()
+            .map(|command| match command {
+                DrawCmd::Fill {
+                    geom: Geom::Rect(rect),
+                    ..
+                } => *rect,
+                other => panic!("a tick rail draws rectangles and nothing else, got {other:?}"),
+            })
+            .collect()
+    }
+
+    #[kithara::test]
+    fn ticks_span_the_rail_from_inset_to_inset() {
+        // 100 wide, 5 px inset each end, 2 px thick: 88 px of travel over 4 gaps.
+        let ticks = rects(
+            &rail(TickAxis::Horizontal, 5),
+            Rect {
+                h: 12.0,
+                w: 100.0,
+                x: 0.0,
+                y: 0.0,
+            },
+        );
+
+        assert_eq!(ticks.len(), 5);
+        assert_eq!(ticks[0].x, 5.0);
+        assert_eq!(ticks[4].x, 93.0, "the last tick ends at the far inset");
+        assert_eq!(ticks[1].x - ticks[0].x, 22.0, "the step is even");
+    }
+
+    #[kithara::test]
+    fn the_middle_tick_is_longer_only_when_there_is_a_middle() {
+        let odd = rects(
+            &rail(TickAxis::Horizontal, 5),
+            Rect {
+                h: 12.0,
+                w: 100.0,
+                x: 0.0,
+                y: 0.0,
+            },
+        );
+        let even = rects(
+            &rail(TickAxis::Horizontal, 4),
+            Rect {
+                h: 12.0,
+                w: 100.0,
+                x: 0.0,
+                y: 0.0,
+            },
+        );
+
+        assert_eq!(odd[2].h, 10.0, "an odd count has a centre tick");
+        assert!(
+            odd.iter()
+                .enumerate()
+                .all(|(index, tick)| index == 2 || (tick.h - 6.0).abs() < f32::EPSILON)
+        );
+        assert!(
+            even.iter().all(|tick| (tick.h - 6.0).abs() < f32::EPSILON),
+            "an even count has no middle to mark"
+        );
+    }
+
+    #[kithara::test]
+    fn a_tick_never_outgrows_the_rail_it_sits_in() {
+        let squashed = rects(
+            &rail(TickAxis::Horizontal, 5),
+            Rect {
+                h: 3.0,
+                w: 100.0,
+                x: 0.0,
+                y: 0.0,
+            },
+        );
+
+        assert!(squashed.iter().all(|tick| tick.h <= 3.0));
+        assert!(
+            squashed.iter().all(|tick| tick.y >= 0.0),
+            "clamping the length must not push a tick above the rail"
+        );
+    }
+
+    #[kithara::test]
+    fn the_vertical_axis_swaps_the_span_and_the_cross() {
+        let ticks = rects(
+            &rail(TickAxis::Vertical, 5),
+            Rect {
+                h: 100.0,
+                w: 12.0,
+                x: 0.0,
+                y: 0.0,
+            },
+        );
+
+        assert_eq!(ticks[0].y, 5.0);
+        assert_eq!(ticks[4].y, 93.0);
+        assert_eq!(ticks[0].h, 2.0, "thickness runs across the span");
+        assert_eq!(ticks[0].w, 6.0, "length runs across the rail");
     }
 }

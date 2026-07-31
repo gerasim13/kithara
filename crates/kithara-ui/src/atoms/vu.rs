@@ -92,13 +92,13 @@ impl canvas::Program<UiEvent> for VerticalVuCanvas<'_> {
         } else {
             canvas_bounds
         };
+        let mut builder = DrawListBuilder::default();
         if let Some(rail) = &self.ticks {
-            rail.draw(
-                &mut frame,
-                tick_rail_bounds(canvas_bounds, fader.x, self.metrics.ticks.gap),
+            rail.paint(
+                &mut builder,
+                tick_rail_bounds(canvas_bounds, fader.x, self.metrics.ticks.gap).into(),
             );
         }
-        let mut builder = DrawListBuilder::default();
         draw_segments(&mut builder, fader, self.levels, self.metrics, self.palette);
         draw_thumb(
             &mut builder,
