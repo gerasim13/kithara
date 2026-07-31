@@ -1,3 +1,4 @@
+pub(crate) mod click;
 mod double_click;
 mod item;
 mod scalar;

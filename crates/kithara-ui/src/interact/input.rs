@@ -22,6 +22,18 @@ pub(crate) enum Scroll {
     Pixels(f32),
 }
 
+impl Scroll {
+    /// The vertical delta in whatever unit the host reported. A consumer that
+    /// only needs a direction or a raw magnitude reads this; turning a delta
+    /// into whole steps goes through `recognizers::wheel`, which is the one
+    /// place that knows how many pixels make one.
+    pub(crate) const fn y(self) -> f32 {
+        match self {
+            Self::Lines(y) | Self::Pixels(y) => y,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct Hit {
     at: Option<Pt>,

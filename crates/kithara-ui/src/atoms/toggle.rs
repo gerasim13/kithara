@@ -8,10 +8,10 @@ use iced::{
 };
 
 use crate::{
-    interact::{CursorShape, Hover},
-    render::{ReadValue, Skin, UiEvent, theme::RenderPalette},
+    interact::{CursorShape, Hover, iced as iced_interact, recognizers::click},
+    render::{ReadValue, Skin, UiEvent, activate, theme::RenderPalette},
     skin::{CheckboxSkin, FrameSkin, ToggleSkin},
-    widgets::{Widget, behavior::ClickActivate},
+    widgets::Widget,
 };
 
 #[derive(bon::Builder)]
@@ -75,10 +75,7 @@ impl<'a> Widget<'a> for BinaryControl<'_, '_, '_, '_> {
         };
         Canvas::new(BinaryControlCanvas {
             active: *active,
-            click: ClickActivate::builder()
-                .path(self.path.to_owned())
-                .hover(Hover::new(CursorShape::Pointer))
-                .build(),
+            path: self.path.to_owned(),
             palette: self.skin.palette,
             shape: self.shape,
         })
@@ -104,7 +101,7 @@ enum Shape {
 
 struct BinaryControlCanvas {
     active: bool,
-    click: ClickActivate,
+    path: String,
     palette: RenderPalette,
     shape: Shape,
 }
@@ -158,19 +155,21 @@ impl canvas::Program<UiEvent> for BinaryControlCanvas {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> mouse::Interaction {
-        self.click.mouse_interaction(bounds, cursor)
+        Hover::new(CursorShape::Pointer)
+            .cursor(false, &iced_interact::hit(bounds, cursor))
+            .into()
     }
 
-    delegate::delegate! {
-        to self.click {
-            fn update(
-                &self,
-                state: &mut (),
-                event: &Event,
-                bounds: Rectangle,
-                cursor: Cursor,
-            ) -> Option<Action<UiEvent>>;
-        }
+    fn update(
+        &self,
+        _state: &mut (),
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<UiEvent>> {
+        let input = iced_interact::input(event)?;
+        let hit = iced_interact::hit(bounds, cursor);
+        activate(&self.path, click::on_input(input, &hit))
     }
 }
 

@@ -18,7 +18,7 @@ use num_traits::cast::AsPrimitive;
 
 use crate::{
     interact::{
-        CursorShape, Hover, iced as iced_interact,
+        CursorShape, Hover, Input, iced as iced_interact,
         recognizers::{Scalar, ScalarState, Track},
     },
     module::WaveStyle,
@@ -29,7 +29,6 @@ use crate::{
     skin::{FontSkin, FrameSkin, WaveOverlaySkin, WaveSkin},
     widgets::{
         Widget,
-        behavior::scroll_y,
         wave::{
             bars,
             hero::{HeroPalette, HeroWave, draw as draw_hero_wave},
@@ -340,10 +339,10 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
             }
         }
         if self.hero()
-            && let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event
+            && let Some(Input::Wheel(scroll)) = iced_interact::input(event)
             && cursor.is_over(bounds)
         {
-            let zoom = zoom_for_wheel(self.zoom, scroll_y(*delta));
+            let zoom = zoom_for_wheel(self.zoom, scroll.y());
             return Some(scalar_child(&self.path, "zoom", zoom));
         }
         let input = iced_interact::input(event)?;

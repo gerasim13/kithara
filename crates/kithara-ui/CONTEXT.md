@@ -312,10 +312,17 @@ Time enters a recognizer as a parameter rather than being read inside it. That i
 double-click window testable at all, and the window is `[0 ms, 301 ms)` rather than 300 because
 `as_millis` truncates - a `Duration` constant compared with `<=` would silently narrow it.
 
-`behavior::ScalarDrag` is gone, and with it the 0.90 similarity pair its state struct formed with
-`interact::ScalarState`. Six tracks now share one state machine instead of two machines sharing a
-field bag: press, move while active, release, plus the two opt-ins. `widgets::interaction::behavior`
-is down to `ClickActivate` and the scroll-delta reader.
+`widgets::interaction::behavior` is gone entirely, and with it the 0.90 similarity pair
+`ScalarDragState` formed with `interact::ScalarState`. Six tracks now share one state machine
+instead of two machines sharing a field bag: press, move while active, release, plus the two
+opt-ins. Every pointer gesture in the crate is a recognizer; what is left under
+`widgets::interaction` is the tempo wheel surface, which is a widget rather than a gesture.
+
+`recognizers::click` is a free function rather than a type, following `recognizers::wheel`. A press
+that lands is the whole gesture, so there is no state, and the only thing that looked like
+configuration - the cursor shape - already belongs to `Hover`. A struct here would have carried
+nothing and its `on_input` would not have read `self`, which is what `clippy::unused_self` says out
+loud.
 
 ## Text Control Ownership
 

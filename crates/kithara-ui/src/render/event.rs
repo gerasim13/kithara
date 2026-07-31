@@ -33,6 +33,13 @@ pub(crate) fn scalar(path: &str, outcome: Outcome) -> Option<Action<UiEvent>> {
     action(outcome, |value| set_scalar(path.to_owned(), value))
 }
 
+pub(crate) fn activate(path: &str, outcome: Outcome<()>) -> Option<Action<UiEvent>> {
+    action(outcome, |()| UiEvent::Control {
+        path: path.to_owned(),
+        action: ControlAction::Activate,
+    })
+}
+
 /// A value a control decides for itself, addressed under one of its own
 /// endpoints rather than the one its gesture writes.
 pub(crate) fn scalar_child(path: &str, child: &str, value: f32) -> Action<UiEvent> {

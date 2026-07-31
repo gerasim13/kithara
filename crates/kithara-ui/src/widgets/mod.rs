@@ -13,7 +13,7 @@ pub(crate) mod track_list;
 pub(crate) mod vis;
 pub(crate) mod wave;
 pub(crate) mod window;
-pub(crate) use interaction::{behavior, wheel};
+pub(crate) use interaction::wheel;
 pub use module::LayoutPreview;
 pub(crate) use module::{DropZone, ModuleChrome, frame_overlay};
 
