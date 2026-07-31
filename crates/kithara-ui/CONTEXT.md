@@ -119,10 +119,10 @@ crate-owned.
 
 ## Layout Ownership And The Parity Harness
 
-`solve` owns main-axis distribution, cross extent, and child offsets for expanded `Row` and
-`Column` nodes. `render::tree::flex` is its only iced host: it supplies declared lengths and
-limits, measures each child through iced, places the returned layout nodes, and forwards the
-complete widget lifecycle. `Split`, `Slot`, module chrome, and controls remain on iced layout.
+`solve` owns main-axis distribution, cross extent, and child offsets for expanded `Row`, `Column`,
+and `Slot` nodes and compiled `Split` nodes. `render::tree::flex` is its only iced host: it supplies
+declared lengths and limits, measures each child through iced, places the returned layout nodes,
+and forwards the complete widget lifecycle. Module chrome and controls remain on iced layout.
 
 Ownership is split for now, and measurement is the reason. A child that is still an iced element
 is the only thing that knows its own intrinsic size, so the solver distributes while iced measures.
@@ -131,6 +131,11 @@ although its job is toolkit-neutral: it speaks iced's `Length`, `Limits` and `Si
 Lifting those to owned types buys nothing until a second host exists to disagree with iced, and
 would be a translation layer with one caller - so the gate stays, named here rather than left to
 look like an oversight.
+
+`Split` supplies its existing quantised cell size directly to `Flex`. The sized-child path measures
+the child under the same loose limits as the removed iced container and resolves the cell extent
+separately, without emitting a layout wrapper. `Split` and `Slot` pass no `Range` minimum because
+their previous paths carried none.
 
 `Range` keeps its `length_for` mapping to `Fill` or `FillPortion`, so the existing weight reaches
 the solver unchanged; the render tree passes the main-axis minimum alongside it for expanded rows

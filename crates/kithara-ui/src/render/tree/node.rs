@@ -1,6 +1,6 @@
 use iced::{
-    Alignment, Element, Length,
-    widget::{Column, Row, Space, Stack, container},
+    Alignment, Element, Length, Size,
+    widget::{Space, Stack, container},
 };
 use num_traits::cast::AsPrimitive;
 
@@ -29,11 +29,15 @@ pub(super) fn render_compiled<'a>(
     match node {
         CompiledNode::Split { axis, children, .. } => match axis {
             Axis::Horizontal => container(
-                Row::with_children(children.iter().map(|(weight, child)| {
-                    container(render_compiled(child, ui, reads, skin))
-                        .width(split_length(child_size(child).w, *weight, skin))
-                        .height(Length::Fill)
-                        .into()
+                Flex::row_sized(children.iter().map(|(weight, child)| {
+                    (
+                        render_compiled(child, ui, reads, skin),
+                        Size::new(
+                            split_length(child_size(child).w, *weight, skin),
+                            Length::Fill,
+                        ),
+                        None,
+                    )
                 }))
                 .width(Length::Fill)
                 .height(Length::Fill),
@@ -42,11 +46,15 @@ pub(super) fn render_compiled<'a>(
             .height(Length::Fill)
             .into(),
             Axis::Vertical => container(
-                Column::with_children(children.iter().map(|(weight, child)| {
-                    container(render_compiled(child, ui, reads, skin))
-                        .width(Length::Fill)
-                        .height(split_length(child_size(child).h, *weight, skin))
-                        .into()
+                Flex::column_sized(children.iter().map(|(weight, child)| {
+                    (
+                        render_compiled(child, ui, reads, skin),
+                        Size::new(
+                            Length::Fill,
+                            split_length(child_size(child).h, *weight, skin),
+                        ),
+                        None,
+                    )
                 }))
                 .width(Length::Fill)
                 .height(Length::Fill),
@@ -229,10 +237,10 @@ fn render_node<'a>(
         )),
         ExpandedNode::Slot { children, .. } => Rendered::leading(
             container(
-                Column::with_children(
+                Flex::column(
                     children
                         .iter()
-                        .map(|child| render_node(child, ui, reads, skin)),
+                        .map(|child| (render_node(child, ui, reads, skin), None)),
                 )
                 .spacing(skin.layout.grid_gap)
                 .width(Length::Fill),
