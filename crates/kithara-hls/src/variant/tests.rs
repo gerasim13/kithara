@@ -1551,7 +1551,7 @@ fn wait_range_probes_without_sleeping() {
 
     let started = Instant::now();
     let outcome = v.wait_range(0..1, Some(Duration::from_millis(10)));
-    let elapsed = started.elapsed();
+    let elapsed = Instant::now().saturating_duration_since(started);
 
     assert!(
         matches!(
@@ -1584,12 +1584,13 @@ fn wait_range_flush_short_circuits_without_sleeping() {
     let _ = SeekControl::begin(&*seek, Duration::from_millis(10));
     let started = Instant::now();
     let interrupted = v.wait_range(0..1, Some(Duration::from_millis(10)));
+    let elapsed = Instant::now().saturating_duration_since(started);
     assert!(
         matches!(interrupted, Ok(WaitOutcome::Interrupted)),
         "flushing seek state must Interrupt the probe, got {interrupted:?}"
     );
     assert!(
-        started.elapsed() < Duration::from_millis(2),
-        "flush short-circuit must not sleep"
+        elapsed < Duration::from_millis(2),
+        "flush short-circuit must not sleep; took {elapsed:?}"
     );
 }

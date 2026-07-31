@@ -22,6 +22,25 @@ A bare `#[kithara::test]` is a sync test on native + wasm; flags can be combined
 
 Supports `#[case]` / `#[case::name]` parameterization and fixture injection.
 
+### Time rewriting only reaches path calls
+
+`rewrite.rs` retargets **path** calls in a test body — `Instant::now()` becomes
+`flash::virtual_now()`, which reads the engine clock unconditionally. It does not
+touch **method** calls, so `started.elapsed()` stays `Instant::elapsed`, which
+re-reads `now()` through the ordinary arm and gets REAL time: a test body never
+sets the `active` flag, which only production `#[kithara::flash]` regions push.
+
+Subtracting the two therefore mixes a virtual start from a real end. The error is
+systematic, not jitter — the real arm is measured from the engine's real anchor,
+so it grows with process age and a wall-clock assertion fails more often the
+longer the process has lived.
+
+In a test body, sample **both** endpoints with `Instant::now()` and subtract them:
+`Instant::now().saturating_duration_since(started)`. Never `.elapsed()`, and never
+any other method that internally re-reads `now()`. The rewrite reaches nested
+closures and spawned blocks too, so a timing probe inside `tokio_spawn(async move
+{ … })` carries the same rule.
+
 ### Loom execution and debugging
 
 The macro emits a `loom_model_` test-name prefix. `just test run --loom=on` enables
