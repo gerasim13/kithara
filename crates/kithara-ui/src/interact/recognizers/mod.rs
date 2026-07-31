@@ -3,4 +3,4 @@ mod scalar;
 pub(crate) mod wheel;
 
 pub(crate) use double_click::DoubleClick;
-pub(crate) use scalar::{Scalar, ScalarState, WheelStep};
+pub(crate) use scalar::{Scalar, ScalarState, Track, WheelStep};

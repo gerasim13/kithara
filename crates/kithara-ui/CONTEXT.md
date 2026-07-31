@@ -241,10 +241,20 @@ including this. Closing either belongs to the wave that takes font policy off th
 `interact` owns gesture recognition: the pointer and wheel vocabulary, the gesture state machines,
 their pixel and time constants, and the cursor vocabulary. It imports `draw::{Pt, Rect}` and nothing
 else from this crate - it does not know what a `UiEvent` is. A recognizer answers with an `Outcome`
-carrying a normalized `f32` and a capture flag; the document event is built one layer up, in
-`render::tree`, which is where `UiEvent` lives. Routing the event through the recognizer instead
-would point the base at the crate's orchestration layer, and every base peer points strictly
-downward: `draw` to `text`, `text` to `skin`, `solve` to `layout::Axis`.
+carrying a normalized `f32` and a capture flag; `render::event::scalar` turns that into the document
+event, one layer up and in the same file as the `UiEvent` it names. Routing the event through the
+recognizer instead would point the base at the crate's orchestration layer, and every base peer
+points strictly downward: `draw` to `text`, `text` to `skin`, `solve` to `layout::Axis`.
+
+A `Scalar` carries a `Track` that says how a position becomes a value. `RelativeVertical` measures
+travel since the press against a pixel range, so the press only arms the gesture and publishes
+nothing - a knob that jumped to the pointer would lose its current value on the first touch.
+`AbsoluteVertical` normalizes the position against the area, so the press seeks straight there,
+which is what a fader thumb has to do. Both arms set `active` before computing, so a press whose
+computation yields nothing still arms the gesture that follows. A degenerate height publishes
+nothing rather than a clamped zero: a control laid out to zero pixels has no position to report,
+and `0.0` would be a value the user never asked for. The move arm never re-tests the bounds, so a
+drag survives the pointer leaving the control and clamps at the end of travel instead of stopping.
 
 Exactly one file, `interact::iced`, names a toolkit. It translates an `iced::Event` into an `Input`,
 builds a `Hit` from bounds and a cursor, and converts a `CursorShape` into `mouse::Interaction`.
@@ -277,7 +287,8 @@ double-click window testable at all, and the window is `[0 ms, 301 ms)` rather t
 `interact::Scalar`'s state struct rhymes with `behavior::ScalarDragState` at 0.90 in the similarity
 report, and that is transitional rather than duplicated logic: the wheel decoder, the double-click
 latch and the cursor rule are single-sourced and appear nowhere in the report - only the field bag
-repeats. It resolves when `ScalarDrag`'s remaining horizontal modes port.
+repeats. `ScalarDragMode` has lost its vertical arm to `Track` and is down to three horizontal
+modes; the rhyme resolves when those port too.
 
 ## Text Control Ownership
 

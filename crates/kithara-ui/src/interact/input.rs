@@ -44,4 +44,10 @@ impl Hit {
     pub(crate) fn over(self) -> bool {
         self.inside().is_some()
     }
+
+    /// The box the pointer is tested against, for a recognizer that normalizes
+    /// a position against it rather than only asking whether it landed inside.
+    pub(crate) const fn area(self) -> Rect {
+        self.area
+    }
 }

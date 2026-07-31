@@ -9,6 +9,7 @@ pub mod tree;
 pub mod typography;
 
 pub use address::{Node, Scope, Walk};
+pub(crate) use event::scalar;
 pub use event::{ControlAction, DragPhase, UiEvent, WindowCommand, WindowEdge};
 pub use icons::Icon;
 pub use model::{

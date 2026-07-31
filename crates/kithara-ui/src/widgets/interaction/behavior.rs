@@ -199,7 +199,6 @@ pub(crate) enum ScalarDragMode {
     Horizontal,
     HorizontalClick,
     RelativeHorizontal { value: f32, scale: f32 },
-    Vertical,
 }
 
 #[derive(bon::Builder)]
@@ -221,16 +220,12 @@ pub(crate) struct ScalarDragState {
 impl ScalarDrag {
     fn absolute_action(&self, bounds: Rectangle, cursor: Cursor) -> Option<Action<UiEvent>> {
         let position = cursor.position()?;
-        let value = match self.mode {
+        match self.mode {
             ScalarDragMode::Horizontal | ScalarDragMode::HorizontalClick => {
-                normalized_horizontal(bounds, position)?
+                Some(self.publish(normalized_horizontal(bounds, position)?))
             }
-            ScalarDragMode::Vertical if bounds.height > 0.0 => {
-                1.0 - (position.y - bounds.y) / bounds.height
-            }
-            ScalarDragMode::Vertical | ScalarDragMode::RelativeHorizontal { .. } => return None,
-        };
-        Some(self.publish(value.clamp(0.0, 1.0)))
+            ScalarDragMode::RelativeHorizontal { .. } => None,
+        }
     }
 
     pub(crate) fn mouse_interaction(
@@ -276,7 +271,7 @@ impl ScalarDrag {
                         state.active = true;
                         Some(Action::capture())
                     }
-                    ScalarDragMode::Horizontal | ScalarDragMode::Vertical => {
+                    ScalarDragMode::Horizontal => {
                         state.active = true;
                         self.absolute_action(bounds, cursor)
                     }
@@ -293,9 +288,7 @@ impl ScalarDrag {
                         )
                     })
                 }
-                ScalarDragMode::Horizontal | ScalarDragMode::Vertical => {
-                    self.absolute_action(bounds, cursor)
-                }
+                ScalarDragMode::Horizontal => self.absolute_action(bounds, cursor),
                 ScalarDragMode::HorizontalClick | ScalarDragMode::RelativeHorizontal { .. } => None,
             },
             Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) if state.active => {
@@ -380,116 +373,6 @@ mod tests {
             path: path.to_owned(),
             action: ControlAction::Drag(phase),
         }
-    }
-
-    fn moved_to(position: Point) -> Event {
-        Event::Mouse(mouse::Event::CursorMoved { position })
-    }
-
-    fn scalar(path: &str, value: f64) -> UiEvent {
-        UiEvent::Control {
-            path: path.to_owned(),
-            action: ControlAction::SetScalar(value),
-        }
-    }
-
-    /// The VU meter's bounds: offset from the origin, so an inverted axis that
-    /// forgot to subtract `bounds.y` would still look right at the top edge.
-    fn vu() -> Rectangle {
-        Rectangle::new(Point::new(0.0, 10.0), iced::Size::new(12.0, 40.0))
-    }
-
-    fn vu_drag() -> ScalarDrag {
-        ScalarDrag::builder()
-            .path("vu".to_owned())
-            .mode(ScalarDragMode::Vertical)
-            .hover(Hover::new(CursorShape::ResizeV))
-            .build()
-    }
-
-    #[kithara::test]
-    fn vertical_drag_publishes_the_inverted_position() {
-        let drag = vu_drag();
-
-        // Every fraction here is dyadic, so `f64::from` widens the `f32` result
-        // without a residue and the assertion can be an equality.
-        for (y, expected) in [(10.0, 1.0), (20.0, 0.75), (30.0, 0.5), (40.0, 0.25)] {
-            let mut state = ScalarDragState::default();
-            let cursor = Cursor::Available(Point::new(6.0, y));
-
-            let (message, _, _) = drag
-                .update(&mut state, &press(), vu(), cursor)
-                .unwrap()
-                .into_inner();
-
-            assert_eq!(message, Some(scalar("vu", expected)), "at y={y}");
-        }
-    }
-
-    #[kithara::test]
-    fn vertical_drag_on_zero_height_publishes_nothing() {
-        let drag = vu_drag();
-        let cursor = Cursor::Available(Point::new(6.0, 30.0));
-        let mut state = ScalarDragState::default();
-        drag.update(&mut state, &press(), vu(), cursor).unwrap();
-
-        let flattened = Rectangle {
-            height: 0.0,
-            ..vu()
-        };
-
-        assert!(
-            drag.update(
-                &mut state,
-                &moved_to(Point::new(6.0, 30.0)),
-                flattened,
-                cursor
-            )
-            .is_none(),
-            "a degenerate height must publish nothing rather than a clamped zero"
-        );
-    }
-
-    #[kithara::test]
-    fn vertical_drag_keeps_publishing_after_the_pointer_leaves() {
-        let drag = vu_drag();
-        let mut state = ScalarDragState::default();
-        drag.update(
-            &mut state,
-            &press(),
-            vu(),
-            Cursor::Available(Point::new(6.0, 30.0)),
-        )
-        .unwrap();
-
-        let escaped = Cursor::Available(Point::new(6.0, 200.0));
-        let (message, _, _) = drag
-            .update(&mut state, &moved_to(Point::new(6.0, 200.0)), vu(), escaped)
-            .unwrap()
-            .into_inner();
-
-        assert_eq!(message, Some(scalar("vu", 0.0)));
-    }
-
-    #[kithara::test]
-    fn vertical_press_publishes_and_captures_and_release_captures_silently() {
-        let drag = vu_drag();
-        let cursor = Cursor::Available(Point::new(6.0, 30.0));
-        let mut state = ScalarDragState::default();
-
-        let (pressed, _, press_status) = drag
-            .update(&mut state, &press(), vu(), cursor)
-            .unwrap()
-            .into_inner();
-        let (released, _, release_status) = drag
-            .update(&mut state, &release(), vu(), cursor)
-            .unwrap()
-            .into_inner();
-
-        assert_eq!(pressed, Some(scalar("vu", 0.5)));
-        assert_eq!(press_status, iced::event::Status::Captured);
-        assert_eq!(released, None);
-        assert_eq!(release_status, iced::event::Status::Captured);
     }
 
     #[kithara::test]

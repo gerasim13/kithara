@@ -1,8 +1,25 @@
-use iced::Element;
+use iced::{Element, widget::canvas::Action};
+
+use crate::interact::Outcome;
 
 /// Shared view contract: a built control renders itself into the event tree.
 pub(crate) trait Widget<'a> {
     fn view(self) -> Element<'a, UiEvent>;
+}
+
+/// Carry a recognizer's verdict out to the toolkit: a value becomes a control
+/// event, and a gesture that only captured stays silent.
+pub(crate) fn scalar(path: &str, outcome: Outcome) -> Option<Action<UiEvent>> {
+    if let Some(value) = outcome.value() {
+        return Some(
+            Action::publish(UiEvent::Control {
+                path: path.to_owned(),
+                action: ControlAction::SetScalar(f64::from(value)),
+            })
+            .and_capture(),
+        );
+    }
+    outcome.is_captured().then(Action::capture)
 }
 
 /// Action emitted by an interactive control.

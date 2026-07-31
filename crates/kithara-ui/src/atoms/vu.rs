@@ -6,20 +6,21 @@ use iced::{
         canvas::{self, Action, Canvas, Frame, Geometry},
     },
 };
+use kithara_platform::time::Instant;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
     atoms::design::crossfader::{TickAxis, TickRail},
     backends::IcedBackend,
     draw::{DrawListBuilder, Rect, replay},
-    interact::{CursorShape, Hover},
-    render::{ReadValue, Skin, StereoLevels, UiEvent, theme::RenderPalette},
+    interact::{
+        CursorShape, Hover, iced as iced_interact,
+        recognizers::{Scalar, ScalarState, Track},
+    },
+    render::{ReadValue, Skin, StereoLevels, UiEvent, scalar, theme::RenderPalette},
     skin::VuVerticalSkin,
     text::TextResources,
-    widgets::{
-        Widget,
-        behavior::{ScalarDrag, ScalarDragMode, ScalarDragState},
-    },
+    widgets::Widget,
 };
 
 #[derive(bon::Builder)]
@@ -36,11 +37,11 @@ impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, 'a> {
             return Space::new().into();
         };
         Canvas::new(VerticalVuCanvas {
-            drag: ScalarDrag::builder()
-                .path(self.path.to_owned())
-                .mode(ScalarDragMode::Vertical)
+            drag: Scalar::builder()
+                .track(Track::AbsoluteVertical)
                 .hover(Hover::new(CursorShape::ResizeV))
                 .build(),
+            path: self.path.to_owned(),
             metrics: self.skin.vu_vertical,
             ticks: self
                 .ticks
@@ -58,7 +59,8 @@ impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, 'a> {
 }
 
 struct VerticalVuCanvas<'skin> {
-    drag: ScalarDrag,
+    drag: Scalar,
+    path: String,
     metrics: VuVerticalSkin,
     ticks: Option<TickRail>,
     levels: StereoLevels,
@@ -69,11 +71,11 @@ struct VerticalVuCanvas<'skin> {
 }
 
 impl canvas::Program<UiEvent> for VerticalVuCanvas<'_> {
-    type State = ScalarDragState;
+    type State = ScalarState;
 
     fn draw(
         &self,
-        _state: &ScalarDragState,
+        _state: &ScalarState,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -113,22 +115,30 @@ impl canvas::Program<UiEvent> for VerticalVuCanvas<'_> {
         vec![frame.into_geometry()]
     }
 
-    delegate::delegate! {
-        to self.drag {
-            fn update(
-                &self,
-                state: &mut ScalarDragState,
-                event: &Event,
-                bounds: Rectangle,
-                cursor: Cursor,
-            ) -> Option<Action<UiEvent>>;
-            fn mouse_interaction(
-                &self,
-                state: &ScalarDragState,
-                bounds: Rectangle,
-                cursor: Cursor,
-            ) -> mouse::Interaction;
-        }
+    fn mouse_interaction(
+        &self,
+        state: &ScalarState,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> mouse::Interaction {
+        self.drag
+            .cursor(state, &iced_interact::hit(bounds, cursor))
+            .into()
+    }
+
+    fn update(
+        &self,
+        state: &mut ScalarState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<UiEvent>> {
+        let input = iced_interact::input(event)?;
+        let hit = iced_interact::hit(bounds, cursor);
+        scalar(
+            &self.path,
+            self.drag.on_input(state, input, &hit, Instant::now()),
+        )
     }
 }
 

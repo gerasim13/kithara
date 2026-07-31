@@ -12,10 +12,10 @@ use crate::{
     backends::IcedBackend,
     draw::{DrawListBuilder, Rect, replay},
     interact::{
-        CursorShape, Hover, Outcome, iced as iced_interact,
-        recognizers::{Scalar, ScalarState, WheelStep},
+        CursorShape, Hover, iced as iced_interact,
+        recognizers::{Scalar, ScalarState, Track, WheelStep},
     },
-    render::{ControlAction, Skin, UiEvent},
+    render::{Skin, UiEvent, scalar},
     skin::KnobSkin,
     text::{TextContext, TextResources},
 };
@@ -42,8 +42,10 @@ impl<'data, 'skin> KnobProgram<'data, 'skin> {
             knob: Knob::new(label, value, skin),
             metrics,
             drag: Scalar::builder()
-                .value(value)
-                .range(metrics.drag_range)
+                .track(Track::RelativeVertical {
+                    range: metrics.drag_range,
+                    value,
+                })
                 .hover(Hover::new(CursorShape::ResizeV))
                 .reset(RESET_VALUE)
                 .wheel(WheelStep {
@@ -123,19 +125,6 @@ impl canvas::Program<UiEvent> for KnobProgram<'_, '_> {
 pub(super) struct KnobState {
     drag: ScalarState,
     text: RefCell<Option<TextContext>>,
-}
-
-fn scalar(path: &str, outcome: Outcome) -> Option<Action<UiEvent>> {
-    if let Some(value) = outcome.value() {
-        return Some(
-            Action::publish(UiEvent::Control {
-                path: path.to_owned(),
-                action: ControlAction::SetScalar(f64::from(value)),
-            })
-            .and_capture(),
-        );
-    }
-    outcome.is_captured().then(Action::capture)
 }
 
 impl KnobProgram<'_, '_> {
