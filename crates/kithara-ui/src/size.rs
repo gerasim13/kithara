@@ -306,9 +306,9 @@ pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc, hidden: Hidden<'
                         .iter()
                         .map(|child| compute_size(child, skin, hidden)),
                 ),
-                gap_total(*gap, laid_out.len(), skin.layout.size_gap),
+                gap_total(*gap, laid_out.len(), skin.layout.grid_gap),
                 0.0,
-                Pad::new(*pad, *pad_x, *pad_y, skin.layout.size_pad),
+                Pad::new(*pad, *pad_x, *pad_y, skin.layout.grid_pad),
             )
         }
         ExpandedNode::Column {
@@ -327,8 +327,8 @@ pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc, hidden: Hidden<'
                         .map(|child| compute_size(child, skin, hidden)),
                 ),
                 0.0,
-                gap_total(*gap, laid_out.len(), skin.layout.size_gap),
-                Pad::new(*pad, *pad_x, *pad_y, skin.layout.size_pad),
+                gap_total(*gap, laid_out.len(), skin.layout.grid_gap),
+                Pad::new(*pad, *pad_x, *pad_y, skin.layout.grid_pad),
             )
         }
         ExpandedNode::Slot { children, .. } => {
@@ -712,8 +712,8 @@ mod tests {
             None,
         );
         let mut skin = builtin::skin_doc().clone();
-        skin.layout.size_gap = 3.0;
-        skin.layout.size_pad = 2.0;
+        skin.layout.grid_gap = 3.0;
+        skin.layout.grid_pad = 2.0;
 
         let size = compute_size(&node, &skin, VISIBLE);
 
