@@ -246,15 +246,23 @@ event, one layer up and in the same file as the `UiEvent` it names. Routing the 
 recognizer instead would point the base at the crate's orchestration layer, and every base peer
 points strictly downward: `draw` to `text`, `text` to `skin`, `solve` to `layout::Axis`.
 
-A `Scalar` carries a `Track` that says how a position becomes a value. `RelativeVertical` measures
-travel since the press against a pixel range, so the press only arms the gesture and publishes
-nothing - a knob that jumped to the pointer would lose its current value on the first touch.
-`AbsoluteVertical` normalizes the position against the area, so the press seeks straight there,
-which is what a fader thumb has to do. Both arms set `active` before computing, so a press whose
-computation yields nothing still arms the gesture that follows. A degenerate height publishes
-nothing rather than a clamped zero: a control laid out to zero pixels has no position to report,
+A `Scalar` carries a `Track` that says how a position becomes a value, and the split that matters is
+relative against absolute. A relative track counts travel from the press, so the press only arms the
+gesture and publishes nothing - a knob that jumped to the pointer would lose its current value on
+the first touch. An absolute track reads the position itself, so the press seeks straight there,
+which is what a fader thumb and a VU have to do. `HorizontalClick` is the one absolute track that
+seeks without arming: the mini-wave without beats is a seek surface, not a drag surface, and leaving
+the pointer free is why the press does not capture the moves that follow.
+
+Three properties hold across every track. The press decides `active` before computing, so a press
+whose computation yields nothing still arms the gesture that follows. A degenerate extent publishes
+nothing rather than a clamped zero - a control laid out to zero pixels has no position to report,
 and `0.0` would be a value the user never asked for. The move arm never re-tests the bounds, so a
 drag survives the pointer leaving the control and clamps at the end of travel instead of stopping.
+
+Only `HorizontalPixels` leaves the unit interval, because a column width is a width: it floors at a
+minimum and has no ceiling. `RelativeHorizontal` subtracts rather than adds, because the mini-wave
+moves its content under a fixed playhead, so pulling right walks the position back.
 
 `Outcome<T>` carries what the gesture produced and whether it took the pointer, and those are two
 independent facts rather than one. `set` publishes and captures; `observed` publishes without
@@ -304,11 +312,10 @@ Time enters a recognizer as a parameter rather than being read inside it. That i
 double-click window testable at all, and the window is `[0 ms, 301 ms)` rather than 300 because
 `as_millis` truncates - a `Duration` constant compared with `<=` would silently narrow it.
 
-`interact::Scalar`'s state struct rhymes with `behavior::ScalarDragState` at 0.90 in the similarity
-report, and that is transitional rather than duplicated logic: the wheel decoder, the double-click
-latch and the cursor rule are single-sourced and appear nowhere in the report - only the field bag
-repeats. `ScalarDragMode` has lost its vertical arm to `Track` and is down to three horizontal
-modes; the rhyme resolves when those port too.
+`behavior::ScalarDrag` is gone, and with it the 0.90 similarity pair its state struct formed with
+`interact::ScalarState`. Six tracks now share one state machine instead of two machines sharing a
+field bag: press, move while active, release, plus the two opt-ins. `widgets::interaction::behavior`
+is down to `ClickActivate` and the scroll-delta reader.
 
 ## Text Control Ownership
 

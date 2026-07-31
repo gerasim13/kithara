@@ -8,16 +8,17 @@ use iced::{
         container,
     },
 };
+use kithara_platform::time::Instant;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    interact::{CursorShape, Hover},
-    render::{Icon, ReadValue, Skin, UiEvent, fonts, shaped_text},
-    skin::{FrameSkin, TickSkin},
-    widgets::{
-        Widget,
-        behavior::{ScalarDrag, ScalarDragMode, ScalarDragState},
+    interact::{
+        CursorShape, Hover, iced as iced_interact,
+        recognizers::{Scalar, ScalarState, Track},
     },
+    render::{Icon, ReadValue, Skin, UiEvent, fonts, scalar, shaped_text},
+    skin::{FrameSkin, TickSkin},
+    widgets::Widget,
 };
 
 #[derive(bon::Builder)]
@@ -86,11 +87,11 @@ where
             .then(|| TickRail::new(TickAxis::Horizontal, metrics.ticks, self.skin));
         let slider_height = ticks.as_ref().map_or(0.0, TickRail::reserved) + metrics.thumb_height;
         let slider = Canvas::new(CrossfaderCanvas {
-            drag: ScalarDrag::builder()
-                .path(self.path.to_owned())
-                .mode(ScalarDragMode::Horizontal)
+            drag: Scalar::builder()
+                .track(Track::AbsoluteHorizontal)
                 .hover(Hover::new(CursorShape::ResizeH))
                 .build(),
+            path: self.path.to_owned(),
             rail_background: self.skin.color(metrics.rail_background),
             rail_color: self.skin.color(metrics.rail_frame.border),
             rail_frame: metrics.rail_frame,
@@ -129,7 +130,8 @@ where
 }
 
 struct CrossfaderCanvas {
-    drag: ScalarDrag,
+    drag: Scalar,
+    path: String,
     rail_background: Color,
     rail_color: Color,
     rail_frame: FrameSkin,
@@ -223,11 +225,11 @@ impl TickRail {
 }
 
 impl canvas::Program<UiEvent> for CrossfaderCanvas {
-    type State = ScalarDragState;
+    type State = ScalarState;
 
     fn draw(
         &self,
-        _state: &ScalarDragState,
+        _state: &ScalarState,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -283,21 +285,29 @@ impl canvas::Program<UiEvent> for CrossfaderCanvas {
         vec![frame.into_geometry()]
     }
 
-    delegate::delegate! {
-        to self.drag {
-            fn update(
-                &self,
-                state: &mut ScalarDragState,
-                event: &Event,
-                bounds: Rectangle,
-                cursor: Cursor,
-            ) -> Option<Action<UiEvent>>;
-            fn mouse_interaction(
-                &self,
-                state: &ScalarDragState,
-                bounds: Rectangle,
-                cursor: Cursor,
-            ) -> mouse::Interaction;
-        }
+    fn mouse_interaction(
+        &self,
+        state: &ScalarState,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> mouse::Interaction {
+        self.drag
+            .cursor(state, &iced_interact::hit(bounds, cursor))
+            .into()
+    }
+
+    fn update(
+        &self,
+        state: &mut ScalarState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<UiEvent>> {
+        let input = iced_interact::input(event)?;
+        let hit = iced_interact::hit(bounds, cursor);
+        scalar(
+            &self.path,
+            self.drag.on_input(state, input, &hit, Instant::now()),
+        )
     }
 }

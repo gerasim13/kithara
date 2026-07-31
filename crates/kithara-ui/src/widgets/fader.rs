@@ -11,19 +11,21 @@ use iced::{
         slider::{Handle, HandleShape, Rail, Status as SliderStatus, Style as SliderStyle},
     },
 };
+use kithara_platform::time::Instant;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    interact::{CursorShape, Hover, recognizers::WheelStep},
+    interact::{
+        CursorShape, Hover, iced as iced_interact,
+        recognizers::{Scalar, ScalarState, Track, WheelStep},
+    },
     module::FaderStyle,
     render::{
-        ControlAction, Icon, ReadValue, Skin, UiEvent, fonts, shaped_text, theme::RenderPalette,
+        ControlAction, Icon, ReadValue, Skin, UiEvent, fonts, scalar, shaped_text,
+        theme::RenderPalette,
     },
     skin::{FaderSkin, FrameSkin},
-    widgets::{
-        Widget,
-        behavior::{ScalarDrag, ScalarDragMode, ScalarDragState},
-    },
+    widgets::Widget,
 };
 
 #[derive(bon::Builder)]
@@ -207,7 +209,8 @@ impl canvas::Program<UiEvent> for FaderTicks {
 }
 
 struct SegmentedVolumeCanvas {
-    drag: ScalarDrag,
+    drag: Scalar,
+    path: String,
     metrics: FaderSkin,
     border_color: Color,
     palette: RenderPalette,
@@ -215,11 +218,11 @@ struct SegmentedVolumeCanvas {
 }
 
 impl canvas::Program<UiEvent> for SegmentedVolumeCanvas {
-    type State = ScalarDragState;
+    type State = ScalarState;
 
     fn draw(
         &self,
-        _state: &ScalarDragState,
+        _state: &ScalarState,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -237,22 +240,30 @@ impl canvas::Program<UiEvent> for SegmentedVolumeCanvas {
         vec![frame.into_geometry()]
     }
 
-    delegate::delegate! {
-        to self.drag {
-            fn update(
-                &self,
-                state: &mut ScalarDragState,
-                event: &Event,
-                bounds: Rectangle,
-                cursor: Cursor,
-            ) -> Option<Action<UiEvent>>;
-            fn mouse_interaction(
-                &self,
-                state: &ScalarDragState,
-                bounds: Rectangle,
-                cursor: Cursor,
-            ) -> mouse::Interaction;
-        }
+    fn mouse_interaction(
+        &self,
+        state: &ScalarState,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> mouse::Interaction {
+        self.drag
+            .cursor(state, &iced_interact::hit(bounds, cursor))
+            .into()
+    }
+
+    fn update(
+        &self,
+        state: &mut ScalarState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<UiEvent>> {
+        let input = iced_interact::input(event)?;
+        let hit = iced_interact::hit(bounds, cursor);
+        scalar(
+            &self.path,
+            self.drag.on_input(state, input, &hit, Instant::now()),
+        )
     }
 }
 
@@ -266,15 +277,15 @@ struct VolumeStrip<'path, 'skin> {
 impl<'a> Widget<'a> for VolumeStrip<'_, '_> {
     fn view(self) -> Element<'a, UiEvent> {
         Canvas::new(SegmentedVolumeCanvas {
-            drag: ScalarDrag::builder()
-                .path(self.path.to_owned())
-                .mode(ScalarDragMode::Horizontal)
+            drag: Scalar::builder()
+                .track(Track::AbsoluteHorizontal)
                 .hover(Hover::new(CursorShape::ResizeH))
                 .wheel(WheelStep {
                     value: self.value.clamp(0.0, 1.0).as_(),
                     step: self.skin.fader.step.as_(),
                 })
                 .build(),
+            path: self.path.to_owned(),
             metrics: self.skin.fader,
             border_color: self.skin.color(self.skin.fader.strip_frame.border),
             palette: self.skin.palette,

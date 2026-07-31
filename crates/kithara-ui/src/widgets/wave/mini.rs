@@ -13,18 +13,23 @@ use iced::{
         text,
     },
 };
+use kithara_platform::time::Instant;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    interact::{CursorShape, Hover},
+    interact::{
+        CursorShape, Hover, iced as iced_interact,
+        recognizers::{Scalar, ScalarState, Track},
+    },
     module::WaveStyle,
     render::{
-        ReadValue, Reads, Skin, UiEvent, WaveBucket, fonts, model::derived, theme::RenderPalette,
+        ReadValue, Reads, Skin, UiEvent, WaveBucket, fonts, model::derived, scalar, scalar_child,
+        theme::RenderPalette,
     },
     skin::{FontSkin, FrameSkin, WaveOverlaySkin, WaveSkin},
     widgets::{
         Widget,
-        behavior::{ScalarDrag, ScalarDragMode, ScalarDragState, scroll_y},
+        behavior::scroll_y,
         wave::{
             bars,
             hero::{HeroPalette, HeroWave, draw as draw_hero_wave},
@@ -92,15 +97,14 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
             border_color: self.skin.color(self.skin.wave.frame.border),
             cue_badge_background: self.skin.color(self.skin.wave.cue_badge_background),
             cue_badge_text_color: self.skin.color(self.skin.wave.cue_badge_text_color),
-            drag: ScalarDrag::builder()
-                .path(self.path.to_owned())
-                .mode(if show_beats {
-                    ScalarDragMode::RelativeHorizontal {
-                        value: progress,
+            drag: Scalar::builder()
+                .track(if show_beats {
+                    Track::RelativeHorizontal {
                         scale: zoom,
+                        value: progress,
                     }
                 } else {
-                    ScalarDragMode::HorizontalClick
+                    Track::HorizontalClick
                 })
                 .hover(Hover::new(if show_beats {
                     CursorShape::Grab
@@ -108,6 +112,7 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
                     CursorShape::Pointer
                 }))
                 .build(),
+            path: self.path.to_owned(),
             overlay,
             overlay_palette: OverlayPalette::new(self.skin),
             palette: self.skin.palette,
@@ -124,12 +129,13 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
 }
 
 struct MiniWaveCanvas {
+    path: String,
     metrics: WaveSkin,
     background: Color,
     border_color: Color,
     cue_badge_background: Color,
     cue_badge_text_color: Color,
-    drag: ScalarDrag,
+    drag: Scalar,
     overlay: Option<OverlayData>,
     overlay_palette: OverlayPalette,
     palette: RenderPalette,
@@ -142,7 +148,7 @@ struct MiniWaveCanvas {
 
 #[derive(Default)]
 struct MiniWaveState {
-    drag: ScalarDragState,
+    drag: ScalarState,
     loop_start: Option<f32>,
     modifiers: Modifiers,
     wave: canvas::Cache,
@@ -290,7 +296,9 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
         cursor: Cursor,
     ) -> mouse::Interaction {
         if self.has_waveform() {
-            self.drag.mouse_interaction(&state.drag, bounds, cursor)
+            self.drag
+                .cursor(&state.drag, &iced_interact::hit(bounds, cursor))
+                .into()
         } else {
             mouse::Interaction::default()
         }
@@ -317,11 +325,11 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
                 {
                     let start = self.track_position(bounds, cursor)?;
                     state.loop_start = Some(start);
-                    return Some(self.drag.publish_child("loop_start", start));
+                    return Some(scalar_child(&self.path, "loop_start", start));
                 }
                 Event::Mouse(mouse::Event::CursorMoved { .. }) if state.loop_start.is_some() => {
                     let end = self.track_position(bounds, cursor)?;
-                    return Some(self.drag.publish_child("loop_end", end));
+                    return Some(scalar_child(&self.path, "loop_end", end));
                 }
                 Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
                     if state.loop_start.take().is_some() =>
@@ -336,9 +344,15 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
             && cursor.is_over(bounds)
         {
             let zoom = zoom_for_wheel(self.zoom, scroll_y(*delta));
-            return Some(self.drag.publish_child("zoom", zoom));
+            return Some(scalar_child(&self.path, "zoom", zoom));
         }
-        self.drag.update(&mut state.drag, event, bounds, cursor)
+        let input = iced_interact::input(event)?;
+        let hit = iced_interact::hit(bounds, cursor);
+        scalar(
+            &self.path,
+            self.drag
+                .on_input(&mut state.drag, input, &hit, Instant::now()),
+        )
     }
 }
 

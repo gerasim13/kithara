@@ -15,17 +15,18 @@ use iced::{
         },
     },
 };
+use kithara_platform::time::Instant;
 use num_traits::ToPrimitive;
 
-use super::{
-    Widget,
-    behavior::{HorizontalPixelDrag, HorizontalPixelDragState},
-};
+use super::Widget;
 use crate::{
-    interact::{CursorShape, Hover, iced as iced_interact, recognizers::ItemDrag},
+    interact::{
+        CursorShape, Hover, iced as iced_interact,
+        recognizers::{ItemDrag, Scalar, ScalarState, Track},
+    },
     module::TrackColumn,
     render::{
-        ControlAction, ReadValue, Reads, Skin, TrackRow, UiEvent, drag, fonts, shaped_text,
+        ControlAction, ReadValue, Reads, Skin, TrackRow, UiEvent, drag, fonts, scalar, shaped_text,
         theme::RenderPalette,
     },
     skin::TrackListSkin,
@@ -376,10 +377,12 @@ fn header_cell(
     let divider = Canvas::new(ColumnDivider {
         color: style.divider_color,
         divider_width: style.metrics.divider_width,
-        drag: HorizontalPixelDrag::builder()
-            .path(format!("{path}/width/{}", column.column.endpoint_name()))
-            .value(column.width)
-            .minimum(style.metrics.min_column_width)
+        path: format!("{path}/width/{}", column.column.endpoint_name()),
+        drag: Scalar::builder()
+            .track(Track::HorizontalPixels {
+                minimum: style.metrics.min_column_width,
+                value: column.width,
+            })
             .hover(Hover::new(CursorShape::ResizeH))
             .build(),
     })
@@ -607,15 +610,16 @@ fn energy_cell(
 struct ColumnDivider {
     color: Color,
     divider_width: f32,
-    drag: HorizontalPixelDrag,
+    path: String,
+    drag: Scalar,
 }
 
 impl canvas::Program<UiEvent> for ColumnDivider {
-    type State = HorizontalPixelDragState;
+    type State = ScalarState;
 
     fn draw(
         &self,
-        _state: &HorizontalPixelDragState,
+        _state: &ScalarState,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -631,22 +635,30 @@ impl canvas::Program<UiEvent> for ColumnDivider {
         vec![frame.into_geometry()]
     }
 
-    delegate::delegate! {
-        to self.drag {
-            fn update(
-                &self,
-                state: &mut HorizontalPixelDragState,
-                event: &Event,
-                bounds: Rectangle,
-                cursor: Cursor,
-            ) -> Option<Action<UiEvent>>;
-            fn mouse_interaction(
-                &self,
-                state: &HorizontalPixelDragState,
-                bounds: Rectangle,
-                cursor: Cursor,
-            ) -> mouse::Interaction;
-        }
+    fn mouse_interaction(
+        &self,
+        state: &ScalarState,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> mouse::Interaction {
+        self.drag
+            .cursor(state, &iced_interact::hit(bounds, cursor))
+            .into()
+    }
+
+    fn update(
+        &self,
+        state: &mut ScalarState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<UiEvent>> {
+        let input = iced_interact::input(event)?;
+        let hit = iced_interact::hit(bounds, cursor);
+        scalar(
+            &self.path,
+            self.drag.on_input(state, input, &hit, Instant::now()),
+        )
     }
 }
 

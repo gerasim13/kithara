@@ -22,11 +22,21 @@ fn action<T>(outcome: Outcome<T>, event: impl FnOnce(T) -> UiEvent) -> Option<Ac
     })
 }
 
-pub(crate) fn scalar(path: &str, outcome: Outcome) -> Option<Action<UiEvent>> {
-    action(outcome, |value| UiEvent::Control {
-        path: path.to_owned(),
+fn set_scalar(path: String, value: f32) -> UiEvent {
+    UiEvent::Control {
+        path,
         action: ControlAction::SetScalar(f64::from(value)),
-    })
+    }
+}
+
+pub(crate) fn scalar(path: &str, outcome: Outcome) -> Option<Action<UiEvent>> {
+    action(outcome, |value| set_scalar(path.to_owned(), value))
+}
+
+/// A value a control decides for itself, addressed under one of its own
+/// endpoints rather than the one its gesture writes.
+pub(crate) fn scalar_child(path: &str, child: &str, value: f32) -> Action<UiEvent> {
+    Action::publish(set_scalar(format!("{path}/{child}"), value)).and_capture()
 }
 
 pub(crate) fn drag(

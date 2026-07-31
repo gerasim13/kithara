@@ -6,15 +6,34 @@ use super::{
 };
 use crate::draw::{Pt, Rect};
 
-/// How a pointer position becomes a value.
+/// How a pointer position becomes a value. A relative track counts travel from
+/// the press, so the press only arms it; an absolute track reads the position
+/// itself, so the press seeks straight there.
 #[derive(Clone, Copy)]
 pub(crate) enum Track {
-    /// Travel since the press, divided by `range` and added to `value`; up is
-    /// positive. The press itself only arms the gesture.
+    /// Vertical travel divided by `range` and added to `value`; up is positive.
     RelativeVertical { range: f32, value: f32 },
-    /// The position itself, normalized against the area with the bottom at
-    /// zero. The press seeks straight there.
+    /// Horizontal travel over the area's width, scaled and *subtracted* from
+    /// `value`: the content moves with the pointer under a fixed playhead, so
+    /// dragging right walks the position back.
+    RelativeHorizontal { scale: f32, value: f32 },
+    /// Horizontal travel added to `value` in pixels, floored at `minimum`. The
+    /// only track whose value is a width rather than a fraction, which is why
+    /// it has a floor and no ceiling.
+    HorizontalPixels { minimum: f32, value: f32 },
+    /// The position normalized against the area's height, bottom at zero.
     AbsoluteVertical,
+    /// The position normalized against the area's width.
+    AbsoluteHorizontal,
+    /// The position normalized against the area's width, once: the press seeks
+    /// and never arms, so the pointer stays free for whoever wants it next.
+    HorizontalClick,
+}
+
+impl Track {
+    const fn arms(self) -> bool {
+        !matches!(self, Self::HorizontalClick)
+    }
 }
 
 #[derive(bon::Builder)]
@@ -60,14 +79,23 @@ impl Scalar {
                     state.active = false;
                     return Outcome::set(value);
                 }
-                state.active = true;
+                state.active = self.track.arms();
                 match self.track {
                     Track::RelativeVertical { value, .. } => {
                         state.start_position = position.y;
                         state.start_value = value;
                         Outcome::captured()
                     }
-                    Track::AbsoluteVertical => seek(position, hit.area()),
+                    Track::RelativeHorizontal { value, .. }
+                    | Track::HorizontalPixels { value, .. } => {
+                        state.start_position = position.x;
+                        state.start_value = value;
+                        Outcome::captured()
+                    }
+                    Track::AbsoluteVertical => seek_down(position, hit.area()),
+                    Track::AbsoluteHorizontal | Track::HorizontalClick => {
+                        seek_across(position, hit.area())
+                    }
                 }
             }
             Input::PointerMoved { .. } if state.active => {
@@ -77,7 +105,25 @@ impl Scalar {
                             (state.start_value + (state.start_position - position.y) / range)
                                 .clamp(0.0, 1.0),
                         ),
-                        Track::AbsoluteVertical => seek(position, hit.area()),
+                        Track::RelativeHorizontal { scale, .. } => {
+                            let width = hit.area().w;
+                            if width > 0.0 {
+                                Outcome::set(
+                                    (state.start_value
+                                        - (position.x - state.start_position) / width * scale)
+                                        .clamp(0.0, 1.0),
+                                )
+                            } else {
+                                Outcome::IGNORED
+                            }
+                        }
+                        Track::HorizontalPixels { minimum, .. } => Outcome::set(
+                            (state.start_value + position.x - state.start_position).max(minimum),
+                        ),
+                        Track::AbsoluteVertical => seek_down(position, hit.area()),
+                        Track::AbsoluteHorizontal | Track::HorizontalClick => {
+                            seek_across(position, hit.area())
+                        }
                     })
             }
             Input::PointerUp if state.active => {
@@ -104,9 +150,15 @@ impl Scalar {
     }
 }
 
-fn seek(position: Pt, area: Rect) -> Outcome {
+fn seek_down(position: Pt, area: Rect) -> Outcome {
     (area.h > 0.0)
         .then(|| (1.0 - (position.y - area.y) / area.h).clamp(0.0, 1.0))
+        .map_or(Outcome::IGNORED, Outcome::set)
+}
+
+fn seek_across(position: Pt, area: Rect) -> Outcome {
+    (area.w > 0.0)
+        .then(|| ((position.x - area.x) / area.w).clamp(0.0, 1.0))
         .map_or(Outcome::IGNORED, Outcome::set)
 }
 
@@ -408,6 +460,169 @@ mod tests {
 
         assert_eq!(pressed, Outcome::set(0.5));
         assert_eq!(released, Outcome::captured());
+    }
+
+    /// A rail offset from the origin, so a normalization that forgot to
+    /// subtract `area.x` would still look right at the left edge.
+    fn rail() -> Rect {
+        Rect {
+            h: 40.0,
+            w: 200.0,
+            x: 20.0,
+            y: 4.0,
+        }
+    }
+
+    fn on_rail(x: f32) -> Hit {
+        Hit::new(Some(Pt { x, y: 24.0 }), rail())
+    }
+
+    fn across(x: f32) -> Input {
+        Input::PointerMoved {
+            at: Pt { x, y: 24.0 },
+        }
+    }
+
+    fn sliding(track: Track) -> Scalar {
+        Scalar::builder()
+            .track(track)
+            .hover(Hover::new(CursorShape::ResizeH))
+            .build()
+    }
+
+    #[kithara::test]
+    fn an_absolute_horizontal_drag_maps_to_the_normalized_position_and_clamps() {
+        let slide = sliding(Track::AbsoluteHorizontal);
+        let mut state = ScalarState::default();
+        let now = Instant::now();
+
+        assert_eq!(
+            slide.on_input(&mut state, Input::PointerDown, &on_rail(120.0), now),
+            Outcome::set(0.5),
+            "the press seeks, offset by the rail's own origin"
+        );
+        for (x, expected) in [(20.0, 0.0), (220.0, 1.0), (0.0, 0.0), (260.0, 1.0)] {
+            assert_eq!(
+                slide.on_input(&mut state, across(x), &on_rail(x), now),
+                Outcome::set(expected),
+                "at x={x}"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn an_absolute_horizontal_drag_on_zero_width_publishes_nothing() {
+        let slide = sliding(Track::AbsoluteHorizontal);
+        let mut state = ScalarState::default();
+        let now = Instant::now();
+        slide.on_input(&mut state, Input::PointerDown, &on_rail(120.0), now);
+
+        let flattened = Hit::new(Some(Pt { x: 120.0, y: 24.0 }), Rect { w: 0.0, ..rail() });
+
+        assert_eq!(
+            slide.on_input(&mut state, across(120.0), &flattened, now),
+            Outcome::IGNORED,
+            "a degenerate width must publish nothing rather than a clamped zero"
+        );
+    }
+
+    #[kithara::test]
+    fn a_click_track_seeks_once_and_never_arms_a_drag() {
+        let click = Scalar::builder()
+            .track(Track::HorizontalClick)
+            .hover(Hover::new(CursorShape::Pointer))
+            .build();
+        let mut state = ScalarState::default();
+        let now = Instant::now();
+
+        assert_eq!(
+            click.on_input(&mut state, Input::PointerDown, &on_rail(120.0), now),
+            Outcome::set(0.5)
+        );
+        assert_eq!(
+            click.on_input(&mut state, across(220.0), &on_rail(220.0), now),
+            Outcome::IGNORED,
+            "the press seeks without arming, so the move belongs to whoever is behind"
+        );
+    }
+
+    #[kithara::test]
+    fn a_relative_horizontal_drag_walks_back_from_the_start_value() {
+        let slide = sliding(Track::RelativeHorizontal {
+            scale: 0.2,
+            value: 0.4,
+        });
+        let mut state = ScalarState::default();
+        let now = Instant::now();
+
+        assert_eq!(
+            slide.on_input(&mut state, Input::PointerDown, &on_rail(120.0), now),
+            Outcome::captured(),
+            "a relative press seeks nothing"
+        );
+
+        let Some(value) = slide
+            .on_input(&mut state, across(170.0), &on_rail(170.0), now)
+            .value()
+        else {
+            panic!("a relative drag must publish its movement");
+        };
+        // 50 px of a 200 px rail, scaled by 0.2, walked back from 0.4.
+        assert!((value - 0.35).abs() < 0.000_1, "got {value}");
+
+        assert_eq!(
+            slide.on_input(&mut state, Input::PointerUp, &on_rail(170.0), now),
+            Outcome::captured()
+        );
+    }
+
+    #[kithara::test]
+    fn a_pixel_drag_counts_from_the_start_width_and_floors_at_the_minimum() {
+        let divider = Rect {
+            h: 22.0,
+            w: 7.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let on_divider = |x: f32| Hit::new(Some(Pt { x, y: 11.0 }), divider);
+        let drag = Scalar::builder()
+            .track(Track::HorizontalPixels {
+                minimum: 28.0,
+                value: 180.0,
+            })
+            .hover(Hover::new(CursorShape::ResizeH))
+            .build();
+        let mut state = ScalarState::default();
+        let now = Instant::now();
+
+        assert_eq!(
+            drag.on_input(&mut state, Input::PointerDown, &on_divider(3.0), now),
+            Outcome::captured(),
+            "a width drag has no value to seek on the press"
+        );
+        assert_eq!(
+            drag.on_input(
+                &mut state,
+                Input::PointerMoved {
+                    at: Pt { x: 43.0, y: 11.0 }
+                },
+                &on_divider(43.0),
+                now,
+            ),
+            Outcome::set(220.0)
+        );
+        assert_eq!(
+            drag.on_input(
+                &mut state,
+                Input::PointerMoved {
+                    at: Pt { x: -300.0, y: 11.0 }
+                },
+                &on_divider(-300.0),
+                now,
+            ),
+            Outcome::set(28.0),
+            "the floor is a width, so it clamps below and not above"
+        );
     }
 
     #[kithara::test]
