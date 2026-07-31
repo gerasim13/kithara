@@ -7,24 +7,20 @@ use kithara_abr::{PendingAbrClaim, PendingAbrDecision};
 use kithara_events::VariantIndex;
 use kithara_platform::{
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 use kithara_stream::{
     OpenedVariantReader, ReaderProfile, SourceError, StreamError, StreamResult, VariantPromotion,
     VariantReaderPlan, VariantReaderTake, VariantTransition, VariantTransitionId,
 };
 
-use super::{coord::HlsCoord, session::HlsSession};
-use crate::config::VariantSessionMode;
-
+use super::{
+    coord::{HlsCoord, variant_switch_target_time},
+    session::HlsSession,
+};
 pub(super) struct SessionSlots {
-    publication: ArcSwap<SessionPublication>,
+    publication: ArcSwap<ResidentSessions>,
     transition: Mutex<TransitionState>,
-}
-
-enum SessionPublication {
-    Legacy { active: Arc<HlsSession> },
-    Exact { residents: ResidentSessions },
 }
 
 struct ResidentSessions {
@@ -58,105 +54,56 @@ impl ResidentSessions {
 }
 
 impl SessionSlots {
-    pub(super) fn new(active: Arc<HlsSession>, mode: VariantSessionMode) -> Self {
-        let (publication, exact) = match mode {
-            VariantSessionMode::Legacy => (SessionPublication::Legacy { active }, false),
-            VariantSessionMode::Exact => (
-                SessionPublication::Exact {
-                    residents: ResidentSessions::one(active),
-                },
-                true,
-            ),
-        };
+    pub(super) fn new(active: Arc<HlsSession>) -> Self {
         Self {
-            publication: ArcSwap::from_pointee(publication),
-            transition: Mutex::new(TransitionState {
-                exact,
-                incoming: None,
-            }),
+            publication: ArcSwap::from_pointee(ResidentSessions::one(active)),
+            transition: Mutex::new(TransitionState { incoming: None }),
         }
     }
 
     pub(super) fn active(&self, mut selected_variant: impl FnMut() -> usize) -> Arc<HlsSession> {
         loop {
             let before = selected_variant();
-            let publication = self.publication.load();
-            match publication.as_ref() {
-                SessionPublication::Legacy { active } => return Arc::clone(active),
-                SessionPublication::Exact { residents } => {
-                    let resolved = residents.find(before);
-                    let after = selected_variant();
-                    if before != after {
-                        continue;
-                    }
-                    return resolved.map_or_else(
-                        || {
-                            panic!(
-                                "exact resident sessions do not contain published ABR variant \
-                                 {before}"
-                            )
-                        },
-                        Arc::clone,
-                    );
-                }
+            let residents = self.publication.load();
+            let resolved = residents.find(before);
+            let after = selected_variant();
+            if before != after {
+                continue;
             }
+            return resolved.map_or_else(
+                || panic!("exact resident sessions do not contain published ABR variant {before}"),
+                Arc::clone,
+            );
         }
     }
 
     fn publish_exact_one(&self, session: Arc<HlsSession>) {
-        self.publication.store(Arc::new(SessionPublication::Exact {
-            residents: ResidentSessions::one(session),
-        }));
+        self.publication
+            .store(Arc::new(ResidentSessions::one(session)));
     }
 
     fn publish_exact_two(&self, first: Arc<HlsSession>, second: Arc<HlsSession>) {
-        self.publication.store(Arc::new(SessionPublication::Exact {
-            residents: ResidentSessions::two(first, second),
-        }));
-    }
-
-    pub(super) fn commit_legacy(&self, commit: impl FnOnce() -> bool) -> bool {
-        let state = self.transition.lock();
-        if state.exact || state.incoming.is_some() {
-            return false;
-        }
-        let committed = commit();
-        drop(state);
-        committed
-    }
-
-    pub(super) fn replace_legacy(&self, session: Arc<HlsSession>) {
-        let outgoing = self
-            .publication
-            .swap(Arc::new(SessionPublication::Legacy { active: session }));
-        let SessionPublication::Legacy { active } = outgoing.as_ref() else {
-            panic!("legacy session replacement attempted after exact mode was enabled");
-        };
-        active.abort();
+        self.publication
+            .store(Arc::new(ResidentSessions::two(first, second)));
     }
 
     #[cfg(test)]
     pub(super) fn resident_count(&self) -> usize {
-        match self.publication.load().as_ref() {
-            SessionPublication::Legacy { .. } => 1,
-            SessionPublication::Exact { residents } => {
-                if residents.second.is_some() {
-                    2
-                } else {
-                    1
-                }
-            }
+        if self.publication.load().second.is_some() {
+            2
+        } else {
+            1
         }
     }
 }
 
 struct TransitionState {
-    exact: bool,
     incoming: Option<IncomingSlot>,
 }
 
 struct IncomingSlot {
     claim: PendingAbrDecision,
+    landing_time: Duration,
     profile: ReaderProfile,
     reader: Option<OpenedVariantReader>,
     session: Arc<HlsSession>,
@@ -176,14 +123,11 @@ impl HlsCoord {
         }
     }
 
-    pub(super) fn plan_variant_reader(&self) -> StreamResult<Option<VariantReaderPlan>> {
+    pub(super) fn plan_variant_reader(
+        &self,
+        landing: Option<Duration>,
+    ) -> StreamResult<Option<VariantReaderPlan>> {
         let mut state = self.sessions.transition.lock();
-        if !state.exact {
-            return Err(StreamError::Source(SourceError::Io(IoError::new(
-                ErrorKind::InvalidInput,
-                "exact variant sessions are not enabled",
-            ))));
-        }
         let claim = match self.abr.pending_claim() {
             PendingAbrClaim::Absent => {
                 self.discard_incoming(&mut state, true);
@@ -204,7 +148,7 @@ impl HlsCoord {
                     return Ok(Some(VariantReaderPlan::new(
                         slot.transition,
                         slot.session.media_info(),
-                        0,
+                        slot.landing_time,
                     )));
                 }
                 self.discard_incoming(&mut state, true);
@@ -225,7 +169,7 @@ impl HlsCoord {
             return Ok(Some(VariantReaderPlan::new(
                 transition,
                 slot.session.media_info(),
-                0,
+                slot.landing_time,
             )));
         }
         if state.incoming.is_some() {
@@ -259,10 +203,15 @@ impl HlsCoord {
             return Ok(None);
         }
 
+        let landing_time = variant_switch_target_time(
+            self.seek_observe().as_ref(),
+            self.playhead_read().as_ref(),
+            landing,
+        );
         Ok(Some(VariantReaderPlan::new(
             transition,
             target.media_info(),
-            0,
+            landing_time,
         )))
     }
 
@@ -418,6 +367,23 @@ impl HlsCoord {
         self.discard_incoming(&mut state, false);
     }
 
+    /// Fetches for the variant that is audible right now.
+    pub(crate) fn dispatch_active(
+        &self,
+        ctx: &crate::variant::PlanCtx,
+        budget: usize,
+    ) -> Vec<kithara_stream::dl::FetchCmd> {
+        self.active_session().dispatch(ctx, budget)
+    }
+
+    /// Fetches for the variant a switch is preparing.
+    ///
+    /// Carries no command priority, exactly like the active session's fetches.
+    /// The peer already decides how much of each poll's budget preparation may
+    /// take; a priority tag here would overrule that decision inside the
+    /// downloader's queue — tagging preparation `High` starves the audible
+    /// stream, tagging it `Low` starves the switch behind an active variant
+    /// that never stops prefetching.
     pub(crate) fn dispatch_incoming(
         &self,
         ctx: &crate::variant::PlanCtx,
@@ -435,10 +401,6 @@ impl HlsCoord {
 
     pub(crate) fn has_incoming(&self) -> bool {
         self.sessions.transition.lock().incoming.is_some()
-    }
-
-    pub(crate) fn exact_sessions_enabled(&self) -> bool {
-        self.sessions.transition.lock().exact
     }
 
     pub(crate) fn active_session(&self) -> Arc<HlsSession> {

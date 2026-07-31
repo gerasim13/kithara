@@ -69,7 +69,6 @@ pub(crate) fn apply(
         return Some(chunk);
     }
     let spec = chunk.spec();
-    let channels = usize::from(spec.channels.max(1));
     let chunk_frames = chunk.frames();
     if chunk_frames == 0 {
         return None;
@@ -83,6 +82,29 @@ pub(crate) fn apply(
         resume.skip = (!remaining.is_zero()).then_some(remaining);
         return None;
     }
+    trim_start(&mut chunk, drop_frames);
+    resume.skip = None;
+    Some(chunk)
+}
+
+pub(crate) fn apply_frames(mut chunk: PcmChunk, remaining: &mut u64) -> Option<PcmChunk> {
+    if *remaining == 0 {
+        return Some(chunk);
+    }
+    let chunk_frames = u64::try_from(chunk.frames()).unwrap_or(u64::MAX);
+    if chunk_frames <= *remaining {
+        *remaining = remaining.saturating_sub(chunk_frames);
+        return None;
+    }
+    let drop_frames = usize::try_from(*remaining).unwrap_or(usize::MAX);
+    trim_start(&mut chunk, drop_frames);
+    *remaining = 0;
+    Some(chunk)
+}
+
+fn trim_start(chunk: &mut PcmChunk, drop_frames: usize) {
+    let spec = chunk.spec();
+    let channels = usize::from(spec.channels.max(1));
     let drop_samples = drop_frames.saturating_mul(channels);
     let len = chunk.samples.len();
     chunk.samples.copy_within(drop_samples..len, 0);
@@ -96,6 +118,4 @@ pub(crate) fn apply(
         .meta
         .frames
         .saturating_sub(u32::try_from(drop_frames).unwrap_or(u32::MAX));
-    resume.skip = None;
-    Some(chunk)
 }

@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-#[path = "state/cancel.rs"]
-mod cancel_epoch;
 #[path = "flow/cas_anchor.rs"]
 mod cas_anchor;
 mod core;
@@ -49,7 +47,7 @@ pub(crate) use self::core::VariantParts;
 #[cfg(test)]
 pub(in crate::variant) use self::{core::segment_placeholder_size, probe::SizeDemand};
 pub(crate) use self::{
-    core::{HlsVariant, PlanCtx, SegmentActivateParams, VariantParams},
+    core::{HlsVariant, PlanCtx, VariantParams},
     profile::VariantReaderPreparation,
     seek::ResolvedSeekProjection,
 };

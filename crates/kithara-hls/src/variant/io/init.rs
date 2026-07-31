@@ -171,18 +171,6 @@ impl HlsVariant {
         Some(self.segments.init.as_ref()?.resource_id().clone())
     }
 
-    /// Flip the init slot to `Missing`, clearing the Layout seed when the
-    /// variant actually carries an init segment.
-    pub(crate) fn invalidate_init(&self) {
-        let had_init = self.segments.init.as_ref().is_some_and(|seg| {
-            seg.state().mark_missing();
-            true
-        });
-        if had_init {
-            self.layout.clear_init_seed();
-        }
-    }
-
     /// Whether the next dispatch should issue the separate init fetch
     /// (CMAF `EXT-X-MAP`) — true only if the variant advertises a
     /// non-zero init segment that hasn't been loaded yet.

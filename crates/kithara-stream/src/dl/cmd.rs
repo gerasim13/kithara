@@ -1,7 +1,7 @@
 use std::io;
 
 use bon::Builder;
-use kithara_events::RequestMethod;
+use kithara_events::{RequestMethod, RequestPriority};
 use kithara_net::{Headers, NetError, NetResult, RangeSpec};
 use kithara_platform::CancelToken;
 use url::Url;
@@ -66,6 +66,8 @@ pub struct FetchCmd {
     pub on_slow: Option<OnSlowFn>,
     /// Optional byte range (HTTP Range request).
     pub range: Option<RangeSpec>,
+    /// Scheduling priority for proactive peer fetches.
+    pub priority: Option<RequestPriority>,
     /// Optional per-request response validator.
     /// Called with the response headers after a successful HTTP response.
     /// Return `Err` to reject the response before the body is consumed.

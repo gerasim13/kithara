@@ -376,7 +376,10 @@ impl TestControl {
 }
 
 impl VariantControl for TestControl {
-    fn plan_variant_reader(&self) -> StreamResult<Option<VariantReaderPlan>> {
+    fn plan_variant_reader(
+        &self,
+        _landing: Option<Duration>,
+    ) -> StreamResult<Option<VariantReaderPlan>> {
         self.plan_calls.fetch_add(1, Ordering::AcqRel);
         Ok(self.exact_plan.lock().clone())
     }
@@ -410,7 +413,7 @@ impl VariantControl for TestControl {
         if self.exact_reader_taken.swap(true, Ordering::AcqRel) {
             return Ok(VariantReaderTake::Taken);
         }
-        let reader = OpenedReader::new(Cursor::new(Vec::new()), Some(0), None, None);
+        let reader = OpenedReader::new(Cursor::new(Vec::new()), Some(0), None, None, None);
         Ok(VariantReaderTake::Ready(OpenedVariantReader::new(
             plan, reader,
         )))
@@ -645,8 +648,10 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
     };
     let shared_stream = SharedStream::new(stream);
     let factory_drops = drops.clone();
-    let decoder_factory: DecoderFactory =
-        Arc::new(move |_reader, _info| Ok(Box::new(TestDecoder::new(99, factory_drops.clone()))));
+    let decoder_factory = DecoderFactory::new(
+        move |_reader, _info| Ok(Box::new(TestDecoder::new(99, factory_drops.clone()))),
+        None,
+    );
     let runtime_handle = match RuntimeHandle::try_current() {
         Ok(handle) => handle,
         Err(err) => panic!("test requires tokio runtime: {err}"),
@@ -694,14 +699,17 @@ pub(super) async fn route_signal_source(initial_host_rate: u32) -> RouteFixture 
     let shared_stream = SharedStream::new(stream);
     let factory_drops = drops.clone();
     let factory_host_rate = host_sample_rate.clone();
-    let decoder_factory: DecoderFactory = Arc::new(move |_reader, _info| {
-        let rate = factory_host_rate.load(Ordering::Acquire);
-        Ok(Box::new(RouteSignalDecoder::new(
-            99,
-            rate,
-            factory_drops.clone(),
-        )))
-    });
+    let decoder_factory = DecoderFactory::new(
+        move |_reader, _info| {
+            let rate = factory_host_rate.load(Ordering::Acquire);
+            Ok(Box::new(RouteSignalDecoder::new(
+                99,
+                rate,
+                factory_drops.clone(),
+            )))
+        },
+        None,
+    );
     let runtime_handle = match RuntimeHandle::try_current() {
         Ok(handle) => handle,
         Err(err) => panic!("test requires tokio runtime: {err}"),
@@ -826,6 +834,7 @@ fn push_completion_with_drops(
             Some(media_info),
             offset,
             seek_epoch,
+            None,
             GaplessMode::Disabled,
         )),
     });
@@ -850,11 +859,14 @@ async fn rebuild_prepares_generation_profiles_before_rt_install() {
         test_source_with_mode(1, GaplessMode::SilenceTrim(Default::default())).await;
     let profile_reads = Arc::new(AtomicU64::new(0));
     let factory_reads = profile_reads.clone();
-    let factory: DecoderFactory = Arc::new(move |_reader, _info| {
-        Ok(Box::new(ProfileCountingDecoder {
-            gapless_profile_reads: factory_reads.clone(),
-        }))
-    });
+    let factory = DecoderFactory::new(
+        move |_reader, _info| {
+            Ok(Box::new(ProfileCountingDecoder {
+                gapless_profile_reads: factory_reads.clone(),
+            }))
+        },
+        None,
+    );
     source.rebuild = RebuildPort::new(
         factory,
         source.decode.gapless_mode(),
@@ -942,6 +954,7 @@ async fn decode_error_precedes_track_failure_on_event_bus() {
         Some(media_info(0)),
         0,
         0,
+        None,
         GaplessMode::Disabled,
     );
     let old = source.decode.replace_active(replacement);
@@ -1243,8 +1256,10 @@ async fn rebuild_factory_panic_fails_track_without_hang() {
     let RebuildFixture { mut source, .. } = test_source(1).await;
 
     let wake = Arc::new(CountingWake::default());
-    let panicking_factory: DecoderFactory =
-        Arc::new(|_reader, _info| panic!("decoder construction blew up"));
+    let panicking_factory = DecoderFactory::new(
+        |_reader, _info| panic!("decoder construction blew up"),
+        None,
+    );
     source.rebuild = RebuildPort::new(
         panicking_factory,
         GaplessMode::Disabled,

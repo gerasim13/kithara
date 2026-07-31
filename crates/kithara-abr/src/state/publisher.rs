@@ -1,6 +1,6 @@
 use kithara_platform::{sync::Arc, time::Instant};
 
-use super::{AbrDecision, AbrState, AbrTicket, PendingAbrDecision};
+use super::{AbrState, AbrTicket, PendingAbrDecision};
 
 /// Publication authority retained by the owner of an [`AbrState`].
 ///
@@ -14,11 +14,6 @@ pub struct AbrPublisher {
 impl AbrPublisher {
     pub(super) fn new(state: Arc<AbrState>) -> Self {
         Self { state }
-    }
-
-    /// Apply the temporary target-only legacy publication contract.
-    pub fn apply_legacy_decision(&self, decision: &AbrDecision, now: Instant) {
-        self.state.apply_decision(decision, now);
     }
 
     /// Drop the pending request only when `ticket` still identifies it.

@@ -1,5 +1,5 @@
 use arc_swap::ArcSwap;
-use kithara_decode::{DecoderFactory as DecoderBuilder, PcmChunk};
+use kithara_decode::PcmChunk;
 use kithara_events::{AudioEvent, DecoderChangeCause, DeferredBus, Event, TrackFailureKind};
 use kithara_platform::sync::Arc;
 use kithara_stream::{
@@ -17,14 +17,18 @@ pub(crate) use crate::pipeline::{
 };
 use crate::{
     pipeline::{
-        decode::{gate::ReadinessGate, resume::ResumeCursor},
+        decode::{
+            gate::ReadinessGate,
+            resume::ResumeCursor,
+            transition::{IncomingPrime, OutgoingFrontier},
+        },
         parts::SourceParts,
         rebuild::{
             DecoderBuildComplete, DecoderBuildPurpose, port::RebuildPort,
             retire::RetiredGenerations,
         },
         seek::SeekEngine,
-        track::{self, CurrentFsm, Decoding, Track, TrackStep},
+        track::{self, CurrentFsm, Decoding, Track, TrackStep, WaitContext},
     },
     renderer::AudioWorkerSource,
 };
@@ -202,7 +206,12 @@ impl<T: StreamType> StreamAudioSource<T> {
                             self.retired.retire_generation(generation);
                         }
                     }
-                    Err(_) => {
+                    Err(outcome) => {
+                        warn!(
+                            ?transition,
+                            ?outcome,
+                            "incoming decoder build failed; aborting variant transition"
+                        );
                         if self.decode.incoming_transition() == Some(transition) {
                             if let Some(generation) = self.decode.discard_incoming() {
                                 self.retired.retire_generation(generation);
@@ -218,18 +227,45 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     fn progress_variant_transition(&mut self) {
-        if !matches!(self.state, CurrentFsm::Decoding(_)) {
-            return;
-        }
+        // A reader starved on a variant that stopped delivering parks in
+        // `WaitingForSource` with the active decoder intact and only source
+        // bytes missing — the exact state an urgent down-switch exists to
+        // leave, so the transition has to keep advancing through it. The seek
+        // and recreate phases stay excluded: they are about to replace the very
+        // decoder a promotion would install into.
+        let outgoing_unavailable = match &self.state {
+            CurrentFsm::Decoding(_) => false,
+            CurrentFsm::WaitingForSource(track) => {
+                if matches!(track.data().context, WaitContext::Playback) {
+                    true
+                } else {
+                    return;
+                }
+            }
+            _ => return,
+        };
         let Some(control) = self.variant_control.clone() else {
             return;
         };
 
+        let outgoing_frontier = match self.resume.decode_head(self.seek_obs.epoch()) {
+            Some((frame, rate)) => OutgoingFrontier::Exact { frame, rate },
+            None if outgoing_unavailable => OutgoingFrontier::Unavailable,
+            None => OutgoingFrontier::Awaiting,
+        };
         self.retire_failed_incoming(control.as_ref());
-        if !self.promote_ready_incoming(control.as_ref()) {
+        // Priming is bounded per pass and may mint the overlap proof consumed
+        // immediately below. A publication lock leaves both generations intact
+        // and the next pass extends the staged range to the newer frontier.
+        if self.decode.prime_incoming(outgoing_frontier) == IncomingPrime::Advanced {
+            self.rebuild.wake();
+        }
+        if !self.promote_ready_incoming(control.as_ref(), outgoing_frontier) {
             return;
         }
-        let Some(transition) = self.prepare_incoming_transition(control.as_ref()) else {
+        let Some(transition) =
+            self.prepare_incoming_transition(control.as_ref(), outgoing_frontier)
+        else {
             return;
         };
         self.take_prepared_incoming(control.as_ref(), transition);
@@ -242,8 +278,12 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
-    fn promote_ready_incoming(&mut self, control: &dyn VariantControl) -> bool {
-        let Some(proof) = self.decode.ready_to_promote() else {
+    fn promote_ready_incoming(
+        &mut self,
+        control: &dyn VariantControl,
+        outgoing_frontier: OutgoingFrontier,
+    ) -> bool {
+        let Some(proof) = self.decode.ready_to_promote(outgoing_frontier) else {
             return true;
         };
         match control.promote_variant(proof.transition()) {
@@ -290,8 +330,9 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn prepare_incoming_transition(
         &mut self,
         control: &dyn VariantControl,
+        outgoing_frontier: OutgoingFrontier,
     ) -> Option<VariantTransition> {
-        let plan = match control.plan_variant_reader() {
+        let plan = match control.plan_variant_reader(self.decode.landing_for(outgoing_frontier)) {
             Ok(plan) => plan,
             Err(error) => {
                 warn!(?error, "failed to plan exact incoming variant reader");
@@ -316,7 +357,9 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
 
         let byte_map = self.shared_stream.byte_map();
-        let profile = DecoderBuilder::reader_profile(plan.media_info(), byte_map.as_deref());
+        let profile = self
+            .rebuild
+            .reader_profile(plan.media_info(), byte_map.as_deref());
         match control.prepare_variant_reader(plan, profile) {
             Ok(Some(prepared)) if prepared == transition => Some(transition),
             Ok(Some(prepared)) => {

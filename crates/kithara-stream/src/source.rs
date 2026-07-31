@@ -354,10 +354,18 @@ pub trait VariantControl: Send + Sync + 'static {
     /// Capture the exact target media facts needed to select a decoder and
     /// compute its reader profile before an incoming session is opened.
     ///
+    /// `landing` is the content time the caller will require the incoming
+    /// variant to cover — the decode frontier the splice is proved against, not
+    /// the audible position. `None` when the caller has no frontier to name, in
+    /// which case the source keeps its own seek-derived target.
+    ///
     /// # Errors
     ///
     /// Returns a source error when the pending target cannot be resolved.
-    fn plan_variant_reader(&self) -> StreamResult<Option<VariantReaderPlan>>;
+    fn plan_variant_reader(
+        &self,
+        landing: Option<Duration>,
+    ) -> StreamResult<Option<VariantReaderPlan>>;
 
     /// Claim the current exact ABR intent and start preparing its independent
     /// reader session. Repeated calls for the same intent return the same

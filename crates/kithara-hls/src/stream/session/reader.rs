@@ -63,8 +63,29 @@ impl Read for HlsSessionReader {
         self.session.check_live()?;
         let position = self.session.projected_position();
         let byte = position.byte;
-        let range = byte..byte.saturating_add(buf.len() as u64);
-        match self.session.variant.wait_range(range, Some(Duration::ZERO)) {
+        let requested_end = byte.saturating_add(buf.len() as u64);
+        let unit_end = self
+            .session
+            .variant
+            .init_descriptor_at(byte)
+            .map(|range| range.end)
+            .or_else(|| {
+                self.session
+                    .find_at_offset(byte)
+                    .map(|(_, start, size)| start.saturating_add(size))
+            })
+            .unwrap_or(requested_end);
+        let read_end = requested_end.min(unit_end);
+        let read_len = usize::try_from(read_end.saturating_sub(byte))
+            .map_or(buf.len(), |len| len.min(buf.len()));
+        let buf = &mut buf[..read_len];
+        let range = byte..read_end;
+        let wait_budget = if self.session.construction_blocking() {
+            None
+        } else {
+            Some(Duration::ZERO)
+        };
+        match self.session.wait_range(range, wait_budget) {
             Ok(WaitOutcome::Ready) => {}
             Ok(WaitOutcome::Eof) => return Ok(0),
             Ok(WaitOutcome::Interrupted) => {

@@ -16,11 +16,14 @@ const POST_BOUNDARY_GUARD_FRAMES: usize = 44_100 + BLOCK_FRAMES * 8;
 const MIN_CORRELATION: f64 = 0.85;
 const CONTROL_CORRELATION_SLACK: f64 = 0.01;
 
-const PROVENANCE_TRANSITIONS: [Transition; 4] = [
+/// Every ordered pair of the fixture's variants — see `TRANSITIONS`.
+const PROVENANCE_TRANSITIONS: [Transition; 6] = [
     Transition::new("aac-low-to-aac-high-sweep", AAC_LOW, AAC_HIGH),
     Transition::new("aac-high-to-flac-sweep", AAC_HIGH, FLAC),
     Transition::new("flac-to-aac-high-sweep", FLAC, AAC_HIGH),
     Transition::new("aac-high-to-aac-low-sweep", AAC_HIGH, AAC_LOW),
+    Transition::new("aac-low-to-flac-sweep", AAC_LOW, FLAC),
+    Transition::new("flac-to-aac-low-sweep", FLAC, AAC_LOW),
 ];
 
 #[derive(Clone, Copy, Debug)]

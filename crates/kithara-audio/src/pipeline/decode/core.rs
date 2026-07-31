@@ -11,7 +11,9 @@ use kithara_decode::{
 };
 use kithara_events::{DeferredBus, Event};
 use kithara_platform::sync::Arc;
-use kithara_stream::{MediaInfo, OpenedReader, PlayheadWrite, SeekObserve, StreamType};
+use kithara_stream::{
+    ByteMap, MediaInfo, OpenedReader, PlayheadWrite, ReaderProfile, SeekObserve, StreamType,
+};
 use kithara_test_utils::kithara;
 use tracing::{debug, warn};
 
@@ -32,9 +34,55 @@ use crate::{
     traits::AudioEffect,
 };
 
-/// Factory closure that creates a decoder from an opened reader and media facts.
-pub(crate) type DecoderFactory =
-    Arc<dyn Fn(OpenedReader, MediaInfo) -> Result<Box<dyn Decoder>, DecodeError> + Send + Sync>;
+type DecoderBuilder =
+    dyn Fn(OpenedReader, MediaInfo) -> Result<Box<dyn Decoder>, DecodeError> + Send + Sync;
+
+/// Decoder construction and reader-profile policy for one configured track.
+#[derive(Clone)]
+pub(crate) struct DecoderFactory {
+    builder: Arc<DecoderBuilder>,
+    configured_media_info: Option<MediaInfo>,
+}
+
+impl DecoderFactory {
+    pub(crate) fn new(
+        builder: impl Fn(OpenedReader, MediaInfo) -> Result<Box<dyn Decoder>, DecodeError>
+        + Send
+        + Sync
+        + 'static,
+        configured_media_info: Option<MediaInfo>,
+    ) -> Self {
+        Self {
+            builder: Arc::new(builder),
+            configured_media_info,
+        }
+    }
+
+    pub(crate) fn create(
+        &self,
+        reader: OpenedReader,
+        media_info: MediaInfo,
+    ) -> Result<Box<dyn Decoder>, DecodeError> {
+        (self.builder)(reader, media_info)
+    }
+
+    pub(crate) fn reader_profile(
+        &self,
+        media_info: &MediaInfo,
+        byte_map: Option<&dyn ByteMap>,
+    ) -> ReaderProfile {
+        let mut resolved = media_info.clone();
+        if let Some(configured) = &self.configured_media_info {
+            if configured.codec.is_some() {
+                resolved.codec = configured.codec;
+            }
+            if configured.container.is_some() {
+                resolved.container = configured.container;
+            }
+        }
+        kithara_decode::DecoderFactory::reader_profile(&resolved, byte_map)
+    }
+}
 
 /// Decoder construction state shared by initial installation and later rebuilds.
 pub(crate) struct DecodeInit {
@@ -84,6 +132,7 @@ impl DecodeInit {
             media_info,
             0,
             installed_at_seek_epoch,
+            None,
             gapless_mode,
         );
         DecodeParts {
@@ -271,5 +320,30 @@ fn panic_message(payload: Box<dyn Any + Send>) -> String {
             |_| "unknown panic payload".to_string(),
             |message| (*message).to_string(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_stream::{AudioCodec, ContainerFormat, ReaderInput};
+
+    use super::*;
+
+    #[kithara::test]
+    fn configured_container_selects_the_incoming_reader_profile() {
+        let factory = DecoderFactory::new(
+            |_reader, _media_info| -> Result<Box<dyn Decoder>, DecodeError> {
+                panic!("reader-profile test must not construct a decoder")
+            },
+            Some(MediaInfo::new(
+                Some(AudioCodec::Pcm),
+                Some(ContainerFormat::Wav),
+            )),
+        );
+        let playlist_info = MediaInfo::new(None, Some(ContainerFormat::Fmp4));
+
+        let profile = factory.reader_profile(&playlist_info, None);
+
+        assert_eq!(profile.input(), ReaderInput::InitOnly);
     }
 }

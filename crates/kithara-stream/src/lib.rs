@@ -33,7 +33,8 @@ pub use playhead::{ChunkPosition, PlayheadRead, PlayheadState, PlayheadWrite};
 pub use preroll::PrerollHint;
 pub use profile::{ReaderInput, ReaderProfile, ReaderWarmup};
 pub use reader::{
-    OpenedReader, OpenedVariantReader, SessionReader, VariantReaderPlan, VariantReaderTake,
+    ConstructionGate, OpenedReader, OpenedVariantReader, SessionReader, VariantReaderPlan,
+    VariantReaderTake,
 };
 pub use seek_state::{Activity, SeekControl, SeekObserve, SeekState};
 pub use source::{

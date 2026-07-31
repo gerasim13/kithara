@@ -196,18 +196,6 @@ impl HlsVariant {
         }
     }
 
-    pub(crate) fn dispatch_size_only(
-        self: &Arc<Self>,
-        ctx: &PlanCtx,
-        budget: usize,
-    ) -> Vec<FetchCmd> {
-        let mut out = Vec::new();
-        let mut remaining = budget;
-        let cancel = self.cancel_handle();
-        self.dispatch_size_demands(ctx, &mut out, &mut remaining, &cancel);
-        out
-    }
-
     delegate::delegate! {
         to self.seek.size_demand.lock() {
             #[call(pop_dispatchable)]

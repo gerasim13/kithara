@@ -154,6 +154,18 @@ impl Registry {
         self.slots.iter().any(|s| !s.is_empty())
     }
 
+    fn requeue_pending(&mut self, pending: Vec<SlotEntry>) {
+        for entry in pending.into_iter().rev() {
+            let peer_priority = entry
+                .cmd
+                .peer
+                .and_then(|peer| self.peers.get(peer))
+                .map_or(RequestPriority::Low, |peer| peer.peer.priority());
+            let slot = slot_index(peer_priority, entry.cmd.priority);
+            self.slots[slot].push_front(entry);
+        }
+    }
+
     /// Poll all peers: drain `cmd_rx` channels and call `poll_next`.
     /// Route each command to the correct slot. Returns per-peer counters
     /// so [`tick`](Self::tick) can classify forward motion.
@@ -195,9 +207,6 @@ impl Registry {
             if entry.peer_done {
                 continue;
             }
-            if inner.inflight.load(Ordering::Relaxed) >= inner.max_concurrent {
-                continue;
-            }
 
             match entry.peer.poll_next(cx) {
                 Poll::Ready(Some(batch)) => {
@@ -210,7 +219,7 @@ impl Registry {
                             Some(epoch) => CancelGroup::new(vec![entry.peer_cancel.clone(), epoch]),
                             None => CancelGroup::new(vec![entry.peer_cancel.child()]),
                         };
-                        let cmd_prio = RequestPriority::Low;
+                        let cmd_prio = cmd.priority.unwrap_or(RequestPriority::Low);
                         let slot = slot_index(peer_prio, cmd_prio);
                         let request_id = inner.next_request_id();
                         let enqueued_at = Instant::now();
@@ -342,7 +351,14 @@ impl Registry {
             BatchGroup::from_iter(s0.drain(..).chain(s1.drain(..)))
         };
         if !urgent_batch.is_empty() {
-            dispatched += urgent_batch.process(inner).await;
+            let result = urgent_batch.process(inner);
+            dispatched += result.dispatched;
+            let capacity_blocked = !result.pending.is_empty()
+                && inner.inflight.load(Ordering::Relaxed) >= inner.max_concurrent;
+            self.requeue_pending(result.pending);
+            if capacity_blocked {
+                inner.capacity_notify.notified().await;
+            }
             return classify_progress(
                 inflight_enter,
                 inner.inflight.load(Ordering::Relaxed),
@@ -371,7 +387,14 @@ impl Registry {
             BatchGroup::from_iter(low_high.drain(..).chain(low_low.drain(..)))
         };
         if !demand_batch.is_empty() {
-            dispatched += demand_batch.process(inner).await;
+            let result = demand_batch.process(inner);
+            dispatched += result.dispatched;
+            let capacity_blocked = !result.pending.is_empty()
+                && inner.inflight.load(Ordering::Relaxed) >= inner.max_concurrent;
+            self.requeue_pending(result.pending);
+            if capacity_blocked {
+                inner.capacity_notify.notified().await;
+            }
         }
 
         classify_progress(

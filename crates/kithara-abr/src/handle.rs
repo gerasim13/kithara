@@ -1,7 +1,7 @@
 use kithara_events::{AbrEvent, AbrMode, EventBus, VariantIndex, VariantInfo};
 use kithara_platform::{
     sync::{Arc, RwLock},
-    time::{Duration, Instant},
+    time::Instant,
 };
 use kithara_test_utils::kithara;
 
@@ -150,22 +150,6 @@ impl AbrHandle {
         }
     }
 
-    /// Side-effects after HLS scheduler committed a variant switch:
-    /// emits `VariantApplied` via bus + schedules incoherence watchdog.
-    #[kithara::probe(current_before)]
-    pub fn notify_commit(
-        &self,
-        decision: AbrDecision,
-        current_before: usize,
-        reader_pt: Duration,
-        now: Instant,
-    ) {
-        self.publish_variant_applied(decision, current_before);
-        self.inner
-            .controller
-            .schedule_incoherence_watch(self.inner.peer_id, reader_pt, now);
-    }
-
     /// Side-effects after an exact transition promoted its incoming
     /// generation: emits `VariantApplied` via bus and nothing else.
     ///
@@ -295,7 +279,7 @@ mod tests {
         AbrEvent, AbrReason, DEFAULT_EVENT_BUS_CAPACITY, Envelope, Event, EventBus,
         VariantDuration, VariantIndex, VariantInfo,
     };
-    use kithara_platform::CancelToken;
+    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -358,7 +342,6 @@ mod tests {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
-            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let publisher = state.publisher();
@@ -381,7 +364,14 @@ mod tests {
             "peek must not mutate"
         );
 
-        publisher.apply_legacy_decision(&decision, Instant::now());
+        assert!(
+            publisher.commit_pending(
+                state
+                    .claim_pending_decision(state.current_variant_index())
+                    .expect("pending claim"),
+                Instant::now(),
+            )
+        );
         assert_eq!(state.current_variant_index(), VariantIndex::new(2));
     }
 
@@ -390,7 +380,6 @@ mod tests {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
-            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let publisher = state.publisher();
@@ -414,7 +403,6 @@ mod tests {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
-            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
@@ -438,7 +426,6 @@ mod tests {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
-            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(1)))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
@@ -474,7 +461,6 @@ mod tests {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
-            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let handle = {
@@ -491,44 +477,6 @@ mod tests {
         );
         assert!(handle.current_variant().is_none());
     }
-
-    #[kithara::test(tokio)]
-    async fn notify_commit_emits_variant_applied() {
-        let controller = AbrController::with_estimator(
-            settings_fast(),
-            Arc::new(ThroughputEstimator::new()) as Arc<_>,
-            CancelToken::never(),
-        );
-        let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
-        let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
-            state: Arc::clone(&state),
-        });
-
-        let bus = EventBus::new(DEFAULT_EVENT_BUS_CAPACITY);
-        let mut rx = bus.subscribe();
-        let handle = controller.register(&peer).with_bus(bus);
-
-        let decision = AbrDecision::UpSwitch {
-            from: VariantIndex::new(0),
-            to: VariantIndex::new(2),
-            reason: AbrReason::UpSwitch,
-        };
-        handle.notify_commit(decision, 0, Duration::ZERO, Instant::now());
-
-        let found =
-            std::iter::from_fn(|| rx.try_recv().ok()).find_map(|Envelope { event, .. }| {
-                if let Event::Abr(AbrEvent::VariantApplied { from, to, reason }) = event {
-                    assert_eq!(from, VariantIndex::new(0));
-                    assert_eq!(to, VariantIndex::new(2));
-                    assert_eq!(reason, AbrReason::UpSwitch);
-                    Some(())
-                } else {
-                    None
-                }
-            });
-        assert!(found.is_some(), "expected VariantApplied event on the bus");
-    }
-
     /// Exact promotion runs on the audio worker, which is not a runtime
     /// thread. Deliberately *not* a `tokio` test: a reactor here would hide a
     /// `task::spawn` creeping back into this path.
@@ -537,7 +485,6 @@ mod tests {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
-            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {

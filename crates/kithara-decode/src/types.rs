@@ -81,17 +81,32 @@ impl GaplessProfile {
 #[non_exhaustive]
 pub struct BlenderProfile {
     spec: PcmSpec,
+    timeline_gap_frames: u64,
 }
 
 impl BlenderProfile {
     #[must_use]
     pub const fn new(spec: PcmSpec) -> Self {
-        Self { spec }
+        Self {
+            spec,
+            timeline_gap_frames: 0,
+        }
     }
 
     #[must_use]
     pub const fn spec(self) -> PcmSpec {
         self.spec
+    }
+
+    #[must_use]
+    pub const fn timeline_gap_frames(self) -> u64 {
+        self.timeline_gap_frames
+    }
+
+    #[must_use]
+    pub const fn with_timeline_gap_frames(mut self, frames: u64) -> Self {
+        self.timeline_gap_frames = frames;
+        self
     }
 }
 

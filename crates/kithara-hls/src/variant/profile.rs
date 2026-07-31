@@ -11,9 +11,9 @@ use crate::HlsError;
 
 pub(crate) struct VariantReaderPreparation {
     anchor: SourceSeekAnchor,
+    first_segment: u32,
     forward: Range<u64>,
     input: ReaderInput,
-    warmup: Option<Range<u64>>,
 }
 
 impl VariantReaderPreparation {
@@ -43,7 +43,8 @@ impl HlsVariant {
         let warmup_start = profile.warmup().max_bytes().map_or(landing_byte, |bytes| {
             landing_byte.saturating_sub(bytes.get())
         });
-        let first_segment = self.demand_segment_at_offset(warmup_start).ok_or_else(|| {
+        let landing_segment = landing.segment_index;
+        let forward_segment = self.demand_segment_at_offset(warmup_start).ok_or_else(|| {
             StreamError::Source(
                 HlsError::SegmentNotFound(format!(
                     "reader warmup not mapped: variant={} byte={warmup_start}",
@@ -54,9 +55,20 @@ impl HlsVariant {
         })?;
 
         self.set_prefetch_anchor(warmup_start);
-        if !self.fetch_plan_satisfied(first_segment) {
-            self.rebuild_queue(first_segment);
+        let tail_start = self.seek_readahead_start_segment(forward_segment);
+        let probe_segment = (landing_segment > 0).then_some(0);
+        self.set_segment_aware_seek_tail(tail_start);
+        if !self.fetch_plan_satisfied(tail_start, probe_segment) {
+            self.rebuild_queue(tail_start, probe_segment);
         }
+
+        let anchor = SourceSeekAnchor::builder()
+            .byte_offset(landing_byte)
+            .segment_start(landing.decode_time)
+            .segment_end(landing.decode_time.saturating_add(landing.duration))
+            .segment_index(landing.segment_index)
+            .variant_index(landing.variant_index)
+            .build();
 
         let forward_end = self.stream_len().map_or_else(
             || landing_byte.saturating_add(profile.read_ahead_bytes().get()),
@@ -66,40 +78,40 @@ impl HlsVariant {
                     .min(len)
             },
         );
-        let warmup = (warmup_start < landing_byte).then_some(warmup_start..landing_byte);
-        let anchor = SourceSeekAnchor::builder()
-            .byte_offset(landing_byte)
-            .segment_start(landing.decode_time)
-            .segment_end(landing.decode_time.saturating_add(landing.duration))
-            .segment_index(landing.segment_index)
-            .variant_index(landing.variant_index)
-            .build();
-        self.set_seek_alias(landing_byte, landing.segment_index);
-        self.set_exact_seek_demand(landing_byte, landing.segment_index);
-
         Ok(VariantReaderPreparation {
             anchor,
+            first_segment: forward_segment,
             forward: warmup_start..forward_end,
             input: profile.input(),
-            warmup,
         })
+    }
+
+    /// Last segment an inactive session may fetch while it is being built.
+    ///
+    /// Derived from the same byte range [`reader_is_ready`](Self::reader_is_ready)
+    /// waits on, and derived *live*: segment sizes start as placeholders and are
+    /// replaced by the committed lengths, which moves every byte-to-segment
+    /// boundary. A ceiling frozen at plan time is a second source of truth for
+    /// the same window — once the real sizes push the window's last byte past
+    /// the frozen segment, dispatch refuses to fetch the segment readiness is
+    /// waiting for and the transition never completes.
+    pub(crate) fn construction_segment_end(&self, preparation: &VariantReaderPreparation) -> u32 {
+        self.demand_segment_at_offset(preparation.forward.end.saturating_sub(1))
+            .unwrap_or(preparation.first_segment)
+            .max(preparation.first_segment)
     }
 
     pub(crate) fn reader_is_ready(
         &self,
         preparation: &VariantReaderPreparation,
     ) -> StreamResult<bool> {
-        if matches!(preparation.input, ReaderInput::InitOnly) {
+        let header_ready = if matches!(preparation.input, ReaderInput::InitOnly) {
             let header = self.header_byte_range()?;
-            if header.is_empty() || !self.reader_range_is_ready(header)? {
-                return Ok(false);
-            }
-            return preparation
-                .warmup
-                .as_ref()
-                .map_or(Ok(true), |range| self.reader_range_is_ready(range.clone()));
-        }
-        self.reader_range_is_ready(preparation.forward.clone())
+            !header.is_empty() && self.reader_range_is_ready(header)?
+        } else {
+            true
+        };
+        Ok(header_ready && self.reader_range_is_ready(preparation.forward.clone())?)
     }
 
     fn reader_range_is_ready(&self, range: Range<u64>) -> StreamResult<bool> {

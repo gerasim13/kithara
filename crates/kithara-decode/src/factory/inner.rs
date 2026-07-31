@@ -327,8 +327,7 @@ impl DecoderFactory {
     }
 
     /// Reader contract of the demuxer this factory would build for
-    /// `media_info`, for the kithara-audio readiness gate. Mirrors
-    /// [`should_use_segment_aware`]: only segment-aware fMP4 is `InitOnly`.
+    /// `media_info`, for the kithara-audio readiness gate.
     #[must_use]
     pub fn reader_profile(media_info: &MediaInfo, byte_map: Option<&dyn ByteMap>) -> ReaderProfile {
         let input = match byte_map {
@@ -338,6 +337,9 @@ impl DecoderFactory {
                     .is_some_and(|codec| segment_aware_container(codec, media_info.container)) =>
             {
                 <crate::fmp4::Fmp4SegmentDemuxer as crate::demuxer::Demuxer>::required_input()
+            }
+            _ if matches!(media_info.container, Some(ContainerFormat::Wav)) => {
+                ReaderInput::InitOnly
             }
             _ => ReaderInput::Incremental,
         };
@@ -912,6 +914,24 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wav_reader_profile_requires_gated_input() {
+        let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+
+        let profile = DecoderFactory::reader_profile(&media_info, None);
+
+        assert_eq!(profile.input(), ReaderInput::InitOnly);
+    }
+
+    #[test]
+    fn self_framing_reader_profile_remains_incremental() {
+        let media_info = MediaInfo::new(Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio));
+
+        let profile = DecoderFactory::reader_profile(&media_info, None);
+
+        assert_eq!(profile.input(), ReaderInput::Incremental);
+    }
 
     #[test]
     fn decoder_resampler_config_keeps_typed_backend() {

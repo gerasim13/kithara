@@ -21,7 +21,7 @@ use super::{
     source::HlsSource,
 };
 use crate::{
-    config::{HlsConfig, VariantSessionMode},
+    config::HlsConfig,
     handle::StreamPeer,
     peer::HlsPeer,
     playlist::{
@@ -143,7 +143,6 @@ impl StreamType for Hls {
             bus: bus.clone(),
             look_ahead_bytes,
             look_ahead_segments,
-            master_cancel: cancel.clone(),
             scope: stream_peer.scope(),
             headers: config.headers.clone(),
             prefetch_budget: config.download_batch_size.max(1),
@@ -179,14 +178,12 @@ impl StreamType for Hls {
                 scope: stream_peer.scope(),
                 headers: config.headers.clone(),
                 emit: Arc::clone(&emit),
-                variant_sessions: config.variant_sessions,
             },
             playhead,
             seek,
             stream_peer.peer_handle().abr().clone(),
             hls_peer.abr_publisher(),
             Arc::clone(&variants),
-            Arc::clone(&playlist_state),
         ));
 
         let mut source = HlsSource::new(Arc::clone(&coord), emit, stream_scope);
@@ -209,10 +206,6 @@ impl StreamType for Hls {
 
     fn event_bus(config: &Self::Config) -> Option<Self::Events> {
         config.bus.clone()
-    }
-
-    fn use_exact_variant_sessions(config: &mut Self::Config) {
-        config.variant_sessions = VariantSessionMode::Exact;
     }
 }
 

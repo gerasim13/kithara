@@ -5,7 +5,7 @@ use kithara::{
     self,
     abr::{AbrController, AbrMode, AbrSettings},
     events::{VariantDuration, VariantIndex, VariantInfo},
-    platform::{CancelToken, time::Duration},
+    platform::time::Duration,
 };
 
 fn create_variants(bitrates: &[u64]) -> Vec<VariantInfo> {
@@ -50,8 +50,7 @@ fn perf_abr_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenari
         | PerfScenario::EstimatorHotLoop => {
             hotpath::measure_block!("abr_create", {
                 for _ in 0..100 {
-                    let _controller =
-                        AbrController::new(AbrSettings::default(), CancelToken::never());
+                    let _controller = AbrController::new(AbrSettings::default());
                 }
             });
 

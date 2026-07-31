@@ -2,7 +2,7 @@ use std::io::{Error as IoError, ErrorKind};
 
 use kithara_abr::PendingAbrClaim;
 use kithara_events::VariantIndex;
-use kithara_platform::sync::Arc;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{
     ByteMap, MediaInfo, OpenedReader, OpenedVariantReader, ReaderProfile, SourceError, StreamError,
     StreamResult, VariantReaderPlan, VariantTransition, VariantTransitionId,
@@ -11,10 +11,7 @@ use kithara_stream::{
 use super::{HlsCoord, IncomingSlot, unsupported_pending_claim};
 use crate::{
     reader::HlsReaderEventSink,
-    stream::{
-        coord::variant_switch_target_time,
-        session::{HlsSession, HlsSessionReader},
-    },
+    stream::session::{HlsSession, HlsSessionReader},
 };
 
 impl HlsCoord {
@@ -24,12 +21,6 @@ impl HlsCoord {
         profile: ReaderProfile,
     ) -> StreamResult<Option<VariantTransition>> {
         let mut state = self.sessions.transition.lock();
-        if !state.exact {
-            return Err(StreamError::Source(SourceError::Io(IoError::new(
-                ErrorKind::InvalidInput,
-                "exact variant sessions are not enabled",
-            ))));
-        }
         let transition = plan.transition();
         let claim = match self.abr.pending_claim() {
             PendingAbrClaim::Absent => {
@@ -49,7 +40,7 @@ impl HlsCoord {
                         self.discard_incoming(&mut state, false);
                         return Ok(None);
                     }
-                    validate_hls_reader_plan(&plan, &slot.session.media_info())?;
+                    validate_hls_reader_plan(&plan, &slot.session.media_info(), slot.landing_time)?;
                     if slot.profile != profile {
                         return Err(StreamError::Source(SourceError::Io(IoError::new(
                             ErrorKind::InvalidInput,
@@ -84,7 +75,7 @@ impl HlsCoord {
         if let Some(slot) = state.incoming.as_ref()
             && slot.transition == transition
         {
-            validate_hls_reader_plan(&plan, &slot.session.media_info())?;
+            validate_hls_reader_plan(&plan, &slot.session.media_info(), slot.landing_time)?;
             if slot.profile != profile {
                 return Err(StreamError::Source(SourceError::Io(IoError::new(
                     ErrorKind::InvalidInput,
@@ -112,7 +103,8 @@ impl HlsCoord {
                 transition.incoming_variant().get()
             ))));
         };
-        validate_hls_reader_plan(&plan, &target.media_info())?;
+        let landing_time = plan.landing_time();
+        validate_hls_reader_plan(&plan, &target.media_info(), landing_time)?;
         let session = match HlsSession::incoming(
             self.cancel.child(),
             profile,
@@ -120,7 +112,7 @@ impl HlsCoord {
             self.signal(),
             transition,
             target,
-            variant_switch_target_time(self.seek_observe().as_ref(), self.playhead_read().as_ref()),
+            landing_time,
         ) {
             Ok(session) => Arc::new(session),
             Err(error) => {
@@ -149,6 +141,7 @@ impl HlsCoord {
             HlsSessionReader::new(Arc::clone(&session)),
             session.len(),
             Some(Arc::clone(&session) as Arc<dyn ByteMap>),
+            Some(session.construction_gate()),
             Some(Box::new(HlsReaderEventSink::for_session(
                 Arc::clone(&self.emit),
                 Arc::clone(&session),
@@ -161,6 +154,7 @@ impl HlsCoord {
             .publish_exact_two(outgoing, Arc::clone(&session));
         state.incoming = Some(IncomingSlot {
             claim,
+            landing_time,
             profile,
             reader: Some(reader),
             session,
@@ -172,8 +166,12 @@ impl HlsCoord {
     }
 }
 
-fn validate_hls_reader_plan(plan: &VariantReaderPlan, media_info: &MediaInfo) -> StreamResult<()> {
-    if plan.media_info() == media_info && plan.base_offset() == 0 {
+fn validate_hls_reader_plan(
+    plan: &VariantReaderPlan,
+    media_info: &MediaInfo,
+    landing_time: Duration,
+) -> StreamResult<()> {
+    if plan.media_info() == media_info && plan.landing_time() == landing_time {
         return Ok(());
     }
     Err(StreamError::Source(SourceError::Io(IoError::new(

@@ -4,13 +4,15 @@ use std::{
 };
 
 use crossbeam_queue::ArrayQueue;
-use kithara_decode::GaplessMode;
+use kithara_decode::{DecoderSeekOutcome, GaplessMode};
 use kithara_platform::{
     sync::Arc,
+    time::Duration,
     tokio::{runtime::Handle as RuntimeHandle, task::spawn_blocking_on},
 };
 use kithara_stream::{
-    MediaInfo, OpenedReader, OpenedVariantReader, StreamType, VariantTransition, WorkerWake,
+    ByteMap, MediaInfo, OpenedReader, OpenedVariantReader, ReaderProfile, StreamType,
+    VariantTransition, WorkerWake,
 };
 use tracing::warn;
 
@@ -23,6 +25,7 @@ use crate::pipeline::{
             RecreateNext, RecreateOutcome, RecreateState,
         },
     },
+    seek::{ResumeState, SeekContext},
     stream::shared::SharedStream,
 };
 
@@ -56,6 +59,7 @@ struct PendingJob<T: StreamType> {
     build: BuildId,
     deps: JobDeps,
     input: PendingInput<T>,
+    landing: Option<Duration>,
     media_info: MediaInfo,
     offset: u64,
     purpose: DecoderBuildPurpose,
@@ -129,6 +133,7 @@ impl<T: StreamType> RebuildPort<T> {
                 stream: stream.clone(),
                 offset: recreate.offset,
             },
+            landing: None,
             media_info: recreate.media_info.clone(),
             offset: recreate.offset,
             purpose: DecoderBuildPurpose::Replacement,
@@ -150,8 +155,8 @@ impl<T: StreamType> RebuildPort<T> {
             return None;
         }
         let transition = opened.transition();
+        let landing = opened.landing_time();
         let media_info = opened.media_info().clone();
-        let offset = opened.base_offset();
         let seek_epoch = transition.id().seek_epoch();
         let (_plan, reader) = opened.split();
         let build = self.next_build();
@@ -159,8 +164,9 @@ impl<T: StreamType> RebuildPort<T> {
             build,
             deps: self.deps.clone(),
             input: PendingInput::Opened(reader),
+            landing: Some(landing),
             media_info,
-            offset,
+            offset: 0,
             purpose: DecoderBuildPurpose::Incoming(transition),
             seek_epoch,
         });
@@ -169,6 +175,14 @@ impl<T: StreamType> RebuildPort<T> {
 
     pub(crate) const fn can_prepare(&self) -> bool {
         self.pending.is_none()
+    }
+
+    pub(crate) fn reader_profile(
+        &self,
+        media_info: &MediaInfo,
+        byte_map: Option<&dyn ByteMap>,
+    ) -> ReaderProfile {
+        self.deps.factory.reader_profile(media_info, byte_map)
     }
 
     pub(crate) fn pop_completion(&self) -> Option<DecoderBuildComplete> {
@@ -201,6 +215,10 @@ impl<T: StreamType> RebuildPort<T> {
         drop(spawn_blocking_on(&self.runtime, move || run(job)));
     }
 
+    pub(crate) fn wake(&self) {
+        self.deps.wake.wake();
+    }
+
     fn next_build(&mut self) -> BuildId {
         let build = BuildId::new(self.next_build);
         self.next_build = self.next_build.wrapping_add(1);
@@ -230,25 +248,56 @@ fn run<T: StreamType>(job: PendingJob<T>) {
         build,
         deps,
         input,
+        landing,
         media_info,
         offset,
         purpose,
         seek_epoch,
     } = job;
-    let result = match catch_unwind(AssertUnwindSafe(|| {
-        let reader = match input {
-            PendingInput::Opened(reader) => reader,
-            PendingInput::Shared { stream, offset } => stream.open_rebuild_reader(offset),
+    let reader = match input {
+        PendingInput::Opened(reader) => reader,
+        PendingInput::Shared { stream, offset } => stream.open_rebuild_reader(offset),
+    };
+    let construction_gate = reader.construction_gate();
+    if let Some(gate) = &construction_gate {
+        gate.arm();
+    }
+    let built = catch_unwind(AssertUnwindSafe(|| {
+        let mut decoder = deps.factory.create(reader, media_info.clone())?;
+        let pending_head_skip = match landing {
+            Some(landing) => match decoder.seek(landing)? {
+                DecoderSeekOutcome::Landed { landed_at, .. } => {
+                    let remaining = landing.saturating_sub(landed_at);
+                    (!remaining.is_zero()).then_some(ResumeState {
+                        skip: Some(remaining),
+                        seek: SeekContext {
+                            target: landing,
+                            epoch: seek_epoch,
+                        },
+                        ..Default::default()
+                    })
+                }
+                DecoderSeekOutcome::PastEof { .. } => None,
+            },
+            None => None,
         };
-        let decoder = (deps.factory)(reader, media_info.clone())?;
-        Ok(DecoderGeneration::new(
+        let mut generation = DecoderGeneration::new(
             decoder,
             Some(media_info),
             offset,
             seek_epoch,
+            pending_head_skip,
             deps.gapless_mode,
-        ))
-    })) {
+        );
+        if landing.is_some_and(|landing| !landing.is_zero()) {
+            generation.notify_seek();
+        }
+        Ok(generation)
+    }));
+    if let Some(gate) = &construction_gate {
+        gate.disarm();
+    }
+    let result = match built {
         Ok(result) => result.map_err(|error| classify(&error)),
         Err(payload) => {
             warn!(

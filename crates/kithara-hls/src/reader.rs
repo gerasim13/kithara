@@ -243,7 +243,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::{SizeProbeMethod, VariantSessionMode},
+        config::SizeProbeMethod,
         playlist::{PlaylistState, SegmentState, VariantState},
         segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
         signal::SizeSignal,
@@ -272,7 +272,6 @@ mod tests {
         PlanCtx {
             bus: bus.clone(),
             prefetch_budget: 1,
-            master_cancel: cancel,
             scope: store
                 .scope::<crate::Hls>(&AssetSource::Remote {
                     url: "https://example.com/master.m3u8"
@@ -300,13 +299,11 @@ mod tests {
                     url: "https://example.com/seg0.m4s".parse().expect("url"),
                     duration: kithara_platform::time::Duration::from_secs(2),
                     byte_range_len: Some(100),
-                    index: crate::ids::SegmentIndex::try_new(0, 2).expect("idx"),
                 },
                 SegmentState {
                     url: "https://example.com/seg1.m4s".parse().expect("url"),
                     duration: kithara_platform::time::Duration::from_secs(2),
                     byte_range_len: Some(200),
-                    index: crate::ids::SegmentIndex::try_new(1, 2).expect("idx"),
                 },
             ],
         }]))
@@ -358,25 +355,20 @@ mod tests {
         ))));
         let publisher = state.publisher();
         let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer { state });
-        let controller = Arc::new(AbrController::new(
-            AbrSettings::default(),
-            CancelToken::never(),
-        ));
+        let controller = Arc::new(AbrController::new(AbrSettings::default()));
         Arc::new(HlsCoord::new(
             HlsCoordEnv {
                 scope: ctx.scope.clone(),
-                cancel: ctx.master_cancel.clone(),
+                cancel: CancelToken::never(),
                 headers: None,
                 emit: Arc::new(DeferredBus::new(bus.clone(), 8)),
                 signal: ctx.signal.clone(),
-                variant_sessions: VariantSessionMode::Legacy,
             },
             Arc::new(PlayheadState::new()),
             Arc::new(SeekState::new()),
             controller.register(&peer),
             publisher,
             Arc::from(vec![variant]),
-            playlist,
         ))
     }
 

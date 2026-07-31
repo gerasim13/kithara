@@ -1,5 +1,3 @@
-use kithara_platform::CancelToken;
-
 use super::HlsVariant;
 use crate::segment::{FetchClaim, Loaded, PlannedFetch};
 
@@ -42,27 +40,6 @@ impl HlsVariant {
                     slot.set_loaded_size(final_len);
                 }
             }
-        }
-    }
-
-    delegate::delegate! {
-        to self.flow.cancel_epoch {
-            #[cfg(test)]
-            pub(crate) fn cancel(&self);
-            #[call(handle)]
-            pub(crate) fn cancel_handle(&self) -> CancelToken;
-            /// Replace the cancel token with a fresh child of `master_cancel`.
-            /// Called on every re-activation path ([`Self::reset_to_full_range`]
-            /// and [`Self::activate_at_segment_with_shift`]) so a variant that
-            /// was deactivated (cancelled) on a prior ABR commit can dispatch
-            /// fetches again. Without this, the second activation of the same
-            /// `HlsVariant` instance enqueues `FetchCmd`s under a permanently
-            /// cancelled token — every fetch settles immediately as
-            /// `stale (cancelled)` and the reader hangs on `wait_range`.
-            /// In-flight clones held by prior fetches stay cancelled (correct —
-            /// they belong to the previous epoch and must not write).
-            #[call(rearm)]
-            pub(crate) fn rearm_cancel(&self);
         }
     }
 }

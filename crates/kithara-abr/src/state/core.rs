@@ -188,13 +188,19 @@ impl AbrState {
         true
     }
 
+    /// Whether the anti-oscillation interval has elapsed. Before the first
+    /// switch it is measured from the start of the session: that is when the
+    /// throughput estimate rests on the fewest samples, so a fast first segment
+    /// must not be enough to flip the variant out from under a listener who has
+    /// barely started playing.
     pub(super) fn can_switch_now(&self, now: Instant, min_interval: Duration) -> bool {
         let nanos = self.last_switch_at_nanos.load(Ordering::Acquire);
-        if nanos == Self::NO_SWITCH {
-            return true;
-        }
-        let last = self.reference_instant + Duration::from_nanos(nanos);
-        now.duration_since(last) >= min_interval
+        let since = if nanos == Self::NO_SWITCH {
+            self.reference_instant
+        } else {
+            self.reference_instant + Duration::from_nanos(nanos)
+        };
+        now.duration_since(since) >= min_interval
     }
 
     /// Clear the escape condition — the active variant is delivering again, or
@@ -423,11 +429,17 @@ impl AbrState {
     /// commit is driven by [`commit_pending`](Self::commit_pending) at
     /// segment boundaries (Phase 3 wires the scheduler to call it).
     ///
-    /// Replace-pending semantics: a fresh `request_target` overwrites
-    /// any prior unobserved entry. This honours the user-stated
+    /// Replace-pending semantics: a request for a *different* target
+    /// overwrites any prior unobserved entry. This honours the user-stated
     /// contract that a switch only commits at the next segment boundary
     /// — between two boundaries we keep the latest intent and discard
     /// stale ones.
+    ///
+    /// A repeat request for the target already queued is a no-op, ticket and
+    /// reason included. The ticket names the exact transition the consumer
+    /// built its incoming session and decoder against, so re-minting one for
+    /// an unchanged intent would cancel that live session on every tick and
+    /// the switch could never finish.
     ///
     /// The pending intent is written regardless of `is_locked` — the
     /// publish gate lives in
@@ -453,6 +465,12 @@ impl AbrState {
         let mut state = self.pending.lock();
         if let AbrMode::Manual(idx) = self.mode()
             && idx != target
+        {
+            return;
+        }
+        if state
+            .pending
+            .is_some_and(|pending| pending.target == target)
         {
             return;
         }
@@ -482,10 +500,22 @@ impl AbrState {
     /// `on_mode_changed`). The mode is stored before the slot clears so
     /// a [`request_target`](Self::request_target) that acquires the slot
     /// lock afterwards observes the new mode in its consistency check.
+    ///
+    /// A manual pin that names the target already queued restates that intent
+    /// instead of superseding it, so its entry survives. The ticket identifies
+    /// the transition a consumer is already building against; clearing it here
+    /// would cancel that work only for the re-derived tick to ask for the very
+    /// same switch under a new identity.
     pub fn set_mode(&self, mode: AbrMode) {
         let mut state = self.pending.lock();
         self.mode.store(mode.into(), Ordering::Release);
-        state.pending = None;
+        let restates_queued_intent = matches!(
+            mode,
+            AbrMode::Manual(target) if state.pending.is_some_and(|pending| pending.target == target)
+        );
+        if !restates_queued_intent {
+            state.pending = None;
+        }
     }
 
     pub fn unlock(&self) {

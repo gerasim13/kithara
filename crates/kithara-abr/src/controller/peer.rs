@@ -4,24 +4,17 @@ use std::sync::{
 };
 
 use kithara_events::EventBus;
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, Mutex, RwLock},
-    time::{Duration, Instant},
-};
+use kithara_platform::sync::{Arc, Mutex, RwLock};
 
 use super::throttle::EventThrottleCache;
 use crate::{abr::Abr, state::AbrState};
 
-/// Per-peer bookkeeping shared by tick orchestration, throttling, and the
-/// incoherence watcher.
+/// Per-peer bookkeeping shared by tick orchestration and throttling.
 pub(crate) struct PeerEntry {
     pub(crate) peer_weak: Weak<dyn Abr>,
     pub(super) bus: Arc<RwLock<Option<EventBus>>>,
     pub(super) variants_registered_published: AtomicBool,
     pub(super) bytes_downloaded: AtomicU64,
-    pub(super) incoherence_cancel: Mutex<Option<CancelToken>>,
-    pub(super) last_variant_switch: Mutex<Option<(Instant, Duration)>>,
     pub(super) throttle: Mutex<EventThrottleCache>,
     pub(super) state: Option<Arc<AbrState>>,
 }

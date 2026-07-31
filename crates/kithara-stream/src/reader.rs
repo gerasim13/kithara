@@ -1,8 +1,36 @@
-use std::io::{Read, Seek};
+use std::{
+    io::{Read, Seek},
+    sync::atomic::{AtomicBool, Ordering},
+};
 
-use kithara_platform::sync::Arc;
+use kithara_platform::{sync::Arc, time::Duration};
 
 use crate::{BoxedEventSink, ByteMap, MediaInfo, VariantTransition};
+
+/// Shared switch for blocking reads during off-RT decoder construction.
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct ConstructionGate {
+    armed: Arc<AtomicBool>,
+}
+
+impl ConstructionGate {
+    /// Enable blocking construction reads.
+    pub fn arm(&self) {
+        self.armed.store(true, Ordering::Release);
+    }
+
+    /// Restore non-blocking steady-state reads.
+    pub fn disarm(&self) {
+        self.armed.store(false, Ordering::Release);
+    }
+
+    /// Whether construction reads should wait for source bytes.
+    #[must_use]
+    pub fn is_armed(&self) -> bool {
+        self.armed.load(Ordering::Acquire)
+    }
+}
 
 /// Move-only byte input owned by one decoder session.
 pub trait SessionReader: Read + Seek + Send + Sync + 'static {}
@@ -14,6 +42,7 @@ impl<T> SessionReader for T where T: Read + Seek + Send + Sync + 'static {}
 pub struct OpenedReader {
     byte_len: Option<u64>,
     byte_map: Option<Arc<dyn ByteMap>>,
+    construction_gate: Option<ConstructionGate>,
     event_sink: Option<BoxedEventSink>,
     input: Box<dyn SessionReader>,
 }
@@ -25,11 +54,13 @@ impl OpenedReader {
         input: R,
         byte_len: Option<u64>,
         byte_map: Option<Arc<dyn ByteMap>>,
+        construction_gate: Option<ConstructionGate>,
         event_sink: Option<BoxedEventSink>,
     ) -> Self {
         Self {
             byte_len,
             byte_map,
+            construction_gate,
             event_sink,
             input: Box::new(input),
         }
@@ -45,6 +76,12 @@ impl OpenedReader {
     #[must_use]
     pub fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
         self.byte_map.clone()
+    }
+
+    /// Construction gate supplied by the byte-stream owner.
+    #[must_use]
+    pub fn construction_gate(&self) -> Option<ConstructionGate> {
+        self.construction_gate.clone()
     }
 
     /// Transfer reader-side observation to the decoder.
@@ -64,22 +101,21 @@ impl OpenedReader {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct VariantReaderPlan {
-    base_offset: u64,
+    landing_time: Duration,
     media_info: MediaInfo,
     transition: VariantTransition,
 }
 
 impl VariantReaderPlan {
-    /// Bind target media facts and the reader coordinate origin to one exact
-    /// transition.
+    /// Bind target media facts and landing time to one exact transition.
     #[must_use]
     pub const fn new(
         transition: VariantTransition,
         media_info: MediaInfo,
-        base_offset: u64,
+        landing_time: Duration,
     ) -> Self {
         Self {
-            base_offset,
+            landing_time,
             media_info,
             transition,
         }
@@ -97,10 +133,10 @@ impl VariantReaderPlan {
         &self.media_info
     }
 
-    /// Coordinate origin of the reader passed to the decoder.
+    /// Content time where the incoming decoder must land.
     #[must_use]
-    pub const fn base_offset(&self) -> u64 {
-        self.base_offset
+    pub const fn landing_time(&self) -> Duration {
+        self.landing_time
     }
 }
 
@@ -136,10 +172,10 @@ impl OpenedVariantReader {
         self.plan.transition()
     }
 
-    /// Coordinate origin of the reader passed to the decoder.
+    /// Content time where the incoming decoder must land.
     #[must_use]
-    pub const fn base_offset(&self) -> u64 {
-        self.plan.base_offset()
+    pub const fn landing_time(&self) -> Duration {
+        self.plan.landing_time()
     }
 
     /// Split the move-only bundle for decoder construction.

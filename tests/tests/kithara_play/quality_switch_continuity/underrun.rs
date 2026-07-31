@@ -13,10 +13,13 @@ use super::*;
 const OUTPUT_RING_CHUNKS: usize = 1;
 const TARGET_SEGMENT_DELAY_MS: u64 = 250;
 const SLOW_TARGET_SEGMENT_DELAY_MS: u64 = 600;
+const COLD_TARGET_SEGMENT_DELAY_MS: u64 = 300;
 const OBSERVATION_FRAMES: usize = SAMPLE_RATE as usize * 3;
 const CAPTURE_FRAME: usize = SAMPLE_RATE as usize * 2;
 const TARGET_SWITCH_SEGMENT: usize = 3;
 const MAX_EXTRA_SILENT_FRAMES: usize = 2;
+
+const AAC_TO_FLAC: Transition = Transition::new("aac-to-flac", AAC_HIGH, FLAC);
 
 #[derive(Debug)]
 struct Render {
@@ -39,6 +42,21 @@ fn slow_target_rebuild_fixture() -> HlsFixtureBuilder {
         segment_gte: None,
         variant: Some(FLAC),
         delay_ms: SLOW_TARGET_SEGMENT_DELAY_MS,
+    }])
+}
+
+/// Every segment of the target variant is slow, so the switch cannot be served
+/// from anything the source variant already pulled: the transition has to plan,
+/// fetch and prime the incoming variant over a link that never gets faster.
+/// This is the shape a real switch has — the target is cold — whereas a rule
+/// pinned to one segment index only bites when the switch happens to land on
+/// exactly that segment.
+fn cold_target_fixture(target: usize) -> HlsFixtureBuilder {
+    fixture().delay_rules(vec![DelayRule {
+        segment_eq: None,
+        segment_gte: Some(0),
+        variant: Some(target),
+        delay_ms: COLD_TARGET_SEGMENT_DELAY_MS,
     }])
 }
 
@@ -135,9 +153,13 @@ async fn render_to_capture_frame(player: &mut OfflinePlayer, label: &str) {
     }
 }
 
-async fn render_tiny_ring_control(master_url: &url::Url, backend: DecoderBackend) -> Render {
-    let mut prepared =
-        prepare_tiny_ring_player(master_url, AAC_HIGH, backend, "tiny-ring-control").await;
+async fn render_tiny_ring_control(
+    master_url: &url::Url,
+    transition: Transition,
+    backend: DecoderBackend,
+) -> Render {
+    let label = format!("{}-tiny-ring-control", transition.label);
+    let mut prepared = prepare_tiny_ring_player(master_url, transition.from, backend, &label).await;
     let mut samples = Vec::with_capacity(OBSERVATION_FRAMES * usize::from(CHANNELS));
     let mut decoder_events = Vec::new();
     while samples.len() / usize::from(CHANNELS) < OBSERVATION_FRAMES {
@@ -150,12 +172,12 @@ async fn render_tiny_ring_control(master_url: &url::Url, backend: DecoderBackend
     }
     assert_eq!(
         prepared.abr.current_variant_index(),
-        Some(AAC_HIGH),
-        "tiny-ring control must stay on the source variant",
+        Some(transition.from),
+        "{label} must stay on the source variant",
     );
     assert!(
         decoder_events.is_empty(),
-        "tiny-ring control must not recreate its decoder: {decoder_events:?}",
+        "{label} must not recreate its decoder: {decoder_events:?}",
     );
     Render {
         capture_frame: prepared.capture_frame,
@@ -163,13 +185,17 @@ async fn render_tiny_ring_control(master_url: &url::Url, backend: DecoderBackend
     }
 }
 
-async fn render_tiny_ring_switch(master_url: &url::Url, backend: DecoderBackend) -> Render {
-    let mut prepared =
-        prepare_tiny_ring_player(master_url, AAC_HIGH, backend, "tiny-ring-switch").await;
+async fn render_tiny_ring_switch(
+    master_url: &url::Url,
+    transition: Transition,
+    backend: DecoderBackend,
+) -> Render {
+    let label = format!("{}-tiny-ring-switch", transition.label);
+    let mut prepared = prepare_tiny_ring_player(master_url, transition.from, backend, &label).await;
     prepared
         .abr
-        .set_mode(AbrMode::manual(FLAC))
-        .unwrap_or_else(|error| panic!("request tiny-ring quality switch: {error}"));
+        .set_mode(AbrMode::manual(transition.to))
+        .unwrap_or_else(|error| panic!("request {label}: {error}"));
 
     let mut samples = Vec::with_capacity(OBSERVATION_FRAMES * usize::from(CHANNELS));
     let mut decoder_events = Vec::new();
@@ -183,21 +209,26 @@ async fn render_tiny_ring_switch(master_url: &url::Url, backend: DecoderBackend)
     }
     assert_eq!(
         prepared.abr.current_variant_index(),
-        Some(FLAC),
-        "tiny-ring switch must apply the target variant",
+        Some(transition.to),
+        "{label} must apply the target variant",
     );
     assert_eq!(
         decoder_events.len(),
         1,
-        "tiny-ring switch must recreate exactly one decoder: {decoder_events:?}",
+        "{label} must recreate exactly one decoder: {decoder_events:?}",
     );
     let event = decoder_events[0];
     assert_eq!(
         event.cause,
-        DecoderChangeCause::FormatBoundary,
-        "tiny-ring switch recreation cause",
+        DecoderChangeCause::VariantSwitch,
+        "{label} switch cause",
     );
-    assert_eq!(event.variant, Some(FLAC as u32), "tiny-ring target variant");
+    let expected_variant = u32::try_from(transition.to).expect("fixture variant fits u32");
+    assert_eq!(
+        event.variant,
+        Some(expected_variant),
+        "{label} target variant"
+    );
     Render {
         capture_frame: prepared.capture_frame,
         samples,
@@ -260,8 +291,8 @@ async fn delayed_target_rebuild_keeps_the_player_output_continuous(
         .expect("create delayed target quality-switch fixture");
     let master_url = created.master_url();
 
-    let control = render_tiny_ring_control(&master_url, backend).await;
-    let switched = render_tiny_ring_switch(&master_url, backend).await;
+    let control = render_tiny_ring_control(&master_url, AAC_TO_FLAC, backend).await;
+    let switched = render_tiny_ring_switch(&master_url, AAC_TO_FLAC, backend).await;
     assert_eq!(
         switched.capture_frame, control.capture_frame,
         "switch and no-switch control must start at the same source frame",
@@ -303,8 +334,8 @@ async fn manual_aac_to_flac_switch_has_no_gap_when_target_preparation_exceeds_de
         .expect("create slow AAC-to-FLAC quality-switch fixture");
     let master_url = created.master_url();
 
-    let control = render_tiny_ring_control(&master_url, backend).await;
-    let switched = render_tiny_ring_switch(&master_url, backend).await;
+    let control = render_tiny_ring_control(&master_url, AAC_TO_FLAC, backend).await;
+    let switched = render_tiny_ring_switch(&master_url, AAC_TO_FLAC, backend).await;
     assert_eq!(
         switched.capture_frame, control.capture_frame,
         "switch and no-switch control must start at the same source frame",
@@ -320,5 +351,65 @@ async fn manual_aac_to_flac_switch_has_no_gap_when_target_preparation_exceeds_de
     assert!(
         switched_buckets <= control_buckets,
         "Cochlea found switch-only silent buckets during manual AAC-to-FLAC switch: switched={switched_buckets}, control={control_buckets}, target_delay_ms={SLOW_TARGET_SEGMENT_DELAY_MS}",
+    );
+}
+
+#[kithara::test(
+    tokio,
+    multi_thread,
+    native,
+    serial,
+    timeout(Duration::from_secs(600)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "3")
+)]
+#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple(DecoderBackend::Apple)
+)]
+async fn cold_target_variant_switch_keeps_playback_uninterrupted(#[case] backend: DecoderBackend) {
+    let mut failures = Vec::new();
+    for transition in TRANSITIONS {
+        let server = TestServerHelper::new().await;
+        let created = server
+            .create_hls(cold_target_fixture(transition.to))
+            .await
+            .unwrap_or_else(|error| {
+                panic!(
+                    "create cold-target fixture for {}: {error:?}",
+                    transition.label
+                )
+            });
+        let master_url = created.master_url();
+
+        let control = render_tiny_ring_control(&master_url, transition, backend).await;
+        let switched = render_tiny_ring_switch(&master_url, transition, backend).await;
+        assert_eq!(
+            switched.capture_frame, control.capture_frame,
+            "{} switch and no-switch control must start at the same source frame",
+            transition.label,
+        );
+
+        let control_silence = longest_silent_run(&control.samples);
+        let switched_silence = longest_silent_run(&switched.samples);
+        if switched_silence > control_silence.saturating_add(MAX_EXTRA_SILENT_FRAMES) {
+            failures.push(format!(
+                "{} inserted an audible silent gap: switched={switched_silence} frames, control={control_silence} frames",
+                transition.label,
+            ));
+        }
+        let control_buckets = cochlea_silent_buckets(&control.samples);
+        let switched_buckets = cochlea_silent_buckets(&switched.samples);
+        if switched_buckets > control_buckets {
+            failures.push(format!(
+                "{} produced switch-only silent buckets: switched={switched_buckets}, control={control_buckets}",
+                transition.label,
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "switching to a cold target variant interrupted playback (delay_ms={COLD_TARGET_SEGMENT_DELAY_MS}): {}",
+        failures.join("; "),
     );
 }

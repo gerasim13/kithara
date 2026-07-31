@@ -290,7 +290,7 @@ async fn render_desktop(master_url: &url::Url, switch: bool) -> DesktopRender {
         );
         let target = lifecycle.decoders[0];
         assert_eq!(target.backend, DecoderBackendKind::Apple);
-        assert_eq!(target.cause, DecoderChangeCause::FormatBoundary);
+        assert_eq!(target.cause, DecoderChangeCause::VariantSwitch);
         assert_eq!(target.codec, Some(AudioCodecKind::Flac));
         assert_eq!(target.sample_rate, HOST_SAMPLE_RATE);
         assert_eq!(target.channels, CHANNELS);

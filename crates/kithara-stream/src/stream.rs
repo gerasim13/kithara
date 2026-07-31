@@ -163,13 +163,6 @@ pub trait StreamType: MaybeSend + 'static {
         let _ = config;
         None
     }
-
-    /// Declare that the consumer owns exact dual-session variant transitions.
-    /// Adaptive sources fix their session mode from this before any transport
-    /// peer is registered; non-adaptive sources ignore it.
-    fn use_exact_variant_sessions(config: &mut Self::Config) {
-        let _ = config;
-    }
 }
 
 /// Generic audio stream with sync `Read + Seek`.

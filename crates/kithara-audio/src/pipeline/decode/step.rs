@@ -44,7 +44,6 @@ pub(crate) fn tick<T: StreamType>(
         if ctx.seek_observe.is_flushing() || ctx.seek_observe.is_pending() {
             return DecodeAction::SeekInterrupted;
         }
-        let _ = core.prime_incoming();
         if let Some(chunk) = core.next_output() {
             return produced(chunk, epoch, &mut ctx);
         }

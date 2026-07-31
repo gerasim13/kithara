@@ -141,23 +141,4 @@ impl HlsVariant {
     pub(super) fn reset_layout_to_full_range(&self) {
         self.layout.reset(self.init_route_size(), &self.segments);
     }
-
-    /// Natural byte offset of segment `seg_idx` — i.e. without applying
-    /// `byte_shift`. Used internally by `activate_*` to compute the
-    /// shift needed to pin a segment at a given virtual byte.
-    pub(crate) fn segment_byte_offset_natural(&self, seg_idx: u32) -> Option<u64> {
-        self.layout.natural_offset(seg_idx as usize)
-    }
-
-    /// Cap the upper bound (exclusive) of segments this variant serves.
-    /// Called from [`HlsCoord::commit_variant_switch`] on same-codec ABR
-    /// commit so the outgoing variant's `find_at_offset` returns `None`
-    /// for segments at or past the boundary — gates the reader's
-    /// `SegmentReadStart` events against the post-switch range owned by
-    /// the incoming variant, preventing a duplicate `(v_old, from_seg)`
-    /// emit when the reader cursor lingers in the boundary segment.
-    pub(crate) fn set_served_until(&self, until: u32) {
-        self.layout
-            .set_served_until(until, &self.segments, self.init_route_size());
-    }
 }

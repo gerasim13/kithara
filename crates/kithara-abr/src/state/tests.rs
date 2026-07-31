@@ -2,7 +2,6 @@ use kithara_events::{
     AbrMode, AbrReason, BandwidthSource, VariantDuration, VariantIndex, VariantInfo,
 };
 use kithara_platform::{
-    CancelToken,
     sync::Arc,
     time::{Duration, Duration as StdDuration, Instant},
 };
@@ -247,6 +246,28 @@ fn request_target_replace_pending_latest_wins() {
 }
 
 #[kithara::test]
+fn request_target_repeat_same_target_keeps_the_ticket() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    let first = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("first request must be claimable");
+
+    state.request_target(VariantIndex::new(2), AbrReason::UrgentDownSwitch);
+
+    assert_eq!(
+        state
+            .claim_pending_decision(VariantIndex::new(0))
+            .map(PendingAbrDecision::ticket),
+        Some(first.ticket()),
+        "a repeat request for the queued target must not re-mint the ticket \
+         the consumer built its incoming session against"
+    );
+    assert!(state.commit_pending(first, Instant::now()));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(2));
+}
+
+#[kithara::test]
 fn stale_claim_cannot_commit_after_same_target_aba() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
@@ -254,6 +275,7 @@ fn stale_claim_cannot_commit_after_same_target_aba() {
         .claim_pending_decision(VariantIndex::new(0))
         .expect("first request must be claimable");
 
+    state.request_target(VariantIndex::new(1), AbrReason::DownSwitch);
     state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
     let current = state
         .claim_pending_decision(VariantIndex::new(0))
@@ -544,7 +566,10 @@ fn request_target_accepts_manual_pin_target() {
     );
 }
 
-#[kithara::test]
+// Wall-clock interval measured against the instant `AbrState` captured at
+// construction: both must come from the same clock, so this one opts out
+// of the virtual one.
+#[kithara::test(flash(false))]
 fn min_switch_interval_prevents_oscillation() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     let variants = test_variants_3();
@@ -561,11 +586,84 @@ fn min_switch_interval_prevents_oscillation() {
         variants: &variants,
         settings: &settings,
     };
-    let d1 = state.decide(&view, now);
+    // The interval also guards the first switch of a session, so let it elapse
+    // before the pair of decisions this test is about.
+    let settled = now + Duration::from_secs(30);
+    let d1 = state.decide(&view, settled);
     assert!(d1.changed());
-    state.apply_decision(&d1, now);
-    let d2 = state.decide(&view, now + Duration::from_secs(1));
+    state.apply_decision(&d1, settled);
+
+    // Evidence that would immediately send the variant back down — this is the
+    // oscillation the interval exists to damp.
+    let reversal = AbrView {
+        estimate_bps: Some(1),
+        buffer_ahead: None,
+        bytes_downloaded: 10 * 1024 * 1024,
+        variants: &variants,
+        settings: &settings,
+    };
+    let d2 = state.decide(&reversal, settled + Duration::from_secs(1));
     assert_eq!(d2.reason(), AbrReason::MinInterval);
+}
+
+// Wall-clock interval measured against the instant `AbrState` captured at
+// construction: both must come from the same clock, so this one opts out
+// of the virtual one.
+#[kithara::test(flash(false))]
+fn min_switch_interval_guards_the_first_switch_of_a_session() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    let variants = test_variants_3();
+    let settings = AbrSettings {
+        min_switch_interval: Duration::from_secs(30),
+        min_buffer_for_up_switch: Duration::ZERO,
+        ..AbrSettings::default()
+    };
+    let now = Instant::now();
+    let view = AbrView {
+        estimate_bps: Some(3_000_000),
+        buffer_ahead: None,
+        bytes_downloaded: 10 * 1024 * 1024,
+        variants: &variants,
+        settings: &settings,
+    };
+
+    assert_eq!(
+        state.decide(&view, now + Duration::from_secs(1)).reason(),
+        AbrReason::MinInterval,
+        "a fast first sample must not flip the variant out from under a \
+         listener who has barely started playing"
+    );
+    assert!(
+        state.decide(&view, now + Duration::from_secs(30)).changed(),
+        "once the interval has elapsed the same evidence must be acted on"
+    );
+}
+
+#[kithara::test]
+fn urgent_down_switch_is_not_held_by_the_switch_interval() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(2))));
+    let variants = test_variants_3();
+    let settings = AbrSettings {
+        min_switch_interval: Duration::from_secs(30),
+        urgent_downswitch_buffer: Duration::from_secs(5),
+        ..AbrSettings::default()
+    };
+    let now = Instant::now();
+    let view = AbrView {
+        estimate_bps: Some(1),
+        buffer_ahead: Some(Duration::ZERO),
+        bytes_downloaded: 10 * 1024 * 1024,
+        variants: &variants,
+        settings: &settings,
+    };
+
+    let decision = state.decide(&view, now + Duration::from_secs(1));
+    assert_eq!(
+        decision.reason(),
+        AbrReason::UrgentDownSwitch,
+        "a starving reader must not be held on a variant that cannot feed it"
+    );
+    assert!(decision.changed());
 }
 
 /// A locked `AbrState` must never change variant, regardless of bandwidth
@@ -639,7 +737,7 @@ async fn auto_mode_with_default_seed_picks_high_variant_on_cold_start() {
         .min_switch_interval(Duration::ZERO)
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
-    let controller = AbrController::new(settings, CancelToken::never());
+    let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
         state: Arc::clone(&state),
@@ -667,7 +765,7 @@ async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
         min_buffer_for_up_switch: Duration::ZERO,
         ..AbrSettings::default()
     };
-    let controller = AbrController::new(settings, CancelToken::never());
+    let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
         state: Arc::clone(&state),
@@ -687,7 +785,7 @@ async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
 /// choice.
 #[kithara::test(tokio)]
 async fn set_mode_back_to_current_kills_queued_switch() {
-    let controller = AbrController::new(settings_fast(), CancelToken::never());
+    let controller = AbrController::new(settings_fast());
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
         state: Arc::clone(&state),
@@ -717,11 +815,8 @@ async fn set_mode_back_to_current_kills_queued_switch() {
 #[kithara::test(tokio)]
 async fn lock_refcount_holds_across_record_bandwidth() {
     let settings = settings_fast();
-    let controller = AbrController::with_estimator(
-        settings,
-        Arc::new(ThroughputEstimator::new()) as Arc<_>,
-        CancelToken::never(),
-    );
+    let controller =
+        AbrController::with_estimator(settings, Arc::new(ThroughputEstimator::new()) as Arc<_>);
 
     struct LockedPeer {
         state: Arc<AbrState>,

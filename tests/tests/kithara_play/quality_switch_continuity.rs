@@ -50,11 +50,18 @@ const AAC_LOW: usize = 0;
 const AAC_HIGH: usize = 1;
 const FLAC: usize = 2;
 
-const TRANSITIONS: [Transition; 4] = [
+/// Every ordered pair of the fixture's variants. A switch is characterised by
+/// what changes across it — bitrate only, codec only, or both at once — so
+/// covering a subset leaves the sharpest combinations (the two-step
+/// `aac-low` <-> `flac`, which changes codec *and* jumps two quality steps)
+/// untested.
+const TRANSITIONS: [Transition; 6] = [
     Transition::new("aac-low-to-aac-high", AAC_LOW, AAC_HIGH),
     Transition::new("aac-high-to-aac-low", AAC_HIGH, AAC_LOW),
     Transition::new("aac-to-flac", AAC_HIGH, FLAC),
     Transition::new("flac-to-aac", FLAC, AAC_HIGH),
+    Transition::new("aac-low-to-flac", AAC_LOW, FLAC),
+    Transition::new("flac-to-aac-low", FLAC, AAC_LOW),
 ];
 
 #[derive(Clone, Copy, Debug)]
@@ -383,8 +390,8 @@ async fn render_switch(
     );
     assert_eq!(
         target_event.cause,
-        DecoderChangeCause::FormatBoundary,
-        "{} recreation cause",
+        DecoderChangeCause::VariantSwitch,
+        "{} switch cause",
         transition.label,
     );
     assert_eq!(

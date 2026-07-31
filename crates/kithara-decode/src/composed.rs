@@ -8,6 +8,7 @@ use kithara_stream::{
 use kithara_test_utils::kithara;
 
 use crate::{
+    BlenderProfile,
     codec::FrameCodec,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
     duration_for_frames,
@@ -39,12 +40,9 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
     pending_seek_target: Option<Duration>,
     pool: PcmPool,
     spec: PcmSpec,
-    /// Set on every seek; the next emitted chunk re-anchors
-    /// `frame_offset` to its own pts so that the chunk-level invariant
-    /// `frame_offset / sample_rate ≈ timestamp` holds even when the
-    /// demuxer snapped to a packet boundary inside / behind the
-    /// requested seek target.
+    /// Set on every seek; the next emitted chunk may re-anchor the PCM cursor.
     resync_frame_offset_to_pts: bool,
+    timeline_gap_frames: u64,
     epoch: u64,
     /// Cumulative frame counter. Anchored to `landed_at` on seek (so the
     /// next chunk's `frame_offset / sample_rate ≈ timestamp`) and
@@ -91,6 +89,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             frame_offset: 0,
             pending_seek_target: None,
             resync_frame_offset_to_pts: true,
+            timeline_gap_frames: 0,
             zero_frame_count: 0,
         }
     }
@@ -115,9 +114,15 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         let frame_duration = Duration::from_secs_f64(chunk_secs);
         let end_timestamp = timestamp.saturating_add(frame_duration);
 
+        let timestamp_frame = frame_offset_for(timestamp, live_spec.sample_rate.get());
         if self.resync_frame_offset_to_pts {
             self.resync_frame_offset_to_pts = false;
-            self.frame_offset = frame_offset_for(timestamp, live_spec.sample_rate.get());
+            self.frame_offset = timestamp_frame;
+        } else if timestamp_frame > self.frame_offset {
+            self.timeline_gap_frames = self
+                .timeline_gap_frames
+                .saturating_add(timestamp_frame.saturating_sub(self.frame_offset));
+            self.frame_offset = timestamp_frame;
         }
         let frame_offset = self.frame_offset;
         self.frame_offset = self.frame_offset.saturating_add(u64::from(frames));
@@ -291,6 +296,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                 self.pending_seek_target = (landed_at < pos).then_some(pos);
                 self.frame_offset = frame_offset_for(landed_at, self.spec.sample_rate.get());
                 self.resync_frame_offset_to_pts = true;
+                self.timeline_gap_frames = 0;
                 Ok(DecoderSeekOutcome::Landed {
                     landed_byte,
                     landed_at,
@@ -319,6 +325,14 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
 
     fn duration(&self) -> Option<Duration> {
         self.duration
+    }
+
+    fn blender_profile(&self) -> BlenderProfile {
+        BlenderProfile::new(self.spec).with_timeline_gap_frames(
+            self.codec
+                .timestamp_bias_frames()
+                .saturating_add(self.timeline_gap_frames),
+        )
     }
 
     fn flush_reader_signals(&mut self) {
@@ -731,6 +745,7 @@ mod test_counting_codec {
 
     pub(super) struct CountingCodec {
         pub(super) decode_calls: Arc<AtomicU32>,
+        first_frames: Option<u32>,
         pub(super) flush_calls: Arc<AtomicU32>,
         pub(super) spec: PcmSpec,
         pub(super) frames_per_call: u32,
@@ -741,9 +756,15 @@ mod test_counting_codec {
             Self {
                 spec,
                 frames_per_call,
+                first_frames: None,
                 decode_calls: Arc::new(AtomicU32::new(0)),
                 flush_calls: Arc::new(AtomicU32::new(0)),
             }
+        }
+
+        pub(super) fn with_first_frames(mut self, frames: u32) -> Self {
+            self.first_frames = Some(frames);
+            self
         }
     }
 
@@ -756,7 +777,8 @@ mod test_counting_codec {
             out: &mut PcmBuf,
         ) -> DecodeResult<u32> {
             self.decode_calls.fetch_add(1, Ordering::SeqCst);
-            super::write_silent_test_frame(self.spec, self.frames_per_call, out)
+            let frames = self.first_frames.take().unwrap_or(self.frames_per_call);
+            super::write_silent_test_frame(self.spec, frames, out)
         }
 
         fn flush(&mut self) -> DecodeResult<()> {
@@ -1092,6 +1114,47 @@ mod seek_trim_tests {
             calls.load(Ordering::SeqCst),
             2,
             "decode_frame must be called for pre-target frames so MDCT advances"
+        );
+
+        let packet = duration_for_frames(Consts::SAMPLE_RATE, 1_024);
+        let codec = CountingCodec::new(
+            PcmSpec::new(
+                Consts::CHANNELS,
+                NonZeroU32::new(Consts::SAMPLE_RATE).expect("test rate"),
+            ),
+            1_024,
+        )
+        .with_first_frames(363);
+        let demuxer = BoundaryFrameDemuxer {
+            track: empty_track(),
+            held: Vec::new(),
+            idx: 0,
+            frames: vec![
+                BoundaryFrame {
+                    pts: packet,
+                    duration: packet,
+                },
+                BoundaryFrame {
+                    pts: packet.saturating_mul(2),
+                    duration: packet,
+                },
+            ],
+        };
+        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+        let first = decoder.next_chunk().expect("first head-trimmed chunk");
+        assert!(matches!(first, DecoderChunkOutcome::Chunk(_)));
+        let second = decoder.next_chunk().expect("second full packet");
+        let DecoderChunkOutcome::Chunk(second) = second else {
+            panic!("expected second PCM chunk, got {second:?}");
+        };
+        assert_eq!(
+            second.meta.frame_offset, 2_048,
+            "a decoder head trim must not compress every later packet's frame offset"
+        );
+        assert_eq!(
+            decoder.blender_profile().timeline_gap_frames(),
+            661,
+            "the decoder must publish forward timestamp gaps without a second frame cursor"
         );
     }
 

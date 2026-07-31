@@ -87,16 +87,26 @@ where
 struct FactoryDeps<B> {
     decoder: DecoderDeps<B>,
     epoch: Arc<AtomicU64>,
+    /// The caller's `MediaInfo` declaration, kept for the life of the track.
+    /// Every decoder built for it resolves through the same precedence as the
+    /// initial one — a per-variant plan describes the variant, not the bytes
+    /// the caller told us to expect.
+    user_media_info: Option<MediaInfo>,
 }
 
 impl<B> FactoryDeps<B>
 where
     B: ResamplerBackend,
 {
-    fn new(decoder: &DecoderDeps<B>, epoch: &Arc<AtomicU64>) -> Self {
+    fn new(
+        decoder: &DecoderDeps<B>,
+        epoch: &Arc<AtomicU64>,
+        user_media_info: Option<MediaInfo>,
+    ) -> Self {
         Self {
             decoder: DecoderDeps::clone(decoder),
             epoch: Arc::clone(epoch),
+            user_media_info,
         }
     }
 }
@@ -162,7 +172,7 @@ where
             decoder,
             preload_chunks,
             block_on_underrun,
-            stream: mut stream_config,
+            stream: stream_config,
             bus: config_bus,
             effects: custom_effects,
             worker: config_worker,
@@ -176,13 +186,12 @@ where
         })?;
 
         let bus = resolve_event_bus::<T>(&stream_config, config_bus);
-        T::use_exact_variant_sessions(&mut stream_config);
         let stream = create_stream_with_probe::<T>(stream_config, byte_pool.clone()).await?;
         let playhead = stream.playhead_write();
         let seek = stream.seek_control();
         let seek_obs = stream.seek_observe();
         let initial_media_info =
-            merge_user_and_stream_media_info(user_media_info, stream.media_info());
+            merge_user_and_stream_media_info(user_media_info.clone(), stream.media_info());
         debug!(?initial_media_info, "Initial MediaInfo from stream");
 
         let variant_control = stream.variant_control();
@@ -225,7 +234,7 @@ where
             cancel: &cancel,
             decoder,
             decoder_backend: deps.backend(),
-            decoder_factory: create_decoder_factory(&deps, &epoch),
+            decoder_factory: create_decoder_factory(&deps, &epoch, user_media_info),
             effects,
             emit: Arc::clone(&emit),
             engine_load,
@@ -436,36 +445,45 @@ where
 fn create_decoder_factory<B>(
     decoder: &DecoderDeps<B>,
     epoch: &Arc<AtomicU64>,
+    user_media_info: Option<MediaInfo>,
 ) -> StreamDecoderFactory
 where
     B: ResamplerBackend,
 {
-    let deps = FactoryDeps::new(decoder, epoch);
-    Arc::new(move |mut reader, info| {
-        let byte_len = reader.byte_len().unwrap_or(0);
-        let byte_len_handle = Arc::new(AtomicU64::new(byte_len));
-        let config = DecoderConfig::builder()
-            .backend(deps.decoder.decoder.backend())
-            .byte_len_handle(byte_len_handle)
-            .pcm_pool(deps.decoder.pcm_pool.clone())
-            .byte_pool(deps.decoder.byte_pool.clone())
-            .epoch(deps.epoch.load(Ordering::Acquire))
-            .maybe_byte_map(reader.byte_map())
-            .maybe_hooks(reader.take_event_sink())
-            .maybe_resampler(deps.decoder.resampler_config()?)
-            .build();
-        let source = reader.into_inner();
-        match DecoderFactory::create_from_media_info(source, &info, config) {
-            Ok(decoder) => {
-                decoder.update_byte_len(byte_len);
-                Ok(decoder)
+    let configured_media_info = user_media_info.clone();
+    let deps = FactoryDeps::new(decoder, epoch, user_media_info);
+    StreamDecoderFactory::new(
+        move |mut reader, info| {
+            let byte_len = reader.byte_len().unwrap_or(0);
+            let byte_len_handle = Arc::new(AtomicU64::new(byte_len));
+            let config = DecoderConfig::builder()
+                .backend(deps.decoder.decoder.backend())
+                .byte_len_handle(byte_len_handle)
+                .pcm_pool(deps.decoder.pcm_pool.clone())
+                .byte_pool(deps.decoder.byte_pool.clone())
+                .epoch(deps.epoch.load(Ordering::Acquire))
+                .maybe_byte_map(reader.byte_map())
+                .maybe_hooks(reader.take_event_sink())
+                .maybe_resampler(deps.decoder.resampler_config()?)
+                .build();
+            let source = reader.into_inner();
+            let info = match deps.user_media_info.clone() {
+                Some(user) => merge_media_info(user, &info),
+                None => info,
+            };
+            match DecoderFactory::create_from_media_info(source, &info, config) {
+                Ok(decoder) => {
+                    decoder.update_byte_len(byte_len);
+                    Ok(decoder)
+                }
+                Err(error) => {
+                    warn!(?error, "failed to recreate decoder");
+                    Err(error)
+                }
             }
-            Err(error) => {
-                warn!(?error, "failed to recreate decoder");
-                Err(error)
-            }
-        }
-    })
+        },
+        configured_media_info,
+    )
 }
 
 async fn create_initial_decoder<B>(
@@ -579,29 +597,34 @@ fn log_pipeline_ready(spec: PcmSpec, host_sample_rate: &Arc<AtomicU32>) {
     );
 }
 
+/// Fill the caller's unset fields from what the source reports. The caller's
+/// declaration wins: they know the bytes, the source only knows what its
+/// container or playlist claims about them.
+fn merge_media_info(mut user: MediaInfo, stream: &MediaInfo) -> MediaInfo {
+    if user.codec.is_none() {
+        user.codec = stream.codec;
+    }
+    if user.container.is_none() {
+        user.container = stream.container;
+    }
+    if user.channels.is_none() {
+        user.channels = stream.channels;
+    }
+    if user.sample_rate.is_none() {
+        user.sample_rate = stream.sample_rate;
+    }
+    if user.variant_index.is_none() {
+        user.variant_index = stream.variant_index;
+    }
+    user
+}
+
 fn merge_user_and_stream_media_info(
     user: Option<MediaInfo>,
     stream: Option<MediaInfo>,
 ) -> Option<MediaInfo> {
     match (user, stream) {
-        (Some(mut user), Some(stream)) => {
-            if user.codec.is_none() {
-                user.codec = stream.codec;
-            }
-            if user.container.is_none() {
-                user.container = stream.container;
-            }
-            if user.channels.is_none() {
-                user.channels = stream.channels;
-            }
-            if user.sample_rate.is_none() {
-                user.sample_rate = stream.sample_rate;
-            }
-            if user.variant_index.is_none() {
-                user.variant_index = stream.variant_index;
-            }
-            Some(user)
-        }
+        (Some(user), Some(stream)) => Some(merge_media_info(user, &stream)),
         (Some(user), None) => Some(user),
         (None, stream) => stream,
     }

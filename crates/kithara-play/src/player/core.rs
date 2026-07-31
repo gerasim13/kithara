@@ -90,7 +90,7 @@ impl PlayerImpl {
             .build();
         let engine = EngineImpl::new(engine_config, bus.clone());
         if config.abr.is_none() {
-            config.abr = Some(AbrController::new(AbrSettings::default(), cancel.child()));
+            config.abr = Some(AbrController::new(AbrSettings::default()));
         }
 
         // Seed the single speed source with the configured default rate.

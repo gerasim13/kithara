@@ -8,28 +8,25 @@ use std::{
 use delegate::delegate;
 use kithara_abr::{AbrHandle, AbrPublisher};
 use kithara_assets::{AssetScope, ResourceKey};
-use kithara_events::{AbrReason, DeferredBus, HlsEvent};
+use kithara_events::{DeferredBus, HlsEvent};
 use kithara_platform::{
     CancelToken,
-    sync::{Arc, ThreadGate, WaitGate},
-    time::{Duration, Instant},
+    sync::{Arc, WaitGate},
+    time::Duration,
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    Activity, ByteMap, ContainerFormat, DeferredWake, MediaInfo, PendingReason, PlayheadRead,
-    PlayheadState, PlayheadWrite, ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekState,
+    Activity, ByteMap, DeferredWake, MediaInfo, PendingReason, PlayheadRead, PlayheadState,
+    PlayheadWrite, ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekState,
     SegmentDescriptor, SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult,
     VariantControl, VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
-    dl::FetchCmd,
 };
 use kithara_test_utils::kithara;
 
 use super::{session::HlsSession, transition::SessionSlots};
 use crate::{
-    config::VariantSessionMode,
-    playlist::{PlaylistAccess, PlaylistState},
     signal::SizeSignal,
-    variant::{HlsVariant, PlanCtx, SegmentActivateParams},
+    variant::{HlsVariant, PlanCtx},
 };
 
 /// Watchdog timeout for the off-RT blocking `wait_range(_, None)`: must exceed
@@ -58,8 +55,6 @@ pub(crate) struct HlsCoordEnv {
     /// signals use [`SizeSignal::fire_ready_only`]. See `CONTEXT.md`
     /// "Event-driven read wait".
     pub(crate) signal: SizeSignal,
-    /// Variant-session ownership fixed before downloader registration.
-    pub(crate) variant_sessions: VariantSessionMode,
 }
 
 /// Coordinator over fixed variants and one authoritative active reader session.
@@ -74,10 +69,6 @@ pub(crate) struct HlsCoord {
     /// Backing playhead state — the coord owns the `Arc` directly and
     /// vends narrow trait-object handles from it.
     playhead: Arc<PlayheadState>,
-    /// Narrow read-only playhead handle — derived from `playhead` at construction.
-    /// Used by internal methods that only need committed position reads.
-    playhead_read: Arc<dyn PlayheadRead>,
-    playlist_state: Arc<PlaylistState>,
     /// Backing seek/activity state — the coord owns the `Arc` directly and
     /// vends narrow trait-object handles from it.
     seek: Arc<SeekState>,
@@ -134,7 +125,6 @@ impl HlsCoord {
         abr: AbrHandle,
         abr_publisher: AbrPublisher,
         variants: Arc<[Arc<HlsVariant>]>,
-        playlist_state: Arc<PlaylistState>,
     ) -> Self {
         assert!(
             !variants.is_empty(),
@@ -145,7 +135,6 @@ impl HlsCoord {
             "HlsCoord requires an AbrHandle with state — HlsPeer must construct AbrState"
         );
         let seek_obs = Arc::clone(&seek) as Arc<dyn SeekObserve>;
-        let playhead_read = Arc::clone(&playhead) as Arc<dyn PlayheadRead>;
         let active_index = abr
             .current_variant_index()
             .expect("stateful ABR handle checked above");
@@ -158,20 +147,17 @@ impl HlsCoord {
             env.cancel.child(),
             Arc::clone(&seek_obs),
             env.signal.clone(),
-            env.variant_sessions,
             active_index,
             Arc::clone(&active_variant),
-            active_variant.get_position(),
+            0,
         ));
         Self {
             playhead,
             seek,
             seek_obs,
-            playhead_read,
             abr,
             abr_publisher,
             variants,
-            playlist_state,
             cancel: env.cancel,
             scope: env.scope,
             headers: env.headers,
@@ -179,7 +165,7 @@ impl HlsCoord {
             variant_generation: AtomicU64::new(0),
             fence_at: AtomicU64::new(0),
             fence_target: AtomicUsize::new(0),
-            sessions: SessionSlots::new(active_session, env.variant_sessions),
+            sessions: SessionSlots::new(active_session),
             signal: env.signal,
         }
     }
@@ -230,127 +216,6 @@ impl HlsCoord {
         self.signal.fire_ready_only();
     }
 
-    /// Commit any ABR pending decision at the reader's segment boundary.
-    /// Returns `true` when a switch landed.
-    ///
-    /// Two branches, selected by codec continuity:
-    ///
-    /// - **Byte-continuity switches** (same codec, plus raw PCM/WAV):
-    ///   activate `v_new` at the boundary segment with `byte_shift` so the
-    ///   existing decoder keeps reading aligned bytes from the new variant.
-    ///   No fence, no recreate.
-    /// - **Decoder-recreate switches** (known cross-codec, or codec
-    ///   unknown): hard reset on `v_new` via [`HlsVariant::reset_to_full_range`],
-    ///   reader position seeded to the segment covering the current timeline
-    ///   position, and `variant_generation` bumped — the next [`Self::read_at`]
-    ///   / [`Self::wait_range`] short-circuits with `Pending(VariantChange)` /
-    ///   `Interrupted` until the audio FSM recreates the decoder and acks via
-    ///   [`Self::clear_variant_fence`].
-    pub(crate) fn commit_variant_switch(&self, ctx: &PlanCtx, from_seg: u32) -> bool {
-        self.commit_variant_switch_starting_at(ctx, from_seg.saturating_add(1))
-    }
-
-    /// Commit a pending ABR switch whose first target-variant segment is
-    /// `switch_at`. The seek-settle floor already names the target segment;
-    /// unlike steady boundary crossing it is not the old segment before the
-    /// boundary.
-    pub(crate) fn commit_variant_switch_at_segment(&self, ctx: &PlanCtx, switch_at: u32) -> bool {
-        self.commit_variant_switch_starting_at(ctx, switch_at)
-    }
-
-    fn commit_variant_switch_starting_at(&self, ctx: &PlanCtx, switch_at: u32) -> bool {
-        self.sessions
-            .commit_legacy(|| self.commit_legacy_variant_switch(ctx, switch_at))
-    }
-
-    fn commit_legacy_variant_switch(&self, ctx: &PlanCtx, switch_at: u32) -> bool {
-        let current_before = self.variant_index();
-        let Some(decision) = self.abr.peek_pending_decision() else {
-            return false;
-        };
-        let new_v = decision.target().get();
-        let Some(v_new) = self.variants.get(new_v) else {
-            return false;
-        };
-        let v_old = self.variants.get(current_before);
-        let old_codec = v_old.and_then(|_| self.playlist_state.variant_codec(current_before));
-        let new_codec = self.playlist_state.variant_codec(new_v);
-        let same_codec = matches!((old_codec, new_codec), (Some(a), Some(b)) if a == b);
-        let is_cross_codec = matches!((old_codec, new_codec), (Some(a), Some(b)) if a != b);
-        let needs_byte_continuity = variant_switch_uses_byte_continuity(
-            same_codec,
-            self.playlist_state.variant_container(new_v),
-        );
-        let active_position = if needs_byte_continuity {
-            let switch_at = switch_at.min(v_new.num_segments());
-            if !v_new.prepare_exact_prefix_for_boundary(switch_at) {
-                return false;
-            }
-            let reader_pos = self.position();
-            let seg_boundary = v_old
-                .and_then(|v| v.segment_byte_offset(switch_at))
-                .unwrap_or(reader_pos);
-            if let Some(v_old) = v_old {
-                v_old.set_served_until(switch_at);
-            }
-            v_new.activate_at_segment_with_shift(
-                ctx,
-                SegmentActivateParams {
-                    seg_boundary,
-                    reader_pos,
-                    from_seg: switch_at,
-                },
-            );
-            self.abr_publisher
-                .apply_legacy_decision(&decision, Instant::now());
-            reader_pos
-        } else {
-            v_new.reset_to_full_range();
-            if is_cross_codec {
-                v_new.invalidate_init();
-            }
-            let target_time =
-                variant_switch_target_time(self.seek_obs.as_ref(), self.playhead_read.as_ref());
-            let target_seg: u32 = self
-                .playlist_state
-                .find_seek_point_for_time(new_v, target_time)
-                .and_then(|(seg, _, _)| u32::try_from(seg).ok())
-                .unwrap_or(0);
-            let target_byte = v_new.segment_byte_offset_natural(target_seg).unwrap_or(0);
-            v_new.set_position(target_byte);
-            self.fence_target.store(new_v, Ordering::Release);
-            self.variant_generation.fetch_add(1, Ordering::Release);
-            self.emit.enqueue(HlsEvent::VariantSwitchFenced {
-                from_variant: current_before,
-                to_variant: new_v,
-                cross_codec: is_cross_codec,
-            });
-            self.abr_publisher
-                .apply_legacy_decision(&decision, Instant::now());
-            v_new.rebuild_with_decoder_probe(ctx, target_seg);
-            target_byte
-        };
-        let active_session = Arc::new(HlsSession::active(
-            self.cancel.child(),
-            Arc::clone(&self.seek_obs),
-            self.signal.clone(),
-            VariantSessionMode::Legacy,
-            new_v,
-            Arc::clone(v_new),
-            active_position,
-        ));
-        self.sessions.replace_legacy(active_session);
-        let reader_pt = self.playhead_read.position();
-        self.abr
-            .notify_commit(decision, current_before, reader_pt, Instant::now());
-        // Variant switched (fence raised on the structured-container branch, or
-        // a byte-continuity reactivation): wake a parked reader to re-probe /
-        // observe the new `Interrupted`(VariantChange) gate, and re-tick the RT
-        // decoder's audio worker so it observes the new gate off its scheduler poll.
-        self.signal.fire();
-        true
-    }
-
     /// Resolve the segment whose fetch queue owns the reader cursor.
     ///
     /// This is deliberately wider than [`Self::find_at_offset`]: a cursor in
@@ -363,26 +228,6 @@ impl HlsCoord {
         active
             .demand_segment_at_offset(byte_offset)
             .or_else(|| self.find_at_offset(byte_offset).map(|(idx, _, _)| idx))
-    }
-
-    pub(crate) fn dispatch_pending_size_demands(
-        &self,
-        ctx: &PlanCtx,
-        budget: usize,
-    ) -> Vec<FetchCmd> {
-        if self.exact_sessions_enabled() {
-            return Vec::new();
-        }
-        let Some(decision) = self.abr.peek_pending_decision() else {
-            return Vec::new();
-        };
-        let target = decision.target().get();
-        if target == self.variant_index() {
-            return Vec::new();
-        }
-        self.variants
-            .get(target)
-            .map_or_else(Vec::new, |variant| variant.dispatch_size_only(ctx, budget))
     }
 
     /// Cross-variant segment lookup. Mirrors [`Self::variant_serving`]'s
@@ -458,18 +303,13 @@ impl HlsCoord {
     /// unconditional, so the seek's cancel/wake semantics are unchanged for
     /// every track (cross-variant, partial-download, or fully cached).
     ///
-    /// Legacy boundary switching drops a throughput-driven decision because it
-    /// could commit immediately after the seek against a cold target. Exact
-    /// sessions preserve the ticket and rebuild its incoming session in the new
-    /// seek epoch; publication remains impossible until that replacement is
-    /// ready.
+    /// A pending decision survives the seek: its incoming session is rebuilt in
+    /// the new seek epoch, and publication remains impossible until that
+    /// replacement is ready.
     pub(crate) fn prepare_for_seek(&self) {
         self.cancel_incoming_for_seek();
         if !self.active().layout_seek_invariant() {
             self.reset_for_seek();
-        }
-        if !self.exact_sessions_enabled() {
-            self.abr.invalidate_pending();
         }
         // A seek repositioned the active variant: wake a reader parked on the
         // pre-seek range so it re-probes against the new position / flush gate.
@@ -501,13 +341,6 @@ impl HlsCoord {
             return Ok(ReadOutcome::Pending(PendingReason::VariantChange));
         }
         self.variant_serving(offset).read_at(offset, buf)
-    }
-
-    /// The bare readiness gate, captured by the cancel waker's `on_cancel`
-    /// closure (which needs a hard-`Send + Sync` handle). Re-vended from
-    /// [`Self::signal`].
-    pub(crate) fn ready_gate(&self) -> Arc<ThreadGate> {
-        self.signal.ready_gate()
     }
 
     /// Reconcile the ABR escape flag against the live stall geometry. Edge-
@@ -567,8 +400,12 @@ impl HlsCoord {
     /// Install the peer's `reader_advanced` wake so the `on_slow` hook can
     /// re-poll the peer when an in-flight fetch stalls past `soft_timeout`.
     /// Called once by `HlsPeer::activate`.
-    pub(crate) fn set_peer_wake(&self, wake: Arc<DeferredWake>) {
-        self.signal.set_peer_wake(wake);
+    pub(crate) fn set_peer_wake(
+        &self,
+        deferred: Arc<DeferredWake>,
+        direct: Arc<dyn kithara_stream::WorkerWake>,
+    ) {
+        self.signal.set_peer_wake(deferred, direct);
     }
 
     /// Install the audio worker's data-arrival wake (idempotent — only the
@@ -584,23 +421,6 @@ impl HlsCoord {
         self.signal.clone()
     }
 
-    /// Generalised boundary-free escape for the startup/stall livelock: the
-    /// reader is parked at a clean segment boundary on the active variant, that
-    /// segment's in-flight fetch has crossed `soft_timeout` without settling
-    /// (the variant cannot deliver the byte range the reader needs), and a
-    /// switch is pending. Unlike [`Self::urgent_rescue_boundary`] this is
-    /// direction- and container-agnostic: the commit reseeds the target at the
-    /// stalled segment (recreate path reseeds by playhead time, byte-continuity
-    /// at the boundary — both continuity-safe with nothing read past it).
-    /// Distinct from a normal startup, where the needed segment settles before
-    /// `soft_timeout` and the slow flag never sets.
-    pub(crate) fn stalled_escape(&self, reader_seg: u32) -> bool {
-        self.abr.peek_pending_decision().is_some()
-            && self
-                .active()
-                .segment_stalled_at_boundary(reader_seg, self.position())
-    }
-
     /// Mirror `abr.lock()` state to `seek_obs.is_pending()`.
     pub(crate) fn sync_abr_lock(&self) {
         let pending = self.seek_obs.is_pending();
@@ -610,56 +430,6 @@ impl HlsCoord {
         } else if !pending && locked {
             self.abr.unlock();
         }
-    }
-
-    /// Break the urgent-down-switch / blocked-reader deadlock: when the
-    /// active (slow) variant cannot deliver the next segment the reader
-    /// needs, an Auto-mode commit would otherwise wait for a boundary
-    /// cross that the undelivered segment prevents. Return the segment to
-    /// commit at (`download_head - 1`, so `commit_variant_switch`'s
-    /// `from_seg + 1` lands `switch_at = download_head`) when a proactive
-    /// rescue is both warranted and continuity-safe; otherwise `None`.
-    ///
-    /// Guards (all required):
-    /// - a pending decision exists and its reason is
-    ///   [`AbrReason::UrgentDownSwitch`] — only the rescue path commits
-    ///   early; opportunistic up/down-switches keep boundary-cross
-    ///   gating so `v_new` is not pinned prematurely;
-    /// - the target is a WAV byte-continuity variant — the structured
-    ///   recreate path reseeds by time and is not subject to this
-    ///   circular dependency;
-    /// - `download_head` is ahead of the reader's current segment, or
-    ///   exactly equals it while the byte cursor is still pinned to that
-    ///   segment boundary. This keeps the switch on a clean boundary:
-    ///   the reader finishes `v_old`'s loaded prefix and `v_new` takes
-    ///   over at `download_head`. If the cursor has advanced inside
-    ///   `download_head`, rescue is unsafe because it would become a
-    ///   mid-segment cross-bitrate switch;
-    /// - `download_head < num_segments`, i.e. `v_old` genuinely has
-    ///   un-downloaded tail (otherwise there is nothing to rescue from).
-    pub(crate) fn urgent_rescue_boundary(&self, reader_seg: u32) -> Option<u32> {
-        let decision = self.abr.peek_pending_decision()?;
-        if decision.reason() != AbrReason::UrgentDownSwitch {
-            return None;
-        }
-        if !matches!(
-            self.playlist_state
-                .variant_container(decision.target().get()),
-            Some(ContainerFormat::Wav)
-        ) {
-            return None;
-        }
-        let head = self.download_head();
-        let active = self.active();
-        if head >= active.num_segments() {
-            return None;
-        }
-        let at_head_boundary =
-            head == reader_seg && active.segment_byte_offset(head) == Some(self.position());
-        if head < reader_seg || (head == reader_seg && !at_head_boundary) {
-            return None;
-        }
-        Some(head.saturating_sub(1))
     }
 
     fn variant_change_pending(&self) -> bool {
@@ -727,7 +497,9 @@ impl HlsCoord {
             // Off-RT consumer (`Stream::read` / `prime_seek_range`): block on
             // the readiness gate until the range resolves, a segment fails, or
             // cancel fires. Event-driven — no wall-clock poll.
-            None => self.wait_range_blocking(range),
+            None => Self::wait_range_blocking(&self.signal, &self.cancel, || {
+                self.probe_range(range.clone(), Some(Duration::ZERO))
+            }),
         }
     }
 
@@ -741,21 +513,25 @@ impl HlsCoord {
     /// (mirrors `kithara-storage` `wait_range_inner`). A genuine wedge (no
     /// signal at all) trips the hang watchdog rather than parking forever.
     #[kithara::hang_watchdog(timeout = WAIT_HANG_TIMEOUT)]
-    fn wait_range_blocking(&self, range: Range<u64>) -> StreamResult<WaitOutcome> {
+    pub(super) fn wait_range_blocking(
+        signal: &SizeSignal,
+        cancel: &CancelToken,
+        mut probe: impl FnMut() -> StreamResult<WaitOutcome>,
+    ) -> StreamResult<WaitOutcome> {
         // Cancel is the one transition with no producer-side signal; register a
         // waker that signals the gate so a parked wait observes it. The guard
         // unregisters when this wait returns (mirror storage `wait.rs`).
         let _cancel_wake = {
-            let ready = self.ready_gate();
-            self.cancel.on_cancel(move || ready.signal())
+            let ready = signal.ready_gate();
+            cancel.on_cancel(move || ready.signal())
         };
         loop {
             hang_tick!();
             // Snapshot the gate BEFORE the probe: a signal landing between the
             // probe and the park advances the counter, so the park returns at
             // once and we re-probe — no lost wakeup.
-            let since = self.signal.current();
-            match self.probe_range(range.clone(), Some(Duration::from_millis(0))) {
+            let since = signal.current();
+            match probe() {
                 Ok(WaitOutcome::Ready) => return Ok(WaitOutcome::Ready),
                 Ok(WaitOutcome::Eof) => return Ok(WaitOutcome::Eof),
                 Ok(WaitOutcome::Interrupted) => return Ok(WaitOutcome::Interrupted),
@@ -771,7 +547,7 @@ impl HlsCoord {
             // after a seek; yield so the off-RT reader re-asserts its prefetch
             // aim and re-enters (mirrors the old per-iteration `notify_peer_wake`
             // without the wall-clock data poll).
-            if self.signal.wait_timeout(since, Self::READER_REAIM_INTERVAL) {
+            if signal.wait_timeout(since, Self::READER_REAIM_INTERVAL) {
                 // Woke from a signal — activity, not a wedge: reset the watchdog.
                 hang_reset!();
             } else {
@@ -816,36 +592,14 @@ impl HlsCoord {
 pub(super) fn variant_switch_target_time(
     seek_obs: &dyn SeekObserve,
     playhead_read: &dyn PlayheadRead,
+    landing: Option<Duration>,
 ) -> Duration {
     if seek_obs.is_pending() || seek_obs.is_flushing() {
         return seek_obs
             .target()
             .unwrap_or_else(|| playhead_read.position());
     }
-    playhead_read.position()
-}
-
-fn variant_switch_uses_byte_continuity(
-    same_codec: bool,
-    container: Option<ContainerFormat>,
-) -> bool {
-    match container {
-        Some(ContainerFormat::Wav) => true,
-        Some(
-            ContainerFormat::Adts
-            | ContainerFormat::Flac
-            | ContainerFormat::MpegAudio
-            | ContainerFormat::MpegTs
-            | ContainerFormat::Ogg,
-        ) => same_codec,
-        Some(
-            ContainerFormat::Caf
-            | ContainerFormat::Fmp4
-            | ContainerFormat::Mkv
-            | ContainerFormat::Mp4,
-        )
-        | None => false,
-    }
+    landing.unwrap_or_else(|| playhead_read.position())
 }
 
 /// `VariantControl` exposes the cross-variant fence/format-change surface
@@ -853,8 +607,11 @@ fn variant_switch_uses_byte_continuity(
 /// methods — non-adaptive sources vend `None` instead of implementing
 /// these.
 impl VariantControl for HlsCoord {
-    fn plan_variant_reader(&self) -> StreamResult<Option<VariantReaderPlan>> {
-        Self::plan_variant_reader(self)
+    fn plan_variant_reader(
+        &self,
+        landing: Option<Duration>,
+    ) -> StreamResult<Option<VariantReaderPlan>> {
+        Self::plan_variant_reader(self, landing)
     }
 
     fn prepare_variant_reader(
@@ -947,15 +704,18 @@ mod tests {
 
     use kithara_abr::{Abr, AbrController, AbrSettings, AbrState, PendingAbrClaim};
     use kithara_assets::{AssetResource, AssetSource, AssetStoreBuilder, StorageBackend};
-    use kithara_events::{AbrMode, AbrReason, Event, EventBus, VariantIndex};
-    use kithara_platform::sync::{Arc, ThreadGate};
+    use kithara_events::{AbrMode, AbrReason, EventBus, VariantIndex};
+    use kithara_platform::{
+        sync::{Arc, ThreadGate},
+        time::Instant,
+    };
     use kithara_stream::{
         AudioCodec, ContainerFormat, PlayheadWrite, ReaderInput, ReaderWarmup, SeekControl,
     };
 
     use super::*;
     use crate::{
-        config::{SizeProbeMethod, VariantSessionMode},
+        config::SizeProbeMethod,
         playlist::{PlaylistState, SegmentState, VariantState},
         segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
         variant::{PlanCtx, VariantParts},
@@ -976,9 +736,7 @@ mod tests {
         }
     }
 
-    fn switch_coord_with_mode(
-        mode: VariantSessionMode,
-    ) -> (Arc<HlsCoord>, EventBus, PlanCtx, Arc<AbrState>) {
+    fn switch_coord() -> (Arc<HlsCoord>, EventBus, PlanCtx, Arc<AbrState>) {
         let bus = EventBus::new(8);
         let cancel = CancelToken::never();
         let store = Arc::new(
@@ -991,7 +749,6 @@ mod tests {
         let ctx = PlanCtx {
             bus: bus.clone(),
             prefetch_budget: 1,
-            master_cancel: cancel.clone(),
             scope: store
                 .scope::<crate::Hls>(&AssetSource::Remote {
                     url: "https://example.com/master.m3u8"
@@ -1016,7 +773,6 @@ mod tests {
                     url: "https://example.com/v0-seg0.m4s".parse().expect("url"),
                     duration: Duration::from_secs(2),
                     byte_range_len: Some(100),
-                    index: crate::ids::SegmentIndex::try_new(0, 1).expect("idx"),
                 }],
             },
             VariantState {
@@ -1027,7 +783,6 @@ mod tests {
                     url: "https://example.com/v1-seg0.m4s".parse().expect("url"),
                     duration: Duration::from_secs(2),
                     byte_range_len: Some(100),
-                    index: crate::ids::SegmentIndex::try_new(0, 1).expect("idx"),
                 }],
             },
         ]));
@@ -1102,10 +857,7 @@ mod tests {
                 },
             ],
         });
-        let controller = Arc::new(AbrController::new(
-            AbrSettings::default(),
-            CancelToken::never(),
-        ));
+        let controller = Arc::new(AbrController::new(AbrSettings::default()));
         let handle = controller.register(&peer);
         abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
         let coord = Arc::new(HlsCoord::new(
@@ -1115,24 +867,14 @@ mod tests {
                 headers: None,
                 emit: Arc::new(DeferredBus::new(bus.clone(), 8)),
                 signal,
-                variant_sessions: mode,
             },
             Arc::new(PlayheadState::new()),
             Arc::new(SeekState::new()),
             handle,
             abr_publisher,
             variants,
-            playlist,
         ));
         (coord, bus, ctx, abr_state)
-    }
-
-    fn switch_coord() -> (Arc<HlsCoord>, EventBus, PlanCtx, Arc<AbrState>) {
-        switch_coord_with_mode(VariantSessionMode::Exact)
-    }
-
-    fn legacy_switch_coord() -> (Arc<HlsCoord>, EventBus, PlanCtx, Arc<AbrState>) {
-        switch_coord_with_mode(VariantSessionMode::Legacy)
     }
 
     fn incremental_profile(read_ahead_bytes: u64) -> ReaderProfile {
@@ -1143,11 +885,20 @@ mod tests {
         )
     }
 
+    /// Mint an intent that supersedes the one already queued for variant 1.
+    /// `request_target` keeps its ticket while the target is unchanged — the
+    /// ticket names the transition a consumer builds against — so the intent
+    /// has to leave and come back for its identity to advance.
+    fn renew_switch_intent(abr_state: &AbrState) {
+        abr_state.request_target(VariantIndex::new(0), AbrReason::ManualOverride);
+        abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+    }
+
     fn prepare_incoming(
         coord: &HlsCoord,
         profile: ReaderProfile,
     ) -> StreamResult<Option<VariantTransition>> {
-        let Some(plan) = VariantControl::plan_variant_reader(coord)? else {
+        let Some(plan) = VariantControl::plan_variant_reader(coord, None)? else {
             return Ok(None);
         };
         VariantControl::prepare_variant_reader(coord, plan, profile)
@@ -1180,7 +931,7 @@ mod tests {
         let _epoch = seek.begin(Duration::from_secs(5));
 
         assert_eq!(
-            variant_switch_target_time(&seek, &playhead),
+            variant_switch_target_time(&seek, &playhead, None),
             Duration::from_secs(5)
         );
     }
@@ -1195,7 +946,7 @@ mod tests {
         seek.clear_pending(epoch);
 
         assert_eq!(
-            variant_switch_target_time(&seek, &playhead),
+            variant_switch_target_time(&seek, &playhead, None),
             Duration::from_secs(5)
         );
     }
@@ -1211,76 +962,43 @@ mod tests {
         playhead.set_position(Duration::from_secs(9));
 
         assert_eq!(
-            variant_switch_target_time(&seek, &playhead),
+            variant_switch_target_time(&seek, &playhead, None),
             Duration::from_secs(9)
         );
     }
 
     #[kithara::test]
-    fn same_codec_fmp4_switch_recreates_decoder_boundary() {
-        assert!(!variant_switch_uses_byte_continuity(
-            true,
-            Some(ContainerFormat::Fmp4)
-        ));
+    fn variant_switch_target_prefers_the_named_landing_over_the_playhead() {
+        let seek = SeekState::new();
+        let playhead = PlayheadState::new();
+        playhead.set_position(Duration::from_secs(9));
+
+        assert_eq!(
+            variant_switch_target_time(&seek, &playhead, Some(Duration::from_secs(12))),
+            Duration::from_secs(12)
+        );
     }
 
     #[kithara::test]
-    fn same_codec_wav_switch_uses_byte_continuity() {
-        assert!(variant_switch_uses_byte_continuity(
-            true,
-            Some(ContainerFormat::Wav)
-        ));
-    }
+    fn variant_switch_target_keeps_the_seek_target_over_a_named_landing() {
+        let seek = SeekState::new();
+        let playhead = PlayheadState::new();
+        playhead.set_position(Duration::from_secs(9));
 
-    #[kithara::test(tokio)]
-    async fn variant_switch_fence_and_ack_publish_events() {
-        let (coord, bus, ctx, _abr_state) = legacy_switch_coord();
-        let mut events = bus.subscribe();
+        let _epoch = seek.begin(Duration::from_secs(5));
 
-        assert!(coord.commit_variant_switch_at_segment(&ctx, 0));
-        coord.clear_variant_fence();
-        coord.emit.flush();
-
-        assert!(matches!(
-            events.try_recv().map(|envelope| envelope.event),
-            Ok(Event::Hls(HlsEvent::VariantSwitchFenced {
-                from_variant: 0,
-                to_variant: 1,
-                cross_codec: true,
-            }))
-        ));
-        assert!(matches!(
-            events.try_recv().map(|envelope| envelope.event),
-            Ok(Event::Hls(HlsEvent::VariantSwitchAcked {
-                variant: 1,
-                generation: 1,
-            }))
-        ));
+        assert_eq!(
+            variant_switch_target_time(&seek, &playhead, Some(Duration::from_secs(12))),
+            Duration::from_secs(5)
+        );
     }
 
     #[kithara::test]
-    fn exact_session_mode_starts_with_one_resident_and_rejects_legacy_commit() {
-        let (coord, _bus, ctx, _abr_state) = switch_coord();
+    fn exact_session_starts_with_one_resident() {
+        let (coord, _bus, _ctx, _abr_state) = switch_coord();
 
         assert_eq!(coord.sessions.resident_count(), 1);
-        assert!(!coord.commit_variant_switch_at_segment(&ctx, 0));
         assert_eq!(coord.variant_index(), 0);
-    }
-
-    #[kithara::test(tokio)]
-    async fn legacy_session_mode_commits_boundary_switch_and_rejects_exact_plan() {
-        let (coord, _bus, ctx, _abr_state) = legacy_switch_coord();
-
-        let error = coord
-            .plan_variant_reader()
-            .expect_err("legacy mode must reject exact reader planning");
-        assert!(matches!(
-            error,
-            StreamError::Source(SourceError::Io(ref error))
-                if error.kind() == ErrorKind::InvalidInput
-        ));
-        assert!(coord.commit_variant_switch_at_segment(&ctx, 0));
-        assert_eq!(coord.variant_index(), 1);
     }
 
     #[kithara::test]
@@ -1288,7 +1006,7 @@ mod tests {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
 
         let plan = coord
-            .plan_variant_reader()
+            .plan_variant_reader(None)
             .expect("plan incoming")
             .expect("pending switch");
 
@@ -1300,7 +1018,7 @@ mod tests {
             Some(ContainerFormat::MpegAudio)
         );
         assert_eq!(plan.media_info().variant_index, Some(1));
-        assert_eq!(plan.base_offset(), 0);
+        assert_eq!(plan.landing_time(), Duration::ZERO);
         assert_eq!(
             coord.sessions.resident_count(),
             1,
@@ -1312,13 +1030,13 @@ mod tests {
     fn stale_variant_reader_plan_cannot_open_a_newer_intent() {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
         let stale = coord
-            .plan_variant_reader()
+            .plan_variant_reader(None)
             .expect("plan first incoming")
             .expect("first pending switch");
 
-        abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        renew_switch_intent(&abr_state);
         let current = coord
-            .plan_variant_reader()
+            .plan_variant_reader(None)
             .expect("plan replacement incoming")
             .expect("replacement pending switch");
 
@@ -1344,7 +1062,7 @@ mod tests {
     fn promotion_distinguishes_deferred_from_stale_transition() {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
         let plan = coord
-            .plan_variant_reader()
+            .plan_variant_reader(None)
             .expect("plan incoming")
             .expect("pending switch");
         let transition = plan.transition();
@@ -1358,7 +1076,7 @@ mod tests {
             VariantPromotion::Deferred
         );
 
-        abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        renew_switch_intent(&abr_state);
         assert_eq!(
             coord.promote_planned_variant(transition),
             VariantPromotion::Stale
@@ -1439,6 +1157,12 @@ mod tests {
         let mut commands = coord.dispatch_incoming(&ctx, 1);
         assert_eq!(commands.len(), 1);
         let mut command = commands.pop().expect("target fetch");
+        // Preparation carries no command priority. Tagging it `High` put the
+        // downloader's queue in charge of a decision the peer already makes by
+        // budget, and put it in charge the wrong way round: every queued
+        // preparation fetch drained ahead of the untagged fetches the audible
+        // decoder was parked on.
+        assert_eq!(command.priority, None);
         assert_eq!(command.url.as_str(), "https://example.com/v1-seg0.m4s");
         let mut writer = command.writer.take().expect("streaming writer");
 
@@ -1459,11 +1183,11 @@ mod tests {
         };
         assert_eq!(reader.transition(), transition);
         assert_eq!(reader.media_info().variant_index, Some(1));
-        assert_eq!(reader.base_offset(), 0);
+        assert_eq!(reader.landing_time(), Duration::ZERO);
         let (plan, reader) = reader.split();
         assert_eq!(plan.transition(), transition);
         assert_eq!(plan.media_info().variant_index, Some(1));
-        assert_eq!(plan.base_offset(), 0);
+        assert_eq!(plan.landing_time(), Duration::ZERO);
         let mut input = reader.into_inner();
         assert!(matches!(
             coord
@@ -1548,7 +1272,7 @@ mod tests {
             .clone();
         assert!(!stale_cancel.is_cancelled());
 
-        abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        renew_switch_intent(&abr_state);
         let current = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare replacement incoming")
             .expect("replacement pending switch");
@@ -1583,8 +1307,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn exact_session_mode_never_falls_back_to_legacy_commit() {
-        let (coord, _bus, ctx, abr_state) = switch_coord();
+    fn aborted_exact_intent_keeps_its_claim_without_switching() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
         let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
@@ -1592,7 +1316,6 @@ mod tests {
 
         abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
         assert!(!coord.has_incoming());
-        assert!(!coord.commit_variant_switch_at_segment(&ctx, 0));
         assert_eq!(coord.variant_index(), 0);
         assert!(coord.abr.claim_pending_decision().is_some());
     }
@@ -1600,20 +1323,42 @@ mod tests {
     #[kithara::test]
     fn locked_exact_intent_keeps_its_incoming_session() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        let transition = prepare_incoming(&coord, incremental_profile(32))
+        let plan = coord
+            .plan_variant_reader(None)
+            .expect("plan incoming")
+            .expect("pending switch");
+        let transition = plan.transition();
+        let landing_time = plan.landing_time();
+        coord
+            .prepare_planned_variant_reader(plan, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
+        coord.playhead_write().set_position(Duration::from_secs(9));
 
         coord.abr.lock();
+        let locked = coord
+            .plan_variant_reader(None)
+            .expect("locked plan")
+            .expect("locked incoming");
+        assert_eq!(locked.landing_time(), landing_time);
         assert_eq!(
-            prepare_incoming(&coord, incremental_profile(32)).expect("locked preparation probe"),
+            coord
+                .prepare_planned_variant_reader(locked, incremental_profile(32))
+                .expect("locked preparation probe"),
             Some(transition)
         );
         assert!(coord.has_incoming());
 
         coord.abr.unlock();
+        let ready = coord
+            .plan_variant_reader(None)
+            .expect("ready plan")
+            .expect("ready incoming");
+        assert_eq!(ready.landing_time(), landing_time);
         assert_eq!(
-            prepare_incoming(&coord, incremental_profile(32)).expect("unlocked preparation probe"),
+            coord
+                .prepare_planned_variant_reader(ready, incremental_profile(32))
+                .expect("unlocked preparation probe"),
             Some(transition)
         );
     }
@@ -1641,7 +1386,7 @@ mod tests {
     fn locked_exact_intent_rejects_a_different_reader_plan() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
         let plan = coord
-            .plan_variant_reader()
+            .plan_variant_reader(None)
             .expect("plan incoming")
             .expect("pending switch");
         let transition = plan.transition();
@@ -1652,7 +1397,7 @@ mod tests {
             .expect("pending switch");
         coord.abr.lock();
 
-        let mismatched = VariantReaderPlan::new(transition, media_info, 1);
+        let mismatched = VariantReaderPlan::new(transition, media_info, Duration::from_secs(1));
         let error = coord
             .prepare_planned_variant_reader(mismatched, incremental_profile(32))
             .expect_err("one transition cannot change reader plan while locked");
@@ -1669,7 +1414,7 @@ mod tests {
     fn locked_plan_drops_an_incoming_from_an_old_seek_epoch() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
         let plan = coord
-            .plan_variant_reader()
+            .plan_variant_reader(None)
             .expect("plan incoming")
             .expect("pending switch");
         coord
@@ -1680,7 +1425,10 @@ mod tests {
 
         let _epoch = coord.seek_control().begin(Duration::from_secs(1));
 
-        assert_eq!(coord.plan_variant_reader().expect("reject old epoch"), None);
+        assert_eq!(
+            coord.plan_variant_reader(None).expect("reject old epoch"),
+            None
+        );
         assert_eq!(coord.sessions.resident_count(), 1);
         assert_eq!(coord.selected_variant_for_seek(), 1);
     }
@@ -1689,7 +1437,7 @@ mod tests {
     fn ready_stale_plan_drops_old_epoch_incoming_without_deleting_selection() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
         let plan = coord
-            .plan_variant_reader()
+            .plan_variant_reader(None)
             .expect("plan incoming")
             .expect("pending switch");
         let stale = plan.clone();
@@ -1717,21 +1465,20 @@ mod tests {
 
     #[kithara::test]
     fn exact_session_mode_accepts_intent_created_before_coord() {
-        let (coord, _bus, ctx, _abr_state) = switch_coord();
+        let (coord, _bus, _ctx, _abr_state) = switch_coord();
         let plan = coord
-            .plan_variant_reader()
+            .plan_variant_reader(None)
             .expect("plan pre-existing exact intent")
             .expect("fixture requested target before coord construction");
 
         assert_eq!(plan.transition().active_variant(), VariantIndex::new(0));
         assert_eq!(plan.transition().incoming_variant(), VariantIndex::new(1));
-        assert!(!coord.commit_variant_switch_at_segment(&ctx, 0));
         assert_eq!(coord.variant_index(), 0);
     }
 
     #[kithara::test]
     fn terminal_exact_preparation_error_aborts_its_claim() {
-        let (coord, _bus, ctx, abr_state) = switch_coord();
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
         abr_state.set_mode(AbrMode::Auto(Some(VariantIndex::new(0))));
         abr_state.request_target(VariantIndex::new(9), AbrReason::UpSwitch);
 
@@ -1742,7 +1489,6 @@ mod tests {
             StreamError::Source(SourceError::VariantNotFound(_))
         ));
         assert!(coord.abr.claim_pending_decision().is_none());
-        assert!(!coord.commit_variant_switch_at_segment(&ctx, 0));
         assert_eq!(coord.variant_index(), 0);
     }
 

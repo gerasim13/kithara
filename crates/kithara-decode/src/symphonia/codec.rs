@@ -24,7 +24,7 @@ use symphonia::core::{
 
 use crate::{
     GaplessInfo,
-    codec::{CodecPriming, FrameCodec},
+    codec::{CodecPriming, FrameCodec, access_unit_frames},
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
     symphonia::config::SymphoniaConfig,
@@ -49,6 +49,7 @@ impl Consts {
 
 /// Frame codec backed by a symphonia codec registry decoder.
 pub(crate) struct SymphoniaCodec {
+    codec: Option<AudioCodec>,
     decoder: Box<dyn AudioDecoder>,
     /// Decoder-owned playback contract. Populated from container-level
     /// gapless metadata captured by the demuxer before the codec is
@@ -90,6 +91,7 @@ impl SymphoniaCodec {
             .map_or(2, |c| u16::try_from(c.count()).unwrap_or(2));
         let spec = PcmSpec::checked(channels, raw_rate, "symphonia.codec.native")?;
         Ok(Self {
+            codec: None,
             decoder,
             spec,
             track_info: DecoderTrackInfo::default(),
@@ -147,6 +149,7 @@ impl SymphoniaCodec {
 
         let spec = PcmSpec::checked(track.channels, track.sample_rate, "symphonia.codec.track")?;
         Ok(Self {
+            codec: Some(track.codec),
             decoder,
             spec,
             track_info: DecoderTrackInfo {
@@ -245,6 +248,14 @@ impl FrameCodec for SymphoniaCodec {
 
     fn decoder_algo_delay(&self, codec: AudioCodec) -> u64 {
         symphonia_decoder_algo_delay(codec)
+    }
+
+    fn timestamp_bias_frames(&self) -> u64 {
+        if cfg!(feature = "fdk-aac") {
+            self.codec.map_or(0, access_unit_frames).into()
+        } else {
+            0
+        }
     }
 
     fn flush(&mut self) -> DecodeResult<()> {

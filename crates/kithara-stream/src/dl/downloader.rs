@@ -6,7 +6,7 @@ use kithara_events::{EventBus, RequestId};
 use kithara_net::HttpClient;
 use kithara_platform::{
     CancelScope, CancelToken,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, Notify, RwLock},
     time::Duration,
     tokio,
     tokio::{sync::mpsc, task},
@@ -66,6 +66,10 @@ pub(super) struct DownloaderInner {
     /// Waker fired when a fetch task completes (inflight decremented).
     /// Wakes `poll_fn` in `Registry::tick` so it can spawn more work.
     pub(super) fetch_waker: Arc<AtomicWaker>,
+    /// Completion edge consumed when queued work is blocked only by the global
+    /// concurrency limit. Unlike the fetch waker, this retains one permit
+    /// across the check-to-await window.
+    pub(super) capacity_notify: Arc<Notify>,
     /// Global in-flight fetch counter. Limits total concurrent HTTP
     /// connections across all peers and command types.
     pub(super) inflight: Arc<AtomicUsize>,
@@ -115,7 +119,7 @@ impl Downloader {
         // Composed/standalone seam: `Some` parent → child of it; `None` → own
         // root. The loop, peers, and ABR controller all derive from this token.
         let cancel = CancelScope::new(config.cancel).token();
-        let abr = AbrController::new(config.abr_settings, cancel.child());
+        let abr = AbrController::new(config.abr_settings);
         Self {
             inner: Arc::new(DownloaderInner {
                 soft_timeout,
@@ -128,6 +132,7 @@ impl Downloader {
                 demand_throttle: config.demand_throttle,
                 inflight: Arc::new(AtomicUsize::new(0)),
                 fetch_waker: Arc::new(AtomicWaker::new()),
+                capacity_notify: Arc::new(Notify::default()),
                 register_tx: tx,
                 register_rx: Mutex::new(Some(rx)),
                 next_request_id: AtomicU64::new(1),

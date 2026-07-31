@@ -3,7 +3,7 @@ use kithara_stream::{AudioCodec, ContainerFormat};
 use url::Url;
 
 use crate::{
-    ids::{SegmentIndex, VariantIndex},
+    ids::VariantIndex,
     playlist::parse::{MediaPlaylist, VariantStream},
 };
 
@@ -16,8 +16,6 @@ pub struct SegmentState {
     pub byte_range_len: Option<u64>,
     /// Absolute URL of the segment.
     pub url: Url,
-    /// Bounded segment index within the variant's media playlist.
-    pub(crate) index: SegmentIndex,
 }
 
 /// Per-variant parsed data.
@@ -81,22 +79,18 @@ impl FromWithParams<&[VariantStream], &[MediaPlaylist]> for PlaylistState {
                     .as_ref()
                     .and_then(|init| media_url.join(&init.uri).ok());
 
-                let num_segments = playlist.segments.len();
                 let segments: Vec<SegmentState> = playlist
                     .segments
                     .iter()
-                    .enumerate()
-                    .filter_map(|(idx, seg)| {
-                        let index = SegmentIndex::try_new(idx, num_segments)?;
+                    .map(|seg| {
                         let url = media_url
                             .join(&seg.uri)
                             .unwrap_or_else(|_| media_url.clone());
-                        Some(SegmentState {
-                            index,
+                        SegmentState {
                             url,
                             duration: seg.duration,
                             byte_range_len: seg.byte_range_len,
-                        })
+                        }
                     })
                     .collect();
 
@@ -145,18 +139,6 @@ impl PlaylistState {
 /// solely to group the visibility of N methods under a single
 /// `pub(crate)` marker rather than annotating each one individually.
 pub(crate) trait PlaylistAccess: Send + Sync {
-    /// Resolve the segment whose decode-time window contains `target` from
-    /// the parsed playlist, returning `(index, segment_start, segment_end)`.
-    /// Cold path: the cross-variant switch reseed in
-    /// [`HlsCoord::commit_variant_switch`]. The per-seek hot path
-    /// (`HlsVariant::seek_time_anchor`) bisects the active variant's
-    /// decode-time table directly instead.
-    fn find_seek_point_for_time(
-        &self,
-        variant: VariantIndex,
-        target: Duration,
-    ) -> Option<(usize, Duration, Duration)>;
-
     fn init_url(&self, variant: VariantIndex) -> Option<Url>;
     fn segment_byte_range_len(&self, variant: VariantIndex, index: usize) -> Option<u64>;
     fn segment_decode_range(
@@ -168,40 +150,6 @@ pub(crate) trait PlaylistAccess: Send + Sync {
 }
 
 impl PlaylistAccess for PlaylistState {
-    fn find_seek_point_for_time(
-        &self,
-        variant: VariantIndex,
-        target: Duration,
-    ) -> Option<(usize, Duration, Duration)> {
-        let lock = self.variants.get(variant)?;
-        let state = lock.read();
-        if state.segments.is_empty() {
-            return None;
-        }
-
-        let result = {
-            let mut elapsed = Duration::ZERO;
-            let mut found = None;
-            for segment in &state.segments {
-                let segment_start = elapsed;
-                let segment_end = segment_start.saturating_add(segment.duration);
-                if target < segment_end {
-                    found = Some((segment.index.into_inner(), segment_start, segment_end));
-                    break;
-                }
-                elapsed = segment_end;
-            }
-            found.or_else(|| {
-                state.segments.last().map(|tail| {
-                    let tail_start = elapsed.saturating_sub(tail.duration);
-                    (tail.index.into_inner(), tail_start, elapsed)
-                })
-            })
-        };
-        drop(state);
-        result
-    }
-
     fn init_url(&self, variant: VariantIndex) -> Option<Url> {
         let lock = self.variants.get(variant)?;
         let state = lock.read();
@@ -294,9 +242,8 @@ mod tests {
         Url::parse(raw).expect("valid test URL")
     }
 
-    fn make_segment(index: usize, num_segments: usize) -> SegmentState {
+    fn make_segment(index: usize) -> SegmentState {
         SegmentState {
-            index: SegmentIndex::try_new(index, num_segments).expect("in-bounds segment index"),
             url: base_url()
                 .join(&format!("segment-{index}.m4s"))
                 .expect("valid segment URL"),
@@ -310,13 +257,12 @@ mod tests {
         byte_ranges: impl IntoIterator<Item = Option<u64>>,
     ) -> VariantState {
         let ranges: Vec<Option<u64>> = byte_ranges.into_iter().collect();
-        let num_segments = ranges.len();
         let segments: Vec<SegmentState> = ranges
             .iter()
             .copied()
             .enumerate()
             .map(|(idx, byte_range_len)| {
-                let mut segment = make_segment(idx, num_segments);
+                let mut segment = make_segment(idx);
                 segment.byte_range_len = byte_range_len;
                 segment
             })
@@ -396,46 +342,6 @@ mod tests {
 
         assert_eq!(state.segment_byte_range_len(0, 0), Some(200));
         assert_eq!(state.segment_byte_range_len(0, 1), None);
-    }
-
-    #[kithara::test(wasm)]
-    #[case::segment_0_start(0, 0)]
-    #[case::segment_0_last_ms(3999, 0)]
-    #[case::segment_1_start(4000, 1)]
-    #[case::segment_1_last_ms(7999, 1)]
-    #[case::segment_2_start(8000, 2)]
-    #[case::segment_3_start(12000, 3)]
-    #[case::past_end_clamps_to_last(999_999, 3)]
-    fn test_seek_point_for_time_deterministic(
-        #[case] target_ms: u64,
-        #[case] expected_segment: usize,
-    ) {
-        let state = PlaylistState::new(vec![make_variant(0, 4)]);
-        let seek_point = state
-            .find_seek_point_for_time(0, Duration::from_millis(target_ms))
-            .expect("seek point");
-        assert_eq!(seek_point.0, expected_segment);
-    }
-
-    #[kithara::test]
-    fn test_seek_point_for_time_boundary_at_track_end() {
-        let state = PlaylistState::new(vec![make_variant(0, 4)]);
-        let seek_point = state
-            .find_seek_point_for_time(0, Duration::from_millis(16_000))
-            .expect("seek point");
-        assert_eq!(seek_point.0, 3);
-    }
-
-    #[kithara::test]
-    fn test_find_seek_point_for_time_returns_segment_bounds() {
-        let state = PlaylistState::new(vec![make_variant(0, 4)]);
-        let seek_point = state
-            .find_seek_point_for_time(0, Duration::from_millis(8_500))
-            .expect("seek point");
-
-        assert_eq!(seek_point.0, 2);
-        assert_eq!(seek_point.1, Duration::from_secs(8));
-        assert_eq!(seek_point.2, Duration::from_secs(12));
     }
 
     #[kithara::test]

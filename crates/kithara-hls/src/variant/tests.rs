@@ -1,18 +1,16 @@
 use std::{
     num::NonZeroU64,
-    sync::{
-        Barrier, OnceLock,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::{Barrier, OnceLock},
     thread,
 };
 
+use kithara_abr::AbrState;
 use kithara_assets::{
     AcquisitionResult, AssetResource, AssetScope, AssetSource, AssetStoreBuilder, StorageBackend,
     WriteSide,
 };
 use kithara_drm::DecryptContext;
-use kithara_events::{Event, EventBus, HlsEvent};
+use kithara_events::{AbrMode, AbrReason, Event, EventBus, HlsEvent, VariantIndex};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, ThreadGate},
@@ -21,17 +19,15 @@ use kithara_platform::{
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     AudioCodec, ContainerFormat, ReadOutcome, ReaderInput, ReaderProfile, ReaderWarmup,
-    SeekControl, SeekObserve, SeekState, SourceError, SourcePhase, StreamError,
+    SeekControl, SeekObserve, SeekState, SourceError, SourcePhase, StreamError, VariantTransition,
+    VariantTransitionId,
 };
 use kithara_test_utils::kithara;
 use url::Url;
 
-use super::{
-    HlsVariant, PlanCtx, SegmentActivateParams, SizeDemand, VariantParts, segment_placeholder_size,
-};
+use super::{HlsVariant, PlanCtx, SizeDemand, VariantParts, segment_placeholder_size};
 use crate::{
-    config::{SizeProbeMethod, VariantSessionMode},
-    ids::SegmentIndex,
+    config::SizeProbeMethod,
     playlist::{PlaylistState, SegmentState, VariantState},
     segment::{
         InitSegment, MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize,
@@ -52,7 +48,6 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
     PlanCtx {
         bus: EventBus::new(8),
         prefetch_budget,
-        master_cancel: cancel,
         scope: backend
             .scope::<crate::Hls>(&AssetSource::Remote {
                 url: Url::parse("https://example.com/master.m3u8").expect("master url"),
@@ -145,6 +140,17 @@ fn make_var(variant: usize, init_size: u64, media_sizes: &[u64], ctx: &PlanCtx) 
     )
 }
 
+fn active_session(v: &Arc<HlsVariant>, ctx: &PlanCtx, position: u64) -> HlsSession {
+    HlsSession::active(
+        CancelToken::never(),
+        Arc::new(SeekState::new()),
+        ctx.signal.clone(),
+        v.variant,
+        Arc::clone(v),
+        position,
+    )
+}
+
 fn make_var_with_seek_obs(
     variant: usize,
     init_size: u64,
@@ -188,7 +194,6 @@ fn make_playlist_state(
                 url,
                 duration: Duration::from_secs(2),
                 byte_range_len: None,
-                index: SegmentIndex::try_new(idx, count).expect("in-bounds segment"),
             }
         })
         .collect();
@@ -378,106 +383,31 @@ fn segment_aware_seek_alias_routes_tail_by_segment_index() {
 fn position_starts_at_zero() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400], &ctx);
-    assert_eq!(v.get_position(), 0);
-}
-
-/// Phase K.0.2 invariant. `HlsCoord::commit_variant_switch`
-/// (same-codec branch) calls `activate_at_segment_with_shift` BEFORE
-/// `abr.apply_decision`, so a reader observing `current_variant := new`
-/// must see `v_new` with all activation atomics published. This test
-/// asserts the variant-side half of that contract: every relevant
-/// atomic carries the post-activation value the moment the call
-/// returns.
-#[kithara::test]
-fn activate_at_segment_with_shift_publishes_all_state_before_returning() {
-    let ctx = test_ctx(3);
-    let v = make_var(0, 200, &[400, 400, 400, 400], &ctx);
-    assert_eq!(v.served_from(), 0);
-    assert_eq!(
-        v.segment_byte_offset(2),
-        Some(1_000),
-        "natural offset of seg 2 = 200 init + 400 + 400"
-    );
-
-    let from_seg: u32 = 2;
-    let seg_boundary: u64 = 1_500;
-    let reader_pos: u64 = 1_600;
-    v.activate_at_segment_with_shift(
-        &ctx,
-        SegmentActivateParams {
-            from_seg,
-            reader_pos,
-            seg_boundary,
-        },
-    );
-
-    assert_eq!(
-        v.served_from(),
-        from_seg,
-        "served_from must equal the activation segment after return"
-    );
-    assert_eq!(
-        v.segment_byte_offset(from_seg),
-        Some(seg_boundary),
-        "from_seg must be pinned at seg_boundary (encodes byte_shift = \
-         seg_boundary - natural_offset = 500)"
-    );
-    let seg3_virtual = v.segment_byte_offset(3).expect("seg 3 addressable");
-    assert!(
-        v.find_at_offset(seg3_virtual).is_some(),
-        "served_until must span all segments after a fresh activate"
-    );
-    assert_eq!(
-        v.get_position(),
-        reader_pos,
-        "position must follow the requested reader_pos"
-    );
-    assert!(
-        v.seek.exact_byte_seek.load().is_none(),
-        "ABR byte-continuity activation mirrors the old reader cursor; it must not register a seek-style exact-byte demand in the incoming variant"
-    );
+    let session = active_session(&v, &ctx, 0);
+    assert_eq!(session.position(), 0);
 }
 
 #[kithara::test]
-fn descriptor_at_byte_uses_virtual_shifted_range() {
+fn descriptor_at_byte_uses_the_find_at_offset_range() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400, 400, 400], &ctx);
 
-    v.activate_at_segment_with_shift(
-        &ctx,
-        SegmentActivateParams {
-            from_seg: 2,
-            reader_pos: 1_500,
-            seg_boundary: 1_500,
-        },
-    );
-
-    let descriptor = v
-        .descriptor_at_byte(1_550)
-        .expect("shifted segment 2 resolves");
+    let descriptor = v.descriptor_at_byte(1_050).expect("segment 2 resolves");
 
     assert_eq!(descriptor.segment_index, 2);
     assert_eq!(
         descriptor.byte_range,
-        1_500..1_900,
-        "ByteMap descriptors must use the same virtual coordinates as \
+        1_000..1_400,
+        "ByteMap descriptors must use the same coordinates as \
          find_at_offset/read_at/phase_at"
     );
 }
 
 #[kithara::test]
-fn reset_to_full_range_uses_live_init_size_after_shifted_activation() {
+fn reset_to_full_range_uses_live_init_size() {
     let ctx = test_ctx(3);
     let v = make_var(0, 600, &[400, 400], &ctx);
 
-    v.activate_at_segment_with_shift(
-        &ctx,
-        SegmentActivateParams {
-            from_seg: 1,
-            reader_pos: 1_000,
-            seg_boundary: 1_000,
-        },
-    );
     v.layout.apply_commit(v.segments(), || {
         v.apply_loaded_size(PlannedFetch::Init, 588);
         v.init_size()
@@ -488,87 +418,7 @@ fn reset_to_full_range_uses_live_init_size_after_shifted_activation() {
     assert_eq!(
         v.segment_byte_offset(0),
         Some(588),
-        "full-range reset must leave shifted/frozen init geometry and use \
-         the committed live init length"
-    );
-}
-
-/// Coordinate-frame coherence under a concurrent variant switch.
-///
-/// `find_virtual` reads `byte_shift` and the served bounds in separate
-/// steps; a reader on the decode thread races
-/// `activate_at_segment_with_shift` / `reset_to_full_range` on the
-/// scheduler thread. Byte 2000 is served by BOTH the full frame
-/// (shift 0, served [0,8) -> seg 1) and the activated frame
-/// (shift -5000, served [4,8) -> seg 6), so a coherent read always
-/// resolves it. The only way `find_virtual` returns `None` is a torn
-/// read that pairs `byte_shift == 0` (full frame) with
-/// `served_from == 4` (activated frame) -> seg 1 falls below the served
-/// range. That `(0, 4)` pairing is never a real activation frame, so
-/// every `None` is a split-lock tear. Offsets are value-identical across
-/// both frames (seed 1000, fixed sizes), isolating the tear to
-/// `byte_shift` + `served_from`.
-#[kithara::test]
-fn concurrent_switch_keeps_coordinate_reads_coherent() {
-    let ctx = test_ctx(8);
-    let v = make_var(0, 1000, &[1000; 8], &ctx);
-
-    v.reset_to_full_range();
-    assert!(
-        v.find_at_offset(2000).is_some(),
-        "full frame must serve byte 2000"
-    );
-    v.activate_at_segment_with_shift(
-        &ctx,
-        SegmentActivateParams {
-            from_seg: 4,
-            seg_boundary: 0,
-            reader_pos: 0,
-        },
-    );
-    assert!(
-        v.find_at_offset(2000).is_some(),
-        "activated frame must serve byte 2000"
-    );
-
-    const ITERS: usize = 50_000;
-    let barrier = Barrier::new(2);
-    let torn = AtomicUsize::new(0);
-
-    thread::scope(|s| {
-        s.spawn(|| {
-            barrier.wait();
-            for i in 0..ITERS {
-                if i % 2 == 0 {
-                    v.reset_to_full_range();
-                } else {
-                    v.activate_at_segment_with_shift(
-                        &ctx,
-                        SegmentActivateParams {
-                            from_seg: 4,
-                            seg_boundary: 0,
-                            reader_pos: 0,
-                        },
-                    );
-                }
-            }
-        });
-        s.spawn(|| {
-            barrier.wait();
-            for _ in 0..ITERS {
-                if v.find_at_offset(2000).is_none() {
-                    torn.fetch_add(1, Ordering::Relaxed);
-                }
-            }
-        });
-    });
-
-    assert_eq!(
-        torn.load(Ordering::Relaxed),
-        0,
-        "byte 2000 is served by both activation frames; a None means \
-         find_virtual mixed byte_shift and served_from from different \
-         frames (split-lock torn read)"
+        "full-range reset must use the committed live init length"
     );
 }
 
@@ -576,19 +426,21 @@ fn concurrent_switch_keeps_coordinate_reads_coherent() {
 fn advance_increments_position() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400], &ctx);
-    v.advance(64);
-    assert_eq!(v.get_position(), 64);
-    v.advance(36);
-    assert_eq!(v.get_position(), 100);
+    let session = active_session(&v, &ctx, 0);
+    session.advance(64);
+    assert_eq!(session.position(), 64);
+    session.advance(36);
+    assert_eq!(session.position(), 100);
 }
 
 #[kithara::test]
 fn set_position_overrides_cursor() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400], &ctx);
-    v.advance(50);
-    v.set_position(1234);
-    assert_eq!(v.get_position(), 1234);
+    let session = active_session(&v, &ctx, 0);
+    session.advance(50);
+    session.set_position(1234);
+    assert_eq!(session.position(), 1234);
 }
 
 #[kithara::test]
@@ -686,9 +538,9 @@ fn find_at_offset_reflects_post_commit_size_shrink() {
 
 /// `total_bytes()` is a lock-free `AtomicU64` snapshot (RT produce-core read).
 /// It must still track every write-lock mutation — a post-commit size shrink
-/// and a `set_served_until` range narrowing both republish the cached total.
+/// republishes the cached total.
 #[kithara::test]
-fn total_bytes_lock_free_tracks_commit_and_served_until() {
+fn total_bytes_lock_free_tracks_commit() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400, 400, 400], &ctx);
     assert_eq!(v.total_bytes(), 200 + 400 * 4, "init + 4 media segments");
@@ -701,14 +553,6 @@ fn total_bytes_lock_free_tracks_commit_and_served_until() {
         v.total_bytes(),
         200 + 384 + 400 * 3,
         "lock-free total reflects the post-commit shrink of seg 0"
-    );
-
-    // Serve only [0, 2): the cached total ends at seg 1's tail.
-    v.set_served_until(2);
-    assert_eq!(
-        v.total_bytes(),
-        200 + 384 + 400,
-        "lock-free total reflects the narrowed served range"
     );
 }
 
@@ -778,7 +622,8 @@ fn variant_init_not_applicable_no_acquire() {
         !queue_has_init(&v),
         "a None init slot must never enqueue PlannedFetch::Init"
     );
-    let cmds = v.dispatch(&ctx, 10);
+    let session = active_session(&v, &ctx, 0);
+    let cmds = session.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 2, "only the two media segments dispatch");
     let seg0_url = v.segments()[0].url().clone();
     assert_eq!(cmds[0].url, seg0_url, "first cmd is seg 0, not an init");
@@ -806,7 +651,8 @@ fn variant_init_pending_for_fmp4() {
         queue_has_init(&v),
         "Pending init must enqueue PlannedFetch::Init first"
     );
-    let cmds = v.dispatch(&ctx, 10);
+    let session = active_session(&v, &ctx, 0);
+    let cmds = session.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 3, "init + two media segments dispatch");
     assert_eq!(cmds[0].url, init_url, "init dispatched first");
 }
@@ -979,17 +825,26 @@ fn descriptor_after_byte_finds_next_segment() {
 }
 
 #[kithara::test]
-fn rebuild_refills_queue_without_touching_cancel_token() {
+fn rebuild_refills_queue_without_touching_session_cancel() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100; 6], &ctx);
     push_planned(&v, 0);
-    let token = v.cancel_handle();
+    let token = CancelToken::root();
+    let session = HlsSession::active(
+        token.clone(),
+        Arc::new(SeekState::new()),
+        ctx.signal.clone(),
+        0,
+        Arc::clone(&v),
+        0,
+    );
     assert!(!token.is_cancelled());
     v.rebuild(&ctx, 2);
     assert!(
         !token.is_cancelled(),
-        "rebuild must NOT cancel the variant token — that's reserved for variant deactivation"
+        "rebuild must not cancel its reader session"
     );
+    assert_eq!(session.position(), 0);
     assert_eq!(queue_seg_indices(&v), vec![2, 3, 4, 5]);
 }
 
@@ -1034,7 +889,7 @@ fn segment_aware_seek_time_anchor_fetches_preroll_segment() {
     .into_variant(0, &ctx);
 
     let anchor = v
-        .seek_time_anchor(Duration::from_secs(4))
+        .prepare_seek_time_anchor(Duration::from_secs(4))
         .expect("seek anchor")
         .expect("segment-aware anchor");
 
@@ -1044,47 +899,11 @@ fn segment_aware_seek_time_anchor_fetches_preroll_segment() {
         "decoder anchor remains the target segment boundary"
     );
     assert_eq!(
-        v.get_position(),
-        200,
-        "reader position remains the decoder anchor"
-    );
-    assert_eq!(
         queue_seg_indices(&v),
         vec![1, 2, 3, 4],
         "fetch queue includes the segment a codec warmup backoff may read"
     );
     assert_eq!(v.prefetch_anchor(), 100);
-}
-
-#[kithara::test]
-fn segment_aware_seek_rejects_an_unmapped_preroll_offset() {
-    let ctx = test_ctx(3);
-    let v = VariantParts {
-        init: None,
-        segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-        codec: Some(AudioCodec::AacLc),
-        container: Some(ContainerFormat::Fmp4),
-    }
-    .into_variant(0, &ctx);
-    v.activate_at_segment_with_shift(
-        &ctx,
-        SegmentActivateParams {
-            from_seg: 2,
-            seg_boundary: 50,
-            reader_pos: 50,
-        },
-    );
-
-    let error = v
-        .prepare_seek_time_anchor(Duration::from_secs(4))
-        .expect_err("unmapped preroll geometry must fail");
-
-    assert!(matches!(
-        error,
-        StreamError::Source(SourceError::SegmentNotFound(message))
-            if message.contains("seek prefetch offset not found")
-    ));
 }
 
 #[kithara::test]
@@ -1152,6 +971,132 @@ fn exact_size_rebuild_with_decoder_probe_starts_tail_at_target_segment() {
 }
 
 #[kithara::test]
+fn incoming_reader_preparation_keeps_the_landing_fetch_anchor() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: make_init(48, &ctx.scope),
+        segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::Pcm),
+        container: Some(ContainerFormat::Wav),
+    }
+    .into_variant(0, &ctx);
+    let profile = ReaderProfile::new(
+        ReaderInput::Incremental,
+        ReaderWarmup::None,
+        NonZeroU64::new(64).expect("non-zero read ahead"),
+    );
+
+    let preparation = v
+        .prepare_reader(profile, Duration::from_secs(4))
+        .expect("incoming reader preparation");
+
+    assert_eq!(preparation.anchor().segment_index, Some(2));
+    assert_eq!(preparation.anchor().byte_offset, 248);
+    assert!(queue_has_init(&v));
+    assert_eq!(queue_seg_indices(&v), vec![0, 2, 3, 4]);
+    assert!(!queue_seg_indices(&v).contains(&1));
+    assert_eq!(v.prefetch_anchor(), 248);
+}
+
+#[kithara::test]
+fn incoming_session_seeds_probe_without_fetching_the_middle_gap() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: make_init(48, &ctx.scope),
+        segments: (0..6).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::Flac),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(1, &ctx);
+    let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+    let claim = abr
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("incoming transition claim");
+    let transition = VariantTransition::new(
+        VariantTransitionId::new(claim.ticket(), 0),
+        VariantIndex::new(0),
+        VariantIndex::new(1),
+    );
+    let profile = ReaderProfile::new(
+        ReaderInput::Incremental,
+        ReaderWarmup::None,
+        NonZeroU64::new(64).expect("non-zero read ahead"),
+    );
+
+    let session = HlsSession::incoming(
+        CancelToken::never(),
+        profile,
+        Arc::new(SeekState::new()),
+        ctx.signal.clone(),
+        transition,
+        Arc::clone(&v),
+        Duration::from_secs(8),
+    )
+    .expect("incoming session");
+
+    assert_eq!(session.position(), 0);
+    assert!(!v.seek_projection_is_live());
+    assert!(queue_has_init(&v));
+    assert_eq!(queue_seg_indices(&v), vec![0, 3, 4, 5]);
+    assert!(
+        !queue_seg_indices(&v)
+            .iter()
+            .any(|segment| (1..3).contains(segment))
+    );
+    assert_eq!(
+        v.prefetch_anchor(),
+        v.segment_byte_offset(4).expect("landing segment offset")
+    );
+}
+
+#[kithara::test]
+fn incoming_session_dispatches_only_the_decoder_construction_window() {
+    let ctx = test_ctx(10);
+    let v = VariantParts {
+        init: make_init(48, &ctx.scope),
+        segments: (0..10).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::Flac),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(1, &ctx);
+    let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+    let claim = abr
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("incoming transition claim");
+    let transition = VariantTransition::new(
+        VariantTransitionId::new(claim.ticket(), 0),
+        VariantIndex::new(0),
+        VariantIndex::new(1),
+    );
+    let profile = ReaderProfile::new(
+        ReaderInput::Incremental,
+        ReaderWarmup::None,
+        NonZeroU64::new(64).expect("non-zero read ahead"),
+    );
+    let session = HlsSession::incoming(
+        CancelToken::never(),
+        profile,
+        Arc::new(SeekState::new()),
+        ctx.signal.clone(),
+        transition,
+        Arc::clone(&v),
+        Duration::from_secs(8),
+    )
+    .expect("incoming session");
+
+    let commands = session.dispatch(&ctx, 10);
+
+    assert_eq!(commands.len(), 4, "init, probe, backoff, and landing");
+    assert_eq!(queue_seg_indices(&v), vec![5, 6, 7, 8, 9]);
+    assert!(session.dispatch(&ctx, 10).is_empty());
+}
+
+#[kithara::test]
 fn dispatch_emits_init_first_then_segments_under_budget() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400, 400], &ctx);
@@ -1160,7 +1105,8 @@ fn dispatch_emits_init_first_then_segments_under_budget() {
     let seg1_url = v.segments()[1].url().clone();
     let seg2_url = v.segments()[2].url().clone();
     v.rebuild(&ctx, 0);
-    let cmds = v.dispatch(&ctx, 10);
+    let session = active_session(&v, &ctx, 0);
+    let cmds = session.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 4);
     assert_eq!(cmds[0].url, init_url, "init dispatched first");
     assert_eq!(cmds[1].url, seg0_url);
@@ -1176,7 +1122,8 @@ fn dispatch_respects_budget() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100; 10], &ctx);
     v.rebuild(&ctx, 0);
-    let cmds = v.dispatch(&ctx, 3);
+    let session = active_session(&v, &ctx, 0);
+    let cmds = session.dispatch(&ctx, 3);
     assert_eq!(cmds.len(), 3);
     assert_eq!(queue_seg_indices(&v), vec![3, 4, 5, 6, 7, 8, 9]);
 }
@@ -1187,8 +1134,9 @@ fn dispatch_respects_segment_lookahead_cap() {
     ctx.look_ahead_segments = Some(2);
     let v = make_var(0, 0, &[100; 6], &ctx);
     v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
 
-    let cmds = v.dispatch(&ctx, 10);
+    let cmds = session.dispatch(&ctx, 10);
 
     assert_eq!(cmds.len(), 2);
     assert_eq!(queue_seg_indices(&v), vec![2, 3, 4, 5]);
@@ -1203,7 +1151,8 @@ fn dispatch_skips_non_missing_segments() {
     for seg in 0..3_u32 {
         push_planned(&v, seg);
     }
-    let cmds = v.dispatch(&ctx, 10);
+    let session = active_session(&v, &ctx, 0);
+    let cmds = session.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 2);
     assert!(v.segments()[1].state().is_loaded());
 }
@@ -1230,9 +1179,10 @@ fn dispatch_requeues_orphaned_downloading_segment() {
     for seg in 0..3_u32 {
         push_planned(&v, seg);
     }
+    let session = active_session(&v, &ctx, 0);
 
     // First dispatch: seg 0 + seg 2 emit; seg 1 is Downloading -> claim fails.
-    let cmds = v.dispatch(&ctx, 10);
+    let cmds = session.dispatch(&ctx, 10);
     assert_eq!(
         cmds.len(),
         2,
@@ -1250,7 +1200,7 @@ fn dispatch_requeues_orphaned_downloading_segment() {
     // A later dispatch (reader re-aim / next poll) MUST re-fetch seg 1. Before
     // the fix the segment was popped+dropped from the queue and lost, so this
     // returned 0 and the reader hung.
-    let cmds2 = v.dispatch(&ctx, 10);
+    let cmds2 = session.dispatch(&ctx, 10);
     assert_eq!(
         cmds2.len(),
         1,
@@ -1298,7 +1248,6 @@ fn exact_seek_session() -> (Arc<HlsVariant>, HlsSession, u64) {
     }
     .into_variant(0, &ctx);
     let stale_anchor = 512;
-    v.set_position(stale_anchor);
     v.set_prefetch_anchor(stale_anchor);
     v.set_seek_alias(stale_anchor, 2);
     v.rebuild(&ctx, 2);
@@ -1307,7 +1256,6 @@ fn exact_seek_session() -> (Arc<HlsVariant>, HlsSession, u64) {
         CancelToken::never(),
         seek,
         ctx.signal.clone(),
-        VariantSessionMode::Exact,
         0,
         Arc::clone(&v),
         stale_anchor,
@@ -1429,7 +1377,6 @@ fn late_rebuild_at_time_does_not_reopen_consumed_exact_seek_projection() {
     }
     .into_variant(0, &ctx);
     let stale_anchor = 512;
-    v.set_position(stale_anchor);
     v.set_prefetch_anchor(stale_anchor);
     v.set_seek_alias(stale_anchor, 2);
     v.set_exact_seek_demand(stale_anchor, 2);
@@ -1437,7 +1384,6 @@ fn late_rebuild_at_time_does_not_reopen_consumed_exact_seek_projection() {
         CancelToken::never(),
         seek,
         ctx.signal.clone(),
-        VariantSessionMode::Exact,
         0,
         Arc::clone(&v),
         stale_anchor,
@@ -1514,7 +1460,7 @@ fn exact_byte_gate_stays_closed_until_exact_layout_is_published() {
 }
 
 #[kithara::test]
-fn exact_init_boundary_stays_closed_until_layout_is_published() {
+fn exact_init_gate_stays_closed_until_layout_is_published() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         init: Some(make_placeholder_init(256, &ctx.scope)),
@@ -1524,7 +1470,13 @@ fn exact_init_boundary_stays_closed_until_layout_is_published() {
         container: Some(ContainerFormat::Fmp4),
     }
     .into_variant(0, &ctx);
-    assert!(!v.prepare_exact_prefix_for_boundary(0));
+    v.apply_resolved_size(SizeDemand::Segment(0), 100);
+    v.set_exact_byte_seek_demand(300);
+    assert_eq!(
+        v.exact_byte_metadata_phase(),
+        Some(SourcePhase::WaitingDemand),
+        "a non-exact init keeps the exact-byte gate closed"
+    );
 
     let stored = Arc::new(Barrier::new(2));
     let resume = Arc::new(Barrier::new(2));
@@ -1536,13 +1488,13 @@ fn exact_init_boundary_stays_closed_until_layout_is_published() {
     );
     stored.wait();
 
-    let ready_during_publication = v.prepare_exact_prefix_for_boundary(0);
+    let phase_during_publication = v.exact_byte_metadata_phase();
 
     resume.wait();
     assert!(publisher.join().expect("init size publisher"));
 
-    assert!(!ready_during_publication);
-    assert!(v.prepare_exact_prefix_for_boundary(0));
+    assert_eq!(phase_during_publication, Some(SourcePhase::WaitingDemand));
+    assert_eq!(v.exact_byte_metadata_phase(), None);
 }
 
 #[kithara::test]
@@ -1684,13 +1636,11 @@ fn exact_session_seek_uses_the_session_cursor_to_detect_movement() {
     }
     .into_variant(0, &ctx);
     let stale_projection = 512;
-    v.set_position(stale_projection);
     v.clear_exact_byte_seek();
     let session = HlsSession::active(
         CancelToken::never(),
         seek,
         ctx.signal.clone(),
-        VariantSessionMode::Exact,
         0,
         Arc::clone(&v),
         stale_projection,
@@ -1707,37 +1657,6 @@ fn exact_session_seek_uses_the_session_cursor_to_detect_movement() {
 }
 
 #[kithara::test]
-fn exact_session_time_seek_does_not_project_the_legacy_variant_cursor() {
-    let ctx = test_ctx(3);
-    let v = VariantParts {
-        init: None,
-        segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-        codec: Some(AudioCodec::AacLc),
-        container: Some(ContainerFormat::Fmp4),
-    }
-    .into_variant(0, &ctx);
-    let legacy_position = 17;
-    v.set_position(legacy_position);
-    let session = HlsSession::active(
-        CancelToken::never(),
-        Arc::new(SeekState::new()),
-        ctx.signal.clone(),
-        VariantSessionMode::Exact,
-        0,
-        Arc::clone(&v),
-        legacy_position,
-    );
-    let anchor = session
-        .seek_time_anchor(Duration::from_secs(4))
-        .expect("seek anchor")
-        .expect("segment-aware anchor");
-
-    assert_eq!(session.position(), anchor.byte_offset);
-    assert_eq!(v.get_position(), legacy_position);
-}
-
-#[kithara::test]
 fn raw_byte_seek_registers_lazy_exact_demand_only_after_cursor_moves() {
     let ctx = test_ctx(3);
     let segments: Vec<Segment> = (0..10)
@@ -1751,16 +1670,17 @@ fn raw_byte_seek_registers_lazy_exact_demand_only_after_cursor_moves() {
         container: Some(ContainerFormat::Wav),
     }
     .into_variant(0, &ctx);
+    let session = active_session(&v, &ctx, 0);
 
-    v.set_position(0);
+    session.seek_to_byte(0);
     assert!(
-        v.dispatch(&ctx, 3).is_empty(),
+        session.dispatch(&ctx, 3).is_empty(),
         "a no-op seek to the current cursor must not issue startup size probes"
     );
 
-    v.set_position(512);
+    session.seek_to_byte(512);
     assert_eq!(v.phase_at(512..513), SourcePhase::WaitingDemand);
-    let cmds = v.dispatch(&ctx, 3);
+    let cmds = session.dispatch(&ctx, 3);
     assert_eq!(
         cmds.len(),
         3,
@@ -1769,49 +1689,11 @@ fn raw_byte_seek_registers_lazy_exact_demand_only_after_cursor_moves() {
     assert_eq!(cmds[0].url, v.segments()[0].url().clone());
     assert_eq!(cmds[1].url, v.segments()[1].url().clone());
     assert_eq!(cmds[2].url, v.segments()[2].url().clone());
-    let cmds = v.dispatch(&ctx, 3);
+    let cmds = session.dispatch(&ctx, 3);
     assert_eq!(cmds.len(), 3);
     assert_eq!(cmds[0].url, v.segments()[3].url().clone());
     assert_eq!(cmds[1].url, v.segments()[4].url().clone());
     assert_eq!(cmds[2].url, v.segments()[5].url().clone());
-}
-
-#[kithara::test]
-fn byte_continuity_boundary_preparation_sizes_only_prefix() {
-    let ctx = test_ctx(8);
-    let segments: Vec<Segment> = (0..4)
-        .map(|idx| make_placeholder_seg(idx, 64, &ctx.scope))
-        .collect();
-    let v = VariantParts {
-        segments,
-        init: None,
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-        codec: Some(AudioCodec::Pcm),
-        container: Some(ContainerFormat::Wav),
-    }
-    .into_variant(0, &ctx);
-
-    assert!(
-        !v.prepare_exact_prefix_for_boundary(2),
-        "WAV byte-continuity switch at segment 2 needs exact sizes for segments 0 and 1"
-    );
-
-    let cmds = v.dispatch_size_only(&ctx, 8);
-    assert_eq!(cmds.len(), 2);
-    assert_eq!(cmds[0].url, v.segments()[0].url().clone());
-    assert_eq!(cmds[1].url, v.segments()[1].url().clone());
-
-    v.apply_resolved_size(SizeDemand::Segment(0), 100);
-    v.apply_resolved_size(SizeDemand::Segment(1), 120);
-
-    assert!(
-        v.prepare_exact_prefix_for_boundary(2),
-        "once the prefix is exact, coord may calculate byte_shift and commit"
-    );
-    assert!(
-        !v.segments()[2].size().is_exact(),
-        "the segment after the switch boundary must stay lazy"
-    );
 }
 
 #[kithara::test]
@@ -1898,12 +1780,13 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
     }
     .into_variant(0, &ctx);
     push_planned(&v, 0);
-    let cmds = v.dispatch(&ctx, 10);
+    let session = active_session(&v, &ctx, 0);
+    let cmds = session.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 1);
     assert!(cmds[0].cancel.is_some());
     push_planned(&v, 0);
     assert!(
-        v.dispatch(&ctx, 10).is_empty(),
+        session.dispatch(&ctx, 10).is_empty(),
         "claimed (in-flight) segment must not be re-dispatched"
     );
 }
@@ -1913,7 +1796,8 @@ fn dropped_fetch_cmd_reverts_segment_to_missing() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100, 100], &ctx);
     push_planned(&v, 0);
-    let cmds = v.dispatch(&ctx, 10);
+    let session = active_session(&v, &ctx, 0);
+    let cmds = session.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 1, "first dispatch claims and emits seg 0");
     // Drop the command without running its `on_complete`: the owned
     // download handle is dropped without a settle, so the Drop safety
@@ -1921,43 +1805,44 @@ fn dropped_fetch_cmd_reverts_segment_to_missing() {
     drop(cmds);
     push_planned(&v, 0);
     assert_eq!(
-        v.dispatch(&ctx, 10).len(),
+        session.dispatch(&ctx, 10).len(),
         1,
         "dropped claim must revert the slot to Missing so it re-dispatches"
     );
 }
 
 #[kithara::test]
-fn positions_of_two_variants_are_independent_after_flip() {
+fn positions_of_two_sessions_are_independent_after_flip() {
     let ctx = test_ctx(3);
     let v_old = make_var(0, 0, &[400; 20], &ctx);
     let v_new = make_var(1, 0, &[800; 20], &ctx);
     let v_new_seg10_offset = v_new.segment_byte_offset(10).expect("seg 10");
-    v_old.set_position(5000);
-    v_new.set_position(v_new_seg10_offset);
-    assert_eq!(v_old.get_position(), 5000);
-    assert_eq!(v_new.get_position(), v_new_seg10_offset);
+    let old_session = active_session(&v_old, &ctx, 5000);
+    let new_session = active_session(&v_new, &ctx, v_new_seg10_offset);
+    assert_eq!(old_session.position(), 5000);
+    assert_eq!(new_session.position(), v_new_seg10_offset);
 
-    v_new.advance(123);
+    new_session.advance(123);
     assert_eq!(
-        v_old.get_position(),
+        old_session.position(),
         5000,
-        "advance(V_new) must not touch V_old"
+        "advancing the new session must not touch the old session"
     );
-    assert_eq!(v_new.get_position(), v_new_seg10_offset + 123);
+    assert_eq!(new_session.position(), v_new_seg10_offset + 123);
 }
 
 #[kithara::test]
 fn position_advances_are_strictly_monotonic() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100], &ctx);
+    let session = active_session(&v, &ctx, 0);
     let mut expected = 0_u64;
     let mut observed = Vec::new();
     for n in [10_u64, 25, 7, 64, 1, 100] {
-        v.advance(n);
+        session.advance(n);
         expected += n;
-        observed.push(v.get_position());
-        assert_eq!(v.get_position(), expected);
+        observed.push(session.position());
+        assert_eq!(session.position(), expected);
     }
     let mut sorted = observed.clone();
     sorted.sort_unstable();
@@ -1965,51 +1850,74 @@ fn position_advances_are_strictly_monotonic() {
 }
 
 #[kithara::test]
-fn dispatch_cmd_cancel_shares_cancellation_with_variant_cancel() {
+fn dispatch_cmd_cancel_shares_cancellation_with_session() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100, 100], &ctx);
-    let variant_cancel = v.cancel_handle();
+    let root = CancelToken::root();
+    let session = HlsSession::active(
+        root,
+        Arc::new(SeekState::new()),
+        ctx.signal.clone(),
+        0,
+        Arc::clone(&v),
+        0,
+    );
     for seg in 0..2_u32 {
         push_planned(&v, seg);
     }
-    let cmds = v.dispatch(&ctx, 10);
+    let cmds = session.dispatch(&ctx, 10);
     for cmd in &cmds {
         let token = cmd.cancel.as_ref().expect("cmd carries cancel");
         assert!(!token.is_cancelled());
     }
-    variant_cancel.cancel();
+    session.abort();
     for cmd in &cmds {
         let token = cmd.cancel.as_ref().expect("cmd carries cancel");
         assert!(
             token.is_cancelled(),
-            "cmd cancel must follow variant.cancel"
+            "command cancellation must follow its reader session"
         );
     }
 }
 
 #[kithara::test]
-fn variant_flip_cancels_v_old_and_keeps_v_new_token_live() {
+fn session_flip_cancels_old_and_keeps_new_live() {
     let ctx = test_ctx(3);
     let v_old = make_var(0, 0, &[100; 20], &ctx);
     let v_new = make_var(1, 0, &[200; 20], &ctx);
-    let v_old_token = v_old.cancel_handle();
-    let v_new_token = v_new.cancel_handle();
+    let old_token = CancelToken::root();
+    let new_token = CancelToken::root();
 
     let from_seg = 7_u32;
     let v_new_seg7_offset = v_new.segment_byte_offset(from_seg).expect("seg 7");
-    v_new.set_position(v_new_seg7_offset);
-    v_old.cancel();
+    let old_session = HlsSession::active(
+        old_token.clone(),
+        Arc::new(SeekState::new()),
+        ctx.signal.clone(),
+        0,
+        v_old,
+        0,
+    );
+    let new_session = HlsSession::active(
+        new_token.clone(),
+        Arc::new(SeekState::new()),
+        ctx.signal.clone(),
+        1,
+        Arc::clone(&v_new),
+        v_new_seg7_offset,
+    );
+    old_session.abort();
     v_new.rebuild(&ctx, from_seg);
 
     assert!(
-        v_old_token.is_cancelled(),
-        "v_old.cancel() cancels v_old's token"
+        old_token.is_cancelled(),
+        "aborting the old session cancels its token"
     );
     assert!(
-        !v_new_token.is_cancelled(),
-        "rebuild on v_new must NOT touch v_new's cancel token"
+        !new_token.is_cancelled(),
+        "rebuilding the new variant must not touch its session token"
     );
-    assert_eq!(v_new.get_position(), v_new_seg7_offset);
+    assert_eq!(new_session.position(), v_new_seg7_offset);
 }
 
 #[kithara::test]
@@ -2019,7 +1927,8 @@ fn dispatch_skips_loaded_segments_in_queue_without_burning_budget() {
     v.segments()[10].state().mark_loaded();
 
     v.rebuild(&ctx, 10);
-    let cmds = v.dispatch(&ctx, 3);
+    let session = active_session(&v, &ctx, 0);
+    let cmds = session.dispatch(&ctx, 3);
     assert_eq!(cmds.len(), 3);
     let seg10_url = v.segments()[10].url().clone();
     assert!(

@@ -79,7 +79,6 @@ impl HlsVariant {
         self.clear_exact_byte_seek();
         self.clear_segment_aware_seek_tail();
         self.reset_layout_to_full_range();
-        self.rearm_cancel();
     }
 
     pub(super) fn resolve_seek_alias(&self, demand: ExactSeekDemand, exact_anchor: u64) {
@@ -152,17 +151,6 @@ impl HlsVariant {
         }
     }
 
-    pub(crate) fn seek_time_anchor(
-        &self,
-        position: Duration,
-    ) -> StreamResult<Option<SourceSeekAnchor>> {
-        let anchor = self.prepare_seek_time_anchor(position)?;
-        if let Some(anchor) = anchor {
-            self.set_position_without_byte_demand(anchor.byte_offset);
-        }
-        Ok(anchor)
-    }
-
     pub(crate) fn prepare_seek_time_anchor(
         &self,
         position: Duration,
@@ -205,8 +193,8 @@ impl HlsVariant {
         self.set_prefetch_anchor(prefetch_anchor);
         self.set_seek_alias(byte_offset, seg_idx_u32);
         self.set_segment_aware_seek_tail(fetch_start);
-        if !self.fetch_plan_satisfied(fetch_start) {
-            self.rebuild_queue(fetch_start);
+        if !self.fetch_plan_satisfied(fetch_start, None) {
+            self.rebuild_queue(fetch_start, None);
         }
         self.set_exact_seek_demand(byte_offset, seg_idx_u32);
         Ok(Some(anchor))

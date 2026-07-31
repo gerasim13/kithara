@@ -59,6 +59,12 @@ impl ResumeCursor {
         ));
     }
 
+    pub(crate) fn decode_head(&self, epoch: u64) -> Option<(u64, u32)> {
+        self.decode_head
+            .filter(|&(head_epoch, _, _)| head_epoch == epoch)
+            .map(|(_, frame, rate)| (frame, rate))
+    }
+
     pub(crate) fn resume_position(
         &self,
         epoch: u64,
@@ -66,9 +72,8 @@ impl ResumeCursor {
         resume_target: Option<(u64, Duration)>,
     ) -> Duration {
         let head = self
-            .decode_head
-            .filter(|&(head_epoch, _, _)| head_epoch == epoch)
-            .map(|(_, frame, rate)| duration_for_frames(rate, frame))
+            .decode_head(epoch)
+            .map(|(frame, rate)| duration_for_frames(rate, frame))
             .filter(|&position| position > committed)
             .unwrap_or(committed);
         match resume_target {

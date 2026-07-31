@@ -1,7 +1,7 @@
 use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
 use kithara_decode::{DecoderFactory as DecoderBuilder, GaplessMode};
 use kithara_events::{DecoderChangeCause, DecoderEvent, DeferredBus, Event, EventBus};
-use kithara_platform::{sync::Arc, tokio::task::yield_now};
+use kithara_platform::{sync::Arc, time::Duration, tokio::task::yield_now};
 use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, VariantPromotion, VariantReaderPlan, VariantTransition,
     VariantTransitionId,
@@ -42,7 +42,7 @@ fn request_incoming_plan(abr: &AbrState) -> VariantReaderPlan {
         VariantIndex::new(0),
         VariantIndex::new(1),
     );
-    VariantReaderPlan::new(transition, media_info(1), 0)
+    VariantReaderPlan::new(transition, media_info(1), Duration::ZERO)
 }
 
 async fn wait_for_incoming_priming(fixture: &mut RouteFixture, transition: VariantTransition) {
@@ -155,7 +155,7 @@ async fn incoming_completion_never_replaces_active_before_staged_pcm() {
 }
 
 #[kithara::test(tokio)]
-async fn exact_primed_generation_promotes_once_and_preserves_first_chunk() {
+async fn exact_primed_generation_promotes_once_at_outgoing_frontier() {
     let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
     let plan = incoming_plan();
     let transition = plan.transition();
@@ -187,7 +187,10 @@ async fn exact_primed_generation_promotes_once_and_preserves_first_chunk() {
     let TrackStep::Produced(incoming) = fixture.source.step_track() else {
         panic!("promoted incoming must emit its already staged first chunk");
     };
-    assert_eq!(produced_data(incoming).meta.frame_offset, 0);
+    assert_eq!(
+        produced_data(incoming).meta.frame_offset,
+        u64::try_from(Consts::ROUTE_CHUNK_FRAMES).unwrap_or(u64::MAX)
+    );
 }
 
 #[kithara::test(tokio)]
@@ -308,6 +311,7 @@ async fn stale_incoming_completion_retires_generation_in_shell() {
                 Some(media_info(1)),
                 0,
                 0,
+                None,
                 GaplessMode::Disabled,
             )),
         });
@@ -336,7 +340,11 @@ async fn incoming_media_facts_choose_reader_profile() {
     let mut incoming_media =
         MediaInfo::new(Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio));
     incoming_media.variant_index = Some(1);
-    let plan = VariantReaderPlan::new(template.transition(), incoming_media.clone(), 0);
+    let plan = VariantReaderPlan::new(
+        template.transition(),
+        incoming_media.clone(),
+        template.landing_time(),
+    );
     fixture.control.set_exact_plan(plan);
 
     fixture.source.flush_deferred();

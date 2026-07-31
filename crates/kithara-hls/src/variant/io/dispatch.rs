@@ -7,11 +7,6 @@ use super::{HlsVariant, PlanCtx};
 use crate::segment::{Downloading, FetchClaim, PlannedFetch};
 
 impl HlsVariant {
-    #[cfg(test)]
-    pub(crate) fn dispatch(self: &Arc<Self>, ctx: &PlanCtx, budget: usize) -> Vec<FetchCmd> {
-        self.dispatch_from(ctx, budget, self.get_position(), self.cancel_handle())
-    }
-
     #[kithara::probe(
         variant = self.variant as u64,
         budget = budget as u64,
@@ -23,6 +18,7 @@ impl HlsVariant {
         ctx: &PlanCtx,
         budget: usize,
         position: u64,
+        construction_segment_end: Option<u32>,
         cancel: CancelToken,
     ) -> Vec<FetchCmd> {
         let mut out = Vec::new();
@@ -51,6 +47,9 @@ impl HlsVariant {
                     None => break,
                     Some(PlannedFetch::Init) => queue.pop_front(),
                     Some(PlannedFetch::Segment(seg_idx)) => {
+                        if construction_segment_end.is_some_and(|end| seg_idx > end) {
+                            break;
+                        }
                         if let Some(cap) = prefetch_byte_cap
                             && let Some(seg_off) = self.segment_byte_offset(seg_idx)
                             && seg_off > cap

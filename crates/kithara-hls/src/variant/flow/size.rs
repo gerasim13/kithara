@@ -109,12 +109,6 @@ impl HlsVariant {
             .is_none_or(|init| init.size().is_exact())
     }
 
-    fn exact_prefix_complete(&self, segment: u32) -> bool {
-        self.layout
-            .try_published(|| Some(self.exact_prefix_complete_now(segment)))
-            .unwrap_or(false)
-    }
-
     fn exact_prefix_complete_now(&self, segment: u32) -> bool {
         if self
             .segments
@@ -148,29 +142,6 @@ impl HlsVariant {
         }
         self.request_exact_prefix_through(demand.segment);
         Some(SourcePhase::WaitingDemand)
-    }
-
-    pub(crate) fn prepare_exact_prefix_for_boundary(&self, boundary: u32) -> bool {
-        if !needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
-            return true;
-        }
-        let boundary = boundary.min(self.num_segments());
-        if self
-            .segments
-            .init
-            .as_ref()
-            .is_some_and(|init| !init.size().is_exact())
-        {
-            self.request_exact_size(SizeDemand::Init);
-        }
-        let Some(last) = boundary.checked_sub(1) else {
-            return self
-                .layout
-                .try_published(|| Some(self.exact_init_complete()))
-                .unwrap_or(false);
-        };
-        self.request_exact_prefix_through(last);
-        self.exact_prefix_complete(last)
     }
 
     fn request_exact_prefix_for_byte(&self, byte: u64) {

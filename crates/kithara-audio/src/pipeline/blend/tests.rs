@@ -44,7 +44,7 @@ fn single_input_blender_is_bit_exact() {
         .iter()
         .map(|sample| sample.to_bits())
         .collect::<Vec<_>>();
-    let blender = PcmBlender::new(BlenderProfile::new(spec));
+    let mut blender = PcmBlender::new(BlenderProfile::new(spec));
 
     let output = blender.process_active(input);
 
@@ -66,6 +66,12 @@ fn replacing_active_profile_accepts_the_new_spec() {
     let initial = spec(2, 44_100);
     let replacement = spec(1, 48_000);
     let mut blender = PcmBlender::new(BlenderProfile::new(initial));
+    let _ = blender.process_active(chunk(initial, vec![-0.1, 0.0, 0.1, 0.2, 0.3, 0.4]));
+    blender.join_active(BlenderProfile::new(initial));
+    let joined = blender.process_active(chunk(initial, vec![0.5, 0.6, 0.7, 0.8]));
+    assert!((joined.samples[0] - 0.5).abs() < 1.0e-4);
+    assert!((joined.samples[2] - joined.samples[0] - 0.2).abs() < 1.0e-3);
+
     blender.replace_active(BlenderProfile::new(replacement));
 
     let output = blender.process_active(chunk(replacement, vec![0.25, -0.25]));
