@@ -240,6 +240,9 @@ pub(crate) struct DoubleClickState {
 }
 
 impl DoubleClickState {
+    /// `as_millis` truncates, so the accepted window is `[0 ms, 301 ms)` rather
+    /// than the 300 a `Duration` constant compared with `<=` would give. The
+    /// boundary is unreachable from a test while `now` is read in here.
     pub(crate) fn register(&mut self, position: Point) -> bool {
         let now = Instant::now();
         let consecutive = self
@@ -475,6 +478,300 @@ mod tests {
             path: path.to_owned(),
             action: ControlAction::Drag(phase),
         }
+    }
+
+    fn moved_to(position: Point) -> Event {
+        Event::Mouse(mouse::Event::CursorMoved { position })
+    }
+
+    fn scalar(path: &str, value: f64) -> UiEvent {
+        UiEvent::Control {
+            path: path.to_owned(),
+            action: ControlAction::SetScalar(value),
+        }
+    }
+
+    /// The VU meter's bounds: offset from the origin, so an inverted axis that
+    /// forgot to subtract `bounds.y` would still look right at the top edge.
+    fn vu() -> Rectangle {
+        Rectangle::new(Point::new(0.0, 10.0), iced::Size::new(12.0, 40.0))
+    }
+
+    fn knob() -> Rectangle {
+        Rectangle::new(Point::ORIGIN, iced::Size::new(34.0, 34.0))
+    }
+
+    fn vu_drag() -> ScalarDrag {
+        ScalarDrag::builder()
+            .path("vu".to_owned())
+            .mode(ScalarDragMode::Vertical)
+            .hover(HoverState::new(mouse::Interaction::ResizingVertically))
+            .build()
+    }
+
+    /// `range` is a power of two so the expected values are exact in binary and
+    /// the assertions can be equalities rather than tolerances.
+    fn knob_drag(value: f32) -> ScalarDrag {
+        ScalarDrag::builder()
+            .path("knob".to_owned())
+            .mode(ScalarDragMode::RelativeVertical {
+                value,
+                range: 128.0,
+            })
+            .hover(HoverState::new(mouse::Interaction::ResizingVertically))
+            .build()
+    }
+
+    fn resetting_knob_drag(reset: f32) -> ScalarDrag {
+        ScalarDrag::builder()
+            .path("knob".to_owned())
+            .mode(ScalarDragMode::RelativeVertical {
+                value: 0.8,
+                range: 128.0,
+            })
+            .hover(HoverState::new(mouse::Interaction::ResizingVertically))
+            .double_click_value(reset)
+            .build()
+    }
+
+    #[kithara::test]
+    fn vertical_drag_publishes_the_inverted_position() {
+        let drag = vu_drag();
+
+        // Every fraction here is dyadic, so `f64::from` widens the `f32` result
+        // without a residue and the assertion can be an equality.
+        for (y, expected) in [(10.0, 1.0), (20.0, 0.75), (30.0, 0.5), (40.0, 0.25)] {
+            let mut state = ScalarDragState::default();
+            let cursor = Cursor::Available(Point::new(6.0, y));
+
+            let (message, _, _) = drag
+                .update(&mut state, &press(), vu(), cursor)
+                .unwrap()
+                .into_inner();
+
+            assert_eq!(message, Some(scalar("vu", expected)), "at y={y}");
+        }
+    }
+
+    #[kithara::test]
+    fn vertical_drag_on_zero_height_publishes_nothing() {
+        let drag = vu_drag();
+        let cursor = Cursor::Available(Point::new(6.0, 30.0));
+        let mut state = ScalarDragState::default();
+        drag.update(&mut state, &press(), vu(), cursor).unwrap();
+
+        let flattened = Rectangle {
+            height: 0.0,
+            ..vu()
+        };
+
+        assert!(
+            drag.update(
+                &mut state,
+                &moved_to(Point::new(6.0, 30.0)),
+                flattened,
+                cursor
+            )
+            .is_none(),
+            "a degenerate height must publish nothing rather than a clamped zero"
+        );
+    }
+
+    #[kithara::test]
+    fn vertical_drag_keeps_publishing_after_the_pointer_leaves() {
+        let drag = vu_drag();
+        let mut state = ScalarDragState::default();
+        drag.update(
+            &mut state,
+            &press(),
+            vu(),
+            Cursor::Available(Point::new(6.0, 30.0)),
+        )
+        .unwrap();
+
+        let escaped = Cursor::Available(Point::new(6.0, 200.0));
+        let (message, _, _) = drag
+            .update(&mut state, &moved_to(Point::new(6.0, 200.0)), vu(), escaped)
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(message, Some(scalar("vu", 0.0)));
+    }
+
+    #[kithara::test]
+    fn vertical_press_publishes_and_captures_and_release_captures_silently() {
+        let drag = vu_drag();
+        let cursor = Cursor::Available(Point::new(6.0, 30.0));
+        let mut state = ScalarDragState::default();
+
+        let (pressed, _, press_status) = drag
+            .update(&mut state, &press(), vu(), cursor)
+            .unwrap()
+            .into_inner();
+        let (released, _, release_status) = drag
+            .update(&mut state, &release(), vu(), cursor)
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(pressed, Some(scalar("vu", 0.5)));
+        assert_eq!(press_status, iced::event::Status::Captured);
+        assert_eq!(released, None);
+        assert_eq!(release_status, iced::event::Status::Captured);
+    }
+
+    #[kithara::test]
+    fn relative_vertical_drag_is_up_positive_and_scaled_by_range() {
+        let drag = knob_drag(0.5);
+
+        for (from, to, expected) in [(33.0, 1.0, 0.75), (1.0, 33.0, 0.25)] {
+            let mut state = ScalarDragState::default();
+            drag.update(
+                &mut state,
+                &press(),
+                knob(),
+                Cursor::Available(Point::new(17.0, from)),
+            )
+            .unwrap();
+
+            let moved = Point::new(17.0, to);
+            let (message, _, _) = drag
+                .update(
+                    &mut state,
+                    &moved_to(moved),
+                    knob(),
+                    Cursor::Available(moved),
+                )
+                .unwrap()
+                .into_inner();
+
+            assert_eq!(message, Some(scalar("knob", expected)), "{from} -> {to}");
+        }
+    }
+
+    #[kithara::test]
+    fn relative_vertical_press_captures_without_publishing() {
+        let drag = knob_drag(0.5);
+        let cursor = Cursor::Available(Point::new(17.0, 17.0));
+        let mut state = ScalarDragState::default();
+
+        let (message, _, status) = drag
+            .update(&mut state, &press(), knob(), cursor)
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(message, None, "a relative press seeks nothing");
+        assert_eq!(status, iced::event::Status::Captured);
+    }
+
+    #[kithara::test]
+    fn double_click_slop_excludes_exactly_six_pixels() {
+        for (separation, resets) in [(5.0, true), (6.0, false)] {
+            let drag = resetting_knob_drag(0.5);
+            let first = Cursor::Available(Point::new(17.0, 17.0));
+            let second = Cursor::Available(Point::new(17.0, 17.0 + separation));
+            let mut state = ScalarDragState::default();
+
+            drag.update(&mut state, &press(), knob(), first).unwrap();
+            drag.update(&mut state, &release(), knob(), first).unwrap();
+            let (message, _, _) = drag
+                .update(&mut state, &press(), knob(), second)
+                .unwrap()
+                .into_inner();
+
+            assert_eq!(
+                message.is_some(),
+                resets,
+                "a {separation} px separation must {} reset",
+                if resets { "" } else { "not" }
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn a_reset_never_becomes_a_drag() {
+        let drag = resetting_knob_drag(0.5);
+        let cursor = Cursor::Available(Point::new(17.0, 17.0));
+        let mut state = ScalarDragState::default();
+
+        drag.update(&mut state, &press(), knob(), cursor).unwrap();
+        drag.update(&mut state, &release(), knob(), cursor).unwrap();
+        drag.update(&mut state, &press(), knob(), cursor).unwrap();
+
+        let moved = Point::new(17.0, 1.0);
+        assert!(
+            drag.update(
+                &mut state,
+                &moved_to(moved),
+                knob(),
+                Cursor::Available(moved)
+            )
+            .is_none(),
+            "the press that reset the value must not have armed a drag"
+        );
+    }
+
+    #[kithara::test]
+    fn the_release_after_a_reset_is_not_captured() {
+        let drag = resetting_knob_drag(0.5);
+        let cursor = Cursor::Available(Point::new(17.0, 17.0));
+        let mut state = ScalarDragState::default();
+
+        drag.update(&mut state, &press(), knob(), cursor).unwrap();
+        drag.update(&mut state, &release(), knob(), cursor).unwrap();
+        drag.update(&mut state, &press(), knob(), cursor).unwrap();
+
+        assert!(
+            drag.update(&mut state, &release(), knob(), cursor)
+                .is_none(),
+            "no gesture is active, so the release belongs to whoever is behind"
+        );
+    }
+
+    #[kithara::test]
+    fn a_double_click_pair_is_spent() {
+        let drag = resetting_knob_drag(0.5);
+        let cursor = Cursor::Available(Point::new(17.0, 17.0));
+        let mut state = ScalarDragState::default();
+
+        for _ in 0..2 {
+            drag.update(&mut state, &press(), knob(), cursor).unwrap();
+            drag.update(&mut state, &release(), knob(), cursor);
+        }
+
+        let (message, _, _) = drag
+            .update(&mut state, &press(), knob(), cursor)
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(
+            message, None,
+            "the third press starts a fresh pair rather than resetting again"
+        );
+    }
+
+    #[kithara::test]
+    fn the_cursor_shape_follows_hover_or_an_active_gesture() {
+        let drag = knob_drag(0.5);
+        let over = Cursor::Available(Point::new(17.0, 17.0));
+        let away = Cursor::Available(Point::new(200.0, 200.0));
+        let mut state = ScalarDragState::default();
+
+        assert_eq!(
+            drag.mouse_interaction(&state, knob(), over),
+            mouse::Interaction::ResizingVertically
+        );
+        assert_eq!(
+            drag.mouse_interaction(&state, knob(), away),
+            mouse::Interaction::None
+        );
+
+        drag.update(&mut state, &press(), knob(), over).unwrap();
+
+        assert_eq!(
+            drag.mouse_interaction(&state, knob(), away),
+            mouse::Interaction::ResizingVertically,
+            "an active gesture keeps its shape once the pointer leaves"
+        );
     }
 
     #[kithara::test]
