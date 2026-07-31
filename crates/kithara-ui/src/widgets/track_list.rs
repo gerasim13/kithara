@@ -19,11 +19,10 @@ use num_traits::ToPrimitive;
 
 use super::{
     Widget,
-    behavior::{
-        HorizontalPixelDrag, HorizontalPixelDragState, HoverState, ItemDrag, ItemDragState,
-    },
+    behavior::{HorizontalPixelDrag, HorizontalPixelDragState, ItemDrag, ItemDragState},
 };
 use crate::{
+    interact::{CursorShape, Hover},
     module::TrackColumn,
     render::{
         ControlAction, ReadValue, Reads, Skin, TrackRow, UiEvent, fonts, shaped_text,
@@ -379,7 +378,7 @@ fn header_cell(
             .path(format!("{path}/width/{}", column.column.endpoint_name()))
             .value(column.width)
             .minimum(style.metrics.min_column_width)
-            .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
+            .hover(Hover::new(CursorShape::ResizeH))
             .build(),
     })
     .width(Length::Fixed(style.metrics.divider_hit_width))

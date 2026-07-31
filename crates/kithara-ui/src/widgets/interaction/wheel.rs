@@ -1,16 +1,17 @@
 use iced::{
     Element, Event, Length, Rectangle, Renderer, Theme,
-    mouse::{self, Button, Cursor, ScrollDelta},
-    time::Instant,
+    mouse::{self, Button, Cursor},
     widget::canvas::{self, Action, Canvas, Geometry},
 };
+use kithara_platform::time::Instant;
 
 use crate::{
-    render::{ControlAction, UiEvent},
-    widgets::{
-        Widget,
-        behavior::{DoubleClickState, HoverState},
+    interact::{
+        CursorShape, Hover, Input, Scroll, iced as iced_interact,
+        recognizers::{DoubleClick, wheel},
     },
+    render::{ControlAction, UiEvent},
+    widgets::Widget,
 };
 
 #[derive(bon::Builder)]
@@ -36,7 +37,7 @@ struct WheelCanvas {
 #[derive(Default)]
 struct WheelState {
     last_step: Option<Instant>,
-    double_click: DoubleClickState,
+    double_click: DoubleClick,
     drag: Option<f32>,
 }
 
@@ -50,18 +51,17 @@ impl WheelState {
         Some((from - y) * Self::DRAG_STEPS_PER_PIXEL)
     }
 
-    fn step(&mut self, delta: ScrollDelta) -> f32 {
-        match delta {
-            ScrollDelta::Lines { y, .. } => direction(y),
-            ScrollDelta::Pixels { y, .. } => {
-                let now = Instant::now();
+    fn step(&mut self, scroll: Scroll, now: Instant) -> f32 {
+        match scroll {
+            Scroll::Lines(_) => direction(scroll),
+            Scroll::Pixels(y) => {
                 if self.last_step.is_some_and(|previous| {
                     now.checked_duration_since(previous)
                         .is_some_and(|elapsed| elapsed.as_millis() < Self::STEP_INTERVAL_MS)
                 }) {
                     return 0.0;
                 }
-                let step = direction(y);
+                let step = direction(Scroll::Lines(y));
                 if step != 0.0 {
                     self.last_step = Some(now);
                 }
@@ -71,12 +71,13 @@ impl WheelState {
     }
 }
 
-fn direction(y: f32) -> f32 {
-    if y == 0.0 { 0.0 } else { -y.signum() }
+fn direction(scroll: Scroll) -> f32 {
+    let mut accum = 0.0;
+    wheel::steps(&mut accum, scroll)
 }
 
 impl WheelCanvas {
-    const HOVER: HoverState = HoverState::new(mouse::Interaction::ResizingVertically);
+    const HOVER: Hover = Hover::new(CursorShape::ResizeV);
 
     fn publish(&self, action: ControlAction) -> Action<UiEvent> {
         Action::publish(UiEvent::Control {
@@ -107,7 +108,9 @@ impl canvas::Program<UiEvent> for WheelCanvas {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> mouse::Interaction {
-        Self::HOVER.interaction(state.drag.is_some(), bounds, cursor)
+        Self::HOVER
+            .cursor(state.drag.is_some(), &iced_interact::hit(bounds, cursor))
+            .into()
     }
 
     fn update(
@@ -118,16 +121,19 @@ impl canvas::Program<UiEvent> for WheelCanvas {
         cursor: Cursor,
     ) -> Option<Action<UiEvent>> {
         match event {
-            Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.is_over(bounds) => {
-                let steps = state.step(*delta);
+            Event::Mouse(mouse::Event::WheelScrolled { .. }) if cursor.is_over(bounds) => {
+                let Input::Wheel(scroll) = iced_interact::input(event)? else {
+                    return None;
+                };
+                let steps = state.step(scroll, Instant::now());
                 if steps == 0.0 {
                     return Some(Action::capture());
                 }
                 Some(self.publish(ControlAction::StepScalar(steps)))
             }
             Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
-                let position = cursor.position()?;
-                if state.double_click.register(position) {
+                let position = iced_interact::hit(bounds, cursor).at()?;
+                if state.double_click.register(position, Instant::now()) {
                     state.drag = None;
                     return Some(self.publish(ControlAction::Activate));
                 }
@@ -151,7 +157,7 @@ impl canvas::Program<UiEvent> for WheelCanvas {
 
 #[cfg(test)]
 mod tests {
-    use iced::{Point, Size, widget::canvas::Program};
+    use iced::{Point, Size, mouse::ScrollDelta, widget::canvas::Program};
     use kithara_test_utils::kithara;
 
     use super::*;

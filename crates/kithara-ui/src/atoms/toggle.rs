@@ -8,12 +8,10 @@ use iced::{
 };
 
 use crate::{
+    interact::{CursorShape, Hover},
     render::{ReadValue, Skin, UiEvent, theme::RenderPalette},
     skin::{CheckboxSkin, FrameSkin, ToggleSkin},
-    widgets::{
-        Widget,
-        behavior::{ClickActivate, HoverState},
-    },
+    widgets::{Widget, behavior::ClickActivate},
 };
 
 #[derive(bon::Builder)]
@@ -79,7 +77,7 @@ impl<'a> Widget<'a> for BinaryControl<'_, '_, '_, '_> {
             active: *active,
             click: ClickActivate::builder()
                 .path(self.path.to_owned())
-                .hover(HoverState::new(mouse::Interaction::Pointer))
+                .hover(Hover::new(CursorShape::Pointer))
                 .build(),
             palette: self.skin.palette,
             shape: self.shape,

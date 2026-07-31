@@ -14,6 +14,7 @@ use iced::{
 use num_traits::cast::AsPrimitive;
 
 use crate::{
+    interact::{CursorShape, Hover, recognizers::WheelStep},
     module::FaderStyle,
     render::{
         ControlAction, Icon, ReadValue, Skin, UiEvent, fonts, shaped_text, theme::RenderPalette,
@@ -21,7 +22,7 @@ use crate::{
     skin::{FaderSkin, FrameSkin},
     widgets::{
         Widget,
-        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState, WheelStep},
+        behavior::{ScalarDrag, ScalarDragMode, ScalarDragState},
     },
 };
 
@@ -268,7 +269,7 @@ impl<'a> Widget<'a> for VolumeStrip<'_, '_> {
             drag: ScalarDrag::builder()
                 .path(self.path.to_owned())
                 .mode(ScalarDragMode::Horizontal)
-                .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
+                .hover(Hover::new(CursorShape::ResizeH))
                 .wheel(WheelStep {
                     value: self.value.clamp(0.0, 1.0).as_(),
                     step: self.skin.fader.step.as_(),

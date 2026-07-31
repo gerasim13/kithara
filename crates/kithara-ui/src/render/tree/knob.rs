@@ -5,21 +5,26 @@ use iced::{
     mouse::{Cursor, Interaction},
     widget::canvas::{self, Action, Canvas, Frame, Geometry},
 };
+use kithara_platform::time::Instant;
 
 use crate::{
     atoms::knob::Knob,
     backends::IcedBackend,
     draw::{DrawListBuilder, Rect, replay},
-    render::{Skin, UiEvent},
+    interact::{
+        CursorShape, Hover, Outcome, iced as iced_interact,
+        recognizers::{Scalar, ScalarState, WheelStep},
+    },
+    render::{ControlAction, Skin, UiEvent},
     skin::KnobSkin,
     text::{TextContext, TextResources},
-    widgets::behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState, WheelStep},
 };
 
 pub(super) struct KnobProgram<'data, 'skin> {
     knob: Knob<'data, 'skin>,
     metrics: KnobSkin,
-    drag: ScalarDrag,
+    drag: Scalar,
+    path: String,
     text_resources: &'skin TextResources,
 }
 
@@ -36,19 +41,17 @@ impl<'data, 'skin> KnobProgram<'data, 'skin> {
         Self {
             knob: Knob::new(label, value, skin),
             metrics,
-            drag: ScalarDrag::builder()
-                .path(path.to_owned())
-                .mode(ScalarDragMode::RelativeVertical {
-                    value,
-                    range: metrics.drag_range,
-                })
-                .hover(HoverState::new(Interaction::ResizingVertically))
-                .double_click_value(RESET_VALUE)
+            drag: Scalar::builder()
+                .value(value)
+                .range(metrics.drag_range)
+                .hover(Hover::new(CursorShape::ResizeV))
+                .reset(RESET_VALUE)
                 .wheel(WheelStep {
                     value,
                     step: metrics.wheel_step,
                 })
                 .build(),
+            path: path.to_owned(),
             text_resources: skin.text_resources(),
         }
     }
@@ -94,7 +97,9 @@ impl canvas::Program<UiEvent> for KnobProgram<'_, '_> {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Interaction {
-        self.drag.mouse_interaction(&state.drag, bounds, cursor)
+        self.drag
+            .cursor(&state.drag, &iced_interact::hit(bounds, cursor))
+            .into()
     }
 
     fn update(
@@ -104,14 +109,33 @@ impl canvas::Program<UiEvent> for KnobProgram<'_, '_> {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Option<Action<UiEvent>> {
-        self.drag.update(&mut state.drag, event, bounds, cursor)
+        let input = iced_interact::input(event)?;
+        let hit = iced_interact::hit(bounds, cursor);
+        scalar(
+            &self.path,
+            self.drag
+                .on_input(&mut state.drag, input, &hit, Instant::now()),
+        )
     }
 }
 
 #[derive(Default)]
 pub(super) struct KnobState {
-    drag: ScalarDragState,
+    drag: ScalarState,
     text: RefCell<Option<TextContext>>,
+}
+
+fn scalar(path: &str, outcome: Outcome) -> Option<Action<UiEvent>> {
+    if let Some(value) = outcome.value() {
+        return Some(
+            Action::publish(UiEvent::Control {
+                path: path.to_owned(),
+                action: ControlAction::SetScalar(f64::from(value)),
+            })
+            .and_capture(),
+        );
+    }
+    outcome.is_captured().then(Action::capture)
 }
 
 impl KnobProgram<'_, '_> {

@@ -236,6 +236,49 @@ system fallback face. The Latin-only corpus keeps the second one out of reach, a
 inherent to the iced path being pinned - the harness reproduces what the shipped iced host does,
 including this. Closing either belongs to the wave that takes font policy off the global.
 
+## Interaction Ownership
+
+`interact` owns gesture recognition: the pointer and wheel vocabulary, the gesture state machines,
+their pixel and time constants, and the cursor vocabulary. It imports `draw::{Pt, Rect}` and nothing
+else from this crate - it does not know what a `UiEvent` is. A recognizer answers with an `Outcome`
+carrying a normalized `f32` and a capture flag; the document event is built one layer up, in
+`render::tree`, which is where `UiEvent` lives. Routing the event through the recognizer instead
+would point the base at the crate's orchestration layer, and every base peer points strictly
+downward: `draw` to `text`, `text` to `skin`, `solve` to `layout::Axis`.
+
+Exactly one file, `interact::iced`, names a toolkit. It translates an `iced::Event` into an `Input`,
+builds a `Hit` from bounds and a cursor, and converts a `CursorShape` into `mouse::Interaction`.
+`Hit` is constructed separately from event translation on purpose: `mouse_interaction` receives no
+event, so a `Hit` that only fell out of an event would grow a second, unwritten hit-test path.
+`Hit::at` and `Hit::inside` are different questions - a gesture already under way tracks the pointer
+past the edge, while a gesture starting needs it inside - and `Rect::contains` is half-open to match
+`iced::Rectangle::contains`, which makes an `at`-based test bit-equal to `Cursor::is_over`.
+
+`CursorShape` deliberately derives no ordering. `mouse::Interaction` derives `Ord` and the render
+tree `.max()`-merges it in `render::tree::flex` and `widgets::anchored`; those merges stay on iced's
+type and convert only at each `mouse_interaction` return.
+
+`interact` is gated on `render` although its core names no toolkit, and that is a cost rather than a
+contract. Its consumers are all `render`-gated, so under a `vello-backend`-only build - which
+`cargo hack --feature-powerset` really compiles - every item would be dead code. A separate `engine`
+feature would buy nothing: the `dead_exports` check treats only `target_os`/`target_arch` as a gate,
+so a feature offers no exemption from the rule that actually governs this code, and `just check
+clippy` runs without `--all-features`, which would make the module a permanent lint blind spot. The
+gate splits the day a second host routes input, exactly as `backends` already splits.
+
+Two wheel policies coexist and must not be unified: the scalar recognizer accumulates 20 px of
+trackpad travel per step, while `widgets::wheel` debounces its own stepping at 200 ms. They answer
+different questions and share only the delta decoder.
+
+Time enters a recognizer as a parameter rather than being read inside it. That is what makes the
+double-click window testable at all, and the window is `[0 ms, 301 ms)` rather than 300 because
+`as_millis` truncates - a `Duration` constant compared with `<=` would silently narrow it.
+
+`interact::Scalar`'s state struct rhymes with `behavior::ScalarDragState` at 0.90 in the similarity
+report, and that is transitional rather than duplicated logic: the wheel decoder, the double-click
+latch and the cursor rule are single-sourced and appear nowhere in the report - only the field bag
+repeats. It resolves when `ScalarDrag`'s remaining horizontal modes port.
+
 ## Text Control Ownership
 
 The `Text` control is the first control whose measurement and painting both belong to the base.

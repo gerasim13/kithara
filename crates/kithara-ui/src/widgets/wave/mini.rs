@@ -16,6 +16,7 @@ use iced::{
 use num_traits::cast::AsPrimitive;
 
 use crate::{
+    interact::{CursorShape, Hover},
     module::WaveStyle,
     render::{
         ReadValue, Reads, Skin, UiEvent, WaveBucket, fonts, model::derived, theme::RenderPalette,
@@ -23,7 +24,7 @@ use crate::{
     skin::{FontSkin, FrameSkin, WaveOverlaySkin, WaveSkin},
     widgets::{
         Widget,
-        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState, scroll_y},
+        behavior::{ScalarDrag, ScalarDragMode, ScalarDragState, scroll_y},
         wave::{
             bars,
             hero::{HeroPalette, HeroWave, draw as draw_hero_wave},
@@ -101,10 +102,10 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
                 } else {
                     ScalarDragMode::HorizontalClick
                 })
-                .hover(HoverState::new(if show_beats {
-                    mouse::Interaction::Grab
+                .hover(Hover::new(if show_beats {
+                    CursorShape::Grab
                 } else {
-                    mouse::Interaction::Pointer
+                    CursorShape::Pointer
                 }))
                 .build(),
             overlay,

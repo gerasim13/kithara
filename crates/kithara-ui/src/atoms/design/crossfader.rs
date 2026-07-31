@@ -11,11 +11,12 @@ use iced::{
 use num_traits::cast::AsPrimitive;
 
 use crate::{
+    interact::{CursorShape, Hover},
     render::{Icon, ReadValue, Skin, UiEvent, fonts, shaped_text},
     skin::{FrameSkin, TickSkin},
     widgets::{
         Widget,
-        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState},
+        behavior::{ScalarDrag, ScalarDragMode, ScalarDragState},
     },
 };
 
@@ -88,7 +89,7 @@ where
             drag: ScalarDrag::builder()
                 .path(self.path.to_owned())
                 .mode(ScalarDragMode::Horizontal)
-                .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
+                .hover(Hover::new(CursorShape::ResizeH))
                 .build(),
             rail_background: self.skin.color(metrics.rail_background),
             rail_color: self.skin.color(metrics.rail_frame.border),

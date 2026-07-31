@@ -25,6 +25,23 @@ pub struct Rect {
     pub y: f32,
 }
 
+impl Pt {
+    #[cfg(feature = "render")]
+    pub(crate) fn distance(self, other: Self) -> f32 {
+        (self.x - other.x).hypot(self.y - other.y)
+    }
+}
+
+impl Rect {
+    #[cfg(feature = "render")]
+    pub(crate) fn contains(self, point: Pt) -> bool {
+        self.x <= point.x
+            && point.x < self.x + self.w
+            && self.y <= point.y
+            && point.y < self.y + self.h
+    }
+}
+
 /// A toolkit-neutral affine transform.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Transform {

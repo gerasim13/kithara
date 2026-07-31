@@ -12,12 +12,13 @@ use crate::{
     atoms::design::crossfader::{TickAxis, TickRail},
     backends::IcedBackend,
     draw::{DrawListBuilder, Rect, replay},
+    interact::{CursorShape, Hover},
     render::{ReadValue, Skin, StereoLevels, UiEvent, theme::RenderPalette},
     skin::VuVerticalSkin,
     text::TextResources,
     widgets::{
         Widget,
-        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState},
+        behavior::{ScalarDrag, ScalarDragMode, ScalarDragState},
     },
 };
 
@@ -38,7 +39,7 @@ impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, 'a> {
             drag: ScalarDrag::builder()
                 .path(self.path.to_owned())
                 .mode(ScalarDragMode::Vertical)
-                .hover(HoverState::new(mouse::Interaction::ResizingVertically))
+                .hover(Hover::new(CursorShape::ResizeV))
                 .build(),
             metrics: self.skin.vu_vertical,
             ticks: self

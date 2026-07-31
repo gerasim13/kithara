@@ -11,12 +11,13 @@ use num_traits::cast::AsPrimitive;
 use crate::{
     backends::IcedBackend,
     draw::{DrawListBuilder, Rect, replay},
+    interact::{CursorShape, Hover},
     render::{ReadValue, Skin, StereoLevels, UiEvent, theme::RenderPalette},
     skin::VuStereoSkin,
     text::TextResources,
     widgets::{
         Widget,
-        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState},
+        behavior::{ScalarDrag, ScalarDragMode, ScalarDragState},
     },
 };
 
@@ -36,7 +37,7 @@ impl<'a> Widget<'a> for StereoMeter<'_, '_, '_, 'a> {
             drag: ScalarDrag::builder()
                 .path(self.path.to_owned())
                 .mode(ScalarDragMode::Horizontal)
-                .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
+                .hover(Hover::new(CursorShape::ResizeH))
                 .build(),
             metrics: self.skin.vu_stereo,
             levels: *levels,
