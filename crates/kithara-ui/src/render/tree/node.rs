@@ -161,11 +161,12 @@ fn render_node<'a>(
             bordered(
                 filled(
                     container(
-                        Flex::row(
-                            children
-                                .iter()
-                                .map(|child| render_node(child, ui, reads, skin)),
-                        )
+                        Flex::row(children.iter().map(|child| {
+                            (
+                                render_node(child, ui, reads, skin),
+                                main_minimum(child, Axis::Horizontal, skin),
+                            )
+                        }))
                         .spacing(gap.unwrap_or(skin.layout.grid_gap))
                         .align(Alignment::Center)
                         .width(size.0)
@@ -201,11 +202,12 @@ fn render_node<'a>(
             bordered(
                 filled(
                     container(
-                        Flex::column(
-                            children
-                                .iter()
-                                .map(|child| render_node(child, ui, reads, skin)),
-                        )
+                        Flex::column(children.iter().map(|child| {
+                            (
+                                render_node(child, ui, reads, skin),
+                                main_minimum(child, Axis::Vertical, skin),
+                            )
+                        }))
                         .spacing(gap.unwrap_or(skin.layout.grid_gap))
                         .align(Alignment::Center)
                         .width(size.0),
@@ -248,6 +250,18 @@ fn render_node<'a>(
 fn child_size(node: &CompiledNode) -> SizeSpec {
     match node {
         CompiledNode::Split { size, .. } | CompiledNode::Module { size, .. } => *size,
+    }
+}
+
+fn main_minimum(node: &ExpandedNode, axis: Axis, skin: &Skin) -> Option<f32> {
+    let size = effective_size(node, skin)?;
+    let dim = match axis {
+        Axis::Horizontal => size.w,
+        Axis::Vertical => size.h,
+    };
+    match dim {
+        Dim::Range { min, .. } => Some(min),
+        _ => None,
     }
 }
 

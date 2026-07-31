@@ -132,10 +132,23 @@ Lifting those to owned types buys nothing until a second host exists to disagree
 would be a translation layer with one caller - so the gate stays, named here rather than left to
 look like an oversight.
 
-The first flip was deliberately made byte-neutral. `Range` still maps as `length_for` has always
-mapped it, min and max discarded; honouring it is a separate commit whose delta the harness
-measures. Padding and gap defaults are likewise untouched, so nothing about this transfer can move
-a rect - and the fixtures prove it did not.
+`Range` keeps its `length_for` mapping to `Fill` or `FillPortion`, so the existing weight reaches
+the solver unchanged; the render tree passes the main-axis minimum alongside it for expanded rows
+and columns. Until the solver existed there was nowhere to enforce that minimum, so it was simply
+discarded - a control declared `Range(min: 90)` could be laid out 33 px wide. That was a defect,
+not a design, and `solve` now honours it while dividing fluid space. `Range` maximums stay
+unimplemented: every `Range` in the repo declares `max: None`, so a clamp would be untested code.
+Padding and gap defaults are unchanged.
+
+When the minimums cannot all be met the solver scales every one of them by a single factor. This
+is a deliberate degraded mode, and AGENTS.md wants such a branch justified rather than assumed.
+It is total (no panic, no negative extent, no division by a zero minimum sum), it is continuous in
+the container width, and it never overflows the parent - which is what makes it preferable to
+honouring minimums absolutely and letting a row spill. It is also unreachable in the shipped app:
+`gui::frontend` declares a minimum window of 1080x640, and at 1080 the micro row's two
+`Range(min: 90)` children have 893 px to share. The parity harness exercises the branch at 320x240
+on purpose, because a library consumer carries no such window floor. If a document ever does
+exhaust its minimums inside the declared floor, the document is what gets fixed.
 
 `tests/layout_parity.rs` holds this owner to iced's prior answers. It compiles the two builtin
 presets, renders them through the render-tree adapter, resolves the tree against a headless

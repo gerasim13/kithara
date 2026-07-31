@@ -1,6 +1,7 @@
 use iced::{Alignment, Length, Padding, Point, Size, advanced::layout::Limits};
 use num_traits::cast::AsPrimitive;
 
+use super::fluid;
 use crate::layout::Axis;
 
 pub(crate) struct Input<'a> {
@@ -17,14 +18,16 @@ pub(crate) struct Input<'a> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Item {
     pub(crate) declared: Size<Length>,
+    pub(super) main_minimum: Option<f32>,
     pub(crate) offset: Point,
     pub(crate) size: Size,
 }
 
 impl Item {
-    pub(crate) const fn new(declared: Size<Length>) -> Self {
+    pub(crate) const fn new(declared: Size<Length>, main_minimum: Option<f32>) -> Self {
         Self {
             declared,
+            main_minimum,
             offset: Point::ORIGIN,
             size: Size::ZERO,
         }
@@ -127,7 +130,8 @@ pub(crate) fn resolve(input: Input<'_>, measure: &mut impl Measure) -> Distribut
     let remaining = available.max(0.0);
 
     if !main_compress {
-        for (index, item) in items.iter_mut().enumerate() {
+        let allocated_main = fluid::allocate(&items, axis, remaining, fill_main_sum);
+        for (index, (item, allocation)) in items.iter_mut().zip(allocated_main).enumerate() {
             let declared = item.declared;
             let (fill_main_factor, fill_cross_factor) = pack(
                 axis,
@@ -136,11 +140,10 @@ pub(crate) fn resolve(input: Input<'_>, measure: &mut impl Measure) -> Distribut
             );
 
             if fill_main_factor != 0 {
-                let max_main = remaining * f32::from(fill_main_factor) / f32::from(fill_main_sum);
-                let max_main = if max_main.is_nan() {
+                let max_main = if allocation.extent().is_nan() {
                     f32::INFINITY
                 } else {
-                    max_main
+                    allocation.extent()
                 };
                 let min_main = if max_main.is_infinite() {
                     0.0
