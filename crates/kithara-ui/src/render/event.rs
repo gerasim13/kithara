@@ -1,6 +1,9 @@
 use iced::{Element, widget::canvas::Action};
 
-use crate::interact::{Outcome, recognizers::DragEvent};
+use crate::interact::{
+    Outcome,
+    recognizers::{DragEvent, StepEvent},
+};
 
 /// Shared view contract: a built control renders itself into the event tree.
 pub(crate) trait Widget<'a> {
@@ -31,6 +34,16 @@ fn set_scalar(path: String, value: f32) -> UiEvent {
 
 pub(crate) fn scalar(path: &str, outcome: Outcome) -> Option<Action<UiEvent>> {
     action(outcome, |value| set_scalar(path.to_owned(), value))
+}
+
+pub(crate) fn step(path: &str, outcome: Outcome<StepEvent>) -> Option<Action<UiEvent>> {
+    action(outcome, |event| UiEvent::Control {
+        path: path.to_owned(),
+        action: match event {
+            StepEvent::By(steps) => ControlAction::StepScalar(steps),
+            StepEvent::Activate => ControlAction::Activate,
+        },
+    })
 }
 
 pub(crate) fn activate(path: &str, outcome: Outcome<()>) -> Option<Action<UiEvent>> {

@@ -304,9 +304,11 @@ so a feature offers no exemption from the rule that actually governs this code, 
 clippy` runs without `--all-features`, which would make the module a permanent lint blind spot. The
 gate splits the day a second host routes input, exactly as `backends` already splits.
 
-Two wheel policies coexist and must not be unified: the scalar recognizer accumulates 20 px of
-trackpad travel per step, while `widgets::wheel` debounces its own stepping at 200 ms. They answer
-different questions and share only the delta decoder.
+Two wheel policies coexist and must not be unified: `Scalar` accumulates 20 px of trackpad travel
+per step, while `Stepper` treats any pixel delta as one detent and debounces at 200 ms. One asks how
+many steps have accumulated, the other asks whether one has gone by yet - a flick arrives as a long
+tail of shrinking deltas, and every one of them would be its own detent without the window. They
+share only the delta decoder.
 
 Time enters a recognizer as a parameter rather than being read inside it. That is what makes the
 double-click window testable at all, and the window is `[0 ms, 301 ms)` rather than 300 because
@@ -315,8 +317,9 @@ double-click window testable at all, and the window is `[0 ms, 301 ms)` rather t
 `widgets::interaction::behavior` is gone entirely, and with it the 0.90 similarity pair
 `ScalarDragState` formed with `interact::ScalarState`. Six tracks now share one state machine
 instead of two machines sharing a field bag: press, move while active, release, plus the two
-opt-ins. Every pointer gesture in the crate is a recognizer; what is left under
-`widgets::interaction` is the tempo wheel surface, which is a widget rather than a gesture.
+opt-ins. Every pointer gesture in the crate is a recognizer, including the stepping surface: what is left
+under `widgets::interaction` is a canvas that draws nothing and forwards, which is the shape every
+ported control now has.
 
 `recognizers::click` is a free function rather than a type, following `recognizers::wheel`. A press
 that lands is the whole gesture, so there is no state, and the only thing that looked like
