@@ -5193,6 +5193,8 @@ dependencies = [
  "delegate",
  "derive_more",
  "iced",
+ "iced_renderer",
+ "iced_tiny_skia",
  "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",
