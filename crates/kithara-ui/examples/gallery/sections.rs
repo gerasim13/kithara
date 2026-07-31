@@ -17,10 +17,11 @@ pub(super) enum Tab {
     Tree,
     Library2,
     Stress,
+    Menu,
 }
 
 impl Tab {
-    pub(super) const ALL: [Self; 17] = [
+    pub(super) const ALL: [Self; 18] = [
         Self::Atoms,
         Self::Buttons,
         Self::Faders,
@@ -38,6 +39,7 @@ impl Tab {
         Self::Tree,
         Self::Library2,
         Self::Stress,
+        Self::Menu,
     ];
 
     pub(super) const fn entry(self) -> &'static str {
@@ -59,6 +61,7 @@ impl Tab {
             Self::Tree => "gallery-tree.klayout.ron",
             Self::Library2 => "gallery-library2.klayout.ron",
             Self::Stress => "gallery-stress.klayout.ron",
+            Self::Menu => "gallery-menu.klayout.ron",
         }
     }
 
@@ -81,6 +84,7 @@ impl Tab {
             Self::Tree => 14,
             Self::Library2 => 15,
             Self::Stress => 16,
+            Self::Menu => 17,
         }
     }
 }
@@ -89,24 +93,29 @@ impl TryFrom<&str> for Tab {
     type Error = ();
 
     fn try_from(path: &str) -> Result<Self, ()> {
-        match path {
-            "gallery/atoms" => Ok(Self::Atoms),
-            "gallery/buttons" => Ok(Self::Buttons),
-            "gallery/faders" => Ok(Self::Faders),
-            "gallery/modules" => Ok(Self::Modules),
-            "gallery/typography" => Ok(Self::Typography),
-            "gallery/cells" => Ok(Self::Cells),
-            "gallery/sizes" => Ok(Self::Sizes),
-            "gallery/tokens" => Ok(Self::Tokens),
-            "gallery/micro" => Ok(Self::Micro),
-            "gallery/mixer" => Ok(Self::Mixer),
-            "gallery/vis" => Ok(Self::Vis),
-            "gallery/chrome" => Ok(Self::Chrome),
-            "gallery/titlebars" => Ok(Self::Titlebars),
-            "gallery/tracklist" => Ok(Self::Tracklist),
-            "gallery/tree" => Ok(Self::Tree),
-            "gallery/library2" => Ok(Self::Library2),
-            "gallery/stress" => Ok(Self::Stress),
+        let slug = path
+            .strip_prefix("gallery/")
+            .and_then(|rest| rest.strip_suffix("/item"))
+            .ok_or(())?;
+        match slug {
+            "atoms" => Ok(Self::Atoms),
+            "buttons" => Ok(Self::Buttons),
+            "faders" => Ok(Self::Faders),
+            "modules" => Ok(Self::Modules),
+            "typography" => Ok(Self::Typography),
+            "cells" => Ok(Self::Cells),
+            "sizes" => Ok(Self::Sizes),
+            "tokens" => Ok(Self::Tokens),
+            "micro" => Ok(Self::Micro),
+            "mixer" => Ok(Self::Mixer),
+            "vis" => Ok(Self::Vis),
+            "chrome" => Ok(Self::Chrome),
+            "titlebars" => Ok(Self::Titlebars),
+            "tracklist" => Ok(Self::Tracklist),
+            "tree" => Ok(Self::Tree),
+            "library2" => Ok(Self::Library2),
+            "stress" => Ok(Self::Stress),
+            "menu" => Ok(Self::Menu),
             _ => Err(()),
         }
     }

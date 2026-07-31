@@ -64,7 +64,8 @@ To add a backend:
 5. Document any target or tail-drain limitations here.
 
 Bungee on iOS is an opt-in backend. Its CMake C++ build must see
-`IPHONEOS_DEPLOYMENT_TARGET=16.0`; `xtask apple` exports that env before
+`IPHONEOS_DEPLOYMENT_TARGET=15.6`; `xtask apple` exports the workspace Apple
+deployment target before
 invoking `cargo swift package`. Preserve the same env for manual
 `-F stretch-bungee` Apple builds.
 

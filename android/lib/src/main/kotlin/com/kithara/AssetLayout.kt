@@ -6,6 +6,8 @@ import com.kithara.ffi.FfiAssetLayoutTarget
 import com.kithara.ffi.FfiAssetResource
 import com.kithara.ffi.FfiAssetSource
 import com.kithara.ffi.FfiAssetStore
+import com.kithara.ffi.FfiCacheIdentityRule
+import com.kithara.ffi.queryIdentityLayout
 
 /** Asset identity passed to [AssetLayout.root]. */
 sealed interface AssetSource {
@@ -50,8 +52,9 @@ sealed interface AssetResource {
  * minted; cache I/O using that key does not call the layout again.
  *
  * An [AssetResource.Url] contains the full URL. Custom layouts must preserve
- * required query identity without writing raw query text. Kithara's default
- * layout uses a bounded query fingerprint and ignores fragments.
+ * required query identity without writing raw query text. Use
+ * [AssetLayouts.queryIdentity] to select application-defined query parameters
+ * per domain.
  *
  * [root] must return exactly one non-empty component other than `_index`.
  * [path] must return a non-empty relative path separated by `/`. Components
@@ -67,6 +70,28 @@ interface AssetLayout {
 
     /** Returns the relative path for [resource] below its asset root. */
     fun path(resource: AssetResource): String
+}
+
+/** Query parameters included in cache identity for exact, `*.domain`, or `*` domain matches. */
+data class CacheIdentityRule(
+    val domains: List<String>,
+    val queryParameters: List<String>,
+) {
+    internal fun toFfi(): FfiCacheIdentityRule = FfiCacheIdentityRule(
+        domains = domains,
+        queryParameters = queryParameters,
+    )
+}
+
+/** Built-in Rust-owned asset layouts. */
+object AssetLayouts {
+    /**
+     * Creates a layout whose first matching domain rule selects the query
+     * parameters used for cache identity.
+     */
+    @JvmStatic
+    fun queryIdentity(rules: List<CacheIdentityRule>): AssetLayout =
+        RustAssetLayout(queryIdentityLayout(rules.map(CacheIdentityRule::toFfi)))
 }
 
 /** Playback protocol whose default asset layout can be replaced. */
@@ -90,7 +115,11 @@ class AssetLayoutRegistry internal constructor(
 
     /** Registers [layout] for [target], replacing an existing registration. */
     fun register(layout: AssetLayout, target: AssetLayoutTarget) {
-        inner.register(target.toFfi(), AssetLayoutBridge(layout))
+        val ffiLayout = when (layout) {
+            is RustAssetLayout -> layout.inner
+            else -> AssetLayoutBridge(layout)
+        }
+        inner.register(target.toFfi(), ffiLayout)
     }
 }
 
@@ -108,6 +137,14 @@ class AssetStore internal constructor(
     ) : this(FfiAssetStore(root, layouts.inner))
 }
 
+private class RustAssetLayout(
+    val inner: FfiAssetLayout,
+) : AssetLayout {
+    override fun root(source: AssetSource): String = inner.root(source.toFfi())
+
+    override fun path(resource: AssetResource): String = inner.path(resource.toFfi())
+}
+
 private class AssetLayoutBridge(
     private val layout: AssetLayout,
 ) : FfiAssetLayout {
@@ -121,9 +158,20 @@ private fun AssetLayoutTarget.toFfi(): FfiAssetLayoutTarget = when (this) {
     AssetLayoutTarget.Hls -> FfiAssetLayoutTarget.HLS
 }
 
+private fun AssetSource.toFfi(): FfiAssetSource = when (this) {
+    is AssetSource.Remote -> FfiAssetSource.Remote(url, discriminator)
+    is AssetSource.Local -> FfiAssetSource.Local(path)
+}
+
 private fun FfiAssetSource.toAssetSource(): AssetSource = when (this) {
     is FfiAssetSource.Remote -> AssetSource.Remote(url, discriminator)
     is FfiAssetSource.Local -> AssetSource.Local(path)
+}
+
+private fun AssetResource.toFfi(): FfiAssetResource = when (this) {
+    is AssetResource.Source -> FfiAssetResource.Source(extension)
+    is AssetResource.Url -> FfiAssetResource.Url(url)
+    is AssetResource.Named -> FfiAssetResource.Named(namespace, name)
 }
 
 private fun FfiAssetResource.toAssetResource(): AssetResource = when (this) {

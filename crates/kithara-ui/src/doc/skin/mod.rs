@@ -1,13 +1,6 @@
-mod content;
 mod controls;
 mod document;
-mod palette;
-mod shell;
-mod typography;
+mod panels;
+mod primitives;
 
-pub use content::*;
-pub use controls::*;
-pub use document::*;
-pub use palette::*;
-pub use shell::*;
-pub use typography::*;
+pub use self::{controls::*, document::*, panels::*, primitives::*};

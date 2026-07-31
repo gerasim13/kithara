@@ -50,6 +50,7 @@ thunderdome = { version = "0.6", default-features = false, features = ["std"] }
 tinystr = { version = "0.8", default-features = false, features = ["alloc", "zerovec"] }
 tracing-core = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = { version = "2", features = ["serde"] }
 writeable = { version = "0.6", default-features = false, features = ["alloc"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
 zerovec = { version = "0.11", default-features = false, features = ["alloc", "derive", "yoke"] }
@@ -291,6 +292,7 @@ regex-syntax = { version = "0.8" }
 ringbuf = { version = "0.4", features = ["portable-atomic"] }
 serde = { version = "1", features = ["alloc", "derive"] }
 serde_core = { version = "1", default-features = false, features = ["alloc", "result", "std"] }
+serde_derive = { version = "1" }
 serde_json = { version = "1", features = ["alloc"] }
 smallvec = { version = "1", default-features = false, features = ["const_new", "union"] }
 syn = { version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
@@ -299,6 +301,7 @@ thunderdome = { version = "0.6", default-features = false, features = ["std"] }
 tinystr = { version = "0.8", default-features = false, features = ["alloc", "zerovec"] }
 tracing-core = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = { version = "2", features = ["serde"] }
 writeable = { version = "0.6", default-features = false, features = ["alloc"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
 zerovec = { version = "0.11", default-features = false, features = ["alloc", "derive", "yoke"] }

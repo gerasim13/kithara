@@ -165,6 +165,7 @@ mod tests {
 
         let program = KnobProgram::new("mixer/gain", Some("GAIN"), 0.5, &skin);
         let (dial, caption) = program.rects(bounds);
+        let unlabelled = KnobProgram::new("mixer/gain", None, 0.5, &skin);
 
         assert_eq!(
             dial.h + metrics.outer_inset * 2.0 + metrics.label_gap + caption.h,
@@ -172,5 +173,6 @@ mod tests {
         );
         assert_eq!(caption.h, metrics.label_height);
         assert!(caption.y >= dial.y + dial.h);
+        assert_eq!(program.rects(bounds), unlabelled.rects(bounds));
     }
 }

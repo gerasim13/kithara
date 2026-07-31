@@ -6,10 +6,10 @@ use crate::{
     layout::FrameSides,
     module::{
         AdaptivePolicy, BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode,
-        DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, ScalarFormat, TextAlign, TextStyle,
-        Tone, TrackColumn, WaveStyle, WindowControlsStyle,
+        DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAt, ScalarFormat, TextAlign,
+        TextStyle, Tone, TrackColumn, WaveStyle, WindowControlsStyle,
     },
-    size::SizeSpec,
+    size::{BlockNode, SizeSpec},
     skin::ColorRole,
 };
 
@@ -26,6 +26,10 @@ pub enum ExpandedNode {
         frame: Option<FrameSides>,
         background: Option<ColorRole>,
         background_alpha: Option<f32>,
+        active: Option<Binding>,
+        active_background: Option<ColorRole>,
+        frame_color: Option<ColorRole>,
+        active_frame_color: Option<ColorRole>,
         surface: Option<SurfaceSpec>,
         children: Vec<Self>,
     },
@@ -41,6 +45,24 @@ pub enum ExpandedNode {
         background_alpha: Option<f32>,
         surface: Option<SurfaceSpec>,
         children: Vec<Self>,
+    },
+    Optional {
+        block: BlockSpec,
+        child: Box<Self>,
+    },
+    /// `content` is laid out only inside the overlay, so the node's intrinsic
+    /// size is the anchor's alone.
+    Popover {
+        path: InternId,
+        open: Binding,
+        at: PopoverAt,
+        anchor: Box<Self>,
+        content: Box<Self>,
+    },
+    Pressable {
+        path: InternId,
+        press: Binding,
+        child: Box<Self>,
     },
     Slot {
         id: InternId,
@@ -79,12 +101,18 @@ pub enum ControlSpec {
     Text {
         style: TextStyle,
         label: Option<InternId>,
+        color: Option<ColorRole>,
+        active_color: Option<ColorRole>,
         active: Option<Binding>,
         align: TextAlign,
     },
     Glyph {
         icon: IconName,
+        active_icon: Option<IconName>,
         style: GlyphStyle,
+        color: Option<ColorRole>,
+        active_color: Option<ColorRole>,
+        active: Option<Binding>,
     },
     NavItem {
         label: InternId,
@@ -171,54 +199,26 @@ pub enum ControlSpec {
     },
 }
 
+/// Which side of the host contract a [`Binding`] addresses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BindingKind {
+    Command,
+    Parameter,
+    Telemetry,
+    Model,
+}
+
 /// Compiled endpoint reference. `id` is the bare endpoint; `key` is the
 /// canonical scope-qualified form `<id>@<scope>=<value>[,...]` (equal to `id`
 /// when the binding has no scope). Renderers and hosts address reads by `key`.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
-pub enum Binding {
-    Command {
-        id: InternId,
-        key: InternId,
-        with: BTreeMap<InternId, InternId>,
-    },
-    Parameter {
-        id: InternId,
-        key: InternId,
-        with: BTreeMap<InternId, InternId>,
-    },
-    Telemetry {
-        id: InternId,
-        key: InternId,
-        with: BTreeMap<InternId, InternId>,
-    },
-    Model {
-        id: InternId,
-        key: InternId,
-        with: BTreeMap<InternId, InternId>,
-    },
-}
-
-impl Binding {
-    #[must_use]
-    pub fn id(&self) -> InternId {
-        match self {
-            Self::Command { id, .. }
-            | Self::Parameter { id, .. }
-            | Self::Telemetry { id, .. }
-            | Self::Model { id, .. } => *id,
-        }
-    }
-
-    #[must_use]
-    pub fn key(&self) -> InternId {
-        match self {
-            Self::Command { key, .. }
-            | Self::Parameter { key, .. }
-            | Self::Telemetry { key, .. }
-            | Self::Model { key, .. } => *key,
-        }
-    }
+pub struct Binding {
+    pub kind: BindingKind,
+    pub id: InternId,
+    pub key: InternId,
+    pub with: BTreeMap<InternId, InternId>,
 }
 
 #[derive(Debug)]
@@ -232,6 +232,24 @@ pub(crate) struct ExpandedModule {
     pub(crate) drop: Option<DropSpec>,
     pub(crate) collapsed: InternId,
     pub(crate) root: ExpandedNode,
+}
+
+/// A block the host may hide: the path that addresses it, and the Bool it
+/// reads. While that read is true the block is not laid out.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct BlockSpec {
+    pub path: InternId,
+    pub hidden: Binding,
+}
+
+impl BlockNode for ExpandedNode {
+    fn block(&self) -> Option<&BlockSpec> {
+        match self {
+            Self::Optional { block, .. } => Some(block),
+            _ => None,
+        }
+    }
 }
 
 /// Control path a wheel detent publishes on, and the scalar it steps.

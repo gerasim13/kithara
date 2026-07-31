@@ -1,0 +1,22 @@
+.macos-job:
+  tags:
+    - kithara-macos
+
+.linux-job:
+  image: kithara-ci:linux-20260729
+  tags:
+    - kithara-linux
+
+.android-job:
+  tags:
+    - kithara-android
+
+.windows-job:
+  variables:
+    KITHARA_CI_HOST_CONFIG: C:/KitharaCI/host.toml
+  tags:
+    - kithara-windows
+
+.release-job:
+  tags:
+    - kithara-release

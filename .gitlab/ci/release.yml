@@ -1,0 +1,58 @@
+release:apple:
+  extends: .macos-job
+  stage: release-build
+  timeout: 180 minutes
+  needs:
+    - apple:required
+  script:
+    - just ci run release-apple
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "release"
+  artifacts:
+    expire_in: never
+    paths:
+      - KitharaFFIInternal.xcframework.zip
+      - KitharaFFIInternal.xcframework.zip.sha256
+      - Kithara.xcframework.zip
+      - Kithara.xcframework.zip.sha256
+      - Kithara-docs.zip
+      - Kithara-docs.zip.sha256
+      - kithara-wasm-pages.zip
+      - kithara-wasm-pages.zip.sha256
+
+release:android:
+  extends: .android-job
+  stage: release-build
+  timeout: 180 minutes
+  needs:
+    - job: release:apple
+      artifacts: false
+  script:
+    - just ci run release-android
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "release"
+  artifacts:
+    expire_in: never
+    paths:
+      - kithara.aar
+      - kithara.aar.sha256
+      - rust-tls.aar
+      - rust-tls.aar.sha256
+
+release:publish:
+  extends: .release-job
+  stage: release-publish
+  timeout: 90 minutes
+  needs:
+    - job: release:apple
+      artifacts: true
+    - job: release:android
+      artifacts: true
+  environment:
+    name: release
+  script:
+    - just ci run release-publish
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "release"
+      when: manual
+  allow_failure: false

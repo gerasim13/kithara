@@ -23,14 +23,21 @@ IV derivation happens in `kithara-hls`'s `KeyStore`:
 - Otherwise, IV is derived from the segment sequence number: `[0u8; 8] || sequence.to_be_bytes()`.
 - Optional key unwrapping/processing for in-house DRM is also performed by `KeyStore` before building `DecryptContext`.
 
-## Domain Matchers
+## Key Request Resolution
 
-`DomainMatcher::parse(pattern)` recognises three pattern shapes used by `KeyProcessorRegistry` to route key URLs to per-domain rules:
+`kithara-drm` owns the policy-neutral request contract and its registry, not
+domain or URL policy:
 
-| Pattern | Variant | Matches |
-|---------|---------|---------|
-| `"zvuk.com"` | `Exact` | host equal to `zvuk.com` only |
-| `"*.zvuk.com"` | `Wildcard` | any subdomain of `zvuk.com` (e.g. `cdn.zvuk.com`, `edge.cdn.zvuk.com`), but **not** `zvuk.com` itself |
-| `"*"` | `All` | any host |
+- `KeyRequestResolver::prepare` optionally returns a final wire URL, policy
+  headers, and the processor paired with that response.
+- `KeyProcessorRegistry` consults resolvers in registration order and returns
+  the first prepared request.
+- `None` means the key stays on the plain AES-128 path.
+- `KeyRequestFactory` produces fresh per-fetch headers and a processor derived
+  from the same request material. Consumers must not reuse that pair across
+  fetches.
 
-Registry order matters: `KeyProcessorRegistry::find` returns the first matching rule. Place specific rules first; an `"*"`-rule must be last, otherwise it masks every rule registered after it.
+`PreparedKeyRequest` redacts its URL, headers, and processor from `Debug`
+because URLs and headers may contain credentials. Concrete domain matching,
+query shaping, and static provider headers belong to the composition layer
+(`kithara-play`), which implements and registers `KeyRequestResolver`.

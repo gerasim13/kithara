@@ -5,8 +5,9 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use kithara::{
     drm::{DecryptContext, KeyRequest, KeyRequestFactory, aes128_cbc_process_chunk},
-    hls::{HlsError, HlsResult, KeyProcessorRegistry, KeyProcessorRule},
+    hls::{HlsError, HlsResult, KeyProcessorRegistry},
     platform::{sync::Arc, time::Duration},
+    play::policy::{DomainKeyPolicy, DomainKeyRule},
 };
 use kithara_integration_tests::{hls_fixture::*, hls_server::*};
 use url::Url;
@@ -15,7 +16,10 @@ fn registry_for_host(host: &str, processor: kithara::hls::KeyProcessor) -> KeyPr
     let factory: KeyRequestFactory =
         Arc::new(move || KeyRequest::new(HashMap::new(), Arc::clone(&processor)));
     let mut reg = KeyProcessorRegistry::new();
-    reg.add(KeyProcessorRule::new([host], factory));
+    reg.register(Arc::new(DomainKeyPolicy::new([DomainKeyRule::new(
+        [host],
+        factory,
+    )])));
     reg
 }
 

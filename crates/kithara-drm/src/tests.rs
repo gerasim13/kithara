@@ -113,187 +113,170 @@ mod registry {
     use kithara_test_utils::kithara;
     use url::Url;
 
-    use crate::{
-        DomainMatcher, KeyProcessor, KeyProcessorRegistry, KeyProcessorRule, KeyRequest,
-        KeyRequestFactory,
-    };
+    use crate::{KeyProcessor, KeyProcessorRegistry, KeyRequestResolver, PreparedKeyRequest};
 
-    type AttachField = fn(KeyProcessorRule, HashMap<String, String>) -> KeyProcessorRule;
-    type ReadField = fn(&KeyProcessorRule) -> Option<&HashMap<String, String>>;
-
-    /// Wrap a one-shot [`KeyProcessor`] in a [`KeyRequestFactory`]
-    /// that re-issues the same closure on every call. Tests don't
-    /// care about per-call salt rotation — they only validate the
-    /// processor behaviour.
-    fn const_factory(processor: KeyProcessor) -> KeyRequestFactory {
-        Arc::new(move || KeyRequest::new(HashMap::new(), Arc::clone(&processor)))
+    #[derive(Clone, Copy, Debug)]
+    enum ProcessorKind {
+        Identity,
+        Reverse,
     }
 
-    fn noop_factory() -> KeyRequestFactory {
-        const_factory(Arc::new(Ok))
+    impl ProcessorKind {
+        fn build(self) -> KeyProcessor {
+            match self {
+                Self::Identity => Arc::new(Ok),
+                Self::Reverse => Arc::new(|key| {
+                    let mut bytes = key.to_vec();
+                    bytes.reverse();
+                    Ok(Bytes::from(bytes))
+                }),
+            }
+        }
     }
 
-    fn reverse_factory() -> KeyRequestFactory {
-        const_factory(Arc::new(|key| {
-            let mut v = key.to_vec();
-            v.reverse();
-            Ok(Bytes::from(v))
-        }))
+    #[derive(Debug)]
+    struct FakeResolver {
+        final_url: Url,
+        headers: HashMap<String, String>,
+        matches: bool,
+        processor: ProcessorKind,
     }
 
-    #[kithara::test]
-    fn exact_match() {
-        let m = DomainMatcher::parse("zvuk.com");
-        assert!(m.matches("zvuk.com"));
-        assert!(m.matches("ZVUK.COM"));
-        assert!(!m.matches("cdn.zvuk.com"));
-        assert!(!m.matches("nozvuk.com"));
+    impl FakeResolver {
+        fn matching(final_url: &str, processor: ProcessorKind) -> Self {
+            Self {
+                final_url: Url::parse(final_url).expect("test URL is valid"),
+                headers: HashMap::new(),
+                matches: true,
+                processor,
+            }
+        }
+
+        fn with_header(mut self, name: &str, value: &str) -> Self {
+            self.headers.insert(name.to_string(), value.to_string());
+            self
+        }
+
+        fn not_matching() -> Self {
+            Self {
+                final_url: Url::parse("https://unused.example/key").expect("test URL is valid"),
+                headers: HashMap::new(),
+                matches: false,
+                processor: ProcessorKind::Identity,
+            }
+        }
     }
 
-    #[kithara::test]
-    fn wildcard_match() {
-        let m = DomainMatcher::parse("*.zvuk.com");
-        assert!(m.matches("cdn.zvuk.com"));
-        assert!(m.matches("edge.cdn.zvuk.com"));
-        assert!(!m.matches("zvuk.com"));
-        assert!(!m.matches("nozvuk.com"));
-    }
-
-    #[kithara::test]
-    fn wildcard_case_insensitive() {
-        let m = DomainMatcher::parse("*.ZVQ.ME");
-        assert!(m.matches("cdn-edge.zvq.me"));
-        assert!(m.matches("CDN-EDGE.ZVQ.ME"));
-    }
-
-    #[kithara::test]
-    fn parse_wildcard_all() {
-        assert!(matches!(DomainMatcher::parse("*"), DomainMatcher::All));
-    }
-
-    #[kithara::test]
-    fn wildcard_all_matches_any_host() {
-        let m = DomainMatcher::parse("*");
-        assert!(m.matches("zvuk.com"));
-        assert!(m.matches("cdn.zvq.me"));
-        assert!(m.matches("a.b.c.d.example.org"));
-        assert!(m.matches("LOCALHOST"));
-    }
-
-    #[kithara::test]
-    fn registry_find_with_wildcard_all() {
-        let mut reg = KeyProcessorRegistry::new();
-        reg.add(KeyProcessorRule::new(["*"], noop_factory()));
-
-        for host in ["cdn.zvuk.com", "silvercomet.top", "example.org"] {
-            let url = Url::parse(&format!("https://{host}/key.bin")).expect("test URL is valid");
-            assert!(reg.find(&url).is_some());
+    impl KeyRequestResolver for FakeResolver {
+        fn prepare(&self, _key_url: &Url) -> Option<PreparedKeyRequest> {
+            self.matches.then(|| {
+                PreparedKeyRequest::new(
+                    self.final_url.clone(),
+                    self.headers.clone(),
+                    self.processor.build(),
+                )
+            })
         }
     }
 
     #[kithara::test]
-    fn registry_specific_rule_overrides_wildcard_all_when_registered_first() {
+    fn registry_uses_first_resolver_that_prepares_a_request() {
         let mut reg = KeyProcessorRegistry::new();
-        reg.add(KeyProcessorRule::new(["*.zvuk.com"], reverse_factory()));
-        reg.add(KeyProcessorRule::new(["*"], noop_factory()));
+        reg.register(Arc::new(FakeResolver::not_matching()));
+        reg.register(Arc::new(FakeResolver::matching(
+            "https://first.example/key",
+            ProcessorKind::Identity,
+        )));
+        reg.register(Arc::new(FakeResolver::matching(
+            "https://second.example/key",
+            ProcessorKind::Identity,
+        )));
 
-        let url = Url::parse("https://cdn.zvuk.com/key.bin").expect("test URL is valid");
-        let rule = reg.find(&url).expect("matched");
-        let result = (rule.build_request().processor)(Bytes::from_static(b"abcd")).expect("ok");
-        assert_eq!(&result[..], b"dcba");
+        let source = Url::parse("https://source.example/key").expect("test URL is valid");
+        let prepared = reg.prepare(&source).expect("resolver should match");
+
+        assert_eq!(prepared.url.as_str(), "https://first.example/key");
     }
 
     #[kithara::test]
-    fn rule_builder_sets_headers_and_query_params() {
-        let mut headers = HashMap::new();
-        headers.insert("X-Encrypted-Key".to_string(), "seed123".to_string());
-        let mut params = HashMap::new();
-        params.insert("token".to_string(), "abc".to_string());
-
-        let rule = KeyProcessorRule::for_domains(["*.zvuk.com"], noop_factory())
-            .headers(headers.clone())
-            .query_params(params.clone())
-            .build();
-
-        assert_eq!(rule.headers.as_ref().expect("headers"), &headers);
-        assert_eq!(rule.query_params.as_ref().expect("params"), &params);
-    }
-
-    #[kithara::test]
-    fn registry_find_first_match() {
+    fn registry_returns_prepared_wire_request_and_selected_processor() {
         let mut reg = KeyProcessorRegistry::new();
-        reg.add(KeyProcessorRule::new(
-            ["*.zvuk.com", "*.zvq.me"],
-            noop_factory(),
+        reg.register(Arc::new(
+            FakeResolver::matching(
+                "https://wire.example/key?session=fresh",
+                ProcessorKind::Reverse,
+            )
+            .with_header("X-Encrypted-Key", "fresh-salt"),
         ));
-        reg.add(KeyProcessorRule::new(["other.com"], reverse_factory()));
 
-        let url = Url::parse("https://cdn-edge.zvq.me/keys/track.key").expect("url");
-        assert!(reg.find(&url).is_some());
+        let source = Url::parse("https://source.example/key").expect("test URL is valid");
+        let prepared = reg.prepare(&source).expect("resolver should match");
 
-        let url = Url::parse("https://other.com/key.bin").expect("url");
-        assert!(reg.find(&url).is_some());
-
-        let url = Url::parse("https://unknown.com/key.bin").expect("url");
-        assert!(reg.find(&url).is_none());
-    }
-
-    #[kithara::test]
-    #[case::headers(
-        "X-Encrypted-Key",
-        "seed123",
-        (|mut rule: KeyProcessorRule, kv: HashMap<String, String>| { rule.headers = Some(kv); rule }) as AttachField,
-        (|rule: &KeyProcessorRule| rule.headers.as_ref()) as ReadField
-    )]
-    #[case::query_params(
-        "token",
-        "xyz",
-        (|mut rule: KeyProcessorRule, kv: HashMap<String, String>| { rule.query_params = Some(kv); rule }) as AttachField,
-        (|rule: &KeyProcessorRule| rule.query_params.as_ref()) as ReadField
-    )]
-    fn registry_returns_per_rule_field(
-        #[case] map_key: &str,
-        #[case] map_val: &str,
-        #[case] attach: AttachField,
-        #[case] field: ReadField,
-    ) {
-        let mut reg = KeyProcessorRegistry::new();
-        let mut kv = HashMap::new();
-        kv.insert(map_key.to_string(), map_val.to_string());
-        let rule_with_field = attach(KeyProcessorRule::new(["*.zvuk.com"], noop_factory()), kv);
-        reg.add(rule_with_field);
-        reg.add(KeyProcessorRule::new(["silvercomet.top"], noop_factory()));
-
-        let url = Url::parse("https://cdn.zvuk.com/key.bin").expect("url");
-        let rule = reg.find(&url).expect("matched");
-        assert_eq!(field(rule).expect("field present")[map_key], map_val);
-
-        let url = Url::parse("https://silvercomet.top/key.bin").expect("url");
-        let rule = reg.find(&url).expect("matched");
-        assert!(field(rule).is_none());
-    }
-
-    #[kithara::test]
-    fn registry_processor_transforms_key() {
-        let mut reg = KeyProcessorRegistry::new();
-        reg.add(KeyProcessorRule::new(["example.com"], reverse_factory()));
-
-        let url = Url::parse("https://example.com/key.bin").expect("url");
-        let rule = reg.find(&url).expect("matched");
-        let result = (rule.build_request().processor)(Bytes::from_static(b"abcd")).expect("ok");
+        assert_eq!(
+            prepared.url.as_str(),
+            "https://wire.example/key?session=fresh"
+        );
+        assert_eq!(prepared.headers["X-Encrypted-Key"], "fresh-salt");
+        let result = (prepared.processor)(Bytes::from_static(b"abcd")).expect("processor succeeds");
         assert_eq!(&result[..], b"dcba");
     }
 
     #[kithara::test]
-    fn no_match_returns_none() {
-        let reg = KeyProcessorRegistry::new();
-        let url = Url::parse("https://example.com/key.bin").expect("url");
-        assert!(reg.find(&url).is_none());
+    fn registry_returns_none_when_no_resolver_matches() {
+        let mut reg = KeyProcessorRegistry::new();
+        reg.register(Arc::new(FakeResolver::not_matching()));
+
+        let source = Url::parse("https://source.example/key").expect("test URL is valid");
+
+        assert!(reg.prepare(&source).is_none());
     }
 
     #[kithara::test]
-    fn empty_registry() {
-        let reg = KeyProcessorRegistry::new();
+    fn registry_reports_whether_it_has_resolvers() {
+        let mut reg = KeyProcessorRegistry::new();
         assert!(reg.is_empty());
+
+        reg.register(Arc::new(FakeResolver::not_matching()));
+
+        assert!(!reg.is_empty());
+    }
+
+    #[kithara::test]
+    fn registry_debug_does_not_format_resolvers() {
+        let mut reg = KeyProcessorRegistry::new();
+        reg.register(Arc::new(
+            FakeResolver::matching(
+                "https://wire.example/key?access_token=secret-query",
+                ProcessorKind::Identity,
+            )
+            .with_header("Authorization", "secret-header"),
+        ));
+
+        let debug = format!("{reg:?}");
+
+        assert!(debug.contains("resolver_count"));
+        assert!(!debug.contains("secret-query"));
+        assert!(!debug.contains("secret-header"));
+    }
+
+    #[kithara::test]
+    fn prepared_request_debug_redacts_secrets() {
+        let url = Url::parse(
+            "https://api-user:api-password@example.com/key?access_token=secret-query-value",
+        )
+        .expect("test URL is valid");
+        let headers = HashMap::from([(
+            "Authorization".to_string(),
+            "secret-header-value".to_string(),
+        )]);
+        let request = PreparedKeyRequest::new(url, headers, ProcessorKind::Identity.build());
+
+        let debug = format!("{request:?}");
+
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("api-user"));
+        assert!(!debug.contains("api-password"));
+        assert!(!debug.contains("secret-query-value"));
+        assert!(!debug.contains("secret-header-value"));
     }
 }

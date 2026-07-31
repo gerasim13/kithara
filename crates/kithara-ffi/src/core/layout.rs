@@ -23,6 +23,16 @@ pub enum FfiAssetResource {
     Named { namespace: String, name: String },
 }
 
+/// Domain-scoped query parameters that identify remote media content.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct FfiCacheIdentityRule {
+    /// Exact hosts, `*.domain` subdomain patterns, or `*`.
+    pub domains: Vec<String>,
+    /// Query parameter names included in the cache identity.
+    pub query_parameters: Vec<String>,
+}
+
 /// Foreign cache layout callback.
 ///
 /// Implementations must be pure and deterministic, fast, non-blocking,

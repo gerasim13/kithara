@@ -1,14 +1,18 @@
 use std::collections::BTreeMap;
 
-use super::{Binding, machine::Context};
+use serde::de::DeserializeOwned;
+
+use super::{Binding, BindingKind, machine::Context};
 use crate::{
     error::UiDocError,
-    ids::{InternId, Interner, SourceUri},
+    ids::{EndpointId, InternId, Interner, SourceUri},
     module::BindingRef,
+    param::Param,
 };
 
-pub(super) fn substitute(
-    context: &Context<'_>,
+pub(crate) fn substitute(
+    args: &BTreeMap<String, String>,
+    origin: &SourceUri,
     value: &str,
     path: &str,
 ) -> Result<String, UiDocError> {
@@ -18,51 +22,81 @@ pub(super) fn substitute(
     let Some(name) = value.strip_prefix('$') else {
         return Ok(value.to_owned());
     };
-    context
-        .args
-        .get(name)
+    args.get(name)
         .cloned()
         .ok_or_else(|| UiDocError::UnresolvedParam {
-            origin: context.origin.clone(),
+            origin: origin.clone(),
             name: name.to_owned(),
             path: path.to_owned(),
         })
 }
 
-pub(super) fn substitute_map(
-    context: &Context<'_>,
+pub(crate) fn resolve_param<T: Clone + DeserializeOwned>(
+    args: &BTreeMap<String, String>,
+    origin: &SourceUri,
+    param: &Param<T>,
+    path: &str,
+) -> Result<T, UiDocError> {
+    let reference = match param {
+        Param::Fixed(value) => return Ok(value.clone()),
+        Param::Ref(reference) => reference,
+    };
+    let name = reference
+        .strip_prefix('$')
+        .ok_or_else(|| UiDocError::BadVariant {
+            origin: origin.clone(),
+            value: reference.clone(),
+            path: path.to_owned(),
+        })?;
+    let value = substitute(args, origin, reference, path)?;
+    ron::from_str::<T>(&value).map_err(|_| UiDocError::BadParamVariant {
+        origin: origin.clone(),
+        name: name.to_owned(),
+        value,
+        path: path.to_owned(),
+    })
+}
+
+pub(crate) fn resolve_optional_param<T: Clone + DeserializeOwned>(
+    args: &BTreeMap<String, String>,
+    origin: &SourceUri,
+    param: Option<&Param<T>>,
+    path: &str,
+) -> Result<Option<T>, UiDocError> {
+    param
+        .map(|param| resolve_param(args, origin, param, path))
+        .transpose()
+}
+
+pub(crate) fn substitute_map(
+    args: &BTreeMap<String, String>,
+    origin: &SourceUri,
     map: &BTreeMap<String, String>,
     path: &str,
 ) -> Result<BTreeMap<String, String>, UiDocError> {
     map.iter()
-        .map(|(key, value)| Ok((key.clone(), substitute(context, value, path)?)))
+        .map(|(key, value)| Ok((key.clone(), substitute(args, origin, value, path)?)))
         .collect()
 }
 
-pub(super) fn substitute_binding(
-    context: &Context<'_>,
+pub(crate) fn substitute_binding(
+    args: &BTreeMap<String, String>,
+    origin: &SourceUri,
     binding: &BindingRef,
     path: &str,
 ) -> Result<BindingRef, UiDocError> {
-    let binding = match binding {
-        BindingRef::Command { id, with } => BindingRef::Command {
-            id: id.clone(),
-            with: substitute_map(context, with, path)?,
-        },
-        BindingRef::Parameter { id, with } => BindingRef::Parameter {
-            id: id.clone(),
-            with: substitute_map(context, with, path)?,
-        },
-        BindingRef::Telemetry { id, with } => BindingRef::Telemetry {
-            id: id.clone(),
-            with: substitute_map(context, with, path)?,
-        },
-        BindingRef::Model { id, with } => BindingRef::Model {
-            id: id.clone(),
-            with: substitute_map(context, with, path)?,
-        },
-    };
-    Ok(binding)
+    let (BindingRef::Command { id, with }
+    | BindingRef::Parameter { id, with }
+    | BindingRef::Telemetry { id, with }
+    | BindingRef::Model { id, with }) = binding;
+    let id = EndpointId(substitute(args, origin, &id.0, path)?);
+    let with = substitute_map(args, origin, with, path)?;
+    Ok(match binding {
+        BindingRef::Command { .. } => BindingRef::Command { id, with },
+        BindingRef::Parameter { .. } => BindingRef::Parameter { id, with },
+        BindingRef::Telemetry { .. } => BindingRef::Telemetry { id, with },
+        BindingRef::Model { .. } => BindingRef::Model { id, with },
+    })
 }
 
 pub(super) fn intern_map(
@@ -134,28 +168,19 @@ pub(crate) fn intern_binding(
     binding: &BindingRef,
     origin: &SourceUri,
 ) -> Result<Binding, UiDocError> {
-    match binding {
-        BindingRef::Command { id, with } => {
-            let BindingParts { id, key, with } =
-                intern_binding_parts(interner, &id.0, with, origin)?;
-            Ok(Binding::Command { id, key, with })
-        }
-        BindingRef::Parameter { id, with } => {
-            let BindingParts { id, key, with } =
-                intern_binding_parts(interner, &id.0, with, origin)?;
-            Ok(Binding::Parameter { id, key, with })
-        }
-        BindingRef::Telemetry { id, with } => {
-            let BindingParts { id, key, with } =
-                intern_binding_parts(interner, &id.0, with, origin)?;
-            Ok(Binding::Telemetry { id, key, with })
-        }
-        BindingRef::Model { id, with } => {
-            let BindingParts { id, key, with } =
-                intern_binding_parts(interner, &id.0, with, origin)?;
-            Ok(Binding::Model { id, key, with })
-        }
-    }
+    let (kind, id, with) = match binding {
+        BindingRef::Command { id, with } => (BindingKind::Command, id, with),
+        BindingRef::Parameter { id, with } => (BindingKind::Parameter, id, with),
+        BindingRef::Telemetry { id, with } => (BindingKind::Telemetry, id, with),
+        BindingRef::Model { id, with } => (BindingKind::Model, id, with),
+    };
+    let BindingParts { id, key, with } = intern_binding_parts(interner, &id.0, with, origin)?;
+    Ok(Binding {
+        kind,
+        id,
+        key,
+        with,
+    })
 }
 
 pub(super) fn intern_optional_binding(
@@ -175,7 +200,10 @@ pub(super) fn intern_text(
     path: &str,
     origin: &SourceUri,
 ) -> Result<InternId, UiDocError> {
-    interner.intern(&substitute(context, value, path)?, origin)
+    interner.intern(
+        &substitute(&context.args, &context.origin, value, path)?,
+        origin,
+    )
 }
 
 pub(super) fn intern_optional_text(

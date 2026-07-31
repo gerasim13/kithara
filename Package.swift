@@ -68,7 +68,7 @@ if useLocalBinary {
 
 let package = Package(
     name: "Kithara",
-    platforms: [.iOS(.v16), .macOS(.v13)],
+    platforms: [.iOS("15.6"), .macOS(.v13)],
     products: [
         .library(name: "Kithara", targets: ["Kithara"]),
         .library(name: "KitharaFFI", targets: ["KitharaFFI"]),

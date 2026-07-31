@@ -50,13 +50,20 @@ into a domain-separated root identity. The default local root is a
 domain-separated hash of the absolute lexical path; it performs no
 canonicalization or filesystem I/O.
 
+`kithara-assets` owns layout registration, validation, and filesystem mapping;
+it does not own domain or transport policy. Higher layers may implement
+`AssetLayout` using the complete source/resource values and register that
+layout for `File`, `Hls`, or another protocol marker. The built-in
+domain-scoped query identity policy lives in `kithara-play`.
+
 For a URL resource, every path and authority component is encoded portably.
 Cross-origin HLS resources therefore cannot alias one another. A non-empty
 query is represented by an ordered, bounded fingerprint inserted before the
 leaf extension; query text and credentials are never written to disk, and a
 fragment does not affect the path. Direct-file `AssetResource::Source` does not
-carry a query, so callers must set `AssetSource::Remote.discriminator` when two
-query variants of one canonical URL identify different file bytes.
+carry a query. Callers can either set `AssetSource::Remote.discriminator`
+directly or register a higher-layer layout for the direct-file protocol marker
+when source URLs need additional identity.
 
 `AssetResource::Named` is the extension point for analysis and other derived
 artifacts. For example, analysis is the ordinary layout-owned resource

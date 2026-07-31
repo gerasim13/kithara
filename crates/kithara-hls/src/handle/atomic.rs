@@ -12,7 +12,7 @@ use kithara_stream::dl::{FetchCmd, FetchResponse, PeerHandle, reject_html_respon
 use tracing::{debug, warn};
 use url::Url;
 
-use crate::{HlsError, HlsResult};
+use crate::{HlsError, HlsResult, logging::RedactedUrl};
 
 /// Marker for a small atomic resource fetched through the disk cache +
 /// unified downloader pipeline. The associated `KIND` is used for the
@@ -83,7 +83,7 @@ impl<R: AtomicResource> AtomicFetch<R> {
         headers: Option<Headers>,
     ) -> HlsResult<Bytes> {
         debug!(
-            url = %url,
+            url = %RedactedUrl::new(url),
             asset_root = %self.scope.asset_root(),
             rel_path = %rel_path_for_log(key),
             resource_kind = R::KIND,
@@ -142,13 +142,13 @@ impl<R: AtomicResource> AtomicFetch<R> {
         let store = self.scope.store().clone();
         store
             .with_resource_transaction(key, || async {
-                self.fetch_validated_inner(key, url, headers, validate)
+                self.fetch_validated_in_transaction(key, url, headers, validate)
                     .await
             })
             .await
     }
 
-    async fn fetch_validated_inner<T, F>(
+    pub(crate) async fn fetch_validated_in_transaction<T, F>(
         &self,
         key: &ResourceKey,
         url: &Url,
@@ -163,7 +163,7 @@ impl<R: AtomicResource> AtomicFetch<R> {
                 Ok(value) => return Ok(value),
                 Err(error) => {
                     warn!(
-                        url = %url,
+                        url = %RedactedUrl::new(url),
                         error = %error,
                         resource_kind = R::KIND,
                         "kithara-hls: cached atomic resource is invalid; removing it before refetch"
@@ -177,7 +177,7 @@ impl<R: AtomicResource> AtomicFetch<R> {
         let value = validate(&bytes)?;
         if let Err(error) = self.write_back(key, url, &bytes) {
             warn!(
-                url = %url,
+                url = %RedactedUrl::new(url),
                 error = %error,
                 resource_kind = R::KIND,
                 "kithara-hls: valid atomic resource could not be persisted; using network bytes"
@@ -197,7 +197,7 @@ fn write_back_cache(
 ) -> bool {
     let Ok(final_len) = u64::try_from(bytes.len()) else {
         warn!(
-            url = %url,
+            url = %RedactedUrl::new(url),
             resource_kind,
             "kithara-hls: cache write skipped because body length does not fit u64"
         );
@@ -208,7 +208,7 @@ fn write_back_cache(
         .and_then(|()| writer.commit(Some(final_len)).map(|_reader| ()));
     if let Err(error) = result {
         warn!(
-            url = %url,
+            url = %RedactedUrl::new(url),
             error = %error,
             resource_kind,
             "kithara-hls: cache write failed"
@@ -216,7 +216,7 @@ fn write_back_cache(
         return false;
     }
     debug!(
-        url = %url,
+        url = %RedactedUrl::new(url),
         asset_root = %scope.asset_root(),
         rel_path = %rel_path,
         bytes = bytes.len(),
@@ -247,7 +247,7 @@ fn try_read_cached(
     let n = res.read_into(&mut buf)?;
     if n == 0 {
         warn!(
-            url = %url,
+            url = %RedactedUrl::new(url),
             asset_root = %scope.asset_root(),
             rel_path,
             resource_kind,
@@ -258,7 +258,7 @@ fn try_read_cached(
     }
     let _pinned = res.retain();
     debug!(
-        url = %url,
+        url = %RedactedUrl::new(url),
         asset_root = %scope.asset_root(),
         rel_path = %rel_path,
         bytes = n,

@@ -5,7 +5,7 @@
 <div align="center">
 
 [![Swift 6.0](https://img.shields.io/badge/Swift-6.0-orange.svg)](https://swift.org)
-[![Platforms](https://img.shields.io/badge/Platforms-iOS%2016%2B%20%7C%20macOS%2013%2B-blue.svg)]()
+[![Platforms](https://img.shields.io/badge/Platforms-iOS%2015.6%2B%20%7C%20macOS%2013%2B-blue.svg)]()
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../LICENSE-MIT)
 
 </div>
@@ -30,7 +30,7 @@ import PackageDescription
 
 let package = Package(
     name: "MyApp",
-    platforms: [.iOS(.v16), .macOS(.v13)],
+    platforms: [.iOS("15.6"), .macOS(.v13)],
     dependencies: [
         // Replace X.Y.Z with the latest tag from https://github.com/zvuk/kithara/releases
         .package(url: "https://github.com/zvuk/kithara", from: "X.Y.Z"),
@@ -54,8 +54,8 @@ assets and add the unpacked `Kithara.xcframework` to the app target.
 For local development, clone the repo and use the `KITHARA_LOCAL_DEV` environment variable to build against the local XCFramework:
 
 ```bash
-cargo xtask apple build                    # build XCFramework (release)
-cargo xtask apple build --profile debug    # build XCFramework (debug)
+just platform apple xcframework                    # build XCFramework (release)
+just platform apple xcframework --profile debug    # build XCFramework (debug)
 KITHARA_LOCAL_DEV=1 swift build            # build Swift package with local binary
 ```
 
@@ -131,6 +131,31 @@ captures its registry snapshot when it is created, so later registrations
 affect only later stores. An empty registry uses Kithara's defaults. Invalid
 callback output is rejected rather than rewritten or replaced with a default
 path; see the protocol documentation for the portable component rules.
+
+When remote media URLs use query parameters as content identity, create the
+built-in domain-aware layout and register it for each applicable protocol:
+
+```swift
+let layouts = AssetLayoutRegistry()
+let queryIdentity = AssetLayouts.queryIdentity(rules: [
+    CacheIdentityRule(
+        domains: ["media.example", "*.cdn.example"],
+        queryParameters: ["content_ref", "edition"]
+    ),
+    CacheIdentityRule(
+        domains: ["*"],
+        queryParameters: ["fallback_content_key"]
+    ),
+])
+layouts.register(queryIdentity, for: .file)
+layouts.register(queryIdentity, for: .hls)
+```
+
+Rules are evaluated in order. Exact hosts, `*.domain` subdomains, and `*` are
+supported. Only listed parameters affect the cache root; unlisted signed URL
+parameters such as expiry timestamps are ignored. The raw query is never stored
+in a cache path. The same ordinary registration method is used for Rust-owned
+built-in layouts and application-provided layouts.
 
 ### Seek
 
@@ -253,7 +278,7 @@ Open `apple/Package.swift` in Xcode, then open the playground from the Project n
 For local Rust changes, build a local XCFramework first:
 
 ```bash
-cargo xtask apple build --profile debug
+just platform apple xcframework --profile debug
 cd apple
 KITHARA_LOCAL_DEV=1 open Package.swift
 ```
@@ -262,14 +287,14 @@ KITHARA_LOCAL_DEV=1 open Package.swift
 An iOS/macOS demo player is included in [`Examples/KitharaDemo`](Examples/KitharaDemo). It plays audio from any URL (MP3, AAC, FLAC, HLS) with transport controls, seek, volume, playback rate, and error reporting.
 
 ```bash
-cargo xtask apple run
-just apple demo
+just platform apple demo
+just platform apple demo
 ```
 
 To open the generated Xcode project instead of launching a simulator:
 
 ```bash
-just apple xcode
+just platform apple xcode
 ```
 
 Features: URL input with Cmd+V, play/pause with auto-reload after track ends, seek slider, volume with mute, rate selector (0.5x–2.0x), status badge, and error display.
@@ -279,11 +304,11 @@ Features: URL input with Cmd+V, play/pause with auto-reload after track ends, se
 The XCFramework bundles the Rust core for all supported Apple platforms:
 
 ```bash
-just apple xcframework                       # release (optimized)
-just apple xcframework --profile debug       # debug (faster builds)
+just platform apple xcframework                       # release (optimized)
+just platform apple xcframework --profile debug       # debug (faster builds)
 # Equivalent direct xtask invocations:
-cargo xtask apple build
-cargo xtask apple build --profile debug
+just platform apple xcframework
+just platform apple xcframework --profile debug
 ```
 
 Output: `apple/KitharaFFIInternal.xcframework` with slices for:

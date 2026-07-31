@@ -1,21 +1,23 @@
 use std::collections::BTreeMap;
 
+use serde::de::DeserializeOwned;
+
 use super::{
-    Budget, ControlSite, ControlSpec, ControlVisitor, DropSpec, ExpandedModule, ExpandedNode,
-    SurfaceSpec,
+    Binding, BlockSpec, Budget, ControlSite, ControlSpec, ControlVisitor, DropSpec, ExpandedModule,
+    ExpandedNode, SurfaceSpec,
     binding_subst::{
         intern_binding, intern_optional_binding, intern_optional_text, intern_text, intern_texts,
-        substitute_binding, substitute_map,
+        resolve_optional_param, resolve_param, substitute_binding, substitute_map,
     },
 };
 use crate::{
     error::UiDocError,
     ids::{InternId, Interner, NodeId, SourceUri},
-    module::{
-        AdaptivePolicy, BindingRef, ControlNode, TextAlign, TextStyle, TrackColumn, WaveStyle,
-    },
+    module::{AdaptivePolicy, BindingRef, ControlNode, PopoverAt, TrackColumn, WaveStyle},
+    param::Param,
     resolve::ModuleSet,
     size::SizeSpec,
+    validate,
 };
 
 pub(super) struct Context<'a> {
@@ -25,6 +27,28 @@ pub(super) struct Context<'a> {
     pub(super) prefix: String,
 }
 
+impl Context<'_> {
+    fn substitute(&self, binding: &BindingRef, path: &str) -> Result<BindingRef, UiDocError> {
+        substitute_binding(&self.args, &self.origin, binding, path)
+    }
+
+    fn param<T: Clone + DeserializeOwned>(
+        &self,
+        param: &Param<T>,
+        path: &str,
+    ) -> Result<T, UiDocError> {
+        resolve_param(&self.args, &self.origin, param, path)
+    }
+
+    fn optional_param<T: Clone + DeserializeOwned>(
+        &self,
+        param: Option<&Param<T>>,
+        path: &str,
+    ) -> Result<Option<T>, UiDocError> {
+        resolve_optional_param(&self.args, &self.origin, param, path)
+    }
+}
+
 /// Cross-cutting expansion state threaded through the recursion: the include
 /// depth cap, the shared node budget, and the per-control validation visitor.
 pub(crate) struct Expander<'m, 'v> {
@@ -32,6 +56,7 @@ pub(crate) struct Expander<'m, 'v> {
     budget: &'m mut Budget,
     interner: &'m mut Interner,
     visitor: &'m mut ControlVisitor<'v>,
+    in_popover: bool,
 }
 
 impl<'m, 'v> Expander<'m, 'v> {
@@ -46,6 +71,7 @@ impl<'m, 'v> Expander<'m, 'v> {
             budget,
             interner,
             visitor,
+            in_popover: false,
         }
     }
 
@@ -72,7 +98,7 @@ impl<'m, 'v> Expander<'m, 'v> {
             .as_ref()
             .map(|binding| {
                 let path = format!("{prefix}/footer");
-                let binding = substitute_binding(&context, binding, &path)?;
+                let binding = context.substitute(binding, &path)?;
                 intern_binding(self.interner, &binding, entry)
             })
             .transpose()?;
@@ -84,12 +110,12 @@ impl<'m, 'v> Expander<'m, 'v> {
                 Ok(DropSpec {
                     write: intern_binding(
                         self.interner,
-                        &substitute_binding(&context, &drop.write, &path)?,
+                        &context.substitute(&drop.write, &path)?,
                         entry,
                     )?,
                     read: intern_binding(
                         self.interner,
-                        &substitute_binding(&context, &drop.read, &path)?,
+                        &context.substitute(&drop.read, &path)?,
                         entry,
                     )?,
                 })
@@ -189,23 +215,6 @@ fn title_bar_spec(
     })
 }
 
-fn text_spec(
-    context: &Context<'_>,
-    interner: &mut Interner,
-    style: TextStyle,
-    label: Option<&str>,
-    active: Option<&BindingRef>,
-    align: TextAlign,
-    path: &str,
-) -> Result<ControlSpec, UiDocError> {
-    Ok(ControlSpec::Text {
-        style,
-        label: intern_optional_text(context, interner, label, path, &context.origin)?,
-        active: intern_optional_binding(interner, active, &context.origin)?,
-        align,
-    })
-}
-
 fn child_path(prefix: &str, id: &NodeId) -> String {
     if prefix.is_empty() {
         id.0.clone()
@@ -258,35 +267,35 @@ impl ExtraBindings {
         let columns_state = match control {
             ControlNode::TrackList { columns_state, .. } => columns_state
                 .as_ref()
-                .map(|binding| substitute_binding(context, binding, path))
+                .map(|binding| context.substitute(binding, path))
                 .transpose()?,
             _ => None,
         };
         let query = match control {
             ControlNode::Tree { query, .. } => query
                 .as_ref()
-                .map(|binding| substitute_binding(context, binding, path))
+                .map(|binding| context.substitute(binding, path))
                 .transpose()?,
             _ => None,
         };
         let scope = match control {
             ControlNode::ContextBar { scope, .. } => scope
                 .as_ref()
-                .map(|binding| substitute_binding(context, binding, path))
+                .map(|binding| context.substitute(binding, path))
                 .transpose()?,
             _ => None,
         };
         let zoom = match control {
             ControlNode::Wave { zoom, .. } => zoom
                 .as_ref()
-                .map(|binding| substitute_binding(context, binding, path))
+                .map(|binding| context.substitute(binding, path))
                 .transpose()?,
             _ => None,
         };
         let active = match control {
-            ControlNode::Text { active, .. } => active
+            ControlNode::Text { active, .. } | ControlNode::Glyph { active, .. } => active
                 .as_ref()
-                .map(|binding| substitute_binding(context, binding, path))
+                .map(|binding| context.substitute(binding, path))
                 .transpose()?,
             _ => None,
         };
@@ -339,11 +348,11 @@ fn finish_control(
 ) -> Result<ExpandedNode, UiDocError> {
     let read = fields
         .read
-        .map(|binding| substitute_binding(context, binding, path))
+        .map(|binding| context.substitute(binding, path))
         .transpose()?;
     let write = fields
         .write
-        .map(|binding| substitute_binding(context, binding, path))
+        .map(|binding| context.substitute(binding, path))
         .transpose()?;
     (machine.visitor)(
         ControlSite {
@@ -416,9 +425,20 @@ fn control_spec(
         ControlNode::SettingsButton { .. } => ControlSpec::SettingsButton,
         ControlNode::WindowDrag { .. } => ControlSpec::WindowDrag,
         ControlNode::WindowControls { style, .. } => ControlSpec::WindowControls { style: *style },
-        ControlNode::Glyph { icon, style, .. } => ControlSpec::Glyph {
-            icon: *icon,
+        ControlNode::Glyph {
+            icon,
+            active_icon,
+            style,
+            color,
+            active_color,
+            ..
+        } => ControlSpec::Glyph {
+            icon: context.param(icon, path)?,
+            active_icon: context.optional_param(active_icon.as_ref(), path)?,
             style: *style,
+            color: context.optional_param(color.as_ref(), path)?,
+            active_color: context.optional_param(active_color.as_ref(), path)?,
+            active: optional_binding(context, machine, extra.active.as_ref())?,
         },
         ControlNode::Time { .. } => ControlSpec::Time,
         ControlNode::Scalar { format, framed, .. } => ControlSpec::Scalar {
@@ -437,19 +457,20 @@ fn control_spec(
             style,
             label,
             align,
+            color,
+            active_color,
             ..
-        } => text_spec(
-            context,
-            machine.interner,
-            *style,
-            label.as_deref(),
-            extra.active.as_ref(),
-            *align,
-            path,
-        )?,
+        } => ControlSpec::Text {
+            style: *style,
+            label: optional_text(context, machine, label.as_deref(), path)?,
+            color: *color,
+            active_color: *active_color,
+            active: optional_binding(context, machine, extra.active.as_ref())?,
+            align: *align,
+        },
         ControlNode::NavItem { label, icon, .. } => ControlSpec::NavItem {
             label: intern_text(context, machine.interner, label, path, &context.origin)?,
-            icon: *icon,
+            icon: context.param(icon, path)?,
         },
         ControlNode::TabLarge { label, .. } => ControlSpec::TabLarge {
             label: intern_text(context, machine.interner, label, path, &context.origin)?,
@@ -463,7 +484,7 @@ fn control_spec(
             ..
         } => ControlSpec::Button {
             label: intern_text(context, machine.interner, label, path, &context.origin)?,
-            icon: *icon,
+            icon: context.optional_param(icon.as_ref(), path)?,
             active_label: optional_text(context, machine, active_label.as_deref(), path)?,
             style: *style,
             frame: *frame,
@@ -487,11 +508,7 @@ fn control_spec(
             track_list_spec(context, machine, columns, extra)?
         }
         ControlNode::Tree { .. } => ControlSpec::Tree {
-            query: intern_optional_binding(
-                machine.interner,
-                extra.query.as_ref(),
-                &context.origin,
-            )?,
+            query: optional_binding(context, machine, extra.query.as_ref())?,
         },
         ControlNode::ContextBar { scope_items, .. } => context_bar_spec(
             context,
@@ -540,6 +557,9 @@ fn control_spec(
         ControlNode::Row { .. }
         | ControlNode::Column { .. }
         | ControlNode::Include { .. }
+        | ControlNode::Optional { .. }
+        | ControlNode::Popover { .. }
+        | ControlNode::Pressable { .. }
         | ControlNode::Slot { .. } => return Ok(None),
     };
     Ok(Some(spec))
@@ -552,6 +572,14 @@ fn optional_text(
     path: &str,
 ) -> Result<Option<InternId>, UiDocError> {
     intern_optional_text(context, machine.interner, label, path, &context.origin)
+}
+
+fn optional_binding(
+    context: &Context<'_>,
+    machine: &mut Expander<'_, '_>,
+    binding: Option<&BindingRef>,
+) -> Result<Option<Binding>, UiDocError> {
+    intern_optional_binding(machine.interner, binding, &context.origin)
 }
 
 fn wave_spec(
@@ -585,24 +613,73 @@ fn track_list_spec(
     })
 }
 
-fn container_surface(
+fn container_bindings(
     context: &Context<'_>,
     node: &ControlNode,
     id: Option<&NodeId>,
     write: Option<&BindingRef>,
+    active: Option<&BindingRef>,
     machine: &mut Expander<'_, '_>,
-) -> Result<Option<SurfaceSpec>, UiDocError> {
-    let Some((id, write)) = id.zip(write) else {
-        return Ok(None);
-    };
-    let path = child_path(&context.prefix, id);
-    let write = substitute_binding(context, write, &path)?;
+) -> Result<(Option<SurfaceSpec>, Option<Binding>), UiDocError> {
+    if write.is_none() && active.is_none() {
+        return Ok((None, None));
+    }
+    let path = id.map_or_else(
+        || context.prefix.clone(),
+        |id| child_path(&context.prefix, id),
+    );
+    let write = write
+        .map(|binding| context.substitute(binding, &path))
+        .transpose()?;
+    let active = active
+        .map(|binding| context.substitute(binding, &path))
+        .transpose()?;
     (machine.visitor)(
         ControlSite {
             path: &path,
             control: node,
             read: None,
-            write: Some(&write),
+            write: write.as_ref(),
+            columns_state: None,
+            query: None,
+            scope: None,
+            zoom: None,
+            active: active.as_ref(),
+        },
+        &context.origin,
+    )?;
+    let surface = write
+        .as_ref()
+        .map(|write| -> Result<SurfaceSpec, UiDocError> {
+            Ok(SurfaceSpec {
+                path: machine.interner.intern(&path, &context.origin)?,
+                write: intern_binding(machine.interner, write, &context.origin)?,
+            })
+        })
+        .transpose()?;
+    let active = intern_optional_binding(machine.interner, active.as_ref(), &context.origin)?;
+    Ok((surface, active))
+}
+
+fn expand_optional(
+    context: &Context<'_>,
+    node: &ControlNode,
+    id: &NodeId,
+    hidden: &BindingRef,
+    child: &ControlNode,
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    machine.budget.charge(&context.origin)?;
+    let path = child_path(&context.prefix, id);
+    validate::check_block_path(&path, &context.origin)?;
+    let hidden = context.substitute(hidden, &path)?;
+    (machine.visitor)(
+        ControlSite {
+            path: &path,
+            control: node,
+            read: Some(&hidden),
+            write: None,
             columns_state: None,
             query: None,
             scope: None,
@@ -611,10 +688,139 @@ fn container_surface(
         },
         &context.origin,
     )?;
-    Ok(Some(SurfaceSpec {
+    Ok(ExpandedNode::Optional {
+        block: BlockSpec {
+            path: machine.interner.intern(&path, &context.origin)?,
+            hidden: intern_binding(machine.interner, &hidden, &context.origin)?,
+        },
+        child: Box::new(walk(context, child, depth, machine)?),
+    })
+}
+
+fn expand_popover(
+    context: &Context<'_>,
+    node: &ControlNode,
+    id: &NodeId,
+    declared: (&BindingRef, PopoverAt, &ControlNode, &ControlNode),
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    let (open, at, anchor, content) = declared;
+    machine.budget.charge(&context.origin)?;
+    let path = child_path(&context.prefix, id);
+    if machine.in_popover {
+        return Err(UiDocError::InvalidId {
+            origin: context.origin.clone(),
+            id: path,
+            reason: "a popover must not open inside another popover".to_owned(),
+        });
+    }
+    let open = context.substitute(open, &path)?;
+    (machine.visitor)(
+        ControlSite {
+            path: &path,
+            control: node,
+            read: Some(&open),
+            write: None,
+            columns_state: None,
+            query: None,
+            scope: None,
+            zoom: None,
+            active: None,
+        },
+        &context.origin,
+    )?;
+    let anchor = walk(context, anchor, depth, machine)?;
+    machine.in_popover = true;
+    let content = walk(context, content, depth, machine);
+    machine.in_popover = false;
+    Ok(ExpandedNode::Popover {
         path: machine.interner.intern(&path, &context.origin)?,
-        write: intern_binding(machine.interner, &write, &context.origin)?,
-    }))
+        open: intern_binding(machine.interner, &open, &context.origin)?,
+        at,
+        anchor: Box::new(anchor),
+        content: Box::new(content?),
+    })
+}
+
+fn expand_pressable(
+    context: &Context<'_>,
+    node: &ControlNode,
+    id: &NodeId,
+    press: &BindingRef,
+    child: &ControlNode,
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    machine.budget.charge(&context.origin)?;
+    let path = child_path(&context.prefix, id);
+    let press = context.substitute(press, &path)?;
+    (machine.visitor)(
+        ControlSite {
+            path: &path,
+            control: node,
+            read: None,
+            write: Some(&press),
+            columns_state: None,
+            query: None,
+            scope: None,
+            zoom: None,
+            active: None,
+        },
+        &context.origin,
+    )?;
+    Ok(ExpandedNode::Pressable {
+        path: machine.interner.intern(&path, &context.origin)?,
+        press: intern_binding(machine.interner, &press, &context.origin)?,
+        child: Box::new(walk(context, child, depth, machine)?),
+    })
+}
+
+fn walk_children(
+    context: &Context<'_>,
+    children: &[ControlNode],
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<Vec<ExpandedNode>, UiDocError> {
+    children
+        .iter()
+        .map(|child| walk(context, child, depth, machine))
+        .collect()
+}
+
+fn expand_slot(
+    context: &Context<'_>,
+    id: &NodeId,
+    size: Option<SizeSpec>,
+    default: &[ControlNode],
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    machine.budget.charge(&context.origin)?;
+    Ok(ExpandedNode::Slot {
+        id: machine.interner.intern(&id.0, &context.origin)?,
+        size,
+        children: walk_children(context, default, depth, machine)?,
+    })
+}
+
+fn expand_include(
+    context: &Context<'_>,
+    id: &NodeId,
+    source: &str,
+    with: &BTreeMap<String, String>,
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    let path = child_path(&context.prefix, id);
+    let args = substitute_map(&context.args, &context.origin, with, &path)?;
+    let target = crate::source::join_rel(crate::source::base_dir(Some(&context.origin)), source)
+        .map(SourceUri)
+        .ok_or_else(|| UiDocError::RootEscape {
+            origin: context.origin.clone(),
+            rel: source.to_owned(),
+        })?;
+    expand_at(context.set, &target, args, path, depth + 1, machine)
 }
 
 fn walk(
@@ -634,11 +840,22 @@ fn walk(
             frame,
             background,
             background_alpha,
+            active,
+            active_background,
+            frame_color,
+            active_frame_color,
             write,
             children,
         } => {
             machine.budget.charge(&context.origin)?;
-            let surface = container_surface(context, node, id.as_ref(), write.as_ref(), machine)?;
+            let (surface, active) = container_bindings(
+                context,
+                node,
+                id.as_ref(),
+                write.as_ref(),
+                active.as_ref(),
+                machine,
+            )?;
             Ok(ExpandedNode::Row {
                 id: id
                     .as_ref()
@@ -652,11 +869,12 @@ fn walk(
                 frame: *frame,
                 background: *background,
                 background_alpha: *background_alpha,
+                active,
+                active_background: *active_background,
+                frame_color: *frame_color,
+                active_frame_color: *active_frame_color,
                 surface,
-                children: children
-                    .iter()
-                    .map(|child| walk(context, child, depth, machine))
-                    .collect::<Result<_, _>>()?,
+                children: walk_children(context, children, depth, machine)?,
             })
         }
         ControlNode::Column {
@@ -673,7 +891,8 @@ fn walk(
             children,
         } => {
             machine.budget.charge(&context.origin)?;
-            let surface = container_surface(context, node, id.as_ref(), write.as_ref(), machine)?;
+            let (surface, _) =
+                container_bindings(context, node, id.as_ref(), write.as_ref(), None, machine)?;
             Ok(ExpandedNode::Column {
                 id: id
                     .as_ref()
@@ -688,34 +907,30 @@ fn walk(
                 background: *background,
                 background_alpha: *background_alpha,
                 surface,
-                children: children
-                    .iter()
-                    .map(|child| walk(context, child, depth, machine))
-                    .collect::<Result<_, _>>()?,
+                children: walk_children(context, children, depth, machine)?,
             })
         }
         ControlNode::Slot { id, size, default } => {
-            machine.budget.charge(&context.origin)?;
-            Ok(ExpandedNode::Slot {
-                id: machine.interner.intern(&id.0, &context.origin)?,
-                size: *size,
-                children: default
-                    .iter()
-                    .map(|child| walk(context, child, depth, machine))
-                    .collect::<Result<_, _>>()?,
-            })
+            expand_slot(context, id, *size, default, depth, machine)
+        }
+        ControlNode::Optional { id, hidden, child } => {
+            expand_optional(context, node, id, hidden, child, depth, machine)
+        }
+        ControlNode::Popover {
+            id,
+            open,
+            at,
+            anchor,
+            content,
+        } => {
+            let declared = (open, *at, anchor.as_ref(), content.as_ref());
+            expand_popover(context, node, id, declared, depth, machine)
+        }
+        ControlNode::Pressable { id, press, child } => {
+            expand_pressable(context, node, id, press, child, depth, machine)
         }
         ControlNode::Include { id, source, with } => {
-            let path = child_path(&context.prefix, id);
-            let args = substitute_map(context, with, &path)?;
-            let target =
-                crate::source::join_rel(crate::source::base_dir(Some(&context.origin)), source)
-                    .map(SourceUri)
-                    .ok_or_else(|| UiDocError::RootEscape {
-                        origin: context.origin.clone(),
-                        rel: source.clone(),
-                    })?;
-            expand_at(context.set, &target, args, path, depth + 1, machine)
+            expand_include(context, id, source, with, depth, machine)
         }
         control @ (ControlNode::DeckSummary { id, adaptive, .. }
         | ControlNode::Brand { id, adaptive, .. }
@@ -758,7 +973,7 @@ fn walk(
             expand_control(
                 context,
                 control,
-                ControlFields::new(id, control.size(), read, write, adaptive),
+                ControlFields::new(id, control.size().copied(), read, write, adaptive),
                 depth,
                 machine,
             )
@@ -774,7 +989,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        expand::Binding,
+        expand::{Binding, BindingKind},
         ids::StrArena,
         resolve::load_module_graph,
         source::{Limits, MemResolver},
@@ -889,7 +1104,12 @@ mod tests {
             panic!("expected control");
         };
         assert_eq!(arena.resolve(*path), "transport/play");
-        let Some(Binding::Command { with, .. }) = write else {
+        let Some(Binding {
+            kind: BindingKind::Command,
+            with,
+            ..
+        }) = write
+        else {
             panic!("expected command");
         };
         let deck = with

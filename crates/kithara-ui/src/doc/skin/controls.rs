@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use super::{ColorRole, FontSkin, FrameSkin, TextRoleSkin, TickSkin};
+use super::{
+    document::ColorRole,
+    primitives::{FontSkin, FrameSkin, TextRoleSkin, TickSkin},
+};
 use crate::{layout::FrameSides, size::SizeSpec};
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -235,14 +238,27 @@ pub struct TabLargeSkin {
 pub struct TextSkin {
     pub size: SizeSpec,
     pub brand: TextRoleSkin,
+    pub brand_small: TextRoleSkin,
     pub deck_letter: TextRoleSkin,
-    /// Tone the deck letter takes while its `Text.active` binding reads true.
     pub deck_letter_active: ColorRole,
     pub track_title: TextRoleSkin,
     pub body: TextRoleSkin,
     pub telemetry: TextRoleSkin,
-    pub micro_label: TextRoleSkin,
+    pub mono: TextRoleSkin,
     pub section: TextRoleSkin,
+    pub micro_label: TextRoleSkin,
+    pub caption: TextRoleSkin,
+}
+
+/// Menu icon sizes. Row geometry lives in the markup and menu typography in [`TextSkin`].
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct MenuSkin {
+    pub icon_size: f32,
+    pub burger_icon_size: f32,
+    pub small_icon_size: f32,
+    pub cell_icon_size: f32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -340,4 +356,46 @@ pub struct FaderSkin {
     pub tick_height: f32,
     pub tick_step: f32,
     pub tick_width: f32,
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::{
+        super::document::{FontFamily, FontWeight},
+        *,
+    };
+    use crate::builtin;
+
+    const fn mono(size: f32, spacing: f32, color: ColorRole) -> TextRoleSkin {
+        TextRoleSkin {
+            font: FontFamily::Mono,
+            weight: FontWeight::Normal,
+            size,
+            spacing,
+            color,
+        }
+    }
+
+    #[kithara::test]
+    fn menu_holds_exactly_the_declared_glyph_sizes() {
+        assert_eq!(
+            builtin::skin_doc().menu,
+            MenuSkin {
+                icon_size: 11.0,
+                burger_icon_size: 13.0,
+                small_icon_size: 10.0,
+                cell_icon_size: 9.0,
+            }
+        );
+    }
+
+    #[kithara::test]
+    fn the_mono_pair_transcribes_the_design_defaults() {
+        let text = builtin::skin_doc().text;
+
+        assert_eq!(text.mono, mono(10.0, 0.0, ColorRole::TextDim));
+        assert_eq!(text.caption, mono(7.0, 0.08, ColorRole::Muted));
+    }
 }

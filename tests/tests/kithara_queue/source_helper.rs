@@ -5,7 +5,6 @@ use kithara::{
     audio::AudioDecoderConfig,
     decode::DecoderBackend,
     hls::{AbrMode, KeyOptions},
-    net::Headers,
     play::ResourceConfig,
     queue::TrackSource,
 };
@@ -23,20 +22,15 @@ pub(crate) fn app_track_source(
     let Ok(builder) = ResourceConfig::for_src(url) else {
         return TrackSource::Uri(url.to_string());
     };
-    let keys = if config.key_registry.is_empty() {
+    let registry = config.drm.registry();
+    let keys = if registry.is_empty() {
         KeyOptions::default()
     } else {
-        KeyOptions::builder()
-            .key_registry(config.key_registry.clone())
-            .build()
+        KeyOptions::builder().key_registry(registry.clone()).build()
     };
-    let headers = Url::parse(url).ok().and_then(|parsed| {
-        config
-            .key_registry
-            .find(&parsed)
-            .and_then(|rule| rule.headers.clone())
-            .map(Headers::from)
-    });
+    let headers = Url::parse(url)
+        .ok()
+        .and_then(|parsed| config.drm.resource_headers(&parsed));
     let decoder_defaults = kithara::play::default_resource_decoder_config();
     let decoder = AudioDecoderConfig::builder()
         .backend(backend)

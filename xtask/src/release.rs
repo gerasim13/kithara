@@ -35,7 +35,7 @@ enum ReleaseCommand {
     Prepare {
         /// Version to release, without the `v` prefix (e.g. 0.0.2).
         version: String,
-        /// Pre-built `XCFramework` zip. When omitted, `cargo xtask apple
+        /// Pre-built `XCFramework` zip. When omitted, `just platform apple
         /// release` is run to produce /tmp/KitharaFFIInternal.xcframework.zip.
         #[arg(long)]
         zip: Option<PathBuf>,
@@ -45,6 +45,10 @@ enum ReleaseCommand {
         /// Git ref whose release manifest defines the release (merge commit).
         #[arg(long, default_value = "HEAD")]
         r#ref: String,
+        /// Directory containing the retained CI-built release artifacts.
+        /// When omitted, the local developer release cache is used.
+        #[arg(long)]
+        artifacts: Option<PathBuf>,
     },
     /// Deploy the prepared wasm bundle to GitHub Pages classic (gh-pages
     /// branch, force-orphan).
@@ -52,6 +56,10 @@ enum ReleaseCommand {
         /// Git ref whose release manifest defines the release version.
         #[arg(long, default_value = "HEAD")]
         r#ref: String,
+        /// Directory containing the retained CI-built release artifacts.
+        /// When omitted, the local developer release cache is used.
+        #[arg(long)]
+        artifacts: Option<PathBuf>,
     },
 }
 
@@ -60,9 +68,19 @@ pub(crate) fn run(args: &ReleaseArgs, ctx: &Ctx) -> Result<()> {
     let cfg = &ext.release;
     match &args.command {
         ReleaseCommand::Prepare { version, zip } => prepare(cfg, version, zip.as_deref()),
-        ReleaseCommand::Publish { r#ref } => publish(cfg, r#ref),
-        ReleaseCommand::Pages { r#ref } => pages(cfg, r#ref),
+        ReleaseCommand::Publish { r#ref, artifacts } => publish(cfg, r#ref, artifacts.as_deref()),
+        ReleaseCommand::Pages { r#ref, artifacts } => pages(cfg, r#ref, artifacts.as_deref()),
     }
+}
+
+pub(crate) fn publish_retained(ctx: &Ctx, git_ref: &str, artifacts: &Path) -> Result<()> {
+    let ext = KitharaExt::from_ctx(ctx)?;
+    publish(&ext.release, git_ref, Some(artifacts))
+}
+
+pub(crate) fn publish_pages_retained(ctx: &Ctx, git_ref: &str, artifacts: &Path) -> Result<()> {
+    let ext = KitharaExt::from_ctx(ctx)?;
+    pages(&ext.release, git_ref, Some(artifacts))
 }
 
 fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()> {
@@ -73,11 +91,11 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
     let zip = if let Some(path) = zip {
         path
     } else {
-        check_tool("cargo", &["--version"], "https://rustup.rs")?;
-        println!("Building XCFramework (cargo xtask apple release)...");
+        check_tool("just", &["--version"], "brew install just")?;
+        println!("Building XCFramework (just platform apple release)...");
         run_step(
-            Command::new("cargo").args(["xtask", "apple", "release"]),
-            "cargo xtask apple release",
+            Command::new("just").args(["platform", "apple", "release"]),
+            "just platform apple release",
         )?;
         built = env::temp_dir().join(&cfg.asset);
         built.as_path()
@@ -133,9 +151,9 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
     println!();
     println!("Next steps:");
     println!("  1. Commit {manifest_path} in the release PR.");
-    println!("  2. After merge: cargo xtask release publish");
+    println!("  2. After merge: just release publish");
     if !cfg.pages_branch.is_empty() && !cfg.wasm_asset.is_empty() {
-        println!("  3. Deploy wasm to Pages: cargo xtask release pages");
+        println!("  3. Deploy wasm to Pages: just release pages");
     }
     Ok(())
 }
@@ -185,7 +203,7 @@ fn zip_dir(parent: &Path, directory_name: &str, output: &Path) -> Result<()> {
     )
 }
 
-fn publish(cfg: &ReleaseConfig, git_ref: &str) -> Result<()> {
+fn publish(cfg: &ReleaseConfig, git_ref: &str, artifacts: Option<&Path>) -> Result<()> {
     require_config(cfg)?;
     check_tool("gh", &["--version"], "brew install gh")?;
 
@@ -196,14 +214,14 @@ fn publish(cfg: &ReleaseConfig, git_ref: &str) -> Result<()> {
     let tag = tag_of(&version);
     println!("Release {tag} from {git_ref} ({short})", short = &sha[..12]);
 
-    let zip = cache_path(cfg, &tag)?;
+    let zip = artifact_path(&tag, &cfg.asset, artifacts)?;
     let zip = match zip.is_file() {
         true => {
             let actual = sha256(&zip)?;
             if actual != checksum {
                 bail!(
                     "cached {} sha256 {actual} does not match {} checksum {checksum}; \
-                     re-run `cargo xtask release prepare` and release a new version",
+                     re-run `just release artifacts <version>` and release a new version",
                     zip.display(),
                     cfg.manifest
                 );
@@ -213,11 +231,11 @@ fn publish(cfg: &ReleaseConfig, git_ref: &str) -> Result<()> {
         false => None,
     };
 
-    let notes = release_notes(cfg, &tag, &sha, &checksum)?;
+    let notes = release_notes(cfg, &tag, &sha, &checksum, artifacts)?;
 
-    publish_github(cfg, &tag, &sha, &notes, zip.as_deref())?;
+    publish_github(cfg, &tag, &sha, &notes, &checksum, zip.as_deref())?;
     publish_gitlab(cfg, &tag, &sha, &notes, &checksum, zip.as_deref())?;
-    publish_extras(cfg, &tag)?;
+    publish_extras(cfg, &tag, artifacts)?;
     sync_gitlab_distribution_links(cfg, &tag)?;
 
     println!();
@@ -238,6 +256,7 @@ fn publish_github(
     tag: &str,
     sha: &str,
     notes: &str,
+    checksum: &str,
     zip: Option<&Path>,
 ) -> Result<()> {
     let repo = &cfg.github_repo;
@@ -287,31 +306,12 @@ fn publish_github(
             ]),
             "gh release create",
         )?;
+        verify_github_asset(repo, tag, &cfg.asset, checksum)?;
         return Ok(());
     }
 
-    let assets = gh_json(&["api", &format!("repos/{repo}/releases/tags/{tag}")])?;
-    let has_asset = assets["assets"]
-        .as_array()
-        .is_some_and(|a| a.iter().any(|x| x["name"].as_str() == Some(&cfg.asset)));
-    if has_asset {
-        println!("[github] asset {} already uploaded", cfg.asset);
-    } else {
-        let zip = zip_required(zip, cfg, tag)?;
-        println!("[github] uploading {}...", cfg.asset);
-        run_step(
-            Command::new("gh").args([
-                "release",
-                "upload",
-                tag,
-                "--repo",
-                repo,
-                &zip.display().to_string(),
-            ]),
-            "gh release upload",
-        )?;
-    }
-    Ok(())
+    let zip = zip_required(zip, cfg, tag)?;
+    upload_github_asset(repo, tag, zip)
 }
 
 fn publish_gitlab(
@@ -401,9 +401,12 @@ fn publish_gitlab(
 /// Publish the secondary cached assets — the single self-contained framework
 /// and the documentation archive — to the GitHub release and the `GitLab`
 /// generic registry so manual integrations download the same bytes.
-fn publish_extras(cfg: &ReleaseConfig, tag: &str) -> Result<()> {
-    upload_extra_asset(cfg, tag, &cfg.single_asset, true)?;
-    upload_extra_asset(cfg, tag, &cfg.docs_asset, false)?;
+fn publish_extras(cfg: &ReleaseConfig, tag: &str, artifacts: Option<&Path>) -> Result<()> {
+    upload_extra_asset(cfg, tag, &cfg.single_asset, true, artifacts)?;
+    for name in &cfg.platform_assets {
+        upload_extra_asset(cfg, tag, name, true, artifacts)?;
+    }
+    upload_extra_asset(cfg, tag, &cfg.docs_asset, false, artifacts)?;
     Ok(())
 }
 
@@ -411,15 +414,21 @@ fn publish_extras(cfg: &ReleaseConfig, tag: &str) -> Result<()> {
 /// the cached zip is missing (the single framework channel); otherwise a
 /// missing artifact (docs) is skipped with a note so the core release still
 /// publishes.
-fn upload_extra_asset(cfg: &ReleaseConfig, tag: &str, name: &str, required: bool) -> Result<()> {
+fn upload_extra_asset(
+    cfg: &ReleaseConfig,
+    tag: &str,
+    name: &str,
+    required: bool,
+    artifacts: Option<&Path>,
+) -> Result<()> {
     if name.is_empty() {
         return Ok(());
     }
-    let zip = cache_named(tag, name)?;
+    let zip = artifact_path(tag, name, artifacts)?;
     if !zip.is_file() {
         if required {
             bail!(
-                "cached {name} not found at {}; re-run `cargo xtask release prepare`",
+                "cached {name} not found at {}; re-run `just release artifacts <version>`",
                 zip.display()
             );
         }
@@ -434,22 +443,27 @@ fn upload_extra_asset(cfg: &ReleaseConfig, tag: &str, name: &str, required: bool
 /// Deploy the prepared wasm bundle to GitHub Pages classic: force-orphan a
 /// single commit onto the configured branch and push it. Idempotent — every
 /// deploy replaces the branch contents wholesale.
-fn pages(cfg: &ReleaseConfig, git_ref: &str) -> Result<()> {
+fn pages(cfg: &ReleaseConfig, git_ref: &str, artifacts: Option<&Path>) -> Result<()> {
     if cfg.pages_branch.is_empty() || cfg.wasm_asset.is_empty() {
         bail!("release.pages_branch / release.wasm_asset must be set in .config/xtask.toml");
     }
     check_tool("git", &["--version"], "https://git-scm.com")?;
+    check_tool("gh", &["--version"], "brew install gh")?;
     check_tool("unzip", &["-v"], "unzip is part of the base system")?;
+    run_step(
+        Command::new("gh").args(["auth", "setup-git"]),
+        "gh auth setup-git",
+    )?;
 
     let sha = git_capture(&["rev-parse", git_ref])?;
     let manifest = git_capture(&["show", &format!("{sha}:{}", cfg.manifest)])?;
     let version = manifest_field(&manifest, "version")?;
     let tag = tag_of(&version);
 
-    let zip = cache_named(&tag, &cfg.wasm_asset)?;
+    let zip = artifact_path(&tag, &cfg.wasm_asset, artifacts)?;
     if !zip.is_file() {
         bail!(
-            "cached {} not found at {}; run `just release-artifacts {version}` first",
+            "cached {} not found at {}; run `just release artifacts {version}` first",
             cfg.wasm_asset,
             zip.display()
         );
@@ -472,7 +486,12 @@ fn pages(cfg: &ReleaseConfig, git_ref: &str) -> Result<()> {
         "unzip wasm bundle",
     )?;
 
-    deploy_pages_branch(&cfg.pages_branch, &single_subdir(&staging)?, &tag)?;
+    deploy_pages_branch(
+        &cfg.pages_branch,
+        &github_remote(&cfg.github_repo)?,
+        &single_subdir(&staging)?,
+        &tag,
+    )?;
     println!();
     println!("Pages deployed to branch {} ({tag}).", cfg.pages_branch);
     Ok(())
@@ -492,7 +511,7 @@ fn single_subdir(dir: &Path) -> Result<PathBuf> {
     }
 }
 
-fn deploy_pages_branch(branch: &str, content: &Path, tag: &str) -> Result<()> {
+fn deploy_pages_branch(branch: &str, remote: &str, content: &Path, tag: &str) -> Result<()> {
     let worktree = env::temp_dir().join(format!(
         "{}-{branch}-worktree",
         kithara_devtools::util::project_name()
@@ -511,7 +530,7 @@ fn deploy_pages_branch(branch: &str, content: &Path, tag: &str) -> Result<()> {
             .arg(&worktree),
         "git worktree add",
     )?;
-    let result = deploy_into_worktree(&worktree, branch, content, tag);
+    let result = deploy_into_worktree(&worktree, branch, remote, content, tag);
     let _ = Command::new("git")
         .args(["worktree", "remove", "--force"])
         .arg(&worktree)
@@ -519,7 +538,13 @@ fn deploy_pages_branch(branch: &str, content: &Path, tag: &str) -> Result<()> {
     result
 }
 
-fn deploy_into_worktree(worktree: &Path, branch: &str, content: &Path, tag: &str) -> Result<()> {
+fn deploy_into_worktree(
+    worktree: &Path,
+    branch: &str,
+    remote: &str,
+    content: &Path,
+    tag: &str,
+) -> Result<()> {
     run_step(
         Command::new("git")
             .current_dir(worktree)
@@ -546,9 +571,19 @@ fn deploy_into_worktree(worktree: &Path, branch: &str, content: &Path, tag: &str
     run_step(
         Command::new("git")
             .current_dir(worktree)
-            .args(["push", "--force", "origin", branch]),
+            .args(["push", "--force", remote, branch]),
         "git push gh-pages",
     )
+}
+
+fn github_remote(repo: &str) -> Result<String> {
+    let valid = regex::Regex::new(r"^[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+$")
+        .context("compile GitHub repository regex")?
+        .is_match(repo);
+    if !valid {
+        bail!("invalid GitHub repository name: {repo:?}");
+    }
+    Ok(format!("https://github.com/{repo}.git"))
 }
 
 /// Remove every entry except the worktree's `.git` link.
@@ -596,13 +631,86 @@ fn upload_github_asset(repo: &str, tag: &str, file: &Path) -> Result<()> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
+    let checksum = sha256(file)?;
+    match github_asset_sha256(repo, tag, &name)? {
+        Some(existing) if existing == checksum => {
+            println!("[github] asset {name} already uploaded with matching checksum");
+            return Ok(());
+        }
+        Some(existing) => {
+            bail!("github asset {name} has sha256 {existing}, expected {checksum}");
+        }
+        None => {}
+    }
+
     println!("[github] uploading {name}...");
     run_step(
         Command::new("gh")
-            .args(["release", "upload", tag, "--repo", repo, "--clobber"])
+            .args(["release", "upload", tag, "--repo", repo])
             .arg(file),
         "gh release upload",
-    )
+    )?;
+    verify_github_asset(repo, tag, &name, &checksum)
+}
+
+fn verify_github_asset(repo: &str, tag: &str, name: &str, expected: &str) -> Result<()> {
+    let actual = github_asset_sha256(repo, tag, name)?
+        .with_context(|| format!("github asset {name} is missing after upload"))?;
+    if actual != expected {
+        bail!("github asset {name} has sha256 {actual}, expected {expected}");
+    }
+    Ok(())
+}
+
+fn github_asset_sha256(repo: &str, tag: &str, name: &str) -> Result<Option<String>> {
+    let release = gh_json(&["api", &format!("repos/{repo}/releases/tags/{tag}")])?;
+    let Some(asset) = release["assets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|asset| asset["name"].as_str() == Some(name))
+    else {
+        return Ok(None);
+    };
+
+    if let Some(digest) = asset["digest"].as_str()
+        && let Some(checksum) = digest.strip_prefix("sha256:")
+    {
+        return Ok(Some(checksum.to_string()));
+    }
+
+    let download_dir = env::temp_dir().join(format!(
+        "{}-release-asset-{}-{tag}",
+        kithara_devtools::util::project_name(),
+        std::process::id()
+    ));
+    if download_dir.exists() {
+        fs::remove_dir_all(&download_dir)
+            .with_context(|| format!("clean {}", download_dir.display()))?;
+    }
+    fs::create_dir_all(&download_dir)
+        .with_context(|| format!("create {}", download_dir.display()))?;
+
+    let result = (|| {
+        run_step(
+            Command::new("gh").args([
+                "release",
+                "download",
+                tag,
+                "--repo",
+                repo,
+                "--pattern",
+                name,
+                "--dir",
+                &download_dir.display().to_string(),
+            ]),
+            "gh release download",
+        )?;
+        sha256(&download_dir.join(name)).map(Some)
+    })();
+    fs::remove_dir_all(&download_dir)
+        .with_context(|| format!("remove {}", download_dir.display()))?;
+    result
 }
 
 /// Mirror one asset to the `GitLab` generic package registry under the tag.
@@ -784,6 +892,11 @@ fn gitlab_release_links(cfg: &ReleaseConfig, tag: &str) -> Vec<GitlabReleaseLink
     if !cfg.single_asset.is_empty() {
         links.push(gitlab_release_link(cfg, tag, &cfg.single_asset));
     }
+    links.extend(
+        cfg.platform_assets
+            .iter()
+            .map(|name| gitlab_release_link(cfg, tag, name)),
+    );
     links
 }
 
@@ -896,7 +1009,13 @@ fn gitlab_token(host: &str) -> Result<String> {
     Ok(token.to_string())
 }
 
-fn release_notes(cfg: &ReleaseConfig, tag: &str, sha: &str, checksum: &str) -> Result<String> {
+fn release_notes(
+    cfg: &ReleaseConfig,
+    tag: &str,
+    sha: &str,
+    checksum: &str,
+    artifacts: Option<&Path>,
+) -> Result<String> {
     let version = tag.trim_start_matches('v');
     let body = changelog_section(sha, version)
         .or_else(|| generated_release_summary(sha, tag).ok())
@@ -904,7 +1023,7 @@ fn release_notes(cfg: &ReleaseConfig, tag: &str, sha: &str, checksum: &str) -> R
             "This release contains the changes merged since the previous published tag.".to_string()
         });
     let single_checksum = if !cfg.single_asset.is_empty() {
-        let single = cache_named(tag, &cfg.single_asset)?;
+        let single = artifact_path(tag, &cfg.single_asset, artifacts)?;
         if single.is_file() {
             Some(sha256(&single)?)
         } else {
@@ -1062,6 +1181,19 @@ fn require_config(cfg: &ReleaseConfig) -> Result<()> {
             );
         }
     }
+    for name in std::iter::once(&cfg.asset)
+        .chain(std::iter::once(&cfg.single_asset))
+        .chain(std::iter::once(&cfg.docs_asset))
+        .chain(cfg.platform_assets.iter())
+        .filter(|name| !name.is_empty())
+    {
+        let path = Path::new(name);
+        if path.file_name().and_then(|part| part.to_str()) != Some(name)
+            || path.components().count() != 1
+        {
+            bail!("release artifact names must not contain path components: {name}");
+        }
+    }
     Ok(())
 }
 
@@ -1083,6 +1215,22 @@ fn cache_path(cfg: &ReleaseConfig, tag: &str) -> Result<PathBuf> {
     cache_named(tag, &cfg.asset)
 }
 
+fn artifact_path(tag: &str, name: &str, artifacts: Option<&Path>) -> Result<PathBuf> {
+    match artifacts {
+        Some(root) => {
+            if !root.is_dir() {
+                bail!("release artifact directory not found: {}", root.display());
+            }
+            let path = root.join(name);
+            if path.parent() != Some(root) {
+                bail!("release artifact name must not contain path components: {name}");
+            }
+            Ok(path)
+        }
+        None => cache_named(tag, name),
+    }
+}
+
 /// Cache path for an arbitrary release artifact (per tag + file name).
 fn cache_named(tag: &str, name: &str) -> Result<PathBuf> {
     let home = env::var_os("HOME").context("HOME is not set")?;
@@ -1097,7 +1245,7 @@ fn cache_named(tag: &str, name: &str) -> Result<PathBuf> {
 fn zip_required<'a>(zip: Option<&'a Path>, cfg: &ReleaseConfig, tag: &str) -> Result<&'a Path> {
     zip.with_context(|| {
         format!(
-            "artifact for {tag} not found at {}; run `cargo xtask release prepare` \
+            "artifact for {tag} not found at {}; run `just release artifacts <version>` \
              on the machine that built the release zip",
             cache_path(cfg, tag).map_or_else(|_| cfg.asset.clone(), |p| p.display().to_string()),
         )
@@ -1253,6 +1401,30 @@ mod tests {
     }
 
     #[test]
+    fn pages_remote_is_explicitly_github() {
+        assert_eq!(
+            github_remote("zvuk/kithara").unwrap(),
+            "https://github.com/zvuk/kithara.git"
+        );
+        assert!(github_remote("zvuk/kithara?token=secret").is_err());
+    }
+
+    #[test]
+    fn retained_artifacts_override_the_developer_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            artifact_path(
+                "v0.0.2",
+                "KitharaFFIInternal.xcframework.zip",
+                Some(dir.path())
+            )
+            .unwrap(),
+            dir.path().join("KitharaFFIInternal.xcframework.zip")
+        );
+        assert!(artifact_path("v0.0.2", "../outside.zip", Some(dir.path())).is_err());
+    }
+
+    #[test]
     fn release_notes_render_release_content() {
         let cfg = ReleaseConfig {
             manifest: "Package.swift".into(),
@@ -1263,6 +1435,7 @@ mod tests {
             gitlab_package: "kithara".into(),
             asset: "KitharaFFIInternal.xcframework.zip".into(),
             single_asset: "Kithara.xcframework.zip".into(),
+            platform_assets: vec!["kithara.aar".into(), "rust-tls.aar".into()],
             docs_asset: "Kithara-docs.zip".into(),
             docs_archive: "docs-build/Kithara.doccarchive".into(),
             wasm_asset: "kithara-wasm-pages.zip".into(),
@@ -1305,6 +1478,7 @@ mod tests {
             gitlab_package: "kithara".into(),
             asset: "KitharaFFIInternal.xcframework.zip".into(),
             single_asset: "Kithara.xcframework.zip".into(),
+            platform_assets: vec!["kithara.aar".into(), "rust-tls.aar".into()],
             docs_asset: "Kithara-docs.zip".into(),
             docs_archive: "docs-build/Kithara.doccarchive".into(),
             wasm_asset: "kithara-wasm-pages.zip".into(),
@@ -1321,6 +1495,8 @@ mod tests {
             vec![
                 "KitharaFFIInternal.xcframework.zip",
                 "Kithara.xcframework.zip",
+                "kithara.aar",
+                "rust-tls.aar",
             ]
         );
         assert!(
@@ -1353,6 +1529,7 @@ mod tests {
             gitlab_package: String::new(),
             asset: String::new(),
             single_asset: String::new(),
+            platform_assets: Vec::new(),
             docs_asset: String::new(),
             docs_archive: String::new(),
             wasm_asset: String::new(),
@@ -1377,6 +1554,7 @@ mod tests {
             gitlab_package: String::new(),
             asset: String::new(),
             single_asset: String::new(),
+            platform_assets: Vec::new(),
             docs_asset: String::new(),
             docs_archive: String::new(),
             wasm_asset: String::new(),
@@ -1401,6 +1579,7 @@ mod tests {
             gitlab_package: String::new(),
             asset: String::new(),
             single_asset: String::new(),
+            platform_assets: Vec::new(),
             docs_asset: String::new(),
             docs_archive: String::new(),
             wasm_asset: String::new(),

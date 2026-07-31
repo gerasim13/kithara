@@ -16,20 +16,6 @@ use crate::{
     skin::DragSkin,
 };
 
-struct Consts;
-
-impl Consts {
-    const ELLIPSIS: char = '\u{2026}';
-
-    /// A canvas cannot measure text, so the label is cut to what fits: the mono
-    /// face this widget draws with advances that fraction of its size per glyph.
-    const MONO_ADVANCE: f32 = 0.6;
-
-    /// Gap between the pointer and the box it carries, so the box trails the
-    /// pointer instead of sitting under it.
-    const POINTER_GAP: f32 = 12.0;
-}
-
 /// What the pointer is carrying, drawn at the pointer over everything the
 /// layout lays out. It paints only: every event passes through it untouched,
 /// and it claims no cursor of its own.
@@ -42,6 +28,16 @@ pub(crate) struct DragGhost {
 }
 
 impl DragGhost {
+    const ELLIPSIS: char = '\u{2026}';
+
+    /// Gap between the pointer and the box it carries, so the box trails the
+    /// pointer instead of sitting under it.
+    const POINTER_GAP: f32 = 12.0;
+
+    /// A canvas cannot measure text, so the label is cut to what fits: the mono
+    /// face this widget draws with advances that fraction of its size per glyph.
+    const MONO_ADVANCE: f32 = 0.6;
+
     pub(crate) fn new(label: Option<String>, skin: &Skin) -> Self {
         let metrics = skin.drag;
         Self {
@@ -56,8 +52,8 @@ impl DragGhost {
     /// The box trails the pointer and stays inside the window.
     fn box_at(&self, pointer: Point, bounds: Rectangle) -> Rectangle {
         let size = Size::new(self.metrics.width, self.metrics.height);
-        let x = (pointer.x + Consts::POINTER_GAP).min(bounds.width - size.width);
-        let y = (pointer.y + Consts::POINTER_GAP).min(bounds.height - size.height);
+        let x = (pointer.x + Self::POINTER_GAP).min(bounds.width - size.width);
+        let y = (pointer.y + Self::POINTER_GAP).min(bounds.height - size.height);
         Rectangle::new(Point::new(x.max(0.0), y.max(0.0)), size)
     }
 }
@@ -141,7 +137,7 @@ impl canvas::Program<UiEvent> for DragGhost {
 /// Glyphs the box holds between its paddings.
 fn fitting_chars(metrics: DragSkin) -> usize {
     let inner = (metrics.width - metrics.pad_x * 2.0).max(0.0);
-    (inner / (metrics.text.size * Consts::MONO_ADVANCE))
+    (inner / (metrics.text.size * DragGhost::MONO_ADVANCE))
         .trunc()
         .as_()
 }
@@ -154,7 +150,7 @@ fn elide(label: &str, max_chars: usize) -> String {
         return head;
     }
     let mut elided: String = head.chars().take(max_chars.saturating_sub(1)).collect();
-    elided.push(Consts::ELLIPSIS);
+    elided.push(DragGhost::ELLIPSIS);
     elided
 }
 

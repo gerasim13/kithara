@@ -736,6 +736,11 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func removeAllItems()
 
     /**
+     * Current queue repeat mode.
+     */
+    func repeatMode()  -> FfiRepeatMode
+
+    /**
      * Replace the item at `index` with a freshly-configured one.
      *
      * # Errors
@@ -799,6 +804,16 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func setObserver(observer: PlayerObserver)
 
     func setPlayingRate(rate: Float)
+
+    /**
+     * Change the queue repeat mode.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError::InvalidArgument`] if `mode` has no queue-level
+     * meaning.
+     */
+    func setRepeatMode(mode: FfiRepeatMode) throws
 
     func setVolume(volume: Float)
 
@@ -1141,6 +1156,17 @@ open func removeAllItems()  {try! rustCall() {
 }
 
     /**
+     * Current queue repeat mode.
+     */
+open func repeatMode() -> FfiRepeatMode  {
+    return try!  FfiConverterTypeFfiRepeatMode_lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_repeat_mode(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+
+    /**
      * Replace the item at `index` with a freshly-configured one.
      *
      * # Errors
@@ -1265,6 +1291,22 @@ open func setPlayingRate(rate: Float)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_playing_rate(
             self.uniffiCloneHandle(),
         FfiConverterFloat.lower(rate),$0
+    )
+}
+}
+
+    /**
+     * Change the queue repeat mode.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError::InvalidArgument`] if `mode` has no queue-level
+     * meaning.
+     */
+open func setRepeatMode(mode: FfiRepeatMode)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_repeat_mode(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiRepeatMode_lower(mode),$0
     )
 }
 }
@@ -3441,6 +3483,75 @@ public func FfiConverterTypeSeekCallback_lower(_ value: SeekCallback) -> UInt64 
 }
 
 
+
+
+/**
+ * Domain-scoped query parameters that identify progressive-file content.
+ */
+public struct FfiCacheIdentityRule: Equatable, Hashable {
+    /**
+     * Exact hosts, `*.domain` subdomain patterns, or `*`.
+     */
+    public let domains: [String]
+    /**
+     * Query parameter names included in the cache identity.
+     */
+    public let queryParameters: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Exact hosts, `*.domain` subdomain patterns, or `*`.
+         */domains: [String],
+        /**
+         * Query parameter names included in the cache identity.
+         */queryParameters: [String]) {
+        self.domains = domains
+        self.queryParameters = queryParameters
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiCacheIdentityRule: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiCacheIdentityRule: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiCacheIdentityRule {
+        return
+            try FfiCacheIdentityRule(
+                domains: FfiConverterSequenceString.read(from: &buf),
+                queryParameters: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiCacheIdentityRule, into buf: inout [UInt8]) {
+        FfiConverterSequenceString.write(value.domains, into: &buf)
+        FfiConverterSequenceString.write(value.queryParameters, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiCacheIdentityRule_lift(_ buf: RustBuffer) throws -> FfiCacheIdentityRule {
+    return try FfiConverterTypeFfiCacheIdentityRule.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiCacheIdentityRule_lower(_ value: FfiCacheIdentityRule) -> RustBuffer {
+    return FfiConverterTypeFfiCacheIdentityRule.lower(value)
+}
 
 
 /**
@@ -8154,6 +8265,31 @@ fileprivate struct FfiConverterSequenceTypeAudioPlayerItem: FfiConverterRustBuff
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeFfiCacheIdentityRule: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiCacheIdentityRule]
+
+    public static func write(_ value: [FfiCacheIdentityRule], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiCacheIdentityRule.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiCacheIdentityRule] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiCacheIdentityRule]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiCacheIdentityRule.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeFfiKeyRule: FfiConverterRustBuffer {
     typealias SwiftType = [FfiKeyRule]
 
@@ -8295,6 +8431,19 @@ public func FfiConverterTypeTrackId_lower(_ value: TrackId) -> UInt64 {
     return FfiConverterTypeTrackId.lower(value)
 }
 
+/**
+ * Create a Rust-owned query-aware layout.
+ *
+ * Register the returned layout through the ordinary asset-layout registry
+ * for each playback protocol that should use it.
+ */
+public func queryIdentityLayout(rules: [FfiCacheIdentityRule]) -> FfiAssetLayout  {
+    return try!  FfiConverterTypeFfiAssetLayout_lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_func_query_identity_layout(
+        FfiConverterSequenceTypeFfiCacheIdentityRule.lower(rules),$0
+    )
+})
+}
 public func initLogging(level: UInt8)  {try! rustCall() {
     uniffi_kithara_ffi_fn_func_init_logging(
         FfiConverterUInt8.lower(level),$0
@@ -8334,6 +8483,9 @@ private let initializationResult: InitializationResult = {
     let scaffolding_contract_version = ffi_kithara_ffi_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_func_query_identity_layout() != 9390) {
+        return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_func_init_logging() != 43995) {
         return InitializationResult.apiChecksumMismatch
@@ -8461,6 +8613,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_remove_all_items() != 21301) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_repeat_mode() != 59485) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_replace_item() != 29947) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8489,6 +8644,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playing_rate() != 63075) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_repeat_mode() != 38270) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_volume() != 21146) {

@@ -1,8 +1,11 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use bytes::Bytes;
-use kithara::drm::UniqueBinaryCipher;
-use kithara_app::baked::build_baked_drm_registry;
+use kithara::{
+    drm::{KeyProcessorRegistry, UniqueBinaryCipher},
+    platform::sync::Arc,
+};
+use kithara_app::baked::build_baked_drm_policy;
 use kithara_integration_tests::kithara;
 use url::Url;
 
@@ -46,35 +49,17 @@ fn stage_unique_cipher_matches_captured_keyserver_response() {
     );
 }
 
-/// Hypothesis pin: prove that the current `build.rs`-baked DRM registry
-/// emits a seed format that does **not** match the captured stage
-/// fixture (`aaaaaaaaaaaaaaaa` — 16-char alphanumeric).
-///
-/// Pre-`a2224b2dd` `kithara-app/src/drm.rs` shipped
-/// `SEED_LEN = 16` with `Alphanumeric` alphabet — that's what the
-/// staging keyserver was captured against. The `a2224b2dd` overhaul
-/// collapsed every provider into a single `SEED_BYTES = 4` hex-only
-/// closure (iOS WAF for prod requires `randomString(of: 8)`),
-/// inadvertently breaking the stage flow: stage WAF / encryption
-/// pipeline rejects (or replies inconsistently to) the truncated
-/// 8-hex salt, so live decrypt drifts even though the cipher
-/// algorithm itself is fine (the test above passes).
-///
-/// This test fails on `a2224b2dd` head — it pins the wrong contract.
-/// Once `build.rs` reads `seed.length` + `seed.alphabet` per provider
-/// from `drm.toml`, the assertions below will hold and prove that
-/// stage requests carry the legacy 16-char alphanumeric salt while
-/// prod requests carry the iOS-compatible 8-char hex salt.
 #[kithara::test]
-fn baked_registry_emits_per_provider_seed_format() {
-    let registry = build_baked_drm_registry();
+fn baked_policy_emits_per_provider_seed_format_through_registry() {
+    let policy = Arc::new(build_baked_drm_policy());
+    let mut registry = KeyProcessorRegistry::new();
+    registry.register(policy);
 
     let stage_url =
         Url::parse("https://ecs-stage-slicer-01.zvq.me/drm/track/0/key.bin").expect("stage url");
-    let stage_rule = registry
-        .find(&stage_url)
-        .expect("zvuk-stage rule must match *.zvq.me");
-    let stage_req = stage_rule.build_request();
+    let stage_req = registry
+        .prepare(&stage_url)
+        .expect("zvuk-stage policy must match *.zvq.me");
     let stage_seed = stage_req
         .headers
         .get("X-Encrypted-Key")
@@ -83,10 +68,9 @@ fn baked_registry_emits_per_provider_seed_format() {
 
     let prod_url =
         Url::parse("https://cdn-hls-slicer.zvuk.com/drm/track/0/key.bin").expect("prod url");
-    let prod_rule = registry
-        .find(&prod_url)
-        .expect("zvuk-prod rule must match *.zvuk.com");
-    let prod_req = prod_rule.build_request();
+    let prod_req = registry
+        .prepare(&prod_url)
+        .expect("zvuk-prod policy must match *.zvuk.com");
     let prod_seed = prod_req
         .headers
         .get("X-Encrypted-Key")

@@ -59,6 +59,10 @@ impl ItemDragState {
 }
 
 impl ItemDrag {
+    /// Pointer travel that turns a press on an item into a drag; below it the
+    /// press stays a plain click.
+    const DRAG_THRESHOLD: f32 = 4.0;
+
     pub(crate) const fn new(path: String, index: usize) -> Self {
         Self { path, index }
     }
@@ -77,10 +81,6 @@ impl ItemDrag {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Option<Action<UiEvent>> {
-        /// Pointer travel that turns a press on an item into a drag; below it the
-        /// press stays a plain click.
-        const DRAG_THRESHOLD: f32 = 4.0;
-
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
                 *state = ItemDragState {
@@ -94,7 +94,7 @@ impl ItemDrag {
                     state.origin = Some(*position);
                     return None;
                 };
-                if position.distance(origin) < DRAG_THRESHOLD {
+                if position.distance(origin) < Self::DRAG_THRESHOLD {
                     return None;
                 }
                 state.active = true;

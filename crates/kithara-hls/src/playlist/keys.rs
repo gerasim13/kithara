@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use bytes::Bytes;
 use dashmap::DashMap;
 use kithara_assets::{AssetResource, AssetScope, ReadSide, ResourceKey};
-use kithara_drm::{DecryptContext, KeyProcessor, KeyProcessorRegistry, KeyProcessorRule};
+use kithara_drm::{DecryptContext, KeyProcessor, KeyProcessorRegistry, PreparedKeyRequest};
 use kithara_events::{
     DrmEvent, EventBus, HlsError as EventHlsError, HlsEvent, KeyFailureStage, KeySource,
 };
@@ -14,13 +14,17 @@ use kithara_platform::{sync::Arc, time::Instant};
 use kithara_stream::dl::{FetchCmd, PeerHandle};
 use url::Url;
 
-use crate::{HlsError, HlsResult, handle::KeyPeer};
+use crate::{
+    HlsError, HlsResult,
+    handle::KeyPeer,
+    logging::{RedactedNetError, RedactedUrl},
+};
 
 /// DRM key fetch + processor pipeline.
 ///
-/// Routes per-provider processing (headers, query params, key
-/// decryption) through a [`KeyProcessorRegistry`] — each key URL's
-/// host is looked up in the registry to pick the matching rule.
+/// Resolves optional provider processing through a [`KeyProcessorRegistry`].
+/// The registry supplies a fully prepared wire request; this type owns only
+/// cache coordination, fetching, validation, and processor execution.
 #[derive(Clone)]
 pub struct KeyStore {
     /// In-memory hot-path cache of validated final keys.
@@ -32,8 +36,7 @@ pub struct KeyStore {
     /// — re-opening the same track in a later session resolves through
     /// disk cache without re-hitting the key endpoint. The cached
     /// **plaintext** is deterministic per track/quality and safe to
-    /// persist; the on-the-wire response is encrypted with a fresh
-    /// per-session seed and never touches disk.
+    /// persist; request-specific wire material never touches disk.
     keys: Arc<DashMap<Url, Bytes>>,
     scope: AssetScope,
     /// Byte buffer pool for reading cached key bodies.
@@ -155,14 +158,8 @@ impl KeyStore {
         Ok(bytes)
     }
 
-    /// Load, optionally preprocess, and return the final key bytes.
-    ///
-    /// Matches a [`KeyProcessorRegistry`] rule by the key URL's host,
-    /// applies its query params + headers, and runs its processor on the
-    /// response. DRM and plain AES-128 keys both persist to the
-    /// [`AssetStore`] under the scope delegate's URL key; DRM keys are
-    /// decrypted before write-back, so the cached bytes are the plaintext key
-    /// and the per-session wire seed never reaches disk.
+    /// Load the final AES-128 key through an optional prepared request and processor.
+    /// Cached bytes use the original URL identity and contain only processed key material.
     ///
     /// # Errors
     /// Returns an error when the fetch or the processor fails.
@@ -173,17 +170,13 @@ impl KeyStore {
         _iv: Option<[u8; Self::AES_KEY_LEN]>,
     ) -> HlsResult<Bytes> {
         if let Some(cached) = self.keys.get(url).map(|entry| entry.value().clone()) {
-            tracing::debug!(%url, "key: served from in-memory cache");
+            tracing::debug!(url = %RedactedUrl::new(url), "key: served from in-memory cache");
             publish_key_acquired(&self.bus, url, KeySource::MemCache, cached.len(), None);
             return Ok(cached);
         }
 
         let cache_key = self.scope.key(&AssetResource::Url(url.clone()))?;
-        let Some(rule) = self
-            .key_registry
-            .as_ref()
-            .and_then(|registry| registry.find(url))
-        else {
+        let Some(registry) = self.key_registry.as_ref() else {
             let headers = self.merged_headers(None);
             let key = self
                 .key_peer
@@ -195,39 +188,48 @@ impl KeyStore {
         let store = self.scope.store().clone();
         store
             .with_resource_transaction(&cache_key, || {
-                self.fetch_processed_key(&cache_key, url, rule)
+                self.fetch_registered_key(&cache_key, url, registry)
             })
             .await
     }
 
-    async fn fetch_processed_key(
+    async fn fetch_registered_key(
         &self,
         cache_key: &ResourceKey,
         url: &Url,
-        rule: &KeyProcessorRule,
+        registry: &KeyProcessorRegistry,
     ) -> HlsResult<Bytes> {
         if let Some(cached) = self.keys.get(url).map(|entry| entry.value().clone()) {
             publish_key_acquired(&self.bus, url, KeySource::MemCache, cached.len(), None);
             return Ok(cached);
         }
 
-        if let Some(cached) = self.validated_processed_cache(cache_key, url)? {
+        if let Some(cached) = self.validated_key_cache(cache_key, url)? {
             return Ok(cached);
         }
 
-        let (cmd, processor) = self.processed_request(url, rule);
+        let Some(request) = registry.prepare(url) else {
+            let headers = self.merged_headers(None);
+            let key = self
+                .key_peer
+                .fetch_validated_in_transaction(cache_key, url, headers, validated_key_bytes)
+                .await?;
+            self.keys.insert(url.clone(), key.clone());
+            return Ok(key);
+        };
+        let (cmd, processor) = self.prepared_request(request);
         let (raw_key, latency_ms) = self.fetch_processed_body(url, cmd).await?;
         let decrypted = self.process_key(url, &processor, raw_key)?;
 
         tracing::info!(
-            %url,
+            url = %RedactedUrl::new(url),
             bytes = decrypted.len(),
             "drm key: fetched + decrypted, caching to asset store"
         );
 
         if let Err(error) = self.key_peer.write_back(cache_key, url, &decrypted) {
             tracing::warn!(
-                %url,
+                url = %RedactedUrl::new(url),
                 error = %error,
                 "drm key: valid final key could not be persisted; using session memory"
             );
@@ -244,44 +246,32 @@ impl KeyStore {
         Ok(decrypted)
     }
 
-    fn validated_processed_cache(
-        &self,
-        cache_key: &ResourceKey,
-        url: &Url,
-    ) -> HlsResult<Option<Bytes>> {
+    fn validated_key_cache(&self, cache_key: &ResourceKey, url: &Url) -> HlsResult<Option<Bytes>> {
         let Some(bytes) = self.key_peer.try_cached(cache_key, url)? else {
             return Ok(None);
         };
         if let Err(error) = validate_aes128_key(&bytes) {
             tracing::warn!(
-                %url,
+                url = %RedactedUrl::new(url),
                 error = %error,
                 "drm key: cached final key is invalid; removing it before refetch"
             );
             self.scope.store().remove_resource(cache_key)?;
             return Ok(None);
         }
-        tracing::info!(%url, bytes = bytes.len(), "drm key: served from disk cache");
+        tracing::info!(
+            url = %RedactedUrl::new(url),
+            bytes = bytes.len(),
+            "drm key: served from disk cache"
+        );
         self.keys.insert(url.clone(), bytes.clone());
         publish_key_acquired(&self.bus, url, KeySource::DiskCache, bytes.len(), None);
         Ok(Some(bytes))
     }
 
-    fn processed_request(&self, url: &Url, rule: &KeyProcessorRule) -> (FetchCmd, KeyProcessor) {
-        let mut fetch_url = url.clone();
-        if let Some(params) = rule.query_params.as_ref() {
-            let mut pairs = fetch_url.query_pairs_mut();
-            for (k, v) in params {
-                pairs.append_pair(k, v);
-            }
-        }
-        let request = rule.build_request();
-        let mut combined_headers: HashMap<String, String> =
-            rule.headers.clone().unwrap_or_default();
-        combined_headers.extend(request.headers);
-        let headers = self.merged_headers(Some(&combined_headers));
-
-        let cmd = FetchCmd::get(fetch_url).maybe_headers(headers).build();
+    fn prepared_request(&self, request: PreparedKeyRequest) -> (FetchCmd, KeyProcessor) {
+        let headers = self.merged_headers(Some(&request.headers));
+        let cmd = FetchCmd::get(request.url).maybe_headers(headers).build();
         (cmd, request.processor)
     }
 
@@ -290,17 +280,25 @@ impl KeyStore {
         url: &Url,
         cmd: FetchCmd,
     ) -> HlsResult<(Bytes, Option<u64>)> {
-        tracing::info!(%url, "drm key: fetching from network");
+        tracing::info!(url = %RedactedUrl::new(url), "drm key: fetching from network");
         let started_at = Instant::now();
         let resp = self.key_peer.execute(cmd).await.map_err(|e| {
-            tracing::warn!(%url, error = %e, "drm key: network fetch failed");
+            tracing::warn!(
+                url = %RedactedUrl::new(url),
+                error = %RedactedNetError::new(&e),
+                "drm key: network fetch failed"
+            );
             publish_key_fetch_failed(&self.bus, url, KeyFailureStage::Network, "key fetch failed");
             publish_decryption_error(&self.bus, "key fetch failed");
             HlsError::KeyProcessing("key fetch failed".to_string())
         })?;
         let latency_ms = u64::try_from(started_at.elapsed().as_millis()).ok();
         let raw_key = resp.body.collect().await.map_err(|e| {
-            tracing::warn!(%url, error = %e, "drm key: body collect failed");
+            tracing::warn!(
+                url = %RedactedUrl::new(url),
+                error = %RedactedNetError::new(&e),
+                "drm key: body collect failed"
+            );
             publish_key_fetch_failed(
                 &self.bus,
                 url,
@@ -314,8 +312,11 @@ impl KeyStore {
     }
 
     fn process_key(&self, url: &Url, processor: &KeyProcessor, raw_key: Bytes) -> HlsResult<Bytes> {
-        let decrypted = processor(raw_key).map_err(|e| {
-            tracing::warn!(%url, error = %e, "drm key: registry processor (decrypt) failed");
+        let decrypted = processor(raw_key).map_err(|_error| {
+            tracing::warn!(
+                url = %RedactedUrl::new(url),
+                "drm key: registry processor (decrypt) failed"
+            );
             publish_key_fetch_failed(
                 &self.bus,
                 url,
@@ -326,7 +327,11 @@ impl KeyStore {
             HlsError::KeyProcessing("key processor failed".to_string())
         })?;
         if let Err(error) = validate_aes128_key(&decrypted) {
-            tracing::warn!(%url, error = %error, "drm key: processed key has invalid length");
+            tracing::warn!(
+                url = %RedactedUrl::new(url),
+                error = %error,
+                "drm key: processed key has invalid length"
+            );
             publish_key_fetch_failed(
                 &self.bus,
                 url,
@@ -478,7 +483,7 @@ pub(crate) fn resolve_init_decrypt_ctx(
         Ok(ctx) => Some(ctx),
         Err(e) => {
             tracing::warn!(
-                url = %init_url,
+                url = %RedactedUrl::new(&init_url),
                 error = %e,
                 "resolve_init_decrypt_ctx failed; init will be unreadable",
             );
@@ -520,7 +525,7 @@ fn resolve_segment_decrypt_ctx(
         Ok(ctx) => Some(ctx),
         Err(e) => {
             tracing::warn!(
-                url = %segment_url,
+                url = %RedactedUrl::new(&segment_url),
                 sequence = segment.sequence,
                 error = %e,
                 "resolve_decrypt_ctx failed; segment will be unreadable",
@@ -589,15 +594,21 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
-    use axum::{Router, body::Body, routing::get};
+    use axum::{
+        Router,
+        body::Body,
+        extract::Query,
+        http::{HeaderMap, StatusCode},
+        routing::get,
+    };
     use bytes::Bytes;
     use kithara_assets::{
         AcquisitionResult, AssetResource, AssetScope, AssetSource, AssetStore, AssetStoreBuilder,
         StorageBackend, WriteSide,
     };
     use kithara_drm::{
-        DrmError, KeyProcessor, KeyProcessorRegistry, KeyProcessorRule, KeyRequest,
-        KeyRequestFactory,
+        DrmError, KeyProcessor, KeyProcessorRegistry, KeyRequest, KeyRequestFactory,
+        KeyRequestResolver, PreparedKeyRequest,
     };
     use kithara_events::{DrmEvent, Event, EventBus, KeyFailureStage, KeySource};
     use kithara_net::{HttpClient, NetOptions};
@@ -620,8 +631,62 @@ mod tests {
     impl kithara_abr::Abr for MockPeer {}
     impl Peer for MockPeer {}
 
+    struct HostResolver {
+        host: &'static str,
+        request_factory: KeyRequestFactory,
+    }
+
+    impl KeyRequestResolver for HostResolver {
+        fn prepare(&self, url: &Url) -> Option<PreparedKeyRequest> {
+            if url.host_str() != Some(self.host) {
+                return None;
+            }
+            let request = (self.request_factory)();
+            Some(PreparedKeyRequest::new(
+                url.clone(),
+                request.headers,
+                request.processor,
+            ))
+        }
+    }
+
+    struct FixedRequestResolver {
+        headers: HashMap<String, String>,
+        host: &'static str,
+        processor: KeyProcessor,
+        url: Url,
+    }
+
+    impl KeyRequestResolver for FixedRequestResolver {
+        fn prepare(&self, url: &Url) -> Option<PreparedKeyRequest> {
+            (url.host_str() == Some(self.host)).then(|| {
+                PreparedKeyRequest::new(
+                    self.url.clone(),
+                    self.headers.clone(),
+                    Arc::clone(&self.processor),
+                )
+            })
+        }
+    }
+
     fn const_factory(processor: KeyProcessor) -> KeyRequestFactory {
         Arc::new(move || KeyRequest::new(HashMap::new(), Arc::clone(&processor)))
+    }
+
+    fn registry_for(host: &'static str, processor: KeyProcessor) -> KeyProcessorRegistry {
+        registry_for_factory(host, const_factory(processor))
+    }
+
+    fn registry_for_factory(
+        host: &'static str,
+        request_factory: KeyRequestFactory,
+    ) -> KeyProcessorRegistry {
+        let mut registry = KeyProcessorRegistry::new();
+        registry.register(Arc::new(HostResolver {
+            host,
+            request_factory,
+        }));
+        registry
     }
 
     async fn spawn_key_server_with_body(body: Bytes) -> (Url, Arc<AtomicUsize>) {
@@ -651,6 +716,72 @@ mod tests {
         spawn_key_server_with_body(Bytes::from_static(VALID_KEY))
             .await
             .0
+    }
+
+    async fn spawn_domain_key_server() -> (Url, Url) {
+        let reversed = Bytes::from(VALID_KEY.iter().rev().copied().collect::<Vec<_>>());
+        let masked = Bytes::from(VALID_KEY.iter().map(|byte| byte ^ 0xaa).collect::<Vec<_>>());
+        let app = Router::new()
+            .route(
+                "/reversed.key",
+                get(move || {
+                    let body = reversed.clone();
+                    async move { Result::<_, Infallible>::Ok(Body::from(body)) }
+                }),
+            )
+            .route(
+                "/masked.key",
+                get(move || {
+                    let body = masked.clone();
+                    async move { Result::<_, Infallible>::Ok(Body::from(body)) }
+                }),
+            );
+        let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let port = listener.local_addr().expect("local addr").port();
+        tokio_spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        let localhost =
+            Url::parse(&format!("http://localhost:{port}/reversed.key")).expect("localhost URL");
+        let loopback =
+            Url::parse(&format!("http://127.0.0.1:{port}/masked.key")).expect("loopback URL");
+        (localhost, loopback)
+    }
+
+    async fn spawn_prepared_request_server() -> (Url, Url, Arc<AtomicUsize>) {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let handler_requests = Arc::clone(&requests);
+        let reversed = Bytes::from(VALID_KEY.iter().rev().copied().collect::<Vec<_>>());
+        let app = Router::new().route(
+            "/wire.key",
+            get(
+                move |headers: HeaderMap, Query(query): Query<HashMap<String, String>>| {
+                    let requests = Arc::clone(&handler_requests);
+                    let reversed = reversed.clone();
+                    async move {
+                        requests.fetch_add(1, Ordering::SeqCst);
+                        let authorized = headers
+                            .get("X-Key-Auth")
+                            .and_then(|value| value.to_str().ok())
+                            == Some("authorized")
+                            && query.get("session").map(String::as_str) == Some("fresh");
+                        if authorized {
+                            (StatusCode::OK, Body::from(reversed))
+                        } else {
+                            (StatusCode::UNAUTHORIZED, Body::empty())
+                        }
+                    }
+                },
+            ),
+        );
+        let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        tokio_spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        let original = Url::parse(&format!("http://{addr}/original.key")).expect("original URL");
+        let wire = Url::parse(&format!("http://{addr}/wire.key?session=fresh")).expect("wire URL");
+        (original, wire, requests)
     }
 
     async fn spawn_gated_key_server() -> (Url, Arc<AtomicUsize>, Arc<Notify>, Arc<Notify>) {
@@ -792,11 +923,7 @@ mod tests {
     async fn key_fetch_success_publishes_network_acquired() {
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
-        let mut registry = KeyProcessorRegistry::new();
-        registry.add(KeyProcessorRule::new(
-            ["127.0.0.1"],
-            const_factory(Arc::new(Ok::<Bytes, DrmError>)),
-        ));
+        let registry = registry_for("127.0.0.1", Arc::new(Ok::<Bytes, DrmError>));
         let store = make_store(&bus, CancelToken::never(), Some(registry));
         let url = spawn_key_server().await;
 
@@ -819,16 +946,147 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
+    async fn domain_rules_apply_distinct_key_processors_end_to_end() {
+        let (localhost_url, loopback_url) = spawn_domain_key_server().await;
+        let localhost_calls = Arc::new(AtomicUsize::new(0));
+        let loopback_calls = Arc::new(AtomicUsize::new(0));
+
+        let reverse_calls = Arc::clone(&localhost_calls);
+        let mut registry = registry_for(
+            "localhost",
+            Arc::new(move |key| {
+                reverse_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(Bytes::from(key.iter().rev().copied().collect::<Vec<_>>()))
+            }),
+        );
+        let mask_calls = Arc::clone(&loopback_calls);
+        registry.register(Arc::new(HostResolver {
+            host: "127.0.0.1",
+            request_factory: const_factory(Arc::new(move |key| {
+                mask_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(Bytes::from(
+                    key.iter().map(|byte| byte ^ 0xaa).collect::<Vec<_>>(),
+                ))
+            })),
+        }));
+        let store = make_store(&EventBus::new(8), CancelToken::never(), Some(registry));
+
+        let localhost_key = store
+            .get_raw_key(&localhost_url, None)
+            .await
+            .expect("localhost key");
+        let loopback_key = store
+            .get_raw_key(&loopback_url, None)
+            .await
+            .expect("loopback key");
+
+        assert_eq!(localhost_key.as_ref(), VALID_KEY);
+        assert_eq!(loopback_key.as_ref(), VALID_KEY);
+        assert_eq!(localhost_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(loopback_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[kithara::test(tokio)]
+    async fn prepared_request_rewrites_wire_url_and_forwards_headers() {
+        let (original_url, wire_url, requests) = spawn_prepared_request_server().await;
+        let mut registry = KeyProcessorRegistry::new();
+        registry.register(Arc::new(FixedRequestResolver {
+            headers: HashMap::from([("X-Key-Auth".to_string(), "authorized".to_string())]),
+            host: "127.0.0.1",
+            processor: Arc::new(|key| {
+                Ok(Bytes::from(key.iter().rev().copied().collect::<Vec<_>>()))
+            }),
+            url: wire_url,
+        }));
+        let store = make_store(&EventBus::new(8), CancelToken::never(), Some(registry));
+
+        let key = store
+            .get_raw_key(&original_url, None)
+            .await
+            .expect("prepared request key");
+
+        assert_eq!(key.as_ref(), VALID_KEY);
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+    }
+
+    #[kithara::test(tokio)]
+    async fn persisted_final_key_does_not_prepare_fresh_request() {
+        let (url, requests) = spawn_key_server_with_body(Bytes::from_static(VALID_KEY)).await;
+        let dir = tempdir().expect("tempdir");
+        let assets = AssetStoreBuilder::default()
+            .backend(StorageBackend::Disk {
+                root: dir.path().into(),
+            })
+            .cancel(CancelToken::never())
+            .build();
+        let bus = EventBus::new(8);
+
+        let first_prepares = Arc::new(AtomicUsize::new(0));
+        let first_counter = Arc::clone(&first_prepares);
+        let first_registry = registry_for_factory(
+            "127.0.0.1",
+            Arc::new(move || {
+                first_counter.fetch_add(1, Ordering::SeqCst);
+                KeyRequest::new(HashMap::new(), Arc::new(Ok::<Bytes, DrmError>))
+            }),
+        );
+        let first =
+            make_store_with_assets(&bus, CancelToken::never(), Some(first_registry), &assets);
+        assert_eq!(
+            first
+                .get_raw_key(&url, None)
+                .await
+                .expect("network key")
+                .as_ref(),
+            VALID_KEY
+        );
+        assert_eq!(first_prepares.load(Ordering::SeqCst), 1);
+        assets.checkpoint().expect("persist final key");
+        drop(first);
+        drop(assets);
+
+        let reopened_prepares = Arc::new(AtomicUsize::new(0));
+        let reopened_counter = Arc::clone(&reopened_prepares);
+        let reopened_registry = registry_for_factory(
+            "127.0.0.1",
+            Arc::new(move || {
+                reopened_counter.fetch_add(1, Ordering::SeqCst);
+                KeyRequest::new(HashMap::new(), Arc::new(Ok::<Bytes, DrmError>))
+            }),
+        );
+        let reopened_assets = AssetStoreBuilder::default()
+            .backend(StorageBackend::Disk {
+                root: dir.path().into(),
+            })
+            .cancel(CancelToken::never())
+            .build();
+        let reopened = make_store_with_assets(
+            &bus,
+            CancelToken::never(),
+            Some(reopened_registry),
+            &reopened_assets,
+        );
+
+        assert_eq!(
+            reopened
+                .get_raw_key(&url, None)
+                .await
+                .expect("cached key")
+                .as_ref(),
+            VALID_KEY
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        assert_eq!(reopened_prepares.load(Ordering::SeqCst), 0);
+    }
+
+    #[kithara::test(tokio)]
     async fn key_resolution_failure_publishes_hls_error() {
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
-        let mut registry = KeyProcessorRegistry::new();
-        registry.add(KeyProcessorRule::new(
-            ["127.0.0.1"],
-            const_factory(Arc::new(|_bytes| {
-                Err(DrmError::KeyProcessing("fixture processor failed".into()))
-            })),
-        ));
+        let registry = registry_for(
+            "127.0.0.1",
+            Arc::new(|_bytes| Err(DrmError::KeyProcessing("fixture processor failed".into()))),
+        );
         let store = make_store(&bus, CancelToken::never(), Some(registry));
         let url = spawn_key_server().await;
 
@@ -863,11 +1121,15 @@ mod tests {
     async fn key_mem_cache_hit_publishes_mem_cache_acquired() {
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
-        let mut registry = KeyProcessorRegistry::new();
-        registry.add(KeyProcessorRule::new(
-            ["127.0.0.1"],
-            const_factory(Arc::new(Ok::<Bytes, DrmError>)),
-        ));
+        let prepares = Arc::new(AtomicUsize::new(0));
+        let prepare_counter = Arc::clone(&prepares);
+        let registry = registry_for_factory(
+            "127.0.0.1",
+            Arc::new(move || {
+                prepare_counter.fetch_add(1, Ordering::SeqCst);
+                KeyRequest::new(HashMap::new(), Arc::new(Ok::<Bytes, DrmError>))
+            }),
+        );
         let store = make_store(&bus, CancelToken::never(), Some(registry));
         let url = spawn_key_server().await;
 
@@ -875,12 +1137,14 @@ mod tests {
             .get_raw_key(&url, None)
             .await
             .expect("first fetch succeeds");
+        assert_eq!(prepares.load(Ordering::SeqCst), 1);
         let _ = collect_events(&mut events);
         let key = store
             .get_raw_key(&url, None)
             .await
             .expect("mem cache hit succeeds");
         assert_eq!(key.as_ref(), VALID_KEY);
+        assert_eq!(prepares.load(Ordering::SeqCst), 1);
 
         let events = collect_events(&mut events);
         assert!(events.iter().any(|event| matches!(
@@ -953,11 +1217,7 @@ mod tests {
             .build();
         commit_key(&store, &url, b"corrupt");
         let bus = EventBus::new(16);
-        let mut registry = KeyProcessorRegistry::new();
-        registry.add(KeyProcessorRule::new(
-            ["127.0.0.1"],
-            const_factory(Arc::new(Ok::<Bytes, DrmError>)),
-        ));
+        let registry = registry_for("127.0.0.1", Arc::new(Ok::<Bytes, DrmError>));
         let first =
             make_store_with_assets(&bus, CancelToken::never(), Some(registry.clone()), &store);
         let second = make_store_with_assets(&bus, CancelToken::never(), Some(registry), &store);
@@ -976,14 +1236,8 @@ mod tests {
     #[case(false)]
     #[case(true)]
     async fn failed_key_persistence_does_not_break_prefetch_resolution(#[case] processed: bool) {
-        let registry = processed.then(|| {
-            let mut registry = KeyProcessorRegistry::new();
-            registry.add(KeyProcessorRule::new(
-                ["127.0.0.1"],
-                const_factory(Arc::new(Ok::<Bytes, DrmError>)),
-            ));
-            registry
-        });
+        let registry =
+            processed.then(|| registry_for("127.0.0.1", Arc::new(Ok::<Bytes, DrmError>)));
         assert_failed_persistence_keeps_prefetched_key(registry).await;
     }
 }

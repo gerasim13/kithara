@@ -147,9 +147,9 @@ typos = ".config/typos.toml"
 framework-name = "Kithara"
 bundle-id = "io.zvuk.Kithara"
 short-version = "0.0.1"
-# iOS 15 floor: consumer apps (e.g. Zvuk) still ship an iOS 15 minimum, and a
-# module built for iOS 16 cannot be imported by an iOS 15 target.
-deployment-target = "15.0"
+# Consumer apps still ship an iOS 15.6 minimum, and a module built for a newer
+# iOS version cannot be imported by those targets.
+deployment-target = "15.6"
 autolink-frameworks = ["AudioToolbox", "CoreAudio", "AVFoundation", "Security", "SystemConfiguration"]
 
 [workspace.package]
@@ -290,7 +290,6 @@ hotpath = "0.19.1"
 
 # UI frameworks
 iced = { version = "0.14", features = ["tokio", "svg", "canvas"] }
-iced_aw = { version = "0.14.1", default-features = false, features = ["tabs", "tab_bar", "selection_list"] }
 
 # FFI
 jni = "0.22"
@@ -352,7 +351,7 @@ stats_alloc = "0.1"
 symphonia = { version = "0.6.0", features = ["all", "opt-simd"] }
 symphonia-core = "0.6.0"
 symphonia-format-isomp4 = "0.6.0"
-syn = { version = "2", features = ["full"] }
+syn = { version = "3", features = ["full"] }
 tempfile = "3.27.0"
 thirtyfour = "0.37.1"
 thiserror = "2.0.18"
@@ -372,7 +371,7 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 tracing-wasm = "0.2"
 uniffi = { version = "0.31.2", default-features = false }
 unimock = { version = "0.6", features = ["std"] }
-url = "2.5.8"
+url = { version = "2.5.8", features = ["serde"] }
 usdt = { version = "0.6", default-features = false, features = ["asm"] }
 uuid = { version = "1", features = ["v5"] }
 # Held at 0.6 ahead of the masonry host: masonry 0.4 hands a widget a `Scene` from its own

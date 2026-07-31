@@ -19,6 +19,7 @@ render = [
     "dep:parley",
     "dep:skrifa",
     "dep:tracing",
+    "iced/advanced",
 ]
 vello-backend = ["dep:kithara-platform", "dep:parley", "dep:vello"]
 
