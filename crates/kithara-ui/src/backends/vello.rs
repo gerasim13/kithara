@@ -159,20 +159,15 @@ mod tests {
     use super::*;
     use crate::{
         draw::{DrawCmd, DrawListBuilder, Rect, replay},
-        skin::{FontFamily, FontWeight},
+        skin::{ColorRole, FontFamily, FontWeight, TextRoleSkin},
         text::TextContext,
     };
 
     #[kithara::test]
     fn every_draw_operation_adds_to_the_encoding() {
-        let run = TextContext::new().unwrap().shape(
-            "GAIN",
-            FontFamily::Sans,
-            FontWeight::Normal,
-            12.0,
-            0.0,
-            Some(FIXTURE.bounds.w),
-        );
+        let run = TextContext::new()
+            .unwrap()
+            .shape("GAIN", FIXTURE.role, Some(FIXTURE.bounds.w));
         let mut builder = DrawListBuilder::default();
         builder.fill_circle(FIXTURE.point, 5.0, FIXTURE.color);
         builder.stroke_arc(FIXTURE.point, 5.0, 0.0, 1.0, FIXTURE.color, 1.0);
@@ -231,14 +226,9 @@ mod tests {
     }
 
     fn text_scene(content: &str) -> Scene {
-        let run = TextContext::new().unwrap().shape(
-            content,
-            FontFamily::Sans,
-            FontWeight::Normal,
-            12.0,
-            0.0,
-            Some(FIXTURE.bounds.w),
-        );
+        let run = TextContext::new()
+            .unwrap()
+            .shape(content, FIXTURE.role, Some(FIXTURE.bounds.w));
         let mut builder = DrawListBuilder::default();
         builder.text(
             &run,
@@ -259,6 +249,7 @@ mod tests {
         bounds: Rect,
         color: Rgba,
         point: Pt,
+        role: TextRoleSkin,
     }
 
     const FIXTURE: DrawFixture = {
@@ -277,6 +268,13 @@ mod tests {
             },
             color,
             point: Pt { x: 4.0, y: 4.0 },
+            role: TextRoleSkin {
+                color: ColorRole::Text,
+                font: FontFamily::Sans,
+                size: 12.0,
+                spacing: 0.0,
+                weight: FontWeight::Normal,
+            },
         }
     };
 

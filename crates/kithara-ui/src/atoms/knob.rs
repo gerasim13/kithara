@@ -79,14 +79,7 @@ impl<'data, 'skin> Knob<'data, 'skin> {
 
         if let Some(label) = self.label {
             let role = metrics.label_text;
-            let run = text.shape(
-                label,
-                role.font,
-                role.weight,
-                role.size,
-                role.spacing,
-                Some(caption.w),
-            );
+            let run = text.shape(label, role, Some(caption.w));
             list.text(
                 &run,
                 label,

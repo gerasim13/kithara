@@ -7,7 +7,7 @@ use parley::{
 };
 
 use super::{Glyph, GlyphRun, TextError, TextResources, select};
-use crate::skin::{FontFamily, FontWeight};
+use crate::skin::{FontWeight, TextRoleSkin};
 
 /// Owns the embedded font collection and Parley shaping scratch space.
 pub struct TextContext {
@@ -48,28 +48,23 @@ impl From<&TextResources> for TextContext {
 }
 
 impl TextContext {
-    /// Shapes and measures text with the selected embedded face.
+    /// Shapes and measures text in a skin role with the selected embedded face.
     ///
-    /// `tracking` is additional letter spacing relative to `size`. `max_width`
-    /// is `None` for an unbounded line or `Some(width)` for line breaking.
+    /// `max_width` is `None` for an unbounded line or `Some(width)` for line
+    /// breaking. The role travels whole rather than as a face and a size,
+    /// because `spacing` is letter tracking: a signature that took those loose
+    /// let a caller shape text and drop the tracking the skin declared, which
+    /// is what every string rendered through iced did.
     #[must_use]
-    pub fn shape(
-        &mut self,
-        content: &str,
-        family: FontFamily,
-        weight: FontWeight,
-        size: f32,
-        tracking: f32,
-        max_width: Option<f32>,
-    ) -> GlyphRun {
-        let font = select(family, weight);
+    pub fn shape(&mut self, content: &str, role: TextRoleSkin, max_width: Option<f32>) -> GlyphRun {
+        let font = select(role.font, role.weight);
         let mut builder = self
             .layout
             .ranged_builder(&mut self.fonts, content, 1.0, false);
         builder.push_default(ParleyFamily::Named(Cow::Borrowed(font.family_name())));
-        builder.push_default(StyleProperty::FontWeight(parley_weight(weight)));
-        builder.push_default(StyleProperty::FontSize(size));
-        builder.push_default(StyleProperty::LetterSpacing(tracking * size));
+        builder.push_default(StyleProperty::FontWeight(parley_weight(role.weight)));
+        builder.push_default(StyleProperty::FontSize(role.size));
+        builder.push_default(StyleProperty::LetterSpacing(role.spacing * role.size));
         let mut layout = builder.build(content);
         layout.break_all_lines(max_width);
 
@@ -86,7 +81,7 @@ impl TextContext {
                 }));
             }
         }
-        GlyphRun::new(font, glyphs, layout.height(), size, layout.width())
+        GlyphRun::new(font, glyphs, layout.height(), role.size, layout.width())
     }
 }
 
@@ -104,7 +99,20 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::text::FontId;
+    use crate::{
+        skin::{ColorRole, FontFamily},
+        text::FontId,
+    };
+
+    fn role(family: FontFamily, weight: FontWeight, size: f32, spacing: f32) -> TextRoleSkin {
+        TextRoleSkin {
+            color: ColorRole::Text,
+            font: family,
+            size,
+            spacing,
+            weight,
+        }
+    }
 
     #[kithara::test]
     fn context_registers_only_embedded_families() {
@@ -123,10 +131,7 @@ mod tests {
     fn shape_returns_positioned_glyphs_and_measurement() {
         let run = TextContext::new().unwrap().shape(
             "GAIN",
-            FontFamily::Sans,
-            FontWeight::Semibold,
-            12.0,
-            0.0,
+            role(FontFamily::Sans, FontWeight::Semibold, 12.0, 0.0),
             None,
         );
 
@@ -146,18 +151,12 @@ mod tests {
         let mut context = TextContext::new().unwrap();
         let plain = context.shape(
             "GAIN",
-            FontFamily::Sans,
-            FontWeight::Normal,
-            12.0,
-            0.0,
+            role(FontFamily::Sans, FontWeight::Normal, 12.0, 0.0),
             None,
         );
         let tracked = context.shape(
             "GAIN",
-            FontFamily::Sans,
-            FontWeight::Normal,
-            12.0,
-            0.1,
+            role(FontFamily::Sans, FontWeight::Normal, 12.0, 0.1),
             None,
         );
 
@@ -169,18 +168,12 @@ mod tests {
         let mut context = TextContext::new().unwrap();
         let unbounded = context.shape(
             "GAIN GAIN GAIN",
-            FontFamily::Sans,
-            FontWeight::Normal,
-            12.0,
-            0.0,
+            role(FontFamily::Sans, FontWeight::Normal, 12.0, 0.0),
             None,
         );
         let wrapped = context.shape(
             "GAIN GAIN GAIN",
-            FontFamily::Sans,
-            FontWeight::Normal,
-            12.0,
-            0.0,
+            role(FontFamily::Sans, FontWeight::Normal, 12.0, 0.0),
             Some(35.0),
         );
 

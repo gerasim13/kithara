@@ -118,6 +118,15 @@ enabling it would add a second wgpu major beside iced's 27.
 registers the embedded Inter, JetBrains Mono, and Space Grotesk faces. A context is a caller-owned
 value injected where shaping occurs; there is no process-global font context.
 
+`TextContext::shape` takes a whole `TextRoleSkin` rather than a face, a weight and a size, and that
+signature is the contract. `TextRoleSkin::spacing` is letter tracking, and a signature that took
+the pieces loose let a caller shape text and drop it: `render::typography::styled_text` did exactly
+that, because iced's `Text` has no letter spacing to hand it to, so every string rendered through
+iced ignored the tracking its skin declared — `brand` and `brand_small` at 0.3, `micro_label` and
+`titlebar_text` at 0.12, `vis.meta` at 0.1, `caption` and the swatch label at 0.08. Passing the
+role whole means the omission is not expressible. `color` rides along unread by shaping; that is
+the price of making the role the unit.
+
 Fontique system-font access is off, and that is a known gap rather than a contract. Embedded
 coverage is narrower than the face count suggests: Inter and JetBrains Mono carry Latin, Cyrillic
 and Greek, while Space Grotesk is Latin-only, and the skin spends Space Grotesk on `track_title`,
@@ -226,6 +235,31 @@ win the query ahead of the embedded one; and a string outside embedded coverage 
 system fallback face. The Latin-only corpus keeps the second one out of reach, and the first is
 inherent to the iced path being pinned - the harness reproduces what the shipped iced host does,
 including this. Closing either belongs to the wave that takes font policy off the global.
+
+## Text Control Ownership
+
+The `Text` control is the first control whose measurement and painting both belong to the base.
+`atoms::text` owns the pair: it shapes through `TextContext` and either reports an intrinsic size
+or emits one `DrawCmd::Text`. `widgets::text` owns only the iced side - it resolves the style,
+colour and content, then hosts the atom as a leaf `Widget` whose `layout` returns the base's
+intrinsic and whose `draw` replays the command list through `IcedBackend`. It reports
+`Shrink` by `Fill`, which is what the `container` it replaced reported.
+
+The two shaping calls differ on purpose and are not a cache miss to be repaired. `layout` shapes
+unbounded, because an intrinsic is what the control asks its parent for; `draw` shapes against the
+width it was given, so a squeezed box breaks lines instead of overflowing. A single-slot memo keyed
+on the query cannot serve both, and a memo that never hits is worse than none - if shaping ever
+shows up in a frame budget, the fix is a measured one with a `kithara-devtools` number behind it.
+
+Porting it moved rects, and that was the point: `transport/tempo-label` went 24.000 -> 28.800 and
+`transport/stream-label` 96.000 -> 115.200, exactly the `chars x spacing x size` the skin declared
+and iced dropped. The residual against cosmic-text is zero - both engines agree on JetBrains Mono's
+advance - so the whole delta is tracking.
+
+`render::typography::styled_text` still serves `atoms::design::cell`, `atoms::design::swatch` and
+`widgets::window::title`. Those are unported sites, not a fallback: they take the iced path
+entirely, including losing their tracking, until their own wave moves them. Nothing chooses between
+the two at runtime.
 
 ## Wave View Ownership
 
