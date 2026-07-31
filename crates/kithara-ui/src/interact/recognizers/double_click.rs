@@ -13,9 +13,7 @@ impl DoubleClick {
             .previous
             .is_some_and(|(previous_position, previous_time)| {
                 previous_position.distance(position) < 6.0
-                    && now
-                        .checked_duration_since(previous_time)
-                        .is_some_and(|duration| duration.as_millis() <= 300)
+                    && now.saturating_duration_since(previous_time).as_millis() <= 300
             });
         self.previous = (!consecutive).then_some((position, now));
         consecutive

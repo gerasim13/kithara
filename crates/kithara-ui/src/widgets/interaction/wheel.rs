@@ -56,8 +56,7 @@ impl WheelState {
             Scroll::Lines(_) => direction(scroll),
             Scroll::Pixels(y) => {
                 if self.last_step.is_some_and(|previous| {
-                    now.checked_duration_since(previous)
-                        .is_some_and(|elapsed| elapsed.as_millis() < Self::STEP_INTERVAL_MS)
+                    now.saturating_duration_since(previous).as_millis() < Self::STEP_INTERVAL_MS
                 }) {
                     return 0.0;
                 }
