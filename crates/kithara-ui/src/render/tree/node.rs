@@ -19,7 +19,7 @@ use crate::{
     expand::{ExpandedNode, SurfaceSpec},
     layout::Axis,
     module::ChromeStyle,
-    render::{ControlAction, DragPhase, ReadValue, Reads, Skin, UiEvent},
+    render::{ControlAction, DragPhase, ReadValue, Reads, Skin, UiEvent, control_event},
     size::{Dim, Hidden, visible},
     widgets::{DropZone, ModuleChrome, Widget, anchored::Anchored, wheel::WheelSurface},
 };
@@ -126,9 +126,11 @@ pub(super) fn render_compiled<'a>(
 }
 
 fn module_drop_zone(instance: &str, active: bool) -> DropZone<UiEvent> {
-    let crossing = |over| UiEvent::Control {
-        path: format!("{instance}/drop"),
-        action: ControlAction::Drag(DragPhase::Over(over)),
+    let crossing = |over| {
+        control_event(
+            &format!("{instance}/drop"),
+            ControlAction::Drag(DragPhase::Over(over)),
+        )
     };
     DropZone::new(crossing(true), crossing(false), active)
 }
@@ -303,13 +305,6 @@ fn render_node<'a>(
         } => render_control(*path, spec, read.as_ref(), ui, reads, skin),
     };
     apply_size(rendered, effective_size(node, skin))
-}
-
-fn control_event(path: &str, action: ControlAction) -> UiEvent {
-    UiEvent::Control {
-        path: path.to_owned(),
-        action,
-    }
 }
 
 fn main_minimum(node: &ExpandedNode, axis: Axis, skin: &Skin) -> Option<f32> {

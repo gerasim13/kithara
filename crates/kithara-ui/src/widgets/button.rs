@@ -10,7 +10,7 @@ use iced::{
 use crate::{
     layout::FrameSides,
     module::ButtonStyle,
-    render::{ControlAction, Icon, ReadValue, Skin, UiEvent, fonts, shaped_text},
+    render::{ControlAction, Icon, ReadValue, Skin, UiEvent, control_event, fonts, shaped_text},
     skin::FontSkin,
     widgets::{Widget, frame_overlay},
 };
@@ -78,10 +78,7 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
             .height(Length::Fill)
             .padding(padding)
             .style(control_button_style(self.skin, self.style, active))
-            .on_press(UiEvent::Control {
-                path: self.path.to_owned(),
-                action: ControlAction::Activate,
-            });
+            .on_press(control_event(self.path, ControlAction::Activate));
         match self.style {
             ButtonStyle::Transport | ButtonStyle::TransportPrimary => {
                 let fill = if is_primary(self.style) {

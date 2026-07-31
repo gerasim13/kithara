@@ -9,7 +9,7 @@ use iced::{
 };
 
 use crate::{
-    render::{ControlAction, ReadValue, Skin, UiEvent, fonts, shaped_text},
+    render::{ControlAction, ReadValue, Skin, UiEvent, control_event, fonts, shaped_text},
     widgets::Widget,
 };
 
@@ -56,10 +56,7 @@ impl<'a> Widget<'a> for TabLarge<'a, '_, '_, '_> {
             .width(Length::Shrink)
             .height(Length::Fixed(self.skin.tab_large.height))
             .style(tab_large_style(self.skin))
-            .on_press(UiEvent::Control {
-                path: self.path.to_owned(),
-                action: ControlAction::Activate,
-            })
+            .on_press(control_event(self.path, ControlAction::Activate))
             .into()
     }
 }

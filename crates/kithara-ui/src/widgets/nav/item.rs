@@ -10,7 +10,7 @@ use iced::{
 };
 
 use crate::{
-    render::{ControlAction, Icon, ReadValue, Skin, UiEvent, fonts, shaped_text},
+    render::{ControlAction, Icon, ReadValue, Skin, UiEvent, control_event, fonts, shaped_text},
     widgets::Widget,
 };
 
@@ -66,10 +66,7 @@ impl<'a> Widget<'a> for NavItem<'a, '_, '_, '_> {
             .width(Length::Fill)
             .height(Length::Fixed(self.skin.nav.item_height))
             .style(nav_item_style(self.skin, active))
-            .on_press(UiEvent::Control {
-                path: self.path.to_owned(),
-                action: ControlAction::Activate,
-            })
+            .on_press(control_event(self.path, ControlAction::Activate))
             .into()
     }
 }

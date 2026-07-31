@@ -21,7 +21,8 @@ use num_traits::ToPrimitive;
 
 use crate::{
     render::{
-        ControlAction, Icon, ReadValue, Skin, TreeIcon, TreeRow, UiEvent, fonts, shaped_text,
+        ControlAction, Icon, ReadValue, Skin, TreeIcon, TreeRow, UiEvent, control_event, fonts,
+        shaped_text,
     },
     widgets::Widget,
 };
@@ -191,9 +192,8 @@ fn scope_picker<'a>(
         _ => None,
     };
     let padding_y = ((skin.tree.scope_item_height - skin.tree.scope_text.size) / 2.0).max(0.0);
-    pick_list(options, selected, move |option| UiEvent::Control {
-        path: path.to_owned(),
-        action: ControlAction::SelectIndex(option.index),
+    pick_list(options, selected, move |option| {
+        control_event(path, ControlAction::SelectIndex(option.index))
     })
     .padding(Padding {
         top: padding_y,
@@ -371,10 +371,7 @@ fn tree_row(
         .width(Length::Fill)
         .height(Length::Fixed(skin.tree.row_height))
         .style(tree_row_style(skin, row.selected))
-        .on_press(UiEvent::Control {
-            path: path.to_owned(),
-            action: ControlAction::SelectIndex(index),
-        })
+        .on_press(control_event(path, ControlAction::SelectIndex(index)))
         .into()
 }
 

@@ -10,7 +10,7 @@ use iced::{
 use num_traits::ToPrimitive;
 
 use crate::{
-    render::{ControlAction, ReadValue, Skin, UiEvent, fonts},
+    render::{ControlAction, ReadValue, Skin, UiEvent, control_event, fonts},
     skin::SegmentedSkin,
     widgets::Widget,
 };
@@ -142,11 +142,8 @@ impl canvas::Program<UiEvent> for SegmentedCanvas<'_> {
             .to_usize()?
             .min(self.items.len().saturating_sub(1));
         Some(
-            Action::publish(UiEvent::Control {
-                path: self.path.clone(),
-                action: ControlAction::SelectIndex(index),
-            })
-            .and_capture(),
+            Action::publish(control_event(&self.path, ControlAction::SelectIndex(index)))
+                .and_capture(),
         )
     }
 

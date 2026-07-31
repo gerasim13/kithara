@@ -21,7 +21,7 @@ use crate::{
     },
     module::FaderStyle,
     render::{
-        ControlAction, Icon, ReadValue, Skin, UiEvent, fonts, scalar, shaped_text,
+        ControlAction, Icon, ReadValue, Skin, UiEvent, control_event, fonts, scalar, shaped_text,
         theme::RenderPalette,
     },
     skin::{FaderSkin, FrameSkin},
@@ -53,10 +53,7 @@ impl<'a> Widget<'a> for Fader<'_, '_, '_, '_> {
         let palette = self.skin.palette;
         let event_path = self.path.to_owned();
         let slider = slider(0.0..=1.0, value.clamp(0.0, 1.0), move |value| {
-            UiEvent::Control {
-                path: event_path.clone(),
-                action: ControlAction::SetScalar(value),
-            }
+            control_event(&event_path, ControlAction::SetScalar(value))
         })
         .step(self.skin.fader.step)
         .height(self.skin.fader.slider_height)

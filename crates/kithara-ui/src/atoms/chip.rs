@@ -8,7 +8,7 @@ use iced::{
 
 use crate::{
     module::ChipStyle,
-    render::{ControlAction, ReadValue, Skin, UiEvent, fonts, shaped_text},
+    render::{ControlAction, ReadValue, Skin, UiEvent, control_event, fonts, shaped_text},
     widgets::Widget,
 };
 
@@ -39,10 +39,7 @@ impl<'a> Widget<'a> for Chip<'a, '_, '_, '_> {
         .width(Length::Fill)
         .height(Length::Fill)
         .style(chip_style(self.skin, *active))
-        .on_press(UiEvent::Control {
-            path: self.path.to_owned(),
-            action: ControlAction::Activate,
-        })
+        .on_press(control_event(self.path, ControlAction::Activate))
         .into()
     }
 }

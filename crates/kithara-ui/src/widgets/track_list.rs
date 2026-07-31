@@ -26,8 +26,8 @@ use crate::{
     },
     module::TrackColumn,
     render::{
-        ControlAction, ReadValue, Reads, Skin, TrackRow, UiEvent, drag, fonts, scalar, shaped_text,
-        theme::RenderPalette,
+        ControlAction, ReadValue, Reads, Skin, TrackRow, UiEvent, control_event, drag, fonts,
+        scalar, shaped_text, theme::RenderPalette,
     },
     skin::TrackListSkin,
 };
@@ -284,10 +284,10 @@ impl<'a> Widget<'a> for TrackListRow<'_, '_, '_, '_> {
         .width(Length::Fill)
         .height(height)
         .style(track_button_style(self.style, self.track.selected))
-        .on_press(UiEvent::Control {
-            path: self.path.to_owned(),
-            action: ControlAction::SelectIndex(self.index),
-        });
+        .on_press(control_event(
+            self.path,
+            ControlAction::SelectIndex(self.index),
+        ));
         let drag = Canvas::new(RowDrag {
             path: self.path.to_owned(),
             index: self.index,

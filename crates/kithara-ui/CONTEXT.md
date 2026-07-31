@@ -321,6 +321,12 @@ opt-ins. Every pointer gesture in the crate is a recognizer, including the stepp
 under `widgets::interaction` is a canvas that draws nothing and forwards, which is the shape every
 ported control now has.
 
+`render::event::control_event` is the only place production builds a `UiEvent::Control`. That is
+grep-provable and meant to stay so: the remaining literals live in tests, where a pin should spell
+out the event it expects rather than call the constructor it is checking. The rule is not tidiness -
+a binding rule, an address scheme or an emission discipline needs one site to attach to, and
+fifteen literals kept in step by review is not one.
+
 A recognizer pin and a wiring pin hold different halves and neither substitutes for the other. The
 recognizer pins own the arithmetic and the capture rule against `Outcome`, where no path exists. The
 wiring pins own the step the port could otherwise drop silently: that a canvas hands the publisher

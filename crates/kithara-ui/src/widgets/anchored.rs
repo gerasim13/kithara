@@ -450,7 +450,7 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        render::{ControlAction, UiEvent},
+        render::{ControlAction, UiEvent, control_event},
     };
 
     mod consts {
@@ -798,10 +798,7 @@ mod tests {
             content,
             open,
             PopoverAt::Anchor,
-            UiEvent::Control {
-                path: "menu".to_owned(),
-                action: ControlAction::Activate,
-            },
+            control_event("menu", ControlAction::Activate),
             builtin::skin(),
         )
     }
