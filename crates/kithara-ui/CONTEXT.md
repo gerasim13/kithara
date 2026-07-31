@@ -162,13 +162,35 @@ external shell can produce or consume the toolkit-neutral contract. The iced bac
 crate-owned.
 `Rgba`, `Pt`, `Rect`, and `Transform` are directly constructible stable value contracts.
 
-## Layout Parity Harness
+## Layout Ownership And The Parity Harness
 
-iced owns layout. Nothing in this crate resolves a rectangle, so the only way to hold a future
-layout owner to iced's answers is to record them. `tests/layout_parity.rs` compiles the two builtin
+`solve` owns main-axis distribution, cross extent, and child offsets for expanded `Row` and
+`Column` nodes. `render::tree::flex` is its only iced host: it supplies declared lengths and
+limits, measures each child through iced, places the returned layout nodes, and forwards the
+complete widget lifecycle. `Split`, `Slot`, module chrome, and controls remain on iced layout.
+
+Ownership is split for now, and measurement is the reason. A child that is still an iced element
+is the only thing that knows its own intrinsic size, so the solver distributes while iced measures.
+Measurement crosses back as widgets port. That also explains why the solver is render-gated
+although its job is toolkit-neutral: it speaks iced's `Length`, `Limits` and `Size` today.
+Lifting those to owned types buys nothing until a second host exists to disagree with iced, and
+would be a translation layer with one caller - so the gate stays, named here rather than left to
+look like an oversight.
+
+The first flip was deliberately made byte-neutral. `Range` still maps as `length_for` has always
+mapped it, min and max discarded; honouring it is a separate commit whose delta the harness
+measures. Padding and gap defaults are likewise untouched, so nothing about this transfer can move
+a rect - and the fixtures prove it did not.
+
+`tests/layout_parity.rs` holds this owner to iced's prior answers. It compiles the two builtin
 presets, renders them through the render-tree adapter, resolves the tree against a headless
 `iced_tiny_skia` renderer at two viewports, and pins the absolute rect tree in
-`tests/fixtures/layout/*.rects` - one line per node, indented by depth. The reads fixture answers
+`tests/fixtures/layout/*.rects` - one line per document node, keyed by its path and indented by
+document depth. The walk descends the document tree and iced's layout tree together, deriving each
+wrapper step from the node itself, and proves the correspondence twice: it attributes every iced
+node to a document rect, a named wrapper, an opaque control's interior or named furniture and
+asserts the count balances, and a second counter walks the document without consulting iced so a
+subtree cannot be mistaken for furniture and vanish while the totals still add up. The reads fixture answers
 with constant values rather than `None` so text intrinsic sizing participates; a corpus of empty
 strings would measure nothing and pin nothing. Fixtures are re-recorded only when a document
 deliberately changes, in the same commit, via `KITHARA_UI_UPDATE_LAYOUT_FIXTURES`.

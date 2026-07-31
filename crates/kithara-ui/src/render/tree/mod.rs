@@ -1,5 +1,6 @@
 mod atom;
 mod control;
+mod flex;
 mod geometry;
 mod icon;
 mod knob;

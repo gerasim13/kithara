@@ -6,6 +6,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     control::render_control,
+    flex::Flex,
     geometry::{
         Rendered, active_tone, apply_size, bordered, content_size, effective_size, filled,
         frame_tone, padding,
@@ -182,12 +183,12 @@ fn render_node<'a>(
                 bordered(
                     filled(
                         container(
-                            Row::with_children(
+                            Flex::row(
                                 visible(children, hidden)
                                     .map(|child| render_node(child, ui, reads, skin)),
                             )
                             .spacing(gap.unwrap_or(skin.layout.grid_gap))
-                            .align_y(Alignment::Center)
+                            .align(Alignment::Center)
                             .width(size.0)
                             .height(size.1),
                         )
@@ -223,12 +224,12 @@ fn render_node<'a>(
             bordered(
                 filled(
                     container(
-                        Column::with_children(
+                        Flex::column(
                             visible(children, hidden)
                                 .map(|child| render_node(child, ui, reads, skin)),
                         )
                         .spacing(gap.unwrap_or(skin.layout.grid_gap))
-                        .align_x(Alignment::Start)
+                        .align(Alignment::Start)
                         .width(size.0),
                     )
                     .padding(padding(*pad, *pad_x, *pad_y, skin))

@@ -15,6 +15,8 @@ pub mod registry;
 #[cfg(feature = "render")]
 pub mod render;
 pub mod size;
+#[cfg(feature = "render")]
+pub(crate) mod solve;
 pub mod source;
 #[cfg(any(feature = "render", feature = "vello-backend"))]
 pub mod text;
