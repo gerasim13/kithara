@@ -188,7 +188,8 @@ and columns. Until the solver existed there was nowhere to enforce that minimum,
 discarded - a control declared `Range(min: 90)` could be laid out 33 px wide. That was a defect,
 not a design, and `solve` now honours it while dividing fluid space. `Range` maximums stay
 unimplemented: every `Range` in the repo declares `max: None`, so a clamp would be untested code.
-Padding and gap defaults are unchanged.
+Omitted `Row` and `Column` gap and padding defaults have one owner:
+`SkinDoc.layout.grid_gap` and `SkinDoc.layout.grid_pad`, used by intrinsic measurement and rendering.
 
 When the minimums cannot all be met the solver scales every one of them by a single factor. This
 is a deliberate degraded mode, and AGENTS.md wants such a branch justified rather than assumed.
