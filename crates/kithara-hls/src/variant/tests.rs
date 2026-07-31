@@ -1104,6 +1104,69 @@ fn incoming_session_dispatches_only_the_decoder_construction_window() {
     assert!(queue_seg_indices(&v).is_empty());
 }
 
+/// The construction pack is not just *emitted* — landing it is what makes the
+/// session readable. An init-only reader cannot be built until its header is
+/// on disk, so the pack and the readiness window have to agree on which bytes
+/// that is: a pack that never covers what readiness waits on leaves the
+/// transition preparing forever with no failure to point at.
+#[kithara::test]
+fn incoming_session_is_ready_once_its_construction_fetches_land() {
+    let ctx = test_ctx(10);
+    let v = VariantParts {
+        init: make_init(48, &ctx.scope),
+        segments: (0..10).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::Flac),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(1, &ctx);
+    let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+    let claim = abr
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("incoming transition claim");
+    let transition = VariantTransition::new(
+        VariantTransitionId::new(claim.ticket(), 0),
+        VariantIndex::new(0),
+        VariantIndex::new(1),
+    );
+    let profile = ReaderProfile::new(
+        ReaderInput::InitOnly,
+        ReaderWarmup::None,
+        NonZeroU64::new(64).expect("non-zero read ahead"),
+    );
+    let session = HlsSession::incoming(
+        CancelToken::never(),
+        profile,
+        Arc::new(SeekState::new()),
+        ctx.signal.clone(),
+        transition,
+        Arc::clone(&v),
+        Duration::from_secs(8),
+    )
+    .expect("incoming session");
+
+    assert!(
+        !session.is_ready().expect("readiness before any bytes"),
+        "a cold session cannot be readable"
+    );
+
+    let mut commands = session.dispatch_constructing(&ctx, 10);
+    for cmd in &mut commands {
+        let Some(mut writer) = cmd.writer.take() else {
+            continue;
+        };
+        writer(&[7; 100]).expect("construction bytes");
+    }
+
+    assert!(
+        session
+            .is_ready()
+            .expect("readiness after construction bytes"),
+        "the construction pack must cover everything readiness waits on"
+    );
+}
+
 #[kithara::test]
 fn dispatch_emits_init_first_then_segments_under_budget() {
     let ctx = test_ctx(3);

@@ -1,3 +1,4 @@
+use kithara_events::RequestPriority;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::dl::FetchCmd;
 use kithara_test_utils::kithara;
@@ -88,7 +89,7 @@ impl HlsVariant {
                         ctx.signal.fire();
                         continue;
                     }
-                    let Some(cmd) = self.build_init_cmd(ctx, handle, cancel.clone()) else {
+                    let Some(mut cmd) = self.build_init_cmd(ctx, handle, cancel.clone()) else {
                         if self
                             .init()
                             .is_some_and(|i| !i.state().is_loaded() && !i.state().is_failed())
@@ -97,6 +98,17 @@ impl HlsVariant {
                         }
                         continue;
                     };
+                    // A session under construction is unreadable until its
+                    // header arrives, and nothing else it fetches matters until
+                    // then. Untagged, that one request queues behind everything
+                    // the audible variant has speculatively asked for and can
+                    // stay claimed but undispatched indefinitely. Only the
+                    // header is lifted: it is a single small fetch, so it cannot
+                    // displace paced playback the way lifting the whole
+                    // construction window does.
+                    if construction_segment_end.is_some() {
+                        cmd.priority = Some(RequestPriority::High);
+                    }
                     out.push(cmd);
                 }
                 PlannedFetch::Segment(seg_idx) => {

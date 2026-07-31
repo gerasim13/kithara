@@ -6,7 +6,7 @@ use kithara_stream::{
     Activity, OpenedVariantReader, PlayheadWrite, SeekControl, SeekObserve, StreamType,
     VariantControl, VariantPromotion, VariantReaderTake, VariantTransition,
 };
-use tracing::warn;
+use tracing::{trace, warn};
 
 pub(crate) use crate::pipeline::{
     decode::{
@@ -257,7 +257,20 @@ impl<T: StreamType> StreamAudioSource<T> {
         // Priming is bounded per pass and may mint the overlap proof consumed
         // immediately below. A publication lock leaves both generations intact
         // and the next pass extends the staged range to the newer frontier.
-        if self.decode.prime_incoming(outgoing_frontier) == IncomingPrime::Advanced {
+        let prime = self.decode.prime_incoming(outgoing_frontier);
+        if let Some(incoming) = self.decode.incoming_transition() {
+            // The frontier and the prime outcome together are the only thing
+            // that separates "the incoming is still staging" from "the splice
+            // has nothing to land against": both look identical from outside as
+            // a switch that simply never commits.
+            trace!(
+                ?outgoing_frontier,
+                ?prime,
+                ?incoming,
+                "variant transition pass"
+            );
+        }
+        if prime == IncomingPrime::Advanced {
             self.rebuild.wake();
         }
         if !self.promote_ready_incoming(control.as_ref(), outgoing_frontier) {

@@ -193,6 +193,47 @@ async fn exact_primed_generation_promotes_once_at_outgoing_frontier() {
     );
 }
 
+/// The incoming lands *on* the outgoing decode frontier, never ahead of it.
+///
+/// A promotion proof is only minted once the outgoing walks into the incoming's
+/// staged span, and the outgoing stops decoding the moment its PCM ring is
+/// full: a landing placed ahead of the frontier waits on motion nobody owes it,
+/// and the switch never commits. The frontier advances one whole chunk at a
+/// time here, so a landing that is not a whole number of chunks is a landing
+/// that was pushed past it.
+#[kithara::test(tokio)]
+async fn incoming_lands_on_the_outgoing_frontier_not_ahead_of_it() {
+    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+    let plan = incoming_plan();
+    fixture.control.set_exact_plan(plan);
+    fixture.control.set_exact_reader_ready();
+
+    // A frontier has to exist before it can be landed against: until the
+    // outgoing decodes, the source plans with no landing at all.
+    let mut landing = None;
+    for _ in 0..64 {
+        yield_now().await;
+        fixture.source.flush_deferred();
+        landing = fixture.control.landing();
+        if landing.is_some() {
+            break;
+        }
+        if !matches!(fixture.source.step_track(), TrackStep::Produced(_)) {
+            break;
+        }
+    }
+
+    let landing = landing.expect("an exact transition plans against the outgoing frontier");
+    let frames = (landing.as_secs_f64() * f64::from(Consts::SAMPLE_RATE)).round() as u64;
+    let chunk = u64::try_from(Consts::ROUTE_CHUNK_FRAMES).unwrap_or(u64::MAX);
+    assert_eq!(
+        frames % chunk,
+        0,
+        "landing {landing:?} is {frames} frames — not a whole chunk, so it sits past \
+         the frontier the promotion proof is stated against"
+    );
+}
+
 #[kithara::test(tokio)]
 async fn locked_promotion_keeps_primed_incoming_and_outgoing_authoritative() {
     let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;

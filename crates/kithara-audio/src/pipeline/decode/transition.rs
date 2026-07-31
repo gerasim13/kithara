@@ -12,15 +12,6 @@ use crate::pipeline::{
 struct Consts;
 
 impl Consts {
-    /// How far ahead of the outgoing decode frontier the incoming variant is
-    /// landed. The proof consumed by [`promote_incoming`] is stated against the
-    /// frontier, so landing *at* it would leave the incoming chasing a target
-    /// that has already moved by the time its reader and decoder exist. Landing
-    /// ahead inverts that: the outgoing walks into a span the incoming has
-    /// already staged.
-    ///
-    /// [`promote_incoming`]: super::core::ActiveDecode::promote_incoming
-    const LANDING_LEAD: Duration = Duration::from_millis(250);
     const PRIME_STEPS_PER_PASS: usize = 8;
 }
 
@@ -112,12 +103,20 @@ impl super::core::ActiveDecode {
     /// never commits. Only [`OutgoingFrontier::Exact`] names a frame; the other
     /// two states carry no frontier to land against and the source keeps its
     /// own seek-derived target.
+    ///
+    /// The frontier itself, and never ahead of it. A promotion proof is minted
+    /// when the outgoing walks *into* the staged span, and the outgoing stops
+    /// decoding the moment its PCM ring is full — so a landing placed ahead of
+    /// the frontier is a bet on motion the outgoing owes nobody, and a consumer
+    /// that stops pulling wedges the switch for good. Landing on the frontier
+    /// removes the bet: priming extends the staged *end*, and the end only has
+    /// to overtake a frontier that moves no faster than the incoming decodes.
     pub(crate) fn landing_for(&self, outgoing_frontier: OutgoingFrontier) -> Option<Duration> {
         let OutgoingFrontier::Exact { frame, rate } = outgoing_frontier else {
             return None;
         };
         let origin = self.active.timeline_origin(self.gapless_mode());
-        Some(duration_for_frames(rate, frame.saturating_sub(origin)) + Consts::LANDING_LEAD)
+        Some(duration_for_frames(rate, frame.saturating_sub(origin)))
     }
 
     pub(crate) fn begin_incoming(
@@ -410,6 +409,12 @@ fn overlap_span(
             ?incoming_first_time,
             ?incoming_end_time,
             ?outgoing_next,
+            incoming_first,
+            incoming_origin,
+            incoming_rate,
+            outgoing_frame,
+            outgoing_origin,
+            outgoing_rate,
             landed_late = incoming_first_time > outgoing_next,
             "incoming generation does not cover the outgoing frontier"
         );

@@ -293,6 +293,7 @@ pub(super) struct TestControl {
     exact_plan: Mutex<Option<VariantReaderPlan>>,
     exact_reader_ready: AtomicBool,
     exact_reader_taken: AtomicBool,
+    landing: Mutex<Option<Duration>>,
     media_info: Mutex<Option<MediaInfo>>,
     plan_calls: AtomicU64,
     prepare_calls: AtomicU64,
@@ -312,6 +313,7 @@ impl TestControl {
             exact_plan: Mutex::new(None),
             exact_reader_ready: AtomicBool::new(false),
             exact_reader_taken: AtomicBool::new(false),
+            landing: Mutex::new(None),
             media_info: Mutex::new(Some(media_info)),
             plan_calls: AtomicU64::new(0),
             prepare_calls: AtomicU64::new(0),
@@ -348,6 +350,10 @@ impl TestControl {
         self.plan_calls.load(Ordering::Acquire)
     }
 
+    pub(super) fn landing(&self) -> Option<Duration> {
+        *self.landing.lock()
+    }
+
     pub(super) fn prepare_calls(&self) -> u64 {
         self.prepare_calls.load(Ordering::Acquire)
     }
@@ -378,9 +384,12 @@ impl TestControl {
 impl VariantControl for TestControl {
     fn plan_variant_reader(
         &self,
-        _landing: Option<Duration>,
+        landing: Option<Duration>,
     ) -> StreamResult<Option<VariantReaderPlan>> {
         self.plan_calls.fetch_add(1, Ordering::AcqRel);
+        if let Some(landing) = landing {
+            *self.landing.lock() = Some(landing);
+        }
         Ok(self.exact_plan.lock().clone())
     }
 
