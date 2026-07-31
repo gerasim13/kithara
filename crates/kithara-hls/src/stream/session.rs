@@ -189,11 +189,17 @@ impl HlsSession {
         if self.cancel.is_cancelled() {
             return Vec::new();
         }
+        // A session that is not yet audible is never speculating: every byte it
+        // asks for is owed to a decoder being built or primed for a switch the
+        // user asked for. The tag has to outlive the construction window — a
+        // priming decoder starves behind the audible variant's look-ahead
+        // exactly the way a constructing one does.
         self.variant.dispatch_from(
             ctx,
             budget,
             self.projected_position().byte,
             construction_segment_end,
+            !self.active.load(Ordering::Acquire),
             self.cancel.handle(),
         )
     }

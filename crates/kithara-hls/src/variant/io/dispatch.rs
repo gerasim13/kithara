@@ -13,6 +13,10 @@ impl HlsVariant {
         budget = budget as u64,
         queue_len = self.flow.queue.lock().len() as u64
     )]
+    /// `demand` marks fetches that are owed rather than speculative. The
+    /// downloader's queue is first-in-first-out within a priority slot and the
+    /// audible variant appends to it every poll, so an untagged fetch for a
+    /// decoder being built or primed is never reached.
     #[kithara::hang_watchdog]
     pub(crate) fn dispatch_from(
         self: &Arc<Self>,
@@ -20,6 +24,7 @@ impl HlsVariant {
         budget: usize,
         position: u64,
         construction_segment_end: Option<u32>,
+        demand: bool,
         cancel: CancelToken,
     ) -> Vec<FetchCmd> {
         let mut out = Vec::new();
@@ -98,15 +103,7 @@ impl HlsVariant {
                         }
                         continue;
                     };
-                    // A session under construction is unreadable until its
-                    // header arrives, and nothing else it fetches matters until
-                    // then. Untagged, that one request queues behind everything
-                    // the audible variant has speculatively asked for and can
-                    // stay claimed but undispatched indefinitely. Only the
-                    // header is lifted: it is a single small fetch, so it cannot
-                    // displace paced playback the way lifting the whole
-                    // construction window does.
-                    if construction_segment_end.is_some() {
+                    if demand {
                         cmd.priority = Some(RequestPriority::High);
                     }
                     out.push(cmd);
@@ -140,7 +137,7 @@ impl HlsVariant {
                         deferred.push(planned);
                         continue;
                     };
-                    if construction_segment_end.is_some() {
+                    if demand {
                         cmd.priority = Some(RequestPriority::High);
                     }
                     out.push(cmd);
