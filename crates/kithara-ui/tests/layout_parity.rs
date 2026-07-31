@@ -382,11 +382,13 @@ impl LayoutWalker<'_> {
                 &path,
                 depth,
                 already_attributed,
-                size.is_some(),
-                surface.is_some(),
-                frame.is_some(),
-                "Row",
-                children,
+                &Group {
+                    children,
+                    flex_name: "Row",
+                    framed: frame.is_some(),
+                    sized: size.is_some(),
+                    surfaced: surface.is_some(),
+                },
             ),
             ExpandedNode::Column {
                 size,
@@ -399,11 +401,13 @@ impl LayoutWalker<'_> {
                 &path,
                 depth,
                 already_attributed,
-                size.is_some(),
-                surface.is_some(),
-                frame.is_some(),
-                "Column",
-                children,
+                &Group {
+                    children,
+                    flex_name: "Column",
+                    framed: frame.is_some(),
+                    sized: size.is_some(),
+                    surfaced: surface.is_some(),
+                },
             ),
             ExpandedNode::Slot { size, children, .. } => {
                 self.document(&path, layout, depth, already_attributed);
@@ -435,25 +439,21 @@ impl LayoutWalker<'_> {
         path: &str,
         depth: usize,
         already_attributed: bool,
-        sized: bool,
-        surfaced: bool,
-        framed: bool,
-        flex_name: &str,
-        children: &[ExpandedNode],
+        group: &Group<'_>,
     ) {
         self.document(path, layout, depth, already_attributed);
         let mut content = layout;
-        if sized {
+        if group.sized {
             content = only_child(content, path, "apply_size container");
             self.wrapper();
         }
-        if surfaced {
+        if group.surfaced {
             let surface_children = exact_children(content, 2, path, "wheel surface Stack");
             content = surface_children[0];
             self.wrapper();
             self.furniture(surface_children[1]);
         }
-        if framed {
+        if group.framed {
             let frame_children = exact_children(content, 2, path, "frame overlay Stack");
             content = frame_children[0];
             self.wrapper();
@@ -463,11 +463,24 @@ impl LayoutWalker<'_> {
         }
         let flex = only_child(content, path, "padding container");
         self.wrapper();
-        let child_layouts = exact_children(flex, children.len(), path, flex_name);
-        for (position, (child, child_layout)) in children.iter().zip(child_layouts).enumerate() {
+        let child_layouts = exact_children(flex, group.children.len(), path, group.flex_name);
+        for (position, (child, child_layout)) in
+            group.children.iter().zip(child_layouts).enumerate()
+        {
             self.expanded(child, child_layout, path, position, depth + 1, false);
         }
     }
+}
+
+/// The wrapper layers a Row or Column asks iced for, and the children beneath
+/// them. They travel together because every one of them is read off the same
+/// expanded node.
+struct Group<'a> {
+    children: &'a [ExpandedNode],
+    flex_name: &'static str,
+    framed: bool,
+    sized: bool,
+    surfaced: bool,
 }
 
 fn write_layout(output: &mut String, ui: &CompiledUi, reads: &dyn Reads, layout: Layout<'_>) {
