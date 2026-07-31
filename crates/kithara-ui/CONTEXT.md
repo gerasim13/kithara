@@ -256,6 +256,18 @@ nothing rather than a clamped zero: a control laid out to zero pixels has no pos
 and `0.0` would be a value the user never asked for. The move arm never re-tests the bounds, so a
 drag survives the pointer leaving the control and clamps at the end of travel instead of stopping.
 
+`Outcome<T>` carries what the gesture produced and whether it took the pointer, and those are two
+independent facts rather than one. `set` publishes and captures; `observed` publishes without
+capturing, which is what makes `ItemDrag` work at all - the row underneath keeps its own click while
+the drag overlay watches the same gesture, and that non-capture is the pinned regression. Only
+`render::event` turns either into an `Action`, through one `action` helper that both mappings share,
+so the capture rule is written once and the two publishers differ only in the event they name.
+
+`ItemDrag` is one value rather than the config-plus-state pair the other recognizers use, because it
+has nothing to configure: the 4 px threshold is its own constant and the item's identity belongs to
+whoever owns the list. It answers `DragEvent::{Started, Dropped}` and `render::event::drag`
+substitutes the index, which is why the base never learns what a row is.
+
 Exactly one file, `interact::iced`, names a toolkit. It translates an `iced::Event` into an `Input`,
 builds a `Hit` from bounds and a cursor, and converts a `CursorShape` into `mouse::Interaction`.
 `Hit` is constructed separately from event translation on purpose: `mouse_interaction` receives no
@@ -263,6 +275,14 @@ event, so a `Hit` that only fell out of an event would grow a second, unwritten 
 `Hit::at` and `Hit::inside` are different questions - a gesture already under way tracks the pointer
 past the edge, while a gesture starting needs it inside - and `Rect::contains` is half-open to match
 `iced::Rectangle::contains`, which makes an `at`-based test bit-equal to `Cursor::is_over`.
+
+`Input::PointerMoved { at }` is a third question and not a substitute for either. It is what the host
+says about the pointer, reported even while a widget is told its cursor is unavailable, but it is
+only comparable against itself. A recognizer measuring travel reads it - `ItemDrag` must, because
+its pinned contract is a drag that starts after the pointer has left the row, with no cursor at all.
+A recognizer normalizing against an area must read `Hit::at` instead, because that is the position
+already expressed in the area's space; feeding it the event position would be an unnoticed
+coordinate-space bug the moment a control is not at the window origin.
 
 `CursorShape` deliberately derives no ordering. `mouse::Interaction` derives `Ord` and the render
 tree `.max()`-merges it in `render::tree::flex` and `widgets::anchored`; those merges stay on iced's

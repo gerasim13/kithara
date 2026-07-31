@@ -19,13 +19,13 @@ use num_traits::ToPrimitive;
 
 use super::{
     Widget,
-    behavior::{HorizontalPixelDrag, HorizontalPixelDragState, ItemDrag, ItemDragState},
+    behavior::{HorizontalPixelDrag, HorizontalPixelDragState},
 };
 use crate::{
-    interact::{CursorShape, Hover},
+    interact::{CursorShape, Hover, iced as iced_interact, recognizers::ItemDrag},
     module::TrackColumn,
     render::{
-        ControlAction, ReadValue, Reads, Skin, TrackRow, UiEvent, fonts, shaped_text,
+        ControlAction, ReadValue, Reads, Skin, TrackRow, UiEvent, drag, fonts, shaped_text,
         theme::RenderPalette,
     },
     skin::TrackListSkin,
@@ -288,7 +288,8 @@ impl<'a> Widget<'a> for TrackListRow<'_, '_, '_, '_> {
             action: ControlAction::SelectIndex(self.index),
         });
         let drag = Canvas::new(RowDrag {
-            drag: ItemDrag::new(self.path.to_owned(), self.index),
+            path: self.path.to_owned(),
+            index: self.index,
         })
         .width(Length::Fill)
         .height(height);
@@ -303,15 +304,16 @@ impl<'a> Widget<'a> for TrackListRow<'_, '_, '_, '_> {
 /// its track. It paints nothing and captures nothing, so the row keeps its own
 /// click and its hover.
 struct RowDrag {
-    drag: ItemDrag,
+    path: String,
+    index: usize,
 }
 
 impl canvas::Program<UiEvent> for RowDrag {
-    type State = ItemDragState;
+    type State = ItemDrag;
 
     fn draw(
         &self,
-        _state: &ItemDragState,
+        _state: &ItemDrag,
         _renderer: &Renderer,
         _theme: &Theme,
         _bounds: Rectangle,
@@ -322,23 +324,23 @@ impl canvas::Program<UiEvent> for RowDrag {
 
     fn mouse_interaction(
         &self,
-        state: &ItemDragState,
+        state: &ItemDrag,
         _bounds: Rectangle,
         _cursor: Cursor,
     ) -> mouse::Interaction {
-        state.interaction()
+        state.cursor().into()
     }
 
-    delegate::delegate! {
-        to self.drag {
-            fn update(
-                &self,
-                state: &mut ItemDragState,
-                event: &Event,
-                bounds: Rectangle,
-                cursor: Cursor,
-            ) -> Option<Action<UiEvent>>;
-        }
+    fn update(
+        &self,
+        state: &mut ItemDrag,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<UiEvent>> {
+        let input = iced_interact::input(event)?;
+        let hit = iced_interact::hit(bounds, cursor);
+        drag(&self.path, self.index, state.on_input(input, &hit))
     }
 }
 

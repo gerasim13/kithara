@@ -1,25 +1,46 @@
 use iced::{Element, widget::canvas::Action};
 
-use crate::interact::Outcome;
+use crate::interact::{Outcome, recognizers::DragEvent};
 
 /// Shared view contract: a built control renders itself into the event tree.
 pub(crate) trait Widget<'a> {
     fn view(self) -> Element<'a, UiEvent>;
 }
 
-/// Carry a recognizer's verdict out to the toolkit: a value becomes a control
-/// event, and a gesture that only captured stays silent.
+/// Carry a recognizer's verdict out to the toolkit. The recognizer decides
+/// whether the gesture took the pointer; this only names the event it produced.
+fn action<T>(outcome: Outcome<T>, event: impl FnOnce(T) -> UiEvent) -> Option<Action<UiEvent>> {
+    let captured = outcome.is_captured();
+    let Some(value) = outcome.value() else {
+        return captured.then(Action::capture);
+    };
+    let published = Action::publish(event(value));
+    Some(if captured {
+        published.and_capture()
+    } else {
+        published
+    })
+}
+
 pub(crate) fn scalar(path: &str, outcome: Outcome) -> Option<Action<UiEvent>> {
-    if let Some(value) = outcome.value() {
-        return Some(
-            Action::publish(UiEvent::Control {
-                path: path.to_owned(),
-                action: ControlAction::SetScalar(f64::from(value)),
-            })
-            .and_capture(),
-        );
-    }
-    outcome.is_captured().then(Action::capture)
+    action(outcome, |value| UiEvent::Control {
+        path: path.to_owned(),
+        action: ControlAction::SetScalar(f64::from(value)),
+    })
+}
+
+pub(crate) fn drag(
+    path: &str,
+    index: usize,
+    outcome: Outcome<DragEvent>,
+) -> Option<Action<UiEvent>> {
+    action(outcome, |event| UiEvent::Control {
+        path: path.to_owned(),
+        action: ControlAction::Drag(match event {
+            DragEvent::Started => DragPhase::Start(index),
+            DragEvent::Dropped => DragPhase::Drop,
+        }),
+    })
 }
 
 /// Action emitted by an interactive control.

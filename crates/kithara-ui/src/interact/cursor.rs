@@ -4,6 +4,7 @@ use super::Hit;
 pub(crate) enum CursorShape {
     None,
     Grab,
+    Grabbing,
     Pointer,
     ResizeH,
     ResizeV,

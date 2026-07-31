@@ -3,7 +3,15 @@ use crate::draw::{Pt, Rect};
 #[derive(Clone, Copy)]
 pub(crate) enum Input {
     PointerDown,
-    PointerMoved,
+    /// `at` is where the host says the pointer went. It answers a different
+    /// question from [`Hit::at`] and the two are not interchangeable: this one
+    /// is always reported, even while a widget is told it has no cursor, but it
+    /// is only comparable against itself. A recognizer measuring travel reads
+    /// it; one normalizing against an area must read the hit, which is the
+    /// position expressed in that area's space.
+    PointerMoved {
+        at: Pt,
+    },
     PointerUp,
     Wheel(Scroll),
 }

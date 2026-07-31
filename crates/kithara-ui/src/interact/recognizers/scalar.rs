@@ -70,7 +70,7 @@ impl Scalar {
                     Track::AbsoluteVertical => seek(position, hit.area()),
                 }
             }
-            Input::PointerMoved if state.active => {
+            Input::PointerMoved { .. } if state.active => {
                 hit.at()
                     .map_or(Outcome::IGNORED, |position| match self.track {
                         Track::RelativeVertical { range, .. } => Outcome::set(
@@ -95,7 +95,7 @@ impl Scalar {
                 let value = wheel.step.mul_add(steps, wheel.value);
                 Outcome::set(value.clamp(0.0, 1.0))
             }
-            Input::PointerMoved | Input::PointerUp | Input::Wheel(_) => Outcome::IGNORED,
+            Input::PointerMoved { .. } | Input::PointerUp | Input::Wheel(_) => Outcome::IGNORED,
         }
     }
 
@@ -127,6 +127,20 @@ mod tests {
 
     fn hit(y: f32) -> Hit {
         Hit::new(Some(Pt { x: 17.0, y }), knob())
+    }
+
+    /// This recognizer normalizes against the area, so it reads the hit and not
+    /// the event; the event carries the same point so the fixture reads true.
+    fn moved(y: f32) -> Input {
+        Input::PointerMoved {
+            at: Pt { x: 17.0, y },
+        }
+    }
+
+    fn moved_on_meter(y: f32) -> Input {
+        Input::PointerMoved {
+            at: Pt { x: 6.0, y },
+        }
     }
 
     fn drag(value: f32) -> Scalar {
@@ -198,7 +212,7 @@ mod tests {
                 Outcome::captured()
             );
             assert_eq!(
-                drag.on_input(&mut state, Input::PointerMoved, &hit(to), now),
+                drag.on_input(&mut state, moved(to), &hit(to), now),
                 Outcome::set(expected),
                 "{from} -> {to}"
             );
@@ -229,7 +243,7 @@ mod tests {
             Outcome::set(0.5)
         );
         assert_eq!(
-            drag.on_input(&mut state, Input::PointerMoved, &hit(1.0), now),
+            drag.on_input(&mut state, moved(1.0), &hit(1.0), now),
             Outcome::IGNORED,
             "the press that reset the value must not have armed a drag"
         );
@@ -363,7 +377,7 @@ mod tests {
         let flattened = Hit::new(Some(Pt { x: 6.0, y: 30.0 }), Rect { h: 0.0, ..meter() });
 
         assert_eq!(
-            seeking.on_input(&mut state, Input::PointerMoved, &flattened, now),
+            seeking.on_input(&mut state, moved_on_meter(30.0), &flattened, now),
             Outcome::IGNORED,
             "a degenerate height must publish nothing rather than a clamped zero"
         );
@@ -377,7 +391,7 @@ mod tests {
         seeking.on_input(&mut state, Input::PointerDown, &on_meter(30.0), now);
 
         assert_eq!(
-            seeking.on_input(&mut state, Input::PointerMoved, &on_meter(200.0), now),
+            seeking.on_input(&mut state, moved_on_meter(200.0), &on_meter(200.0), now),
             Outcome::set(0.0)
         );
     }
@@ -429,7 +443,7 @@ mod tests {
             "the second press seeks again rather than resetting"
         );
         assert_eq!(
-            seeking.on_input(&mut state, Input::PointerMoved, &on_meter(20.0), now),
+            seeking.on_input(&mut state, moved_on_meter(20.0), &on_meter(20.0), now),
             Outcome::set(0.75),
             "and it armed the gesture, so the move that follows still drags"
         );

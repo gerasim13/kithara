@@ -9,7 +9,9 @@ use crate::draw::{Pt, Rect};
 pub(crate) fn input(event: &Event) -> Option<Input> {
     match event {
         Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) => Some(Input::PointerDown),
-        Event::Mouse(mouse::Event::CursorMoved { .. }) => Some(Input::PointerMoved),
+        Event::Mouse(mouse::Event::CursorMoved { position }) => Some(Input::PointerMoved {
+            at: (*position).into(),
+        }),
         Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) => Some(Input::PointerUp),
         Event::Mouse(mouse::Event::WheelScrolled { delta }) => Some(Input::Wheel(match delta {
             ScrollDelta::Lines { y, .. } => Scroll::Lines(*y),
@@ -48,6 +50,7 @@ impl From<CursorShape> for mouse::Interaction {
         match shape {
             CursorShape::None => Self::None,
             CursorShape::Grab => Self::Grab,
+            CursorShape::Grabbing => Self::Grabbing,
             CursorShape::Pointer => Self::Pointer,
             CursorShape::ResizeH => Self::ResizingHorizontally,
             CursorShape::ResizeV => Self::ResizingVertically,
