@@ -832,9 +832,46 @@ fn track_button_style(
 
 #[cfg(test)]
 mod tests {
+    use iced::{Size, mouse::Button, widget::canvas::Program};
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::render::DragPhase;
+
+    #[kithara::test]
+    fn the_row_overlay_publishes_its_own_path_and_index() {
+        let overlay = RowDrag {
+            path: "library/tracks".to_owned(),
+            index: 3,
+        };
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(400.0, 26.0));
+        let at = |x: f32| Cursor::Available(Point::new(x, 13.0));
+        let mut state = ItemDrag::default();
+        let moved = |x: f32| {
+            Event::Mouse(mouse::Event::CursorMoved {
+                position: Point::new(x, 13.0),
+            })
+        };
+
+        overlay.update(
+            &mut state,
+            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            bounds,
+            at(10.0),
+        );
+        overlay.update(&mut state, &moved(11.0), bounds, at(11.0));
+        let started = overlay
+            .update(&mut state, &moved(40.0), bounds, at(40.0))
+            .unwrap_or_else(|| panic!("crossing the threshold must publish"));
+
+        assert_eq!(
+            started.into_inner().0,
+            Some(UiEvent::Control {
+                path: "library/tracks".to_owned(),
+                action: ControlAction::Drag(DragPhase::Start(3)),
+            })
+        );
+    }
 
     struct ColumnReads(Option<bool>);
 

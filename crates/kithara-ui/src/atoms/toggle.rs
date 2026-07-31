@@ -173,6 +173,49 @@ impl canvas::Program<UiEvent> for BinaryControlCanvas {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use iced::{Size, mouse::Button, widget::canvas::Program};
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{builtin, render::ControlAction};
+
+    #[kithara::test]
+    fn a_press_on_the_control_activates_its_own_path() {
+        let skin = builtin::skin();
+        let control = BinaryControlCanvas {
+            active: false,
+            path: "deck-a/sync".to_owned(),
+            palette: skin.palette,
+            shape: Shape::Toggle {
+                metrics: skin.toggle,
+                active_border: skin.color(skin.toggle.active_frame.border),
+                inactive_border: skin.color(skin.toggle.inactive_frame.border),
+            },
+        };
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(28.0, 18.0));
+        let press = Event::Mouse(mouse::Event::ButtonPressed(Button::Left));
+
+        let action = control
+            .update(
+                &mut (),
+                &press,
+                bounds,
+                Cursor::Available(Point::new(14.0, 9.0)),
+            )
+            .unwrap_or_else(|| panic!("a press on the control must publish"));
+
+        assert_eq!(
+            action.into_inner().0,
+            Some(UiEvent::Control {
+                path: "deck-a/sync".to_owned(),
+                action: ControlAction::Activate,
+            })
+        );
+    }
+}
+
 fn draw_toggle(
     frame: &mut Frame,
     bounds: Rectangle,

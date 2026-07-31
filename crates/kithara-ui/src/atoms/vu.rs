@@ -235,9 +235,49 @@ fn draw_thumb(
 
 #[cfg(test)]
 mod tests {
+    use iced::{Point, Size, mouse::Button, widget::canvas::Program};
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::{builtin, render::ControlAction};
+
+    #[kithara::test]
+    fn the_meter_publishes_the_seeked_value_under_its_own_path() {
+        let skin = builtin::skin();
+        let meter = VerticalVuCanvas {
+            drag: Scalar::builder()
+                .track(Track::AbsoluteVertical)
+                .hover(Hover::new(CursorShape::ResizeV))
+                .build(),
+            path: "mixer/deck-a/volume".to_owned(),
+            metrics: skin.vu_vertical,
+            ticks: None,
+            levels: StereoLevels::default(),
+            palette: skin.palette,
+            thumb_color: skin.color(skin.vu_vertical.thumb_color),
+            thumb_notch_color: skin.color(skin.vu_vertical.thumb_notch_color),
+            text_resources: skin.text_resources(),
+        };
+        let bounds = Rectangle::new(Point::new(0.0, 10.0), Size::new(12.0, 40.0));
+        let press = Event::Mouse(mouse::Event::ButtonPressed(Button::Left));
+
+        let action = meter
+            .update(
+                &mut ScalarState::default(),
+                &press,
+                bounds,
+                Cursor::Available(Point::new(6.0, 30.0)),
+            )
+            .unwrap_or_else(|| panic!("a press on the meter must publish"));
+
+        assert_eq!(
+            action.into_inner().0,
+            Some(UiEvent::Control {
+                path: "mixer/deck-a/volume".to_owned(),
+                action: ControlAction::SetScalar(0.5),
+            })
+        );
+    }
 
     #[kithara::test]
     fn the_fader_keeps_its_width_and_yields_the_rest_to_the_ticks() {

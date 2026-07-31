@@ -321,6 +321,13 @@ opt-ins. Every pointer gesture in the crate is a recognizer, including the stepp
 under `widgets::interaction` is a canvas that draws nothing and forwards, which is the shape every
 ported control now has.
 
+A recognizer pin and a wiring pin hold different halves and neither substitutes for the other. The
+recognizer pins own the arithmetic and the capture rule against `Outcome`, where no path exists. The
+wiring pins own the step the port could otherwise drop silently: that a canvas hands the publisher
+its *own* path, and the row overlay its own index. There is one per publisher - `scalar` on the VU,
+`activate` on the toggle, `drag` on the row overlay, `step` on the wheel surface - because that is
+the smallest set that covers every way a gesture becomes a `UiEvent`.
+
 `recognizers::click` is a free function rather than a type, following `recognizers::wheel`. A press
 that lands is the whole gesture, so there is no state, and the only thing that looked like
 configuration - the cursor shape - already belongs to `Hover`. A struct here would have carried

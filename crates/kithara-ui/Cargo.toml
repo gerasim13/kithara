@@ -60,6 +60,7 @@ workspace = true
 [[example]]
 name = "gallery"
 required-features = ["render"]
+test = true
 
 [[bench]]
 name = "ui"
