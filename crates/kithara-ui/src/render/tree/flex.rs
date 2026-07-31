@@ -22,19 +22,28 @@ pub(super) struct Flex<'a> {
     height: Length,
     align: Alignment,
     children: Vec<Element<'a, UiEvent>>,
+    main_minimums: Vec<Option<f32>>,
 }
 
 impl<'a> Flex<'a> {
-    pub(super) fn row(children: impl IntoIterator<Item = Element<'a, UiEvent>>) -> Self {
+    pub(super) fn row(
+        children: impl IntoIterator<Item = (Element<'a, UiEvent>, Option<f32>)>,
+    ) -> Self {
         Self::with_children(Axis::Horizontal, children)
     }
 
-    pub(super) fn column(children: impl IntoIterator<Item = Element<'a, UiEvent>>) -> Self {
+    pub(super) fn column(
+        children: impl IntoIterator<Item = (Element<'a, UiEvent>, Option<f32>)>,
+    ) -> Self {
         Self::with_children(Axis::Vertical, children)
     }
 
-    fn with_children(axis: Axis, children: impl IntoIterator<Item = Element<'a, UiEvent>>) -> Self {
+    fn with_children(
+        axis: Axis,
+        children: impl IntoIterator<Item = (Element<'a, UiEvent>, Option<f32>)>,
+    ) -> Self {
         let iterator = children.into_iter();
+        let capacity = iterator.size_hint().0;
         let mut flex = Self {
             axis,
             spacing: 0.0,
@@ -42,23 +51,25 @@ impl<'a> Flex<'a> {
             width: Length::Shrink,
             height: Length::Shrink,
             align: Alignment::Start,
-            children: Vec::with_capacity(iterator.size_hint().0),
+            children: Vec::with_capacity(capacity),
+            main_minimums: Vec::with_capacity(capacity),
         };
 
-        for child in iterator {
-            flex = flex.push(child);
+        for (child, main_minimum) in iterator {
+            flex = flex.push(child, main_minimum);
         }
 
         flex
     }
 
-    fn push(mut self, child: Element<'a, UiEvent>) -> Self {
+    fn push(mut self, child: Element<'a, UiEvent>, main_minimum: Option<f32>) -> Self {
         let child_size = child.as_widget().size_hint();
 
         if !child_size.is_void() {
             self.width = self.width.enclose(child_size.width);
             self.height = self.height.enclose(child_size.height);
             self.children.push(child);
+            self.main_minimums.push(main_minimum);
         }
 
         self
@@ -107,7 +118,8 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
         let items = self
             .children
             .iter()
-            .map(|child| solve::Item::new(child.as_widget().size()))
+            .zip(&self.main_minimums)
+            .map(|(child, main_minimum)| solve::Item::new(child.as_widget().size(), *main_minimum))
             .collect::<Vec<_>>();
         let mut measure = IcedMeasure {
             children: &mut self.children,
