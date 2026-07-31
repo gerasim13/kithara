@@ -54,10 +54,6 @@ const DOCS: &[(&str, &str)] = &[
         "modules/studio-strip.kmodule.ron",
         include_str!("../../../assets/ui/modules/studio-strip.kmodule.ron"),
     ),
-    (
-        "modules/studio-library.kmodule.ron",
-        include_str!("../../../assets/ui/modules/studio-library.kmodule.ron"),
-    ),
 ];
 
 /// The compiled studio UI plus the host-owned view state it reads back. Both

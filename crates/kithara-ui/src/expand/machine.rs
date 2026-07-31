@@ -354,12 +354,17 @@ fn finish_control(
         .write
         .map(|binding| context.substitute(binding, path))
         .transpose()?;
+    let columns: &[TrackColumn] = match &spec {
+        ControlSpec::TrackList { columns, .. } => columns,
+        _ => &[],
+    };
     (machine.visitor)(
         ControlSite {
             path,
             control,
             read: read.as_ref(),
             write: write.as_ref(),
+            columns,
             columns_state: extra.columns_state,
             query: extra.query,
             scope: extra.scope,
@@ -505,7 +510,10 @@ fn control_spec(
             path,
         )?,
         ControlNode::TrackList { columns, .. } => {
-            track_list_spec(context, machine, columns, extra)?
+            let columns = context
+                .optional_param(columns.as_ref(), path)?
+                .unwrap_or_default();
+            track_list_spec(context, machine, &columns, extra)?
         }
         ControlNode::Tree { .. } => ControlSpec::Tree {
             query: optional_binding(context, machine, extra.query.as_ref())?,
@@ -640,6 +648,7 @@ fn container_bindings(
             control: node,
             read: None,
             write: write.as_ref(),
+            columns: &[],
             columns_state: None,
             query: None,
             scope: None,
@@ -680,6 +689,7 @@ fn expand_optional(
             control: node,
             read: Some(&hidden),
             write: None,
+            columns: &[],
             columns_state: None,
             query: None,
             scope: None,
@@ -722,6 +732,7 @@ fn expand_popover(
             control: node,
             read: Some(&open),
             write: None,
+            columns: &[],
             columns_state: None,
             query: None,
             scope: None,
@@ -761,6 +772,7 @@ fn expand_pressable(
             control: node,
             read: None,
             write: Some(&press),
+            columns: &[],
             columns_state: None,
             query: None,
             scope: None,

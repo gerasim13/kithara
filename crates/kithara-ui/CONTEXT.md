@@ -696,7 +696,14 @@ skin-driven presentation, but never retains or mutates native window state.
 
 ## Track List Column Ownership
 
-`TrackList` owns an ordered typed `Vec<TrackColumn>` and requires `Title` during compilation. The
+`TrackList` owns an ordered typed column list and requires `Title` during compilation. The list is
+a `Param`, so an including document may pass it as an argument (`columns: "$columns"` against
+`with: { "columns": "[Deck, Title, Artist]" }`); `Param` is untagged, so a literal
+`columns: [Title, Artist, Time]` parses exactly as before. Validation reads the **resolved** list —
+`ControlSite` carries it already substituted, next to the already-substituted `read` and `write` —
+so routing columns through a parameter cannot slip past the `Title` requirement. This is what lets
+one `library.kmodule.ron` serve both the built-in player preset and the app's studio instead of
+each keeping a near-identical copy. The
 renderer owns table geometry and cell presentation but not column visibility. When a
 `columns_state` binding is present, the host may expose Bool reads at
 `<binding-id>.<column-name>`; a missing derived endpoint means that column is visible. This keeps

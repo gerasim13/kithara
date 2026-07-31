@@ -275,6 +275,8 @@ pub(crate) struct ControlSite<'a> {
     pub(crate) control: &'a ControlNode,
     pub(crate) read: Option<&'a BindingRef>,
     pub(crate) write: Option<&'a BindingRef>,
+    /// Already resolved, so a parameterised list is validated like a literal one.
+    pub(crate) columns: &'a [TrackColumn],
     pub(crate) columns_state: Option<&'a BindingRef>,
     pub(crate) query: Option<&'a BindingRef>,
     pub(crate) scope: Option<&'a BindingRef>,

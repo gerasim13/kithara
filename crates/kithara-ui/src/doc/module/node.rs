@@ -421,7 +421,7 @@ pub enum ControlNode {
         #[serde(default)]
         adaptive: AdaptivePolicy,
         #[serde(default)]
-        columns: Vec<TrackColumn>,
+        columns: Option<Param<Vec<TrackColumn>>>,
         #[serde(default)]
         columns_state: Option<BindingRef>,
     },

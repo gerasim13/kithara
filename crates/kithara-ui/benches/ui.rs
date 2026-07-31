@@ -9,6 +9,7 @@ use kithara_ui::{
         AdaptivePolicy, BindingRef, ButtonStyle, ControlNode, FaderStyle, ModuleDoc, ScalarFormat,
         TrackColumn, WaveStyle, parse_module,
     },
+    param::Param,
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
         ControlAction, ReadValue, Reads, StereoLevels, TrackRow, UiEvent, WaveBucket, WaveformView,
@@ -512,7 +513,7 @@ fn track_list(id: &str, endpoint: &str) -> ControlNode {
         read: Some(model(endpoint)),
         write: None,
         adaptive: AdaptivePolicy::default(),
-        columns: vec![TrackColumn::Title],
+        columns: Some(Param::Fixed(vec![TrackColumn::Title])),
         columns_state: None,
     }
 }
