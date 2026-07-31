@@ -64,3 +64,36 @@ split[0] 0.000 0.000 960.000 600.000
   library 0.000 307.714 960.000 292.286
     library/column[0] 0.000 307.714 960.000 292.286
       library/tracks 0.000 307.714 960.000 292.286
+# player.klayout.ron @ 320x240
+split[0] 0.000 0.000 320.000 240.000
+  global-bar 0.000 0.000 320.000 42.000
+    global-bar/row[0] 0.000 0.000 320.000 42.000
+      global-bar/brand 0.000 0.000 112.000 42.000
+      global-bar/presets 113.000 0.000 126.000 42.000
+      global-bar/spacer 240.000 0.000 0.000 42.000
+      global-bar/volume 241.000 10.000 64.000 22.000
+      global-bar/settings 306.000 0.000 14.000 42.000
+  deck-a 0.000 42.000 320.000 94.286
+    deck-a/column[0] 0.000 42.000 320.000 94.286
+      deck-a/wave 0.000 42.000 320.000 62.286
+      deck-a/column[0]/row[1] 0.000 105.286 320.000 30.000
+        deck-a/transport/cue 0.000 105.286 58.000 30.000
+        deck-a/transport/play 58.000 105.286 72.000 30.000
+        deck-a/transport/sync 130.000 105.286 58.000 30.000
+        deck-a/transport/reverse 188.000 105.286 48.000 30.000
+        deck-a/transport/loop 236.000 105.286 74.000 30.000
+        deck-a/transport/jump-back 310.000 105.286 10.000 30.000
+        deck-a/transport/jump-forward 320.000 105.286 0.000 30.000
+        deck-a/column[0]/row[1]/spacer 320.000 105.286 0.000 30.000
+        deck-a/transport/zoom-out 320.000 105.286 0.000 30.000
+        deck-a/transport/zoom-in 320.000 105.286 0.000 30.000
+        deck-a/column[0]/row[1]/stream 320.000 105.286 0.000 30.000
+          deck-a/transport/stream-label 320.000 111.286 0.000 18.000
+          deck-a/transport/stream-chevron 327.000 105.286 0.000 30.000
+        deck-a/column[0]/row[1]/tempo 320.000 105.286 0.000 30.000
+          deck-a/transport/tempo-label 320.000 111.286 0.000 18.000
+          deck-a/transport/tempo-value 327.000 111.286 0.000 18.000
+      deck-a/column[0]/extra-controls 0.000 136.286 320.000 0.000
+  library 0.000 136.286 320.000 103.714
+    library/column[0] 0.000 136.286 320.000 103.714
+      library/tracks 0.000 136.286 320.000 103.714

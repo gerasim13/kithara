@@ -682,7 +682,15 @@ fn builtin_layouts_match_rect_fixtures() {
         )
         .expect("builtin layout must compile");
         let mut actual = String::new();
-        for viewport in [Size::new(1280.0, 720.0), Size::new(960.0, 600.0)] {
+        // 320x240 is narrow enough to drive every fluid child below the `min`
+        // its `Dim::Range` declares, which is the only region where honouring
+        // that min can change a rect. Without it the Range decision would ship
+        // with a measured delta of zero.
+        for viewport in [
+            Size::new(1280.0, 720.0),
+            Size::new(960.0, 600.0),
+            Size::new(320.0, 240.0),
+        ] {
             actual.push_str(&dump(
                 preset,
                 &ui,
