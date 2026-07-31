@@ -258,10 +258,10 @@ impl LayoutWalker<'_> {
                 self.document(&path, layout, depth, false);
                 let flex = only_child(layout, &path, "split container");
                 self.wrapper();
-                let cells = exact_children(flex, children.len(), &path, "split Row or Column");
-                for (position, ((_, child), cell)) in children.iter().zip(cells).enumerate() {
-                    self.wrapper();
-                    let child_layout = only_child(cell, &path, "split cell container");
+                let child_layouts = exact_children(flex, children.len(), &path, "split Flex");
+                for (position, ((_, child), child_layout)) in
+                    children.iter().zip(child_layouts).enumerate()
+                {
                     self.compiled(child, child_layout, &path, position, depth + 1);
                 }
             }
@@ -412,9 +412,9 @@ impl LayoutWalker<'_> {
                     content = only_child(content, &path, "slot apply_size container");
                     self.wrapper();
                 }
-                let column = only_child(content, &path, "slot container");
+                let flex = only_child(content, &path, "slot container");
                 self.wrapper();
-                let child_layouts = exact_children(column, children.len(), &path, "slot Column");
+                let child_layouts = exact_children(flex, children.len(), &path, "slot Flex");
                 for (position, (child, child_layout)) in
                     children.iter().zip(child_layouts).enumerate()
                 {
