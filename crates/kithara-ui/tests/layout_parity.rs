@@ -17,7 +17,9 @@ use iced_tiny_skia::Renderer as TinySkiaRenderer;
 use kithara_test_utils::kithara;
 use kithara_ui::{
     builtin,
-    compile::{CompiledUi, compile},
+    compile::{CompiledNode, CompiledUi, compile},
+    expand::ExpandedNode,
+    module::ChromeStyle,
     render::{
         ReadValue, Reads, Skin, StereoLevels, TrackRow, WaveBucket, WaveformView,
         fonts::{FONT_BYTES, SANS},
@@ -179,29 +181,459 @@ fn dump(
         viewport.width, viewport.height
     )
     .expect("writing to a String cannot fail");
-    write_layout(&mut output, Layout::new(&node), 0);
+    write_layout(&mut output, ui, reads, Layout::new(&node));
     output
 }
 
-fn write_layout(output: &mut String, layout: Layout<'_>, depth: usize) {
-    let bounds = layout.bounds();
-    assert!(
-        [bounds.x, bounds.y, bounds.width, bounds.height]
-            .iter()
-            .all(|value| value.is_finite()),
-        "layout contains non-finite bounds: {bounds:?}"
-    );
-    for _ in 0..depth {
-        output.push_str("  ");
+#[derive(Default)]
+struct Attribution {
+    document_nodes: usize,
+    document_rects: usize,
+    wrappers: usize,
+    opaque_control_nodes: usize,
+    furniture: usize,
+}
+
+impl Attribution {
+    const fn total(&self) -> usize {
+        self.document_rects + self.wrappers + self.opaque_control_nodes + self.furniture
     }
-    writeln!(
+}
+
+struct LayoutWalker<'a> {
+    output: &'a mut String,
+    ui: &'a CompiledUi,
+    reads: &'a dyn Reads,
+    attribution: Attribution,
+}
+
+impl LayoutWalker<'_> {
+    fn document(&mut self, path: &str, layout: Layout<'_>, depth: usize, already_attributed: bool) {
+        let bounds = layout.bounds();
+        assert!(
+            [bounds.x, bounds.y, bounds.width, bounds.height]
+                .iter()
+                .all(|value| value.is_finite()),
+            "layout for document path `{path}` contains non-finite bounds: {bounds:?}"
+        );
+        for _ in 0..depth {
+            self.output.push_str("  ");
+        }
+        writeln!(
+            self.output,
+            "{path} {:.3} {:.3} {:.3} {:.3}",
+            bounds.x, bounds.y, bounds.width, bounds.height
+        )
+        .expect("writing to a String cannot fail");
+        self.attribution.document_nodes += 1;
+        if !already_attributed {
+            self.attribution.document_rects += 1;
+        }
+    }
+
+    fn wrapper(&mut self) {
+        self.attribution.wrappers += 1;
+    }
+
+    fn furniture(&mut self, layout: Layout<'_>) {
+        self.attribution.furniture += layout_node_count(layout);
+    }
+
+    fn opaque_control_children(&mut self, layout: Layout<'_>) {
+        self.attribution.opaque_control_nodes +=
+            layout.children().map(layout_node_count).sum::<usize>();
+    }
+
+    fn compiled(
+        &mut self,
+        node: &CompiledNode,
+        layout: Layout<'_>,
+        parent: &str,
+        position: usize,
+        depth: usize,
+    ) {
+        let path = compiled_path(node, self.ui, parent, position);
+        match node {
+            CompiledNode::Split { children, .. } => {
+                self.document(&path, layout, depth, false);
+                let flex = only_child(layout, &path, "split container");
+                self.wrapper();
+                let cells = exact_children(flex, children.len(), &path, "split Row or Column");
+                for (position, ((_, child), cell)) in children.iter().zip(cells).enumerate() {
+                    self.wrapper();
+                    let child_layout = only_child(cell, &path, "split cell container");
+                    self.compiled(child, child_layout, &path, position, depth + 1);
+                }
+            }
+            CompiledNode::Module {
+                instance,
+                chrome,
+                drop,
+                collapsed,
+                root,
+                ..
+            } => {
+                self.document(&path, layout, depth, false);
+                let shell_attributed = drop.is_none();
+                let shell = if shell_attributed {
+                    layout
+                } else {
+                    only_child(layout, &path, "module drop outline container")
+                };
+                let is_collapsed = *chrome == ChromeStyle::Full
+                    && matches!(
+                        self.reads.get(self.ui.resolve(*collapsed)),
+                        Some(ReadValue::Bool(true))
+                    );
+                match chrome {
+                    ChromeStyle::Frame => {
+                        self.framed_module(root, shell, shell_attributed, &path, depth);
+                    }
+                    ChromeStyle::Plain => {
+                        self.expanded(root, shell, &path, 0, depth + 1, shell_attributed);
+                    }
+                    ChromeStyle::Full => {
+                        self.full_module(root, shell, shell_attributed, is_collapsed, &path, depth);
+                    }
+                    _ => panic!("unsupported chrome style at document path `{path}`"),
+                }
+                assert_eq!(
+                    path,
+                    self.ui.resolve(*instance),
+                    "compiled module path changed while walking `{path}`"
+                );
+            }
+            _ => panic!("unsupported compiled node at document path `{path}`"),
+        }
+    }
+
+    fn framed_module(
+        &mut self,
+        root: &ExpandedNode,
+        shell: Layout<'_>,
+        shell_attributed: bool,
+        path: &str,
+        depth: usize,
+    ) {
+        if !shell_attributed {
+            self.wrapper();
+        }
+        let shell_children = exact_children(shell, 2, path, "module frame Stack");
+        let body = shell_children[0];
+        self.wrapper();
+        self.furniture(shell_children[1]);
+        let root_layout = only_child(body, path, "module frame body container");
+        self.expanded(root, root_layout, path, 0, depth + 1, false);
+    }
+
+    fn full_module(
+        &mut self,
+        root: &ExpandedNode,
+        shell: Layout<'_>,
+        shell_attributed: bool,
+        collapsed: bool,
+        path: &str,
+        depth: usize,
+    ) {
+        if !shell_attributed {
+            self.wrapper();
+        }
+        let shell_children = exact_children(shell, 2, path, "full module frame Stack");
+        let body = shell_children[0];
+        self.wrapper();
+        self.furniture(shell_children[1]);
+        let content = only_child(body, path, "full module frame body container");
+        if collapsed {
+            self.furniture(content);
+            return;
+        }
+
+        self.wrapper();
+        let chrome = exact_children(content, 5, path, "full module chrome Column");
+        for (index, furniture) in chrome.iter().copied().enumerate() {
+            if index != 2 {
+                self.furniture(furniture);
+            }
+        }
+        self.wrapper();
+        let root_layout = only_child(chrome[2], path, "full module content container");
+        self.expanded(root, root_layout, path, 0, depth + 1, false);
+    }
+
+    fn expanded(
+        &mut self,
+        node: &ExpandedNode,
+        layout: Layout<'_>,
+        parent: &str,
+        position: usize,
+        depth: usize,
+        already_attributed: bool,
+    ) {
+        let path = expanded_path(node, self.ui, parent, position);
+        match node {
+            ExpandedNode::Row {
+                size,
+                frame,
+                surface,
+                children,
+                ..
+            } => self.group(
+                layout,
+                &path,
+                depth,
+                already_attributed,
+                size.is_some(),
+                surface.is_some(),
+                frame.is_some(),
+                "Row",
+                children,
+            ),
+            ExpandedNode::Column {
+                size,
+                frame,
+                surface,
+                children,
+                ..
+            } => self.group(
+                layout,
+                &path,
+                depth,
+                already_attributed,
+                size.is_some(),
+                surface.is_some(),
+                frame.is_some(),
+                "Column",
+                children,
+            ),
+            ExpandedNode::Slot { size, children, .. } => {
+                self.document(&path, layout, depth, already_attributed);
+                let mut content = layout;
+                if size.is_some() {
+                    content = only_child(content, &path, "slot apply_size container");
+                    self.wrapper();
+                }
+                let column = only_child(content, &path, "slot container");
+                self.wrapper();
+                let child_layouts = exact_children(column, children.len(), &path, "slot Column");
+                for (position, (child, child_layout)) in
+                    children.iter().zip(child_layouts).enumerate()
+                {
+                    self.expanded(child, child_layout, &path, position, depth + 1, false);
+                }
+            }
+            ExpandedNode::Control { .. } => {
+                self.document(&path, layout, depth, already_attributed);
+                self.opaque_control_children(layout);
+            }
+            _ => panic!("unsupported expanded node at document path `{path}`"),
+        }
+    }
+
+    fn group(
+        &mut self,
+        layout: Layout<'_>,
+        path: &str,
+        depth: usize,
+        already_attributed: bool,
+        sized: bool,
+        surfaced: bool,
+        framed: bool,
+        flex_name: &str,
+        children: &[ExpandedNode],
+    ) {
+        self.document(path, layout, depth, already_attributed);
+        let mut content = layout;
+        if sized {
+            content = only_child(content, path, "apply_size container");
+            self.wrapper();
+        }
+        if surfaced {
+            let surface_children = exact_children(content, 2, path, "wheel surface Stack");
+            content = surface_children[0];
+            self.wrapper();
+            self.furniture(surface_children[1]);
+        }
+        if framed {
+            let frame_children = exact_children(content, 2, path, "frame overlay Stack");
+            content = frame_children[0];
+            self.wrapper();
+            self.furniture(frame_children[1]);
+            content = only_child(content, path, "frame overlay body container");
+            self.wrapper();
+        }
+        let flex = only_child(content, path, "padding container");
+        self.wrapper();
+        let child_layouts = exact_children(flex, children.len(), path, flex_name);
+        for (position, (child, child_layout)) in children.iter().zip(child_layouts).enumerate() {
+            self.expanded(child, child_layout, path, position, depth + 1, false);
+        }
+    }
+}
+
+fn write_layout(output: &mut String, ui: &CompiledUi, reads: &dyn Reads, layout: Layout<'_>) {
+    let root_path = compiled_path(&ui.root, ui, "", 0);
+    let total = layout_node_count(layout);
+    let mut walker = LayoutWalker {
         output,
-        "{:.3} {:.3} {:.3} {:.3}",
-        bounds.x, bounds.y, bounds.width, bounds.height
-    )
-    .expect("writing to a String cannot fail");
-    for child in layout.children() {
-        write_layout(output, child, depth + 1);
+        ui,
+        reads,
+        attribution: Attribution::default(),
+    };
+    let mut content = layout;
+    if ui.dragged.is_some() {
+        walker.wrapper();
+        let children = exact_children(content, 2, &root_path, "drag ghost Stack");
+        content = children[0];
+        walker.furniture(children[1]);
+    }
+    if ui.resize_edges {
+        walker.wrapper();
+        let children = exact_children(content, 2, &root_path, "resize edge Stack");
+        content = children[0];
+        walker.furniture(children[1]);
+    }
+    walker.compiled(&ui.root, content, "", 0, 0);
+    assert_eq!(
+        walker.attribution.document_nodes,
+        document_node_count(&ui.root, ui, reads),
+        "the walk emitted {} document nodes but the document has {}; a subtree was skipped",
+        walker.attribution.document_nodes,
+        document_node_count(&ui.root, ui, reads),
+    );
+    assert_eq!(
+        walker.attribution.total(),
+        total,
+        "layout attribution mismatch at document path `{root_path}`: attributed {} of {total} \
+         iced nodes ({} document nodes emitted, {} document rects, {} wrappers, {} opaque \
+         control nodes, {} furniture nodes)",
+        walker.attribution.total(),
+        walker.attribution.document_nodes,
+        walker.attribution.document_rects,
+        walker.attribution.wrappers,
+        walker.attribution.opaque_control_nodes,
+        walker.attribution.furniture,
+    );
+}
+
+/// Counts document nodes without consulting iced, so the walk cannot lose a
+/// subtree to furniture and still balance its iced-node accounting.
+fn document_node_count(node: &CompiledNode, ui: &CompiledUi, reads: &dyn Reads) -> usize {
+    match node {
+        CompiledNode::Split { children, .. } => {
+            1 + children
+                .iter()
+                .map(|(_, child)| document_node_count(child, ui, reads))
+                .sum::<usize>()
+        }
+        CompiledNode::Module {
+            chrome,
+            collapsed,
+            root,
+            ..
+        } => {
+            let is_collapsed = *chrome == ChromeStyle::Full
+                && matches!(
+                    reads.get(ui.resolve(*collapsed)),
+                    Some(ReadValue::Bool(true))
+                );
+            if is_collapsed {
+                1
+            } else {
+                1 + expanded_node_count(root)
+            }
+        }
+        _ => 1,
+    }
+}
+
+fn expanded_node_count(node: &ExpandedNode) -> usize {
+    match node {
+        ExpandedNode::Row { children, .. }
+        | ExpandedNode::Column { children, .. }
+        | ExpandedNode::Slot { children, .. } => {
+            1 + children.iter().map(expanded_node_count).sum::<usize>()
+        }
+        _ => 1,
+    }
+}
+
+fn compiled_path(node: &CompiledNode, ui: &CompiledUi, parent: &str, position: usize) -> String {
+    match node {
+        CompiledNode::Split { .. } => positional_path(parent, "split", position),
+        CompiledNode::Module { instance, .. } => ui.resolve(*instance).to_owned(),
+        _ => positional_path(parent, "compiled", position),
+    }
+}
+
+fn expanded_path(node: &ExpandedNode, ui: &CompiledUi, parent: &str, position: usize) -> String {
+    match node {
+        ExpandedNode::Row { id, .. } => id.map_or_else(
+            || positional_path(parent, "row", position),
+            |id| named_path(parent, ui.resolve(id)),
+        ),
+        ExpandedNode::Column { id, .. } => id.map_or_else(
+            || positional_path(parent, "column", position),
+            |id| named_path(parent, ui.resolve(id)),
+        ),
+        ExpandedNode::Slot { id, .. } => named_path(parent, ui.resolve(*id)),
+        ExpandedNode::Control { path, .. } => ui.resolve(*path).to_owned(),
+        _ => positional_path(parent, "expanded", position),
+    }
+}
+
+fn positional_path(parent: &str, kind: &str, position: usize) -> String {
+    named_path(parent, &format!("{kind}[{position}]"))
+}
+
+fn named_path(parent: &str, name: &str) -> String {
+    if parent.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{parent}/{name}")
+    }
+}
+
+fn only_child<'a>(layout: Layout<'a>, path: &str, role: &str) -> Layout<'a> {
+    exact_children(layout, 1, path, role)[0]
+}
+
+fn exact_children<'a>(
+    layout: Layout<'a>,
+    expected: usize,
+    path: &str,
+    role: &str,
+) -> Vec<Layout<'a>> {
+    let children = layout.children().collect::<Vec<_>>();
+    assert_eq!(
+        children.len(),
+        expected,
+        "layout correspondence changed at document path `{path}`: {role} expected {expected} \
+         children, found {}",
+        children.len()
+    );
+    children
+}
+
+fn layout_node_count(layout: Layout<'_>) -> usize {
+    1 + layout.children().map(layout_node_count).sum::<usize>()
+}
+
+fn fixture_line_path(line: &str) -> &str {
+    line.split_ascii_whitespace()
+        .next()
+        .unwrap_or("<end of fixture>")
+}
+
+fn assert_fixture_matches(path: &Path, expected: &str, actual: &str) {
+    if let Some((line, expected_line, actual_line)) = first_difference(expected, actual) {
+        assert_eq!(
+            actual_line,
+            expected_line,
+            "layout fixture mismatch in {} at line {line}, document path `{}`\nexpected: \
+             {expected_line}\nactual: {actual_line}",
+            path.display(),
+            fixture_line_path(actual_line),
+        );
     }
 }
 
@@ -227,18 +659,6 @@ fn first_difference<'a, 'b>(
             }
         }
         line += 1;
-    }
-}
-
-fn assert_fixture_matches(path: &Path, expected: &str, actual: &str) {
-    if let Some((line, expected_line, actual_line)) = first_difference(expected, actual) {
-        assert_eq!(
-            actual_line,
-            expected_line,
-            "layout fixture mismatch in {} at line {line}\nexpected: {expected_line}\nactual: \
-             {actual_line}",
-            path.display()
-        );
     }
 }
 
