@@ -46,8 +46,7 @@ use crate::{
         source::StreamAudioSource,
         stream::shared::SharedStream,
         track::{
-            self, CurrentFsm, RebuildingDecoder, RecreatingDecoder, Track, TrackFailure, TrackStep,
-            WaitingReason,
+            self, CurrentFsm, RebuildingDecoder, Track, TrackFailure, TrackStep, WaitingReason,
         },
     },
     renderer::AudioWorkerSource,
@@ -302,9 +301,6 @@ pub(super) struct TestControl {
     promote_calls: AtomicU64,
     promotion: Mutex<VariantPromotion>,
     take_calls: AtomicU64,
-    variant_pending: AtomicBool,
-    read_gate_open: AtomicBool,
-    variant_target: Mutex<Option<usize>>,
     format_range: Mutex<Option<Range<u64>>>,
 }
 
@@ -323,9 +319,6 @@ impl TestControl {
             promote_calls: AtomicU64::new(0),
             promotion: Mutex::new(VariantPromotion::Stale),
             take_calls: AtomicU64::new(0),
-            variant_pending: AtomicBool::new(false),
-            read_gate_open: AtomicBool::new(true),
-            variant_target: Mutex::new(None),
             format_range: Mutex::new(Some(0..32)),
         }
     }
@@ -373,15 +366,10 @@ impl TestControl {
         self.take_calls.load(Ordering::Acquire)
     }
 
+    /// Publish a new active variant on the source, the way a promoted ABR
+    /// switch does. `rebuild::policy::superseded` reads exactly this.
     fn set_media_info(&self, media_info: MediaInfo) {
         *self.media_info.lock() = Some(media_info);
-    }
-
-    fn raise_variant_fence(&self, target: usize, media_info: MediaInfo) {
-        self.set_media_info(media_info);
-        *self.variant_target.lock() = Some(target);
-        self.read_gate_open.store(false, Ordering::Release);
-        self.variant_pending.store(true, Ordering::Release);
     }
 }
 
@@ -457,33 +445,11 @@ impl VariantControl for TestControl {
         0
     }
 
-    fn clear_variant_fence(&self) {
-        self.variant_pending.store(false, Ordering::Release);
-        self.read_gate_open.store(true, Ordering::Release);
-        *self.variant_target.lock() = None;
-    }
-
     fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
         self.format_range
             .lock()
             .clone()
             .ok_or(StreamError::Source(SourceError::FormatChangeNotApplicable))
-    }
-
-    fn has_variant_change_pending(&self) -> bool {
-        self.variant_pending.load(Ordering::Acquire)
-    }
-
-    fn open_variant_read_gate(&self) {
-        self.read_gate_open.store(true, Ordering::Release);
-    }
-
-    fn variant_read_pending(&self) -> bool {
-        self.variant_pending.load(Ordering::Acquire) && !self.read_gate_open.load(Ordering::Acquire)
-    }
-
-    fn variant_change_target(&self) -> Option<usize> {
-        *self.variant_target.lock()
     }
 }
 
@@ -1297,14 +1263,14 @@ async fn rebuilding_decoder_seek_epoch_supersedes_completion() {
 }
 
 #[kithara::test(tokio)]
-async fn rebuilding_decoder_variant_fence_supersedes_completion() {
+async fn rebuilding_decoder_variant_change_supersedes_completion() {
     let RebuildFixture {
         control,
         drops,
         mut source,
     } = test_source(1).await;
     enter_rebuilding(&mut source, 7, recreate_state(1));
-    control.raise_variant_fence(2, media_info(2));
+    control.set_media_info(media_info(2));
     push_completion_with_drops(&mut source, 7, 2, drops.clone());
     source.flush_deferred();
 
@@ -1330,7 +1296,7 @@ async fn rebuilding_decoder_variant_fence_supersedes_completion() {
 }
 
 #[kithara::test(tokio)]
-async fn rebuilding_decoder_variant_fence_preserves_inflight_seek() {
+async fn rebuilding_decoder_variant_change_preserves_inflight_seek() {
     let RebuildFixture {
         control,
         drops,
@@ -1353,7 +1319,7 @@ async fn rebuilding_decoder_variant_fence_preserves_inflight_seek() {
             ..recreate_state(1)
         },
     );
-    control.raise_variant_fence(2, media_info(2));
+    control.set_media_info(media_info(2));
     push_completion_with_drops(&mut source, 7, 2, drops.clone());
     source.flush_deferred();
 
@@ -1392,141 +1358,6 @@ async fn stale_rebuild_completion_retires_decoder_shell_side() {
         TrackStep::Blocked(WaitingReason::Waiting)
     ));
     assert!(matches!(source.state, CurrentFsm::RebuildingDecoder(_)));
-}
-
-fn interrupting_rebuild_port(source: &StreamAudioSource<TestStream>) -> RebuildPort<TestStream> {
-    let factory = DecoderFactory::new(|_reader, _info| Err(DecodeError::Interrupted), None);
-    RebuildPort::new(
-        factory,
-        source.decode.gapless_mode(),
-        RebuildRuntime {
-            handle: source.rebuild.runtime().clone(),
-            wake: Arc::new(TestWake),
-        },
-    )
-}
-
-/// Clearing the variant fence is the acknowledgement that "the decoder has
-/// been recreated against the new variant". A rebuild that comes back
-/// `Interrupted` recreated nothing, so the switch is still outstanding: the
-/// session keeps running the old variant. Acking it anyway destroys the only
-/// signal the decode loop and the rebuild-supersession check have, and the
-/// pending seek that carried the switch is left pointing at a snapshot no
-/// one can invalidate.
-#[kithara::test(tokio)]
-async fn interrupted_variant_rebuild_leaves_the_switch_outstanding() {
-    let RebuildFixture {
-        control,
-        mut source,
-        ..
-    } = test_source(0).await;
-    let target = Duration::from_secs(3);
-    let request = SeekRequest {
-        seek: SeekContext {
-            epoch: source.seek.begin(target),
-            target,
-        },
-        emit_request: false,
-    };
-    control.raise_variant_fence(1, media_info(1));
-    source.rebuild = interrupting_rebuild_port(&source);
-    source.state = Track::<RecreatingDecoder>::new(RecreateState {
-        media_info: media_info(1),
-        cause: RecreateCause::VariantSwitch,
-        next: RecreateNext::Seek(request),
-        offset: 0,
-    })
-    .erase();
-
-    assert!(matches!(source.step_track(), TrackStep::StateChanged));
-    assert!(
-        matches!(source.state, CurrentFsm::RebuildingDecoder(_)),
-        "fixture precondition: the recreate must reach the rebuild port"
-    );
-    source.rebuild.run_inline();
-    source.step_track();
-
-    assert_eq!(
-        source
-            .decode
-            .active()
-            .media_info()
-            .and_then(|info| info.variant_index),
-        Some(0),
-        "fixture precondition: an interrupted rebuild installs no decoder"
-    );
-    assert!(
-        control.has_variant_change_pending(),
-        "the variant switch was acknowledged while the session still runs the old variant"
-    );
-}
-
-/// The switch has to be consumed end to end: once the source can serve the
-/// new variant, the FSM must install a decoder for it and only then drop the
-/// fence. Asserting on the installed variant (not on how long it took) keeps
-/// this a statement about the state contract.
-#[kithara::test(tokio)]
-async fn variant_switch_pending_across_a_seek_is_eventually_consumed() {
-    let RebuildFixture {
-        control,
-        mut source,
-        ..
-    } = test_source(0).await;
-    let target = Duration::from_secs(3);
-    let request = SeekRequest {
-        seek: SeekContext {
-            epoch: source.seek.begin(target),
-            target,
-        },
-        emit_request: false,
-    };
-    control.raise_variant_fence(1, media_info(1));
-    source.rebuild = interrupting_rebuild_port(&source);
-    source.state = Track::<RecreatingDecoder>::new(RecreateState {
-        media_info: media_info(1),
-        cause: RecreateCause::VariantSwitch,
-        next: RecreateNext::Seek(request),
-        offset: 0,
-    })
-    .erase();
-
-    assert!(matches!(source.step_track(), TrackStep::StateChanged));
-    source.rebuild.run_inline();
-    source.step_track();
-
-    // The source can serve the new variant now. Restore the working factory
-    // and let the FSM settle.
-    let drops = Arc::new(Mutex::new(Vec::new()));
-    let factory = DecoderFactory::new(
-        move |_reader, _info| Ok(Box::new(TestDecoder::new(99, drops.clone()))),
-        None,
-    );
-    source.rebuild = RebuildPort::new(
-        factory,
-        source.decode.gapless_mode(),
-        RebuildRuntime {
-            handle: source.rebuild.runtime().clone(),
-            wake: Arc::new(TestWake),
-        },
-    );
-    for _ in 0..16 {
-        source.rebuild.run_inline();
-        source.step_track();
-    }
-
-    assert_eq!(
-        source
-            .decode
-            .active()
-            .media_info()
-            .and_then(|info| info.variant_index),
-        Some(1),
-        "the pending variant switch was never consumed by a decoder recreate"
-    );
-    assert!(
-        !control.has_variant_change_pending(),
-        "the fence must drop once a decoder for the new variant is installed"
-    );
 }
 
 // A decoder factory that panics during construction must not strand the

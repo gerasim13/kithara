@@ -100,9 +100,8 @@ pub enum PendingReason {
     #[display("data not ready ({_0})")]
     NotReady(NotReadyCause),
     /// Source crossed a variant boundary at this offset. Caller must
-    /// recreate the decoder and call
-    /// [`Source::clear_variant_fence`] before reads succeed. Zero bytes
-    /// were touched — the fence fires BEFORE any data is read.
+    /// recreate the decoder before reads succeed. Zero bytes were
+    /// touched — the boundary surfaces BEFORE any data is read.
     #[display("variant change: decoder recreation required")]
     VariantChange,
     /// Resource was evicted between [`Source::wait_range`] (metadata
@@ -343,9 +342,7 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
 }
 
 /// HLS-only variant-coordination surface, vended as `Some` by adaptive
-/// sources and `None` by everything else. Replaces three former no-op
-/// default `Source` methods — non-adaptive sources no longer pretend to
-/// implement variant fences.
+/// sources and `None` by everything else.
 ///
 /// All methods take `&self`; the HLS impl (`HlsCoord`) uses interior
 /// mutability, so callers hold an `Arc<dyn VariantControl>` and never
@@ -404,17 +401,6 @@ pub trait VariantControl: Send + Sync + 'static {
     /// automatic selection wins even while transition publication is locked.
     fn selected_variant_for_seek(&self) -> usize;
 
-    /// Acknowledge an ABR switch: a decoder built against the new variant
-    /// is installed. Call at the install site only — see
-    /// [`Self::open_variant_read_gate`] for the reads that precede it.
-    fn clear_variant_fence(&self);
-
-    /// Let reads through for a decoder that is being built against the new
-    /// variant, without acknowledging the switch. The switch stays pending
-    /// until a decoder actually arrives, so a rebuild that fails leaves the
-    /// signal intact for the next consumer.
-    fn open_variant_read_gate(&self);
-
     /// Byte range of the header the decoder must re-read after a format
     /// change (HLS ABR cross-codec switch).
     ///
@@ -423,22 +409,6 @@ pub trait VariantControl: Send + Sync + 'static {
     /// was served with a non-zero `served_from` so the init prefix lives
     /// outside the virtual range.
     fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
-
-    /// Whether a committed cross-variant transition still has no decoder
-    /// behind it (cleared by `clear_variant_fence`, not by opening the read
-    /// gate).
-    fn has_variant_change_pending(&self) -> bool;
-
-    /// Whether reads are still short-circuited by the transition — true
-    /// until `open_variant_read_gate` (or `clear_variant_fence`) runs.
-    fn variant_read_pending(&self) -> bool;
-
-    /// Target variant index of the in-flight transition, `None` when no
-    /// fence is pending. Published before the fence is raised, so any
-    /// observer of a pending fence also sees the variant that fence
-    /// demands. Lets the decoder ack a fence whose target it is already
-    /// aligned with — no format diff will ever become observable there.
-    fn variant_change_target(&self) -> Option<usize>;
 }
 
 /// Segment-table view exposed by segmented sources (HLS, fragmented

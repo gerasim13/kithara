@@ -220,8 +220,6 @@ class KitharaPlayerItem(
             is FfiItemEvent.BufferHealth,
             is FfiItemEvent.EngineLoad,
             is FfiItemEvent.PlaybackResamplerConfigured,
-            is FfiItemEvent.HlsVariantSwitchFenced,
-            is FfiItemEvent.HlsVariantSwitchAcked,
             is FfiItemEvent.HlsCacheComplete,
             is FfiItemEvent.DownloadStarted,
             is FfiItemEvent.DownloadSlow,

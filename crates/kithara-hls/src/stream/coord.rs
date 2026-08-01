@@ -1,9 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    ops::Range,
-    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
-};
+use std::{ops::Range, sync::atomic::AtomicU64};
 
 use delegate::delegate;
 use kithara_abr::{AbrHandle, AbrPublisher};
@@ -16,10 +13,10 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    Activity, ByteMap, DeferredWake, MediaInfo, PendingReason, PlayheadRead, PlayheadState,
-    PlayheadWrite, ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekState,
-    SegmentDescriptor, SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult,
-    VariantControl, VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
+    Activity, ByteMap, DeferredWake, MediaInfo, PlayheadRead, PlayheadState, PlayheadWrite,
+    ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekState, SegmentDescriptor,
+    SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantControl,
+    VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
 };
 use kithara_test_utils::kithara;
 
@@ -47,12 +44,12 @@ pub(crate) struct HlsCoordEnv {
     pub(crate) emit: Arc<DeferredBus<HlsEvent>>,
     /// Unified reader-wake handle: the shared readiness gate paired with the
     /// late-bound audio-worker wake. Every transition that can flip a blocked
-    /// reader's `wait_range` predicate (segment write/commit/fail, fence
-    /// raise/clear, seek reset, cancel) signals the gate; the off-RT
-    /// `wait_range(_, None)` parks on it instead of polling a wall-clock timer.
-    /// The two downloader write/settle sites additionally re-tick the audio
-    /// worker via [`SizeSignal::fire`]; the coord's RT-reachable fence/seek
-    /// signals use [`SizeSignal::fire_ready_only`]. See `CONTEXT.md`
+    /// reader's `wait_range` predicate (segment write/commit/fail, seek reset,
+    /// cancel) signals the gate; the off-RT `wait_range(_, None)` parks on it
+    /// instead of polling a wall-clock timer. The two downloader write/settle
+    /// sites additionally re-tick the audio worker via [`SizeSignal::fire`];
+    /// the coord's RT-reachable seek signal uses
+    /// [`SizeSignal::fire_ready_only`]. See `CONTEXT.md`
     /// "Event-driven read wait".
     pub(crate) signal: SizeSignal,
 }
@@ -77,39 +74,10 @@ pub(crate) struct HlsCoord {
     seek_obs: Arc<dyn SeekObserve>,
     /// One authoritative active session and at most one exact incoming session.
     pub(super) sessions: SessionSlots,
-    /// Last generation whose switch a decoder actually reached — set by
-    /// [`Self::clear_variant_fence`] once a decoder built against the new
-    /// variant is installed. While `< variant_generation` the switch is
-    /// outstanding ([`Self::has_variant_change_pending`]).
-    fence_at: AtomicU64,
-    /// Last generation the reader is allowed to read across — set by
-    /// [`Self::open_variant_read_gate`] when a decoder rebuild for the new
-    /// variant starts, so its construction reads are not short-circuited by
-    /// the switch they are there to resolve. Distinct from
-    /// [`Self::fence_at`]: opening the gate lets the *candidate* decoder
-    /// read, acking records that a decoder *arrived*. A rebuild that never
-    /// produces one therefore leaves the switch outstanding.
-    read_gate_at: AtomicU64,
-    /// Monotonic counter bumped by [`Self::commit_variant_switch`] on
-    /// every decoder-recreate switch. Same-codec switches use byte
-    /// continuity and do not raise this fence. `read_at` / `wait_range`
-    /// compare against [`Self::read_gate_at`] and short-circuit with
-    /// `Pending(VariantChange)` / `Interrupted` until the rebuild opens the
-    /// gate. Byte-continuity switches do not raise a fence.
-    variant_generation: AtomicU64,
-    /// Target variant index of the in-flight fence. Stored (`Release`)
-    /// BEFORE [`Self::variant_generation`] is bumped, so an observer of
-    /// a pending fence always sees the variant that fence demands
-    /// ([`Self::variant_change_target`]). The decoder needs it to ack a
-    /// fence whose target it is already aligned with (a seek recreate
-    /// landed on the switch target before the commit raised the fence):
-    /// no format diff is observable there, so without the target the
-    /// fence would never clear.
-    fence_target: AtomicUsize,
     /// Unified reader-wake handle for the off-RT blocking `wait_range(_, None)`.
     /// Shared with every variant's fetch closures (write/commit/fail
-    /// [`SizeSignal::fire`] it) and signalled by the coord on fence/seek
-    /// transitions ([`SizeSignal::fire_ready_only`]). See [`HlsCoordEnv::signal`].
+    /// [`SizeSignal::fire`] it) and signalled by the coord on a seek reset
+    /// ([`SizeSignal::fire_ready_only`]). See [`HlsCoordEnv::signal`].
     signal: SizeSignal,
     pub(crate) emit: Arc<DeferredBus<HlsEvent>>,
 }
@@ -169,10 +137,6 @@ impl HlsCoord {
             scope: env.scope,
             headers: env.headers,
             emit: env.emit,
-            variant_generation: AtomicU64::new(0),
-            fence_at: AtomicU64::new(0),
-            read_gate_at: AtomicU64::new(0),
-            fence_target: AtomicUsize::new(0),
             sessions: SessionSlots::new(active_session),
             signal: env.signal,
         }
@@ -206,38 +170,6 @@ impl HlsCoord {
         if active_lost {
             self.active().rebuild(ctx, seg_at_reader);
         }
-    }
-
-    /// Acknowledge the cross-codec switch: a decoder built against the new
-    /// variant is installed. Called from `HlsSource::clear_variant_fence`
-    /// at the install site, never before — an unacknowledged generation is
-    /// how every reader of [`Self::has_variant_change_pending`] learns the
-    /// switch still needs a decoder. Acking also opens the read gate, so a
-    /// byte-continuity decoder that crosses the variant without a rebuild
-    /// does not have to open it separately.
-    pub(crate) fn clear_variant_fence(&self) {
-        let current_gen = self.variant_generation.load(Ordering::Acquire);
-        self.fence_at.fetch_max(current_gen, Ordering::AcqRel);
-        self.read_gate_at.fetch_max(current_gen, Ordering::AcqRel);
-        self.emit.enqueue(HlsEvent::VariantSwitchAcked {
-            variant: self.variant_index(),
-            generation: current_gen,
-        });
-        // The read gate opened: wake a reader parked in `wait_range(_, None)`
-        // (it short-circuited on `variant_read_pending`) so it re-probes.
-        self.signal.fire_ready_only();
-    }
-
-    /// Let reads through for a decoder that is being built against the new
-    /// variant. The switch stays outstanding until that decoder is actually
-    /// installed and calls [`Self::clear_variant_fence`]; a rebuild that
-    /// comes back interrupted has recreated nothing, and burning the ack
-    /// here would leave the old decoder running with no signal left for the
-    /// decode loop or the rebuild-supersession check to consume.
-    pub(crate) fn open_variant_read_gate(&self) {
-        let current_gen = self.variant_generation.load(Ordering::Acquire);
-        self.read_gate_at.fetch_max(current_gen, Ordering::AcqRel);
-        self.signal.fire_ready_only();
     }
 
     /// Resolve the segment whose fetch queue owns the reader cursor.
@@ -275,16 +207,6 @@ impl HlsCoord {
             }
         }
         None
-    }
-
-    /// A committed switch still has no decoder behind it. Used by the audio
-    /// decode loop to bail out of an `Ok(Pending(_))` spin when the
-    /// underlying `VariantChangeError` was absorbed by the demuxer, and by
-    /// the rebuild-supersession check to see which variant is owed a
-    /// decoder. Stays true across a failed rebuild — only an install clears
-    /// it.
-    pub(crate) fn has_variant_change_pending(&self) -> bool {
-        self.variant_generation.load(Ordering::Acquire) > self.fence_at.load(Ordering::Acquire)
     }
 
     /// Total bytes are >0 — the value used by `Source::len` accessor.
@@ -354,18 +276,12 @@ impl HlsCoord {
         if self.cancel.is_cancelled() {
             return Err(StreamError::Source(crate::HlsError::Cancelled.into()));
         }
-        if self.variant_read_pending() {
-            return Ok(WaitOutcome::Interrupted);
-        }
         self.variant_serving(range.start).wait_range(range, timeout)
     }
 
     pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         if self.cancel.is_cancelled() {
             return Err(StreamError::Source(crate::HlsError::Cancelled.into()));
-        }
-        if self.variant_read_pending() {
-            return Ok(ReadOutcome::Pending(PendingReason::VariantChange));
         }
         self.variant_serving(offset).read_at(offset, buf)
     }
@@ -459,22 +375,6 @@ impl HlsCoord {
         }
     }
 
-    /// Reads across the switch are still short-circuited — no decoder for
-    /// the new variant has started building yet.
-    pub(crate) fn variant_read_pending(&self) -> bool {
-        self.variant_generation.load(Ordering::Acquire) > self.read_gate_at.load(Ordering::Acquire)
-    }
-
-    /// Target variant of the outstanding switch; `None` once a decoder for
-    /// it is installed. The target store happens-before the generation
-    /// bump, so a caller that observed the fence reads the variant that
-    /// fence (or a newer one — latest wins, matching `clear_variant_fence`
-    /// absorbing all outstanding generations) demands.
-    pub(crate) fn variant_change_target(&self) -> Option<usize> {
-        self.has_variant_change_pending()
-            .then(|| self.fence_target.load(Ordering::Acquire))
-    }
-
     /// Variant index of the authoritative active source session.
     pub(crate) fn variant_index(&self) -> usize {
         self.active_session().variant_index()
@@ -535,8 +435,8 @@ impl HlsCoord {
     /// Off-RT blocking wait: park on the readiness gate until [`probe_range`]
     /// resolves (`Ready`/`Eof`/`Interrupted`) or returns a terminal error.
     /// Event-driven — every transition that can flip the probe (segment
-    /// write/commit/fail, fence raise/clear, seek reset, cancel) `signal`s the
-    /// gate. The pre-probe [`current`](WaitGate::current) snapshot + park-only-
+    /// write/commit/fail, seek reset, cancel) `signal`s the gate. The
+    /// pre-probe [`current`](WaitGate::current) snapshot + park-only-
     /// if-unchanged is a seqlock guard closing the lost-wakeup window even
     /// though the probe predicate and the gate sit under different locks
     /// (mirrors `kithara-storage` `wait_range_inner`). A genuine wedge (no
@@ -670,28 +570,8 @@ impl VariantControl for HlsCoord {
         Self::selected_variant_for_seek(self)
     }
 
-    fn clear_variant_fence(&self) {
-        Self::clear_variant_fence(self);
-    }
-
     fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
         Self::format_change_segment_range(self)
-    }
-
-    fn has_variant_change_pending(&self) -> bool {
-        Self::has_variant_change_pending(self)
-    }
-
-    fn open_variant_read_gate(&self) {
-        Self::open_variant_read_gate(self);
-    }
-
-    fn variant_change_target(&self) -> Option<usize> {
-        Self::variant_change_target(self)
-    }
-
-    fn variant_read_pending(&self) -> bool {
-        Self::variant_read_pending(self)
     }
 }
 

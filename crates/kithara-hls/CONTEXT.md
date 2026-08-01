@@ -65,32 +65,23 @@ Re-exports: `AbrMode` from `kithara-abr`; `KeyProcessor`,
 - Throughput samples are fed to ABR after each completed segment.
 - Manual ABR (`AbrMode::Manual`) overrides automatic selection — the next fetch picks the requested variant immediately.
 
-### Variant fence: read gate and ack are separate
+### Variant switching has no read fence
 
-`HlsCoord` keeps two watermarks against `variant_generation`, because "the
-candidate decoder may read" and "a decoder for the new variant exists" are
-different facts that end at different times.
+There is no generation counter, read gate, or decoder acknowledgement. A switch
+becomes visible the moment the coord promotes the incoming session, and the only
+published fact about it is the active variant's `MediaInfo`. Reads are never
+short-circuited by a switch: `read_at` / `wait_range` route through
+`variant_serving`, which keeps a shrunk `v_old` serving its pre-switch byte
+range so a reader crossing the boundary mid-buffer still hits the right payload.
 
-- `read_gate_at` — moved by `open_variant_read_gate`. `read_at` / `wait_range`
-  short-circuit with `Pending(VariantChange)` / `Interrupted` until it catches
-  up. The audio rebuild port opens it before submitting the rebuild job so the
-  new decoder's own construction reads are not blocked by the switch they exist
-  to resolve, and the seek engine opens it before anchor resolution.
-- `fence_at` — moved by `clear_variant_fence`, which is the acknowledgement and
-  runs **only** where a decoder built against the new variant becomes the
-  session's decoder: `kithara-audio` `finish_rebuild`'s install site, or
-  `apply_anchor` when the running decoder carries across by byte continuity.
-  `has_variant_change_pending` / `variant_change_target` report on this one.
-
-The distinction is load-bearing. Acking at gate-open time (what
-`RebuildPort::prepare` used to do) makes a rebuild that returns `Interrupted`
-look like a completed switch: the session keeps running the old variant while
-the only signal saying otherwise is gone, so neither the decode loop's
-`Pending(_)`-with-fence branch nor `rebuild::policy::superseded` can consume it,
-and the FSM parks on a `WaitContext::Recreation` snapshot nothing invalidates.
-Because the fence now stays up for the whole rebuild, `superseded` compares the
-outstanding **target** against the variant the rebuild built rather than
-treating any raised fence as supersession.
+The audio layer therefore detects a switch the same way it detects any format
+change — by comparing the session's cached `MediaInfo` against the source's
+current one (`kithara-audio` `decode::format::detect`,
+`rebuild::policy::superseded`). Do not reintroduce a fence: an out-of-band
+"switch outstanding" flag is a second source of truth for a fact `MediaInfo`
+already carries, and the previous one shipped with no writer at all — every
+read of it was permanently false while its acknowledgement event still fired on
+unrelated seeks.
 
 ### Decoder-probe rebuild
 
@@ -209,8 +200,8 @@ keeps its parsed value in memory for the rest of that cache instance.
   off-RT decoder factory has that gate armed, `HlsSessionReader` selects the
   blocking `None` mode; after disarm it retains the existing wake-free
   `Some(Duration::ZERO)` steady-state probe.
-- **Event-driven read wait.** Every transition that can flip the wake-free probe `signal()`s the gate so a parked `wait_range(_, None)` re-probes: each **segment byte write** (the `FetchSlot` writer wrapper) and **settle** (commit/fail/cancel) on the fetch path; **fence raise/clear** (`commit_variant_switch` / `clear_variant_fence`) and **seek reset** (`reset_for_seek`) on the coord; and **cancel** via a `CancelToken::on_cancel` waker registered for the wait's lifetime (the one transition with no producer-side signal, mirroring `kithara-storage` `wait_range_inner`). The reader snapshots the gate counter **before** probing and parks only if it is unchanged — a seqlock guard that closes the lost-wakeup window even though the probe predicate (the `kithara-assets` availability index) and the gate sit under different locks. A genuine wedge (no signal site ever fires) trips the `#[kithara::hang_watchdog]` on the wait rather than parking forever. The probe path stays wake-free; only the off-RT `None` caller blocks.
-- **Event-driven audio-worker wake.** The wake-free probe path above means the RT decoder's worker, when it underruns on a not-yet-arrived segment, parks on the audio scheduler's `Waiting` timer (`kithara-audio` `WAITING_TIMEOUT` = 10 ms) and rediscovers data only on the next poll. Under heavy load that park stretches (OS deschedule) and accumulates — across the hundreds of seeks in the live DRM/HLS stress tests — into the same spurious-timeout flake the off-RT gate fixed for raw reads (flash-masked, since virtual time collapses the park). Any off-RT readiness edge that can flip the wake-free probe also fires a `kithara_stream::WorkerWake` (installed by the audio worker via `Source::set_worker_wake`, bridged to `AudioWorkerHandle::wake`) right after `ready.signal()`: per-chunk **write** (plaintext bytes land), fetch **settle** (commit, where the DRM decrypt gate opens), cache-hit slot adoption (`committed_final_len` fast paths), and **fence raise / variant commit** (`commit_variant_switch`, including manual ABR mode changes). The worker re-ticks the decoder the instant bytes or a variant fence become observable instead of on its 10 ms poll; the timeout stays as a backstop. `clear_variant_fence` still does **not** fire it: it runs on the `#[rtsan_forbid_blocking]` produce core where a cross-thread unpark is illegal, and seek already wakes the worker directly. Wait-free (atomic bump + `unpark`) from off-RT readiness producers.
+- **Event-driven read wait.** Every transition that can flip the wake-free probe `signal()`s the gate so a parked `wait_range(_, None)` re-probes: each **segment byte write** (the `FetchSlot` writer wrapper) and **settle** (commit/fail/cancel) on the fetch path; the **seek reset** (`reset_for_seek`) on the coord; and **cancel** via a `CancelToken::on_cancel` waker registered for the wait's lifetime (the one transition with no producer-side signal, mirroring `kithara-storage` `wait_range_inner`). The reader snapshots the gate counter **before** probing and parks only if it is unchanged — a seqlock guard that closes the lost-wakeup window even though the probe predicate (the `kithara-assets` availability index) and the gate sit under different locks. A genuine wedge (no signal site ever fires) trips the `#[kithara::hang_watchdog]` on the wait rather than parking forever. The probe path stays wake-free; only the off-RT `None` caller blocks.
+- **Event-driven audio-worker wake.** The wake-free probe path above means the RT decoder's worker, when it underruns on a not-yet-arrived segment, parks on the audio scheduler's `Waiting` timer (`kithara-audio` `WAITING_TIMEOUT` = 10 ms) and rediscovers data only on the next poll. Under heavy load that park stretches (OS deschedule) and accumulates — across the hundreds of seeks in the live DRM/HLS stress tests — into the same spurious-timeout flake the off-RT gate fixed for raw reads (flash-masked, since virtual time collapses the park). Any off-RT readiness edge that can flip the wake-free probe also fires a `kithara_stream::WorkerWake` (installed by the audio worker via `Source::set_worker_wake`, bridged to `AudioWorkerHandle::wake`) right after `ready.signal()`: per-chunk **write** (plaintext bytes land), fetch **settle** (commit, where the DRM decrypt gate opens), and cache-hit slot adoption (`committed_final_len` fast paths). The worker re-ticks the decoder the instant bytes become observable instead of on its 10 ms poll; the timeout stays as a backstop. The coord's own seek reset does **not** fire it: it runs on the `#[rtsan_forbid_blocking]` produce core where a cross-thread unpark is illegal, and seek already wakes the worker directly. Wait-free (atomic bump + `unpark`) from off-RT readiness producers.
 - On a seek miss, the source enqueues an explicit on-demand segment fetch for the active variant and seek epoch.
 - On a mid-stream ABR switch, stale metadata offsets are discarded — the source wakes the sequential downloader rather than trusting old offsets.
 - **`is_canonical_complete` two-step read.** It loads the lock-free `sizes_complete` atomic (`Acquire`) *before* taking the frame lock for the `byte_shift` / `served` / `init_seed` / `offsets` geometry checks. The split is safe because `sizes_complete` is republished only **after** `recompute` inside `Layout::apply_commit` / `reset` (mutate frame under the write lock → materialise the `FrameSnapshot` → drop the guard → `republish`): the atomic flips back to `true` only once the offset table is already exact, so a `true` read can never observe an in-progress recompute. Gates `layout_seek_invariant` / `prepare_for_seek`'s seek-reset skip.

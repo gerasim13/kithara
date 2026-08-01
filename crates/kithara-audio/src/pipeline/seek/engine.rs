@@ -128,10 +128,6 @@ impl SeekEngine {
             request.emit_request = false;
         }
         let anchor = ctx.stream.seek_time_anchor(position);
-        // The seek's own reads must cross the fence, but nothing has been
-        // recreated yet: the switch is acked either by `apply_anchor` (the
-        // running decoder carries across) or at the rebuild install site.
-        ctx.stream.open_variant_read_gate();
         ctx.seek.complete(epoch);
         ctx.readiness.arm_peer_wake();
         let mode = match anchor {
@@ -195,7 +191,6 @@ impl SeekEngine {
             }
             anchor::AnchorPlan::Seek => {}
         }
-        ctx.stream.clear_variant_fence();
         update_len(ctx.decode, ctx.stream);
         match ctx
             .decode

@@ -113,13 +113,6 @@ impl<T: StreamType> RebuildPort<T> {
         if self.pending.is_some() {
             return Err((recreate, RecreateOutcome::SoftFailed));
         }
-        // Open the read gate so the rebuild's own construction reads are not
-        // short-circuited by the switch they exist to resolve. The switch
-        // itself stays outstanding until the rebuilt decoder is installed —
-        // this call must never ack it, or a rebuild that comes back
-        // interrupted leaves the session on the old variant with the signal
-        // already consumed.
-        stream.open_variant_read_gate();
         if recreate.cause == RecreateCause::FormatBoundary
             && matches!(recreate.next, RecreateNext::Decode)
         {

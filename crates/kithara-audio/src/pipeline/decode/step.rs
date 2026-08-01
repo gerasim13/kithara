@@ -1,4 +1,4 @@
-use kithara_decode::{DecodeError, DecoderChunkOutcome, ErrorClass, PcmChunk};
+use kithara_decode::{DecoderChunkOutcome, ErrorClass, PcmChunk};
 use kithara_events::{AudioEvent, DecoderEvent, SeekLifecycleStage, SegmentLocation};
 use kithara_stream::{PendingReason, StreamType};
 use kithara_test_utils::kithara;
@@ -10,7 +10,7 @@ use crate::{
     pipeline::{
         decode::{
             core::{ActiveDecode, DecodeAction, DecodeCtx},
-            format::{FormatDecision, detect, handle_variant_change},
+            format::{FormatDecision, detect},
         },
         fetch::Fetch,
         gapless::visible_duration,
@@ -18,12 +18,6 @@ use crate::{
         track::{TrackFailure, WaitingReason},
     },
 };
-
-struct Consts;
-
-impl Consts {
-    const VARIANT_CHANGE: &str = "variant change signal without observable format transition";
-}
 
 #[kithara::hang_watchdog]
 pub(crate) fn tick<T: StreamType>(
@@ -49,22 +43,7 @@ pub(crate) fn tick<T: StreamType>(
         }
         match core.next_chunk(ctx.stream.position()) {
             Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
-                return variant_change(
-                    core,
-                    &ctx,
-                    &DecodeError::InvalidData {
-                        detail: Consts::VARIANT_CHANGE,
-                    },
-                );
-            }
-            Ok(DecoderChunkOutcome::Pending(_)) if ctx.stream.has_variant_change_pending() => {
-                return variant_change(
-                    core,
-                    &ctx,
-                    &DecodeError::InvalidData {
-                        detail: Consts::VARIANT_CHANGE,
-                    },
-                );
+                return variant_change(core, &ctx);
             }
             Ok(DecoderChunkOutcome::Pending(_)) => {
                 return DecodeAction::Pending(WaitingReason::Waiting);
@@ -99,7 +78,7 @@ pub(crate) fn tick<T: StreamType>(
                 return DecodeAction::Eof;
             }
             Err(error) if error.classify() == ErrorClass::VariantChange => {
-                return variant_change(core, &ctx, &error);
+                return variant_change(core, &ctx);
             }
             Err(error) if error.classify() == ErrorClass::Interrupted => {}
             Err(error) => {
@@ -156,16 +135,9 @@ pub(crate) fn produced<T: StreamType>(
 pub(crate) fn variant_change<T: StreamType>(
     core: &ActiveDecode,
     ctx: &DecodeCtx<'_, T>,
-    error: &DecodeError,
 ) -> DecodeAction {
-    match handle_variant_change(ctx.stream, core.active(), ctx.seek_observe, error) {
-        Ok(recreate) => DecodeAction::StartRecreate(recreate),
-        Err(error) => {
-            if error.is_interrupted() {
-                DecodeAction::SeekInterrupted
-            } else {
-                DecodeAction::Failed(TrackFailure::Decode(error))
-            }
-        }
+    match detect(ctx.stream, core.active(), ctx.seek_observe) {
+        FormatDecision::Recreate(recreate) => DecodeAction::StartRecreate(recreate),
+        FormatDecision::None => DecodeAction::SeekInterrupted,
     }
 }

@@ -39,20 +39,9 @@ pub(crate) fn observed_seek(seek: &dyn SeekObserve, min_epoch: u64) -> Option<Se
     })
 }
 
-/// The switch stays outstanding for the whole rebuild — it is acked at the
-/// install site — so "a fence is up" no longer distinguishes the switch this
-/// rebuild serves from a newer one. Compare targets instead: only a fence
-/// demanding some *other* variant supersedes the decoder just built.
+/// Only the variant the source actually publishes decides supersession: a
+/// decoder built for a variant the stream has already moved past is stale.
 fn variant_superseded<T: StreamType>(stream: &SharedStream<T>, recreate: &RecreateState) -> bool {
-    if let Some(target) = stream.variant_change_target()
-        && recreate
-            .media_info
-            .variant_index
-            .and_then(|index| usize::try_from(index).ok())
-            != Some(target)
-    {
-        return true;
-    }
     let Some(current) = stream.media_info() else {
         return false;
     };

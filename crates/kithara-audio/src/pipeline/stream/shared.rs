@@ -82,10 +82,6 @@ impl<T: StreamType> SharedStream<T> {
             pub(crate) fn media_info(&self) -> Option<MediaInfo>;
             pub(crate) fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
             pub(crate) fn format_change_segment_range(&self) -> kithara_stream::StreamResult<Range<u64>>;
-            pub(crate) fn clear_variant_fence(&self);
-            pub(crate) fn open_variant_read_gate(&self);
-            pub(crate) fn has_variant_change_pending(&self) -> bool;
-            pub(crate) fn variant_change_target(&self) -> Option<usize>;
             pub(crate) fn seek_time_anchor(&self, position: kithara_platform::time::Duration) -> Result<Option<SourceSeekAnchor>, io::Error>;
             /// Build a fresh reader-side event-sink instance from the inner source.
             pub(crate) fn take_reader_event_sink(&self) -> Option<kithara_stream::BoxedEventSink>;

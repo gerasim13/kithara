@@ -1622,21 +1622,21 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
 
-    // First switch: cross-codec to FLAC. Closes the variant_generation fence.
+    // First switch: cross-codec to FLAC, which forces a decoder recreate.
     handle
         .set_mode(AbrMode::manual(3))
         .expect("Manual(3) (FLAC) target valid");
 
-    // Race window: same-codec switch must land BEFORE
-    // `clear_variant_fence` fires for the cross-codec recreate. In
-    // local test environment (in-process server, no CDN latency)
-    // recreate completes in ~50-100ms vs ~3-4s in prod. Sleep 0
-    // (immediate) maximizes the chance of hitting the race here.
+    // Race window: the same-codec switch must land BEFORE the cross-codec
+    // recreate installs its decoder. In the local test environment
+    // (in-process server, no CDN latency) the recreate completes in
+    // ~50-100ms vs ~3-4s in prod, so a short sleep maximizes the chance of
+    // hitting the race here.
     kithara::platform::time::sleep(Duration::from_millis(10)).await;
 
-    // Second switch: same-codec sibling of v=0 (AAC v=1) — does NOT
-    // bump fence, but shrinks `served_until` on whatever variant is
-    // active and activates v=1 with `served_from = switch_at`.
+    // Second switch: same-codec sibling of v=0 (AAC v=1) — byte continuity,
+    // so it shrinks `served_until` on whatever variant is active and
+    // activates v=1 with `served_from = switch_at`.
     handle
         .set_mode(AbrMode::manual(1))
         .expect("Manual(1) (AAC sibling) target valid");
