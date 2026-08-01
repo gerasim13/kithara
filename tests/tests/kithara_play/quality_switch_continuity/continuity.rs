@@ -223,7 +223,11 @@ fn primary_continuity_report(switched: &[f32], control: &[f32]) -> ContinuityRep
     ContinuityReport { channels, failures }
 }
 
-fn cochlea_metric(samples: &[f32]) -> CochleaMetric {
+/// The metric plus the onset times behind its count. A bare count says a switch
+/// grew an onset but not where, and "where" is the whole diagnosis: at the
+/// splice it is the join, spread through the tail it is the destination decoder
+/// started mid-stream.
+fn measure_cochlea(samples: &[f32]) -> (CochleaMetric, Vec<f64>) {
     let audio = ProbeAudio {
         samples: samples.to_vec(),
         channels: CHANNELS,
@@ -236,14 +240,15 @@ fn cochlea_metric(samples: &[f32]) -> CochleaMetric {
         .iter()
         .filter(|segment| segment.silent)
         .count();
-    CochleaMetric {
+    let metric = CochleaMetric {
         silent_buckets,
         onsets: report.onsets.count,
         clipped_samples: report.clipping.clipped_samples,
         true_peak_over_0dbtp: report.clipping.true_peak_over_0dbtp,
         leading_silence_ms: report.silence.leading_ms,
         trailing_silence_ms: report.silence.trailing_ms,
-    }
+    };
+    (metric, report.onsets.times_ms.clone())
 }
 
 fn cochlea_failures(
@@ -251,7 +256,7 @@ fn cochlea_failures(
     source: CochleaMetric,
     destination: CochleaMetric,
 ) -> Vec<String> {
-    let switched = cochlea_metric(switched);
+    let (switched, switched_onsets_ms) = measure_cochlea(switched);
     let silent_limit = source.silent_buckets.max(destination.silent_buckets);
     let onset_limit = source.onsets.max(destination.onsets);
     let clipped_limit = source.clipped_samples.max(destination.clipped_samples);
@@ -264,7 +269,7 @@ fn cochlea_failures(
     }
     if switched.onsets > onset_limit {
         failures.push(format!(
-            "Cochlea found extra onsets: switched={}, source={}, destination={}",
+            "Cochlea found extra onsets: switched={}, source={}, destination={}, switched_onsets_ms={switched_onsets_ms:?}",
             switched.onsets, source.onsets, destination.onsets,
         ));
     }
@@ -305,8 +310,8 @@ fn cochlea_failures(
     failures
 }
 
-fn assert_clean_control(control: &[f32], label: &str) -> CochleaMetric {
-    let cochlea = cochlea_metric(control);
+fn assert_clean_control(control: &[f32], label: &str) -> (CochleaMetric, Vec<f64>) {
+    let (cochlea, onsets_ms) = measure_cochlea(control);
     assert_eq!(
         cochlea.silent_buckets, 0,
         "{label} no-switch control is not a valid baseline: {} silent Cochlea buckets",
@@ -350,7 +355,7 @@ fn assert_clean_control(control: &[f32], label: &str) -> CochleaMetric {
         "{label} no-switch control contains a PCM discontinuity:\n{}\nmetrics={metrics:?}",
         failures.join("\n"),
     );
-    cochlea
+    (cochlea, onsets_ms)
 }
 
 fn sine_omega() -> f32 {
@@ -417,7 +422,7 @@ async fn manual_quality_switches_match_time_aligned_no_switch_pcm(#[case] backen
     for (label, variant) in [("aac-low", AAC_LOW), ("aac-high", AAC_HIGH), ("flac", FLAC)] {
         let control_label = format!("{label}-no-switch-control");
         let control = render_no_switch_control(&master_url, variant, backend, &control_label).await;
-        let cochlea = assert_clean_control(&control.samples, &control_label);
+        let (cochlea, onsets_ms) = assert_clean_control(&control.samples, &control_label);
         if let Some(reference) = controls.iter().flatten().next() {
             assert_eq!(
                 control.capture_frame, reference.render.capture_frame,
@@ -426,7 +431,7 @@ async fn manual_quality_switches_match_time_aligned_no_switch_pcm(#[case] backen
             );
         }
         println!(
-            "QUALITY_SWITCH_CONTROL variant={variant} backend={backend:?} capture_source_frame={} frames={}",
+            "QUALITY_SWITCH_CONTROL variant={variant} backend={backend:?} capture_source_frame={} frames={} onsets_ms={onsets_ms:?}",
             control.capture_frame,
             control.samples.len() / usize::from(CHANNELS),
         );
