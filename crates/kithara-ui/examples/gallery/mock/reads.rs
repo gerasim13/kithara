@@ -577,10 +577,10 @@ mod tests {
         let Some(ReadValue::Tree(rows)) = reads.get("library.tree") else {
             panic!("expected tree rows");
         };
-        rows.iter()
-            .find(|row| row.label == label)
-            .map(|row| row.selected)
-            .unwrap_or_else(|| panic!("missing visible tree row {label}"))
+        rows.iter().find(|row| row.label == label).map_or_else(
+            || panic!("missing visible tree row {label}"),
+            |row| row.selected,
+        )
     }
 
     fn visible_tree_row_index(reads: &MockReads, label: &str) -> usize {

@@ -865,7 +865,6 @@ mod tests {
                 spec: ControlSpec::TabLarge { .. },
                 ..
             } => paths.push(ui.resolve(*path).to_owned()),
-            ExpandedNode::Control { .. } => {}
             _ => {}
         }
     }
@@ -1038,7 +1037,6 @@ mod tests {
                     },
                 ..
             } => queries.push(ui.resolve(*id)),
-            ExpandedNode::Control { .. } => {}
             _ => {}
         }
     }
@@ -1055,7 +1053,7 @@ mod tests {
                 }
             }
             CompiledNode::Module { root, .. } => {
-                collect_expanded_context_scopes(root, ui, contexts)
+                collect_expanded_context_scopes(root, ui, contexts);
             }
             _ => {}
         }
@@ -1099,7 +1097,6 @@ mod tests {
                 ui.resolve(*write),
                 scope_items.len(),
             )),
-            ExpandedNode::Control { .. } => {}
             _ => {}
         }
     }
