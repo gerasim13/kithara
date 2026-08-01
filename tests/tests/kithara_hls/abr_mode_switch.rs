@@ -283,6 +283,24 @@ fn read_phase_until_samples<S: StreamType>(
     target_samples: u64,
     label: &str,
 ) -> PhaseReadStats {
+    read_phase_until(audio, target_samples, label, || true)
+}
+
+/// Pump until the sample target is met *and* `settled` holds.
+///
+/// A sample target alone does not bound a phase that is meant to observe a
+/// switch: a consumer reading a warm cache produces those samples in less
+/// wall-clock time than one fetch takes, so the whole budget can be spent on
+/// the outgoing variant and the phase ends before the switch it is watching
+/// for has issued a request. `settled` keeps the window open until the thing
+/// under observation has actually happened; the harness timeout, not the
+/// sample budget, is what fails a switch that never comes.
+fn read_phase_until<S: StreamType>(
+    audio: &mut Audio<Stream<S>>,
+    target_samples: u64,
+    label: &str,
+    settled: impl Fn() -> bool,
+) -> PhaseReadStats {
     let mut buf = vec![0f32; 4096 * 2];
     let mut stats = PhaseReadStats {
         samples: 0,
@@ -290,7 +308,7 @@ fn read_phase_until_samples<S: StreamType>(
         saw_eof: false,
     };
 
-    while stats.samples < target_samples {
+    while stats.samples < target_samples || !settled() {
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) => {
                 let n = count.get();
@@ -1698,7 +1716,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
-    let collector = EventCollector::new(&bus);
+    let collector = Arc::new(EventCollector::new(&bus));
 
     let hls_config = HlsConfig::for_url(url)
         .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
@@ -1786,11 +1804,21 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     // Capping at `phase4_target` (≈ 11 s of audio) keeps us far short of the
     // true tail: any `Eof` before the cap is the premature/false EOS the
     // contract guards against, and is still recorded in `saw_eof`.
+    //
+    // The sample target alone does not bound this window either: the outgoing
+    // variant is warm after phase 1, so those samples come out in less
+    // wall-clock time than the incoming variant needs for a single fetch, and
+    // the phase can close before the switch has issued one request. It runs
+    // until the switch is seen as well.
     let phase4_target: u64 = 500_000;
-    let phase4 =
-        spawn_blocking(move || read_phase_until_samples(&mut audio, phase4_target, "phase 4"))
-            .await
-            .expect("phase 4 join");
+    let switch_seen = Arc::clone(&collector);
+    let phase4 = spawn_blocking(move || {
+        read_phase_until(&mut audio, phase4_target, "phase 4", || {
+            switch_seen.applied_targets().contains(&0)
+        })
+    })
+    .await
+    .expect("phase 4 join");
 
     let targets = collector.applied_targets();
     let audio_trace = collector.audio_trace();
