@@ -10,7 +10,8 @@ use crate::{
     module::WindowControlsStyle,
     render::{ReadValue, Reads, Skin, UiEvent, WindowEdge},
     widgets::{
-        DragGhost, Widget,
+        Widget,
+        drag_ghost::DragGhost,
         window::{TitleBar, WindowControls, WindowSurface},
     },
 };

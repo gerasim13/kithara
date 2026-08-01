@@ -1,0 +1,20 @@
+android:main:
+  extends: .android-job
+  stage: android
+  timeout: 90 minutes
+  needs:
+    - linux:portability
+  script:
+    - just ci run android
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "main"
+    - if: $KITHARA_PIPELINE_KIND == "nightly"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    reports:
+      junit:
+        - android/lib/build/outputs/androidTest-results/connected/**/*.xml
+    paths:
+      - android/lib/build/reports/androidTests/
+      - android/lib/build/outputs/androidTest-results/

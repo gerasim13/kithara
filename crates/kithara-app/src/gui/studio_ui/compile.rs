@@ -10,9 +10,8 @@ use kithara_ui::{
 use super::{
     cache::{DeckLayout, StudioCache},
     endpoints::StudioRegistry,
-    reads::StudioRoot,
 };
-use crate::gui::{app::Kithara, message::Message};
+use crate::gui::{app::Kithara, message::Message, studio_reads::StudioRoot};
 
 const DOCS: &[(&str, &str)] = &[
     (

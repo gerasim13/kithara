@@ -6,13 +6,53 @@ use kithara::{
     audio::analysis::BeatAnalysisConfig,
     bufpool::PcmPool,
     hls::SizeProbeMethod,
+    play::policy::DomainKeyPolicy,
     prelude::PlaybackResamplerBackend,
     stream::dl::Downloader,
 };
 use kithara_drm::KeyProcessorRegistry;
 use kithara_platform::{CancelToken, sync::Arc};
+use url::Url;
 
 use crate::{baked, theme::Palette};
+
+/// App-owned snapshot of one DRM policy and its ordinary resolver registry.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct AppDrm {
+    policy: Arc<DomainKeyPolicy>,
+    registry: KeyProcessorRegistry,
+}
+
+impl AppDrm {
+    /// Register one immutable domain policy and retain the same policy for
+    /// resource-header selection.
+    #[must_use]
+    pub fn new(policy: DomainKeyPolicy) -> Self {
+        let policy = Arc::new(policy);
+        let mut registry = KeyProcessorRegistry::new();
+        registry.register(policy.clone());
+        Self { policy, registry }
+    }
+
+    /// Return the opaque key-request registry.
+    #[must_use]
+    pub fn registry(&self) -> &KeyProcessorRegistry {
+        &self.registry
+    }
+
+    /// Return resource headers selected by the same registered policy.
+    #[must_use]
+    pub fn resource_headers(&self, url: &Url) -> Option<kithara::net::Headers> {
+        self.policy.resource_headers(url)
+    }
+}
+
+impl Default for AppDrm {
+    fn default() -> Self {
+        Self::new(baked::build_baked_drm_policy())
+    }
+}
 
 /// Application configuration passed to frontends.
 ///
@@ -36,9 +76,9 @@ pub struct AppConfig {
     pub shutdown: CancelToken,
     /// Shared HTTP downloader for every track.
     pub downloader: Downloader,
-    /// DRM key processing registry.
-    #[builder(default = baked::build_baked_drm_registry())]
-    pub key_registry: KeyProcessorRegistry,
+    /// App-owned DRM policy and its opaque key-request registry.
+    #[builder(default)]
+    pub drm: AppDrm,
     /// Color palette for the UI.
     #[builder(default)]
     pub palette: Palette,
@@ -76,7 +116,7 @@ fn default_tracks() -> Vec<String> {
 impl fmt::Debug for AppConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AppConfig")
-            .field("key_registry", &self.key_registry)
+            .field("drm", &self.drm)
             .field("palette", &self.palette)
             .field("log_directives", &self.log_directives)
             .field("tracks", &self.tracks)
@@ -109,6 +149,7 @@ impl AppConfig {
             .backend(StorageBackend::default())
             .pool(byte_pool.clone())
             .flush_hub(flush_hub)
+            .layouts(baked::build_baked_asset_layouts())
             .build();
         Self::builder()
             .downloader(downloader)

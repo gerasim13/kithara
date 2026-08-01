@@ -1,0 +1,31 @@
+deep:nightly:
+  extends: .macos-job
+  stage: deep
+  timeout: 180 minutes
+  needs:
+    - windows:nightly
+  script:
+    - just ci run deep
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "nightly"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - perf-results.txt
+      - bench-results.txt
+      - target/criterion/
+
+deep:weekly:
+  extends: .linux-job
+  stage: deep
+  timeout: 6 hours
+  script:
+    - just ci run weekly
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "weekly"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - target/mutants-ci/

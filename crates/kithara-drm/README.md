@@ -37,12 +37,12 @@ let decrypted = &output[..len];
 <tr><td><code>aes128_cbc_process_chunk</code></td><td>fn</td><td>Decrypts a chunk in place; handles PKCS7 padding on the final chunk</td></tr>
 <tr><td><code>UniqueBinaryCipher</code></td><td>struct</td><td>Helper cipher used by app-side key processors (e.g. to unwrap server-encrypted keys with an app-embedded master key)</td></tr>
 <tr><td><code>KeyProcessor</code></td><td>type alias</td><td><code>Arc&lt;dyn Fn(Bytes) -&gt; KeyProcessResult + Send + Sync&gt;</code> invoked before decryption to transform / unwrap a fetched key</td></tr>
-<tr><td><code>KeyRequest</code></td><td>struct</td><td>Per-fetch processor plus request headers/query params produced by a rule</td></tr>
+<tr><td><code>KeyRequest</code></td><td>struct</td><td>Fresh per-fetch headers paired with the processor that can unwrap the corresponding response</td></tr>
 <tr><td><code>KeyRequestFactory</code></td><td>type alias</td><td>Factory that returns a fresh <code>KeyRequest</code> for each key fetch</td></tr>
-<tr><td><code>KeyProcessorRule</code></td><td>struct (bon-builder)</td><td>Single registry entry: domain matchers + request factory + optional headers/query params</td></tr>
-<tr><td><code>KeyProcessorRegistry</code></td><td>struct</td><td>Ordered list of <code>KeyProcessorRule</code>s; <code>find()</code> returns the first match</td></tr>
+<tr><td><code>PreparedKeyRequest</code></td><td>struct</td><td>Final wire URL, policy headers, and response processor returned by a resolver</td></tr>
+<tr><td><code>KeyRequestResolver</code></td><td>trait</td><td>Policy-neutral callback that optionally prepares a key request for a URL</td></tr>
+<tr><td><code>KeyProcessorRegistry</code></td><td>struct</td><td>Ordered resolver registry; <code>prepare()</code> returns the first prepared request</td></tr>
 <tr><td><code>KeyProcessResult</code></td><td>type alias</td><td><code>Result&lt;Bytes, DrmError&gt;</code> returned by a <code>KeyProcessor</code> callback</td></tr>
-<tr><td><code>DomainMatcher</code></td><td>enum</td><td><code>Exact</code> / <code>Wildcard</code> / <code>All</code> host matcher used by <code>KeyProcessorRegistry</code></td></tr>
 <tr><td><code>DrmError</code></td><td>enum</td><td>Crate-level error</td></tr>
 </table>
 
@@ -52,6 +52,8 @@ Used by `kithara-hls` through per-resource processing context: encrypted segment
 acquires pass `Option<ProcessCtx>` to `acquire_resource_with_ctx`, with
 `DecryptContext` wrapped as a `ResourceProcessor`. IV derivation and optional key
 unwrapping happen in `kithara-hls`'s `KeyStore` before a `DecryptContext` is
-built.
+built. Concrete URL and domain policies live in the composition layer
+(`kithara-play`) and register a `KeyRequestResolver`; this crate does not
+interpret domains or query parameters.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

@@ -30,6 +30,11 @@ The native cache object graph is owned in Rust:
   `AssetLayoutRegistry` behind a mutex. `register` replaces the layout for the
   file or HLS target; targets are independent and the latest registration for
   one target is the registry's current value.
+- `query_identity_layout` accepts ordered `FfiCacheIdentityRule` records and
+  returns a Rust-owned `FfiAssetLayout`. Each record carries domain patterns
+  and application-defined query parameter names. Callers use the same ordinary
+  `register` method to install that layout for file, HLS, or both; no foreign
+  callback participates in its cache-key derivation.
 - `FfiAssetStore::new(root, registry)` snapshots the registry and builds one
   `AssetStore`. `root = None` preserves the platform `StorageBackend` default;
   a supplied root selects that outer disk directory without changing paths
@@ -100,4 +105,4 @@ Wasm builds use the web-audio backend and no native stretch backend. The shared
 
 ## Build flow internals
 
-- `cargo xtask wasm postbuild` — post-build patches for COEP/COOP, polyfills, and the `checkRuntime()` helper appended to `kithara-ffi.js`.
+- `just tooling xtask wasm postbuild` — post-build patches for COEP/COOP, polyfills, and the `checkRuntime()` helper appended to `kithara-ffi.js`.

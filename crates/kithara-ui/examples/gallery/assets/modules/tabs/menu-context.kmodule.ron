@@ -1,0 +1,45 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-menu-context",
+    root: Column(
+        gap: 14.0,
+        pad: 14.0,
+        children: [
+            Text(id: "title", style: Section, label: "CONTEXT MENU"),
+            Text(
+                id: "hint",
+                style: MicroLabel,
+                label: "RIGHT-CLICK A TRACK TO OPEN ITS MENU. LEFT-CLICK SELECTS. PRESS OUTSIDE OR ESC TO DISMISS.",
+                size: (w: Fill, h: Fixed(38.0)),
+            ),
+            Column(
+                id: "list",
+                gap: 0.0,
+                frame: (top: true, right: true, bottom: false, left: true),
+                children: [
+                    Include(id: "track-1", source: "menu-context/track-row.kmodule.ron", with: { "row": "1" }),
+                    Include(id: "track-2", source: "menu-context/track-row.kmodule.ron", with: { "row": "2" }),
+                    Include(id: "track-3", source: "menu-context/track-row.kmodule.ron", with: { "row": "3" }),
+                    Include(id: "track-4", source: "menu-context/track-row.kmodule.ron", with: { "row": "4" }),
+                ],
+            ),
+            Row(
+                id: "status",
+                size: (w: Fill, h: Fixed(26.0)),
+                pad_x: 10.0,
+                gap: 8.0,
+                background: BgFooter,
+                children: [
+                    Text(
+                        id: "status-label",
+                        size: (w: Fill, h: Fill),
+                        style: MicroLabel,
+                        label: "ПОСЛЕДНЕЕ ДЕЙСТВИЕ",
+                    ),
+                    Text(id: "status-value", style: MicroLabel, color: Accent, read: Model(id: "gallery.menu.action")),
+                ],
+            ),
+        ],
+    ),
+)

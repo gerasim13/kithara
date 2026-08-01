@@ -82,6 +82,18 @@ pub(crate) fn run(args: &PublishArgs, ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn publish_release(ctx: &Ctx) -> Result<()> {
+    run(
+        &PublishArgs {
+            dry_run: false,
+            verify_registry: false,
+            delay: None,
+            no_verify: true,
+        },
+        ctx,
+    )
+}
+
 /// Dry-run: disable hakari, validate packaging for each crate, re-enable hakari.
 ///
 /// Uses `cargo package --list` to verify that each crate can be packaged

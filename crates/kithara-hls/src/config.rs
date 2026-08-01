@@ -14,17 +14,15 @@ use url::Url;
 
 /// Encryption key handling configuration.
 ///
-/// DRM key processing is routed through [`KeyProcessorRegistry`] so
-/// different providers (zvuk, custom in-house DRM, etc.) can coexist
-/// with different processors, headers, and query params — all scoped
-/// by URL domain.
+/// DRM key processing is routed through [`KeyProcessorRegistry`]. Concrete
+/// resolvers decide which URLs they handle and return prepared requests without
+/// exposing provider policy to HLS.
 #[derive(Clone, Debug, Default, Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct KeyOptions {
-    /// Domain-scoped processor registry. Key URLs whose host matches
-    /// a rule get that rule's processor + headers + query params;
-    /// unmatched URLs use the raw key as-is.
+    /// Ordered processor resolver registry. A URL not handled by any resolver
+    /// uses the raw key as plain AES-128.
     pub key_registry: Option<KeyProcessorRegistry>,
 }
 

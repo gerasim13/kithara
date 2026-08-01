@@ -1,12 +1,20 @@
+use std::collections::BTreeMap;
+
 use crate::{
     error::UiDocError,
-    expand::{Binding, Budget, ControlSite, DropSpec, ExpandedNode, Expander, intern_binding},
+    expand::{
+        Binding, BlockSpec, Budget, ControlSite, DropSpec, ExpandedNode, Expander, intern_binding,
+        substitute_binding, substitute_map,
+    },
     ids::{InternId, Interner, SourceUri, StrArena},
     layout::{Axis, FrameSides, LayoutNode, parse_layout},
     module::ChromeStyle,
     registry::EndpointRegistry,
     resolve::load_module_graph,
-    size::{SizeSpec, combine_horizontal, combine_vertical, compute_size},
+    size::{
+        BlockNode, Hidden, SizeSpec, VISIBLE, combine_horizontal, combine_vertical, compute_size,
+        has_blocks, with_module_chrome,
+    },
     skin::SkinDoc,
     source::{SourceResolver, UiConfig},
     validate,
@@ -41,6 +49,11 @@ pub enum CompiledNode {
         axis: Axis,
         children: Vec<(f32, Self)>,
         size: SizeSpec,
+        blocks: bool,
+    },
+    Optional {
+        block: BlockSpec,
+        child: Box<Self>,
     },
     Module {
         instance: InternId,
@@ -56,7 +69,26 @@ pub enum CompiledNode {
         collapsed: InternId,
         root: Box<ExpandedNode>,
         size: SizeSpec,
+        blocks: bool,
     },
+}
+
+impl CompiledNode {
+    pub(crate) const fn blocks(&self) -> bool {
+        match self {
+            Self::Split { blocks, .. } | Self::Module { blocks, .. } => *blocks,
+            Self::Optional { .. } => true,
+        }
+    }
+}
+
+impl BlockNode for CompiledNode {
+    fn block(&self) -> Option<&BlockSpec> {
+        match self {
+            Self::Optional { block, .. } => Some(block),
+            _ => None,
+        }
+    }
 }
 
 /// Compiles a layout and its module graph into renderer-ready UI data.
@@ -136,10 +168,24 @@ impl Compiler<'_> {
                     Axis::Horizontal => combine_horizontal(sizes),
                     Axis::Vertical => combine_vertical(sizes),
                 };
+                let blocks = children.iter().any(|(_, child)| child.blocks());
                 Ok(CompiledNode::Split {
                     axis: *axis,
                     children,
                     size,
+                    blocks,
+                })
+            }
+            LayoutNode::Optional { id, hidden, node } => {
+                let hidden = substitute_binding(&no_args(), layout_uri, hidden, &id.0)?;
+                validate::check_layout_block(&hidden, &id.0, layout_uri, self.endpoints)?;
+                let child = self.build(node, layout_uri)?;
+                Ok(CompiledNode::Optional {
+                    block: BlockSpec {
+                        path: self.interner.intern(&id.0, layout_uri)?,
+                        hidden: intern_binding(self.interner, &hidden, layout_uri)?,
+                    },
+                    child: Box::new(child),
                 })
             }
             LayoutNode::Module {
@@ -150,26 +196,7 @@ impl Compiler<'_> {
                 frame,
                 corners,
             } => {
-                for value in with.values() {
-                    if !value.starts_with("$$")
-                        && let Some(name) = value.strip_prefix('$')
-                    {
-                        return Err(UiDocError::UnresolvedParam {
-                            origin: layout_uri.clone(),
-                            name: name.to_owned(),
-                            path: instance.0.clone(),
-                        });
-                    }
-                }
-                let args = with
-                    .iter()
-                    .map(|(key, value)| {
-                        let value = value
-                            .strip_prefix("$$")
-                            .map_or_else(|| value.clone(), |literal| format!("${literal}"));
-                        (key.clone(), value)
-                    })
-                    .collect();
+                let args = substitute_map(&no_args(), layout_uri, with, &instance.0)?;
                 let (module_uri, set) = load_module_graph(
                     self.resolver,
                     Some(layout_uri),
@@ -195,13 +222,11 @@ impl Compiler<'_> {
                     &mut visitor,
                 )
                 .expand_module(&set, &module_uri, &args, &instance.0)?;
-                let size = (*size).unwrap_or_else(|| {
-                    crate::size::with_module_chrome(
-                        compute_size(&expanded.root, self.skin),
-                        expanded.chrome,
-                        self.skin,
-                    )
+                let declared = *size;
+                let size = declared.unwrap_or_else(|| {
+                    module_size(&expanded.root, expanded.chrome, self.skin, VISIBLE)
                 });
+                let blocks = declared.is_none() && has_blocks(&expanded.root);
                 let instance = self.interner.intern(&instance.0, layout_uri)?;
                 Ok(CompiledNode::Module {
                     instance,
@@ -217,14 +242,29 @@ impl Compiler<'_> {
                     collapsed: expanded.collapsed,
                     root: Box::new(expanded.root),
                     size,
+                    blocks,
                 })
             }
         }
     }
 }
 
-fn compiled_node_size(node: &CompiledNode) -> SizeSpec {
+pub(crate) fn compiled_node_size(node: &CompiledNode) -> SizeSpec {
     match node {
+        CompiledNode::Optional { child, .. } => compiled_node_size(child),
         CompiledNode::Split { size, .. } | CompiledNode::Module { size, .. } => *size,
     }
+}
+
+pub(crate) fn module_size(
+    root: &ExpandedNode,
+    chrome: ChromeStyle,
+    skin: &SkinDoc,
+    hidden: Hidden<'_>,
+) -> SizeSpec {
+    with_module_chrome(compute_size(root, skin, hidden), chrome, skin)
+}
+
+fn no_args() -> BTreeMap<String, String> {
+    BTreeMap::new()
 }

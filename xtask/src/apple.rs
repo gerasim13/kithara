@@ -50,7 +50,7 @@ struct SingleFrameworkSpec {
     bundle_id: String,
     /// `CFBundleShortVersionString` (must be numeric for the plist).
     short_version: String,
-    /// `MinimumOSVersion` / build target (e.g. `16.0`).
+    /// `MinimumOSVersion` / build target (e.g. `15.6`).
     deployment_target: String,
     /// System frameworks the Rust core needs autolinked into the static
     /// framework (e.g. `AudioToolbox`, `CoreAudio`).
@@ -401,6 +401,7 @@ fn run_build(profile: crate::BuildProfile, target: Option<&str>) -> Result<()> {
     let metadata = MetadataCommand::new()
         .exec()
         .context("failed to read cargo metadata")?;
+    let deployment_target = load_spec(&metadata)?.deployment_target;
     let root = metadata.workspace_root.as_std_path();
     let crate_dir = root.join("crates/kithara-ffi");
     let apple_dir = root.join("apple");
@@ -440,7 +441,7 @@ fn run_build(profile: crate::BuildProfile, target: Option<&str>) -> Result<()> {
         "-y",
     ]);
     cmd.current_dir(&crate_dir);
-    cmd.env("IPHONEOS_DEPLOYMENT_TARGET", "16.0");
+    cmd.env("IPHONEOS_DEPLOYMENT_TARGET", deployment_target);
     set_simulator_bindgen_args(&mut cmd)?;
 
     let status = cmd.status().context("failed to run cargo swift package")?;

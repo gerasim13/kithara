@@ -16,7 +16,6 @@ ignored = ["kithara-workspace-hack"]
 kithara-platform = { workspace = true }
 
 aes = { workspace = true }
-bon = { workspace = true }
 bytes = { workspace = true }
 cbc = { workspace = true }
 thiserror = { workspace = true }

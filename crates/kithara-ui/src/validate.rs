@@ -33,7 +33,35 @@ pub(crate) fn check_layout_instances(
     origin: &SourceUri,
 ) -> Result<(), UiDocError> {
     let mut seen = BTreeSet::new();
-    walk_layout(&doc.root, &NodePath::default(), origin, &mut seen)
+    walk_layout(
+        &doc.root,
+        &NodePath::default(),
+        origin,
+        &mut seen,
+        Sibling::Only,
+    )
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Sibling {
+    Among,
+    Only,
+}
+
+fn check_block_position(
+    id: &NodeId,
+    path: &NodePath,
+    origin: &SourceUri,
+    sibling: Sibling,
+) -> Result<(), UiDocError> {
+    if sibling == Sibling::Among {
+        return Ok(());
+    }
+    Err(UiDocError::RootBlock {
+        origin: origin.clone(),
+        id: id.0.clone(),
+        path: path.render(),
+    })
 }
 
 fn walk_layout(
@@ -41,6 +69,7 @@ fn walk_layout(
     path: &NodePath,
     origin: &SourceUri,
     seen: &mut BTreeSet<String>,
+    sibling: Sibling,
 ) -> Result<(), UiDocError> {
     match node {
         LayoutNode::Split { children, .. } => {
@@ -54,22 +83,46 @@ fn walk_layout(
                         value: format!("{weight}"),
                     });
                 }
-                walk_layout(&child.node, &child_path, origin, seen)?;
+                walk_layout(&child.node, &child_path, origin, seen, Sibling::Among)?;
             }
             Ok(())
+        }
+        LayoutNode::Optional { id, node, .. } => {
+            let here = path.push(format!("Optional({id})"));
+            check_block_position(id, &here, origin, sibling)?;
+            record_block(id, &here, origin, seen)?;
+            walk_layout(node, &here, origin, seen, Sibling::Only)
         }
         LayoutNode::Module { instance, .. } => {
             check_id(&instance.0, origin)?;
-            if !seen.insert(instance.0.clone()) {
-                return Err(UiDocError::DuplicateId {
-                    origin: origin.clone(),
-                    id: instance.0.clone(),
-                    path: path.push(format!("Module({instance})")).render(),
-                });
-            }
-            Ok(())
+            claim(
+                &instance.0,
+                &path.push(format!("Module({instance})")),
+                origin,
+                seen,
+            )
         }
     }
+}
+
+pub(crate) fn check_block_path(path: &str, origin: &SourceUri) -> Result<(), UiDocError> {
+    let reason = if path.contains('.') {
+        "block address must not contain '.'"
+    } else if path.contains('@') {
+        "block address must not contain '@'"
+    } else {
+        return Ok(());
+    };
+    Err(UiDocError::InvalidId {
+        origin: origin.clone(),
+        id: path.to_owned(),
+        reason: reason.to_owned(),
+    })
+}
+
+pub(crate) fn check_block_id(id: &str, origin: &SourceUri) -> Result<(), UiDocError> {
+    check_id(id, origin)?;
+    check_block_path(id, origin)
 }
 
 pub(crate) fn check_id(id: &str, origin: &SourceUri) -> Result<(), UiDocError> {
@@ -106,16 +159,21 @@ pub(crate) fn check_module_id(doc: &ModuleDoc, origin: &SourceUri) -> Result<(),
 
 pub(crate) fn check_module_node_ids(doc: &ModuleDoc, origin: &SourceUri) -> Result<(), UiDocError> {
     let mut seen = BTreeSet::new();
-    walk_module(&doc.root, &NodePath::default(), origin, &mut seen)
+    walk_module(
+        &doc.root,
+        &NodePath::default(),
+        origin,
+        &mut seen,
+        Sibling::Only,
+    )
 }
 
-fn record(
+fn claim(
     id: &str,
     path: &NodePath,
     origin: &SourceUri,
     seen: &mut BTreeSet<String>,
 ) -> Result<(), UiDocError> {
-    check_id(id, origin)?;
     if !seen.insert(id.to_owned()) {
         return Err(UiDocError::DuplicateId {
             origin: origin.clone(),
@@ -126,11 +184,32 @@ fn record(
     Ok(())
 }
 
+fn record(
+    id: &str,
+    path: &NodePath,
+    origin: &SourceUri,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), UiDocError> {
+    check_id(id, origin)?;
+    claim(id, path, origin, seen)
+}
+
+fn record_block(
+    id: &NodeId,
+    path: &NodePath,
+    origin: &SourceUri,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), UiDocError> {
+    check_block_id(&id.0, origin)?;
+    claim(&id.0, path, origin, seen)
+}
+
 fn walk_module(
     node: &ControlNode,
     path: &NodePath,
     origin: &SourceUri,
     seen: &mut BTreeSet<String>,
+    sibling: Sibling,
 ) -> Result<(), UiDocError> {
     match node {
         ControlNode::Row {
@@ -160,18 +239,52 @@ fn walk_module(
                 None => path.clone(),
             };
             for (index, child) in children.iter().enumerate() {
-                walk_module(child, &here.push(format!("[{index}]")), origin, seen)?;
+                walk_module(
+                    child,
+                    &here.push(format!("[{index}]")),
+                    origin,
+                    seen,
+                    Sibling::Among,
+                )?;
             }
             Ok(())
         }
         ControlNode::Include { id, .. } => {
             record(&id.0, &path.push(format!("Include({id})")), origin, seen)
         }
+        ControlNode::Optional { id, child, .. } => {
+            let here = path.push(format!("Optional({id})"));
+            check_block_position(id, &here, origin, sibling)?;
+            record_block(id, &here, origin, seen)?;
+            walk_module(child, &here, origin, seen, Sibling::Only)
+        }
+        ControlNode::Popover {
+            id,
+            anchor,
+            content,
+            ..
+        } => {
+            let here = path.push(format!("Popover({id})"));
+            record(&id.0, &here, origin, seen)?;
+            walk_module(anchor, &here, origin, seen, Sibling::Only)?;
+            walk_module(content, &here, origin, seen, Sibling::Only)
+        }
+        ControlNode::Pressable { id, child, .. } => {
+            let here = path.push(format!("Pressable({id})"));
+            record(&id.0, &here, origin, seen)?;
+            walk_module(child, &here, origin, seen, Sibling::Only)
+        }
         ControlNode::Slot { id, default, .. } => {
             let here = path.push(format!("Slot({id})"));
             record(&id.0, &here, origin, seen)?;
             for (index, child) in default.iter().enumerate() {
-                walk_module(child, &here.push(format!("[{index}]")), origin, seen)?;
+                walk_module(
+                    child,
+                    &here.push(format!("[{index}]")),
+                    origin,
+                    seen,
+                    Sibling::Among,
+                )?;
             }
             Ok(())
         }
@@ -189,6 +302,9 @@ fn control_id(node: &ControlNode) -> Option<&NodeId> {
         ControlNode::Row { .. }
         | ControlNode::Column { .. }
         | ControlNode::Include { .. }
+        | ControlNode::Optional { .. }
+        | ControlNode::Popover { .. }
+        | ControlNode::Pressable { .. }
         | ControlNode::Slot { .. } => None,
         ControlNode::DeckSummary { id, .. }
         | ControlNode::Brand { id, .. }
@@ -410,6 +526,24 @@ pub(crate) fn check_module_footer(
     )
 }
 
+const BLOCK_HIDDEN: ValueKind = ValueKind::Bool;
+
+pub(crate) fn check_layout_block(
+    hidden: &BindingRef,
+    path: &str,
+    origin: &SourceUri,
+    endpoints: &dyn EndpointRegistry,
+) -> Result<(), UiDocError> {
+    check_binding(
+        hidden,
+        BindingSide::Read,
+        Some(BLOCK_HIDDEN),
+        path,
+        origin,
+        endpoints,
+    )
+}
+
 pub(crate) fn check_layout_dragged(
     doc: &LayoutDoc,
     origin: &SourceUri,
@@ -468,6 +602,9 @@ pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<V
         | ControlNode::Text { .. }
         | ControlNode::Readout { .. } => (Some(ValueKind::Text), None),
         ControlNode::ContextBar { .. } => (Some(ValueKind::Text), Some(ValueKind::Scalar)),
+        ControlNode::Optional { .. } => (Some(BLOCK_HIDDEN), None),
+        ControlNode::Popover { .. } => (Some(ValueKind::Bool), None),
+        ControlNode::Pressable { .. } => (None, Some(ValueKind::Trigger)),
         ControlNode::Button { .. }
         | ControlNode::NavItem { .. }
         | ControlNode::TabLarge { .. }

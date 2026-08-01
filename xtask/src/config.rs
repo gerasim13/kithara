@@ -13,10 +13,32 @@ pub(crate) struct KitharaExt {
     pub(crate) android: AndroidConfig,
     pub(crate) wasm: WasmConfig,
     pub(crate) apple: AppleConfig,
+    pub(crate) ci: CiProjectConfig,
     pub(crate) release: ReleaseConfig,
     pub(crate) publish: PublishConfig,
     xtask: Option<XtaskConfig>,
     agent_hook: Option<AgentHookConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct CiProjectConfig {
+    pub(crate) pins: PathBuf,
+}
+
+impl CiProjectConfig {
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.pins.as_os_str().is_empty()
+            || self.pins.is_absolute()
+            || self
+                .pins
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            bail!("ext.ci.pins must be a project-relative file");
+        }
+        Ok(())
+    }
 }
 
 impl KitharaExt {
@@ -220,17 +242,20 @@ pub(crate) struct ReleaseConfig {
     /// Optional single self-contained framework zip for manual drag-in. Empty
     /// disables that channel.
     pub(crate) single_asset: String,
+    /// Additional required CI-built artifacts published with the Apple
+    /// frameworks, such as Android AARs.
+    pub(crate) platform_assets: Vec<String>,
     /// Documentation channel: zip name for the DocC archive uploaded as a
     /// release asset. Empty disables the docs channel.
     pub(crate) docs_asset: String,
     /// Workspace-relative DocC archive dir zipped into [`Self::docs_asset`]
-    /// (the `just apple doc` output).
+    /// (the `just platform apple doc` output).
     pub(crate) docs_archive: String,
     /// WebAssembly channel: zip name for the trunk `dist` bundle deployed to
     /// GitHub Pages classic. Empty disables the wasm channel.
     pub(crate) wasm_asset: String,
     /// Workspace-relative trunk `dist` dir zipped into [`Self::wasm_asset`]
-    /// (the `cargo xtask wasm build` output).
+    /// (the `just platform wasm build` output).
     pub(crate) wasm_dist: String,
     /// Branch GitHub Pages classic serves from (force-orphan deploy of the
     /// wasm bundle). Empty disables the pages deploy.
@@ -282,7 +307,8 @@ pub(crate) struct DocgenConfig {
     /// DocC module name used in the generated extension page headers.
     pub(crate) module: String,
     /// Workspace-relative directory the generated `.md` extensions are written
-    /// to (a `.docc` catalog subfolder; gitignored, rebuilt by `just apple doc`).
+    /// to (a `.docc` catalog subfolder; gitignored, rebuilt by
+    /// `just platform apple doc`).
     pub(crate) output_dir: String,
     /// facade DocC symbol -> Rust type allowlist/mapping.
     pub(crate) symbols: Vec<DocgenSymbol>,
@@ -310,10 +336,10 @@ mod tests {
     use super::KitharaExt;
 
     fn ctx_from_config(text: &str) -> Ctx {
-        Ctx {
-            root: PathBuf::new(),
-            config: toml::from_str(text).expect("parse project config"),
-        }
+        Ctx::new(
+            PathBuf::new(),
+            toml::from_str(text).expect("parse project config"),
+        )
     }
 
     #[test]

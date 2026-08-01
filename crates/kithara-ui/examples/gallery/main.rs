@@ -53,6 +53,10 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-library2.klayout.ron"),
     ),
     (
+        "gallery-menu.klayout.ron",
+        include_str!("assets/gallery-menu.klayout.ron"),
+    ),
+    (
         "gallery-micro.klayout.ron",
         include_str!("assets/gallery-micro.klayout.ron"),
     ),
@@ -113,6 +117,30 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-vis.klayout.ron"),
     ),
     (
+        "modules/app-menu.kmodule.ron",
+        include_str!("../../assets/modules/app-menu.kmodule.ron"),
+    ),
+    (
+        "modules/app-menu/hint-row.kmodule.ron",
+        include_str!("../../assets/modules/app-menu/hint-row.kmodule.ron"),
+    ),
+    (
+        "modules/app-menu/layout-row.kmodule.ron",
+        include_str!("../../assets/modules/app-menu/layout-row.kmodule.ron"),
+    ),
+    (
+        "modules/app-menu/module-cell.kmodule.ron",
+        include_str!("../../assets/modules/app-menu/module-cell.kmodule.ron"),
+    ),
+    (
+        "modules/app-menu/toggle-row.kmodule.ron",
+        include_str!("../../assets/modules/app-menu/toggle-row.kmodule.ron"),
+    ),
+    (
+        "modules/app-menu/window-row.kmodule.ron",
+        include_str!("../../assets/modules/app-menu/window-row.kmodule.ron"),
+    ),
+    (
         "modules/module-deck-micro.kmodule.ron",
         include_str!("assets/modules/module-deck-micro.kmodule.ron"),
     ),
@@ -139,6 +167,10 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "modules/nav.kmodule.ron",
         include_str!("assets/modules/nav.kmodule.ron"),
+    ),
+    (
+        "modules/nav/item.kmodule.ron",
+        include_str!("assets/modules/nav/item.kmodule.ron"),
     ),
     (
         "modules/primitives/chips.kmodule.ron",
@@ -211,6 +243,18 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "modules/tabs/library2.kmodule.ron",
         include_str!("assets/modules/tabs/library2.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/menu-context.kmodule.ron",
+        include_str!("assets/modules/tabs/menu-context.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/menu-context/track-row.kmodule.ron",
+        include_str!("assets/modules/tabs/menu-context/track-row.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/menu-notes.kmodule.ron",
+        include_str!("assets/modules/tabs/menu-notes.kmodule.ron"),
     ),
     (
         "modules/tabs/micro-4a.kmodule.ron",
@@ -465,9 +509,9 @@ mod tests {
     use kithara_test_utils::kithara;
     use kithara_ui::{
         compile::CompiledNode,
-        expand::{Binding, ControlSpec, ExpandedNode},
+        expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
         module::ChromeStyle,
-        render::ControlAction,
+        render::{ControlAction, Reads},
     };
 
     use super::*;
@@ -539,6 +583,58 @@ mod tests {
     }
 
     #[kithara::test]
+    fn every_nav_item_path_selects_its_tab() {
+        let ui = compile(
+            Tab::Atoms.entry(),
+            &resolver(),
+            &mock::registry(),
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap();
+        let mut paths = Vec::new();
+        collect_nav_item_paths(&ui.root, &ui, &mut paths);
+
+        assert_eq!(paths.len(), Tab::ALL.len());
+        let selected: Vec<_> = paths
+            .iter()
+            .map(|path| Tab::try_from(path.as_str()).unwrap_or_else(|()| panic!("{path}")))
+            .collect();
+        assert_eq!(selected, Tab::ALL);
+    }
+
+    fn collect_nav_item_paths(node: &CompiledNode, ui: &CompiledUi, paths: &mut Vec<String>) {
+        match node {
+            CompiledNode::Split { children, .. } => {
+                for (_, child) in children {
+                    collect_nav_item_paths(child, ui, paths);
+                }
+            }
+            CompiledNode::Optional { child, .. } => collect_nav_item_paths(child, ui, paths),
+            CompiledNode::Module { root, .. } => collect_expanded_nav_paths(root, ui, paths),
+            _ => {}
+        }
+    }
+
+    fn collect_expanded_nav_paths(node: &ExpandedNode, ui: &CompiledUi, paths: &mut Vec<String>) {
+        match node {
+            ExpandedNode::Row { children, .. }
+            | ExpandedNode::Column { children, .. }
+            | ExpandedNode::Slot { children, .. } => {
+                for child in children {
+                    collect_expanded_nav_paths(child, ui, paths);
+                }
+            }
+            ExpandedNode::Control {
+                path,
+                spec: ControlSpec::NavItem { .. },
+                ..
+            } => paths.push(ui.resolve(*path).to_owned()),
+            _ => {}
+        }
+    }
+
+    #[kithara::test]
     fn module_demo_tabs_activate_their_compiled_control_paths() {
         let resolver = resolver();
         let endpoints = mock::registry();
@@ -559,6 +655,77 @@ mod tests {
             reads.apply(path, &ControlAction::Activate);
             assert_eq!(reads.active_module(), module, "{path}");
         }
+    }
+
+    #[kithara::test]
+    fn menu_tab_carries_the_app_menu_and_one_popover_per_track() {
+        let resolver = resolver();
+        let endpoints = mock::registry();
+        let ui = compile(
+            Tab::Menu.entry(),
+            &resolver,
+            &endpoints,
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap();
+        let mut found = MenuTab::default();
+        collect_menu_tab(&ui.root, &ui, &mut found);
+
+        assert_eq!(
+            found.popovers,
+            [
+                ("app-menu/pop", "ui.menu.open"),
+                ("ctx/track-1/menu", "gallery.menu.context@row=1"),
+                ("ctx/track-2/menu", "gallery.menu.context@row=2"),
+                ("ctx/track-3/menu", "gallery.menu.context@row=3"),
+                ("ctx/track-4/menu", "gallery.menu.context@row=4"),
+            ]
+        );
+
+        let track_one: Vec<_> = found
+            .pressables
+            .iter()
+            .copied()
+            .filter(|path| path.starts_with("ctx/track-1"))
+            .collect();
+        assert_eq!(
+            track_one,
+            [
+                "ctx/track-1/row",
+                "ctx/track-1/deck-a",
+                "ctx/track-1/deck-b",
+                "ctx/track-1/queue",
+            ]
+        );
+        assert!(found.pressables.contains(&"app-menu/burger"));
+    }
+
+    #[kithara::test]
+    fn the_mock_answers_every_read_the_menu_tab_names() {
+        let resolver = resolver();
+        let endpoints = mock::registry();
+        let ui = compile(
+            Tab::Menu.entry(),
+            &resolver,
+            &endpoints,
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap();
+        let mut keys = Vec::new();
+        collect_menu_reads(&ui.root, &ui, &mut keys);
+        assert!(!keys.is_empty());
+
+        let mut reads = MockReads::default();
+        reads.apply("app-menu/new-window", &ControlAction::Activate);
+        let unanswered: Vec<_> = keys
+            .iter()
+            .copied()
+            .filter(|key| reads.get(key).is_none())
+            .collect();
+
+        assert_eq!(unanswered, [""; 0]);
     }
 
     #[kithara::test]
@@ -631,6 +798,133 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct MenuTab<'a> {
+        popovers: Vec<(&'a str, &'a str)>,
+        pressables: Vec<&'a str>,
+    }
+
+    fn collect_menu_tab<'a>(node: &'a CompiledNode, ui: &'a CompiledUi, found: &mut MenuTab<'a>) {
+        match node {
+            CompiledNode::Split { children, .. } => {
+                for (_, child) in children {
+                    collect_menu_tab(child, ui, found);
+                }
+            }
+            CompiledNode::Optional { child, .. } => collect_menu_tab(child, ui, found),
+            CompiledNode::Module { root, .. } => collect_menu_tab_module(root, ui, found),
+            node => panic!("the menu walker does not know {node:?}"),
+        }
+    }
+
+    fn collect_menu_tab_module<'a>(
+        node: &'a ExpandedNode,
+        ui: &'a CompiledUi,
+        found: &mut MenuTab<'a>,
+    ) {
+        match node {
+            ExpandedNode::Row { children, .. }
+            | ExpandedNode::Column { children, .. }
+            | ExpandedNode::Slot { children, .. } => {
+                for child in children {
+                    collect_menu_tab_module(child, ui, found);
+                }
+            }
+            ExpandedNode::Optional { child, .. } => collect_menu_tab_module(child, ui, found),
+            ExpandedNode::Popover {
+                path,
+                open,
+                anchor,
+                content,
+                ..
+            } => {
+                found
+                    .popovers
+                    .push((ui.resolve(*path), ui.resolve(open.key)));
+                collect_menu_tab_module(anchor, ui, found);
+                collect_menu_tab_module(content, ui, found);
+            }
+            ExpandedNode::Pressable { path, child, .. } => {
+                found.pressables.push(ui.resolve(*path));
+                collect_menu_tab_module(child, ui, found);
+            }
+            ExpandedNode::Control { .. } => {}
+            node => panic!("the menu walker does not know {node:?}"),
+        }
+    }
+
+    fn collect_menu_reads<'a>(node: &'a CompiledNode, ui: &'a CompiledUi, keys: &mut Vec<&'a str>) {
+        match node {
+            CompiledNode::Split { children, .. } => {
+                for (_, child) in children {
+                    collect_menu_reads(child, ui, keys);
+                }
+            }
+            CompiledNode::Optional { block, child } => {
+                keys.push(ui.resolve(block.hidden.key));
+                collect_menu_reads(child, ui, keys);
+            }
+            CompiledNode::Module { root, .. } => collect_menu_module_reads(root, ui, keys),
+            node => panic!("the menu walker does not know {node:?}"),
+        }
+    }
+
+    fn collect_menu_module_reads<'a>(
+        node: &'a ExpandedNode,
+        ui: &'a CompiledUi,
+        keys: &mut Vec<&'a str>,
+    ) {
+        match node {
+            ExpandedNode::Row {
+                active, children, ..
+            } => {
+                if let Some(binding) = active {
+                    keys.push(ui.resolve(binding.key));
+                }
+                for child in children {
+                    collect_menu_module_reads(child, ui, keys);
+                }
+            }
+            ExpandedNode::Column { children, .. } | ExpandedNode::Slot { children, .. } => {
+                for child in children {
+                    collect_menu_module_reads(child, ui, keys);
+                }
+            }
+            ExpandedNode::Optional { block, child } => {
+                keys.push(ui.resolve(block.hidden.key));
+                collect_menu_module_reads(child, ui, keys);
+            }
+            ExpandedNode::Popover {
+                open,
+                anchor,
+                content,
+                ..
+            } => {
+                keys.push(ui.resolve(open.key));
+                collect_menu_module_reads(anchor, ui, keys);
+                collect_menu_module_reads(content, ui, keys);
+            }
+            ExpandedNode::Pressable { child, .. } => collect_menu_module_reads(child, ui, keys),
+            ExpandedNode::Control { spec, read, .. } => {
+                if let Some(binding) = read {
+                    keys.push(ui.resolve(binding.key));
+                }
+                if let ControlSpec::Text {
+                    active: Some(binding),
+                    ..
+                }
+                | ControlSpec::Glyph {
+                    active: Some(binding),
+                    ..
+                } = spec
+                {
+                    keys.push(ui.resolve(binding.key));
+                }
+            }
+            node => panic!("the menu walker does not know {node:?}"),
+        }
+    }
+
     fn collect_tree_queries<'a>(
         node: &'a CompiledNode,
         ui: &'a CompiledUi,
@@ -663,7 +957,12 @@ mod tests {
             ExpandedNode::Control {
                 spec:
                     ControlSpec::Tree {
-                        query: Some(Binding::Model { id, .. }),
+                        query:
+                            Some(Binding {
+                                kind: BindingKind::Model,
+                                id,
+                                ..
+                            }),
                     },
                 ..
             } => queries.push(ui.resolve(*id)),
@@ -708,9 +1007,19 @@ mod tests {
                 spec:
                     ControlSpec::ContextBar {
                         scope_items,
-                        scope: Some(Binding::Model { id: scope, .. }),
+                        scope:
+                            Some(Binding {
+                                kind: BindingKind::Model,
+                                id: scope,
+                                ..
+                            }),
                     },
-                write: Some(Binding::Model { id: write, .. }),
+                write:
+                    Some(Binding {
+                        kind: BindingKind::Model,
+                        id: write,
+                        ..
+                    }),
                 ..
             } => contexts.push((
                 ui.resolve(*path),

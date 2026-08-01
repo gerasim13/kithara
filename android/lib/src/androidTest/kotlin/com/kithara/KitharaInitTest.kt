@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Test
@@ -42,6 +43,44 @@ class KitharaInitTest {
         }
         val store = AssetStore(
             root = context.cacheDir.resolve("kithara-layout-test").absolutePath,
+            layouts = layouts,
+        )
+
+        val player = KitharaPlayer(KitharaPlayer.Config(store = store))
+
+        assertEquals(PlayerStatus.Unknown, player.status)
+    }
+
+    @Test
+    fun queryIdentityLayoutRegistersForFileAndHls() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        Kithara.initialize(context)
+        val layout = AssetLayouts.queryIdentity(
+            listOf(
+                CacheIdentityRule(
+                    domains = listOf("media.example.com"),
+                    queryParameters = listOf("track_id", "variant"),
+                ),
+            ),
+        )
+        val first = layout.root(
+            AssetSource.Remote("https://media.example.com/audio.mp3?track_id=one&expires=1"),
+        )
+        val second = layout.root(
+            AssetSource.Remote("https://media.example.com/audio.mp3?track_id=two&expires=1"),
+        )
+        val refreshed = layout.root(
+            AssetSource.Remote("https://media.example.com/audio.mp3?track_id=one&expires=2"),
+        )
+        assertNotEquals(first, second)
+        assertEquals(first, refreshed)
+
+        val layouts = AssetLayoutRegistry().apply {
+            register(layout, AssetLayoutTarget.File)
+            register(layout, AssetLayoutTarget.Hls)
+        }
+        val store = AssetStore(
+            root = context.cacheDir.resolve("kithara-query-layout-test").absolutePath,
             layouts = layouts,
         )
 

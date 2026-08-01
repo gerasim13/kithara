@@ -51,6 +51,22 @@ struct AssetStoreTests {
         store = nil
         #expect(captured == nil)
     }
+
+    @Test("a query identity layout uses ordinary protocol registration")
+    func registersQueryIdentityLayout() {
+        let registry = AssetLayoutRegistry()
+        let layout = AssetLayouts.queryIdentity(rules: [
+            CacheIdentityRule(
+                domains: ["media.example", "*.cdn.example"],
+                queryParameters: ["content_ref", "edition"]
+            )
+        ])
+
+        registry.register(layout, for: .file)
+        registry.register(layout, for: .hls)
+
+        _ = AssetStore(layouts: registry)
+    }
 }
 
 private final class TestAssetLayout: AssetLayout, @unchecked Sendable {

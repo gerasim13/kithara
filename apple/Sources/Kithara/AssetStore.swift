@@ -18,8 +18,7 @@ public typealias AssetResource = FfiAssetResource
 /// once whenever a resource key is minted. Cache reads and writes using that
 /// key do not invoke either callback again.
 /// A `.url` resource contains the full URL. Custom layouts must preserve any
-/// required query identity without returning raw query text; Kithara's default
-/// layout uses a bounded query fingerprint and ignores fragments.
+/// required query identity without returning raw query text.
 /// `root` returns exactly one non-empty component and cannot equal `_index`.
 /// `path` returns a non-empty relative path separated by `/`; no component may
 /// end in `.tmp`. Components are ASCII, at most 96 bytes, never `.` or `..`,
@@ -28,6 +27,31 @@ public typealias AssetResource = FfiAssetResource
 /// are case-insensitive. Invalid output fails scope or key creation rather than
 /// being rewritten or replaced with the default layout.
 public typealias AssetLayout = FfiAssetLayout
+
+/// Query parameters included in cache identity for exact, `*.domain`, or `*`
+/// domain matches.
+public struct CacheIdentityRule: Sendable {
+    public let domains: [String]
+    public let queryParameters: [String]
+
+    public init(domains: [String], queryParameters: [String]) {
+        self.domains = domains
+        self.queryParameters = queryParameters
+    }
+
+    fileprivate var ffiValue: FfiCacheIdentityRule {
+        FfiCacheIdentityRule(domains: domains, queryParameters: queryParameters)
+    }
+}
+
+/// Built-in Rust-owned asset layouts.
+public enum AssetLayouts {
+    /// Creates a layout whose first matching domain rule selects the query
+    /// parameters used for cache identity.
+    public static func queryIdentity(rules: [CacheIdentityRule]) -> AssetLayout {
+        queryIdentityLayout(rules: rules.map(\.ffiValue))
+    }
+}
 
 /// Playback source whose default asset layout can be replaced.
 public enum AssetLayoutTarget: Sendable {

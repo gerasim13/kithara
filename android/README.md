@@ -40,9 +40,9 @@ rustup target add aarch64-linux-android x86_64-linux-android
 **Build JNI libraries and generate Kotlin UniFFI bindings:**
 
 ```bash
-just android                              # debug (default)
-cargo xtask android build                 # equivalent
-cargo xtask android build --profile release
+just platform android                     # debug (default)
+just platform android build              # equivalent
+just platform android build --profile release
 ```
 
 Output:
@@ -116,6 +116,32 @@ below the outer cache directory. An empty registry uses Kithara's defaults.
 Invalid callback output is rejected rather than rewritten or replaced with a
 default path; see the `AssetLayout` API contract for the portable component
 rules.
+
+For signed media URLs whose path is shared by several tracks or variants,
+create the built-in query-identity layout and register the same layout for each
+protocol that uses those URLs:
+
+```kotlin
+val queryIdentity = AssetLayouts.queryIdentity(
+    rules = listOf(
+        CacheIdentityRule(
+            domains = listOf("media.example.com", "*.cdn.example.com"),
+            queryParameters = listOf("track_id", "variant"),
+        ),
+    ),
+)
+val layouts = AssetLayoutRegistry().apply {
+    register(queryIdentity, AssetLayoutTarget.File)
+    register(queryIdentity, AssetLayoutTarget.Hls)
+}
+```
+
+Rules are checked in order. Domain patterns support exact hosts,
+`*.example.com` for subdomains only, and `*` for every host. Only the configured
+parameter names contribute to cache identity; rotating signatures, expiry
+timestamps, and other unlisted parameters do not split the cache. Selected
+values are hashed into safe cache components and are never written as raw query
+text.
 
 ### Seek
 
@@ -237,8 +263,8 @@ cd android
 Builds the Rust core for all supported ABIs and packages it into a release AAR:
 
 ```bash
-just android aar
-cargo xtask android aar
+just platform android aar
+just platform android aar
 ```
 
 Outputs in `android/lib/build/outputs/aar/`:

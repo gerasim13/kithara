@@ -187,6 +187,10 @@ pub(super) fn finish_rebuild<T: StreamType>(
     };
     let duration = generation.decoder().duration();
     let old = src.decode.replace_active(generation);
+    // A decoder built against the new variant is now the session's decoder:
+    // this is the moment `clear_variant_fence` documents, and the only place
+    // the switch may be acknowledged.
+    src.shared_stream.clear_variant_fence();
     src.retired.retire_generation(old);
     debug!(
         ?duration,

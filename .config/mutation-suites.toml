@@ -1,0 +1,6 @@
+[[suite]]
+name = "crossfader"
+package = "kithara-play"
+files = ["crates/kithara-play/src/api/mix.rs"]
+test_filters = ["test(/api::mix::tests::/)"]
+timeout_seconds = 120

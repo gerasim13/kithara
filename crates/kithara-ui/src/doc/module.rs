@@ -8,6 +8,7 @@ use crate::{
     error::UiDocError,
     ids::{DocId, EndpointId, NodeId, SourceUri},
     layout::FrameSides,
+    param::Param,
     size::SizeSpec,
     skin::ColorRole,
 };
@@ -88,6 +89,14 @@ pub enum ControlNode {
         #[serde(default)]
         background_alpha: Option<f32>,
         #[serde(default)]
+        active: Option<BindingRef>,
+        #[serde(default)]
+        active_background: Option<ColorRole>,
+        #[serde(default)]
+        frame_color: Option<ColorRole>,
+        #[serde(default)]
+        active_frame_color: Option<ColorRole>,
+        #[serde(default)]
         write: Option<BindingRef>,
         children: Vec<Self>,
     },
@@ -122,6 +131,29 @@ pub enum ControlNode {
         source: String,
         #[serde(default)]
         with: BTreeMap<String, String>,
+    },
+    /// Marks its child as a block the host may hide. While `hidden` reads
+    /// true the child is not laid out.
+    Optional {
+        id: NodeId,
+        hidden: BindingRef,
+        child: Box<Self>,
+    },
+    /// Floats `content` over the layout while `open` reads true. Only `anchor`
+    /// is laid out in flow.
+    Popover {
+        id: NodeId,
+        open: BindingRef,
+        #[serde(default)]
+        at: PopoverAt,
+        anchor: Box<Self>,
+        content: Box<Self>,
+    },
+    /// Makes its child a click target that publishes on this node's path.
+    Pressable {
+        id: NodeId,
+        press: BindingRef,
+        child: Box<Self>,
     },
     Slot {
         id: NodeId,
@@ -253,7 +285,10 @@ pub enum ControlNode {
         /// Where the glyphs sit inside the node's box.
         #[serde(default)]
         align: TextAlign,
-        /// Boolean binding that switches the style to its active tone.
+        #[serde(default)]
+        color: Option<ColorRole>,
+        #[serde(default)]
+        active_color: Option<ColorRole>,
         #[serde(default)]
         active: Option<BindingRef>,
     },
@@ -267,9 +302,17 @@ pub enum ControlNode {
         write: Option<BindingRef>,
         #[serde(default)]
         adaptive: AdaptivePolicy,
-        icon: IconName,
+        icon: Param<IconName>,
+        #[serde(default)]
+        active_icon: Option<Param<IconName>>,
         #[serde(default)]
         style: GlyphStyle,
+        #[serde(default)]
+        color: Option<Param<ColorRole>>,
+        #[serde(default)]
+        active_color: Option<Param<ColorRole>>,
+        #[serde(default)]
+        active: Option<BindingRef>,
     },
     NavItem {
         id: NodeId,
@@ -282,7 +325,7 @@ pub enum ControlNode {
         #[serde(default)]
         adaptive: AdaptivePolicy,
         label: String,
-        icon: IconName,
+        icon: Param<IconName>,
     },
     TabLarge {
         id: NodeId,
@@ -308,7 +351,7 @@ pub enum ControlNode {
         adaptive: AdaptivePolicy,
         label: String,
         #[serde(default)]
-        icon: Option<IconName>,
+        icon: Option<Param<IconName>>,
         #[serde(default)]
         active_label: Option<String>,
         #[serde(default)]
@@ -615,7 +658,10 @@ pub enum ControlNode {
 impl ControlNode {
     pub(crate) fn size(&self) -> Option<&SizeSpec> {
         match self {
-            Self::Include { .. } => None,
+            Self::Include { .. }
+            | Self::Optional { .. }
+            | Self::Popover { .. }
+            | Self::Pressable { .. } => None,
             Self::Row { size, .. }
             | Self::Column { size, .. }
             | Self::Slot { size, .. }
@@ -662,6 +708,9 @@ impl ControlNode {
     pub(crate) fn bindings(&self) -> (Option<&BindingRef>, Option<&BindingRef>) {
         match self {
             Self::Row { write, .. } | Self::Column { write, .. } => (None, write.as_ref()),
+            Self::Optional { hidden, .. } => (Some(hidden), None),
+            Self::Popover { open, .. } => (Some(open), None),
+            Self::Pressable { press, .. } => (None, Some(press)),
             Self::Include { .. }
             | Self::Slot { .. }
             | Self::WindowDrag { .. }
@@ -708,19 +757,29 @@ impl ControlNode {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub enum IconName {
+    Activity,
     ChevronDown,
+    ChevronRight,
     ChevronUp,
+    Circle,
     Disc,
     Faders,
     FastForward,
+    FolderPlus,
     Gear,
     Headphones,
     Maximize,
     Menu,
+    Monitor,
     Play,
     PlayReverse,
     Playlist,
+    Plus,
+    Radio,
+    RefreshCw,
     Rewind,
+    Save,
+    SlidersHorizontal,
     SpeakerHigh,
     Waveform,
     X,
@@ -737,12 +796,25 @@ pub enum TextAlign {
     End,
 }
 
+/// The geometry a popover surface opens from.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum PopoverAt {
+    #[default]
+    Anchor,
+    Pointer,
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub enum GlyphStyle {
     #[default]
     Default,
     Vis,
+    Menu,
+    MenuBurger,
+    MenuSmall,
+    MenuCell,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -770,11 +842,14 @@ pub enum TextStyle {
     #[default]
     Body,
     Brand,
+    BrandSmall,
     DeckLetter,
     TrackTitle,
     Telemetry,
     MicroLabel,
     Section,
+    Mono,
+    Caption,
     VisFooter,
     VisMeta,
     VisTitle,

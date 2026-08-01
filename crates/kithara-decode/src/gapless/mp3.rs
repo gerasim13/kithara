@@ -136,7 +136,7 @@ fn find_frame_start(data: &[u8]) -> Option<usize> {
     None
 }
 
-fn skip_id3v2(data: &[u8]) -> usize {
+pub(super) fn skip_id3v2(data: &[u8]) -> usize {
     if data.len() < 10 || &data[..3] != b"ID3" {
         return 0;
     }
@@ -236,6 +236,19 @@ mod tests {
         buf[lame_off + 22] = ((trim >> 8) & 0xFF) as u8;
         buf[lame_off + 23] = (trim & 0xFF) as u8;
         buf
+    }
+
+    #[test]
+    fn finds_the_frame_when_the_id3_tag_fits_the_buffer() {
+        let mut data = vec![0u8; 10 + 64];
+        data[..3].copy_from_slice(b"ID3");
+        data[3] = 3;
+        data[9] = 64;
+        data.extend_from_slice(&build_mpeg1_stereo_xing(576, 960));
+
+        let lame = read_lame_trim(&data).expect("BUG: LAME behind an ID3v2 tag");
+
+        assert_eq!(lame.enc_delay, 576);
     }
 
     #[test]

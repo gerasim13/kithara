@@ -20,6 +20,15 @@ network:
   compression: [gzip, deflate]
   size_probe_method: range_get
 
+# Remote media identity used by the shared AssetStore. Rules are ordered and
+# use exact hosts, `*.domain` subdomains, or `*`. Only listed query parameters
+# affect cache identity; signed URL parameters and expiry timestamps remain
+# transport details.
+assets:
+  cache_identity:
+    - domains: [cdn-edge.zvq.me]
+      query_parameters: [id]
+
 playlist:
   tracks:
     - https://stream.silvercomet.top/track.mp3
@@ -42,11 +51,10 @@ playlist:
     - https://cdn-hls-slicer.zvuk.com/drm/track/171515249_1/master.m3u8
     - https://cdn-hls-slicer.zvuk.com/drm/track/59232754_2/master.m3u8
 
-# DRM key-server providers. Domains use the same matcher rules as
-# `KeyProcessorRegistry`: bare host = exact match; `*.host` = subdomain
-# wildcard. List both forms when the key URL lives on a bare host but
-# media is served from subdomains (e.g. `zvuk.com/keyserver/...` plus
-# `cdn-hls-slicer.zvuk.com/...`).
+# DRM key-server providers. The play-level domain policy treats a bare host as
+# an exact match and `*.host` as a subdomain wildcard. List both forms when the
+# key URL lives on a bare host but media is served from subdomains (e.g.
+# `zvuk.com/keyserver/...` plus `cdn-hls-slicer.zvuk.com/...`).
 #
 # Each provider must define exactly one of `cipher_key` (inline
 # non-secret literal) or `cipher_env` (`$KITHARA_...` env reference).

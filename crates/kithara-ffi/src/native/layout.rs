@@ -1,7 +1,8 @@
-use std::fmt;
+use std::{fmt, path::PathBuf};
 
 use kithara_assets::{AssetLayout, AssetResource, AssetSource};
 use kithara_platform::sync::Arc;
+use url::Url;
 
 use crate::layout::{FfiAssetLayout, FfiAssetResource, FfiAssetSource};
 
@@ -55,6 +56,46 @@ impl AssetLayout for ForeignLayout {
             _ => return String::new(),
         };
         self.0.path(resource)
+    }
+}
+
+/// Adapts a Rust-owned core layout to the foreign-capable FFI contract.
+pub(crate) struct NativeLayout(Arc<dyn AssetLayout>);
+
+impl NativeLayout {
+    pub(crate) fn new(layout: Arc<dyn AssetLayout>) -> Self {
+        Self(layout)
+    }
+}
+
+impl FfiAssetLayout for NativeLayout {
+    fn root(&self, source: FfiAssetSource) -> String {
+        let source = match source {
+            FfiAssetSource::Remote { url, discriminator } => {
+                let Ok(url) = Url::parse(&url) else {
+                    return String::new();
+                };
+                AssetSource::Remote { url, discriminator }
+            }
+            FfiAssetSource::Local { path } => AssetSource::Local {
+                path: PathBuf::from(path),
+            },
+        };
+        self.0.root(&source)
+    }
+
+    fn path(&self, resource: FfiAssetResource) -> String {
+        let resource = match resource {
+            FfiAssetResource::Source { extension } => AssetResource::Source { extension },
+            FfiAssetResource::Url { url } => {
+                let Ok(url) = Url::parse(&url) else {
+                    return String::new();
+                };
+                AssetResource::Url(url)
+            }
+            FfiAssetResource::Named { namespace, name } => AssetResource::Named { namespace, name },
+        };
+        self.0.path(&resource)
     }
 }
 

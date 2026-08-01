@@ -2,8 +2,8 @@ use iced::alignment::Horizontal;
 
 use super::{
     atom::{
-        cell, chip, crossfader, fader, glyph, knob, nav_item, readout, segmented, select,
-        status_dot, swatch, tab_large,
+        cell, checkbox, chip, crossfader, fader, glyph, knob, meter, nav_item, readout, segmented,
+        select, status_dot, swatch, tab_large, toggle, vu_stereo, vu_vertical,
     },
     geometry::Rendered,
     icon::render_icon,
@@ -12,12 +12,6 @@ use super::{
     window::{titlebar, window_controls},
 };
 use crate::{
-    atoms::{
-        design::meter::Meter,
-        meter::StereoMeter,
-        toggle::{Checkbox, Toggle},
-        vu::VerticalVu,
-    },
     compile::CompiledUi,
     expand::{Binding, ControlSpec},
     ids::InternId,
@@ -28,9 +22,9 @@ use crate::{
         button::ControlButton,
         deck::Bpm,
         global_bar::{Brand, Divider, PresetSelector, SettingsButton, Spacer},
-        mini_wave::MiniWave,
         telemetry::Telemetry,
         text::Text,
+        wave::mini::MiniWave,
         window::WindowSurface,
     },
 };
@@ -74,6 +68,8 @@ pub(super) fn render_control<'a>(
         ControlSpec::Text {
             style,
             label,
+            color,
+            active_color,
             active,
             align: declared,
         } => {
@@ -82,12 +78,29 @@ pub(super) fn render_control<'a>(
                 .style(*style)
                 .maybe_value(value)
                 .maybe_label(label.map(|id| ui.resolve(id)))
+                .maybe_color(*color)
+                .maybe_active_color(*active_color)
                 .active(read_flag(active.as_ref(), reads, ui))
                 .skin(skin)
                 .build()
                 .view()
         }
-        ControlSpec::Glyph { icon, style } => glyph(*icon, *style, skin),
+        ControlSpec::Glyph {
+            icon,
+            active_icon,
+            style,
+            color,
+            active_color,
+            active,
+        } => glyph(
+            *icon,
+            *active_icon,
+            *style,
+            *color,
+            *active_color,
+            read_flag(active.as_ref(), reads, ui),
+            skin,
+        ),
         ControlSpec::NavItem { label, icon } => {
             nav_item(path, ui.resolve(*label), *icon, value, skin)
         }
@@ -120,18 +133,8 @@ pub(super) fn render_control<'a>(
         ControlSpec::Fader { style, label } => {
             fader(path, *style, label.map(|id| ui.resolve(id)), value, skin)
         }
-        ControlSpec::Toggle => Toggle::builder()
-            .path(path)
-            .maybe_value(value)
-            .skin(skin)
-            .build()
-            .view(),
-        ControlSpec::Checkbox => Checkbox::builder()
-            .path(path)
-            .maybe_value(value)
-            .skin(skin)
-            .build()
-            .view(),
+        ControlSpec::Toggle => toggle(path, value, skin),
+        ControlSpec::Checkbox => checkbox(path, value, skin),
         ControlSpec::Segmented { items } => segmented(path, items, value, ui, skin),
         ControlSpec::Select { label } => select(*label, ui, skin),
         ControlSpec::StatusDot { label, tone } => status_dot(*label, *tone, ui, skin),
@@ -144,19 +147,8 @@ pub(super) fn render_control<'a>(
         } => readout(*label, *tone, *framed, value, ui, skin),
         ControlSpec::Chip { label, style } => chip(path, ui.resolve(*label), *style, value, skin),
         ControlSpec::Knob { label } => knob(path, label.map(|id| ui.resolve(id)), value, skin),
-        ControlSpec::VuStereo => StereoMeter::builder()
-            .path(path)
-            .maybe_value(value)
-            .skin(skin)
-            .build()
-            .view(),
-        ControlSpec::VuVertical { ticks } => VerticalVu::builder()
-            .path(path)
-            .ticks(*ticks)
-            .maybe_value(value)
-            .skin(skin)
-            .build()
-            .view(),
+        ControlSpec::VuStereo => vu_stereo(path, value, skin),
+        ControlSpec::VuVertical { ticks } => vu_vertical(path, *ticks, value, skin),
         ControlSpec::Vis => vis(value, reads),
         ControlSpec::Wave { style, badge, zoom } => MiniWave::builder()
             .path(path)
@@ -169,11 +161,7 @@ pub(super) fn render_control<'a>(
             .skin(skin)
             .build()
             .view(),
-        ControlSpec::Meter => Meter::builder()
-            .maybe_value(value)
-            .skin(skin)
-            .build()
-            .view(),
+        ControlSpec::Meter => meter(value, skin),
         ControlSpec::TrackList {
             columns,
             columns_state,

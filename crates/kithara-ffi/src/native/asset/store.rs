@@ -101,8 +101,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        asset::FfiAssetLayoutTarget,
-        layout::{FfiAssetLayout, FfiAssetResource, FfiAssetSource},
+        asset::{FfiAssetLayoutTarget, query_identity_layout},
+        layout::{FfiAssetLayout, FfiAssetResource, FfiAssetSource, FfiCacheIdentityRule},
     };
 
     struct FixedLayout {
@@ -132,10 +132,23 @@ mod tests {
     }
 
     fn remote_source() -> AssetSource {
+        remote_source_for("https://example.com/audio.mp3")
+    }
+
+    fn remote_source_for(value: &str) -> AssetSource {
         AssetSource::Remote {
-            url: Url::parse("https://example.com/audio.mp3").expect("valid URL"),
+            url: Url::parse(value).expect("valid URL"),
             discriminator: None,
         }
+    }
+
+    fn asset_root<T: 'static>(store: &FfiAssetStore, source: &AssetSource) -> String {
+        store
+            .handle()
+            .scope::<T>(source)
+            .expect("valid asset scope")
+            .asset_root()
+            .to_string()
     }
 
     fn assert_layout<T: 'static>(store: &FfiAssetStore, root: &str, path: &str) {
@@ -242,6 +255,39 @@ mod tests {
         let root = DefaultLayout.root(&source);
 
         assert_layout::<TestProtocol>(&store, &root, "track/track.mp3");
+    }
+
+    #[kithara::test]
+    fn query_identity_rules_route_through_the_native_registry() {
+        let registry = FfiAssetLayoutRegistry::new();
+        let layout = query_identity_layout(vec![FfiCacheIdentityRule {
+            domains: vec!["media.example".to_string()],
+            query_parameters: vec!["content_ref".to_string(), "edition".to_string()],
+        }]);
+        registry.register(FfiAssetLayoutTarget::File, Arc::clone(&layout));
+        registry.register(FfiAssetLayoutTarget::Hls, layout);
+        let store = FfiAssetStore::build_with_backend(StorageBackend::Memory, registry.snapshot());
+        let first = remote_source_for(
+            "https://media.example/audio.mp3?content_ref=alpha&edition=studio&signature=one",
+        );
+        let second = remote_source_for(
+            "https://media.example/audio.mp3?content_ref=beta&edition=studio&signature=one",
+        );
+        let renewed = remote_source_for(
+            "https://media.example/audio.mp3?signature=two&edition=studio&content_ref=alpha",
+        );
+
+        let first_root = asset_root::<kithara::file::File>(&store, &first);
+        let second_root = asset_root::<kithara::file::File>(&store, &second);
+        let renewed_root = asset_root::<kithara::file::File>(&store, &renewed);
+        let hls_first_root = asset_root::<kithara::hls::Hls>(&store, &first);
+        let hls_second_root = asset_root::<kithara::hls::Hls>(&store, &second);
+        let hls_renewed_root = asset_root::<kithara::hls::Hls>(&store, &renewed);
+
+        assert_ne!(first_root, second_root);
+        assert_eq!(first_root, renewed_root);
+        assert_ne!(hls_first_root, hls_second_root);
+        assert_eq!(hls_first_root, hls_renewed_root);
     }
 
     #[kithara::test]

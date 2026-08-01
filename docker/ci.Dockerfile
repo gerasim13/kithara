@@ -1,35 +1,90 @@
-FROM rust:latest
+ARG RUST_BASE_DIGEST
+ARG RUST_VERSION
+FROM rust:${RUST_VERSION}-bookworm@sha256:${RUST_BASE_DIGEST}
+
+ARG AST_GREP_VERSION
+ARG CARGO_DENY_VERSION
+ARG CARGO_HACK_VERSION
+ARG CARGO_LLVM_COV_VERSION
+ARG CARGO_MACHETE_VERSION
+ARG CARGO_MUTANTS_VERSION
+ARG CARGO_NEXTEST_VERSION
+ARG CARGO_SEMVER_CHECKS_VERSION
+ARG CARGO_SHEAR_VERSION
+ARG CARGO_SORT_VERSION
+ARG GECKODRIVER_SHA256
+ARG GECKODRIVER_VERSION
+ARG GITLEAKS_SHA256
+ARG GITLEAKS_VERSION
+ARG JUST_VERSION
+ARG MD_FORMATTER_VERSION
+ARG MSRV_TOOLCHAIN
+ARG NIGHTLY_TOOLCHAIN
+ARG SCCACHE_VERSION
+ARG SIMILARITY_RS_VERSION
+ARG TAPLO_CLI_VERSION
+ARG TIDY_JSON_VERSION
+ARG TYPOS_CLI_VERSION
+ARG WASM_BINDGEN_CLI_VERSION
+ARG WASM_PACK_VERSION
+ARG WASM_SLIM_VERSION
+
+ENV KITHARA_NIGHTLY_TOOLCHAIN=${NIGHTLY_TOOLCHAIN}
+ENV WASM_SLIM_TOOLCHAIN=${NIGHTLY_TOOLCHAIN}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libasound2-dev pkg-config git \
-    clang libclang-dev \
+    ca-certificates chromium chromium-driver curl firefox-esr git \
+    clang cmake libclang-dev lld pkg-config \
+    libasound2-dev libdbus-1-dev libssl-dev \
     libavcodec-dev libavformat-dev libavfilter-dev libavdevice-dev \
     libavutil-dev libswresample-dev libswscale-dev libpostproc-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Rust toolchains and targets
-RUN rustup component add clippy llvm-tools-preview \
- && rustup toolchain install nightly --component rustfmt --component rust-src \
- && rustup toolchain install 1.89 \
- && rustup target add wasm32-unknown-unknown \
- && rustup target add wasm32-unknown-unknown --toolchain nightly
+RUN curl -fsSL \
+      -o /tmp/geckodriver.tar.gz \
+      "https://github.com/mozilla/geckodriver/releases/download/v${GECKODRIVER_VERSION}/geckodriver-v${GECKODRIVER_VERSION}-linux-aarch64.tar.gz" \
+ && echo "${GECKODRIVER_SHA256}  /tmp/geckodriver.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/geckodriver.tar.gz -C /usr/local/bin geckodriver \
+ && rm /tmp/geckodriver.tar.gz \
+ && ln -s /usr/bin/firefox-esr /usr/local/bin/firefox
 
-# Cargo tools (single layer to reduce image size)
-RUN cargo install \
-    just \
-    cargo-nextest \
-    cargo-deny \
-    cargo-machete \
-    ast-grep \
-    cargo-hack \
-    cargo-semver-checks \
-    cargo-llvm-cov \
-    wasm-bindgen-cli \
-    similarity-rs \
-    sccache \
-    --locked \
- && cargo install cargo-mutants --version 27.0.0 --locked \
- && (cargo install --git https://github.com/vitalratel/wasm-slim \
-    --rev 437c0accaccf37fe16e75991046076c5c1ee1fa7 wasm-slim --locked \
-    || echo "WARNING: wasm-slim install skipped (upstream inaccessible); not required for the CI cycle") \
- && rm -rf /usr/local/cargo/registry /usr/local/cargo/git
+RUN curl -fsSL \
+      -o /tmp/gitleaks.tar.gz \
+      "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_arm64.tar.gz" \
+ && echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks \
+ && rm /tmp/gitleaks.tar.gz
+
+RUN rustup component add clippy llvm-tools-preview rustfmt \
+ && rustup toolchain install "${NIGHTLY_TOOLCHAIN}" \
+      --profile minimal \
+      --component rust-src \
+      --component rustfmt \
+ && rustup toolchain install "${MSRV_TOOLCHAIN}" --profile minimal \
+ && rustup target add wasm32-unknown-unknown \
+ && rustup target add wasm32-unknown-unknown --toolchain "${NIGHTLY_TOOLCHAIN}"
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/tmp/cargo-install-target \
+    CARGO_TARGET_DIR=/tmp/cargo-install-target \
+    cargo install --locked --version "${AST_GREP_VERSION}" ast-grep \
+ && cargo install --locked --version "${CARGO_DENY_VERSION}" cargo-deny \
+ && cargo install --locked --version "${CARGO_HACK_VERSION}" cargo-hack \
+ && cargo install --locked --version "${CARGO_LLVM_COV_VERSION}" cargo-llvm-cov \
+ && cargo install --locked --version "${CARGO_MACHETE_VERSION}" cargo-machete \
+ && cargo install --locked --version "${CARGO_MUTANTS_VERSION}" cargo-mutants \
+ && cargo install --locked --version "${CARGO_NEXTEST_VERSION}" cargo-nextest \
+ && cargo install --locked --version "${CARGO_SEMVER_CHECKS_VERSION}" cargo-semver-checks \
+ && cargo install --locked --version "${CARGO_SHEAR_VERSION}" cargo-shear \
+ && cargo install --locked --version "${CARGO_SORT_VERSION}" cargo-sort \
+ && cargo install --locked --version "${JUST_VERSION}" just \
+ && cargo install --locked --version "${MD_FORMATTER_VERSION}" md-formatter \
+ && cargo install --locked --version "${SCCACHE_VERSION}" sccache \
+ && cargo install --locked --version "${SIMILARITY_RS_VERSION}" similarity-rs \
+ && cargo install --locked --version "${TAPLO_CLI_VERSION}" taplo-cli \
+ && cargo install --locked --version "${TIDY_JSON_VERSION}" tidy-json \
+ && cargo install --locked --version "${TYPOS_CLI_VERSION}" typos-cli \
+ && cargo install --locked --version "${WASM_BINDGEN_CLI_VERSION}" wasm-bindgen-cli \
+ && cargo install --locked --version "${WASM_PACK_VERSION}" wasm-pack \
+ && cargo install --locked --version "${WASM_SLIM_VERSION}" wasm-slim

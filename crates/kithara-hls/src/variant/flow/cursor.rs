@@ -9,6 +9,35 @@ impl HlsVariant {
         self.flow.prefetch_anchor.load(Ordering::Acquire)
     }
 
+    /// Record the cursor byte at which the front-of-queue segment enters the
+    /// look-ahead window, or `u64::MAX` when nothing is deferred. Written by
+    /// [`HlsVariant::dispatch`] on every pass, so it always describes the
+    /// decision the peer last took.
+    pub(super) fn defer_prefetch_until(&self, byte: u64) {
+        self.flow.prefetch_resume_at.store(byte, Ordering::Release);
+    }
+
+    /// Whether the reader just made the deferred dispatch decision stale.
+    /// Consumes the threshold, so it answers `true` exactly once per deferred
+    /// segment: the next `dispatch` publishes the threshold for the segment
+    /// after it. This is the reader's own progress re-opening a decision that
+    /// was taken against an older cursor — no timer re-checks it.
+    ///
+    /// Progress is read from the prefetch anchor, because that is where the
+    /// reader is in this model: the session owns the byte cursor and publishes
+    /// it here on every projected position, so the variant has no separate
+    /// position of its own to compare against.
+    pub(crate) fn take_prefetch_resume(&self) -> bool {
+        let at = self.flow.prefetch_resume_at.load(Ordering::Acquire);
+        at != u64::MAX
+            && self.prefetch_anchor() >= at
+            && self
+                .flow
+                .prefetch_resume_at
+                .swap(u64::MAX, Ordering::AcqRel)
+                != u64::MAX
+    }
+
     pub(crate) fn register_session_seek(&self, pos: u64, moved: bool) {
         if !self.flow.reader.is_seek_active() {
             self.retire_seek_projection_if_moved(pos);

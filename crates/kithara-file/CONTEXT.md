@@ -60,8 +60,11 @@ extension, and finally `bin`.
 
 The default layout stores the file at `<hash>/track/track.<ext>`. The root hash
 uses the canonical URL without query or fragment and folds in the explicit
-discriminator when present. Query parameters are therefore not an implicit
-identity for direct files; callers must set `config.discriminator` when two
-query variants of one canonical URL represent different bytes. Layouts are
-registered once through `AssetStoreBuilder::layouts`; every `FileConfig` holds
-a cheap clone of that same store handle.
+discriminator when present. Query parameters are not an implicit identity for
+direct files. A higher layer may register any `AssetLayout` for `File`;
+`kithara-play::policy::QueryIdentityLayout` is the built-in domain-aware option
+for selecting stable identity parameters while ignoring rotating signatures
+and expiry values. Callers can still set `config.discriminator` for an explicit
+per-source identity. Layouts are registered once through
+`AssetStoreBuilder::layouts`; every `FileConfig` holds a cheap clone of that
+same store handle.

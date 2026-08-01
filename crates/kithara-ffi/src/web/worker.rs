@@ -4,14 +4,18 @@ use kithara_abr::AbrMode;
 use kithara_assets::{AssetStore, AssetStoreBuilder, StorageBackend};
 use kithara_bufpool::Region;
 use kithara_drm::{KeyRequest, KeyRequestFactory};
-use kithara_hls::{KeyOptions, KeyProcessorRule};
+use kithara_hls::KeyOptions;
 use kithara_platform::{
     sync::{Arc, mpsc},
     thread::{assert_not_main_thread, keep_worker_alive},
     time::{Duration, sleep},
     tokio::task::spawn as task_spawn,
 };
-use kithara_play::{ResourceConfig, wasm};
+use kithara_play::{
+    ResourceConfig,
+    policy::{DomainKeyPolicy, DomainKeyRule},
+    wasm,
+};
 use kithara_queue::{Queue, QueueConfig, TrackId, TrackSource};
 
 use crate::{
@@ -197,6 +201,7 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &Rc<Queue>, build_state: &Rc<RefCell<Buil
         WorkerCmd::SetAbrMode { variant_index } => {
             apply_abr_mode(queue, variant_index);
         }
+        WorkerCmd::SetRepeat(mode) => queue.set_repeat(mode),
         WorkerCmd::PeakBitrate {
             wifi_bps,
             cellular_bps,
@@ -296,13 +301,13 @@ fn register_key_rule(
             )
         })
     };
-    let rule = KeyProcessorRule::for_domains(domains, factory)
+    let rule = DomainKeyRule::for_domains(domains, factory)
         .maybe_headers(headers)
         .maybe_query_params(query_params)
         .build();
 
     let mut registry = state.keys.key_registry.take().unwrap_or_default();
-    registry.add(rule);
+    registry.register(Arc::new(DomainKeyPolicy::new([rule])));
     state.keys = KeyOptions::builder().key_registry(registry).build();
 }
 

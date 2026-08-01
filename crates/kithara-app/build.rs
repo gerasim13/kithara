@@ -20,10 +20,22 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct AppConfig {
+    assets: Assets,
     drm: Drm,
     network: Network,
     playback: Playback,
     playlist: Playlist,
+}
+
+#[derive(Deserialize)]
+struct Assets {
+    cache_identity: Vec<CacheIdentityRule>,
+}
+
+#[derive(Deserialize)]
+struct CacheIdentityRule {
+    domains: Vec<String>,
+    query_parameters: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -176,7 +188,8 @@ fn main() {
     let mut code = String::new();
     emit_scalars(&mut code, &app);
     emit_tracks(&mut code, &app.playlist.tracks);
-    emit_registry(&mut code, &app.drm.providers, &env_map);
+    emit_asset_layouts(&mut code, &app.assets.cache_identity);
+    emit_drm_policy(&mut code, &app.drm.providers, &env_map);
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is set by cargo"));
     let out_path = out_dir.join("app_config_baked.rs");
@@ -255,7 +268,48 @@ fn emit_tracks(code: &mut String, tracks: &[String]) {
     code.push_str("];\n");
 }
 
-fn emit_registry(code: &mut String, providers: &[DrmProvider], env_map: &HashMap<String, String>) {
+fn emit_asset_layouts(code: &mut String, rules: &[CacheIdentityRule]) {
+    code.push_str(
+        "#[must_use]\n\
+         pub fn build_baked_asset_layouts() -> ::kithara::assets::AssetLayoutRegistry {\n\
+         use ::kithara::assets::{AssetLayout, AssetLayoutRegistry};\n\
+         use ::kithara::play::policy::{QueryIdentityLayout, QueryIdentityRule};\n\
+         use ::kithara_platform::sync::Arc;\n\
+         let layout = Arc::new(QueryIdentityLayout::new([\n",
+    );
+    for rule in rules {
+        let domains = rule
+            .domains
+            .iter()
+            .map(|domain| format!("{domain:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let query_parameters = rule
+            .query_parameters
+            .iter()
+            .map(|parameter| format!("{parameter:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(
+            code,
+            "        QueryIdentityRule::new([{domains}], [{query_parameters}]),"
+        )
+        .expect("write to String never fails");
+    }
+    code.push_str(
+        "    ])) as Arc<dyn AssetLayout>;\n\
+         AssetLayoutRegistry::default()\n\
+             .with::<::kithara::file::File>(Arc::clone(&layout))\n\
+             .with::<::kithara::hls::Hls>(layout)\n\
+         }\n",
+    );
+}
+
+fn emit_drm_policy(
+    code: &mut String,
+    providers: &[DrmProvider],
+    env_map: &HashMap<String, String>,
+) {
     // Each provider emits its own `KeyRequestFactory` closure that
     // rebuilds the X-Encrypted-Key salt on EVERY key request, using
     // the alphabet/length declared per-provider in `app.yaml`. iOS
@@ -265,18 +319,19 @@ fn emit_registry(code: &mut String, providers: &[DrmProvider], env_map: &HashMap
     // [`SeedSpec`].
     code.push_str(
         "#[must_use]\n\
-         pub fn build_baked_drm_registry() -> ::kithara_drm::KeyProcessorRegistry {\n\
+         pub fn build_baked_drm_policy() -> ::kithara::play::policy::DomainKeyPolicy {\n\
          use ::std::collections::HashMap;\n\
          use ::kithara_platform::sync::Arc;\n\
-         use ::kithara_drm::{KeyProcessorRegistry, KeyProcessorRule, KeyRequest, KeyRequestFactory, KeyProcessor, UniqueBinaryCipher};\n\
+         use ::kithara::play::policy::{DomainKeyPolicy, DomainKeyRule};\n\
+         use ::kithara_drm::{KeyRequest, KeyRequestFactory, KeyProcessor, UniqueBinaryCipher};\n\
          use ::bytes::Bytes;\n\
          use ::rand::prelude::*;\n\
-         let mut registry = KeyProcessorRegistry::new();\n",
+         let mut rules = Vec::new();\n",
     );
     for provider in providers {
         emit_provider(code, provider, env_map);
     }
-    code.push_str("    registry\n}\n");
+    code.push_str("    DomainKeyPolicy::new(rules)\n}\n");
 }
 
 fn emit_provider(code: &mut String, p: &DrmProvider, env_map: &HashMap<String, String>) {
@@ -324,8 +379,8 @@ fn emit_provider(code: &mut String, p: &DrmProvider, env_map: &HashMap<String, S
             KeyRequest::new(headers, processor)
         }});
         let mut base_headers = HashMap::new();
-{extra_inserts}        registry.add(
-            KeyProcessorRule::for_domains([{domains}], factory)
+{extra_inserts}        rules.push(
+            DomainKeyRule::for_domains([{domains}], factory)
                 .headers(base_headers)
                 .build()
         );

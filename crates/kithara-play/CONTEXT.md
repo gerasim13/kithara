@@ -2,6 +2,29 @@
 
 Detailed contracts and invariants for the kithara-play crate; the README is the overview.
 
+## Domain Policies
+
+`policy` is the orchestration-level owner of domain matching. Its private
+matcher supports exact hosts, `*.domain` subdomains, and `*`; rules are ordered
+and the first matching rule wins. Neither `kithara-assets`,
+`kithara-platform`, nor `kithara-drm` owns these network-origin rules.
+
+`QueryIdentityLayout` implements the ordinary `AssetLayout` contract. A
+`QueryIdentityRule` lists application-defined, case-sensitive query keys for
+one or more domain patterns. Configured values contribute to the asset-root
+identity in declared-key order; repeated values retain URL order. Unlisted
+signatures, expiry values, fragments, and query-pair ordering do not fragment
+the cache, and raw query text is never written into a path. The same layout can
+be registered normally for `File`, `Hls`, or both.
+
+`DomainKeyPolicy` implements `KeyRequestResolver` and is registered normally in
+`KeyProcessorRegistry`. A matching `DomainKeyRule` combines its static headers
+and query parameters with fresh request-factory output into one
+`PreparedKeyRequest`; factory headers take precedence. The opaque DRM registry
+does not expose domain rules or resource headers. Callers that also need
+playlist/segment headers retain the same immutable `Arc<DomainKeyPolicy>` and
+ask it directly, avoiding a second policy source of truth.
+
 ## Tempo & Key-Lock
 
 `kithara-audio`'s `StretchControls` (one per deck, in `PlayerConfig.timestretch`)
@@ -134,7 +157,7 @@ that cancels the player's own subtree - it never implicitly cancels a
 potentially-foreign master passed in from above (the previous `Drop`-cancel of
 the passed token is gone). Hard-coded `CancelToken::root()` and
 `CancelToken::never()` outside the allowlist are forbidden, enforced by
-`cargo xtask lint arch` (`cancel_root_sites`).
+`just lint arch` (`cancel_root_sites`).
 
 ## Real-Time Audio Thread
 
@@ -164,8 +187,9 @@ the forbid path - like the reader-hooks. The produce-core read/seek path is
 verified kevent/yield-free; the CI lane stays advisory (soak) until that holds
 across the full lane set.
 
-**Lanes.** `just rtsan` (mock decoder, fast tripwire), `just rtsan-file`
-(real-decoder file-offline), `just rtsan-hls` (real-decoder HLS-offline). The
+**Lanes.** `just test rtsan` (mock decoder, fast tripwire),
+`just test rtsan-file` (real-decoder file-offline), `just test rtsan-hls`
+(real-decoder HLS-offline). The
 nightly `.github/workflows/rtsan.yml.disabled` runs all three on linux+macos
 (pinned nightly + `rust-src`), `continue-on-error` until the produce-core lanes
 are green.

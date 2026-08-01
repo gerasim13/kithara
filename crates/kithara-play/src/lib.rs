@@ -9,6 +9,7 @@ pub mod api;
 pub mod bridge;
 pub mod engine;
 pub mod player;
+pub mod policy;
 pub mod resource;
 pub mod rt;
 pub mod session;
