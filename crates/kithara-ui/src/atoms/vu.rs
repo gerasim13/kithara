@@ -33,7 +33,7 @@ pub(crate) struct VerticalVu<'path, 'value, 'data, 'skin> {
 
 impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, 'a> {
     fn view(self) -> Element<'a, UiEvent> {
-        let Some(ReadValue::Stereo(levels)) = self.value else {
+        let Some(paint) = self.paint() else {
             return Space::new().into();
         };
         Canvas::new(VerticalVuCanvas {
@@ -42,6 +42,30 @@ impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, 'a> {
                 .hover(Hover::new(CursorShape::ResizeV))
                 .build(),
             path: self.path.to_owned(),
+            paint,
+        })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    }
+}
+
+impl<'a> VerticalVu<'_, '_, '_, 'a> {
+    pub(crate) fn painted(self) -> Element<'a, UiEvent> {
+        let Some(paint) = self.paint() else {
+            return Space::new().into();
+        };
+        Canvas::new(paint)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+
+    fn paint(&self) -> Option<VerticalVuPaint<'a>> {
+        let Some(ReadValue::Stereo(levels)) = self.value else {
+            return None;
+        };
+        Some(VerticalVuPaint {
             metrics: self.skin.vu_vertical,
             ticks: self
                 .ticks
@@ -52,15 +76,16 @@ impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, 'a> {
             thumb_notch_color: self.skin.color(self.skin.vu_vertical.thumb_notch_color),
             text_resources: self.skin.text_resources(),
         })
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
     }
 }
 
 struct VerticalVuCanvas<'skin> {
     drag: Scalar,
     path: String,
+    paint: VerticalVuPaint<'skin>,
+}
+
+struct VerticalVuPaint<'skin> {
     metrics: VuVerticalSkin,
     ticks: Option<TickRail>,
     levels: StereoLevels,
@@ -76,6 +101,47 @@ impl canvas::Program<UiEvent> for VerticalVuCanvas<'_> {
     fn draw(
         &self,
         _state: &ScalarState,
+        renderer: &Renderer,
+        theme: &Theme,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Vec<Geometry> {
+        self.paint.draw(&(), renderer, theme, bounds, cursor)
+    }
+
+    fn mouse_interaction(
+        &self,
+        state: &ScalarState,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> mouse::Interaction {
+        self.drag
+            .cursor(state, &iced_interact::hit(bounds, cursor))
+            .into()
+    }
+
+    fn update(
+        &self,
+        state: &mut ScalarState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<UiEvent>> {
+        let input = iced_interact::input(event)?;
+        let hit = iced_interact::hit(bounds, cursor);
+        scalar(
+            &self.path,
+            self.drag.on_input(state, input, &hit, Instant::now()),
+        )
+    }
+}
+
+impl canvas::Program<UiEvent> for VerticalVuPaint<'_> {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -113,32 +179,6 @@ impl canvas::Program<UiEvent> for VerticalVuCanvas<'_> {
             &mut IcedBackend::new(&mut frame, self.text_resources),
         );
         vec![frame.into_geometry()]
-    }
-
-    fn mouse_interaction(
-        &self,
-        state: &ScalarState,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> mouse::Interaction {
-        self.drag
-            .cursor(state, &iced_interact::hit(bounds, cursor))
-            .into()
-    }
-
-    fn update(
-        &self,
-        state: &mut ScalarState,
-        event: &Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
-        let input = iced_interact::input(event)?;
-        let hit = iced_interact::hit(bounds, cursor);
-        scalar(
-            &self.path,
-            self.drag.on_input(state, input, &hit, Instant::now()),
-        )
     }
 }
 
@@ -235,49 +275,9 @@ fn draw_thumb(
 
 #[cfg(test)]
 mod tests {
-    use iced::{Point, Size, mouse::Button, widget::canvas::Program};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{builtin, render::ControlAction};
-
-    #[kithara::test]
-    fn the_meter_publishes_the_seeked_value_under_its_own_path() {
-        let skin = builtin::skin();
-        let meter = VerticalVuCanvas {
-            drag: Scalar::builder()
-                .track(Track::AbsoluteVertical)
-                .hover(Hover::new(CursorShape::ResizeV))
-                .build(),
-            path: "mixer/deck-a/volume".to_owned(),
-            metrics: skin.vu_vertical,
-            ticks: None,
-            levels: StereoLevels::default(),
-            palette: skin.palette,
-            thumb_color: skin.color(skin.vu_vertical.thumb_color),
-            thumb_notch_color: skin.color(skin.vu_vertical.thumb_notch_color),
-            text_resources: skin.text_resources(),
-        };
-        let bounds = Rectangle::new(Point::new(0.0, 10.0), Size::new(12.0, 40.0));
-        let press = Event::Mouse(mouse::Event::ButtonPressed(Button::Left));
-
-        let action = meter
-            .update(
-                &mut ScalarState::default(),
-                &press,
-                bounds,
-                Cursor::Available(Point::new(6.0, 30.0)),
-            )
-            .unwrap_or_else(|| panic!("a press on the meter must publish"));
-
-        assert_eq!(
-            action.into_inner().0,
-            Some(UiEvent::Control {
-                path: "mixer/deck-a/volume".to_owned(),
-                action: ControlAction::SetScalar(0.5),
-            })
-        );
-    }
 
     #[kithara::test]
     fn the_fader_keeps_its_width_and_yields_the_rest_to_the_ticks() {

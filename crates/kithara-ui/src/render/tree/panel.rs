@@ -1,15 +1,12 @@
 use iced::Element;
 
-use super::{
-    icon::render_tree_icon,
-    read::{read_scope, resolve},
-};
+use super::read::{read_scope, resolve};
 use crate::{
     compile::CompiledUi,
     expand::Binding,
     ids::InternId,
     module::{DeckSummaryStyle, TrackColumn},
-    render::{ReadValue, Reads, Skin, UiEvent},
+    render::{ReadValue, Reads, Skin, UiEvent, icons::tree_icon},
     widgets::{
         Widget,
         deck::{DeckSummary, Time},
@@ -99,7 +96,7 @@ pub(super) fn browser_tree<'a>(
         .path(path)
         .query(query)
         .maybe_value(value)
-        .icon(render_tree_icon)
+        .icon(tree_icon)
         .skin(skin)
         .build()
         .view()

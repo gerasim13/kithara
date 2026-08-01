@@ -232,6 +232,13 @@ pub(crate) struct ExpandedModule {
     pub(crate) drop: Option<DropSpec>,
     pub(crate) collapsed: InternId,
     pub(crate) root: ExpandedNode,
+    pub(crate) includes: Vec<ExpandedInclude>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ExpandedInclude {
+    pub(crate) address: Box<[usize]>,
+    pub(crate) module: InternId,
 }
 
 /// A block the host may hide: the path that addresses it, and the Bool it

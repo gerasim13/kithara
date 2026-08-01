@@ -2,7 +2,7 @@ mod atom;
 mod control;
 mod flex;
 mod geometry;
-mod icon;
+mod host;
 mod knob;
 mod node;
 mod panel;

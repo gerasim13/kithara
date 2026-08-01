@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use crate::{
     error::UiDocError,
     expand::{
-        Binding, BlockSpec, Budget, ControlSite, DropSpec, ExpandedNode, Expander, intern_binding,
-        substitute_binding, substitute_map,
+        Binding, BlockSpec, Budget, ControlSite, DropSpec, ExpandedInclude, ExpandedNode, Expander,
+        intern_binding, substitute_binding, substitute_map,
     },
     ids::{InternId, Interner, SourceUri, StrArena},
     layout::{Axis, FrameSides, LayoutNode, parse_layout},
@@ -29,6 +29,7 @@ pub struct CompiledUi {
     pub resize_edges: bool,
     /// Names the item the pointer is carrying; drawn at the pointer.
     pub dragged: Option<Binding>,
+    includes: Vec<IncludedModule>,
     arena: StrArena,
 }
 
@@ -40,6 +41,21 @@ impl CompiledUi {
             pub fn resolve(&self, id: InternId) -> &str;
         }
     }
+
+    #[cfg(feature = "render")]
+    pub(crate) fn includes_module(&self, owner: InternId, address: &[usize], module: &str) -> bool {
+        self.includes
+            .iter()
+            .filter(|include| include.owner == owner && include.address.as_ref() == address)
+            .any(|include| self.resolve(include.module) == module)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct IncludedModule {
+    owner: InternId,
+    address: Box<[usize]>,
+    module: InternId,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -116,6 +132,7 @@ pub fn compile(
     validate::check_layout_dragged(&document, &loaded.uri, endpoints)?;
     let mut budget = Budget::new(config.limits.max_nodes);
     let mut interner = Interner::new(config.max_arena_bytes);
+    let mut includes = Vec::new();
     let root = Compiler {
         resolver,
         endpoints,
@@ -123,6 +140,7 @@ pub fn compile(
         config,
         budget: &mut budget,
         interner: &mut interner,
+        includes: &mut includes,
     }
     .build(&document.root, &loaded.uri)?;
     let size = compiled_node_size(&root);
@@ -137,6 +155,7 @@ pub fn compile(
         size,
         resize_edges: document.resize_edges,
         dragged,
+        includes,
         arena,
     })
 }
@@ -148,6 +167,7 @@ struct Compiler<'a> {
     config: &'a UiConfig,
     budget: &'a mut Budget,
     interner: &'a mut Interner,
+    includes: &'a mut Vec<IncludedModule>,
 }
 
 impl Compiler<'_> {
@@ -215,7 +235,7 @@ impl Compiler<'_> {
                     })?;
                 validate::check_module_footer(document, &module_uri, self.endpoints)?;
                 validate::check_module_drop(document, &module_uri, self.endpoints)?;
-                let expanded = Expander::new(
+                let mut expanded = Expander::new(
                     self.config.limits.max_depth,
                     self.budget,
                     self.interner,
@@ -228,6 +248,11 @@ impl Compiler<'_> {
                 });
                 let blocks = declared.is_none() && has_blocks(&expanded.root);
                 let instance = self.interner.intern(&instance.0, layout_uri)?;
+                self.includes.extend(
+                    std::mem::take(&mut expanded.includes)
+                        .into_iter()
+                        .map(|include| included_module(instance, include)),
+                );
                 Ok(CompiledNode::Module {
                     instance,
                     module: expanded.module,
@@ -246,6 +271,14 @@ impl Compiler<'_> {
                 })
             }
         }
+    }
+}
+
+fn included_module(owner: InternId, include: ExpandedInclude) -> IncludedModule {
+    IncludedModule {
+        owner,
+        address: include.address,
+        module: include.module,
     }
 }
 

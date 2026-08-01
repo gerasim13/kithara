@@ -21,11 +21,9 @@ use crate::{
 };
 
 pub(super) struct KnobProgram<'data, 'skin> {
-    knob: Knob<'data, 'skin>,
-    metrics: KnobSkin,
+    paint: KnobPaint<'data, 'skin>,
     drag: Scalar,
     path: String,
-    text_resources: &'skin TextResources,
 }
 
 impl<'data, 'skin> KnobProgram<'data, 'skin> {
@@ -39,8 +37,7 @@ impl<'data, 'skin> KnobProgram<'data, 'skin> {
 
         let metrics = skin.knob;
         Self {
-            knob: Knob::new(label, value, skin),
-            metrics,
+            paint: KnobPaint::new(label, value, skin),
             drag: Scalar::builder()
                 .track(Track::RelativeVertical {
                     range: metrics.drag_range,
@@ -54,7 +51,6 @@ impl<'data, 'skin> KnobProgram<'data, 'skin> {
                 })
                 .build(),
             path: path.to_owned(),
-            text_resources: skin.text_resources(),
         }
     }
 
@@ -76,21 +72,12 @@ impl canvas::Program<UiEvent> for KnobProgram<'_, '_> {
         &self,
         state: &KnobState,
         renderer: &Renderer,
-        _theme: &Theme,
+        theme: &Theme,
         bounds: Rectangle,
-        _cursor: Cursor,
+        cursor: Cursor,
     ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        let (dial, caption) = self.rects(bounds);
-        let mut text = state.text.borrow_mut();
-        let text = text.get_or_insert_with(|| self.text_resources.into());
-        let mut builder = DrawListBuilder::default();
-        self.knob.paint(&mut builder, text, dial, caption);
-        replay(
-            &builder.finish(),
-            &mut IcedBackend::new(&mut frame, self.text_resources),
-        );
-        vec![frame.into_geometry()]
+        self.paint
+            .draw(&state.paint, renderer, theme, bounds, cursor)
     }
 
     fn mouse_interaction(
@@ -124,10 +111,66 @@ impl canvas::Program<UiEvent> for KnobProgram<'_, '_> {
 #[derive(Default)]
 pub(super) struct KnobState {
     drag: ScalarState,
+    paint: KnobPaintState,
+}
+
+pub(super) struct KnobPaint<'data, 'skin> {
+    knob: Knob<'data, 'skin>,
+    metrics: KnobSkin,
+    text_resources: &'skin TextResources,
+}
+
+impl<'data, 'skin> KnobPaint<'data, 'skin> {
+    pub(super) fn new(label: Option<&'data str>, value: f32, skin: &'skin Skin) -> Self {
+        Self {
+            knob: Knob::new(label, value, skin),
+            metrics: skin.knob,
+            text_resources: skin.text_resources(),
+        }
+    }
+
+    pub(super) fn view(self) -> Element<'skin, UiEvent>
+    where
+        'data: 'skin,
+    {
+        Canvas::new(self)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+}
+
+impl canvas::Program<UiEvent> for KnobPaint<'_, '_> {
+    type State = KnobPaintState;
+
+    fn draw(
+        &self,
+        state: &KnobPaintState,
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: Cursor,
+    ) -> Vec<Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        let (dial, caption) = self.rects(bounds);
+        let mut text = state.text.borrow_mut();
+        let text = text.get_or_insert_with(|| self.text_resources.into());
+        let mut builder = DrawListBuilder::default();
+        self.knob.paint(&mut builder, text, dial, caption);
+        replay(
+            &builder.finish(),
+            &mut IcedBackend::new(&mut frame, self.text_resources),
+        );
+        vec![frame.into_geometry()]
+    }
+}
+
+#[derive(Default)]
+pub(super) struct KnobPaintState {
     text: RefCell<Option<TextContext>>,
 }
 
-impl KnobProgram<'_, '_> {
+impl KnobPaint<'_, '_> {
     fn rects(&self, bounds: Rectangle) -> (Rect, Rect) {
         const DIAMETER_SCALE: f32 = 2.0;
 
@@ -177,7 +220,7 @@ mod tests {
         let metrics = skin.knob;
 
         let program = KnobProgram::new("mixer/gain", Some("GAIN"), 0.5, &skin);
-        let (dial, caption) = program.rects(bounds);
+        let (dial, caption) = program.paint.rects(bounds);
         let unlabelled = KnobProgram::new("mixer/gain", None, 0.5, &skin);
 
         assert_eq!(
@@ -186,6 +229,6 @@ mod tests {
         );
         assert_eq!(caption.h, metrics.label_height);
         assert!(caption.y >= dial.y + dial.h);
-        assert_eq!(program.rects(bounds), unlabelled.rects(bounds));
+        assert_eq!(program.paint.rects(bounds), unlabelled.paint.rects(bounds));
     }
 }

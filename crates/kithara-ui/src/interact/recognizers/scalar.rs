@@ -60,6 +60,12 @@ pub(crate) struct ScalarState {
     wheel_accum: f32,
 }
 
+impl ScalarState {
+    pub(crate) const fn captures_pointer(&self) -> bool {
+        self.active
+    }
+}
+
 impl Scalar {
     pub(crate) fn on_input(
         &self,

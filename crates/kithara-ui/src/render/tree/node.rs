@@ -5,22 +5,26 @@ use iced::{
 use num_traits::cast::AsPrimitive;
 
 use super::{
+    atom::InputOwner,
     control::render_control,
     flex::Flex,
     geometry::{
         Rendered, active_tone, apply_size, bordered, content_size, effective_size, filled,
         frame_tone, padding,
     },
+    host,
     read::{read_flag, resolve},
     size::{node_size, visible_children},
 };
 use crate::{
     compile::{CompiledNode, CompiledUi},
     expand::{ExpandedNode, SurfaceSpec},
-    layout::Axis,
+    ids::InternId,
+    layout::{Axis, FrameSides},
     module::ChromeStyle,
     render::{ControlAction, DragPhase, ReadValue, Reads, Skin, UiEvent, control_event},
-    size::{Dim, Hidden, visible},
+    size::{Dim, Hidden, is_hidden},
+    skin::ColorRole,
     widgets::{DropZone, ModuleChrome, Widget, anchored::Anchored, wheel::WheelSurface},
 };
 
@@ -99,7 +103,17 @@ pub(super) fn render_compiled<'a>(
             let content: Element<'a, UiEvent> = if collapsed {
                 Space::new().into()
             } else {
-                render_node(root, ui, reads, skin)
+                render_node(
+                    root,
+                    &[],
+                    NodeContext {
+                        owner: *instance,
+                        ui,
+                        reads,
+                        skin,
+                        input_owner: InputOwner::Leaf,
+                    },
+                )
             };
             ModuleChrome::builder()
                 .content(content)
@@ -154,16 +168,38 @@ fn wheeled<'a>(
         .into()
 }
 
+#[derive(Clone, Copy)]
+struct NodeContext<'a, 'reads> {
+    owner: InternId,
+    ui: &'a CompiledUi,
+    reads: &'reads dyn Reads,
+    skin: &'a Skin,
+    input_owner: InputOwner,
+}
+
 fn render_node<'a>(
     node: &ExpandedNode,
-    ui: &'a CompiledUi,
-    reads: &dyn Reads,
-    skin: &'a Skin,
+    address: &[usize],
+    context: NodeContext<'a, '_>,
 ) -> Element<'a, UiEvent> {
+    let NodeContext {
+        owner,
+        ui,
+        reads,
+        skin,
+        input_owner,
+    } = context;
+    if matches!(input_owner, InputOwner::Leaf) && hosts_studio_strip(ui, owner, address) {
+        let child = render_engine_node(node, address, owner, ui, reads, skin);
+        return host::host(child, node, ui, reads, skin);
+    }
+
     let size = content_size(node, skin);
     let hidden: Hidden<'_> = &|block| read_flag(Some(&block.hidden), reads, ui);
     let rendered = match node {
-        ExpandedNode::Optional { child, .. } => return render_node(child, ui, reads, skin),
+        ExpandedNode::Optional { child, .. } => {
+            return render_child(child, address, 0, context);
+        }
         ExpandedNode::Row {
             children,
             gap,
@@ -181,37 +217,25 @@ fn render_node<'a>(
             ..
         } => {
             let active = read_flag(active.as_ref(), reads, ui);
-            Rendered::leading(wheeled(
-                bordered(
-                    filled(
-                        container(
-                            Flex::row(visible(children, hidden).map(|child| {
-                                (
-                                    render_node(child, ui, reads, skin),
-                                    main_minimum(child, Axis::Horizontal, skin),
-                                )
-                            }))
-                            .spacing(gap.unwrap_or(skin.layout.grid_gap))
-                            .align(Alignment::Center)
-                            .width(size.0)
-                            .height(size.1),
-                        )
-                        .padding(padding(*pad, *pad_x, *pad_y, skin))
-                        .width(size.0)
-                        .height(size.1),
-                        active_tone(*background, *active_background, active),
-                        *background_alpha,
-                        skin,
-                    ),
-                    *frame,
-                    frame_tone(*frame_color, *active_frame_color, active, skin),
-                    size,
-                    skin,
-                ),
-                surface.as_ref(),
+            render_group(
+                Group {
+                    axis: Axis::Horizontal,
+                    children,
+                    gap: *gap,
+                    pad: *pad,
+                    pad_x: *pad_x,
+                    pad_y: *pad_y,
+                    frame: *frame,
+                    background: active_tone(*background, *active_background, active),
+                    background_alpha: *background_alpha,
+                    frame_tone: frame_tone(*frame_color, *active_frame_color, active, skin),
+                    surface: surface.as_ref(),
+                },
+                address,
+                context,
                 size,
-                ui,
-            ))
+                hidden,
+            )
         }
         ExpandedNode::Column {
             children,
@@ -224,36 +248,25 @@ fn render_node<'a>(
             background_alpha,
             surface,
             ..
-        } => Rendered::leading(wheeled(
-            bordered(
-                filled(
-                    container(
-                        Flex::column(visible(children, hidden).map(|child| {
-                            (
-                                render_node(child, ui, reads, skin),
-                                main_minimum(child, Axis::Vertical, skin),
-                            )
-                        }))
-                        .spacing(gap.unwrap_or(skin.layout.grid_gap))
-                        .align(Alignment::Start)
-                        .width(size.0),
-                    )
-                    .padding(padding(*pad, *pad_x, *pad_y, skin))
-                    .width(size.0)
-                    .height(size.1),
-                    *background,
-                    *background_alpha,
-                    skin,
-                ),
-                *frame,
-                frame_tone(None, None, false, skin),
-                size,
-                skin,
-            ),
-            surface.as_ref(),
+        } => render_group(
+            Group {
+                axis: Axis::Vertical,
+                children,
+                gap: *gap,
+                pad: *pad,
+                pad_x: *pad_x,
+                pad_y: *pad_y,
+                frame: *frame,
+                background: *background,
+                background_alpha: *background_alpha,
+                frame_tone: frame_tone(None, None, false, skin),
+                surface: surface.as_ref(),
+            },
+            address,
+            context,
             size,
-            ui,
-        )),
+            hidden,
+        ),
         ExpandedNode::Popover {
             path,
             open,
@@ -263,13 +276,13 @@ fn render_node<'a>(
         } => {
             let open = read_flag(Some(open), reads, ui);
             let content: Element<'a, UiEvent> = if open {
-                render_node(content, ui, reads, skin)
+                render_child(content, address, 1, context)
             } else {
                 Space::new().into()
             };
             Rendered::leading(
                 Anchored::new(
-                    render_node(anchor, ui, reads, skin),
+                    render_child(anchor, address, 0, context),
                     content,
                     open,
                     *at,
@@ -282,29 +295,167 @@ fn render_node<'a>(
         ExpandedNode::Pressable { path, child, .. } => {
             let path = ui.resolve(*path);
             Rendered::leading(
-                mouse_area(render_node(child, ui, reads, skin))
+                mouse_area(render_child(child, address, 0, context))
                     .on_press(control_event(path, ControlAction::Activate))
                     .on_right_press(control_event(path, ControlAction::SecondaryActivate))
                     .into(),
             )
         }
-        ExpandedNode::Slot { children, .. } => Rendered::leading(
-            container(
-                Flex::column(
-                    visible(children, hidden)
-                        .map(|child| (render_node(child, ui, reads, skin), None)),
-                )
-                .spacing(skin.layout.grid_gap)
-                .width(Length::Fill),
-            )
-            .width(Length::Fill)
-            .into(),
-        ),
+        ExpandedNode::Slot { children, .. } => render_slot(children, address, context, hidden),
         ExpandedNode::Control {
             path, spec, read, ..
-        } => render_control(*path, spec, read.as_ref(), ui, reads, skin),
+        } => render_control(*path, spec, read.as_ref(), ui, reads, skin, input_owner),
     };
     apply_size(rendered, effective_size(node, skin))
+}
+
+pub(super) fn render_engine_node<'a>(
+    node: &ExpandedNode,
+    address: &[usize],
+    owner: InternId,
+    ui: &'a CompiledUi,
+    reads: &dyn Reads,
+    skin: &'a Skin,
+) -> Element<'a, UiEvent> {
+    render_node(
+        node,
+        address,
+        NodeContext {
+            owner,
+            ui,
+            reads,
+            skin,
+            input_owner: InputOwner::Engine,
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
+struct Group<'a> {
+    axis: Axis,
+    children: &'a [ExpandedNode],
+    gap: Option<f32>,
+    pad: Option<f32>,
+    pad_x: Option<f32>,
+    pad_y: Option<f32>,
+    frame: Option<FrameSides>,
+    background: Option<ColorRole>,
+    background_alpha: Option<f32>,
+    frame_tone: (ColorRole, f32),
+    surface: Option<&'a SurfaceSpec>,
+}
+
+fn render_group<'a>(
+    group: Group<'_>,
+    address: &[usize],
+    context: NodeContext<'a, '_>,
+    size: (Length, Length),
+    hidden: Hidden<'_>,
+) -> Rendered<'a> {
+    let Group {
+        axis,
+        children,
+        gap,
+        pad,
+        pad_x,
+        pad_y,
+        frame,
+        background,
+        background_alpha,
+        frame_tone,
+        surface,
+    } = group;
+    let spacing = gap.unwrap_or(context.skin.layout.grid_gap);
+    let flex = match axis {
+        Axis::Horizontal => Flex::row(children.iter().enumerate().filter_map(|(index, child)| {
+            if is_hidden(child, hidden) {
+                return None;
+            }
+            Some((
+                render_child(child, address, index, context),
+                main_minimum(child, axis, context.skin),
+            ))
+        }))
+        .spacing(spacing)
+        .align(Alignment::Center)
+        .width(size.0)
+        .height(size.1),
+        Axis::Vertical => Flex::column(children.iter().enumerate().filter_map(|(index, child)| {
+            if is_hidden(child, hidden) {
+                return None;
+            }
+            Some((
+                render_child(child, address, index, context),
+                main_minimum(child, axis, context.skin),
+            ))
+        }))
+        .spacing(spacing)
+        .align(Alignment::Start)
+        .width(size.0),
+    };
+    Rendered::leading(wheeled(
+        bordered(
+            filled(
+                container(flex)
+                    .padding(padding(pad, pad_x, pad_y, context.skin))
+                    .width(size.0)
+                    .height(size.1),
+                background,
+                background_alpha,
+                context.skin,
+            ),
+            frame,
+            frame_tone,
+            size,
+            context.skin,
+        ),
+        surface,
+        size,
+        context.ui,
+    ))
+}
+
+fn render_child<'a>(
+    node: &ExpandedNode,
+    parent: &[usize],
+    index: usize,
+    context: NodeContext<'a, '_>,
+) -> Element<'a, UiEvent> {
+    let address = child_address(parent, index);
+    render_node(node, &address, context)
+}
+
+fn render_slot<'a>(
+    children: &[ExpandedNode],
+    address: &[usize],
+    context: NodeContext<'a, '_>,
+    hidden: Hidden<'_>,
+) -> Rendered<'a> {
+    Rendered::leading(
+        container(
+            Flex::column(children.iter().enumerate().filter_map(|(index, child)| {
+                if is_hidden(child, hidden) {
+                    return None;
+                }
+                Some((render_child(child, address, index, context), None))
+            }))
+            .spacing(context.skin.layout.grid_gap)
+            .width(Length::Fill),
+        )
+        .width(Length::Fill)
+        .into(),
+    )
+}
+
+fn child_address(parent: &[usize], index: usize) -> Vec<usize> {
+    let mut address = Vec::with_capacity(parent.len() + 1);
+    address.extend_from_slice(parent);
+    address.push(index);
+    address
+}
+
+fn hosts_studio_strip(ui: &CompiledUi, owner: InternId, address: &[usize]) -> bool {
+    ui.includes_module(owner, address, "studio-strip")
 }
 
 fn main_minimum(node: &ExpandedNode, axis: Axis, skin: &Skin) -> Option<f32> {

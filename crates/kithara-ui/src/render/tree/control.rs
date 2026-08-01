@@ -2,11 +2,10 @@ use iced::alignment::Horizontal;
 
 use super::{
     atom::{
-        cell, checkbox, chip, crossfader, fader, glyph, knob, meter, nav_item, readout, segmented,
-        select, status_dot, swatch, tab_large, toggle, vu_stereo, vu_vertical,
+        InputOwner, cell, checkbox, chip, crossfader, fader, glyph, knob, meter, nav_item, readout,
+        segmented, select, status_dot, swatch, tab_large, toggle, vu_stereo, vu_vertical,
     },
     geometry::Rendered,
-    icon::render_icon,
     panel::{browser_tree, context_bar, deck_summary, time, track_list, vis},
     read::{read_flag, read_scope, resolve, wave_zoom},
     window::{titlebar, window_controls},
@@ -16,7 +15,7 @@ use crate::{
     expand::{Binding, ControlSpec},
     ids::InternId,
     module::TextAlign,
-    render::{Reads, Skin},
+    render::{Reads, Skin, icons::document_icon},
     widgets::{
         Widget,
         button::ControlButton,
@@ -36,6 +35,7 @@ pub(super) fn render_control<'a>(
     ui: &'a CompiledUi,
     reads: &dyn Reads,
     skin: &'a Skin,
+    owner: InputOwner,
 ) -> Rendered<'a> {
     let value = read.and_then(|binding| resolve(reads, binding, ui));
     let value = value.as_ref();
@@ -114,7 +114,7 @@ pub(super) fn render_control<'a>(
         } => ControlButton::builder()
             .path(path)
             .label(ui.resolve(*label))
-            .maybe_icon(icon.map(render_icon))
+            .maybe_icon(icon.map(document_icon))
             .maybe_active_label(active_label.map(|id| ui.resolve(id)))
             .style(*style)
             .maybe_frame(*frame)
@@ -146,9 +146,11 @@ pub(super) fn render_control<'a>(
             framed,
         } => readout(*label, *tone, *framed, value, ui, skin),
         ControlSpec::Chip { label, style } => chip(path, ui.resolve(*label), *style, value, skin),
-        ControlSpec::Knob { label } => knob(path, label.map(|id| ui.resolve(id)), value, skin),
+        ControlSpec::Knob { label } => {
+            knob(path, label.map(|id| ui.resolve(id)), value, skin, owner)
+        }
         ControlSpec::VuStereo => vu_stereo(path, value, skin),
-        ControlSpec::VuVertical { ticks } => vu_vertical(path, *ticks, value, skin),
+        ControlSpec::VuVertical { ticks } => vu_vertical(path, *ticks, value, skin, owner),
         ControlSpec::Vis => vis(value, reads),
         ControlSpec::Wave { style, badge, zoom } => MiniWave::builder()
             .path(path)

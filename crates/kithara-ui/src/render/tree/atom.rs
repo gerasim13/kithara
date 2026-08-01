@@ -1,7 +1,10 @@
 use iced::{Color, Element, widget::Space};
 use num_traits::cast::AsPrimitive;
 
-use super::{geometry::active_tone, icon::render_icon, knob::KnobProgram};
+use super::{
+    geometry::active_tone,
+    knob::{KnobPaint, KnobProgram},
+};
 use crate::{
     atoms::{
         chip::Chip,
@@ -17,7 +20,7 @@ use crate::{
     compile::CompiledUi,
     ids::InternId,
     module::{ChipStyle, FaderStyle, GlyphStyle, IconName, Tone},
-    render::{ReadValue, Skin, UiEvent},
+    render::{ReadValue, Skin, UiEvent, icons::document_icon},
     skin::ColorRole,
     widgets::{
         Widget,
@@ -25,6 +28,12 @@ use crate::{
         nav::{Glyph, NavItem, TabLarge},
     },
 };
+
+#[derive(Clone, Copy)]
+pub(super) enum InputOwner {
+    Leaf,
+    Engine,
+}
 
 pub(super) fn crossfader<'a>(
     path: &'a str,
@@ -119,14 +128,18 @@ pub(super) fn vu_vertical<'a>(
     ticks: bool,
     value: Option<&ReadValue<'_>>,
     skin: &'a Skin,
+    owner: InputOwner,
 ) -> Element<'a, UiEvent> {
-    VerticalVu::builder()
+    let vu = VerticalVu::builder()
         .path(path)
         .ticks(ticks)
         .maybe_value(value)
         .skin(skin)
-        .build()
-        .view()
+        .build();
+    match owner {
+        InputOwner::Leaf => vu.view(),
+        InputOwner::Engine => vu.painted(),
+    }
 }
 
 pub(super) fn meter<'a>(value: Option<&ReadValue<'_>>, skin: &'a Skin) -> Element<'a, UiEvent> {
@@ -142,12 +155,16 @@ pub(super) fn knob<'a>(
     label: Option<&'a str>,
     value: Option<&ReadValue<'_>>,
     skin: &'a Skin,
+    owner: InputOwner,
 ) -> Element<'a, UiEvent> {
     let Some(ReadValue::Scalar(value)) = value else {
         return Space::new().into();
     };
     let value = value.clamp(0.0, 1.0).as_();
-    KnobProgram::new(path, label, value, skin).view()
+    match owner {
+        InputOwner::Leaf => KnobProgram::new(path, label, value, skin).view(),
+        InputOwner::Engine => KnobPaint::new(label, value, skin).view(),
+    }
 }
 
 pub(super) fn readout<'a>(
@@ -246,7 +263,7 @@ pub(super) fn glyph(
     let icon = active.then_some(active_icon).flatten().unwrap_or(icon);
     let tone = glyph_tone(color, active_color, active, skin);
     Glyph::builder()
-        .icon(render_icon(icon))
+        .icon(document_icon(icon))
         .size(glyph_size(style, skin))
         .color(tone.unwrap_or_else(|| glyph_base(style, skin)))
         .build()
@@ -294,7 +311,7 @@ pub(super) fn nav_item<'a>(
     NavItem::builder()
         .path(path)
         .label(label)
-        .icon(render_icon(icon))
+        .icon(document_icon(icon))
         .maybe_value(value)
         .skin(skin)
         .build()

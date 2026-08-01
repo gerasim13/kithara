@@ -8,6 +8,8 @@ pub mod builtin;
 pub mod compile;
 #[cfg(any(feature = "render", feature = "vello-backend"))]
 pub mod draw;
+#[cfg(feature = "render")]
+pub(crate) mod engine;
 pub mod error;
 pub mod expand;
 pub mod ids;
