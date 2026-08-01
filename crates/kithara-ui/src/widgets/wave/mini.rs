@@ -308,11 +308,11 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
                 {
                     let start = self.track_position(bounds, cursor)?;
                     state.loop_start = Some(start);
-                    return Some(scalar_child(&self.path, "loop_start", start));
+                    return Some(scalar_child(&self.path, "loop_start", f64::from(start)));
                 }
                 Event::Mouse(mouse::Event::CursorMoved { .. }) if state.loop_start.is_some() => {
                     let end = self.track_position(bounds, cursor)?;
-                    return Some(scalar_child(&self.path, "loop_end", end));
+                    return Some(scalar_child(&self.path, "loop_end", f64::from(end)));
                 }
                 Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
                     if state.loop_start.take().is_some() =>
@@ -327,14 +327,15 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
             && cursor.is_over(bounds)
         {
             let zoom = zoom_for_wheel(self.paint.zoom, scroll.y());
-            return Some(scalar_child(&self.path, "zoom", zoom));
+            return Some(scalar_child(&self.path, "zoom", f64::from(zoom)));
         }
         let input = iced_interact::input(event)?;
         let hit = iced_interact::hit(bounds, cursor);
         scalar(
             &self.path,
             self.drag
-                .on_input(&mut state.drag, input, &hit, Instant::now()),
+                .on_input(&mut state.drag, input, &hit, Instant::now())
+                .map(f64::from),
         )
     }
 }

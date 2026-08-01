@@ -21,8 +21,8 @@ use crate::{
     compile::CompiledUi,
     engine::{Descriptor, Engine, Target},
     expand::{ControlSpec, ExpandedNode},
-    interact::iced as iced_interact,
-    module::WaveStyle,
+    interact::{CursorShape, Hover, iced as iced_interact, recognizers::WheelStep},
+    module::{FaderStyle, WaveStyle},
     render::{
         ReadValue, Reads, Skin, UiEvent,
         controls::{nav_item_supports_engine_input, supports_engine_input},
@@ -31,7 +31,10 @@ use crate::{
         model::derived,
     },
     size::{Hidden, is_hidden},
-    widgets::wave::zoom_math::{clamp_zoom, window_bounds, zoom_for_wheel},
+    widgets::{
+        fader::fader_input_layout,
+        wave::zoom_math::{clamp_zoom, window_bounds, zoom_for_wheel},
+    },
 };
 
 pub(super) fn host<'a>(
@@ -404,15 +407,23 @@ impl HostedLayout {
                 let Some(layout) = first_child(layout) else {
                     return;
                 };
+                let Some(layout) = control.input_layout(layout) else {
+                    return;
+                };
                 targets.push(Target::new(
                     control.path(),
                     iced_interact::hit(layout.bounds(), cursor),
                 ));
             }
-            Self::SelfMeasuredControl(Some(control)) => targets.push(Target::new(
-                control.path(),
-                iced_interact::hit(layout.bounds(), cursor),
-            )),
+            Self::SelfMeasuredControl(Some(control)) => {
+                let Some(layout) = control.input_layout(layout) else {
+                    return;
+                };
+                targets.push(Target::new(
+                    control.path(),
+                    iced_interact::hit(layout.bounds(), cursor),
+                ));
+            }
             Self::Control(None) | Self::SelfMeasuredControl(None) | Self::Passive => {}
         }
     }
@@ -425,6 +436,13 @@ enum HostedControl {
     Segmented {
         path: String,
         item_count: usize,
+    },
+    Fader {
+        path: String,
+        style: FaderStyle,
+        labelled: bool,
+        drag_step: Option<f64>,
+        wheel: Option<WheelStep>,
     },
     Crossfader {
         path: String,
@@ -491,6 +509,25 @@ impl HostedControl {
                     item_count: items.len(),
                 })
             }
+            (ControlSpec::Fader { style, label }, Some(ReadValue::Scalar(value))) => {
+                let (drag_step, wheel) = match style {
+                    FaderStyle::Default => (Some(skin.fader.step), None),
+                    FaderStyle::Volume => (
+                        None,
+                        Some(WheelStep {
+                            value: value.clamp(0.0, 1.0).as_(),
+                            step: skin.fader.step.as_(),
+                        }),
+                    ),
+                };
+                Some(Self::Fader {
+                    path: path.to_owned(),
+                    style: *style,
+                    labelled: label.is_some(),
+                    drag_step,
+                    wheel,
+                })
+            }
             (ControlSpec::Crossfader { .. }, Some(ReadValue::Scalar(_))) => {
                 Some(Self::Crossfader {
                     path: path.to_owned(),
@@ -541,12 +578,22 @@ impl HostedControl {
         match self {
             Self::Activation { path }
             | Self::Segmented { path, .. }
+            | Self::Fader { path, .. }
             | Self::Crossfader { path }
             | Self::Knob { path, .. }
             | Self::StereoMeter { path }
             | Self::VerticalVu { path }
             | Self::Wave { path }
             | Self::HeroWave { path, .. } => path,
+        }
+    }
+
+    fn input_layout<'a>(&self, layout: Layout<'a>) -> Option<Layout<'a>> {
+        match self {
+            Self::Fader {
+                style, labelled, ..
+            } => fader_input_layout(layout, *style, *labelled),
+            _ => Some(layout),
         }
     }
 }
@@ -558,6 +605,21 @@ impl From<&HostedControl> for Descriptor {
             HostedControl::Segmented { path, item_count } => {
                 Self::segmented(path.clone(), *item_count)
             }
+            HostedControl::Fader {
+                path,
+                style,
+                drag_step,
+                wheel,
+                ..
+            } => Self::fader(
+                path.clone(),
+                Hover::new(match style {
+                    FaderStyle::Default => CursorShape::Grab,
+                    FaderStyle::Volume => CursorShape::ResizeH,
+                }),
+                *drag_step,
+                *wheel,
+            ),
             HostedControl::Crossfader { path } => Self::crossfader(path.clone()),
             HostedControl::Knob {
                 path,
@@ -687,7 +749,9 @@ mod tests {
     impl EndpointRegistry for Registry {
         fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
             match (category, id.0.as_str()) {
-                (EndpointCategory::Parameter, "gain") => Some(&self.scalar),
+                (EndpointCategory::Parameter, "gain")
+                | (EndpointCategory::Model | EndpointCategory::Parameter, "mock.cells.segmented")
+                | (EndpointCategory::Model, "mock.volume") => Some(&self.scalar),
                 (EndpointCategory::Telemetry, "levels")
                 | (EndpointCategory::Model, "mock.levels") => Some(&self.stereo),
                 (
@@ -696,15 +760,17 @@ mod tests {
                     | "mock.button.play" | "mock.button.cue" | "mock.button.sync"
                     | "mock.chip.active" | "mock.chip.inactive",
                 ) => Some(&self.boolean),
-                (EndpointCategory::Model | EndpointCategory::Parameter, "mock.cells.segmented") => {
-                    Some(&self.scalar)
-                }
                 (
                     EndpointCategory::Model,
                     "gallery.label.meters"
                     | "gallery.label.toggles"
                     | "gallery.label.transport"
-                    | "gallery.label.regular",
+                    | "gallery.label.regular"
+                    | "gallery.label.text"
+                    | "gallery.label.faders"
+                    | "gallery.label.scalar"
+                    | "mock.track.title"
+                    | "mock.track.artist",
                 ) => Some(&self.text),
                 (EndpointCategory::Model, endpoint)
                     if endpoint.starts_with("gallery.tab.")
@@ -739,7 +805,7 @@ mod tests {
     impl Reads for FixtureReads {
         fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
             match endpoint {
-                "gain" => Some(ReadValue::Scalar(self.gain)),
+                "gain" | "mock.volume" => Some(ReadValue::Scalar(self.gain)),
                 "levels" | "mock.levels" => Some(ReadValue::Stereo(StereoLevels {
                     l: 0.4,
                     r: 0.6,
@@ -758,6 +824,11 @@ mod tests {
                 "gallery.label.toggles" => Some(ReadValue::Text("TOGGLES / CHECKBOXES")),
                 "gallery.label.transport" => Some(ReadValue::Text("TRANSPORT")),
                 "gallery.label.regular" => Some(ReadValue::Text("REGULAR")),
+                "gallery.label.text" => Some(ReadValue::Text("TEXT STYLES")),
+                "gallery.label.faders" => Some(ReadValue::Text("HORIZONTAL FADERS")),
+                "gallery.label.scalar" => Some(ReadValue::Text("SCALAR TELEMETRY")),
+                "mock.track.title" => Some(ReadValue::Text("Track")),
+                "mock.track.artist" => Some(ReadValue::Text("Artist")),
                 endpoint if endpoint.starts_with("gallery.tab.") => {
                     Some(ReadValue::Bool(endpoint == "gallery.tab.atoms"))
                 }
@@ -884,6 +955,27 @@ mod tests {
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("gallery cells fixture must compile: {error}"))
+    }
+
+    fn compiled_gallery_faders() -> CompiledUi {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "gallery.klayout.ron",
+            r#"(schema: "kithara.layout", version: 1, id: "gallery-faders-host",
+                root: Module(instance: "faders", source: "faders.kmodule.ron"))"#,
+        );
+        resolver.insert(
+            "faders.kmodule.ron",
+            include_str!("../../../examples/gallery/assets/modules/tabs/faders.kmodule.ron"),
+        );
+        compile(
+            "gallery.klayout.ron",
+            &resolver,
+            &Registry::default(),
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap_or_else(|error| panic!("gallery faders fixture must compile: {error}"))
     }
 
     fn compiled_gallery_tabs() -> CompiledUi {
@@ -1018,6 +1110,9 @@ mod tests {
                 ControlSpec::Segmented { .. } => {
                     components.push("segmented");
                 }
+                ControlSpec::Fader { .. } => {
+                    components.push("fader");
+                }
                 ControlSpec::Knob { .. } => {
                     components.push("knob");
                 }
@@ -1047,6 +1142,7 @@ mod tests {
         match descriptor {
             Descriptor::Activation { path }
             | Descriptor::Segmented { path, .. }
+            | Descriptor::Fader { path, .. }
             | Descriptor::Crossfader { path }
             | Descriptor::Knob { path, .. }
             | Descriptor::StereoMeter { path }
@@ -1210,6 +1306,140 @@ mod tests {
                 path: path.to_owned(),
                 action: ControlAction::SetScalar(0.5),
             })
+        );
+    }
+
+    #[kithara::test]
+    fn gallery_faders_host_their_exact_input_surfaces() {
+        let ui = compiled_gallery_faders();
+        let reads = FixtureReads::default();
+        let CompiledNode::Module {
+            instance,
+            module,
+            root,
+            ..
+        } = &ui.root
+        else {
+            panic!("gallery faders fixture root must be a module");
+        };
+
+        assert_eq!(ui.resolve(*module), "gallery-faders-tab");
+        let mut components = Vec::new();
+        claimed_components(root, &mut components);
+        assert_eq!(components, ["fader", "fader", "vertical-vu"]);
+
+        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full_tree = Tree::new(full.as_widget());
+        assert_eq!(host_count(&full_tree), 1, "the faders page owns one engine");
+
+        let renderer = headless_renderer();
+        let viewport = Size::new(320.0, 500.0);
+        let child = super::super::node::render_engine_node(
+            root,
+            &[],
+            *instance,
+            &ui,
+            &reads,
+            builtin::skin(),
+        );
+        let mut element = host(child, root, &ui, &reads, builtin::skin());
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let descriptors = hosted.descriptors();
+        assert_eq!(
+            descriptors.iter().map(descriptor_path).collect::<Vec<_>>(),
+            ["faders/default", "faders/volume", "faders/vertical"]
+        );
+        let [
+            Descriptor::Fader {
+                drag_step: default_step,
+                ..
+            },
+            Descriptor::Fader {
+                drag_step: volume_step,
+                ..
+            },
+            Descriptor::VerticalVu { .. },
+        ] = descriptors.as_slice()
+        else {
+            panic!("the hosted fader descriptors must keep one shared kind");
+        };
+        assert_eq!(*default_step, Some(builtin::skin().fader.step));
+        assert_eq!(*volume_step, None);
+
+        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        assert_eq!(
+            targets.iter().map(|target| target.path).collect::<Vec<_>>(),
+            ["faders/default", "faders/volume", "faders/vertical"]
+        );
+        let area = |path: &str| {
+            targets
+                .iter()
+                .find(|target| target.path == path)
+                .unwrap_or_else(|| panic!("the hosted `{path}` target must exist"))
+                .hit
+                .area()
+        };
+        let default = area("faders/default");
+        let volume = area("faders/volume");
+        let vertical = area("faders/vertical");
+        assert_eq!(default.h, 16.0);
+        assert_eq!(volume.h, 14.0);
+        assert_eq!((vertical.w, vertical.h), (18.0, 120.0));
+
+        let speaker = Cursor::Available(Point::new(
+            volume.x - builtin::skin().fader.content_gap - builtin::skin().fader.icon_width / 2.0,
+            volume.y + volume.h / 2.0,
+        ));
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            Layout::new(&node),
+            speaker,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert!(!shell.is_event_captured());
+        drop(shell);
+        assert!(
+            messages.is_empty(),
+            "the Volume speaker is outside the fader input surface"
+        );
+
+        let cursor = Cursor::Available(Point::new(
+            default.x + default.w / 2.0,
+            default.y + default.h / 2.0,
+        ));
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            Layout::new(&node),
+            cursor,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert!(shell.is_event_captured());
+        drop(shell);
+
+        assert_eq!(
+            messages,
+            [UiEvent::Control {
+                path: "faders/default".to_owned(),
+                action: ControlAction::SetScalar(0.5),
+            }]
         );
     }
 

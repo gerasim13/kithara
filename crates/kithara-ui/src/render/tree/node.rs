@@ -458,7 +458,7 @@ fn child_address(parent: &[usize], index: usize) -> Vec<usize> {
     address
 }
 
-const HOSTED_MODULES: [&str; 12] = [
+const HOSTED_MODULES: [&str; 13] = [
     "studio-deck",
     "studio-strip",
     "studio-mixer",
@@ -469,6 +469,7 @@ const HOSTED_MODULES: [&str; 12] = [
     "gallery-toggles",
     "gallery-buttons-tab",
     "gallery-cells-tab",
+    "gallery-faders-tab",
     "gallery-module-tabs",
     "gallery-nav",
 ];

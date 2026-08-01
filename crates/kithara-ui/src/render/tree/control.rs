@@ -133,9 +133,7 @@ pub(super) fn render_control<'a>(
             .build()
             .view(),
         ControlSpec::Crossfader { ticks } => crossfader(path, *ticks, value, skin, owner),
-        ControlSpec::Fader { style, label } => {
-            fader(path, *style, label.map(|id| ui.resolve(id)), value, skin)
-        }
+        ControlSpec::Fader { style, label } => fader(path, *style, *label, value, ui, skin, owner),
         ControlSpec::Toggle => toggle(path, value, skin, owner),
         ControlSpec::Checkbox => checkbox(path, value, skin, owner),
         ControlSpec::Segmented { items } => segmented(path, items, value, ui, skin, owner),

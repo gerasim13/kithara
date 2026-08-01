@@ -1,11 +1,15 @@
 use std::ops::Range;
 
-use crate::interact::{Hit, Outcome};
+use crate::interact::{
+    Hit, Hover, Outcome,
+    recognizers::{Scalar, Track, WheelStep},
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Kind {
     Activation,
     Segmented,
+    Fader,
     Crossfader,
     Knob,
     StereoMeter,
@@ -27,6 +31,11 @@ pub(crate) enum Descriptor {
     Segmented {
         path: String,
         item_count: usize,
+    },
+    Fader {
+        path: String,
+        scalar: Scalar,
+        drag_step: Option<f64>,
     },
     Crossfader {
         path: String,
@@ -63,6 +72,23 @@ impl Descriptor {
 
     pub(crate) fn segmented(path: String, item_count: usize) -> Self {
         Self::Segmented { path, item_count }
+    }
+
+    pub(crate) fn fader(
+        path: String,
+        hover: Hover,
+        drag_step: Option<f64>,
+        wheel: Option<WheelStep>,
+    ) -> Self {
+        Self::Fader {
+            path,
+            scalar: Scalar::builder()
+                .track(Track::AbsoluteHorizontal)
+                .hover(hover)
+                .maybe_wheel(wheel)
+                .build(),
+            drag_step,
+        }
     }
 
     pub(crate) fn crossfader(path: String) -> Self {
@@ -112,6 +138,7 @@ impl Descriptor {
         match self {
             Self::Activation { path }
             | Self::Segmented { path, .. }
+            | Self::Fader { path, .. }
             | Self::Crossfader { path }
             | Self::Knob { path, .. }
             | Self::StereoMeter { path }
@@ -125,6 +152,7 @@ impl Descriptor {
         match self {
             Self::Activation { .. } => Kind::Activation,
             Self::Segmented { .. } => Kind::Segmented,
+            Self::Fader { .. } => Kind::Fader,
             Self::Crossfader { .. } => Kind::Crossfader,
             Self::Knob { .. } => Kind::Knob,
             Self::StereoMeter { .. } => Kind::StereoMeter,
@@ -137,7 +165,7 @@ impl Descriptor {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum EngineEvent {
-    Scalar(f32),
+    Scalar(f64),
     Activate,
     Index(usize),
 }

@@ -291,7 +291,9 @@ impl canvas::Program<UiEvent> for CrossfaderCanvas<'_> {
         let hit = iced_interact::hit(bounds, cursor);
         scalar(
             &self.path,
-            self.drag.on_input(state, input, &hit, Instant::now()),
+            self.drag
+                .on_input(state, input, &hit, Instant::now())
+                .map(f64::from),
         )
     }
 }

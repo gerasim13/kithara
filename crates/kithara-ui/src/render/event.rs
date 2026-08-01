@@ -38,11 +38,11 @@ pub(crate) fn control_event(path: &str, action: ControlAction) -> UiEvent {
     }
 }
 
-fn set_scalar(path: &str, value: f32) -> UiEvent {
-    control_event(path, ControlAction::SetScalar(f64::from(value)))
+fn set_scalar(path: &str, value: f64) -> UiEvent {
+    control_event(path, ControlAction::SetScalar(value))
 }
 
-pub(crate) fn scalar(path: &str, outcome: Outcome) -> Option<Action<UiEvent>> {
+pub(crate) fn scalar(path: &str, outcome: Outcome<f64>) -> Option<Action<UiEvent>> {
     action(outcome, |value| set_scalar(path, value))
 }
 
@@ -95,7 +95,7 @@ fn typed_outcome<T>(value: T, captured: bool) -> Outcome<T> {
 
 /// A value a control decides for itself, addressed under one of its own
 /// endpoints rather than the one its gesture writes.
-pub(crate) fn scalar_child(path: &str, child: &str, value: f32) -> Action<UiEvent> {
+pub(crate) fn scalar_child(path: &str, child: &str, value: f64) -> Action<UiEvent> {
     Action::publish(set_scalar(&format!("{path}/{child}"), value)).and_capture()
 }
 
@@ -188,7 +188,7 @@ mod tests {
         let action = engine(
             "deck-a/wave",
             Some("loop_start"),
-            Outcome::set(EngineEvent::Scalar(0.375)),
+            Outcome::set(EngineEvent::Scalar(0.14)),
         )
         .unwrap_or_else(|| panic!("a child scalar emission must publish"));
 
@@ -196,7 +196,7 @@ mod tests {
             action.into_inner().0,
             Some(UiEvent::Control {
                 path: "deck-a/wave/loop_start".to_owned(),
-                action: ControlAction::SetScalar(0.375),
+                action: ControlAction::SetScalar(0.14),
             })
         );
     }

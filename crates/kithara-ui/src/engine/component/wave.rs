@@ -108,7 +108,7 @@ impl Component for HeroWaveComponent {
                 };
                 self.loop_active = true;
                 (
-                    Outcome::set(EngineEvent::Scalar(position)),
+                    Outcome::set(EngineEvent::Scalar(f64::from(position))),
                     Some(Endpoint::LoopStart.name()),
                 )
             }
@@ -117,7 +117,7 @@ impl Component for HeroWaveComponent {
                     return (Outcome::IGNORED, None);
                 };
                 (
-                    Outcome::set(EngineEvent::Scalar(position)),
+                    Outcome::set(EngineEvent::Scalar(f64::from(position))),
                     Some(Endpoint::LoopEnd.name()),
                 )
             }
@@ -126,17 +126,17 @@ impl Component for HeroWaveComponent {
                 (Outcome::captured(), None)
             }
             Input::Wheel(scroll) if hit.over() => (
-                Outcome::set(EngineEvent::Scalar(if scroll.y() > 0.0 {
+                Outcome::set(EngineEvent::Scalar(f64::from(if scroll.y() > 0.0 {
                     self.wheel_positive
                 } else {
                     self.wheel_non_positive
-                })),
+                }))),
                 Some(Endpoint::Zoom.name()),
             ),
             _ => (
                 self.drag
                     .on_input(&mut self.drag_state, input, hit, now)
-                    .map(EngineEvent::Scalar),
+                    .map(|value| EngineEvent::Scalar(f64::from(value))),
                 None,
             ),
         }

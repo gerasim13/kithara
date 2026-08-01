@@ -1,5 +1,6 @@
 use iced::{
     Alignment, Background, Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
+    advanced::layout::Layout,
     alignment::Vertical,
     mouse::{self, Cursor},
     widget::{
@@ -7,8 +8,7 @@ use iced::{
         canvas::{self, Action, Frame, Geometry, Path, Stroke},
         container,
         container::Style as ContainerStyle,
-        row, slider,
-        slider::{Handle, HandleShape, Rail, Status as SliderStatus, Style as SliderStyle},
+        row,
     },
 };
 use kithara_platform::time::Instant;
@@ -21,7 +21,7 @@ use crate::{
     },
     module::FaderStyle,
     render::{
-        ControlAction, Icon, ReadValue, Skin, UiEvent, control_event, fonts, scalar, shaped_text,
+        Icon, InputOwner, ReadValue, Skin, UiEvent, fader_slider, fonts, scalar, shaped_text,
         theme::RenderPalette,
     },
     skin::{FaderSkin, FrameSkin},
@@ -35,9 +35,13 @@ pub(crate) struct Fader<'path, 'value, 'data, 'skin> {
     label: Option<&'path str>,
     value: Option<&'value ReadValue<'data>>,
     skin: &'skin Skin,
+    owner: InputOwner,
 }
 
-impl<'a> Widget<'a> for Fader<'_, '_, '_, '_> {
+impl<'a, 'path, 'value, 'data, 'skin> Widget<'a> for Fader<'path, 'value, 'data, 'skin>
+where
+    'skin: 'a,
+{
     fn view(self) -> Element<'a, UiEvent> {
         let Some(ReadValue::Scalar(value)) = self.value else {
             return Space::new().into();
@@ -47,18 +51,12 @@ impl<'a> Widget<'a> for Fader<'_, '_, '_, '_> {
                 .skin(self.skin)
                 .path(self.path)
                 .value(*value)
+                .owner(self.owner)
                 .build()
                 .view();
         }
         let palette = self.skin.palette;
-        let event_path = self.path.to_owned();
-        let slider = slider(0.0..=1.0, value.clamp(0.0, 1.0), move |value| {
-            control_event(&event_path, ControlAction::SetScalar(value))
-        })
-        .step(self.skin.fader.step)
-        .height(self.skin.fader.slider_height)
-        .style(slider_style(self.skin))
-        .width(Length::Fill);
+        let slider = fader_slider(self.path, *value, self.skin, self.owner);
         let ticks = Canvas::new(FaderTicks {
             metrics: self.skin.fader,
             color: palette.line_soft,
@@ -110,6 +108,7 @@ struct SegmentedFader<'path, 'skin> {
     skin: &'skin Skin,
     path: &'path str,
     value: f64,
+    owner: InputOwner,
 }
 
 impl<'a> Widget<'a> for SegmentedFader<'_, '_> {
@@ -124,6 +123,7 @@ impl<'a> Widget<'a> for SegmentedFader<'_, '_> {
             .skin(self.skin)
             .path(self.path)
             .value(self.value)
+            .owner(self.owner)
             .build()
             .view();
         let control = row![icon, strip]
@@ -144,33 +144,6 @@ impl<'a> Widget<'a> for SegmentedFader<'_, '_> {
                 ContainerStyle::default().background(Background::Color(palette.bg_panel))
             })
             .into()
-    }
-}
-
-fn slider_style(skin: &Skin) -> impl Fn(&Theme, SliderStatus) -> SliderStyle + 'static {
-    let palette = skin.palette;
-    let metrics = skin.fader;
-    let rail_border = skin.border(metrics.rail_frame);
-    let handle_border = skin.color(metrics.handle_frame.border);
-    let handle_color = skin.color(metrics.handle_color);
-    move |_theme, _status| SliderStyle {
-        rail: Rail {
-            backgrounds: (
-                Background::Color(palette.accent),
-                Background::Color(palette.bg_deep),
-            ),
-            width: metrics.rail_width,
-            border: rail_border,
-        },
-        handle: Handle {
-            shape: HandleShape::Rectangle {
-                width: metrics.handle_width,
-                border_radius: metrics.handle_frame.radius.into(),
-            },
-            background: Background::Color(handle_color),
-            border_width: metrics.handle_frame.border_width,
-            border_color: handle_border,
-        },
     }
 }
 
@@ -208,6 +181,10 @@ impl canvas::Program<UiEvent> for FaderTicks {
 struct SegmentedVolumeCanvas {
     drag: Scalar,
     path: String,
+    paint: SegmentedVolumePaint,
+}
+
+struct SegmentedVolumePaint {
     metrics: FaderSkin,
     border_color: Color,
     palette: RenderPalette,
@@ -225,16 +202,7 @@ impl canvas::Program<UiEvent> for SegmentedVolumeCanvas {
         bounds: Rectangle,
         _cursor: Cursor,
     ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.palette.bg_deep);
-        draw_segments(&mut frame, bounds, self.volume, self.metrics, self.palette);
-        draw_border(
-            &mut frame,
-            bounds,
-            self.metrics.strip_frame,
-            self.border_color,
-        );
-        vec![frame.into_geometry()]
+        self.paint.geometry(renderer, bounds)
     }
 
     fn mouse_interaction(
@@ -259,8 +227,40 @@ impl canvas::Program<UiEvent> for SegmentedVolumeCanvas {
         let hit = iced_interact::hit(bounds, cursor);
         scalar(
             &self.path,
-            self.drag.on_input(state, input, &hit, Instant::now()),
+            self.drag
+                .on_input(state, input, &hit, Instant::now())
+                .map(f64::from),
         )
+    }
+}
+
+impl SegmentedVolumePaint {
+    fn geometry(&self, renderer: &Renderer, bounds: Rectangle) -> Vec<Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.palette.bg_deep);
+        draw_segments(&mut frame, bounds, self.volume, self.metrics, self.palette);
+        draw_border(
+            &mut frame,
+            bounds,
+            self.metrics.strip_frame,
+            self.border_color,
+        );
+        vec![frame.into_geometry()]
+    }
+}
+
+impl canvas::Program<UiEvent> for SegmentedVolumePaint {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: Cursor,
+    ) -> Vec<Geometry> {
+        self.geometry(renderer, bounds)
     }
 }
 
@@ -269,28 +269,54 @@ struct VolumeStrip<'path, 'skin> {
     skin: &'skin Skin,
     path: &'path str,
     value: f64,
+    owner: InputOwner,
 }
 
 impl<'a> Widget<'a> for VolumeStrip<'_, '_> {
     fn view(self) -> Element<'a, UiEvent> {
-        Canvas::new(SegmentedVolumeCanvas {
-            drag: Scalar::builder()
-                .track(Track::AbsoluteHorizontal)
-                .hover(Hover::new(CursorShape::ResizeH))
-                .wheel(WheelStep {
-                    value: self.value.clamp(0.0, 1.0).as_(),
-                    step: self.skin.fader.step.as_(),
-                })
-                .build(),
-            path: self.path.to_owned(),
+        let paint = SegmentedVolumePaint {
             metrics: self.skin.fader,
             border_color: self.skin.color(self.skin.fader.strip_frame.border),
             palette: self.skin.palette,
             volume: self.value.clamp(0.0, 1.0).as_(),
-        })
-        .width(Length::Fill)
-        .height(Length::Fixed(self.skin.fader.strip_height))
-        .into()
+        };
+        match self.owner {
+            InputOwner::Leaf => Canvas::new(SegmentedVolumeCanvas {
+                drag: Scalar::builder()
+                    .track(Track::AbsoluteHorizontal)
+                    .hover(Hover::new(CursorShape::ResizeH))
+                    .wheel(WheelStep {
+                        value: self.value.clamp(0.0, 1.0).as_(),
+                        step: self.skin.fader.step.as_(),
+                    })
+                    .build(),
+                path: self.path.to_owned(),
+                paint,
+            })
+            .width(Length::Fill)
+            .height(Length::Fixed(self.skin.fader.strip_height))
+            .into(),
+            InputOwner::Engine => Canvas::new(paint)
+                .width(Length::Fill)
+                .height(Length::Fixed(self.skin.fader.strip_height))
+                .into(),
+        }
+    }
+}
+
+pub(crate) fn fader_input_layout<'a>(
+    layout: Layout<'a>,
+    style: FaderStyle,
+    labelled: bool,
+) -> Option<Layout<'a>> {
+    let row = layout.children().next()?;
+    match style {
+        FaderStyle::Default => {
+            let rail = row.children().nth(usize::from(labelled))?;
+            let slider = rail.children().nth(1)?;
+            slider.children().next()
+        }
+        FaderStyle::Volume => row.children().nth(1),
     }
 }
 

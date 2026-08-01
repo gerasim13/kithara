@@ -48,16 +48,19 @@ pub(super) fn crossfader<'a>(
 pub(super) fn fader<'a>(
     path: &'a str,
     style: FaderStyle,
-    label: Option<&'a str>,
+    label: Option<InternId>,
     value: Option<&ReadValue<'_>>,
+    ui: &'a CompiledUi,
     skin: &'a Skin,
+    owner: InputOwner,
 ) -> Element<'a, UiEvent> {
     Fader::builder()
         .path(path)
         .style(style)
-        .maybe_label(label)
+        .maybe_label(label.map(|id| ui.resolve(id)))
         .maybe_value(value)
         .skin(skin)
+        .owner(owner)
         .build()
         .view()
 }

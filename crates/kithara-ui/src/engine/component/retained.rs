@@ -108,6 +108,11 @@ impl From<Descriptor> for RetainedComponent {
             Descriptor::Segmented { path, item_count } => {
                 Self::Segmented(SegmentedComponent::new(path, item_count))
             }
+            Descriptor::Fader {
+                path,
+                scalar,
+                drag_step,
+            } => Self::Scalar(ScalarComponent::new(path, Kind::Fader, scalar, drag_step)),
             Descriptor::Crossfader { path } => Self::Scalar(ScalarComponent::new(
                 path,
                 Kind::Crossfader,
@@ -115,6 +120,7 @@ impl From<Descriptor> for RetainedComponent {
                     .track(Track::AbsoluteHorizontal)
                     .hover(Hover::new(CursorShape::ResizeH))
                     .build(),
+                None,
             )),
             Descriptor::Knob {
                 path,
@@ -136,6 +142,7 @@ impl From<Descriptor> for RetainedComponent {
                         step: wheel_step,
                     })
                     .build(),
+                None,
             )),
             Descriptor::StereoMeter { path } => Self::Scalar(ScalarComponent::new(
                 path,
@@ -144,6 +151,7 @@ impl From<Descriptor> for RetainedComponent {
                     .track(Track::AbsoluteHorizontal)
                     .hover(Hover::new(CursorShape::ResizeH))
                     .build(),
+                None,
             )),
             Descriptor::VerticalVu { path } => Self::Scalar(ScalarComponent::new(
                 path,
@@ -152,6 +160,7 @@ impl From<Descriptor> for RetainedComponent {
                     .track(Track::AbsoluteVertical)
                     .hover(Hover::new(CursorShape::ResizeV))
                     .build(),
+                None,
             )),
             Descriptor::Wave { path } => Self::Scalar(ScalarComponent::new(
                 path,
@@ -160,6 +169,7 @@ impl From<Descriptor> for RetainedComponent {
                     .track(Track::HorizontalClick)
                     .hover(Hover::new(CursorShape::Pointer))
                     .build(),
+                None,
             )),
             Descriptor::HeroWave {
                 path,

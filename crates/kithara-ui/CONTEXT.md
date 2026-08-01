@@ -113,8 +113,11 @@ deliberately absent. A kithara-bufpool byte budget would not enforce a retained-
 entirely through one seam. The button is the production consumer that asked for the rounded
 rectangle: its fill and uniform-radius border stay one native shape in the retained list, iced
 replays it with `Path::rounded_rectangle`, and Vello replays it as `kurbo::RoundedRect`. The
-crossfader remains on its existing iced path in this slice; the new vocabulary does not by itself
-authorize that separate port.
+default fader also paints through the builder: two independently framed solid rail rectangles are
+followed by the rectangular handle, preserving iced slider command order and geometry. The Volume
+fader remains on its existing canvas painter; its engine-owned variant reuses that painter without
+the interactive program. The crossfader remains on its existing iced path in this slice; the new
+vocabulary does not by itself authorize that separate port.
 
 `backends::iced_canvas` owns iced translation, glyph-outline filling, and canvas calls.
 `backends::vello` owns Vello translation and scene encoding; the draw list needs no GPU dependency.
@@ -253,8 +256,11 @@ including this. Closing either belongs to the wave that takes font policy off th
 state machines, their pixel and time constants, and the cursor vocabulary. It imports
 `draw::{Pt, Rect}` and nothing else from this crate - it does not know what a `UiEvent` is. A scalar
 recognizer answers with an `Outcome<f32>` and a click answers with an `Outcome<()>`, each carrying
-its capture flag. The engine maps those values into `EngineEvent::{Scalar, Activate, Index}` without
-losing capture. The third emission kind, `EngineEvent::Index`, carries the selected `usize`; the
+its capture flag. A component widens a recognizer scalar exactly once at its boundary, and
+`EngineEvent::Scalar` carries `f64` from there through `ControlAction::SetScalar`; render event
+publication performs no later widening or narrow round trip. The engine maps the other values into
+`EngineEvent::{Activate, Index}` without losing capture. The third emission kind,
+`EngineEvent::Index`, carries the selected `usize`; the
 stateless segmented component derives it from the click's hit rectangle and item count. An engine
 `Emission` may address one fixed child endpoint, and `render::event` binds the result to the document
 publisher one layer up and in the same file as the `UiEvent` it names, including binding an index to
@@ -263,11 +269,12 @@ Routing the document event through the recognizer or engine instead would point 
 crate's orchestration layer, and every base peer points strictly downward: `draw` to `text`, `text`
 to `skin`, `solve` to `layout::Axis`.
 
-The retained interaction boundary explicitly names twelve documents: `studio-deck`, `studio-mixer`,
+The retained interaction boundary explicitly names thirteen documents: `studio-deck`, `studio-mixer`,
 `studio-mixer-single`, their nested `studio-strip`, the nested `studio-overview-row`, the
 `gallery-knobs`, `gallery-meters`, and `gallery-toggles` includes inside the Atoms gallery page, and
-the direct `gallery-buttons-tab`, `gallery-cells-tab`, `gallery-module-tabs`, and `gallery-nav`
-modules. A direct layout module is selected by its compiled module ID; expansion records each nested
+the direct `gallery-buttons-tab`, `gallery-cells-tab`, `gallery-faders-tab`,
+`gallery-module-tabs`, and `gallery-nav` modules. A direct layout module is selected by its compiled
+module ID; expansion records each nested
 include root by structural address and module ID without adding a node wrapper, so the existing
 render-tree shape and layout stay unchanged. The iced host at each selected root keeps one `Engine`
 in widget-tree state while its descriptor snapshot is rebuilt from the current reads on every view.
@@ -275,7 +282,7 @@ Reconciliation matches an owned resolved control path plus component kind; it re
 configuration and preserves recognizer state, and never retains an `InternId` across compiled UI
 lifetimes. The ordinary click wave and Hero Wave have distinct descriptor identities. The Hero
 descriptor refreshes its scalar drag, visible window, and wheel answers from current progress and
-zoom on every view. The twelve module IDs form a named set in the render tree; subtree contents never
+zoom on every view. The thirteen module IDs form a named set in the render tree; subtree contents never
 silently opt another document into the engine.
 
 The mixer host absorbs the expanded roots of both included strips. Rendering beneath that host
@@ -310,7 +317,7 @@ the required existing `Descriptor::Activation` is stateless and carries no held 
 second pressed-state channel merely for paint would create the parallel mutable ownership this
 transition forbids.
 
-The interactive `canvas::Program` for a button, nav item, segmented control, crossfader, knob,
+The interactive `canvas::Program` for a button, nav item, segmented control, fader, crossfader, knob,
 vertical VU, stereo meter, toggle, checkbox, or wave is therefore not gone: `InputOwner` picks the
 paint-only variant for `InputOwner::Engine` only when the host has a matching descriptor, and the
 interactive variant answers everywhere else under `InputOwner::Leaf`. An effective SVG button or
@@ -337,6 +344,9 @@ page with mixed interaction ownership: in document order its exact engine descri
 two activations for cue and play, one segmented descriptor with `item_count: 4`, and four
 activations for its two toggles and two checkboxes. Its chips, cells, select, and status dots remain
 iced-answered controls, and input the engine does not answer continues unchanged through the child.
+`gallery-faders-tab` has one descriptor kind for both configurations: the default fader has an
+optional drag step, the Volume fader keeps continuous drag plus its own wheel step, and the vertical
+VU keeps its scalar descriptor. The page's telemetry `Scalar` is an inert readout and is not hosted.
 `gallery-module-tabs` contains five activation tabs. `gallery-nav` contains eighteen activation nav
 items plus an inert icon and label in its header. Each hosted `studio-deck` contains one Hero Wave
 and five Lucide activation buttons, while its Slot and labels are passive and its tempo row remains
@@ -350,6 +360,13 @@ the first touch. An absolute track reads the position itself, so the press seeks
 which is what a fader thumb and a VU have to do. `HorizontalClick` is the one absolute track that
 seeks without arming: the mini-wave without beats is a seek surface, not a drag surface, and leaving
 the pointer free is why the press does not capture the moves that follow.
+
+The recognizer and iced rectangle remain `f32`, so an absolute track computes the same pointer ratio
+as iced. `ScalarComponent` widens that ratio before any value arithmetic. Its optional `f64` drag
+step applies only to pointer press and move outcomes; wheel values retain the recognizer's separate
+wheel policy. Quantizing after widening is required for pixel-exact iced parity: quantizing the
+ratio in `f32` moved a half-step boundary by one rail pixel before the result ever reached the
+published `f64` field.
 
 Three properties hold across every track. The press decides `active` before computing, so a press
 whose computation yields nothing still arms the gesture that follows. A degenerate extent publishes
@@ -403,8 +420,7 @@ type and convert only at each `mouse_interaction` return.
 contract. Its consumers are all `render`-gated, so under a `vello-backend`-only build - which
 `cargo hack --feature-powerset` really compiles - every item would be dead code. A separate `engine`
 feature would buy nothing: the `dead_exports` check treats only `target_os`/`target_arch` as a gate,
-so a feature offers no exemption from the rule that actually governs this code, and `just check
-clippy` runs without `--all-features`, which would make the module a permanent lint blind spot. The
+so a feature offers no exemption from the rule that actually governs this code, and `just check clippy` runs without `--all-features`, which would make the module a permanent lint blind spot. The
 gate splits the day a second host routes input, exactly as `backends` already splits.
 
 Two wheel policies coexist and must not be unified: `Scalar` accumulates 20 px of trackpad travel

@@ -13,15 +13,17 @@ pub(in crate::engine) struct ScalarComponent {
     path: String,
     kind: Kind,
     scalar: Scalar,
+    drag_step: Option<f64>,
     state: ScalarState,
 }
 
 impl ScalarComponent {
-    pub(super) fn new(path: String, kind: Kind, scalar: Scalar) -> Self {
+    pub(super) fn new(path: String, kind: Kind, scalar: Scalar, drag_step: Option<f64>) -> Self {
         Self {
             path,
             kind,
             scalar,
+            drag_step,
             state: ScalarState::default(),
         }
     }
@@ -32,6 +34,7 @@ impl ScalarComponent {
         }
         self.path = next.path;
         self.scalar = next.scalar;
+        self.drag_step = next.drag_step;
         self
     }
 }
@@ -51,10 +54,9 @@ impl Component for ScalarComponent {
         hit: &Hit,
         now: Instant,
     ) -> (Outcome<EngineEvent>, Option<&'static str>) {
+        let outcome = self.scalar.on_input(&mut self.state, input, hit, now);
         (
-            self.scalar
-                .on_input(&mut self.state, input, hit, now)
-                .map(EngineEvent::Scalar),
+            outcome.map(|value| EngineEvent::Scalar(scalar_value(input, value, self.drag_step))),
             None,
         )
     }
@@ -65,5 +67,18 @@ impl Component for ScalarComponent {
 
     fn captures_pointer(&self) -> bool {
         self.state.captures_pointer()
+    }
+}
+
+pub(crate) fn scalar_value(input: Input, value: f32, drag_step: Option<f64>) -> f64 {
+    let value = f64::from(value);
+    if value == 0.0 || value == 1.0 {
+        return value;
+    }
+    match (input, drag_step) {
+        (Input::PointerDown | Input::PointerMoved { .. }, Some(step)) => {
+            ((value / step).round() * step).min(1.0)
+        }
+        _ => value,
     }
 }

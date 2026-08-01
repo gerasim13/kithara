@@ -11,6 +11,7 @@ pub mod tree;
 pub mod typography;
 
 pub use address::{Node, Scope, Walk};
+pub(crate) use controls::fader_slider;
 pub use event::{ControlAction, DragPhase, UiEvent, WindowCommand, WindowEdge};
 pub(crate) use event::{activate, control_event, drag, engine, index, scalar, scalar_child, step};
 pub use icons::Icon;

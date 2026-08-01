@@ -103,7 +103,8 @@ impl canvas::Program<UiEvent> for KnobProgram<'_, '_> {
         scalar(
             &self.path,
             self.drag
-                .on_input(&mut state.drag, input, &hit, Instant::now()),
+                .on_input(&mut state.drag, input, &hit, Instant::now())
+                .map(f64::from),
         )
     }
 }

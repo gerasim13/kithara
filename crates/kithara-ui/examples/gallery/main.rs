@@ -644,6 +644,20 @@ mod tests {
     }
 
     #[kithara::test]
+    fn the_hosted_faders_keep_their_descriptor_backed_controls() {
+        assert_hosted_page_claims(
+            Tab::Faders,
+            "faders",
+            |path| path.starts_with("faders/"),
+            &[
+                ("faders/default", "fader"),
+                ("faders/vertical", "vertical-vu"),
+                ("faders/volume", "fader"),
+            ],
+        );
+    }
+
+    #[kithara::test]
     fn the_hosted_module_tabs_keep_their_descriptor_backed_controls() {
         assert_hosted_page_claims(
             Tab::Modules,
@@ -705,6 +719,7 @@ mod tests {
             | ControlSpec::Toggle
             | ControlSpec::Checkbox => Some("activation"),
             ControlSpec::Crossfader { .. } => Some("crossfader"),
+            ControlSpec::Fader { .. } => Some("fader"),
             ControlSpec::Knob { .. } => Some("knob"),
             ControlSpec::VuStereo => Some("stereo-meter"),
             ControlSpec::VuVertical { .. } => Some("vertical-vu"),

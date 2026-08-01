@@ -57,7 +57,7 @@ mod tests {
     use super::{super::model::EngineEvent, *};
     use crate::{
         draw::{Pt, Rect},
-        interact::{Hit, Modifiers, Outcome, Scroll},
+        interact::{Hit, Hover, Modifiers, Outcome, Scroll, recognizers::WheelStep},
     };
 
     fn knob(path: &str, current: f32) -> Descriptor {
@@ -79,11 +79,79 @@ mod tests {
         )
     }
 
-    fn value(emission: Option<Emission>) -> Option<f32> {
+    fn value(emission: Option<Emission>) -> Option<f64> {
         emission.and_then(|emission| match emission.outcome.value() {
             Some(EngineEvent::Scalar(value)) => Some(value),
             Some(EngineEvent::Activate | EngineEvent::Index(_)) | None => None,
         })
+    }
+
+    #[kithara::test]
+    fn fader_quantizes_the_wide_value_at_iced_step_boundaries() {
+        let path = "gallery/faders/default";
+        let observed = [29.0, 30.0, 31.0].map(|x| {
+            let mut engine = Engine::default();
+            engine.reconcile([Descriptor::fader(
+                path.to_owned(),
+                Hover::new(CursorShape::Grab),
+                Some(0.01),
+                None,
+            )]);
+            value(engine.handle(
+                Input::PointerDown,
+                &[Target::new(
+                    path,
+                    Hit::new(
+                        Some(Pt { x, y: 8.0 }),
+                        Rect {
+                            h: 16.0,
+                            w: 200.0,
+                            x: 0.0,
+                            y: 0.0,
+                        },
+                    ),
+                )],
+                Instant::now(),
+            ))
+        });
+
+        assert_eq!(observed, [Some(0.14), Some(0.15), Some(0.16)]);
+    }
+
+    #[kithara::test]
+    fn volume_fader_keeps_drag_continuous_and_wheel_step_separate() {
+        let path = "gallery/faders/volume";
+        let mut engine = Engine::default();
+        engine.reconcile([Descriptor::fader(
+            path.to_owned(),
+            Hover::new(CursorShape::ResizeH),
+            None,
+            Some(WheelStep {
+                value: 0.5,
+                step: 0.01,
+            }),
+        )]);
+        let targets = [Target::new(
+            path,
+            Hit::new(
+                Some(Pt { x: 29.0, y: 7.0 }),
+                Rect {
+                    h: 14.0,
+                    w: 200.0,
+                    x: 0.0,
+                    y: 0.0,
+                },
+            ),
+        )];
+
+        assert_eq!(
+            value(engine.handle(Input::PointerDown, &targets, Instant::now())),
+            Some(f64::from(29.0_f32 / 200.0_f32))
+        );
+        assert_eq!(
+            value(engine.handle(Input::Wheel(Scroll::Lines(1.0)), &targets, Instant::now(),)),
+            Some(f64::from(0.49_f32))
+        );
     }
 
     #[kithara::test]
@@ -367,7 +435,7 @@ mod tests {
             0.4,
         )]);
 
-        for (delta, expected) in [(1.0, 0.625), (-1.0, 0.4), (0.0, 0.4)] {
+        for (delta, expected) in [(1.0, 0.625_f32), (-1.0, 0.4), (0.0, 0.4)] {
             let emission = engine
                 .handle(
                     Input::Wheel(Scroll::Lines(delta)),
@@ -378,7 +446,7 @@ mod tests {
             assert_eq!(emission.child, Some("zoom"));
             assert_eq!(
                 emission.outcome.value(),
-                Some(EngineEvent::Scalar(expected))
+                Some(EngineEvent::Scalar(f64::from(expected)))
             );
             assert!(!engine.captures_pointer());
         }
@@ -444,6 +512,40 @@ mod tests {
             )),
             Some(0.5),
             "the retained start value combines with the refreshed drag range"
+        );
+    }
+
+    #[kithara::test]
+    fn fader_reconciliation_refreshes_the_wide_drag_step_without_losing_capture() {
+        let mut engine = Engine::default();
+        let path = "gallery/faders/default";
+        let now = Instant::now();
+        engine.reconcile([Descriptor::fader(
+            path.to_owned(),
+            Hover::new(CursorShape::Grab),
+            Some(0.01),
+            None,
+        )]);
+        let _ = engine.handle(Input::PointerDown, &[target(path, 29.0, 50.0)], now);
+        assert!(engine.captures_pointer());
+
+        engine.reconcile([Descriptor::fader(
+            path.to_owned(),
+            Hover::new(CursorShape::Grab),
+            Some(0.2),
+            None,
+        )]);
+
+        assert!(engine.captures_pointer());
+        assert_eq!(
+            value(engine.handle(
+                Input::PointerMoved {
+                    at: Pt { x: 31.0, y: 50.0 },
+                },
+                &[target(path, 31.0, 50.0)],
+                now,
+            )),
+            Some(0.4)
         );
     }
 
