@@ -105,7 +105,7 @@ pub(super) fn render_control<'a>(
             skin,
         ),
         ControlSpec::NavItem { label, icon } => {
-            nav_item(path, ui.resolve(*label), *icon, value, skin)
+            nav_item(path, ui.resolve(*label), *icon, value, skin, owner)
         }
         ControlSpec::TabLarge { label } => tab_large(path, ui.resolve(*label), value, skin),
         ControlSpec::Button {

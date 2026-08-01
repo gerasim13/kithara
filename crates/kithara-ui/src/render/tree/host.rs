@@ -21,8 +21,11 @@ use crate::{
     interact::iced as iced_interact,
     module::WaveStyle,
     render::{
-        ReadValue, Reads, Skin, UiEvent, controls::supports_engine_input, engine as engine_event,
-        icons::document_icon, model::derived,
+        ReadValue, Reads, Skin, UiEvent,
+        controls::{nav_item_supports_engine_input, supports_engine_input},
+        engine as engine_event,
+        icons::document_icon,
+        model::derived,
     },
     size::{Hidden, is_hidden},
     widgets::wave::zoom_math::{clamp_zoom, window_bounds, zoom_for_wheel},
@@ -448,6 +451,13 @@ impl HostedControl {
                     path: path.to_owned(),
                 })
             }
+            (ControlSpec::NavItem { icon, .. }, Some(ReadValue::Bool(_)))
+                if nav_item_supports_engine_input(document_icon(*icon)) =>
+            {
+                Some(Self::Activation {
+                    path: path.to_owned(),
+                })
+            }
             (ControlSpec::Toggle | ControlSpec::Checkbox, Some(ReadValue::Bool(_))) => {
                 Some(Self::Activation {
                     path: path.to_owned(),
@@ -660,6 +670,9 @@ mod tests {
                     | "gallery.label.transport"
                     | "gallery.label.regular",
                 ) => Some(&self.text),
+                (EndpointCategory::Model, endpoint) if endpoint.starts_with("gallery.tab.") => {
+                    Some(&self.boolean)
+                }
                 (EndpointCategory::Model, "mock.wave") => Some(&self.waveform),
                 (EndpointCategory::Command, "mock.seek")
                 | (EndpointCategory::Telemetry, "deck.playback.position_normalized") => {
@@ -703,6 +716,9 @@ mod tests {
                 "gallery.label.toggles" => Some(ReadValue::Text("TOGGLES / CHECKBOXES")),
                 "gallery.label.transport" => Some(ReadValue::Text("TRANSPORT")),
                 "gallery.label.regular" => Some(ReadValue::Text("REGULAR")),
+                endpoint if endpoint.starts_with("gallery.tab.") => {
+                    Some(ReadValue::Bool(endpoint == "gallery.tab.atoms"))
+                }
                 "mock.wave@deck=a" => Some(ReadValue::Waveform(WaveformView {
                     buckets: &WAVE_BUCKETS,
                     beats: &[],
@@ -804,6 +820,31 @@ mod tests {
         .unwrap_or_else(|error| panic!("gallery buttons fixture must compile: {error}"))
     }
 
+    fn compiled_gallery_nav() -> CompiledUi {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "gallery.klayout.ron",
+            r#"(schema: "kithara.layout", version: 1, id: "gallery-nav-host",
+                root: Module(instance: "gallery", source: "modules/nav.kmodule.ron"))"#,
+        );
+        resolver.insert(
+            "modules/nav.kmodule.ron",
+            include_str!("../../../examples/gallery/assets/modules/nav.kmodule.ron"),
+        );
+        resolver.insert(
+            "modules/nav/item.kmodule.ron",
+            include_str!("../../../examples/gallery/assets/modules/nav/item.kmodule.ron"),
+        );
+        compile(
+            "gallery.klayout.ron",
+            &resolver,
+            &Registry::default(),
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap_or_else(|error| panic!("gallery nav fixture must compile: {error}"))
+    }
+
     fn compiled_overview_row() -> CompiledUi {
         let mut resolver = MemResolver::default();
         resolver.insert(
@@ -876,6 +917,11 @@ mod tests {
             ExpandedNode::Control { spec, .. } => match spec {
                 ControlSpec::Button { style, icon, .. }
                     if supports_engine_input(*style, icon.map(document_icon)) =>
+                {
+                    components.push("activation");
+                }
+                ControlSpec::NavItem { icon, .. }
+                    if nav_item_supports_engine_input(document_icon(*icon)) =>
                 {
                     components.push("activation");
                 }
@@ -1380,6 +1426,113 @@ mod tests {
                 },
             ],
             "a button with no read endpoint must still have the same activation contract"
+        );
+    }
+
+    #[kithara::test]
+    fn gallery_nav_shares_the_host_activation_component() {
+        let ui = compiled_gallery_nav();
+        let reads = FixtureReads::default();
+        let CompiledNode::Module {
+            instance,
+            module,
+            root,
+            ..
+        } = &ui.root
+        else {
+            panic!("gallery nav fixture root must be a module");
+        };
+
+        assert_eq!(ui.resolve(*module), "gallery-nav");
+        let mut components = Vec::new();
+        claimed_components(root, &mut components);
+        assert_eq!(components, ["activation"; 18]);
+
+        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full_tree = Tree::new(full.as_widget());
+        assert_eq!(host_count(&full_tree), 1, "the nav owns one engine");
+
+        let renderer = headless_renderer();
+        let viewport = Size::new(198.0, 620.0);
+        let child = super::super::node::render_engine_node(
+            root,
+            &[],
+            *instance,
+            &ui,
+            &reads,
+            builtin::skin(),
+        );
+        let mut element = host(child, root, &ui, &reads, builtin::skin());
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let descriptors = hosted.descriptors();
+        assert_eq!(
+            descriptors.iter().map(descriptor_path).collect::<Vec<_>>(),
+            [
+                "gallery/atoms/item",
+                "gallery/buttons/item",
+                "gallery/faders/item",
+                "gallery/modules/item",
+                "gallery/typography/item",
+                "gallery/cells/item",
+                "gallery/sizes/item",
+                "gallery/tokens/item",
+                "gallery/micro/item",
+                "gallery/mixer/item",
+                "gallery/vis/item",
+                "gallery/chrome/item",
+                "gallery/titlebars/item",
+                "gallery/tracklist/item",
+                "gallery/tree/item",
+                "gallery/library2/item",
+                "gallery/stress/item",
+                "gallery/menu/item",
+            ]
+        );
+        assert!(
+            descriptors
+                .iter()
+                .all(|descriptor| matches!(descriptor, Descriptor::Activation { .. }))
+        );
+
+        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let target = targets
+            .iter()
+            .find(|target| target.path == "gallery/buttons/item")
+            .unwrap_or_else(|| panic!("the hosted buttons nav item target must exist"));
+        let area = target.hit.area();
+        assert_eq!((area.w, area.h), (198.0, builtin::skin().nav.item_height));
+        let cursor = Cursor::Available(Point::new(area.x + area.w / 2.0, area.y + area.h / 2.0));
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            Layout::new(&node),
+            cursor,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert!(
+            !shell.is_event_captured(),
+            "activation publishes without retaining the engine capture slot"
+        );
+        drop(shell);
+
+        assert_eq!(
+            messages,
+            [UiEvent::Control {
+                path: "gallery/buttons/item".to_owned(),
+                action: ControlAction::Activate,
+            }]
         );
     }
 

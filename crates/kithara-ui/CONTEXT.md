@@ -260,18 +260,18 @@ Routing the document event through the recognizer or engine instead would point 
 crate's orchestration layer, and every base peer points strictly downward: `draw` to `text`, `text`
 to `skin`, `solve` to `layout::Axis`.
 
-The retained interaction boundary explicitly names nine documents: `studio-deck`, `studio-mixer`,
+The retained interaction boundary explicitly names ten documents: `studio-deck`, `studio-mixer`,
 `studio-mixer-single`, their nested `studio-strip`, the nested `studio-overview-row`, the
 `gallery-knobs`, `gallery-meters`, and `gallery-toggles` includes inside the Atoms gallery page, and
-the direct `gallery-buttons-tab` module. A direct layout module is selected by its compiled module
-ID; expansion records each nested include root by structural address and module ID without adding a
-node wrapper, so the existing render-tree shape and layout stay unchanged. The iced host at each
-selected root keeps one `Engine` in widget-tree state while its descriptor snapshot is rebuilt from
-the current reads on every view. Reconciliation matches an owned resolved control path plus
-component kind; it refreshes configuration and preserves recognizer state, and never retains an
+the direct `gallery-buttons-tab` and `gallery-nav` modules. A direct layout module is selected by its
+compiled module ID; expansion records each nested include root by structural address and module ID
+without adding a node wrapper, so the existing render-tree shape and layout stay unchanged. The iced
+host at each selected root keeps one `Engine` in widget-tree state while its descriptor snapshot is
+rebuilt from the current reads on every view. Reconciliation matches an owned resolved control path
+plus component kind; it refreshes configuration and preserves recognizer state, and never retains an
 `InternId` across compiled UI lifetimes. The ordinary click wave and Hero Wave have distinct
 descriptor identities. The Hero descriptor refreshes its scalar drag, visible window, and wheel
-answers from current progress and zoom on every view. The nine module IDs form a named set in the
+answers from current progress and zoom on every view. The ten module IDs form a named set in the
 render tree; subtree contents never silently opt another document into the engine.
 
 The mixer host absorbs the expanded roots of both included strips. Rendering beneath that host
@@ -294,9 +294,10 @@ input exclusively until it releases, otherwise reverse document order chooses th
 non-ignored component. Cursor resolution follows the holder first, then the topmost non-default
 cursor. Hosted leaves the engine claims use paint-only canvas programs; engine events cross through
 `render::event`, so `render::event::control_event` remains the only production
-`UiEvent::Control` constructor. Button is the first activation control whose fill, frame, and label
-or Lucide glyph are all painted by a toolkit-neutral base atom through one `DrawListBuilder`
-instead of by iced.
+`UiEvent::Control` constructor. Button was the first activation control whose fill, frame, and label
+or Lucide glyph were all painted by a toolkit-neutral base atom through one `DrawListBuilder`
+instead of by iced; NavItem now owns its background, marker, icon glyph, and label through the same
+seam.
 
 The Leaf adapter owns the transient pressed visual while its click recognizer sees the pointer
 gesture. The Engine adapter is paint-only and derives only idle or hovered paint from the cursor;
@@ -304,13 +305,13 @@ the required existing `Descriptor::Activation` is stateless and carries no held 
 second pressed-state channel merely for paint would create the parallel mutable ownership this
 transition forbids.
 
-The interactive `canvas::Program` for a button, crossfader, knob, vertical VU, stereo meter,
-toggle, checkbox, or wave is therefore not gone: `InputOwner` picks the paint-only variant only
-when the host has a matching descriptor, and the interactive variant answers everywhere else.
-An effective SVG button is one deliberate example: it has no descriptor and remains an iced leaf
-until its painting is ported. Two input paths for one control are a transition, not the design -
-each disappears when its last unhosted site flips, and the pair must not grow a third reader or a
-second capture slot in the meantime.
+The interactive `canvas::Program` for a button, nav item, crossfader, knob, vertical VU, stereo
+meter, toggle, checkbox, or wave is therefore not gone: `InputOwner` picks the paint-only variant
+only when the host has a matching descriptor, and the interactive variant answers everywhere else.
+An effective SVG button or nav item is one deliberate example: it has no descriptor and remains an
+iced leaf until its painting is ported. Two input paths for one control are a transition, not the
+design - each disappears when its last unhosted site flips, and the pair must not grow a third reader
+or a second capture slot in the meantime.
 
 The host observes decoded input before its child. An engine emission answers the event and is bound
 once; when no component emits, the child receives the same iced event unchanged. Cursor resolution
@@ -325,9 +326,10 @@ mixer contains one supported strip. Each strip contains knobs, a vertical VU, an
 contains four knobs and a label; `gallery-meters` contains a stereo meter, two vertical VUs, and a
 label; `gallery-toggles` contains two toggles, two checkboxes, and a label.
 `gallery-buttons-tab` contains six activation buttons and two inert text labels; its micro
-play/pause cell reaches the draw seam as a Lucide font glyph. Each hosted `studio-deck` contains one
-Hero Wave and five Lucide activation buttons, while its Slot and labels are passive and its tempo
-row remains an iced wheel surface. The Hero component preserves shift-loop child emissions,
+play/pause cell reaches the draw seam as a Lucide font glyph. `gallery-nav` contains eighteen
+activation nav items plus an inert icon and label in its header. Each hosted `studio-deck` contains
+one Hero Wave and five Lucide activation buttons, while its Slot and labels are passive and its
+tempo row remains an iced wheel surface. The Hero component preserves shift-loop child emissions,
 child-addressed wheel zoom, and the plain scalar drag.
 
 A `Scalar` carries a `Track` that says how a position becomes a value, and the split that matters is
@@ -618,6 +620,13 @@ not as an owner-based second rendering. `MicroPrimary` retains its existing forc
 glyph and therefore ignores a declared icon before that capability decision. The hosted gallery
 buttons declare no explicit icons, and the app's SVG reverse-play button remains on its unhosted
 path for the later vector wave.
+
+`atoms::nav_item::NavItem` likewise owns one retained painting: the selected background, marker
+rectangle, Lucide icon glyph, and mono label. Its canvas remains `Fill` wide and fixes only
+`skin.nav.item_height`, so shaping the two glyph runs never participates in intrinsic layout.
+`TabLarge` stays on iced because its width is `Shrink`: base painting it must first measure the label
+to choose its own width. That production need will introduce the text-measurement boundary; this
+slice neither approximates the width nor adds a measurer before it has that caller.
 
 A container that declares no `size` renders `Fill` on both axes — `render::tree::content_size`
 maps the undeclared case there. A stack of unsized rows therefore splits its parent between them

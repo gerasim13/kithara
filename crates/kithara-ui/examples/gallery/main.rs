@@ -643,6 +643,35 @@ mod tests {
         );
     }
 
+    #[kithara::test]
+    fn the_hosted_nav_keeps_its_descriptor_backed_controls() {
+        assert_hosted_page_claims(
+            Tab::Atoms,
+            "nav",
+            |path| path.starts_with("gallery/"),
+            &[
+                ("gallery/atoms/item", "activation"),
+                ("gallery/buttons/item", "activation"),
+                ("gallery/cells/item", "activation"),
+                ("gallery/chrome/item", "activation"),
+                ("gallery/faders/item", "activation"),
+                ("gallery/library2/item", "activation"),
+                ("gallery/menu/item", "activation"),
+                ("gallery/micro/item", "activation"),
+                ("gallery/mixer/item", "activation"),
+                ("gallery/modules/item", "activation"),
+                ("gallery/sizes/item", "activation"),
+                ("gallery/stress/item", "activation"),
+                ("gallery/titlebars/item", "activation"),
+                ("gallery/tokens/item", "activation"),
+                ("gallery/tracklist/item", "activation"),
+                ("gallery/tree/item", "activation"),
+                ("gallery/typography/item", "activation"),
+                ("gallery/vis/item", "activation"),
+            ],
+        );
+    }
+
     fn engine_descriptor_kind(spec: &ControlSpec) -> Option<&'static str> {
         match spec {
             ControlSpec::Button {
@@ -650,9 +679,14 @@ mod tests {
                 style,
                 ..
             } if *style != ButtonStyle::MicroPrimary => None,
-            ControlSpec::Button { .. } | ControlSpec::Toggle | ControlSpec::Checkbox => {
-                Some("activation")
-            }
+            ControlSpec::NavItem {
+                icon: IconName::PlayReverse,
+                ..
+            } => None,
+            ControlSpec::Button { .. }
+            | ControlSpec::NavItem { .. }
+            | ControlSpec::Toggle
+            | ControlSpec::Checkbox => Some("activation"),
             ControlSpec::Crossfader { .. } => Some("crossfader"),
             ControlSpec::Knob { .. } => Some("knob"),
             ControlSpec::VuStereo => Some("stereo-meter"),

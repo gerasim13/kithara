@@ -26,7 +26,7 @@ use crate::{
     widgets::{
         Widget,
         fader::Fader,
-        nav::{Glyph, NavItem, TabLarge},
+        nav::{Glyph, TabLarge},
     },
 };
 
@@ -317,16 +317,10 @@ pub(super) fn nav_item<'a>(
     label: &'a str,
     icon: IconName,
     value: Option<&ReadValue<'_>>,
-    skin: &Skin,
+    skin: &'a Skin,
+    owner: InputOwner,
 ) -> Element<'a, UiEvent> {
-    NavItem::builder()
-        .path(path)
-        .label(label)
-        .icon(document_icon(icon))
-        .maybe_value(value)
-        .skin(skin)
-        .build()
-        .view()
+    crate::render::controls::nav_item(path, label, document_icon(icon), value, skin, owner)
 }
 
 pub(super) fn tab_large<'a>(
