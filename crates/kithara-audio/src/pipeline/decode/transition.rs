@@ -426,10 +426,30 @@ fn overlap_span(
         incoming_next = incoming_next.saturating_add(1);
     }
     incoming_next = incoming_next.saturating_add(incoming_origin);
-    (incoming_first <= incoming_next && incoming_next < incoming_end).then_some(OverlapSpan {
-        incoming_first,
-        incoming_next,
-    })
+    let span =
+        (incoming_first <= incoming_next && incoming_next < incoming_end).then_some(OverlapSpan {
+            incoming_first,
+            incoming_next,
+        });
+    if span.is_some() {
+        // Fires once per transition, and it is the one number the splice is
+        // judged by: which incoming frame replaces the outgoing frontier. The
+        // miss path already explains why a proof was refused; without this the
+        // proof that succeeded says nothing about where it cut.
+        debug!(
+            incoming_first,
+            incoming_next,
+            incoming_end,
+            incoming_origin,
+            incoming_rate,
+            outgoing_frame,
+            outgoing_origin,
+            outgoing_rate,
+            ?outgoing_next,
+            "incoming generation covers the outgoing frontier"
+        );
+    }
+    span
 }
 
 fn staged_ahead(
