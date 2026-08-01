@@ -130,6 +130,10 @@ fn drop_targets(ui: &CompiledUi) -> Vec<(&str, Vec<&str>)> {
     out
 }
 
+fn hosted_subtree(path: &str) -> bool {
+    path.starts_with("mixer/") || path.starts_with("overview/")
+}
+
 #[kithara::test]
 fn studio_documents_compile_against_the_registry() {
     for layout in LAYOUTS {
@@ -231,6 +235,23 @@ fn every_hosted_studio_control_is_answered_by_the_engine_or_inert() {
         let mut mixer_seen = 0;
         let mut overview_seen = 0;
         each_node(&ui, &mut |node| {
+            if let ExpandedNode::Row {
+                surface: Some(surface),
+                ..
+            }
+            | ExpandedNode::Column {
+                surface: Some(surface),
+                ..
+            } = node
+            {
+                let path = ui.resolve(surface.path);
+                assert!(
+                    !hosted_subtree(path),
+                    "`{path}` catches the wheel inside a hosted subtree, and the host answers \
+                     pointer input before its child sees it - the container would go deaf"
+                );
+                return;
+            }
             let ExpandedNode::Control { path, spec, .. } = node else {
                 return;
             };
@@ -258,6 +279,11 @@ fn every_hosted_studio_control_is_answered_by_the_engine_or_inert() {
                 );
             }
         });
+        assert!(
+            !surfaces(&ui).is_empty(),
+            "{layout:?} compiled no wheel-catching container at all, so the check above proved \
+             nothing"
+        );
         assert!(
             mixer_seen > 0,
             "{layout:?} compiled no mixer controls at all"
