@@ -8,7 +8,13 @@ use kithara::{
     platform::{
         CancelToken,
         sync::Arc,
-        time::{Duration, Instant, sleep},
+        // The warmup budget below asks "have we waited long enough for a
+        // switch to show up" — a question about the caller's own wall clock.
+        // The alias is what asks it there: the flash rewriter matches
+        // `Instant::now` lexically, so a name it does not recognise keeps the
+        // platform clock unvirtualised. Measured on virtual time the budget
+        // expires while the run is still seconds of real work from a switch.
+        time::{Duration, Instant, Instant as RealInstant, sleep},
     },
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
@@ -205,7 +211,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
 
     info!("Phase 1: waiting for ABR switch (ascending -> descending) via chunks...");
 
-    let warmup_start = Instant::now();
+    let warmup_start = RealInstant::now();
     let warmup_timeout = Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
     let mut warmup_ascending = 0u64;
     let mut warmup_unknown = 0u64;

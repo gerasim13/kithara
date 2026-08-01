@@ -30,18 +30,20 @@ use crate::pipeline::{
 };
 
 struct JobDeps {
-    completion: Arc<ArrayQueue<DecoderBuildComplete>>,
+    incoming_completion: Arc<ArrayQueue<DecoderBuildComplete>>,
     factory: DecoderFactory,
     gapless_mode: GaplessMode,
+    replacement_completion: Arc<ArrayQueue<DecoderBuildComplete>>,
     wake: Arc<dyn WorkerWake>,
 }
 
 impl Clone for JobDeps {
     fn clone(&self) -> Self {
         Self {
-            completion: self.completion.clone(),
+            incoming_completion: self.incoming_completion.clone(),
             factory: self.factory.clone(),
             gapless_mode: self.gapless_mode,
+            replacement_completion: self.replacement_completion.clone(),
             wake: self.wake.clone(),
         }
     }
@@ -89,9 +91,10 @@ impl<T: StreamType> RebuildPort<T> {
     ) -> Self {
         Self {
             deps: JobDeps {
-                completion: Arc::new(ArrayQueue::new(Self::COMPLETION_CAPACITY)),
+                incoming_completion: Arc::new(ArrayQueue::new(Self::COMPLETION_CAPACITY)),
                 factory,
                 gapless_mode,
+                replacement_completion: Arc::new(ArrayQueue::new(Self::COMPLETION_CAPACITY)),
                 wake: runtime.wake,
             },
             next_build: 1,
@@ -187,8 +190,12 @@ impl<T: StreamType> RebuildPort<T> {
         self.deps.factory.reader_profile(media_info, byte_map)
     }
 
-    pub(crate) fn pop_completion(&self) -> Option<DecoderBuildComplete> {
-        self.deps.completion.pop()
+    pub(crate) fn pop_incoming_completion(&self) -> Option<DecoderBuildComplete> {
+        self.deps.incoming_completion.pop()
+    }
+
+    pub(crate) fn pop_replacement_completion(&self) -> Option<DecoderBuildComplete> {
+        self.deps.replacement_completion.pop()
     }
 
     pub(crate) fn cache_replacement(
@@ -229,7 +236,7 @@ impl<T: StreamType> RebuildPort<T> {
 
     #[cfg(test)]
     pub(crate) fn completion(&self) -> Arc<ArrayQueue<DecoderBuildComplete>> {
-        self.deps.completion.clone()
+        self.deps.replacement_completion.clone()
     }
 
     #[cfg(test)]
@@ -316,9 +323,13 @@ fn run<T: StreamType>(job: PendingJob<T>) {
         purpose,
         result,
     };
-    if let Err(complete) = deps.completion.push(complete) {
-        let _ = deps.completion.pop();
-        if deps.completion.push(complete).is_err() {
+    let completion = match purpose {
+        DecoderBuildPurpose::Replacement => &deps.replacement_completion,
+        DecoderBuildPurpose::Incoming(_) => &deps.incoming_completion,
+    };
+    if let Err(complete) = completion.push(complete) {
+        let _ = completion.pop();
+        if completion.push(complete).is_err() {
             warn!(
                 build = build.get(),
                 "decoder build completion queue overflowed"

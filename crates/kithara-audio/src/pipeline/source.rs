@@ -182,7 +182,11 @@ impl<T: StreamType> Drop for StreamAudioSource<T> {
 
 impl<T: StreamType> StreamAudioSource<T> {
     fn route_build_completions(&mut self) {
-        while let Some(complete) = self.rebuild.pop_completion() {
+        while let Some(complete) = self
+            .rebuild
+            .pop_replacement_completion()
+            .or_else(|| self.rebuild.pop_incoming_completion())
+        {
             match complete.purpose {
                 DecoderBuildPurpose::Replacement => {
                     let expected = match &self.state {
