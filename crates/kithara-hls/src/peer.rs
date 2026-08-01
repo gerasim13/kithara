@@ -410,6 +410,15 @@ impl Peer for HlsPeer {
             }
         }
         if cmds.is_empty() {
+            // Parking with a session still waiting on bytes is the stall shape:
+            // from here only an external wake re-drives this peer, and the one
+            // an unready incoming session raises comes from a readiness poll its
+            // own consumer cannot make while it waits.
+            tracing::trace!(
+                has_incoming = outcome.coord.has_incoming(),
+                budget = outcome.ctx.prefetch_budget,
+                "hls peer parked without commands"
+            );
             return Poll::Pending;
         }
         Poll::Ready(Some(cmds))

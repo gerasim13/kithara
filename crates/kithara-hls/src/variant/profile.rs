@@ -168,6 +168,12 @@ impl HlsVariant {
             init_loaded = self.init().is_some_and(|i| i.state().is_loaded()),
             init_downloading = self.init().is_some_and(|i| i.state().is_downloading()),
             init_slow = self.init().is_some_and(|i| i.state().is_slow()),
+            init_failed = self.init().is_some_and(|i| i.state().is_failed()),
+            // A window this session waits on but has nothing queued for is the
+            // shape of a stall: nothing is in flight, nothing is planned, and
+            // the only thing that re-drives the peer is another readiness poll
+            // the consumer cannot make while it waits for this one.
+            queued = self.flow.queue.lock().len(),
             "variant reader readiness"
         );
         Ok(header_ready && forward_ready)
