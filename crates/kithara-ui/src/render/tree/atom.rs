@@ -114,13 +114,17 @@ pub(super) fn vu_stereo<'a>(
     path: &'a str,
     value: Option<&ReadValue<'_>>,
     skin: &'a Skin,
+    owner: InputOwner,
 ) -> Element<'a, UiEvent> {
-    StereoMeter::builder()
+    let meter = StereoMeter::builder()
         .path(path)
         .maybe_value(value)
         .skin(skin)
-        .build()
-        .view()
+        .build();
+    match owner {
+        InputOwner::Leaf => meter.view(),
+        InputOwner::Engine => meter.painted(),
+    }
 }
 
 pub(super) fn vu_vertical<'a>(

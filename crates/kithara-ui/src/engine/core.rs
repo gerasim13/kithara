@@ -1,7 +1,7 @@
 use kithara_platform::time::Instant;
 
 use super::{
-    component::RetainedComponent,
+    component::ScalarComponent,
     model::{Descriptor, Emission, Target},
     router::Router,
 };
@@ -9,7 +9,7 @@ use crate::interact::{CursorShape, Input};
 
 #[derive(Default)]
 pub(crate) struct Engine {
-    components: Vec<RetainedComponent>,
+    components: Vec<ScalarComponent>,
     router: Router,
 }
 
@@ -268,6 +268,26 @@ mod tests {
                 target("studio/front", 150.0, 150.0),
             ]),
             CursorShape::None
+        );
+    }
+
+    #[kithara::test]
+    fn stereo_meter_seeks_horizontally_with_a_horizontal_cursor() {
+        let mut engine = Engine::default();
+        let path = "gallery/meters/stereo";
+        engine.reconcile([Descriptor::stereo_meter(path.to_owned())]);
+
+        assert_eq!(
+            engine.cursor(&[target(path, 25.0, 50.0)]),
+            CursorShape::ResizeH
+        );
+        assert_eq!(
+            value(engine.handle(
+                Input::PointerDown,
+                &[target(path, 25.0, 50.0)],
+                Instant::now(),
+            )),
+            Some(0.25)
         );
     }
 }

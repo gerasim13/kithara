@@ -189,7 +189,7 @@ fn render_node<'a>(
         skin,
         input_owner,
     } = context;
-    if matches!(input_owner, InputOwner::Leaf) && hosts_studio_strip(ui, owner, address) {
+    if matches!(input_owner, InputOwner::Leaf) && hosts_engine(ui, owner, address) {
         let child = render_engine_node(node, address, owner, ui, reads, skin);
         return host::host(child, node, ui, reads, skin);
     }
@@ -454,8 +454,12 @@ fn child_address(parent: &[usize], index: usize) -> Vec<usize> {
     address
 }
 
-fn hosts_studio_strip(ui: &CompiledUi, owner: InternId, address: &[usize]) -> bool {
-    ui.includes_module(owner, address, "studio-strip")
+const HOSTED_MODULES: [&str; 2] = ["studio-strip", "gallery-meters"];
+
+fn hosts_engine(ui: &CompiledUi, owner: InternId, address: &[usize]) -> bool {
+    HOSTED_MODULES
+        .iter()
+        .any(|module| ui.includes_module(owner, address, module))
 }
 
 fn main_minimum(node: &ExpandedNode, axis: Axis, skin: &Skin) -> Option<f32> {

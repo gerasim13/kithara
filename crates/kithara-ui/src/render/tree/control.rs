@@ -149,7 +149,7 @@ pub(super) fn render_control<'a>(
         ControlSpec::Knob { label } => {
             knob(path, label.map(|id| ui.resolve(id)), value, skin, owner)
         }
-        ControlSpec::VuStereo => vu_stereo(path, value, skin),
+        ControlSpec::VuStereo => vu_stereo(path, value, skin, owner),
         ControlSpec::VuVertical { ticks } => vu_vertical(path, *ticks, value, skin, owner),
         ControlSpec::Vis => vis(value, reads),
         ControlSpec::Wave { style, badge, zoom } => MiniWave::builder()

@@ -31,7 +31,7 @@ pub(crate) struct StereoMeter<'path, 'value, 'data, 'skin> {
 
 impl<'a> Widget<'a> for StereoMeter<'_, '_, '_, 'a> {
     fn view(self) -> Element<'a, UiEvent> {
-        let Some(ReadValue::Stereo(levels)) = self.value else {
+        let Some(paint) = self.paint() else {
             return Space::new().into();
         };
         Canvas::new(StereoMeterCanvas {
@@ -40,10 +40,7 @@ impl<'a> Widget<'a> for StereoMeter<'_, '_, '_, 'a> {
                 .hover(Hover::new(CursorShape::ResizeH))
                 .build(),
             path: self.path.to_owned(),
-            metrics: self.skin.vu_stereo,
-            levels: *levels,
-            palette: self.skin.palette,
-            text_resources: self.skin.text_resources(),
+            paint,
         })
         .width(Length::Fill)
         .height(Length::Fill)
@@ -51,9 +48,37 @@ impl<'a> Widget<'a> for StereoMeter<'_, '_, '_, 'a> {
     }
 }
 
+impl<'a> StereoMeter<'_, '_, '_, 'a> {
+    pub(crate) fn painted(self) -> Element<'a, UiEvent> {
+        let Some(paint) = self.paint() else {
+            return Space::new().into();
+        };
+        Canvas::new(paint)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+
+    fn paint(&self) -> Option<StereoMeterPaint<'a>> {
+        let Some(ReadValue::Stereo(levels)) = self.value else {
+            return None;
+        };
+        Some(StereoMeterPaint {
+            metrics: self.skin.vu_stereo,
+            levels: *levels,
+            palette: self.skin.palette,
+            text_resources: self.skin.text_resources(),
+        })
+    }
+}
+
 struct StereoMeterCanvas<'skin> {
     drag: Scalar,
     path: String,
+    paint: StereoMeterPaint<'skin>,
+}
+
+struct StereoMeterPaint<'skin> {
     metrics: VuStereoSkin,
     levels: StereoLevels,
     palette: RenderPalette,
@@ -66,6 +91,47 @@ impl canvas::Program<UiEvent> for StereoMeterCanvas<'_> {
     fn draw(
         &self,
         _state: &ScalarState,
+        renderer: &Renderer,
+        theme: &Theme,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Vec<Geometry> {
+        self.paint.draw(&(), renderer, theme, bounds, cursor)
+    }
+
+    fn mouse_interaction(
+        &self,
+        state: &ScalarState,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> mouse::Interaction {
+        self.drag
+            .cursor(state, &iced_interact::hit(bounds, cursor))
+            .into()
+    }
+
+    fn update(
+        &self,
+        state: &mut ScalarState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<UiEvent>> {
+        let input = iced_interact::input(event)?;
+        let hit = iced_interact::hit(bounds, cursor);
+        scalar(
+            &self.path,
+            self.drag.on_input(state, input, &hit, Instant::now()),
+        )
+    }
+}
+
+impl canvas::Program<UiEvent> for StereoMeterPaint<'_> {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -105,32 +171,6 @@ impl canvas::Program<UiEvent> for StereoMeterCanvas<'_> {
             &mut IcedBackend::new(&mut frame, self.text_resources),
         );
         vec![frame.into_geometry()]
-    }
-
-    fn mouse_interaction(
-        &self,
-        state: &ScalarState,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> mouse::Interaction {
-        self.drag
-            .cursor(state, &iced_interact::hit(bounds, cursor))
-            .into()
-    }
-
-    fn update(
-        &self,
-        state: &mut ScalarState,
-        event: &Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
-        let input = iced_interact::input(event)?;
-        let hit = iced_interact::hit(bounds, cursor);
-        scalar(
-            &self.path,
-            self.drag.on_input(state, input, &hit, Instant::now()),
-        )
     }
 }
 

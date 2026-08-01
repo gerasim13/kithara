@@ -360,6 +360,9 @@ enum HostedControl {
         drag_range: f32,
         wheel_step: f32,
     },
+    StereoMeter {
+        path: String,
+    },
     VerticalVu {
         path: String,
     },
@@ -379,6 +382,9 @@ impl HostedControl {
                 drag_range: skin.knob.drag_range,
                 wheel_step: skin.knob.wheel_step,
             }),
+            (ControlSpec::VuStereo, Some(ReadValue::Stereo(_))) => Some(Self::StereoMeter {
+                path: path.to_owned(),
+            }),
             (ControlSpec::VuVertical { .. }, Some(ReadValue::Stereo(_))) => {
                 Some(Self::VerticalVu {
                     path: path.to_owned(),
@@ -390,7 +396,9 @@ impl HostedControl {
 
     fn path(&self) -> &str {
         match self {
-            Self::Knob { path, .. } | Self::VerticalVu { path } => path,
+            Self::Knob { path, .. } | Self::StereoMeter { path } | Self::VerticalVu { path } => {
+                path
+            }
         }
     }
 }
@@ -404,6 +412,7 @@ impl From<&HostedControl> for Descriptor {
                 drag_range,
                 wheel_step,
             } => Self::knob(path.clone(), *current, *drag_range, *wheel_step),
+            HostedControl::StereoMeter { path } => Self::stereo_meter(path.clone()),
             HostedControl::VerticalVu { path } => Self::vertical_vu(path.clone()),
         }
     }
@@ -472,6 +481,7 @@ mod tests {
     struct Registry {
         scalar: EndpointDesc,
         stereo: EndpointDesc,
+        text: EndpointDesc,
     }
 
     impl Default for Registry {
@@ -479,6 +489,7 @@ mod tests {
             Self {
                 scalar: EndpointDesc::new(ValueKind::Scalar),
                 stereo: EndpointDesc::new(ValueKind::Stereo),
+                text: EndpointDesc::new(ValueKind::Text),
             }
         }
     }
@@ -487,7 +498,9 @@ mod tests {
         fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
             match (category, id.0.as_str()) {
                 (EndpointCategory::Parameter, "gain") => Some(&self.scalar),
-                (EndpointCategory::Telemetry, "levels") => Some(&self.stereo),
+                (EndpointCategory::Telemetry, "levels")
+                | (EndpointCategory::Model, "mock.levels") => Some(&self.stereo),
+                (EndpointCategory::Model, "gallery.label.meters") => Some(&self.text),
                 _ => None,
             }
         }
@@ -507,11 +520,12 @@ mod tests {
         fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
             match endpoint {
                 "gain" => Some(ReadValue::Scalar(self.gain)),
-                "levels" => Some(ReadValue::Stereo(StereoLevels {
+                "levels" | "mock.levels" => Some(ReadValue::Stereo(StereoLevels {
                     l: 0.4,
                     r: 0.6,
                     volume: 0.5,
                 })),
+                "gallery.label.meters" => Some(ReadValue::Text("VU / STEREO / VERTICAL")),
                 _ => None,
             }
         }
@@ -539,6 +553,35 @@ mod tests {
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("retained host fixture must compile: {error}"))
+    }
+
+    fn compiled_gallery_meters() -> CompiledUi {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "gallery.klayout.ron",
+            r#"(schema: "kithara.layout", version: 1, id: "gallery-meters-host",
+                root: Module(instance: "atoms", source: "modules/tabs/atoms.kmodule.ron"))"#,
+        );
+        resolver.insert(
+            "modules/tabs/atoms.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "gallery-atoms-tab",
+                root: Column(children: [
+                    Text(id: "intro", label: "ATOMS"),
+                    Include(id: "meters", source: "../primitives/meters.kmodule.ron"),
+                ]))"#,
+        );
+        resolver.insert(
+            "modules/primitives/meters.kmodule.ron",
+            include_str!("../../../examples/gallery/assets/modules/primitives/meters.kmodule.ron"),
+        );
+        compile(
+            "gallery.klayout.ron",
+            &resolver,
+            &Registry::default(),
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap_or_else(|error| panic!("gallery meter fixture must compile: {error}"))
     }
 
     fn headless_renderer() -> Renderer {
@@ -580,6 +623,10 @@ mod tests {
                     components.push("knob");
                     true
                 }
+                ControlSpec::VuStereo => {
+                    components.push("stereo-meter");
+                    true
+                }
                 ControlSpec::VuVertical { .. } => {
                     components.push("vertical-vu");
                     true
@@ -616,6 +663,90 @@ mod tests {
                 action: ControlAction::SetScalar(0.5),
             })
         );
+    }
+
+    #[kithara::test]
+    fn gallery_meters_is_explicitly_hosted_and_routes_the_stereo_gesture() {
+        let ui = compiled_gallery_meters();
+        let reads = FixtureReads::default();
+        let CompiledNode::Module { instance, root, .. } = &ui.root else {
+            panic!("gallery fixture root must be a module");
+        };
+        let ExpandedNode::Column { children, .. } = root.as_ref() else {
+            panic!("gallery atoms root must be a column");
+        };
+        let meters = &children[1];
+
+        assert!(ui.includes_module(*instance, &[1], "gallery-meters"));
+        let mut components = Vec::new();
+        assert!(hosted_contract(meters, &mut components));
+        assert_eq!(components, ["stereo-meter", "vertical-vu", "vertical-vu"]);
+
+        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full_tree = Tree::new(full.as_widget());
+        assert_eq!(
+            host_count(&full_tree),
+            1,
+            "only the meter include owns an engine"
+        );
+
+        let renderer = headless_renderer();
+        let viewport = Size::new(160.0, 180.0);
+        let child = super::super::node::render_engine_node(
+            meters,
+            &[1],
+            *instance,
+            &ui,
+            &reads,
+            builtin::skin(),
+        );
+        let mut element = host(child, meters, &ui, &reads, builtin::skin());
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let hosted = HostedLayout::new(meters, &ui, &reads, builtin::skin());
+        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        assert_eq!(
+            targets.iter().map(|target| target.path).collect::<Vec<_>>(),
+            [
+                "atoms/meters/stereo",
+                "atoms/meters/vertical-120",
+                "atoms/meters/vertical-64",
+            ]
+        );
+        let stereo = targets
+            .iter()
+            .find(|target| target.path == "atoms/meters/stereo")
+            .unwrap_or_else(|| panic!("the hosted stereo meter target must exist"));
+        let area = stereo.hit.area();
+        assert_eq!((area.w, area.h), (64.0, 22.0));
+        let expected_path = stereo.path.to_owned();
+        let cursor = Cursor::Available(Point::new(area.x + area.w * 0.25, area.y + area.h / 2.0));
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            Layout::new(&node),
+            cursor,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert!(shell.is_event_captured());
+        drop(shell);
+
+        assert_eq!(messages.len(), 1);
+        let UiEvent::Control { path, action } = &messages[0] else {
+            panic!("the hosted stereo meter must publish a control event");
+        };
+        assert_eq!(path, &expected_path);
+        assert_eq!(action, &ControlAction::SetScalar(0.25));
     }
 
     #[kithara::test]

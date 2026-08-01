@@ -3,6 +3,7 @@ use crate::interact::{Hit, Outcome};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Kind {
     Knob,
+    StereoMeter,
     VerticalVu,
 }
 
@@ -18,6 +19,9 @@ pub(crate) enum Descriptor {
         current: f32,
         drag_range: f32,
         wheel_step: f32,
+    },
+    StereoMeter {
+        path: String,
     },
     VerticalVu {
         path: String,
@@ -38,15 +42,22 @@ impl Descriptor {
         Self::VerticalVu { path }
     }
 
+    pub(crate) fn stereo_meter(path: String) -> Self {
+        Self::StereoMeter { path }
+    }
+
     pub(super) fn path(&self) -> &str {
         match self {
-            Self::Knob { path, .. } | Self::VerticalVu { path } => path,
+            Self::Knob { path, .. } | Self::StereoMeter { path } | Self::VerticalVu { path } => {
+                path
+            }
         }
     }
 
     pub(super) const fn kind(&self) -> Kind {
         match self {
             Self::Knob { .. } => Kind::Knob,
+            Self::StereoMeter { .. } => Kind::StereoMeter,
             Self::VerticalVu { .. } => Kind::VerticalVu,
         }
     }

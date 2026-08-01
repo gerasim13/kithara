@@ -582,6 +582,78 @@ mod tests {
         }
     }
 
+    /// The meters page runs under the retained engine host, which answers pointer
+    /// input for its whole subtree - a control the engine does not know would draw
+    /// and then ignore the mouse, with nothing to see until a hand tries it.
+    #[kithara::test]
+    fn the_hosted_meters_page_holds_only_controls_the_engine_answers() {
+        let ui = compile(
+            Tab::Atoms.entry(),
+            &resolver(),
+            &mock::registry(),
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap();
+        let mut seen = 0;
+
+        each_control(&ui, &mut |path, spec| {
+            if !path.contains("/meters/") {
+                return;
+            }
+            seen += 1;
+            assert!(
+                matches!(
+                    spec,
+                    ControlSpec::VuStereo
+                        | ControlSpec::VuVertical { .. }
+                        | ControlSpec::Text { .. }
+                ),
+                "`{path}` sits inside the hosted meters page but is not a control the engine \
+                 answers"
+            );
+        });
+
+        assert!(seen > 0, "the atoms tab compiled no meters controls at all");
+    }
+
+    fn each_control(ui: &CompiledUi, visit: &mut impl FnMut(&str, &ControlSpec)) {
+        fn walk(node: &ExpandedNode, ui: &CompiledUi, visit: &mut impl FnMut(&str, &ControlSpec)) {
+            match node {
+                ExpandedNode::Row { children, .. }
+                | ExpandedNode::Column { children, .. }
+                | ExpandedNode::Slot { children, .. } => {
+                    for child in children {
+                        walk(child, ui, visit);
+                    }
+                }
+                ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
+                    walk(child, ui, visit);
+                }
+                ExpandedNode::Popover {
+                    anchor, content, ..
+                } => {
+                    walk(anchor, ui, visit);
+                    walk(content, ui, visit);
+                }
+                ExpandedNode::Control { path, spec, .. } => visit(ui.resolve(*path), spec),
+                _ => {}
+            }
+        }
+
+        let mut stack = vec![&ui.root];
+        while let Some(node) = stack.pop() {
+            match node {
+                CompiledNode::Split { children, .. } => {
+                    stack.extend(children.iter().map(|(_, child)| child));
+                }
+                CompiledNode::Optional { child, .. } => stack.push(child),
+                CompiledNode::Module { root, .. } => walk(root, ui, visit),
+                _ => {}
+            }
+        }
+    }
+
     #[kithara::test]
     fn every_nav_item_path_selects_its_tab() {
         let ui = compile(
