@@ -372,19 +372,20 @@ fn symphonia_aac_warm_decode_does_not_grow_pool_alloc_misses() {
 }
 
 /// A decoder instance strips its own algorithmic delay from the head of the
-/// PCM it emits, and `head_strip_frames` is how it reports that strip. The two
-/// have to be the same number, and the number is not any declared constant:
-/// the fdk-aac adapter drops `stream_info.outputDelay` — 1685 frames on this
-/// fixture — while `timestamp_bias_frames` models one access unit, 1024.
+/// PCM it emits. The observed strip is the difference between packet frames
+/// supplied and PCM frames emitted, and is not any declared constant: the
+/// fdk-aac adapter drops `stream_info.outputDelay`, 1685 frames on this fixture,
+/// while `timestamp_bias_frames` models one access unit, 1024.
 ///
 /// The 661-frame remainder decides where an exact variant splice cuts. A decode
 /// that started at the head sees it as a container timeline gap the moment the
 /// next packet's timestamp runs past what the decoder has emitted; a decode
 /// that started mid-stream records no such jump, because `seek` resyncs the
-/// frame offset onto the packet timestamp instead. Reporting the observed strip
-/// is what lets `ComposedDecoder::blender_profile` hand both the same figure.
+/// frame offset onto the packet timestamp instead. Observing the strip in
+/// `ComposedDecoder` is what lets its `blender_profile` hand both the same
+/// figure.
 #[kithara::test]
-fn aac_head_strip_is_reported_as_the_decoder_observes_it() {
+fn aac_head_strip_exceeds_the_bias_the_timeline_models() {
     let pool = PcmPool::default();
     let (mut codec, seg, ranges) = aac_codec_and_frames();
     let supplied = ranges.len() as u64 * u64::from(access_unit_frames(AudioCodec::AacLc));
@@ -394,12 +395,6 @@ fn aac_head_strip_is_reported_as_the_decoder_observes_it() {
     let emitted = pcm.len() as u64 / channels;
     let head_strip = supplied.saturating_sub(emitted);
 
-    assert_eq!(
-        codec.head_strip_frames(),
-        head_strip,
-        "the decoder must report the frames it actually stripped: \
-         supplied={supplied}, emitted={emitted}"
-    );
     assert!(
         head_strip > codec.timestamp_bias_frames(),
         "the declared bias is expected to fall short of the real strip on this \

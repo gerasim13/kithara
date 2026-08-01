@@ -13,9 +13,43 @@ use crate::{
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
     duration_for_frames,
     error::DecodeResult,
+    pcm_time::frames_for_duration,
     traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
     types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata},
 };
+
+/// Frames the decoder drops from the head of its PCM, counted as they are
+/// dropped rather than declared up front.
+///
+/// `supplied` comes from the packet's own duration converted at the output
+/// sample rate, so it is already in the domain the decoder emits in: an
+/// SBR codec whose access unit is 1024 core frames but 2048 output frames
+/// is measured against 2048, not against a core-rate constant.
+#[derive(Clone, Copy, Debug, Default)]
+struct HeadStrip {
+    frames: u64,
+    settled: bool,
+}
+
+impl HeadStrip {
+    /// Stops once a packet comes back whole: from there on the decoder is
+    /// through its delay, and a short packet is the stream's own tail
+    /// rather than more strip.
+    fn record(&mut self, supplied: u64, emitted: u64) {
+        if self.settled || supplied == 0 {
+            return;
+        }
+        if emitted >= supplied {
+            self.settled = true;
+            return;
+        }
+        self.frames = self.frames.saturating_add(supplied - emitted);
+    }
+
+    const fn frames(self) -> u64 {
+        self.frames
+    }
+}
 
 const ZERO_FRAME_BUDGET: u32 = 32;
 
@@ -43,6 +77,7 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
     /// Set on every seek; the next emitted chunk may re-anchor the PCM cursor.
     resync_frame_offset_to_pts: bool,
     timeline_gap_frames: u64,
+    head_strip: HeadStrip,
     epoch: u64,
     /// Cumulative frame counter. Anchored to `landed_at` on seek (so the
     /// next chunk's `frame_offset / sample_rate ≈ timestamp`) and
@@ -90,6 +125,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             pending_seek_target: None,
             resync_frame_offset_to_pts: true,
             timeline_gap_frames: 0,
+            head_strip: HeadStrip::default(),
             zero_frame_count: 0,
         }
     }
@@ -183,12 +219,21 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             };
             hang_reset!();
             let frame_pts = frame.pts;
-            let frame_end = frame_pts.saturating_add(frame.duration);
+            let frame_duration = frame.duration;
+            let frame_end = frame_pts.saturating_add(frame_duration);
             let source_bytes = u64::try_from(frame.data.len()).unwrap_or(u64::MAX);
             let mut buf = self.pool.get();
             let mut frames =
                 self.codec
                     .decode_frame(frame.data, frame_pts, frame.packet_desc, &mut buf)?;
+            self.head_strip.record(
+                u64::try_from(frames_for_duration(
+                    self.spec.sample_rate.get(),
+                    frame_duration,
+                ))
+                .unwrap_or(u64::MAX),
+                u64::from(frames),
+            );
             let zero_frame_budget_reached = if frames == 0 {
                 self.zero_frame_count = self.zero_frame_count.saturating_add(1);
                 self.zero_frame_count >= ZERO_FRAME_BUDGET
@@ -336,16 +381,16 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
     /// surfaces as a timestamp jump this decoder records in
     /// `timeline_gap_frames`. A decode that started mid-stream records no jump —
     /// `seek` resyncs the frame offset onto the packet timestamp instead — so
-    /// for it only the directly observed strip is complete. Taking the maximum
-    /// leaves both with the same number, which is what a splice between them
-    /// cuts on.
+    /// for it only the strip directly observed by this decoder is complete.
+    /// Taking the maximum leaves both with the same number, which is what a
+    /// splice between them cuts on.
     fn blender_profile(&self) -> BlenderProfile {
         let modelled = self
             .codec
             .timestamp_bias_frames()
             .saturating_add(self.timeline_gap_frames);
         BlenderProfile::new(self.spec)
-            .with_timeline_gap_frames(self.codec.head_strip_frames().max(modelled))
+            .with_timeline_gap_frames(self.head_strip.frames().max(modelled))
     }
 
     fn flush_reader_signals(&mut self) {
@@ -749,7 +794,10 @@ mod test_stub_codec {
 #[cfg(test)]
 mod test_counting_codec {
 
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::{
+        collections::VecDeque,
+        sync::atomic::{AtomicU32, Ordering},
+    };
 
     use kithara_bufpool::PcmBuf;
     use kithara_platform::{sync::Arc, time::Duration};
@@ -758,7 +806,7 @@ mod test_counting_codec {
 
     pub(super) struct CountingCodec {
         pub(super) decode_calls: Arc<AtomicU32>,
-        first_frames: Option<u32>,
+        frames: VecDeque<u32>,
         pub(super) flush_calls: Arc<AtomicU32>,
         pub(super) spec: PcmSpec,
         pub(super) frames_per_call: u32,
@@ -769,14 +817,14 @@ mod test_counting_codec {
             Self {
                 spec,
                 frames_per_call,
-                first_frames: None,
+                frames: VecDeque::new(),
                 decode_calls: Arc::new(AtomicU32::new(0)),
                 flush_calls: Arc::new(AtomicU32::new(0)),
             }
         }
 
-        pub(super) fn with_first_frames(mut self, frames: u32) -> Self {
-            self.first_frames = Some(frames);
+        pub(super) fn with_frames(mut self, frames: impl IntoIterator<Item = u32>) -> Self {
+            self.frames.extend(frames);
             self
         }
     }
@@ -790,7 +838,7 @@ mod test_counting_codec {
             out: &mut PcmBuf,
         ) -> DecodeResult<u32> {
             self.decode_calls.fetch_add(1, Ordering::SeqCst);
-            let frames = self.first_frames.take().unwrap_or(self.frames_per_call);
+            let frames = self.frames.pop_front().unwrap_or(self.frames_per_call);
             super::write_silent_test_frame(self.spec, frames, out)
         }
 
@@ -934,7 +982,7 @@ mod seek_trim_tests {
     use super::{test_counting_codec::CountingCodec, test_stub_codec::LaggedQueueCodec, *};
     use crate::{
         demuxer::{DemuxOutcome, DemuxSeekOutcome, Frame, TrackInfo},
-        duration_for_frames,
+        duration_for_frames, frames_for_duration,
         traits::Decoder,
     };
 
@@ -1137,7 +1185,7 @@ mod seek_trim_tests {
             ),
             1_024,
         )
-        .with_first_frames(363);
+        .with_frames([363]);
         let demuxer = BoundaryFrameDemuxer {
             track: empty_track(),
             held: Vec::new(),
@@ -1168,6 +1216,64 @@ mod seek_trim_tests {
             decoder.blender_profile().timeline_gap_frames(),
             661,
             "the decoder must publish forward timestamp gaps without a second frame cursor"
+        );
+    }
+
+    #[kithara::test]
+    fn composed_decoder_observes_head_strip_from_packet_duration() {
+        const SOURCE_SAMPLE_RATE: u32 = 24_000;
+        const OUTPUT_SAMPLE_RATE: u32 = 48_000;
+        const PACKET_DURATION: Duration = Duration::from_millis(20);
+        const SUPPLIED_FRAMES: u32 = 960;
+
+        assert_eq!(
+            frames_for_duration(OUTPUT_SAMPLE_RATE, PACKET_DURATION),
+            usize::try_from(SUPPLIED_FRAMES).expect("supplied frames fit in usize")
+        );
+        assert_eq!(
+            frames_for_duration(SOURCE_SAMPLE_RATE, PACKET_DURATION),
+            480,
+            "the fixture must distinguish source-rate from output-rate frames"
+        );
+
+        let codec = CountingCodec::new(
+            PcmSpec::new(
+                Consts::CHANNELS,
+                NonZeroU32::new(OUTPUT_SAMPLE_RATE).expect("test rate"),
+            ),
+            SUPPLIED_FRAMES,
+        )
+        .with_frames([480, 720]);
+        let demuxer = BoundaryFrameDemuxer {
+            track: track_with_rate(SOURCE_SAMPLE_RATE),
+            held: Vec::new(),
+            idx: 0,
+            frames: vec![
+                BoundaryFrame {
+                    pts: Duration::ZERO,
+                    duration: PACKET_DURATION,
+                };
+                3
+            ],
+        };
+        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+
+        for packet_idx in 0..3 {
+            let outcome = decoder.next_chunk().expect("packet must decode");
+            assert!(
+                matches!(outcome, DecoderChunkOutcome::Chunk(_)),
+                "packet {packet_idx} must emit a chunk, got {outcome:?}"
+            );
+        }
+
+        assert_eq!(
+            decoder.timeline_gap_frames, 0,
+            "constant packet PTS must keep the modelled timeline gap out of the result"
+        );
+        assert_eq!(
+            decoder.blender_profile().timeline_gap_frames(),
+            720,
+            "the composed decoder must publish the head strip measured in output frames"
         );
     }
 

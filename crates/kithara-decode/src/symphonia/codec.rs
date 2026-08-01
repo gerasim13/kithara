@@ -62,35 +62,9 @@ pub(crate) struct SymphoniaCodec {
     /// rate-doubling (HE-AAC v2: container declares core rate, decoder
     /// outputs upsampled rate) without flooding the log.
     logged_first_frame: bool,
-    /// Frames the decoder has dropped from the head of its PCM so far, and
-    /// whether that count has settled. fdk-aac strips `stream_info.outputDelay`
-    /// before its first full packet, which no declared constant here matches:
-    /// counting supplied against emitted is the only way to learn the real
-    /// figure, and it is the figure the timeline has to account for.
-    head_strip_frames: u64,
-    head_strip_settled: bool,
 }
 
 impl SymphoniaCodec {
-    /// Count the frames this packet lost to the decoder's head strip.
-    ///
-    /// Stops once a packet comes back whole: from there on the decoder is
-    /// through its delay, and a short packet is the stream's own tail rather
-    /// than more strip.
-    fn record_head_strip(&mut self, emitted: u32) {
-        if self.head_strip_settled {
-            return;
-        }
-        let supplied = self.codec.map_or(0, access_unit_frames);
-        if supplied == 0 || emitted >= supplied {
-            self.head_strip_settled = supplied != 0;
-            return;
-        }
-        self.head_strip_frames = self
-            .head_strip_frames
-            .saturating_add(u64::from(supplied.saturating_sub(emitted)));
-    }
-
     /// Build a [`SymphoniaCodec`] from native Symphonia codec
     /// parameters. Used by the factory when wiring a
     /// [`crate::symphonia::SymphoniaDemuxer`] for PCM/ADPCM tracks where
@@ -122,8 +96,6 @@ impl SymphoniaCodec {
             spec,
             track_info: DecoderTrackInfo::default(),
             logged_first_frame: false,
-            head_strip_frames: 0,
-            head_strip_settled: false,
         })
     }
 
@@ -185,8 +157,6 @@ impl SymphoniaCodec {
                 ..DecoderTrackInfo::default()
             },
             logged_first_frame: false,
-            head_strip_frames: 0,
-            head_strip_settled: false,
         })
     }
 
@@ -267,24 +237,17 @@ impl FrameCodec for SymphoniaCodec {
         }
         if num_samples == 0 {
             out.clear();
-            self.record_head_strip(0);
             return Ok(0);
         }
 
         out.ensure_len(num_samples)?;
         decoded.copy_to_slice_interleaved(&mut out[..num_samples]);
         out.truncate(num_samples);
-        let emitted = u32::try_from(decoded.frames()).unwrap_or(u32::MAX);
-        self.record_head_strip(emitted);
-        Ok(emitted)
+        Ok(u32::try_from(decoded.frames()).unwrap_or(u32::MAX))
     }
 
     fn decoder_algo_delay(&self, codec: AudioCodec) -> u64 {
         symphonia_decoder_algo_delay(codec)
-    }
-
-    fn head_strip_frames(&self) -> u64 {
-        self.head_strip_frames
     }
 
     fn timestamp_bias_frames(&self) -> u64 {
