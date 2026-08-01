@@ -204,6 +204,7 @@ bitflags = { version = "2", default-features = false, features = ["std"] }
 block2 = { version = "0.6" }
 clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
+cookie = { version = "0.18", default-features = false, features = ["percent-encode"] }
 core-foundation = { version = "0.10" }
 core-foundation-sys = { version = "0.8" }
 dasp_sample = { version = "0.11" }
@@ -243,6 +244,7 @@ time = { version = "0.3", features = ["formatting", "local-offset", "macros", "p
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
+tower-http = { version = "0.6", default-features = false, features = ["decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "follow-redirect"] }
 tracing = { version = "0.1", features = ["log"] }
 zstd = { version = "0.13" }
 zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
@@ -257,6 +259,7 @@ block2 = { version = "0.6" }
 clang-sys = { version = "1", default-features = false, features = ["clang_11_0", "runtime"] }
 clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
+cookie = { version = "0.18", default-features = false, features = ["percent-encode"] }
 core-foundation = { version = "0.10" }
 core-foundation-sys = { version = "0.8" }
 dasp_sample = { version = "0.11" }
@@ -299,6 +302,7 @@ time = { version = "0.3", features = ["formatting", "local-offset", "macros", "p
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
+tower-http = { version = "0.6", default-features = false, features = ["decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "follow-redirect"] }
 tracing = { version = "0.1", features = ["log"] }
 zstd = { version = "0.13" }
 zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
@@ -312,6 +316,7 @@ bitflags = { version = "2", default-features = false, features = ["std"] }
 block2 = { version = "0.6" }
 clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
+cookie = { version = "0.18", default-features = false, features = ["percent-encode"] }
 core-foundation = { version = "0.10" }
 core-foundation-sys = { version = "0.8" }
 dasp_sample = { version = "0.11" }
@@ -351,6 +356,7 @@ time = { version = "0.3", features = ["formatting", "local-offset", "macros", "p
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
+tower-http = { version = "0.6", default-features = false, features = ["decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "follow-redirect"] }
 tracing = { version = "0.1", features = ["log"] }
 zstd = { version = "0.13" }
 zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
@@ -365,6 +371,7 @@ block2 = { version = "0.6" }
 clang-sys = { version = "1", default-features = false, features = ["clang_11_0", "runtime"] }
 clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
+cookie = { version = "0.18", default-features = false, features = ["percent-encode"] }
 core-foundation = { version = "0.10" }
 core-foundation-sys = { version = "0.8" }
 dasp_sample = { version = "0.11" }
@@ -407,6 +414,7 @@ time = { version = "0.3", features = ["formatting", "local-offset", "macros", "p
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
+tower-http = { version = "0.6", default-features = false, features = ["decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "follow-redirect"] }
 tracing = { version = "0.1", features = ["log"] }
 zstd = { version = "0.13" }
 zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
