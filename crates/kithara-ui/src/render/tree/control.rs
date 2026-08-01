@@ -152,17 +152,22 @@ pub(super) fn render_control<'a>(
         ControlSpec::VuStereo => vu_stereo(path, value, skin, owner),
         ControlSpec::VuVertical { ticks } => vu_vertical(path, *ticks, value, skin, owner),
         ControlSpec::Vis => vis(value, reads),
-        ControlSpec::Wave { style, badge, zoom } => MiniWave::builder()
-            .path(path)
-            .style(*style)
-            .zoom(wave_zoom(zoom.as_ref(), reads, ui))
-            .maybe_badge(badge.map(|id| ui.resolve(id)))
-            .maybe_value(value)
-            .scope(scope)
-            .reads(reads)
-            .skin(skin)
-            .build()
-            .view(),
+        ControlSpec::Wave { style, badge, zoom } => {
+            let wave = MiniWave::builder()
+                .path(path)
+                .style(*style)
+                .zoom(wave_zoom(zoom.as_ref(), reads, ui))
+                .maybe_badge(badge.map(|id| ui.resolve(id)))
+                .maybe_value(value)
+                .scope(scope)
+                .reads(reads)
+                .skin(skin)
+                .build();
+            match owner {
+                InputOwner::Leaf => wave.view(),
+                InputOwner::Engine => wave.painted(),
+            }
+        }
         ControlSpec::Meter => meter(value, skin),
         ControlSpec::TrackList {
             columns,

@@ -11,14 +11,16 @@ use iced::{
 use kithara_platform::time::Instant;
 use num_traits::cast::AsPrimitive;
 
-use super::read::{read_flag, resolve};
+use super::read::{read_flag, read_scope, resolve, wave_zoom};
 use crate::{
     compile::CompiledUi,
     engine::{Descriptor, Engine, Target},
     expand::{ControlSpec, ExpandedNode},
     interact::iced as iced_interact,
-    render::{ReadValue, Reads, Skin, UiEvent, engine as engine_event},
+    module::WaveStyle,
+    render::{ReadValue, Reads, Skin, UiEvent, engine as engine_event, model::derived},
     size::{Hidden, is_hidden},
+    widgets::wave::zoom_math::clamp_zoom,
 };
 
 pub(super) fn host<'a>(
@@ -282,6 +284,9 @@ impl HostedLayout {
                 spec,
                 read.as_ref()
                     .and_then(|binding| resolve(reads, binding, ui)),
+                read_scope(read.as_ref(), ui),
+                reads,
+                ui,
                 skin,
             )),
             ExpandedNode::Popover { .. } | ExpandedNode::Pressable { .. } => Self::Passive,
@@ -373,6 +378,12 @@ enum HostedControl {
     VerticalVu {
         path: String,
     },
+    Wave {
+        path: String,
+        beats_shown: bool,
+        scale: f32,
+        progress: f32,
+    },
 }
 
 impl HostedControl {
@@ -380,6 +391,9 @@ impl HostedControl {
         path: &str,
         spec: &ControlSpec,
         value: Option<ReadValue<'_>>,
+        scope: &str,
+        reads: &dyn Reads,
+        ui: &CompiledUi,
         skin: &Skin,
     ) -> Option<Self> {
         match (spec, value) {
@@ -407,6 +421,21 @@ impl HostedControl {
                     path: path.to_owned(),
                 })
             }
+            (ControlSpec::Wave { style, zoom, .. }, Some(ReadValue::Waveform(waveform)))
+                if !waveform.buckets.is_empty() =>
+            {
+                let progress = match reads.get(&derived("deck.playback.position_normalized", scope))
+                {
+                    Some(ReadValue::Scalar(value)) => value.as_(),
+                    _ => 0.0,
+                };
+                Some(Self::Wave {
+                    path: path.to_owned(),
+                    beats_shown: *style == WaveStyle::Hero,
+                    scale: clamp_zoom(wave_zoom(zoom.as_ref(), reads, ui)),
+                    progress,
+                })
+            }
             _ => None,
         }
     }
@@ -417,7 +446,8 @@ impl HostedControl {
             | Self::Crossfader { path }
             | Self::Knob { path, .. }
             | Self::StereoMeter { path }
-            | Self::VerticalVu { path } => path,
+            | Self::VerticalVu { path }
+            | Self::Wave { path, .. } => path,
         }
     }
 }
@@ -435,6 +465,12 @@ impl From<&HostedControl> for Descriptor {
             } => Self::knob(path.clone(), *current, *drag_range, *wheel_step),
             HostedControl::StereoMeter { path } => Self::stereo_meter(path.clone()),
             HostedControl::VerticalVu { path } => Self::vertical_vu(path.clone()),
+            HostedControl::Wave {
+                path,
+                beats_shown,
+                scale,
+                progress,
+            } => Self::wave(path.clone(), *beats_shown, *scale, *progress),
         }
     }
 }
@@ -481,6 +517,7 @@ mod tests {
             widget::{Tree, tree::Tag},
         },
         mouse::{self, Button, Cursor},
+        widget::{Space, container},
     };
     use iced_renderer::fallback::Renderer as FallbackRenderer;
     use iced_tiny_skia::Renderer as TinySkiaRenderer;
@@ -494,17 +531,33 @@ mod tests {
         interact::recognizers::ScalarState,
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
         render::{
-            ControlAction, StereoLevels,
+            ControlAction, StereoLevels, WaveBucket, WaveformView,
             fonts::{FONT_BYTES, SANS},
         },
         source::{MemResolver, UiConfig},
+        widgets::wave::zoom_math::DEFAULT_ZOOM,
     };
+
+    const WAVE_BUCKETS: [WaveBucket; 2] = [
+        WaveBucket {
+            low: 0.2,
+            mid: 0.4,
+            high: 0.6,
+        },
+        WaveBucket {
+            low: 0.3,
+            mid: 0.5,
+            high: 0.7,
+        },
+    ];
 
     struct Registry {
         boolean: EndpointDesc,
         scalar: EndpointDesc,
+        scoped_scalar: EndpointDesc,
         stereo: EndpointDesc,
         text: EndpointDesc,
+        waveform: EndpointDesc,
     }
 
     impl Default for Registry {
@@ -512,8 +565,10 @@ mod tests {
             Self {
                 boolean: EndpointDesc::new(ValueKind::Bool),
                 scalar: EndpointDesc::new(ValueKind::Scalar),
+                scoped_scalar: EndpointDesc::new(ValueKind::Scalar).with_scope("deck"),
                 stereo: EndpointDesc::new(ValueKind::Stereo),
                 text: EndpointDesc::new(ValueKind::Text),
+                waveform: EndpointDesc::new(ValueKind::Waveform).with_scope("deck"),
             }
         }
     }
@@ -531,6 +586,11 @@ mod tests {
                 (EndpointCategory::Model, "gallery.label.meters" | "gallery.label.toggles") => {
                     Some(&self.text)
                 }
+                (EndpointCategory::Model, "mock.wave") => Some(&self.waveform),
+                (EndpointCategory::Command, "mock.seek")
+                | (EndpointCategory::Telemetry, "deck.playback.position_normalized") => {
+                    Some(&self.scoped_scalar)
+                }
                 _ => None,
             }
         }
@@ -538,11 +598,15 @@ mod tests {
 
     struct FixtureReads {
         gain: f64,
+        progress: f64,
     }
 
     impl Default for FixtureReads {
         fn default() -> Self {
-            Self { gain: 0.5 }
+            Self {
+                gain: 0.5,
+                progress: 0.75,
+            }
         }
     }
 
@@ -559,6 +623,17 @@ mod tests {
                 "mock.toggle.off" | "mock.checkbox.off" => Some(ReadValue::Bool(false)),
                 "gallery.label.meters" => Some(ReadValue::Text("VU / STEREO / VERTICAL")),
                 "gallery.label.toggles" => Some(ReadValue::Text("TOGGLES / CHECKBOXES")),
+                "mock.wave@deck=a" => Some(ReadValue::Waveform(WaveformView {
+                    buckets: &WAVE_BUCKETS,
+                    beats: &[],
+                    downbeats: &[],
+                    bpm: None,
+                    r#loop: None,
+                    cues: &[],
+                })),
+                "deck.playback.position_normalized@deck=a" => {
+                    Some(ReadValue::Scalar(self.progress))
+                }
                 _ => None,
             }
         }
@@ -628,6 +703,48 @@ mod tests {
         )
     }
 
+    fn compiled_overview_row() -> CompiledUi {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "layout.klayout.ron",
+            r#"(schema: "kithara.layout", version: 1, id: "overview-host",
+                root: Module(instance: "overview", source: "studio-overview.kmodule.ron"))"#,
+        );
+        resolver.insert(
+            "studio-overview.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "studio-overview",
+                root: Row(children: [
+                    Include(
+                        id: "a",
+                        source: "studio-overview-row.kmodule.ron",
+                        with: { "deck": "a" },
+                    ),
+                ]))"#,
+        );
+        resolver.insert(
+            "studio-overview-row.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "studio-overview-row",
+                parameters: ["deck"],
+                root: Row(gap: 0.0, size: (w: Fill, h: Fixed(40.0)), children: [
+                    Text(id: "letter", label: "A"),
+                    Wave(
+                        id: "wave",
+                        read: Model(id: "mock.wave", with: { "deck": "$deck" }),
+                        write: Command(id: "mock.seek", with: { "deck": "$deck" }),
+                    ),
+                    Text(id: "remain", label: "00:00"),
+                ]))"#,
+        );
+        compile(
+            "layout.klayout.ron",
+            &resolver,
+            &Registry::default(),
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap_or_else(|error| panic!("overview row fixture must compile: {error}"))
+    }
+
     fn headless_renderer() -> Renderer {
         let mut fonts = font_system()
             .write()
@@ -692,6 +809,10 @@ mod tests {
                     components.push("crossfader");
                     true
                 }
+                ControlSpec::Wave { .. } => {
+                    components.push("wave");
+                    true
+                }
                 ControlSpec::Divider | ControlSpec::Text { .. } => true,
                 _ => false,
             },
@@ -705,7 +826,8 @@ mod tests {
             | Descriptor::Crossfader { path }
             | Descriptor::Knob { path, .. }
             | Descriptor::StereoMeter { path }
-            | Descriptor::VerticalVu { path } => path,
+            | Descriptor::VerticalVu { path }
+            | Descriptor::Wave { path, .. } => path,
         }
     }
 
@@ -901,6 +1023,184 @@ mod tests {
                     action: ControlAction::Activate,
                 },
             ]
+        );
+    }
+
+    #[kithara::test]
+    fn studio_overview_row_hosts_its_click_wave() {
+        let ui = compiled_overview_row();
+        let reads = FixtureReads::default();
+        let CompiledNode::Module {
+            instance,
+            module,
+            root,
+            ..
+        } = &ui.root
+        else {
+            panic!("overview fixture root must be a module");
+        };
+        let ExpandedNode::Row { children, .. } = root.as_ref() else {
+            panic!("overview fixture body must be a row");
+        };
+        let row = &children[0];
+
+        assert_eq!(ui.resolve(*module), "studio-overview");
+        assert!(ui.includes_module(*instance, &[0], "studio-overview-row"));
+        let mut components = Vec::new();
+        assert!(hosted_contract(row, &mut components));
+        assert_eq!(components, ["wave"]);
+
+        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full_tree = Tree::new(full.as_widget());
+        assert_eq!(
+            host_count(&full_tree),
+            1,
+            "the overview row owns one engine"
+        );
+
+        let renderer = headless_renderer();
+        let viewport = Size::new(200.0, 40.0);
+        let child = super::super::node::render_engine_node(
+            row,
+            &[0],
+            *instance,
+            &ui,
+            &reads,
+            builtin::skin(),
+        );
+        let mut element = host(child, row, &ui, &reads, builtin::skin());
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let hosted = HostedLayout::new(row, &ui, &reads, builtin::skin());
+        let descriptors = hosted.descriptors();
+        assert_eq!(descriptors.len(), 1);
+        let Descriptor::Wave {
+            path,
+            beats_shown,
+            scale,
+            progress,
+        } = &descriptors[0]
+        else {
+            panic!("the overview wave must produce a wave descriptor");
+        };
+        assert_eq!(path, "overview/a/wave");
+        assert!(!beats_shown);
+        assert_eq!(*scale, DEFAULT_ZOOM);
+        assert_eq!(*progress, 0.75);
+
+        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        assert_eq!(
+            targets.iter().map(|target| target.path).collect::<Vec<_>>(),
+            ["overview/a/wave"]
+        );
+        let area = targets[0].hit.area();
+        let cursor = Cursor::Available(Point::new(area.x + area.w * 0.25, area.y + area.h / 2.0));
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            Layout::new(&node),
+            cursor,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert!(shell.is_event_captured());
+        drop(shell);
+
+        let outside = Point::new(area.x + area.w + 10.0, area.y + area.h / 2.0);
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::CursorMoved { position: outside }),
+            Layout::new(&node),
+            Cursor::Available(outside),
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert!(!shell.is_event_captured());
+        drop(shell);
+
+        assert_eq!(
+            messages,
+            [UiEvent::Control {
+                path: "overview/a/wave".to_owned(),
+                action: ControlAction::SetScalar(0.25),
+            }]
+        );
+    }
+
+    #[kithara::test]
+    fn hosted_beats_wave_keeps_grip_outside_bounds() {
+        let path = "deck-a/wave";
+        let child = container(Space::new().width(Length::Fill).height(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+        let mut element = Element::new(Host {
+            child,
+            layout: HostedLayout::Control(Some(HostedControl::Wave {
+                path: path.to_owned(),
+                beats_shown: true,
+                scale: 0.25,
+                progress: 0.75,
+            })),
+        });
+        let renderer = headless_renderer();
+        let viewport = Size::new(100.0, 40.0);
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            Layout::new(&node),
+            Cursor::Available(Point::new(50.0, 20.0)),
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert!(shell.is_event_captured());
+        drop(shell);
+        assert!(messages.is_empty());
+
+        let outside = Point::new(150.0, 20.0);
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::CursorMoved { position: outside }),
+            Layout::new(&node),
+            Cursor::Available(outside),
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert!(shell.is_event_captured());
+        drop(shell);
+
+        assert_eq!(
+            messages,
+            [UiEvent::Control {
+                path: path.to_owned(),
+                action: ControlAction::SetScalar(0.5),
+            }]
         );
     }
 
@@ -1173,7 +1473,10 @@ mod tests {
         assert!(messages.is_empty(), "arming a knob must not publish");
         drop(element);
 
-        let refreshed_reads = FixtureReads { gain: 0.9 };
+        let refreshed_reads = FixtureReads {
+            gain: 0.9,
+            ..FixtureReads::default()
+        };
         let next_child = super::super::node::render_engine_node(
             strip,
             &[0, 0],

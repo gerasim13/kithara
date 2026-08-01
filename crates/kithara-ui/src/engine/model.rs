@@ -7,6 +7,7 @@ pub(super) enum Kind {
     Knob,
     StereoMeter,
     VerticalVu,
+    Wave,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -33,6 +34,12 @@ pub(crate) enum Descriptor {
     },
     VerticalVu {
         path: String,
+    },
+    Wave {
+        path: String,
+        beats_shown: bool,
+        scale: f32,
+        progress: f32,
     },
 }
 
@@ -62,13 +69,23 @@ impl Descriptor {
         Self::StereoMeter { path }
     }
 
+    pub(crate) fn wave(path: String, beats_shown: bool, scale: f32, progress: f32) -> Self {
+        Self::Wave {
+            path,
+            beats_shown,
+            scale,
+            progress: progress.clamp(0.0, 1.0),
+        }
+    }
+
     pub(super) fn path(&self) -> &str {
         match self {
             Self::Activation { path }
             | Self::Crossfader { path }
             | Self::Knob { path, .. }
             | Self::StereoMeter { path }
-            | Self::VerticalVu { path } => path,
+            | Self::VerticalVu { path }
+            | Self::Wave { path, .. } => path,
         }
     }
 
@@ -79,6 +96,7 @@ impl Descriptor {
             Self::Knob { .. } => Kind::Knob,
             Self::StereoMeter { .. } => Kind::StereoMeter,
             Self::VerticalVu { .. } => Kind::VerticalVu,
+            Self::Wave { .. } => Kind::Wave,
         }
     }
 }

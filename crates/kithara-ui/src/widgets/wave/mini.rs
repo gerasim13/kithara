@@ -51,6 +51,40 @@ pub(crate) struct MiniWave<'path, 'value, 'data, 'scope, 'reads, 'skin> {
 
 impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
     fn view(self) -> Element<'a, UiEvent> {
+        let path = self.path.to_owned();
+        let paint = self.paint();
+        let show_beats = paint.hero();
+        let drag = Scalar::builder()
+            .track(if show_beats {
+                Track::RelativeHorizontal {
+                    scale: paint.zoom,
+                    value: paint.progress,
+                }
+            } else {
+                Track::HorizontalClick
+            })
+            .hover(Hover::new(if show_beats {
+                CursorShape::Grab
+            } else {
+                CursorShape::Pointer
+            }))
+            .build();
+        Canvas::new(MiniWaveCanvas { path, drag, paint })
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+}
+
+impl<'a> MiniWave<'_, '_, '_, '_, '_, '_> {
+    pub(crate) fn painted(self) -> Element<'a, UiEvent> {
+        Canvas::new(self.paint())
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+
+    fn paint(self) -> MiniWavePaint {
         let waveform = match self.value {
             Some(ReadValue::Waveform(waveform)) => Some(*waveform),
             _ => None,
@@ -90,28 +124,12 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
                 .to_owned(),
             badge: self.badge.unwrap_or_default().to_owned(),
         });
-        Canvas::new(MiniWaveCanvas {
+        MiniWavePaint {
             metrics: self.skin.wave,
             background: self.skin.color(self.skin.wave.background),
             border_color: self.skin.color(self.skin.wave.frame.border),
             cue_badge_background: self.skin.color(self.skin.wave.cue_badge_background),
             cue_badge_text_color: self.skin.color(self.skin.wave.cue_badge_text_color),
-            drag: Scalar::builder()
-                .track(if show_beats {
-                    Track::RelativeHorizontal {
-                        scale: zoom,
-                        value: progress,
-                    }
-                } else {
-                    Track::HorizontalClick
-                })
-                .hover(Hover::new(if show_beats {
-                    CursorShape::Grab
-                } else {
-                    CursorShape::Pointer
-                }))
-                .build(),
-            path: self.path.to_owned(),
             overlay,
             overlay_palette: OverlayPalette::new(self.skin),
             palette: self.skin.palette,
@@ -120,21 +138,22 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
             progress,
             wave_revision,
             zoom,
-        })
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+        }
     }
 }
 
 struct MiniWaveCanvas {
     path: String,
+    drag: Scalar,
+    paint: MiniWavePaint,
+}
+
+struct MiniWavePaint {
     metrics: WaveSkin,
     background: Color,
     border_color: Color,
     cue_badge_background: Color,
     cue_badge_text_color: Color,
-    drag: Scalar,
     overlay: Option<OverlayData>,
     overlay_palette: OverlayPalette,
     palette: RenderPalette,
@@ -150,6 +169,11 @@ struct MiniWaveState {
     drag: ScalarState,
     loop_start: Option<f32>,
     modifiers: Modifiers,
+    paint: MiniWavePaintState,
+}
+
+#[derive(Default)]
+struct MiniWavePaintState {
     wave: canvas::Cache,
     wave_revision: Cell<Option<u64>>,
 }
@@ -240,6 +264,109 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
         &self,
         state: &MiniWaveState,
         renderer: &Renderer,
+        theme: &Theme,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Vec<Geometry> {
+        self.paint
+            .geometries(&state.paint, renderer, theme, bounds, cursor)
+    }
+
+    fn mouse_interaction(
+        &self,
+        state: &MiniWaveState,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> mouse::Interaction {
+        if self.paint.has_waveform() {
+            self.drag
+                .cursor(&state.drag, &iced_interact::hit(bounds, cursor))
+                .into()
+        } else {
+            mouse::Interaction::default()
+        }
+    }
+
+    fn update(
+        &self,
+        state: &mut MiniWaveState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<UiEvent>> {
+        if let Event::Keyboard(KeyboardEvent::ModifiersChanged(modifiers)) = event {
+            state.modifiers = *modifiers;
+            return None;
+        }
+        if !self.paint.has_waveform() {
+            return None;
+        }
+        if self.paint.hero() {
+            match event {
+                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+                    if state.modifiers.shift() && cursor.is_over(bounds) =>
+                {
+                    let start = self.track_position(bounds, cursor)?;
+                    state.loop_start = Some(start);
+                    return Some(scalar_child(&self.path, "loop_start", start));
+                }
+                Event::Mouse(mouse::Event::CursorMoved { .. }) if state.loop_start.is_some() => {
+                    let end = self.track_position(bounds, cursor)?;
+                    return Some(scalar_child(&self.path, "loop_end", end));
+                }
+                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+                    if state.loop_start.take().is_some() =>
+                {
+                    return Some(Action::capture());
+                }
+                _ => {}
+            }
+        }
+        if self.paint.hero()
+            && let Some(Input::Wheel(scroll)) = iced_interact::input(event)
+            && cursor.is_over(bounds)
+        {
+            let zoom = zoom_for_wheel(self.paint.zoom, scroll.y());
+            return Some(scalar_child(&self.path, "zoom", zoom));
+        }
+        let input = iced_interact::input(event)?;
+        let hit = iced_interact::hit(bounds, cursor);
+        scalar(
+            &self.path,
+            self.drag
+                .on_input(&mut state.drag, input, &hit, Instant::now()),
+        )
+    }
+}
+
+impl MiniWaveCanvas {
+    fn track_position(&self, bounds: Rectangle, cursor: Cursor) -> Option<f32> {
+        let position = cursor.position()?;
+        let window = window_bounds(self.paint.progress, self.paint.zoom);
+        x_to_norm(position.x - bounds.x, &window, bounds.width)
+    }
+}
+
+impl canvas::Program<UiEvent> for MiniWavePaint {
+    type State = MiniWavePaintState;
+
+    fn draw(
+        &self,
+        state: &MiniWavePaintState,
+        renderer: &Renderer,
+        theme: &Theme,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Vec<Geometry> {
+        self.geometries(state, renderer, theme, bounds, cursor)
+    }
+}
+
+impl MiniWavePaint {
+    fn geometries(
+        &self,
+        state: &MiniWavePaintState,
+        renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         cursor: Cursor,
@@ -288,74 +415,6 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
         layers
     }
 
-    fn mouse_interaction(
-        &self,
-        state: &MiniWaveState,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> mouse::Interaction {
-        if self.has_waveform() {
-            self.drag
-                .cursor(&state.drag, &iced_interact::hit(bounds, cursor))
-                .into()
-        } else {
-            mouse::Interaction::default()
-        }
-    }
-
-    fn update(
-        &self,
-        state: &mut MiniWaveState,
-        event: &Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
-        if let Event::Keyboard(KeyboardEvent::ModifiersChanged(modifiers)) = event {
-            state.modifiers = *modifiers;
-            return None;
-        }
-        if !self.has_waveform() {
-            return None;
-        }
-        if self.hero() {
-            match event {
-                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
-                    if state.modifiers.shift() && cursor.is_over(bounds) =>
-                {
-                    let start = self.track_position(bounds, cursor)?;
-                    state.loop_start = Some(start);
-                    return Some(scalar_child(&self.path, "loop_start", start));
-                }
-                Event::Mouse(mouse::Event::CursorMoved { .. }) if state.loop_start.is_some() => {
-                    let end = self.track_position(bounds, cursor)?;
-                    return Some(scalar_child(&self.path, "loop_end", end));
-                }
-                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
-                    if state.loop_start.take().is_some() =>
-                {
-                    return Some(Action::capture());
-                }
-                _ => {}
-            }
-        }
-        if self.hero()
-            && let Some(Input::Wheel(scroll)) = iced_interact::input(event)
-            && cursor.is_over(bounds)
-        {
-            let zoom = zoom_for_wheel(self.zoom, scroll.y());
-            return Some(scalar_child(&self.path, "zoom", zoom));
-        }
-        let input = iced_interact::input(event)?;
-        let hit = iced_interact::hit(bounds, cursor);
-        scalar(
-            &self.path,
-            self.drag
-                .on_input(&mut state.drag, input, &hit, Instant::now()),
-        )
-    }
-}
-
-impl MiniWaveCanvas {
     const fn hero(&self) -> bool {
         matches!(self.style, WaveStyle::Hero)
     }
@@ -407,12 +466,6 @@ impl MiniWaveCanvas {
                 cue_text: self.cue_badge_text_color,
             },
         );
-    }
-
-    fn track_position(&self, bounds: Rectangle, cursor: Cursor) -> Option<f32> {
-        let position = cursor.position()?;
-        let window = window_bounds(self.progress, self.zoom);
-        x_to_norm(position.x - bounds.x, &window, bounds.width)
     }
 }
 
@@ -821,9 +874,46 @@ fn draw_border(frame: &mut Frame, bounds: Rectangle, skin: FrameSkin, color: Col
 
 #[cfg(test)]
 mod tests {
+    use iced::advanced::widget::{Tree, tree::State};
     use kithara_test_utils::kithara;
 
     use super::*;
+
+    struct EmptyReads;
+
+    impl Reads for EmptyReads {
+        fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
+            None
+        }
+    }
+
+    #[kithara::test]
+    fn painted_wave_owns_no_interactive_canvas_state() {
+        let reads = EmptyReads;
+        let wave = || {
+            MiniWave::builder()
+                .path("overview/a/wave")
+                .style(WaveStyle::Default)
+                .scope("")
+                .reads(&reads)
+                .skin(crate::builtin::skin())
+                .zoom(crate::widgets::wave::zoom_math::DEFAULT_ZOOM)
+                .build()
+        };
+
+        let interactive = wave().view();
+        let painted = wave().painted();
+        let interactive = Tree::new(interactive.as_widget());
+        let painted = Tree::new(painted.as_widget());
+        assert!(matches!(
+            &interactive.state,
+            State::Some(state) if state.is::<MiniWaveState>()
+        ));
+        assert!(matches!(
+            &painted.state,
+            State::Some(state) if state.is::<MiniWavePaintState>()
+        ));
+    }
 
     #[kithara::test]
     fn overlay_hides_only_when_the_cursor_is_inside_the_header_strip() {

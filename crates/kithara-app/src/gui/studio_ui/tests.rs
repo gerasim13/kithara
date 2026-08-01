@@ -224,36 +224,48 @@ fn every_channel_strip_carries_the_supported_control_set() {
     }
 }
 
-/// The mixer runs under one retained engine host that answers pointer input for
-/// its whole subtree, so an interactive control the engine does not know would
-/// render and then quietly ignore the mouse.
 #[kithara::test]
-fn every_mixer_control_is_one_the_engine_host_can_answer_or_is_inert() {
+fn every_hosted_studio_control_is_answered_by_the_engine_or_inert() {
     for layout in LAYOUTS {
         let ui = compile_studio(layout).unwrap();
-        let mut seen = 0;
+        let mut mixer_seen = 0;
+        let mut overview_seen = 0;
         each_node(&ui, &mut |node| {
             let ExpandedNode::Control { path, spec, .. } = node else {
                 return;
             };
             let path = ui.resolve(*path);
-            if !path.starts_with("mixer/") {
+            if path.starts_with("mixer/") {
+                mixer_seen += 1;
+                assert!(
+                    matches!(
+                        spec,
+                        ControlSpec::Knob { .. }
+                            | ControlSpec::VuVertical { .. }
+                            | ControlSpec::Crossfader { .. }
+                            | ControlSpec::Divider
+                            | ControlSpec::Text { .. }
+                    ),
+                    "`{path}` sits inside the hosted mixer but is neither engine input nor inert"
+                );
                 return;
             }
-            seen += 1;
-            assert!(
-                matches!(
-                    spec,
-                    ControlSpec::Knob { .. }
-                        | ControlSpec::VuVertical { .. }
-                        | ControlSpec::Crossfader { .. }
-                        | ControlSpec::Divider
-                        | ControlSpec::Text { .. }
-                ),
-                "`{path}` sits inside the hosted mixer but is neither engine input nor inert"
-            );
+            if path.starts_with("overview/") {
+                overview_seen += 1;
+                assert!(
+                    matches!(spec, ControlSpec::Wave { .. } | ControlSpec::Text { .. }),
+                    "`{path}` sits inside a hosted overview row but is neither engine input nor inert"
+                );
+            }
         });
-        assert!(seen > 0, "{layout:?} compiled no mixer controls at all");
+        assert!(
+            mixer_seen > 0,
+            "{layout:?} compiled no mixer controls at all"
+        );
+        assert!(
+            overview_seen > 0,
+            "{layout:?} compiled no overview controls at all"
+        );
     }
 }
 

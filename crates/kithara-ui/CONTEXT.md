@@ -254,16 +254,19 @@ maps those values into `EngineEvent::{Scalar, Activate}` without losing capture,
 the base at the crate's orchestration layer, and every base peer points strictly downward: `draw` to
 `text`, `text` to `skin`, `solve` to `layout::Axis`.
 
-The retained interaction boundary explicitly names six documents: `studio-mixer`,
-`studio-mixer-single`, their nested `studio-strip`, and the `gallery-knobs`, `gallery-meters`, and
-`gallery-toggles` includes inside the Atoms gallery page. A direct layout module is selected by its
-compiled module ID; expansion records each nested include root by structural address and module ID
-without adding a node wrapper, so the existing render-tree shape and layout stay unchanged. The
-iced host at each selected root keeps one `Engine` in widget-tree state while its descriptor
-snapshot is rebuilt from the current reads on every view. Reconciliation matches an owned resolved
-control path plus component kind; it refreshes configuration and preserves recognizer state, and
-never retains an `InternId` across compiled UI lifetimes. The six module IDs form a named set in the
-render tree; subtree contents never silently opt another document into the engine.
+The retained interaction boundary explicitly names seven documents: `studio-mixer`,
+`studio-mixer-single`, their nested `studio-strip`, the nested `studio-overview-row`, and the
+`gallery-knobs`, `gallery-meters`, and `gallery-toggles` includes inside the Atoms gallery page. A
+direct layout module is selected by its compiled module ID; expansion records each nested include
+root by structural address and module ID without adding a node wrapper, so the existing render-tree
+shape and layout stay unchanged. The iced host at each selected root keeps one `Engine` in
+widget-tree state while its descriptor snapshot is rebuilt from the current reads on every view.
+Reconciliation matches an owned resolved control path plus component kind; it refreshes
+configuration and preserves recognizer state, and never retains an `InternId` across compiled UI
+lifetimes. A wave descriptor carries whether beats are shown, the clamped zoom scale, and the
+current progress, so reconciliation chooses and refreshes its scalar track per frame rather than
+fixing it at construction. The seven module IDs form a named set in the render tree; subtree
+contents never silently opt another document into the engine.
 
 The mixer host absorbs the expanded roots of both included strips. Rendering beneath that host
 propagates `InputOwner::Engine`, while only `InputOwner::Leaf` may open a host, so the nested
@@ -287,17 +290,19 @@ existing iced painting but use paint-only canvas programs; engine events cross t
 `render::event`, so `render::event::control_event` remains the only production `UiEvent::Control`
 constructor.
 
-The interactive `canvas::Program` for a crossfader, knob, vertical VU, stereo meter, toggle, or
-checkbox is therefore not gone: `InputOwner` picks the paint-only variant under the host and the
-interactive one everywhere else, because the same controls also stand outside these documents. Two
-input paths for one control is a transition, not the design - each disappears when its last unhosted
-site flips, and the pair must not grow a third reader or a second capture slot in the meantime. A
-hosted subtree also swallows every pointer event before its child sees it, so a hosted interactive
-leaf without a matching component would go dead. The dual mixer adds one crossfader and an inert
-divider around two supported strips; the single mixer contains one supported strip. Each strip
-contains only knobs, a vertical VU and a label. `gallery-knobs` contains four knobs and a label;
-`gallery-meters` contains a stereo meter, two vertical VUs and a label; `gallery-toggles` contains
-two toggles, two checkboxes and a label.
+The interactive `canvas::Program` for a crossfader, knob, vertical VU, stereo meter, toggle,
+checkbox, or wave is therefore not gone: `InputOwner` picks the paint-only variant under the host
+and the interactive one everywhere else, because the same controls also stand outside these
+documents. Two input paths for one control is a transition, not the design - each disappears when
+its last unhosted site flips, and the pair must not grow a third reader or a second capture slot in
+the meantime. A hosted subtree also swallows every pointer event before its child sees it, so a
+hosted interactive leaf without a matching component would go dead. The dual mixer adds one
+crossfader and an inert divider around two supported strips; the single mixer contains one supported
+strip. Each strip contains only knobs, a vertical VU and a label. Each `studio-overview-row`
+contains one supported wave between two inert text labels. `gallery-knobs` contains four knobs and a
+label; `gallery-meters` contains a stereo meter, two vertical VUs and a label; `gallery-toggles`
+contains two toggles, two checkboxes and a label. `studio-deck` is not hosted, so its hero wave keeps
+its keyboard modifiers and child-addressed loop and zoom emissions in the leaf.
 
 A `Scalar` carries a `Track` that says how a position becomes a value, and the split that matters is
 relative against absolute. A relative track counts travel from the press, so the press only arms the

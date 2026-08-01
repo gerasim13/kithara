@@ -166,6 +166,86 @@ mod tests {
     }
 
     #[kithara::test]
+    fn click_wave_seeks_on_press_without_holding_capture() {
+        let mut engine = Engine::default();
+        let wave = "overview/a/wave";
+        let meter = "gallery/meters/level";
+        engine.reconcile([
+            Descriptor::vertical_vu(meter.to_owned()),
+            Descriptor::wave(wave.to_owned(), false, 0.25, 0.8),
+        ]);
+
+        let press = engine
+            .handle(
+                Input::PointerDown,
+                &[target(wave, 25.0, 50.0)],
+                Instant::now(),
+            )
+            .map(|emission| {
+                let captured = emission.is_captured();
+                (emission.path, emission.outcome.value(), captured)
+            });
+        assert_eq!(
+            press,
+            Some((wave.to_owned(), Some(EngineEvent::Scalar(0.25)), true,))
+        );
+
+        let next = engine
+            .handle(
+                Input::PointerDown,
+                &[target(meter, 50.0, 25.0)],
+                Instant::now(),
+            )
+            .map(|emission| (emission.path, emission.outcome.value()));
+        assert_eq!(
+            next,
+            Some((meter.to_owned(), Some(EngineEvent::Scalar(0.75)),))
+        );
+    }
+
+    #[kithara::test]
+    fn beats_wave_refreshes_its_track_and_keeps_grip_outside_bounds() {
+        let mut engine = Engine::default();
+        let wave = "deck-a/wave";
+        let meter = "gallery/meters/level";
+        engine.reconcile([
+            Descriptor::vertical_vu(meter.to_owned()),
+            Descriptor::wave(wave.to_owned(), false, 0.5, 0.25),
+        ]);
+        engine.reconcile([
+            Descriptor::vertical_vu(meter.to_owned()),
+            Descriptor::wave(wave.to_owned(), true, 0.5, 0.75),
+        ]);
+
+        let press = engine
+            .handle(
+                Input::PointerDown,
+                &[target(wave, 50.0, 50.0)],
+                Instant::now(),
+            )
+            .map(|emission| (emission.path, emission.outcome));
+        assert_eq!(press, Some((wave.to_owned(), Outcome::captured())));
+
+        engine.reconcile([
+            Descriptor::vertical_vu(meter.to_owned()),
+            Descriptor::wave(wave.to_owned(), true, 0.25, 0.0),
+        ]);
+        let moved = engine
+            .handle(
+                Input::PointerMoved {
+                    at: Pt { x: 150.0, y: 50.0 },
+                },
+                &[target(wave, 150.0, 50.0), target(meter, 50.0, 25.0)],
+                Instant::now(),
+            )
+            .map(|emission| (emission.path, emission.outcome.value()));
+        assert_eq!(
+            moved,
+            Some((wave.to_owned(), Some(EngineEvent::Scalar(0.5))))
+        );
+    }
+
+    #[kithara::test]
     fn reconciliation_refreshes_config_and_retains_an_active_drag() {
         let mut engine = Engine::default();
         let now = Instant::now();

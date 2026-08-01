@@ -133,6 +133,30 @@ impl From<Descriptor> for RetainedComponent {
                     .hover(Hover::new(CursorShape::ResizeV))
                     .build(),
             )),
+            Descriptor::Wave {
+                path,
+                beats_shown,
+                scale,
+                progress,
+            } => Self::Scalar(ScalarComponent::new(
+                path,
+                Kind::Wave,
+                Scalar::builder()
+                    .track(if beats_shown {
+                        Track::RelativeHorizontal {
+                            scale,
+                            value: progress,
+                        }
+                    } else {
+                        Track::HorizontalClick
+                    })
+                    .hover(Hover::new(if beats_shown {
+                        CursorShape::Grab
+                    } else {
+                        CursorShape::Pointer
+                    }))
+                    .build(),
+            )),
         }
     }
 }
