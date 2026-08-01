@@ -240,6 +240,12 @@ fn queue_seg_indices(v: &HlsVariant) -> Vec<u32> {
         .collect()
 }
 
+/// Whether a seek is still unresolved — the reader has not yet landed on the
+/// target it was aimed at.
+fn seek_projection_is_live(v: &HlsVariant) -> bool {
+    v.seek.alias.load().is_some() || v.seek.exact_seek.load().is_some()
+}
+
 fn queue_has_init(v: &HlsVariant) -> bool {
     v.flow
         .queue
@@ -1044,7 +1050,7 @@ fn incoming_session_leads_with_the_landing_and_skips_everything_before_it() {
     .expect("incoming session");
 
     assert_eq!(session.position(), 0);
-    assert!(!v.seek_projection_is_live());
+    assert!(!seek_projection_is_live(&v));
     assert!(queue_has_init(&v));
     // The landing's backoff, the landing, then forward — and nothing before
     // them. No head-of-stream decoder probe: this reader opens on the landing
@@ -1444,7 +1450,7 @@ fn exact_seek_projection_retires_after_the_first_consumed_byte() {
     session.advance(1);
 
     assert_eq!(session.position(), 202);
-    assert!(!v.seek_projection_is_live());
+    assert!(!seek_projection_is_live(&v));
 }
 
 #[kithara::test]
@@ -1480,12 +1486,12 @@ fn late_rebuild_at_time_does_not_reopen_consumed_exact_seek_projection() {
 
     session.advance(1);
     assert_eq!(session.position(), 201);
-    assert!(!v.seek_projection_is_live());
+    assert!(!seek_projection_is_live(&v));
 
     assert_eq!(v.rebuild_at_time(&ctx, Duration::from_secs(4)), Some(2));
     assert_eq!(session.position(), 201);
     assert_eq!(v.exact_seek_metadata_phase(), None);
-    assert!(!v.seek_projection_is_live());
+    assert!(!seek_projection_is_live(&v));
 }
 
 #[kithara::test]

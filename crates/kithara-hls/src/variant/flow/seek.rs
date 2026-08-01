@@ -54,12 +54,6 @@ impl HlsVariant {
         }
     }
 
-    /// Whether a seek is still unresolved — the reader has not yet landed on
-    /// the target it was aimed at.
-    pub(crate) fn seek_projection_is_live(&self) -> bool {
-        self.seek.alias.load().is_some() || self.seek.exact_seek.load().is_some()
-    }
-
     fn clear_segment_aware_seek_tail(&self) {
         self.seek
             .segment_aware_tail
