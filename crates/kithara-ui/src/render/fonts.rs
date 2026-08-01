@@ -11,6 +11,7 @@ pub const INTER_SEMIBOLD_BYTES: &[u8] = FontId::InterSemibold.bytes();
 pub const JETBRAINS_MONO_REGULAR_BYTES: &[u8] = FontId::JetBrainsMonoRegular.bytes();
 pub const JETBRAINS_MONO_MEDIUM_BYTES: &[u8] = FontId::JetBrainsMonoMedium.bytes();
 pub const JETBRAINS_MONO_SEMIBOLD_BYTES: &[u8] = FontId::JetBrainsMonoSemibold.bytes();
+pub const LUCIDE_BYTES: &[u8] = FontId::Lucide.bytes();
 pub const SPACE_GROTESK_REGULAR_BYTES: &[u8] = FontId::SpaceGroteskRegular.bytes();
 pub const SPACE_GROTESK_MEDIUM_BYTES: &[u8] = FontId::SpaceGroteskMedium.bytes();
 pub const SPACE_GROTESK_SEMIBOLD_BYTES: &[u8] = FontId::SpaceGroteskSemibold.bytes();
@@ -26,7 +27,7 @@ pub const FONT_BYTES: [&[u8]; 10] = [
     JETBRAINS_MONO_REGULAR_BYTES,
     JETBRAINS_MONO_MEDIUM_BYTES,
     JETBRAINS_MONO_SEMIBOLD_BYTES,
-    lucide_icons::LUCIDE_FONT_BYTES,
+    LUCIDE_BYTES,
 ];
 
 pub const SANS: Font = font(FontFamily::Sans, FontWeight::Normal);

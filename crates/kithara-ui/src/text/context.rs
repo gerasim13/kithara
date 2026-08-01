@@ -6,13 +6,21 @@ use parley::{
     style::{FontFamily as ParleyFamily, FontWeight as ParleyWeight},
 };
 
-use super::{Glyph, GlyphRun, TextError, TextResources, select};
+use super::{FontId, Glyph, GlyphRun, TextError, TextResources, select};
 use crate::skin::{FontWeight, TextRoleSkin};
 
 /// Owns the embedded font collection and Parley shaping scratch space.
 pub struct TextContext {
     fonts: FontContext,
     layout: LayoutContext<()>,
+}
+
+#[derive(Clone, Copy)]
+struct FaceStyle {
+    font: FontId,
+    size: f32,
+    spacing: f32,
+    weight: FontWeight,
 }
 
 impl TextContext {
@@ -57,14 +65,40 @@ impl TextContext {
     /// is what every string rendered through iced did.
     #[must_use]
     pub fn shape(&mut self, content: &str, role: TextRoleSkin, max_width: Option<f32>) -> GlyphRun {
-        let font = select(role.font, role.weight);
+        self.shape_run(
+            content,
+            FaceStyle {
+                font: select(role.font, role.weight),
+                size: role.size,
+                spacing: role.spacing,
+                weight: role.weight,
+            },
+            max_width,
+        )
+    }
+
+    #[cfg(feature = "render")]
+    pub(crate) fn shape_lucide(&mut self, content: &str, size: f32) -> GlyphRun {
+        self.shape_run(
+            content,
+            FaceStyle {
+                font: FontId::Lucide,
+                size,
+                spacing: 0.0,
+                weight: FontWeight::Normal,
+            },
+            None,
+        )
+    }
+
+    fn shape_run(&mut self, content: &str, style: FaceStyle, max_width: Option<f32>) -> GlyphRun {
         let mut builder = self
             .layout
             .ranged_builder(&mut self.fonts, content, 1.0, false);
-        builder.push_default(ParleyFamily::Named(Cow::Borrowed(font.family_name())));
-        builder.push_default(StyleProperty::FontWeight(parley_weight(role.weight)));
-        builder.push_default(StyleProperty::FontSize(role.size));
-        builder.push_default(StyleProperty::LetterSpacing(role.spacing * role.size));
+        builder.push_default(ParleyFamily::Named(Cow::Borrowed(style.font.family_name())));
+        builder.push_default(StyleProperty::FontWeight(parley_weight(style.weight)));
+        builder.push_default(StyleProperty::FontSize(style.size));
+        builder.push_default(StyleProperty::LetterSpacing(style.spacing * style.size));
         let mut layout = builder.build(content);
         layout.break_all_lines(max_width);
 
@@ -81,7 +115,13 @@ impl TextContext {
                 }));
             }
         }
-        GlyphRun::new(font, glyphs, layout.height(), role.size, layout.width())
+        GlyphRun::new(
+            style.font,
+            glyphs,
+            layout.height(),
+            style.size,
+            layout.width(),
+        )
     }
 }
 
@@ -99,10 +139,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{
-        skin::{ColorRole, FontFamily},
-        text::FontId,
-    };
+    use crate::skin::{ColorRole, FontFamily};
 
     fn role(family: FontFamily, weight: FontWeight, size: f32, spacing: f32) -> TextRoleSkin {
         TextRoleSkin {
@@ -122,8 +159,24 @@ mod tests {
 
         assert_eq!(
             families,
-            ["Inter", "JetBrains Mono", "Space Grotesk"],
-            "the collection is embedded-only until system fallback is owned"
+            ["Inter", "JetBrains Mono", "Space Grotesk", "lucide"],
+            "the ten-face embedded catalog is the owned registration contract; system fallback remains excluded"
+        );
+        assert_eq!(
+            FontId::ALL,
+            [
+                FontId::InterRegular,
+                FontId::InterSemibold,
+                FontId::JetBrainsMonoRegular,
+                FontId::JetBrainsMonoMedium,
+                FontId::JetBrainsMonoSemibold,
+                FontId::SpaceGroteskRegular,
+                FontId::SpaceGroteskMedium,
+                FontId::SpaceGroteskSemibold,
+                FontId::SpaceGroteskBold,
+                FontId::Lucide,
+            ],
+            "all ten registered embedded faces are named by the catalog contract"
         );
     }
 
@@ -142,6 +195,18 @@ mod tests {
                 .iter()
                 .all(|glyph| glyph.x.is_finite() && glyph.y.is_finite())
         );
+        assert!(run.width() > 0.0);
+        assert!(run.height() > 0.0);
+    }
+
+    #[cfg(feature = "render")]
+    #[kithara::test]
+    fn explicit_lucide_face_shapes_an_icon_glyph() {
+        let content = char::from(lucide_icons::Icon::Play).to_string();
+        let run = TextContext::new().unwrap().shape_lucide(&content, 14.0);
+
+        assert_eq!(run.font(), FontId::Lucide);
+        assert_eq!(run.glyphs().len(), 1);
         assert!(run.width() > 0.0);
         assert!(run.height() > 0.0);
     }

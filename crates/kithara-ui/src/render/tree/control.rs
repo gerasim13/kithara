@@ -2,8 +2,8 @@ use iced::alignment::Horizontal;
 
 use super::{
     atom::{
-        InputOwner, cell, checkbox, chip, crossfader, fader, glyph, knob, meter, nav_item, readout,
-        segmented, select, status_dot, swatch, tab_large, toggle, vu_stereo, vu_vertical,
+        cell, checkbox, chip, crossfader, fader, glyph, knob, meter, nav_item, readout, segmented,
+        select, status_dot, swatch, tab_large, toggle, vu_stereo, vu_vertical,
     },
     geometry::Rendered,
     panel::{browser_tree, context_bar, deck_summary, time, track_list, vis},
@@ -15,10 +15,13 @@ use crate::{
     expand::{Binding, ControlSpec},
     ids::InternId,
     module::TextAlign,
-    render::{Reads, Skin, icons::document_icon},
+    render::{
+        InputOwner, Reads, Skin,
+        controls::{ButtonView, button},
+        icons::document_icon,
+    },
     widgets::{
         Widget,
-        button::ControlButton,
         deck::Bpm,
         global_bar::{Brand, Divider, PresetSelector, SettingsButton, Spacer},
         telemetry::Telemetry,
@@ -111,17 +114,17 @@ pub(super) fn render_control<'a>(
             active_label,
             style,
             frame,
-        } => ControlButton::builder()
-            .path(path)
-            .label(ui.resolve(*label))
-            .maybe_icon(icon.map(document_icon))
-            .maybe_active_label(active_label.map(|id| ui.resolve(id)))
-            .style(*style)
-            .maybe_frame(*frame)
-            .maybe_value(value)
-            .skin(skin)
-            .build()
-            .view(),
+        } => button(&ButtonView {
+            active_label: active_label.map(|id| ui.resolve(id)),
+            frame: *frame,
+            icon: icon.map(document_icon),
+            label: ui.resolve(*label),
+            owner,
+            path,
+            skin,
+            style: *style,
+            value,
+        }),
         ControlSpec::Scalar { format, framed } => Telemetry::builder()
             .format(*format)
             .framed(*framed)

@@ -1,7 +1,10 @@
 use kithara_platform::sync::Arc as SharedArc;
 use vello::{
     Glyph, Scene,
-    kurbo::{Affine, Arc, Cap, Circle, Join, Line, Point, Rect as KurboRect, Shape, Stroke, Vec2},
+    kurbo::{
+        Affine, Arc, Cap, Circle, Join, Line, Point, Rect as KurboRect, RoundedRect, Shape, Stroke,
+        Vec2,
+    },
     peniko::{Blob, Color, Fill, FontData},
 };
 
@@ -73,6 +76,16 @@ impl Backend for VelloBackend<'_> {
                 ),
                 color,
             ),
+            Geom::RoundedRect { rect, radius } => self.fill_shape(
+                &RoundedRect::new(
+                    f64::from(rect.x),
+                    f64::from(rect.y),
+                    f64::from(rect.x + rect.w),
+                    f64::from(rect.y + rect.h),
+                    f64::from(radius),
+                ),
+                color,
+            ),
         }
     }
 
@@ -104,6 +117,17 @@ impl Backend for VelloBackend<'_> {
                     f64::from(rect.y),
                     f64::from(rect.x + rect.w),
                     f64::from(rect.y + rect.h),
+                ),
+                color,
+                width,
+            ),
+            Geom::RoundedRect { rect, radius } => self.stroke_shape(
+                &RoundedRect::new(
+                    f64::from(rect.x),
+                    f64::from(rect.y),
+                    f64::from(rect.x + rect.w),
+                    f64::from(rect.y + rect.h),
+                    f64::from(radius),
                 ),
                 color,
                 width,
@@ -174,13 +198,15 @@ mod tests {
         builder.stroke_circle(FIXTURE.point, 5.0, FIXTURE.color, 1.0);
         builder.stroke_line(FIXTURE.point, Pt { x: 8.0, y: 8.0 }, FIXTURE.color, 1.0);
         builder.fill_rect(FIXTURE.bounds, FIXTURE.color);
+        builder.fill_rounded_rect(FIXTURE.bounds, 3.0, FIXTURE.color);
+        builder.stroke_rounded_rect(FIXTURE.bounds, 3.0, FIXTURE.color, 1.0);
         builder.text(&run, "GAIN", Transform::IDENTITY, FIXTURE.color);
         let list = builder.finish();
         let mut scene = Scene::new();
 
         replay(&list, &mut VelloBackend::new(&mut scene));
 
-        assert_eq!(scene.encoding().n_paths, 5);
+        assert_eq!(scene.encoding().n_paths, 7);
         assert!(!scene.encoding().resources.glyphs.is_empty());
     }
 

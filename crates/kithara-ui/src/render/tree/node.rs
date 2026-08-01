@@ -5,7 +5,6 @@ use iced::{
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    atom::InputOwner,
     control::render_control,
     flex::Flex,
     geometry::{
@@ -22,7 +21,9 @@ use crate::{
     ids::InternId,
     layout::{Axis, FrameSides},
     module::ChromeStyle,
-    render::{ControlAction, DragPhase, ReadValue, Reads, Skin, UiEvent, control_event},
+    render::{
+        ControlAction, DragPhase, InputOwner, ReadValue, Reads, Skin, UiEvent, control_event,
+    },
     size::{Dim, Hidden, is_hidden},
     skin::ColorRole,
     widgets::{DropZone, ModuleChrome, Widget, anchored::Anchored, wheel::WheelSurface},
@@ -457,7 +458,7 @@ fn child_address(parent: &[usize], index: usize) -> Vec<usize> {
     address
 }
 
-const HOSTED_MODULES: [&str; 7] = [
+const HOSTED_MODULES: [&str; 8] = [
     "studio-strip",
     "studio-mixer",
     "studio-mixer-single",
@@ -465,6 +466,7 @@ const HOSTED_MODULES: [&str; 7] = [
     "gallery-knobs",
     "gallery-meters",
     "gallery-toggles",
+    "gallery-buttons-tab",
 ];
 
 fn hosted_module(module: &str) -> bool {

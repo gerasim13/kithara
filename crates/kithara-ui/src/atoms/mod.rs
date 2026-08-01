@@ -1,3 +1,4 @@
+pub(crate) mod button;
 pub(crate) mod chip;
 pub(crate) mod design;
 pub(crate) mod knob;

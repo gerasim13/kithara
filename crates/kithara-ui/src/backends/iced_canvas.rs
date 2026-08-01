@@ -111,6 +111,11 @@ fn path(geom: Geom) -> Path {
         Geom::Circle { center, radius } => Path::circle(center.into(), radius),
         Geom::Line { from, to } => Path::line(from.into(), to.into()),
         Geom::Rect(rect) => Path::rectangle(Point::new(rect.x, rect.y), Size::new(rect.w, rect.h)),
+        Geom::RoundedRect { rect, radius } => Path::rounded_rectangle(
+            Point::new(rect.x, rect.y),
+            Size::new(rect.w, rect.h),
+            radius.into(),
+        ),
     }
 }
 

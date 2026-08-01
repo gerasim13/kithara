@@ -98,8 +98,10 @@ shadow share one square outline.
 geometry primitives, retained commands, ordered `DrawList` value, builder, backend trait, and
 replay. A widget owns command order and local geometry. A backend owns conversion from `Geom` into
 its toolkit vocabulary, text submission, and encoding into its target. Geometry crosses the seam
-as arcs, circles, lines, and rectangles rather than pre-flattened paths, so every backend
-rasterises curves at its own device scale.
+as arcs, circles, lines, rectangles, and uniform-radius rounded rectangles rather than
+pre-flattened paths, so every backend rasterises curves at its own device scale. A zero-radius
+rounded rectangle is canonicalised by the builder to the existing rectangle command; its retained
+list is therefore exactly the list callers produced before the rounded shape existed.
 
 The retained list is a cloneable, comparable value. Cross-backend identity is therefore asserted
 against the same list rather than promised by two call-through implementations. Pooling is
@@ -108,10 +110,11 @@ deliberately absent. A kithara-bufpool byte budget would not enforce a retained-
 `push`. Any future cap must be a builder-side contract, not a pool property.
 
 `TickRail` paints through the builder, so the shared atom names no toolkit and `atoms::vu` draws
-entirely through one seam. The crossfader still reaches for an iced `Frame` after its ticks, and
-that is a `Geom` gap rather than a design choice: its rail is a rounded rectangle with a stroke, and
-`Geom` carries arc, circle, line and rect. It ports whole when that vocabulary lands with a second
-consumer, not before.
+entirely through one seam. The button is the production consumer that asked for the rounded
+rectangle: its fill and uniform-radius border stay one native shape in the retained list, iced
+replays it with `Path::rounded_rectangle`, and Vello replays it as `kurbo::RoundedRect`. The
+crossfader remains on its existing iced path in this slice; the new vocabulary does not by itself
+authorize that separate port.
 
 `backends::iced_canvas` owns iced translation, glyph-outline filling, and canvas calls.
 `backends::vello` owns Vello translation and scene encoding; the draw list needs no GPU dependency.
@@ -121,8 +124,8 @@ type. Vello's `wgpu` feature stays off because the backend encodes commands but 
 enabling it would add a second wgpu major beside iced's 27.
 
 `text::TextContext` is the canonical shaping owner. It owns Parley's font and layout contexts and
-registers the embedded Inter, JetBrains Mono, and Space Grotesk faces. A context is a caller-owned
-value injected where shaping occurs; there is no process-global font context.
+registers the embedded Inter, JetBrains Mono, Space Grotesk, and Lucide faces. A context is a
+caller-owned value injected where shaping occurs; there is no process-global font context.
 
 `TextContext::shape` takes a whole `TextRoleSkin` rather than a face, a weight and a size, and that
 signature is the contract. `TextRoleSkin::spacing` is letter tracking, and a signature that took
@@ -147,7 +150,7 @@ Where that owner sits is transitional and is stated here so it does not become p
 default. Each text-drawing widget still owns one `TextContext`, so a document holds as many Parley
 shaping scratch buffers and font collections as it has shaped widgets. Consolidating those
 contexts needs a document-scoped owner that does not exist yet. Font-derived draw resources no
-longer follow that per-widget lifetime: `TextResources` builds the nine skrifa outline collections
+longer follow that per-widget lifetime: `TextResources` builds the ten skrifa outline collections
 once and lends them to the iced backend, and adapters borrow the resources from `Skin` rather than
 cloning them per view build.
 
@@ -156,9 +159,11 @@ font-cache type whose only caller is a test, because no shipped host encodes a V
 the architectural ratchet refuses that, and it is right to. The allocation ends when a Vello host
 exists or when the draw seam gains a backend-owned font type, whichever lands first.
 
-`text::FontId` owns family/weight-to-face selection and the
-face-to-byte mapping. `render::fonts` re-exports those bytes for iced host registration and adds
-Lucide. Invalid compile-time embedded font data is a fail-fast construction error.
+`text::FontId` owns family/weight-to-face selection and the face-to-byte mapping. Its tenth value is
+the embedded Lucide face, and `render::fonts` re-exports the same catalog bytes for iced host
+registration. The Lucide addition does not widen identity to system fallback: it is another
+compile-time embedded face with a production glyph consumer, while a fallback face still has no
+`FontId`. Invalid compile-time embedded font data is a fail-fast construction error.
 
 Text crosses the draw seam as the source string, a neutral `GlyphRun`, a transform, and a
 colour. `GlyphRun` carries the selected `FontId`, font size, measured width and height, and visual
@@ -254,9 +259,10 @@ maps those values into `EngineEvent::{Scalar, Activate}` without losing capture,
 the base at the crate's orchestration layer, and every base peer points strictly downward: `draw` to
 `text`, `text` to `skin`, `solve` to `layout::Axis`.
 
-The retained interaction boundary explicitly names seven documents: `studio-mixer`,
+The retained interaction boundary explicitly names eight documents: `studio-mixer`,
 `studio-mixer-single`, their nested `studio-strip`, the nested `studio-overview-row`, and the
-`gallery-knobs`, `gallery-meters`, and `gallery-toggles` includes inside the Atoms gallery page. A
+`gallery-knobs`, `gallery-meters`, and `gallery-toggles` includes inside the Atoms gallery page,
+plus the direct `gallery-buttons-tab` module. A
 direct layout module is selected by its compiled module ID; expansion records each nested include
 root by structural address and module ID without adding a node wrapper, so the existing render-tree
 shape and layout stay unchanged. The iced host at each selected root keeps one `Engine` in
@@ -265,7 +271,7 @@ Reconciliation matches an owned resolved control path plus component kind; it re
 configuration and preserves recognizer state, and never retains an `InternId` across compiled UI
 lifetimes. A wave descriptor carries whether beats are shown, the clamped zoom scale, and the
 current progress, so reconciliation chooses and refreshes its scalar track per frame rather than
-fixing it at construction. The seven module IDs form a named set in the render tree; subtree
+fixing it at construction. The eight module IDs form a named set in the render tree; subtree
 contents never silently opt another document into the engine.
 
 The mixer host absorbs the expanded roots of both included strips. Rendering beneath that host
@@ -277,7 +283,7 @@ the pointer crosses the other strip.
 
 The engine carries two component shapes in one `RetainedComponent` enum. `ScalarComponent` owns its
 resolved path, `Kind`, `Scalar`, and `ScalarState`; `ActivationComponent` owns a path, the pointer
-hover, and the stateless `click::on_input` gesture shared by Toggle and Checkbox. A narrow
+hover, and the stateless `click::on_input` gesture shared by Button, Toggle, and Checkbox. A narrow
 `Component` trait gives the router only path, kind, event handling, cursor, and capture-slot state.
 The dispatch returned because activation is genuinely not scalar - it has no scalar configuration
 or state and emits no value - rather than because two controls happened to have different names.
@@ -285,23 +291,35 @@ There are no per-control engine types. `Kind` still belongs to the retained iden
 reconciling a different control kind at the same path rebuilds recognizer state and clears capture.
 One router owns the subtree's sole capture identity: the holder receives input exclusively until it
 releases, otherwise reverse document order chooses the topmost non-ignored component. Cursor
-resolution follows the holder first, then the topmost non-default cursor. Hosted leaves keep their
-existing iced painting but use paint-only canvas programs; engine events cross through
-`render::event`, so `render::event::control_event` remains the only production `UiEvent::Control`
-constructor.
+resolution follows the holder first, then the topmost non-default cursor. Hosted leaves use
+paint-only canvas programs; engine events cross through `render::event`, so
+`render::event::control_event` remains the only production `UiEvent::Control` constructor. Button
+is the first activation control whose fill, frame, and label or Lucide glyph are all painted by a
+toolkit-neutral base atom through one `DrawListBuilder` instead of by iced.
 
-The interactive `canvas::Program` for a crossfader, knob, vertical VU, stereo meter, toggle,
-checkbox, or wave is therefore not gone: `InputOwner` picks the paint-only variant under the host
+The Leaf adapter owns the transient pressed visual while its click recognizer sees the pointer
+gesture. The Engine adapter is paint-only and derives only idle or hovered paint from the cursor;
+the required existing `Descriptor::Activation` is stateless and carries no held phase. Adding a
+second pressed-state channel merely for paint would create the parallel mutable ownership this
+transition forbids.
+
+The interactive `canvas::Program` for a button, crossfader, knob, vertical VU, stereo meter,
+toggle, checkbox, or wave is therefore not gone: `InputOwner` picks the paint-only variant under the host
 and the interactive one everywhere else, because the same controls also stand outside these
 documents. Two input paths for one control is a transition, not the design - each disappears when
 its last unhosted site flips, and the pair must not grow a third reader or a second capture slot in
-the meantime. A hosted subtree also swallows every pointer event before its child sees it, so a
+the meantime. This slice does not widen `interact::iced::input`: portable activation retains its
+existing left-mouse vocabulary, and touch does not enter the retained boundary here. A hosted
+subtree also swallows every pointer event before its child sees it, so a
 hosted interactive leaf without a matching component would go dead. The dual mixer adds one
 crossfader and an inert divider around two supported strips; the single mixer contains one supported
 strip. Each strip contains only knobs, a vertical VU and a label. Each `studio-overview-row`
 contains one supported wave between two inert text labels. `gallery-knobs` contains four knobs and a
 label; `gallery-meters` contains a stereo meter, two vertical VUs and a label; `gallery-toggles`
-contains two toggles, two checkboxes and a label. `studio-deck` is not hosted, so its hero wave keeps
+contains two toggles, two checkboxes and a label. `gallery-buttons-tab` contains six activation
+buttons and two inert text labels; its micro play/pause cell reaches the draw seam as a Lucide font
+glyph. No app button-bearing module joins the hosted set in this slice, so those documents remain
+`InputOwner::Leaf`. `studio-deck` is not hosted, so its hero wave keeps
 its keyboard modifiers and child-addressed loop and zoom emissions in the leaf.
 
 A `Scalar` carries a `Track` that says how a position becomes a value, and the split that matters is
@@ -581,6 +599,16 @@ the cells after it take a left one, the side the container cells beside them alr
 Only the transport styles read that declaration; every other button style draws the border of its
 own style.
 
+`atoms::button::Button` owns button painting. It emits the background, either the uniform rounded
+border or transport seam strips, and the centred label or Lucide glyph into one retained list; both
+the interactive Leaf canvas and paint-only Engine canvas replay that list. Lucide icons cross as
+text because their source is a glyph in the tenth embedded face. An effective `IconSource::Svg`
+cannot cross this seam and remains on the existing iced button adapter as a capability boundary,
+not as an owner-based second rendering. `MicroPrimary` retains its existing forced Play/Pause
+glyph and therefore ignores a declared icon before that capability decision. The hosted gallery
+buttons declare no explicit icons, and the app's SVG reverse-play button remains on its unhosted
+path for the later vector wave.
+
 A container that declares no `size` renders `Fill` on both axes — `render::tree::content_size`
 maps the undeclared case there. A stack of unsized rows therefore splits its parent between them
 instead of hugging its content, and a row that should hug says `h: Shrink`.
@@ -773,10 +801,11 @@ traversal, not only by its own descendants. Harmless beside presses gated on the
 over their bounds; not harmless beside a widget that captures away from the cursor, such as a
 `WheelSurface` or a track-list row mid-drag.
 
-A `Button` inside a `Pressable` resolves by phase rather than by nesting. `button` captures the
-press and publishes on the release; `mouse_area` publishes and captures on the press. So the press
-is the button's and the `Pressable` stays silent, and the release is the button's and the
-`Pressable` has no release to fire.
+A portable `Button` inside a `Pressable` resolves by traversal rather than by nesting. Its shared
+click recognizer publishes and captures the left press before `mouse_area` sees it, so the
+`Pressable` stays silent and the release publishes nothing. The explicit-SVG legacy iced button
+still captures the press and publishes on release; that earlier capture likewise keeps the wrapper
+silent.
 
 ## Popover Ownership
 

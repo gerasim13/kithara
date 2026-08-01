@@ -124,6 +124,13 @@ enum IconSource {
 }
 
 impl Icon {
+    pub(crate) fn lucide_glyph(self) -> Option<char> {
+        match source(self) {
+            IconSource::Lucide(icon) => Some(char::from(icon)),
+            IconSource::Svg(_) => None,
+        }
+    }
+
     /// Renders this icon with the given size and color.
     #[must_use]
     pub fn view<'a, M: 'a>(self, size: f32, color: Color) -> Element<'a, M> {
@@ -202,14 +209,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use lucide_icons::Icon as Lucide;
 
-    use super::{Icon, IconSource, source};
-
-    fn glyph(icon: Icon) -> Option<char> {
-        match source(icon) {
-            IconSource::Lucide(lucide) => Some(char::from(lucide)),
-            IconSource::Svg(_) => None,
-        }
-    }
+    use super::Icon;
 
     #[kithara::test]
     fn every_app_menu_glyph_resolves_to_its_lucide_namesake() {
@@ -234,7 +234,7 @@ mod tests {
 
         for (icon, lucide) in table {
             assert_eq!(
-                glyph(icon),
+                icon.lucide_glyph(),
                 Some(char::from(lucide)),
                 "{icon:?} must render {lucide:?}"
             );
@@ -260,17 +260,23 @@ mod tests {
 
         for (icon, wrong) in prohibited {
             assert_ne!(
-                glyph(icon),
+                icon.lucide_glyph(),
                 Some(char::from(wrong)),
                 "{icon:?} must not be substituted by {wrong:?}"
             );
         }
         for (icon, right) in canon {
             assert_eq!(
-                glyph(icon),
+                icon.lucide_glyph(),
                 Some(char::from(right)),
                 "{icon:?} must render {right:?}"
             );
         }
+    }
+
+    #[kithara::test]
+    fn svg_icons_do_not_cross_the_glyph_seam() {
+        assert_eq!(Icon::PlayReverse.lucide_glyph(), None);
+        assert_eq!(Icon::Zvuk.lucide_glyph(), None);
     }
 }

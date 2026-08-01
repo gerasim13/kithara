@@ -584,45 +584,77 @@ mod tests {
 
     #[kithara::test]
     fn the_hosted_meters_page_holds_only_controls_the_engine_answers() {
-        assert_hosted_page_controls("meters", |spec| {
-            matches!(
-                spec,
-                ControlSpec::VuStereo | ControlSpec::VuVertical { .. } | ControlSpec::Text { .. }
-            )
-        });
+        assert_hosted_page_controls(
+            Tab::Atoms,
+            "meters",
+            |path| path.contains("/meters/"),
+            |spec| {
+                matches!(
+                    spec,
+                    ControlSpec::VuStereo
+                        | ControlSpec::VuVertical { .. }
+                        | ControlSpec::Text { .. }
+                )
+            },
+        );
     }
 
     #[kithara::test]
     fn the_hosted_knobs_page_holds_only_controls_the_engine_answers() {
-        assert_hosted_page_controls("knobs", |spec| {
-            matches!(spec, ControlSpec::Knob { .. } | ControlSpec::Text { .. })
-        });
+        assert_hosted_page_controls(
+            Tab::Atoms,
+            "knobs",
+            |path| path.contains("/knobs/"),
+            |spec| matches!(spec, ControlSpec::Knob { .. } | ControlSpec::Text { .. }),
+        );
     }
 
     #[kithara::test]
     fn the_hosted_toggles_page_holds_only_controls_the_engine_answers() {
-        assert_hosted_page_controls("toggles", |spec| {
-            matches!(
-                spec,
-                ControlSpec::Toggle | ControlSpec::Checkbox | ControlSpec::Text { .. }
-            )
-        });
+        assert_hosted_page_controls(
+            Tab::Atoms,
+            "toggles",
+            |path| path.contains("/toggles/"),
+            |spec| {
+                matches!(
+                    spec,
+                    ControlSpec::Toggle | ControlSpec::Checkbox | ControlSpec::Text { .. }
+                )
+            },
+        );
     }
 
-    fn assert_hosted_page_controls(page: &str, engine_answers: impl Fn(&ControlSpec) -> bool) {
+    #[kithara::test]
+    fn the_hosted_buttons_page_holds_only_glyph_buttons_the_engine_answers() {
+        assert_hosted_page_controls(
+            Tab::Buttons,
+            "buttons",
+            |path| path.starts_with("buttons/"),
+            |spec| match spec {
+                ControlSpec::Button { icon, .. } => icon.is_none(),
+                ControlSpec::Text { .. } => true,
+                _ => false,
+            },
+        );
+    }
+
+    fn assert_hosted_page_controls(
+        tab: Tab,
+        page: &str,
+        belongs: impl Fn(&str) -> bool,
+        engine_answers: impl Fn(&ControlSpec) -> bool,
+    ) {
         let ui = compile(
-            Tab::Atoms.entry(),
+            tab.entry(),
             &resolver(),
             &mock::registry(),
             builtin::skin_doc(),
             &UiConfig::default(),
         )
-        .unwrap_or_else(|error| panic!("the atoms tab must compile: {error}"));
+        .unwrap_or_else(|error| panic!("the {tab:?} tab must compile: {error}"));
         let mut seen = 0;
-        let segment = format!("/{page}/");
-
         each_hosted_item(&ui, &mut |path, spec| {
-            if !path.contains(&segment) {
+            if !belongs(path) {
                 return;
             }
             seen += 1;

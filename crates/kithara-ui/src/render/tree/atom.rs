@@ -1,10 +1,7 @@
 use iced::{Color, Element, widget::Space};
 use num_traits::cast::AsPrimitive;
 
-use super::{
-    geometry::active_tone,
-    knob::{KnobPaint, KnobProgram},
-};
+use super::geometry::active_tone;
 use crate::{
     atoms::{
         chip::Chip,
@@ -20,7 +17,11 @@ use crate::{
     compile::CompiledUi,
     ids::InternId,
     module::{ChipStyle, FaderStyle, GlyphStyle, IconName, Tone},
-    render::{ReadValue, Skin, UiEvent, icons::document_icon},
+    render::{
+        InputOwner, ReadValue, Skin, UiEvent,
+        controls::{KnobPaint, KnobProgram},
+        icons::document_icon,
+    },
     skin::ColorRole,
     widgets::{
         Widget,
@@ -28,12 +29,6 @@ use crate::{
         nav::{Glyph, NavItem, TabLarge},
     },
 };
-
-#[derive(Clone, Copy)]
-pub(super) enum InputOwner {
-    Leaf,
-    Engine,
-}
 
 pub(super) fn crossfader<'a>(
     path: &'a str,

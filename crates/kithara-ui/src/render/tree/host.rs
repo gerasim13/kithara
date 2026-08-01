@@ -43,6 +43,7 @@ struct Host<'a> {
 
 struct State {
     engine: Engine,
+    last_hovered_control: Option<String>,
     last_mouse_interaction: Option<mouse::Interaction>,
 }
 
@@ -52,6 +53,7 @@ impl State {
         engine.reconcile(layout.descriptors());
         Self {
             engine,
+            last_hovered_control: None,
             last_mouse_interaction: None,
         }
     }
@@ -138,12 +140,18 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
         }
 
         if shell.redraw_request() != window::RedrawRequest::NextFrame {
-            let interaction = interaction(&state.engine, &self.layout, layout, cursor);
+            let targets = self.layout.targets(layout, cursor);
+            let interaction = state.engine.cursor(&targets).into();
+            let hovered = hovered_control(&targets);
             if matches!(event, Event::Window(window::Event::RedrawRequested(_))) {
+                if state.last_hovered_control.as_deref() != hovered {
+                    state.last_hovered_control = hovered.map(ToOwned::to_owned);
+                }
                 state.last_mouse_interaction = Some(interaction);
             } else if state
                 .last_mouse_interaction
                 .is_some_and(|last| last != interaction)
+                || state.last_hovered_control.as_deref() != hovered
             {
                 shell.request_redraw();
             }
@@ -224,6 +232,14 @@ fn interaction(
     cursor: mouse::Cursor,
 ) -> mouse::Interaction {
     engine.cursor(&layout_tree.targets(layout, cursor)).into()
+}
+
+fn hovered_control<'a>(targets: &[Target<'a>]) -> Option<&'a str> {
+    targets
+        .iter()
+        .rev()
+        .find(|target| target.hit.over())
+        .map(|target| target.path)
 }
 
 enum HostedLayout {
@@ -397,6 +413,9 @@ impl HostedControl {
         skin: &Skin,
     ) -> Option<Self> {
         match (spec, value) {
+            (ControlSpec::Button { .. }, _) => Some(Self::Activation {
+                path: path.to_owned(),
+            }),
             (ControlSpec::Toggle | ControlSpec::Checkbox, Some(ReadValue::Bool(_))) => {
                 Some(Self::Activation {
                     path: path.to_owned(),
@@ -581,11 +600,16 @@ mod tests {
                 | (EndpointCategory::Model, "mock.levels") => Some(&self.stereo),
                 (
                     EndpointCategory::Model,
-                    "mock.toggle.on" | "mock.toggle.off" | "mock.checkbox.on" | "mock.checkbox.off",
+                    "mock.toggle.on" | "mock.toggle.off" | "mock.checkbox.on" | "mock.checkbox.off"
+                    | "mock.button.play" | "mock.button.cue" | "mock.button.sync",
                 ) => Some(&self.boolean),
-                (EndpointCategory::Model, "gallery.label.meters" | "gallery.label.toggles") => {
-                    Some(&self.text)
-                }
+                (
+                    EndpointCategory::Model,
+                    "gallery.label.meters"
+                    | "gallery.label.toggles"
+                    | "gallery.label.transport"
+                    | "gallery.label.regular",
+                ) => Some(&self.text),
                 (EndpointCategory::Model, "mock.wave") => Some(&self.waveform),
                 (EndpointCategory::Command, "mock.seek")
                 | (EndpointCategory::Telemetry, "deck.playback.position_normalized") => {
@@ -619,10 +643,16 @@ mod tests {
                     r: 0.6,
                     volume: 0.5,
                 })),
-                "mock.toggle.on" | "mock.checkbox.on" => Some(ReadValue::Bool(true)),
-                "mock.toggle.off" | "mock.checkbox.off" => Some(ReadValue::Bool(false)),
+                "mock.toggle.on" | "mock.checkbox.on" | "mock.button.play" | "mock.button.sync" => {
+                    Some(ReadValue::Bool(true))
+                }
+                "mock.toggle.off" | "mock.checkbox.off" | "mock.button.cue" => {
+                    Some(ReadValue::Bool(false))
+                }
                 "gallery.label.meters" => Some(ReadValue::Text("VU / STEREO / VERTICAL")),
                 "gallery.label.toggles" => Some(ReadValue::Text("TOGGLES / CHECKBOXES")),
+                "gallery.label.transport" => Some(ReadValue::Text("TRANSPORT")),
+                "gallery.label.regular" => Some(ReadValue::Text("REGULAR")),
                 "mock.wave@deck=a" => Some(ReadValue::Waveform(WaveformView {
                     buckets: &WAVE_BUCKETS,
                     beats: &[],
@@ -701,6 +731,27 @@ mod tests {
             "toggles",
             include_str!("../../../examples/gallery/assets/modules/primitives/toggles.kmodule.ron"),
         )
+    }
+
+    fn compiled_gallery_buttons() -> CompiledUi {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "gallery.klayout.ron",
+            r#"(schema: "kithara.layout", version: 1, id: "gallery-buttons-host",
+                root: Module(instance: "buttons", source: "buttons.kmodule.ron"))"#,
+        );
+        resolver.insert(
+            "buttons.kmodule.ron",
+            include_str!("../../../examples/gallery/assets/modules/tabs/buttons.kmodule.ron"),
+        );
+        compile(
+            "gallery.klayout.ron",
+            &resolver,
+            &Registry::default(),
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap_or_else(|error| panic!("gallery buttons fixture must compile: {error}"))
     }
 
     fn compiled_overview_row() -> CompiledUi {
@@ -789,7 +840,7 @@ mod tests {
                 .all(|child| hosted_contract(child, components)),
             ExpandedNode::Optional { child, .. } => hosted_contract(child, components),
             ExpandedNode::Control { spec, .. } => match spec {
-                ControlSpec::Toggle | ControlSpec::Checkbox => {
+                ControlSpec::Button { .. } | ControlSpec::Toggle | ControlSpec::Checkbox => {
                     components.push("activation");
                     true
                 }
@@ -1023,6 +1074,143 @@ mod tests {
                     action: ControlAction::Activate,
                 },
             ]
+        );
+    }
+
+    #[kithara::test]
+    fn gallery_buttons_share_the_host_activation_component() {
+        let ui = compiled_gallery_buttons();
+        let reads = FixtureReads::default();
+        let CompiledNode::Module {
+            instance,
+            module,
+            root,
+            ..
+        } = &ui.root
+        else {
+            panic!("gallery buttons fixture root must be a module");
+        };
+
+        assert_eq!(ui.resolve(*module), "gallery-buttons-tab");
+        let mut components = Vec::new();
+        assert!(hosted_contract(root, &mut components));
+        assert_eq!(components, ["activation"; 6]);
+
+        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full_tree = Tree::new(full.as_widget());
+        assert_eq!(
+            host_count(&full_tree),
+            1,
+            "the buttons page owns one engine"
+        );
+
+        let renderer = headless_renderer();
+        let viewport = Size::new(320.0, 160.0);
+        let child = super::super::node::render_engine_node(
+            root,
+            &[],
+            *instance,
+            &ui,
+            &reads,
+            builtin::skin(),
+        );
+        let mut element = host(child, root, &ui, &reads, builtin::skin());
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let descriptors = hosted.descriptors();
+        assert_eq!(
+            descriptors.iter().map(descriptor_path).collect::<Vec<_>>(),
+            [
+                "buttons/play",
+                "buttons/cue",
+                "buttons/sync",
+                "buttons/default",
+                "buttons/primary",
+                "buttons/micro",
+            ]
+        );
+        assert!(
+            descriptors
+                .iter()
+                .all(|descriptor| matches!(descriptor, Descriptor::Activation { .. }))
+        );
+
+        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        let center = |path: &str| {
+            let target = targets
+                .iter()
+                .find(|target| target.path == path)
+                .unwrap_or_else(|| panic!("the hosted `{path}` target must exist"));
+            let area = target.hit.area();
+            Point::new(area.x + area.w / 2.0, area.y + area.h / 2.0)
+        };
+        let cue = center("buttons/cue");
+        let state = tree.state.downcast_mut::<State>();
+        state.last_hovered_control = Some("buttons/play".to_owned());
+        state.last_mouse_interaction = Some(mouse::Interaction::Pointer);
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::CursorMoved { position: cue }),
+            Layout::new(&node),
+            Cursor::Available(cue),
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert_eq!(
+            shell.redraw_request(),
+            window::RedrawRequest::NextFrame,
+            "moving between adjacent activation controls must repaint both hover states"
+        );
+        drop(shell);
+
+        for expected_path in ["buttons/play", "buttons/default"] {
+            let target = targets
+                .iter()
+                .find(|target| target.path == expected_path)
+                .unwrap_or_else(|| panic!("the hosted `{expected_path}` target must exist"));
+            let area = target.hit.area();
+            let cursor =
+                Cursor::Available(Point::new(area.x + area.w / 2.0, area.y + area.h / 2.0));
+            let mut shell = Shell::new(&mut messages);
+            element.as_widget_mut().update(
+                &mut tree,
+                &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+                Layout::new(&node),
+                cursor,
+                &renderer,
+                &mut clipboard,
+                &mut shell,
+                &Rectangle::with_size(viewport),
+            );
+            assert!(
+                shell.is_event_captured(),
+                "the hosted `{expected_path}` press in {area:?} must be captured"
+            );
+        }
+
+        assert_eq!(
+            messages,
+            [
+                UiEvent::Control {
+                    path: "buttons/play".to_owned(),
+                    action: ControlAction::Activate,
+                },
+                UiEvent::Control {
+                    path: "buttons/default".to_owned(),
+                    action: ControlAction::Activate,
+                },
+            ],
+            "a button with no read endpoint must still have the same activation contract"
         );
     }
 

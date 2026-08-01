@@ -13,10 +13,11 @@ pub enum FontId {
     SpaceGroteskMedium,
     SpaceGroteskSemibold,
     SpaceGroteskBold,
+    Lucide,
 }
 
 impl FontId {
-    pub(super) const ALL: [Self; 9] = [
+    pub(super) const ALL: [Self; 10] = [
         Self::InterRegular,
         Self::InterSemibold,
         Self::JetBrainsMonoRegular,
@@ -26,6 +27,7 @@ impl FontId {
         Self::SpaceGroteskMedium,
         Self::SpaceGroteskSemibold,
         Self::SpaceGroteskBold,
+        Self::Lucide,
     ];
 
     /// Returns the embedded bytes for this face.
@@ -43,6 +45,7 @@ impl FontId {
             Self::JetBrainsMonoSemibold => {
                 include_bytes!("../../assets/fonts/JetBrainsMono-SemiBold.ttf")
             }
+            Self::Lucide => lucide_icons::LUCIDE_FONT_BYTES,
             Self::SpaceGroteskRegular => {
                 include_bytes!("../../assets/fonts/SpaceGrotesk-Regular.ttf")
             }
@@ -62,6 +65,7 @@ impl FontId {
             Self::JetBrainsMonoRegular
             | Self::JetBrainsMonoMedium
             | Self::JetBrainsMonoSemibold => "JetBrains Mono",
+            Self::Lucide => "lucide",
             Self::SpaceGroteskRegular
             | Self::SpaceGroteskMedium
             | Self::SpaceGroteskSemibold
@@ -81,6 +85,7 @@ impl FontId {
             Self::SpaceGroteskMedium => 6,
             Self::SpaceGroteskSemibold => 7,
             Self::SpaceGroteskBold => 8,
+            Self::Lucide => 9,
         }
     }
 }

@@ -1,8 +1,10 @@
 pub mod address;
+mod controls;
 pub mod event;
 pub mod fonts;
-pub mod icons;
+mod icons;
 pub mod model;
+mod owner;
 pub mod skin;
 pub mod theme;
 pub mod tree;
@@ -15,6 +17,7 @@ pub use icons::Icon;
 pub use model::{
     ReadValue, Reads, StereoLevels, TrackRow, TreeIcon, TreeRow, WaveBucket, WaveformView,
 };
+pub(crate) use owner::InputOwner;
 pub use skin::Skin;
 pub use typography::shaped_text;
 

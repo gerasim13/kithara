@@ -3,7 +3,6 @@ mod control;
 mod flex;
 mod geometry;
 mod host;
-mod knob;
 mod node;
 mod panel;
 mod read;

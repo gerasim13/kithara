@@ -21,7 +21,7 @@ render = [
     "dep:tracing",
     "iced/advanced",
 ]
-vello-backend = ["dep:kithara-platform", "dep:parley", "dep:vello"]
+vello-backend = ["dep:kithara-platform", "dep:lucide-icons", "dep:parley", "dep:vello"]
 
 [dependencies]
 kithara-platform = { workspace = true, optional = true }

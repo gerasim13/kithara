@@ -20,14 +20,14 @@ use crate::{
     text::{TextContext, TextResources},
 };
 
-pub(super) struct KnobProgram<'data, 'skin> {
+pub(crate) struct KnobProgram<'data, 'skin> {
     paint: KnobPaint<'data, 'skin>,
     drag: Scalar,
     path: String,
 }
 
 impl<'data, 'skin> KnobProgram<'data, 'skin> {
-    pub(super) fn new(
+    pub(crate) fn new(
         path: &str,
         label: Option<&'data str>,
         value: f32,
@@ -54,7 +54,7 @@ impl<'data, 'skin> KnobProgram<'data, 'skin> {
         }
     }
 
-    pub(super) fn view(self) -> Element<'skin, UiEvent>
+    pub(crate) fn view(self) -> Element<'skin, UiEvent>
     where
         'data: 'skin,
     {
@@ -109,19 +109,19 @@ impl canvas::Program<UiEvent> for KnobProgram<'_, '_> {
 }
 
 #[derive(Default)]
-pub(super) struct KnobState {
+pub(crate) struct KnobState {
     drag: ScalarState,
     paint: KnobPaintState,
 }
 
-pub(super) struct KnobPaint<'data, 'skin> {
+pub(crate) struct KnobPaint<'data, 'skin> {
     knob: Knob<'data, 'skin>,
     metrics: KnobSkin,
     text_resources: &'skin TextResources,
 }
 
 impl<'data, 'skin> KnobPaint<'data, 'skin> {
-    pub(super) fn new(label: Option<&'data str>, value: f32, skin: &'skin Skin) -> Self {
+    pub(crate) fn new(label: Option<&'data str>, value: f32, skin: &'skin Skin) -> Self {
         Self {
             knob: Knob::new(label, value, skin),
             metrics: skin.knob,
@@ -129,7 +129,7 @@ impl<'data, 'skin> KnobPaint<'data, 'skin> {
         }
     }
 
-    pub(super) fn view(self) -> Element<'skin, UiEvent>
+    pub(crate) fn view(self) -> Element<'skin, UiEvent>
     where
         'data: 'skin,
     {
@@ -166,7 +166,7 @@ impl canvas::Program<UiEvent> for KnobPaint<'_, '_> {
 }
 
 #[derive(Default)]
-pub(super) struct KnobPaintState {
+pub(crate) struct KnobPaintState {
     text: RefCell<Option<TextContext>>,
 }
 

@@ -103,6 +103,10 @@ pub enum Geom {
         to: Pt,
     },
     Rect(Rect),
+    RoundedRect {
+        rect: Rect,
+        radius: f32,
+    },
 }
 
 /// A retained drawing command.

@@ -72,6 +72,29 @@ impl DrawListBuilder {
         });
     }
 
+    pub fn fill_rounded_rect(&mut self, rect: Rect, radius: f32, color: Rgba) {
+        self.commands.push(DrawCmd::Fill {
+            geom: if radius == 0.0 {
+                Geom::Rect(rect)
+            } else {
+                Geom::RoundedRect { rect, radius }
+            },
+            color,
+        });
+    }
+
+    pub fn stroke_rounded_rect(&mut self, rect: Rect, radius: f32, color: Rgba, width: f32) {
+        self.commands.push(DrawCmd::Stroke {
+            geom: if radius == 0.0 {
+                Geom::Rect(rect)
+            } else {
+                Geom::RoundedRect { rect, radius }
+            },
+            color,
+            width,
+        });
+    }
+
     pub fn text(&mut self, run: &GlyphRun, content: &str, transform: Transform, color: Rgba) {
         self.commands.push(DrawCmd::Text {
             run: run.clone(),
@@ -85,5 +108,69 @@ impl DrawListBuilder {
     #[must_use]
     pub fn finish(self) -> DrawList {
         DrawList(self.commands)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn a_zero_radius_rounded_fill_is_the_existing_rect_list() {
+        let rect = Rect {
+            h: 12.0,
+            w: 24.0,
+            x: 3.0,
+            y: 6.0,
+        };
+        let color = Rgba {
+            a: 1.0,
+            b: 0.25,
+            g: 0.5,
+            r: 0.75,
+        };
+        let mut expected = DrawListBuilder::default();
+        expected.fill_rect(rect, color);
+        let mut rounded = DrawListBuilder::default();
+        rounded.fill_rounded_rect(rect, 0.0, color);
+
+        assert_eq!(rounded.finish(), expected.finish());
+    }
+
+    #[kithara::test]
+    fn rounded_strokes_retain_native_geometry_and_canonicalize_zero() {
+        let rect = Rect {
+            h: 12.0,
+            w: 24.0,
+            x: 3.0,
+            y: 6.0,
+        };
+        let color = Rgba {
+            a: 1.0,
+            b: 0.25,
+            g: 0.5,
+            r: 0.75,
+        };
+        let mut builder = DrawListBuilder::default();
+        builder.stroke_rounded_rect(rect, 4.0, color, 1.5);
+        builder.stroke_rounded_rect(rect, 0.0, color, 1.5);
+
+        assert_eq!(
+            builder.finish().commands(),
+            [
+                DrawCmd::Stroke {
+                    geom: Geom::RoundedRect { rect, radius: 4.0 },
+                    color,
+                    width: 1.5,
+                },
+                DrawCmd::Stroke {
+                    geom: Geom::Rect(rect),
+                    color,
+                    width: 1.5,
+                },
+            ]
+        );
     }
 }

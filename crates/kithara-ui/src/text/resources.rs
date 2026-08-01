@@ -26,7 +26,7 @@ pub enum TextError {
 #[derive(Clone)]
 pub(crate) struct TextResources {
     collection: Collection,
-    fonts: [FontId; 9],
+    fonts: [FontId; 10],
     #[cfg(feature = "render")]
     outlines: Vec<OutlineGlyphCollection<'static>>,
 }
