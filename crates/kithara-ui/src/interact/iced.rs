@@ -57,3 +57,47 @@ impl From<CursorShape> for mouse::Interaction {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use iced::keyboard::{
+        self, Location, Modifiers,
+        key::{Named, Physical},
+    };
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn a_key_carries_no_portable_input() {
+        let pressed = Event::Keyboard(keyboard::Event::KeyPressed {
+            key: keyboard::Key::Named(Named::Delete),
+            modified_key: keyboard::Key::Named(Named::Delete),
+            physical_key: Physical::Code(keyboard::key::Code::Delete),
+            location: Location::Standard,
+            modifiers: Modifiers::empty(),
+            text: None,
+            repeat: false,
+        });
+
+        assert!(
+            input(&pressed).is_none(),
+            "a key that becomes portable input would be answered by the engine host and never \
+             reach the child, which is where the app's unconsumed-key contract lives"
+        );
+    }
+
+    #[kithara::test]
+    fn only_the_left_button_arms_a_gesture() {
+        for button in [Button::Right, Button::Middle] {
+            assert!(
+                input(&Event::Mouse(mouse::Event::ButtonPressed(button))).is_none(),
+                "{button:?} must stay with the child"
+            );
+            assert!(
+                input(&Event::Mouse(mouse::Event::ButtonReleased(button))).is_none(),
+                "{button:?} must stay with the child"
+            );
+        }
+    }
+}
