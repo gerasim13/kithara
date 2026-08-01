@@ -2,22 +2,23 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::ron_io;
+use super::{
+    binding::{AdaptivePolicy, BindingRef},
+    style::{
+        ButtonStyle, ChipStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign,
+        PopoverAt, ScalarFormat, TextAlign, TextStyle, Tone, TrackColumn, WaveStyle,
+        WindowControlsStyle,
+    },
+};
 use crate::{
+    doc::ron_io,
     envelope::{self, DocKind},
     error::UiDocError,
-    ids::{DocId, EndpointId, NodeId, SourceUri},
+    ids::{DocId, NodeId, SourceUri},
     layout::FrameSides,
     param::Param,
     size::SizeSpec,
     skin::ColorRole,
-};
-
-mod style;
-
-pub use style::{
-    ButtonStyle, ChipStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAt,
-    ScalarFormat, TextAlign, TextStyle, Tone, TrackColumn, WaveStyle, WindowControlsStyle,
 };
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -153,6 +154,8 @@ pub enum ControlNode {
         open: BindingRef,
         #[serde(default)]
         at: PopoverAt,
+        #[serde(default)]
+        align: PopoverAlign,
         anchor: Box<Self>,
         content: Box<Self>,
     },
@@ -761,49 +764,6 @@ impl ControlNode {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub enum BindingRef {
-    Command {
-        id: EndpointId,
-        #[serde(default)]
-        with: BTreeMap<String, String>,
-    },
-    Parameter {
-        id: EndpointId,
-        #[serde(default)]
-        with: BTreeMap<String, String>,
-    },
-    Telemetry {
-        id: EndpointId,
-        #[serde(default)]
-        with: BTreeMap<String, String>,
-    },
-    Model {
-        id: EndpointId,
-        #[serde(default)]
-        with: BTreeMap<String, String>,
-    },
-}
-
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
-#[serde(default, deny_unknown_fields)]
-#[non_exhaustive]
-pub struct AdaptivePolicy {
-    pub priority: Priority,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum Priority {
-    Required,
-    High,
-    #[default]
-    Normal,
-    Low,
-}
-
 /// Parses a validated module document.
 ///
 /// # Errors
@@ -829,7 +789,7 @@ pub fn parse_module(text: &str, origin: &SourceUri) -> Result<ModuleDoc, UiDocEr
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::*;
+    use super::{super::binding::Priority, *};
     use crate::size::{Dim, SizeSpec};
 
     fn origin() -> SourceUri {

@@ -9,6 +9,7 @@ use num_traits::cast::AsPrimitive;
 use super::{
     consts::Consts,
     menu::{ContextState, MenuState},
+    quality::QualityState,
 };
 use crate::{
     mock_data::CATALOG,
@@ -36,6 +37,7 @@ pub(crate) struct MockReads {
     library_scope: usize,
     menu: MenuState,
     mixer: MixerState,
+    quality: QualityState,
     segmented_index: f64,
     stress: StressState,
     toggle_off: bool,
@@ -90,6 +92,7 @@ impl Default for MockReads {
             library_scope: 0,
             menu: MenuState::default(),
             mixer: MixerState::default(),
+            quality: QualityState::default(),
             segmented_index: 2.0,
             stress: StressState::default(),
             toggle_off: false,
@@ -304,6 +307,9 @@ impl MockReads {
         if self.context.activate(path) {
             return;
         }
+        if self.quality.activate(path) {
+            return;
+        }
         if self.mixer.activate(path) {
             return;
         }
@@ -402,6 +408,9 @@ impl Reads for MockReads {
             return Some(value);
         }
         if let Some(value) = self.context.get(endpoint) {
+            return Some(value);
+        }
+        if let Some(value) = self.quality.get(endpoint) {
             return Some(value);
         }
         // The gallery hosts one virtual deck: every scope suffix resolves to

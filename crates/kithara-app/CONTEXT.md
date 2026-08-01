@@ -68,6 +68,14 @@ a press is worth and hold the scale to the bounds the wave draws within, the
 same bounds a wheel over the wave answers to. A deck no press has reached yet
 starts from `DEFAULT_ZOOM`, which is what the wave shows until then.
 
+Beside them rides the stream-quality cell, and only where there is a choice: the
+ladder belongs to the stream, so a deck on a plain file answers
+`deck.stream.quality_hidden` and the cell leaves the row. The document is the
+`kithara-ui` one; the studio supplies the rungs and owns the open flag per deck.
+A rung is addressed by its slot, `auto` hands the choice back to the ladder, and
+a pick becomes `DeckMsg::SetQuality`, which sets the ABR mode on the deck's own
+handle and mirrors it in the deck state.
+
 The studio window opens without system decorations, so the top bar is the
 window chrome: its empty middle is a `WindowDrag` surface, and the cell on its
 right carries minimise, maximise and close. `Message::Window` executes those
