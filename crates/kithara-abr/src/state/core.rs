@@ -424,6 +424,28 @@ impl AbrState {
             .store(self.instant_to_nanos(now), Ordering::Release);
     }
 
+    /// Drop a throughput-driven pending whose target the live decision no
+    /// longer wants. Called from the controller tick's
+    /// `Stay { AlreadyOptimal }` arm — the one verdict that re-affirms
+    /// `current` against fresh evidence. Without it, an urgent down-switch
+    /// latched on the initial throughput seed outlives the estimate that
+    /// justified it and commits a quality drop at the next boundary.
+    ///
+    /// Reason predicate matches [`invalidate_pending`](Self::invalidate_pending):
+    /// manual and first-pick intents are not throughput claims, so a
+    /// throughput verdict cannot overrule them. A pending that already
+    /// targets `current` describes no divergence and is left untouched.
+    pub(crate) fn retract_throughput_pending(&self, current: VariantIndex) {
+        let mut state = self.pending.lock();
+        if state
+            .pending
+            .as_ref()
+            .is_some_and(|p| is_throughput_driven(p.reason) && p.target != current)
+        {
+            state.pending = None;
+        }
+    }
+
     /// Phase 2 of the two-cursor refactor: record the intent to switch
     /// to `target` without committing the variant change. The boundary
     /// commit is driven by [`commit_pending`](Self::commit_pending) at

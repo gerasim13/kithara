@@ -123,8 +123,16 @@ impl AbrController {
         match decision {
             AbrDecision::Stay {
                 reason: AbrReason::AlreadyOptimal,
-                ..
-            } => {}
+                current,
+            } => {
+                // The only Stay that retracts: AlreadyOptimal positively
+                // re-affirms `current` on live evidence. MinInterval wraps a
+                // switch `evaluate()` still wants; Locked and NoEstimate are
+                // the absence of an answer, not a decision to stay; and
+                // BufferTooLowForUpSwitch only gates up-switches, so it is
+                // no verdict on a pending down-switch.
+                state.retract_throughput_pending(current);
+            }
             AbrDecision::Stay { reason, .. } => {
                 if let Some(ref bus) = bus {
                     bus.publish(AbrEvent::DecisionSkipped { reason });

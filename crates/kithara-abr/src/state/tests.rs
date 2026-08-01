@@ -388,6 +388,31 @@ fn abort_pending_only_clears_matching_ticket() {
 }
 
 #[kithara::test]
+fn retract_throughput_pending_drops_intent_without_moving_variant() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(2))));
+    state.request_target(VariantIndex::new(0), AbrReason::UrgentDownSwitch);
+    state.retract_throughput_pending(VariantIndex::new(2));
+    assert_eq!(state.pending_target(), None);
+    assert_eq!(
+        state.current_variant_index(),
+        VariantIndex::new(2),
+        "retracting an intent must not move the audible variant"
+    );
+}
+
+#[kithara::test]
+fn retract_throughput_pending_preserves_manual_intent() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::ManualOverride);
+    state.retract_throughput_pending(VariantIndex::new(0));
+    assert_eq!(
+        state.pending_target(),
+        Some(VariantIndex::new(2)),
+        "a user-driven pending must not be retracted by a throughput verdict"
+    );
+}
+
+#[kithara::test]
 fn peek_pending_decision_returns_none_when_no_request() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     assert!(state.peek_pending_decision(VariantIndex::new(0)).is_none());
@@ -775,6 +800,78 @@ async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
     controller.tick(handle.peer_id(), Instant::now());
     assert_eq!(state.current_variant_index(), VariantIndex::new(0));
     assert_eq!(state.pending_target(), None);
+    drop(handle);
+}
+
+/// Prod trace (`runtime_manual_switch_works_when_all_segments_cached`): an
+/// `UrgentDownSwitch` latched on the initial 2 Mbps seed survived nine
+/// `AlreadyOptimal` ticks after the estimate recovered, then committed a
+/// quality drop the controller no longer wanted. `AlreadyOptimal` is the
+/// live verdict for the current variant, so the tick must retract the
+/// stale throughput-driven pending.
+#[kithara::test(tokio)]
+async fn tick_already_optimal_retracts_stale_throughput_pending() {
+    let controller = AbrController::new(settings_fast());
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(2)))));
+    let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
+        state: Arc::clone(&state),
+        variants: test_variants_3(),
+    });
+    let handle = controller.register(&peer);
+
+    state.request_target(VariantIndex::new(0), AbrReason::UrgentDownSwitch);
+
+    // A fast real sample recovers the estimate far above every tier, so the
+    // tick inside `record_bandwidth` reports `AlreadyOptimal` at variant 2.
+    controller.record_bandwidth(
+        handle.peer_id(),
+        30_000_000,
+        Duration::from_secs(1),
+        BandwidthSource::Network,
+    );
+
+    assert_eq!(
+        state.pending_target(),
+        None,
+        "an AlreadyOptimal verdict must drop the stale throughput pending"
+    );
+    assert_eq!(
+        state.current_variant_index(),
+        VariantIndex::new(2),
+        "retraction drops the intent, never the audible variant"
+    );
+    drop(handle);
+}
+
+// Wall-clock interval measured against the instant `AbrState` captured at
+// construction: both must come from the same clock, so this one opts out
+// of the virtual one.
+#[kithara::test(flash(false))]
+fn tick_min_interval_hold_preserves_pending() {
+    let settings = AbrSettings {
+        min_switch_interval: Duration::from_secs(30),
+        min_buffer_for_up_switch: Duration::ZERO,
+        ..AbrSettings::default()
+    };
+    let controller = AbrController::new(settings);
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
+        state: Arc::clone(&state),
+        variants: audio_variants_4tier(),
+    });
+    let handle = controller.register(&peer);
+    state.request_target(VariantIndex::new(3), AbrReason::UpSwitch);
+
+    // The 2 Mbps seed still wants the up-switch; only the interval holds it,
+    // so `evaluate()` reports `Stay { MinInterval }` on this tick.
+    controller.tick(handle.peer_id(), Instant::now());
+
+    assert_eq!(
+        state.pending_target(),
+        Some(VariantIndex::new(3)),
+        "a MinInterval hold wraps a switch evaluate() still wants — the \
+         pending must survive it"
+    );
     drop(handle);
 }
 
