@@ -390,7 +390,7 @@ fn abort_pending_only_clears_matching_ticket() {
 #[kithara::test]
 fn retract_throughput_pending_drops_intent_without_moving_variant() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(2))));
-    state.request_target(VariantIndex::new(0), AbrReason::UrgentDownSwitch);
+    state.request_target(VariantIndex::new(0), AbrReason::DownSwitch);
     state.retract_throughput_pending(VariantIndex::new(2));
     assert_eq!(state.pending_target(), None);
     assert_eq!(
@@ -409,6 +409,22 @@ fn retract_throughput_pending_preserves_manual_intent() {
         state.pending_target(),
         Some(VariantIndex::new(2)),
         "a user-driven pending must not be retracted by a throughput verdict"
+    );
+}
+
+#[kithara::test]
+#[case::urgent_down(AbrReason::UrgentDownSwitch)]
+#[case::escape_stalled(AbrReason::EscapeStalled)]
+fn retract_throughput_pending_preserves_a_rescue(#[case] reason: AbrReason) {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), reason);
+    state.retract_throughput_pending(VariantIndex::new(0));
+    assert_eq!(
+        state.pending_target(),
+        Some(VariantIndex::new(2)),
+        "a rescue off a variant that stopped delivering must survive a \
+         recovered throughput estimate — the estimate recovers as soon as \
+         another variant's segment lands, while the stalled one is still stalled"
     );
 }
 
@@ -819,7 +835,9 @@ async fn tick_already_optimal_retracts_stale_throughput_pending() {
     });
     let handle = controller.register(&peer);
 
-    state.request_target(VariantIndex::new(0), AbrReason::UrgentDownSwitch);
+    // A quality down-switch, not a rescue: a rescue answers a variant that
+    // stopped delivering, and a recovered estimate is no evidence about that.
+    state.request_target(VariantIndex::new(0), AbrReason::DownSwitch);
 
     // A fast real sample recovers the estimate far above every tier, so the
     // tick inside `record_bandwidth` reports `AlreadyOptimal` at variant 2.

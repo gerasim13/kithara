@@ -108,15 +108,10 @@ pub(crate) fn evaluate(state: &AbrState, view: &AbrView<'_>, now: Instant) -> Ab
     }
 }
 
-/// A decision the active variant's failure forced, rather than one taken to
-/// improve quality. The anti-oscillation interval must not hold these: their
-/// premise is that the current variant is not delivering, so waiting it out
+/// The anti-oscillation interval must not hold a rescue: waiting it out
 /// starves the reader instead of settling the choice.
 fn is_rescue(decision: &AbrDecision) -> bool {
-    matches!(
-        decision.reason(),
-        AbrReason::EscapeStalled | AbrReason::UrgentDownSwitch
-    )
+    super::core::is_rescue(decision.reason())
 }
 
 /// Phase 1: parallel computes. None of the `let X = expr` lines branches —

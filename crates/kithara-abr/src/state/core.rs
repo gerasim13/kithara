@@ -92,6 +92,18 @@ fn is_throughput_driven(reason: AbrReason) -> bool {
     )
 }
 
+/// A switch the active variant's failure forced, rather than one taken to
+/// improve quality. Its premise is that the variant stopped delivering, and
+/// no amount of throughput evidence speaks to that: an estimate recovers as
+/// soon as some *other* variant's segment lands, while the stalled one is
+/// still stalled.
+pub(super) fn is_rescue(reason: AbrReason) -> bool {
+    matches!(
+        reason,
+        AbrReason::EscapeStalled | AbrReason::UrgentDownSwitch
+    )
+}
+
 /// Rebuild the typed [`AbrDecision`] a pending boundary-commit publishes,
 /// using the live `from` and the reason captured at `request_target`. The
 /// only reasons that reach a pending slot are switch-class (a `Stay` never
@@ -431,17 +443,16 @@ impl AbrState {
     /// latched on the initial throughput seed outlives the estimate that
     /// justified it and commits a quality drop at the next boundary.
     ///
-    /// Reason predicate matches [`invalidate_pending`](Self::invalidate_pending):
-    /// manual and first-pick intents are not throughput claims, so a
-    /// throughput verdict cannot overrule them. A pending that already
-    /// targets `current` describes no divergence and is left untouched.
+    /// Narrower than [`invalidate_pending`](Self::invalidate_pending), which
+    /// drops every throughput-driven pending across a position jump: manual and
+    /// first-pick intents are not throughput claims, and a rescue is not one
+    /// either — see [`is_rescue`]. A pending that already targets `current`
+    /// describes no divergence and is left untouched.
     pub(crate) fn retract_throughput_pending(&self, current: VariantIndex) {
         let mut state = self.pending.lock();
-        if state
-            .pending
-            .as_ref()
-            .is_some_and(|p| is_throughput_driven(p.reason) && p.target != current)
-        {
+        if state.pending.as_ref().is_some_and(|p| {
+            is_throughput_driven(p.reason) && !is_rescue(p.reason) && p.target != current
+        }) {
             state.pending = None;
         }
     }
