@@ -327,12 +327,25 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
         self.duration
     }
 
+    /// The frames between a packet's timestamp and the PCM the decoder has
+    /// actually produced for it.
+    ///
+    /// Two ways of learning the same figure, and the larger one is the whole of
+    /// it. A decode that started at the head sees the decoder's strip split in
+    /// two: `timestamp_bias_frames` models part of it, and the remainder
+    /// surfaces as a timestamp jump this decoder records in
+    /// `timeline_gap_frames`. A decode that started mid-stream records no jump —
+    /// `seek` resyncs the frame offset onto the packet timestamp instead — so
+    /// for it only the directly observed strip is complete. Taking the maximum
+    /// leaves both with the same number, which is what a splice between them
+    /// cuts on.
     fn blender_profile(&self) -> BlenderProfile {
-        BlenderProfile::new(self.spec).with_timeline_gap_frames(
-            self.codec
-                .timestamp_bias_frames()
-                .saturating_add(self.timeline_gap_frames),
-        )
+        let modelled = self
+            .codec
+            .timestamp_bias_frames()
+            .saturating_add(self.timeline_gap_frames);
+        BlenderProfile::new(self.spec)
+            .with_timeline_gap_frames(self.codec.head_strip_frames().max(modelled))
     }
 
     fn flush_reader_signals(&mut self) {
