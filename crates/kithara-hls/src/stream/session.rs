@@ -269,6 +269,14 @@ impl HlsSession {
         self.variant_index
     }
 
+    /// Whether the reader's own consumption has made a deferred prefetch
+    /// decision stale. The session owns the byte cursor, so it is the session
+    /// that answers this; the variant only owns the threshold.
+    pub(crate) fn take_prefetch_resume(&self) -> bool {
+        self.variant
+            .take_prefetch_resume_at(self.position.load(Ordering::Acquire))
+    }
+
     pub(crate) fn advance(&self, bytes: u64) {
         let position = self.projected_position();
         self.advance_from(position, bytes);

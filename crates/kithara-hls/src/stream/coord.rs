@@ -459,8 +459,10 @@ impl HlsCoord {
         }
     }
 
-    fn variant_change_pending(&self) -> bool {
-        self.variant_generation.load(Ordering::Acquire) > self.fence_at.load(Ordering::Acquire)
+    /// Reads across the switch are still short-circuited — no decoder for
+    /// the new variant has started building yet.
+    pub(crate) fn variant_read_pending(&self) -> bool {
+        self.variant_generation.load(Ordering::Acquire) > self.read_gate_at.load(Ordering::Acquire)
     }
 
     /// Target variant of the outstanding switch; `None` once a decoder for
@@ -610,7 +612,6 @@ impl HlsCoord {
 
     delegate! {
         to self.active().as_ref() {
-            pub(crate) fn take_prefetch_resume(&self) -> bool;
             pub(crate) fn download_head(&self) -> u32;
             pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
         }

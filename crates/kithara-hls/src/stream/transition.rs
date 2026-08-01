@@ -425,6 +425,13 @@ impl HlsCoord {
         self.sessions.transition.lock().incoming.is_some()
     }
 
+    /// The reader's own consumption re-opening a deferred prefetch decision.
+    /// Answered by the session, which owns the byte cursor; the variant only
+    /// owns the threshold.
+    pub(crate) fn take_prefetch_resume(&self) -> bool {
+        self.active_session().take_prefetch_resume()
+    }
+
     pub(crate) fn active_session(&self) -> Arc<HlsSession> {
         self.sessions.active(|| {
             self.abr

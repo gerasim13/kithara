@@ -2,13 +2,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use kithara_decode::{DecoderSeekOutcome, PcmChunk, duration_for_frames};
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_stream::{SourceSeekAnchor, StreamType};
-use tracing::warn;
+use kithara_stream::StreamType;
 
 use crate::pipeline::{
     decode::DecoderGeneration,
     rebuild::{RecreateCause, RecreateNext, RecreateState},
-    seek::{SeekContext, SeekEngine, SeekRequest},
+    seek::{SeekContext, SeekEngine, SeekRequest, anchor},
     stream::shared::SharedStream,
 };
 
@@ -118,20 +117,18 @@ impl ResumeCursor {
             .media_info()
             .cloned()
             .or_else(|| ctx.stream.media_info())?;
+        // A route change keeps the container, so the rebuilt demuxer must start
+        // where the container starts — not at the byte the resume time maps to.
+        // Seeking the anchor by time lands past the init and the demuxer never
+        // sees its own header.
+        let offset = anchor::recreate_offset(
+            ctx.stream,
+            media_info.container,
+            false,
+            ctx.active.base_offset(),
+        )?;
         let epoch = ctx.seek.epoch();
         let target = self.resume_position(epoch, ctx.committed, None);
-        let offset = match ctx.stream.seek_time_anchor(target) {
-            Ok(Some(SourceSeekAnchor { byte_offset, .. })) => byte_offset,
-            Ok(None) => ctx.active.base_offset(),
-            Err(err) => {
-                warn!(
-                    ?err,
-                    ?target,
-                    "route-change recreate anchor resolution failed"
-                );
-                ctx.active.base_offset()
-            }
-        };
         self.decoder_rate = host_rate;
         Some(RecreateState {
             cause: RecreateCause::RouteChange,

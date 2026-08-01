@@ -17,20 +17,21 @@ impl HlsVariant {
         self.flow.prefetch_resume_at.store(byte, Ordering::Release);
     }
 
-    /// Whether the reader just made the deferred dispatch decision stale.
-    /// Consumes the threshold, so it answers `true` exactly once per deferred
-    /// segment: the next `dispatch` publishes the threshold for the segment
-    /// after it. This is the reader's own progress re-opening a decision that
-    /// was taken against an older cursor — no timer re-checks it.
+    /// Whether the reader at `consumed` just made the deferred dispatch
+    /// decision stale. Consumes the threshold, so it answers `true` exactly once
+    /// per deferred segment: the next `dispatch` publishes the threshold for the
+    /// segment after it. This is the reader's own progress re-opening a decision
+    /// that was taken against an older cursor — no timer re-checks it.
     ///
-    /// Progress is read from the prefetch anchor, because that is where the
-    /// reader is in this model: the session owns the byte cursor and publishes
-    /// it here on every projected position, so the variant has no separate
-    /// position of its own to compare against.
-    pub(crate) fn take_prefetch_resume(&self) -> bool {
+    /// The caller supplies the position because the two facts have different
+    /// owners: the variant plans, so it owns the threshold; the session reads,
+    /// so it owns the byte cursor. Reading the variant's own prefetch anchor
+    /// instead answers a different question — where the reader is *aimed*, not
+    /// how far it has *consumed* — and leaves the peer asleep on real progress.
+    pub(crate) fn take_prefetch_resume_at(&self, consumed: u64) -> bool {
         let at = self.flow.prefetch_resume_at.load(Ordering::Acquire);
         at != u64::MAX
-            && self.prefetch_anchor() >= at
+            && consumed >= at
             && self
                 .flow
                 .prefetch_resume_at
