@@ -2037,12 +2037,7 @@ fn wait_range_probes_without_sleeping() {
 
     let started = Instant::now();
     let outcome = v.wait_range(0..1, Some(Duration::from_millis(10)));
-    // Both ends read the same clock. `Instant::now()` is rewritten onto virtual
-    // time inside a test body while `Instant::elapsed()` — a method, not a
-    // recognised path — is not, so `started.elapsed()` subtracts a virtual
-    // instant from a real one and reports the offset between the two scales.
-    // Under load that offset alone blows any millisecond budget.
-    let elapsed = Instant::now().saturating_duration_since(started);
+    let elapsed = started.elapsed();
 
     assert!(
         matches!(
@@ -2075,7 +2070,7 @@ fn wait_range_flush_short_circuits_without_sleeping() {
     let _ = SeekControl::begin(&*seek, Duration::from_millis(10));
     let started = Instant::now();
     let interrupted = v.wait_range(0..1, Some(Duration::from_millis(10)));
-    let elapsed = Instant::now().saturating_duration_since(started);
+    let elapsed = started.elapsed();
     assert!(
         matches!(interrupted, Ok(WaitOutcome::Interrupted)),
         "flushing seek state must Interrupt the probe, got {interrupted:?}"

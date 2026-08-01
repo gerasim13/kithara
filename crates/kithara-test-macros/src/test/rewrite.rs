@@ -1,6 +1,6 @@
 use proc_macro2::Span;
 use syn::{
-    Expr, ExprCall, ExprPath,
+    Expr, ExprCall, ExprPath, Ident,
     visit_mut::{self, VisitMut},
 };
 
@@ -36,6 +36,38 @@ pub(crate) struct FlashRewrite {
     /// virtual body — the mixed-clock hazard above. The caller turns these
     /// into a compile error.
     pub(crate) bare_time_calls: Vec<(Span, String)>,
+    /// Locals currently bound to a rewritten `Instant::now()`. `.elapsed()` on
+    /// one of these subtracts a virtual instant from a real one — the same
+    /// mixed-clock hazard as a bare `sleep`, but silent: it compiles, runs, and
+    /// reports the offset between the two scales as if it were a duration. The
+    /// matcher cannot key on the method name alone, because `elapsed` belongs to
+    /// several types; keying on the binding is exact.
+    virtual_instants: Vec<String>,
+}
+
+impl FlashRewrite {
+    /// Whether `expr` is a call that [`virtual_path`] has already retargeted
+    /// onto `flash::virtual_now`.
+    fn is_virtual_now(expr: &Expr) -> bool {
+        let Expr::Call(call) = expr else {
+            return false;
+        };
+        let Expr::Path(path) = &*call.func else {
+            return false;
+        };
+        path.path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "virtual_now")
+    }
+
+    fn track_binding(&mut self, name: &Ident, init: &Expr) {
+        self.virtual_instants
+            .retain(|bound| bound != &name.to_string());
+        if Self::is_virtual_now(init) {
+            self.virtual_instants.push(name.to_string());
+        }
+    }
 }
 
 impl VisitMut for FlashRewrite {
@@ -56,6 +88,52 @@ impl VisitMut for FlashRewrite {
         }
         // Recurse into args and nested calls (the func above was already mapped).
         visit_mut::visit_expr_call_mut(self, call);
+    }
+
+    /// Remember `let started = Instant::now();` — and forget the name again if a
+    /// later binding shadows it with anything else.
+    fn visit_local_mut(&mut self, local: &mut syn::Local) {
+        visit_mut::visit_local_mut(self, local);
+        let syn::Pat::Ident(pat) = &local.pat else {
+            return;
+        };
+        if let Some(init) = &local.init
+            && init.diverge.is_none()
+        {
+            self.track_binding(&pat.ident, &init.expr);
+        }
+    }
+
+    /// Put both ends of the measurement on the same clock. `started.elapsed()`
+    /// becomes `virtual_now().saturating_duration_since(started)` when `started`
+    /// holds a virtual instant, and is left untouched otherwise — so a body that
+    /// deliberately measures the real clock through a `RealInstant` alias keeps
+    /// doing exactly that.
+    fn visit_expr_mut(&mut self, expr: &mut Expr) {
+        visit_mut::visit_expr_mut(self, expr);
+        let Expr::MethodCall(call) = expr else {
+            return;
+        };
+        if call.method != "elapsed" || !call.args.is_empty() || call.turbofish.is_some() {
+            return;
+        }
+        let Expr::Path(receiver) = &*call.receiver else {
+            return;
+        };
+        let Some(ident) = receiver.path.get_ident() else {
+            return;
+        };
+        if !self
+            .virtual_instants
+            .iter()
+            .any(|bound| bound == &ident.to_string())
+        {
+            return;
+        }
+        *expr = syn::parse_quote!(
+            ::kithara_test_utils::kithara_platform::flash::virtual_now()
+                .saturating_duration_since(#ident)
+        );
     }
 }
 
