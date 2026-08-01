@@ -994,14 +994,12 @@ fn incoming_reader_preparation_keeps_the_landing_fetch_anchor() {
     assert_eq!(preparation.anchor().segment_index, Some(2));
     assert_eq!(preparation.anchor().byte_offset, 248);
     assert!(queue_has_init(&v));
-    // The landing leads: readiness waits on its window alone, so anything
-    // queued ahead of it is served first and costs the switch a whole segment.
-    // The plan still reaches one segment behind the landing even here, where
-    // byte sizes are exact — a demuxer parks at the packet boundary at or
-    // before the landing, and the landing is a segment start, so its first
-    // packet begins in segment 1. Exactness of byte sizes says nothing about
-    // the packet grid. It just follows the landing instead of leading it.
-    assert_eq!(queue_seg_indices(&v), vec![2, 1, 3, 4]);
+    // The plan reaches one segment behind the landing even here, where byte
+    // sizes are exact: a demuxer parks at the packet boundary at or before the
+    // landing, and the landing is a segment start, so its first packet begins in
+    // segment 1. Exactness of byte sizes says nothing about the packet grid.
+    // Nothing else precedes the landing — no head-of-stream decoder probe.
+    assert_eq!(queue_seg_indices(&v), vec![1, 2, 3, 4]);
     // Only the plan reaches back — the anchor the reader is opened at, and the
     // prefetch it drives, both stay on the landing.
     assert_eq!(v.prefetch_anchor(), 248);
@@ -1048,11 +1046,11 @@ fn incoming_session_leads_with_the_landing_and_skips_everything_before_it() {
     assert_eq!(session.position(), 0);
     assert!(!v.seek_projection_is_live());
     assert!(queue_has_init(&v));
-    // Landing first, its backoff second, then forward. Nothing ahead of the
-    // landing, and no head-of-stream decoder probe: this reader opens on the
-    // landing anchor and seeks straight to it, so it never reads segment 0 —
+    // The landing's backoff, the landing, then forward — and nothing before
+    // them. No head-of-stream decoder probe: this reader opens on the landing
+    // anchor and seeks straight to it, so it never reads segment 0, and
     // fetching it only delays the segment readiness is waiting for.
-    assert_eq!(queue_seg_indices(&v), vec![4, 3, 5]);
+    assert_eq!(queue_seg_indices(&v), vec![3, 4, 5]);
     assert!(
         queue_seg_indices(&v)
             .iter()
@@ -1103,7 +1101,11 @@ fn incoming_session_dispatches_only_the_decoder_construction_window() {
 
     let commands = session.dispatch_constructing(&ctx, 10);
 
-    assert_eq!(commands.len(), 3, "init, landing, and its backoff");
+    assert_eq!(
+        commands.len(),
+        3,
+        "init, the landing backoff, and the landing"
+    );
     assert_eq!(queue_seg_indices(&v), vec![5, 6, 7, 8, 9]);
     assert!(session.dispatch_constructing(&ctx, 10).is_empty());
 

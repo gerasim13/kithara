@@ -76,34 +76,6 @@ impl HlsVariant {
         queue.extend(init.chain(probe).chain(tail));
     }
 
-    /// Fetch plan for a reader being prepared to land on `landing`.
-    ///
-    /// The landing segment leads. It is the only one the readiness gate waits
-    /// for, and that gate is what holds the switch: whatever precedes it in the
-    /// queue is served first and delays the transition by a whole segment.
-    /// `landing - 1` is still planned — a demuxer handed a landing time parks at
-    /// the packet boundary at or before it, which falls in the previous segment
-    /// when the landing sits at a segment start — it just follows the landing
-    /// instead of leading it.
-    pub(super) fn rebuild_reader_queue(&self, landing: u32) {
-        let segs_len = self.num_segments();
-        let init = self
-            .needs_init_fetch()
-            .then_some(PlannedFetch::Init)
-            .into_iter();
-        let head = (landing < segs_len)
-            .then_some(PlannedFetch::Segment(landing))
-            .into_iter();
-        let behind = landing
-            .checked_sub(1)
-            .map(PlannedFetch::Segment)
-            .into_iter();
-        let rest = (landing.saturating_add(1)..segs_len).map(PlannedFetch::Segment);
-        let mut queue = self.flow.queue.lock();
-        queue.clear();
-        queue.extend(init.chain(head).chain(behind).chain(rest));
-    }
-
     /// Same as [`Self::rebuild`] but also enqueues `seg 0` when
     /// `from_seg > 0`, so the decoder factory's probe has the container
     /// header to construct the codec. See the crate `CONTEXT.md`
