@@ -341,9 +341,10 @@ label; `gallery-toggles` contains two toggles, two checkboxes, and a label.
 `gallery-buttons-tab` contains six activation buttons and two inert text labels; its micro
 play/pause cell reaches the draw seam as a Lucide font glyph. `gallery-cells-tab` is the first hosted
 page with mixed interaction ownership: in document order its exact engine descriptor inventory is
-two activations for cue and play, one segmented descriptor with `item_count: 4`, and four
-activations for its two toggles and two checkboxes. Its chips, cells, select, and status dots remain
-iced-answered controls, and input the engine does not answer continues unchanged through the child.
+two activations for cue and play, four base-painted chip activations, one segmented descriptor with
+`item_count: 4`, and four activations for its two toggles and two checkboxes. Its cells, select, and
+status dots remain iced-answered controls, and unanswered input continues unchanged through the
+child.
 `gallery-faders-tab` has one descriptor kind for both configurations: the default fader has an
 optional drag step, the Volume fader keeps continuous drag plus its own wheel step, and the vertical
 VU keeps its scalar descriptor. The page's telemetry `Scalar` is an inert readout and is not hosted.

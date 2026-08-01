@@ -498,7 +498,10 @@ impl HostedControl {
                 })
             }
             (
-                ControlSpec::TabLarge { .. } | ControlSpec::Toggle | ControlSpec::Checkbox,
+                ControlSpec::TabLarge { .. }
+                | ControlSpec::Toggle
+                | ControlSpec::Checkbox
+                | ControlSpec::Chip { .. },
                 Some(ReadValue::Bool(_)),
             ) => Some(Self::Activation {
                 path: path.to_owned(),
@@ -764,6 +767,7 @@ mod tests {
                     EndpointCategory::Model,
                     "gallery.label.meters"
                     | "gallery.label.toggles"
+                    | "gallery.label.chips"
                     | "gallery.label.transport"
                     | "gallery.label.regular"
                     | "gallery.label.text"
@@ -822,6 +826,7 @@ mod tests {
                 "mock.cells.segmented" => Some(ReadValue::Scalar(2.0)),
                 "gallery.label.meters" => Some(ReadValue::Text("VU / STEREO / VERTICAL")),
                 "gallery.label.toggles" => Some(ReadValue::Text("TOGGLES / CHECKBOXES")),
+                "gallery.label.chips" => Some(ReadValue::Text("CHIP")),
                 "gallery.label.transport" => Some(ReadValue::Text("TRANSPORT")),
                 "gallery.label.regular" => Some(ReadValue::Text("REGULAR")),
                 "gallery.label.text" => Some(ReadValue::Text("TEXT STYLES")),
@@ -912,6 +917,13 @@ mod tests {
         compiled_gallery_primitive(
             "toggles",
             include_str!("../../../examples/gallery/assets/modules/primitives/toggles.kmodule.ron"),
+        )
+    }
+
+    fn compiled_gallery_chips() -> CompiledUi {
+        compiled_gallery_primitive(
+            "chips",
+            include_str!("../../../examples/gallery/assets/modules/primitives/chips.kmodule.ron"),
         )
     }
 
@@ -1104,7 +1116,10 @@ mod tests {
                 {
                     components.push("activation");
                 }
-                ControlSpec::TabLarge { .. } | ControlSpec::Toggle | ControlSpec::Checkbox => {
+                ControlSpec::TabLarge { .. }
+                | ControlSpec::Toggle
+                | ControlSpec::Checkbox
+                | ControlSpec::Chip { .. } => {
                     components.push("activation");
                 }
                 ControlSpec::Segmented { .. } => {
@@ -1615,6 +1630,107 @@ mod tests {
     }
 
     #[kithara::test]
+    fn gallery_chips_host_their_exact_activation_inventory() {
+        let ui = compiled_gallery_chips();
+        let reads = FixtureReads::default();
+        let CompiledNode::Module { instance, root, .. } = &ui.root else {
+            panic!("gallery fixture root must be a module");
+        };
+        let ExpandedNode::Column { children, .. } = root.as_ref() else {
+            panic!("gallery atoms root must be a column");
+        };
+        let chips = &children[1];
+
+        assert!(ui.includes_module(*instance, &[1], "gallery-chips"));
+        let mut components = Vec::new();
+        claimed_components(chips, &mut components);
+        assert_eq!(components, ["activation"; 2]);
+
+        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full_tree = Tree::new(full.as_widget());
+        assert_eq!(
+            host_count(&full_tree),
+            1,
+            "only the chips include owns an engine"
+        );
+
+        let renderer = headless_renderer();
+        let viewport = Size::new(100.0, 80.0);
+        let child = super::super::node::render_engine_node(
+            chips,
+            &[1],
+            *instance,
+            &ui,
+            &reads,
+            builtin::skin(),
+        );
+        let mut element = host(child, chips, &ui, &reads, builtin::skin());
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let hosted = HostedLayout::new(chips, &ui, &reads, builtin::skin());
+        let descriptors = hosted.descriptors();
+        assert_eq!(
+            descriptors.iter().map(descriptor_path).collect::<Vec<_>>(),
+            ["atoms/chips/active", "atoms/chips/inactive"]
+        );
+        assert!(
+            descriptors
+                .iter()
+                .all(|descriptor| matches!(descriptor, Descriptor::Activation { .. }))
+        );
+
+        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        assert_eq!(
+            targets.iter().map(|target| target.path).collect::<Vec<_>>(),
+            ["atoms/chips/active", "atoms/chips/inactive"]
+        );
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        for expected_path in ["atoms/chips/active", "atoms/chips/inactive"] {
+            let target = targets
+                .iter()
+                .find(|target| target.path == expected_path)
+                .unwrap_or_else(|| panic!("the hosted `{expected_path}` target must exist"));
+            let area = target.hit.area();
+            let cursor =
+                Cursor::Available(Point::new(area.x + area.w / 2.0, area.y + area.h / 2.0));
+            let mut shell = Shell::new(&mut messages);
+            element.as_widget_mut().update(
+                &mut tree,
+                &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+                Layout::new(&node),
+                cursor,
+                &renderer,
+                &mut clipboard,
+                &mut shell,
+                &Rectangle::with_size(viewport),
+            );
+            assert!(
+                !shell.is_event_captured(),
+                "activation publishes without retaining the engine capture slot"
+            );
+        }
+
+        assert_eq!(
+            messages,
+            [
+                UiEvent::Control {
+                    path: "atoms/chips/active".to_owned(),
+                    action: ControlAction::Activate,
+                },
+                UiEvent::Control {
+                    path: "atoms/chips/inactive".to_owned(),
+                    action: ControlAction::Activate,
+                },
+            ]
+        );
+    }
+
+    #[kithara::test]
     fn gallery_buttons_share_the_host_activation_component() {
         let ui = compiled_gallery_buttons();
         let reads = FixtureReads::default();
@@ -1774,6 +1890,10 @@ mod tests {
             [
                 "activation",
                 "activation",
+                "activation",
+                "activation",
+                "activation",
+                "activation",
                 "segmented",
                 "activation",
                 "activation",
@@ -1810,6 +1930,10 @@ mod tests {
             [
                 "cells/cue",
                 "cells/play",
+                "cells/deck-b",
+                "cells/deck-a",
+                "cells/fx-1",
+                "cells/fx-2",
                 "cells/beat",
                 "cells/toggle-off",
                 "cells/toggle-on",
@@ -1820,6 +1944,10 @@ mod tests {
         assert!(matches!(
             descriptors.as_slice(),
             [
+                Descriptor::Activation { .. },
+                Descriptor::Activation { .. },
+                Descriptor::Activation { .. },
+                Descriptor::Activation { .. },
                 Descriptor::Activation { .. },
                 Descriptor::Activation { .. },
                 Descriptor::Segmented { item_count: 4, .. },

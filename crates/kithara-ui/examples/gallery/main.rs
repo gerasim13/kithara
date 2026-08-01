@@ -627,6 +627,19 @@ mod tests {
     }
 
     #[kithara::test]
+    fn the_hosted_chips_keep_their_descriptor_backed_controls() {
+        assert_hosted_page_claims(
+            Tab::Atoms,
+            "chips",
+            |path| path.contains("/chips/"),
+            &[
+                ("atoms/chips/active", "activation"),
+                ("atoms/chips/inactive", "activation"),
+            ],
+        );
+    }
+
+    #[kithara::test]
     fn the_hosted_buttons_keep_their_descriptor_backed_controls() {
         assert_hosted_page_claims(
             Tab::Buttons,
@@ -717,7 +730,8 @@ mod tests {
             | ControlSpec::NavItem { .. }
             | ControlSpec::TabLarge { .. }
             | ControlSpec::Toggle
-            | ControlSpec::Checkbox => Some("activation"),
+            | ControlSpec::Checkbox
+            | ControlSpec::Chip { .. } => Some("activation"),
             ControlSpec::Crossfader { .. } => Some("crossfader"),
             ControlSpec::Fader { .. } => Some("fader"),
             ControlSpec::Knob { .. } => Some("knob"),

@@ -146,7 +146,9 @@ pub(super) fn render_control<'a>(
             tone,
             framed,
         } => readout(*label, *tone, *framed, value, ui, skin),
-        ControlSpec::Chip { label, style } => chip(path, ui.resolve(*label), *style, value, skin),
+        ControlSpec::Chip { label, style } => {
+            chip(path, ui.resolve(*label), *style, value, skin, owner)
+        }
         ControlSpec::Knob { label } => {
             knob(path, label.map(|id| ui.resolve(id)), value, skin, owner)
         }

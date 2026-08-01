@@ -4,7 +4,6 @@ use num_traits::cast::AsPrimitive;
 use super::geometry::active_tone;
 use crate::{
     atoms::{
-        chip::Chip,
         design::{
             cell::Cell, crossfader::Crossfader, meter::Meter, segmented::Segmented, select::Select,
             status_dot::StatusDot, swatch::Swatch,
@@ -71,15 +70,9 @@ pub(super) fn chip<'a>(
     style: ChipStyle,
     value: Option<&ReadValue<'_>>,
     skin: &'a Skin,
+    owner: InputOwner,
 ) -> Element<'a, UiEvent> {
-    Chip::builder()
-        .path(path)
-        .label(label)
-        .style(style)
-        .maybe_value(value)
-        .skin(skin)
-        .build()
-        .view()
+    crate::render::controls::chip(path, label, style, value, skin, owner)
 }
 
 pub(super) fn toggle<'a>(
