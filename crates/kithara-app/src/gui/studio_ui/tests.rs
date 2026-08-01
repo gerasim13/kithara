@@ -224,6 +224,40 @@ fn every_channel_strip_carries_the_supported_control_set() {
     }
 }
 
+/// The strip runs under a retained engine host that answers pointer input for
+/// its whole subtree, so a control the engine does not know would render and
+/// then quietly ignore the mouse.
+#[kithara::test]
+fn every_strip_control_is_one_the_engine_host_can_answer() {
+    for layout in LAYOUTS {
+        let ui = compile_studio(layout).unwrap();
+        let mut seen = 0;
+        each_node(&ui, &mut |node| {
+            let ExpandedNode::Control { path, spec, .. } = node else {
+                return;
+            };
+            let path = ui.resolve(*path);
+            if !["mixer/a/", "mixer/b/"]
+                .iter()
+                .any(|strip| path.starts_with(strip))
+            {
+                return;
+            }
+            seen += 1;
+            assert!(
+                matches!(
+                    spec,
+                    ControlSpec::Knob { .. }
+                        | ControlSpec::VuVertical { .. }
+                        | ControlSpec::Text { .. }
+                ),
+                "`{path}` sits inside the hosted strip but is not a control the engine answers"
+            );
+        });
+        assert!(seen > 0, "{layout:?} compiled no strip controls at all");
+    }
+}
+
 #[kithara::test]
 fn studio_hides_controls_outside_the_supported_playback_contract() {
     let ui = compile_studio(DeckLayout::Dual).unwrap();
