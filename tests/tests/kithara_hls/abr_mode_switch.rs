@@ -502,11 +502,18 @@ async fn vod_manual_switch_affects_future_segments() {
 
     let v0 = segments.iter().filter(|s| s.variant == 0).count();
     let v1 = segments.iter().filter(|s| s.variant == 1).count();
+    let mut v0_net: Vec<usize> = segments
+        .iter()
+        .filter(|s| s.variant == 0 && !s.cached)
+        .map(|s| s.segment_index)
+        .collect();
+    v0_net.sort_unstable();
     info!(
         switches,
         total_segments = segments.len(),
         v0,
         v1,
+        ?v0_net,
         "VOD test result"
     );
 
@@ -554,9 +561,14 @@ async fn vod_manual_switch_affects_future_segments() {
         net_v1.iter().max()
     );
     let v0_max = net_v0.iter().max().copied().unwrap_or(0);
+    let mut v0_fetched: Vec<usize> = net_v0.iter().copied().collect();
+    v0_fetched.sort_unstable();
     assert!(
         v0_max < last_seg,
-        "V0 must stop at an early prefix after downswitch, not reach the end. v0_max={v0_max}, last={last_seg}"
+        "V0 must stop at an early prefix after downswitch, not reach the end. \
+         v0_max={v0_max}, last={last_seg}, switch_count={switches}, \
+         applied_targets={targets:?}, v0_network_segments={v0_fetched:?}, \
+         reader_segments={reader_segments:?}"
     );
 }
 
