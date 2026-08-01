@@ -2,6 +2,7 @@ use crate::draw::{Pt, Rect};
 
 #[derive(Clone, Copy)]
 pub(crate) enum Input {
+    ModifiersChanged(Modifiers),
     PointerDown,
     /// `at` is where the host says the pointer went. It answers a different
     /// question from [`Hit::at`] and the two are not interchangeable: this one
@@ -14,6 +15,21 @@ pub(crate) enum Input {
     },
     PointerUp,
     Wheel(Scroll),
+}
+
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+pub(crate) struct Modifiers {
+    shift: bool,
+}
+
+impl Modifiers {
+    pub(crate) const fn new(shift: bool) -> Self {
+        Self { shift }
+    }
+
+    pub(crate) const fn shift(self) -> bool {
+        self.shift
+    }
 }
 
 #[derive(Clone, Copy)]

@@ -1,13 +1,17 @@
 use iced::{
     Event, Point, Rectangle,
+    keyboard::Event as KeyboardEvent,
     mouse::{self, Button, Cursor, ScrollDelta},
 };
 
-use super::{CursorShape, Hit, Input, Scroll};
+use super::{CursorShape, Hit, Input, Modifiers, Scroll};
 use crate::draw::{Pt, Rect};
 
 pub(crate) fn input(event: &Event) -> Option<Input> {
     match event {
+        Event::Keyboard(KeyboardEvent::ModifiersChanged(modifiers)) => {
+            Some(Input::ModifiersChanged(Modifiers::new(modifiers.shift())))
+        }
         Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) => Some(Input::PointerDown),
         Event::Mouse(mouse::Event::CursorMoved { position }) => Some(Input::PointerMoved {
             at: (*position).into(),
@@ -69,7 +73,7 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    fn a_key_carries_no_portable_input() {
+    fn key_presses_and_releases_carry_no_portable_input() {
         let pressed = Event::Keyboard(keyboard::Event::KeyPressed {
             key: keyboard::Key::Named(Named::Delete),
             modified_key: keyboard::Key::Named(Named::Delete),
@@ -79,12 +83,31 @@ mod tests {
             text: None,
             repeat: false,
         });
+        let released = Event::Keyboard(keyboard::Event::KeyReleased {
+            key: keyboard::Key::Named(Named::Delete),
+            modified_key: keyboard::Key::Named(Named::Delete),
+            physical_key: Physical::Code(keyboard::key::Code::Delete),
+            location: Location::Standard,
+            modifiers: Modifiers::empty(),
+        });
 
-        assert!(
-            input(&pressed).is_none(),
-            "a key that becomes portable input would be answered by the engine host and never \
-             reach the child, which is where the app's unconsumed-key contract lives"
-        );
+        for key in [&pressed, &released] {
+            assert!(
+                input(key).is_none(),
+                "key presses and releases stay with the child; a modifiers change is portable \
+                 state, not a key event"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn a_modifiers_change_is_portable_input() {
+        let changed = Event::Keyboard(keyboard::Event::ModifiersChanged(Modifiers::SHIFT));
+
+        let Some(Input::ModifiersChanged(modifiers)) = input(&changed) else {
+            panic!("the retained hero wave needs the current modifiers before it sees a press");
+        };
+        assert!(modifiers.shift());
     }
 
     #[kithara::test]

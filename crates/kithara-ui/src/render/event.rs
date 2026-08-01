@@ -62,10 +62,17 @@ pub(crate) fn activate(path: &str, outcome: Outcome<()>) -> Option<Action<UiEven
     action(outcome, |()| control_event(path, ControlAction::Activate))
 }
 
-pub(crate) fn engine(path: &str, outcome: Outcome<EngineEvent>) -> Option<Action<UiEvent>> {
+pub(crate) fn engine(
+    path: &str,
+    child: Option<&str>,
+    outcome: Outcome<EngineEvent>,
+) -> Option<Action<UiEvent>> {
     let captured = outcome.is_captured();
     match outcome.value() {
-        Some(EngineEvent::Scalar(value)) => scalar(path, typed_outcome(value, captured)),
+        Some(EngineEvent::Scalar(value)) => child.map_or_else(
+            || scalar(path, typed_outcome(value, captured)),
+            |child| Some(scalar_child(path, child, value)),
+        ),
         Some(EngineEvent::Activate) => activate(path, typed_outcome((), captured)),
         None => captured.then(Action::capture),
     }
@@ -161,4 +168,29 @@ pub enum UiEvent {
     OpenSettings,
     LibraryQuery(String),
     Window(WindowCommand),
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn an_engine_child_emission_binds_under_the_control_path() {
+        let action = engine(
+            "deck-a/wave",
+            Some("loop_start"),
+            Outcome::set(EngineEvent::Scalar(0.375)),
+        )
+        .unwrap_or_else(|| panic!("a child scalar emission must publish"));
+
+        assert_eq!(
+            action.into_inner().0,
+            Some(UiEvent::Control {
+                path: "deck-a/wave/loop_start".to_owned(),
+                action: ControlAction::SetScalar(0.375),
+            })
+        );
+    }
 }

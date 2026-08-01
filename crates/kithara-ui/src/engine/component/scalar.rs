@@ -45,10 +45,18 @@ impl Component for ScalarComponent {
         self.kind
     }
 
-    fn handle(&mut self, input: Input, hit: &Hit, now: Instant) -> Outcome<EngineEvent> {
-        self.scalar
-            .on_input(&mut self.state, input, hit, now)
-            .map(EngineEvent::Scalar)
+    fn handle(
+        &mut self,
+        input: Input,
+        hit: &Hit,
+        now: Instant,
+    ) -> (Outcome<EngineEvent>, Option<&'static str>) {
+        (
+            self.scalar
+                .on_input(&mut self.state, input, hit, now)
+                .map(EngineEvent::Scalar),
+            None,
+        )
     }
 
     fn cursor(&self, hit: &Hit) -> CursorShape {

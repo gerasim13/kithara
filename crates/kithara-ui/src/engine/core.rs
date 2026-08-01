@@ -44,6 +44,10 @@ impl Engine {
     pub(crate) fn cursor(&self, targets: &[Target<'_>]) -> CursorShape {
         self.router.cursor(&self.components, targets)
     }
+
+    pub(crate) const fn captures_pointer(&self) -> bool {
+        self.router.captures_pointer()
+    }
 }
 
 #[cfg(test)]
@@ -53,7 +57,7 @@ mod tests {
     use super::{super::model::EngineEvent, *};
     use crate::{
         draw::{Pt, Rect},
-        interact::{Hit, Outcome, Scroll},
+        interact::{Hit, Modifiers, Outcome, Scroll},
     };
 
     fn knob(path: &str, current: f32) -> Descriptor {
@@ -94,7 +98,10 @@ mod tests {
                 &[target(path, 50.0, 50.0)],
                 Instant::now(),
             )
-            .map(|emission| (emission.outcome.value(), emission.is_captured()));
+            .map(|emission| {
+                let captured = emission.outcome.is_captured();
+                (emission.outcome.value(), captured)
+            });
         assert_eq!(press, Some((Some(EngineEvent::Activate), true)));
 
         assert!(
@@ -154,6 +161,10 @@ mod tests {
             )
             .map(|emission| emission.outcome.value());
         assert_eq!(activation, Some(Some(EngineEvent::Activate)));
+        assert!(
+            !engine.captures_pointer(),
+            "a captured activation outcome must not occupy the router capture slot"
+        );
 
         let scalar = engine
             .handle(
@@ -172,7 +183,7 @@ mod tests {
         let meter = "gallery/meters/level";
         engine.reconcile([
             Descriptor::vertical_vu(meter.to_owned()),
-            Descriptor::wave(wave.to_owned(), false, 0.25, 0.8),
+            Descriptor::wave(wave.to_owned()),
         ]);
 
         let press = engine
@@ -182,12 +193,16 @@ mod tests {
                 Instant::now(),
             )
             .map(|emission| {
-                let captured = emission.is_captured();
+                let captured = emission.outcome.is_captured();
                 (emission.path, emission.outcome.value(), captured)
             });
         assert_eq!(
             press,
             Some((wave.to_owned(), Some(EngineEvent::Scalar(0.25)), true,))
+        );
+        assert!(
+            !engine.captures_pointer(),
+            "a click wave answers the press without retaining the pointer"
         );
 
         let next = engine
@@ -204,17 +219,64 @@ mod tests {
     }
 
     #[kithara::test]
-    fn beats_wave_refreshes_its_track_and_keeps_grip_outside_bounds() {
+    fn hero_wave_shift_drag_publishes_child_endpoints_and_releases_capture() {
+        let mut engine = Engine::default();
+        let path = "deck-a/wave";
+        let now = Instant::now();
+        engine.reconcile([Descriptor::hero_wave(
+            path.to_owned(),
+            0.5,
+            0.5,
+            0.25..0.75,
+            0.625,
+            0.4,
+        )]);
+
+        assert!(
+            engine
+                .handle(
+                    Input::ModifiersChanged(Modifiers::new(true)),
+                    &[target(path, 25.0, 50.0)],
+                    now,
+                )
+                .is_none()
+        );
+        let start = engine
+            .handle(Input::PointerDown, &[target(path, 25.0, 50.0)], now)
+            .unwrap_or_else(|| panic!("a shifted press must publish the loop start"));
+        assert_eq!(start.child, Some("loop_start"));
+        assert_eq!(start.outcome.value(), Some(EngineEvent::Scalar(0.375)));
+        assert!(engine.captures_pointer());
+
+        let end = engine
+            .handle(
+                Input::PointerMoved {
+                    at: Pt { x: 75.0, y: 50.0 },
+                },
+                &[target(path, 75.0, 50.0)],
+                now,
+            )
+            .unwrap_or_else(|| panic!("a shifted drag must publish the loop end"));
+        assert_eq!(end.child, Some("loop_end"));
+        assert_eq!(end.outcome.value(), Some(EngineEvent::Scalar(0.625)));
+        assert!(engine.captures_pointer());
+
+        let release = engine
+            .handle(Input::PointerUp, &[target(path, 75.0, 50.0)], now)
+            .unwrap_or_else(|| panic!("the loop release must finish the gesture"));
+        assert_eq!(release.child, None);
+        assert_eq!(release.outcome, Outcome::captured());
+        assert!(!engine.captures_pointer());
+    }
+
+    #[kithara::test]
+    fn hero_wave_refreshes_its_plain_drag_and_keeps_grip_outside_bounds() {
         let mut engine = Engine::default();
         let wave = "deck-a/wave";
         let meter = "gallery/meters/level";
         engine.reconcile([
             Descriptor::vertical_vu(meter.to_owned()),
-            Descriptor::wave(wave.to_owned(), false, 0.5, 0.25),
-        ]);
-        engine.reconcile([
-            Descriptor::vertical_vu(meter.to_owned()),
-            Descriptor::wave(wave.to_owned(), true, 0.5, 0.75),
+            Descriptor::hero_wave(wave.to_owned(), 0.5, 0.75, 0.5..1.0, 0.5, 0.4),
         ]);
 
         let press = engine
@@ -225,10 +287,11 @@ mod tests {
             )
             .map(|emission| (emission.path, emission.outcome));
         assert_eq!(press, Some((wave.to_owned(), Outcome::captured())));
+        assert!(engine.captures_pointer());
 
         engine.reconcile([
             Descriptor::vertical_vu(meter.to_owned()),
-            Descriptor::wave(wave.to_owned(), true, 0.25, 0.0),
+            Descriptor::hero_wave(wave.to_owned(), 0.25, 0.0, 0.0..0.25, 0.3, 0.2),
         ]);
         let moved = engine
             .handle(
@@ -242,6 +305,69 @@ mod tests {
         assert_eq!(
             moved,
             Some((wave.to_owned(), Some(EngineEvent::Scalar(0.5))))
+        );
+    }
+
+    #[kithara::test]
+    fn hero_wave_wheel_publishes_zoom_without_holding_capture() {
+        let mut engine = Engine::default();
+        let path = "deck-a/wave";
+        engine.reconcile([Descriptor::hero_wave(
+            path.to_owned(),
+            0.5,
+            0.5,
+            0.25..0.75,
+            0.625,
+            0.4,
+        )]);
+
+        for (delta, expected) in [(1.0, 0.625), (-1.0, 0.4), (0.0, 0.4)] {
+            let emission = engine
+                .handle(
+                    Input::Wheel(Scroll::Lines(delta)),
+                    &[target(path, 50.0, 50.0)],
+                    Instant::now(),
+                )
+                .unwrap_or_else(|| panic!("a hero wave wheel must publish zoom"));
+            assert_eq!(emission.child, Some("zoom"));
+            assert_eq!(
+                emission.outcome.value(),
+                Some(EngineEvent::Scalar(expected))
+            );
+            assert!(!engine.captures_pointer());
+        }
+    }
+
+    #[kithara::test]
+    fn changing_wave_style_rebuilds_state_and_clears_hero_capture() {
+        let mut engine = Engine::default();
+        let path = "deck-a/wave";
+        let now = Instant::now();
+        engine.reconcile([Descriptor::hero_wave(
+            path.to_owned(),
+            0.5,
+            0.5,
+            0.25..0.75,
+            0.625,
+            0.4,
+        )]);
+        engine.handle(Input::PointerDown, &[target(path, 50.0, 50.0)], now);
+        assert!(engine.captures_pointer());
+
+        engine.reconcile([Descriptor::wave(path.to_owned())]);
+
+        assert!(!engine.captures_pointer());
+        assert!(
+            engine
+                .handle(
+                    Input::PointerMoved {
+                        at: Pt { x: 75.0, y: 50.0 },
+                    },
+                    &[target(path, 75.0, 50.0)],
+                    now,
+                )
+                .is_none(),
+            "ordinary Wave must not retain HeroWave's plain-drag state"
         );
     }
 
@@ -362,6 +488,7 @@ mod tests {
             &[target("studio/front", 50.0, 125.0)],
             now,
         );
+        assert!(!engine.captures_pointer());
         let next = engine
             .handle(
                 Input::PointerDown,
@@ -392,6 +519,10 @@ mod tests {
         assert_eq!(
             wheel.map(|emission| emission.outcome),
             Some(Outcome::captured())
+        );
+        assert!(
+            !engine.captures_pointer(),
+            "a wheel outcome must not occupy the router capture slot"
         );
 
         let next = engine

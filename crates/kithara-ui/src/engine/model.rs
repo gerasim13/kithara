@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use crate::interact::{Hit, Outcome};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -8,6 +10,7 @@ pub(super) enum Kind {
     StereoMeter,
     VerticalVu,
     Wave,
+    HeroWave,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -37,9 +40,14 @@ pub(crate) enum Descriptor {
     },
     Wave {
         path: String,
-        beats_shown: bool,
+    },
+    HeroWave {
+        path: String,
         scale: f32,
         progress: f32,
+        visible: Range<f32>,
+        wheel_positive: f32,
+        wheel_non_positive: f32,
     },
 }
 
@@ -69,12 +77,25 @@ impl Descriptor {
         Self::StereoMeter { path }
     }
 
-    pub(crate) fn wave(path: String, beats_shown: bool, scale: f32, progress: f32) -> Self {
-        Self::Wave {
+    pub(crate) fn wave(path: String) -> Self {
+        Self::Wave { path }
+    }
+
+    pub(crate) fn hero_wave(
+        path: String,
+        scale: f32,
+        progress: f32,
+        visible: Range<f32>,
+        wheel_positive: f32,
+        wheel_non_positive: f32,
+    ) -> Self {
+        Self::HeroWave {
             path,
-            beats_shown,
             scale,
             progress: progress.clamp(0.0, 1.0),
+            visible,
+            wheel_positive,
+            wheel_non_positive,
         }
     }
 
@@ -85,7 +106,8 @@ impl Descriptor {
             | Self::Knob { path, .. }
             | Self::StereoMeter { path }
             | Self::VerticalVu { path }
-            | Self::Wave { path, .. } => path,
+            | Self::Wave { path, .. }
+            | Self::HeroWave { path, .. } => path,
         }
     }
 
@@ -97,6 +119,7 @@ impl Descriptor {
             Self::StereoMeter { .. } => Kind::StereoMeter,
             Self::VerticalVu { .. } => Kind::VerticalVu,
             Self::Wave { .. } => Kind::Wave,
+            Self::HeroWave { .. } => Kind::HeroWave,
         }
     }
 }
@@ -121,11 +144,6 @@ impl<'a> Target<'a> {
 
 pub(crate) struct Emission {
     pub(crate) path: String,
+    pub(crate) child: Option<&'static str>,
     pub(crate) outcome: Outcome<EngineEvent>,
-}
-
-impl Emission {
-    pub(crate) const fn is_captured(&self) -> bool {
-        self.outcome.is_captured()
-    }
 }

@@ -8,9 +8,11 @@ use super::super::{Hit, Input, Outcome};
 pub(crate) fn on_input(input: Input, hit: &Hit) -> Outcome<()> {
     match input {
         Input::PointerDown if hit.over() => Outcome::set(()),
-        Input::PointerDown | Input::PointerMoved { .. } | Input::PointerUp | Input::Wheel(_) => {
-            Outcome::IGNORED
-        }
+        Input::ModifiersChanged(_)
+        | Input::PointerDown
+        | Input::PointerMoved { .. }
+        | Input::PointerUp
+        | Input::Wheel(_) => Outcome::IGNORED,
     }
 }
 

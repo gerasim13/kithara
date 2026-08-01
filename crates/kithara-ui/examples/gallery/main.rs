@@ -510,7 +510,7 @@ mod tests {
     use kithara_ui::{
         compile::CompiledNode,
         expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
-        module::ChromeStyle,
+        module::{ButtonStyle, ChromeStyle, IconName, WaveStyle},
         render::{ControlAction, Reads},
     };
 
@@ -583,66 +583,94 @@ mod tests {
     }
 
     #[kithara::test]
-    fn the_hosted_meters_page_holds_only_controls_the_engine_answers() {
-        assert_hosted_page_controls(
+    fn the_hosted_meters_keep_their_descriptor_backed_controls() {
+        assert_hosted_page_claims(
             Tab::Atoms,
             "meters",
             |path| path.contains("/meters/"),
-            |spec| {
-                matches!(
-                    spec,
-                    ControlSpec::VuStereo
-                        | ControlSpec::VuVertical { .. }
-                        | ControlSpec::Text { .. }
-                )
-            },
+            &[
+                ("atoms/meters/stereo", "stereo-meter"),
+                ("atoms/meters/vertical-120", "vertical-vu"),
+                ("atoms/meters/vertical-64", "vertical-vu"),
+            ],
         );
     }
 
     #[kithara::test]
-    fn the_hosted_knobs_page_holds_only_controls_the_engine_answers() {
-        assert_hosted_page_controls(
+    fn the_hosted_knobs_keep_their_descriptor_backed_controls() {
+        assert_hosted_page_claims(
             Tab::Atoms,
             "knobs",
             |path| path.contains("/knobs/"),
-            |spec| matches!(spec, ControlSpec::Knob { .. } | ControlSpec::Text { .. }),
+            &[
+                ("atoms/knobs/size-26", "knob"),
+                ("atoms/knobs/size-28", "knob"),
+                ("atoms/knobs/size-34", "knob"),
+                ("atoms/knobs/size-38", "knob"),
+            ],
         );
     }
 
     #[kithara::test]
-    fn the_hosted_toggles_page_holds_only_controls_the_engine_answers() {
-        assert_hosted_page_controls(
+    fn the_hosted_toggles_keep_their_descriptor_backed_controls() {
+        assert_hosted_page_claims(
             Tab::Atoms,
             "toggles",
             |path| path.contains("/toggles/"),
-            |spec| {
-                matches!(
-                    spec,
-                    ControlSpec::Toggle | ControlSpec::Checkbox | ControlSpec::Text { .. }
-                )
-            },
+            &[
+                ("atoms/toggles/checkbox-off", "activation"),
+                ("atoms/toggles/checkbox-on", "activation"),
+                ("atoms/toggles/toggle-off", "activation"),
+                ("atoms/toggles/toggle-on", "activation"),
+            ],
         );
     }
 
     #[kithara::test]
-    fn the_hosted_buttons_page_holds_only_glyph_buttons_the_engine_answers() {
-        assert_hosted_page_controls(
+    fn the_hosted_buttons_keep_their_descriptor_backed_controls() {
+        assert_hosted_page_claims(
             Tab::Buttons,
             "buttons",
             |path| path.starts_with("buttons/"),
-            |spec| match spec {
-                ControlSpec::Button { icon, .. } => icon.is_none(),
-                ControlSpec::Text { .. } => true,
-                _ => false,
-            },
+            &[
+                ("buttons/cue", "activation"),
+                ("buttons/default", "activation"),
+                ("buttons/micro", "activation"),
+                ("buttons/play", "activation"),
+                ("buttons/primary", "activation"),
+                ("buttons/sync", "activation"),
+            ],
         );
     }
 
-    fn assert_hosted_page_controls(
+    fn engine_descriptor_kind(spec: &ControlSpec) -> Option<&'static str> {
+        match spec {
+            ControlSpec::Button {
+                icon: Some(IconName::PlayReverse),
+                style,
+                ..
+            } if *style != ButtonStyle::MicroPrimary => None,
+            ControlSpec::Button { .. } | ControlSpec::Toggle | ControlSpec::Checkbox => {
+                Some("activation")
+            }
+            ControlSpec::Crossfader { .. } => Some("crossfader"),
+            ControlSpec::Knob { .. } => Some("knob"),
+            ControlSpec::VuStereo => Some("stereo-meter"),
+            ControlSpec::VuVertical { .. } => Some("vertical-vu"),
+            ControlSpec::Wave {
+                style: WaveStyle::Hero,
+                ..
+            } => Some("hero-wave"),
+            ControlSpec::Wave { .. } => Some("wave"),
+            _ => None,
+        }
+    }
+
+    fn assert_hosted_page_claims(
         tab: Tab,
         page: &str,
         belongs: impl Fn(&str) -> bool,
-        engine_answers: impl Fn(&ControlSpec) -> bool,
+        expected: &[(&str, &str)],
     ) {
         let ui = compile(
             tab.entry(),
@@ -652,66 +680,48 @@ mod tests {
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("the {tab:?} tab must compile: {error}"));
-        let mut seen = 0;
-        each_hosted_item(&ui, &mut |path, spec| {
-            if !belongs(path) {
-                return;
+        let mut claims = Vec::new();
+        each_control(&ui, &mut |path, spec| {
+            if belongs(path)
+                && let Some(kind) = engine_descriptor_kind(spec)
+            {
+                claims.push((path.to_owned(), kind));
             }
-            seen += 1;
-            assert!(
-                spec.is_some_and(&engine_answers),
-                "`{path}` sits inside the hosted {page} page but takes input the engine does not \
-                 answer"
-            );
         });
-
-        assert!(seen > 0, "the atoms tab compiled no {page} controls at all");
+        claims.sort_unstable();
+        let mut expected = expected
+            .iter()
+            .map(|(path, kind)| ((*path).to_owned(), *kind))
+            .collect::<Vec<_>>();
+        expected.sort_unstable();
+        assert_eq!(
+            claims, expected,
+            "the hosted {page} page's engine claims changed; unported controls, passive controls, \
+             and containers are intentionally absent"
+        );
     }
 
-    fn each_hosted_item(ui: &CompiledUi, visit: &mut impl FnMut(&str, Option<&ControlSpec>)) {
-        fn walk(
-            node: &ExpandedNode,
-            ui: &CompiledUi,
-            visit: &mut impl FnMut(&str, Option<&ControlSpec>),
-        ) {
+    fn each_control(ui: &CompiledUi, visit: &mut impl FnMut(&str, &ControlSpec)) {
+        fn walk(node: &ExpandedNode, ui: &CompiledUi, visit: &mut impl FnMut(&str, &ControlSpec)) {
             match node {
-                ExpandedNode::Row {
-                    surface, children, ..
-                }
-                | ExpandedNode::Column {
-                    surface, children, ..
-                } => {
-                    if let Some(surface) = surface {
-                        visit(ui.resolve(surface.path), None);
-                    }
+                ExpandedNode::Row { children, .. }
+                | ExpandedNode::Column { children, .. }
+                | ExpandedNode::Slot { children, .. } => {
                     for child in children {
                         walk(child, ui, visit);
                     }
                 }
-                ExpandedNode::Slot { children, .. } => {
-                    for child in children {
-                        walk(child, ui, visit);
-                    }
-                }
-                ExpandedNode::Optional { child, .. } => {
-                    walk(child, ui, visit);
-                }
-                ExpandedNode::Pressable { path, child, .. } => {
-                    visit(ui.resolve(*path), None);
+                ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
                     walk(child, ui, visit);
                 }
                 ExpandedNode::Popover {
-                    path,
-                    anchor,
-                    content,
-                    ..
+                    anchor, content, ..
                 } => {
-                    visit(ui.resolve(*path), None);
                     walk(anchor, ui, visit);
                     walk(content, ui, visit);
                 }
                 ExpandedNode::Control { path, spec, .. } => {
-                    visit(ui.resolve(*path), Some(spec));
+                    visit(ui.resolve(*path), spec);
                 }
                 _ => {}
             }

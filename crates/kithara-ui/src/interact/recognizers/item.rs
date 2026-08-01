@@ -56,7 +56,10 @@ impl ItemDrag {
                     Outcome::IGNORED
                 }
             }
-            Input::PointerDown | Input::PointerMoved { .. } | Input::Wheel(_) => Outcome::IGNORED,
+            Input::ModifiersChanged(_)
+            | Input::PointerDown
+            | Input::PointerMoved { .. }
+            | Input::Wheel(_) => Outcome::IGNORED,
         }
     }
 

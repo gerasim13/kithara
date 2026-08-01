@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use iced::{
     Element, Event, Length, Rectangle, Renderer, Size, Theme, Vector,
     advanced::{
@@ -18,9 +20,12 @@ use crate::{
     expand::{ControlSpec, ExpandedNode},
     interact::iced as iced_interact,
     module::WaveStyle,
-    render::{ReadValue, Reads, Skin, UiEvent, engine as engine_event, model::derived},
+    render::{
+        ReadValue, Reads, Skin, UiEvent, controls::supports_engine_input, engine as engine_event,
+        icons::document_icon, model::derived,
+    },
     size::{Hidden, is_hidden},
-    widgets::wave::zoom_math::clamp_zoom,
+    widgets::wave::zoom_math::{clamp_zoom, window_bounds, zoom_for_wheel},
 };
 
 pub(super) fn host<'a>(
@@ -111,22 +116,26 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
         viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_mut::<State>();
-        if let Some(input) = iced_interact::input(event) {
+        let input = iced_interact::input(event);
+        let answered = if let Some(input) = input {
             let targets = self.layout.targets(layout, cursor);
             if let Some(emission) = state.engine.handle(input, &targets, Instant::now()) {
-                let captured = emission.is_captured();
-                if let Some(action) = engine_event(&emission.path, emission.outcome) {
+                if let Some(action) = engine_event(&emission.path, emission.child, emission.outcome)
+                {
                     let (message, redraw_request, _) = action.into_inner();
                     shell.request_redraw_at(redraw_request);
                     if let Some(message) = message {
                         shell.publish(message);
                     }
                 }
-                if captured {
-                    shell.capture_event();
-                }
+                true
+            } else {
+                false
             }
         } else {
+            false
+        };
+        if !answered {
             self.child.as_widget_mut().update(
                 &mut tree.children[0],
                 event,
@@ -137,6 +146,9 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
                 shell,
                 viewport,
             );
+        }
+        if input.is_some() && state.engine.captures_pointer() {
+            shell.capture_event();
         }
 
         if shell.redraw_request() != window::RedrawRequest::NextFrame {
@@ -163,15 +175,26 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
         tree: &Tree,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
-        _viewport: &Rectangle,
-        _renderer: &Renderer,
+        viewport: &Rectangle,
+        renderer: &Renderer,
     ) -> mouse::Interaction {
-        interaction(
+        let interaction = interaction(
             &tree.state.downcast_ref::<State>().engine,
             &self.layout,
             layout,
             cursor,
-        )
+        );
+        if interaction == mouse::Interaction::None {
+            self.child.as_widget().mouse_interaction(
+                &tree.children[0],
+                layout,
+                cursor,
+                viewport,
+                renderer,
+            )
+        } else {
+            interaction
+        }
     }
 
     fn draw(
@@ -396,9 +419,14 @@ enum HostedControl {
     },
     Wave {
         path: String,
-        beats_shown: bool,
+    },
+    HeroWave {
+        path: String,
         scale: f32,
         progress: f32,
+        visible: Range<f32>,
+        wheel_positive: f32,
+        wheel_non_positive: f32,
     },
 }
 
@@ -413,9 +441,13 @@ impl HostedControl {
         skin: &Skin,
     ) -> Option<Self> {
         match (spec, value) {
-            (ControlSpec::Button { .. }, _) => Some(Self::Activation {
-                path: path.to_owned(),
-            }),
+            (ControlSpec::Button { style, icon, .. }, _)
+                if supports_engine_input(*style, icon.map(document_icon)) =>
+            {
+                Some(Self::Activation {
+                    path: path.to_owned(),
+                })
+            }
             (ControlSpec::Toggle | ControlSpec::Checkbox, Some(ReadValue::Bool(_))) => {
                 Some(Self::Activation {
                     path: path.to_owned(),
@@ -443,16 +475,24 @@ impl HostedControl {
             (ControlSpec::Wave { style, zoom, .. }, Some(ReadValue::Waveform(waveform)))
                 if !waveform.buckets.is_empty() =>
             {
+                if *style != WaveStyle::Hero {
+                    return Some(Self::Wave {
+                        path: path.to_owned(),
+                    });
+                }
                 let progress = match reads.get(&derived("deck.playback.position_normalized", scope))
                 {
                     Some(ReadValue::Scalar(value)) => value.as_(),
                     _ => 0.0,
                 };
-                Some(Self::Wave {
+                let scale = clamp_zoom(wave_zoom(zoom.as_ref(), reads, ui));
+                Some(Self::HeroWave {
                     path: path.to_owned(),
-                    beats_shown: *style == WaveStyle::Hero,
-                    scale: clamp_zoom(wave_zoom(zoom.as_ref(), reads, ui)),
+                    scale,
                     progress,
+                    visible: window_bounds(progress, scale),
+                    wheel_positive: zoom_for_wheel(scale, 1.0),
+                    wheel_non_positive: zoom_for_wheel(scale, 0.0),
                 })
             }
             _ => None,
@@ -466,7 +506,8 @@ impl HostedControl {
             | Self::Knob { path, .. }
             | Self::StereoMeter { path }
             | Self::VerticalVu { path }
-            | Self::Wave { path, .. } => path,
+            | Self::Wave { path }
+            | Self::HeroWave { path, .. } => path,
         }
     }
 }
@@ -484,12 +525,22 @@ impl From<&HostedControl> for Descriptor {
             } => Self::knob(path.clone(), *current, *drag_range, *wheel_step),
             HostedControl::StereoMeter { path } => Self::stereo_meter(path.clone()),
             HostedControl::VerticalVu { path } => Self::vertical_vu(path.clone()),
-            HostedControl::Wave {
+            HostedControl::Wave { path } => Self::wave(path.clone()),
+            HostedControl::HeroWave {
                 path,
-                beats_shown,
                 scale,
                 progress,
-            } => Self::wave(path.clone(), *beats_shown, *scale, *progress),
+                visible,
+                wheel_positive,
+                wheel_non_positive,
+            } => Self::hero_wave(
+                path.clone(),
+                *scale,
+                *progress,
+                visible.clone(),
+                *wheel_positive,
+                *wheel_non_positive,
+            ),
         }
     }
 }
@@ -536,7 +587,7 @@ mod tests {
             widget::{Tree, tree::Tag},
         },
         mouse::{self, Button, Cursor},
-        widget::{Space, container},
+        widget::{Space, container, mouse_area},
     };
     use iced_renderer::fallback::Renderer as FallbackRenderer;
     use iced_tiny_skia::Renderer as TinySkiaRenderer;
@@ -547,14 +598,13 @@ mod tests {
         builtin,
         compile::{CompiledNode, compile},
         ids::EndpointId,
-        interact::recognizers::ScalarState,
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
         render::{
             ControlAction, StereoLevels, WaveBucket, WaveformView,
             fonts::{FONT_BYTES, SANS},
         },
         source::{MemResolver, UiConfig},
-        widgets::wave::zoom_math::DEFAULT_ZOOM,
+        widgets::{Widget, wheel::WheelSurface},
     };
 
     const WAVE_BUCKETS: [WaveBucket; 2] = [
@@ -813,61 +863,45 @@ mod tests {
             + tree.children.iter().map(host_count).sum::<usize>()
     }
 
-    fn leaf_scalar_state_count(tree: &Tree) -> usize {
-        usize::from(tree.tag == Tag::of::<ScalarState>())
-            + tree
-                .children
-                .iter()
-                .map(leaf_scalar_state_count)
-                .sum::<usize>()
-    }
-
-    fn hosted_contract(node: &ExpandedNode, components: &mut Vec<&'static str>) -> bool {
+    fn claimed_components(node: &ExpandedNode, components: &mut Vec<&'static str>) {
         match node {
-            ExpandedNode::Row {
-                children, surface, ..
-            }
-            | ExpandedNode::Column {
-                children, surface, ..
-            } => {
-                surface.is_none()
-                    && children
-                        .iter()
-                        .all(|child| hosted_contract(child, components))
-            }
-            ExpandedNode::Slot { children, .. } => children
-                .iter()
-                .all(|child| hosted_contract(child, components)),
-            ExpandedNode::Optional { child, .. } => hosted_contract(child, components),
-            ExpandedNode::Control { spec, .. } => match spec {
-                ControlSpec::Button { .. } | ControlSpec::Toggle | ControlSpec::Checkbox => {
-                    components.push("activation");
-                    true
+            ExpandedNode::Row { children, .. }
+            | ExpandedNode::Column { children, .. }
+            | ExpandedNode::Slot { children, .. } => {
+                for child in children {
+                    claimed_components(child, components);
                 }
+            }
+            ExpandedNode::Optional { child, .. } => claimed_components(child, components),
+            ExpandedNode::Control { spec, .. } => match spec {
+                ControlSpec::Button { style, icon, .. }
+                    if supports_engine_input(*style, icon.map(document_icon)) =>
+                {
+                    components.push("activation");
+                }
+                ControlSpec::Toggle | ControlSpec::Checkbox => components.push("activation"),
                 ControlSpec::Knob { .. } => {
                     components.push("knob");
-                    true
                 }
                 ControlSpec::VuStereo => {
                     components.push("stereo-meter");
-                    true
                 }
                 ControlSpec::VuVertical { .. } => {
                     components.push("vertical-vu");
-                    true
                 }
                 ControlSpec::Crossfader { .. } => {
                     components.push("crossfader");
-                    true
                 }
-                ControlSpec::Wave { .. } => {
-                    components.push("wave");
-                    true
+                ControlSpec::Wave { style, .. } => {
+                    components.push(if *style == WaveStyle::Hero {
+                        "hero-wave"
+                    } else {
+                        "wave"
+                    });
                 }
-                ControlSpec::Divider | ControlSpec::Text { .. } => true,
-                _ => false,
+                _ => {}
             },
-            ExpandedNode::Popover { .. } | ExpandedNode::Pressable { .. } => false,
+            ExpandedNode::Popover { .. } | ExpandedNode::Pressable { .. } => {}
         }
     }
 
@@ -878,7 +912,138 @@ mod tests {
             | Descriptor::Knob { path, .. }
             | Descriptor::StereoMeter { path }
             | Descriptor::VerticalVu { path }
-            | Descriptor::Wave { path, .. } => path,
+            | Descriptor::Wave { path }
+            | Descriptor::HeroWave { path, .. } => path,
+        }
+    }
+
+    #[kithara::test]
+    fn decoded_input_unanswered_by_the_engine_reaches_the_child() {
+        let child = mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
+            .on_press(UiEvent::OpenSettings)
+            .into();
+        let mut element = Element::new(Host {
+            child,
+            layout: HostedLayout::Control(None),
+        });
+        let renderer = headless_renderer();
+        let viewport = Size::new(100.0, 40.0);
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            Layout::new(&node),
+            Cursor::Available(Point::new(50.0, 20.0)),
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        drop(shell);
+
+        assert_eq!(messages, [UiEvent::OpenSettings]);
+    }
+
+    #[kithara::test]
+    fn unanswered_wheel_reaches_the_still_iced_tempo_surface_once() {
+        let child = WheelSurface::builder().path("deck-a/tempo").build().view();
+        let mut element = Element::new(Host {
+            child,
+            layout: HostedLayout::Control(None),
+        });
+        let renderer = headless_renderer();
+        let viewport = Size::new(100.0, 40.0);
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::WheelScrolled {
+                delta: mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 },
+            }),
+            Layout::new(&node),
+            Cursor::Available(Point::new(50.0, 20.0)),
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert!(
+            shell.is_event_captured(),
+            "the still-iced tempo surface owns its wheel detent"
+        );
+        drop(shell);
+
+        assert_eq!(
+            messages,
+            [UiEvent::Control {
+                path: "deck-a/tempo".to_owned(),
+                action: ControlAction::StepScalar(1.0),
+            }],
+            "the unanswered detent must reach the child exactly once"
+        );
+    }
+
+    #[kithara::test]
+    fn engine_cursor_wins_and_none_falls_back_to_the_child() {
+        let renderer = headless_renderer();
+        let viewport = Size::new(100.0, 40.0);
+        let cursor = Cursor::Available(Point::new(50.0, 20.0));
+        let bounds = Rectangle::with_size(viewport);
+
+        for (layout, expected) in [
+            (
+                HostedLayout::Control(Some(HostedControl::Activation {
+                    path: "hosted/button".to_owned(),
+                })),
+                mouse::Interaction::Pointer,
+            ),
+            (
+                HostedLayout::Control(None),
+                mouse::Interaction::ResizingHorizontally,
+            ),
+        ] {
+            let child = container(
+                mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
+                    .interaction(mouse::Interaction::ResizingHorizontally),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+            let mut element = Element::new(Host { child, layout });
+            let mut tree = Tree::new(element.as_widget());
+            let node = element.as_widget_mut().layout(
+                &mut tree,
+                &renderer,
+                &Limits::new(Size::ZERO, viewport),
+            );
+
+            assert_eq!(
+                element.as_widget().mouse_interaction(
+                    &tree,
+                    Layout::new(&node),
+                    cursor,
+                    &bounds,
+                    &renderer,
+                ),
+                expected,
+            );
         }
     }
 
@@ -897,7 +1062,7 @@ mod tests {
         let emission = engine
             .handle(input, &[target], Instant::now())
             .unwrap_or_else(|| panic!("a press on the meter must publish"));
-        let action = engine_event(&emission.path, emission.outcome)
+        let action = engine_event(&emission.path, emission.child, emission.outcome)
             .unwrap_or_else(|| panic!("the published value must cross the iced boundary"));
 
         assert_eq!(
@@ -923,7 +1088,7 @@ mod tests {
 
         assert!(ui.includes_module(*instance, &[1], "gallery-meters"));
         let mut components = Vec::new();
-        assert!(hosted_contract(meters, &mut components));
+        claimed_components(meters, &mut components);
         assert_eq!(components, ["stereo-meter", "vertical-vu", "vertical-vu"]);
 
         let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
@@ -1007,7 +1172,7 @@ mod tests {
 
         assert!(ui.includes_module(*instance, &[1], "gallery-toggles"));
         let mut components = Vec::new();
-        assert!(hosted_contract(toggles, &mut components));
+        claimed_components(toggles, &mut components);
         assert_eq!(components, ["activation"; 4]);
 
         let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
@@ -1059,7 +1224,10 @@ mod tests {
                 &mut shell,
                 &Rectangle::with_size(viewport),
             );
-            assert!(shell.is_event_captured());
+            assert!(
+                !shell.is_event_captured(),
+                "activation publishes without retaining the engine capture slot"
+            );
         }
 
         assert_eq!(
@@ -1093,7 +1261,7 @@ mod tests {
 
         assert_eq!(ui.resolve(*module), "gallery-buttons-tab");
         let mut components = Vec::new();
-        assert!(hosted_contract(root, &mut components));
+        claimed_components(root, &mut components);
         assert_eq!(components, ["activation"; 6]);
 
         let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
@@ -1193,8 +1361,9 @@ mod tests {
                 &Rectangle::with_size(viewport),
             );
             assert!(
-                shell.is_event_captured(),
-                "the hosted `{expected_path}` press in {area:?} must be captured"
+                !shell.is_event_captured(),
+                "the hosted `{expected_path}` press in {area:?} publishes without retaining the \
+                 engine capture slot"
             );
         }
 
@@ -1235,7 +1404,7 @@ mod tests {
         assert_eq!(ui.resolve(*module), "studio-overview");
         assert!(ui.includes_module(*instance, &[0], "studio-overview-row"));
         let mut components = Vec::new();
-        assert!(hosted_contract(row, &mut components));
+        claimed_components(row, &mut components);
         assert_eq!(components, ["wave"]);
 
         let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
@@ -1266,19 +1435,10 @@ mod tests {
         let hosted = HostedLayout::new(row, &ui, &reads, builtin::skin());
         let descriptors = hosted.descriptors();
         assert_eq!(descriptors.len(), 1);
-        let Descriptor::Wave {
-            path,
-            beats_shown,
-            scale,
-            progress,
-        } = &descriptors[0]
-        else {
+        let Descriptor::Wave { path } = &descriptors[0] else {
             panic!("the overview wave must produce a wave descriptor");
         };
         assert_eq!(path, "overview/a/wave");
-        assert!(!beats_shown);
-        assert_eq!(*scale, DEFAULT_ZOOM);
-        assert_eq!(*progress, 0.75);
 
         let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
         assert_eq!(
@@ -1300,7 +1460,10 @@ mod tests {
             &mut shell,
             &Rectangle::with_size(viewport),
         );
-        assert!(shell.is_event_captured());
+        assert!(
+            !shell.is_event_captured(),
+            "the click wave publishes without retaining the engine capture slot"
+        );
         drop(shell);
 
         let outside = Point::new(area.x + area.w + 10.0, area.y + area.h / 2.0);
@@ -1328,7 +1491,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn hosted_beats_wave_keeps_grip_outside_bounds() {
+    fn hosted_hero_wave_keeps_grip_outside_bounds() {
         let path = "deck-a/wave";
         let child = container(Space::new().width(Length::Fill).height(Length::Fill))
             .width(Length::Fill)
@@ -1336,11 +1499,13 @@ mod tests {
             .into();
         let mut element = Element::new(Host {
             child,
-            layout: HostedLayout::Control(Some(HostedControl::Wave {
+            layout: HostedLayout::Control(Some(HostedControl::HeroWave {
                 path: path.to_owned(),
-                beats_shown: true,
                 scale: 0.25,
                 progress: 0.75,
+                visible: 0.625..0.875,
+                wheel_positive: 0.3125,
+                wheel_non_positive: 0.2,
             })),
         });
         let renderer = headless_renderer();
@@ -1461,7 +1626,7 @@ mod tests {
         assert!(ui.includes_module(*instance, &[0, 0], "studio-strip"));
         assert!(ui.includes_module(*instance, &[0, 2], "studio-strip"));
         let mut components = Vec::new();
-        assert!(hosted_contract(root, &mut components));
+        claimed_components(root, &mut components);
         assert_eq!(
             components,
             [
@@ -1482,11 +1647,6 @@ mod tests {
         let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(host_count(&full_tree), 1, "the whole mixer owns one engine");
-        assert_eq!(
-            leaf_scalar_state_count(&full_tree),
-            0,
-            "hosted leaves must use paint-only canvas programs"
-        );
 
         let child = super::super::node::render_engine_node(
             root,
@@ -1564,6 +1724,36 @@ mod tests {
         let mut shell = Shell::new(&mut messages);
         element.as_widget_mut().update(
             &mut tree,
+            &Event::Mouse(mouse::Event::WheelScrolled {
+                delta: mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 },
+            }),
+            Layout::new(&node),
+            Cursor::Available(start),
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert!(
+            !shell.is_event_captured(),
+            "a knob wheel emission does not retain the engine capture slot"
+        );
+        drop(shell);
+        assert_eq!(
+            messages.len(),
+            1,
+            "a wheel on the real hosted knob must publish exactly once"
+        );
+        let UiEvent::Control { path, action } = &messages[0] else {
+            panic!("the hosted knob wheel must publish a control event");
+        };
+        assert_eq!(path, "mixer/a/high");
+        assert!(matches!(action, ControlAction::SetScalar(_)));
+        messages.clear();
+
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
             &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
             Layout::new(&node),
             Cursor::Available(start),
@@ -1592,7 +1782,8 @@ mod tests {
         assert_eq!(
             messages.len(),
             1,
-            "strip B must not publish while strip A owns the mixer's capture slot"
+            "the hosted knob's paint-only child must not answer the move a second time, and strip \
+             B must stay silent while strip A owns the mixer's capture slot"
         );
         let UiEvent::Control { path, action } = &messages[0] else {
             panic!("the captured strip A knob must publish a control event");

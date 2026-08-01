@@ -65,7 +65,7 @@ impl Stepper {
                     Outcome::IGNORED
                 }
             }
-            Input::Wheel(_) => Outcome::IGNORED,
+            Input::ModifiersChanged(_) | Input::Wheel(_) => Outcome::IGNORED,
         }
     }
 

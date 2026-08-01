@@ -1,6 +1,6 @@
 use kithara_platform::time::Instant;
 
-use super::{activation::ActivationComponent, scalar::ScalarComponent};
+use super::{activation::ActivationComponent, scalar::ScalarComponent, wave::HeroWaveComponent};
 use crate::{
     engine::model::{Descriptor, EngineEvent, Identity, Kind},
     interact::{
@@ -12,7 +12,12 @@ use crate::{
 pub(super) trait Component {
     fn path(&self) -> &str;
     fn kind(&self) -> Kind;
-    fn handle(&mut self, input: Input, hit: &Hit, now: Instant) -> Outcome<EngineEvent>;
+    fn handle(
+        &mut self,
+        input: Input,
+        hit: &Hit,
+        now: Instant,
+    ) -> (Outcome<EngineEvent>, Option<&'static str>);
     fn cursor(&self, hit: &Hit) -> CursorShape;
     fn captures_pointer(&self) -> bool;
 }
@@ -20,6 +25,7 @@ pub(super) trait Component {
 pub(in crate::engine) enum RetainedComponent {
     Scalar(ScalarComponent),
     Activation(ActivationComponent),
+    HeroWave(HeroWaveComponent),
 }
 
 impl RetainedComponent {
@@ -28,6 +34,9 @@ impl RetainedComponent {
         match (self, next) {
             (Self::Scalar(component), Self::Scalar(next)) => {
                 Self::Scalar(component.reconcile(next))
+            }
+            (Self::HeroWave(component), Self::HeroWave(next)) => {
+                Self::HeroWave(component.reconcile(next))
             }
             (_, next) => next,
         }
@@ -57,7 +66,7 @@ impl RetainedComponent {
         input: Input,
         hit: &Hit,
         now: Instant,
-    ) -> Outcome<EngineEvent> {
+    ) -> (Outcome<EngineEvent>, Option<&'static str>) {
         self.component_mut().handle(input, hit, now)
     }
 
@@ -73,6 +82,7 @@ impl RetainedComponent {
         match self {
             Self::Scalar(component) => component,
             Self::Activation(component) => component,
+            Self::HeroWave(component) => component,
         }
     }
 
@@ -80,6 +90,7 @@ impl RetainedComponent {
         match self {
             Self::Scalar(component) => component,
             Self::Activation(component) => component,
+            Self::HeroWave(component) => component,
         }
     }
 }
@@ -133,29 +144,28 @@ impl From<Descriptor> for RetainedComponent {
                     .hover(Hover::new(CursorShape::ResizeV))
                     .build(),
             )),
-            Descriptor::Wave {
-                path,
-                beats_shown,
-                scale,
-                progress,
-            } => Self::Scalar(ScalarComponent::new(
+            Descriptor::Wave { path } => Self::Scalar(ScalarComponent::new(
                 path,
                 Kind::Wave,
                 Scalar::builder()
-                    .track(if beats_shown {
-                        Track::RelativeHorizontal {
-                            scale,
-                            value: progress,
-                        }
-                    } else {
-                        Track::HorizontalClick
-                    })
-                    .hover(Hover::new(if beats_shown {
-                        CursorShape::Grab
-                    } else {
-                        CursorShape::Pointer
-                    }))
+                    .track(Track::HorizontalClick)
+                    .hover(Hover::new(CursorShape::Pointer))
                     .build(),
+            )),
+            Descriptor::HeroWave {
+                path,
+                scale,
+                progress,
+                visible,
+                wheel_positive,
+                wheel_non_positive,
+            } => Self::HeroWave(HeroWaveComponent::new(
+                path,
+                scale,
+                progress,
+                visible,
+                wheel_positive,
+                wheel_non_positive,
             )),
         }
     }

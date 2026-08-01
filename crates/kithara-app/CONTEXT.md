@@ -54,6 +54,10 @@ the tempo by `TEMPO_STEP` percent, a held press drags it the same way, and a
 double click returns it to zero. The step is what makes the travel reachable by
 scrolling at all, so it is bounded against `TEMPO_RANGE` rather than chosen for
 precision. The mixer channel keeps the EQ the design canon reserves it for.
+The deck module is retained-hosted, but the tempo surface stays on iced: the
+engine observes each decoded event first, and an unanswered wheel event reaches
+the same child unchanged. The Hero Wave and five transport buttons have engine
+descriptors; the tempo row deliberately does not.
 
 The block prints the playing BPM beside the tempo percent — the analysed BPM
 scaled by the tempo, an em dash while no analysis carries one. The percent is

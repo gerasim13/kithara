@@ -84,6 +84,10 @@ fn effective_icon(style: ButtonStyle, icon: Option<Icon>, active: bool) -> Effec
     })
 }
 
+pub(crate) fn supports_engine_input(style: ButtonStyle, icon: Option<Icon>) -> bool {
+    !matches!(effective_icon(style, icon, false), EffectiveIcon::Svg(_))
+}
+
 pub(crate) struct ButtonProgram<'data, 'skin> {
     paint: ButtonPaint<'data, 'skin>,
     path: String,
@@ -167,7 +171,10 @@ impl canvas::Program<UiEvent> for ButtonProgram<'_, '_> {
                 state.hovered = hovered;
                 changed
             }
-            Input::PointerDown | Input::PointerUp | Input::Wheel(_) => false,
+            Input::ModifiersChanged(_)
+            | Input::PointerDown
+            | Input::PointerUp
+            | Input::Wheel(_) => false,
         };
         action.or_else(|| redraw.then(Action::request_redraw))
     }
@@ -355,6 +362,14 @@ mod tests {
         assert!(matches!(
             effective_icon(ButtonStyle::Default, Some(Icon::PlayReverse), false),
             EffectiveIcon::Svg(Icon::PlayReverse)
+        ));
+        assert!(supports_engine_input(
+            ButtonStyle::MicroPrimary,
+            Some(Icon::PlayReverse)
+        ));
+        assert!(!supports_engine_input(
+            ButtonStyle::Default,
+            Some(Icon::PlayReverse)
         ));
     }
 }

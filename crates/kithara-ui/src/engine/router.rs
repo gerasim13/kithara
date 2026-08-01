@@ -12,6 +12,10 @@ pub(super) struct Router {
 }
 
 impl Router {
+    pub(super) const fn captures_pointer(&self) -> bool {
+        self.capture.is_some()
+    }
+
     pub(super) fn reconcile(&mut self, components: &[RetainedComponent]) {
         let missing = self.capture.as_ref().is_some_and(|identity| {
             !components
@@ -30,18 +34,29 @@ impl Router {
         targets: &[Target<'_>],
         now: Instant,
     ) -> Option<Emission> {
+        if matches!(input, Input::ModifiersChanged(_)) {
+            for target in targets {
+                if let Some(component) = components
+                    .iter_mut()
+                    .find(|component| component.path() == target.path)
+                {
+                    let _ = component.handle(input, &target.hit, now);
+                }
+            }
+            return None;
+        }
         if let Some(identity) = &self.capture {
             let component_index = components
                 .iter()
                 .position(|component| component.has_identity(identity))?;
             let target = targets.iter().find(|target| target.path == identity.path)?;
             let component = &mut components[component_index];
-            let outcome = component.handle(input, &target.hit, now);
+            let (outcome, child) = component.handle(input, &target.hit, now);
             let path = component.path().to_owned();
             if !component.captures_pointer() {
                 self.capture = None;
             }
-            return emission(path, outcome);
+            return emission(path, child, outcome);
         }
 
         for target in targets.iter().rev() {
@@ -51,14 +66,14 @@ impl Router {
             else {
                 continue;
             };
-            let outcome = component.handle(input, &target.hit, now);
+            let (outcome, child) = component.handle(input, &target.hit, now);
             if outcome == Outcome::IGNORED {
                 continue;
             }
             if component.captures_pointer() {
                 self.capture = Some(component.identity());
             }
-            return emission(component.path().to_owned(), outcome);
+            return emission(component.path().to_owned(), child, outcome);
         }
         None
     }
@@ -94,6 +109,14 @@ impl Router {
     }
 }
 
-fn emission(path: String, outcome: Outcome<EngineEvent>) -> Option<Emission> {
-    (outcome != Outcome::IGNORED).then_some(Emission { path, outcome })
+fn emission(
+    path: String,
+    child: Option<&'static str>,
+    outcome: Outcome<EngineEvent>,
+) -> Option<Emission> {
+    (outcome != Outcome::IGNORED).then_some(Emission {
+        path,
+        child,
+        outcome,
+    })
 }

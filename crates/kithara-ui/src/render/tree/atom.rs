@@ -346,10 +346,38 @@ pub(super) fn tab_large<'a>(
 
 #[cfg(test)]
 mod tests {
+    use iced::advanced::widget::Tree;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::builtin;
+
+    #[kithara::test]
+    fn engine_owned_knob_selects_the_paint_only_program() {
+        let skin = builtin::skin();
+        let value = ReadValue::Scalar(0.5);
+        let hosted = knob(
+            "mixer/gain",
+            Some("GAIN"),
+            Some(&value),
+            skin,
+            InputOwner::Engine,
+        );
+        let painted = KnobPaint::new(Some("GAIN"), 0.5, skin).view();
+        let interactive = KnobProgram::new("mixer/gain", Some("GAIN"), 0.5, skin).view();
+        let hosted_tree = Tree::new(hosted.as_widget());
+        let painted_tree = Tree::new(painted.as_widget());
+        let interactive_tree = Tree::new(interactive.as_widget());
+
+        assert!(
+            hosted_tree.tag == painted_tree.tag,
+            "InputOwner::Engine must select the paint-only knob program"
+        );
+        assert!(
+            hosted_tree.tag != interactive_tree.tag,
+            "the hosted knob must not retain the leaf gesture state"
+        );
+    }
 
     #[kithara::test]
     fn every_glyph_style_takes_its_own_skin_icon_size() {

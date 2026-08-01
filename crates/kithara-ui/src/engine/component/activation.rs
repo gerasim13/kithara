@@ -29,8 +29,16 @@ impl Component for ActivationComponent {
         Kind::Activation
     }
 
-    fn handle(&mut self, input: Input, hit: &Hit, _now: Instant) -> Outcome<EngineEvent> {
-        click::on_input(input, hit).map(|()| EngineEvent::Activate)
+    fn handle(
+        &mut self,
+        input: Input,
+        hit: &Hit,
+        _now: Instant,
+    ) -> (Outcome<EngineEvent>, Option<&'static str>) {
+        (
+            click::on_input(input, hit).map(|()| EngineEvent::Activate),
+            None,
+        )
     }
 
     fn cursor(&self, hit: &Hit) -> CursorShape {
