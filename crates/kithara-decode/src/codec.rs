@@ -66,19 +66,6 @@ pub(crate) trait FrameCodec: Send + 'static {
         0
     }
 
-    /// Frames this decoder instance actually strips from the head of the PCM it
-    /// emits, counted as they are stripped rather than declared up front.
-    ///
-    /// `timestamp_bias_frames` is the timeline's *model* of that strip and can
-    /// fall short of it; the remainder then surfaces as a container timeline gap
-    /// for a decode that started at the head and is lost for one that started
-    /// mid-stream, leaving the two to map the same packet timestamp to content
-    /// times that differ by it. Zero until the strip has been observed, which is
-    /// after the first decoded packets.
-    fn head_strip_frames(&self) -> u64 {
-        0
-    }
-
     /// Decoder-side algorithmic delay in PCM frames for `codec` — the
     /// silent lead-in this concrete decoder emits **in addition to**
     /// the encoder-declared priming. LAME-convention MP3 decoders

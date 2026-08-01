@@ -371,20 +371,30 @@ fn symphonia_aac_warm_decode_does_not_grow_pool_alloc_misses() {
     );
 }
 
-/// A decoder instance strips its own algorithmic delay from the head of the
-/// PCM it emits, and `head_strip_frames` is how it reports that strip. The two
-/// have to be the same number, and the number is not any declared constant:
-/// the fdk-aac adapter drops `stream_info.outputDelay` — 1685 frames on this
-/// fixture — while `timestamp_bias_frames` models one access unit, 1024.
+/// RED — a decoder instance strips its own algorithmic delay from the head of
+/// the PCM it emits, and `timestamp_bias_frames` is how the timeline accounts
+/// for that strip. The two have to be the same number, and they are not: the
+/// fdk-aac adapter drops `stream_info.outputDelay` (1685 frames here) while the
+/// bias reports one access unit (1024).
 ///
-/// The 661-frame remainder decides where an exact variant splice cuts. A decode
-/// that started at the head sees it as a container timeline gap the moment the
-/// next packet's timestamp runs past what the decoder has emitted; a decode
-/// that started mid-stream records no such jump, because `seek` resyncs the
-/// frame offset onto the packet timestamp instead. Reporting the observed strip
-/// is what lets `ComposedDecoder::blender_profile` hand both the same figure.
+/// The 661-frame remainder is not cosmetic. For a decode that started at the
+/// head, `ComposedDecoder::build_chunk` records it as a container timeline gap
+/// the moment the next packet's PTS runs past what the decoder has emitted, and
+/// it lands in the generation's timeline origin. For a decode that started
+/// mid-stream it is lost outright — `seek` zeroes the gap and
+/// `resync_frame_offset_to_pts` swallows the jump instead of recording it. The
+/// two then map the same PTS frame to content times 661 frames apart, and an
+/// exact variant splice cuts on exactly that mapping: measured origins are
+/// 2709 for a head-built AAC generation against 2048 for a mid-stream one,
+/// which is what `manual_quality_switches_match_time_aligned_no_switch_pcm`
+/// sees on `flac-to-aac-low` and does not see on `aac-high-to-aac-low`, where
+/// both sides carry the same error and it cancels.
+///
+/// Pins the broken observable. Invert to `assert_eq!(head_strip, bias)` once
+/// the real `outputDelay` reaches `timestamp_bias_frames` — it is currently
+/// behind `Box<dyn AudioDecoder>` and only known after the first decode.
 #[kithara::test]
-fn aac_head_strip_is_reported_as_the_decoder_observes_it() {
+fn red_aac_head_strip_exceeds_the_bias_the_timeline_accounts_for() {
     let pool = PcmPool::default();
     let (mut codec, seg, ranges) = aac_codec_and_frames();
     let supplied = ranges.len() as u64 * u64::from(access_unit_frames(AudioCodec::AacLc));
@@ -393,18 +403,18 @@ fn aac_head_strip_is_reported_as_the_decoder_observes_it() {
     let channels = u64::from(codec.spec().channels.max(1));
     let emitted = pcm.len() as u64 / channels;
     let head_strip = supplied.saturating_sub(emitted);
+    let bias = codec.timestamp_bias_frames();
 
-    assert_eq!(
-        codec.head_strip_frames(),
-        head_strip,
-        "the decoder must report the frames it actually stripped: \
+    assert!(
+        head_strip > bias,
+        "RED — the strip and the bias are expected to disagree until the real \
+         outputDelay reaches the timeline: strip={head_strip}, bias={bias}, \
          supplied={supplied}, emitted={emitted}"
     );
-    assert!(
-        head_strip > codec.timestamp_bias_frames(),
-        "the declared bias is expected to fall short of the real strip on this \
-         fixture — that shortfall is the whole point of reporting the observed \
-         one: strip={head_strip}, bias={}",
-        codec.timestamp_bias_frames()
+    assert_eq!(
+        head_strip.saturating_sub(bias),
+        661,
+        "the unaccounted remainder is what separates a head-built generation's \
+         timeline origin from a mid-stream one's"
     );
 }
