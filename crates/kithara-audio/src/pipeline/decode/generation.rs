@@ -18,7 +18,6 @@ pub(crate) struct DecoderGeneration {
     base_offset: u64,
     installed_at_seek_epoch: u64,
     gapless_profile: GaplessProfile,
-    blender_profile: BlenderProfile,
     gapless: GaplessStage,
     pending_head_skip: Option<ResumeState>,
     staged: VecDeque<PcmChunk>,
@@ -35,7 +34,6 @@ impl DecoderGeneration {
     ) -> Self {
         let codec = media_info.as_ref().and_then(|info| info.codec);
         let gapless_profile = decoder.gapless_profile(codec);
-        let blender_profile = decoder.blender_profile();
         let gapless = GaplessStage::build(gapless_profile, gapless_mode);
         Self {
             decoder,
@@ -43,7 +41,6 @@ impl DecoderGeneration {
             base_offset,
             installed_at_seek_epoch,
             gapless_profile,
-            blender_profile,
             gapless,
             pending_head_skip,
             staged: VecDeque::new(),
@@ -91,7 +88,7 @@ impl DecoderGeneration {
     }
 
     pub(crate) fn blender_profile(&self) -> BlenderProfile {
-        self.blender_profile
+        self.decoder.blender_profile()
     }
 
     pub(crate) fn notify_seek(&mut self) {
@@ -116,7 +113,7 @@ impl DecoderGeneration {
     }
 
     pub(crate) fn timeline_gap(&self) -> u64 {
-        self.decoder.blender_profile().timeline_gap_frames()
+        self.decoder.timeline_gap_frames()
     }
 
     pub(crate) fn push(&mut self, chunk: PcmChunk) {

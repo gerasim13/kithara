@@ -190,13 +190,20 @@ pub trait Decoder: Send + 'static {
         )
     }
 
-    /// Snapshot the existing decoder facts needed to configure PCM blending.
+    /// Construction-time PCM specification used to configure PCM blending.
     ///
     /// The default exposes the same output specification already returned by
-    /// [`Self::spec`]. The audio pipeline captures it when constructing a
-    /// decoder generation and routes all emitted PCM through the blender.
+    /// [`Self::spec`].
     fn blender_profile(&self) -> BlenderProfile {
         BlenderProfile::new(self.spec())
+    }
+
+    /// Frames between a packet's timestamp and the PCM this decoder has
+    /// actually produced for it. Live: it settles as the decoder works
+    /// through its head strip, so a caller that cached it at construction
+    /// would hold the pre-strip value forever.
+    fn timeline_gap_frames(&self) -> u64 {
+        0
     }
 
     /// Default leading-silence frame count for `codec` when no

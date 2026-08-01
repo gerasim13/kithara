@@ -382,8 +382,8 @@ fn symphonia_aac_warm_decode_does_not_grow_pool_alloc_misses() {
 /// next packet's timestamp runs past what the decoder has emitted; a decode
 /// that started mid-stream records no such jump, because `seek` resyncs the
 /// frame offset onto the packet timestamp instead. Observing the strip in
-/// `ComposedDecoder` is what lets its `blender_profile` hand both the same
-/// figure.
+/// `ComposedDecoder` is what lets its live timeline-gap query hand both the
+/// same figure.
 #[kithara::test]
 fn aac_head_strip_exceeds_the_bias_the_timeline_models() {
     let pool = PcmPool::default();

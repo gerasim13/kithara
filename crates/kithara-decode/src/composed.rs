@@ -384,13 +384,16 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
     /// for it only the strip directly observed by this decoder is complete.
     /// Taking the maximum leaves both with the same number, which is what a
     /// splice between them cuts on.
-    fn blender_profile(&self) -> BlenderProfile {
+    fn timeline_gap_frames(&self) -> u64 {
         let modelled = self
             .codec
             .timestamp_bias_frames()
             .saturating_add(self.timeline_gap_frames);
+        self.head_strip.frames().max(modelled)
+    }
+
+    fn blender_profile(&self) -> BlenderProfile {
         BlenderProfile::new(self.spec)
-            .with_timeline_gap_frames(self.head_strip.frames().max(modelled))
     }
 
     fn flush_reader_signals(&mut self) {
@@ -1213,7 +1216,7 @@ mod seek_trim_tests {
             "a decoder head trim must not compress every later packet's frame offset"
         );
         assert_eq!(
-            decoder.blender_profile().timeline_gap_frames(),
+            decoder.timeline_gap_frames(),
             661,
             "the decoder must publish forward timestamp gaps without a second frame cursor"
         );
@@ -1271,7 +1274,7 @@ mod seek_trim_tests {
             "constant packet PTS must keep the modelled timeline gap out of the result"
         );
         assert_eq!(
-            decoder.blender_profile().timeline_gap_frames(),
+            decoder.timeline_gap_frames(),
             720,
             "the composed decoder must publish the head strip measured in output frames"
         );

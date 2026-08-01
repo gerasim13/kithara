@@ -353,14 +353,16 @@ where
         )
     }
 
-    fn blender_profile(&self) -> BlenderProfile {
-        let source = self.decoder.blender_profile();
-        let bias = round_scaled_frames_lossy(
-            source.timeline_gap_frames(),
+    fn timeline_gap_frames(&self) -> u64 {
+        round_scaled_frames_lossy(
+            self.decoder.timeline_gap_frames(),
             self.source_spec.sample_rate.get(),
             self.target_sample_rate.get(),
-        );
-        BlenderProfile::new(self.target_spec).with_timeline_gap_frames(bias)
+        )
+    }
+
+    fn blender_profile(&self) -> BlenderProfile {
+        BlenderProfile::new(self.target_spec)
     }
 
     delegate::delegate! {
