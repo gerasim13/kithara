@@ -354,6 +354,9 @@ impl HostedLayout {
 }
 
 enum HostedControl {
+    Crossfader {
+        path: String,
+    },
     Knob {
         path: String,
         current: f32,
@@ -376,6 +379,11 @@ impl HostedControl {
         skin: &Skin,
     ) -> Option<Self> {
         match (spec, value) {
+            (ControlSpec::Crossfader { .. }, Some(ReadValue::Scalar(_))) => {
+                Some(Self::Crossfader {
+                    path: path.to_owned(),
+                })
+            }
             (ControlSpec::Knob { .. }, Some(ReadValue::Scalar(value))) => Some(Self::Knob {
                 path: path.to_owned(),
                 current: value.clamp(0.0, 1.0).as_(),
@@ -396,9 +404,10 @@ impl HostedControl {
 
     fn path(&self) -> &str {
         match self {
-            Self::Knob { path, .. } | Self::StereoMeter { path } | Self::VerticalVu { path } => {
-                path
-            }
+            Self::Crossfader { path }
+            | Self::Knob { path, .. }
+            | Self::StereoMeter { path }
+            | Self::VerticalVu { path } => path,
         }
     }
 }
@@ -406,6 +415,7 @@ impl HostedControl {
 impl From<&HostedControl> for Descriptor {
     fn from(control: &HostedControl) -> Self {
         match control {
+            HostedControl::Crossfader { path } => Self::crossfader(path.clone()),
             HostedControl::Knob {
                 path,
                 current,
@@ -470,6 +480,7 @@ mod tests {
         builtin,
         compile::{CompiledNode, compile},
         ids::EndpointId,
+        interact::recognizers::ScalarState,
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
         render::{
             ControlAction, StereoLevels,
@@ -601,6 +612,15 @@ mod tests {
             + tree.children.iter().map(host_count).sum::<usize>()
     }
 
+    fn leaf_scalar_state_count(tree: &Tree) -> usize {
+        usize::from(tree.tag == Tag::of::<ScalarState>())
+            + tree
+                .children
+                .iter()
+                .map(leaf_scalar_state_count)
+                .sum::<usize>()
+    }
+
     fn hosted_contract(node: &ExpandedNode, components: &mut Vec<&'static str>) -> bool {
         match node {
             ExpandedNode::Row {
@@ -631,10 +651,23 @@ mod tests {
                     components.push("vertical-vu");
                     true
                 }
-                ControlSpec::Text { .. } => true,
+                ControlSpec::Crossfader { .. } => {
+                    components.push("crossfader");
+                    true
+                }
+                ControlSpec::Divider | ControlSpec::Text { .. } => true,
                 _ => false,
             },
             ExpandedNode::Popover { .. } | ExpandedNode::Pressable { .. } => false,
+        }
+    }
+
+    fn descriptor_path(descriptor: &Descriptor) -> &str {
+        match descriptor {
+            Descriptor::Crossfader { path }
+            | Descriptor::Knob { path, .. }
+            | Descriptor::StereoMeter { path }
+            | Descriptor::VerticalVu { path } => path,
         }
     }
 
@@ -791,10 +824,16 @@ mod tests {
     }
 
     #[kithara::test]
-    fn the_app_shaped_cut_hosts_only_both_studio_strips() {
+    fn the_app_shaped_mixer_owns_one_engine_for_both_strips() {
         let ui = compiled_fixture();
         let reads = FixtureReads::default();
-        let CompiledNode::Module { instance, root, .. } = &ui.root else {
+        let CompiledNode::Module {
+            instance,
+            module,
+            root,
+            ..
+        } = &ui.root
+        else {
             panic!("fixture root must be the mixer module");
         };
         let ExpandedNode::Column { children, .. } = root.as_ref() else {
@@ -806,93 +845,84 @@ mod tests {
         else {
             panic!("mixer strips must be a row");
         };
-        let strip_a = &strips[0];
-        let strip_b = &strips[2];
+        assert_eq!(strips.len(), 3, "two strips must surround one divider");
 
+        assert_eq!(ui.resolve(*module), "studio-mixer");
         assert!(ui.includes_module(*instance, &[0, 0], "studio-strip"));
         assert!(ui.includes_module(*instance, &[0, 2], "studio-strip"));
-        assert!(!ui.includes_module(*instance, &[], "studio-strip"));
-        assert!(!ui.includes_module(*instance, &[0], "studio-strip"));
-        assert!(!ui.includes_module(*instance, &[1], "studio-strip"));
-        for strip in [strip_a, strip_b] {
-            let mut components = Vec::new();
-            assert!(hosted_contract(strip, &mut components));
-            assert_eq!(components, ["knob", "knob", "knob", "vertical-vu"]);
-        }
+        let mut components = Vec::new();
+        assert!(hosted_contract(root, &mut components));
+        assert_eq!(
+            components,
+            [
+                "knob",
+                "knob",
+                "knob",
+                "vertical-vu",
+                "knob",
+                "knob",
+                "knob",
+                "vertical-vu",
+                "crossfader",
+            ]
+        );
 
         let renderer = headless_renderer();
         let viewport = Size::new(224.0, 420.0);
         let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
         let full_tree = Tree::new(full.as_widget());
-        assert_eq!(host_count(&full_tree), 2, "only both strips own engines");
+        assert_eq!(host_count(&full_tree), 1, "the whole mixer owns one engine");
+        assert_eq!(
+            leaf_scalar_state_count(&full_tree),
+            0,
+            "hosted leaves must use paint-only canvas programs"
+        );
 
         let child = super::super::node::render_engine_node(
-            strip_a,
-            &[0, 0],
+            root,
+            &[],
             *instance,
             &ui,
             &reads,
             builtin::skin(),
         );
-        let mut element = host(child, strip_a, &ui, &reads, builtin::skin());
+        let mut element = host(child, root, &ui, &reads, builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
             &mut tree,
             &renderer,
             &Limits::new(Size::ZERO, viewport),
         );
-        let hosted_a = HostedLayout::new(strip_a, &ui, &reads, builtin::skin());
-        let targets_a = hosted_a.targets(Layout::new(&node), Cursor::Unavailable);
-
-        let child_b = super::super::node::render_engine_node(
-            strip_b,
-            &[0, 2],
-            *instance,
-            &ui,
-            &reads,
-            builtin::skin(),
-        );
-        let mut element_b = host(child_b, strip_b, &ui, &reads, builtin::skin());
-        let mut tree_b = Tree::new(element_b.as_widget());
-        let node_b = element_b.as_widget_mut().layout(
-            &mut tree_b,
-            &renderer,
-            &Limits::new(Size::ZERO, viewport),
-        );
-        let hosted_b = HostedLayout::new(strip_b, &ui, &reads, builtin::skin());
-        let targets_b = hosted_b.targets(Layout::new(&node_b), Cursor::Unavailable);
+        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let descriptors = hosted.descriptors();
+        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let expected_paths = [
+            "mixer/a/high",
+            "mixer/a/mid",
+            "mixer/a/low",
+            "mixer/a/volume",
+            "mixer/b/high",
+            "mixer/b/mid",
+            "mixer/b/low",
+            "mixer/b/volume",
+            "mixer/xfade",
+        ];
         assert_eq!(
-            targets_a
-                .iter()
-                .map(|target| target.path)
-                .collect::<Vec<_>>(),
-            [
-                "mixer/a/high",
-                "mixer/a/mid",
-                "mixer/a/low",
-                "mixer/a/volume",
-            ],
+            descriptors.iter().map(descriptor_path).collect::<Vec<_>>(),
+            expected_paths,
+            "every interactive control needs its own descriptor"
         );
         assert_eq!(
-            targets_b
-                .iter()
-                .map(|target| target.path)
-                .collect::<Vec<_>>(),
-            [
-                "mixer/b/high",
-                "mixer/b/mid",
-                "mixer/b/low",
-                "mixer/b/volume",
-            ],
+            targets.iter().map(|target| target.path).collect::<Vec<_>>(),
+            expected_paths,
         );
         assert!(
-            targets_a
+            targets
                 .iter()
-                .chain(&targets_b)
                 .all(|target| target.hit.area().w > 0.0 && target.hit.area().h > 0.0),
             "every retained component must resolve to its paint-only canvas bounds",
         );
-        for target in targets_a.iter().chain(&targets_b) {
+        for target in targets.iter().filter(|target| target.path != "mixer/xfade") {
             let area = target.hit.area();
             if target.path.ends_with("/volume") {
                 assert_eq!(area.w, 38.0, "the VU target must be its declared canvas");
@@ -905,21 +935,28 @@ mod tests {
             }
         }
 
-        let volume = targets_a
+        let high_a = targets
             .iter()
-            .find(|target| target.path == "mixer/a/volume")
-            .unwrap_or_else(|| panic!("strip A volume target must exist"));
-        let area = volume.hit.area();
-        let cursor = Cursor::Available(Point::new(area.x + area.w / 2.0, area.y + area.h / 2.0));
-        let event = Event::Mouse(mouse::Event::ButtonPressed(Button::Left));
+            .find(|target| target.path == "mixer/a/high")
+            .unwrap_or_else(|| panic!("strip A high target must exist"));
+        let high_b = targets
+            .iter()
+            .find(|target| target.path == "mixer/b/high")
+            .unwrap_or_else(|| panic!("strip B high target must exist"));
+        let center = |target: &Target<'_>| {
+            let area = target.hit.area();
+            Point::new(area.x + area.w / 2.0, area.y + area.h / 2.0)
+        };
+        let start = center(high_a);
+        let over_b = center(high_b);
         let mut clipboard = clipboard::Null;
         let mut messages = Vec::new();
         let mut shell = Shell::new(&mut messages);
         element.as_widget_mut().update(
             &mut tree,
-            &event,
+            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
             Layout::new(&node),
-            cursor,
+            Cursor::Available(start),
             &renderer,
             &mut clipboard,
             &mut shell,
@@ -927,16 +964,30 @@ mod tests {
         );
         assert!(shell.is_event_captured());
         drop(shell);
+        assert!(messages.is_empty(), "arming a knob must not publish");
 
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::CursorMoved { position: over_b }),
+            Layout::new(&node),
+            Cursor::Available(over_b),
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert!(shell.is_event_captured());
+        drop(shell);
         assert_eq!(
             messages.len(),
             1,
-            "the hosted leaf must publish exactly once"
+            "strip B must not publish while strip A owns the mixer's capture slot"
         );
         let UiEvent::Control { path, action } = &messages[0] else {
-            panic!("the hosted VU must publish a control event");
+            panic!("the captured strip A knob must publish a control event");
         };
-        assert_eq!(path, "mixer/a/volume");
+        assert_eq!(path, "mixer/a/high");
         assert_eq!(action, &ControlAction::SetScalar(0.5));
     }
 

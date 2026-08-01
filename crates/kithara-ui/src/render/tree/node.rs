@@ -102,6 +102,9 @@ pub(super) fn render_compiled<'a>(
                 });
             let content: Element<'a, UiEvent> = if collapsed {
                 Space::new().into()
+            } else if hosted_module(ui.resolve(*module)) {
+                let child = render_engine_node(root, &[], *instance, ui, reads, skin);
+                host::host(child, root, ui, reads, skin)
             } else {
                 render_node(
                     root,
@@ -454,7 +457,16 @@ fn child_address(parent: &[usize], index: usize) -> Vec<usize> {
     address
 }
 
-const HOSTED_MODULES: [&str; 2] = ["studio-strip", "gallery-meters"];
+const HOSTED_MODULES: [&str; 4] = [
+    "studio-strip",
+    "studio-mixer",
+    "studio-mixer-single",
+    "gallery-meters",
+];
+
+fn hosted_module(module: &str) -> bool {
+    HOSTED_MODULES.contains(&module)
+}
 
 fn hosts_engine(ui: &CompiledUi, owner: InternId, address: &[usize]) -> bool {
     HOSTED_MODULES

@@ -290,4 +290,24 @@ mod tests {
             Some(0.25)
         );
     }
+
+    #[kithara::test]
+    fn crossfader_seeks_horizontally_with_a_horizontal_cursor() {
+        let mut engine = Engine::default();
+        let path = "mixer/xfade";
+        engine.reconcile([Descriptor::crossfader(path.to_owned())]);
+
+        assert_eq!(
+            engine.cursor(&[target(path, 25.0, 50.0)]),
+            CursorShape::ResizeH
+        );
+        assert_eq!(
+            value(engine.handle(
+                Input::PointerDown,
+                &[target(path, 25.0, 50.0)],
+                Instant::now(),
+            )),
+            Some(0.25)
+        );
+    }
 }

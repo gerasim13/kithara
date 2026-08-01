@@ -224,11 +224,11 @@ fn every_channel_strip_carries_the_supported_control_set() {
     }
 }
 
-/// The strip runs under a retained engine host that answers pointer input for
-/// its whole subtree, so a control the engine does not know would render and
-/// then quietly ignore the mouse.
+/// The mixer runs under one retained engine host that answers pointer input for
+/// its whole subtree, so an interactive control the engine does not know would
+/// render and then quietly ignore the mouse.
 #[kithara::test]
-fn every_strip_control_is_one_the_engine_host_can_answer() {
+fn every_mixer_control_is_one_the_engine_host_can_answer_or_is_inert() {
     for layout in LAYOUTS {
         let ui = compile_studio(layout).unwrap();
         let mut seen = 0;
@@ -237,10 +237,7 @@ fn every_strip_control_is_one_the_engine_host_can_answer() {
                 return;
             };
             let path = ui.resolve(*path);
-            if !["mixer/a/", "mixer/b/"]
-                .iter()
-                .any(|strip| path.starts_with(strip))
-            {
+            if !path.starts_with("mixer/") {
                 return;
             }
             seen += 1;
@@ -249,12 +246,14 @@ fn every_strip_control_is_one_the_engine_host_can_answer() {
                     spec,
                     ControlSpec::Knob { .. }
                         | ControlSpec::VuVertical { .. }
+                        | ControlSpec::Crossfader { .. }
+                        | ControlSpec::Divider
                         | ControlSpec::Text { .. }
                 ),
-                "`{path}` sits inside the hosted strip but is not a control the engine answers"
+                "`{path}` sits inside the hosted mixer but is neither engine input nor inert"
             );
         });
-        assert!(seen > 0, "{layout:?} compiled no strip controls at all");
+        assert!(seen > 0, "{layout:?} compiled no mixer controls at all");
     }
 }
 

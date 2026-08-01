@@ -32,11 +32,18 @@ pub(crate) struct Crossfader<'path, 'value, 'data, 'skin> {
     skin: &'skin Skin,
 }
 
-impl<'a, 'path, 'value, 'data, 'skin> Widget<'a> for Crossfader<'path, 'value, 'data, 'skin>
-where
-    'skin: 'a,
-{
+impl<'a> Widget<'a> for Crossfader<'_, '_, '_, 'a> {
     fn view(self) -> Element<'a, UiEvent> {
+        self.render(true)
+    }
+}
+
+impl<'a> Crossfader<'_, '_, '_, 'a> {
+    pub(crate) fn painted(self) -> Element<'a, UiEvent> {
+        self.render(false)
+    }
+
+    fn render(self, interactive: bool) -> Element<'a, UiEvent> {
         let Some(ReadValue::Scalar(value)) = self.value else {
             return Space::new().into();
         };
@@ -89,12 +96,7 @@ where
             .ticks
             .then(|| TickRail::new(TickAxis::Horizontal, metrics.ticks, self.skin));
         let slider_height = ticks.as_ref().map_or(0.0, TickRail::reserved) + metrics.thumb_height;
-        let slider = Canvas::new(CrossfaderCanvas {
-            drag: Scalar::builder()
-                .track(Track::AbsoluteHorizontal)
-                .hover(Hover::new(CursorShape::ResizeH))
-                .build(),
-            path: self.path.to_owned(),
+        let paint = CrossfaderPaint {
             rail_background: self.skin.color(metrics.rail_background),
             rail_color: self.skin.color(metrics.rail_frame.border),
             rail_frame: metrics.rail_frame,
@@ -108,9 +110,25 @@ where
             ticks,
             text_resources: self.skin.text_resources(),
             value: value.clamp(0.0, 1.0).as_(),
-        })
-        .width(Length::Fill)
-        .height(Length::Fixed(slider_height));
+        };
+        let slider: Element<'a, UiEvent> = if interactive {
+            Canvas::new(CrossfaderCanvas {
+                drag: Scalar::builder()
+                    .track(Track::AbsoluteHorizontal)
+                    .hover(Hover::new(CursorShape::ResizeH))
+                    .build(),
+                path: self.path.to_owned(),
+                paint,
+            })
+            .width(Length::Fill)
+            .height(Length::Fixed(slider_height))
+            .into()
+        } else {
+            Canvas::new(paint)
+                .width(Length::Fill)
+                .height(Length::Fixed(slider_height))
+                .into()
+        };
 
         container(
             Column::new()
@@ -136,6 +154,10 @@ where
 struct CrossfaderCanvas<'skin> {
     drag: Scalar,
     path: String,
+    paint: CrossfaderPaint<'skin>,
+}
+
+struct CrossfaderPaint<'skin> {
     rail_background: Color,
     rail_color: Color,
     rail_frame: FrameSkin,
@@ -240,6 +262,47 @@ impl canvas::Program<UiEvent> for CrossfaderCanvas<'_> {
         &self,
         _state: &ScalarState,
         renderer: &Renderer,
+        theme: &Theme,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Vec<Geometry> {
+        self.paint.draw(&(), renderer, theme, bounds, cursor)
+    }
+
+    fn mouse_interaction(
+        &self,
+        state: &ScalarState,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> mouse::Interaction {
+        self.drag
+            .cursor(state, &iced_interact::hit(bounds, cursor))
+            .into()
+    }
+
+    fn update(
+        &self,
+        state: &mut ScalarState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<UiEvent>> {
+        let input = iced_interact::input(event)?;
+        let hit = iced_interact::hit(bounds, cursor);
+        scalar(
+            &self.path,
+            self.drag.on_input(state, input, &hit, Instant::now()),
+        )
+    }
+}
+
+impl canvas::Program<UiEvent> for CrossfaderPaint<'_> {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         _cursor: Cursor,
@@ -297,32 +360,6 @@ impl canvas::Program<UiEvent> for CrossfaderCanvas<'_> {
             );
         }
         vec![frame.into_geometry()]
-    }
-
-    fn mouse_interaction(
-        &self,
-        state: &ScalarState,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> mouse::Interaction {
-        self.drag
-            .cursor(state, &iced_interact::hit(bounds, cursor))
-            .into()
-    }
-
-    fn update(
-        &self,
-        state: &mut ScalarState,
-        event: &Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
-        let input = iced_interact::input(event)?;
-        let hit = iced_interact::hit(bounds, cursor);
-        scalar(
-            &self.path,
-            self.drag.on_input(state, input, &hit, Instant::now()),
-        )
     }
 }
 

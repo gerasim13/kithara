@@ -252,15 +252,23 @@ event, one layer up and in the same file as the `UiEvent` it names. Routing the 
 recognizer instead would point the base at the crate's orchestration layer, and every base peer
 points strictly downward: `draw` to `text`, `text` to `skin`, `solve` to `layout::Axis`.
 
-The retained interaction boundary explicitly names two documents: the nested `studio-strip`, not
-its including mixer, and the `gallery-meters` include inside the Atoms gallery page. Expansion
-records each include root by structural address and module ID without adding a node wrapper, so the
-existing render-tree shape and layout stay unchanged. The iced host at each named root keeps one
+The retained interaction boundary explicitly names four documents: `studio-mixer`,
+`studio-mixer-single`, their nested `studio-strip`, and the `gallery-meters` include inside the
+Atoms gallery page. A direct layout module is selected by its compiled module ID; expansion records
+each nested include root by structural address and module ID without adding a node wrapper, so the
+existing render-tree shape and layout stay unchanged. The iced host at each selected root keeps one
 `Engine` in widget-tree state while its descriptor snapshot is rebuilt from the current reads on
 every view. Reconciliation matches an owned resolved control path plus component kind; it refreshes
 configuration and preserves recognizer state, and never retains an `InternId` across compiled UI
-lifetimes. The two module IDs form a named set in the render tree; subtree contents never silently
+lifetimes. The four module IDs form a named set in the render tree; subtree contents never silently
 opt another document into the engine.
+
+The mixer host absorbs the expanded roots of both included strips. Rendering beneath that host
+propagates `InputOwner::Engine`, while only `InputOwner::Leaf` may open a host, so the nested
+`studio-strip` markers cannot open second hosts. The descriptor and target walks recurse through the
+already-expanded rows and columns into both strips. One mixer therefore owns one engine and one
+capture slot for its crossfader, knobs, and VUs; a captured drag in one strip remains exclusive while
+the pointer crosses the other strip.
 
 Every hosted control is represented by one concrete scalar component that owns its resolved path,
 `Kind`, `Scalar`, and `ScalarState`. The former `Component` trait and `RetainedComponent` enum
@@ -274,14 +282,15 @@ non-default cursor. Hosted leaves keep their existing iced painting but use pain
 programs; their outcomes still cross through `render::event::scalar`, so
 `render::event::control_event` remains the only production `UiEvent::Control` constructor.
 
-The interactive `canvas::Program` for a knob, vertical VU, or stereo meter is therefore not gone:
-`InputOwner` picks the paint-only variant under the host and the interactive one everywhere else,
-because the same controls also stand outside these two documents. Two input paths for one control
+The interactive `canvas::Program` for a crossfader, knob, vertical VU, or stereo meter is therefore
+not gone: `InputOwner` picks the paint-only variant under the host and the interactive one everywhere
+else, because the same controls also stand outside these documents. Two input paths for one control
 is a transition, not the design - each disappears when its last unhosted site flips, and the pair
 must not grow a third reader or a second capture slot in the meantime. A hosted subtree also
-swallows every pointer event before its child sees it, so a hosted interactive leaf without a
-scalar component would go dead: the strip contains only knobs, a vertical VU and a label, while
-`gallery-meters` contains a stereo meter, two vertical VUs and a label.
+swallows every pointer event before its child sees it, so a hosted interactive leaf without a scalar
+component would go dead. The dual mixer adds one crossfader and an inert divider around two supported
+strips; the single mixer contains one supported strip. Each strip contains only knobs, a vertical VU
+and a label, while `gallery-meters` contains a stereo meter, two vertical VUs and a label.
 
 A `Scalar` carries a `Track` that says how a position becomes a value, and the split that matters is
 relative against absolute. A relative track counts travel from the press, so the press only arms the

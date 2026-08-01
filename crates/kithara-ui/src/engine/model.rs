@@ -2,6 +2,7 @@ use crate::interact::{Hit, Outcome};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Kind {
+    Crossfader,
     Knob,
     StereoMeter,
     VerticalVu,
@@ -14,6 +15,9 @@ pub(super) struct Identity {
 }
 
 pub(crate) enum Descriptor {
+    Crossfader {
+        path: String,
+    },
     Knob {
         path: String,
         current: f32,
@@ -29,6 +33,10 @@ pub(crate) enum Descriptor {
 }
 
 impl Descriptor {
+    pub(crate) fn crossfader(path: String) -> Self {
+        Self::Crossfader { path }
+    }
+
     pub(crate) fn knob(path: String, current: f32, drag_range: f32, wheel_step: f32) -> Self {
         Self::Knob {
             path,
@@ -48,14 +56,16 @@ impl Descriptor {
 
     pub(super) fn path(&self) -> &str {
         match self {
-            Self::Knob { path, .. } | Self::StereoMeter { path } | Self::VerticalVu { path } => {
-                path
-            }
+            Self::Crossfader { path }
+            | Self::Knob { path, .. }
+            | Self::StereoMeter { path }
+            | Self::VerticalVu { path } => path,
         }
     }
 
     pub(super) const fn kind(&self) -> Kind {
         match self {
+            Self::Crossfader { .. } => Kind::Crossfader,
             Self::Knob { .. } => Kind::Knob,
             Self::StereoMeter { .. } => Kind::StereoMeter,
             Self::VerticalVu { .. } => Kind::VerticalVu,

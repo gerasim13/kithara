@@ -129,7 +129,7 @@ pub(super) fn render_control<'a>(
             .skin(skin)
             .build()
             .view(),
-        ControlSpec::Crossfader { ticks } => crossfader(path, *ticks, value, skin),
+        ControlSpec::Crossfader { ticks } => crossfader(path, *ticks, value, skin, owner),
         ControlSpec::Fader { style, label } => {
             fader(path, *style, label.map(|id| ui.resolve(id)), value, skin)
         }

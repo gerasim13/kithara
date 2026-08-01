@@ -40,14 +40,18 @@ pub(super) fn crossfader<'a>(
     ticks: bool,
     value: Option<&ReadValue<'_>>,
     skin: &'a Skin,
+    owner: InputOwner,
 ) -> Element<'a, UiEvent> {
-    Crossfader::builder()
+    let crossfader = Crossfader::builder()
         .path(path)
         .ticks(ticks)
         .maybe_value(value)
         .skin(skin)
-        .build()
-        .view()
+        .build();
+    match owner {
+        InputOwner::Leaf => crossfader.view(),
+        InputOwner::Engine => crossfader.painted(),
+    }
 }
 
 pub(super) fn fader<'a>(

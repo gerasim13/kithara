@@ -71,6 +71,13 @@ impl From<Descriptor> for ScalarComponent {
 
 fn config(descriptor: Descriptor) -> (String, Scalar) {
     match descriptor {
+        Descriptor::Crossfader { path } | Descriptor::StereoMeter { path } => (
+            path,
+            Scalar::builder()
+                .track(Track::AbsoluteHorizontal)
+                .hover(Hover::new(CursorShape::ResizeH))
+                .build(),
+        ),
         Descriptor::Knob {
             path,
             current,
@@ -96,13 +103,6 @@ fn config(descriptor: Descriptor) -> (String, Scalar) {
             Scalar::builder()
                 .track(Track::AbsoluteVertical)
                 .hover(Hover::new(CursorShape::ResizeV))
-                .build(),
-        ),
-        Descriptor::StereoMeter { path } => (
-            path,
-            Scalar::builder()
-                .track(Track::AbsoluteHorizontal)
-                .hover(Hover::new(CursorShape::ResizeH))
                 .build(),
         ),
     }
