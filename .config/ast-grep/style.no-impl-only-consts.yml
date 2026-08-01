@@ -1,5 +1,12 @@
 id: style.no-impl-only-consts
-message: "Do not create an inherent `impl` block that only contains constants. Constants should be in the same `impl` block as the methods that use them. `struct Consts` is allowed only for grouping >2 constants."
+message: |
+  Inherent `impl` block containing one or two constants and nothing else.
+  Constants belong in the same `impl` block as the methods that use them.
+
+  Grouping is fine: an `impl` that holds three or more constants and no
+  methods is a deliberate constant namespace, and the type it hangs off may
+  be named anything. The smell this rule catches is one or two constants
+  split away from the code that uses them.
 severity: error
 language: Rust
 ignores:
@@ -13,10 +20,6 @@ rule:
     - kind: impl_item
     - not:
         pattern: "impl $TRAIT for $TYPE { $$$ }"
-    - not:
-        has:
-          kind: type_identifier
-          regex: "^Consts$"
     - has:
         kind: declaration_list
         has:
@@ -30,3 +33,30 @@ rule:
             any:
               - kind: function_item
               - kind: type_item
+    # Two ways to be a deliberate constant namespace rather than a split.
+    - not:
+        any:
+          # A type whose name ends in `Consts` says so outright, at any count.
+          - has:
+              kind: type_identifier
+              regex: "Consts$"
+          # Or three or more constants say so by weight. A middle constant —
+          # one that both follows and precedes another — proves there are at
+          # least three, without the rule having to count.
+          - has:
+              kind: declaration_list
+              has:
+                all:
+                  - any:
+                      - kind: const_item
+                      - kind: static_item
+                  - follows:
+                      any:
+                        - kind: const_item
+                        - kind: static_item
+                      stopBy: end
+                  - precedes:
+                      any:
+                        - kind: const_item
+                        - kind: static_item
+                      stopBy: end

@@ -439,6 +439,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use consts::{POPOVER, SURFACE, VIEWPORT};
     use iced::{
         keyboard::{Location, Modifiers, key::Physical},
         mouse::{Button, ScrollDelta},
@@ -452,15 +453,26 @@ mod tests {
         render::{ControlAction, UiEvent},
     };
 
-    const VIEWPORT: Size = Size {
-        width: 1280.0,
-        height: 800.0,
-    };
+    mod consts {
+        use super::{Rectangle, Size};
 
-    const SURFACE: Size = Size {
-        width: 300.0,
-        height: 404.0,
-    };
+        pub(super) const VIEWPORT: Size = Size {
+            width: 1280.0,
+            height: 800.0,
+        };
+
+        pub(super) const SURFACE: Size = Size {
+            width: 300.0,
+            height: 404.0,
+        };
+
+        pub(super) const POPOVER: Rectangle = Rectangle {
+            x: 35.0,
+            y: 36.0,
+            width: 300.0,
+            height: 404.0,
+        };
+    }
 
     const fn burger(x: f32, y: f32) -> Rectangle {
         Rectangle {
@@ -673,13 +685,6 @@ mod tests {
         );
         assert_eq!(state.press, None, "a press with no cursor clears the point");
     }
-
-    const POPOVER: Rectangle = Rectangle {
-        x: 35.0,
-        y: 36.0,
-        width: 300.0,
-        height: 404.0,
-    };
 
     const fn at(x: f32, y: f32) -> Cursor {
         Cursor::Available(Point::new(x, y))

@@ -24,20 +24,34 @@ rule:
         - kind: static_item
     - not: { has: { kind: visibility_modifier } }
     - not:
-        {
-          inside:
-            {
-              any:
-                [
-                  { kind: impl_item },
-                  { kind: trait_item },
-                  { kind: function_item },
-                  { kind: foreign_mod_item },
-                  { kind: block },
-                ],
-              stopBy: end,
-            },
-        }
+        inside:
+          any:
+            - kind: impl_item
+            - kind: trait_item
+            - kind: function_item
+            - kind: foreign_mod_item
+            - kind: block
+            # A module holding constants and nothing else is a deliberate
+            # constant namespace — the same grouping a `Consts` type gives,
+            # and the shape this rule's own message recommends. Its name is
+            # not the signal; the absence of anything but constants is.
+            - all:
+                - kind: mod_item
+                - not:
+                    has:
+                      kind: declaration_list
+                      has:
+                        any:
+                          - kind: function_item
+                          - kind: struct_item
+                          - kind: enum_item
+                          - kind: union_item
+                          - kind: trait_item
+                          - kind: impl_item
+                          - kind: type_item
+                          - kind: mod_item
+                          - kind: macro_definition
+          stopBy: end
     - any:
         - follows:
             all:
