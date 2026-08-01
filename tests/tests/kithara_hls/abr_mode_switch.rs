@@ -1199,11 +1199,18 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
 
     // download_batch_size larger than total segments → peer fetches the
     // full variant 0 then parks itself idle.
+    //
+    // The variant is pinned rather than left to `auto(0)`: the subject here is
+    // the Manual click, and under Auto the controller reaches its own
+    // down-switch off the initial bandwidth estimate before the click lands.
+    // The player is then already on variant 1 and a Manual(1) click is a
+    // correct no-op — the assertion below would be waiting for a switch the
+    // user never asked for.
     let hls_config = HlsConfig::for_url(url)
         .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(auto(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .download_batch_size(segment_count * 2)
         .build();
 

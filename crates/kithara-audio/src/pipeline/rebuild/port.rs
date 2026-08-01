@@ -275,17 +275,14 @@ fn run<T: StreamType>(job: PendingJob<T>) {
         let mut decoder = deps.factory.create(reader, media_info.clone())?;
         let pending_head_skip = match landing {
             Some(landing) => match decoder.seek(landing)? {
-                DecoderSeekOutcome::Landed { landed_at, .. } => {
-                    let remaining = landing.saturating_sub(landed_at);
-                    (!remaining.is_zero()).then_some(ResumeState {
-                        skip: Some(remaining),
-                        seek: SeekContext {
-                            target: landing,
-                            epoch: seek_epoch,
-                        },
-                        ..Default::default()
-                    })
-                }
+                DecoderSeekOutcome::Landed { .. } => Some(ResumeState {
+                    trim_head: true,
+                    seek: SeekContext {
+                        target: landing,
+                        epoch: seek_epoch,
+                    },
+                    ..Default::default()
+                }),
                 DecoderSeekOutcome::PastEof { .. } => None,
             },
             None => None,

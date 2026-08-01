@@ -280,7 +280,7 @@ mod tests {
                 },
                 anchor_offset: None,
                 anchor_variant_index: None,
-                skip: None,
+                trim_head: false,
             })
             .erase(),
             Track::<AtEof>::new(()).erase(),

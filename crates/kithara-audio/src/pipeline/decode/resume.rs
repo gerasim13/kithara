@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use kithara_decode::{DecoderSeekOutcome, PcmChunk, duration_for_frames};
+use kithara_decode::{PcmChunk, duration_for_frames};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::StreamType;
 
@@ -24,13 +24,6 @@ pub(crate) struct RouteCtx<'a, T: StreamType> {
     pub(crate) seek_active: bool,
     pub(crate) active: &'a DecoderGeneration,
     pub(crate) stream: &'a SharedStream<T>,
-}
-
-pub(crate) fn seek_position(outcome: DecoderSeekOutcome) -> Duration {
-    match outcome {
-        DecoderSeekOutcome::Landed { landed_at, .. } => landed_at,
-        DecoderSeekOutcome::PastEof { duration } => duration,
-    }
 }
 
 impl ResumeCursor {

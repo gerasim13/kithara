@@ -1,6 +1,7 @@
 use kithara_decode::{PcmChunk, PcmSpec};
 use kithara_platform::time::Duration;
 use kithara_stream::StreamType;
+use tracing::debug;
 
 use crate::pipeline::{decode::DecoderGeneration, seek::ResumeState, stream::shared::SharedStream};
 
@@ -61,11 +62,11 @@ pub(crate) fn apply(
     let Some(resume) = resume else {
         return Some(chunk);
     };
-    let Some(remaining) = resume.skip else {
+    if !resume.trim_head {
         return Some(chunk);
-    };
-    if resume.seek.epoch != epoch || remaining.is_zero() {
-        resume.skip = None;
+    }
+    if resume.seek.epoch != epoch {
+        resume.trim_head = false;
         return Some(chunk);
     }
     let spec = chunk.spec();
@@ -73,17 +74,22 @@ pub(crate) fn apply(
     if chunk_frames == 0 {
         return None;
     }
-    let mut drop_frames = frames(spec, remaining);
-    if drop_frames == 0 {
-        drop_frames = 1;
-    }
+    let drop_frames = frames(
+        spec,
+        resume.seek.target.saturating_sub(chunk.meta.timestamp),
+    );
     if drop_frames >= chunk_frames {
-        let remaining = remaining.saturating_sub(duration(spec, chunk_frames));
-        resume.skip = (!remaining.is_zero()).then_some(remaining);
         return None;
     }
+    debug!(
+        target = ?resume.seek.target,
+        chunk_at = ?chunk.meta.timestamp,
+        frame_offset = chunk.meta.frame_offset,
+        drop_frames,
+        "trimmed the head of a resumed generation"
+    );
     trim_start(&mut chunk, drop_frames);
-    resume.skip = None;
+    resume.trim_head = false;
     Some(chunk)
 }
 

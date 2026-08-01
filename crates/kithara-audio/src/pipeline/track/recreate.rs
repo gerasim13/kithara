@@ -13,7 +13,6 @@ use crate::pipeline::{
         event::{GenerationInstalled, enqueue_generation_installed},
         format::{FormatDecision, detect},
         gate::recreate_phase,
-        resume::seek_position,
     },
     rebuild::{
         DecoderBuildComplete, RebuildState, RecreateCause, RecreateNext, RecreateOutcome,
@@ -42,13 +41,10 @@ fn finish_route_change_after_recreate<T: StreamType>(
         .decode
         .seek(&src.shared_stream, src.playhead.as_ref(), target)
     {
-        Ok(outcome) => {
+        Ok(_) => {
             src.decode.reset();
             src.seek_engine
                 .record_resume_target(request.seek.epoch, target);
-            let landed_at = seek_position(outcome);
-            let remaining = target.saturating_sub(landed_at);
-            let skip = (!remaining.is_zero()).then_some(remaining);
             src.update_state(
                 Track::<AwaitingResume>::new(ResumeState {
                     anchor_offset: Some(recreate.offset),
@@ -56,7 +52,7 @@ fn finish_route_change_after_recreate<T: StreamType>(
                         .media_info
                         .variant_index
                         .and_then(|variant| usize::try_from(variant).ok()),
-                    skip,
+                    trim_head: true,
                     seek: request.seek,
                 })
                 .erase(),
