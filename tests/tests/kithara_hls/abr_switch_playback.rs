@@ -961,6 +961,14 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
     // ≥660_000-frame target proves sustained FLAC throughput; `saw_eof` records
     // a PREMATURE end (the prod stall surfaces as a false EOS), and the read
     // owns `hls_rx` to capture every `VariantApplied` without broadcast lag.
+    //
+    // The sample target alone does not bound this window, though: a consumer
+    // reading a warm cache produces those frames in less wall-clock time than a
+    // single fetch takes, so the whole budget can be spent on the OUTGOING
+    // variant and the window closes before the switch it is meant to observe
+    // has issued one request. That measures nothing "post-switch". The loop
+    // therefore also runs until the switch is seen — the harness timeout, not
+    // the sample budget, is what fails a switch that never comes.
     let post_target: u64 = 660_000;
     let (post_samples, applied_targets, max_stall_ms, saw_eof) = spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];
@@ -969,7 +977,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
         let mut last_progress = Instant::now();
         let mut max_stall = 0u128;
         let mut eof = false;
-        while post < post_target {
+        while post < post_target || applied.is_empty() {
             while let Ok(ev) = hls_rx.try_recv().map(|env| env.event) {
                 if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
                     applied.push(to.get());
