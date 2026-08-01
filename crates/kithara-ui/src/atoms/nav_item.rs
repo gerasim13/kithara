@@ -109,7 +109,7 @@ mod tests {
     use crate::{
         builtin,
         draw::{DrawCmd, Geom},
-        text::FontId,
+        text::{FontId, GlyphSegment},
     };
 
     #[kithara::test]
@@ -164,7 +164,10 @@ mod tests {
         else {
             panic!("the third command must draw the nav icon");
         };
-        assert_eq!(icon_run.font(), FontId::Lucide);
+        assert_eq!(
+            icon_run.segments().first().map(GlyphSegment::face),
+            Some(FontId::Lucide)
+        );
         assert_eq!(icon_content, &glyph.to_string());
         assert_eq!(icon_transform.dx, 19.0);
         assert_eq!(
@@ -182,7 +185,10 @@ mod tests {
         else {
             panic!("the fourth command must draw the nav label");
         };
-        assert_eq!(label_run.font(), FontId::JetBrainsMonoRegular);
+        assert_eq!(
+            label_run.segments().first().map(GlyphSegment::face),
+            Some(FontId::JetBrainsMonoRegular)
+        );
         assert_eq!(label_content, "PRIMITIVES");
         assert_eq!(
             label_transform.dx,

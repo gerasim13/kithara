@@ -8,4 +8,4 @@ pub(crate) use catalog::select;
 pub use context::TextContext;
 pub use resources::TextError;
 pub(crate) use resources::TextResources;
-pub use run::{Glyph, GlyphRun};
+pub use run::{Glyph, GlyphRun, GlyphSegment};

@@ -47,29 +47,32 @@ impl Backend for IcedBackend<'_> {
     }
 
     fn text(&mut self, run: &GlyphRun, _content: &str, transform: Transform, color: Rgba) {
-        let outlines = self.resources.outlines(run.font());
+        let resources = self.resources;
         let path = Path::new(|builder| {
-            for glyph in run.glyphs() {
-                let Some(outline) = outlines.get(GlyphId::new(glyph.id)) else {
-                    continue;
-                };
-                let mut pen = IcedOutline {
-                    builder,
-                    glyph: Pt {
-                        x: glyph.x,
-                        y: glyph.y,
-                    },
-                    transform,
-                };
-                let settings =
-                    DrawSettings::unhinted(FontSize::new(run.size()), LocationRef::default());
-                if let Err(error) = outline.draw(settings, &mut pen) {
-                    tracing::warn!(
-                        face = ?run.font(),
-                        glyph_id = glyph.id,
-                        ?error,
-                        "failed to draw embedded glyph outline"
-                    );
+            for segment in run.segments() {
+                let outlines = resources.outlines(segment.face());
+                for glyph in segment.glyphs() {
+                    let Some(outline) = outlines.get(GlyphId::new(glyph.id)) else {
+                        continue;
+                    };
+                    let mut pen = IcedOutline {
+                        builder,
+                        glyph: Pt {
+                            x: glyph.x,
+                            y: glyph.y,
+                        },
+                        transform,
+                    };
+                    let settings =
+                        DrawSettings::unhinted(FontSize::new(run.size()), LocationRef::default());
+                    if let Err(error) = outline.draw(settings, &mut pen) {
+                        tracing::warn!(
+                            face = ?segment.face(),
+                            glyph_id = glyph.id,
+                            ?error,
+                            "failed to draw embedded glyph outline"
+                        );
+                    }
                 }
             }
         });

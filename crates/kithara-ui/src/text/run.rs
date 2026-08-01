@@ -9,43 +9,59 @@ pub struct Glyph {
     pub y: f32,
 }
 
-/// A measured, positioned glyph run using one embedded font face and size.
+/// A stretch of a shaped run drawn with one embedded face.
 #[derive(Clone, Debug, PartialEq)]
-pub struct GlyphRun {
-    font: FontId,
+pub struct GlyphSegment {
+    face: FontId,
     glyphs: Vec<Glyph>,
-    height: f32,
-    size: f32,
-    width: f32,
 }
 
-impl GlyphRun {
-    pub(super) fn new(
-        font: FontId,
-        glyphs: Vec<Glyph>,
-        height: f32,
-        size: f32,
-        width: f32,
-    ) -> Self {
-        Self {
-            font,
-            glyphs,
-            height,
-            size,
-            width,
-        }
+impl GlyphSegment {
+    pub(super) const fn new(face: FontId, glyphs: Vec<Glyph>) -> Self {
+        Self { face, glyphs }
     }
 
-    /// Returns the embedded face used by every glyph in the run.
+    /// Returns the embedded face every glyph in this segment belongs to.
     #[must_use]
-    pub const fn font(&self) -> FontId {
-        self.font
+    pub const fn face(&self) -> FontId {
+        self.face
     }
 
     /// Returns the positioned glyphs in visual order.
     #[must_use]
     pub fn glyphs(&self) -> &[Glyph] {
         &self.glyphs
+    }
+}
+
+/// A measured, positioned run of text at one size, segmented by face.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GlyphRun {
+    segments: Vec<GlyphSegment>,
+    height: f32,
+    size: f32,
+    width: f32,
+}
+
+impl GlyphRun {
+    pub(super) const fn new(
+        segments: Vec<GlyphSegment>,
+        height: f32,
+        size: f32,
+        width: f32,
+    ) -> Self {
+        Self {
+            segments,
+            height,
+            size,
+            width,
+        }
+    }
+
+    /// Returns the single-face segments in visual order.
+    #[must_use]
+    pub fn segments(&self) -> &[GlyphSegment] {
+        &self.segments
     }
 
     /// Returns the measured layout height in logical pixels.

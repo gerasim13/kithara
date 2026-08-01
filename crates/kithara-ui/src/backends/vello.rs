@@ -136,25 +136,27 @@ impl Backend for VelloBackend<'_> {
     }
 
     fn text(&mut self, run: &GlyphRun, _content: &str, transform: Transform, color: Rgba) {
-        let data = FontData::new(Blob::new(SharedArc::new(run.font().bytes())), 0);
-        let glyphs = run.glyphs().iter().map(|glyph| Glyph {
-            id: glyph.id,
-            x: glyph.x,
-            y: glyph.y,
-        });
-        self.scene
-            .draw_glyphs(&data)
-            .transform(Affine::new([
-                f64::from(transform.xx),
-                f64::from(transform.yx),
-                f64::from(transform.xy),
-                f64::from(transform.yy),
-                f64::from(transform.dx),
-                f64::from(transform.dy),
-            ]))
-            .font_size(run.size())
-            .brush(Color::from(color))
-            .draw(Fill::NonZero, glyphs);
+        for segment in run.segments() {
+            let data = FontData::new(Blob::new(SharedArc::new(segment.face().bytes())), 0);
+            let glyphs = segment.glyphs().iter().map(|glyph| Glyph {
+                id: glyph.id,
+                x: glyph.x,
+                y: glyph.y,
+            });
+            self.scene
+                .draw_glyphs(&data)
+                .transform(Affine::new([
+                    f64::from(transform.xx),
+                    f64::from(transform.yx),
+                    f64::from(transform.xy),
+                    f64::from(transform.yy),
+                    f64::from(transform.dx),
+                    f64::from(transform.dy),
+                ]))
+                .font_size(run.size())
+                .brush(Color::from(color))
+                .draw(Fill::NonZero, glyphs);
+        }
     }
 }
 

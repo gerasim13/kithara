@@ -139,15 +139,26 @@ iced ignored the tracking its skin declared — `brand` and `brand_small` at 0.3
 role whole means the omission is not expressible. `color` rides along unread by shaping; that is
 the price of making the role the unit.
 
-Fontique system-font access is off, and that is a known gap rather than a contract. Embedded
-coverage is narrower than the face count suggests: Inter and JetBrains Mono carry Latin, Cyrillic
-and Greek, while Space Grotesk is Latin-only, and the skin spends Space Grotesk on `track_title`,
-`title`, `deck_letter` and `brand`. Text outside that coverage shapes to `.notdef` here, while the
-iced host's own text stack still falls back through cosmic-text, so the gap becomes user-visible
-exactly when the base takes over all text. Closing it needs two things this crate does not have
-yet: a `GlyphRun` that can name a face outside `FontId`, and a single document-scoped context, so
-that enabling system fonts does not repeat a platform font-directory scan per widget. Until then
-the collection stays embedded-only.
+Embedded coverage is narrower than the face count suggests: Inter and JetBrains Mono carry Latin,
+Cyrillic and Greek, while Space Grotesk is Latin-only. `kithara-dark.kskin.ron` spends the Display
+family on `track_title`, `title`, `deck_letter` and `brand`; a Cyrillic track title in a deck header
+therefore shaped to `.notdef` under the base while the iced host's own stack still fell back
+through cosmic-text, so the hole became user-visible exactly when the base took over all text.
+
+`TextResources::new` closes it for Cyrillic and Greek by naming Inter as the collection's fallback
+for those two scripts. Under AGENTS.md this is a legitimate fallback rather than a workaround: it
+is the Unicode fallback mechanism itself, a user-facing capability, not a branch papering over a
+broken state contract. A fallback key carries a script and a locale rather than a family, so the
+registration is collection-wide — Inter and JetBrains Mono carry both scripts themselves and never
+reach it, and only the Display family does. Greek is registered because Inter was measured to cover
+it rather than assumed to, and a test holds that measurement; a fallback that resolved to `.notdef`
+would be worse than none.
+
+Fontique system-font access stays off, and that remains a known gap rather than a contract. It is
+what still leaves CJK, Hebrew, Arabic and emoji at `.notdef`, since nothing embedded covers them.
+Closing that needs two things this crate does not have yet: a font identity that can name a face
+outside `FontId`, and a single document-scoped context, so that enabling system fonts does not
+repeat a platform font-directory scan per widget.
 
 Where that owner sits is transitional and is stated here so it does not become permanent by
 default. Each text-drawing widget still owns one `TextContext`, so a document holds as many Parley
@@ -157,10 +168,11 @@ longer follow that per-widget lifetime: `TextResources` builds the ten skrifa ou
 once and lends them to the iced backend, and adapters borrow the resources from `Skin` rather than
 cloning them per view build.
 
-The Vello backend still builds a `FontData` per text call. Caching them would mean an exported
-font-cache type whose only caller is a test, because no shipped host encodes a Vello scene yet —
-the architectural ratchet refuses that, and it is right to. The allocation ends when a Vello host
-exists or when the draw seam gains a backend-owned font type, whichever lands first.
+The Vello backend still builds a `FontData` per text call, now once per segment rather than once
+per run. Caching them would mean an exported font-cache type whose only caller is a test, because
+no shipped host encodes a Vello scene yet — the architectural ratchet refuses that, and it is right
+to. The allocation ends when a Vello host exists or when the draw seam gains a backend-owned font
+type, whichever lands first.
 
 `text::FontId` owns family/weight-to-face selection and the face-to-byte mapping. Its tenth value is
 the embedded Lucide face, and `render::fonts` re-exports the same catalog bytes for iced host
@@ -169,10 +181,20 @@ compile-time embedded face with a production glyph consumer, while a fallback fa
 `FontId`. Invalid compile-time embedded font data is a fail-fast construction error.
 
 Text crosses the draw seam as the source string, a neutral `GlyphRun`, a transform, and a
-colour. `GlyphRun` carries the selected `FontId`, font size, measured width and height, and visual
-order glyphs as id plus positioned x/y. Backends do not shape: Vello submits those positions to
-`draw_glyphs`, while iced canvas extracts the corresponding outlines with skrifa and fills one
-canvas path; it never calls `Frame::fill_text`.
+colour. `GlyphRun` carries font size, measured width and height, and its glyphs as a sequence of
+single-face `GlyphSegment`s in visual order, each naming its own `FontId`. It cannot name one face
+for the whole run, because script fallback means one string crosses faces mid-run: the moment the
+Cyrillic fallback exists, `"Трек Mix"` shapes as three Parley runs over two faces, and a run that
+reported a single face would hand Inter's glyph ids to Space Grotesk's outline table — wrong
+glyphs rather than `.notdef`. A segment's face is settled by pointer identity against the
+registered `&'static [u8]`, not by re-parsing the table; a face outside the embedded catalog cannot
+occur while the collection is embedded-only, and is dropped with a `tracing` warning if it ever
+does. The grouping sits on the segment rather than on each glyph because backends bind one outline
+collection per face; a per-glyph tag would make them rebind per glyph.
+
+Backends do not shape: Vello submits each segment's positions to `draw_glyphs` under that
+segment's face, while iced canvas extracts the corresponding outlines with skrifa and fills one
+canvas path across all segments; it never calls `Frame::fill_text`.
 
 Parley 0.6, Vello 0.6, and the iced outline path use the same skrifa 0.37 crate instance. Full
 positioned glyph data may cross between shaping and rendering; there is no bare-glyph-id-only

@@ -6,11 +6,14 @@ use parley::{
     style::{FontFamily as ParleyFamily, FontWeight as ParleyWeight},
 };
 
-use super::{FontId, Glyph, GlyphRun, TextError, TextResources, select};
+use super::{
+    FontId, Glyph, GlyphRun, GlyphSegment, TextError, TextResources, resources::FaceBlobs, select,
+};
 use crate::skin::{FontWeight, TextRoleSkin};
 
 /// Owns the embedded font collection and Parley shaping scratch space.
 pub struct TextContext {
+    faces: FaceBlobs,
     fonts: FontContext,
     layout: LayoutContext<()>,
 }
@@ -46,6 +49,7 @@ impl TextContext {
 impl From<&TextResources> for TextContext {
     fn from(resources: &TextResources) -> Self {
         Self {
+            faces: resources.faces(),
             fonts: FontContext {
                 collection: resources.collection(),
                 source_cache: SourceCache::default(),
@@ -56,7 +60,7 @@ impl From<&TextResources> for TextContext {
 }
 
 impl TextContext {
-    /// Shapes and measures text in a skin role with the selected embedded face.
+    /// Shapes and measures text in a skin role with embedded primary and fallback faces.
     ///
     /// `max_width` is `None` for an unbounded line or `Some(width)` for line
     /// breaking. The role travels whole rather than as a face and a size,
@@ -102,26 +106,33 @@ impl TextContext {
         let mut layout = builder.build(content);
         layout.break_all_lines(max_width);
 
-        let mut glyphs = Vec::new();
+        let mut segments = Vec::new();
         for line in layout.lines() {
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(run) = item else {
                     continue;
                 };
-                glyphs.extend(run.positioned_glyphs().map(|glyph| Glyph {
-                    id: glyph.id,
-                    x: glyph.x,
-                    y: glyph.y,
-                }));
+                let blob = run.run().font().data.id();
+                let Some(face) = self.faces.face(blob) else {
+                    tracing::warn!(
+                        requested = ?style.font,
+                        blob,
+                        "shaping resolved a face outside the embedded catalog; dropping its glyphs"
+                    );
+                    continue;
+                };
+                let glyphs = run
+                    .positioned_glyphs()
+                    .map(|glyph| Glyph {
+                        id: glyph.id,
+                        x: glyph.x,
+                        y: glyph.y,
+                    })
+                    .collect();
+                segments.push(GlyphSegment::new(face, glyphs));
             }
         }
-        GlyphRun::new(
-            style.font,
-            glyphs,
-            layout.height(),
-            style.size,
-            layout.width(),
-        )
+        GlyphRun::new(segments, layout.height(), style.size, layout.width())
     }
 }
 
@@ -181,6 +192,82 @@ mod tests {
     }
 
     #[kithara::test]
+    fn display_cyrillic_uses_one_inter_segment() {
+        let run = TextContext::new().unwrap().shape(
+            "Трек",
+            role(FontFamily::Display, FontWeight::Normal, 12.0, 0.0),
+            None,
+        );
+        let [segment] = run.segments() else {
+            panic!("Display Cyrillic must shape as one fallback segment");
+        };
+
+        assert_eq!(segment.face(), FontId::InterRegular);
+        assert_eq!(
+            segment
+                .glyphs()
+                .iter()
+                .map(|glyph| glyph.id)
+                .collect::<Vec<_>>(),
+            [2437, 848, 641, 1264]
+        );
+    }
+
+    #[kithara::test]
+    fn display_mixed_script_preserves_visual_segment_order() {
+        let run = TextContext::new().unwrap().shape(
+            "Трек Mix",
+            role(FontFamily::Display, FontWeight::Normal, 12.0, 0.0),
+            None,
+        );
+        let segments = run.segments();
+
+        assert_eq!(segments.len(), 3);
+        assert_eq!(segments[0].face(), FontId::InterRegular);
+        assert_eq!(segments[1].face(), FontId::SpaceGroteskRegular);
+        assert_eq!(segments[2].face(), FontId::SpaceGroteskRegular);
+        assert_eq!(
+            segments[0]
+                .glyphs()
+                .iter()
+                .map(|glyph| glyph.id)
+                .collect::<Vec<_>>(),
+            [2437, 848, 641, 1264]
+        );
+    }
+
+    #[kithara::test]
+    fn display_latin_uses_one_space_grotesk_segment() {
+        let run = TextContext::new().unwrap().shape(
+            "Track",
+            role(FontFamily::Display, FontWeight::Normal, 12.0, 0.0),
+            None,
+        );
+        let [segment] = run.segments() else {
+            panic!("Display Latin must stay in one primary-face segment");
+        };
+
+        assert_eq!(segment.face(), FontId::SpaceGroteskRegular);
+        assert!(segment.glyphs().iter().all(|glyph| glyph.id != 0));
+    }
+
+    #[kithara::test]
+    fn display_greek_fallback_has_no_notdef_glyphs() {
+        let run = TextContext::new().unwrap().shape(
+            "Ελληνικά",
+            role(FontFamily::Display, FontWeight::Normal, 12.0, 0.0),
+            None,
+        );
+        let [segment] = run.segments() else {
+            panic!("Display Greek must shape as one fallback segment");
+        };
+
+        assert_eq!(segment.face(), FontId::InterRegular);
+        assert!(!segment.glyphs().is_empty());
+        assert!(segment.glyphs().iter().all(|glyph| glyph.id != 0));
+    }
+
+    #[kithara::test]
     fn shape_returns_positioned_glyphs_and_measurement() {
         let run = TextContext::new().unwrap().shape(
             "GAIN",
@@ -188,10 +275,15 @@ mod tests {
             None,
         );
 
-        assert_eq!(run.font(), FontId::InterSemibold);
-        assert!(!run.glyphs().is_empty());
+        let [segment] = run.segments() else {
+            panic!("Latin in the Sans family must stay in one primary-face segment");
+        };
+
+        assert_eq!(segment.face(), FontId::InterSemibold);
+        assert!(!segment.glyphs().is_empty());
         assert!(
-            run.glyphs()
+            segment
+                .glyphs()
                 .iter()
                 .all(|glyph| glyph.x.is_finite() && glyph.y.is_finite())
         );
@@ -205,8 +297,12 @@ mod tests {
         let content = char::from(lucide_icons::Icon::Play).to_string();
         let run = TextContext::new().unwrap().shape_lucide(&content, 14.0);
 
-        assert_eq!(run.font(), FontId::Lucide);
-        assert_eq!(run.glyphs().len(), 1);
+        let [segment] = run.segments() else {
+            panic!("an icon glyph must shape as one Lucide segment");
+        };
+
+        assert_eq!(segment.face(), FontId::Lucide);
+        assert_eq!(segment.glyphs().len(), 1);
         assert!(run.width() > 0.0);
         assert!(run.height() > 0.0);
     }
