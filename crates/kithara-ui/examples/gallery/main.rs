@@ -582,11 +582,34 @@ mod tests {
         }
     }
 
-    /// The meters page runs under the retained engine host, which answers pointer
-    /// input for its whole subtree - a control the engine does not know would draw
-    /// and then ignore the mouse, with nothing to see until a hand tries it.
     #[kithara::test]
     fn the_hosted_meters_page_holds_only_controls_the_engine_answers() {
+        assert_hosted_page_controls("meters", |spec| {
+            matches!(
+                spec,
+                ControlSpec::VuStereo | ControlSpec::VuVertical { .. } | ControlSpec::Text { .. }
+            )
+        });
+    }
+
+    #[kithara::test]
+    fn the_hosted_knobs_page_holds_only_controls_the_engine_answers() {
+        assert_hosted_page_controls("knobs", |spec| {
+            matches!(spec, ControlSpec::Knob { .. } | ControlSpec::Text { .. })
+        });
+    }
+
+    #[kithara::test]
+    fn the_hosted_toggles_page_holds_only_controls_the_engine_answers() {
+        assert_hosted_page_controls("toggles", |spec| {
+            matches!(
+                spec,
+                ControlSpec::Toggle | ControlSpec::Checkbox | ControlSpec::Text { .. }
+            )
+        });
+    }
+
+    fn assert_hosted_page_controls(page: &str, engine_answers: impl Fn(&ControlSpec) -> bool) {
         let ui = compile(
             Tab::Atoms.entry(),
             &resolver(),
@@ -594,49 +617,70 @@ mod tests {
             builtin::skin_doc(),
             &UiConfig::default(),
         )
-        .unwrap();
+        .unwrap_or_else(|error| panic!("the atoms tab must compile: {error}"));
         let mut seen = 0;
+        let segment = format!("/{page}/");
 
-        each_control(&ui, &mut |path, spec| {
-            if !path.contains("/meters/") {
+        each_hosted_item(&ui, &mut |path, spec| {
+            if !path.contains(&segment) {
                 return;
             }
             seen += 1;
             assert!(
-                matches!(
-                    spec,
-                    ControlSpec::VuStereo
-                        | ControlSpec::VuVertical { .. }
-                        | ControlSpec::Text { .. }
-                ),
-                "`{path}` sits inside the hosted meters page but is not a control the engine \
-                 answers"
+                spec.is_some_and(&engine_answers),
+                "`{path}` sits inside the hosted {page} page but takes input the engine does not \
+                 answer"
             );
         });
 
-        assert!(seen > 0, "the atoms tab compiled no meters controls at all");
+        assert!(seen > 0, "the atoms tab compiled no {page} controls at all");
     }
 
-    fn each_control(ui: &CompiledUi, visit: &mut impl FnMut(&str, &ControlSpec)) {
-        fn walk(node: &ExpandedNode, ui: &CompiledUi, visit: &mut impl FnMut(&str, &ControlSpec)) {
+    fn each_hosted_item(ui: &CompiledUi, visit: &mut impl FnMut(&str, Option<&ControlSpec>)) {
+        fn walk(
+            node: &ExpandedNode,
+            ui: &CompiledUi,
+            visit: &mut impl FnMut(&str, Option<&ControlSpec>),
+        ) {
             match node {
-                ExpandedNode::Row { children, .. }
-                | ExpandedNode::Column { children, .. }
-                | ExpandedNode::Slot { children, .. } => {
+                ExpandedNode::Row {
+                    surface, children, ..
+                }
+                | ExpandedNode::Column {
+                    surface, children, ..
+                } => {
+                    if let Some(surface) = surface {
+                        visit(ui.resolve(surface.path), None);
+                    }
                     for child in children {
                         walk(child, ui, visit);
                     }
                 }
-                ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
+                ExpandedNode::Slot { children, .. } => {
+                    for child in children {
+                        walk(child, ui, visit);
+                    }
+                }
+                ExpandedNode::Optional { child, .. } => {
+                    walk(child, ui, visit);
+                }
+                ExpandedNode::Pressable { path, child, .. } => {
+                    visit(ui.resolve(*path), None);
                     walk(child, ui, visit);
                 }
                 ExpandedNode::Popover {
-                    anchor, content, ..
+                    path,
+                    anchor,
+                    content,
+                    ..
                 } => {
+                    visit(ui.resolve(*path), None);
                     walk(anchor, ui, visit);
                     walk(content, ui, visit);
                 }
-                ExpandedNode::Control { path, spec, .. } => visit(ui.resolve(*path), spec),
+                ExpandedNode::Control { path, spec, .. } => {
+                    visit(ui.resolve(*path), Some(spec));
+                }
                 _ => {}
             }
         }

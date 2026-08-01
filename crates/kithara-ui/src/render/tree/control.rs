@@ -133,8 +133,8 @@ pub(super) fn render_control<'a>(
         ControlSpec::Fader { style, label } => {
             fader(path, *style, label.map(|id| ui.resolve(id)), value, skin)
         }
-        ControlSpec::Toggle => toggle(path, value, skin),
-        ControlSpec::Checkbox => checkbox(path, value, skin),
+        ControlSpec::Toggle => toggle(path, value, skin, owner),
+        ControlSpec::Checkbox => checkbox(path, value, skin, owner),
         ControlSpec::Segmented { items } => segmented(path, items, value, ui, skin),
         ControlSpec::Select { label } => select(*label, ui, skin),
         ControlSpec::StatusDot { label, tone } => status_dot(*label, *tone, ui, skin),

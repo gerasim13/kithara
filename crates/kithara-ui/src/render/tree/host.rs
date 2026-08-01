@@ -6,7 +6,7 @@ use iced::{
         mouse, overlay, renderer,
         widget::{self, Operation, Tree},
     },
-    event, window,
+    window,
 };
 use kithara_platform::time::Instant;
 use num_traits::cast::AsPrimitive;
@@ -17,7 +17,7 @@ use crate::{
     engine::{Descriptor, Engine, Target},
     expand::{ControlSpec, ExpandedNode},
     interact::iced as iced_interact,
-    render::{ReadValue, Reads, Skin, UiEvent, scalar},
+    render::{ReadValue, Reads, Skin, UiEvent, engine as engine_event},
     size::{Hidden, is_hidden},
 };
 
@@ -109,15 +109,16 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
         let state = tree.state.downcast_mut::<State>();
         if let Some(input) = iced_interact::input(event) {
             let targets = self.layout.targets(layout, cursor);
-            if let Some(emission) = state.engine.handle(input, &targets, Instant::now())
-                && let Some(action) = scalar(&emission.path, emission.outcome)
-            {
-                let (message, redraw_request, status) = action.into_inner();
-                shell.request_redraw_at(redraw_request);
-                if let Some(message) = message {
-                    shell.publish(message);
+            if let Some(emission) = state.engine.handle(input, &targets, Instant::now()) {
+                let captured = emission.is_captured();
+                if let Some(action) = engine_event(&emission.path, emission.outcome) {
+                    let (message, redraw_request, _) = action.into_inner();
+                    shell.request_redraw_at(redraw_request);
+                    if let Some(message) = message {
+                        shell.publish(message);
+                    }
                 }
-                if status == event::Status::Captured {
+                if captured {
                     shell.capture_event();
                 }
             }
@@ -354,6 +355,9 @@ impl HostedLayout {
 }
 
 enum HostedControl {
+    Activation {
+        path: String,
+    },
     Crossfader {
         path: String,
     },
@@ -379,6 +383,11 @@ impl HostedControl {
         skin: &Skin,
     ) -> Option<Self> {
         match (spec, value) {
+            (ControlSpec::Toggle | ControlSpec::Checkbox, Some(ReadValue::Bool(_))) => {
+                Some(Self::Activation {
+                    path: path.to_owned(),
+                })
+            }
             (ControlSpec::Crossfader { .. }, Some(ReadValue::Scalar(_))) => {
                 Some(Self::Crossfader {
                     path: path.to_owned(),
@@ -404,7 +413,8 @@ impl HostedControl {
 
     fn path(&self) -> &str {
         match self {
-            Self::Crossfader { path }
+            Self::Activation { path }
+            | Self::Crossfader { path }
             | Self::Knob { path, .. }
             | Self::StereoMeter { path }
             | Self::VerticalVu { path } => path,
@@ -415,6 +425,7 @@ impl HostedControl {
 impl From<&HostedControl> for Descriptor {
     fn from(control: &HostedControl) -> Self {
         match control {
+            HostedControl::Activation { path } => Self::activation(path.clone()),
             HostedControl::Crossfader { path } => Self::crossfader(path.clone()),
             HostedControl::Knob {
                 path,
@@ -490,6 +501,7 @@ mod tests {
     };
 
     struct Registry {
+        boolean: EndpointDesc,
         scalar: EndpointDesc,
         stereo: EndpointDesc,
         text: EndpointDesc,
@@ -498,6 +510,7 @@ mod tests {
     impl Default for Registry {
         fn default() -> Self {
             Self {
+                boolean: EndpointDesc::new(ValueKind::Bool),
                 scalar: EndpointDesc::new(ValueKind::Scalar),
                 stereo: EndpointDesc::new(ValueKind::Stereo),
                 text: EndpointDesc::new(ValueKind::Text),
@@ -511,7 +524,13 @@ mod tests {
                 (EndpointCategory::Parameter, "gain") => Some(&self.scalar),
                 (EndpointCategory::Telemetry, "levels")
                 | (EndpointCategory::Model, "mock.levels") => Some(&self.stereo),
-                (EndpointCategory::Model, "gallery.label.meters") => Some(&self.text),
+                (
+                    EndpointCategory::Model,
+                    "mock.toggle.on" | "mock.toggle.off" | "mock.checkbox.on" | "mock.checkbox.off",
+                ) => Some(&self.boolean),
+                (EndpointCategory::Model, "gallery.label.meters" | "gallery.label.toggles") => {
+                    Some(&self.text)
+                }
                 _ => None,
             }
         }
@@ -536,7 +555,10 @@ mod tests {
                     r: 0.6,
                     volume: 0.5,
                 })),
+                "mock.toggle.on" | "mock.checkbox.on" => Some(ReadValue::Bool(true)),
+                "mock.toggle.off" | "mock.checkbox.off" => Some(ReadValue::Bool(false)),
                 "gallery.label.meters" => Some(ReadValue::Text("VU / STEREO / VERTICAL")),
+                "gallery.label.toggles" => Some(ReadValue::Text("TOGGLES / CHECKBOXES")),
                 _ => None,
             }
         }
@@ -566,25 +588,22 @@ mod tests {
         .unwrap_or_else(|error| panic!("retained host fixture must compile: {error}"))
     }
 
-    fn compiled_gallery_meters() -> CompiledUi {
+    fn compiled_gallery_primitive(page: &str, source: &str) -> CompiledUi {
         let mut resolver = MemResolver::default();
         resolver.insert(
             "gallery.klayout.ron",
-            r#"(schema: "kithara.layout", version: 1, id: "gallery-meters-host",
+            r#"(schema: "kithara.layout", version: 1, id: "gallery-primitive-host",
                 root: Module(instance: "atoms", source: "modules/tabs/atoms.kmodule.ron"))"#,
         );
-        resolver.insert(
-            "modules/tabs/atoms.kmodule.ron",
+        let tab = format!(
             r#"(schema: "kithara.module", version: 1, id: "gallery-atoms-tab",
                 root: Column(children: [
                     Text(id: "intro", label: "ATOMS"),
-                    Include(id: "meters", source: "../primitives/meters.kmodule.ron"),
-                ]))"#,
+                    Include(id: "{page}", source: "../primitives/{page}.kmodule.ron"),
+                ]))"#
         );
-        resolver.insert(
-            "modules/primitives/meters.kmodule.ron",
-            include_str!("../../../examples/gallery/assets/modules/primitives/meters.kmodule.ron"),
-        );
+        resolver.insert("modules/tabs/atoms.kmodule.ron", &tab);
+        resolver.insert(&format!("modules/primitives/{page}.kmodule.ron"), source);
         compile(
             "gallery.klayout.ron",
             &resolver,
@@ -592,7 +611,21 @@ mod tests {
             builtin::skin_doc(),
             &UiConfig::default(),
         )
-        .unwrap_or_else(|error| panic!("gallery meter fixture must compile: {error}"))
+        .unwrap_or_else(|error| panic!("gallery {page} fixture must compile: {error}"))
+    }
+
+    fn compiled_gallery_meters() -> CompiledUi {
+        compiled_gallery_primitive(
+            "meters",
+            include_str!("../../../examples/gallery/assets/modules/primitives/meters.kmodule.ron"),
+        )
+    }
+
+    fn compiled_gallery_toggles() -> CompiledUi {
+        compiled_gallery_primitive(
+            "toggles",
+            include_str!("../../../examples/gallery/assets/modules/primitives/toggles.kmodule.ron"),
+        )
     }
 
     fn headless_renderer() -> Renderer {
@@ -639,6 +672,10 @@ mod tests {
                 .all(|child| hosted_contract(child, components)),
             ExpandedNode::Optional { child, .. } => hosted_contract(child, components),
             ExpandedNode::Control { spec, .. } => match spec {
+                ControlSpec::Toggle | ControlSpec::Checkbox => {
+                    components.push("activation");
+                    true
+                }
                 ControlSpec::Knob { .. } => {
                     components.push("knob");
                     true
@@ -664,7 +701,8 @@ mod tests {
 
     fn descriptor_path(descriptor: &Descriptor) -> &str {
         match descriptor {
-            Descriptor::Crossfader { path }
+            Descriptor::Activation { path }
+            | Descriptor::Crossfader { path }
             | Descriptor::Knob { path, .. }
             | Descriptor::StereoMeter { path }
             | Descriptor::VerticalVu { path } => path,
@@ -686,7 +724,7 @@ mod tests {
         let emission = engine
             .handle(input, &[target], Instant::now())
             .unwrap_or_else(|| panic!("a press on the meter must publish"));
-        let action = scalar(&emission.path, emission.outcome)
+        let action = engine_event(&emission.path, emission.outcome)
             .unwrap_or_else(|| panic!("the published value must cross the iced boundary"));
 
         assert_eq!(
@@ -780,6 +818,90 @@ mod tests {
         };
         assert_eq!(path, &expected_path);
         assert_eq!(action, &ControlAction::SetScalar(0.25));
+    }
+
+    #[kithara::test]
+    fn gallery_toggles_route_activation_without_retaining_capture() {
+        let ui = compiled_gallery_toggles();
+        let reads = FixtureReads::default();
+        let CompiledNode::Module { instance, root, .. } = &ui.root else {
+            panic!("gallery fixture root must be a module");
+        };
+        let ExpandedNode::Column { children, .. } = root.as_ref() else {
+            panic!("gallery atoms root must be a column");
+        };
+        let toggles = &children[1];
+
+        assert!(ui.includes_module(*instance, &[1], "gallery-toggles"));
+        let mut components = Vec::new();
+        assert!(hosted_contract(toggles, &mut components));
+        assert_eq!(components, ["activation"; 4]);
+
+        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full_tree = Tree::new(full.as_widget());
+        assert_eq!(
+            host_count(&full_tree),
+            1,
+            "only the toggles include owns an engine"
+        );
+
+        let renderer = headless_renderer();
+        let viewport = Size::new(200.0, 100.0);
+        let child = super::super::node::render_engine_node(
+            toggles,
+            &[1],
+            *instance,
+            &ui,
+            &reads,
+            builtin::skin(),
+        );
+        let mut element = host(child, toggles, &ui, &reads, builtin::skin());
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let hosted = HostedLayout::new(toggles, &ui, &reads, builtin::skin());
+        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+
+        for expected_path in ["atoms/toggles/toggle-on", "atoms/toggles/checkbox-on"] {
+            let target = targets
+                .iter()
+                .find(|target| target.path == expected_path)
+                .unwrap_or_else(|| panic!("the hosted `{expected_path}` target must exist"));
+            let area = target.hit.area();
+            let cursor =
+                Cursor::Available(Point::new(area.x + area.w / 2.0, area.y + area.h / 2.0));
+            let mut shell = Shell::new(&mut messages);
+            element.as_widget_mut().update(
+                &mut tree,
+                &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+                Layout::new(&node),
+                cursor,
+                &renderer,
+                &mut clipboard,
+                &mut shell,
+                &Rectangle::with_size(viewport),
+            );
+            assert!(shell.is_event_captured());
+        }
+
+        assert_eq!(
+            messages,
+            [
+                UiEvent::Control {
+                    path: "atoms/toggles/toggle-on".to_owned(),
+                    action: ControlAction::Activate,
+                },
+                UiEvent::Control {
+                    path: "atoms/toggles/checkbox-on".to_owned(),
+                    action: ControlAction::Activate,
+                },
+            ]
+        );
     }
 
     #[kithara::test]

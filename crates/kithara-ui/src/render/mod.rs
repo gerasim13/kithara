@@ -10,7 +10,7 @@ pub mod typography;
 
 pub use address::{Node, Scope, Walk};
 pub use event::{ControlAction, DragPhase, UiEvent, WindowCommand, WindowEdge};
-pub(crate) use event::{activate, control_event, drag, scalar, scalar_child, step};
+pub(crate) use event::{activate, control_event, drag, engine, scalar, scalar_child, step};
 pub use icons::Icon;
 pub use model::{
     ReadValue, Reads, StereoLevels, TrackRow, TreeIcon, TreeRow, WaveBucket, WaveformView,

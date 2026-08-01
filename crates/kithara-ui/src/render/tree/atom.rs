@@ -92,26 +92,34 @@ pub(super) fn toggle<'a>(
     path: &'a str,
     value: Option<&ReadValue<'_>>,
     skin: &'a Skin,
+    owner: InputOwner,
 ) -> Element<'a, UiEvent> {
-    Toggle::builder()
+    let toggle = Toggle::builder()
         .path(path)
         .maybe_value(value)
         .skin(skin)
-        .build()
-        .view()
+        .build();
+    match owner {
+        InputOwner::Leaf => toggle.view(),
+        InputOwner::Engine => toggle.painted(),
+    }
 }
 
 pub(super) fn checkbox<'a>(
     path: &'a str,
     value: Option<&ReadValue<'_>>,
     skin: &'a Skin,
+    owner: InputOwner,
 ) -> Element<'a, UiEvent> {
-    Checkbox::builder()
+    let checkbox = Checkbox::builder()
         .path(path)
         .maybe_value(value)
         .skin(skin)
-        .build()
-        .view()
+        .build();
+    match owner {
+        InputOwner::Leaf => checkbox.view(),
+        InputOwner::Engine => checkbox.painted(),
+    }
 }
 
 pub(super) fn vu_stereo<'a>(

@@ -246,22 +246,24 @@ including this. Closing either belongs to the wave that takes font policy off th
 
 `interact` owns gesture recognition: the pointer and wheel vocabulary, the gesture state machines,
 their pixel and time constants, and the cursor vocabulary. It imports `draw::{Pt, Rect}` and nothing
-else from this crate - it does not know what a `UiEvent` is. A recognizer answers with an `Outcome`
-carrying a normalized `f32` and a capture flag; `render::event::scalar` turns that into the document
-event, one layer up and in the same file as the `UiEvent` it names. Routing the event through the
-recognizer instead would point the base at the crate's orchestration layer, and every base peer
-points strictly downward: `draw` to `text`, `text` to `skin`, `solve` to `layout::Axis`.
+else from this crate - it does not know what a `UiEvent` is. A scalar recognizer answers with an
+`Outcome<f32>` and a click answers with an `Outcome<()>`, each carrying its capture flag. The engine
+maps those values into `EngineEvent::{Scalar, Activate}` without losing capture, and
+`render::event` binds that event to the document publisher one layer up and in the same file as the
+`UiEvent` it names. Routing the document event through the recognizer or engine instead would point
+the base at the crate's orchestration layer, and every base peer points strictly downward: `draw` to
+`text`, `text` to `skin`, `solve` to `layout::Axis`.
 
-The retained interaction boundary explicitly names four documents: `studio-mixer`,
-`studio-mixer-single`, their nested `studio-strip`, and the `gallery-meters` include inside the
-Atoms gallery page. A direct layout module is selected by its compiled module ID; expansion records
-each nested include root by structural address and module ID without adding a node wrapper, so the
-existing render-tree shape and layout stay unchanged. The iced host at each selected root keeps one
-`Engine` in widget-tree state while its descriptor snapshot is rebuilt from the current reads on
-every view. Reconciliation matches an owned resolved control path plus component kind; it refreshes
-configuration and preserves recognizer state, and never retains an `InternId` across compiled UI
-lifetimes. The four module IDs form a named set in the render tree; subtree contents never silently
-opt another document into the engine.
+The retained interaction boundary explicitly names six documents: `studio-mixer`,
+`studio-mixer-single`, their nested `studio-strip`, and the `gallery-knobs`, `gallery-meters`, and
+`gallery-toggles` includes inside the Atoms gallery page. A direct layout module is selected by its
+compiled module ID; expansion records each nested include root by structural address and module ID
+without adding a node wrapper, so the existing render-tree shape and layout stay unchanged. The
+iced host at each selected root keeps one `Engine` in widget-tree state while its descriptor
+snapshot is rebuilt from the current reads on every view. Reconciliation matches an owned resolved
+control path plus component kind; it refreshes configuration and preserves recognizer state, and
+never retains an `InternId` across compiled UI lifetimes. The six module IDs form a named set in the
+render tree; subtree contents never silently opt another document into the engine.
 
 The mixer host absorbs the expanded roots of both included strips. Rendering beneath that host
 propagates `InputOwner::Engine`, while only `InputOwner::Leaf` may open a host, so the nested
@@ -270,27 +272,32 @@ already-expanded rows and columns into both strips. One mixer therefore owns one
 capture slot for its crossfader, knobs, and VUs; a captured drag in one strip remains exclusive while
 the pointer crosses the other strip.
 
-Every hosted control is represented by one concrete scalar component that owns its resolved path,
-`Kind`, `Scalar`, and `ScalarState`. The former `Component` trait and `RetainedComponent` enum
-duplicated identical dispatch for knob and vertical-VU gestures, so they are gone; a polymorphic
-component boundary returns only when the first hosted component is not a scalar gesture. `Kind`
-still belongs to the retained identity, so reconciling a different control kind at the same path
-rebuilds recognizer state and clears capture. One router owns the subtree's sole capture identity:
-the holder receives input exclusively until it releases, otherwise reverse document order chooses
-the topmost non-ignored component. Cursor resolution follows the holder first, then the topmost
-non-default cursor. Hosted leaves keep their existing iced painting but use paint-only canvas
-programs; their outcomes still cross through `render::event::scalar`, so
-`render::event::control_event` remains the only production `UiEvent::Control` constructor.
+The engine carries two component shapes in one `RetainedComponent` enum. `ScalarComponent` owns its
+resolved path, `Kind`, `Scalar`, and `ScalarState`; `ActivationComponent` owns a path, the pointer
+hover, and the stateless `click::on_input` gesture shared by Toggle and Checkbox. A narrow
+`Component` trait gives the router only path, kind, event handling, cursor, and capture-slot state.
+The dispatch returned because activation is genuinely not scalar - it has no scalar configuration
+or state and emits no value - rather than because two controls happened to have different names.
+There are no per-control engine types. `Kind` still belongs to the retained identity, so
+reconciling a different control kind at the same path rebuilds recognizer state and clears capture.
+One router owns the subtree's sole capture identity: the holder receives input exclusively until it
+releases, otherwise reverse document order chooses the topmost non-ignored component. Cursor
+resolution follows the holder first, then the topmost non-default cursor. Hosted leaves keep their
+existing iced painting but use paint-only canvas programs; engine events cross through
+`render::event`, so `render::event::control_event` remains the only production `UiEvent::Control`
+constructor.
 
-The interactive `canvas::Program` for a crossfader, knob, vertical VU, or stereo meter is therefore
-not gone: `InputOwner` picks the paint-only variant under the host and the interactive one everywhere
-else, because the same controls also stand outside these documents. Two input paths for one control
-is a transition, not the design - each disappears when its last unhosted site flips, and the pair
-must not grow a third reader or a second capture slot in the meantime. A hosted subtree also
-swallows every pointer event before its child sees it, so a hosted interactive leaf without a scalar
-component would go dead. The dual mixer adds one crossfader and an inert divider around two supported
-strips; the single mixer contains one supported strip. Each strip contains only knobs, a vertical VU
-and a label, while `gallery-meters` contains a stereo meter, two vertical VUs and a label.
+The interactive `canvas::Program` for a crossfader, knob, vertical VU, stereo meter, toggle, or
+checkbox is therefore not gone: `InputOwner` picks the paint-only variant under the host and the
+interactive one everywhere else, because the same controls also stand outside these documents. Two
+input paths for one control is a transition, not the design - each disappears when its last unhosted
+site flips, and the pair must not grow a third reader or a second capture slot in the meantime. A
+hosted subtree also swallows every pointer event before its child sees it, so a hosted interactive
+leaf without a matching component would go dead. The dual mixer adds one crossfader and an inert
+divider around two supported strips; the single mixer contains one supported strip. Each strip
+contains only knobs, a vertical VU and a label. `gallery-knobs` contains four knobs and a label;
+`gallery-meters` contains a stereo meter, two vertical VUs and a label; `gallery-toggles` contains
+two toggles, two checkboxes and a label.
 
 A `Scalar` carries a `Track` that says how a position becomes a value, and the split that matters is
 relative against absolute. A relative track counts travel from the press, so the press only arms the
@@ -313,9 +320,13 @@ moves its content under a fixed playhead, so pulling right walks the position ba
 `Outcome<T>` carries what the gesture produced and whether it took the pointer, and those are two
 independent facts rather than one. `set` publishes and captures; `observed` publishes without
 capturing, which is what makes `ItemDrag` work at all - the row underneath keeps its own click while
-the drag overlay watches the same gesture, and that non-capture is the pinned regression. Only
-`render::event` turns either into an `Action`, through one `action` helper that both mappings share,
-so the capture rule is written once and the two publishers differ only in the event they name.
+the drag overlay watches the same gesture, and that non-capture is the pinned regression. An engine
+`Emission` retains the complete `Outcome<EngineEvent>`: a scalar press may capture without emitting
+a value, while an activation emits once and captures that iced event without taking the router's
+persistent capture slot. The host reads `Emission::is_captured` to consume the iced event;
+`Component::captures_pointer` alone decides whether the router retains an owner. Only
+`render::event` turns an engine event into an `Action`, routing scalar and activation through the
+existing publishers and their shared capture rule.
 
 `ItemDrag` is one value rather than the config-plus-state pair the other recognizers use, because it
 has nothing to configure: the 4 px threshold is its own constant and the item's identity belongs to

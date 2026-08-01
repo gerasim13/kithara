@@ -1,8 +1,11 @@
 use iced::{Element, widget::canvas::Action};
 
-use crate::interact::{
-    Outcome,
-    recognizers::{DragEvent, StepEvent},
+use crate::{
+    engine::EngineEvent,
+    interact::{
+        Outcome,
+        recognizers::{DragEvent, StepEvent},
+    },
 };
 
 /// Shared view contract: a built control renders itself into the event tree.
@@ -57,6 +60,23 @@ pub(crate) fn step(path: &str, outcome: Outcome<StepEvent>) -> Option<Action<UiE
 
 pub(crate) fn activate(path: &str, outcome: Outcome<()>) -> Option<Action<UiEvent>> {
     action(outcome, |()| control_event(path, ControlAction::Activate))
+}
+
+pub(crate) fn engine(path: &str, outcome: Outcome<EngineEvent>) -> Option<Action<UiEvent>> {
+    let captured = outcome.is_captured();
+    match outcome.value() {
+        Some(EngineEvent::Scalar(value)) => scalar(path, typed_outcome(value, captured)),
+        Some(EngineEvent::Activate) => activate(path, typed_outcome((), captured)),
+        None => captured.then(Action::capture),
+    }
+}
+
+fn typed_outcome<T>(value: T, captured: bool) -> Outcome<T> {
+    if captured {
+        Outcome::set(value)
+    } else {
+        Outcome::observed(value)
+    }
 }
 
 /// A value a control decides for itself, addressed under one of its own

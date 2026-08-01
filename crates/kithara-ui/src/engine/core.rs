@@ -1,7 +1,7 @@
 use kithara_platform::time::Instant;
 
 use super::{
-    component::ScalarComponent,
+    component::RetainedComponent,
     model::{Descriptor, Emission, Target},
     router::Router,
 };
@@ -9,7 +9,7 @@ use crate::interact::{CursorShape, Input};
 
 #[derive(Default)]
 pub(crate) struct Engine {
-    components: Vec<ScalarComponent>,
+    components: Vec<RetainedComponent>,
     router: Router,
 }
 
@@ -50,7 +50,7 @@ impl Engine {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::*;
+    use super::{super::model::EngineEvent, *};
     use crate::{
         draw::{Pt, Rect},
         interact::{Hit, Outcome, Scroll},
@@ -76,7 +76,93 @@ mod tests {
     }
 
     fn value(emission: Option<Emission>) -> Option<f32> {
-        emission.and_then(|emission| emission.outcome.value())
+        emission.and_then(|emission| match emission.outcome.value() {
+            Some(EngineEvent::Scalar(value)) => Some(value),
+            Some(EngineEvent::Activate) | None => None,
+        })
+    }
+
+    #[kithara::test]
+    fn activation_publishes_once_on_press() {
+        let mut engine = Engine::default();
+        let path = "gallery/toggles/enabled";
+        engine.reconcile([Descriptor::activation(path.to_owned())]);
+
+        let press = engine
+            .handle(
+                Input::PointerDown,
+                &[target(path, 50.0, 50.0)],
+                Instant::now(),
+            )
+            .map(|emission| (emission.outcome.value(), emission.is_captured()));
+        assert_eq!(press, Some((Some(EngineEvent::Activate), true)));
+
+        assert!(
+            engine
+                .handle(
+                    Input::PointerMoved {
+                        at: Pt { x: 55.0, y: 50.0 },
+                    },
+                    &[target(path, 55.0, 50.0)],
+                    Instant::now(),
+                )
+                .is_none()
+        );
+        assert!(
+            engine
+                .handle(
+                    Input::PointerUp,
+                    &[target(path, 55.0, 50.0)],
+                    Instant::now(),
+                )
+                .is_none()
+        );
+    }
+
+    #[kithara::test]
+    fn activation_press_that_misses_publishes_nothing() {
+        let mut engine = Engine::default();
+        let path = "gallery/toggles/enabled";
+        engine.reconcile([Descriptor::activation(path.to_owned())]);
+
+        assert!(
+            engine
+                .handle(
+                    Input::PointerDown,
+                    &[target(path, 150.0, 50.0)],
+                    Instant::now(),
+                )
+                .is_none()
+        );
+    }
+
+    #[kithara::test]
+    fn activation_does_not_take_the_capture_slot() {
+        let mut engine = Engine::default();
+        let toggle = "gallery/toggles/enabled";
+        let meter = "gallery/meters/level";
+        engine.reconcile([
+            Descriptor::vertical_vu(meter.to_owned()),
+            Descriptor::activation(toggle.to_owned()),
+        ]);
+
+        let activation = engine
+            .handle(
+                Input::PointerDown,
+                &[target(toggle, 50.0, 50.0)],
+                Instant::now(),
+            )
+            .map(|emission| emission.outcome.value());
+        assert_eq!(activation, Some(Some(EngineEvent::Activate)));
+
+        let scalar = engine
+            .handle(
+                Input::PointerDown,
+                &[target(meter, 50.0, 25.0)],
+                Instant::now(),
+            )
+            .map(|emission| emission.outcome.value());
+        assert_eq!(scalar, Some(Some(EngineEvent::Scalar(0.75))));
     }
 
     #[kithara::test]
@@ -127,7 +213,13 @@ mod tests {
                 &[target("studio/level", 50.0, 25.0)],
                 now,
             )
-            .map(|emission| (emission.path, emission.outcome.value()));
+            .map(|emission| {
+                let value = match emission.outcome.value() {
+                    Some(EngineEvent::Scalar(value)) => Some(value),
+                    Some(EngineEvent::Activate) | None => None,
+                };
+                (emission.path, value)
+            });
 
         assert_eq!(emission, Some(("studio/level".to_owned(), Some(0.75))));
     }

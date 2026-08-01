@@ -39,6 +39,13 @@ impl<T> Outcome<T> {
         self.value
     }
 
+    pub(crate) fn map<U>(self, map: impl FnOnce(T) -> U) -> Outcome<U> {
+        Outcome {
+            value: self.value.map(map),
+            capture: self.capture,
+        }
+    }
+
     pub(crate) const fn is_captured(&self) -> bool {
         self.capture
     }

@@ -1,8 +1,8 @@
 use kithara_platform::time::Instant;
 
 use super::{
-    component::ScalarComponent,
-    model::{Emission, Identity, Target},
+    component::RetainedComponent,
+    model::{Emission, EngineEvent, Identity, Target},
 };
 use crate::interact::{CursorShape, Input, Outcome};
 
@@ -12,7 +12,7 @@ pub(super) struct Router {
 }
 
 impl Router {
-    pub(super) fn reconcile(&mut self, components: &[ScalarComponent]) {
+    pub(super) fn reconcile(&mut self, components: &[RetainedComponent]) {
         let missing = self.capture.as_ref().is_some_and(|identity| {
             !components
                 .iter()
@@ -25,7 +25,7 @@ impl Router {
 
     pub(super) fn handle(
         &mut self,
-        components: &mut [ScalarComponent],
+        components: &mut [RetainedComponent],
         input: Input,
         targets: &[Target<'_>],
         now: Instant,
@@ -65,7 +65,7 @@ impl Router {
 
     pub(super) fn cursor(
         &self,
-        components: &[ScalarComponent],
+        components: &[RetainedComponent],
         targets: &[Target<'_>],
     ) -> CursorShape {
         if let Some(identity) = &self.capture {
@@ -94,6 +94,6 @@ impl Router {
     }
 }
 
-fn emission(path: String, outcome: Outcome) -> Option<Emission> {
+fn emission(path: String, outcome: Outcome<EngineEvent>) -> Option<Emission> {
     (outcome != Outcome::IGNORED).then_some(Emission { path, outcome })
 }

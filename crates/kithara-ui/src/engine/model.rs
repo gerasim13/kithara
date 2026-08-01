@@ -2,6 +2,7 @@ use crate::interact::{Hit, Outcome};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Kind {
+    Activation,
     Crossfader,
     Knob,
     StereoMeter,
@@ -15,6 +16,9 @@ pub(super) struct Identity {
 }
 
 pub(crate) enum Descriptor {
+    Activation {
+        path: String,
+    },
     Crossfader {
         path: String,
     },
@@ -33,6 +37,10 @@ pub(crate) enum Descriptor {
 }
 
 impl Descriptor {
+    pub(crate) fn activation(path: String) -> Self {
+        Self::Activation { path }
+    }
+
     pub(crate) fn crossfader(path: String) -> Self {
         Self::Crossfader { path }
     }
@@ -56,7 +64,8 @@ impl Descriptor {
 
     pub(super) fn path(&self) -> &str {
         match self {
-            Self::Crossfader { path }
+            Self::Activation { path }
+            | Self::Crossfader { path }
             | Self::Knob { path, .. }
             | Self::StereoMeter { path }
             | Self::VerticalVu { path } => path,
@@ -65,12 +74,19 @@ impl Descriptor {
 
     pub(super) const fn kind(&self) -> Kind {
         match self {
+            Self::Activation { .. } => Kind::Activation,
             Self::Crossfader { .. } => Kind::Crossfader,
             Self::Knob { .. } => Kind::Knob,
             Self::StereoMeter { .. } => Kind::StereoMeter,
             Self::VerticalVu { .. } => Kind::VerticalVu,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum EngineEvent {
+    Scalar(f32),
+    Activate,
 }
 
 #[derive(Clone, Copy)]
@@ -87,5 +103,11 @@ impl<'a> Target<'a> {
 
 pub(crate) struct Emission {
     pub(crate) path: String,
-    pub(crate) outcome: Outcome,
+    pub(crate) outcome: Outcome<EngineEvent>,
+}
+
+impl Emission {
+    pub(crate) const fn is_captured(&self) -> bool {
+        self.outcome.is_captured()
+    }
 }
