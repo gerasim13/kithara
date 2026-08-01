@@ -17,6 +17,15 @@ impl HlsVariant {
     /// downloader's queue is first-in-first-out within a priority slot and the
     /// audible variant appends to it every poll, so an untagged fetch for a
     /// decoder being built or primed is never reached.
+    ///
+    /// Owed is a property of a segment, not of a pass. A pass on a demanding
+    /// session also plans look-ahead, and tagging that look-ahead `High` puts
+    /// it in the same downloader slot ahead of the audible variant's next
+    /// segment — the priming session then outranks the audio that is currently
+    /// playing, which is the opposite of what the peer's budget split reserves
+    /// a slot for. The boundary is the segment the reader is actually stopped
+    /// at, or the construction window while the reader has not been handed
+    /// over yet; past it every fetch is speculation and stays untagged.
     #[kithara::hang_watchdog]
     pub(crate) fn dispatch_from(
         self: &Arc<Self>,
@@ -38,6 +47,12 @@ impl HlsVariant {
         // references it, so it is never re-fetched and the reader hangs (the
         // `player_worker_hls_then_unavailable_mp3_then_mp3_recovery` deadlock).
         let mut deferred: Vec<PlannedFetch> = Vec::new();
+        let demand_until = demand
+            .then(|| {
+                construction_segment_end
+                    .or_else(|| self.find_at_offset(position).map(|(seg_idx, _, _)| seg_idx))
+            })
+            .flatten();
         let mut remaining = budget;
         self.dispatch_size_demands(ctx, &mut out, &mut remaining, &cancel);
         let prefetch_base = position.max(self.prefetch_anchor());
@@ -145,7 +160,7 @@ impl HlsVariant {
                         deferred.push(planned);
                         continue;
                     };
-                    if demand {
+                    if demand_until.is_some_and(|last| seg_idx <= last) {
                         cmd.priority = Some(RequestPriority::High);
                     }
                     out.push(cmd);
