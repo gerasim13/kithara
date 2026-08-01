@@ -82,7 +82,7 @@ mod tests {
     fn value(emission: Option<Emission>) -> Option<f32> {
         emission.and_then(|emission| match emission.outcome.value() {
             Some(EngineEvent::Scalar(value)) => Some(value),
-            Some(EngineEvent::Activate) | None => None,
+            Some(EngineEvent::Activate | EngineEvent::Index(_)) | None => None,
         })
     }
 
@@ -137,6 +137,52 @@ mod tests {
                 .handle(
                     Input::PointerDown,
                     &[target(path, 150.0, 50.0)],
+                    Instant::now(),
+                )
+                .is_none()
+        );
+    }
+
+    #[kithara::test]
+    fn segmented_publishes_the_uniform_cell_index_on_press() {
+        let mut engine = Engine::default();
+        let path = "cells/beat";
+        let area = Rect {
+            h: 20.0,
+            w: 100.0,
+            x: 10.0,
+            y: 20.0,
+        };
+        engine.reconcile([Descriptor::segmented(path.to_owned(), 4)]);
+
+        assert_eq!(
+            engine.cursor(&[Target::new(
+                path,
+                Hit::new(Some(Pt { x: 10.0, y: 30.0 }), area),
+            )]),
+            CursorShape::Pointer
+        );
+
+        for (x, expected) in [(10.0, 0), (34.0, 0), (35.0, 1), (109.0, 3)] {
+            let emission = engine
+                .handle(
+                    Input::PointerDown,
+                    &[Target::new(path, Hit::new(Some(Pt { x, y: 30.0 }), area))],
+                    Instant::now(),
+                )
+                .unwrap_or_else(|| panic!("a segmented press must publish its cell index"));
+            assert_eq!(emission.outcome.value(), Some(EngineEvent::Index(expected)));
+            assert!(!engine.captures_pointer());
+        }
+
+        assert!(
+            engine
+                .handle(
+                    Input::PointerDown,
+                    &[Target::new(
+                        path,
+                        Hit::new(Some(Pt { x: 110.0, y: 30.0 }), area),
+                    )],
                     Instant::now(),
                 )
                 .is_none()
@@ -422,7 +468,7 @@ mod tests {
             .map(|emission| {
                 let value = match emission.outcome.value() {
                     Some(EngineEvent::Scalar(value)) => Some(value),
-                    Some(EngineEvent::Activate) | None => None,
+                    Some(EngineEvent::Activate | EngineEvent::Index(_)) | None => None,
                 };
                 (emission.path, value)
             });

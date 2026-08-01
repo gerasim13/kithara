@@ -138,7 +138,7 @@ pub(super) fn render_control<'a>(
         }
         ControlSpec::Toggle => toggle(path, value, skin, owner),
         ControlSpec::Checkbox => checkbox(path, value, skin, owner),
-        ControlSpec::Segmented { items } => segmented(path, items, value, ui, skin),
+        ControlSpec::Segmented { items } => segmented(path, items, value, ui, skin, owner),
         ControlSpec::Select { label } => select(*label, ui, skin),
         ControlSpec::StatusDot { label, tone } => status_dot(*label, *tone, ui, skin),
         ControlSpec::Swatch { role, label } => swatch(*role, *label, ui, skin),

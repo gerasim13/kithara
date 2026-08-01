@@ -5,6 +5,7 @@ use crate::interact::{Hit, Outcome};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Kind {
     Activation,
+    Segmented,
     Crossfader,
     Knob,
     StereoMeter,
@@ -22,6 +23,10 @@ pub(super) struct Identity {
 pub(crate) enum Descriptor {
     Activation {
         path: String,
+    },
+    Segmented {
+        path: String,
+        item_count: usize,
     },
     Crossfader {
         path: String,
@@ -54,6 +59,10 @@ pub(crate) enum Descriptor {
 impl Descriptor {
     pub(crate) fn activation(path: String) -> Self {
         Self::Activation { path }
+    }
+
+    pub(crate) fn segmented(path: String, item_count: usize) -> Self {
+        Self::Segmented { path, item_count }
     }
 
     pub(crate) fn crossfader(path: String) -> Self {
@@ -102,6 +111,7 @@ impl Descriptor {
     pub(super) fn path(&self) -> &str {
         match self {
             Self::Activation { path }
+            | Self::Segmented { path, .. }
             | Self::Crossfader { path }
             | Self::Knob { path, .. }
             | Self::StereoMeter { path }
@@ -114,6 +124,7 @@ impl Descriptor {
     pub(super) const fn kind(&self) -> Kind {
         match self {
             Self::Activation { .. } => Kind::Activation,
+            Self::Segmented { .. } => Kind::Segmented,
             Self::Crossfader { .. } => Kind::Crossfader,
             Self::Knob { .. } => Kind::Knob,
             Self::StereoMeter { .. } => Kind::StereoMeter,
@@ -128,6 +139,7 @@ impl Descriptor {
 pub(crate) enum EngineEvent {
     Scalar(f32),
     Activate,
+    Index(usize),
 }
 
 #[derive(Clone, Copy)]

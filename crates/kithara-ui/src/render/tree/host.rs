@@ -422,6 +422,10 @@ enum HostedControl {
     Activation {
         path: String,
     },
+    Segmented {
+        path: String,
+        item_count: usize,
+    },
     Crossfader {
         path: String,
     },
@@ -481,6 +485,12 @@ impl HostedControl {
             ) => Some(Self::Activation {
                 path: path.to_owned(),
             }),
+            (ControlSpec::Segmented { items }, Some(ReadValue::Scalar(_))) if !items.is_empty() => {
+                Some(Self::Segmented {
+                    path: path.to_owned(),
+                    item_count: items.len(),
+                })
+            }
             (ControlSpec::Crossfader { .. }, Some(ReadValue::Scalar(_))) => {
                 Some(Self::Crossfader {
                     path: path.to_owned(),
@@ -530,6 +540,7 @@ impl HostedControl {
     fn path(&self) -> &str {
         match self {
             Self::Activation { path }
+            | Self::Segmented { path, .. }
             | Self::Crossfader { path }
             | Self::Knob { path, .. }
             | Self::StereoMeter { path }
@@ -544,6 +555,9 @@ impl From<&HostedControl> for Descriptor {
     fn from(control: &HostedControl) -> Self {
         match control {
             HostedControl::Activation { path } => Self::activation(path.clone()),
+            HostedControl::Segmented { path, item_count } => {
+                Self::segmented(path.clone(), *item_count)
+            }
             HostedControl::Crossfader { path } => Self::crossfader(path.clone()),
             HostedControl::Knob {
                 path,
@@ -679,8 +693,12 @@ mod tests {
                 (
                     EndpointCategory::Model,
                     "mock.toggle.on" | "mock.toggle.off" | "mock.checkbox.on" | "mock.checkbox.off"
-                    | "mock.button.play" | "mock.button.cue" | "mock.button.sync",
+                    | "mock.button.play" | "mock.button.cue" | "mock.button.sync"
+                    | "mock.chip.active" | "mock.chip.inactive",
                 ) => Some(&self.boolean),
+                (EndpointCategory::Model | EndpointCategory::Parameter, "mock.cells.segmented") => {
+                    Some(&self.scalar)
+                }
                 (
                     EndpointCategory::Model,
                     "gallery.label.meters"
@@ -733,6 +751,9 @@ mod tests {
                 "mock.toggle.off" | "mock.checkbox.off" | "mock.button.cue" => {
                     Some(ReadValue::Bool(false))
                 }
+                "mock.chip.active" => Some(ReadValue::Bool(true)),
+                "mock.chip.inactive" => Some(ReadValue::Bool(false)),
+                "mock.cells.segmented" => Some(ReadValue::Scalar(2.0)),
                 "gallery.label.meters" => Some(ReadValue::Text("VU / STEREO / VERTICAL")),
                 "gallery.label.toggles" => Some(ReadValue::Text("TOGGLES / CHECKBOXES")),
                 "gallery.label.transport" => Some(ReadValue::Text("TRANSPORT")),
@@ -842,6 +863,27 @@ mod tests {
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("gallery buttons fixture must compile: {error}"))
+    }
+
+    fn compiled_gallery_cells() -> CompiledUi {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "gallery.klayout.ron",
+            r#"(schema: "kithara.layout", version: 1, id: "gallery-cells-host",
+                root: Module(instance: "cells", source: "cells.kmodule.ron"))"#,
+        );
+        resolver.insert(
+            "cells.kmodule.ron",
+            include_str!("../../../examples/gallery/assets/modules/tabs/cells.kmodule.ron"),
+        );
+        compile(
+            "gallery.klayout.ron",
+            &resolver,
+            &Registry::default(),
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap_or_else(|error| panic!("gallery cells fixture must compile: {error}"))
     }
 
     fn compiled_gallery_tabs() -> CompiledUi {
@@ -973,6 +1015,9 @@ mod tests {
                 ControlSpec::TabLarge { .. } | ControlSpec::Toggle | ControlSpec::Checkbox => {
                     components.push("activation");
                 }
+                ControlSpec::Segmented { .. } => {
+                    components.push("segmented");
+                }
                 ControlSpec::Knob { .. } => {
                     components.push("knob");
                 }
@@ -1001,6 +1046,7 @@ mod tests {
     fn descriptor_path(descriptor: &Descriptor) -> &str {
         match descriptor {
             Descriptor::Activation { path }
+            | Descriptor::Segmented { path, .. }
             | Descriptor::Crossfader { path }
             | Descriptor::Knob { path, .. }
             | Descriptor::StereoMeter { path }
@@ -1473,6 +1519,117 @@ mod tests {
                 },
             ],
             "a button with no read endpoint must still have the same activation contract"
+        );
+    }
+
+    #[kithara::test]
+    fn gallery_cells_hosts_its_exact_engine_control_inventory() {
+        let ui = compiled_gallery_cells();
+        let reads = FixtureReads::default();
+        let CompiledNode::Module {
+            instance,
+            module,
+            root,
+            ..
+        } = &ui.root
+        else {
+            panic!("gallery cells fixture root must be a module");
+        };
+
+        assert_eq!(ui.resolve(*module), "gallery-cells-tab");
+        let mut components = Vec::new();
+        claimed_components(root, &mut components);
+        assert_eq!(
+            components,
+            [
+                "activation",
+                "activation",
+                "segmented",
+                "activation",
+                "activation",
+                "activation",
+                "activation",
+            ]
+        );
+
+        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full_tree = Tree::new(full.as_widget());
+        assert_eq!(host_count(&full_tree), 1, "the cells page owns one engine");
+
+        let renderer = headless_renderer();
+        let viewport = Size::new(1_000.0, 400.0);
+        let child = super::super::node::render_engine_node(
+            root,
+            &[],
+            *instance,
+            &ui,
+            &reads,
+            builtin::skin(),
+        );
+        let mut element = host(child, root, &ui, &reads, builtin::skin());
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let descriptors = hosted.descriptors();
+        assert_eq!(
+            descriptors.iter().map(descriptor_path).collect::<Vec<_>>(),
+            [
+                "cells/cue",
+                "cells/play",
+                "cells/beat",
+                "cells/toggle-off",
+                "cells/toggle-on",
+                "cells/checkbox-off",
+                "cells/checkbox-on",
+            ]
+        );
+        assert!(matches!(
+            descriptors.as_slice(),
+            [
+                Descriptor::Activation { .. },
+                Descriptor::Activation { .. },
+                Descriptor::Segmented { item_count: 4, .. },
+                Descriptor::Activation { .. },
+                Descriptor::Activation { .. },
+                Descriptor::Activation { .. },
+                Descriptor::Activation { .. },
+            ]
+        ));
+
+        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let target = targets
+            .iter()
+            .find(|target| target.path == "cells/beat")
+            .unwrap_or_else(|| panic!("the hosted segmented target must exist"));
+        let area = target.hit.area();
+        assert_eq!((area.w, area.h), (220.0, 26.0));
+        let cursor = Cursor::Available(Point::new(area.x + area.w * 0.625, area.y + area.h / 2.0));
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            Layout::new(&node),
+            cursor,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert!(!shell.is_event_captured());
+        drop(shell);
+
+        assert_eq!(
+            messages,
+            [UiEvent::Control {
+                path: "cells/beat".to_owned(),
+                action: ControlAction::SelectIndex(2),
+            }]
         );
     }
 

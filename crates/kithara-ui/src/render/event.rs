@@ -62,6 +62,12 @@ pub(crate) fn activate(path: &str, outcome: Outcome<()>) -> Option<Action<UiEven
     action(outcome, |()| control_event(path, ControlAction::Activate))
 }
 
+pub(crate) fn index(path: &str, outcome: Outcome<usize>) -> Option<Action<UiEvent>> {
+    action(outcome, |index| {
+        control_event(path, ControlAction::SelectIndex(index))
+    })
+}
+
 pub(crate) fn engine(
     path: &str,
     child: Option<&str>,
@@ -74,6 +80,7 @@ pub(crate) fn engine(
             |child| Some(scalar_child(path, child, value)),
         ),
         Some(EngineEvent::Activate) => activate(path, typed_outcome((), captured)),
+        Some(EngineEvent::Index(selected)) => index(path, typed_outcome(selected, captured)),
         None => captured.then(Action::capture),
     }
 }
@@ -190,6 +197,20 @@ mod tests {
             Some(UiEvent::Control {
                 path: "deck-a/wave/loop_start".to_owned(),
                 action: ControlAction::SetScalar(0.375),
+            })
+        );
+    }
+
+    #[kithara::test]
+    fn an_engine_index_emission_binds_to_select_index() {
+        let action = engine("cells/beat", None, Outcome::set(EngineEvent::Index(3)))
+            .unwrap_or_else(|| panic!("an index emission must publish"));
+
+        assert_eq!(
+            action.into_inner().0,
+            Some(UiEvent::Control {
+                path: "cells/beat".to_owned(),
+                action: ControlAction::SelectIndex(3),
             })
         );
     }

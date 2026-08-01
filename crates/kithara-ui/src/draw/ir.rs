@@ -1,3 +1,6 @@
+#[cfg(feature = "render")]
+use num_traits::ToPrimitive;
+
 use crate::text::GlyphRun;
 
 /// A toolkit-neutral RGBA colour.
@@ -39,6 +42,17 @@ impl Rect {
             && point.x < self.x + self.w
             && self.y <= point.y
             && point.y < self.y + self.h
+    }
+
+    #[cfg(feature = "render")]
+    pub(crate) fn uniform_horizontal_index(self, point: Pt, count: usize) -> Option<usize> {
+        let last = count.checked_sub(1)?;
+        let count = count.to_f32()?;
+        let cell_width = (self.contains(point) && self.w > 0.0).then_some(self.w / count)?;
+        ((point.x - self.x) / cell_width)
+            .floor()
+            .to_usize()
+            .map(|index| index.min(last))
     }
 }
 

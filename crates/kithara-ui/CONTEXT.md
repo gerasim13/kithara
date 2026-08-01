@@ -253,27 +253,30 @@ including this. Closing either belongs to the wave that takes font policy off th
 state machines, their pixel and time constants, and the cursor vocabulary. It imports
 `draw::{Pt, Rect}` and nothing else from this crate - it does not know what a `UiEvent` is. A scalar
 recognizer answers with an `Outcome<f32>` and a click answers with an `Outcome<()>`, each carrying
-its capture flag. The engine maps those values into `EngineEvent::{Scalar, Activate}` without losing
-capture. An engine `Emission` may address one fixed child endpoint, and `render::event` binds the
-result to the document publisher one layer up and in the same file as the `UiEvent` it names.
+its capture flag. The engine maps those values into `EngineEvent::{Scalar, Activate, Index}` without
+losing capture. The third emission kind, `EngineEvent::Index`, carries the selected `usize`; the
+stateless segmented component derives it from the click's hit rectangle and item count. An engine
+`Emission` may address one fixed child endpoint, and `render::event` binds the result to the document
+publisher one layer up and in the same file as the `UiEvent` it names, including binding an index to
+`ControlAction::SelectIndex`.
 Routing the document event through the recognizer or engine instead would point the base at the
 crate's orchestration layer, and every base peer points strictly downward: `draw` to `text`, `text`
 to `skin`, `solve` to `layout::Axis`.
 
-The retained interaction boundary explicitly names eleven documents: `studio-deck`, `studio-mixer`,
+The retained interaction boundary explicitly names twelve documents: `studio-deck`, `studio-mixer`,
 `studio-mixer-single`, their nested `studio-strip`, the nested `studio-overview-row`, the
 `gallery-knobs`, `gallery-meters`, and `gallery-toggles` includes inside the Atoms gallery page, and
-the direct `gallery-buttons-tab`, `gallery-module-tabs`, and `gallery-nav` modules. A direct layout
-module is selected by its compiled module ID; expansion records each nested include root by
-structural address and module ID without adding a node wrapper, so the existing render-tree shape
-and layout stay unchanged. The iced host at each selected root keeps one `Engine` in widget-tree
-state while its descriptor snapshot is rebuilt from the current reads on every view. Reconciliation
-matches an owned resolved control path plus component kind; it refreshes configuration and
-preserves recognizer state, and never retains an `InternId` across compiled UI lifetimes. The
-ordinary click wave and Hero Wave have distinct descriptor identities. The Hero descriptor
-refreshes its scalar drag, visible window, and wheel answers from current progress and zoom on every
-view. The eleven module IDs form a named set in the render tree; subtree contents never silently opt
-another document into the engine.
+the direct `gallery-buttons-tab`, `gallery-cells-tab`, `gallery-module-tabs`, and `gallery-nav`
+modules. A direct layout module is selected by its compiled module ID; expansion records each nested
+include root by structural address and module ID without adding a node wrapper, so the existing
+render-tree shape and layout stay unchanged. The iced host at each selected root keeps one `Engine`
+in widget-tree state while its descriptor snapshot is rebuilt from the current reads on every view.
+Reconciliation matches an owned resolved control path plus component kind; it refreshes
+configuration and preserves recognizer state, and never retains an `InternId` across compiled UI
+lifetimes. The ordinary click wave and Hero Wave have distinct descriptor identities. The Hero
+descriptor refreshes its scalar drag, visible window, and wheel answers from current progress and
+zoom on every view. The twelve module IDs form a named set in the render tree; subtree contents never
+silently opt another document into the engine.
 
 The mixer host absorbs the expanded roots of both included strips. Rendering beneath that host
 propagates `InputOwner::Engine`, while only `InputOwner::Leaf` may open a host, so the nested
@@ -282,19 +285,20 @@ already-expanded rows and columns into both strips. One mixer therefore owns one
 capture slot for its crossfader, knobs, and VUs; a captured drag in one strip remains exclusive while
 the pointer crosses the other strip.
 
-The engine carries three component shapes in one `RetainedComponent` enum. `ScalarComponent` owns
+The engine carries four component shapes in one `RetainedComponent` enum. `ScalarComponent` owns
 its resolved path, `Kind`, `Scalar`, and `ScalarState`; `ActivationComponent` owns a path, the
 pointer hover, and the stateless `click::on_input` gesture shared by Button, Toggle, and Checkbox;
+`SegmentedComponent` owns a path, item count, pointer hover, and the same stateless click gesture;
 `HeroWaveComponent` owns modifier and loop state while reusing `Scalar` for the plain drag. A narrow
 `Component` trait gives the router only path, kind, event handling, cursor, and capture-slot state.
-The dispatch exists because activation and the Hero Wave have state and emissions a scalar alone
-cannot express, not because controls happened to have different names. `Kind` belongs to the
-retained identity, so reconciling a different component shape at the same path rebuilds recognizer
-state and clears capture. One router owns the subtree's sole capture identity: the holder receives
-input exclusively until it releases, otherwise reverse document order chooses the topmost
-non-ignored component. Cursor resolution follows the holder first, then the topmost non-default
-cursor. Hosted leaves the engine claims use paint-only canvas programs; engine events cross through
-`render::event`, so `render::event::control_event` remains the only production
+The dispatch exists because activation, segmented selection, and the Hero Wave have emissions or
+state a scalar alone cannot express, not because controls happened to have different names. `Kind`
+belongs to the retained identity, so reconciling a different component shape at the same path
+rebuilds recognizer state and clears capture. One router owns the subtree's sole capture identity:
+the holder receives input exclusively until it releases, otherwise reverse document order chooses
+the topmost non-ignored component. Cursor resolution follows the holder first, then the topmost
+non-default cursor. Hosted leaves the engine claims use paint-only canvas programs; engine events
+cross through `render::event`, so `render::event::control_event` remains the only production
 `UiEvent::Control` constructor. Button was the first activation control whose fill, frame, and label
 or Lucide glyph were all painted by a toolkit-neutral base atom through one `DrawListBuilder`
 instead of by iced; NavItem now owns its background, marker, icon glyph, and label through the same
@@ -306,13 +310,14 @@ the required existing `Descriptor::Activation` is stateless and carries no held 
 second pressed-state channel merely for paint would create the parallel mutable ownership this
 transition forbids.
 
-The interactive `canvas::Program` for a button, nav item, crossfader, knob, vertical VU, stereo
-meter, toggle, checkbox, or wave is therefore not gone: `InputOwner` picks the paint-only variant
-only when the host has a matching descriptor, and the interactive variant answers everywhere else.
-An effective SVG button or nav item is one deliberate example: it has no descriptor and remains an
-iced leaf until its painting is ported. Two input paths for one control are a transition, not the
-design - each disappears when its last unhosted site flips, and the pair must not grow a third reader
-or a second capture slot in the meantime.
+The interactive `canvas::Program` for a button, nav item, segmented control, crossfader, knob,
+vertical VU, stereo meter, toggle, checkbox, or wave is therefore not gone: `InputOwner` picks the
+paint-only variant for `InputOwner::Engine` only when the host has a matching descriptor, and the
+interactive variant answers everywhere else under `InputOwner::Leaf`. An effective SVG button or
+nav item is one deliberate example: it has no descriptor and remains an iced leaf until its painting
+is ported. Two input paths for one control are a transition, not the design - each disappears when
+its last unhosted site flips, and the pair must not grow a third reader or a second capture slot in
+the meantime.
 
 The host observes decoded input before its child. An engine emission answers the event and is bound
 once; when no component emits, the child receives the same iced event unchanged. Cursor resolution
@@ -327,12 +332,16 @@ mixer contains one supported strip. Each strip contains knobs, a vertical VU, an
 contains four knobs and a label; `gallery-meters` contains a stereo meter, two vertical VUs, and a
 label; `gallery-toggles` contains two toggles, two checkboxes, and a label.
 `gallery-buttons-tab` contains six activation buttons and two inert text labels; its micro
-play/pause cell reaches the draw seam as a Lucide font glyph. `gallery-module-tabs` contains five
-activation tabs. `gallery-nav` contains eighteen activation nav items plus an inert icon and label
-in its header. Each hosted `studio-deck` contains one Hero Wave and five Lucide activation buttons,
-while its Slot and labels are passive and its tempo row remains an iced wheel surface. The Hero
-component preserves shift-loop child emissions, child-addressed wheel zoom, and the plain scalar
-drag.
+play/pause cell reaches the draw seam as a Lucide font glyph. `gallery-cells-tab` is the first hosted
+page with mixed interaction ownership: in document order its exact engine descriptor inventory is
+two activations for cue and play, one segmented descriptor with `item_count: 4`, and four
+activations for its two toggles and two checkboxes. Its chips, cells, select, and status dots remain
+iced-answered controls, and input the engine does not answer continues unchanged through the child.
+`gallery-module-tabs` contains five activation tabs. `gallery-nav` contains eighteen activation nav
+items plus an inert icon and label in its header. Each hosted `studio-deck` contains one Hero Wave
+and five Lucide activation buttons, while its Slot and labels are passive and its tempo row remains
+an iced wheel surface. The Hero component preserves shift-loop child emissions, child-addressed
+wheel zoom, and the plain scalar drag.
 
 A `Scalar` carries a `Track` that says how a position becomes a value, and the split that matters is
 relative against absolute. A relative track counts travel from the press, so the press only arms the
@@ -358,12 +367,12 @@ capturing, which is what makes `ItemDrag` work at all - the row underneath keeps
 the drag overlay watches the same gesture, and that non-capture is the pinned regression. An engine
 `Emission` retains the complete `Outcome<EngineEvent>` plus an optional child endpoint: a scalar
 press may capture without emitting a value, activation emits once without holding the router slot,
-and the Hero Wave emits loop and zoom values under its own children. `Component::captures_pointer`
-alone decides whether the router retains an owner. For decoded input answered by the engine, the
-host reports iced `Captured` if and only if that router slot remains held; consumed-without-capture
-and observed outcomes report `Ignored`. Only `render::event` turns an engine emission into an
-`Action`, routing parent scalars and activation through their existing publishers and child scalars
-through `scalar_child`.
+segmented selection emits one index without holding it, and the Hero Wave emits loop and zoom values
+under its own children. `Component::captures_pointer` alone decides whether the router retains an
+owner. For decoded input answered by the engine, the host reports iced `Captured` if and only if
+that router slot remains held; consumed-without-capture and observed outcomes report `Ignored`.
+Only `render::event` turns an engine emission into an `Action`, routing parent scalars, activation,
+and index selection through their existing publishers and child scalars through `scalar_child`.
 
 `ItemDrag` is one value rather than the config-plus-state pair the other recognizers use, because it
 has nothing to configure: the 4 px threshold is its own constant and the item's identity belongs to

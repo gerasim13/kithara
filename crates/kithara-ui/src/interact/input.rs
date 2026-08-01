@@ -81,6 +81,10 @@ impl Hit {
         self.inside().is_some()
     }
 
+    pub(crate) fn uniform_horizontal_index(self, count: usize) -> Option<usize> {
+        self.area.uniform_horizontal_index(self.inside()?, count)
+    }
+
     /// The box the pointer is tested against, for a recognizer that normalizes
     /// a position against it rather than only asking whether it landed inside.
     pub(crate) const fn area(self) -> Rect {

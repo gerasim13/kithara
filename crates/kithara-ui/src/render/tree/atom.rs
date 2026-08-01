@@ -198,14 +198,18 @@ pub(super) fn segmented<'a>(
     value: Option<&ReadValue<'_>>,
     ui: &'a CompiledUi,
     skin: &Skin,
+    owner: InputOwner,
 ) -> Element<'a, UiEvent> {
-    Segmented::builder()
+    let segmented = Segmented::builder()
         .path(path)
         .items(items.iter().map(|id| ui.resolve(*id)).collect())
         .maybe_value(value)
         .skin(skin)
-        .build()
-        .view()
+        .build();
+    match owner {
+        InputOwner::Leaf => segmented.view(),
+        InputOwner::Engine => segmented.painted(),
+    }
 }
 
 pub(super) fn select<'a>(label: InternId, ui: &'a CompiledUi, skin: &Skin) -> Element<'a, UiEvent> {
