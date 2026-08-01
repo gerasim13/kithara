@@ -994,18 +994,21 @@ fn incoming_reader_preparation_keeps_the_landing_fetch_anchor() {
     assert_eq!(preparation.anchor().segment_index, Some(2));
     assert_eq!(preparation.anchor().byte_offset, 248);
     assert!(queue_has_init(&v));
-    // The plan reaches one segment behind the landing even here, where byte
-    // sizes are exact: a demuxer parks at the packet boundary at or before the
-    // landing, and the landing is a segment start, so its first packet begins in
-    // segment 1. Exactness of byte sizes says nothing about the packet grid.
-    assert_eq!(queue_seg_indices(&v), vec![0, 1, 2, 3, 4]);
+    // The landing leads: readiness waits on its window alone, so anything
+    // queued ahead of it is served first and costs the switch a whole segment.
+    // The plan still reaches one segment behind the landing even here, where
+    // byte sizes are exact — a demuxer parks at the packet boundary at or
+    // before the landing, and the landing is a segment start, so its first
+    // packet begins in segment 1. Exactness of byte sizes says nothing about
+    // the packet grid. It just follows the landing instead of leading it.
+    assert_eq!(queue_seg_indices(&v), vec![2, 1, 3, 4]);
     // Only the plan reaches back — the anchor the reader is opened at, and the
     // prefetch it drives, both stay on the landing.
     assert_eq!(v.prefetch_anchor(), 248);
 }
 
 #[kithara::test]
-fn incoming_session_seeds_probe_without_fetching_the_middle_gap() {
+fn incoming_session_leads_with_the_landing_and_skips_everything_before_it() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         init: make_init(48, &ctx.scope),
@@ -1045,11 +1048,15 @@ fn incoming_session_seeds_probe_without_fetching_the_middle_gap() {
     assert_eq!(session.position(), 0);
     assert!(!v.seek_projection_is_live());
     assert!(queue_has_init(&v));
-    assert_eq!(queue_seg_indices(&v), vec![0, 3, 4, 5]);
+    // Landing first, its backoff second, then forward. Nothing ahead of the
+    // landing, and no head-of-stream decoder probe: this reader opens on the
+    // landing anchor and seeks straight to it, so it never reads segment 0 —
+    // fetching it only delays the segment readiness is waiting for.
+    assert_eq!(queue_seg_indices(&v), vec![4, 3, 5]);
     assert!(
-        !queue_seg_indices(&v)
+        queue_seg_indices(&v)
             .iter()
-            .any(|segment| (1..3).contains(segment))
+            .all(|segment| !(0..3).contains(segment))
     );
     assert_eq!(
         v.prefetch_anchor(),
@@ -1096,7 +1103,7 @@ fn incoming_session_dispatches_only_the_decoder_construction_window() {
 
     let commands = session.dispatch_constructing(&ctx, 10);
 
-    assert_eq!(commands.len(), 4, "init, probe, backoff, and landing");
+    assert_eq!(commands.len(), 3, "init, landing, and its backoff");
     assert_eq!(queue_seg_indices(&v), vec![5, 6, 7, 8, 9]);
     assert!(session.dispatch_constructing(&ctx, 10).is_empty());
 
@@ -2028,7 +2035,12 @@ fn wait_range_probes_without_sleeping() {
 
     let started = Instant::now();
     let outcome = v.wait_range(0..1, Some(Duration::from_millis(10)));
-    let elapsed = started.elapsed();
+    // Both ends read the same clock. `Instant::now()` is rewritten onto virtual
+    // time inside a test body while `Instant::elapsed()` — a method, not a
+    // recognised path — is not, so `started.elapsed()` subtracts a virtual
+    // instant from a real one and reports the offset between the two scales.
+    // Under load that offset alone blows any millisecond budget.
+    let elapsed = Instant::now().saturating_duration_since(started);
 
     assert!(
         matches!(
@@ -2061,12 +2073,13 @@ fn wait_range_flush_short_circuits_without_sleeping() {
     let _ = SeekControl::begin(&*seek, Duration::from_millis(10));
     let started = Instant::now();
     let interrupted = v.wait_range(0..1, Some(Duration::from_millis(10)));
+    let elapsed = Instant::now().saturating_duration_since(started);
     assert!(
         matches!(interrupted, Ok(WaitOutcome::Interrupted)),
         "flushing seek state must Interrupt the probe, got {interrupted:?}"
     );
     assert!(
-        started.elapsed() < Duration::from_millis(2),
-        "flush short-circuit must not sleep"
+        elapsed < Duration::from_millis(2),
+        "flush short-circuit must not sleep; took {elapsed:?}"
     );
 }

@@ -194,7 +194,7 @@ impl HlsVariant {
         self.set_prefetch_anchor(prefetch_anchor);
         self.set_seek_alias(byte_offset, seg_idx_u32);
         self.set_segment_aware_seek_tail(fetch_start);
-        if !self.fetch_plan_satisfied(fetch_start, None) {
+        if !self.fetch_plan_satisfied(fetch_start) {
             self.rebuild_queue(fetch_start, None);
         }
         self.set_exact_seek_demand(byte_offset, seg_idx_u32);

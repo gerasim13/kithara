@@ -58,23 +58,28 @@ impl HlsVariant {
         })?;
 
         self.set_prefetch_anchor(warmup_start);
-        // The plan reaches one segment behind the landing, whatever the
+        // The plan covers one segment behind the landing, whatever the
         // container. A demuxer handed a landing time parks at the packet
-        // boundary at or before it, and the landing is a segment start — so the
+        // boundary at or before it, and when the landing is a segment start the
         // first packet it reads begins in the segment before. Exact byte sizes
         // say nothing about where the codec's packet grid falls, so this backoff
         // cannot be conditional on them: without it the decoder is handed a
         // reader that cannot reach its own first packet, produces one chunk, and
         // stalls with the transition still pending.
         //
-        // Only the *plan* reaches back. Readiness still waits on the landing
-        // window: making it wait for the whole preceding segment delays every
-        // switch for bytes no decoder reads.
+        // What the plan must not do is put that backoff, or a segment-0 decoder
+        // probe, *ahead* of the landing. Readiness waits on the landing window
+        // alone, and readiness is what holds the switch — anything queued before
+        // it is served first and costs the transition a whole segment. Measured
+        // on a same-codec downswitch: a segment-0 probe took 9.8 ms of an 18.4 ms
+        // switch and the landing segment never arrived at all. The segment-0
+        // probe is gone outright; it belongs to a reader opened at the head of
+        // the stream that scans forward from byte zero, and this one opens on the
+        // landing anchor and seeks straight to it.
         let tail_start = forward_segment.saturating_sub(1);
-        let probe_segment = (landing_segment > 0).then_some(0);
         self.set_segment_aware_seek_tail(tail_start);
-        if !self.fetch_plan_satisfied(tail_start, probe_segment) {
-            self.rebuild_queue(tail_start, probe_segment);
+        if !self.fetch_plan_satisfied(tail_start) {
+            self.rebuild_reader_queue(forward_segment);
         }
 
         let anchor = SourceSeekAnchor::builder()

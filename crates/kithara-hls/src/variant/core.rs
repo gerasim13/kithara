@@ -327,7 +327,7 @@ impl HlsVariant {
     }
 
     pub(crate) fn maybe_publish_cache_complete(&self) {
-        if !self.fetch_plan_satisfied(0, None) {
+        if !self.fetch_plan_satisfied(0) {
             return;
         }
         if self.cache_complete_emitted.swap(true, Ordering::AcqRel) {
