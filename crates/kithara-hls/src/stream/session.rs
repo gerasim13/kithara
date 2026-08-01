@@ -219,23 +219,34 @@ impl HlsSession {
     }
 
     /// Whether the construction window this session was prepared for is
-    /// readable. The variant plans nothing by itself, so a not-yet-ready answer
-    /// wakes the peer for the same reason a not-ready read does: without it an
-    /// incoming session is only serviced when the *active* session happens to
-    /// ask for bytes, and a switch requested while the active one is fully
-    /// cached would never be fed. Off-RT — this is the transition shell, not the
-    /// produce core.
+    /// readable.
+    ///
+    /// A pure question. It used to wake the peer on a negative answer, and that
+    /// wake deadlocked the stream: this is called under the transition lock,
+    /// while `wake_peer` takes the peer's state lock — and the peer takes those
+    /// two in the opposite order, `poll_state_phase` holding its state lock
+    /// across `prepare_for_seek` -> `cancel_incoming_for_seek`, which locks the
+    /// transition. A seek epoch landing while an incoming session was being
+    /// polled for readiness stopped the stream dead, with the queue full and
+    /// nothing in flight.
+    ///
+    /// The wake is still owed — the variant plans nothing by itself, so without
+    /// it an incoming session is only serviced when the *active* session happens
+    /// to ask for bytes. It belongs to the caller, which knows when it has let
+    /// the transition lock go. See [`wake_peer_for_readiness`].
     pub(crate) fn is_ready(&self) -> StreamResult<bool> {
         match &self.readiness {
             SessionReadiness::Active => Ok(true),
             SessionReadiness::Profiled { preparation, .. } => {
-                let ready = self.variant.reader_is_ready(&preparation.lock())?;
-                if !ready {
-                    self.signal.wake_peer();
-                }
-                Ok(ready)
+                self.variant.reader_is_ready(&preparation.lock())
             }
         }
+    }
+
+    /// Ask the peer to plan for a session that answered [`Self::is_ready`] with
+    /// `false`. Call it only with no transition lock held.
+    pub(crate) fn wake_peer_for_readiness(&self) {
+        self.signal.wake_peer();
     }
 
     pub(crate) fn media_info(&self) -> kithara_stream::MediaInfo {

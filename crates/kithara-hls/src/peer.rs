@@ -278,6 +278,9 @@ impl HlsPeer {
             .as_ref()
             .and_then(|state| state.waker.clone())
             .or_else(|| self.pending_waker.lock().clone());
+        // A wake that finds no waker is silently dropped, and the caller has no
+        // way to tell that apart from a wake that landed and produced nothing.
+        tracing::trace!(found = waker.is_some(), "hls peer wake requested");
         if let Some(waker) = waker {
             waker.wake();
         }

@@ -219,6 +219,7 @@ impl HlsCoord {
         &self,
         transition: VariantTransition,
     ) -> StreamResult<VariantReaderTake> {
+        let mut wake_when_unlocked: Option<Arc<HlsSession>> = None;
         let mut state = self.sessions.transition.lock();
         let result = if let Some(slot) = state.incoming.as_mut() {
             if slot.transition != transition {
@@ -246,7 +247,14 @@ impl HlsCoord {
                         Ok(VariantReaderTake::Stale)
                     }
                     PendingAbrClaim::Ready(_) => match slot.session.is_ready() {
-                        Ok(false) => Ok(VariantReaderTake::Preparing),
+                        Ok(false) => {
+                            // Owed a wake, but not from here: `wake_peer` takes
+                            // the peer's state lock, and the peer holds that
+                            // across `prepare_for_seek`, which takes the
+                            // transition lock this arm is standing on.
+                            wake_when_unlocked = Some(Arc::clone(&slot.session));
+                            Ok(VariantReaderTake::Preparing)
+                        }
                         Ok(true) => Ok(slot
                             .reader
                             .take()
@@ -263,6 +271,9 @@ impl HlsCoord {
             Ok(VariantReaderTake::Stale)
         };
         drop(state);
+        if let Some(session) = wake_when_unlocked {
+            session.wake_peer_for_readiness();
+        }
         result
     }
 
