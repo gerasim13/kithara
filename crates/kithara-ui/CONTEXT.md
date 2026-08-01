@@ -260,19 +260,20 @@ Routing the document event through the recognizer or engine instead would point 
 crate's orchestration layer, and every base peer points strictly downward: `draw` to `text`, `text`
 to `skin`, `solve` to `layout::Axis`.
 
-The retained interaction boundary explicitly names ten documents: `studio-deck`, `studio-mixer`,
+The retained interaction boundary explicitly names eleven documents: `studio-deck`, `studio-mixer`,
 `studio-mixer-single`, their nested `studio-strip`, the nested `studio-overview-row`, the
 `gallery-knobs`, `gallery-meters`, and `gallery-toggles` includes inside the Atoms gallery page, and
-the direct `gallery-buttons-tab` and `gallery-nav` modules. A direct layout module is selected by its
-compiled module ID; expansion records each nested include root by structural address and module ID
-without adding a node wrapper, so the existing render-tree shape and layout stay unchanged. The iced
-host at each selected root keeps one `Engine` in widget-tree state while its descriptor snapshot is
-rebuilt from the current reads on every view. Reconciliation matches an owned resolved control path
-plus component kind; it refreshes configuration and preserves recognizer state, and never retains an
-`InternId` across compiled UI lifetimes. The ordinary click wave and Hero Wave have distinct
-descriptor identities. The Hero descriptor refreshes its scalar drag, visible window, and wheel
-answers from current progress and zoom on every view. The ten module IDs form a named set in the
-render tree; subtree contents never silently opt another document into the engine.
+the direct `gallery-buttons-tab`, `gallery-module-tabs`, and `gallery-nav` modules. A direct layout
+module is selected by its compiled module ID; expansion records each nested include root by
+structural address and module ID without adding a node wrapper, so the existing render-tree shape
+and layout stay unchanged. The iced host at each selected root keeps one `Engine` in widget-tree
+state while its descriptor snapshot is rebuilt from the current reads on every view. Reconciliation
+matches an owned resolved control path plus component kind; it refreshes configuration and
+preserves recognizer state, and never retains an `InternId` across compiled UI lifetimes. The
+ordinary click wave and Hero Wave have distinct descriptor identities. The Hero descriptor
+refreshes its scalar drag, visible window, and wheel answers from current progress and zoom on every
+view. The eleven module IDs form a named set in the render tree; subtree contents never silently opt
+another document into the engine.
 
 The mixer host absorbs the expanded roots of both included strips. Rendering beneath that host
 propagates `InputOwner::Engine`, while only `InputOwner::Leaf` may open a host, so the nested
@@ -326,11 +327,12 @@ mixer contains one supported strip. Each strip contains knobs, a vertical VU, an
 contains four knobs and a label; `gallery-meters` contains a stereo meter, two vertical VUs, and a
 label; `gallery-toggles` contains two toggles, two checkboxes, and a label.
 `gallery-buttons-tab` contains six activation buttons and two inert text labels; its micro
-play/pause cell reaches the draw seam as a Lucide font glyph. `gallery-nav` contains eighteen
-activation nav items plus an inert icon and label in its header. Each hosted `studio-deck` contains
-one Hero Wave and five Lucide activation buttons, while its Slot and labels are passive and its
-tempo row remains an iced wheel surface. The Hero component preserves shift-loop child emissions,
-child-addressed wheel zoom, and the plain scalar drag.
+play/pause cell reaches the draw seam as a Lucide font glyph. `gallery-module-tabs` contains five
+activation tabs. `gallery-nav` contains eighteen activation nav items plus an inert icon and label
+in its header. Each hosted `studio-deck` contains one Hero Wave and five Lucide activation buttons,
+while its Slot and labels are passive and its tempo row remains an iced wheel surface. The Hero
+component preserves shift-loop child emissions, child-addressed wheel zoom, and the plain scalar
+drag.
 
 A `Scalar` carries a `Track` that says how a position becomes a value, and the split that matters is
 relative against absolute. A relative track counts travel from the press, so the press only arms the
@@ -624,9 +626,14 @@ path for the later vector wave.
 `atoms::nav_item::NavItem` likewise owns one retained painting: the selected background, marker
 rectangle, Lucide icon glyph, and mono label. Its canvas remains `Fill` wide and fixes only
 `skin.nav.item_height`, so shaping the two glyph runs never participates in intrinsic layout.
-`TabLarge` stays on iced because its width is `Shrink`: base painting it must first measure the label
-to choose its own width. That production need will introduce the text-measurement boundary; this
-slice neither approximates the width nor adds a measurer before it has that caller.
+`TabLarge` is the first base-painted activation control whose size comes from its own text.
+`atoms::tab::TabLarge` shapes the label through `TextContext`; that shaped width is the measurement,
+and horizontal padding produces the control width while the skin supplies its fixed height. The
+custom iced widget performs that measurement in `layout` and replays the atom's label and
+active-only underline in `draw`, so leaf and hosted tabs keep the same rectangle. Its shaping
+scratch remains per-widget; moving it to a document-scoped owner is still separate debt. With no
+sizing wrapper, the retained host maps the tab target from the widget's own layout bounds; wrapped
+controls continue to map the child bounds inside their declared-size container.
 
 A container that declares no `size` renders `Fill` on both axes — `render::tree::content_size`
 maps the undeclared case there. A stack of unsized rows therefore splits its parent between them

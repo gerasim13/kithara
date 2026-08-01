@@ -23,11 +23,7 @@ use crate::{
         icons::document_icon,
     },
     skin::ColorRole,
-    widgets::{
-        Widget,
-        fader::Fader,
-        nav::{Glyph, TabLarge},
-    },
+    widgets::{Widget, fader::Fader, nav::Glyph},
 };
 
 pub(super) fn crossfader<'a>(
@@ -327,15 +323,10 @@ pub(super) fn tab_large<'a>(
     path: &'a str,
     label: &'a str,
     value: Option<&ReadValue<'_>>,
-    skin: &Skin,
+    skin: &'a Skin,
+    owner: InputOwner,
 ) -> Element<'a, UiEvent> {
-    TabLarge::builder()
-        .path(path)
-        .label(label)
-        .maybe_value(value)
-        .skin(skin)
-        .build()
-        .view()
+    crate::render::controls::tab_large(path, label, value, skin, owner)
 }
 
 #[cfg(test)]

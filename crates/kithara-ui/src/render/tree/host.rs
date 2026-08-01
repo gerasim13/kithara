@@ -13,7 +13,10 @@ use iced::{
 use kithara_platform::time::Instant;
 use num_traits::cast::AsPrimitive;
 
-use super::read::{read_flag, read_scope, resolve, wave_zoom};
+use super::{
+    geometry::effective_size,
+    read::{read_flag, read_scope, resolve, wave_zoom},
+};
 use crate::{
     compile::CompiledUi,
     engine::{Descriptor, Engine, Target},
@@ -280,6 +283,7 @@ enum HostedLayout {
         children: Vec<Self>,
     },
     Control(Option<HostedControl>),
+    SelfMeasuredControl(Option<HostedControl>),
     Passive,
 }
 
@@ -321,16 +325,23 @@ impl HostedLayout {
             },
             ExpandedNode::Control {
                 path, spec, read, ..
-            } => Self::Control(HostedControl::new(
-                ui.resolve(*path),
-                spec,
-                read.as_ref()
-                    .and_then(|binding| resolve(reads, binding, ui)),
-                read_scope(read.as_ref(), ui),
-                reads,
-                ui,
-                skin,
-            )),
+            } => {
+                let control = HostedControl::new(
+                    ui.resolve(*path),
+                    spec,
+                    read.as_ref()
+                        .and_then(|binding| resolve(reads, binding, ui)),
+                    read_scope(read.as_ref(), ui),
+                    reads,
+                    ui,
+                    skin,
+                );
+                if effective_size(node, skin).is_none() {
+                    Self::SelfMeasuredControl(control)
+                } else {
+                    Self::Control(control)
+                }
+            }
             ExpandedNode::Popover { .. } | ExpandedNode::Pressable { .. } => Self::Passive,
         }
     }
@@ -348,8 +359,10 @@ impl HostedLayout {
                     child.append_descriptors(descriptors);
                 }
             }
-            Self::Control(Some(control)) => descriptors.push(control.into()),
-            Self::Control(None) | Self::Passive => {}
+            Self::Control(Some(control)) | Self::SelfMeasuredControl(Some(control)) => {
+                descriptors.push(control.into());
+            }
+            Self::Control(None) | Self::SelfMeasuredControl(None) | Self::Passive => {}
         }
     }
 
@@ -396,7 +409,11 @@ impl HostedLayout {
                     iced_interact::hit(layout.bounds(), cursor),
                 ));
             }
-            Self::Control(None) | Self::Passive => {}
+            Self::SelfMeasuredControl(Some(control)) => targets.push(Target::new(
+                control.path(),
+                iced_interact::hit(layout.bounds(), cursor),
+            )),
+            Self::Control(None) | Self::SelfMeasuredControl(None) | Self::Passive => {}
         }
     }
 }
@@ -458,11 +475,12 @@ impl HostedControl {
                     path: path.to_owned(),
                 })
             }
-            (ControlSpec::Toggle | ControlSpec::Checkbox, Some(ReadValue::Bool(_))) => {
-                Some(Self::Activation {
-                    path: path.to_owned(),
-                })
-            }
+            (
+                ControlSpec::TabLarge { .. } | ControlSpec::Toggle | ControlSpec::Checkbox,
+                Some(ReadValue::Bool(_)),
+            ) => Some(Self::Activation {
+                path: path.to_owned(),
+            }),
             (ControlSpec::Crossfader { .. }, Some(ReadValue::Scalar(_))) => {
                 Some(Self::Crossfader {
                     path: path.to_owned(),
@@ -670,7 +688,10 @@ mod tests {
                     | "gallery.label.transport"
                     | "gallery.label.regular",
                 ) => Some(&self.text),
-                (EndpointCategory::Model, endpoint) if endpoint.starts_with("gallery.tab.") => {
+                (EndpointCategory::Model, endpoint)
+                    if endpoint.starts_with("gallery.tab.")
+                        || endpoint.starts_with("gallery.module.") =>
+                {
                     Some(&self.boolean)
                 }
                 (EndpointCategory::Model, "mock.wave") => Some(&self.waveform),
@@ -718,6 +739,9 @@ mod tests {
                 "gallery.label.regular" => Some(ReadValue::Text("REGULAR")),
                 endpoint if endpoint.starts_with("gallery.tab.") => {
                     Some(ReadValue::Bool(endpoint == "gallery.tab.atoms"))
+                }
+                endpoint if endpoint.starts_with("gallery.module.") => {
+                    Some(ReadValue::Bool(endpoint == "gallery.module.deck"))
                 }
                 "mock.wave@deck=a" => Some(ReadValue::Waveform(WaveformView {
                     buckets: &WAVE_BUCKETS,
@@ -818,6 +842,27 @@ mod tests {
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("gallery buttons fixture must compile: {error}"))
+    }
+
+    fn compiled_gallery_tabs() -> CompiledUi {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "gallery.klayout.ron",
+            r#"(schema: "kithara.layout", version: 1, id: "gallery-tabs-host",
+                root: Module(instance: "modules-tabs", source: "module-tabs.kmodule.ron"))"#,
+        );
+        resolver.insert(
+            "module-tabs.kmodule.ron",
+            include_str!("../../../examples/gallery/assets/modules/module-tabs.kmodule.ron"),
+        );
+        compile(
+            "gallery.klayout.ron",
+            &resolver,
+            &Registry::default(),
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap_or_else(|error| panic!("gallery module tabs fixture must compile: {error}"))
     }
 
     fn compiled_gallery_nav() -> CompiledUi {
@@ -925,7 +970,9 @@ mod tests {
                 {
                     components.push("activation");
                 }
-                ControlSpec::Toggle | ControlSpec::Checkbox => components.push("activation"),
+                ControlSpec::TabLarge { .. } | ControlSpec::Toggle | ControlSpec::Checkbox => {
+                    components.push("activation");
+                }
                 ControlSpec::Knob { .. } => {
                     components.push("knob");
                 }
@@ -1426,6 +1473,98 @@ mod tests {
                 },
             ],
             "a button with no read endpoint must still have the same activation contract"
+        );
+    }
+
+    #[kithara::test]
+    fn gallery_module_tabs_share_the_host_activation_component() {
+        let ui = compiled_gallery_tabs();
+        let reads = FixtureReads::default();
+        let CompiledNode::Module {
+            instance,
+            module,
+            root,
+            ..
+        } = &ui.root
+        else {
+            panic!("gallery module tabs fixture root must be a module");
+        };
+
+        assert_eq!(ui.resolve(*module), "gallery-module-tabs");
+        let mut components = Vec::new();
+        claimed_components(root, &mut components);
+        assert_eq!(components, ["activation"; 5]);
+
+        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full_tree = Tree::new(full.as_widget());
+        assert_eq!(host_count(&full_tree), 1, "the tabs own one engine");
+
+        let renderer = headless_renderer();
+        let viewport = Size::new(500.0, 80.0);
+        let child = super::super::node::render_engine_node(
+            root,
+            &[],
+            *instance,
+            &ui,
+            &reads,
+            builtin::skin(),
+        );
+        let mut element = host(child, root, &ui, &reads, builtin::skin());
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let descriptors = hosted.descriptors();
+        assert_eq!(
+            descriptors.iter().map(descriptor_path).collect::<Vec<_>>(),
+            [
+                "modules-tabs/deck",
+                "modules-tabs/deck-micro",
+                "modules-tabs/global-bar",
+                "modules-tabs/telemetry",
+                "modules-tabs/layout",
+            ]
+        );
+        assert!(
+            descriptors
+                .iter()
+                .all(|descriptor| matches!(descriptor, Descriptor::Activation { .. }))
+        );
+
+        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let target = targets
+            .iter()
+            .find(|target| target.path == "modules-tabs/deck-micro")
+            .unwrap_or_else(|| panic!("the hosted DECK MICRO target must exist"));
+        let area = target.hit.area();
+        assert!((area.w - 94.0).abs() < 0.001);
+        assert_eq!(area.h, builtin::skin().tab_large.height);
+        let cursor = Cursor::Available(Point::new(area.x + area.w / 2.0, area.y + area.h / 2.0));
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            Layout::new(&node),
+            cursor,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert!(!shell.is_event_captured());
+        drop(shell);
+
+        assert_eq!(
+            messages,
+            [UiEvent::Control {
+                path: "modules-tabs/deck-micro".to_owned(),
+                action: ControlAction::Activate,
+            }]
         );
     }
 

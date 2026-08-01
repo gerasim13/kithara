@@ -644,6 +644,22 @@ mod tests {
     }
 
     #[kithara::test]
+    fn the_hosted_module_tabs_keep_their_descriptor_backed_controls() {
+        assert_hosted_page_claims(
+            Tab::Modules,
+            "module tabs",
+            |path| path.starts_with("modules-tabs/"),
+            &[
+                ("modules-tabs/deck", "activation"),
+                ("modules-tabs/deck-micro", "activation"),
+                ("modules-tabs/global-bar", "activation"),
+                ("modules-tabs/layout", "activation"),
+                ("modules-tabs/telemetry", "activation"),
+            ],
+        );
+    }
+
+    #[kithara::test]
     fn the_hosted_nav_keeps_its_descriptor_backed_controls() {
         assert_hosted_page_claims(
             Tab::Atoms,
@@ -685,6 +701,7 @@ mod tests {
             } => None,
             ControlSpec::Button { .. }
             | ControlSpec::NavItem { .. }
+            | ControlSpec::TabLarge { .. }
             | ControlSpec::Toggle
             | ControlSpec::Checkbox => Some("activation"),
             ControlSpec::Crossfader { .. } => Some("crossfader"),
