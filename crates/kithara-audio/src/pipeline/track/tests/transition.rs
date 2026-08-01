@@ -15,7 +15,7 @@ use crate::{
     pipeline::{
         decode::DecoderGeneration,
         rebuild::{DecoderBuildComplete, DecoderBuildPurpose, state::BuildId},
-        track::{CurrentFsm, TrackStep},
+        track::{AtEof, CurrentFsm, Failed, Track, TrackFailure, TrackStep},
     },
     renderer::AudioWorkerSource,
 };
@@ -54,6 +54,56 @@ async fn wait_for_incoming_priming(fixture: &mut RouteFixture, transition: Varia
         }
     }
     panic!("incoming decoder build did not complete");
+}
+
+#[kithara::test(tokio)]
+async fn eof_transition_retires_staged_incoming_and_aborts_variant() {
+    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+    let plan = incoming_plan();
+    let transition = plan.transition();
+    fixture.control.set_exact_plan(plan);
+    fixture.control.set_exact_reader_ready();
+
+    fixture.source.flush_deferred();
+    wait_for_incoming_priming(&mut fixture, transition).await;
+
+    assert!(fixture.source.decode.incoming_is_priming(transition));
+    assert_eq!(fixture.control.aborted_transition(), None);
+    assert!(fixture.drops.lock().is_empty());
+
+    fixture.source.update_state(Track::<AtEof>::new(()).erase());
+    assert!(matches!(fixture.source.state, CurrentFsm::AtEof(_)));
+    fixture.source.flush_deferred();
+
+    assert!(fixture.source.decode.incoming_transition().is_none());
+    assert_eq!(fixture.control.aborted_transition(), Some(transition));
+    assert_eq!(fixture.drops.lock().as_slice(), &[99]);
+}
+
+#[kithara::test(tokio)]
+async fn failed_source_removal_retires_staged_incoming_and_aborts_variant() {
+    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+    let plan = incoming_plan();
+    let transition = plan.transition();
+    fixture.control.set_exact_plan(plan);
+    fixture.control.set_exact_reader_ready();
+
+    fixture.source.flush_deferred();
+    wait_for_incoming_priming(&mut fixture, transition).await;
+
+    assert!(fixture.source.decode.incoming_is_priming(transition));
+    assert_eq!(fixture.control.aborted_transition(), None);
+    assert!(fixture.drops.lock().is_empty());
+
+    fixture
+        .source
+        .update_state(Track::<Failed>::new(TrackFailure::SourceCancelled).erase());
+    let control = fixture.control.clone();
+    let drops = fixture.drops.clone();
+    drop(fixture.source);
+
+    assert_eq!(control.aborted_transition(), Some(transition));
+    assert_eq!(drops.lock().as_slice(), &[99, 1]);
 }
 
 #[kithara::test(tokio)]

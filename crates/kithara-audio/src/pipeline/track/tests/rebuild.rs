@@ -289,6 +289,7 @@ impl WorkerWake for CountingWake {
 }
 
 pub(super) struct TestControl {
+    aborted_transition: Mutex<Option<VariantTransition>>,
     byte_map_enabled: AtomicBool,
     exact_plan: Mutex<Option<VariantReaderPlan>>,
     exact_reader_ready: AtomicBool,
@@ -307,6 +308,7 @@ pub(super) struct TestControl {
 impl TestControl {
     fn new(media_info: MediaInfo) -> Self {
         Self {
+            aborted_transition: Mutex::new(None),
             byte_map_enabled: AtomicBool::new(false),
             exact_plan: Mutex::new(None),
             exact_reader_ready: AtomicBool::new(false),
@@ -340,6 +342,10 @@ impl TestControl {
 
     pub(super) fn set_promotion(&self, promotion: VariantPromotion) {
         *self.promotion.lock() = promotion;
+    }
+
+    pub(super) fn aborted_transition(&self) -> Option<VariantTransition> {
+        *self.aborted_transition.lock()
     }
 
     pub(super) fn plan_calls(&self) -> u64 {
@@ -437,8 +443,17 @@ impl VariantControl for TestControl {
         promotion
     }
 
-    fn abort_variant(&self, _transition: VariantTransition) -> bool {
-        false
+    fn abort_variant(&self, transition: VariantTransition) -> bool {
+        let mut exact_plan = self.exact_plan.lock();
+        if exact_plan
+            .as_ref()
+            .is_none_or(|plan| plan.transition() != transition)
+        {
+            return false;
+        }
+        *exact_plan = None;
+        *self.aborted_transition.lock() = Some(transition);
+        true
     }
 
     fn selected_variant_for_seek(&self) -> usize {

@@ -168,6 +168,10 @@ impl<T: StreamType> StreamAudioSource<T> {
 
 impl<T: StreamType> Drop for StreamAudioSource<T> {
     fn drop(&mut self) {
+        // A failed node can be removed before another deferred pass.
+        if matches!(self.state, CurrentFsm::AtEof(_) | CurrentFsm::Failed(_)) {
+            self.progress_variant_transition();
+        }
         // Publish any lifecycle event enqueued on the final produce pass before
         // the terminal node is dropped — `scheduler::run_loop` removes a
         // removable slot via `retain` without another `flush_deferred`, so a
@@ -245,6 +249,15 @@ impl<T: StreamType> StreamAudioSource<T> {
                 } else {
                     return;
                 }
+            }
+            CurrentFsm::AtEof(_) | CurrentFsm::Failed(_) => {
+                if let (Some(control), Some(transition)) = (
+                    self.variant_control.clone(),
+                    self.decode.incoming_transition(),
+                ) {
+                    self.abort_local_incoming(control.as_ref(), transition);
+                }
+                return;
             }
             _ => return,
         };
