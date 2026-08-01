@@ -41,7 +41,6 @@ struct CacheIdentityRule {
 #[derive(Deserialize)]
 struct Playback {
     crossfade_seconds: f32,
-    eq_band_count: usize,
 }
 
 #[derive(Deserialize)]
@@ -201,12 +200,6 @@ fn emit_scalars(code: &mut String, app: &AppConfig) {
         code,
         "pub const BAKED_CROSSFADE_SECONDS: f32 = {:?};",
         app.playback.crossfade_seconds
-    )
-    .expect("write to String never fails");
-    writeln!(
-        code,
-        "pub const BAKED_EQ_BAND_COUNT: usize = {};",
-        app.playback.eq_band_count
     )
     .expect("write to String never fails");
     writeln!(
