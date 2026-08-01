@@ -178,6 +178,18 @@ fn source_frame(position: f64, label: &str) -> i64 {
         .expect("validated source frame fits signed frame coordinates")
 }
 
+/// Source frame every render captures at: the first whole render block at or
+/// after [`REQUEST_AT_SECS`], so the capture sits on the block grid the warm-up
+/// loop advances by.
+fn capture_frame_target() -> i64 {
+    let request = REQUEST_AT_SECS * f64::from(SAMPLE_RATE);
+    let blocks = (request / BLOCK_FRAMES.to_f64().expect("render block fits f64")).ceil();
+    let frames = blocks * BLOCK_FRAMES.to_f64().expect("render block fits f64");
+    frames
+        .to_i64()
+        .expect("capture frame target fits the source frame index")
+}
+
 fn observation_frames() -> usize {
     usize::try_from(SAMPLE_RATE)
         .expect("fixture sample rate fits usize")
@@ -285,11 +297,24 @@ async fn prepare_player(
     let mut player = OfflinePlayer::new(SAMPLE_RATE);
     player.load_and_fadein(resource, label);
 
+    // Render to a capture point fixed in *frames*, not to whichever frame the
+    // warm-up happens to stop on. A cold start can hand back a short block, and
+    // then the capture drifts off the block grid by however much the pipeline
+    // owed — which turns "every render captures the same source frame" from a
+    // property of the fixture into a property of the host's load. Every render
+    // now asks for exactly the frames still missing, so it lands on
+    // `capture_frame` whatever the pipeline did on the way there.
+    let capture_frame = capture_frame_target();
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut active_blocks = 0usize;
     let mut decoder_events = drain_decoder_events(&mut events, 0);
     loop {
-        let block = render_paced(&mut player, BLOCK_FRAMES).await;
+        let rendered = source_frame(player.position(), label);
+        let remaining = capture_frame.saturating_sub(rendered);
+        let request = usize::try_from(remaining)
+            .unwrap_or(BLOCK_FRAMES)
+            .min(BLOCK_FRAMES);
+        let block = render_paced(&mut player, request.max(1)).await;
         decoder_events.extend(drain_decoder_events(&mut events, 0));
         if block
             .iter()
@@ -300,7 +325,7 @@ async fn prepare_player(
             active_blocks = 0;
         }
         if abr.current_variant_index() == Some(initial_variant)
-            && player.position() >= REQUEST_AT_SECS
+            && source_frame(player.position(), label) >= capture_frame
             && active_blocks >= 2
         {
             break;
@@ -314,7 +339,11 @@ async fn prepare_player(
     }
 
     assert_initial_decoder(&decoder_events, initial_variant, backend, label);
-    let capture_frame = source_frame(player.position(), label);
+    assert_eq!(
+        source_frame(player.position(), label),
+        capture_frame,
+        "{label} warm-up must stop exactly on the capture frame",
+    );
     PreparedPlayer {
         _temp: temp,
         player,
