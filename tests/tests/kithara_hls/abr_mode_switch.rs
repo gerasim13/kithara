@@ -1853,7 +1853,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     assert!(
         targets.contains(&0),
         "Manual(0) (slq AAC) must publish VariantApplied, saw: {targets:?}, \
-         audio_trace={audio_trace:?}"
+         phase4={phase4:?}, audio_trace={audio_trace:?}"
     );
 
     // Bug surfaces as samples_phase4 ≪ expected. 10 s @ 44.1 kHz
