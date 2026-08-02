@@ -968,7 +968,7 @@ async fn rebuilding_decoder_completion_installs_once() {
         drops, mut source, ..
     } = test_source(1).await;
     enter_rebuilding(&mut source, 7, recreate_state(1));
-    push_completion_with_drops(&mut source, 7, 2, drops.clone());
+    push_completion_with_drops(&source, 7, 2, drops.clone());
     source.flush_deferred();
 
     assert!(matches!(source.step_track(), TrackStep::StateChanged));
@@ -996,7 +996,7 @@ async fn rebuilding_decoder_completion_emits_decoder_changed_cause() {
     let mut events = bus.subscribe();
     source = source.with_emit(Arc::new(DeferredBus::new(bus, 16)));
     enter_rebuilding(&mut source, 7, recreate_state(1));
-    push_completion_with_drops(&mut source, 7, 2, drops);
+    push_completion_with_drops(&source, 7, 2, drops);
     source.flush_deferred();
 
     assert!(matches!(source.step_track(), TrackStep::StateChanged));
@@ -1252,7 +1252,7 @@ async fn rebuilding_decoder_seek_epoch_supersedes_completion() {
     } = test_source(1).await;
     enter_rebuilding(&mut source, 7, recreate_state(1));
     let epoch = source.seek.begin(Duration::from_secs(3));
-    push_completion_with_drops(&mut source, 7, 2, drops.clone());
+    push_completion_with_drops(&source, 7, 2, drops.clone());
     source.flush_deferred();
 
     assert!(matches!(source.step_track(), TrackStep::StateChanged));
@@ -1286,7 +1286,7 @@ async fn rebuilding_decoder_variant_change_supersedes_completion() {
     } = test_source(1).await;
     enter_rebuilding(&mut source, 7, recreate_state(1));
     control.set_media_info(media_info(2));
-    push_completion_with_drops(&mut source, 7, 2, drops.clone());
+    push_completion_with_drops(&source, 7, 2, drops.clone());
     source.flush_deferred();
 
     assert!(matches!(source.step_track(), TrackStep::StateChanged));
@@ -1335,7 +1335,7 @@ async fn rebuilding_decoder_variant_change_preserves_inflight_seek() {
         },
     );
     control.set_media_info(media_info(2));
-    push_completion_with_drops(&mut source, 7, 2, drops.clone());
+    push_completion_with_drops(&source, 7, 2, drops.clone());
     source.flush_deferred();
 
     assert!(matches!(source.step_track(), TrackStep::StateChanged));
@@ -1363,7 +1363,7 @@ async fn stale_rebuild_completion_retires_decoder_shell_side() {
         drops, mut source, ..
     } = test_source(1).await;
     enter_rebuilding(&mut source, 7, recreate_state(1));
-    push_completion_with_drops(&mut source, 6, 3, drops.clone());
+    push_completion_with_drops(&source, 6, 3, drops.clone());
     assert!(drops.lock().is_empty());
 
     source.flush_deferred();
