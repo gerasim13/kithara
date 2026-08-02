@@ -12,7 +12,9 @@ use syn::{
 
 use super::{
     Check, Context,
-    derivable_support::{crate_manifest, deletion_range, item_blocks, line_start},
+    derivable_support::{
+        attrs_match_config, crate_manifest, deletion_range, item_blocks, line_start,
+    },
 };
 use crate::{
     common::{
@@ -26,6 +28,8 @@ use crate::{
 
 pub(crate) const ID: &str = "derivable_delegation";
 const MAX_RAW_STRING_HASHES: usize = 255;
+const NON_SIMPLE_DELEGATE_TARGET: &str = "impl has a non-simple delegate! target";
+const UNSUPPORTED_DELEGATE_SYNTAX: &str = "existing delegate! block has unsupported syntax";
 
 pub(crate) struct DerivableDelegation;
 
@@ -131,7 +135,10 @@ impl Check for DerivableDelegation {
                 cfg.inherent_min_methods,
                 &cfg.blocking_impl_attrs,
                 &cfg.keep_manual_method_attrs,
-            ) {
+            )
+            .into_iter()
+            .filter(is_reportable)
+            {
                 let detail = candidate.skip.map_or_else(
                     || {
                         if candidate.existing_blocks == 0 {
@@ -197,6 +204,10 @@ struct Candidate {
 struct Edit {
     range: Range<usize>,
     text: String,
+}
+
+fn is_reportable(candidate: &Candidate) -> bool {
+    candidate.skip.as_deref() != Some(NON_SIMPLE_DELEGATE_TARGET)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -284,6 +295,12 @@ struct DelegateSegment<'a> {
     attrs: Vec<String>,
     bodies: Vec<ExistingBody>,
     methods: Vec<ForwardMethod<'a>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DelegateParseError {
+    NonSimpleTarget,
+    UnsupportedSyntax,
 }
 
 fn candidates(
@@ -392,7 +409,7 @@ fn collect_impl_items<'a>(
 fn collect_existing_segments<'a>(
     src: &str,
     delegate_macros: &[(usize, &syn::ImplItemMacro)],
-) -> Result<Vec<DelegateSegment<'a>>, ()> {
+) -> Result<Vec<DelegateSegment<'a>>, DelegateParseError> {
     let mut segments = Vec::<DelegateSegment<'_>>::new();
     for (_, item) in delegate_macros {
         for parsed in parse_delegate_segments(src, item)? {
@@ -434,17 +451,24 @@ fn candidate(
     let (groups, delegate_macros) = collect_impl_items(src, impl_block, keep_manual_method_attrs);
     let target = self_ty_name(&impl_block.self_ty).unwrap_or_else(|| "impl".to_owned());
     let line = impl_block.impl_token.span.start().line;
-    let Ok(mut segments) = collect_existing_segments(src, &delegate_macros) else {
-        return Some(Candidate {
-            target,
-            kind,
-            line,
-            existing_blocks: delegate_macros.len(),
-            fields: groups.len(),
-            methods: groups.iter().map(|group| group.methods.len()).sum(),
-            edits: Vec::new(),
-            skip: Some("impl has a non-simple delegate! target".to_owned()),
-        });
+    let mut segments = match collect_existing_segments(src, &delegate_macros) {
+        Ok(segments) => segments,
+        Err(error) => {
+            let reason = match error {
+                DelegateParseError::NonSimpleTarget => NON_SIMPLE_DELEGATE_TARGET,
+                DelegateParseError::UnsupportedSyntax => UNSUPPORTED_DELEGATE_SYNTAX,
+            };
+            return Some(Candidate {
+                target,
+                kind,
+                line,
+                existing_blocks: delegate_macros.len(),
+                fields: groups.len(),
+                methods: groups.iter().map(|group| group.methods.len()).sum(),
+                edits: Vec::new(),
+                skip: Some(reason.to_owned()),
+            });
+        }
     };
 
     let mut structural_change = delegate_macros.len() >= 2;
@@ -627,9 +651,9 @@ fn is_delegate_macro(item: &syn::ImplItemMacro) -> bool {
 fn parse_delegate_segments(
     src: &str,
     item: &syn::ImplItemMacro,
-) -> Result<Vec<ExistingSegment>, ()> {
+) -> Result<Vec<ExistingSegment>, DelegateParseError> {
     if !item.attrs.is_empty() {
-        return Err(());
+        return Err(DelegateParseError::UnsupportedSyntax);
     }
     let tokens: Vec<_> = item.mac.tokens.clone().into_iter().collect();
     let mut segments = Vec::new();
@@ -644,20 +668,24 @@ fn parse_delegate_segments(
             }
             let start = hash.span().byte_range().start;
             let end = group.span().byte_range().end;
-            attrs.push(src.get(start..end).ok_or(())?.to_owned());
+            attrs.push(
+                src.get(start..end)
+                    .ok_or(DelegateParseError::UnsupportedSyntax)?
+                    .to_owned(),
+            );
             cursor += 2;
         }
         let Some(TokenTree::Ident(to)) = tokens.get(cursor) else {
-            return Err(());
+            return Err(DelegateParseError::UnsupportedSyntax);
         };
         if to != "to" {
-            return Err(());
+            return Err(DelegateParseError::UnsupportedSyntax);
         }
         cursor += 1;
         let target_start = cursor;
         let body = loop {
             let Some(token) = tokens.get(cursor) else {
-                return Err(());
+                return Err(DelegateParseError::UnsupportedSyntax);
             };
             if let TokenTree::Group(group) = token
                 && group.delimiter() == Delimiter::Brace
@@ -667,9 +695,21 @@ fn parse_delegate_segments(
             }
             cursor += 1;
         };
-        let target = simple_delegate_target(&tokens[target_start..cursor - 1]).ok_or(())?;
+        let target_tokens = &tokens[target_start..cursor - 1];
+        if target_tokens.is_empty() {
+            return Err(DelegateParseError::UnsupportedSyntax);
+        }
+        let target =
+            simple_delegate_target(target_tokens).ok_or(DelegateParseError::NonSimpleTarget)?;
         let range = body.span().byte_range();
-        let inner = range.start.checked_add(1).ok_or(())?..range.end.checked_sub(1).ok_or(())?;
+        let inner = range
+            .start
+            .checked_add(1)
+            .ok_or(DelegateParseError::UnsupportedSyntax)?
+            ..range
+                .end
+                .checked_sub(1)
+                .ok_or(DelegateParseError::UnsupportedSyntax)?;
         let mut attr_ranges = Vec::new();
         let body_tokens: Vec<_> = body.stream().into_iter().collect();
         for pair in body_tokens.windows(2) {
@@ -684,19 +724,22 @@ fn parse_delegate_segments(
                 .byte_range()
                 .start
                 .checked_sub(inner.start)
-                .ok_or(())?;
+                .ok_or(DelegateParseError::UnsupportedSyntax)?;
             let end = group
                 .span()
                 .byte_range()
                 .end
                 .checked_sub(inner.start)
-                .ok_or(())?;
+                .ok_or(DelegateParseError::UnsupportedSyntax)?;
             if end > inner.len() {
-                return Err(());
+                return Err(DelegateParseError::UnsupportedSyntax);
             }
             attr_ranges.push(start..end);
         }
-        let source = src.get(inner).ok_or(())?.to_owned();
+        let source = src
+            .get(inner)
+            .ok_or(DelegateParseError::UnsupportedSyntax)?
+            .to_owned();
         segments.push(ExistingSegment {
             attrs,
             target,
@@ -996,31 +1039,6 @@ fn push_indented(output: &mut String, text: &str, indent: &str) {
 
 fn impl_has_blocking_attr(attrs: &[syn::Attribute], blocking: &[String]) -> bool {
     attrs_match_config(attrs, blocking)
-}
-
-fn attrs_match_config(attrs: &[syn::Attribute], configured: &[String]) -> bool {
-    if configured.is_empty() {
-        return false;
-    }
-    attrs.iter().any(|attr| {
-        let path = attr
-            .path()
-            .segments
-            .iter()
-            .map(|segment| segment.ident.to_string())
-            .collect::<Vec<_>>()
-            .join("::");
-        // Whitespace-stripped meta tokens catch `#[cfg_attr(cond, uniffi::export)]`.
-        let meta: String = attr
-            .meta
-            .to_token_stream()
-            .to_string()
-            .split_whitespace()
-            .collect();
-        configured.iter().any(|entry| {
-            path == *entry || path.ends_with(&format!("::{entry}")) || meta.contains(entry.as_str())
-        })
-    })
 }
 
 fn method_is_supported(
@@ -1578,7 +1596,9 @@ mod tests {
             &test_blocking(),
             &[],
         )
-        .len()
+        .into_iter()
+        .filter(is_reportable)
+        .count()
     }
 
     fn emitted_severity(severity: DerivableSeverity) -> Severity {
@@ -2320,9 +2340,10 @@ mod tests {
             "impl Wrapper {\n    delegate! { to match self { Self::Inner(inner) => inner } { fn a(&self); } }\n}\n",
         ];
         for source in sources {
+            assert_eq!(count(source), 0);
             let (fixed, outcome) = fix_source(source)?;
             assert_eq!(outcome.writes, 0);
-            assert_eq!(outcome.skipped, ["impl has a non-simple delegate! target"]);
+            assert_eq!(outcome.skipped, [NON_SIMPLE_DELEGATE_TARGET]);
             assert_eq!(fixed, source);
         }
         Ok(())
@@ -2331,9 +2352,10 @@ mod tests {
     #[test]
     fn unparseable_existing_block_keeps_manual_forwarders_unchanged() -> Result<()> {
         let source = "impl Wrapper {\n    delegate! { unexpected }\n    fn a(&self) { self.inner.a() }\n    fn b(&self) { self.inner.b() }\n}\n";
+        assert_eq!(count(source), 1);
         let (fixed, outcome) = fix_source(source)?;
         assert_eq!(outcome.writes, 0);
-        assert_eq!(outcome.skipped, ["impl has a non-simple delegate! target"]);
+        assert_eq!(outcome.skipped, [UNSUPPORTED_DELEGATE_SYNTAX]);
         assert_eq!(fixed, source);
         Ok(())
     }
@@ -2637,6 +2659,16 @@ mod tests {
                 "#[cfg_attr(not(target_arch = \"wasm32\"), async_trait)] #[cfg_attr(target_arch = \"wasm32\", async_trait(?Send))] impl Net for Client { async fn get(&self, r: Req) { self.net.get(r).await } async fn head(&self, r: Req) { self.net.head(r).await } }"
             ),
             0
+        );
+    }
+
+    #[test]
+    fn blocking_attribute_names_in_cfg_predicates_do_not_block_detection() {
+        assert_eq!(
+            count(
+                "#[cfg(feature = \"async_trait\")] impl Wrapper { fn a(&self) { self.inner.a() } fn b(&self) { self.inner.b() } }"
+            ),
+            1
         );
     }
 

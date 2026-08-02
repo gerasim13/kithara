@@ -91,6 +91,8 @@ pub(crate) enum DerivableSeverity {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DerivableGetterConfig {
+    #[serde(default = "default_blocking_impl_attrs")]
+    pub(crate) blocking_impl_attrs: Vec<String>,
     #[serde(default = "default_qualified_deref_remaps")]
     pub(crate) qualified_deref_remaps: Vec<QualifiedDerefRemap>,
     #[serde(default = "default_true")]
@@ -116,6 +118,7 @@ fn default_qualified_deref_remaps() -> Vec<QualifiedDerefRemap> {
 impl Default for DerivableGetterConfig {
     fn default() -> Self {
         Self {
+            blocking_impl_attrs: default_blocking_impl_attrs(),
             enabled: true,
             qualified_deref_remaps: default_qualified_deref_remaps(),
             severity: DerivableSeverity::Warn,

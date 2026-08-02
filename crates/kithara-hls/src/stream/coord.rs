@@ -142,16 +142,8 @@ impl HlsCoord {
         }
     }
 
-    pub(crate) fn active(&self) -> Arc<HlsVariant> {
-        self.active_session().variant()
-    }
-
     pub(crate) fn activity(&self) -> Arc<dyn Activity> {
         Arc::clone(&self.seek) as Arc<dyn Activity>
-    }
-
-    pub(crate) fn advance(&self, n: u64) {
-        self.active_session().advance(n);
     }
 
     /// Process one evicted resource key. Marks the lost segment
@@ -220,19 +212,6 @@ impl HlsCoord {
         None
     }
 
-    /// Total bytes are >0 — the value used by `Source::len` accessor.
-    pub(crate) fn len(&self) -> Option<u64> {
-        self.active().stream_len()
-    }
-
-    /// Active variant's media info. `HlsCoord` is constructed
-    /// non-empty (asserted in [`Self::new`]) so this always succeeds —
-    /// the `Source` trait's `Option<MediaInfo>` shape is restored at
-    /// the [`HlsSource`](crate::stream::HlsSource) façade.
-    pub(crate) fn media_info(&self) -> MediaInfo {
-        self.active().media_info()
-    }
-
     /// Track-level phase. Master-cancel takes precedence (terminal
     /// `Cancelled`); otherwise the variant that currently serves
     /// `range.start` decides — mid-buffer boundary cross resolves to
@@ -250,10 +229,6 @@ impl HlsCoord {
 
     pub(crate) fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
         Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
-    }
-
-    pub(crate) fn position(&self) -> u64 {
-        self.active_session().position()
     }
 
     /// Seek entry point. Collapses cross-variant byte-continuity layering,
@@ -325,17 +300,6 @@ impl HlsCoord {
         }
     }
 
-    /// Collapse the active variant to a "fresh" single-variant layout on
-    /// seek. Random seek may land far from the post-ABR-commit window, so
-    /// reset `byte_shift` / `served_from` / `served_until` back to the
-    /// natural range: subsequent ABR commits at boundary will re-build the
-    /// layering as usual. Gated by [`Self::prepare_for_seek`] so it is not
-    /// entered when the layout is already canonical.
-    #[kithara::probe]
-    pub(crate) fn reset_for_seek(&self) {
-        self.active().reset_for_seek();
-    }
-
     pub(crate) fn seek_control(&self) -> Arc<dyn SeekControl> {
         Arc::clone(&self.seek) as Arc<dyn SeekControl>
     }
@@ -346,13 +310,6 @@ impl HlsCoord {
 
     pub(crate) fn seek_observe(&self) -> Arc<dyn SeekObserve> {
         Arc::clone(&self.seek) as Arc<dyn SeekObserve>
-    }
-
-    pub(crate) fn seek_time_anchor(
-        &self,
-        position: Duration,
-    ) -> StreamResult<Option<SourceSeekAnchor>> {
-        self.active_session().seek_time_anchor(position)
     }
 
     pub(crate) fn selected_variant_for_seek(&self) -> usize {
@@ -370,10 +327,6 @@ impl HlsCoord {
         direct: Arc<dyn kithara_stream::WorkerWake>,
     ) {
         self.signal.set_peer_wake(deferred, direct);
-    }
-
-    pub(crate) fn set_position(&self, pos: u64) {
-        self.active_session().seek_to_byte(pos);
     }
 
     /// Install the audio worker's data-arrival wake (idempotent — only the
@@ -398,11 +351,6 @@ impl HlsCoord {
         } else if !pending && locked {
             self.abr.unlock();
         }
-    }
-
-    /// Variant index of the authoritative active source session.
-    pub(crate) fn variant_index(&self) -> usize {
-        self.active_session().variant_index()
     }
 
     /// Find the variant whose served range covers `offset`. Priority:
@@ -511,6 +459,34 @@ impl HlsCoord {
     }
 
     delegate! {
+        to self.active_session() {
+            #[call(variant)]
+            pub(crate) fn active(&self) -> Arc<HlsVariant>;
+            pub(crate) fn advance(&self, n: u64);
+            pub(crate) fn position(&self) -> u64;
+            pub(crate) fn seek_time_anchor(
+                &self,
+                position: Duration,
+            ) -> StreamResult<Option<SourceSeekAnchor>>;
+            #[call(seek_to_byte)]
+            pub(crate) fn set_position(&self, pos: u64);
+            /// Variant index of the authoritative active source session.
+            pub(crate) fn variant_index(&self) -> usize;
+        }
+        to self.active() {
+            /// Total bytes are >0 - the value used by `Source::len` accessor.
+            #[call(stream_len)]
+            pub(crate) fn len(&self) -> Option<u64>;
+            /// Active variant's media info. `HlsCoord` is constructed
+            /// non-empty (asserted in [`Self::new`]) so this always succeeds;
+            /// the `Source` trait's `Option<MediaInfo>` shape is restored at
+            /// the [`HlsSource`](crate::stream::HlsSource) facade.
+            pub(crate) fn media_info(&self) -> MediaInfo;
+            /// Collapse the active variant to a fresh single-variant layout on
+            /// seek, restoring the natural served range and byte shift.
+            #[kithara::probe]
+            pub(crate) fn reset_for_seek(&self);
+        }
         to self.active().as_ref() {
             pub(crate) fn download_head(&self) -> u32;
             pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;

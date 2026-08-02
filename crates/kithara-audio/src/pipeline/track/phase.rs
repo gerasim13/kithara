@@ -22,7 +22,7 @@ pub(crate) trait TrackPhase: sealed::Sealed + Sized {
 /// type-erased, in [`CurrentFsm`].
 #[derive(fieldwork::Fieldwork)]
 pub(crate) struct Track<S: TrackPhase> {
-    #[field(get(vis = "pub(crate)"))]
+    #[field(get, get_mut, vis = "pub(crate)")]
     data: S::Data,
     _phase: PhantomData<S>,
 }
@@ -33,10 +33,6 @@ impl<S: TrackPhase> Track<S> {
             data,
             _phase: PhantomData,
         }
-    }
-
-    pub(crate) fn data_mut(&mut self) -> &mut S::Data {
-        &mut self.data
     }
 
     pub(crate) fn erase(self) -> CurrentFsm {

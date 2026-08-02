@@ -30,12 +30,16 @@ pub struct EngineImpl {
     #[field(get)]
     worker: AudioWorkerHandle,
     config: EngineConfig,
+    #[field(get, vis = "pub(crate)")]
     bus: EventBus,
     player_id: Mutex<Option<PlayerId>>,
     slots: Mutex<SlotTable>,
+    #[field(get, vis = "pub(super)")]
     start_lock: Mutex<()>,
     runtime: Option<RuntimeHandle>,
+    #[field(get, vis = "pub(crate)")]
     pcm_pool: PcmPool,
+    #[field(get = session_handle, vis = "pub(super)")]
     session: SessionHandle,
 }
 
@@ -64,10 +68,6 @@ impl EngineImpl {
             worker: AudioWorkerHandle::with_cancel(worker_cancel),
             runtime: RuntimeHandle::try_current().ok(),
         }
-    }
-
-    pub(crate) fn bus(&self) -> &EventBus {
-        &self.bus
     }
 
     pub(crate) fn cancel(&self) {
@@ -115,10 +115,6 @@ impl EngineImpl {
 
     pub(crate) fn eq_band_count(&self) -> usize {
         self.config.eq_layout.len()
-    }
-
-    pub(crate) fn pcm_pool(&self) -> &PcmPool {
-        &self.pcm_pool
     }
 
     pub(crate) fn pop_slot_notification(&self, slot: SlotId) -> Option<PlayerNotification> {
@@ -288,10 +284,6 @@ impl EngineImpl {
         Ok(())
     }
 
-    pub(super) fn session_handle(&self) -> &SessionHandle {
-        &self.session
-    }
-
     pub fn start(&self) -> Result<(), PlayError> {
         let _start = self.start_lock.lock();
         if self.running.load(Ordering::Acquire) {
@@ -314,10 +306,6 @@ impl EngineImpl {
         );
         self.emit(EngineEvent::Started);
         Ok(())
-    }
-
-    pub(super) fn start_lock(&self) -> &Mutex<()> {
-        &self.start_lock
     }
 
     pub fn stop(&self) -> Result<(), PlayError> {

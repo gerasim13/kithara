@@ -167,7 +167,7 @@ impl RubatoEngine {
 #[derive(fieldwork::Fieldwork)]
 struct PooledScratch {
     pool: PcmPool,
-    #[field(get(deref = "[Vec<f32>]", vis = ""))]
+    #[field(get, get_mut, deref = "[Vec<f32>]", vis = "")]
     buffers: SmallVec<[Vec<f32>; 8]>,
 }
 
@@ -186,10 +186,6 @@ impl PooledScratch {
             buffers.push(buffer.into_inner());
         }
         Ok(Self { pool, buffers })
-    }
-
-    fn buffers_mut(&mut self) -> &mut [Vec<f32>] {
-        &mut self.buffers
     }
 
     fn frames(&self) -> usize {

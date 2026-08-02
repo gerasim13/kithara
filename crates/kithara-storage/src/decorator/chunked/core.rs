@@ -64,6 +64,8 @@ type FactoryFn<D> =
 /// `canonical`, and the inner is reopened on the canonical path —
 /// guaranteeing that any external observer of the canonical path
 /// either sees no file or sees the fully durable committed bytes.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get, deref = false)]
 pub struct AtomicChunked<D: DriverIo> {
     /// The current writer. Swapped (not cloned) on the commit-rename.
     /// Read/wait paths mint a cheap `ResourceReader` from the current snapshot.
@@ -75,6 +77,10 @@ pub struct AtomicChunked<D: DriverIo> {
     /// Factory to reopen the inner on the canonical path post-rename.
     /// `None` when the wrapper was constructed in passthrough mode.
     factory: Option<FactoryFn<D>>,
+    #[field(get(
+        deref = Path,
+        doc = "Path the resource will land at on a successful commit."
+    ))]
     canonical_path: PathBuf,
 }
 
@@ -90,11 +96,6 @@ impl<D: DriverIo> std::fmt::Debug for AtomicChunked<D> {
 }
 
 impl<D: DriverIo> AtomicChunked<D> {
-    /// Path the resource will land at on a successful commit.
-    pub fn canonical_path(&self) -> &Path {
-        &self.canonical_path
-    }
-
     /// Commit the accumulated chunks: durably flush + atomically rename the
     /// temp file to the canonical path + reopen the inner on the canonical
     /// path. Rewrites in place (the writer commits without being consumed).

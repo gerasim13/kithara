@@ -15,8 +15,8 @@ use syn::{
 use super::{
     Check, Context,
     derivable_support::{
-        cfg_tokens, crate_manifest, deletion_range, field_declaration_start, impl_range,
-        indent_attribute, line_start, merge_derive, method_blocks,
+        attrs_match_config, cfg_tokens, crate_manifest, deletion_range, field_declaration_start,
+        impl_range, indent_attribute, line_start, merge_derive, method_blocks,
     },
 };
 #[cfg(test)]
@@ -56,7 +56,14 @@ impl Check for DerivableGetter {
             let rel = relative_to(ctx.workspace_root, &path)
                 .to_string_lossy()
                 .replace('\\', "/");
-            let analysis = analyze(&src, &file, &rel, &redundant, &cfg.qualified_deref_remaps);
+            let analysis = analyze(
+                &src,
+                &file,
+                &rel,
+                &redundant,
+                &cfg.blocking_impl_attrs,
+                &cfg.qualified_deref_remaps,
+            );
             for finding in &analysis.findings {
                 if let Some(reason) = &finding.skip {
                     outcome.skipped.push(format!(
@@ -125,7 +132,14 @@ impl Check for DerivableGetter {
             let rel = relative_to(ctx.workspace_root, &path)
                 .to_string_lossy()
                 .replace('\\', "/");
-            let analysis = analyze(&src, &file, &rel, &redundant, &cfg.qualified_deref_remaps);
+            let analysis = analyze(
+                &src,
+                &file,
+                &rel,
+                &redundant,
+                &cfg.blocking_impl_attrs,
+                &cfg.qualified_deref_remaps,
+            );
             for finding in analysis.findings {
                 let detail = finding.skip.map_or_else(
                     || {
@@ -183,11 +197,23 @@ impl AccessorKind {
     }
 }
 
+fn method_attr_is_reproducible(attr: &Attribute, kind: AccessorKind) -> bool {
+    if attr.path().is_ident("doc") {
+        return matches!(
+            &attr.meta,
+            syn::Meta::NameValue(value)
+                if matches!(&value.value, Expr::Lit(literal) if matches!(&literal.lit, syn::Lit::Str(_)))
+        );
+    }
+    kind == AccessorKind::With
+        && attr.path().is_ident("must_use")
+        && matches!(&attr.meta, syn::Meta::Path(_))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BodyKind {
     Borrow,
     Move,
-    Clone,
     BorrowMut,
     Assign,
     OptionSetSome,
@@ -260,13 +286,10 @@ enum FieldworkMode {
 
 struct Completion<'a, 'out> {
     insertions: &'out mut BTreeMap<usize, Vec<String>>,
-    redundant: &'a BTreeSet<String>,
     scoped_names: &'a BTreeSet<String>,
     edits: &'out mut Vec<Edit>,
     findings: &'out mut Vec<Finding>,
     qualified_deref_remaps: &'a [QualifiedDerefRemap],
-    mod_prefix: &'a str,
-    rel: &'a str,
     src: &'a str,
 }
 
@@ -283,6 +306,7 @@ fn analyze(
     file: &syn::File,
     rel: &str,
     redundant: &BTreeSet<String>,
+    blocking_impl_attrs: &[String],
     qualified_deref_remaps: &[QualifiedDerefRemap],
 ) -> FileAnalysis {
     let mut findings = Vec::new();
@@ -293,10 +317,16 @@ fn analyze(
     let import_scopes = qualified_deref_import_scopes(file, qualified_deref_remaps);
 
     for scope in collect_scopes(file) {
+        let mod_prefix = if scope.path.is_empty() {
+            String::new()
+        } else {
+            format!("{}::", scope.path.join("::"))
+        };
         let mut by_type = BTreeMap::<String, Vec<RawAccessor<'_>>>::new();
         for &impl_block in &scope.impls {
             if impl_block.trait_.is_some()
                 || attrs_have_cfg_test(&impl_block.attrs)
+                || attrs_match_config(&impl_block.attrs, blocking_impl_attrs)
                 || cfg_test_ranges
                     .iter()
                     .any(|range| range.contains(&impl_block.span().start().line))
@@ -321,6 +351,17 @@ fn analyze(
                 let Some(detected) = detect(method) else {
                     continue;
                 };
+                if method
+                    .attrs
+                    .iter()
+                    .any(|attr| !method_attr_is_reproducible(attr, detected.kind))
+                {
+                    continue;
+                }
+                let key = format!("{rel}::{mod_prefix}{type_name}::{}", method.sig.ident);
+                if redundant.contains(&key) {
+                    continue;
+                }
                 let (block, block_error) = match &blocks {
                     Ok(blocks) => (blocks.get(index).cloned(), None),
                     Err(reason) => (None, Some(reason.clone())),
@@ -343,11 +384,6 @@ fn analyze(
             }
         }
 
-        let mod_prefix = if scope.path.is_empty() {
-            String::new()
-        } else {
-            format!("{}::", scope.path.join("::"))
-        };
         let scoped_names = import_scopes
             .iter()
             .filter(|(_, scopes)| scopes.contains(&scope.path))
@@ -364,13 +400,10 @@ fn analyze(
             }
             let mut completion = Completion {
                 qualified_deref_remaps,
-                redundant,
-                rel,
                 src,
                 edits: &mut edits,
                 findings: &mut findings,
                 insertions: &mut insertions,
-                mod_prefix: &mod_prefix,
                 scoped_names: &scoped_names,
             };
             complete_type(&mut completion, local, raw);
@@ -496,14 +529,6 @@ fn conversion_reason<'a>(
     {
         return Err("impl has a non-cfg attribute");
     }
-    if accessor
-        .method
-        .attrs
-        .iter()
-        .any(|attr| !attr.path().is_ident("doc") && !attr.path().is_ident("must_use"))
-    {
-        return Err("method has a non-droppable attribute");
-    }
     if method_body_has_comment(completion.src, accessor.method) {
         return Err("method body contains a comment");
     }
@@ -512,13 +537,6 @@ fn conversion_reason<'a>(
     }
     if claimed.contains(&(accessor.field.clone(), accessor.kind)) {
         return Err("field already has a convertible accessor of this kind");
-    }
-    let key = format!(
-        "{}::{}{}::{}",
-        completion.rel, completion.mod_prefix, accessor.type_name, accessor.method.sig.ident
-    );
-    if completion.redundant.contains(&key) {
-        return Err("redundant_accessors owns this method for deletion");
     }
     let Some(field) = struct_field(strukt, &accessor.field) else {
         return Err("target is not a field on the same-file struct");
@@ -683,9 +701,6 @@ fn plan_method(
         }
         return Err("fieldwork cannot reproduce the exact owned setter");
     }
-    if body == BodyKind::Clone {
-        return Err("clone getter is not generated by fieldwork");
-    }
     if kind == AccessorKind::Get
         && option_inner(field_ty).is_some()
         && is_reference_to(return_ty, field_ty, false)
@@ -801,17 +816,6 @@ fn detect(method: &ImplItemFn) -> Option<DetectedAccessor<'_>> {
             kind: AccessorKind::Get,
             value_ty: None,
         }),
-        Expr::MethodCall(call)
-            if call.method == "clone" && call.args.is_empty() && call.turbofish.is_none() =>
-        {
-            Some(DetectedAccessor {
-                return_ty,
-                body: BodyKind::Clone,
-                field: direct_self_field(&call.receiver)?,
-                kind: AccessorKind::Get,
-                value_ty: None,
-            })
-        }
         _ => None,
     }
 }
@@ -1503,7 +1507,15 @@ fn fix_source_with_remaps(
     qualified_deref_remaps: &[QualifiedDerefRemap],
 ) -> Result<(String, FixOutcome, Vec<Finding>)> {
     let file = syn::parse_file(source)?;
-    let analysis = analyze(source, &file, "test.rs", redundant, qualified_deref_remaps);
+    let config = DerivableGetterConfig::default();
+    let analysis = analyze(
+        source,
+        &file,
+        "test.rs",
+        redundant,
+        &config.blocking_impl_attrs,
+        qualified_deref_remaps,
+    );
     let mut outcome = FixOutcome::default();
     for finding in &analysis.findings {
         if let Some(reason) = &finding.skip {
@@ -1546,6 +1558,7 @@ mod tests {
             &file,
             "test.rs",
             &BTreeSet::new(),
+            &config.blocking_impl_attrs,
             &config.qualified_deref_remaps,
         )
         .findings
@@ -1860,23 +1873,22 @@ mod tests {
     }
 
     #[test]
-    fn clone_and_option_reference_getters_stay_manual() -> Result<()> {
-        let source = "struct Values {\n    name: String,\n    item: Option<String>,\n}\nimpl Values { pub fn name(&self) -> String { self.name.clone() } pub fn item(&self) -> &Option<String> { &self.item } }\n";
+    fn clone_getters_are_not_detected() {
+        let source = "struct Values { name: String } impl Values { pub fn name(&self) -> String { self.name.clone() } }";
+
+        assert_eq!(count(source), 0);
+    }
+
+    #[test]
+    fn option_reference_getters_stay_manual() -> Result<()> {
+        let source = "struct Values {\n    item: Option<String>,\n}\nimpl Values { pub fn item(&self) -> &Option<String> { &self.item } }\n";
         let (fixed, outcome, findings) = fix(source)?;
         assert_eq!(fixed, source);
         assert_eq!(outcome.writes, 0);
-        assert_eq!(findings.len(), 2);
-        assert!(
-            outcome
-                .skipped
-                .iter()
-                .any(|reason| reason.contains("clone getter"))
-        );
-        assert!(
-            outcome
-                .skipped
-                .iter()
-                .any(|reason| reason.contains("&Option"))
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            outcome.skipped,
+            ["direct &Option<T> access is outside this autofix"]
         );
         Ok(())
     }
@@ -1918,6 +1930,28 @@ mod tests {
     }
 
     #[test]
+    fn blocking_impl_attributes_are_not_detected() {
+        for attribute in [
+            "#[async_trait]",
+            "#[uniffi::export]",
+            "#[wasm_bindgen]",
+            "#[cfg_attr(feature = \"uniffi\", uniffi::export)]",
+        ] {
+            let source = format!(
+                "struct User {{ name: String }} {attribute} impl User {{ pub fn name(&self) -> &str {{ &self.name }} }}"
+            );
+            assert_eq!(count(&source), 0, "{attribute}");
+        }
+    }
+
+    #[test]
+    fn blocking_attribute_names_in_cfg_predicates_do_not_block_detection() {
+        let source = "struct User { name: String } #[cfg(feature = \"async_trait\")] impl User { pub fn name(&self) -> &str { &self.name } }";
+
+        assert_eq!(count(source), 1);
+    }
+
+    #[test]
     fn cross_file_struct_is_reported_but_not_fixed() -> Result<()> {
         let source = "impl User { pub fn name(&self) -> &str { &self.name } }\n";
         let (fixed, outcome, findings) = fix(source)?;
@@ -1928,12 +1962,13 @@ mod tests {
     }
 
     #[test]
-    fn redundant_accessor_is_left_for_delete_pass() -> Result<()> {
+    fn redundant_accessor_is_not_detected() -> Result<()> {
         let source = "pub struct User {\n    name: String,\n}\nimpl User { pub fn name(&self) -> &str { &self.name } }\n";
         let redundant = BTreeSet::from(["test.rs::User::name".to_owned()]);
-        let (fixed, outcome, _) = fix_source(source, &redundant)?;
+        let (fixed, outcome, findings) = fix_source(source, &redundant)?;
         assert_eq!(fixed, source);
-        assert!(outcome.skipped[0].contains("redundant_accessors"));
+        assert!(outcome.skipped.is_empty());
+        assert!(findings.is_empty());
         Ok(())
     }
 
@@ -1999,27 +2034,46 @@ mod tests {
     }
 
     #[test]
-    fn must_use_getter_converts_and_drops_method_attributes() -> Result<()> {
+    fn must_use_getter_is_not_detected() -> Result<()> {
         let source = "struct User {\n    name: String,\n}\nimpl User {\n    /// The name.\n    #[must_use]\n    pub fn name(&self) -> &str { &self.name }\n}\n";
-        let (fixed, outcome, _) = fix(source)?;
-        assert_eq!(outcome.changes, ["name"]);
-        assert!(!fixed.contains("must_use"));
-        assert!(!fixed.contains("/// The name."));
-        assert!(!fixed.contains("fn name"));
+        let (fixed, outcome, findings) = fix(source)?;
+        assert_eq!(count(source), 0);
+        assert_eq!(fixed, source);
+        assert_eq!(outcome.writes, 0);
+        assert!(findings.is_empty());
         Ok(())
     }
 
     #[test]
-    fn inline_getter_stays_manual() {
-        let source = "struct User { name: String }\nimpl User {\n    #[inline]\n    pub fn name(&self) -> &str { &self.name }\n}\n";
-        let (fixed, outcome, _) = fix(source).expect("fix");
+    fn must_use_reason_is_not_dropped_from_owned_setter() -> Result<()> {
+        let source = "struct User { name: String } impl User { #[must_use = \"use the updated user\"] pub fn with_name(mut self, name: String) -> Self { self.name = name; self } }";
+        let (fixed, outcome, findings) = fix(source)?;
+        assert_eq!(count(source), 0);
         assert_eq!(fixed, source);
-        assert!(
-            outcome
-                .skipped
-                .iter()
-                .any(|reason| reason.contains("non-droppable"))
-        );
+        assert_eq!(outcome.writes, 0);
+        assert!(findings.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn structured_doc_attributes_are_not_detected() -> Result<()> {
+        let source = "struct User { name: String } impl User { #[doc(hidden)] pub fn name(&self) -> &str { &self.name } }";
+        let (fixed, outcome, findings) = fix(source)?;
+        assert_eq!(count(source), 0);
+        assert_eq!(fixed, source);
+        assert_eq!(outcome.writes, 0);
+        assert!(findings.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn inline_getter_is_not_detected() {
+        let source = "struct User { name: String }\nimpl User {\n    #[inline]\n    pub fn name(&self) -> &str { &self.name }\n}\n";
+        let (fixed, outcome, findings) = fix(source).expect("fix");
+        assert_eq!(count(source), 0);
+        assert_eq!(fixed, source);
+        assert_eq!(outcome.writes, 0);
+        assert!(findings.is_empty());
     }
 
     #[test]

@@ -344,10 +344,6 @@ impl Layout {
         });
     }
 
-    pub(super) fn served_from(&self) -> u32 {
-        self.frame.load().served_from
-    }
-
     /// Lock-free `sizes_complete` read for the produce-core EOF gates. `false`
     /// means at least one served segment's size is still unknown, so
     /// [`Self::total_bytes`] is a lower bound and must not mint EOF.
@@ -387,6 +383,8 @@ impl Layout {
             ) -> Option<(u32, u64, u64)>;
             pub(super) fn find_natural(&self, byte: u64, segments: &[Segment]) -> Option<(u32, u64, u64)>;
             pub(super) fn segment_byte_offset(&self, idx: u32) -> Option<u64>;
+            #[field]
+            pub(super) fn served_from(&self) -> u32;
         }
     }
 }
