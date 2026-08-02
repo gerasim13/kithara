@@ -86,8 +86,9 @@ impl EngineLoad {
 }
 
 /// Copyable view of [`EngineLoad`] for cross-thread reads / UI rendering.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, fieldwork::Fieldwork)]
 #[non_exhaustive]
+#[fieldwork(get)]
 pub struct EngineLoadSnapshot {
     /// Fraction of realtime spent producing (`0.05` = 5% load).
     load: f32,
@@ -102,24 +103,6 @@ impl EngineLoadSnapshot {
     #[must_use]
     pub fn is_active(&self) -> bool {
         self.realtime > 0.0
-    }
-
-    /// Fraction of realtime spent producing (`0.05` = 5% load).
-    #[must_use]
-    pub fn load(&self) -> f32 {
-        self.load
-    }
-
-    /// Wall time per produced chunk, in milliseconds.
-    #[must_use]
-    pub fn ms(&self) -> f32 {
-        self.ms
-    }
-
-    /// Produced audio-seconds per CPU-second (`>1` = faster than realtime).
-    #[must_use]
-    pub fn realtime(&self) -> f32 {
-        self.realtime
     }
 }
 

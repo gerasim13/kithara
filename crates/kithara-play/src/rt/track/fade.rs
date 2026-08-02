@@ -11,9 +11,12 @@ use firewheel::dsp::{
     mix::{Mix, MixDSP},
 };
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(super) struct TrackFade {
     curve: FadeCurve,
     mix: MixDSP,
+    #[field(get, vis = "pub(super)")]
     duration: f32,
 }
 
@@ -29,10 +32,6 @@ impl TrackFade {
                 sample_rate,
             ),
         }
-    }
-
-    pub(super) fn duration(&self) -> f32 {
-        self.duration
     }
 
     pub(super) fn fade_in(&mut self) {

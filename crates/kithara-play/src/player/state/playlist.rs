@@ -8,10 +8,12 @@ pub(crate) struct QueuedResource {
     pub(crate) resource: Resource,
 }
 
-#[derive(Default)]
+#[derive(Default, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct Playlist {
     last_announced: Option<usize>,
     items: Vec<Option<QueuedResource>>,
+    #[field(get, vis = "pub(crate)")]
     current: usize,
 }
 
@@ -38,12 +40,16 @@ impl Playlist {
         }
     }
 
-    pub(crate) fn current(&self) -> usize {
-        self.current
-    }
-
-    pub(crate) fn has_resource(&self, index: usize) -> bool {
-        self.items.get(index).is_some_and(Option::is_some)
+    delegate::delegate! {
+        to self.items {
+            #[expr($.is_some_and(Option::is_some))]
+            #[call(get)]
+            pub(crate) fn has_resource(&self, index: usize) -> bool;
+            pub(crate) fn len(&self) -> usize;
+            #[expr($.and_then(Option::take))]
+            #[call(get_mut)]
+            pub(crate) fn take(&mut self, index: usize) -> Option<QueuedResource>;
+        }
     }
 
     pub(crate) fn insert(&mut self, q: QueuedResource, at: Option<usize>) -> usize {
@@ -54,10 +60,6 @@ impl Playlist {
 
     pub(crate) fn is_announced(&self, index: usize) -> bool {
         self.last_announced == Some(index)
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.items.len()
     }
 
     pub(crate) fn mark_announced(&mut self, index: usize) -> bool {
@@ -99,10 +101,6 @@ impl Playlist {
 
     pub(crate) fn set_current(&mut self, index: usize) {
         self.current = index;
-    }
-
-    pub(crate) fn take(&mut self, index: usize) -> Option<QueuedResource> {
-        self.items.get_mut(index).and_then(Option::take)
     }
 }
 

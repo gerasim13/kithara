@@ -14,9 +14,13 @@ impl Consts {
 
 /// Shareable Rust-owned asset store used by one or more players.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct FfiAssetStore {
+    #[field(get = handle, vis = "pub(crate)")]
     inner: AssetStore,
     shutdown: CancelScope,
+    #[field(get, vis = "pub(crate)")]
     region: Region,
 }
 
@@ -48,14 +52,6 @@ impl FfiAssetStore {
     #[cfg(test)]
     pub(crate) fn cancel_token(&self) -> kithara_platform::CancelToken {
         self.shutdown.token()
-    }
-
-    pub(crate) fn handle(&self) -> &AssetStore {
-        &self.inner
-    }
-
-    pub(crate) fn region(&self) -> &Region {
-        &self.region
     }
 }
 

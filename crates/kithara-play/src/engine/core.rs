@@ -163,12 +163,12 @@ impl EngineImpl {
             .set_player_slot_volume(player_id, slot, volume.clamp(0.0, 1.0))
     }
 
-    pub(crate) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq> {
-        self.slots.lock().slot_eq(slot)
-    }
-
-    pub(crate) fn slot_playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>> {
-        self.slots.lock().playback(slot)
+    delegate::delegate! {
+        to self.slots.lock() {
+            pub(crate) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq>;
+            #[call(playback)]
+            pub(crate) fn slot_playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>>;
+        }
     }
 
     pub(crate) fn tick(&self) -> Result<(), PlayError> {

@@ -46,8 +46,18 @@ impl ItemQueue {
         }
     }
 
-    pub(crate) fn clear_all(&self) {
-        self.playlist.lock().clear();
+    delegate::delegate! {
+        to self.playlist.lock() {
+            #[call(clear)]
+            pub(crate) fn clear_all(&self);
+            #[call(current)]
+            pub(crate) fn current_index(&self) -> usize;
+            pub(crate) fn has_resource(&self, index: usize) -> bool;
+            pub(crate) fn is_announced(&self, index: usize) -> bool;
+            #[call(len)]
+            pub(crate) fn item_count(&self) -> usize;
+            pub(crate) fn set_current(&self, index: usize);
+        }
     }
 
     pub(crate) fn clear_item(&self, index: usize) {
@@ -57,14 +67,6 @@ impl ItemQueue {
             drop(playlist);
             debug!(index, "item cleared");
         }
-    }
-
-    pub(crate) fn current_index(&self) -> usize {
-        self.playlist.lock().current()
-    }
-
-    pub(crate) fn has_resource(&self, index: usize) -> bool {
-        self.playlist.lock().has_resource(index)
     }
 
     pub(crate) fn insert(
@@ -79,14 +81,6 @@ impl ItemQueue {
             (playlist.len(), pos)
         };
         debug!(count, pos, "item inserted");
-    }
-
-    pub(crate) fn is_announced(&self, index: usize) -> bool {
-        self.playlist.lock().is_announced(index)
-    }
-
-    pub(crate) fn item_count(&self) -> usize {
-        self.playlist.lock().len()
     }
 
     pub(crate) fn remove_at(&self, index: usize) -> Option<QueuedResource> {
@@ -115,10 +109,6 @@ impl ItemQueue {
     pub(crate) fn reserve_slots(&self, count: usize) {
         self.playlist.lock().reserve(count);
         debug!(count, "slots reserved");
-    }
-
-    pub(crate) fn set_current(&self, index: usize) {
-        self.playlist.lock().set_current(index);
     }
 
     pub(crate) fn take_for_load(

@@ -115,9 +115,14 @@ impl<T: StreamType> RebuildPort<T> {
         self.pending.is_none()
     }
 
-    #[cfg(test)]
-    pub(crate) fn completion(&self) -> Arc<ArrayQueue<DecoderBuildComplete>> {
-        self.deps.replacement_completion.clone()
+    delegate::delegate! {
+        to self.deps.replacement_completion {
+            #[cfg(test)]
+            #[call(clone)]
+            pub(crate) fn completion(&self) -> Arc<ArrayQueue<DecoderBuildComplete>>;
+            #[call(pop)]
+            pub(crate) fn pop_replacement_completion(&self) -> Option<DecoderBuildComplete>;
+        }
     }
 
     fn next_build(&mut self) -> BuildId {
@@ -128,10 +133,6 @@ impl<T: StreamType> RebuildPort<T> {
 
     pub(crate) fn pop_incoming_completion(&self) -> Option<DecoderBuildComplete> {
         self.deps.incoming_completion.pop()
-    }
-
-    pub(crate) fn pop_replacement_completion(&self) -> Option<DecoderBuildComplete> {
-        self.deps.replacement_completion.pop()
     }
 
     pub(crate) fn prepare(

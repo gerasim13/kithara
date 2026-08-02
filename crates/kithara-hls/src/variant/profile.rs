@@ -10,19 +10,16 @@ use tracing::{debug, trace};
 use super::HlsVariant;
 use crate::HlsError;
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct VariantReaderPreparation {
     input: ReaderInput,
+    #[field(get, vis = "pub(crate)", copy)]
     anchor: SourceSeekAnchor,
     first_segment: u32,
     landing_segment: u32,
     read_ahead: u64,
     warmup: u64,
-}
-
-impl VariantReaderPreparation {
-    pub(crate) const fn anchor(&self) -> SourceSeekAnchor {
-        self.anchor
-    }
 }
 
 impl HlsVariant {

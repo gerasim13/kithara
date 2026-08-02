@@ -26,9 +26,11 @@ impl Consts {
 }
 
 /// Physical analysis resource together with the store that owns it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct AnalysisTarget {
     store: AssetStore,
+    #[field(get, vis = "pub(crate)")]
     key: ResourceKey,
 }
 
@@ -46,10 +48,6 @@ impl AnalysisTarget {
 
     pub(crate) fn is_same(&self, other: &Self) -> bool {
         self.key == other.key && self.store.is_same(&other.store)
-    }
-
-    pub(crate) fn key(&self) -> &ResourceKey {
-        &self.key
     }
 }
 

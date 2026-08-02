@@ -109,10 +109,15 @@ impl<S> Audio<S> {
         self.session.abr_handle.as_ref()?.current_variant()
     }
 
-    #[must_use]
-    /// Returns the known stream duration.
-    pub fn duration(&self) -> Option<Duration> {
-        self.session.playhead.duration()
+    delegate::delegate! {
+        to self.session.playhead {
+            #[must_use]
+            /// Returns the known stream duration.
+            pub fn duration(&self) -> Option<Duration>;
+            #[must_use]
+            /// Returns the committed playback position.
+            pub fn position(&self) -> Duration;
+        }
     }
 
     pub(crate) fn fill_buffer(&mut self) -> bool {
@@ -139,12 +144,6 @@ impl<S> Audio<S> {
     /// Returns track metadata.
     pub fn metadata(&self) -> &TrackMetadata {
         &self.session.metadata
-    }
-
-    #[must_use]
-    /// Returns the committed playback position.
-    pub fn position(&self) -> Duration {
-        self.session.playhead.position()
     }
 
     /// Enables non-blocking reads and primes the first PCM chunk.
@@ -237,12 +236,12 @@ impl<S> Audio<S> {
 }
 
 impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
-    fn cached_span(&self) -> Duration {
-        self.session.playhead.cached()
-    }
-
-    fn decoded_frontier(&self) -> Duration {
-        self.session.playhead.decoded_frontier()
+    delegate::delegate! {
+        to self.session.playhead {
+            #[call(cached)]
+            fn cached_span(&self) -> Duration;
+            fn decoded_frontier(&self) -> Duration;
+        }
     }
 
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
@@ -305,20 +304,16 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
 }
 
 impl<S: kithara_platform::maybe_send::MaybeSend> PcmSession for Audio<S> {
-    fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
-        self.abr_handle()
-    }
-
-    fn duration(&self) -> Option<Duration> {
-        self.duration()
+    delegate::delegate! {
+        to self {
+            fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
+            fn duration(&self) -> Option<Duration>;
+            fn metadata(&self) -> &TrackMetadata;
+        }
     }
 
     fn event_bus(&self) -> &EventBus {
         self.events.bus()
-    }
-
-    fn metadata(&self) -> &TrackMetadata {
-        self.metadata()
     }
 
     fn preload_epoch(&self) -> u64 {

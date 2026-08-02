@@ -65,8 +65,12 @@ impl Deck {
 /// The deck list is dynamic. `mix.strips` is kept parallel to `decks` — same
 /// length, same order — by this type alone; every lookup goes through
 /// [`DeckSet::position`], never through a raw [`DeckId`] value.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct DeckSet {
+    #[field(get)]
     mix: MixState,
+    #[field(get)]
     decks: Vec<Deck>,
     next_id: usize,
 }
@@ -119,16 +123,6 @@ impl DeckSet {
     #[must_use]
     pub fn deck(&self, id: DeckId) -> Option<&Deck> {
         self.decks.iter().find(|deck| deck.id == id)
-    }
-
-    #[must_use]
-    pub fn decks(&self) -> &[Deck] {
-        &self.decks
-    }
-
-    #[must_use]
-    pub fn mix(&self) -> &MixState {
-        &self.mix
     }
 
     /// Id for the next deck; never reuses one that has been handed out.

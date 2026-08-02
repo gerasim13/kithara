@@ -38,22 +38,21 @@ impl EqEffect {
             .collect()
     }
 
-    /// Check if any band is currently smoothing.
-    #[cfg(test)]
-    fn is_smoothing(&self) -> bool {
-        self.eq_l.is_smoothing()
+    delegate::delegate! {
+        to self.eq_l {
+            /// Check if any band is currently smoothing.
+            #[cfg(test)]
+            fn is_smoothing(&self) -> bool;
+            /// Get the target gain for a specific band.
+            #[must_use]
+            pub fn target_gain(&self, band_index: usize) -> Option<f32>;
+        }
     }
 
     /// Set the gain for a specific band (clamped to min/max dB).
     pub fn set_gain(&mut self, band_index: usize, gain_db: f32) {
         self.eq_l.set_gain(band_index, gain_db);
         self.eq_r.set_gain(band_index, gain_db);
-    }
-
-    /// Get the target gain for a specific band.
-    #[must_use]
-    pub fn target_gain(&self, band_index: usize) -> Option<f32> {
-        self.eq_l.target_gain(band_index)
     }
 }
 

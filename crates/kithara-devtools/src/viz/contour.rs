@@ -25,7 +25,8 @@ struct ContourRecord {
     primary_visible: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, fieldwork::Fieldwork)]
+#[fieldwork(get, vis = "pub(crate)")]
 pub(crate) struct ContourIndex {
     parents: BTreeMap<NodeId, NodeId>,
 }
@@ -61,10 +62,6 @@ impl ContourIndex {
             }
             current = self.parents.get(current)?;
         }
-    }
-
-    pub(crate) fn parents(&self) -> &BTreeMap<NodeId, NodeId> {
-        &self.parents
     }
 }
 

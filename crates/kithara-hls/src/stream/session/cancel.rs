@@ -11,16 +11,16 @@ impl SessionCancel {
         Self { root, fetch }
     }
 
-    pub(super) fn abort(&self) {
-        self.root.cancel();
+    delegate::delegate! {
+        to self.root {
+            #[call(cancel)]
+            pub(super) fn abort(&self);
+            pub(super) fn is_cancelled(&self) -> bool;
+        }
     }
 
     pub(super) fn handle(&self) -> CancelToken {
         self.fetch.read().clone()
-    }
-
-    pub(super) fn is_cancelled(&self) -> bool {
-        self.root.is_cancelled()
     }
 
     pub(super) fn rearm(&self) {

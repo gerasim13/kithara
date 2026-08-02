@@ -19,16 +19,12 @@ impl GateGuard {
         self.armed = false;
     }
 
-    pub(super) fn fail(&self) {
-        self.readiness.fail();
-    }
-
-    pub(super) fn is_ready(&self) -> bool {
-        self.readiness.is_ready()
-    }
-
-    pub(super) fn mark_ready(&self) {
-        self.readiness.mark_ready();
+    delegate::delegate! {
+        to self.readiness {
+            pub(super) fn fail(&self);
+            pub(super) fn is_ready(&self) -> bool;
+            pub(super) fn mark_ready(&self);
+        }
     }
 
     pub(super) fn shared(&self) -> Arc<ReadinessGate> {

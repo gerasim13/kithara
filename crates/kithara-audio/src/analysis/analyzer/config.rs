@@ -14,14 +14,16 @@ impl Consts {
 }
 
 /// Beat-analysis tunables used by [`super::AnalyzerBuilder`].
-#[derive(Clone, Builder)]
+#[derive(Clone, Builder, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
+#[fieldwork(get)]
 pub struct BeatAnalysisConfig<B> {
     /// Standalone mono resampler backend used before detector windows.
     resampler_backend: B,
     /// Quality used by the configured beat-resampler backend.
     #[builder(default = Consts::DEFAULT_BEAT_RESAMPLER_QUALITY)]
+    #[field(get(copy))]
     resampler_quality: ResamplerQuality,
     /// Seconds carried from the end of one detector window into the next.
     #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS)]
@@ -42,42 +44,12 @@ where
     B: ResamplerBackend,
 {
     #[must_use]
-    pub fn block_frames(&self) -> usize {
-        self.block_frames
-    }
-
-    #[must_use]
     pub fn cache_tag(&self) -> Option<String> {
         super::nn::tag(self)
     }
 
-    #[must_use]
-    pub fn detector_overlap_seconds(&self) -> u32 {
-        self.detector_overlap_seconds
-    }
-
-    #[must_use]
-    pub fn detector_window_seconds(&self) -> u32 {
-        self.detector_window_seconds
-    }
-
-    #[must_use]
-    pub fn resampler_backend(&self) -> &B {
-        &self.resampler_backend
-    }
-
     fn resampler_backend_name(&self) -> &'static str {
         self.resampler_backend.name()
-    }
-
-    #[must_use]
-    pub fn resampler_quality(&self) -> ResamplerQuality {
-        self.resampler_quality
-    }
-
-    #[must_use]
-    pub fn target_rate(&self) -> u32 {
-        self.target_rate
     }
 }
 

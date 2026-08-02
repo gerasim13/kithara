@@ -17,10 +17,12 @@ use url::Url;
 use crate::{baked, theme::Palette};
 
 /// App-owned snapshot of one DRM policy and its ordinary resolver registry.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, fieldwork::Fieldwork)]
 #[non_exhaustive]
+#[fieldwork(opt_in, get)]
 pub struct AppDrm {
     policy: Arc<DomainKeyPolicy>,
+    #[field(get)]
     registry: KeyProcessorRegistry,
 }
 
@@ -33,12 +35,6 @@ impl AppDrm {
         let mut registry = KeyProcessorRegistry::new();
         registry.register(policy.clone());
         Self { policy, registry }
-    }
-
-    /// Return the opaque key-request registry.
-    #[must_use]
-    pub fn registry(&self) -> &KeyProcessorRegistry {
-        &self.registry
     }
 
     /// Return resource headers selected by the same registered policy.

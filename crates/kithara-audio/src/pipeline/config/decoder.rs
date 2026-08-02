@@ -4,35 +4,18 @@ use bon::Builder;
 use kithara_decode::{DecoderBackend, DecoderResamplerConfig, GaplessMode};
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
 
-#[derive(Clone, Debug, Builder)]
+#[derive(Clone, Debug, Builder, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
+#[fieldwork(get)]
 pub struct DecoderResamplerSettings<B = NoResamplerBackend> {
     pub(crate) backend: B,
     #[builder(default)]
+    #[field(get(copy))]
     pub(crate) options: ResamplerOptions,
     #[builder(default)]
+    #[field(get(copy))]
     pub(crate) quality: ResamplerQuality,
-}
-
-impl<B> DecoderResamplerSettings<B> {
-    /// Return the selected resampler backend.
-    #[must_use]
-    pub fn backend(&self) -> &B {
-        &self.backend
-    }
-
-    /// Return the resampler options.
-    #[must_use]
-    pub fn options(&self) -> ResamplerOptions {
-        self.options
-    }
-
-    /// Return the resampler quality.
-    #[must_use]
-    pub fn quality(&self) -> ResamplerQuality {
-        self.quality
-    }
 }
 
 impl<B> Default for DecoderResamplerSettings<B>
@@ -48,13 +31,16 @@ where
     }
 }
 
-#[derive(Clone, Debug, Builder)]
+#[derive(Clone, Debug, Builder, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
+#[fieldwork(opt_in, get)]
 pub struct AudioDecoderConfig<B = NoResamplerBackend> {
     #[builder(default)]
+    #[field(get, copy)]
     pub(crate) backend: DecoderBackend,
     #[builder(default)]
+    #[field(get, copy)]
     pub(crate) gapless_mode: GaplessMode,
     pub(crate) resampler: Option<DecoderResamplerSettings<B>>,
 }
@@ -63,12 +49,6 @@ impl<B> AudioDecoderConfig<B>
 where
     B: ResamplerBackend,
 {
-    /// Return the decoder backend.
-    #[must_use]
-    pub fn backend(&self) -> DecoderBackend {
-        self.backend
-    }
-
     pub(crate) fn build_resampler_config(
         &self,
         target_sample_rate: Option<NonZeroU32>,
@@ -88,20 +68,15 @@ where
         )
     }
 
-    /// Return the gapless playback mode.
-    #[must_use]
-    pub fn gapless_mode(&self) -> GaplessMode {
-        self.gapless_mode
-    }
-
-    pub(crate) fn recreates_on_host_rate_change(&self) -> bool {
-        self.resampler.is_some()
-    }
-
-    /// Return the decoder-side resampler settings.
-    #[must_use]
-    pub fn resampler(&self) -> Option<&DecoderResamplerSettings<B>> {
-        self.resampler.as_ref()
+    delegate::delegate! {
+        to self.resampler {
+            #[call(is_some)]
+            pub(crate) fn recreates_on_host_rate_change(&self) -> bool;
+            /// Return the decoder-side resampler settings.
+            #[must_use]
+            #[call(as_ref)]
+            pub fn resampler(&self) -> Option<&DecoderResamplerSettings<B>>;
+        }
     }
 }
 

@@ -36,11 +36,15 @@ impl ReaderWarmup {
 }
 
 /// Byte-access requirements for one reader implementation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
 #[non_exhaustive]
+#[fieldwork(get)]
 pub struct ReaderProfile {
+    #[field(get(copy))]
     read_ahead_bytes: NonZeroU64,
+    #[field(get(copy))]
     input: ReaderInput,
+    #[field(get(copy))]
     warmup: ReaderWarmup,
 }
 
@@ -58,24 +62,6 @@ impl ReaderProfile {
             input,
             warmup,
         }
-    }
-
-    /// Return the reader's construction-time input requirement.
-    #[must_use]
-    pub const fn input(&self) -> ReaderInput {
-        self.input
-    }
-
-    /// Return the forward byte window the reader may consume.
-    #[must_use]
-    pub const fn read_ahead_bytes(&self) -> NonZeroU64 {
-        self.read_ahead_bytes
-    }
-
-    /// Return the reader's behind-position warmup requirement.
-    #[must_use]
-    pub const fn warmup(&self) -> ReaderWarmup {
-        self.warmup
     }
 }
 

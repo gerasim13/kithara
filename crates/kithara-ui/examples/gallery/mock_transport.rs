@@ -1,14 +1,22 @@
 use num_traits::cast::AsPrimitive;
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(super) struct DeckTransport {
+    #[field(get, vis = "pub(super)", copy)]
     loop_region: Option<[f32; 2]>,
+    #[field(get, vis = "pub(super)")]
     cues: Vec<f32>,
+    #[field(get, vis = "pub(super)")]
     playing: bool,
+    #[field(get, vis = "pub(super)")]
     reverse: bool,
     loop_anchor: f32,
     bpm: f64,
     duration_secs: f64,
+    #[field(get, vis = "pub(super)")]
     position_secs: f64,
+    #[field(get, vis = "pub(super)")]
     zoom: f64,
 }
 
@@ -60,33 +68,13 @@ impl DeckTransport {
         true
     }
 
-    pub(super) fn cues(&self) -> &[f32] {
-        &self.cues
-    }
-
     fn jump_bars(&mut self, bars: f64) {
         let delta = bars * Self::BEATS_PER_BAR * Self::SECS_PER_MINUTE / self.bpm;
         self.position_secs = (self.position_secs + delta).clamp(0.0, self.duration_secs);
     }
 
-    pub(super) const fn loop_region(&self) -> Option<[f32; 2]> {
-        self.loop_region
-    }
-
-    pub(super) const fn playing(&self) -> bool {
-        self.playing
-    }
-
     pub(super) fn position_normalized(&self) -> f64 {
         self.position_secs / self.duration_secs
-    }
-
-    pub(super) const fn position_secs(&self) -> f64 {
-        self.position_secs
-    }
-
-    pub(super) const fn reverse(&self) -> bool {
-        self.reverse
     }
 
     pub(super) fn seek_normalized(&mut self, position: f64) {
@@ -129,10 +117,6 @@ impl DeckTransport {
 
     pub(super) fn toggle_play(&mut self) {
         self.playing = !self.playing;
-    }
-
-    pub(super) const fn zoom(&self) -> f64 {
-        self.zoom
     }
 }
 

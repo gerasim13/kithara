@@ -113,22 +113,22 @@ impl PlayerTrack {
         track
     }
 
-    /// Cached span in seconds: how much of the source is on disk.
-    #[must_use]
-    pub fn cached_span(&self) -> f64 {
-        self.resource.cached_span()
-    }
-
-    /// Decoded-ahead frontier in seconds.
-    #[must_use]
-    pub fn decoded_frontier(&self) -> f64 {
-        self.resource.decoded_frontier()
-    }
-
-    /// Current visible (post-gapless-trim) duration in seconds.
-    #[must_use]
-    pub fn duration(&self) -> f64 {
-        observed_duration(self.observed_duration, self.resource.duration())
+    delegate::delegate! {
+        to self.resource {
+            /// Cached span in seconds: how much of the source is on disk.
+            #[must_use]
+            pub fn cached_span(&self) -> f64;
+            /// Decoded-ahead frontier in seconds.
+            #[must_use]
+            pub fn decoded_frontier(&self) -> f64;
+            /// Current visible (post-gapless-trim) duration in seconds.
+            #[must_use]
+            #[expr(observed_duration(self.observed_duration, $))]
+            pub fn duration(&self) -> f64;
+            /// Source identifier.
+            #[must_use]
+            pub fn src(&self) -> &Arc<str>;
+        }
     }
 
     /// Start a fade-in: transitions to `FadingIn`, targets `FULLY_DRY` (audible).
@@ -202,12 +202,6 @@ impl PlayerTrack {
             self.state_dirty = true;
             self.update_service_class(new_state);
         }
-    }
-
-    /// Source identifier.
-    #[must_use]
-    pub fn src(&self) -> &Arc<str> {
-        self.resource.src()
     }
 
     /// Instantly stop (silent, finished state).

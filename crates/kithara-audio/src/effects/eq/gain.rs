@@ -49,9 +49,13 @@ impl GainState {
     }
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct GainBank {
     gains: Vec<GainState>,
+    #[field(get, vis = "pub(crate)")]
     bypass_active: bool,
+    #[field(get, vis = "pub(crate)")]
     silence_active: bool,
     smooth_coeff: f32,
     block_counter: usize,
@@ -71,10 +75,6 @@ impl GainBank {
         bank
     }
 
-    pub(crate) fn bypass_active(&self) -> bool {
-        self.bypass_active
-    }
-
     #[cfg(test)]
     pub(crate) fn force_current(&mut self, band: usize, linear: f32) {
         self.gains[band].current_linear = linear;
@@ -88,8 +88,13 @@ impl GainBank {
         })
     }
 
-    pub(crate) fn len(&self) -> usize {
-        self.gains.len()
+    delegate::delegate! {
+        to self.gains {
+            pub(crate) fn len(&self) -> usize;
+            #[expr($.map(|state| state.target_db))]
+            #[call(get)]
+            pub(crate) fn target(&self, band: usize) -> Option<f32>;
+        }
     }
 
     pub(crate) fn linear(&self, band: usize) -> f32 {
@@ -123,14 +128,6 @@ impl GainBank {
             state.set_target(gain_db);
         }
         self.refresh_fastpath();
-    }
-
-    pub(crate) fn silence_active(&self) -> bool {
-        self.silence_active
-    }
-
-    pub(crate) fn target(&self, band: usize) -> Option<f32> {
-        self.gains.get(band).map(|state| state.target_db)
     }
 
     pub(crate) fn tick(&mut self) {

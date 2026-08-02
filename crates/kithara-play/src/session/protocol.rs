@@ -168,12 +168,11 @@ mod handle {
             Arc::clone(&self.0)
         }
 
-        pub fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-            self.0.exec(cmd)
-        }
-
-        pub fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-            self.0.exec_ok(cmd)
+        delegate::delegate! {
+            to self.0 {
+                pub fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
+                pub fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError>;
+            }
         }
 
         pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {

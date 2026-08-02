@@ -64,18 +64,17 @@ where
         }
     }
 
-    fn backend(&self) -> kithara_decode::DecoderBackend {
-        self.decoder.backend()
+    delegate::delegate! {
+        to self.decoder {
+            fn backend(&self) -> kithara_decode::DecoderBackend;
+            fn recreates_on_host_rate_change(&self) -> bool;
+        }
     }
 
     fn playback_resampler_backend(&self) -> &'static str {
         self.decoder
             .resampler()
             .map_or("none", |resampler| resampler.backend().name())
-    }
-
-    fn recreates_on_host_rate_change(&self) -> bool {
-        self.decoder.recreates_on_host_rate_change()
     }
 
     fn resampler_config(&self) -> Result<Option<DecoderResamplerConfig<B>>, DecodeError> {

@@ -16,10 +16,13 @@ use crate::{BusEvent, Envelope, Event, EventBus, EventMeta};
 ///
 /// The element is the narrow per-domain event (`HlsEvent` / `FileEvent`),
 /// converted to [`Event`] only at publish time, so the ring stays small.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct DeferredBus<E> {
     next_seq: kithara_platform::sync::Arc<AtomicU64>,
     pending: ArrayQueue<DeferredEvent<E>>,
     dropped: AtomicU64,
+    #[field(get)]
     bus: EventBus,
 }
 
@@ -41,12 +44,6 @@ impl<E: Into<Event>> DeferredBus<E> {
             dropped: AtomicU64::new(0),
             pending: ArrayQueue::new(capacity.max(1)),
         }
-    }
-
-    /// The underlying scoped bus this ring flushes into.
-    #[must_use]
-    pub fn bus(&self) -> &EventBus {
-        &self.bus
     }
 
     /// Queue a resolved event for shell-side publish.

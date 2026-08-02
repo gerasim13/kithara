@@ -111,25 +111,43 @@ impl AbrHandle {
         }
     }
 
-    /// Side-effects after an exact transition promoted its incoming
-    /// generation: emits `VariantApplied` via bus and nothing else.
-    ///
-    /// The caller is the audio worker, which is not a runtime thread, so this
-    /// path must not schedule async work. The stuck-reader watchdog is a
-    /// boundary-switch diagnostic and does not apply here: exact promotion
-    /// already proved the incoming reader produced staged PCM.
-    #[kithara::probe(current_before)]
-    pub fn notify_exact_commit(&self, decision: AbrDecision, current_before: usize) {
-        self.publish_variant_applied(decision, current_before);
-    }
-
-    /// Read-only: peek at the pending boundary commit. Mirrors
-    /// [`AbrState::peek_pending_decision`].
-    #[must_use]
-    #[kithara::probe]
-    pub fn peek_pending_decision(&self) -> Option<AbrDecision> {
-        self.claim_pending_decision()
-            .map(PendingAbrDecision::decision)
+    delegate::delegate! {
+        to self.inner.state {
+            /// `true` while the active variant is flagged non-delivering — see
+            /// [`AbrState::is_escaping`].
+            #[must_use]
+            #[expr($.is_some_and(|s| s.is_escaping()))]
+            #[call(as_ref)]
+            pub fn is_escaping(&self) -> bool;
+            #[must_use]
+            #[expr($.is_some_and(|s| s.is_locked()))]
+            #[call(as_ref)]
+            pub fn is_locked(&self) -> bool;
+            /// Current ABR mode (Auto / Manual). `None` for peers without state.
+            #[must_use]
+            #[expr($.map(|s| s.mode()))]
+            #[call(as_ref)]
+            pub fn mode(&self) -> Option<AbrMode>;
+        }
+        to self {
+            /// Side-effects after an exact transition promoted its incoming
+            /// generation: emits `VariantApplied` via bus and nothing else.
+            ///
+            /// The caller is the audio worker, which is not a runtime thread, so this
+            /// path must not schedule async work. The stuck-reader watchdog is a
+            /// boundary-switch diagnostic and does not apply here: exact promotion
+            /// already proved the incoming reader produced staged PCM.
+            #[kithara::probe(current_before)]
+            #[call(publish_variant_applied)]
+            pub fn notify_exact_commit(&self, decision: AbrDecision, current_before: usize);
+            /// Read-only: peek at the pending boundary commit. Mirrors
+            /// [`AbrState::peek_pending_decision`].
+            #[must_use]
+            #[kithara::probe]
+            #[expr($.map(PendingAbrDecision::decision))]
+            #[call(claim_pending_decision)]
+            pub fn peek_pending_decision(&self) -> Option<AbrDecision>;
+        }
     }
 
     #[must_use]
@@ -244,26 +262,6 @@ impl AbrHandle {
     pub fn with_bus(self, bus: EventBus) -> Self {
         *self.inner.bus.write() = Some(bus);
         self
-    }
-
-    delegate::delegate! {
-        to self.inner.state {
-            /// `true` while the active variant is flagged non-delivering — see
-            /// [`AbrState::is_escaping`].
-            #[must_use]
-            #[expr($.is_some_and(|s| s.is_escaping()))]
-            #[call(as_ref)]
-            pub fn is_escaping(&self) -> bool;
-            #[must_use]
-            #[expr($.is_some_and(|s| s.is_locked()))]
-            #[call(as_ref)]
-            pub fn is_locked(&self) -> bool;
-            /// Current ABR mode (Auto / Manual). `None` for peers without state.
-            #[must_use]
-            #[expr($.map(|s| s.mode()))]
-            #[call(as_ref)]
-            pub fn mode(&self) -> Option<AbrMode>;
-        }
     }
 }
 

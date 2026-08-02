@@ -111,36 +111,45 @@ impl PlayerImpl {
         }
     }
 
-    /// Advance to the next item in the queue.
-    ///
-    /// Does nothing if the current item is already the last one.
-    pub fn advance_to_next_item(&self) {
-        self.core.items.advance_to_next_item();
-    }
-
-    /// Sole publisher of `CurrentItemChanged`: emits only when `index` differs
-    /// from the last announced item, so a `play()` resume of the same item
-    /// stays quiet.
-    pub(crate) fn announce_current_item(&self, index: usize) {
-        self.core.items.announce_current_item(index);
+    delegate! {
+        to self.core.items {
+            /// Advance to the next item in the queue.
+            ///
+            /// Does nothing if the current item is already the last one.
+            pub fn advance_to_next_item(&self);
+            /// Sole publisher of `CurrentItemChanged`: emits only when `index` differs
+            /// from the last announced item, so a `play()` resume of the same item
+            /// stays quiet.
+            pub(crate) fn announce_current_item(&self, index: usize);
+            /// Drop the resource at `index` so the auto-advance prefetch path
+            /// (`arm_next`) cannot plant it into the audio thread.
+            ///
+            /// Used by the queue when a previously-loaded track is cancelled by
+            /// a later `select` — without this, a slow track whose loader
+            /// raced ahead of the override stays in `items` and the next
+            /// `TrackRequested` notification near EOF would arm it for
+            /// handover, surfacing as a barge-in.
+            pub fn clear_item(&self, index: usize);
+            /// Insert a resource with optional queue-item identity metadata at a
+            /// specific position, or append to the end.
+            pub fn insert(
+                &self,
+                resource: Resource,
+                item_id: Option<Arc<str>>,
+                at_position: Option<usize>,
+            );
+            /// Replace a consumed (or existing) resource at the given index with item
+            /// identity metadata.
+            pub fn replace_item_tagged(&self, index: usize, resource: Resource, item_id: Option<Arc<str>>);
+            /// Pre-allocate empty slots so `replace_item` can fill them by index.
+            pub fn reserve_slots(&self, count: usize);
+        }
     }
 
     /// Byte pool used for resources created by this player.
     #[must_use]
     pub fn byte_pool(&self) -> &BytePool {
         &self.core.byte_pool
-    }
-
-    /// Drop the resource at `index` so the auto-advance prefetch path
-    /// (`arm_next`) cannot plant it into the audio thread.
-    ///
-    /// Used by the queue when a previously-loaded track is cancelled by
-    /// a later `select` — without this, a slow track whose loader
-    /// raced ahead of the override stays in `items` and the next
-    /// `TrackRequested` notification near EOF would arm it for
-    /// handover, surfacing as a barge-in.
-    pub fn clear_item(&self, index: usize) {
-        self.core.items.clear_item(index);
     }
 
     pub(crate) fn enqueue_to_processor(&self, index: usize) -> Option<(Arc<str>, f64)> {
@@ -157,17 +166,6 @@ impl PlayerImpl {
             resource: Box::new(item.player_resource),
         });
         Some((src, item.duration_seconds))
-    }
-
-    /// Insert a resource with optional queue-item identity metadata at a
-    /// specific position, or append to the end.
-    pub fn insert(
-        &self,
-        resource: Resource,
-        item_id: Option<Arc<str>>,
-        at_position: Option<usize>,
-    ) {
-        self.core.items.insert(resource, item_id, at_position);
     }
 
     /// PCM pool used by this player's audio engine.
@@ -203,19 +201,6 @@ impl PlayerImpl {
     /// by `load_current_item`. Does nothing if `index` is out of bounds.
     pub fn replace_item(&self, index: usize, resource: Resource) {
         self.replace_item_tagged(index, resource, None);
-    }
-
-    /// Replace a consumed (or existing) resource at the given index with item
-    /// identity metadata.
-    pub fn replace_item_tagged(&self, index: usize, resource: Resource, item_id: Option<Arc<str>>) {
-        self.core
-            .items
-            .replace_item_tagged(index, resource, item_id);
-    }
-
-    /// Pre-allocate empty slots so `replace_item` can fill them by index.
-    pub fn reserve_slots(&self, count: usize) {
-        self.core.items.reserve_slots(count);
     }
 
     /// Internal: set status and emit event if changed.

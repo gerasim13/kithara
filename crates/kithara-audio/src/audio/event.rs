@@ -18,7 +18,10 @@ impl Consts {
     const PROGRESS_EMIT_MIN_DELTA_MS: u64 = 100;
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(super) struct AudioEvents {
+    #[field(get, vis = "pub(super)")]
     bus: EventBus,
     last_progress_emit: Option<(u64, u64)>,
     underrun_active: bool,
@@ -31,10 +34,6 @@ impl AudioEvents {
             last_progress_emit: None,
             underrun_active: false,
         }
-    }
-
-    pub(super) fn bus(&self) -> &EventBus {
-        &self.bus
     }
 
     pub(super) fn commit_read(

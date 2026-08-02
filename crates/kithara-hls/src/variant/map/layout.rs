@@ -17,13 +17,51 @@ impl HlsVariant {
         self.eof_at_with(offset, || {})
     }
 
-    #[cfg(test)]
-    pub(crate) fn eof_at_before_ready_check(
-        &self,
-        offset: u64,
-        before_ready: impl FnOnce(),
-    ) -> bool {
-        self.eof_at_with(offset, before_ready)
+    delegate::delegate! {
+        to self {
+            /// Init segment range in **natural** byte space — always
+            /// `0..init_size`, regardless of post-commit `served_from`. Returns
+            /// an empty range (`0..0`) when the variant has no `#EXT-X-MAP`
+            /// init (raw TS/AAC/MPEG-ES).
+            ///
+            /// The "is this init addressable in the merged virtual space?"
+            /// question lives in the *caller* (e.g. `init_descriptor_at`) which
+            /// combines this with `served_from()` — keeping virtual-space
+            /// concerns out of a per-variant primitive avoids silently dropping
+            /// post-commit inits at the `ByteMap` boundary.
+            #[kithara::probe(variant = self.variant as u64, size = self.init_size())]
+            #[expr(0..$)]
+            #[call(init_size)]
+            pub(crate) fn init_byte_range(&self) -> Range<u64>;
+            #[call(authoritative_len)]
+            pub(crate) fn stream_len(&self) -> Option<u64>;
+            #[cfg(test)]
+            #[call(eof_at_with)]
+            pub(crate) fn eof_at_before_ready_check(
+                &self,
+                offset: u64,
+                before_ready: impl FnOnce(),
+            ) -> bool;
+        }
+        to self.layout {
+            /// Virtual byte offset of segment `seg_idx` in the combined stream.
+            /// For the initial variant (`byte_shift == 0`) this equals the natural
+            /// offset; after an Auto-mode switch this places the segment relative
+            /// to the reader's current byte position at the switch boundary.
+            pub(crate) fn segment_byte_offset(&self, seg_idx: u32) -> Option<u64>;
+            pub(crate) fn served_from(&self) -> u32;
+            /// Whether every served segment's byte size is known. While `false`,
+            /// [`Self::total_bytes`] is a lower bound (a segment's size estimate is
+            /// missing), so the byte-EOF gates must hold `Waiting`/`Pending` rather
+            /// than mint EOF for an in-range offset that only looks past-the-end
+            /// against the under-count.
+            pub(crate) fn sizes_complete(&self) -> bool;
+            #[kithara::probe(
+                variant = self.variant as u64,
+                total = self.layout.total_bytes()
+            )]
+            pub(crate) fn total_bytes(&self) -> u64;
+        }
     }
 
     pub(in crate::variant) fn eof_at_published(&self, offset: u64, total: u64) -> bool {
@@ -115,45 +153,5 @@ impl HlsVariant {
 
     pub(super) fn reset_layout_to_full_range(&self) {
         self.layout.reset(self.init_route_size(), &self.segments);
-    }
-
-    delegate::delegate! {
-        to self {
-            /// Init segment range in **natural** byte space — always
-            /// `0..init_size`, regardless of post-commit `served_from`. Returns
-            /// an empty range (`0..0`) when the variant has no `#EXT-X-MAP`
-            /// init (raw TS/AAC/MPEG-ES).
-            ///
-            /// The "is this init addressable in the merged virtual space?"
-            /// question lives in the *caller* (e.g. `init_descriptor_at`) which
-            /// combines this with `served_from()` — keeping virtual-space
-            /// concerns out of a per-variant primitive avoids silently dropping
-            /// post-commit inits at the `ByteMap` boundary.
-            #[kithara::probe(variant = self.variant as u64, size = self.init_size())]
-            #[expr(0..$)]
-            #[call(init_size)]
-            pub(crate) fn init_byte_range(&self) -> Range<u64>;
-            #[call(authoritative_len)]
-            pub(crate) fn stream_len(&self) -> Option<u64>;
-        }
-        to self.layout {
-            /// Virtual byte offset of segment `seg_idx` in the combined stream.
-            /// For the initial variant (`byte_shift == 0`) this equals the natural
-            /// offset; after an Auto-mode switch this places the segment relative
-            /// to the reader's current byte position at the switch boundary.
-            pub(crate) fn segment_byte_offset(&self, seg_idx: u32) -> Option<u64>;
-            pub(crate) fn served_from(&self) -> u32;
-            /// Whether every served segment's byte size is known. While `false`,
-            /// [`Self::total_bytes`] is a lower bound (a segment's size estimate is
-            /// missing), so the byte-EOF gates must hold `Waiting`/`Pending` rather
-            /// than mint EOF for an in-range offset that only looks past-the-end
-            /// against the under-count.
-            pub(crate) fn sizes_complete(&self) -> bool;
-            #[kithara::probe(
-                variant = self.variant as u64,
-                total = self.layout.total_bytes()
-            )]
-            pub(crate) fn total_bytes(&self) -> u64;
-        }
     }
 }

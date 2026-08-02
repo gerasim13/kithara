@@ -301,12 +301,11 @@ where
         })
     }
 
-    fn size(&self) -> Size<Length> {
-        self.anchor.as_widget().size()
-    }
-
-    fn size_hint(&self) -> Size<Length> {
-        self.anchor.as_widget().size_hint()
+    delegate::delegate! {
+        to self.anchor.as_widget() {
+            fn size(&self) -> Size<Length>;
+            fn size_hint(&self) -> Size<Length>;
+        }
     }
 
     fn state(&self) -> tree::State {

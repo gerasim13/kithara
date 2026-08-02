@@ -21,8 +21,9 @@ pub trait AudioConverterFactory: Send + Sync + 'static {
     ) -> Result<Self::Resampler, ResamplerBuildError>;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, fieldwork::Fieldwork)]
 #[non_exhaustive]
+#[fieldwork(get)]
 pub struct AppleAudioConverterBackend<F> {
     config: AppleAudioConverterConfig<F>,
 }
@@ -42,11 +43,6 @@ impl<F> AppleAudioConverterBackend<F> {
                 .factory(factory)
                 .build(),
         )
-    }
-
-    #[must_use]
-    pub const fn config(&self) -> &AppleAudioConverterConfig<F> {
-        &self.config
     }
 
     #[must_use]

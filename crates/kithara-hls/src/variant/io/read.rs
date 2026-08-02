@@ -25,13 +25,23 @@ impl HlsVariant {
         self.phase_at_with(range, || {})
     }
 
-    #[cfg(test)]
-    pub(crate) fn phase_at_after_eof(
-        &self,
-        range: Range<u64>,
-        after_eof: impl FnOnce(),
-    ) -> SourcePhase {
-        self.phase_at_with(range, after_eof)
+    delegate::delegate! {
+        to self {
+            #[cfg(test)]
+            #[call(phase_at_with)]
+            pub(crate) fn phase_at_after_eof(
+                &self,
+                range: Range<u64>,
+                after_eof: impl FnOnce(),
+            ) -> SourcePhase;
+            #[cfg(test)]
+            #[call(range_ready_with)]
+            pub(crate) fn range_ready_after_total(
+                &self,
+                range: &Range<u64>,
+                after_total: impl FnOnce(),
+            ) -> bool;
+        }
     }
 
     fn phase_at_with(&self, range: Range<u64>, after_eof: impl FnOnce()) -> SourcePhase {
@@ -127,15 +137,6 @@ impl HlsVariant {
     #[cfg(test)]
     pub(crate) fn range_ready(&self, range: &Range<u64>) -> bool {
         self.range_ready_with(range, || {})
-    }
-
-    #[cfg(test)]
-    pub(crate) fn range_ready_after_total(
-        &self,
-        range: &Range<u64>,
-        after_total: impl FnOnce(),
-    ) -> bool {
-        self.range_ready_with(range, after_total)
     }
 
     fn range_ready_published_with(&self, range: &Range<u64>, after_total: impl FnOnce()) -> bool {

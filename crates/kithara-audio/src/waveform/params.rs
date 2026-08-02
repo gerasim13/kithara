@@ -11,15 +11,17 @@ impl Consts {
 }
 
 /// FFT / band-split / reduction tunables. One home for the constants.
-#[derive(Builder, Clone, Copy, Debug)]
+#[derive(Builder, Clone, Copy, Debug, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
+#[fieldwork(get)]
 pub struct AnalysisParams {
     /// Per-band perceptual gain (`[low, mid, high]`) applied to magnitudes
     /// before shared normalization. Music tilts energy toward the low end, so
     /// without lifting mid/high the upper bands render as invisible slivers.
     /// This is the balance knob, not a color: low stays the dominant hull.
     #[builder(default = Consts::BAND_GAIN)]
+    #[field(get(copy))]
     band_gain: [f32; 3],
     /// Per-window RMS gate; windows below it contribute no band energy.
     #[builder(default = Consts::ENERGY_FLOOR)]
@@ -33,33 +35,6 @@ pub struct AnalysisParams {
     /// FFT window length (real input); band bins span `0..=fft_size/2`.
     #[builder(default = Consts::FFT_SIZE)]
     fft_size: usize,
-}
-
-impl AnalysisParams {
-    #[must_use]
-    pub fn band_gain(&self) -> [f32; 3] {
-        self.band_gain
-    }
-
-    #[must_use]
-    pub fn energy_floor(&self) -> f32 {
-        self.energy_floor
-    }
-
-    #[must_use]
-    pub fn fft_size(&self) -> usize {
-        self.fft_size
-    }
-
-    #[must_use]
-    pub fn low_mid_hz(&self) -> f32 {
-        self.low_mid_hz
-    }
-
-    #[must_use]
-    pub fn mid_high_hz(&self) -> f32 {
-        self.mid_high_hz
-    }
 }
 
 impl Default for AnalysisParams {

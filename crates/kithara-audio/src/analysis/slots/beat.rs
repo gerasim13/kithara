@@ -41,18 +41,20 @@ where
         }))
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_none()
+    delegate::delegate! {
+        to self.0 {
+            #[call(is_none)]
+            pub(crate) fn is_empty(&self) -> bool;
+            #[expr($.and_then(|config| config.detector.take()))]
+            #[call(as_mut)]
+            pub(crate) fn take_detector(&mut self) -> Option<Detector>;
+        }
     }
 
     pub(crate) fn set_resampler(&mut self, resampler: BeatAnalysisConfig<B>) {
         if let Some(config) = &mut self.0 {
             config.resampler = resampler;
         }
-    }
-
-    pub(crate) fn take_detector(&mut self) -> Option<Detector> {
-        self.0.as_mut().and_then(|config| config.detector.take())
     }
 
     pub(crate) fn with_default(&mut self, resampler: BeatAnalysisConfig<B>) {

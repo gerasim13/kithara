@@ -18,8 +18,11 @@ pub(super) struct CursorRead {
     pub(super) outcome: ReadOutcome,
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(super) struct ChunkCursor {
     interleaved: Option<PcmBuf>,
+    #[field(get, vis = "pub(super)", copy)]
     spec: PcmSpec,
     current_chunk_consumed_frames: u64,
 }
@@ -214,10 +217,6 @@ impl ChunkCursor {
         };
         self.interleaved = Some(interleaved);
         result
-    }
-
-    pub(super) fn spec(&self) -> PcmSpec {
-        self.spec
     }
 }
 

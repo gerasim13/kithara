@@ -74,13 +74,15 @@ type CacheItem<A> = (
 /// `(ResourceKey, Option<RequestIdentity>, Option<Ctx>)`; the
 /// `ResourceKey` carries its own asset namespace. Absolute keys bypass
 /// caching (capability gate or absolute-key bypass).
-#[derive(Clone)]
+#[derive(Clone, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct CachedAssets<A>
 where
     A: Assets,
 {
     inner: Arc<A>,
     pinned: Arc<DashSet<ResourceKey>>,
+    #[field(get = cache_capacity, vis = "pub(crate)", copy)]
     capacity: NonZeroUsize,
     enforce_capacity: Option<EnforceCapacity>,
     on_invalidated: Option<crate::store::OnInvalidatedFn>,
@@ -115,10 +117,6 @@ where
         volatile: bool,
     ) -> Self {
         Self::with_max_bytes(inner, capacity, on_invalidated, volatile, None)
-    }
-
-    pub(crate) fn cache_capacity(&self) -> NonZeroUsize {
-        self.capacity
     }
 
     fn cache_entry(

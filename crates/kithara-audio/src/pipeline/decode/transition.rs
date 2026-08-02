@@ -101,8 +101,15 @@ impl super::core::ActiveDecode {
             .and_then(Into::into)
     }
 
-    pub(crate) fn discard_incoming(&mut self) -> Option<DecoderGeneration> {
-        self.incoming.take().and_then(Into::into)
+    delegate::delegate! {
+        to self.incoming {
+            #[expr($.and_then(Into::into))]
+            #[call(take)]
+            pub(crate) fn discard_incoming(&mut self) -> Option<DecoderGeneration>;
+            #[expr($.map(IncomingDecode::transition))]
+            #[call(as_ref)]
+            pub(crate) fn incoming_transition(&self) -> Option<VariantTransition>;
+        }
     }
 
     pub(crate) fn flush_incoming_reader_signals(&mut self) {
@@ -144,10 +151,6 @@ impl super::core::ActiveDecode {
                 ..
             }) if current == transition
         )
-    }
-
-    pub(crate) fn incoming_transition(&self) -> Option<VariantTransition> {
-        self.incoming.as_ref().map(IncomingDecode::transition)
     }
 
     pub(crate) fn install_incoming(

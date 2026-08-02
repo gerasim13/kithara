@@ -347,12 +347,13 @@ impl EvidenceGraph {
         }
     }
 
-    pub(crate) fn node(&self, id: &NodeId) -> Option<&Node> {
-        self.nodes.get(id)
-    }
-
-    pub(crate) fn nodes(&self) -> impl Iterator<Item = &Node> {
-        self.nodes.values()
+    delegate::delegate! {
+        to self.nodes {
+            #[call(get)]
+            pub(crate) fn node(&self, id: &NodeId) -> Option<&Node>;
+            #[call(values)]
+            pub(crate) fn nodes(&self) -> impl Iterator<Item = &Node>;
+        }
     }
 }
 

@@ -65,9 +65,28 @@ where
     /// Each probe is a lock-free `pop` — empty shards yield `None`.
     const MAX_PROBE: usize = 4;
 
-    /// Current number of tracked bytes across all live buffers.
-    pub fn allocated_bytes(&self) -> usize {
-        self.budget.allocated_bytes()
+    delegate::delegate! {
+        to self.budget {
+            /// Current number of tracked bytes across all live buffers.
+            pub fn allocated_bytes(&self) -> usize;
+            /// Release byte budget (e.g., when a buffer is dropped without returning to pool).
+            ///
+            /// Uses saturating subtraction to prevent underflow when buffers grow
+            /// via `DerefMut` (e.g., `Vec::resize`) without going through
+            /// [`super::owned::PooledOwned::ensure_len`].
+            #[call(release)]
+            pub fn release_budget(&self, amount: usize);
+            /// Request additional byte budget. Returns `Err` if exceeding `max_bytes`.
+            ///
+            /// Uses a compare-and-swap loop to atomically check and update.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`BudgetExhausted`] if adding `additional` bytes would exceed
+            /// the pool's `max_bytes` limit, or if the total would overflow `usize`.
+            #[call(request)]
+            pub fn request_budget(&self, additional: usize) -> Result<(), BudgetExhausted>;
+        }
     }
 
     /// Return a buffer to the pool.
@@ -77,27 +96,6 @@ where
             self.release_budget(bytes);
             self.stat_put_drops.fetch_add(1, Ordering::Relaxed);
         }
-    }
-
-    /// Release byte budget (e.g., when a buffer is dropped without returning to pool).
-    ///
-    /// Uses saturating subtraction to prevent underflow when buffers grow
-    /// via `DerefMut` (e.g., `Vec::resize`) without going through
-    /// [`super::owned::PooledOwned::ensure_len`].
-    pub fn release_budget(&self, amount: usize) {
-        self.budget.release(amount);
-    }
-
-    /// Request additional byte budget. Returns `Err` if exceeding `max_bytes`.
-    ///
-    /// Uses a compare-and-swap loop to atomically check and update.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BudgetExhausted`] if adding `additional` bytes would exceed
-    /// the pool's `max_bytes` limit, or if the total would overflow `usize`.
-    pub fn request_budget(&self, additional: usize) -> Result<(), BudgetExhausted> {
-        self.budget.request(additional)
     }
 
     /// Determine shard index for current thread. Pure function of the

@@ -116,6 +116,7 @@ kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 
 delegate = { workspace = true }
+fieldwork = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

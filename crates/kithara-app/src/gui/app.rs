@@ -65,12 +65,11 @@ impl Decks {
         self.items.iter_mut().find(|deck| deck.id == id)
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &DeckUi> {
-        self.items.iter()
-    }
-
-    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut DeckUi> {
-        self.items.iter_mut()
+    delegate::delegate! {
+        to self.items {
+            pub(crate) fn iter(&self) -> impl Iterator<Item = &DeckUi>;
+            pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut DeckUi>;
+        }
     }
 }
 

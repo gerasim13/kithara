@@ -14,7 +14,10 @@ use crate::resource::Resource;
 /// that are filled from the underlying `PcmReader`. The audio thread
 /// reads from these buffers, avoiding direct interaction with the
 /// potentially-blocking decoder on every callback.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct PlayerResource {
+    #[field(get, deref = false)]
     src: Arc<str>,
     resource: WasmSend<Resource>,
     channel_buffers: [PcmBuf; Self::STEREO_CHANNELS],
@@ -241,12 +244,6 @@ impl PlayerResource {
                 warn!("failed to seek: {err}");
             }
         }
-    }
-
-    /// Source identifier attached to this resource.
-    #[must_use]
-    pub fn src(&self) -> &Arc<str> {
-        &self.src
     }
 
     delegate::delegate! {

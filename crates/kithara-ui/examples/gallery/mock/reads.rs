@@ -19,6 +19,8 @@ use crate::{
     sections::{ModuleDemo, Tab},
 };
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct MockReads {
     tracklist_widths: BTreeMap<TrackColumn, f64>,
     collapsed: BTreeSet<String>,
@@ -26,10 +28,12 @@ pub(crate) struct MockReads {
     transport: DeckTransport,
     menu: MenuState,
     mixer: MixerState,
+    #[field(get, vis = "pub(crate)", copy)]
     active_module: ModuleDemo,
     quality: QualityState,
     stress: StressState,
     library_query: String,
+    #[field(get, vis = "pub(crate)", copy)]
     active_tab: Tab,
     tree_expanded: Vec<bool>,
     tree_rows: Vec<TreeRow<'static>>,
@@ -178,14 +182,6 @@ impl MockReads {
             path if path.ends_with("/play") => self.transport.toggle_play(),
             _ => {}
         }
-    }
-
-    pub(crate) const fn active_module(&self) -> ModuleDemo {
-        self.active_module
-    }
-
-    pub(crate) const fn active_tab(&self) -> Tab {
-        self.active_tab
     }
 
     pub(crate) fn apply(&mut self, path: &str, action: &ControlAction) {

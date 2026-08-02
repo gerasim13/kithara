@@ -59,7 +59,10 @@ impl CrossfadeSettings {
 ///
 /// Manages tracks in a thunderdome arena, handles transitions,
 /// and renders mixed stereo audio into the Firewheel output buffers.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct PlayerNodeProcessor {
+    #[field(get, deref = false)]
     pub(super) playback: Arc<PlaybackShared>,
     pub(super) tracks: ArenaRegistry<Arc<str>, PlayerTrack>,
     pub(super) crossfade: CrossfadeSettings,
@@ -217,12 +220,6 @@ impl PlayerNodeProcessor {
                 break;
             }
         }
-    }
-
-    /// Reference to the playback atomics used by the processor.
-    #[must_use]
-    pub fn playback(&self) -> &Arc<PlaybackShared> {
-        &self.playback
     }
 
     pub fn render_audio(

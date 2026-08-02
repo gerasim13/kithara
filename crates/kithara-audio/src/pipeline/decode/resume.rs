@@ -11,9 +11,12 @@ use crate::pipeline::{
     stream::shared::SharedStream,
 };
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct ResumeCursor {
     host_rate: Arc<AtomicU32>,
     decode_head: Option<(u64, u64, u32)>,
+    #[field(get = recreates_on_route, vis = "pub(crate)")]
     recreate_on_route: bool,
     decoder_rate: u32,
 }
@@ -64,10 +67,6 @@ impl ResumeCursor {
                 .saturating_add(u64::from(chunk.meta.frames)),
             chunk.meta.spec.sample_rate.get(),
         ));
-    }
-
-    pub(crate) fn recreates_on_route(&self) -> bool {
-        self.recreate_on_route
     }
 
     pub(crate) fn resume_position(

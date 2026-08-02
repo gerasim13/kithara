@@ -147,11 +147,15 @@ impl DecodeInit {
     }
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct ActiveDecode {
+    #[field(get, vis = "pub(crate)")]
     pub(super) active: DecoderGeneration,
     pub(super) incoming: Option<IncomingDecode>,
     pub(super) blender: PcmBlender,
     drain: EofDrain,
+    #[field(get, vis = "pub(crate)", copy)]
     gapless_mode: GaplessMode,
     effects: Vec<Box<dyn AudioEffect>>,
 }
@@ -193,17 +197,9 @@ impl ActiveDecode {
         }
     }
 
-    pub(crate) fn active(&self) -> &DecoderGeneration {
-        &self.active
-    }
-
     pub(crate) fn flush_reader_signals(&mut self) {
         self.active.decoder_mut().flush_reader_signals();
         self.flush_incoming_reader_signals();
-    }
-
-    pub(crate) fn gapless_mode(&self) -> GaplessMode {
-        self.gapless_mode
     }
 
     #[kithara::rtsan_allow_blocking]
@@ -241,12 +237,22 @@ impl ActiveDecode {
         None
     }
 
-    pub(crate) fn notify_seek(&mut self) {
-        self.active.notify_seek();
-    }
-
-    pub(crate) fn push(&mut self, chunk: PcmChunk) {
-        self.active.push(chunk);
+    delegate::delegate! {
+        to self.active {
+            pub(crate) fn notify_seek(&mut self);
+            pub(crate) fn push(&mut self, chunk: PcmChunk);
+            #[call(finish)]
+            pub(crate) fn set_tail_compensation(&mut self);
+        }
+        to self.drain {
+            pub(crate) fn stats(&self) -> (u64, u64);
+            pub(crate) fn track(
+                &mut self,
+                chunk: &PcmChunk,
+                playhead: &dyn PlayheadWrite,
+                emit: Option<&DeferredBus<Event>>,
+            );
+        }
     }
 
     pub(crate) fn replace_active(&mut self, active: DecoderGeneration) -> DecoderGeneration {
@@ -289,23 +295,6 @@ impl ActiveDecode {
             "decoder seek completed"
         );
         outcome
-    }
-
-    pub(crate) fn set_tail_compensation(&mut self) {
-        self.active.finish();
-    }
-
-    pub(crate) fn stats(&self) -> (u64, u64) {
-        self.drain.stats()
-    }
-
-    pub(crate) fn track(
-        &mut self,
-        chunk: &PcmChunk,
-        playhead: &dyn PlayheadWrite,
-        emit: Option<&DeferredBus<Event>>,
-    ) {
-        self.drain.track(chunk, playhead, emit);
     }
 
     pub(crate) fn update_len(&self, len: u64) {

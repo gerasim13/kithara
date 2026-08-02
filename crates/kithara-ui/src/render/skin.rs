@@ -15,8 +15,9 @@ use crate::{
 };
 
 /// Resolved skin consumed by iced renderers.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
 #[non_exhaustive]
+#[fieldwork(opt_in, get)]
 pub struct Skin {
     pub button: ButtonSkin,
     pub cell: CellSkin,
@@ -54,6 +55,7 @@ pub struct Skin {
     pub vu_vertical: VuVerticalSkin,
     pub wave: WaveSkin,
     pub window: WindowSkin,
+    #[field(get, vis = "pub(crate)")]
     document: SkinDoc,
 }
 
@@ -95,10 +97,6 @@ impl Skin {
             ColorRole::WaveHigh => self.palette.wave_high,
             ColorRole::Shadow => self.palette.shadow,
         }
-    }
-
-    pub(crate) fn document(&self) -> &SkinDoc {
-        &self.document
     }
 
     /// Resolves a parsed document into iced colors and render metrics.

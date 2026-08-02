@@ -107,9 +107,22 @@ impl AssetStore {
         self.demand().attach_demand(key, entry)
     }
 
-    /// Return the crate-private aggregate availability handle.
-    pub(crate) fn availability(&self) -> &AvailabilityIndex {
-        &self.inner.availability
+    delegate::delegate! {
+        to self.inner {
+            /// Return the crate-private aggregate availability handle.
+            #[field(&availability)]
+            pub(crate) fn availability(&self) -> &AvailabilityIndex;
+            /// Return the crate-private aggregate demand handle.
+            #[field(&demand)]
+            fn demand(&self) -> &DemandIndex;
+            /// Return the crate-private eviction-router handle.
+            #[field(&eviction)]
+            fn eviction(&self) -> &EvictionRouter;
+            #[field(&layouts)]
+            fn layouts(&self) -> &AssetLayoutRegistry;
+            #[field(&transactions)]
+            fn transactions(&self) -> &ResourceTransactionIndex;
+        }
     }
 
     /// Return a snapshot of byte ranges known to be available for the
@@ -190,11 +203,6 @@ impl AssetStore {
         delegate_to_store!(self, delete_asset, asset_root)
     }
 
-    /// Return the crate-private aggregate demand handle.
-    fn demand(&self) -> &DemandIndex {
-        &self.inner.demand
-    }
-
     /// Return the fixed handle-cache capacity for an ephemeral memory store.
     /// Durable stores return `None` because handle displacement does not remove
     /// their committed bytes.
@@ -205,11 +213,6 @@ impl AssetStore {
             StoreBackendInner::Disk { .. } => None,
             StoreBackendInner::Memory { store } => Some(store.cache_capacity()),
         }
-    }
-
-    /// Return the crate-private eviction-router handle.
-    fn eviction(&self) -> &EvictionRouter {
-        &self.inner.eviction
     }
 
     /// Return the committed final length of the resource, if known.
@@ -231,10 +234,6 @@ impl AssetStore {
     #[must_use]
     pub fn is_same(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
-    }
-
-    fn layouts(&self) -> &AssetLayoutRegistry {
-        &self.inner.layouts
     }
 
     pub(super) fn new_handle(inner: AssetStoreInner) -> Self {
@@ -317,10 +316,6 @@ impl AssetStore {
         tx: mpsc::UnboundedSender<ResourceKey>,
     ) -> EvictionSubscription {
         self.eviction().subscribe(asset_root, tx)
-    }
-
-    fn transactions(&self) -> &ResourceTransactionIndex {
-        &self.inner.transactions
     }
 
     /// Serialize a closure per key across clones of this store. The closure

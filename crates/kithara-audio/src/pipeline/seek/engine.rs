@@ -24,8 +24,11 @@ use crate::pipeline::{
     track::{WaitContext, WaitingReason},
 };
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct SeekEngine {
     epoch: Arc<AtomicU64>,
+    #[field(get, vis = "pub(crate)", copy)]
     resume_target: Option<(u64, Duration)>,
 }
 
@@ -264,9 +267,5 @@ impl SeekEngine {
 
     pub(crate) fn record_resume_target(&mut self, epoch: u64, target: Duration) {
         self.resume_target = Some((epoch, target));
-    }
-
-    pub(crate) fn resume_target(&self) -> Option<(u64, Duration)> {
-        self.resume_target
     }
 }

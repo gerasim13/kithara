@@ -32,7 +32,8 @@ fn canonical_source(url: &str) -> String {
 
 /// The app's track list. Decks load from it; it never plays anything itself,
 /// so it holds no player state.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, fieldwork::Fieldwork)]
+#[fieldwork(get)]
 pub struct Catalog {
     entries: Vec<CatalogEntry>,
 }
@@ -54,11 +55,6 @@ impl Catalog {
         }
         self.entries.push(CatalogEntry::new(url));
         self.entries.len() - 1
-    }
-
-    #[must_use]
-    pub fn entries(&self) -> &[CatalogEntry] {
-        &self.entries
     }
 
     #[must_use]

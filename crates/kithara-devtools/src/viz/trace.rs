@@ -47,9 +47,10 @@ impl TraceSource {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, fieldwork::Fieldwork)]
 #[non_exhaustive]
 #[serde(deny_unknown_fields)]
+#[fieldwork(opt_in, with)]
 pub struct TraceRecord {
     #[serde(default)]
     correlation_id: Option<String>,
@@ -60,6 +61,7 @@ pub struct TraceRecord {
     #[serde(default)]
     resource_type: Option<String>,
     #[serde(default)]
+    #[field(with, option_set_some)]
     source: Option<TraceSource>,
     #[serde(default)]
     span_id: Option<String>,
@@ -112,12 +114,6 @@ impl TraceRecord {
     ) -> Self {
         self.resource_type = Some(resource_type.into());
         self.resource_id = Some(resource_id.into());
-        self
-    }
-
-    #[must_use]
-    pub fn with_source(mut self, source: TraceSource) -> Self {
-        self.source = Some(source);
         self
     }
 

@@ -12,14 +12,19 @@ use tracing::warn;
 
 use crate::pipeline::{gapless::GaplessStage, seek::ResumeState};
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct DecoderGeneration {
     decoder: Box<dyn Decoder>,
+    #[field(get, vis = "pub(crate)", copy)]
     gapless_profile: GaplessProfile,
     gapless: GaplessStage,
     media_info: Option<MediaInfo>,
     pending_head_skip: Option<ResumeState>,
     staged: VecDeque<PcmChunk>,
+    #[field(get, vis = "pub(crate)")]
     base_offset: u64,
+    #[field(get, vis = "pub(crate)")]
     installed_at_seek_epoch: u64,
 }
 
@@ -47,20 +52,22 @@ impl DecoderGeneration {
         }
     }
 
-    pub(crate) fn base_offset(&self) -> u64 {
-        self.base_offset
-    }
-
-    pub(crate) fn blender_profile(&self) -> BlenderProfile {
-        self.decoder.blender_profile()
-    }
-
-    pub(crate) fn decoder(&self) -> &dyn Decoder {
-        self.decoder.as_ref()
-    }
-
-    pub(crate) fn decoder_mut(&mut self) -> &mut dyn Decoder {
-        self.decoder.as_mut()
+    delegate::delegate! {
+        to self.decoder {
+            pub(crate) fn blender_profile(&self) -> BlenderProfile;
+            #[call(as_ref)]
+            pub(crate) fn decoder(&self) -> &dyn Decoder;
+            #[call(as_mut)]
+            pub(crate) fn decoder_mut(&mut self) -> &mut dyn Decoder;
+            #[call(timeline_gap_frames)]
+            pub(crate) fn timeline_gap(&self) -> u64;
+        }
+        to self.staged {
+            #[call(pop_front)]
+            pub(crate) fn pop_staged(&mut self) -> Option<PcmChunk>;
+            #[call(push_front)]
+            pub(crate) fn push_staged_front(&mut self, chunk: PcmChunk);
+        }
     }
 
     pub(crate) fn finish(&mut self) {
@@ -75,16 +82,8 @@ impl DecoderGeneration {
         }
     }
 
-    pub(crate) fn gapless_profile(&self) -> GaplessProfile {
-        self.gapless_profile
-    }
-
     pub(crate) fn has_output(&self) -> bool {
         !self.staged.is_empty() || self.gapless.has_output()
-    }
-
-    pub(crate) fn installed_at_seek_epoch(&self) -> u64 {
-        self.installed_at_seek_epoch
     }
 
     pub(crate) fn media_info(&self) -> Option<&MediaInfo> {
@@ -116,16 +115,8 @@ impl DecoderGeneration {
         self.pending_head_skip.as_mut()
     }
 
-    pub(crate) fn pop_staged(&mut self) -> Option<PcmChunk> {
-        self.staged.pop_front()
-    }
-
     pub(crate) fn push(&mut self, chunk: PcmChunk) {
         self.gapless.push(chunk);
-    }
-
-    pub(crate) fn push_staged_front(&mut self, chunk: PcmChunk) {
-        self.staged.push_front(chunk);
     }
 
     pub(crate) fn stage(&mut self, chunk: PcmChunk) {
@@ -145,10 +136,6 @@ impl DecoderGeneration {
                 .saturating_add(u64::from(last.meta.frames)),
             first.meta.spec.sample_rate.get(),
         ))
-    }
-
-    pub(crate) fn timeline_gap(&self) -> u64 {
-        self.decoder.timeline_gap_frames()
     }
 
     pub(crate) fn timeline_origin(&self, mode: GaplessMode) -> u64 {

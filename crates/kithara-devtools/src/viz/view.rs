@@ -50,8 +50,11 @@ pub(crate) struct ViewRequest {
     pub(crate) kind: ViewKind,
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct Projector<'a> {
     graph: &'a EvidenceGraph,
+    #[field(get, vis = "pub(crate)")]
     contours: ContourIndex,
 }
 
@@ -61,10 +64,6 @@ impl<'a> Projector<'a> {
             graph,
             contours: ContourIndex::new(graph),
         }
-    }
-
-    pub(crate) fn contours(&self) -> &ContourIndex {
-        &self.contours
     }
 
     pub(crate) fn project(&self, request: &ViewRequest) -> DiagramModel {

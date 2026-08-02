@@ -21,11 +21,13 @@ struct Edge {
     to: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(super) struct BehaviorGraph {
     edge_counts: BTreeMap<String, usize>,
     label_counts: BTreeMap<String, usize>,
     wl_fingerprint: BTreeMap<String, usize>,
+    #[field(get = bucket_key, vis = "pub(super)")]
     signature: String,
     edges: Vec<Edge>,
     nodes: Vec<Node>,
@@ -38,10 +40,6 @@ pub(super) struct BehaviorComparison {
 }
 
 impl BehaviorGraph {
-    pub(super) fn bucket_key(&self) -> &str {
-        &self.signature
-    }
-
     pub(super) fn compare(&self, other: &Self) -> BehaviorComparison {
         let label_score = multiset_dice(&self.label_counts, &other.label_counts);
         let edge_score = multiset_dice(&self.edge_counts, &other.edge_counts);

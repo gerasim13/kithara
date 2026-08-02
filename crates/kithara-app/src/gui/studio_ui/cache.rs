@@ -17,16 +17,20 @@ use crate::{
 };
 
 /// Studio state the host owns, re-derived from the deck snapshots once a frame.
-#[derive(Default)]
+#[derive(Default, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct StudioCache {
     pub(in crate::gui) deck_marks: CatalogRowMarks,
     pub(in crate::gui) collapsed: CollapsedModules,
     pub(in crate::gui) drag: Option<usize>,
+    #[field(get, vis = "pub(in crate::gui)", copy)]
     layout: DeckLayout,
 
     hover_deck: Option<usize>,
+    #[field(get, vis = "pub(in crate::gui)")]
     decks: Vec<DeckCache>,
 
+    #[field(get, vis = "pub(crate)")]
     focus_deck: usize,
 }
 
@@ -91,10 +95,6 @@ impl StudioCache {
         self.decks.get_mut(index)
     }
 
-    pub(in crate::gui) fn decks(&self) -> &[DeckCache] {
-        &self.decks
-    }
-
     pub(in crate::gui) const fn drag_target(&self) -> Option<usize> {
         if self.drag.is_some() {
             self.hover_deck
@@ -103,16 +103,8 @@ impl StudioCache {
         }
     }
 
-    pub(crate) const fn focus_deck(&self) -> usize {
-        self.focus_deck
-    }
-
     pub(crate) const fn laid_out_decks(&self) -> usize {
         self.layout.decks()
-    }
-
-    pub(in crate::gui) const fn layout(&self) -> DeckLayout {
-        self.layout
     }
 
     pub(crate) fn refresh(&mut self, decks: &Decks, catalog: &Catalog) {

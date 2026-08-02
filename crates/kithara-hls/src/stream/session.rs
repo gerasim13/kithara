@@ -26,6 +26,8 @@ use crate::{
     variant::{HlsVariant, ResolvedSeekProjection, VariantReaderPreparation},
 };
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct HlsSession {
     seek: Arc<dyn SeekObserve>,
     variant: Arc<HlsVariant>,
@@ -36,6 +38,7 @@ pub(crate) struct HlsSession {
     cancel: SessionCancel,
     readiness: SessionReadiness,
     signal: SizeSignal,
+    #[field(get, vis = "pub(crate)")]
     variant_index: usize,
 }
 
@@ -102,8 +105,26 @@ impl HlsSession {
         }
     }
 
-    pub(crate) fn arm_peer(&self) {
-        self.signal.arm_peer();
+    delegate::delegate! {
+        to self.signal {
+            pub(crate) fn arm_peer(&self);
+            /// Ask the peer to plan for a session that answered [`Self::is_ready`] with
+            /// `false`. Call it only with no transition lock held.
+            #[call(wake_peer)]
+            pub(crate) fn wake_peer_for_readiness(&self);
+        }
+        to self.construction_gate {
+            #[call(is_armed)]
+            pub(crate) fn construction_blocking(&self) -> bool;
+            #[call(clone)]
+            pub(crate) fn construction_gate(&self) -> ConstructionGate;
+        }
+        to self.variant {
+            pub(crate) fn find_at_offset(&self, byte: u64) -> Option<(u32, u64, u64)>;
+            #[call(stream_len)]
+            pub(crate) fn len(&self) -> Option<u64>;
+            pub(crate) fn media_info(&self) -> kithara_stream::MediaInfo;
+        }
     }
 
     fn check_live(&self) -> io::Result<()> {
@@ -118,14 +139,6 @@ impl HlsSession {
             return Err(pending(PendingReason::SeekPending));
         }
         Ok(())
-    }
-
-    pub(crate) fn construction_blocking(&self) -> bool {
-        self.construction_gate.is_armed()
-    }
-
-    pub(crate) fn construction_gate(&self) -> ConstructionGate {
-        self.construction_gate.clone()
     }
 
     /// Fetches for a session that owns a live reader.
@@ -183,10 +196,6 @@ impl HlsSession {
         self.dispatch_capped(ctx, budget, cap)
     }
 
-    pub(crate) fn find_at_offset(&self, byte: u64) -> Option<(u32, u64, u64)> {
-        self.variant.find_at_offset(byte)
-    }
-
     pub(crate) fn incoming(
         cancel: CancelToken,
         profile: ReaderProfile,
@@ -237,14 +246,6 @@ impl HlsSession {
                 self.variant.reader_is_ready(&preparation.lock())
             }
         }
-    }
-
-    pub(crate) fn len(&self) -> Option<u64> {
-        self.variant.stream_len()
-    }
-
-    pub(crate) fn media_info(&self) -> kithara_stream::MediaInfo {
-        self.variant.media_info()
     }
 
     pub(crate) fn position(&self) -> u64 {
@@ -323,10 +324,6 @@ impl HlsSession {
         Arc::clone(&self.variant)
     }
 
-    pub(crate) fn variant_index(&self) -> usize {
-        self.variant_index
-    }
-
     /// Session-scoped twin of [`HlsCoord::wait_range`]: `Some(_)` is the
     /// wake-free RT probe, `None` the off-RT construction wait that parks on the
     /// readiness gate. The variant plans nothing by itself — the reader driver
@@ -351,12 +348,6 @@ impl HlsSession {
             }),
         }
     }
-
-    /// Ask the peer to plan for a session that answered [`Self::is_ready`] with
-    /// `false`. Call it only with no transition lock held.
-    pub(crate) fn wake_peer_for_readiness(&self) {
-        self.signal.wake_peer();
-    }
 }
 
 impl ByteMap for HlsSession {
@@ -364,32 +355,26 @@ impl ByteMap for HlsSession {
         self.prepare_at(position).map(Some)
     }
 
-    fn init_segment_range(&self) -> Range<u64> {
-        self.variant.init_byte_range()
-    }
-
-    fn len(&self) -> Option<u64> {
-        self.variant.stream_len()
-    }
-
-    fn segment_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
-        self.variant.descriptor_after_byte(byte)
-    }
-
-    fn segment_at_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
-        self.variant.descriptor_at_byte(byte)
+    delegate::delegate! {
+        to self.variant {
+            #[call(init_byte_range)]
+            fn init_segment_range(&self) -> Range<u64>;
+            #[call(stream_len)]
+            fn len(&self) -> Option<u64>;
+            #[call(descriptor_after_byte)]
+            fn segment_after_byte(&self, byte: u64) -> Option<SegmentDescriptor>;
+            #[call(descriptor_at_byte)]
+            fn segment_at_byte(&self, byte: u64) -> Option<SegmentDescriptor>;
+            #[call(descriptor_at_time)]
+            fn segment_at_time(&self, position: Duration) -> Option<SegmentDescriptor>;
+            #[expr(Some($))]
+            #[call(num_segments)]
+            fn segment_count(&self) -> Option<u32>;
+        }
     }
 
     fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
         self.variant.descriptor(segment_index as usize)
-    }
-
-    fn segment_at_time(&self, position: Duration) -> Option<SegmentDescriptor> {
-        self.variant.descriptor_at_time(position)
-    }
-
-    fn segment_count(&self) -> Option<u32> {
-        Some(self.variant.num_segments())
     }
 }
 

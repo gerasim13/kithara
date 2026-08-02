@@ -1,7 +1,8 @@
 /// One uniform-tempo region of the grid: `[start_frame, end_frame)` in
 /// source frames with a single time-stretch ratio correction.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, fieldwork::Fieldwork)]
 #[non_exhaustive]
+#[fieldwork(get)]
 pub struct GridSegment {
     /// `nominal_bar / fitted_bar`; 1.0 = the region already sits on the grid.
     ratio_correction: f64,
@@ -18,21 +19,6 @@ impl GridSegment {
             end_frame,
             start_frame,
         }
-    }
-
-    #[must_use]
-    pub fn end_frame(&self) -> u64 {
-        self.end_frame
-    }
-
-    #[must_use]
-    pub fn ratio_correction(&self) -> f64 {
-        self.ratio_correction
-    }
-
-    #[must_use]
-    pub fn start_frame(&self) -> u64 {
-        self.start_frame
     }
 }
 
@@ -109,8 +95,9 @@ impl RegionPlan {
 
 /// Resolved uniform-ratio span covering one source frame: either a plan
 /// segment or a gap between segments.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, fieldwork::Fieldwork)]
 #[non_exhaustive]
+#[fieldwork(get)]
 pub struct ActiveRegion {
     correction: f64,
     end: u64,
@@ -137,21 +124,6 @@ impl ActiveRegion {
     #[must_use]
     pub fn contains(&self, frame: u64) -> bool {
         self.start <= frame && frame < self.end
-    }
-
-    #[must_use]
-    pub fn correction(&self) -> f64 {
-        self.correction
-    }
-
-    #[must_use]
-    pub fn end(&self) -> u64 {
-        self.end
-    }
-
-    #[must_use]
-    pub fn start(&self) -> u64 {
-        self.start
     }
 }
 
