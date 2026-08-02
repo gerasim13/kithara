@@ -8,13 +8,13 @@ use super::{
     scalar::ScalarComponent,
     scroll::ScrollComponent,
     segmented::SegmentedComponent,
+    text_input::{TextInputComponent, TextInputSnapshot},
     wave::HeroWaveComponent,
 };
 use crate::{
-    draw::Rect,
     engine::model::{Descriptor, EngineEvent, Identity, Kind},
     interact::{
-        CursorShape, Hit, Hover, Input, Outcome,
+        CursorShape, Hit, Hover, Input, InputMethodRequest, Outcome, Rect,
         recognizers::{Scalar, Track, WheelStep},
     },
 };
@@ -49,6 +49,7 @@ pub(in crate::engine) enum RetainedComponent {
     Crossing(CrossingComponent),
     Segmented(SegmentedComponent),
     Picker(PickerComponent),
+    TextInput(TextInputComponent),
     Scroll(ScrollComponent),
     Item(ItemComponent),
     HeroWave(HeroWaveComponent),
@@ -69,6 +70,9 @@ impl RetainedComponent {
             }
             (Self::Picker(component), Self::Picker(next)) => {
                 Self::Picker(component.reconcile(next))
+            }
+            (Self::TextInput(component), Self::TextInput(next)) => {
+                Self::TextInput(component.reconcile(next))
             }
             (Self::Item(component), Self::Item(next)) => Self::Item(component.reconcile(next)),
             (Self::Crossing(component), Self::Crossing(_)) => Self::Crossing(component),
@@ -140,6 +144,25 @@ impl RetainedComponent {
         }
     }
 
+    pub(in crate::engine) fn text_input_snapshot(
+        &self,
+        focused: bool,
+    ) -> Option<TextInputSnapshot> {
+        if let Self::TextInput(component) = self {
+            Some(component.snapshot(focused))
+        } else {
+            None
+        }
+    }
+
+    pub(in crate::engine) fn input_method(&self, area: Rect) -> Option<InputMethodRequest<'_>> {
+        if let Self::TextInput(component) = self {
+            Some(component.input_method(area))
+        } else {
+            None
+        }
+    }
+
     pub(in crate::engine) fn scroll_offset(&self) -> Option<f32> {
         if let Self::Scroll(component) = self {
             Some(component.offset())
@@ -169,6 +192,7 @@ impl RetainedComponent {
             Self::Crossing(component) => component,
             Self::Segmented(component) => component,
             Self::Picker(component) => component,
+            Self::TextInput(component) => component,
             Self::Scroll(component) => component,
             Self::Item(component) => component,
             Self::HeroWave(component) => component,
@@ -182,6 +206,7 @@ impl RetainedComponent {
             Self::Crossing(component) => component,
             Self::Segmented(component) => component,
             Self::Picker(component) => component,
+            Self::TextInput(component) => component,
             Self::Scroll(component) => component,
             Self::Item(component) => component,
             Self::HeroWave(component) => component,
@@ -202,6 +227,11 @@ impl From<Descriptor> for RetainedComponent {
                 item_count,
                 selected,
             } => Self::Picker(PickerComponent::new(path, item_count, selected)),
+            Descriptor::TextInput {
+                path,
+                query,
+                layout,
+            } => Self::TextInput(TextInputComponent::new(path, query, layout)),
             Descriptor::Scroll { path, config } => Self::Scroll(ScrollComponent::new(path, config)),
             Descriptor::Item {
                 target,

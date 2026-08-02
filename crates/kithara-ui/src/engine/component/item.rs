@@ -92,7 +92,8 @@ impl Component for ItemComponent {
                     Outcome::captured()
                 }
             }),
-            Input::KeyPressed { .. }
+            Input::InputMethod(_)
+            | Input::KeyPressed { .. }
             | Input::KeyReleased { .. }
             | Input::ModifiersChanged(_)
             | Input::PointerDown

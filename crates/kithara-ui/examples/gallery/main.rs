@@ -676,7 +676,10 @@ mod tests {
             Tab::Tree,
             "tree",
             |path| path.starts_with("tree/"),
-            &[("tree/browser", "scroll")],
+            &[
+                ("tree/browser", "scroll"),
+                ("tree/browser/search", "text-input"),
+            ],
         );
     }
 
@@ -688,6 +691,7 @@ mod tests {
             |path| path.starts_with("library2/"),
             &[
                 ("library2/browser", "scroll"),
+                ("library2/browser/search", "text-input"),
                 ("library2/context", "picker"),
                 ("library2/table", "track-list"),
             ],
@@ -762,38 +766,38 @@ mod tests {
         );
     }
 
-    fn engine_descriptor_kind(spec: &ControlSpec) -> Option<&'static str> {
+    fn engine_descriptor_kinds(spec: &ControlSpec) -> &'static [&'static str] {
         match spec {
             ControlSpec::Button {
                 icon: Some(IconName::PlayReverse),
                 style,
                 ..
-            } if *style != ButtonStyle::MicroPrimary => None,
+            } if *style != ButtonStyle::MicroPrimary => &[],
             ControlSpec::NavItem {
                 icon: IconName::PlayReverse,
                 ..
-            } => None,
+            } => &[],
             ControlSpec::Button { .. }
             | ControlSpec::NavItem { .. }
             | ControlSpec::TabLarge { .. }
             | ControlSpec::Toggle
             | ControlSpec::Checkbox
-            | ControlSpec::Chip { .. } => Some("activation"),
-            ControlSpec::ContextBar { .. } => Some("picker"),
-            ControlSpec::Crossfader { .. } => Some("crossfader"),
-            ControlSpec::Fader { .. } => Some("fader"),
-            ControlSpec::Knob { .. } => Some("knob"),
-            ControlSpec::Segmented { .. } => Some("segmented"),
-            ControlSpec::TrackList { .. } => Some("track-list"),
-            ControlSpec::VuStereo => Some("stereo-meter"),
-            ControlSpec::VuVertical { .. } => Some("vertical-vu"),
-            ControlSpec::Tree { .. } => Some("scroll"),
+            | ControlSpec::Chip { .. } => &["activation"],
+            ControlSpec::ContextBar { .. } => &["picker"],
+            ControlSpec::Crossfader { .. } => &["crossfader"],
+            ControlSpec::Fader { .. } => &["fader"],
+            ControlSpec::Knob { .. } => &["knob"],
+            ControlSpec::Segmented { .. } => &["segmented"],
+            ControlSpec::TrackList { .. } => &["track-list"],
+            ControlSpec::VuStereo => &["stereo-meter"],
+            ControlSpec::VuVertical { .. } => &["vertical-vu"],
+            ControlSpec::Tree { .. } => &["scroll", "text-input"],
             ControlSpec::Wave {
                 style: WaveStyle::Hero,
                 ..
-            } => Some("hero-wave"),
-            ControlSpec::Wave { .. } => Some("wave"),
-            _ => None,
+            } => &["hero-wave"],
+            ControlSpec::Wave { .. } => &["wave"],
+            _ => &[],
         }
     }
 
@@ -813,10 +817,16 @@ mod tests {
         .unwrap_or_else(|error| panic!("the {tab:?} tab must compile: {error}"));
         let mut claims = Vec::new();
         each_control(&ui, &mut |path, spec| {
-            if belongs(path)
-                && let Some(kind) = engine_descriptor_kind(spec)
-            {
-                claims.push((path.to_owned(), kind));
+            if belongs(path) {
+                for kind in engine_descriptor_kinds(spec) {
+                    let path = if matches!(spec, ControlSpec::Tree { .. }) && *kind == "text-input"
+                    {
+                        format!("{path}/search")
+                    } else {
+                        path.to_owned()
+                    };
+                    claims.push((path, *kind));
+                }
             }
         });
         claims.sort_unstable();

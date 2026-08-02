@@ -1,23 +1,29 @@
 use iced::{
     Event, Point, Rectangle,
+    advanced::{InputMethod as IcedInputMethod, input_method},
     keyboard::{
         self, Event as KeyboardEvent,
         key::{Key as IcedKey, Named},
     },
     mouse::{self, Button, Cursor, ScrollDelta},
 };
+use input_method::Event as InputMethodEvent;
 
-use super::{CursorShape, Hit, Input, Key, Modifiers, Scroll};
+use super::{CursorShape, Hit, Input, InputMethod, InputMethodRequest, Key, Modifiers, Scroll};
 use crate::draw::{Pt, Rect};
 
 pub(crate) fn input(event: &Event) -> Option<Input<'_>> {
     match event {
-        Event::Keyboard(KeyboardEvent::KeyPressed { key, modifiers, .. }) => {
-            Some(Input::KeyPressed {
-                key: portable_key(key),
-                modifiers: portable_modifiers(*modifiers),
-            })
-        }
+        Event::Keyboard(KeyboardEvent::KeyPressed {
+            key,
+            modifiers,
+            text,
+            ..
+        }) => Some(Input::KeyPressed {
+            key: portable_key(key),
+            modifiers: portable_modifiers(*modifiers),
+            text: text.as_deref(),
+        }),
         Event::Keyboard(KeyboardEvent::KeyReleased { key, modifiers, .. }) => {
             Some(Input::KeyReleased {
                 key: portable_key(key),
@@ -27,6 +33,15 @@ pub(crate) fn input(event: &Event) -> Option<Input<'_>> {
         Event::Keyboard(KeyboardEvent::ModifiersChanged(modifiers)) => {
             Some(Input::ModifiersChanged(portable_modifiers(*modifiers)))
         }
+        Event::InputMethod(event) => Some(Input::InputMethod(match event {
+            InputMethodEvent::Opened => InputMethod::Opened,
+            InputMethodEvent::Preedit(content, selection) => InputMethod::Preedit {
+                content,
+                selection: selection.as_ref().map(|range| (range.start, range.end)),
+            },
+            InputMethodEvent::Commit(content) => InputMethod::Commit(content),
+            InputMethodEvent::Closed => InputMethod::Closed,
+        })),
         Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) => Some(Input::PointerDown),
         Event::Mouse(mouse::Event::CursorMoved { position }) => Some(Input::PointerMoved {
             at: (*position).into(),
@@ -44,14 +59,38 @@ pub(crate) fn input(event: &Event) -> Option<Input<'_>> {
 fn portable_key<'a>(key: &'a IcedKey<impl AsRef<str>>) -> Key<'a> {
     match key {
         IcedKey::Named(Named::ArrowDown) => Key::ArrowDown,
+        IcedKey::Named(Named::ArrowLeft) => Key::ArrowLeft,
+        IcedKey::Named(Named::ArrowRight) => Key::ArrowRight,
         IcedKey::Named(Named::ArrowUp) => Key::ArrowUp,
         IcedKey::Named(Named::Backspace) => Key::Backspace,
         IcedKey::Named(Named::Delete) => Key::Delete,
+        IcedKey::Named(Named::End) => Key::End,
         IcedKey::Named(Named::Enter) => Key::Enter,
         IcedKey::Named(Named::Escape) => Key::Escape,
+        IcedKey::Named(Named::Home) => Key::Home,
         IcedKey::Named(Named::Space) => Key::Space,
         IcedKey::Character(character) => Key::Character(character.as_ref()),
         IcedKey::Named(_) | IcedKey::Unidentified => Key::Other,
+    }
+}
+
+pub(crate) fn input_method(request: Option<InputMethodRequest<'_>>) -> IcedInputMethod<&str> {
+    let Some(request) = request else {
+        return IcedInputMethod::Disabled;
+    };
+    IcedInputMethod::Enabled {
+        cursor: Rectangle {
+            height: request.caret.h,
+            width: request.caret.w,
+            x: request.caret.x,
+            y: request.caret.y,
+        },
+        purpose: input_method::Purpose::Normal,
+        preedit: request.preedit.map(|preedit| input_method::Preedit {
+            content: preedit.content,
+            selection: preedit.selection,
+            text_size: Some(iced::Pixels(request.text_size)),
+        }),
     }
 }
 
@@ -97,6 +136,7 @@ impl From<CursorShape> for mouse::Interaction {
             CursorShape::Pointer => Self::Pointer,
             CursorShape::ResizeH => Self::ResizingHorizontally,
             CursorShape::ResizeV => Self::ResizingVertically,
+            CursorShape::Text => Self::Text,
         }
     }
 }
@@ -137,6 +177,7 @@ mod tests {
             Some(Input::KeyPressed {
                 key: Key::Character("z"),
                 modifiers: decoded,
+                text: Some("z"),
             }) if decoded == Modifiers::new(true, false, true, false)
         ));
         assert!(matches!(
@@ -145,6 +186,36 @@ mod tests {
                 key: Key::Delete,
                 modifiers: decoded,
             }) if decoded == Modifiers::new(false, true, false, true)
+        ));
+    }
+
+    #[kithara::test]
+    fn input_method_events_preserve_composition_and_byte_selection() {
+        let events = [
+            Event::InputMethod(InputMethodEvent::Opened),
+            Event::InputMethod(InputMethodEvent::Preedit("かな".to_owned(), Some(3..6))),
+            Event::InputMethod(InputMethodEvent::Commit("仮名".to_owned())),
+            Event::InputMethod(InputMethodEvent::Closed),
+        ];
+
+        assert!(matches!(
+            input(&events[0]),
+            Some(Input::InputMethod(InputMethod::Opened))
+        ));
+        assert!(matches!(
+            input(&events[1]),
+            Some(Input::InputMethod(InputMethod::Preedit {
+                content: "かな",
+                selection: Some((3, 6)),
+            }))
+        ));
+        assert!(matches!(
+            input(&events[2]),
+            Some(Input::InputMethod(InputMethod::Commit("仮名")))
+        ));
+        assert!(matches!(
+            input(&events[3]),
+            Some(Input::InputMethod(InputMethod::Closed))
         ));
     }
 

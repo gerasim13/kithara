@@ -13,7 +13,7 @@ use super::{
         select, status_dot, swatch, tab_large, toggle, vu_stereo, vu_vertical,
     },
     geometry::Rendered,
-    host::{picker_input_layout, tree_input_layout},
+    host::{picker_input_layout, tree_input_layout, tree_search_input_layout},
     panel::{context_bar, deck_summary, time, track_list, tree, vis},
     read::{read_flag, read_scope, resolve, wave_zoom},
     track_list::TrackListHost,
@@ -24,14 +24,17 @@ use crate::{
     engine::{Descriptor, Engine, ScrollConfig, Target},
     expand::{Binding, ControlSpec},
     ids::InternId,
-    interact::{CursorShape, Hover, ScrollAxis, iced as iced_interact, recognizers::WheelStep},
+    interact::{
+        CursorShape, Hover, ScrollAxis, TextInputLayout, iced as iced_interact,
+        recognizers::WheelStep,
+    },
     module::{FaderStyle, TextAlign, WaveStyle},
     render::{
         InputOwner, ReadValue, Reads, Skin, UiEvent,
         controls::{ButtonView, button, nav_item_supports_engine_input, supports_engine_input},
         icons::document_icon,
         model::derived,
-        picker_selected_index,
+        picker_selected_index, text_input_layout,
     },
     widgets::{
         Widget,
@@ -255,9 +258,12 @@ pub(super) enum HostedControl {
         item_height: f32,
         selected: Option<usize>,
     },
-    Scroll {
+    Tree {
         path: String,
-        config: ScrollConfig,
+        query: String,
+        scroll: ScrollConfig,
+        search_layout: TextInputLayout,
+        search_path: String,
     },
     TrackList(Box<TrackListHost>),
     Fader {
@@ -349,17 +355,31 @@ impl HostedControl {
                     selected,
                 })
             }
-            (ControlSpec::Tree { .. }, Some(ReadValue::Tree(rows))) => Some(Self::Scroll {
-                path: path.to_owned(),
-                config: ScrollConfig::items(
-                    ScrollAxis::Vertical,
-                    AsPrimitive::<f32>::as_(rows.len()) * skin.tree.row_height,
-                    rows.len(),
-                    skin.tree.row_height,
-                    skin.tree.row_height,
-                    skin.tree.scrollbar_margin + skin.tree.scrollbar_width,
-                ),
-            }),
+            (ControlSpec::Tree { query }, Some(ReadValue::Tree(rows))) => {
+                let query = query
+                    .as_ref()
+                    .and_then(|binding| resolve(reads, binding, ui))
+                    .and_then(|value| match value {
+                        ReadValue::Text(query) => Some(query.to_owned()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                let search_layout = text_input_layout(&query, skin);
+                Some(Self::Tree {
+                    path: path.to_owned(),
+                    query,
+                    scroll: ScrollConfig::items(
+                        ScrollAxis::Vertical,
+                        AsPrimitive::<f32>::as_(rows.len()) * skin.tree.row_height,
+                        rows.len(),
+                        skin.tree.row_height,
+                        skin.tree.row_height,
+                        skin.tree.scrollbar_margin + skin.tree.scrollbar_width,
+                    ),
+                    search_layout,
+                    search_path: format!("{path}/search"),
+                })
+            }
             (
                 ControlSpec::TrackList {
                     columns,
@@ -448,7 +468,7 @@ impl HostedControl {
             Self::Activation { path }
             | Self::Segmented { path, .. }
             | Self::Picker { path, .. }
-            | Self::Scroll { path, .. }
+            | Self::Tree { path, .. }
             | Self::Fader { path, .. }
             | Self::Crossfader { path }
             | Self::Knob { path, .. }
@@ -466,7 +486,6 @@ impl HostedControl {
                 style, labelled, ..
             } => fader_input_layout(layout, *style, *labelled),
             Self::Picker { .. } => picker_input_layout(layout),
-            Self::Scroll { .. } => tree_input_layout(layout),
             _ => Some(layout),
         }
     }
@@ -479,6 +498,24 @@ pub(super) fn append_control_targets<'a>(
     engine: Option<&Engine>,
     targets: &mut Vec<Target<'a>>,
 ) {
+    if let HostedControl::Tree {
+        path, search_path, ..
+    } = control
+    {
+        if let Some(layout) = tree_search_input_layout(layout) {
+            targets.push(Target::new(
+                search_path,
+                iced_interact::hit(layout.bounds(), cursor),
+            ));
+        }
+        if let Some(layout) = tree_input_layout(layout) {
+            targets.push(Target::new(
+                path,
+                iced_interact::hit(layout.bounds(), cursor),
+            ));
+        }
+        return;
+    }
     let Some(layout) = control.input_layout(layout) else {
         return;
     };
@@ -511,8 +548,19 @@ pub(super) fn append_control_descriptors(
         } => {
             descriptors.push(Descriptor::picker(path.clone(), *item_count, *selected));
         }
-        HostedControl::Scroll { path, config } => {
-            descriptors.push(Descriptor::scroll(path.clone(), *config));
+        HostedControl::Tree {
+            path,
+            query,
+            scroll,
+            search_layout,
+            search_path,
+        } => {
+            descriptors.push(Descriptor::text_input(
+                search_path.clone(),
+                query.clone(),
+                search_layout.clone(),
+            ));
+            descriptors.push(Descriptor::scroll(path.clone(), *scroll));
         }
         HostedControl::TrackList(track_list) => track_list.append_descriptors(descriptors),
         HostedControl::Fader {

@@ -366,13 +366,15 @@ already-expanded rows and columns into both strips. One mixer therefore owns one
 pointer-capture slot for its crossfader, knobs, and VUs; a captured drag in one strip remains
 exclusive while the pointer crosses the other strip.
 
-The engine carries eight component shapes in one `RetainedComponent` enum. `ScalarComponent` owns
+The engine carries nine component shapes in one `RetainedComponent` enum. `ScalarComponent` owns
 its resolved path, `Kind`, `Scalar`, and `ScalarState`; `ActivationComponent` owns a path, the
 pointer hover, and the stateless `click::on_input` gesture shared by Button, Toggle, and Checkbox;
 `CrossingComponent` owns the previous boundary state and preserves it across reconciliation so a
 view rebuild while still inside cannot publish a second entry;
 `SegmentedComponent` owns a path, item count, pointer hover, and the same stateless click gesture;
 the `ContextBar` picker shape owns the focusable index selection and its open/highlighted projection;
+`TextInputComponent` owns the focusable caret, selection, pointer drag, and current preedit, while
+retaining only a reconciled working mirror of the document query for applying sequential edits;
 `ScrollComponent` owns a path and the one mutable scroll offset, retains it across reconciliation,
 and refreshes row count, row height, and viewport extent without notifying the document;
 `ItemComponent` owns one list target, its document publisher, and the pressed row index;
@@ -401,7 +403,8 @@ second pressed-state channel merely for paint would create the parallel mutable 
 transition forbids.
 
 The interactive `canvas::Program` for a button, nav item, segmented control, fader, crossfader,
-knob, vertical VU, stereo meter, toggle, checkbox, tree, or wave is therefore not gone: `InputOwner`
+knob, vertical VU, stereo meter, toggle, checkbox, text input, tree, or wave is therefore not gone:
+`InputOwner`
 picks the paint-only variant for `InputOwner::Engine` only when the host has a matching descriptor,
 and the interactive variant answers everywhere else under `InputOwner::Leaf`. An effective SVG
 button or nav item is one deliberate example: it has no descriptor and remains an iced leaf until
@@ -423,7 +426,7 @@ preserves the app's `Delete` and `Backspace` shortcuts unless the focused contro
 them. Picker arrows may repeat, while held Enter and Space presses are inert until release or focus
 loss so native key repeat cannot alternate open and commit states. When engine focus is acquired,
 the host unfocuses iced descendants without replaying the press; ignored character or IME events
-therefore cannot edit a previously focused search field behind the popup. Answered picker pointer
+therefore cannot edit another focused descendant behind the popup. Answered picker pointer
 input is also reported as captured to iced, preventing click-through outside the hosted subtree.
 
 Module chrome remains iced-composed during this transition: its header `Row`, panel column, footer,
@@ -449,12 +452,11 @@ two activations for cue and play, four base-painted chip activations, one segmen
 status dots remain iced-answered controls, and unanswered input continues unchanged through the
 child.
 `gallery-library2-tab` mounts the engine-owned `ContextBar` scope picker. Its document-level hosted
-inventory is the vertical scroll at `library2/browser`, the picker at `library2/context`, and the
-track-list family at `library2/table`. The picker is not mounted by `gallery-tree-tab`:
-`gallery-tree-tab` has one scroll descriptor at `tree/browser`. Its retained row canvas and offset
-are engine-answered, while its widget-internal search input remains iced-answered. Tree search stays
-an iced `text_input`, including its text focus and IME behaviour; moving that editor onto the engine
-belongs to M6b.
+inventory starts with the text input at `library2/browser/search` and vertical scroll at
+`library2/browser`, followed by the picker at `library2/context` and the track-list family at
+`library2/table`. The picker is not mounted by `gallery-tree-tab`: `gallery-tree-tab` has the text
+input at `tree/browser/search` and scroll at `tree/browser`. The retained row canvas, offset, and
+search interaction are engine-answered.
 `gallery-faders-tab` has one descriptor kind for both configurations: the default fader has an
 optional drag step, the Volume fader keeps continuous drag plus its own wheel step, and the vertical
 VU keeps its scalar descriptor. The page's telemetry `Scalar` is an inert readout and is not hosted.
@@ -1159,6 +1161,24 @@ branch or selects a leaf. `TreeSkin` owns the search, row, indentation, panel, a
 metrics. `ContextBar` keeps breadcrumb text read-only; optional scope items use a separate Scalar
 read binding and emit `SelectIndex` on the control path so scope state remains host-owned.
 
+The search combines two ownership domains without merging them. The query is document-owned: each
+ordinary text edit and each native IME commit emits exactly one `UiEvent::LibraryQuery` containing
+the complete resulting query, and the next view reconciles that document value back into the
+component. The engine owns only per-control interaction state: caret, selection, pointer drag, and
+preedit. Moving the caret, extending the selection, or replacing or closing a preedit changes the
+paint projection and requests a redraw without emitting a `UiEvent`. Preedit is composition, not
+query text; only `InputMethod::Commit` applies it to the query and publishes. The component's query
+copy is a reconciled edit mirror for consecutive input packets, not a second canonical read.
+
+Text shaping and caret measurement come from the same Parley layout at UTF-8 grapheme boundaries.
+The painter uses local canvas coordinates, while the engine target carries iced's absolute
+window-client layout rectangle in logical pixels. Adding the local caret offset to that target
+origin produces the absolute logical rectangle passed through `Shell::request_input_method` on
+each redraw. The Leaf wrapper asks its local engine; an Engine-owned tree is answered by its outer
+host. The current preedit and its byte-range selection travel with that request, so `iced_winit`
+paints its over-the-spot text, selection, and underline at the reported caret. Composition is
+therefore answered rather than dropped, and the canvas does not paint a second preedit copy.
+
 Rows paint through `DrawListBuilder` inside one viewport clip. `InputOwner::Leaf` selects the
 interactive canvas program; `InputOwner::Engine` selects the paint-only program and receives a
 derived offset snapshot after host reconciliation and layout. The retained `ScrollComponent` is
@@ -1178,8 +1198,9 @@ offset. A wrong-axis delta or travel beyond either boundary returns `Ignored`, s
 to the next outer engine target and then unchanged to an unported iced ancestor. Consequently a
 movable vertical track-list body passes a horizontal wheel to its conditional horizontal parent;
 at the bottom a further downward wheel is ignored while an upward wheel is still consumed, and the
-same two-direction boundary rule holds for the horizontal axis. Search text editing remains
-iced-owned until M6b; hosting the row viewport does not intercept its keyboard or IME input.
+same two-direction boundary rule holds for the horizontal axis. Search keyboard and IME input route
+only to the focused text-input component; with focus elsewhere they remain ignored and can continue
+to the host shortcut layer.
 
 ## Application Consumer
 

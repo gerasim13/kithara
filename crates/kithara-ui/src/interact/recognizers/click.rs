@@ -8,7 +8,8 @@ use super::super::{Hit, Input, Outcome};
 pub(crate) fn on_input(input: Input<'_>, hit: &Hit) -> Outcome<()> {
     match input {
         Input::PointerDown if hit.over() => Outcome::set(()),
-        Input::KeyPressed { .. }
+        Input::InputMethod(_)
+        | Input::KeyPressed { .. }
         | Input::KeyReleased { .. }
         | Input::ModifiersChanged(_)
         | Input::PointerDown

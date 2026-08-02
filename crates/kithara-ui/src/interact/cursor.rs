@@ -8,6 +8,7 @@ pub(crate) enum CursorShape {
     Pointer,
     ResizeH,
     ResizeV,
+    Text,
 }
 
 #[derive(Clone, Copy)]

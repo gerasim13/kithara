@@ -10,7 +10,8 @@ impl Crossing {
         let over = match input {
             Input::PointerMoved { .. } => hit.over(),
             Input::PointerLeft => false,
-            Input::KeyPressed { .. }
+            Input::InputMethod(_)
+            | Input::KeyPressed { .. }
             | Input::KeyReleased { .. }
             | Input::ModifiersChanged(_)
             | Input::PointerDown

@@ -1,14 +1,11 @@
 use kithara_platform::time::Instant;
 
 use super::{
-    component::{PickerSnapshot, RetainedComponent},
+    component::{PickerSnapshot, RetainedComponent, TextInputSnapshot},
     model::{Descriptor, Emission, Kind, Target},
     router::Router,
 };
-use crate::{
-    draw::Rect,
-    interact::{CursorShape, Input},
-};
+use crate::interact::{CursorShape, Input, InputMethodRequest, Rect};
 
 #[derive(Default)]
 pub(crate) struct Engine {
@@ -69,6 +66,43 @@ impl Engine {
             .and_then(RetainedComponent::picker_snapshot)
     }
 
+    pub(crate) fn text_input_snapshot(&self, path: &str) -> Option<TextInputSnapshot> {
+        let focused = self.router.focused_path() == Some(path);
+        self.components
+            .iter()
+            .find(|component| component.path() == path && component.kind() == Kind::TextInput)
+            .and_then(|component| component.text_input_snapshot(focused))
+    }
+
+    pub(crate) fn text_input_snapshots(&self) -> Vec<(String, TextInputSnapshot)> {
+        let focused = self.router.focused_path();
+        self.components
+            .iter()
+            .filter_map(|component| {
+                component
+                    .text_input_snapshot(focused == Some(component.path()))
+                    .map(|snapshot| (component.path().to_owned(), snapshot))
+            })
+            .collect()
+    }
+
+    pub(crate) fn input_method<'a>(
+        &'a self,
+        targets: &[Target<'_>],
+    ) -> Option<InputMethodRequest<'a>> {
+        let path = self.router.focused_path()?;
+        let component = self
+            .components
+            .iter()
+            .find(|component| component.path() == path && component.kind() == Kind::TextInput)?;
+        let area = targets
+            .iter()
+            .find(|target| target.path == path)?
+            .hit
+            .area();
+        component.input_method(area)
+    }
+
     pub(crate) fn has_pressed_item(&self) -> bool {
         self.components
             .iter()
@@ -107,7 +141,7 @@ mod tests {
         draw::{Pt, Rect},
         engine::ScrollConfig,
         interact::{
-            Hit, Hover, Key, Modifiers, Outcome, Scroll, ScrollAxis,
+            Hit, Hover, InputMethod, Key, Modifiers, Outcome, Scroll, ScrollAxis, TextInputLayout,
             recognizers::{DragEvent, WheelStep},
         },
     };
@@ -127,6 +161,14 @@ mod tests {
         Descriptor::scroll(path.to_owned(), ScrollConfig::plain(axis, 200.0))
     }
 
+    fn text_input(path: &str, query: &str) -> Descriptor {
+        Descriptor::text_input(
+            path.to_owned(),
+            query.to_owned(),
+            TextInputLayout::new([(0, 4.0), (1, 14.0), (2, 30.0)], 3.0, 12.0, 12.0),
+        )
+    }
+
     fn target(path: &str, x: f32, y: f32) -> Target<'_> {
         Target::new(
             path,
@@ -137,6 +179,24 @@ mod tests {
                     w: 100.0,
                     x: 0.0,
                     y: 0.0,
+                },
+            ),
+        )
+    }
+
+    fn text_target(path: &str, x: f32, origin_x: f32, origin_y: f32) -> Target<'_> {
+        Target::new(
+            path,
+            Hit::new(
+                Some(Pt {
+                    x,
+                    y: origin_y + 8.0,
+                }),
+                Rect {
+                    h: 24.0,
+                    w: 100.0,
+                    x: origin_x,
+                    y: origin_y,
                 },
             ),
         )
@@ -184,6 +244,7 @@ mod tests {
         Input::KeyPressed {
             key,
             modifiers: Modifiers::default(),
+            text: None,
         }
     }
 
@@ -194,6 +255,22 @@ mod tests {
         }
     }
 
+    fn typed(text: &'static str) -> Input<'static> {
+        Input::KeyPressed {
+            key: Key::Character(text),
+            modifiers: Modifiers::default(),
+            text: Some(text),
+        }
+    }
+
+    fn shifted(key: Key<'static>) -> Input<'static> {
+        Input::KeyPressed {
+            key,
+            modifiers: Modifiers::new(false, false, false, true),
+            text: None,
+        }
+    }
+
     fn value(emission: Option<Emission>) -> Option<f64> {
         emission.and_then(|emission| match emission.outcome.value() {
             Some(EngineEvent::Scalar(value)) => Some(value),
@@ -201,7 +278,8 @@ mod tests {
                 EngineEvent::Activate
                 | EngineEvent::Crossing(_)
                 | EngineEvent::Index(_)
-                | EngineEvent::Drag { .. },
+                | EngineEvent::Drag { .. }
+                | EngineEvent::Text(_),
             )
             | None => None,
         })
@@ -349,8 +427,8 @@ mod tests {
             .unwrap_or_else(|| panic!("entering the drop zone must publish"));
         assert_eq!(enter.path, path);
         assert_eq!(enter.child, None);
-        assert_eq!(enter.outcome.value(), Some(EngineEvent::Crossing(true)));
         assert!(!enter.outcome.is_captured());
+        assert_eq!(enter.outcome.value(), Some(EngineEvent::Crossing(true)));
         assert!(!engine.captures_pointer());
 
         engine.reconcile([Descriptor::crossing(path.to_owned())]);
@@ -374,8 +452,8 @@ mod tests {
                 Instant::now(),
             )
             .unwrap_or_else(|| panic!("leaving the drop zone must publish"));
-        assert_eq!(leave.outcome.value(), Some(EngineEvent::Crossing(false)));
         assert!(!leave.outcome.is_captured());
+        assert_eq!(leave.outcome.value(), Some(EngineEvent::Crossing(false)));
         assert!(!engine.captures_pointer());
         assert!(
             engine
@@ -913,7 +991,8 @@ mod tests {
                         EngineEvent::Activate
                         | EngineEvent::Crossing(_)
                         | EngineEvent::Index(_)
-                        | EngineEvent::Drag { .. },
+                        | EngineEvent::Drag { .. }
+                        | EngineEvent::Text(_),
                     )
                     | None => None,
                 };
@@ -1337,6 +1416,210 @@ mod tests {
             )),
             Some(0.25)
         );
+    }
+
+    #[kithara::test]
+    fn focused_text_input_publishes_typing_but_not_caret_or_selection_changes() {
+        let mut engine = Engine::default();
+        let path = "library/search";
+        let now = Instant::now();
+        let at_end = text_target(path, 30.0, 0.0, 0.0);
+        engine.reconcile([text_input(path, "ab")]);
+        let focused = engine
+            .handle(Input::PointerDown, &[at_end], now)
+            .unwrap_or_else(|| panic!("pressing the text input must focus it"));
+        assert_eq!(focused.outcome, Outcome::captured());
+
+        let moved = engine
+            .handle(key_pressed(Key::ArrowLeft), &[at_end], now)
+            .unwrap_or_else(|| panic!("moving the focused caret must be consumed"));
+        assert_eq!(moved.outcome, Outcome::captured());
+        let selected = engine
+            .handle(shifted(Key::ArrowLeft), &[at_end], now)
+            .unwrap_or_else(|| panic!("extending the focused selection must be consumed"));
+        assert_eq!(selected.outcome, Outcome::captured());
+        assert_eq!(
+            engine.text_input_snapshot(path),
+            Some(TextInputSnapshot {
+                caret: 0,
+                focused: true,
+                preedit: None,
+                selection: Some(0..1),
+            })
+        );
+
+        let _ = engine.handle(Input::PointerDown, &[at_end], now);
+        let first = engine
+            .handle(typed("x"), &[at_end], now)
+            .unwrap_or_else(|| panic!("ordinary typing must publish the resulting query"));
+        assert_eq!(
+            first.outcome,
+            Outcome::set(EngineEvent::Text("abx".to_owned()))
+        );
+        let second = engine
+            .handle(typed("y"), &[at_end], now)
+            .unwrap_or_else(|| panic!("each ordinary key must publish the next query"));
+        assert_eq!(
+            second.outcome,
+            Outcome::set(EngineEvent::Text("abxy".to_owned()))
+        );
+        let backspaced = engine
+            .handle(key_pressed(Key::Backspace), &[at_end], now)
+            .unwrap_or_else(|| panic!("backspace must edit the current working query"));
+        assert_eq!(
+            backspaced.outcome,
+            Outcome::set(EngineEvent::Text("abx".to_owned()))
+        );
+    }
+
+    #[kithara::test]
+    fn text_input_keeps_the_caret_on_a_merged_grapheme_boundary() {
+        let mut engine = Engine::default();
+        let path = "library/search";
+        let now = Instant::now();
+        let at_start = text_target(path, 4.0, 0.0, 0.0);
+        engine.reconcile([Descriptor::text_input(
+            path.to_owned(),
+            "🇧".to_owned(),
+            TextInputLayout::new([(0, 4.0), (4, 20.0)], 3.0, 12.0, 12.0),
+        )]);
+        let _ = engine.handle(Input::PointerDown, &[at_start], now);
+
+        let inserted = engine
+            .handle(typed("🇦"), &[at_start], now)
+            .unwrap_or_else(|| panic!("typing must publish the merged flag grapheme"));
+        assert_eq!(
+            inserted.outcome,
+            Outcome::set(EngineEvent::Text("🇦🇧".to_owned()))
+        );
+        assert_eq!(
+            engine
+                .text_input_snapshot(path)
+                .map(|snapshot| snapshot.caret),
+            Some(8)
+        );
+
+        let backspaced = engine
+            .handle(key_pressed(Key::Backspace), &[at_start], now)
+            .unwrap_or_else(|| panic!("backspace must remove the whole merged grapheme"));
+        assert_eq!(
+            backspaced.outcome,
+            Outcome::set(EngineEvent::Text(String::new()))
+        );
+    }
+
+    #[kithara::test]
+    fn text_input_preedit_replaces_silently_and_commit_publishes_once() {
+        let mut engine = Engine::default();
+        let path = "library/search";
+        let now = Instant::now();
+        let at_end = text_target(path, 30.0, 0.0, 0.0);
+        engine.reconcile([text_input(path, "ab")]);
+        let _ = engine.handle(Input::PointerDown, &[at_end], now);
+
+        for input in [
+            Input::InputMethod(InputMethod::Preedit {
+                content: "かな",
+                selection: Some((0, 3)),
+            }),
+            Input::InputMethod(InputMethod::Preedit {
+                content: "日本",
+                selection: Some((3, 6)),
+            }),
+        ] {
+            let preedit = engine
+                .handle(input, &[at_end], now)
+                .unwrap_or_else(|| panic!("preedit changes must be answered"));
+            assert_eq!(preedit.outcome, Outcome::captured());
+        }
+        let snapshot = engine
+            .text_input_snapshot(path)
+            .unwrap_or_else(|| panic!("composition must remain engine-owned"));
+        let preedit = snapshot
+            .preedit
+            .unwrap_or_else(|| panic!("the latest preedit must be retained"));
+        assert_eq!(preedit.content, "日本");
+        assert_eq!(preedit.selection, Some(3..6));
+
+        let committed = engine
+            .handle(
+                Input::InputMethod(InputMethod::Commit("日")),
+                &[at_end],
+                now,
+            )
+            .unwrap_or_else(|| panic!("commit must publish the resulting query"));
+        assert_eq!(
+            committed.outcome,
+            Outcome::set(EngineEvent::Text("ab日".to_owned()))
+        );
+        assert!(
+            engine
+                .text_input_snapshot(path)
+                .is_some_and(|snapshot| snapshot.preedit.is_none())
+        );
+    }
+
+    #[kithara::test]
+    fn text_input_reports_absolute_logical_caret_rect_at_two_positions() {
+        let mut engine = Engine::default();
+        let path = "library/search";
+        let now = Instant::now();
+        let first = text_target(path, 44.0, 40.0, 20.0);
+        engine.reconcile([text_input(path, "ab")]);
+        let _ = engine.handle(Input::PointerDown, &[first], now);
+        let first_caret = engine
+            .input_method(&[first])
+            .unwrap_or_else(|| panic!("focused input must enable the input method"))
+            .caret;
+
+        let last = text_target(path, 70.0, 40.0, 20.0);
+        let _ = engine.handle(Input::PointerDown, &[last], now);
+        let last_caret = engine
+            .input_method(&[last])
+            .unwrap_or_else(|| panic!("moving the caret must update its rectangle"))
+            .caret;
+
+        assert_eq!(
+            first_caret,
+            Rect {
+                x: 44.0,
+                y: 23.0,
+                w: 1.0,
+                h: 12.0
+            }
+        );
+        assert_eq!(
+            last_caret,
+            Rect {
+                x: 70.0,
+                y: 23.0,
+                w: 1.0,
+                h: 12.0
+            }
+        );
+    }
+
+    #[kithara::test]
+    fn text_input_owns_delete_and_backspace_only_while_focused() {
+        let path = "library/search";
+        let now = Instant::now();
+
+        for key in [Key::Delete, Key::Backspace] {
+            let mut engine = Engine::default();
+            let at_end = text_target(path, 30.0, 0.0, 0.0);
+            engine.reconcile([text_input(path, "ab")]);
+            assert!(engine.handle(key_pressed(key), &[at_end], now).is_none());
+
+            let _ = engine.handle(Input::PointerDown, &[at_end], now);
+            let emission = engine
+                .handle(key_pressed(key), &[at_end], now)
+                .unwrap_or_else(|| panic!("focused text input must consume {key:?}"));
+            assert!(emission.outcome.is_captured());
+            assert!(matches!(
+                emission.outcome.value(),
+                Some(EngineEvent::Text(_))
+            ));
+        }
     }
 
     #[kithara::test]

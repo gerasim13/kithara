@@ -5,11 +5,13 @@ pub(crate) enum Input<'a> {
     KeyPressed {
         key: Key<'a>,
         modifiers: Modifiers,
+        text: Option<&'a str>,
     },
     KeyReleased {
         key: Key<'a>,
         modifiers: Modifiers,
     },
+    InputMethod(InputMethod<'a>),
     ModifiersChanged(Modifiers),
     PointerDown,
     /// `at` is where the host says the pointer went. It answers a different
@@ -29,14 +31,29 @@ pub(crate) enum Input<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Key<'a> {
     ArrowDown,
+    ArrowLeft,
+    ArrowRight,
     ArrowUp,
     Backspace,
     Delete,
+    End,
     Enter,
     Escape,
+    Home,
     Space,
     Character(&'a str),
     Other,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum InputMethod<'a> {
+    Opened,
+    Preedit {
+        content: &'a str,
+        selection: Option<(usize, usize)>,
+    },
+    Commit(&'a str),
+    Closed,
 }
 
 #[derive(Clone, Copy, Default, Eq, PartialEq)]

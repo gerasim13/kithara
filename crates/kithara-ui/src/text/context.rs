@@ -1,10 +1,17 @@
 use std::borrow::Cow;
 
+#[cfg(feature = "render")]
+use num_traits::cast::AsPrimitive;
+#[cfg(feature = "render")]
+use parley::layout::{Affinity, Cursor};
 use parley::{
     FontContext, LayoutContext, PositionedLayoutItem, StyleProperty,
     fontique::SourceCache,
+    layout::Layout,
     style::{FontFamily as ParleyFamily, FontWeight as ParleyWeight},
 };
+#[cfg(feature = "render")]
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::{
     FontId, FontPolicy, Glyph, GlyphRun, GlyphSegment, TextError, TextResources,
@@ -96,7 +103,45 @@ impl TextContext {
         )
     }
 
+    #[cfg(feature = "render")]
+    pub(crate) fn shape_input(
+        &mut self,
+        content: &str,
+        role: TextRoleSkin,
+    ) -> (GlyphRun, Vec<(usize, f32)>) {
+        let style = FaceStyle {
+            font: select(role.font, role.weight),
+            size: role.size,
+            spacing: role.spacing,
+            weight: role.weight,
+        };
+        let layout = self.build_layout(content, style, None);
+        let carets = content
+            .grapheme_indices(true)
+            .map(|(index, _)| index)
+            .chain(std::iter::once(content.len()))
+            .map(|index| {
+                let cursor = Cursor::from_byte_index(&layout, index, Affinity::Downstream);
+                (
+                    index,
+                    AsPrimitive::<f32>::as_(cursor.geometry(&layout, 1.0).x0),
+                )
+            })
+            .collect();
+        (self.glyph_run(&layout, style), carets)
+    }
+
     fn shape_run(&mut self, content: &str, style: FaceStyle, max_width: Option<f32>) -> GlyphRun {
+        let layout = self.build_layout(content, style, max_width);
+        self.glyph_run(&layout, style)
+    }
+
+    fn build_layout(
+        &mut self,
+        content: &str,
+        style: FaceStyle,
+        max_width: Option<f32>,
+    ) -> Layout<()> {
         let mut builder = self
             .layout
             .ranged_builder(&mut self.fonts, content, 1.0, false);
@@ -106,7 +151,10 @@ impl TextContext {
         builder.push_default(StyleProperty::LetterSpacing(style.spacing * style.size));
         let mut layout = builder.build(content);
         layout.break_all_lines(max_width);
+        layout
+    }
 
+    fn glyph_run(&self, layout: &Layout<()>, style: FaceStyle) -> GlyphRun {
         let mut segments = Vec::new();
         for line in layout.lines() {
             for item in line.items() {

@@ -5,5 +5,5 @@ mod router;
 
 pub(crate) use core::Engine;
 
-pub(crate) use component::{PickerSnapshot, ScrollState, scalar_value};
+pub(crate) use component::{PickerSnapshot, ScrollState, TextInputSnapshot, scalar_value};
 pub(crate) use model::{Descriptor, EngineEvent, ScrollConfig, Target};

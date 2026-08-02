@@ -146,7 +146,12 @@ impl PickerComponent {
                 Outcome::captured()
             }
             Key::Backspace | Key::Delete => Outcome::captured(),
-            Key::Character(_) | Key::Other => Outcome::IGNORED,
+            Key::ArrowLeft
+            | Key::ArrowRight
+            | Key::Character(_)
+            | Key::End
+            | Key::Home
+            | Key::Other => Outcome::IGNORED,
         }
     }
 
@@ -180,7 +185,8 @@ impl Component for PickerComponent {
         let outcome = match input {
             Input::PointerDown => self.pointer_down(hit, index),
             Input::PointerMoved { .. } => self.pointer_moved(hit, index),
-            Input::KeyPressed { .. }
+            Input::InputMethod(_)
+            | Input::KeyPressed { .. }
             | Input::KeyReleased { .. }
             | Input::ModifiersChanged(_)
             | Input::PointerLeft
@@ -192,9 +198,10 @@ impl Component for PickerComponent {
 
     fn handle_key(&mut self, input: Input<'_>) -> (Outcome<EngineEvent>, Option<&'static str>) {
         let outcome = match input {
-            Input::KeyPressed { key, modifiers } => self.key_pressed(key, modifiers),
+            Input::KeyPressed { key, modifiers, .. } => self.key_pressed(key, modifiers),
             Input::KeyReleased { key, modifiers } => self.key_released(key, modifiers),
-            Input::ModifiersChanged(_)
+            Input::InputMethod(_)
+            | Input::ModifiersChanged(_)
             | Input::PointerDown
             | Input::PointerMoved { .. }
             | Input::PointerLeft

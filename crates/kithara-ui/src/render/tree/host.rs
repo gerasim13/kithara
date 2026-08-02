@@ -23,8 +23,8 @@ use crate::{
     render::{
         Reads, Skin, UiEvent,
         controls::sync_tree_scroll,
-        engine as engine_event, picker_option_bounds, sync_picker, sync_track_list_scroll,
-        toggle_module,
+        engine as engine_event, picker_option_bounds, sync_picker, sync_text_input,
+        sync_track_list_scroll, toggle_module,
         tree::control::{HostedControl, append_control_descriptors, append_control_targets},
     },
     size::{Hidden, is_hidden},
@@ -155,6 +155,13 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
             &self.layout,
             &state.engine,
         );
+        sync_text_inputs(
+            &mut self.child,
+            &mut tree.children[0],
+            child_layout,
+            renderer,
+            &state.engine,
+        );
         node
     }
 
@@ -174,7 +181,8 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
         let focus_before = state.engine.focused_path().map(ToOwned::to_owned);
         let item_was_pressed = state.engine.has_pressed_item();
         let picker_before = self.layout.picker_snapshots(&state.engine);
-        let (captured, scroll_captured, picker_pointer_captured) = if let Some(input) = input {
+        let text_before = state.engine.text_input_snapshots();
+        let (captured, scroll_captured, control_pointer_captured) = if let Some(input) = input {
             let targets = self
                 .layout
                 .targets_with_engine(layout, cursor, Some(&state.engine));
@@ -183,13 +191,13 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
                 let scroll_captured = captured
                     && matches!(input, Input::Wheel(_))
                     && state.engine.scroll_offset(&emission.path).is_some();
-                let picker_pointer_captured = captured
-                    && matches!(input, Input::PointerDown | Input::PointerMoved { .. })
-                    && state.engine.picker_snapshot(&emission.path).is_some();
-                let action = self.layout.header_module(&emission.path).map_or_else(
-                    || engine_event(&emission.path, emission.child, emission.outcome),
-                    |module| toggle_module(module, emission.outcome.map(|_| ())),
-                );
+                let control_pointer_captured =
+                    control_pointer_answered(&state.engine, input, &emission.path, captured);
+                let action = if let Some(module) = self.layout.header_module(&emission.path) {
+                    toggle_module(module, emission.outcome.map(|_| ()))
+                } else {
+                    engine_event(&emission.path, emission.child, emission.outcome)
+                };
                 if let Some(action) = action {
                     let (message, redraw_request, _) = action.into_inner();
                     shell.request_redraw_at(redraw_request);
@@ -197,7 +205,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
                         shell.publish(message);
                     }
                 }
-                (captured, scroll_captured, picker_pointer_captured)
+                (captured, scroll_captured, control_pointer_captured)
             } else {
                 (false, false, false)
             }
@@ -230,6 +238,8 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
         let item_projection_changed = item_was_pressed || state.engine.has_pressed_item();
         let picker_after = self.layout.picker_snapshots(&state.engine);
         let picker_projection_changed = picker_before != picker_after;
+        let text_after = state.engine.text_input_snapshots();
+        let text_projection_changed = text_before != text_after;
         let picker_overlay_needs_rebuild = captured
             && matches!(
                 input,
@@ -240,6 +250,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
             || item_projection_changed
             || picker_projection_changed
             || picker_overlay_needs_rebuild
+            || text_projection_changed
         {
             let targets = self.layout.targets_with_engine(
                 layout,
@@ -264,6 +275,15 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
                     &state.engine,
                 );
             }
+            if text_projection_changed {
+                sync_text_inputs(
+                    &mut self.child,
+                    &mut tree.children[0],
+                    layout,
+                    renderer,
+                    &state.engine,
+                );
+            }
             if picker_projection_changed || picker_overlay_needs_rebuild {
                 shell.invalidate_layout();
             }
@@ -273,10 +293,18 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
             input,
             captured,
             scroll_captured,
-            picker_pointer_captured,
+            control_pointer_captured,
             state.engine.captures_pointer(),
         ) {
             shell.capture_event();
+        }
+
+        if matches!(event, Event::Window(window::Event::RedrawRequested(_))) {
+            let targets = self
+                .layout
+                .targets_with_engine(layout, cursor, Some(&state.engine));
+            let request = iced_interact::input_method(state.engine.input_method(&targets));
+            shell.request_input_method(&request);
         }
 
         if shell.redraw_request() != window::RedrawRequest::NextFrame {
@@ -423,6 +451,21 @@ fn sync_pickers(
     }
 }
 
+fn sync_text_inputs(
+    child: &mut Element<'_, UiEvent>,
+    tree: &mut Tree,
+    layout: Layout<'_>,
+    renderer: &Renderer,
+    engine: &Engine,
+) {
+    for (path, snapshot) in engine.text_input_snapshots() {
+        let mut sync = sync_text_input(&path, snapshot);
+        child
+            .as_widget_mut()
+            .operate(tree, layout, renderer, &mut sync);
+    }
+}
+
 fn interaction(
     engine: &Engine,
     layout_tree: &HostedLayout,
@@ -459,13 +502,13 @@ fn captures_event(
     input: Option<Input<'_>>,
     answered: bool,
     scroll_answered: bool,
-    picker_pointer_answered: bool,
+    control_pointer_answered: bool,
     pointer_captured: bool,
 ) -> bool {
-    let keyboard_answered = answered
+    let routed_answered = answered
         && matches!(
             input,
-            Some(Input::KeyPressed { .. } | Input::KeyReleased { .. })
+            Some(Input::InputMethod(_) | Input::KeyPressed { .. } | Input::KeyReleased { .. })
         );
     let pointer_retained = pointer_captured
         && matches!(
@@ -477,7 +520,16 @@ fn captures_event(
                     | Input::PointerUp
             )
         );
-    scroll_answered || keyboard_answered || picker_pointer_answered || pointer_retained
+    scroll_answered || routed_answered || control_pointer_answered || pointer_retained
+}
+
+fn control_pointer_answered(engine: &Engine, input: Input<'_>, path: &str, answered: bool) -> bool {
+    answered
+        && matches!(
+            input,
+            Input::PointerDown | Input::PointerMoved { .. } | Input::PointerUp
+        )
+        && (engine.picker_snapshot(path).is_some() || engine.text_input_snapshot(path).is_some())
 }
 
 enum HostedLayout {
@@ -809,6 +861,12 @@ pub(super) fn tree_input_layout(layout: Layout<'_>) -> Option<Layout<'_>> {
     first_child(panel)
 }
 
+pub(super) fn tree_search_input_layout(layout: Layout<'_>) -> Option<Layout<'_>> {
+    let search = layout.children().next()?;
+    let row = first_child(search)?;
+    row.children().nth(1)
+}
+
 pub(super) fn picker_input_layout(layout: Layout<'_>) -> Option<Layout<'_>> {
     let content = first_child(layout)?;
     let row = first_child(content)?;
@@ -851,8 +909,9 @@ mod tests {
     use iced::{
         Pixels, Point, Rectangle, Size,
         advanced::{
-            clipboard,
+            InputMethod as IcedInputMethod, clipboard,
             graphics::text::font_system,
+            input_method,
             layout::{Layout, Limits},
             widget::{Tree, tree::Tag},
         },
@@ -862,6 +921,7 @@ mod tests {
         },
         mouse::{self, Button, Cursor},
         widget::{Space, container, mouse_area},
+        window,
     };
     use iced_renderer::fallback::Renderer as FallbackRenderer;
     use iced_tiny_skia::Renderer as TinySkiaRenderer;
@@ -889,6 +949,10 @@ mod tests {
         source::{MemResolver, UiConfig},
         widgets::{DropZone, ModuleChrome, Widget, wheel::WheelSurface},
     };
+
+    fn redraw_event() -> Event {
+        Event::Window(window::Event::RedrawRequested(iced::time::Instant::now()))
+    }
 
     struct Fixtures {
         track_rows: [TrackRow<'static>; 9],
@@ -1021,6 +1085,7 @@ mod tests {
     struct FixtureReads {
         gain: f64,
         progress: f64,
+        query: String,
     }
 
     impl Default for FixtureReads {
@@ -1028,6 +1093,7 @@ mod tests {
             Self {
                 gain: 0.5,
                 progress: 0.75,
+                query: String::new(),
             }
         }
     }
@@ -1052,7 +1118,7 @@ mod tests {
                 "mock.cells.segmented" => Some(ReadValue::Scalar(2.0)),
                 "gallery.tracklist.preset" | "library.scope" => Some(ReadValue::Scalar(0.0)),
                 "library.breadcrumb" => Some(ReadValue::Text("All Tracks")),
-                "library.query" => Some(ReadValue::Text("")),
+                "library.query" => Some(ReadValue::Text(&self.query)),
                 "library.visible_tracks" => Some(ReadValue::TrackList(&FIXTURES.track_rows)),
                 "library.tree" => Some(ReadValue::Tree(&FIXTURES.tree_rows)),
                 "gallery.label.meters" => Some(ReadValue::Text("VU / STEREO / VERTICAL")),
@@ -1493,6 +1559,7 @@ mod tests {
                     });
                 }
                 ControlSpec::Tree { .. } => {
+                    components.push("text-input");
                     components.push("scroll");
                 }
                 _ => {}
@@ -1507,6 +1574,7 @@ mod tests {
             | Descriptor::Crossing { path }
             | Descriptor::Segmented { path, .. }
             | Descriptor::Picker { path, .. }
+            | Descriptor::TextInput { path, .. }
             | Descriptor::Scroll { path, .. }
             | Descriptor::ColumnDivider { path, .. }
             | Descriptor::Fader { path, .. }
@@ -1768,6 +1836,7 @@ mod tests {
             let input = Some(Input::KeyPressed {
                 key,
                 modifiers: Modifiers::default(),
+                text: None,
             });
             assert!(
                 captures_event(input, true, false, false, false),
@@ -1781,7 +1850,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn answered_picker_pointer_input_is_reported_captured_to_the_host() {
+    fn answered_control_pointer_input_is_reported_captured_to_the_host() {
         assert!(captures_event(
             Some(Input::PointerDown),
             true,
@@ -1793,6 +1862,13 @@ mod tests {
             Some(Input::PointerMoved {
                 at: Pt { x: 1.0, y: 1.0 },
             }),
+            true,
+            false,
+            true,
+            false,
+        ));
+        assert!(captures_event(
+            Some(Input::PointerUp),
             true,
             false,
             true,
@@ -1883,10 +1959,19 @@ mod tests {
         let descriptors = hosted.descriptors();
         assert!(matches!(
             descriptors.as_slice(),
-            [Descriptor::Scroll {
-                path,
-                config,
-            }] if path == "tree/browser"
+            [
+                Descriptor::TextInput {
+                    path: search_path,
+                    query,
+                    ..
+                },
+                Descriptor::Scroll {
+                    path,
+                    config,
+                },
+            ] if search_path == "tree/browser/search"
+                && query.is_empty()
+                && path == "tree/browser"
                 && *config == ScrollConfig::items(
                     ScrollAxis::Vertical,
                     192.0,
@@ -1897,9 +1982,11 @@ mod tests {
                 )
         ));
         let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
-        let [target] = targets.as_slice() else {
-            panic!("the tree document must expose exactly its scroll viewport");
+        let [search, target] = targets.as_slice() else {
+            panic!("the tree document must expose its search input and scroll viewport");
         };
+        assert_eq!(search.path, "tree/browser/search");
+        assert_eq!(target.path, "tree/browser");
         let area = target.hit.area();
         let cursor = Cursor::Available(Point::new(area.x + area.w / 2.0, area.y + area.h / 2.0));
         let mut clipboard = clipboard::Null;
@@ -3005,7 +3092,7 @@ mod tests {
         assert_eq!(ui.resolve(*module), "gallery-library2-tab");
         let mut components = Vec::new();
         claimed_components(root, &mut components);
-        assert_eq!(components, ["scroll", "picker", "track-list"]);
+        assert_eq!(components, ["text-input", "scroll", "picker", "track-list"]);
 
         let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
         let full_tree = Tree::new(full.as_widget());
@@ -3037,6 +3124,7 @@ mod tests {
         assert_eq!(
             descriptors.iter().map(descriptor_path).collect::<Vec<_>>(),
             [
+                "library2/browser/search",
                 "library2/browser",
                 "library2/context",
                 "library2/table/scroll-x",
@@ -3049,7 +3137,7 @@ mod tests {
             ]
         );
         assert!(matches!(
-            &descriptors[1],
+            &descriptors[2],
             Descriptor::Picker {
                 path,
                 item_count: 2,
@@ -3061,6 +3149,7 @@ mod tests {
         assert_eq!(
             targets.iter().map(|target| target.path).collect::<Vec<_>>(),
             [
+                "library2/browser/search",
                 "library2/browser",
                 "library2/context",
                 "library2/table",
@@ -3078,7 +3167,7 @@ mod tests {
         assert_eq!(picker.hit.area().h, builtin::skin().tree.scope_item_height);
         assert_eq!(
             active_descriptors(&hosted, &targets).len(),
-            8,
+            9,
             "the non-overflowing table omits only its horizontal scroll descriptor"
         );
 
@@ -3088,15 +3177,28 @@ mod tests {
         let viewport_bounds = Rectangle::with_size(viewport);
         let mut clipboard = clipboard::Null;
         let mut messages = Vec::new();
-        let browser = targets[0].hit.area();
+        let search = targets[0].hit.area();
+        let browser = targets[1].hit.area();
         let search_cursor = Cursor::Available(Point::new(
-            browser.x + browser.w / 2.0,
-            browser.y - builtin::skin().tree.search_height / 2.0,
+            search.x + search.w / 2.0,
+            search.y + search.h / 2.0,
         ));
         let mut shell = Shell::new(&mut messages);
         element.as_widget_mut().update(
             &mut tree,
             &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            Layout::new(&node),
+            search_cursor,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &viewport_bounds,
+        );
+        drop(shell);
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::ButtonReleased(Button::Left)),
             Layout::new(&node),
             search_cursor,
             &renderer,
@@ -3160,7 +3262,7 @@ mod tests {
         drop(shell);
         assert!(
             messages.is_empty(),
-            "engine focus must unfocus the iced search editor before ignored text is forwarded"
+            "picker focus must keep ignored text away from the search document"
         );
         assert!(
             element
@@ -3372,6 +3474,329 @@ mod tests {
                 !shell.is_event_captured(),
                 "a key with engine focus elsewhere must reach the app as Ignored"
             );
+        }
+    }
+
+    #[kithara::test]
+    fn hosted_search_reports_two_carets_and_forwards_replacing_preedit_until_one_commit() {
+        let ui = compiled_gallery_library();
+        let reads = FixtureReads {
+            query: "ab".to_owned(),
+            ..FixtureReads::default()
+        };
+        let CompiledNode::Module { instance, root, .. } = &ui.root else {
+            panic!("gallery library fixture root must be a module");
+        };
+        let renderer = headless_renderer();
+        let viewport = Size::new(900.0, 600.0);
+        let viewport_bounds = Rectangle::with_size(viewport);
+        let child = super::super::node::render_engine_node(
+            root,
+            &[],
+            *instance,
+            &ui,
+            &reads,
+            builtin::skin(),
+        );
+        let mut element = host(child, root, &ui, &reads, builtin::skin());
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let search = targets
+            .iter()
+            .find(|target| target.path == "library2/browser/search")
+            .map_or_else(
+                || panic!("the search target must exist"),
+                |target| target.hit.area(),
+            );
+        let first_position = Point::new(
+            search.x + builtin::skin().tree.search_padding_x,
+            search.y + search.h / 2.0,
+        );
+        let first_pointer = Cursor::Available(first_position);
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+
+        for event in [
+            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)),
+        ] {
+            let mut shell = Shell::new(&mut messages);
+            element.as_widget_mut().update(
+                &mut tree,
+                &event,
+                Layout::new(&node),
+                first_pointer,
+                &renderer,
+                &mut clipboard,
+                &mut shell,
+                &viewport_bounds,
+            );
+            assert!(
+                shell.is_event_captured(),
+                "the hosted search must retain both pointer press and release"
+            );
+        }
+
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &redraw_event(),
+            Layout::new(&node),
+            Cursor::Unavailable,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &viewport_bounds,
+        );
+        let first_caret = match shell.input_method() {
+            IcedInputMethod::Enabled {
+                cursor,
+                preedit: None,
+                ..
+            } => *cursor,
+            request => panic!("focused search must enable IME without preedit: {request:?}"),
+        };
+        assert_eq!(
+            first_caret.x,
+            search.x + builtin::skin().tree.search_padding_x.floor()
+        );
+        drop(shell);
+
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &key_event(Named::ArrowRight, Code::ArrowRight),
+            Layout::new(&node),
+            Cursor::Unavailable,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &viewport_bounds,
+        );
+        assert!(shell.is_event_captured());
+        drop(shell);
+        assert!(messages.is_empty(), "caret movement must not publish");
+
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &redraw_event(),
+            Layout::new(&node),
+            Cursor::Unavailable,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &viewport_bounds,
+        );
+        let second_caret = match shell.input_method() {
+            IcedInputMethod::Enabled { cursor, .. } => *cursor,
+            IcedInputMethod::Disabled => panic!("moved caret must keep IME enabled"),
+        };
+        assert!(second_caret.x > first_caret.x);
+        assert_eq!(second_caret.y, first_caret.y);
+        drop(shell);
+
+        let shifted_right = Event::Keyboard(keyboard::Event::KeyPressed {
+            key: keyboard::Key::Named(Named::ArrowRight),
+            modified_key: keyboard::Key::Named(Named::ArrowRight),
+            physical_key: Physical::Code(Code::ArrowRight),
+            location: Location::Standard,
+            modifiers: IcedModifiers::SHIFT,
+            text: None,
+            repeat: false,
+        });
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &shifted_right,
+            Layout::new(&node),
+            Cursor::Unavailable,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &viewport_bounds,
+        );
+        assert!(shell.is_event_captured());
+        assert_ne!(shell.redraw_request(), window::RedrawRequest::Wait);
+        drop(shell);
+        assert!(messages.is_empty(), "selection changes must not publish");
+        assert_eq!(
+            tree.state
+                .downcast_ref::<State>()
+                .engine
+                .text_input_snapshot("library2/browser/search")
+                .and_then(|snapshot| snapshot.selection),
+            Some(1..2)
+        );
+
+        for event in [
+            input_method::Event::Preedit("かな".to_owned(), Some(0..3)),
+            input_method::Event::Preedit("日本".to_owned(), Some(3..6)),
+        ] {
+            let mut shell = Shell::new(&mut messages);
+            element.as_widget_mut().update(
+                &mut tree,
+                &Event::InputMethod(event),
+                Layout::new(&node),
+                Cursor::Unavailable,
+                &renderer,
+                &mut clipboard,
+                &mut shell,
+                &viewport_bounds,
+            );
+            assert!(shell.is_event_captured());
+        }
+        assert!(messages.is_empty(), "preedit replacement must not publish");
+
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &redraw_event(),
+            Layout::new(&node),
+            Cursor::Unavailable,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &viewport_bounds,
+        );
+        match shell.input_method() {
+            IcedInputMethod::Enabled {
+                cursor,
+                preedit: Some(preedit),
+                ..
+            } => {
+                assert_eq!(*cursor, second_caret);
+                assert_eq!(preedit.content, "日本");
+                assert_eq!(preedit.selection, Some(3..6));
+            }
+            request => panic!("latest preedit must reach iced at the caret: {request:?}"),
+        }
+        drop(shell);
+
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::InputMethod(input_method::Event::Commit("日".to_owned())),
+            Layout::new(&node),
+            Cursor::Unavailable,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &viewport_bounds,
+        );
+        assert!(shell.is_event_captured());
+        drop(shell);
+        assert_eq!(messages, [UiEvent::LibraryQuery("a日".to_owned())]);
+        assert!(
+            tree.state
+                .downcast_ref::<State>()
+                .engine
+                .text_input_snapshot("library2/browser/search")
+                .is_some_and(|snapshot| snapshot.preedit.is_none())
+        );
+    }
+
+    #[kithara::test]
+    fn hosted_search_owns_delete_and_backspace_only_after_focus() {
+        let ui = compiled_gallery_library();
+        let reads = FixtureReads {
+            query: "ab".to_owned(),
+            ..FixtureReads::default()
+        };
+        let CompiledNode::Module { instance, root, .. } = &ui.root else {
+            panic!("gallery library fixture root must be a module");
+        };
+        let renderer = headless_renderer();
+        let viewport = Size::new(900.0, 600.0);
+        let viewport_bounds = Rectangle::with_size(viewport);
+        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+
+        for (key, code) in [
+            (Named::Delete, Code::Delete),
+            (Named::Backspace, Code::Backspace),
+        ] {
+            let child = super::super::node::render_engine_node(
+                root,
+                &[],
+                *instance,
+                &ui,
+                &reads,
+                builtin::skin(),
+            );
+            let mut element = host(child, root, &ui, &reads, builtin::skin());
+            let mut tree = Tree::new(element.as_widget());
+            let node = element.as_widget_mut().layout(
+                &mut tree,
+                &renderer,
+                &Limits::new(Size::ZERO, viewport),
+            );
+            let search = hosted
+                .targets(Layout::new(&node), Cursor::Unavailable)
+                .into_iter()
+                .find(|target| target.path == "library2/browser/search")
+                .map_or_else(
+                    || panic!("the search target must exist"),
+                    |target| target.hit.area(),
+                );
+            let mut clipboard = clipboard::Null;
+            let mut messages = Vec::new();
+
+            let mut shell = Shell::new(&mut messages);
+            element.as_widget_mut().update(
+                &mut tree,
+                &key_event(key, code),
+                Layout::new(&node),
+                Cursor::Unavailable,
+                &renderer,
+                &mut clipboard,
+                &mut shell,
+                &viewport_bounds,
+            );
+            assert!(!shell.is_event_captured());
+            drop(shell);
+
+            let pointer = Cursor::Available(Point::new(
+                search.x + search.w - 1.0,
+                search.y + search.h / 2.0,
+            ));
+            for event in [
+                Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+                Event::Mouse(mouse::Event::ButtonReleased(Button::Left)),
+            ] {
+                let mut shell = Shell::new(&mut messages);
+                element.as_widget_mut().update(
+                    &mut tree,
+                    &event,
+                    Layout::new(&node),
+                    pointer,
+                    &renderer,
+                    &mut clipboard,
+                    &mut shell,
+                    &viewport_bounds,
+                );
+            }
+            messages.clear();
+
+            let mut shell = Shell::new(&mut messages);
+            element.as_widget_mut().update(
+                &mut tree,
+                &key_event(key, code),
+                Layout::new(&node),
+                Cursor::Unavailable,
+                &renderer,
+                &mut clipboard,
+                &mut shell,
+                &viewport_bounds,
+            );
+            assert!(shell.is_event_captured());
+            drop(shell);
+            assert_eq!(messages.len(), 1, "focused {key:?} must publish once");
         }
     }
 

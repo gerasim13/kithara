@@ -146,7 +146,8 @@ impl Scalar {
                 let value = wheel.step.mul_add(steps, wheel.value);
                 Outcome::set(value.clamp(0.0, 1.0))
             }
-            Input::KeyPressed { .. }
+            Input::InputMethod(_)
+            | Input::KeyPressed { .. }
             | Input::KeyReleased { .. }
             | Input::ModifiersChanged(_)
             | Input::PointerLeft

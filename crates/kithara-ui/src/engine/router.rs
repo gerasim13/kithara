@@ -53,7 +53,10 @@ impl Router {
         targets: &[Target<'_>],
         now: Instant,
     ) -> Option<Emission> {
-        if matches!(input, Input::KeyPressed { .. } | Input::KeyReleased { .. }) {
+        if matches!(
+            input,
+            Input::InputMethod(_) | Input::KeyPressed { .. } | Input::KeyReleased { .. }
+        ) {
             let path = self.focus.as_deref()?;
             let component = components
                 .iter_mut()

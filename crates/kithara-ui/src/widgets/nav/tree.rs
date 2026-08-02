@@ -1,15 +1,13 @@
 use iced::{
-    Alignment, Background, Border, Element, Length, Padding, Pixels, Theme,
+    Alignment, Background, Element, Length, Padding,
     alignment::{Horizontal, Vertical},
-    widget::{
-        Row, Space, column, container, container::Style as ContainerStyle, row, text_input,
-        text_input::Style as TextInputStyle,
-    },
+    widget::{Row, Space, column, container, container::Style as ContainerStyle, row},
 };
 
 use crate::{
     render::{
-        Icon, InputOwner, ReadValue, Skin, UiEvent, fonts, scope_picker, shaped_text, tree_rows,
+        Icon, InputOwner, ReadValue, Skin, UiEvent, fonts, scope_picker, search_input, shaped_text,
+        tree_rows,
     },
     widgets::Widget,
 };
@@ -43,10 +41,13 @@ impl<'a, 'skin: 'a> Widget<'a> for Tree<'_, '_, '_, '_, 'skin> {
                 move |_| ContainerStyle::default().background(Background::Color(background))
             });
 
-        column![search_bar(self.query, self.skin), panel]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        column![
+            search_bar(self.path, self.query, self.skin, self.owner),
+            panel
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 }
 
@@ -120,7 +121,12 @@ impl<'a, 'skin: 'a> Widget<'a> for ContextBar<'a, '_, '_, '_, 'skin> {
     }
 }
 
-fn search_bar(query: &str, skin: &Skin) -> Element<'static, UiEvent> {
+fn search_bar<'a>(
+    path: &str,
+    query: &str,
+    skin: &'a Skin,
+    owner: InputOwner,
+) -> Element<'a, UiEvent> {
     let icon = container(Icon::Search.view(skin.tree.search_icon_size, skin.palette.muted))
         .width(Length::Fixed(skin.tree.search_icon_width))
         .height(Length::Fill)
@@ -130,31 +136,7 @@ fn search_bar(query: &str, skin: &Skin) -> Element<'static, UiEvent> {
             let background = skin.color(skin.tree.search_background);
             move |_| ContainerStyle::default().background(Background::Color(background))
         });
-    let padding_y = ((skin.tree.search_height - skin.tree.search_text.size) / 2.0).max(0.0);
-    let input = text_input(&skin.tree.search_placeholder, query)
-        .on_input(UiEvent::LibraryQuery)
-        .padding(Padding {
-            top: padding_y,
-            right: skin.tree.search_padding_x,
-            bottom: padding_y,
-            left: skin.tree.search_padding_x,
-        })
-        .font(fonts::sans(skin.tree.search_text.weight))
-        .size(skin.tree.search_text.size)
-        .line_height(Pixels(skin.tree.search_text.size))
-        .width(Length::Fill)
-        .style({
-            let background = skin.color(skin.tree.search_background);
-            let palette = skin.palette;
-            move |_theme: &Theme, _status| TextInputStyle {
-                background: Background::Color(background),
-                border: Border::default(),
-                icon: palette.muted,
-                placeholder: palette.muted,
-                value: palette.text,
-                selection: palette.accent_soft,
-            }
-        });
+    let input = search_input(&format!("{path}/search"), query, skin, owner);
 
     container(row![icon, input].spacing(1).height(Length::Fill))
         .width(Length::Fill)

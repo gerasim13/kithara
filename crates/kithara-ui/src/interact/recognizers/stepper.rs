@@ -70,7 +70,8 @@ impl Stepper {
                     Outcome::IGNORED
                 }
             }
-            Input::KeyPressed { .. }
+            Input::InputMethod(_)
+            | Input::KeyPressed { .. }
             | Input::KeyReleased { .. }
             | Input::ModifiersChanged(_)
             | Input::PointerLeft

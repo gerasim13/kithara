@@ -91,6 +91,9 @@ pub(crate) fn engine(
         Some(EngineEvent::Drag { event, index }) => {
             drag(path, index, typed_outcome(event, captured))
         }
+        Some(EngineEvent::Text(query)) => {
+            action(typed_outcome(query, captured), UiEvent::LibraryQuery)
+        }
         None => captured.then(Action::capture),
     }
 }

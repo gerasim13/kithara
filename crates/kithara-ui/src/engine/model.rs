@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use crate::interact::{
-    CursorShape, Hit, Hover, Outcome, ScrollAxis,
+    CursorShape, Hit, Hover, Outcome, ScrollAxis, TextInputLayout,
     recognizers::{DragEvent, Scalar, Track, WheelStep},
 };
 
@@ -68,6 +68,7 @@ pub(super) enum Kind {
     Crossing,
     Segmented,
     Picker,
+    TextInput,
     Scroll,
     Item,
     ColumnDivider,
@@ -101,6 +102,11 @@ pub(crate) enum Descriptor {
         path: String,
         item_count: usize,
         selected: Option<usize>,
+    },
+    TextInput {
+        path: String,
+        query: String,
+        layout: TextInputLayout,
     },
     Scroll {
         path: String,
@@ -166,6 +172,14 @@ impl Descriptor {
             path,
             item_count,
             selected,
+        }
+    }
+
+    pub(crate) fn text_input(path: String, query: String, layout: TextInputLayout) -> Self {
+        Self::TextInput {
+            path,
+            query,
+            layout,
         }
     }
 
@@ -257,6 +271,7 @@ impl Descriptor {
             | Self::Crossing { path }
             | Self::Segmented { path, .. }
             | Self::Picker { path, .. }
+            | Self::TextInput { path, .. }
             | Self::Scroll { path, .. }
             | Self::ColumnDivider { path, .. }
             | Self::Fader { path, .. }
@@ -276,6 +291,7 @@ impl Descriptor {
             Self::Crossing { .. } => Kind::Crossing,
             Self::Segmented { .. } => Kind::Segmented,
             Self::Picker { .. } => Kind::Picker,
+            Self::TextInput { .. } => Kind::TextInput,
             Self::Scroll { .. } => Kind::Scroll,
             Self::Item { .. } => Kind::Item,
             Self::ColumnDivider { .. } => Kind::ColumnDivider,
@@ -290,13 +306,14 @@ impl Descriptor {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum EngineEvent {
     Scalar(f64),
     Activate,
     Crossing(bool),
     Index(usize),
     Drag { event: DragEvent, index: usize },
+    Text(String),
 }
 
 #[derive(Clone, Copy)]
