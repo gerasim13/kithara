@@ -347,6 +347,7 @@ mod tests {
             8,
             fixture.source.position(),
             None,
+            true,
             fixture.cancel.clone(),
         );
         assert_eq!(
@@ -370,6 +371,7 @@ mod tests {
             8,
             fixture.source.position(),
             None,
+            true,
             fixture.cancel.clone(),
         );
         assert_eq!(

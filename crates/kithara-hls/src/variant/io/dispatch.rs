@@ -13,23 +13,27 @@ impl HlsVariant {
         budget = budget as u64,
         queue_len = self.flow.queue.lock().len() as u64
     )]
-    /// A segment a reader is stopped at is owed; everything past it is
-    /// look-ahead. Owed fetches carry `High`, because the downloader serves its
-    /// slots in strict order and drains the tagged one completely first: an
-    /// untagged fetch queues behind every tagged one, however far ahead of
-    /// itself that tagged pass was reaching.
+    /// Owed fetches carry `High`. The downloader serves its slots in strict
+    /// order and drains the tagged one completely first, so an untagged fetch
+    /// queues behind every tagged one — which makes the tag, not the peer's
+    /// budget split, the thing that decides who waits for whom.
     ///
-    /// The rule is the same for every session, and it has to be. Tagging only
-    /// the session being built puts its look-ahead ahead of the audible
-    /// variant's next segment, so the variant being prepared outranks the audio
-    /// that is playing — and with a cold target, whose segments are slow, those
-    /// fetches hold the downloader while the speaker runs dry. Tagging only the
-    /// audible session buries a decoder being built behind a variant that
-    /// appends to the queue every poll. Owed on both sides puts them in one
-    /// slot, where arrival order decides and neither can starve the other out.
+    /// A session that is not yet audible has no look-ahead of its own: it asks
+    /// only for what a decoder being built or primed is blocked on, and its
+    /// pass is already bounded by the construction window or by that decoder's
+    /// reads. Every fetch it plans is owed. Bounding it the way an audible
+    /// session is bounded strands the priming phase, whose reads sit at the
+    /// landing while the session's own position still reads zero.
     ///
-    /// The boundary is the construction window while the reader has not been
-    /// handed over yet, else the segment the reader actually sits on.
+    /// The audible session is the opposite: it plans look-ahead every poll, and
+    /// only the segment its reader is stopped at is owed. Leaving that segment
+    /// untagged is what let a cold target — whose segments are deliberately
+    /// slow — hold the downloader while the speaker ran dry.
+    ///
+    /// So both owed sets share one slot, where arrival order decides: the
+    /// audible variant adds a single segment per poll and cannot bury a
+    /// decoder being built, and the session being prepared cannot outrank the
+    /// audio that is playing.
     #[kithara::hang_watchdog]
     pub(crate) fn dispatch_from(
         self: &Arc<Self>,
@@ -37,6 +41,7 @@ impl HlsVariant {
         budget: usize,
         position: u64,
         construction_segment_end: Option<u32>,
+        audible: bool,
         cancel: CancelToken,
     ) -> Vec<FetchCmd> {
         let mut out = Vec::new();
@@ -50,8 +55,10 @@ impl HlsVariant {
         // references it, so it is never re-fetched and the reader hangs (the
         // `player_worker_hls_then_unavailable_mp3_then_mp3_recovery` deadlock).
         let mut deferred: Vec<PlannedFetch> = Vec::new();
-        let demand_until = construction_segment_end
-            .or_else(|| self.find_at_offset(position).map(|(seg_idx, _, _)| seg_idx));
+        let owed_through = audible
+            .then(|| self.find_at_offset(position).map(|(seg_idx, _, _)| seg_idx))
+            .flatten();
+        let owed = |seg_idx: u32| !audible || owed_through.is_some_and(|last| seg_idx <= last);
         let mut remaining = budget;
         self.dispatch_size_demands(ctx, &mut out, &mut remaining, &cancel);
         let prefetch_base = position.max(self.prefetch_anchor());
@@ -159,7 +166,7 @@ impl HlsVariant {
                         deferred.push(planned);
                         continue;
                     };
-                    if demand_until.is_some_and(|last| seg_idx <= last) {
+                    if owed(seg_idx) {
                         cmd.priority = Some(RequestPriority::High);
                     }
                     out.push(cmd);

@@ -194,6 +194,7 @@ impl HlsSession {
             budget,
             self.projected_position().byte,
             construction_segment_end,
+            self.active.load(Ordering::Acquire),
             self.cancel.handle(),
         )
     }
