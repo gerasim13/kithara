@@ -1,6 +1,7 @@
 use std::ops::Range;
 
 use kithara_test_utils::kithara;
+use tracing::debug;
 
 use super::HlsVariant;
 
@@ -16,7 +17,21 @@ impl HlsVariant {
     }
 
     pub(in crate::variant) fn eof_at_published(&self, offset: u64, total: u64) -> bool {
-        total > 0 && offset >= total && self.eof_ready()
+        let eof = total > 0 && offset >= total && self.eof_ready();
+        if eof {
+            // Once per stream, and the one fact worth having when a track ends
+            // early: which geometry the offset was judged against.
+            debug!(
+                variant = self.variant,
+                offset,
+                total,
+                served_from = self.served_from(),
+                segments = self.num_segments(),
+                sizes_complete = self.sizes_complete(),
+                "minting byte EOF"
+            );
+        }
+        eof
     }
 
     pub(crate) fn eof_at(&self, offset: u64) -> bool {
