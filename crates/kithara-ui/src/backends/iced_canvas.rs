@@ -7,15 +7,15 @@ use iced::{
     },
 };
 use skrifa::{
-    GlyphId,
-    instance::{LocationRef, Size as FontSize},
-    outline::{DrawSettings, OutlinePen},
+    FontRef, GlyphId,
+    instance::{LocationRef, NormalizedCoord, Size as FontSize},
+    outline::{DrawSettings, OutlineGlyphCollection, OutlinePen},
 };
 
 use crate::{
     draw::{Backend, Geom, Pt, Rgba, Transform},
     skin::{FontFamily, FontWeight},
-    text::{GlyphRun, TextResources, select},
+    text::{GlyphFace, GlyphRun, GlyphSegment, TextResources, select},
 };
 
 pub(crate) struct IcedBackend<'frame> {
@@ -50,33 +50,71 @@ impl Backend for IcedBackend<'_> {
         let resources = self.resources;
         let path = Path::new(|builder| {
             for segment in run.segments() {
-                let outlines = resources.outlines(segment.face());
-                for glyph in segment.glyphs() {
-                    let Some(outline) = outlines.get(GlyphId::new(glyph.id)) else {
-                        continue;
-                    };
-                    let mut pen = IcedOutline {
+                match segment.face() {
+                    GlyphFace::Embedded(font) => draw_segment(
                         builder,
-                        glyph: Pt {
-                            x: glyph.x,
-                            y: glyph.y,
-                        },
+                        segment,
+                        resources.outlines(*font),
+                        run.size(),
                         transform,
-                    };
-                    let settings =
-                        DrawSettings::unhinted(FontSize::new(run.size()), LocationRef::default());
-                    if let Err(error) = outline.draw(settings, &mut pen) {
-                        tracing::warn!(
-                            face = ?segment.face(),
-                            glyph_id = glyph.id,
-                            ?error,
-                            "failed to draw embedded glyph outline"
-                        );
+                    ),
+                    GlyphFace::System(data) => {
+                        let font = match FontRef::from_index(data.data.as_ref(), data.index) {
+                            Ok(font) => font,
+                            Err(error) => {
+                                tracing::warn!(
+                                    blob = data.data.id(),
+                                    index = data.index,
+                                    ?error,
+                                    "failed to parse system font face"
+                                );
+                                continue;
+                            }
+                        };
+                        let outlines = OutlineGlyphCollection::new(&font);
+                        draw_segment(builder, segment, &outlines, run.size(), transform);
                     }
                 }
             }
         });
         self.frame.fill(&path, Color::from(color));
+    }
+}
+
+fn draw_segment(
+    builder: &mut Builder,
+    segment: &GlyphSegment,
+    outlines: &OutlineGlyphCollection<'_>,
+    size: f32,
+    transform: Transform,
+) {
+    let normalized_coords = segment
+        .normalized_coords()
+        .iter()
+        .map(|coord| NormalizedCoord::from_bits(*coord))
+        .collect::<Vec<_>>();
+    let location = LocationRef::new(&normalized_coords);
+    for glyph in segment.glyphs() {
+        let Some(outline) = outlines.get(GlyphId::new(glyph.id)) else {
+            continue;
+        };
+        let mut pen = IcedOutline {
+            builder,
+            glyph: Pt {
+                x: glyph.x,
+                y: glyph.y,
+            },
+            transform,
+        };
+        let settings = DrawSettings::unhinted(FontSize::new(size), location);
+        if let Err(error) = outline.draw(settings, &mut pen) {
+            tracing::warn!(
+                face = ?segment.face(),
+                glyph_id = glyph.id,
+                ?error,
+                "failed to draw glyph outline"
+            );
+        }
     }
 }
 

@@ -109,7 +109,7 @@ mod tests {
     use crate::{
         builtin,
         draw::{DrawCmd, Geom},
-        text::{FontId, GlyphSegment},
+        text::{FontId, GlyphFace, GlyphSegment},
     };
 
     #[kithara::test]
@@ -166,7 +166,7 @@ mod tests {
         };
         assert_eq!(
             icon_run.segments().first().map(GlyphSegment::face),
-            Some(FontId::Lucide)
+            Some(&GlyphFace::Embedded(FontId::Lucide))
         );
         assert_eq!(icon_content, &glyph.to_string());
         assert_eq!(icon_transform.dx, 19.0);
@@ -187,7 +187,7 @@ mod tests {
         };
         assert_eq!(
             label_run.segments().first().map(GlyphSegment::face),
-            Some(FontId::JetBrainsMonoRegular)
+            Some(&GlyphFace::Embedded(FontId::JetBrainsMonoRegular))
         );
         assert_eq!(label_content, "PRIMITIVES");
         assert_eq!(

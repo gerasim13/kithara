@@ -7,11 +7,12 @@ use parley::{
 };
 
 use super::{
-    FontId, Glyph, GlyphRun, GlyphSegment, TextError, TextResources, resources::FaceBlobs, select,
+    FontId, FontPolicy, Glyph, GlyphRun, GlyphSegment, TextError, TextResources,
+    resources::FaceBlobs, select,
 };
 use crate::skin::{FontWeight, TextRoleSkin};
 
-/// Owns the embedded font collection and Parley shaping scratch space.
+/// Owns a policy-selected font collection and Parley shaping scratch space.
 pub struct TextContext {
     faces: FaceBlobs,
     fonts: FontContext,
@@ -33,7 +34,7 @@ impl TextContext {
     ///
     /// Returns [`TextError`] when a compile-time embedded face is invalid.
     pub fn new() -> Result<Self, TextError> {
-        Ok(Self::from(&TextResources::new()?))
+        Ok(Self::from(&TextResources::new(FontPolicy::Embedded)?))
     }
 
     #[cfg(test)]
@@ -60,7 +61,7 @@ impl From<&TextResources> for TextContext {
 }
 
 impl TextContext {
-    /// Shapes and measures text in a skin role with embedded primary and fallback faces.
+    /// Shapes and measures text with embedded primary faces and configured fallbacks.
     ///
     /// `max_width` is `None` for an unbounded line or `Some(width)` for line
     /// breaking. The role travels whole rather than as a face and a size,
@@ -112,15 +113,8 @@ impl TextContext {
                 let PositionedLayoutItem::GlyphRun(run) = item else {
                     continue;
                 };
-                let blob = run.run().font().data.id();
-                let Some(face) = self.faces.face(blob) else {
-                    tracing::warn!(
-                        requested = ?style.font,
-                        blob,
-                        "shaping resolved a face outside the embedded catalog; dropping its glyphs"
-                    );
-                    continue;
-                };
+                let face = self.faces.resolve(run.run().font());
+                let normalized_coords = run.run().normalized_coords().to_vec();
                 let glyphs = run
                     .positioned_glyphs()
                     .map(|glyph| Glyph {
@@ -129,7 +123,7 @@ impl TextContext {
                         y: glyph.y,
                     })
                     .collect();
-                segments.push(GlyphSegment::new(face, glyphs));
+                segments.push(GlyphSegment::new(face, normalized_coords, glyphs));
             }
         }
         GlyphRun::new(segments, layout.height(), style.size, layout.width())
@@ -150,7 +144,21 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::skin::{ColorRole, FontFamily};
+    use crate::{
+        skin::{ColorRole, FontFamily},
+        text::GlyphFace,
+    };
+
+    fn context(policy: FontPolicy) -> TextContext {
+        TextContext::from(&TextResources::new(policy).unwrap())
+    }
+
+    fn glyph_ids(run: &GlyphRun) -> Vec<u32> {
+        run.segments()
+            .iter()
+            .flat_map(|segment| segment.glyphs().iter().map(|glyph| glyph.id))
+            .collect()
+    }
 
     fn role(family: FontFamily, weight: FontWeight, size: f32, spacing: f32) -> TextRoleSkin {
         TextRoleSkin {
@@ -164,14 +172,14 @@ mod tests {
 
     #[kithara::test]
     fn context_registers_only_embedded_families() {
-        let mut context = TextContext::new().unwrap();
+        let mut context = context(FontPolicy::Embedded);
         let mut families = context.family_names();
         families.sort();
 
         assert_eq!(
             families,
             ["Inter", "JetBrains Mono", "Space Grotesk", "lucide"],
-            "the ten-face embedded catalog is the owned registration contract; system fallback remains excluded"
+            "the harness policy must register the ten embedded faces and exclude machine-owned families"
         );
         assert_eq!(
             FontId::ALL,
@@ -192,24 +200,97 @@ mod tests {
     }
 
     #[kithara::test]
-    fn display_cyrillic_uses_one_inter_segment() {
-        let run = TextContext::new().unwrap().shape(
-            "Трек",
-            role(FontFamily::Display, FontWeight::Normal, 12.0, 0.0),
-            None,
-        );
-        let [segment] = run.segments() else {
-            panic!("Display Cyrillic must shape as one fallback segment");
-        };
+    fn display_cyrillic_uses_embedded_fallback_under_both_policies() {
+        for policy in [FontPolicy::Embedded, FontPolicy::System] {
+            let run = context(policy).shape(
+                "Трек",
+                role(FontFamily::Display, FontWeight::Normal, 12.0, 0.0),
+                None,
+            );
+            let [segment] = run.segments() else {
+                panic!("Display Cyrillic must shape as one fallback segment under {policy:?}");
+            };
 
-        assert_eq!(segment.face(), FontId::InterRegular);
-        assert_eq!(
-            segment
-                .glyphs()
+            assert_eq!(
+                segment.face(),
+                &GlyphFace::Embedded(FontId::InterRegular),
+                "the registered embedded fallback must win under {policy:?}"
+            );
+            assert_eq!(glyph_ids(&run), [2437, 848, 641, 1264]);
+        }
+    }
+
+    /// Scripts no embedded face covers. Which of them a given machine can
+    /// answer is the machine's business; that the production policy reaches
+    /// *some* of them, and the harness policy reaches none, is the contract.
+    const OUTSIDE_THE_CATALOG: [&str; 5] = [
+        "\u{66f2}\u{540d}",
+        "\u{5e0}\u{5dc}\u{5d5}\u{5dd}",
+        "\u{645}\u{631}\u{62d}\u{628}\u{627}",
+        "\u{c81c}\u{baa9}",
+        "\u{e0a}\u{e37}\u{e48}\u{e2d}",
+    ];
+
+    #[kithara::test]
+    fn the_harness_policy_reaches_no_face_outside_the_catalog() {
+        let mut harness = context(FontPolicy::Embedded);
+
+        for content in OUTSIDE_THE_CATALOG {
+            let run = harness.shape(
+                content,
+                role(FontFamily::Display, FontWeight::Normal, 12.0, 0.0),
+                None,
+            );
+
+            assert!(
+                glyph_ids(&run).iter().all(|glyph| *glyph == 0),
+                "{content:?} must stay .notdef under the harness policy"
+            );
+            assert!(
+                run.segments()
+                    .iter()
+                    .all(|segment| matches!(segment.face(), GlyphFace::Embedded(_))),
+                "the harness policy must never name a machine-owned face"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn the_production_policy_reaches_faces_the_catalog_does_not_own() {
+        let mut production = context(FontPolicy::System);
+        let mut resolved = Vec::new();
+
+        for content in OUTSIDE_THE_CATALOG {
+            let run = production.shape(
+                content,
+                role(FontFamily::Display, FontWeight::Normal, 12.0, 0.0),
+                None,
+            );
+            let system = run
+                .segments()
                 .iter()
-                .map(|glyph| glyph.id)
-                .collect::<Vec<_>>(),
-            [2437, 848, 641, 1264]
+                .any(|segment| matches!(segment.face(), GlyphFace::System(_)));
+
+            if system {
+                assert!(
+                    glyph_ids(&run).iter().all(|glyph| *glyph != 0),
+                    "a resolved system face must paint real glyphs, not .notdef: {run:?}"
+                );
+                resolved.push(content);
+            } else {
+                assert!(
+                    glyph_ids(&run).iter().all(|glyph| *glyph == 0),
+                    "a script with no machine candidate must stay .notdef: {run:?}"
+                );
+            }
+        }
+
+        // Without this the test would pass vacuously on a host that resolves
+        // nothing, and the system arm would be dead code no one noticed.
+        assert!(
+            !resolved.is_empty(),
+            "a system-backed target must answer at least one script the catalog cannot: \
+             none of {OUTSIDE_THE_CATALOG:?} resolved"
         );
     }
 
@@ -223,9 +304,18 @@ mod tests {
         let segments = run.segments();
 
         assert_eq!(segments.len(), 3);
-        assert_eq!(segments[0].face(), FontId::InterRegular);
-        assert_eq!(segments[1].face(), FontId::SpaceGroteskRegular);
-        assert_eq!(segments[2].face(), FontId::SpaceGroteskRegular);
+        assert_eq!(
+            segments[0].face(),
+            &GlyphFace::Embedded(FontId::InterRegular)
+        );
+        assert_eq!(
+            segments[1].face(),
+            &GlyphFace::Embedded(FontId::SpaceGroteskRegular)
+        );
+        assert_eq!(
+            segments[2].face(),
+            &GlyphFace::Embedded(FontId::SpaceGroteskRegular)
+        );
         assert_eq!(
             segments[0]
                 .glyphs()
@@ -247,7 +337,10 @@ mod tests {
             panic!("Display Latin must stay in one primary-face segment");
         };
 
-        assert_eq!(segment.face(), FontId::SpaceGroteskRegular);
+        assert_eq!(
+            segment.face(),
+            &GlyphFace::Embedded(FontId::SpaceGroteskRegular)
+        );
         assert!(segment.glyphs().iter().all(|glyph| glyph.id != 0));
     }
 
@@ -262,7 +355,7 @@ mod tests {
             panic!("Display Greek must shape as one fallback segment");
         };
 
-        assert_eq!(segment.face(), FontId::InterRegular);
+        assert_eq!(segment.face(), &GlyphFace::Embedded(FontId::InterRegular));
         assert!(!segment.glyphs().is_empty());
         assert!(segment.glyphs().iter().all(|glyph| glyph.id != 0));
     }
@@ -279,7 +372,7 @@ mod tests {
             panic!("Latin in the Sans family must stay in one primary-face segment");
         };
 
-        assert_eq!(segment.face(), FontId::InterSemibold);
+        assert_eq!(segment.face(), &GlyphFace::Embedded(FontId::InterSemibold));
         assert!(!segment.glyphs().is_empty());
         assert!(
             segment
@@ -301,7 +394,7 @@ mod tests {
             panic!("an icon glyph must shape as one Lucide segment");
         };
 
-        assert_eq!(segment.face(), FontId::Lucide);
+        assert_eq!(segment.face(), &GlyphFace::Embedded(FontId::Lucide));
         assert_eq!(segment.glyphs().len(), 1);
         assert!(run.width() > 0.0);
         assert!(run.height() > 0.0);

@@ -1,11 +1,12 @@
-use kithara_platform::sync::Arc as SharedArc;
+use std::borrow::Cow;
+
 use vello::{
     Glyph, Scene,
     kurbo::{
         Affine, Arc, Cap, Circle, Join, Line, Point, Rect as KurboRect, RoundedRect, Shape, Stroke,
         Vec2,
     },
-    peniko::{Blob, Color, Fill, FontData},
+    peniko::{Color, Fill, FontData},
 };
 
 use crate::{
@@ -137,14 +138,14 @@ impl Backend for VelloBackend<'_> {
 
     fn text(&mut self, run: &GlyphRun, _content: &str, transform: Transform, color: Rgba) {
         for segment in run.segments() {
-            let data = FontData::new(Blob::new(SharedArc::new(segment.face().bytes())), 0);
+            let data: Cow<'_, FontData> = segment.face().into();
             let glyphs = segment.glyphs().iter().map(|glyph| Glyph {
                 id: glyph.id,
                 x: glyph.x,
                 y: glyph.y,
             });
             self.scene
-                .draw_glyphs(&data)
+                .draw_glyphs(data.as_ref())
                 .transform(Affine::new([
                     f64::from(transform.xx),
                     f64::from(transform.yx),
@@ -154,6 +155,7 @@ impl Backend for VelloBackend<'_> {
                     f64::from(transform.dy),
                 ]))
                 .font_size(run.size())
+                .normalized_coords(segment.normalized_coords())
                 .brush(Color::from(color))
                 .draw(Fill::NonZero, glyphs);
         }

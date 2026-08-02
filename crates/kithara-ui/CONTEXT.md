@@ -154,47 +154,65 @@ reach it, and only the Display family does. Greek is registered because Inter wa
 it rather than assumed to, and a test holds that measurement; a fallback that resolved to `.notdef`
 would be worse than none.
 
-Fontique system-font access stays off, and that remains a known gap rather than a contract. It is
-what still leaves CJK, Hebrew, Arabic and emoji at `.notdef`, since nothing embedded covers them.
-Closing that needs two things this crate does not have yet: a font identity that can name a face
-outside `FontId`, and a single document-scoped context, so that enabling system fonts does not
-repeat a platform font-directory scan per widget.
+`TextResources` takes an explicit font policy. Production `Skin::resolve` enables Fontique's system
+collection, while deterministic harnesses resolve a skin with the embedded-only policy. Both
+policies register the Cyrillic and Greek fallbacks above. The system feature is unconditional;
+targets without a Fontique platform backend receive its empty dummy collection and retain the
+embedded-only behaviour.
+
+What the production policy actually reaches is the machine's business, not this crate's, and it is
+not uniform. Measured on an Apple/CoreText host against 519 scanned families: Hebrew resolves to
+Lucida Grande, Arabic to Geeza Pro, Korean to Apple SD Gothic Neo, Thai to Thonburi, Devanagari to
+Kohinoor Devanagari — while **Han and Japanese resolve to nothing**. That last one is an upstream
+gap rather than a policy decision: `fontique-0.6.0/src/backend/coretext.rs` asks CoreText for a
+fallback font, gets `PingFang SC`, and then looks that family up in its own scanned name map, which
+does not contain PingFang; the lookup misses and `fallback()` returns `None`. So a CJK track title
+still shapes to `.notdef` on macOS.
+
+Selecting a face ourselves when Fontique declines would be exactly the fallback chain AGENTS.md
+forbids — the mechanism is Unicode's and upstream's, and a second private path over the top of it
+would hide the real defect. The tests therefore pin the contract rather than a script list: the
+harness policy reaches nothing outside the catalog, the production policy paints real glyphs for
+every script the machine can answer and leaves `.notdef` for the rest, and **at least one** script
+outside the catalog must resolve, so the system arm cannot quietly become dead code.
 
 Where that owner sits is transitional and is stated here so it does not become permanent by
 default. Each text-drawing widget still owns one `TextContext`, so a document holds as many Parley
 shaping scratch buffers and font collections as it has shaped widgets. Consolidating those
 contexts needs a document-scoped owner that does not exist yet. Font-derived draw resources no
 longer follow that per-widget lifetime: `TextResources` builds the ten skrifa outline collections
-once and lends them to the iced backend, and adapters borrow the resources from `Skin` rather than
-cloning them per view build.
+and scans the system collection once, then lends those resources to contexts and the iced backend.
+`TextContext::from` clones Fontique's collection; its system backend and name maps are `Arc`-shared,
+so a widget clone does not enumerate the machine again.
 
-The Vello backend still builds a `FontData` per text call, now once per segment rather than once
-per run. Caching them would mean an exported font-cache type whose only caller is a test, because
-no shipped host encodes a Vello scene yet — the architectural ratchet refuses that, and it is right
-to. The allocation ends when a Vello host exists or when the draw seam gains a backend-owned font
-type, whichever lands first.
+For an embedded segment, the Vello backend still builds a `FontData` per text call. A system segment
+already owns the exact `FontData` Parley shaped, so Vello borrows it directly. Caching the embedded
+conversion would mean an exported font-cache type whose only caller is a test, because no shipped
+host encodes a Vello scene yet — the architectural ratchet refuses that, and it is right to.
 
 `text::FontId` owns family/weight-to-face selection and the face-to-byte mapping. Its tenth value is
 the embedded Lucide face, and `render::fonts` re-exports the same catalog bytes for iced host
-registration. The Lucide addition does not widen identity to system fallback: it is another
-compile-time embedded face with a production glyph consumer, while a fallback face still has no
-`FontId`. Invalid compile-time embedded font data is a fail-fast construction error.
+registration. A system fallback has no `FontId`; it carries Parley's `FontData`, including the
+collection index required for TTC faces. Invalid compile-time embedded font data is a fail-fast
+construction error.
 
 Text crosses the draw seam as the source string, a neutral `GlyphRun`, a transform, and a
 colour. `GlyphRun` carries font size, measured width and height, and its glyphs as a sequence of
-single-face `GlyphSegment`s in visual order, each naming its own `FontId`. It cannot name one face
-for the whole run, because script fallback means one string crosses faces mid-run: the moment the
-Cyrillic fallback exists, `"Трек Mix"` shapes as three Parley runs over two faces, and a run that
-reported a single face would hand Inter's glyph ids to Space Grotesk's outline table — wrong
-glyphs rather than `.notdef`. A segment's face is settled by pointer identity against the
-registered `&'static [u8]`, not by re-parsing the table; a face outside the embedded catalog cannot
-occur while the collection is embedded-only, and is dropped with a `tracing` warning if it ever
-does. The grouping sits on the segment rather than on each glyph because backends bind one outline
-collection per face; a per-glyph tag would make them rebind per glyph.
+single-face `GlyphSegment`s in visual order, each naming a `GlyphFace`. It cannot name one face for
+the whole run, because script fallback means one string crosses faces mid-run: `"Трек Mix"` shapes
+as three Parley runs over two faces, and a run that reported a single face would hand Inter's glyph
+ids to Space Grotesk's outline table — wrong glyphs rather than `.notdef`. Registration records each
+embedded blob's stable `Blob::id()`; shaping maps a table hit to `GlyphFace::Embedded(FontId)` and a
+miss to `GlyphFace::System(FontData)`. Byte addresses are not identity because two evaluations of
+an `include_bytes!` promoted constant need not share an address. Each segment also retains the
+normalized variation coordinates used during shaping, so variable system faces are outlined at the
+same instance whose advances Parley measured. The grouping sits on the segment rather than on each
+glyph because backends bind one outline collection per face.
 
-Backends do not shape: Vello submits each segment's positions to `draw_glyphs` under that
-segment's face, while iced canvas extracts the corresponding outlines with skrifa and fills one
-canvas path across all segments; it never calls `Frame::fill_text`.
+Backends do not shape: Vello submits each segment's positions to `draw_glyphs` under that segment's
+font data. Iced canvas uses the cached static outline collection for an embedded face; for a system
+face it builds a call-local `FontRef` at the carried collection index and borrows its outlines only
+while constructing the canvas path. It never leaks system bytes or calls `Frame::fill_text`.
 
 Parley 0.6, Vello 0.6, and the iced outline path use the same skrifa 0.37 crate instance. Full
 positioned glyph data may cross between shaping and rendering; there is no bare-glyph-id-only
@@ -265,12 +283,12 @@ the embedded faces into `iced::advanced::graphics::text::font_system` before it 
 Without that load the skin's family names resolve to whatever the host machine happens to have
 installed and the committed rects stop being reproducible.
 
-Two residues of that global remain, and neither is closed here. Its font database still holds the
-machine's system faces, so a host carrying its own face under one of the skin's family names can
-win the query ahead of the embedded one; and a string outside embedded coverage would reach a
-system fallback face. The Latin-only corpus keeps the second one out of reach, and the first is
-inherent to the iced path being pinned - the harness reproduces what the shipped iced host does,
-including this. Closing either belongs to the wave that takes font policy off the global.
+Two residues of that global remain. Its font database still holds the machine's system faces, so a
+host carrying its own face under one of the skin's family names can win the query ahead of the
+embedded one, and unported iced text could still reach a system fallback face. The base shaping
+path receives an embedded-policy `Skin`, and a corpus test holds every committed fixture string to
+real glyphs across the embedded Display, Sans and Mono families. The remaining global behaviour is
+inherent to the iced path being pinned until those text sites are ported.
 
 ## Interaction Ownership
 

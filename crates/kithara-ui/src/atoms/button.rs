@@ -343,7 +343,7 @@ mod tests {
         builtin,
         draw::{DrawCmd, DrawListBuilder, Geom, Rect},
         module::ButtonStyle,
-        text::{FontId, GlyphSegment, TextContext},
+        text::{FontId, GlyphFace, GlyphSegment, TextContext},
     };
 
     #[kithara::test]
@@ -387,7 +387,7 @@ mod tests {
             DrawCmd::Text { run, content, .. }
                 if content == "DEFAULT"
                     && run.segments().first().map(GlyphSegment::face)
-                        == Some(FontId::JetBrainsMonoRegular)
+                        == Some(&GlyphFace::Embedded(FontId::JetBrainsMonoRegular))
         ));
     }
 
@@ -421,7 +421,8 @@ mod tests {
             &list.commands()[2],
             DrawCmd::Text { run, content, .. }
                 if content == &glyph.to_string()
-                    && run.segments().first().map(GlyphSegment::face) == Some(FontId::Lucide)
+                    && run.segments().first().map(GlyphSegment::face)
+                        == Some(&GlyphFace::Embedded(FontId::Lucide))
         ));
     }
 

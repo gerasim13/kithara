@@ -312,7 +312,7 @@ objc2-foundation = { version = "0.3.2", default-features = false }
 parking_lot = "0.12"
 
 # proc macros
-parley = { version = "0.6", default-features = false, features = ["std"] }
+parley = { version = "0.6", default-features = false, features = ["std", "system"] }
 pin-project-lite = "0.2"
 plist = "1"
 portable-atomic = { version = "1.13.1", default-features = false, features = ["fallback", "float"] }

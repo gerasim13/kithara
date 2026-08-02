@@ -1,12 +1,15 @@
 use std::fmt;
 
 use kithara_platform::sync::Arc;
-use parley::fontique::{Blob, Collection, CollectionOptions, FallbackKey, Script};
+use parley::{
+    FontData,
+    fontique::{Blob, Collection, CollectionOptions, FallbackKey, Script},
+};
 #[cfg(feature = "render")]
 use skrifa::{FontRef, outline::OutlineGlyphCollection, raw::ReadError};
 use thiserror::Error;
 
-use super::FontId;
+use super::{FontId, FontPolicy, GlyphFace};
 
 /// Failure to construct the embedded text resources.
 #[derive(Clone, Debug, Error, PartialEq)]
@@ -44,9 +47,13 @@ const FALLBACK_SCRIPTS: [Script; 2] = [Script(*b"Cyrl"), Script(*b"Grek")];
 pub(super) struct FaceBlobs([u64; 10]);
 
 impl FaceBlobs {
-    pub(super) fn face(self, blob: u64) -> Option<FontId> {
-        let index = self.0.iter().position(|id| *id == blob)?;
-        FontId::ALL.get(index).copied()
+    pub(super) fn resolve(self, data: &FontData) -> GlyphFace {
+        self.0
+            .iter()
+            .position(|id| *id == data.data.id())
+            .and_then(|index| FontId::ALL.get(index))
+            .copied()
+            .map_or_else(|| GlyphFace::System(data.clone()), GlyphFace::Embedded)
     }
 }
 
@@ -55,15 +62,16 @@ pub(crate) struct TextResources {
     collection: Collection,
     fonts: [FontId; 10],
     faces: FaceBlobs,
+    policy: FontPolicy,
     #[cfg(feature = "render")]
     outlines: Vec<OutlineGlyphCollection<'static>>,
 }
 
 impl TextResources {
-    pub(crate) fn new() -> Result<Self, TextError> {
+    pub(crate) fn new(policy: FontPolicy) -> Result<Self, TextError> {
         let mut collection = Collection::new(CollectionOptions {
             shared: false,
-            system_fonts: false,
+            system_fonts: policy.system_fonts(),
         });
         let mut blobs = [0; 10];
         for (font, blob) in FontId::ALL.into_iter().zip(&mut blobs) {
@@ -78,6 +86,7 @@ impl TextResources {
             collection,
             fonts: FontId::ALL,
             faces: FaceBlobs(blobs),
+            policy,
             #[cfg(feature = "render")]
             outlines: FontId::ALL
                 .into_iter()
@@ -105,13 +114,14 @@ impl fmt::Debug for TextResources {
         formatter
             .debug_struct("TextResources")
             .field("fonts", &self.fonts)
+            .field("policy", &self.policy)
             .finish_non_exhaustive()
     }
 }
 
 impl PartialEq for TextResources {
     fn eq(&self, other: &Self) -> bool {
-        self.fonts == other.fonts
+        self.fonts == other.fonts && self.policy == other.policy
     }
 }
 

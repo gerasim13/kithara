@@ -13,7 +13,7 @@ use crate::{
         TextInputSkin, TextSkin, ToggleSkin, TrackListSkin, TreeSkin, VisSkin, VuStereoSkin,
         VuVerticalSkin, WaveSkin, WindowSkin, parse_color,
     },
-    text::TextResources,
+    text::{FontPolicy, TextResources},
 };
 
 /// Resolved skin consumed by iced renderers.
@@ -66,6 +66,18 @@ impl Skin {
     /// # Errors
     /// Returns [`UiDocError`] when a palette value or embedded font is invalid.
     pub fn resolve(document: SkinDoc, origin: &SourceUri) -> Result<Self, UiDocError> {
+        Self::resolve_with_font_policy(document, origin, FontPolicy::System)
+    }
+
+    /// Resolves a parsed document under an explicit font policy.
+    ///
+    /// # Errors
+    /// Returns [`UiDocError`] when a palette value or embedded font is invalid.
+    pub fn resolve_with_font_policy(
+        document: SkinDoc,
+        origin: &SourceUri,
+        font_policy: FontPolicy,
+    ) -> Result<Self, UiDocError> {
         Ok(Self {
             palette: RenderPalette {
                 bg: color(&document.palette.bg, origin)?,
@@ -130,7 +142,7 @@ impl Skin {
             tree: document.tree.clone(),
             track_list: document.track_list.clone(),
             layout_preview: document.layout_preview,
-            text_resources: TextResources::new()?,
+            text_resources: TextResources::new(font_policy)?,
             document,
         })
     }

@@ -19,6 +19,7 @@ use kithara_ui::{
     builtin,
     compile::{CompiledNode, CompiledUi, compile},
     expand::ExpandedNode,
+    ids::SourceUri,
     module::ChromeStyle,
     render::{
         ReadValue, Reads, Skin, StereoLevels, TrackRow, WaveBucket, WaveformView,
@@ -26,6 +27,7 @@ use kithara_ui::{
         tree,
     },
     source::UiConfig,
+    text::{FontPolicy, GlyphFace, GlyphSegment, TextContext},
 };
 
 struct FixtureReads {
@@ -158,6 +160,73 @@ fn headless_renderer() -> iced::Renderer {
     drop(fonts);
 
     FallbackRenderer::Secondary(TinySkiaRenderer::new(SANS, Pixels(14.0)))
+}
+
+fn fixture_skin() -> Skin {
+    Skin::resolve_with_font_policy(
+        builtin::skin_doc().clone(),
+        &SourceUri("fixture:layout-parity".to_owned()),
+        FontPolicy::Embedded,
+    )
+    .expect("builtin layout fixture skin must resolve")
+}
+
+fn fixture_text_corpus() -> impl Iterator<Item = &'static str> {
+    [
+        "#",
+        "1",
+        "2",
+        "3 TRACKS",
+        "A",
+        "Afterimage",
+        "ART",
+        "ARTIST",
+        "B",
+        "Blend",
+        "BPM",
+        "CUE",
+        "Cut",
+        "DECK",
+        "Echo",
+        "ENERGY",
+        "Glass Avenue",
+        "HLS AUTO/320 BUF 18S",
+        "H",
+        "I",
+        "KEY",
+        "K",
+        "LOOP 4",
+        "MICRO",
+        "Midnight Circuit",
+        "Neon Lines",
+        "no source",
+        "PAUSE",
+        "PLAYER",
+        "PLAY",
+        "REMAIN",
+        "Signal Path",
+        "Static Motion",
+        "SYNC",
+        "TEMPO",
+        "T",
+        "TIME",
+        "TITLE",
+        "TRACKS",
+        "TRANSITION",
+        "R",
+        "03:47",
+        "04:12",
+        "05:03",
+        "7A",
+        "8A",
+        "10B",
+        "124.5",
+        "126.0",
+        "128.0",
+        "128.00",
+        "—",
+    ]
+    .into_iter()
 }
 
 fn dump(
@@ -679,6 +748,7 @@ fn first_difference<'a, 'b>(
 fn builtin_layouts_match_rect_fixtures() {
     let reads = FixtureReads::default();
     let renderer = headless_renderer();
+    let skin = fixture_skin();
     let fixture_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/layout");
     let update = env::var_os("KITHARA_UI_UPDATE_LAYOUT_FIXTURES").is_some();
     if update {
@@ -704,14 +774,7 @@ fn builtin_layouts_match_rect_fixtures() {
             Size::new(960.0, 600.0),
             Size::new(320.0, 240.0),
         ] {
-            actual.push_str(&dump(
-                preset,
-                &ui,
-                &reads,
-                builtin::skin(),
-                &renderer,
-                viewport,
-            ));
+            actual.push_str(&dump(preset, &ui, &reads, &skin, &renderer, viewport));
         }
 
         let stem = preset
@@ -724,6 +787,33 @@ fn builtin_layouts_match_rect_fixtures() {
             let expected =
                 fs::read_to_string(&fixture).expect("layout fixture must exist and be readable");
             assert_fixture_matches(&fixture, &expected, &actual);
+        }
+    }
+}
+
+#[kithara::test]
+fn committed_layout_fixture_corpus_needs_no_fallback_face() {
+    let mut context = TextContext::new().unwrap();
+    let text = builtin::skin_doc().text;
+
+    for content in fixture_text_corpus() {
+        for role in [text.brand, text.body, text.telemetry] {
+            let run = context.shape(content, role, None);
+            assert!(
+                run.segments()
+                    .iter()
+                    .all(|segment| matches!(segment.face(), GlyphFace::Embedded(_))),
+                "fixture text `{content}` reached a fallback face in {:?}",
+                role.font
+            );
+            assert!(
+                run.segments()
+                    .iter()
+                    .flat_map(GlyphSegment::glyphs)
+                    .all(|glyph| glyph.id != 0),
+                "fixture text `{content}` reached .notdef in {:?}",
+                role.font
+            );
         }
     }
 }

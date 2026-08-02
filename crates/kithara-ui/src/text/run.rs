@@ -1,4 +1,4 @@
-use super::FontId;
+use super::GlyphFace;
 
 /// A positioned glyph in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -9,22 +9,37 @@ pub struct Glyph {
     pub y: f32,
 }
 
-/// A stretch of a shaped run drawn with one embedded face.
+/// A stretch of a shaped run drawn with one resolved face.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GlyphSegment {
-    face: FontId,
+    face: GlyphFace,
+    normalized_coords: Vec<i16>,
     glyphs: Vec<Glyph>,
 }
 
 impl GlyphSegment {
-    pub(super) const fn new(face: FontId, glyphs: Vec<Glyph>) -> Self {
-        Self { face, glyphs }
+    pub(super) const fn new(
+        face: GlyphFace,
+        normalized_coords: Vec<i16>,
+        glyphs: Vec<Glyph>,
+    ) -> Self {
+        Self {
+            face,
+            normalized_coords,
+            glyphs,
+        }
     }
 
-    /// Returns the embedded face every glyph in this segment belongs to.
+    /// Returns the face every glyph in this segment belongs to.
     #[must_use]
-    pub const fn face(&self) -> FontId {
-        self.face
+    pub const fn face(&self) -> &GlyphFace {
+        &self.face
+    }
+
+    /// Returns the normalized variation coordinates used while shaping.
+    #[must_use]
+    pub fn normalized_coords(&self) -> &[i16] {
+        &self.normalized_coords
     }
 
     /// Returns the positioned glyphs in visual order.

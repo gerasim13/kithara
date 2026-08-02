@@ -95,7 +95,8 @@ itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
-objc2-core-foundation = { version = "0.3" }
+objc2 = { version = "0.6", features = ["relax-sign-encoding"] }
+objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
 objc2-foundation = { version = "0.3" }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
@@ -141,7 +142,8 @@ indexmap = { version = "2", features = ["serde"] }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
-objc2-core-foundation = { version = "0.3" }
+objc2 = { version = "0.6", features = ["relax-sign-encoding"] }
+objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
 objc2-foundation = { version = "0.3" }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
@@ -197,7 +199,8 @@ itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
-objc2-core-foundation = { version = "0.3" }
+objc2 = { version = "0.6", features = ["relax-sign-encoding"] }
+objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
 objc2-foundation = { version = "0.3" }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
@@ -363,7 +366,8 @@ itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
-objc2-core-foundation = { version = "0.3" }
+objc2 = { version = "0.6", features = ["relax-sign-encoding"] }
+objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
 objc2-foundation = { version = "0.3" }
 percent-encoding = { version = "2" }
 prettyplease = { version = "0.2", default-features = false, features = ["verbatim"] }
@@ -412,7 +416,8 @@ idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
-objc2-core-foundation = { version = "0.3" }
+objc2 = { version = "0.6", features = ["relax-sign-encoding"] }
+objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
 objc2-foundation = { version = "0.3" }
 percent-encoding = { version = "2" }
 prettyplease = { version = "0.2", default-features = false, features = ["verbatim"] }
@@ -471,7 +476,8 @@ itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
-objc2-core-foundation = { version = "0.3" }
+objc2 = { version = "0.6", features = ["relax-sign-encoding"] }
+objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
 objc2-foundation = { version = "0.3" }
 percent-encoding = { version = "2" }
 prettyplease = { version = "0.2", default-features = false, features = ["verbatim"] }
