@@ -772,7 +772,6 @@ fn audio_variants_4tier() -> Vec<VariantInfo> {
 #[kithara::test(tokio)]
 async fn auto_mode_with_default_seed_picks_high_variant_on_cold_start() {
     let settings = AbrSettings::builder()
-        .initial_throughput_bps(2_000_000)
         .min_switch_interval(Duration::ZERO)
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();

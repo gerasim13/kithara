@@ -23,11 +23,7 @@ where
     B: Default,
 {
     fn default() -> Self {
-        Self {
-            backend: B::default(),
-            options: ResamplerOptions::default(),
-            quality: ResamplerQuality::default(),
-        }
+        Self::builder().backend(B::default()).build()
     }
 }
 
@@ -82,10 +78,6 @@ where
 
 impl<B> Default for AudioDecoderConfig<B> {
     fn default() -> Self {
-        Self {
-            backend: DecoderBackend::default(),
-            gapless_mode: GaplessMode::default(),
-            resampler: None,
-        }
+        Self::builder().build()
     }
 }

@@ -74,14 +74,7 @@ where
     B: ResamplerBackend + Default,
 {
     fn default() -> Self {
-        Self {
-            block_frames: Consts::DEFAULT_BEAT_BLOCK_FRAMES,
-            target_rate: Consts::DEFAULT_BEAT_TARGET_RATE,
-            resampler_quality: Consts::DEFAULT_BEAT_RESAMPLER_QUALITY,
-            resampler_backend: B::default(),
-            detector_window_seconds: Consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS,
-            detector_overlap_seconds: Consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS,
-        }
+        Self::builder().resampler_backend(B::default()).build()
     }
 }
 

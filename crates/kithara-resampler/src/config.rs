@@ -42,7 +42,7 @@ pub struct Resample<S> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Builder)]
-#[builder(state_mod(vis = "pub"))]
+#[builder(const, state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct ResamplerOptions {
     #[builder(default = 8.0)]
@@ -55,11 +55,7 @@ pub struct ResamplerOptions {
 
 impl Default for ResamplerOptions {
     fn default() -> Self {
-        Self {
-            max_ratio_adjustment: 8.0,
-            passthrough_tolerance: 0.0001,
-            chunk_size: 4_096,
-        }
+        Self::builder().build()
     }
 }
 

@@ -9,10 +9,10 @@ pub enum GlideInterpolation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Builder)]
-#[builder(state_mod(vis = "pub"))]
+#[builder(const, state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct GlideConfig {
-    #[builder(default)]
+    #[builder(default = GlideInterpolation::Quadratic)]
     pub interpolation: GlideInterpolation,
     #[builder(default = true)]
     pub anti_alias: bool,
@@ -20,9 +20,6 @@ pub struct GlideConfig {
 
 impl Default for GlideConfig {
     fn default() -> Self {
-        Self {
-            anti_alias: true,
-            interpolation: GlideInterpolation::Quadratic,
-        }
+        Self::builder().build()
     }
 }

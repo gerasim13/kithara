@@ -39,12 +39,6 @@ pub struct AnalysisParams {
 
 impl Default for AnalysisParams {
     fn default() -> Self {
-        Self {
-            fft_size: Consts::FFT_SIZE,
-            low_mid_hz: Consts::LOW_MID_HZ,
-            mid_high_hz: Consts::MID_HIGH_HZ,
-            energy_floor: Consts::ENERGY_FLOOR,
-            band_gain: Consts::BAND_GAIN,
-        }
+        Self::builder().build()
     }
 }

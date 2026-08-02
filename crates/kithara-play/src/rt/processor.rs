@@ -1,5 +1,6 @@
 use std::{collections::VecDeque, num::NonZeroU32, sync::atomic::Ordering};
 
+use bon::Builder;
 use firewheel::{
     StreamInfo,
     dsp::fade::FadeCurve,
@@ -34,18 +35,17 @@ fn map_curve(curve: CrossfadeCurve) -> FadeCurve {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Builder)]
 pub(crate) struct CrossfadeSettings {
+    #[builder(default)]
     pub(crate) curve: CrossfadeCurve,
+    #[builder(default = 1.0)]
     pub(crate) duration: f32,
 }
 
 impl Default for CrossfadeSettings {
     fn default() -> Self {
-        Self {
-            curve: CrossfadeCurve::default(),
-            duration: 1.0,
-        }
+        Self::builder().build()
     }
 }
 
