@@ -131,7 +131,7 @@ mod tests {
     }
 
     fn apply_headers(mut config: FileConfig) -> FileConfig {
-        let mut headers = Headers::new();
+        let mut headers = Headers::default();
         headers.insert("Authorization", "Bearer token123");
         config.headers = Some(headers);
         config

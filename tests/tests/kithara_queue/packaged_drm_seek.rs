@@ -154,7 +154,7 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {
         loop {

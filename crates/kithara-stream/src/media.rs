@@ -58,6 +58,7 @@ pub enum AudioCodec {
 /// - HTTP Content-Type header
 /// - Container metadata
 #[derive(Debug, Clone, Default, PartialEq, Eq, Builder)]
+#[builder(const)]
 #[non_exhaustive]
 pub struct MediaInfo {
     /// Number of audio channels
@@ -75,18 +76,6 @@ pub struct MediaInfo {
 }
 
 impl MediaInfo {
-    /// Create `MediaInfo` with optional codec and container.
-    #[must_use]
-    pub fn new(codec: Option<AudioCodec>, container: Option<ContainerFormat>) -> Self {
-        Self {
-            codec,
-            container,
-            channels: None,
-            sample_rate: None,
-            variant_index: None,
-        }
-    }
-
     /// Parse codec **and** container from an HTTP `Content-Type` value.
     ///
     /// Distinct from [`AudioCodec::parse_mime`], which returns the codec
@@ -101,7 +90,12 @@ impl MediaInfo {
             "audio/aac" | "audio/aacp" => Some(ContainerFormat::Adts),
             _ => ContainerFormat::try_from(codec).ok(),
         };
-        Some(Self::new(Some(codec), container))
+        Some(
+            Self::builder()
+                .maybe_codec(Some(codec))
+                .maybe_container(container)
+                .build(),
+        )
     }
 }
 
@@ -130,7 +124,10 @@ pub fn needs_exact_byte_sizes(
 /// have ambiguous containers and leave `container = None`.
 impl From<AudioCodec> for MediaInfo {
     fn from(codec: AudioCodec) -> Self {
-        Self::new(Some(codec), ContainerFormat::try_from(codec).ok())
+        Self::builder()
+            .maybe_codec(Some(codec))
+            .maybe_container(ContainerFormat::try_from(codec).ok())
+            .build()
     }
 }
 

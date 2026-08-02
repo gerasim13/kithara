@@ -110,7 +110,7 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
     let cfg = ResourceConfig::for_src(url.as_str())
         .expect("valid fixture URL")
         .byte_pool(kithara::bufpool::BytePool::default())

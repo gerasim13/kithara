@@ -324,12 +324,17 @@ mod tests {
             |_reader, _media_info| -> Result<Box<dyn Decoder>, DecodeError> {
                 panic!("reader-profile test must not construct a decoder")
             },
-            Some(MediaInfo::new(
-                Some(AudioCodec::Pcm),
-                Some(ContainerFormat::Wav),
-            )),
+            Some(
+                MediaInfo::builder()
+                    .maybe_codec(Some(AudioCodec::Pcm))
+                    .maybe_container(Some(ContainerFormat::Wav))
+                    .build(),
+            ),
         );
-        let playlist_info = MediaInfo::new(None, Some(ContainerFormat::Fmp4));
+        let playlist_info = MediaInfo::builder()
+            .maybe_codec(None)
+            .maybe_container(Some(ContainerFormat::Fmp4))
+            .build();
 
         let profile = factory.reader_profile(&playlist_info, None);
 

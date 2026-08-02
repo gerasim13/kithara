@@ -164,7 +164,10 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
     // Build the decoder and drive decode on a blocking thread so the
     // tokio runtime can drive the HLS peer's segment fetches AND the gate
     // releaser concurrently while the blocking `Stream::read` waits.
-    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let wav_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     let decode = spawn_blocking(move || -> (Vec<(u64, Vec<f32>)>, usize) {
         let byte_len = stream.len().unwrap_or(0);
         let byte_map = stream.byte_map();

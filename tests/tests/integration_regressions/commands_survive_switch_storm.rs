@@ -124,7 +124,7 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
     let ticker = spawn_ticker(Arc::clone(&queue));
     let mut status_rx = queue.subscribe();
     let mut probe_rx = queue.subscribe();

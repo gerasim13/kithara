@@ -104,8 +104,8 @@ fn build_queue_with_tick(
         QueueConfig::builder()
             .max_concurrent_loads(cap)
             .store(store.clone())
-            .build()
-            .with_player(player),
+            .player(player)
+            .build(),
     ));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {

@@ -307,7 +307,7 @@ mod tests {
 
     #[kithara::test]
     fn config_with_headers() {
-        let mut headers = Headers::new();
+        let mut headers = Headers::default();
         headers.insert("Authorization", "Bearer test");
         let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()

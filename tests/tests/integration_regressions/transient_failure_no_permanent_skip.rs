@@ -71,11 +71,13 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
 
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_millis(500))
-        .retry_policy(RetryPolicy::new(
-            3,
-            Duration::from_millis(10),
-            Duration::from_millis(200),
-        ))
+        .retry_policy(
+            RetryPolicy::builder()
+                .max_retries(3)
+                .base_delay(Duration::from_millis(10))
+                .max_delay(Duration::from_millis(200))
+                .build(),
+        )
         .build();
     let downloader = Downloader::new(
         DownloaderConfig::builder()
@@ -89,7 +91,7 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
     let target = queue.append(TrackSource::Config(Box::new(
         ResourceConfig::for_src(target_url.as_str())

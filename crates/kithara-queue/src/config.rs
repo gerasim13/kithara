@@ -29,10 +29,9 @@ pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 /// [`TrackSource::Uri`](crate::TrackSource::Uri) resources share this queue's
 /// store. A caller-supplied [`ResourceConfig`](kithara_play::ResourceConfig)
 /// retains its own store.
-#[derive(Clone, Builder, fieldwork::Fieldwork)]
+#[derive(Clone, Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-#[fieldwork(opt_in, with)]
 pub struct QueueConfig {
     /// Max concurrent background prefetch loads. Default: 3.
     #[builder(default = DEFAULT_MAX_CONCURRENT_LOADS)]
@@ -42,15 +41,12 @@ pub struct QueueConfig {
     /// queue subtree cascades from one app-wide owner; `None` falls back
     /// to a fresh standalone token (test / library use). Must never be
     /// `None` on the production app path.
-    #[field(with, option_set_some)]
     pub cancel: Option<CancelToken>,
 
     /// Externally-owned player. `None` means Queue builds a default.
-    #[field(with, option_set_some)]
     pub player: Option<Arc<PlayerImpl>>,
 
     /// Shared store used for bare URI track sources.
-    #[field(with, option_set_some)]
     pub store: Option<AssetStore>,
 
     /// Whether the queue auto-advances to the next track at EOF.
@@ -76,15 +72,6 @@ impl fmt::Debug for QueueConfig {
 impl Default for QueueConfig {
     fn default() -> Self {
         Self::builder().build()
-    }
-}
-
-impl QueueConfig {
-    /// Create a new [`QueueConfig`] with all defaults.
-    #[must_use]
-    // ast-grep-ignore: style.prefer-default-derive
-    pub fn new() -> Self {
-        Self::default()
     }
 }
 

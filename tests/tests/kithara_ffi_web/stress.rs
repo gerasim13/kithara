@@ -133,7 +133,10 @@ async fn create_pipeline_with_url(url: Url) -> Audio<Stream<Hls>> {
         })
         .build();
 
-    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let wav_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())

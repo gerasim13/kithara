@@ -59,7 +59,7 @@ impl<N: Net> Net for DelayedNet<N> {
 
 pub fn success_stream() -> ByteStream {
     let stream = stream::iter(vec![Ok::<_, NetError>(Bytes::from_static(b"success"))]);
-    ByteStream::new(Headers::new(), Box::pin(stream))
+    ByteStream::new(Headers::default(), Box::pin(stream))
 }
 
 pub fn leaked<F>(f: F) -> &'static F
@@ -70,7 +70,7 @@ where
 }
 
 pub fn ok_headers() -> Headers {
-    let mut headers = Headers::new();
+    let mut headers = Headers::default();
     headers.insert("content-length", "7");
     headers
 }

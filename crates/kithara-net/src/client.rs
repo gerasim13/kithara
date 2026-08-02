@@ -118,7 +118,7 @@ fn reject_undecoded_content_encoding(resp: &Response, url: &Url) -> Result<(), N
 
 /// Extract response headers into our [`Headers`] type.
 fn extract_headers(resp: &Response) -> Headers {
-    let mut headers = Headers::new();
+    let mut headers = Headers::default();
     let str_pairs = resp
         .headers()
         .iter()
@@ -528,7 +528,7 @@ impl Net for RawHttp {
         #[cfg(not(target_arch = "wasm32"))]
         reject_undecoded_content_encoding(&resp, &url)?;
 
-        let mut out = Headers::new();
+        let mut out = Headers::default();
         let str_pairs = resp
             .headers()
             .iter()
@@ -812,7 +812,7 @@ mod tests {
             .build();
         let client = HttpClient::new(options, CancelToken::never());
 
-        let mut caller_headers = Headers::new();
+        let mut caller_headers = Headers::default();
         caller_headers.insert("AcCePt-EnCoDiNg", "br");
         let bytes = client
             .get_bytes(url.clone(), Some(caller_headers))

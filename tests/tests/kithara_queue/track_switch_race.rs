@@ -125,9 +125,10 @@ fn build_queue_with_tick(
             .build(),
     ));
     let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-            .with_player(player)
-            .with_store(store.clone()),
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build(),
     ));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(run_tick_driver(queue_for_tick));
@@ -165,9 +166,10 @@ fn build_queue_no_tick(temp_dir: &TestTempDir) -> (Arc<Queue>, Downloader, Asset
             .build(),
     ));
     let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-            .with_player(player)
-            .with_store(store.clone()),
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build(),
     ));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))

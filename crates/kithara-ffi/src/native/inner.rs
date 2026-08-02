@@ -78,7 +78,7 @@ fn build_initial_key_state(
     ffi: crate::types::FfiKeyOptions,
 ) -> (KeyOptions, HashMap<String, String>) {
     if ffi.rules.is_empty() {
-        return (KeyOptions::new(), HashMap::new());
+        return (KeyOptions::default(), HashMap::new());
     }
     let mut registry = KeyProcessorRegistry::new();
     let mut player_headers: HashMap<String, String> = HashMap::new();

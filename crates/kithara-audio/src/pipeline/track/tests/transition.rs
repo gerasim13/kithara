@@ -428,8 +428,10 @@ async fn incoming_media_facts_choose_reader_profile() {
     let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
     fixture.control.enable_byte_map();
     let template = incoming_plan();
-    let mut incoming_media =
-        MediaInfo::new(Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio));
+    let mut incoming_media = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Mp3))
+        .maybe_container(Some(ContainerFormat::MpegAudio))
+        .build();
     incoming_media.variant_index = Some(1);
     let plan = VariantReaderPlan::new(
         template.transition(),

@@ -463,7 +463,7 @@ mod tests {
     }
 
     fn state_with_current(ids: &[TrackId], current: usize) -> Mutex<UiState> {
-        let queue = Queue::new(QueueConfig::new());
+        let queue = Queue::new(QueueConfig::default());
         for id in ids {
             queue.append_with_id(*id, format!("file:///tmp/track-{id}.mp3"));
         }

@@ -58,7 +58,7 @@ async fn shared_ctx() -> &'static Ctx {
                 .session(OfflineSession::arc_auto())
                 .build(),
         ));
-        let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+        let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
         let q = Arc::clone(&queue);
         tokio::task::spawn(async move {

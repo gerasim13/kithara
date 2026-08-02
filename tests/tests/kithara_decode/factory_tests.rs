@@ -85,7 +85,10 @@ fn create_with_probe_with_mp3_hint_succeeds() {
 
 #[kithara::test]
 fn create_from_media_info_surfaces_error_without_native_probe_fallback() {
-    let media_info = MediaInfo::new(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4));
+    let media_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::AacLc))
+        .maybe_container(Some(ContainerFormat::Fmp4))
+        .build();
     let source = Cursor::new(TEST_MP3_BYTES.to_vec());
     let result = DecoderFactory::create_from_media_info(
         source,
@@ -129,7 +132,10 @@ fn apple_mp3_decoder(
 ))]
 #[kithara::test]
 fn apple_fused_src_decodes_at_the_requested_host_rate() {
-    let media_info = MediaInfo::new(Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio));
+    let media_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Mp3))
+        .maybe_container(Some(ContainerFormat::MpegAudio))
+        .build();
     let source_rate = apple_mp3_decoder(&media_info, None)
         .expect("BUG: the Apple backend must open the MP3 fixture")
         .spec()

@@ -126,7 +126,7 @@ fn request_header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
 }
 
 fn overriding_accept_encoding() -> Headers {
-    let mut headers = Headers::new();
+    let mut headers = Headers::default();
     headers.insert("AcCePt-EnCoDiNg", "br");
     headers
 }

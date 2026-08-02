@@ -129,7 +129,7 @@ impl SimHarness {
                 .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
                 .build(),
         ));
-        let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+        let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
         let queue_for_tick = Arc::clone(&queue);
         // Spawn through the platform chokepoint, NOT raw `tokio::spawn`: under
         // flash this installs the quiescence poll-wrapper + ambient gate so the

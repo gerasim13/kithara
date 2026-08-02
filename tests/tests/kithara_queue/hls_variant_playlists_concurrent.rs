@@ -81,9 +81,10 @@ fn build_queue_with_tick(
             .build(),
     ));
     let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-            .with_player(Arc::clone(&player))
-            .with_store(store.clone()),
+        QueueConfig::builder()
+            .player(Arc::clone(&player))
+            .store(store.clone())
+            .build(),
     ));
     let tick_handle = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
     let downloader = Downloader::new(

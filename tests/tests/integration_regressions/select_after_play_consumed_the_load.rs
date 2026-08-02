@@ -109,7 +109,7 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
             .build(),
     ));
     let queue = Arc::new(Queue::new(
-        QueueConfig::default().with_player(Arc::clone(&player)),
+        QueueConfig::builder().player(Arc::clone(&player)).build(),
     ));
     let ticker = spawn_ticker(Arc::clone(&queue));
     let mut status_rx = queue.subscribe();

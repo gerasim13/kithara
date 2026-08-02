@@ -44,10 +44,11 @@ impl Deck {
                 .build(),
         ));
         let queue = Arc::new(Queue::new(
-            QueueConfig::default()
-                .with_player(Arc::clone(&player))
-                .with_store(config.store.clone())
-                .with_cancel(config.shutdown.child()),
+            QueueConfig::builder()
+                .player(Arc::clone(&player))
+                .store(config.store.clone())
+                .cancel(config.shutdown.child())
+                .build(),
         ));
 
         Self {
@@ -214,7 +215,7 @@ mod tests {
                 .build(),
         ));
         let queue = Arc::new(Queue::new(
-            QueueConfig::default().with_player(Arc::clone(&player)),
+            QueueConfig::builder().player(Arc::clone(&player)).build(),
         ));
         Deck {
             player,

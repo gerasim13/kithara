@@ -178,7 +178,10 @@ async fn warm_hls_worker(
     worker: AudioWorkerHandle,
     backend: DecoderBackend,
 ) -> f64 {
-    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let wav_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     let hls_config = HlsConfig::for_url(url.clone()).store(store).build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .byte_pool(kithara::bufpool::BytePool::default())
@@ -237,7 +240,10 @@ async fn warm_hls_worker_without_seek(
     worker: AudioWorkerHandle,
     backend: DecoderBackend,
 ) -> f64 {
-    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let wav_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     let hls_config = HlsConfig::for_url(url.clone()).store(store).build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .byte_pool(kithara::bufpool::BytePool::default())
@@ -1066,7 +1072,10 @@ async fn stress_offline_crossfade_no_gaps() {
     let make_hls = |w: AudioWorkerHandle, s: AssetStore| {
         let u = hls_url.clone();
         async move {
-            let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+            let wav_info = MediaInfo::builder()
+                .maybe_codec(Some(AudioCodec::Pcm))
+                .maybe_container(Some(ContainerFormat::Wav))
+                .build();
             let cfg = HlsConfig::for_url(u).store(s).build();
             let audio_config = AudioConfig::<Hls>::for_stream(cfg)
                 .byte_pool(kithara::bufpool::BytePool::default())

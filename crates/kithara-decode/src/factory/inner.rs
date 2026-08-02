@@ -922,7 +922,10 @@ mod tests {
 
     #[test]
     fn wav_reader_profile_requires_gated_input() {
-        let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+        let media_info = MediaInfo::builder()
+            .maybe_codec(Some(AudioCodec::Pcm))
+            .maybe_container(Some(ContainerFormat::Wav))
+            .build();
 
         let profile = DecoderFactory::reader_profile(&media_info, None);
 
@@ -931,7 +934,10 @@ mod tests {
 
     #[test]
     fn self_framing_reader_profile_remains_incremental() {
-        let media_info = MediaInfo::new(Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio));
+        let media_info = MediaInfo::builder()
+            .maybe_codec(Some(AudioCodec::Mp3))
+            .maybe_container(Some(ContainerFormat::MpegAudio))
+            .build();
 
         let profile = DecoderFactory::reader_profile(&media_info, None);
 
@@ -1107,7 +1113,10 @@ mod apple_factory_tests {
         let (blob, segmented) = build_test_layout(TestLayoutCodec::Aac, 1);
         let source = Cursor::new(blob);
         let byte_map: Arc<dyn ByteMap> = Arc::new(segmented);
-        let media_info = MediaInfo::new(Some(AudioCodec::AacLc), None);
+        let media_info = MediaInfo::builder()
+            .maybe_codec(Some(AudioCodec::AacLc))
+            .maybe_container(None)
+            .build();
         let config: DecoderConfig<kithara_resampler::NoResamplerBackend> = DecoderConfig {
             backend: DecoderBackend::Apple,
             byte_map: Some(byte_map),

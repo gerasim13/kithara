@@ -374,7 +374,10 @@ fn build_variant_layout(label: &str, variant_index: usize) -> VariantLayout {
 }
 
 fn media_info(variant: usize) -> MediaInfo {
-    let mut info = MediaInfo::new(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4));
+    let mut info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::AacLc))
+        .maybe_container(Some(ContainerFormat::Fmp4))
+        .build();
     info.variant_index = Some(u32::try_from(variant).expect("variant fits u32"));
     info
 }

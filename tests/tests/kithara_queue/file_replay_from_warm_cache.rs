@@ -53,9 +53,10 @@ fn build_session(cache_path: &Path) -> Session {
             .build(),
     ));
     let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-            .with_player(player)
-            .with_store(store.clone()),
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build(),
     ));
     let queue_for_tick = Arc::clone(&queue);
     let tick = tokio::task::spawn(async move {

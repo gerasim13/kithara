@@ -94,7 +94,7 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
             .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
             .build(),
     ));
-    let queue = Queue::new(QueueConfig::default().with_player(player));
+    let queue = Queue::new(QueueConfig::builder().player(player).build());
     let cfg = ResourceConfig::for_src(fixture.master_url().as_str())
         .expect("valid HLS URL")
         .byte_pool(kithara::bufpool::BytePool::default())

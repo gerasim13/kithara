@@ -643,7 +643,10 @@ impl StreamType for TestStream {
 }
 
 pub(super) fn media_info(variant: u32) -> MediaInfo {
-    let mut info = MediaInfo::new(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4));
+    let mut info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::AacLc))
+        .maybe_container(Some(ContainerFormat::Fmp4))
+        .build();
     info.variant_index = Some(variant);
     info
 }

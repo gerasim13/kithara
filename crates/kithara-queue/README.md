@@ -59,7 +59,7 @@ use kithara_queue::{Queue, QueueConfig, Transition};
 
 #[tokio::main]
 async fn main() {
-    let queue = Arc::new(Queue::new(QueueConfig::new()));
+    let queue = Arc::new(Queue::new(QueueConfig::default()));
     queue.set_tracks(["https://example.com/a.mp3", "https://example.com/b.mp3"]);
 
     // Caller explicitly picks the first track to play. Queue does not

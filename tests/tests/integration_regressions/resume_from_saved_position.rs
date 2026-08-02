@@ -45,7 +45,7 @@ fn new_queue() -> Arc<Queue> {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    Arc::new(Queue::new(QueueConfig::default().with_player(player)))
+    Arc::new(Queue::new(QueueConfig::builder().player(player).build()))
 }
 
 fn new_downloader() -> Downloader {

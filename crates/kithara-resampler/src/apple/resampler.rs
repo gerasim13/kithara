@@ -513,8 +513,8 @@ mod tests {
     ) -> super::AppleResampler {
         let settings = test_settings(source_rate, target_rate, channels, frames);
         let config = ResamplerConfig::builder()
-            .backend(AppleAudioConverterBackend::new(
-                AudioToolboxConverterFactory::new(),
+            .backend(AppleAudioConverterBackend::with_config(
+                AudioToolboxConverterFactory::new().into(),
             ))
             .settings(settings)
             .build();

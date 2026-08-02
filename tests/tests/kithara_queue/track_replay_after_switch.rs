@@ -131,9 +131,10 @@ fn build_queue_with_tick_cf(
             .build(),
     ));
     let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-            .with_player(player)
-            .with_store(store.clone()),
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build(),
     ));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {

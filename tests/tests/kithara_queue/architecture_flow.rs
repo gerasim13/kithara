@@ -41,9 +41,10 @@ async fn queue_playback_architecture() {
         SAMPLE_RATE,
     );
     let queue = Queue::new(
-        QueueConfig::default()
-            .with_player(Arc::clone(harness.player()))
-            .with_store(store.clone()),
+        QueueConfig::builder()
+            .player(Arc::clone(harness.player()))
+            .store(store.clone())
+            .build(),
     );
     let downloader = create_test_downloader();
     let config = resource_config(url.as_str(), downloader, store);

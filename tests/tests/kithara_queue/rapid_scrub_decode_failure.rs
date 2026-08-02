@@ -246,7 +246,7 @@ impl Harness {
                 .session(OfflineSession::arc_auto())
                 .build(),
         ));
-        let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+        let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
         let queue_for_tick = Arc::clone(&queue);
         let tick = tokio::task::spawn(async move {

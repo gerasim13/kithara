@@ -146,9 +146,10 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
         .event_bus(player.bus().clone())
         .build();
     let queue = Queue::new(
-        QueueConfig::default()
-            .with_player(player)
-            .with_store(store.clone()),
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build(),
     );
     let mut rx = queue.subscribe();
 

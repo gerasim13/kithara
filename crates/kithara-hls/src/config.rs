@@ -26,14 +26,6 @@ pub struct KeyOptions {
     pub key_registry: Option<KeyProcessorRegistry>,
 }
 
-impl KeyOptions {
-    #[must_use]
-    // ast-grep-ignore: style.prefer-default-derive
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
 /// Method used for lazy exact-size probes when a file-like decoder path needs
 /// byte-accurate segment offsets and `#EXT-X-BYTERANGE` is absent.
 ///

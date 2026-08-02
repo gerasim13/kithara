@@ -194,8 +194,8 @@ async fn run_case(mode: GateMode) {
     let queue = Queue::new(
         QueueConfig::builder()
             .should_autoplay(false)
-            .build()
-            .with_player(Arc::clone(&harness.player)),
+            .player(Arc::clone(&harness.player))
+            .build(),
     );
     let mut rx = harness.player.subscribe();
 

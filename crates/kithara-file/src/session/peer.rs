@@ -345,7 +345,7 @@ mod tests {
     fn remote_capture_metadata_publishes_opened() {
         let inner = make_inner();
         let mut rx = inner.source.bus.subscribe();
-        let mut headers = Headers::new();
+        let mut headers = Headers::default();
         headers.insert("content-type", "audio/mpeg");
         headers.insert("content-length", "12");
 
