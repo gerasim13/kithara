@@ -144,14 +144,14 @@ fn apple_fused_src_decodes_at_the_requested_host_rate() {
         .checked_mul(NonZeroU32::new(2).expect("BUG: two is non-zero"))
         .expect("BUG: a doubled sample rate must fit in u32");
 
-    let resampler = DecoderResamplerConfig::for_decoder_backend(
-        DecoderBackend::Apple,
-        target_rate,
-        NoResamplerBackend,
-        ResamplerQuality::default(),
-        ResamplerOptions::default(),
-    )
-    .expect("BUG: the decoder-side resampler plan must be constructible");
+    let resampler = Some(
+        DecoderResamplerConfig::builder()
+            .target_sample_rate(target_rate)
+            .backend(NoResamplerBackend)
+            .quality(ResamplerQuality::default())
+            .options(ResamplerOptions::default())
+            .build(),
+    );
 
     match apple_mp3_decoder(&media_info, resampler) {
         Ok(decoder) => assert_eq!(

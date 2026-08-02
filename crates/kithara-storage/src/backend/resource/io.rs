@@ -186,7 +186,7 @@ mod tests {
     /// builder defaults). The caller keeps the backing `TempDir` alive for the
     /// duration of the test.
     fn open_mmap(path: std::path::PathBuf) -> ResourceCore<MmapDriver> {
-        ResourceCore::open(CancelToken::never(), MmapOptions::new(path))
+        ResourceCore::open(CancelToken::never(), MmapOptions::for_path(path).build())
             .expect("open mmap must succeed")
     }
 

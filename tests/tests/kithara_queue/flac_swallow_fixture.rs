@@ -133,20 +133,21 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
             .build(),
     );
 
-    let cfg = ResourceConfig::for_src(created.master_url().as_str())
-        .expect("valid master URL")
-        .downloader(downloader)
-        .discriminator("t0".to_string())
-        .store(kithara_integration_tests::disk_asset_store(temp.path()))
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(backend)
-                .build(),
-        )
-        .initial_abr_mode(AbrMode::manual(TOP_VARIANT))
-        .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
-        .build();
+    let cfg: ResourceConfig = ResourceConfig::for_src(
+        ResourceConfig::parse_src(created.master_url().as_str()).expect("valid master URL"),
+    )
+    .downloader(downloader)
+    .discriminator("t0".to_string())
+    .store(kithara_integration_tests::disk_asset_store(temp.path()))
+    .decoder(
+        kithara::audio::AudioDecoderConfig::builder()
+            .backend(backend)
+            .build(),
+    )
+    .initial_abr_mode(AbrMode::manual(TOP_VARIANT))
+    .byte_pool(BytePool::default())
+    .pcm_pool(PcmPool::default())
+    .build();
 
     let resource = Resource::new(cfg)
         .await

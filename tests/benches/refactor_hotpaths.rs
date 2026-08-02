@@ -317,10 +317,9 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
             },
             |(_temp_dir, file_path)| {
                 rt.block_on(async move {
-                    let file_config = FileConfig::new(
-                        file_path.into(),
-                        kithara_integration_tests::memory_asset_store(),
-                    );
+                    let file_config = FileConfig::for_src(file_path.into())
+                        .store(kithara_integration_tests::memory_asset_store())
+                        .build();
                     let config = AudioConfig::<File>::for_stream(file_config)
                         .byte_pool(BytePool::default())
                         .pcm_pool(PcmPool::default())
@@ -373,8 +372,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                 rt.block_on(async move {
                     let net = NetOptions::builder().pool_max_idle_per_host(8).build();
                     let downloader = Downloader::new(
-                        DownloaderConfig::builder()
-                            .client(HttpClient::new(net, CancelToken::never()))
+                        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never()))
                             .build(),
                     );
                     let store = AssetStoreBuilder::default()

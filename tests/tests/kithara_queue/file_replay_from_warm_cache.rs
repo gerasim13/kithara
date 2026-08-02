@@ -81,19 +81,20 @@ fn build_session(cache_path: &Path) -> Session {
 }
 
 fn track_source(url: &Url, session: &Session) -> TrackSource {
-    let cfg = ResourceConfig::for_src(url.as_str())
-        .expect("valid fixture URL")
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .downloader(session.downloader.clone())
-        .store(session.store.clone())
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(DecoderBackend::Symphonia)
-                .build(),
-        )
-        .initial_abr_mode(AbrMode::Auto(None))
-        .build();
+    let cfg = ResourceConfig::for_src(
+        ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"),
+    )
+    .byte_pool(kithara::bufpool::BytePool::default())
+    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .downloader(session.downloader.clone())
+    .store(session.store.clone())
+    .decoder(
+        kithara::audio::AudioDecoderConfig::builder()
+            .backend(DecoderBackend::Symphonia)
+            .build(),
+    )
+    .initial_abr_mode(AbrMode::Auto(None))
+    .build();
     TrackSource::Config(Box::new(cfg))
 }
 

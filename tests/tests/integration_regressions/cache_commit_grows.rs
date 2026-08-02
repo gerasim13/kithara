@@ -66,8 +66,7 @@ fn resource_config(
     name: &str,
 ) -> ResourceConfig {
     let url = handle.child_url(name);
-    ResourceConfig::for_src(url.as_str())
-        .expect("valid fixture URL")
+    ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
@@ -128,8 +127,7 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
         })
         .collect();
     let downloader = Downloader::new(
-        DownloaderConfig::builder()
-            .client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
     let player = Arc::new(PlayerImpl::new(

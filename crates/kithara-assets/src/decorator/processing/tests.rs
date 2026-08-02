@@ -25,8 +25,8 @@ fn mock_writer(content: &[u8]) -> (BaseWriter, tempfile::TempDir) {
     let path = dir.path().join("test.bin");
     let cancel = CancelToken::never();
 
-    let res: MmapResource =
-        Resource::open(cancel, MmapOptions::new(path)).expect("open processing test resource");
+    let res: MmapResource = Resource::open(cancel, MmapOptions::for_path(path).build())
+        .expect("open processing test resource");
     res.write_at(0, content)
         .expect("seed processing test resource");
     (BaseWriter::new(StorageResource::from(res)), dir)
@@ -211,7 +211,8 @@ fn wait_range_aborts_on_cancellation() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("cancel.bin");
     let cancel = CancelToken::never();
-    let resource: MmapResource = Resource::open(cancel.clone(), MmapOptions::new(path)).unwrap();
+    let resource: MmapResource =
+        Resource::open(cancel.clone(), MmapOptions::for_path(path).build()).unwrap();
     resource.write_at(0, &[1u8; 16]).unwrap();
 
     let writer = ProcessedWriter::new(
@@ -380,7 +381,8 @@ fn reopened_committed_processed_reader_is_readable_immediately() {
 
     let dir = tempdir().unwrap();
     let path = dir.path().join("reopen.bin");
-    let res: MmapResource = Resource::open(CancelToken::never(), MmapOptions::new(path)).unwrap();
+    let res: MmapResource =
+        Resource::open(CancelToken::never(), MmapOptions::for_path(path).build()).unwrap();
     res.write_at(0, &already_processed).unwrap();
     let storage = StorageResource::from(res);
     storage

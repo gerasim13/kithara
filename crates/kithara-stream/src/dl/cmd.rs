@@ -49,6 +49,9 @@ pub(super) type ResponseValidator = fn(&Headers) -> NetResult<()>;
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct FetchCmd {
+    /// URL to fetch.
+    #[builder(start_fn)]
+    pub url: Url,
     /// Epoch cancel token from the Peer. When set, the Downloader
     /// combines it with the track-level cancel via [`CancelGroup`].
     pub cancel: Option<CancelToken>,
@@ -76,23 +79,17 @@ pub struct FetchCmd {
     pub writer: Option<WriterFn>,
     /// HTTP method.
     pub method: RequestMethod,
-    /// URL to fetch.
-    pub url: Url,
 }
 
 impl FetchCmd {
     /// Builder for an HTTP GET command targeting the given URL.
-    pub fn get(
-        url: Url,
-    ) -> FetchCmdBuilder<fetch_cmd_builder::SetUrl<fetch_cmd_builder::SetMethod>> {
-        Self::builder().method(RequestMethod::Get).url(url)
+    pub fn get(url: Url) -> FetchCmdBuilder<fetch_cmd_builder::SetMethod> {
+        Self::builder(url).method(RequestMethod::Get)
     }
 
     /// Builder for an HTTP HEAD command targeting the given URL.
-    pub fn head(
-        url: Url,
-    ) -> FetchCmdBuilder<fetch_cmd_builder::SetUrl<fetch_cmd_builder::SetMethod>> {
-        Self::builder().method(RequestMethod::Head).url(url)
+    pub fn head(url: Url) -> FetchCmdBuilder<fetch_cmd_builder::SetMethod> {
+        Self::builder(url).method(RequestMethod::Head)
     }
 }
 

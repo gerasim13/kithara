@@ -71,7 +71,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         let p = local_mp3.clone();
         let store = store.clone();
         async move {
-            let file_cfg = FileConfig::new(FileSrc::Local(p), store);
+            let file_cfg = FileConfig::for_src(FileSrc::Local(p)).store(store).build();
             let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
                 .byte_pool(kithara::bufpool::BytePool::default())
                 .pcm_pool(kithara::bufpool::PcmPool::default())

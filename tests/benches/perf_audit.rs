@@ -90,10 +90,9 @@ fn bench_gapless_trim(c: &mut Criterion) {
     group.bench_function("decode_mp3_to_eof", |b| {
         b.iter(|| {
             rt.block_on(async {
-                let file_config = FileConfig::new(
-                    file_path.clone().into(),
-                    kithara_integration_tests::memory_asset_store(),
-                );
+                let file_config = FileConfig::for_src(file_path.clone().into())
+                    .store(kithara_integration_tests::memory_asset_store())
+                    .build();
                 let config = AudioConfig::<File>::for_stream(file_config)
                     .hint("mp3".to_string())
                     .byte_pool(BytePool::default())

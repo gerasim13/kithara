@@ -291,7 +291,7 @@ mod tests {
             .cache_capacity(capacity)
             .build();
         let url = Url::parse("https://example.com/master.m3u8").expect("valid test URL");
-        HlsConfig::new(url, store)
+        HlsConfig::for_url(url).store(store).build()
     }
 
     #[kithara::test]

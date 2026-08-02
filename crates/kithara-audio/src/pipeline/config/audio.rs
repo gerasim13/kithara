@@ -20,10 +20,14 @@ use crate::{
 /// Generic over `StreamType` to include stream-specific configuration.
 /// Combines stream config and audio pipeline settings into a single builder.
 #[derive(Builder, fieldwork::Fieldwork)]
-#[builder(state_mod(vis = "pub"))]
+#[builder(start_fn = for_stream)]
 #[non_exhaustive]
 #[fieldwork(opt_in, get)]
 pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
+    /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
+    #[builder(start_fn)]
+    #[field(get)]
+    pub(crate) stream: T::Config,
     /// Decoder construction settings, including decoder-side resampling.
     #[builder(default)]
     #[field(get)]
@@ -31,9 +35,6 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// Shared byte pool for temporary buffers (probe, etc.).
     #[field(get)]
     pub(crate) byte_pool: BytePool,
-    /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
-    #[field(get)]
-    pub(crate) stream: T::Config,
     /// Number of chunks to buffer before signaling preload readiness.
     #[builder(default = NonZeroUsize::new(3).expect("3 is non-zero"))]
     #[field(get, copy)]
@@ -103,14 +104,6 @@ where
     T: StreamType,
     B: ResamplerBackend,
 {
-    /// Create config with stream config and default audio settings.
-    pub fn new(stream: T::Config, byte_pool: BytePool, pcm_pool: PcmPool) -> Self {
-        Self::for_stream(stream)
-            .byte_pool(byte_pool)
-            .pcm_pool(pcm_pool)
-            .build()
-    }
-
     /// Return the configured event bus.
     #[must_use]
     pub fn bus(&self) -> Option<&EventBus> {
@@ -127,14 +120,6 @@ where
     #[must_use]
     pub fn engine_load(&self) -> Option<&Arc<EngineLoad>> {
         self.engine_load.as_ref()
-    }
-
-    /// Chainable counterpart to [`AudioConfig::new`]: returns a builder
-    /// with `stream` set so callers can attach further setters.
-    pub fn for_stream(
-        stream: T::Config,
-    ) -> AudioConfigBuilder<T, B, audio_config_builder::SetStream> {
-        Self::builder().stream(stream)
     }
 
     /// Return the optional format hint.

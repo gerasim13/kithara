@@ -26,15 +26,19 @@ use kithara_file::{File, FileConfig, FileSrc};
 let store = AssetStoreBuilder::default().build();
 
 // Remote HTTP source
-let config = FileConfig::new(FileSrc::Remote(url), store.clone());
+let config = FileConfig::for_src(FileSrc::Remote(url))
+    .store(store.clone())
+    .build();
 let stream = Stream::<File>::new(config).await?;
 
 // Local file source
-let local = FileConfig::new(FileSrc::Local(path), store);
+let local = FileConfig::for_src(FileSrc::Local(path))
+    .store(store)
+    .build();
 let stream = Stream::<File>::new(local).await?;
 ```
 
-`FileConfig` is a [`bon`](https://crates.io/crates/bon) builder. The shared `AssetStore` is required. `FileConfig::for_src(src)` returns the chained builder for non-default settings (event channel capacity, downloader, cache discriminator, extension hint, asset store, cancel token).
+`FileConfig` is a [`bon`](https://crates.io/crates/bon) builder. Start with `FileConfig::for_src(src)`, set the required shared asset store with `.store(store)`, and call `.build()`. The same chain accepts non-default settings such as event channel capacity, downloader, cache discriminator, extension hint, and cancel token.
 
 ## Public Items
 

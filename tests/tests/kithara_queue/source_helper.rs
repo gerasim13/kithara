@@ -2,10 +2,10 @@
 
 use kithara::{
     assets::AssetStore,
-    audio::AudioDecoderConfig,
+    audio::{AudioDecoderConfig, DecoderResamplerSettings},
     decode::DecoderBackend,
     hls::{AbrMode, KeyOptions},
-    play::ResourceConfig,
+    play::{PlaybackResamplerBackend, ResourceConfig},
     queue::TrackSource,
 };
 use kithara_app::config::AppConfig;
@@ -19,9 +19,10 @@ pub(crate) fn app_track_source(
     abr: AbrMode,
     discriminator: Option<&str>,
 ) -> TrackSource {
-    let Ok(builder) = ResourceConfig::for_src(url) else {
+    let Ok(src) = ResourceConfig::parse_src(url) else {
         return TrackSource::Uri(url.to_string());
     };
+    let builder = ResourceConfig::for_src(src);
     let registry = config.drm.registry();
     let keys = if registry.is_empty() {
         KeyOptions::default()
@@ -31,7 +32,13 @@ pub(crate) fn app_track_source(
     let headers = Url::parse(url)
         .ok()
         .and_then(|parsed| config.drm.resource_headers(&parsed));
-    let decoder_defaults = kithara::play::default_resource_decoder_config();
+    let decoder_defaults = AudioDecoderConfig::builder()
+        .resampler(
+            DecoderResamplerSettings::builder()
+                .backend(PlaybackResamplerBackend::default())
+                .build(),
+        )
+        .build();
     let decoder = AudioDecoderConfig::builder()
         .backend(backend)
         .gapless_mode(decoder_defaults.gapless_mode())

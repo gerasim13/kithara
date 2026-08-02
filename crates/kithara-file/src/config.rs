@@ -21,13 +21,14 @@ pub enum FileSrc {
 ///
 /// Used with `Stream::<File>::new(config)`.
 #[derive(Clone, Builder)]
-#[builder(state_mod(vis = "pub"))]
+#[builder(start_fn = for_src)]
 #[non_exhaustive]
 pub struct FileConfig {
+    /// File source (remote URL or local path).
+    #[builder(start_fn)]
+    pub src: FileSrc,
     /// Shared asset store used by local and remote sources.
     pub store: AssetStore,
-    /// File source (remote URL or local path).
-    pub src: FileSrc,
     /// Event bus (optional - if not provided, one is created internally).
     #[builder(name = events)]
     pub bus: Option<EventBus>,
@@ -67,19 +68,6 @@ impl fmt::Debug for FileConfig {
     }
 }
 
-impl FileConfig {
-    /// Create new file config with source.
-    #[must_use]
-    pub fn new(src: FileSrc, store: AssetStore) -> Self {
-        Self::for_src(src).store(store).build()
-    }
-
-    /// Chainable counterpart to [`FileConfig::new`].
-    pub fn for_src(src: FileSrc) -> FileConfigBuilder<file_config_builder::SetSrc> {
-        Self::builder().src(src)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -102,8 +90,8 @@ mod tests {
     #[kithara::test]
     #[case(test_src())]
     #[case(FileSrc::Local(PathBuf::from("/tmp/song.mp3")))]
-    fn test_file_config_new_preserves_source(#[case] src: FileSrc) {
-        let config = FileConfig::new(src.clone(), test_store());
+    fn test_file_config_for_src_preserves_source(#[case] src: FileSrc) {
+        let config = FileConfig::for_src(src.clone()).store(test_store()).build();
 
         assert_eq!(config.src, src);
         assert!(config.bus.is_none());
@@ -157,7 +145,7 @@ mod tests {
         #[case] apply: fn(FileConfig) -> FileConfig,
         #[case] check: fn(&FileConfig) -> bool,
     ) {
-        let config = apply(FileConfig::new(test_src(), test_store()));
+        let config = apply(FileConfig::for_src(test_src()).store(test_store()).build());
         assert!(check(&config));
     }
 
@@ -189,7 +177,7 @@ mod tests {
 
     #[kithara::test]
     fn test_debug_impl() {
-        let config = FileConfig::new(test_src(), test_store());
+        let config = FileConfig::for_src(test_src()).store(test_store()).build();
         let debug_str = format!("{:?}", config);
 
         assert!(debug_str.contains("FileConfig"));

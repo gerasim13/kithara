@@ -294,13 +294,13 @@ mod tests {
 
     #[kithara::test]
     fn track_source_from_resource_config() {
-        let cfg = ResourceConfig::new(
-            "https://example.com/a.mp3",
-            AssetStoreBuilder::default().build(),
-            BytePool::default(),
-            PcmPool::default(),
-        )
-        .expect("BUG: hard-coded URL is valid");
+        let src = ResourceConfig::parse_src("https://example.com/a.mp3")
+            .expect("BUG: hard-coded URL is valid");
+        let cfg = ResourceConfig::for_src(src)
+            .store(AssetStoreBuilder::default().build())
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
+            .build();
         let src: TrackSource = cfg.into();
         assert!(matches!(src, TrackSource::Config(_)));
         assert_eq!(src.uri(), Some("https://example.com/a.mp3"));

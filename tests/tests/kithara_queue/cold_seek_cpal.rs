@@ -95,9 +95,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
-        DownloaderConfig::builder()
-            .client(HttpClient::new(net, CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
 
     let player = Arc::new(PlayerImpl::new(
@@ -119,18 +117,18 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
         }
     });
 
-    let cfg = ResourceConfig::for_src(URL)
-        .expect("valid silvercomet URL")
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .downloader(downloader.clone())
-        .store(store)
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(backend)
-                .build(),
-        )
-        .build();
+    let cfg =
+        ResourceConfig::for_src(ResourceConfig::parse_src(URL).expect("valid silvercomet URL"))
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .downloader(downloader.clone())
+            .store(store)
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
+            .build();
     let source = TrackSource::Config(Box::new(cfg));
 
     let mut rx = queue.subscribe();

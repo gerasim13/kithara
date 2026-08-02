@@ -82,13 +82,15 @@ impl Loader {
         source: TrackSource,
     ) -> Result<ResourceConfig, QueueError> {
         let mut config = match source {
-            TrackSource::Uri(url) => ResourceConfig::new(
-                &url,
-                self.store.clone(),
-                self.player.byte_pool().clone(),
-                self.player.pcm_pool().clone(),
-            )
-            .map_err(|e| QueueError::InvalidUrl(format!("{url}: {e}")))?,
+            TrackSource::Uri(url) => {
+                let src = ResourceConfig::parse_src(&url)
+                    .map_err(|e| QueueError::InvalidUrl(format!("{url}: {e}")))?;
+                ResourceConfig::for_src(src)
+                    .store(self.store.clone())
+                    .byte_pool(self.player.byte_pool().clone())
+                    .pcm_pool(self.player.pcm_pool().clone())
+                    .build()
+            }
             TrackSource::Config(boxed) => *boxed,
         };
         if config.bus().is_none() {
@@ -309,10 +311,10 @@ mod tests {
         let supplied_store = AssetStoreBuilder::default()
             .backend(StorageBackend::Memory)
             .build();
-        let Ok(builder) = ResourceConfig::for_src("https://example.com/a.mp3") else {
+        let Ok(src) = ResourceConfig::parse_src("https://example.com/a.mp3") else {
             panic!("valid url");
         };
-        let given = builder
+        let given = ResourceConfig::for_src(src)
             .store(supplied_store.clone())
             .byte_pool(BytePool::default())
             .pcm_pool(PcmPool::default())

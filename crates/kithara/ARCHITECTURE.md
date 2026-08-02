@@ -126,6 +126,7 @@ The `prelude` collects the everyday types.
 
 ## Integration
 
-Most consumers depend on `kithara` with default features and call
-`Resource::new(ResourceConfig::new(url)?).await?`. For wasm or embedded builds,
-disable defaults and pick a minimal feature set (e.g. `file` + `symphonia`).
+Most consumers depend on `kithara` with default features, parse the source with
+`ResourceConfig::parse_src`, then configure the required store and pools through
+`ResourceConfig::for_src`. For wasm or embedded builds, disable defaults and
+pick a minimal feature set (e.g. `file` + `symphonia`).

@@ -158,8 +158,7 @@ async fn hung_loads_must_not_starve_user_selected_track() {
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp, Consts::CAP);
 
     let mk_cfg = |url: &Url| {
-        ResourceConfig::for_src(url.as_str())
-            .expect("valid fixture URL")
+        ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
             .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())

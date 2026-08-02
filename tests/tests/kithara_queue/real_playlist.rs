@@ -69,9 +69,7 @@ async fn shared_test_ctx() -> &'static TestCtx {
         .get_or_init(|| async {
             let net = NetOptions::builder().is_insecure(true).build();
             let downloader = Downloader::new(
-                DownloaderConfig::builder()
-                    .client(HttpClient::new(net, CancelToken::never()))
-                    .build(),
+                DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
             );
             let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
             let config = AppConfig::new(

@@ -63,8 +63,7 @@ fn resource_config(
     index: usize,
 ) -> ResourceConfig {
     let url = handle.child_url(&format!("storm-{index}.mp3"));
-    ResourceConfig::for_src(url.as_str())
-        .expect("valid fixture URL")
+    ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
@@ -113,8 +112,7 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
         })
         .collect();
     let downloader = Downloader::new(
-        DownloaderConfig::builder()
-            .client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
     let player = Arc::new(PlayerImpl::new(

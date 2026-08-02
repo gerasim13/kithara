@@ -130,12 +130,13 @@ async fn make_signal_resource(
         bit_rate: None,
     };
     let url = server.sine(&spec, freq_hz).await;
-    let mut config = ResourceConfig::for_src(url.as_str())
-        .expect("valid signal fixture URL")
-        .store(kithara_integration_tests::disk_asset_store(cache_dir))
-        .byte_pool(player.byte_pool().clone())
-        .pcm_pool(player.pcm_pool().clone())
-        .build();
+    let mut config = ResourceConfig::for_src(
+        ResourceConfig::parse_src(url.as_str()).expect("valid signal fixture URL"),
+    )
+    .store(kithara_integration_tests::disk_asset_store(cache_dir))
+    .byte_pool(player.byte_pool().clone())
+    .pcm_pool(player.pcm_pool().clone())
+    .build();
     config = player.prepare_config(config);
 
     Resource::new(config)

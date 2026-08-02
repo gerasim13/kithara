@@ -79,9 +79,7 @@ async fn playback_resumes_after_network_returns(temp_dir: TestTempDir) {
         )
         .build();
     let downloader = Downloader::new(
-        DownloaderConfig::builder()
-            .client(HttpClient::new(net, CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
@@ -91,15 +89,15 @@ async fn playback_resumes_after_network_returns(temp_dir: TestTempDir) {
             .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
-    let cfg = ResourceConfig::for_src(url.as_str())
-        .expect("valid HLS URL")
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .downloader(downloader)
-        .initial_abr_mode(AbrMode::manual(0))
-        .look_ahead_bytes(LOOK_AHEAD_BYTES)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
-        .build();
+    let cfg =
+        ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid HLS URL"))
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .downloader(downloader)
+            .initial_abr_mode(AbrMode::manual(0))
+            .look_ahead_bytes(LOOK_AHEAD_BYTES)
+            .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+            .build();
 
     let ticker = spawn_ticker(Arc::clone(&queue));
     let mut rx = queue.subscribe();

@@ -177,10 +177,9 @@ fn test_audio_config_with_media_info() {
         .sample_rate(44100)
         .build();
 
-    let file_config = FileConfig::new(
-        FileSrc::Local("/tmp/test.mp3".into()),
-        kithara_integration_tests::memory_asset_store(),
-    );
+    let file_config = FileConfig::for_src(FileSrc::Local("/tmp/test.mp3".into()))
+        .store(kithara_integration_tests::memory_asset_store())
+        .build();
     let config = AudioConfig::<kithara::file::File>::for_stream(file_config)
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(PcmPool::default())
@@ -203,10 +202,9 @@ fn test_audio_config_with_media_info() {
     trim_trailing: true,
 }))]
 fn test_audio_config_with_gapless_mode(#[case] mode: GaplessMode) {
-    let file_config = FileConfig::new(
-        FileSrc::Local("/tmp/test.mp3".into()),
-        kithara_integration_tests::memory_asset_store(),
-    );
+    let file_config = FileConfig::for_src(FileSrc::Local("/tmp/test.mp3".into()))
+        .store(kithara_integration_tests::memory_asset_store())
+        .build();
     let config = AudioConfig::<kithara::file::File>::for_stream(file_config)
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(PcmPool::default())

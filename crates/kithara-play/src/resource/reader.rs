@@ -26,12 +26,13 @@ use super::{ResourceConfig, SourceType};
 /// use kithara_play::{Resource, ResourceConfig};
 ///
 /// // Auto-detect: .m3u8 -> HLS, everything else -> progressive file
-/// let config = ResourceConfig::new(
+/// let config: ResourceConfig = ResourceConfig::for_src(ResourceConfig::parse_src(
 ///     "https://example.com/song.mp3",
-///     AssetStoreBuilder::default().build(),
-///     BytePool::default(),
-///     PcmPool::default(),
-/// )?;
+/// )?)
+/// .store(AssetStoreBuilder::default().build())
+/// .byte_pool(BytePool::default())
+/// .pcm_pool(PcmPool::default())
+/// .build();
 /// let mut resource = Resource::new(config).await?;
 ///
 /// let spec = resource.spec();

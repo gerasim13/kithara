@@ -128,20 +128,21 @@ async fn run_case(
         Scenario::SustainedFlac => AbrMode::manual(TOP_VARIANT),
         Scenario::SwitchToFlac => AbrMode::manual(0),
     };
-    let cfg = ResourceConfig::for_src(master.as_str())
-        .expect("valid master URL")
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .downloader(downloader)
-        .discriminator("t0".to_string())
-        .store(store)
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(backend)
-                .build(),
-        )
-        .initial_abr_mode(initial_mode)
-        .build();
+    let cfg: ResourceConfig = ResourceConfig::for_src(
+        ResourceConfig::parse_src(master.as_str()).expect("valid master URL"),
+    )
+    .byte_pool(kithara::bufpool::BytePool::default())
+    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .downloader(downloader)
+    .discriminator("t0".to_string())
+    .store(store)
+    .decoder(
+        kithara::audio::AudioDecoderConfig::builder()
+            .backend(backend)
+            .build(),
+    )
+    .initial_abr_mode(initial_mode)
+    .build();
 
     let resource = Resource::new(cfg)
         .await

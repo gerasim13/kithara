@@ -409,19 +409,20 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
             .build(),
     );
     let store = kithara_integration_tests::disk_asset_store(temp.path());
-    let cfg = kithara::play::ResourceConfig::for_src(spec.url.as_str())
-        .expect("valid track URL")
-        .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
-        .downloader(downloader.clone())
-        .store(store)
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(DecoderBackend::Symphonia)
-                .build(),
-        )
-        .initial_abr_mode(AbrMode::Auto(None))
-        .build();
+    let cfg = kithara::play::ResourceConfig::for_src(
+        kithara::play::ResourceConfig::parse_src(spec.url.as_str()).expect("valid track URL"),
+    )
+    .byte_pool(BytePool::default())
+    .pcm_pool(PcmPool::default())
+    .downloader(downloader.clone())
+    .store(store)
+    .decoder(
+        kithara::audio::AudioDecoderConfig::builder()
+            .backend(DecoderBackend::Symphonia)
+            .build(),
+    )
+    .initial_abr_mode(AbrMode::Auto(None))
+    .build();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
             .byte_pool(BytePool::default())

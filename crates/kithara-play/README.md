@@ -21,11 +21,16 @@ and test-harness crates. Enable `mock` for the `Equalizer` unimock helper.
 ## Usage
 
 ```rust
-use kithara_play::{ResourceConfig, default_resource_decoder_config};
+use kithara_assets::AssetStoreBuilder;
+use kithara_bufpool::{BytePool, PcmPool};
+use kithara_play::ResourceConfig;
 
-let decoder = default_resource_decoder_config();
-let resource = ResourceConfig::for_src("https://example.com/track.m3u8")?
-    .decoder(decoder)
+let resource: ResourceConfig = ResourceConfig::for_src(ResourceConfig::parse_src(
+    "https://example.com/track.m3u8",
+)?)
+    .store(AssetStoreBuilder::default().build())
+    .byte_pool(BytePool::default())
+    .pcm_pool(PcmPool::default())
     .build();
 ```
 

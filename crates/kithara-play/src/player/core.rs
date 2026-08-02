@@ -260,6 +260,16 @@ mod tests {
         StartsPaused,
     }
 
+    fn resource_config(input: &str) -> crate::resource::ResourceConfig {
+        let src = crate::resource::ResourceConfig::parse_src(input)
+            .expect("BUG: valid resource config source");
+        crate::resource::ResourceConfig::for_src(src)
+            .store(AssetStoreBuilder::default().build())
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
+            .build()
+    }
+
     #[kithara::test]
     fn prepare_config_applies_player_gapless_mode() {
         let player = PlayerImpl::new(
@@ -269,13 +279,7 @@ mod tests {
                 .pcm_pool(PcmPool::default())
                 .build(),
         );
-        let mut config = crate::resource::ResourceConfig::new(
-            "https://example.com/song.mp3",
-            AssetStoreBuilder::default().build(),
-            BytePool::default(),
-            PcmPool::default(),
-        )
-        .expect("BUG: valid resource config");
+        let mut config = resource_config("https://example.com/song.mp3");
 
         config = player.prepare_config(config);
 
@@ -290,13 +294,7 @@ mod tests {
     #[kithara::test]
     fn prepare_config_per_track_cancel_is_child_of_player_master() {
         let player = PlayerImpl::new(PlayerConfig::default());
-        let mut rc = crate::resource::ResourceConfig::new(
-            "https://example.com/song.mp3",
-            AssetStoreBuilder::default().build(),
-            BytePool::default(),
-            PcmPool::default(),
-        )
-        .expect("BUG: valid resource config");
+        let mut rc = resource_config("https://example.com/song.mp3");
         rc = player.prepare_config(rc);
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
@@ -320,13 +318,7 @@ mod tests {
                 .pcm_pool(PcmPool::default())
                 .build(),
         );
-        let mut rc = crate::resource::ResourceConfig::new(
-            "https://example.com/song.mp3",
-            AssetStoreBuilder::default().build(),
-            BytePool::default(),
-            PcmPool::default(),
-        )
-        .expect("BUG: valid resource config");
+        let mut rc = resource_config("https://example.com/song.mp3");
         rc = player.prepare_config(rc);
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");

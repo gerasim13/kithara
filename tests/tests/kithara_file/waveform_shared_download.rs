@@ -82,12 +82,12 @@ async fn waveform_and_player_share_one_get() {
         .build();
 
     // Waveform analysis consumer (whole-file) of the shared store.
-    let waveform_cfg = ResourceConfig::for_src(url.as_str())
-        .expect("waveform url")
-        .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
-        .store(store.clone())
-        .build();
+    let waveform_cfg =
+        ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("waveform url"))
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
+            .store(store.clone())
+            .build();
 
     // Player consumer of the same URL through the same shared store. Built
     // with `block_on_underrun(true)` so the drain parks on the virtual clock

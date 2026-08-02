@@ -11,7 +11,9 @@
 //!
 //! // Using StreamType API
 //! let store = AssetStoreBuilder::default().build();
-//! let config = FileConfig::new(FileSrc::Remote(url), store);
+//! let config = FileConfig::for_src(FileSrc::Remote(url))
+//!     .store(store)
+//!     .build();
 //! let inner = File::create(config).await?;
 //! ```
 

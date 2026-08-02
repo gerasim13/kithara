@@ -95,8 +95,7 @@ let decoder_config = AudioDecoderConfig::builder()
             .build(),
     )
     .build();
-let audio_config = AudioConfig::<Hls>::builder()
-    .stream(hls_config)
+let audio_config = AudioConfig::<Hls>::for_stream(hls_config)
     .host_sample_rate(sample_rate)
     .decoder(decoder_config)
     .build();

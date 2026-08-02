@@ -114,8 +114,7 @@ async fn queue_playback_architecture() {
 }
 
 fn resource_config(url: &str, downloader: Downloader, store: AssetStore) -> ResourceConfig {
-    ResourceConfig::for_src(url)
-        .expect("valid local fixture URL")
+    ResourceConfig::for_src(ResourceConfig::parse_src(url).expect("valid local fixture URL"))
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader)

@@ -77,7 +77,7 @@ where
             .map_or("none", |resampler| resampler.backend().name())
     }
 
-    fn resampler_config(&self) -> Result<Option<DecoderResamplerConfig<B>>, DecodeError> {
+    fn resampler_config(&self) -> Option<DecoderResamplerConfig<B>> {
         let target_sample_rate = NonZeroU32::new(self.host_sample_rate.load(Ordering::Acquire));
         self.decoder.build_resampler_config(target_sample_rate)
     }
@@ -258,7 +258,7 @@ where
             initial_spec,
             &initial_track_info,
             total_duration,
-        )?;
+        );
 
         let ring = RingConsumer::new(RingParts {
             block_on_underrun,
@@ -318,8 +318,7 @@ fn publish_initial_decoder_events<B>(
     initial_spec: PcmSpec,
     initial_track_info: &kithara_decode::DecoderTrackInfo,
     total_duration: Option<kithara_platform::time::Duration>,
-) -> Result<(), DecodeError>
-where
+) where
     B: ResamplerBackend,
 {
     bus.publish(decoder_changed_event(DecoderChangedEventData {
@@ -341,7 +340,7 @@ where
         bus.publish(event);
     }
     if let Some(event) = decoder_resampler_event(
-        deps.resampler_config()?.as_ref(),
+        deps.resampler_config().as_ref(),
         initial_spec,
         initial_media_info.and_then(|info| info.sample_rate),
     ) {
@@ -357,7 +356,6 @@ where
     {
         bus.publish(event);
     }
-    Ok(())
 }
 
 fn register_stream_audio_source<T>(
@@ -463,7 +461,7 @@ where
                 .epoch(deps.epoch.load(Ordering::Acquire))
                 .maybe_byte_map(reader.byte_map())
                 .maybe_hooks(reader.take_event_sink())
-                .maybe_resampler(deps.decoder.resampler_config()?)
+                .maybe_resampler(deps.decoder.resampler_config())
                 .build();
             let source = reader.into_inner();
             let info = match deps.user_media_info.clone() {
@@ -503,7 +501,7 @@ where
         .maybe_byte_map(reader.byte_map())
         .maybe_hooks(reader.take_event_sink())
         .maybe_hint(hint.clone())
-        .maybe_resampler(deps.resampler_config()?)
+        .maybe_resampler(deps.resampler_config())
         .build();
     let source = reader.into_inner();
     spawn_blocking(move || {

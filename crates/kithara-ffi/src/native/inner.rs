@@ -573,10 +573,10 @@ fn build_source_for_item(
         FfiAbrMode::Auto => AbrMode::Auto(None),
         FfiAbrMode::Manual { variant_index } => AbrMode::manual(variant_index as usize),
     });
-    let config = ResourceConfig::for_src(item.url())
-        .map_err(|e| FfiError::InvalidArgument {
-            reason: e.to_string(),
-        })?
+    let src = ResourceConfig::parse_src(item.url()).map_err(|e| FfiError::InvalidArgument {
+        reason: e.to_string(),
+    })?;
+    let config = ResourceConfig::for_src(src)
         .preferred_peak_bitrate(item.preferred_peak_bitrate().max(0.0))
         .maybe_headers(merged_headers_for_item(inner, item).map(Into::into))
         .events(scoped.clone())

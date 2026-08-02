@@ -5,8 +5,15 @@ use kithara_platform::{CancelToken, time::Duration, tokio::runtime::Handle};
 
 /// Configuration for [`Downloader`](super::Downloader).
 #[derive(Clone, Builder)]
+#[builder(start_fn = for_client)]
 #[non_exhaustive]
 pub struct DownloaderConfig {
+    /// HTTP client used for all fetches. Cloned by the Downloader to
+    /// share the underlying `reqwest::Client` (and its connection pool)
+    /// with the caller. Pass a single shared `HttpClient` to multiple
+    /// Downloaders to share keep-alive sockets across them.
+    #[builder(start_fn)]
+    pub client: HttpClient,
     /// Settings for the shared ABR controller owned by the Downloader.
     #[builder(default)]
     pub abr_settings: AbrSettings,
@@ -21,11 +28,6 @@ pub struct DownloaderConfig {
     /// — it keeps running until hard timeout fires.
     #[builder(default = Duration::from_secs(2))]
     pub soft_timeout: Duration,
-    /// HTTP client used for all fetches. Cloned by the Downloader to
-    /// share the underlying `reqwest::Client` (and its connection pool)
-    /// with the caller. Pass a single shared `HttpClient` to multiple
-    /// Downloaders to share keep-alive sockets across them.
-    pub client: HttpClient,
     /// Optional parent cancel. `Some` → the download loop's scope is a child
     /// of it (composed); `None` → the Downloader owns a standalone scope. The
     /// `CancelScope` seam lives in [`Downloader::new`](super::Downloader::new).
@@ -38,16 +40,4 @@ pub struct DownloaderConfig {
     /// Maximum number of concurrent in-flight fetch commands.
     #[builder(default = 5)]
     pub max_concurrent: usize,
-}
-
-impl DownloaderConfig {
-    /// Start a builder with `client` already set. Mirrors the
-    /// `ResourceConfig::for_src` / `HlsConfig::for_url` pattern — the
-    /// one required field is pre-supplied so callers can chain only
-    /// the optional knobs they care about.
-    pub fn for_client(
-        client: HttpClient,
-    ) -> DownloaderConfigBuilder<downloader_config_builder::SetClient> {
-        Self::builder().client(client)
-    }
 }

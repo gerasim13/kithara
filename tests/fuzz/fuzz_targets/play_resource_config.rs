@@ -6,7 +6,7 @@ use arbitrary::Arbitrary;
 use kithara::{
     assets::{AssetStore, AssetStoreBuilder, StorageBackend},
     bufpool::{BytePool, PcmPool},
-    play::ResourceConfig,
+    play::{PlaybackResamplerBackend, ResourceConfig},
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -26,10 +26,11 @@ fuzz_target!(|input: Input| {
     raw.truncate(4 * 1024);
 
     let text = String::from_utf8_lossy(&raw);
-    let _ = ResourceConfig::new(
-        text.as_ref(),
-        STORE.clone(),
-        BytePool::default(),
-        PcmPool::default(),
-    );
+    let _ = ResourceConfig::parse_src(text.as_ref()).map(|src| {
+        ResourceConfig::<PlaybackResamplerBackend>::for_src(src)
+            .store(STORE.clone())
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
+            .build()
+    });
 });

@@ -39,8 +39,5 @@ pub use kithara_audio::{
 };
 pub use kithara_net::Headers;
 pub use player::{PlayerConfig, PlayerImpl, SelectTransition};
-pub use resource::{
-    PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType,
-    default_resource_decoder_config,
-};
+pub use resource::{PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType};
 pub use rt::PlayerNode;

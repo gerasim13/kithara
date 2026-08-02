@@ -81,8 +81,7 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
         .expect("create HLS fixture");
     let gate = helper.register_segment_gate(fixture.token(), 0, FINAL_SEGMENT);
     let downloader = Downloader::new(
-        DownloaderConfig::builder()
-            .client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
     let session = Arc::new(OfflineSession::new_manual());
@@ -95,13 +94,14 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
             .build(),
     ));
     let queue = Queue::new(QueueConfig::builder().player(player).build());
-    let cfg = ResourceConfig::for_src(fixture.master_url().as_str())
-        .expect("valid HLS URL")
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .downloader(downloader)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
-        .build();
+    let cfg = ResourceConfig::for_src(
+        ResourceConfig::parse_src(fixture.master_url().as_str()).expect("valid HLS URL"),
+    )
+    .byte_pool(kithara::bufpool::BytePool::default())
+    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .downloader(downloader)
+    .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+    .build();
 
     let mut rx = queue.subscribe();
     let id = queue.append(TrackSource::Config(Box::new(cfg)));

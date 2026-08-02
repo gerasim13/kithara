@@ -24,8 +24,8 @@ Detailed contracts and invariants for the kithara-queue crate; the README is the
 [`TrackSource`] is the input to `append` / `insert` / `set_tracks`. It
 has two shapes:
 
-- `TrackSource::Uri(String)` — the [`Queue`] builds a default
-  `ResourceConfig` via `ResourceConfig::new`.
+- `TrackSource::Uri(String)` — the [`Queue`] parses the source and builds a
+  default `ResourceConfig` via `ResourceConfig::for_src`.
 - `TrackSource::Config(Box<ResourceConfig>)` — the caller provides a
   pre-built `ResourceConfig` (useful for DRM keys, custom headers,
   format hints). [`Queue`] leaves caller-set fields intact.
@@ -191,6 +191,6 @@ into a single [`Queue`]:
 | `player.tick()` | `queue.tick()` |
 
 DRM stays in the caller. `kithara-queue` is DRM-agnostic; apps that
-need zvuk DRM keys build a `ResourceConfig::new(url).with_keys(..)` and
-pass it via `TrackSource::Config(Box::new(cfg))`. See
+need zvuk DRM keys parse the URL, build a `ResourceConfig::for_src(src)` with
+the required keys, then pass it via `TrackSource::Config(Box::new(cfg))`. See
 `kithara-app::sources::build_source` for a reference implementation.

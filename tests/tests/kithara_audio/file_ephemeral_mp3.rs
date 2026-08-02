@@ -182,11 +182,10 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe() {
                 .build(),
         )
         .build();
-    let config = AudioConfig::<File>::new(
-        file_config,
-        kithara::bufpool::BytePool::default(),
-        kithara::bufpool::PcmPool::default(),
-    );
+    let config = AudioConfig::<File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .build();
     let mut audio = Audio::<Stream<File>>::new(config).await.unwrap();
 
     let (samples_read, position, eof) = spawn_blocking(move || {

@@ -48,19 +48,16 @@ where
     pub(crate) fn build_resampler_config(
         &self,
         target_sample_rate: Option<NonZeroU32>,
-    ) -> Result<Option<DecoderResamplerConfig<B>>, kithara_decode::DecodeError> {
-        let Some(target_sample_rate) = target_sample_rate else {
-            return Ok(None);
-        };
-        let Some(resampler) = self.resampler.as_ref() else {
-            return Ok(None);
-        };
-        DecoderResamplerConfig::for_decoder_backend(
-            self.backend,
-            target_sample_rate,
-            resampler.backend.clone(),
-            resampler.quality,
-            resampler.options,
+    ) -> Option<DecoderResamplerConfig<B>> {
+        let target_sample_rate = target_sample_rate?;
+        let resampler = self.resampler.as_ref()?;
+        Some(
+            DecoderResamplerConfig::builder()
+                .target_sample_rate(target_sample_rate)
+                .backend(resampler.backend.clone())
+                .quality(resampler.quality)
+                .options(resampler.options)
+                .build(),
         )
     }
 

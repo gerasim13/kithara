@@ -98,19 +98,20 @@ async fn build_hls_resource(
     store: &AssetStore,
     player: &PlayerImpl,
 ) -> Resource {
-    let cfg = ResourceConfig::for_src(master.as_str())
-        .expect("valid master URL")
-        .downloader(downloader.clone())
-        .store(store.clone())
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(DecoderBackend::Symphonia)
-                .build(),
-        )
-        .initial_abr_mode(AbrMode::manual(GATED_VARIANT))
-        .byte_pool(player.byte_pool().clone())
-        .pcm_pool(player.pcm_pool().clone())
-        .build();
+    let cfg: ResourceConfig = ResourceConfig::for_src(
+        ResourceConfig::parse_src(master.as_str()).expect("valid master URL"),
+    )
+    .downloader(downloader.clone())
+    .store(store.clone())
+    .decoder(
+        kithara::audio::AudioDecoderConfig::builder()
+            .backend(DecoderBackend::Symphonia)
+            .build(),
+    )
+    .initial_abr_mode(AbrMode::manual(GATED_VARIANT))
+    .byte_pool(player.byte_pool().clone())
+    .pcm_pool(player.pcm_pool().clone())
+    .build();
     Resource::new(cfg).await.expect("create HLS resource")
 }
 

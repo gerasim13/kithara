@@ -319,10 +319,10 @@ fn build_source(state: &BuildState, url: String) -> TrackSource {
     if state.keys.key_registry.is_none() && state.headers.is_empty() {
         return TrackSource::Uri(url);
     }
-    match ResourceConfig::for_src(&url) {
-        Ok(builder) => {
+    match ResourceConfig::parse_src(&url) {
+        Ok(src) => {
             let headers = (!state.headers.is_empty()).then(|| state.headers.clone());
-            let config = builder
+            let config = ResourceConfig::for_src(src)
                 .keys(state.keys.clone())
                 .maybe_headers(headers.map(Into::into))
                 .byte_pool(state.region.byte_pool())

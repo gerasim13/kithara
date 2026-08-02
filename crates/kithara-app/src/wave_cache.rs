@@ -370,11 +370,11 @@ mod tests {
     }
 
     fn config(store: &AssetStore, src: &str, discriminator: Option<&str>) -> ResourceConfig {
-        let builder = ResourceConfig::for_src(src)
-            .expect("valid test source")
-            .store(store.clone())
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default());
+        let builder =
+            ResourceConfig::for_src(ResourceConfig::parse_src(src).expect("valid test source"))
+                .store(store.clone())
+                .byte_pool(BytePool::default())
+                .pcm_pool(PcmPool::default());
         match discriminator {
             Some(discriminator) => builder.discriminator(discriminator.to_string()).build(),
             None => builder.build(),

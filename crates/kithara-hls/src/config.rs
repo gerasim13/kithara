@@ -52,9 +52,12 @@ pub enum SizeProbeMethod {
 ///
 /// Used with `Stream::<Hls>::new(config)`.
 #[derive(Clone, Builder)]
-#[builder(state_mod(vis = "pub"))]
+#[builder(start_fn = for_url)]
 #[non_exhaustive]
 pub struct HlsConfig {
+    /// Master playlist URL.
+    #[builder(start_fn)]
+    pub url: Url,
     /// Initial ABR mode.
     #[builder(default)]
     pub initial_abr_mode: AbrMode,
@@ -104,8 +107,6 @@ pub struct HlsConfig {
     /// exact prefix offsets.
     #[builder(default)]
     pub size_probe_method: SizeProbeMethod,
-    /// Master playlist URL.
-    pub url: Url,
     /// Max segments to download per step.
     #[builder(default = 3)]
     pub download_batch_size: usize,
@@ -171,15 +172,4 @@ impl HlsConfig {
     /// need a downloader backpressure cap so an idle reader does not
     /// drain the whole playlist into cache.
     pub const DEFAULT_LOOK_AHEAD_BYTES: u64 = 2 * 1024 * 1024;
-
-    /// Create new HLS config with URL.
-    #[must_use]
-    pub fn new(url: Url, store: AssetStore) -> Self {
-        Self::for_url(url).store(store).build()
-    }
-
-    /// Chainable counterpart to [`HlsConfig::new`].
-    pub fn for_url(url: Url) -> HlsConfigBuilder<hls_config_builder::SetUrl> {
-        Self::builder().url(url)
-    }
 }

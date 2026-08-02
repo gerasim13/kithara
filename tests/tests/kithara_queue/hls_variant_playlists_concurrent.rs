@@ -235,19 +235,20 @@ async fn variant_media_playlists_load_concurrently(#[case] decoder: DecoderBacke
 
     let mut rx = player.bus().subscribe();
 
-    let cfg = ResourceConfig::for_src(url.as_str())
-        .expect("ResourceConfig::for_src")
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .downloader(downloader.clone())
-        .store(store)
-        .initial_abr_mode(AbrMode::Auto(None))
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(decoder)
-                .build(),
-        )
-        .build();
+    let cfg = ResourceConfig::for_src(
+        ResourceConfig::parse_src(url.as_str()).expect("ResourceConfig::parse_src"),
+    )
+    .byte_pool(kithara::bufpool::BytePool::default())
+    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .downloader(downloader.clone())
+    .store(store)
+    .initial_abr_mode(AbrMode::Auto(None))
+    .decoder(
+        kithara::audio::AudioDecoderConfig::builder()
+            .backend(decoder)
+            .build(),
+    )
+    .build();
 
     let track_id = queue.append(TrackSource::Config(Box::new(cfg)));
     queue.select(track_id, Transition::None).expect("select");

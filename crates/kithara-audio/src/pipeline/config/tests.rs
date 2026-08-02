@@ -47,17 +47,21 @@ mod native {
     fn audio_config_with_effect_adds_to_chain() {
         let effects: Vec<Box<dyn AudioEffect>> =
             vec![Box::new(PassthroughEffect), Box::new(PassthroughEffect)];
-        let config =
-            AudioConfig::<kithara_file::File, NoResamplerBackend>::for_stream(FileConfig::new(
-                FileSrc::Local(std::env::temp_dir().join("kithara-audio-config.wav")),
+        let config = AudioConfig::<kithara_file::File, NoResamplerBackend>::for_stream(
+            FileConfig::for_src(FileSrc::Local(
+                std::env::temp_dir().join("kithara-audio-config.wav"),
+            ))
+            .store(
                 AssetStoreBuilder::default()
                     .backend(StorageBackend::Memory)
                     .build(),
-            ))
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
-            .effects(effects)
-            .build();
+            )
+            .build(),
+        )
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
+        .effects(effects)
+        .build();
         assert_eq!(config.effects().len(), 2);
     }
 }

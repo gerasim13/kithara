@@ -95,7 +95,6 @@ pub enum DecoderBackend {
 /// This describes conversion that is part of decoder construction, not the
 /// playback graph's effects chain. Backend choice is encoded by `B`.
 #[derive(Clone, Builder)]
-#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct DecoderResamplerConfig<B = NoResamplerBackend> {
     pub backend: B,
@@ -104,48 +103,6 @@ pub struct DecoderResamplerConfig<B = NoResamplerBackend> {
     pub options: ResamplerOptions,
     #[builder(default)]
     pub quality: ResamplerQuality,
-}
-
-impl<B> DecoderResamplerConfig<B>
-where
-    B: ResamplerBackend,
-{
-    #[must_use]
-    pub fn new(
-        target_sample_rate: NonZeroU32,
-        backend: B,
-        quality: ResamplerQuality,
-        options: ResamplerOptions,
-    ) -> Self {
-        Self {
-            backend,
-            target_sample_rate,
-            options,
-            quality,
-        }
-    }
-
-    /// Build the decoder resampler config selected by the audio decoder config.
-    ///
-    /// # Errors
-    ///
-    /// Currently this constructor is infallible; it returns a `Result` so the
-    /// typed Apple codec-integrated plan can add pair validation without
-    /// widening call sites again.
-    pub fn for_decoder_backend(
-        _decoder_backend: DecoderBackend,
-        target_sample_rate: NonZeroU32,
-        backend: B,
-        quality: ResamplerQuality,
-        options: ResamplerOptions,
-    ) -> DecodeResult<Option<Self>> {
-        Ok(Some(Self::new(
-            target_sample_rate,
-            backend,
-            quality,
-            options,
-        )))
-    }
 }
 
 impl<B> std::fmt::Debug for DecoderResamplerConfig<B>

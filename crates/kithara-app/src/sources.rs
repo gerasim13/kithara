@@ -28,13 +28,14 @@ pub(crate) fn build_resource_config(
     url: &str,
     config: &AppConfig,
 ) -> Option<ResourceConfig<PlaybackResamplerBackend>> {
-    let builder = match ResourceConfig::for_src(url) {
-        Ok(builder) => builder,
+    let src = match ResourceConfig::parse_src(url) {
+        Ok(src) => src,
         Err(e) => {
             tracing::error!(%e, "failed to build ResourceConfig");
             return None;
         }
     };
+    let builder = ResourceConfig::for_src(src);
     let registry = config.drm.registry();
     let keys = if registry.is_empty() {
         KeyOptions::default()

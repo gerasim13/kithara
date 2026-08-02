@@ -452,13 +452,15 @@ mod tests {
         let store = AssetStoreBuilder::default()
             .backend(StorageBackend::Memory)
             .build();
-        let config = ResourceConfig::for_src("https://analysis.test.invalid/track.mp3")
-            .expect("valid test source")
-            .store(store)
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
-            .discriminator(discriminator.to_string())
-            .build();
+        let config = ResourceConfig::for_src(
+            ResourceConfig::parse_src("https://analysis.test.invalid/track.mp3")
+                .expect("valid test source"),
+        )
+        .store(store)
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
+        .discriminator(discriminator.to_string())
+        .build();
         AnalysisTarget::for_config(&config).expect("test source has an analysis target")
     }
 
@@ -652,12 +654,14 @@ mod tests {
             .backend(StorageBackend::Memory)
             .layouts(layouts)
             .build();
-        let config = ResourceConfig::for_src("https://analysis.test.invalid/invalid.mp3")
-            .expect("valid test source")
-            .store(store)
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
-            .build();
+        let config = ResourceConfig::for_src(
+            ResourceConfig::parse_src("https://analysis.test.invalid/invalid.mp3")
+                .expect("valid test source"),
+        )
+        .store(store)
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
+        .build();
         let error = AnalysisTarget::for_config(&config).expect_err("layout must be rejected");
         let current = TrackId::allocate();
         let state = state_with_current(&[current], 0);

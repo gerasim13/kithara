@@ -150,19 +150,20 @@ impl SimHarness {
 
         let mut track_ids = Vec::with_capacity(specs.len());
         for spec in specs {
-            let cfg = ResourceConfig::for_src(spec.url.as_str())
-                .expect("valid track URL")
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
-                .downloader(downloader.clone())
-                .store(store.clone())
-                .decoder(
-                    kithara::audio::AudioDecoderConfig::builder()
-                        .backend(spec.backend)
-                        .build(),
-                )
-                .initial_abr_mode(spec.abr_mode)
-                .build();
+            let cfg = ResourceConfig::for_src(
+                ResourceConfig::parse_src(spec.url.as_str()).expect("valid track URL"),
+            )
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .downloader(downloader.clone())
+            .store(store.clone())
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(spec.backend)
+                    .build(),
+            )
+            .initial_abr_mode(spec.abr_mode)
+            .build();
             let id = queue.append(TrackSource::Config(Box::new(cfg)));
             track_ids.push(id);
         }
