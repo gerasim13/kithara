@@ -137,6 +137,18 @@ where
     read_block_with_position(audio, buf, label).map(|(n, _)| n)
 }
 
+/// Pull one block, retrying while the decoder has nothing yet.
+///
+/// The guard is what makes `READ_PENDING_RETRIES` a statement about the
+/// pipeline rather than about the machine. `paced_backoff` under flash is a
+/// deadline-less yield that re-polls in lockstep with the producer's clock
+/// advances, so a retry is spent only when the decode worker genuinely had
+/// nothing to hand over. Unannotated it is a real 1 ms sleep — the test macro
+/// rewrites time calls in the test body, not in the helpers it calls — and the
+/// retry budget then measures how fast the host is, which is why a loaded
+/// machine reports a starved decoder. The sibling `consumer_pace` below already
+/// carries the same guard.
+#[kithara::flash(true)]
 fn read_block_with_position<T>(
     audio: &mut Audio<Stream<T>>,
     buf: &mut [f32],
@@ -171,6 +183,8 @@ fn start_frame_from_read_position(position: Duration, frames_read: u64) -> u64 {
     end_frame.saturating_sub(frames_read)
 }
 
+/// Async twin of [`read_block_with_position`]; same reason for the guard.
+#[kithara::flash(true)]
 async fn read_block_async<T>(
     audio: &mut Audio<Stream<T>>,
     buf: &mut [f32],
