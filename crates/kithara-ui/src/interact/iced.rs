@@ -16,6 +16,7 @@ pub(crate) fn input(event: &Event) -> Option<Input> {
         Event::Mouse(mouse::Event::CursorMoved { position }) => Some(Input::PointerMoved {
             at: (*position).into(),
         }),
+        Event::Mouse(mouse::Event::CursorLeft) => Some(Input::PointerLeft),
         Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) => Some(Input::PointerUp),
         Event::Mouse(mouse::Event::WheelScrolled { delta }) => Some(Input::Wheel(match delta {
             ScrollDelta::Lines { y, .. } => Scroll::Lines(*y),
@@ -108,6 +109,14 @@ mod tests {
             panic!("the retained hero wave needs the current modifiers before it sees a press");
         };
         assert!(modifiers.shift());
+    }
+
+    #[kithara::test]
+    fn cursor_left_decodes_without_inventing_a_position() {
+        assert!(matches!(
+            input(&Event::Mouse(mouse::Event::CursorLeft)),
+            Some(Input::PointerLeft)
+        ));
     }
 
     #[kithara::test]

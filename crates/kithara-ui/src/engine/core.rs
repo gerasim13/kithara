@@ -82,7 +82,8 @@ mod tests {
     fn value(emission: Option<Emission>) -> Option<f64> {
         emission.and_then(|emission| match emission.outcome.value() {
             Some(EngineEvent::Scalar(value)) => Some(value),
-            Some(EngineEvent::Activate | EngineEvent::Index(_)) | None => None,
+            Some(EngineEvent::Activate | EngineEvent::Crossing(_) | EngineEvent::Index(_))
+            | None => None,
         })
     }
 
@@ -205,6 +206,62 @@ mod tests {
                 .handle(
                     Input::PointerDown,
                     &[target(path, 150.0, 50.0)],
+                    Instant::now(),
+                )
+                .is_none()
+        );
+    }
+
+    #[kithara::test]
+    fn crossing_publishes_once_per_boundary_and_survives_reconciliation() {
+        let mut engine = Engine::default();
+        let path = "deck-a/drop";
+        engine.reconcile([Descriptor::crossing(path.to_owned())]);
+
+        let enter = engine
+            .handle(
+                Input::PointerMoved {
+                    at: Pt { x: 50.0, y: 50.0 },
+                },
+                &[target(path, 50.0, 50.0)],
+                Instant::now(),
+            )
+            .unwrap_or_else(|| panic!("entering the drop zone must publish"));
+        assert_eq!(enter.path, path);
+        assert_eq!(enter.child, None);
+        assert_eq!(enter.outcome.value(), Some(EngineEvent::Crossing(true)));
+        assert!(!enter.outcome.is_captured());
+        assert!(!engine.captures_pointer());
+
+        engine.reconcile([Descriptor::crossing(path.to_owned())]);
+        assert!(
+            engine
+                .handle(
+                    Input::PointerMoved {
+                        at: Pt { x: 55.0, y: 50.0 },
+                    },
+                    &[target(path, 55.0, 50.0)],
+                    Instant::now(),
+                )
+                .is_none(),
+            "reconciliation must not turn an inside move into another entry"
+        );
+
+        let leave = engine
+            .handle(
+                Input::PointerLeft,
+                &[target(path, 55.0, 50.0)],
+                Instant::now(),
+            )
+            .unwrap_or_else(|| panic!("leaving the drop zone must publish"));
+        assert_eq!(leave.outcome.value(), Some(EngineEvent::Crossing(false)));
+        assert!(!leave.outcome.is_captured());
+        assert!(!engine.captures_pointer());
+        assert!(
+            engine
+                .handle(
+                    Input::PointerLeft,
+                    &[target(path, 55.0, 50.0)],
                     Instant::now(),
                 )
                 .is_none()
@@ -570,7 +627,10 @@ mod tests {
             .map(|emission| {
                 let value = match emission.outcome.value() {
                     Some(EngineEvent::Scalar(value)) => Some(value),
-                    Some(EngineEvent::Activate | EngineEvent::Index(_)) | None => None,
+                    Some(
+                        EngineEvent::Activate | EngineEvent::Crossing(_) | EngineEvent::Index(_),
+                    )
+                    | None => None,
                 };
                 (emission.path, value)
             });

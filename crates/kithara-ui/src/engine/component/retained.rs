@@ -1,8 +1,8 @@
 use kithara_platform::time::Instant;
 
 use super::{
-    activation::ActivationComponent, scalar::ScalarComponent, segmented::SegmentedComponent,
-    wave::HeroWaveComponent,
+    activation::ActivationComponent, crossing::CrossingComponent, scalar::ScalarComponent,
+    segmented::SegmentedComponent, wave::HeroWaveComponent,
 };
 use crate::{
     engine::model::{Descriptor, EngineEvent, Identity, Kind},
@@ -28,6 +28,7 @@ pub(super) trait Component {
 pub(in crate::engine) enum RetainedComponent {
     Scalar(ScalarComponent),
     Activation(ActivationComponent),
+    Crossing(CrossingComponent),
     Segmented(SegmentedComponent),
     HeroWave(HeroWaveComponent),
 }
@@ -42,6 +43,7 @@ impl RetainedComponent {
             (Self::HeroWave(component), Self::HeroWave(next)) => {
                 Self::HeroWave(component.reconcile(next))
             }
+            (Self::Crossing(component), Self::Crossing(_)) => Self::Crossing(component),
             (_, next) => next,
         }
     }
@@ -86,6 +88,7 @@ impl RetainedComponent {
         match self {
             Self::Scalar(component) => component,
             Self::Activation(component) => component,
+            Self::Crossing(component) => component,
             Self::Segmented(component) => component,
             Self::HeroWave(component) => component,
         }
@@ -95,6 +98,7 @@ impl RetainedComponent {
         match self {
             Self::Scalar(component) => component,
             Self::Activation(component) => component,
+            Self::Crossing(component) => component,
             Self::Segmented(component) => component,
             Self::HeroWave(component) => component,
         }
@@ -105,6 +109,7 @@ impl From<Descriptor> for RetainedComponent {
     fn from(descriptor: Descriptor) -> Self {
         match descriptor {
             Descriptor::Activation { path } => Self::Activation(ActivationComponent::new(path)),
+            Descriptor::Crossing { path } => Self::Crossing(CrossingComponent::new(path)),
             Descriptor::Segmented { path, item_count } => {
                 Self::Segmented(SegmentedComponent::new(path, item_count))
             }

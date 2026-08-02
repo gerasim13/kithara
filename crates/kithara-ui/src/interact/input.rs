@@ -13,6 +13,7 @@ pub(crate) enum Input {
     PointerMoved {
         at: Pt,
     },
+    PointerLeft,
     PointerUp,
     Wheel(Scroll),
 }

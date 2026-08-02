@@ -8,6 +8,7 @@ use crate::interact::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Kind {
     Activation,
+    Crossing,
     Segmented,
     Fader,
     Crossfader,
@@ -26,6 +27,9 @@ pub(super) struct Identity {
 
 pub(crate) enum Descriptor {
     Activation {
+        path: String,
+    },
+    Crossing {
         path: String,
     },
     Segmented {
@@ -68,6 +72,10 @@ pub(crate) enum Descriptor {
 impl Descriptor {
     pub(crate) fn activation(path: String) -> Self {
         Self::Activation { path }
+    }
+
+    pub(crate) fn crossing(path: String) -> Self {
+        Self::Crossing { path }
     }
 
     pub(crate) fn segmented(path: String, item_count: usize) -> Self {
@@ -137,6 +145,7 @@ impl Descriptor {
     pub(super) fn path(&self) -> &str {
         match self {
             Self::Activation { path }
+            | Self::Crossing { path }
             | Self::Segmented { path, .. }
             | Self::Fader { path, .. }
             | Self::Crossfader { path }
@@ -151,6 +160,7 @@ impl Descriptor {
     pub(super) const fn kind(&self) -> Kind {
         match self {
             Self::Activation { .. } => Kind::Activation,
+            Self::Crossing { .. } => Kind::Crossing,
             Self::Segmented { .. } => Kind::Segmented,
             Self::Fader { .. } => Kind::Fader,
             Self::Crossfader { .. } => Kind::Crossfader,
@@ -167,6 +177,7 @@ impl Descriptor {
 pub(crate) enum EngineEvent {
     Scalar(f64),
     Activate,
+    Crossing(bool),
     Index(usize),
 }
 

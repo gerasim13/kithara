@@ -22,13 +22,14 @@ use crate::{
     engine::{Descriptor, Engine, Target},
     expand::{ControlSpec, ExpandedNode},
     interact::{CursorShape, Hover, iced as iced_interact, recognizers::WheelStep},
-    module::{FaderStyle, WaveStyle},
+    module::{ChromeStyle, FaderStyle, WaveStyle},
     render::{
         ReadValue, Reads, Skin, UiEvent,
         controls::{nav_item_supports_engine_input, supports_engine_input},
         engine as engine_event,
         icons::document_icon,
         model::derived,
+        toggle_module,
     },
     size::{Hidden, is_hidden},
     widgets::{
@@ -36,6 +37,25 @@ use crate::{
         wave::zoom_math::{clamp_zoom, window_bounds, zoom_for_wheel},
     },
 };
+
+#[derive(Clone, Copy)]
+pub(super) struct ModuleHost<'a> {
+    pub(super) instance: &'a str,
+    pub(super) module: &'a str,
+    pub(super) chrome: ChromeStyle,
+    pub(super) collapsed: bool,
+    pub(super) drop: bool,
+}
+
+pub(super) fn module_host<'a>(
+    child: Element<'a, UiEvent>,
+    spec: ModuleHost<'a>,
+) -> Element<'a, UiEvent> {
+    Element::new(Host {
+        child,
+        layout: HostedLayout::module(spec),
+    })
+}
 
 pub(super) fn host<'a>(
     child: Element<'a, UiEvent>,
@@ -126,25 +146,29 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
     ) {
         let state = tree.state.downcast_mut::<State>();
         let input = iced_interact::input(event);
-        let answered = if let Some(input) = input {
+        let captured = if let Some(input) = input {
             let targets = self.layout.targets(layout, cursor);
             if let Some(emission) = state.engine.handle(input, &targets, Instant::now()) {
-                if let Some(action) = engine_event(&emission.path, emission.child, emission.outcome)
-                {
+                let captured = emission.outcome.is_captured();
+                let action = self.layout.header_module(&emission.path).map_or_else(
+                    || engine_event(&emission.path, emission.child, emission.outcome),
+                    |module| toggle_module(module, emission.outcome.map(|_| ())),
+                );
+                if let Some(action) = action {
                     let (message, redraw_request, _) = action.into_inner();
                     shell.request_redraw_at(redraw_request);
                     if let Some(message) = message {
                         shell.publish(message);
                     }
                 }
-                true
+                captured
             } else {
                 false
             }
         } else {
             false
         };
-        if !answered {
+        if !captured {
             self.child.as_widget_mut().update(
                 &mut tree.children[0],
                 event,
@@ -275,6 +299,11 @@ fn hovered_control<'a>(targets: &[Target<'a>]) -> Option<&'a str> {
 }
 
 enum HostedLayout {
+    Chrome {
+        drop: Option<String>,
+        header: Option<(String, String)>,
+        collapsed: bool,
+    },
     Group {
         sized: bool,
         surfaced: bool,
@@ -291,6 +320,22 @@ enum HostedLayout {
 }
 
 impl HostedLayout {
+    fn module(spec: ModuleHost<'_>) -> Self {
+        let ModuleHost {
+            instance,
+            module,
+            chrome,
+            collapsed,
+            drop,
+        } = spec;
+        Self::Chrome {
+            drop: drop.then(|| format!("{instance}/drop")),
+            header: (chrome == ChromeStyle::Full)
+                .then(|| (format!("{instance}/header"), module.to_owned())),
+            collapsed,
+        }
+    }
+
     fn new(node: &ExpandedNode, ui: &CompiledUi, reads: &dyn Reads, skin: &Skin) -> Self {
         let hidden: Hidden<'_> = &|block| read_flag(Some(&block.hidden), reads, ui);
         match node {
@@ -357,6 +402,14 @@ impl HostedLayout {
 
     fn append_descriptors(&self, descriptors: &mut Vec<Descriptor>) {
         match self {
+            Self::Chrome { drop, header, .. } => {
+                if let Some(path) = drop {
+                    descriptors.push(Descriptor::crossing(path.clone()));
+                }
+                if let Some((path, _)) = header {
+                    descriptors.push(Descriptor::activation(path.clone()));
+                }
+            }
             Self::Group { children, .. } | Self::Slot { children, .. } => {
                 for child in children {
                     child.append_descriptors(descriptors);
@@ -382,6 +435,45 @@ impl HostedLayout {
         targets: &mut Vec<Target<'a>>,
     ) {
         match self {
+            Self::Chrome {
+                drop,
+                header,
+                collapsed,
+            } => {
+                let shell = if let Some(path) = drop {
+                    targets.push(Target::new(
+                        path,
+                        iced_interact::hit(layout.bounds(), cursor),
+                    ));
+                    let Some(shell) = first_child(layout) else {
+                        return;
+                    };
+                    shell
+                } else {
+                    layout
+                };
+                let Some((path, _)) = header else {
+                    return;
+                };
+                let Some(body) = first_child(shell) else {
+                    return;
+                };
+                let Some(content) = first_child(body) else {
+                    return;
+                };
+                let header = if *collapsed {
+                    content
+                } else {
+                    let Some(header) = first_child(content) else {
+                        return;
+                    };
+                    header
+                };
+                targets.push(Target::new(
+                    path,
+                    iced_interact::hit(header.bounds(), cursor),
+                ));
+            }
             Self::Group {
                 sized,
                 surfaced,
@@ -425,6 +517,21 @@ impl HostedLayout {
                 ));
             }
             Self::Control(None) | Self::SelfMeasuredControl(None) | Self::Passive => {}
+        }
+    }
+
+    fn header_module<'a>(&'a self, path: &str) -> Option<&'a str> {
+        match self {
+            Self::Chrome {
+                header: Some((header, module)),
+                ..
+            } if header == path => Some(module),
+            Self::Chrome { .. }
+            | Self::Group { .. }
+            | Self::Slot { .. }
+            | Self::Control(_)
+            | Self::SelfMeasuredControl(_)
+            | Self::Passive => None,
         }
     }
 }
@@ -707,11 +814,11 @@ mod tests {
         ids::EndpointId,
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
         render::{
-            ControlAction, StereoLevels, WaveBucket, WaveformView,
+            ControlAction, DragPhase, InputOwner, StereoLevels, WaveBucket, WaveformView,
             fonts::{FONT_BYTES, SANS},
         },
         source::{MemResolver, UiConfig},
-        widgets::{Widget, wheel::WheelSurface},
+        widgets::{DropZone, ModuleChrome, Widget, wheel::WheelSurface},
     };
 
     const WAVE_BUCKETS: [WaveBucket; 2] = [
@@ -1156,6 +1263,7 @@ mod tests {
     fn descriptor_path(descriptor: &Descriptor) -> &str {
         match descriptor {
             Descriptor::Activation { path }
+            | Descriptor::Crossing { path }
             | Descriptor::Segmented { path, .. }
             | Descriptor::Fader { path, .. }
             | Descriptor::Crossfader { path }
@@ -1165,6 +1273,212 @@ mod tests {
             | Descriptor::Wave { path }
             | Descriptor::HeroWave { path, .. } => path,
         }
+    }
+
+    fn chrome_child<'a>(
+        content: Element<'a, UiEvent>,
+        module: &'a str,
+        style: ChromeStyle,
+        drop: bool,
+        collapsed: bool,
+    ) -> Element<'a, UiEvent> {
+        ModuleChrome::builder()
+            .content(content)
+            .module(module)
+            .assign(Vec::new())
+            .style(style)
+            .input_owner(InputOwner::Engine)
+            .maybe_drop(drop.then(|| DropZone::new(false)))
+            .collapsed(collapsed)
+            .skin(builtin::skin())
+            .build()
+            .view()
+    }
+
+    #[kithara::test]
+    fn module_drop_crossing_observes_boundaries_and_forwards_to_the_child() {
+        let instance = "deck-a";
+        let module = "studio-deck";
+        let spec = ModuleHost {
+            instance,
+            module,
+            chrome: ChromeStyle::Plain,
+            collapsed: false,
+            drop: true,
+        };
+        let content = mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
+            .on_move(|_| UiEvent::OpenSettings)
+            .on_exit(UiEvent::OpenSettings)
+            .into();
+        let child = chrome_child(content, module, ChromeStyle::Plain, true, false);
+        let mut element = module_host(child, spec);
+        let renderer = headless_renderer();
+        let viewport = Size::new(100.0, 40.0);
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let hosted = HostedLayout::module(spec);
+        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        assert_eq!(
+            targets.iter().map(|target| target.path).collect::<Vec<_>>(),
+            ["deck-a/drop"],
+            "the whole drop zone is the outer host's only target"
+        );
+        assert_eq!(targets[0].hit.area(), Rectangle::with_size(viewport).into());
+
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        let inside = Point::new(50.0, 20.0);
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::CursorMoved { position: inside }),
+            Layout::new(&node),
+            Cursor::Available(inside),
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert!(!shell.is_event_captured());
+        drop(shell);
+        assert_eq!(
+            messages,
+            [
+                UiEvent::Control {
+                    path: "deck-a/drop".to_owned(),
+                    action: ControlAction::Drag(DragPhase::Over(true)),
+                },
+                UiEvent::OpenSettings,
+            ],
+            "entry publishes once and the observed move still reaches the child"
+        );
+
+        let still_inside = Point::new(60.0, 20.0);
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::CursorMoved {
+                position: still_inside,
+            }),
+            Layout::new(&node),
+            Cursor::Available(still_inside),
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert!(!shell.is_event_captured());
+        drop(shell);
+        assert_eq!(
+            messages,
+            [
+                UiEvent::Control {
+                    path: "deck-a/drop".to_owned(),
+                    action: ControlAction::Drag(DragPhase::Over(true)),
+                },
+                UiEvent::OpenSettings,
+                UiEvent::OpenSettings,
+            ],
+            "an inside move produces no second crossing and still reaches the child"
+        );
+
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::CursorLeft),
+            Layout::new(&node),
+            Cursor::Unavailable,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert!(!shell.is_event_captured());
+        drop(shell);
+        assert_eq!(
+            messages,
+            [
+                UiEvent::Control {
+                    path: "deck-a/drop".to_owned(),
+                    action: ControlAction::Drag(DragPhase::Over(true)),
+                },
+                UiEvent::OpenSettings,
+                UiEvent::OpenSettings,
+                UiEvent::Control {
+                    path: "deck-a/drop".to_owned(),
+                    action: ControlAction::Drag(DragPhase::Over(false)),
+                },
+                UiEvent::OpenSettings,
+            ],
+            "exit publishes once and the observed leave still reaches the child"
+        );
+    }
+
+    #[kithara::test]
+    fn full_module_header_activation_toggles_the_module_directly() {
+        let module = "studio-deck";
+        let spec = ModuleHost {
+            instance: "deck-a",
+            module,
+            chrome: ChromeStyle::Full,
+            collapsed: false,
+            drop: true,
+        };
+        let content = Space::new().width(Length::Fill).height(Length::Fill).into();
+        let child = chrome_child(content, module, ChromeStyle::Full, true, false);
+        let mut element = module_host(child, spec);
+        let renderer = headless_renderer();
+        let viewport = Size::new(200.0, 120.0);
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let hosted = HostedLayout::module(spec);
+        let descriptors = hosted.descriptors();
+        assert_eq!(
+            descriptors.iter().map(descriptor_path).collect::<Vec<_>>(),
+            ["deck-a/drop", "deck-a/header"]
+        );
+        assert!(matches!(
+            descriptors.as_slice(),
+            [Descriptor::Crossing { .. }, Descriptor::Activation { .. }]
+        ));
+        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        assert_eq!(
+            targets.iter().map(|target| target.path).collect::<Vec<_>>(),
+            ["deck-a/drop", "deck-a/header"]
+        );
+        let header = targets[1].hit.area();
+        let cursor = Cursor::Available(Point::new(
+            header.x + header.w / 2.0,
+            header.y + header.h / 2.0,
+        ));
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            Layout::new(&node),
+            cursor,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert!(
+            !shell.is_event_captured(),
+            "the stateless activation does not retain the engine capture slot"
+        );
+        drop(shell);
+
+        assert_eq!(messages, [UiEvent::ToggleModule(module.to_owned())]);
     }
 
     #[kithara::test]

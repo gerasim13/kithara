@@ -10,6 +10,7 @@ pub(crate) fn on_input(input: Input, hit: &Hit) -> Outcome<()> {
         Input::PointerDown if hit.over() => Outcome::set(()),
         Input::ModifiersChanged(_)
         | Input::PointerDown
+        | Input::PointerLeft
         | Input::PointerMoved { .. }
         | Input::PointerUp
         | Input::Wheel(_) => Outcome::IGNORED,

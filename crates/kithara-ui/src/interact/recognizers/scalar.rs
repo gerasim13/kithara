@@ -148,6 +148,7 @@ impl Scalar {
                 Outcome::set(value.clamp(0.0, 1.0))
             }
             Input::ModifiersChanged(_)
+            | Input::PointerLeft
             | Input::PointerMoved { .. }
             | Input::PointerUp
             | Input::Wheel(_) => Outcome::IGNORED,

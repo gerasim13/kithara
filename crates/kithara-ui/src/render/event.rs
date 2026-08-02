@@ -62,6 +62,10 @@ pub(crate) fn activate(path: &str, outcome: Outcome<()>) -> Option<Action<UiEven
     action(outcome, |()| control_event(path, ControlAction::Activate))
 }
 
+pub(crate) fn toggle_module(module: &str, outcome: Outcome<()>) -> Option<Action<UiEvent>> {
+    action(outcome, |()| UiEvent::ToggleModule(module.to_owned()))
+}
+
 pub(crate) fn index(path: &str, outcome: Outcome<usize>) -> Option<Action<UiEvent>> {
     action(outcome, |index| {
         control_event(path, ControlAction::SelectIndex(index))
@@ -80,6 +84,9 @@ pub(crate) fn engine(
             |child| Some(scalar_child(path, child, value)),
         ),
         Some(EngineEvent::Activate) => activate(path, typed_outcome((), captured)),
+        Some(EngineEvent::Crossing(over)) => {
+            drag_phase(path, typed_outcome(DragPhase::Over(over), captured))
+        }
         Some(EngineEvent::Index(selected)) => index(path, typed_outcome(selected, captured)),
         None => captured.then(Action::capture),
     }
@@ -104,14 +111,18 @@ pub(crate) fn drag(
     index: usize,
     outcome: Outcome<DragEvent>,
 ) -> Option<Action<UiEvent>> {
-    action(outcome, |event| {
-        control_event(
-            path,
-            ControlAction::Drag(match event {
-                DragEvent::Started => DragPhase::Start(index),
-                DragEvent::Dropped => DragPhase::Drop,
-            }),
-        )
+    drag_phase(
+        path,
+        outcome.map(|event| match event {
+            DragEvent::Started => DragPhase::Start(index),
+            DragEvent::Dropped => DragPhase::Drop,
+        }),
+    )
+}
+
+fn drag_phase(path: &str, outcome: Outcome<DragPhase>) -> Option<Action<UiEvent>> {
+    action(outcome, |phase| {
+        control_event(path, ControlAction::Drag(phase))
     })
 }
 
@@ -179,6 +190,7 @@ pub enum UiEvent {
 
 #[cfg(test)]
 mod tests {
+    use iced::{event, window::RedrawRequest};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -212,6 +224,41 @@ mod tests {
                 path: "cells/beat".to_owned(),
                 action: ControlAction::SelectIndex(3),
             })
+        );
+    }
+
+    #[kithara::test]
+    fn engine_crossings_bind_to_uncaptured_drag_over_events() {
+        for over in [true, false] {
+            let action = engine(
+                "deck-a/drop",
+                None,
+                Outcome::observed(EngineEvent::Crossing(over)),
+            )
+            .unwrap_or_else(|| panic!("a crossing must publish"));
+
+            assert_eq!(
+                action.into_inner(),
+                (
+                    Some(UiEvent::Control {
+                        path: "deck-a/drop".to_owned(),
+                        action: ControlAction::Drag(DragPhase::Over(over)),
+                    }),
+                    RedrawRequest::Wait,
+                    event::Status::Ignored,
+                )
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn module_header_activation_binds_directly_to_toggle_module() {
+        let action = toggle_module("studio-deck", Outcome::set(()))
+            .unwrap_or_else(|| panic!("a module-header activation must publish"));
+
+        assert_eq!(
+            action.into_inner().0,
+            Some(UiEvent::ToggleModule("studio-deck".to_owned()))
         );
     }
 }

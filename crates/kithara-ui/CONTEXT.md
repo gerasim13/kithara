@@ -281,12 +281,14 @@ recognizer answers with an `Outcome<f32>` and a click answers with an `Outcome<(
 its capture flag. A component widens a recognizer scalar exactly once at its boundary, and
 `EngineEvent::Scalar` carries `f64` from there through `ControlAction::SetScalar`; render event
 publication performs no later widening or narrow round trip. The engine maps the other values into
-`EngineEvent::{Activate, Index}` without losing capture. The third emission kind,
-`EngineEvent::Index`, carries the selected `usize`; the
+`EngineEvent::{Activate, Crossing, Index}` without losing capture. `EngineEvent::Index` carries
+the selected `usize`; the
 stateless segmented component derives it from the click's hit rectangle and item count. An engine
 `Emission` may address one fixed child endpoint, and `render::event` binds the result to the document
 publisher one layer up and in the same file as the `UiEvent` it names, including binding an index to
-`ControlAction::SelectIndex`.
+`ControlAction::SelectIndex`. The fourth emission kind, `Crossing(bool)`, is retained hover state:
+it observes exactly one entry and one exit for a target boundary, emits nothing for motion within
+the target, and never captures. Its render binding reuses `ControlAction::Drag(DragPhase::Over)`.
 Routing the document event through the recognizer or engine instead would point the base at the
 crate's orchestration layer, and every base peer points strictly downward: `draw` to `text`, `text`
 to `skin`, `solve` to `layout::Axis`.
@@ -314,9 +316,11 @@ already-expanded rows and columns into both strips. One mixer therefore owns one
 capture slot for its crossfader, knobs, and VUs; a captured drag in one strip remains exclusive while
 the pointer crosses the other strip.
 
-The engine carries four component shapes in one `RetainedComponent` enum. `ScalarComponent` owns
+The engine carries five component shapes in one `RetainedComponent` enum. `ScalarComponent` owns
 its resolved path, `Kind`, `Scalar`, and `ScalarState`; `ActivationComponent` owns a path, the
 pointer hover, and the stateless `click::on_input` gesture shared by Button, Toggle, and Checkbox;
+`CrossingComponent` owns the previous boundary state and preserves it across reconciliation so a
+view rebuild while still inside cannot publish a second entry;
 `SegmentedComponent` owns a path, item count, pointer hover, and the same stateless click gesture;
 `HeroWaveComponent` owns modifier and loop state while reusing `Scalar` for the plain drag. A narrow
 `Component` trait gives the router only path, kind, event handling, cursor, and capture-slot state.
@@ -348,12 +352,24 @@ is ported. Two input paths for one control are a transition, not the design - ea
 its last unhosted site flips, and the pair must not grow a third reader or a second capture slot in
 the meantime.
 
-The host observes decoded input before its child. An engine emission answers the event and is bound
-once; when no component emits, the child receives the same iced event unchanged. Cursor resolution
+The host observes decoded input before its child. An engine emission is bound once; a captured
+outcome suppresses child delivery, while an observed outcome publishes and still forwards the same
+iced event unchanged. This is the drop-zone crossing contract: `Over(true)` once on entry,
+`Over(false)` once on exit, no message for motion within the zone, and no capture. Cursor resolution
 follows the same order: a non-default engine shape wins, otherwise the child decides. A hosted
 subtree may therefore contain interactive controls and wheel-catching containers the engine does
 not answer. Modifier changes enter the portable vocabulary so the Hero Wave sees shift state, but
 `KeyPressed` and `KeyReleased` still decode to nothing and touch does not enter this boundary.
+
+Module chrome remains iced-composed during this transition: its header `Row`, panel column, footer,
+and frame stack keep their existing layout ownership until the root flip removes `render/tree`.
+Within that composition, the header chips, title cell, and separator lines paint through
+`DrawListBuilder`. One header-sized chevron canvas shares a single painter between the interactive
+`InputOwner::Leaf` program and the paint-only `InputOwner::Engine` variant. The engine-owned header
+activation binds directly to `UiEvent::ToggleModule`; it is not a control action. The chrome host
+owns only the header and drop boundary. A separately hosted module root keeps its existing inner
+host, so an observed outer crossing can publish and forward the same event to the content engine;
+the two hosts own disjoint targets and no shared gesture state.
 
 The dual mixer adds one crossfader and an inert divider around two supported strips; the single
 mixer contains one supported strip. Each strip contains knobs, a vertical VU, and a label. Each

@@ -171,6 +171,7 @@ impl canvas::Program<UiEvent> for ButtonProgram<'_, '_> {
                 state.hovered = hovered;
                 changed
             }
+            Input::PointerLeft => std::mem::take(&mut state.hovered),
             Input::ModifiersChanged(_)
             | Input::PointerDown
             | Input::PointerUp

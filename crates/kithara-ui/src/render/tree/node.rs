@@ -21,9 +21,7 @@ use crate::{
     ids::InternId,
     layout::{Axis, FrameSides},
     module::ChromeStyle,
-    render::{
-        ControlAction, DragPhase, InputOwner, ReadValue, Reads, Skin, UiEvent, control_event,
-    },
+    render::{ControlAction, InputOwner, ReadValue, Reads, Skin, UiEvent, control_event},
     size::{Dim, Hidden, is_hidden},
     skin::ColorRole,
     widgets::{DropZone, ModuleChrome, Widget, anchored::Anchored, wheel::WheelSurface},
@@ -89,6 +87,9 @@ pub(super) fn render_compiled<'a>(
             root,
             ..
         } => {
+            let instance_id = *instance;
+            let instance = ui.resolve(*instance);
+            let module = ui.resolve(*module);
             let collapsed = *chrome == ChromeStyle::Full
                 && matches!(
                     reads.get(ui.resolve(*collapsed)),
@@ -101,17 +102,19 @@ pub(super) fn render_compiled<'a>(
                     ReadValue::Text(text) => Some(text.to_owned()),
                     _ => None,
                 });
+            let content_hosted = hosted_module(module);
+            let chrome_hosted = *chrome == ChromeStyle::Full || drop.is_some();
             let content: Element<'a, UiEvent> = if collapsed {
                 Space::new().into()
-            } else if hosted_module(ui.resolve(*module)) {
-                let child = render_engine_node(root, &[], *instance, ui, reads, skin);
+            } else if content_hosted {
+                let child = render_engine_node(root, &[], instance_id, ui, reads, skin);
                 host::host(child, root, ui, reads, skin)
             } else {
                 render_node(
                     root,
                     &[],
                     NodeContext {
-                        owner: *instance,
+                        owner: instance_id,
                         ui,
                         reads,
                         skin,
@@ -119,8 +122,9 @@ pub(super) fn render_compiled<'a>(
                     },
                 )
             };
-            ModuleChrome::builder()
+            let child = ModuleChrome::builder()
                 .content(content)
+                .module(module)
                 .maybe_title(title.map(|id| ui.resolve(id)))
                 .maybe_chip(chip.map(|id| ui.resolve(id)))
                 .assign(assign.iter().map(|id| ui.resolve(*id)).collect())
@@ -128,29 +132,35 @@ pub(super) fn render_compiled<'a>(
                 .frame(*frame)
                 .corners(*corners)
                 .maybe_footer(footer)
-                .maybe_drop(drop.as_ref().map(|drop| {
-                    module_drop_zone(
-                        ui.resolve(*instance),
-                        read_flag(Some(&drop.read), reads, ui),
-                    )
-                }))
-                .on_toggle(UiEvent::ToggleModule(ui.resolve(*module).to_owned()))
+                .input_owner(if chrome_hosted {
+                    InputOwner::Engine
+                } else {
+                    InputOwner::Leaf
+                })
+                .maybe_drop(
+                    drop.as_ref()
+                        .map(|drop| DropZone::new(read_flag(Some(&drop.read), reads, ui))),
+                )
                 .collapsed(collapsed)
                 .skin(skin)
                 .build()
-                .view()
+                .view();
+            if chrome_hosted {
+                host::module_host(
+                    child,
+                    host::ModuleHost {
+                        instance,
+                        module,
+                        chrome: *chrome,
+                        collapsed,
+                        drop: drop.is_some(),
+                    },
+                )
+            } else {
+                child
+            }
         }
     }
-}
-
-fn module_drop_zone(instance: &str, active: bool) -> DropZone<UiEvent> {
-    let crossing = |over| {
-        control_event(
-            &format!("{instance}/drop"),
-            ControlAction::Drag(DragPhase::Over(over)),
-        )
-    };
-    DropZone::new(crossing(true), crossing(false), active)
 }
 
 fn wheeled<'a>(
