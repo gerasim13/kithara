@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara_decode::PcmChunk;
 use kithara_resampler::ResamplerBackend;
 use num_traits::cast::AsPrimitive;
@@ -7,13 +9,13 @@ use crate::{
     waveform::{BeatGrid, bucket::Waveform},
 };
 
-#[derive(Default)]
 pub(crate) struct TrackAnalyzers<B>
 where
     B: ResamplerBackend,
 {
     pub(super) beat: beat::Slot<B>,
     pub(super) source_frames: u64,
+    pub(super) source_sample_rate: NonZeroU32,
     pub(super) waveform: waveform::Slot,
 }
 
@@ -43,5 +45,10 @@ where
 
     pub(crate) fn source_frames(&self) -> u64 {
         self.source_frames
+    }
+
+    /// Sample-rate axis frozen from the first decoded chunk of this pass.
+    pub(crate) fn source_sample_rate(&self) -> NonZeroU32 {
+        self.source_sample_rate
     }
 }

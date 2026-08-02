@@ -394,6 +394,16 @@ pub enum SessionEvent {
     },
 }
 
+/// Audible movement through a track's beat map.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PlaybackDirection {
+    /// Session beats advance toward higher track beats.
+    #[default]
+    Forward,
+    /// Session beats advance toward lower track beats.
+    Reverse,
+}
+
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum DjEvent {

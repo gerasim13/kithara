@@ -4920,9 +4920,11 @@ dependencies = [
  "derive_more",
  "fast-interleave",
  "kithara-bufpool",
+ "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
  "signalsmith-stretch",
+ "smallvec",
  "thiserror 2.0.18",
  "tracing",
 ]

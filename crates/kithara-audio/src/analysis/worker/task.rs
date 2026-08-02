@@ -107,11 +107,13 @@ where
             return TickResult::Progress;
         };
         let source_frames = analyzers.source_frames();
+        let source_sample_rate = analyzers.source_sample_rate();
         self.waveform = analyzers.finish_waveform();
-        let _ = self.tx.send(Some(TrackAnalysis::new(
+        let _ = self.tx.send(Some(TrackAnalysis::with_source_rate(
             None,
             self.waveform.clone(),
             source_frames,
+            source_sample_rate,
         )));
         self.phase = if analyzers.has_beat() {
             TaskPhase::DetectBeat
@@ -127,11 +129,13 @@ where
             return TickResult::Progress;
         };
         let source_frames = analyzers.source_frames();
+        let source_sample_rate = analyzers.source_sample_rate();
         let beat = analyzers.finish_beat(detector);
-        let _ = self.tx.send(Some(TrackAnalysis::new(
+        let _ = self.tx.send(Some(TrackAnalysis::with_source_rate(
             beat,
             self.waveform.take(),
             source_frames,
+            source_sample_rate,
         )));
         self.phase = TaskPhase::Done;
         TickResult::Progress
