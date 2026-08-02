@@ -83,7 +83,7 @@ impl HlsVariant {
         // on a slow target is the whole switch.
         let tail_start = forward_segment.saturating_sub(1);
         self.set_segment_aware_seek_tail(tail_start);
-        if !self.fetch_plan_satisfied(tail_start) {
+        if !self.queue_matches_plan(tail_start) {
             self.rebuild_queue(tail_start, None);
         }
 
