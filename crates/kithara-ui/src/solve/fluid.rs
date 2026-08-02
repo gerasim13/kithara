@@ -1,3 +1,5 @@
+use num_traits::cast::AsPrimitive;
+
 use super::flex::Item;
 use crate::layout::Axis;
 
@@ -13,38 +15,33 @@ impl Allocation {
     }
 }
 
-pub(super) fn allocate(
-    items: &[Item],
-    axis: Axis,
-    remaining: f32,
-    fill_sum: u16,
-) -> Vec<Allocation> {
+pub(super) fn allocate(items: &[Item], axis: Axis, remaining: f32) -> Vec<Allocation> {
     let minimum_sum = items
         .iter()
-        .filter(|item| fill_factor(item, axis) != 0)
-        .map(minimum)
-        .sum::<f32>();
+        .filter(|item| item.main_weight(axis) != 0.0)
+        .map(|item| f64::from(minimum(item)))
+        .sum::<f64>();
     let mut allocations = vec![Allocation::default(); items.len()];
 
-    if minimum_sum > remaining {
+    if minimum_sum > f64::from(remaining) {
         let scale = if minimum_sum > 0.0 {
-            remaining / minimum_sum
+            f64::from(remaining) / minimum_sum
         } else {
             0.0
         };
 
         for (item, allocation) in items.iter().zip(&mut allocations) {
-            if fill_factor(item, axis) != 0 {
-                allocation.extent = minimum(item) * scale;
+            if item.main_weight(axis) != 0.0 {
+                allocation.extent = (f64::from(minimum(item)) * scale).as_();
             }
         }
         return allocations;
     }
 
-    let mut pool = remaining;
-    let mut weight_sum = f32::from(fill_sum);
+    let mut pool = f64::from(remaining);
 
     loop {
+        let weight_sum = remaining_weight(items, &allocations, axis);
         let next =
             items
                 .iter()
@@ -54,15 +51,15 @@ pub(super) fn allocate(
                     if allocation.is_pinned {
                         return None;
                     }
-                    let weight = fill_factor(item, axis);
-                    if weight == 0 {
+                    let weight = item.main_weight(axis);
+                    if weight == 0.0 {
                         return None;
                     }
                     let item_minimum = minimum(item);
-                    let share = pool * f32::from(weight) / weight_sum;
-                    (share < item_minimum).then_some((index, item_minimum, weight))
+                    let share = pool * f64::from(weight) / weight_sum;
+                    (share < f64::from(item_minimum)).then_some((index, item_minimum))
                 });
-        let Some((index, minimum, weight)) = next else {
+        let Some((index, minimum)) = next else {
             break;
         };
 
@@ -70,25 +67,27 @@ pub(super) fn allocate(
             extent: minimum,
             is_pinned: true,
         };
-        pool -= minimum;
-        weight_sum -= f32::from(weight);
+        pool -= f64::from(minimum);
     }
 
+    let weight_sum = remaining_weight(items, &allocations, axis);
     for (item, allocation) in items.iter().zip(&mut allocations) {
-        let weight = fill_factor(item, axis);
-        if weight != 0 && !allocation.is_pinned {
-            allocation.extent = pool * f32::from(weight) / weight_sum;
+        let weight = item.main_weight(axis);
+        if weight != 0.0 && !allocation.is_pinned {
+            allocation.extent = (pool * f64::from(weight) / weight_sum).as_();
         }
     }
 
     allocations
 }
 
-fn fill_factor(item: &Item, axis: Axis) -> u16 {
-    match axis {
-        Axis::Horizontal => item.declared.width.fill_factor(),
-        Axis::Vertical => item.declared.height.fill_factor(),
-    }
+fn remaining_weight(items: &[Item], allocations: &[Allocation], axis: Axis) -> f64 {
+    items
+        .iter()
+        .zip(allocations)
+        .filter(|(_, allocation)| !allocation.is_pinned)
+        .map(|(item, _)| f64::from(item.main_weight(axis)))
+        .sum()
 }
 
 fn minimum(item: &Item) -> f32 {

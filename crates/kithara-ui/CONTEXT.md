@@ -251,9 +251,10 @@ crate-owned.
 ## Layout Ownership And The Parity Harness
 
 `solve` owns main-axis distribution, cross extent, and child offsets for expanded `Row`, `Column`,
-and `Slot` nodes and compiled `Split` nodes. `render::tree::flex` is its only iced host: it supplies
-declared lengths and limits, measures each child through iced, places the returned layout nodes,
-and forwards the complete widget lifecycle. Module chrome and controls remain on iced layout.
+and `Slot` nodes and compiled `Split` nodes. The root adapter recursively translates the compiled
+document, and `render::tree::flex` is the solver's only iced host: it supplies declared lengths and
+limits, measures each child through iced, places the returned layout nodes, and forwards the complete
+widget lifecycle. Module chrome and controls remain on iced layout.
 
 Ownership is split for now, and measurement is the reason. A child that is still an iced element
 is the only thing that knows its own intrinsic size, so the solver distributes while iced measures.
@@ -263,10 +264,16 @@ Lifting those to owned types buys nothing until a second host exists to disagree
 would be a translation layer with one caller - so the gate stays, named here rather than left to
 look like an oversight.
 
-`Split` supplies its existing quantised cell size directly to `Flex`. The sized-child path measures
-the child under the same loose limits as the removed iced container and resolves the cell extent
-separately, without emitting a layout wrapper. `Split` and `Slot` pass no `Range` minimum because
-their previous paths carried none.
+The root adapter sends a compiled `Split` weight to `Flex` as the document's original `f32`. A fluid
+cell uses `Length::Fill` only to declare that it participates in distribution; the solver reads the
+separate `f32` main weight, so no iced `FillPortion` conversion sits in the path. A fixed cell keeps
+its declared extent and ignores the weight. Expanded `Row`, `Column`, and `Slot` children do not
+supply an explicit weight and retain their existing iced `Length` semantics. The sized-child path
+measures the child under the same loose limits as the removed iced container and resolves the cell
+extent separately, without emitting a layout wrapper. `Split` and `Slot` pass no `Range` minimum
+because their previous paths carried none. `LayoutSkin` no longer carries the scale and minimum that
+drove the integer conversion; the minimum was already unreachable, because a split weight that is
+not finite and strictly positive is rejected at validation.
 
 `Range` keeps its `length_for` mapping to `Fill` or `FillPortion`, so the existing weight reaches
 the solver unchanged; the render tree passes the main-axis minimum alongside it for expanded rows
@@ -288,8 +295,8 @@ on purpose, because a library consumer carries no such window floor. If a docume
 exhaust its minimums inside the declared floor, the document is what gets fixed.
 
 `tests/layout_parity.rs` holds this owner to iced's prior answers. It compiles the two builtin
-presets, renders them through the render-tree adapter, resolves the tree against a headless
-`iced_tiny_skia` renderer at two viewports, and pins the absolute rect tree in
+presets, renders them through the root adapter, resolves the tree against a headless
+`iced_tiny_skia` renderer at three viewports, and pins the absolute rect tree in
 `tests/fixtures/layout/*.rects` - one line per document node, keyed by its path and indented by
 document depth. The walk descends the document tree and iced's layout tree together, deriving each
 wrapper step from the node itself, and proves the correspondence twice: it attributes every iced
@@ -297,8 +304,11 @@ node to a document rect, a named wrapper, an opaque control's interior or named 
 asserts the count balances, and a second counter walks the document without consulting iced so a
 subtree cannot be mistaken for furniture and vanish while the totals still add up. The reads fixture answers
 with constant values rather than `None` so text intrinsic sizing participates; a corpus of empty
-strings would measure nothing and pin nothing. Fixtures are re-recorded only when a document
-deliberately changes, in the same commit, via `KITHARA_UI_UPDATE_LAYOUT_FIXTURES`.
+strings would measure nothing and pin nothing. Byte-identical builtin fixtures through the root flip
+prove parity for the shipped weights, including final edge rounding, spacing distribution, and
+cross-axis sizing. A synthetic `0.335:1.0` split at 1335 pixels separately proves the document's
+fractional weights reach the solver without integer rounding. Fixtures are re-recorded only when a
+document deliberately changes, in the same commit, via `KITHARA_UI_UPDATE_LAYOUT_FIXTURES`.
 
 Reproducibility rests on one non-obvious fact. iced measures text during layout through a
 process-global cosmic-text font system, not through anything this crate owns, so the harness loads

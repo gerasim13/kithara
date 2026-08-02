@@ -19,6 +19,7 @@ pub(crate) struct Input<'a> {
 pub(crate) struct Item {
     pub(crate) declared: Size<Length>,
     pub(super) main_minimum: Option<f32>,
+    main_weight: Option<f32>,
     pub(crate) offset: Point,
     pub(crate) size: Size,
 }
@@ -28,8 +29,31 @@ impl Item {
         Self {
             declared,
             main_minimum,
+            main_weight: None,
             offset: Point::ORIGIN,
             size: Size::ZERO,
+        }
+    }
+
+    pub(crate) const fn weighted(declared: Size<Length>, main_weight: f32) -> Self {
+        Self {
+            declared,
+            main_minimum: None,
+            main_weight: Some(main_weight),
+            offset: Point::ORIGIN,
+            size: Size::ZERO,
+        }
+    }
+
+    pub(super) fn main_weight(self, axis: Axis) -> f32 {
+        let fill_factor = match axis {
+            Axis::Horizontal => self.declared.width.fill_factor(),
+            Axis::Vertical => self.declared.height.fill_factor(),
+        };
+        if fill_factor == 0 {
+            0.0
+        } else {
+            self.main_weight.unwrap_or_else(|| f32::from(fill_factor))
         }
     }
 }
@@ -63,19 +87,16 @@ pub(crate) fn resolve(input: Input<'_>, measure: &mut impl Measure) -> Distribut
     let (main_compress, cross_compress) = pack(axis, compression.width, compression.height);
     let (compress_x, compress_y) = pack(axis, main_compress, false);
     let child_compression = Size::new(compress_x, compress_y);
-    let mut fill_main_sum = 0_u16;
     let mut some_fill_cross = false;
     let mut cross_extent = if cross_compress { 0.0 } else { max_cross };
     let mut available = main(axis, limits.max()) - total_spacing;
     for (index, item) in items.iter_mut().enumerate() {
         let declared = item.declared;
-        let (fill_main_factor, fill_cross_factor) = pack(
-            axis,
-            declared.width.fill_factor(),
-            declared.height.fill_factor(),
-        );
+        let fill_main_weight = item.main_weight(axis);
+        let fill_cross_factor = cross_fill_factor(axis, declared);
 
-        if (main_compress || fill_main_factor == 0) && (!cross_compress || fill_cross_factor == 0) {
+        if (main_compress || fill_main_weight == 0.0) && (!cross_compress || fill_cross_factor == 0)
+        {
             let (max_width, max_height) = pack(
                 axis,
                 available,
@@ -96,7 +117,6 @@ pub(crate) fn resolve(input: Input<'_>, measure: &mut impl Measure) -> Distribut
             cross_extent = cross_extent.max(cross(axis, size));
             item.size = size;
         } else {
-            fill_main_sum += fill_main_factor;
             some_fill_cross = some_fill_cross || fill_cross_factor != 0;
         }
     }
@@ -106,7 +126,7 @@ pub(crate) fn resolve(input: Input<'_>, measure: &mut impl Measure) -> Distribut
             let declared = item.declared;
             let (main_size, cross_size) = pack(axis, declared.width, declared.height);
 
-            if (main_compress || main_size.fill_factor() == 0) && cross_size.fill_factor() != 0 {
+            if (main_compress || item.main_weight(axis) == 0.0) && cross_size.fill_factor() != 0 {
                 if let Length::Fixed(main_extent) = main_size {
                     available -= main_extent;
                     continue;
@@ -130,16 +150,13 @@ pub(crate) fn resolve(input: Input<'_>, measure: &mut impl Measure) -> Distribut
     let remaining = available.max(0.0);
 
     if !main_compress {
-        let allocated_main = fluid::allocate(&items, axis, remaining, fill_main_sum);
+        let allocated_main = fluid::allocate(&items, axis, remaining);
         for (index, (item, allocation)) in items.iter_mut().zip(allocated_main).enumerate() {
             let declared = item.declared;
-            let (fill_main_factor, fill_cross_factor) = pack(
-                axis,
-                declared.width.fill_factor(),
-                declared.height.fill_factor(),
-            );
+            let fill_main_weight = item.main_weight(axis);
+            let fill_cross_factor = cross_fill_factor(axis, declared);
 
-            if fill_main_factor != 0 {
+            if fill_main_weight != 0.0 {
                 let max_main = if allocation.extent().is_nan() {
                     f32::INFINITY
                 } else {
@@ -214,6 +231,13 @@ pub(crate) fn resolve(input: Input<'_>, measure: &mut impl Measure) -> Distribut
         .expand(padding);
 
     Distribution { size, items }
+}
+
+fn cross_fill_factor(axis: Axis, size: Size<Length>) -> u16 {
+    match axis {
+        Axis::Horizontal => size.height.fill_factor(),
+        Axis::Vertical => size.width.fill_factor(),
+    }
 }
 
 fn main(axis: Axis, size: Size) -> f32 {

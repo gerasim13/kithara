@@ -9,6 +9,7 @@ struct TestItem {
     declared: Size<Length>,
     intrinsic: Size,
     main_minimum: Option<f32>,
+    main_weight: Option<f32>,
 }
 
 impl TestItem {
@@ -17,6 +18,7 @@ impl TestItem {
             declared: Size::new(Length::Fixed(width), Length::Fixed(height)),
             intrinsic: Size::new(width, height),
             main_minimum: None,
+            main_weight: None,
         }
     }
 
@@ -25,6 +27,7 @@ impl TestItem {
             declared,
             intrinsic,
             main_minimum: None,
+            main_weight: None,
         }
     }
 
@@ -44,6 +47,11 @@ impl TestItem {
 
     const fn with_main_minimum(mut self, main_minimum: f32) -> Self {
         self.main_minimum = Some(main_minimum);
+        self
+    }
+
+    const fn with_main_weight(mut self, main_weight: f32) -> Self {
+        self.main_weight = Some(main_weight);
         self
     }
 }
@@ -103,7 +111,12 @@ impl Case {
         let declared = self
             .items
             .iter()
-            .map(|item| Item::new(item.declared, item.main_minimum))
+            .map(|item| {
+                item.main_weight.map_or_else(
+                    || Item::new(item.declared, item.main_minimum),
+                    |weight| Item::weighted(item.declared, weight),
+                )
+            })
             .collect::<Vec<_>>();
         let limits = Limits::new(Size::ZERO, self.max);
         let mut measure = TestMeasure {
@@ -331,6 +344,54 @@ fn fill_portions_weight_the_remaining_extent() {
             item(Point::new(0.0, 0.0), Size::new(20.0, 5.0)),
             item(Point::new(20.0, 0.0), Size::new(25.0, 5.0)),
             item(Point::new(45.0, 0.0), Size::new(75.0, 5.0)),
+        ]
+    );
+}
+
+#[kithara::test]
+fn finite_f32_weights_are_distributed_without_overflow() {
+    let fill = TestItem::new(
+        Size::new(Length::Fill, Length::Fixed(5.0)),
+        Size::new(0.0, 5.0),
+    )
+    .with_main_weight(f32::MAX);
+    let case = Case::horizontal(
+        Size::new(100.0, 10.0),
+        Length::Fill,
+        Length::Shrink,
+        vec![fill, fill],
+    );
+
+    let (distribution, _) = case.run();
+
+    assert_eq!(
+        placements(&distribution),
+        vec![
+            item(Point::ORIGIN, Size::new(50.0, 5.0)),
+            item(Point::new(50.0, 0.0), Size::new(50.0, 5.0)),
+        ]
+    );
+}
+
+#[kithara::test]
+fn fixed_main_extent_ignores_an_explicit_weight() {
+    let case = Case::horizontal(
+        Size::new(100.0, 10.0),
+        Length::Fill,
+        Length::Shrink,
+        vec![
+            TestItem::fixed(20.0, 5.0).with_main_weight(f32::MAX),
+            TestItem::fill(1),
+        ],
+    );
+
+    let (distribution, _) = case.run();
+
+    assert_eq!(
+        placements(&distribution),
+        vec![
+            item(Point::ORIGIN, Size::new(20.0, 5.0)),
+            item(Point::new(20.0, 0.0), Size::new(80.0, 5.0)),
         ]
     );
 }

@@ -26,7 +26,7 @@ use kithara_ui::{
         fonts::{FONT_BYTES, SANS},
         tree,
     },
-    source::UiConfig,
+    source::{MemResolver, UiConfig},
     text::{FontPolicy, GlyphFace, GlyphSegment, TextContext},
 };
 
@@ -789,6 +789,68 @@ fn builtin_layouts_match_rect_fixtures() {
             assert_fixture_matches(&fixture, &expected, &actual);
         }
     }
+}
+
+#[kithara::test]
+fn split_weights_reach_layout_as_f32() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "fractional.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "fractional",
+            root: Split(axis: Horizontal, children: [
+                (weight: 0.335, node: Module(
+                    instance: "fractional",
+                    source: "fill.kmodule.ron",
+                    size: (w: Fill, h: Fill),
+                )),
+                (weight: 1.0, node: Module(
+                    instance: "unit",
+                    source: "fill.kmodule.ron",
+                    size: (w: Fill, h: Fill),
+                )),
+            ]))"#,
+    );
+    resolver.insert(
+        "fill.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "fill", chrome: Plain,
+            root: Row(
+                id: "body",
+                size: (w: Fill, h: Fill),
+                gap: 0.0,
+                pad: 0.0,
+                children: [],
+            ))"#,
+    );
+    let ui = compile(
+        "fractional.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .expect("fractional split document must compile");
+    let actual = dump(
+        "fractional.klayout.ron",
+        &ui,
+        &FixtureReads::default(),
+        &fixture_skin(),
+        &headless_renderer(),
+        Size::new(1335.0, 100.0),
+    );
+    let module_rects = actual
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("fractional ") || line.starts_with("unit "))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        module_rects,
+        [
+            "fractional 0.000 0.000 335.000 100.000",
+            "unit 335.000 0.000 1000.000 100.000",
+        ],
+        "split weights were quantized through FillPortion (the rounded result is 338.731:996.269)",
+    );
 }
 
 #[kithara::test]

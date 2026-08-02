@@ -2,7 +2,6 @@ use iced::{
     Alignment, Element, Length, Size,
     widget::{Space, Stack, container, mouse_area},
 };
-use num_traits::cast::AsPrimitive;
 
 use super::{
     control::render_control,
@@ -38,14 +37,14 @@ pub(super) fn render_compiled<'a>(
         CompiledNode::Optional { child, .. } => render_compiled(child, ui, reads, skin),
         CompiledNode::Split { axis, children, .. } => match axis {
             Axis::Horizontal => container(
-                Flex::row_sized(visible_children(children, hidden).map(|(weight, child)| {
+                Flex::row_weighted(visible_children(children, hidden).map(|(weight, child)| {
                     (
                         render_compiled(child, ui, reads, skin),
                         Size::new(
-                            split_length(node_size(child, skin.document(), hidden).w, weight, skin),
+                            main_length(node_size(child, skin.document(), hidden).w),
                             Length::Fill,
                         ),
-                        None,
+                        weight,
                     )
                 }))
                 .width(Length::Fill)
@@ -55,14 +54,14 @@ pub(super) fn render_compiled<'a>(
             .height(Length::Fill)
             .into(),
             Axis::Vertical => container(
-                Flex::column_sized(visible_children(children, hidden).map(|(weight, child)| {
+                Flex::column_weighted(visible_children(children, hidden).map(|(weight, child)| {
                     (
                         render_compiled(child, ui, reads, skin),
                         Size::new(
                             Length::Fill,
-                            split_length(node_size(child, skin.document(), hidden).h, weight, skin),
+                            main_length(node_size(child, skin.document(), hidden).h),
                         ),
-                        None,
+                        weight,
                     )
                 }))
                 .width(Length::Fill)
@@ -160,6 +159,13 @@ pub(super) fn render_compiled<'a>(
                 child
             }
         }
+    }
+}
+
+fn main_length(dim: Dim) -> Length {
+    match dim {
+        Dim::Fixed(value) => Length::Fixed(value),
+        _ => Length::Fill,
     }
 }
 
@@ -510,19 +516,4 @@ fn main_minimum(node: &ExpandedNode, axis: Axis, skin: &Skin) -> Option<f32> {
         Dim::Range { min, .. } => Some(min),
         _ => None,
     }
-}
-
-fn split_length(dim: Dim, weight: f32, skin: &Skin) -> Length {
-    match dim {
-        Dim::Fixed(value) => Length::Fixed(value),
-        _ => Length::FillPortion(fill_portion(weight, skin)),
-    }
-}
-
-fn fill_portion(weight: f32, skin: &Skin) -> u16 {
-    let scaled = (weight * skin.layout.fill_weight_scale)
-        .round()
-        .max(skin.layout.fill_weight_min)
-        .min(f32::from(u16::MAX));
-    scaled.as_()
 }

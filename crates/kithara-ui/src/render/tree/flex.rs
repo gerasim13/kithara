@@ -29,6 +29,7 @@ pub(super) struct Flex<'a> {
 struct ChildLayout {
     declared: Option<Size<Length>>,
     main_minimum: Option<f32>,
+    main_weight: Option<f32>,
 }
 
 impl<'a> Flex<'a> {
@@ -39,7 +40,7 @@ impl<'a> Flex<'a> {
             Axis::Horizontal,
             children
                 .into_iter()
-                .map(|(child, main_minimum)| (child, None, main_minimum)),
+                .map(|(child, main_minimum)| (child, None, main_minimum, None)),
         )
     }
 
@@ -50,35 +51,42 @@ impl<'a> Flex<'a> {
             Axis::Vertical,
             children
                 .into_iter()
-                .map(|(child, main_minimum)| (child, None, main_minimum)),
+                .map(|(child, main_minimum)| (child, None, main_minimum, None)),
         )
     }
 
-    pub(super) fn row_sized(
-        children: impl IntoIterator<Item = (Element<'a, UiEvent>, Size<Length>, Option<f32>)>,
+    pub(super) fn row_weighted(
+        children: impl IntoIterator<Item = (Element<'a, UiEvent>, Size<Length>, f32)>,
     ) -> Self {
         Self::with_children(
             Axis::Horizontal,
-            children
-                .into_iter()
-                .map(|(child, declared, main_minimum)| (child, Some(declared), main_minimum)),
+            children.into_iter().map(|(child, declared, main_weight)| {
+                (child, Some(declared), None, Some(main_weight))
+            }),
         )
     }
 
-    pub(super) fn column_sized(
-        children: impl IntoIterator<Item = (Element<'a, UiEvent>, Size<Length>, Option<f32>)>,
+    pub(super) fn column_weighted(
+        children: impl IntoIterator<Item = (Element<'a, UiEvent>, Size<Length>, f32)>,
     ) -> Self {
         Self::with_children(
             Axis::Vertical,
-            children
-                .into_iter()
-                .map(|(child, declared, main_minimum)| (child, Some(declared), main_minimum)),
+            children.into_iter().map(|(child, declared, main_weight)| {
+                (child, Some(declared), None, Some(main_weight))
+            }),
         )
     }
 
     fn with_children(
         axis: Axis,
-        children: impl IntoIterator<Item = (Element<'a, UiEvent>, Option<Size<Length>>, Option<f32>)>,
+        children: impl IntoIterator<
+            Item = (
+                Element<'a, UiEvent>,
+                Option<Size<Length>>,
+                Option<f32>,
+                Option<f32>,
+            ),
+        >,
     ) -> Self {
         let iterator = children.into_iter();
         let capacity = iterator.size_hint().0;
@@ -93,8 +101,8 @@ impl<'a> Flex<'a> {
             child_layouts: Vec::with_capacity(capacity),
         };
 
-        for (child, declared, main_minimum) in iterator {
-            flex = flex.push(child, declared, main_minimum);
+        for (child, declared, main_minimum, main_weight) in iterator {
+            flex = flex.push(child, declared, main_minimum, main_weight);
         }
 
         flex
@@ -105,6 +113,7 @@ impl<'a> Flex<'a> {
         child: Element<'a, UiEvent>,
         declared: Option<Size<Length>>,
         main_minimum: Option<f32>,
+        main_weight: Option<f32>,
     ) -> Self {
         let size_hint = declared.unwrap_or_else(|| child.as_widget().size_hint());
 
@@ -115,6 +124,7 @@ impl<'a> Flex<'a> {
             self.child_layouts.push(ChildLayout {
                 declared,
                 main_minimum,
+                main_weight,
             });
         }
 
@@ -166,9 +176,10 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
             .iter()
             .zip(&self.child_layouts)
             .map(|(child, layout)| {
-                solve::Item::new(
-                    layout.declared.unwrap_or_else(|| child.as_widget().size()),
-                    layout.main_minimum,
+                let declared = layout.declared.unwrap_or_else(|| child.as_widget().size());
+                layout.main_weight.map_or_else(
+                    || solve::Item::new(declared, layout.main_minimum),
+                    |weight| solve::Item::weighted(declared, weight),
                 )
             })
             .collect::<Vec<_>>();
