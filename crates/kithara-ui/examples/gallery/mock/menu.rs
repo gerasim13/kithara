@@ -8,10 +8,10 @@ impl Consts {
     ];
     const DISPLAYS: [&str; 3] = ["MACBOOK PRO 16\"", "DELL U2720Q", "IPAD · SIDECAR"];
     const LAYOUTS: [&str; 4] = [
-        "КЛУБ · 2 ДЕКИ",
-        "СТУДИЯ · 4 ДЕКИ + VST",
-        "ВИЗУАЛ + ТАЙМЛАЙН",
-        "УЗКОЕ ОКНО · ТАБЫ",
+        "CLUB · 2 DECKS",
+        "STUDIO · 4 DECKS + VST",
+        "VISUALS + TIMELINE",
+        "NARROW WINDOW · TABS",
     ];
     const MAX_WINDOWS: usize = 3;
     const MODULES: [&str; 11] = [
@@ -240,16 +240,10 @@ impl MenuState {
             "ui.prefs.mono" => ReadValue::Bool(self.mono),
             "ui.set.recording" => ReadValue::Bool(self.recording),
             "ui.set.casting" => ReadValue::Bool(self.casting),
-            "ui.set.record_hint" => ReadValue::Text(if self.recording {
-                "ИДЁТ ЗАПИСЬ"
-            } else {
-                "⌘R"
-            }),
-            "ui.set.cast_hint" => ReadValue::Text(if self.casting {
-                "ЗВУК LIVE"
-            } else {
-                "ВЫКЛ"
-            }),
+            "ui.set.record_hint" => {
+                ReadValue::Text(if self.recording { "RECORDING" } else { "⌘R" })
+            }
+            "ui.set.cast_hint" => ReadValue::Text(if self.casting { "AUDIO LIVE" } else { "OFF" }),
             _ => return None,
         };
         Some(value)
@@ -279,23 +273,23 @@ impl MenuState {
     fn rebuild(&mut self) {
         for (index, window) in self.windows.iter_mut().enumerate() {
             let number = index + 1;
-            window.title = format!("ОКНО {number} · {}", Consts::LAYOUTS[window.layout]);
+            window.title = format!("WINDOW {number} · {}", Consts::LAYOUTS[window.layout]);
             window.caption = format!(
-                "{} · {} МОД.",
+                "{} · {} MOD.",
                 Consts::DISPLAYS[window.display],
                 window.modules_on()
             );
         }
         let count = self.windows.len();
         self.count_label = if count == 1 {
-            "1 ОКНО".to_owned()
+            "1 WINDOW".to_owned()
         } else {
-            format!("{count} ОКНА")
+            format!("{count} WINDOWS")
         };
         let active = self.active + 1;
-        self.modules_title = format!("Модули · ОКНО {active}");
+        self.modules_title = format!("Modules · WINDOW {active}");
         let on = self.windows[self.active].modules_on();
-        self.modules_count = format!("{on} ИЗ 11");
+        self.modules_count = format!("{on} OF 11");
     }
 
     fn toggle_group(&mut self, group: MenuGroup) {
@@ -358,9 +352,9 @@ impl ContextState {
                     self.open = None;
                 }
             }
-            "deck-a" => self.run(row, "ДЕКА A"),
-            "deck-b" => self.run(row, "ДЕКА B"),
-            "queue" => self.run(row, "В ОЧЕРЕДЬ"),
+            "deck-a" => self.run(row, "DECK A"),
+            "deck-b" => self.run(row, "DECK B"),
+            "queue" => self.run(row, "TO QUEUE"),
             _ => return false,
         }
         true

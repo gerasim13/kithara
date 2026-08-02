@@ -48,7 +48,7 @@
                             id: "head-label",
                             size: (w: Fill, h: Fill),
                             style: MicroLabel,
-                            label: "КАЧЕСТВО HLS",
+                            label: "HLS QUALITY",
                         ),
                     ],
                 ),
