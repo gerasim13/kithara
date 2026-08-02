@@ -20,16 +20,38 @@ use crate::{
 /// `style.multiple-private-module-consts` lint.
 struct Consts;
 impl Consts {
-    /// Apple App Store uploads no longer require bitcode, and embedding it
-    /// bloats every Rust object stored in the release static archive.
-    const RELEASE_RUSTFLAGS: &[&str] = &["-C", "embed-bitcode=no"];
-    const RELEASE_CARGO_ARGS: &[&str] = &[
-        "+nightly",
-        "-Z",
-        "build-std=std,panic_abort",
-        "-Z",
-        "build-std-features=panic_immediate_abort",
+    /// `panic=immediate-abort` lowers every panic to a trap, so the
+    /// `core::fmt` panic plumbing drops out of each slice; same lane as the
+    /// wasm flags in `crates/kithara-ffi/.cargo/config.toml`.
+    ///
+    /// No `embed-bitcode=no` here: `relink_slices_with_lto` runs fat LTO over
+    /// the slice, and LTO consumes exactly the rlib bitcode that flag
+    /// suppresses. rustc rejects the two together for the same reason.
+    const RELEASE_RUSTFLAGS: &[&str] = &["-Z", "unstable-options", "-C", "panic=immediate-abort"];
+    /// Feature set of every release slice, shared by the `cargo swift`
+    /// packaging build and the whole-program relink so both see one graph.
+    const SLICE_FEATURES: &str = "uniffi,apple,dev,stretch-signalsmith";
+    /// Target triples behind each `*.xcframework` slice directory. Universal
+    /// slices list every arch and are recombined with `lipo -create`.
+    const SLICE_TARGETS: &[(&str, &[&str])] = &[
+        ("ios-arm64", &["aarch64-apple-ios"]),
+        (Self::IOS_SIMULATOR_SLICE, &["aarch64-apple-ios-sim"]),
+        (
+            Self::IOS_SIMULATOR_FAT_SLICE,
+            &["aarch64-apple-ios-sim", "x86_64-apple-ios"],
+        ),
+        (
+            "macos-arm64_x86_64",
+            &["aarch64-apple-darwin", "x86_64-apple-darwin"],
+        ),
     ];
+    /// `+nightly` propagates to the nested `cargo build` processes that
+    /// cargo-swift spawns (rustup exports `RUSTUP_TOOLCHAIN`), which is what
+    /// activates the `[unstable] build-std` section of
+    /// `crates/kithara-ffi/.cargo/config.toml` for every slice. `-Z` CLI
+    /// flags must not be added here: the outer cargo consumes them without
+    /// forwarding to external subcommands, so they silently do nothing.
+    const RELEASE_CARGO_ARGS: &[&str] = &["+nightly"];
     /// Slice subdirectories inside the `*.xcframework` we expect to find.
     const XCFRAMEWORK_SLICES: &[&str] =
         &["ios-arm64", Self::IOS_SIMULATOR_SLICE, "macos-arm64_x86_64"];
@@ -435,13 +457,13 @@ fn run_build(profile: crate::BuildProfile, target: Option<&str>) -> Result<()> {
         // the Apple AudioToolbox backend is the sole decoder on-device.
         "--no-default-features",
         "-F",
-        "uniffi,apple,dev,stretch-signalsmith",
+        Consts::SLICE_FEATURES,
         "--swift-tools-version",
         "6.0",
         "-y",
     ]);
     cmd.current_dir(&crate_dir);
-    cmd.env("IPHONEOS_DEPLOYMENT_TARGET", deployment_target);
+    cmd.env("IPHONEOS_DEPLOYMENT_TARGET", &deployment_target);
     set_simulator_bindgen_args(&mut cmd)?;
 
     let status = cmd.status().context("failed to run cargo swift package")?;
@@ -465,6 +487,12 @@ fn run_build(profile: crate::BuildProfile, target: Option<&str>) -> Result<()> {
         keep_arm64_ios_simulator_only(&xcf_dst)?;
     }
     if matches!(profile, crate::BuildProfile::Release) {
+        relink_slices_with_lto(
+            &xcf_dst,
+            &crate_dir,
+            metadata.target_directory.as_std_path(),
+            &deployment_target,
+        )?;
         strip_xcframework(&xcf_dst)?;
     }
 
@@ -586,6 +614,98 @@ fn run_release(release: &ReleaseConfig, apple: &AppleConfig) -> Result<()> {
     println!("    {}", checksum_file.display());
     println!("==> SPM checksum: {checksum}");
     Ok(())
+}
+
+/// Rebuild every packaged slice as a whole-program archive.
+///
+/// `cargo swift` builds `kithara-ffi` with its declared `crate-type`
+/// (`lib`, `staticlib`, `cdylib`), and cargo skips LTO for any unit that also
+/// emits an rlib, so the packaged archive is a pile of per-crate objects that
+/// the profile's `lto = "fat"` never touched. A `staticlib`-only unit is the
+/// shape fat LTO accepts; rebuild each slice that way and swap it in.
+fn relink_slices_with_lto(
+    xcframework: &Path,
+    crate_dir: &Path,
+    target_dir: &Path,
+    deployment_target: &str,
+) -> Result<()> {
+    require_dir(xcframework)?;
+    for entry in
+        fs::read_dir(xcframework).with_context(|| format!("read {}", xcframework.display()))?
+    {
+        let slice_dir = entry?.path();
+        let lib = slice_dir.join("libkithara_ffi.a");
+        if !lib.is_file() {
+            continue;
+        }
+        let slice = slice_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .with_context(|| format!("slice name is not UTF-8: {}", slice_dir.display()))?;
+        let targets = Consts::SLICE_TARGETS
+            .iter()
+            .find_map(|(name, targets)| (*name == slice).then_some(*targets))
+            .with_context(|| {
+                format!("no target triples registered for xcframework slice `{slice}`")
+            })?;
+
+        println!("==> Relinking {} with fat LTO", lib.display());
+        let archives = targets
+            .iter()
+            .map(|target| build_slice_staticlib(crate_dir, target_dir, target, deployment_target))
+            .collect::<Result<Vec<_>>>()?;
+        match archives.as_slice() {
+            [thin] => {
+                fs::copy(thin, &lib)
+                    .with_context(|| format!("copy {} -> {}", thin.display(), lib.display()))?;
+            }
+            fat => lipo_create(fat, &lib)?,
+        }
+    }
+    Ok(())
+}
+
+/// Build one target's `kithara-ffi` archive as a `staticlib`-only unit and
+/// return its path. `cargo rustc` overrides the manifest `crate-type`, which
+/// is what lets cargo turn fat LTO on for this unit.
+fn build_slice_staticlib(
+    crate_dir: &Path,
+    target_dir: &Path,
+    target: &str,
+    deployment_target: &str,
+) -> Result<PathBuf> {
+    let mut cmd = Command::new("cargo");
+    cmd.args(Consts::RELEASE_CARGO_ARGS);
+    cmd.args([
+        "rustc",
+        "-p",
+        "kithara-ffi",
+        "--release",
+        "--target",
+        target,
+        "--no-default-features",
+        "-F",
+        Consts::SLICE_FEATURES,
+        "--crate-type",
+        "staticlib",
+    ]);
+    cmd.current_dir(crate_dir);
+    cmd.env("IPHONEOS_DEPLOYMENT_TARGET", deployment_target);
+    set_release_rustflags(&mut cmd);
+    set_simulator_bindgen_args(&mut cmd)?;
+
+    let status = cmd
+        .status()
+        .with_context(|| format!("failed to run cargo rustc for {target}"))?;
+    if !status.success() {
+        bail!("staticlib build failed for {target}");
+    }
+    let lib = target_dir
+        .join(target)
+        .join("release")
+        .join("libkithara_ffi.a");
+    require_file(&lib)?;
+    Ok(lib)
 }
 
 fn strip_xcframework(xcframework: &Path) -> Result<()> {
@@ -1173,6 +1293,12 @@ fn sdk_path(sdk: &str) -> Result<PathBuf> {
 }
 
 /// Extract a single arch from a fat static lib.
+fn lipo_create(thin: &[PathBuf], out: &Path) -> Result<()> {
+    let mut cmd = Command::new("lipo");
+    cmd.arg("-create").args(thin).arg("-output").arg(out);
+    run_quiet(&mut cmd, "lipo create")
+}
+
 fn lipo_thin(fat: &Path, arch: &str, out: &Path) -> Result<()> {
     let mut cmd = Command::new("lipo");
     cmd.arg(fat).arg("-thin").arg(arch).arg("-output").arg(out);

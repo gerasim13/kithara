@@ -92,7 +92,6 @@ aes = { workspace = true }
 cbc = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
-unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

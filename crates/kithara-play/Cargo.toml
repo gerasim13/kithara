@@ -79,7 +79,7 @@ analysis-waveform = ["kithara-audio/analysis-waveform"]
 # Re-export of testing helpers (engine module + macro mocks).
 # Offline backend lives in `kithara-integration-tests::offline` since 2026-05-07.
 probe = []
-mock = []
+mock = ["dep:unimock"]
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
@@ -118,7 +118,7 @@ thiserror = { workspace = true }
 thunderdome = { workspace = true }
 tracing = { workspace = true }
 
-unimock = { workspace = true }
+unimock = { workspace = true, optional = true }
 url = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
@@ -134,6 +134,7 @@ kithara-play = { path = ".", default-features = false, features = ["backend-cpal
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 
 bytes = { workspace = true }
+unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
