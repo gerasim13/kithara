@@ -19,23 +19,23 @@ use crate::{
 /// layout lays out. It paints only: every event passes through it untouched,
 /// and it claims no cursor of its own.
 pub(crate) struct DragGhost {
-    label: Option<String>,
-    metrics: DragSkin,
     background: Color,
     border: Color,
     text_color: Color,
+    metrics: DragSkin,
+    label: Option<String>,
 }
 
 impl DragGhost {
     const ELLIPSIS: char = '\u{2026}';
 
-    /// Gap between the pointer and the box it carries, so the box trails the
-    /// pointer instead of sitting under it.
-    const POINTER_GAP: f32 = 12.0;
-
     /// A canvas cannot measure text, so the label is cut to what fits: the mono
     /// face this widget draws with advances that fraction of its size per glyph.
     const MONO_ADVANCE: f32 = 0.6;
+
+    /// Gap between the pointer and the box it carries, so the box trails the
+    /// pointer instead of sitting under it.
+    const POINTER_GAP: f32 = 12.0;
 
     pub(crate) fn new(label: Option<String>, skin: &Skin) -> Self {
         let metrics = skin.drag;
@@ -109,6 +109,15 @@ impl canvas::Program<UiEvent> for DragGhost {
         vec![frame.into_geometry()]
     }
 
+    fn mouse_interaction(
+        &self,
+        _state: &(),
+        _bounds: Rectangle,
+        _cursor: Cursor,
+    ) -> mouse::Interaction {
+        mouse::Interaction::None
+    }
+
     /// The pointer moves without the host's state changing, so a ghost with
     /// something to carry asks for the frame that redraws it where the pointer
     /// now is. Empty-handed, it lets the move pass without a redraw.
@@ -121,15 +130,6 @@ impl canvas::Program<UiEvent> for DragGhost {
     ) -> Option<Action<UiEvent>> {
         let moved = matches!(event, Event::Mouse(mouse::Event::CursorMoved { .. }));
         (moved && self.label.is_some()).then(Action::request_redraw)
-    }
-
-    fn mouse_interaction(
-        &self,
-        _state: &(),
-        _bounds: Rectangle,
-        _cursor: Cursor,
-    ) -> mouse::Interaction {
-        mouse::Interaction::None
     }
 }
 

@@ -179,10 +179,10 @@ pub struct OrphansConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct QualityConfig {
-    /// Trait directory whose every `pub trait` must carry workspace mock coverage.
-    pub unimock_traits_dir: String,
     /// Repository-specific heavyweight stages used by `quality assess --depth deep`.
     pub assessment: QualityAssessmentConfig,
+    /// Trait directory whose every `pub trait` must carry workspace mock coverage.
+    pub unimock_traits_dir: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -197,18 +197,18 @@ pub struct QualityAssessmentConfig {
 pub struct QualityAssessmentStageConfig {
     pub name: String,
     pub command: Vec<String>,
-    pub tools: Vec<String>,
     pub expected_artifacts: Vec<String>,
-    pub hard_invariant: bool,
-    pub complete_only: bool,
     pub platforms: Vec<String>,
+    pub tools: Vec<String>,
+    pub complete_only: bool,
+    pub hard_invariant: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct QualityAssessmentToolPolicyConfig {
-    pub tool: String,
     pub reason: String,
+    pub tool: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -283,15 +283,15 @@ fn default_perf_nextest_profile() -> String {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TestCommandConfig {
-    pub features: Vec<String>,
     pub lanes: BTreeMap<String, TestLaneConfig>,
     pub net_backends: BTreeMap<String, TestNetBackendConfig>,
     pub default_backend: String,
     pub default_lane: String,
     pub feature_arg: String,
+    pub loom_lane: String,
     pub flash: TestFlashConfig,
     pub no_block: TestNoBlockConfig,
-    pub loom_lane: String,
+    pub features: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

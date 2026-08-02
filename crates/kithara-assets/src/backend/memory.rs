@@ -57,9 +57,9 @@ pub struct MemAssetStore {
     /// See [`AssetDeleter`].
     deleter: Arc<dyn AssetDeleter>,
     availability: AvailabilityIndex,
+    pool: BytePool,
     cancel: CancelToken,
     mem_resource_capacity: Option<usize>,
-    pool: BytePool,
 }
 
 #[derive(Debug)]
@@ -113,9 +113,9 @@ pub(crate) struct MemStoreSetup {
     pub(crate) active_resources: Arc<DashMap<MemCacheKey, Weak<StorageResource>>>,
     pub(crate) deleter: Arc<dyn AssetDeleter>,
     pub(crate) availability: AvailabilityIndex,
+    pub(crate) pool: BytePool,
     pub(crate) cancel: CancelToken,
     pub(crate) mem_resource_capacity: Option<usize>,
-    pub(crate) pool: BytePool,
 }
 
 impl MemAssetStore {
@@ -131,16 +131,16 @@ impl MemAssetStore {
         )
     }
 
-    fn scoped_observer(&self, key: &ResourceKey) -> Arc<dyn AvailabilityObserver> {
-        ScopedAvailabilityObserver::new(key.clone(), self.availability.clone())
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
     fn open_absolute_resource(&self, key: &ResourceKey) -> AssetsResult<Option<BaseReader>> {
         let Some(path) = key.as_absolute_path() else {
             return Ok(None);
         };
         Ok(Some(BaseReader::open_read_only_file(path, &self.cancel)?))
+    }
+
+    fn scoped_observer(&self, key: &ResourceKey) -> Arc<dyn AvailabilityObserver> {
+        ScopedAvailabilityObserver::new(key.clone(), self.availability.clone())
     }
 
     /// Like [`MemAssetStore::new`] but shares the given aggregate
@@ -186,9 +186,9 @@ impl MemAssetStore {
             active_resources,
             deleter,
             availability,
+            pool,
             cancel,
             mem_resource_capacity,
-            pool,
         }
     }
 }
@@ -256,13 +256,6 @@ impl Assets for MemAssetStore {
 
     fn capabilities(&self) -> Capabilities {
         Capabilities::CACHE | Capabilities::PROCESSING
-    }
-
-    delegate::delegate! {
-        to self.deleter {
-            fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
-            fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()>;
-        }
     }
 
     fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
@@ -335,6 +328,13 @@ impl Assets for MemAssetStore {
 
     fn root_dir(&self) -> &Path {
         Path::new("")
+    }
+
+    delegate::delegate! {
+        to self.deleter {
+            fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
+            fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()>;
+        }
     }
 }
 

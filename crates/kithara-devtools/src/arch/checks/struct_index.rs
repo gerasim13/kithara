@@ -55,10 +55,10 @@ pub(crate) struct WorkspaceStructIndex {
     /// trait impls (so `#[derive]`-generated and hand-written `impl Default`
     /// don't count).
     pub(crate) impl_method_counts: BTreeMap<String, usize>,
-    /// Crate name → names of fields used as assignment targets.
-    pub(crate) assigned_fields: HashMap<String, HashSet<String>>,
     pub(crate) literals: BTreeMap<String, Vec<LiteralSite>>,
     pub(crate) structs: BTreeMap<String, StructInfo>,
+    /// Crate name → names of fields used as assignment targets.
+    pub(crate) assigned_fields: HashMap<String, HashSet<String>>,
     pub(crate) suppressions: HashMap<String, Suppressions>,
 }
 

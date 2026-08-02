@@ -28,14 +28,14 @@ pub struct PlaybackSnapshot {
 pub struct PlaybackShared {
     /// Whether playback is active.
     pub playing: AtomicBool,
-    /// Playback position in seconds.
-    pub position: AtomicF64,
-    /// Decoded-ahead frontier in seconds.
-    pub frontier: AtomicF64,
     /// Cached span in seconds: how much of the source is on disk.
     pub cached: AtomicF64,
     /// Total media duration in seconds; `0.0` when unknown.
     pub duration: AtomicF64,
+    /// Decoded-ahead frontier in seconds.
+    pub frontier: AtomicF64,
+    /// Playback position in seconds.
+    pub position: AtomicF64,
     /// Current output sample rate.
     pub sample_rate: AtomicU32,
     /// Number of audio-thread process calls.
@@ -45,10 +45,11 @@ pub struct PlaybackShared {
 }
 
 impl PlaybackSnapshot {
-    /// Whether playback is active.
+    /// Cached span in seconds: how much of the source is on disk and needs no
+    /// further network.
     #[must_use]
-    pub fn is_playing(&self) -> bool {
-        self.playing
+    pub fn cached(&self) -> f64 {
+        self.cached
     }
 
     /// Total media duration in seconds; `0.0` when unknown.
@@ -63,11 +64,10 @@ impl PlaybackSnapshot {
         self.frontier
     }
 
-    /// Cached span in seconds: how much of the source is on disk and needs no
-    /// further network.
+    /// Whether playback is active.
     #[must_use]
-    pub fn cached(&self) -> f64 {
-        self.cached
+    pub fn is_playing(&self) -> bool {
+        self.playing
     }
 
     /// Playback position in seconds.

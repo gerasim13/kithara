@@ -15,8 +15,8 @@ type RootSubscribers = HashMap<SubscriptionId, mpsc::UnboundedSender<ResourceKey
 
 #[derive(Default)]
 struct RouterState {
-    next_id: SubscriptionId,
     subscribers: HashMap<Arc<str>, RootSubscribers>,
+    next_id: SubscriptionId,
 }
 
 impl RouterState {
@@ -108,8 +108,8 @@ impl EvictionRouter {
 #[must_use = "drop the guard to deregister the eviction subscription"]
 pub struct EvictionSubscription {
     asset_root: Arc<str>,
-    id: SubscriptionId,
     state: Arc<Mutex<RouterState>>,
+    id: SubscriptionId,
 }
 
 impl Drop for EvictionSubscription {

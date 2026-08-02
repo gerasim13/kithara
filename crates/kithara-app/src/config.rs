@@ -62,12 +62,16 @@ impl Default for AppDrm {
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct AppConfig {
+    /// App-owned DRM policy and its opaque key-request registry.
+    #[builder(default)]
+    pub drm: AppDrm,
     /// App-wide shared asset store.
     pub store: AssetStore,
+    /// Source beat-analysis tunables.
+    #[builder(default)]
+    pub beat_analysis: BeatAnalysisConfig<PlaybackResamplerBackend>,
     /// App-wide shared byte pool for network and cache buffers.
     pub byte_pool: BytePool,
-    /// App-wide shared PCM pool for playback and track analysis.
-    pub pcm_pool: PcmPool,
     /// App master cancel. Single owner for the whole app subtree; the
     /// queue, player, stores, and UI listener all derive children from
     /// it (see `main.rs`). The chain flag reaches the audio worker and HLS
@@ -76,12 +80,11 @@ pub struct AppConfig {
     pub shutdown: CancelToken,
     /// Shared HTTP downloader for every track.
     pub downloader: Downloader,
-    /// App-owned DRM policy and its opaque key-request registry.
-    #[builder(default)]
-    pub drm: AppDrm,
     /// Color palette for the UI.
     #[builder(default)]
     pub palette: Palette,
+    /// App-wide shared PCM pool for playback and track analysis.
+    pub pcm_pool: PcmPool,
     /// HLS size-estimation probe strategy (see
     /// [`kithara::hls::SizeProbeMethod`]).
     #[builder(default = baked::BAKED_SIZE_PROBE_METHOD)]
@@ -98,9 +101,6 @@ pub struct AppConfig {
     /// Crossfade duration in seconds.
     #[builder(default = baked::BAKED_CROSSFADE_SECONDS)]
     pub crossfade_seconds: f32,
-    /// Source beat-analysis tunables.
-    #[builder(default)]
-    pub beat_analysis: BeatAnalysisConfig<PlaybackResamplerBackend>,
 }
 
 fn default_tracks() -> Vec<String> {

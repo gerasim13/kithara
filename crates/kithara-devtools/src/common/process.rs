@@ -60,11 +60,11 @@ pub(crate) struct ProcessOutcome {
 }
 
 pub(crate) struct ProcessRequest<'a> {
-    pub(crate) program: &'a str,
-    pub(crate) args: &'a [String],
     pub(crate) cwd: &'a Path,
-    pub(crate) stdout_path: &'a Path,
     pub(crate) stderr_path: &'a Path,
+    pub(crate) stdout_path: &'a Path,
+    pub(crate) args: &'a [String],
+    pub(crate) program: &'a str,
     pub(crate) timeout: Duration,
 }
 
@@ -99,8 +99,8 @@ pub(crate) fn run_process_with_env(
     loop {
         if let Some(status) = child.try_wait().map_err(ProcessError::Io)? {
             return Ok(ProcessOutcome {
-                duration: start.elapsed(),
                 status,
+                duration: start.elapsed(),
                 timed_out: false,
             });
         }
@@ -108,8 +108,8 @@ pub(crate) fn run_process_with_env(
             child.kill().map_err(ProcessError::Io)?;
             let status = child.wait().map_err(ProcessError::Io)?;
             return Ok(ProcessOutcome {
-                duration: start.elapsed(),
                 status,
+                duration: start.elapsed(),
                 timed_out: true,
             });
         }

@@ -46,8 +46,8 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
             .build(),
     );
     PlanCtx {
-        bus: EventBus::new(8),
         prefetch_budget,
+        bus: EventBus::new(8),
         scope: backend
             .scope::<crate::Hls>(&AssetSource::Remote {
                 url: Url::parse("https://example.com/master.m3u8").expect("master url"),

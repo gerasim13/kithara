@@ -50,21 +50,6 @@ pub enum ReadOutcome {
 }
 
 impl PlayerResource {
-    delegate::delegate! {
-        to self.resource.get() {
-            /// Total duration in seconds. Returns 0.0 if unknown.
-            #[must_use]
-            #[expr($.map_or(0.0, |d| d.as_secs_f64()))]
-            pub fn duration(&self) -> f64;
-            /// Set the target sample rate of the audio host.
-            pub(crate) fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
-            /// Set the playback rate for the active stretch controls.
-            pub(crate) fn set_playback_rate(&self, rate: f32);
-            /// Update the scheduling priority hint for the shared worker.
-            pub(crate) fn set_service_class(&self, class: ServiceClass);
-        }
-    }
-
     /// Buffer duration divisor: `sample_rate` / `BUFFER_DURATION_DIVISOR` gives ~200ms of frames.
     const BUFFER_DURATION_DIVISOR: usize = 5;
 
@@ -93,9 +78,9 @@ impl PlayerResource {
         });
 
         Self {
-            resource: WasmSend::new(resource),
             channel_buffers,
             src,
+            resource: WasmSend::new(resource),
             write_len: 0,
             write_pos: 0,
             eof_seen: false,
@@ -103,10 +88,11 @@ impl PlayerResource {
         }
     }
 
-    /// Source identifier attached to this resource.
+    /// Cached span in seconds: how much of the source is on disk and needs no
+    /// further network.
     #[must_use]
-    pub fn src(&self) -> &Arc<str> {
-        &self.src
+    pub fn cached_span(&self) -> f64 {
+        self.resource.get().cached_span().as_secs_f64()
     }
 
     /// Decoded-ahead frontier in seconds: how much content has been decoded
@@ -114,13 +100,6 @@ impl PlayerResource {
     #[must_use]
     pub fn decoded_frontier(&self) -> f64 {
         self.resource.get().decoded_frontier().as_secs_f64()
-    }
-
-    /// Cached span in seconds: how much of the source is on disk and needs no
-    /// further network.
-    #[must_use]
-    pub fn cached_span(&self) -> f64 {
-        self.resource.get().cached_span().as_secs_f64()
     }
 
     fn fill_scratch(&mut self, target_frames: usize) -> bool {
@@ -261,6 +240,27 @@ impl PlayerResource {
             Err(err) => {
                 warn!("failed to seek: {err}");
             }
+        }
+    }
+
+    /// Source identifier attached to this resource.
+    #[must_use]
+    pub fn src(&self) -> &Arc<str> {
+        &self.src
+    }
+
+    delegate::delegate! {
+        to self.resource.get() {
+            /// Total duration in seconds. Returns 0.0 if unknown.
+            #[must_use]
+            #[expr($.map_or(0.0, |d| d.as_secs_f64()))]
+            pub fn duration(&self) -> f64;
+            /// Set the target sample rate of the audio host.
+            pub(crate) fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
+            /// Set the playback rate for the active stretch controls.
+            pub(crate) fn set_playback_rate(&self, rate: f32);
+            /// Update the scheduling priority hint for the shared worker.
+            pub(crate) fn set_service_class(&self, class: ServiceClass);
         }
     }
 }

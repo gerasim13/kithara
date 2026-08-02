@@ -27,15 +27,15 @@ use crate::{
 };
 
 pub(crate) struct HlsSession {
-    active: AtomicBool,
-    cancel: SessionCancel,
-    construction_gate: ConstructionGate,
-    position: AtomicU64,
-    readiness: SessionReadiness,
     seek: Arc<dyn SeekObserve>,
-    signal: SizeSignal,
-    transition: Option<VariantTransition>,
     variant: Arc<HlsVariant>,
+    active: AtomicBool,
+    position: AtomicU64,
+    construction_gate: ConstructionGate,
+    transition: Option<VariantTransition>,
+    cancel: SessionCancel,
+    readiness: SessionReadiness,
+    signal: SizeSignal,
     variant_index: usize,
 }
 
@@ -49,11 +49,19 @@ enum SessionReadiness {
 
 #[derive(Clone, Copy)]
 struct SessionPosition {
-    byte: u64,
     projection: Option<ResolvedSeekProjection>,
+    byte: u64,
 }
 
 impl HlsSession {
+    pub(crate) fn abort(&self) {
+        self.cancel.abort();
+    }
+
+    pub(crate) fn activate(&self) {
+        self.active.store(true, Ordering::Release);
+    }
+
     pub(crate) fn active(
         cancel: CancelToken,
         seek: Arc<dyn SeekObserve>,
@@ -63,85 +71,61 @@ impl HlsSession {
         position: u64,
     ) -> Self {
         Self {
+            seek,
+            signal,
+            variant,
+            variant_index,
             active: AtomicBool::new(true),
             cancel: SessionCancel::new(cancel),
             construction_gate: ConstructionGate::default(),
             position: AtomicU64::new(position),
             readiness: SessionReadiness::Active,
-            seek,
-            signal,
             transition: None,
-            variant,
-            variant_index,
         }
     }
 
-    pub(crate) fn incoming(
-        cancel: CancelToken,
-        profile: ReaderProfile,
-        seek: Arc<dyn SeekObserve>,
-        signal: SizeSignal,
-        transition: VariantTransition,
-        variant: Arc<HlsVariant>,
-        content_time: Duration,
-    ) -> StreamResult<Self> {
-        let preparation = variant.prepare_reader(profile, content_time)?;
-        Ok(Self {
-            active: AtomicBool::new(false),
-            cancel: SessionCancel::new(cancel),
-            construction_gate: ConstructionGate::default(),
-            position: AtomicU64::new(0),
-            readiness: SessionReadiness::Profiled {
-                preparation: Mutex::new(preparation),
-                profile,
-            },
-            seek,
-            signal,
-            transition: Some(transition),
-            variant,
-            variant_index: transition.incoming_variant().get(),
-        })
+    pub(crate) fn advance(&self, bytes: u64) {
+        let position = self.projected_position();
+        self.advance_from(position, bytes);
     }
 
-    pub(crate) fn abort(&self) {
-        self.cancel.abort();
+    fn advance_from(&self, position: SessionPosition, bytes: u64) {
+        let next = position.byte.wrapping_add(bytes);
+        self.position.store(next, Ordering::Release);
+        if bytes == 0 {
+            return;
+        }
+        if let Some(projection) = position.projection {
+            self.variant.retire_seek_projection(projection);
+        } else {
+            self.variant.retire_seek_projection_if_moved(next);
+        }
     }
 
     pub(crate) fn arm_peer(&self) {
         self.signal.arm_peer();
     }
 
-    pub(crate) fn construction_gate(&self) -> ConstructionGate {
-        self.construction_gate.clone()
+    fn check_live(&self) -> io::Result<()> {
+        if self.cancel.root.is_cancelled() {
+            return Err(io::Error::other("HLS reader session cancelled"));
+        }
+        if !self.active.load(Ordering::Acquire)
+            && self
+                .transition
+                .is_some_and(|transition| self.seek.epoch() != transition.id().seek_epoch())
+        {
+            return Err(pending(PendingReason::SeekPending));
+        }
+        Ok(())
     }
 
     pub(crate) fn construction_blocking(&self) -> bool {
         self.construction_gate.is_armed()
     }
 
-    /// Session-scoped twin of [`HlsCoord::wait_range`]: `Some(_)` is the
-    /// wake-free RT probe, `None` the off-RT construction wait that parks on the
-    /// readiness gate. The variant plans nothing by itself — the reader driver
-    /// wakes the peer for the range — so the blocking probe notifies the peer
-    /// before parking, the same consumer-wake shape `Stream::read` uses off-RT.
-    pub(crate) fn wait_range(
-        &self,
-        range: Range<u64>,
-        timeout: Option<Duration>,
-    ) -> StreamResult<WaitOutcome> {
-        match timeout {
-            Some(_) => self.variant.wait_range(range, timeout),
-            None => HlsCoord::wait_range_blocking(&self.signal, &self.cancel.root, || {
-                let outcome = self.variant.wait_range(range.clone(), Some(Duration::ZERO));
-                if matches!(
-                    outcome,
-                    Err(StreamError::Source(SourceError::WaitBudgetExceeded))
-                ) {
-                    self.signal.wake_peer();
-                }
-                outcome
-            }),
-        }
+    pub(crate) fn construction_gate(&self) -> ConstructionGate {
+        self.construction_gate.clone()
     }
 
     /// Fetches for a session that owns a live reader.
@@ -154,6 +138,25 @@ impl HlsSession {
         budget: usize,
     ) -> Vec<kithara_stream::dl::FetchCmd> {
         self.dispatch_capped(ctx, budget, None)
+    }
+
+    fn dispatch_capped(
+        &self,
+        ctx: &crate::variant::PlanCtx,
+        budget: usize,
+        construction_segment_end: Option<u32>,
+    ) -> Vec<kithara_stream::dl::FetchCmd> {
+        if self.cancel.is_cancelled() {
+            return Vec::new();
+        }
+        self.variant.dispatch_from(
+            ctx,
+            budget,
+            self.projected_position().byte,
+            construction_segment_end,
+            self.active.load(Ordering::Acquire),
+            self.cancel.handle(),
+        )
     }
 
     /// Fetches for an incoming session whose reader has not been handed to a
@@ -180,31 +183,35 @@ impl HlsSession {
         self.dispatch_capped(ctx, budget, cap)
     }
 
-    fn dispatch_capped(
-        &self,
-        ctx: &crate::variant::PlanCtx,
-        budget: usize,
-        construction_segment_end: Option<u32>,
-    ) -> Vec<kithara_stream::dl::FetchCmd> {
-        if self.cancel.is_cancelled() {
-            return Vec::new();
-        }
-        self.variant.dispatch_from(
-            ctx,
-            budget,
-            self.projected_position().byte,
-            construction_segment_end,
-            self.active.load(Ordering::Acquire),
-            self.cancel.handle(),
-        )
-    }
-
     pub(crate) fn find_at_offset(&self, byte: u64) -> Option<(u32, u64, u64)> {
         self.variant.find_at_offset(byte)
     }
 
-    pub(crate) fn len(&self) -> Option<u64> {
-        self.variant.stream_len()
+    pub(crate) fn incoming(
+        cancel: CancelToken,
+        profile: ReaderProfile,
+        seek: Arc<dyn SeekObserve>,
+        signal: SizeSignal,
+        transition: VariantTransition,
+        variant: Arc<HlsVariant>,
+        content_time: Duration,
+    ) -> StreamResult<Self> {
+        let preparation = variant.prepare_reader(profile, content_time)?;
+        Ok(Self {
+            seek,
+            signal,
+            variant,
+            active: AtomicBool::new(false),
+            cancel: SessionCancel::new(cancel),
+            construction_gate: ConstructionGate::default(),
+            position: AtomicU64::new(0),
+            readiness: SessionReadiness::Profiled {
+                profile,
+                preparation: Mutex::new(preparation),
+            },
+            transition: Some(transition),
+            variant_index: transition.incoming_variant().get(),
+        })
     }
 
     /// Whether the construction window this session was prepared for is
@@ -232,10 +239,8 @@ impl HlsSession {
         }
     }
 
-    /// Ask the peer to plan for a session that answered [`Self::is_ready`] with
-    /// `false`. Call it only with no transition lock held.
-    pub(crate) fn wake_peer_for_readiness(&self) {
-        self.signal.wake_peer();
+    pub(crate) fn len(&self) -> Option<u64> {
+        self.variant.stream_len()
     }
 
     pub(crate) fn media_info(&self) -> kithara_stream::MediaInfo {
@@ -244,74 +249,6 @@ impl HlsSession {
 
     pub(crate) fn position(&self) -> u64 {
         self.projected_position().byte
-    }
-
-    pub(crate) fn activate(&self) {
-        self.active.store(true, Ordering::Release);
-    }
-
-    pub(crate) fn variant(&self) -> Arc<HlsVariant> {
-        Arc::clone(&self.variant)
-    }
-
-    pub(crate) fn variant_index(&self) -> usize {
-        self.variant_index
-    }
-
-    /// Whether the reader's own consumption has made a deferred prefetch
-    /// decision stale. The session owns the byte cursor, so it is the session
-    /// that answers this; the variant only owns the threshold.
-    pub(crate) fn take_prefetch_resume(&self) -> bool {
-        self.variant
-            .take_prefetch_resume_at(self.position.load(Ordering::Acquire))
-    }
-
-    pub(crate) fn advance(&self, bytes: u64) {
-        let position = self.projected_position();
-        self.advance_from(position, bytes);
-    }
-
-    fn projected_position(&self) -> SessionPosition {
-        let provisional = self.position.load(Ordering::Acquire);
-        let Some(projection) = self.variant.resolved_seek_projection(provisional) else {
-            return SessionPosition {
-                byte: provisional,
-                projection: None,
-            };
-        };
-        let exact = projection.exact_anchor();
-        self.variant.set_prefetch_anchor(exact);
-        SessionPosition {
-            byte: exact,
-            projection: Some(projection),
-        }
-    }
-
-    fn advance_from(&self, position: SessionPosition, bytes: u64) {
-        let next = position.byte.wrapping_add(bytes);
-        self.position.store(next, Ordering::Release);
-        if bytes == 0 {
-            return;
-        }
-        if let Some(projection) = position.projection {
-            self.variant.retire_seek_projection(projection);
-        } else {
-            self.variant.retire_seek_projection_if_moved(next);
-        }
-    }
-
-    fn check_live(&self) -> io::Result<()> {
-        if self.cancel.root.is_cancelled() {
-            return Err(io::Error::other("HLS reader session cancelled"));
-        }
-        if !self.active.load(Ordering::Acquire)
-            && self
-                .transition
-                .is_some_and(|transition| self.seek.epoch() != transition.id().seek_epoch())
-        {
-            return Err(pending(PendingReason::SeekPending));
-        }
-        Ok(())
     }
 
     fn prepare_at(&self, position: Duration) -> StreamResult<SourceSeekAnchor> {
@@ -337,14 +274,20 @@ impl HlsSession {
         Ok(anchor)
     }
 
-    pub(crate) fn set_position(&self, position: u64) {
-        self.position.store(position, Ordering::Release);
-    }
-
-    pub(crate) fn seek_to_byte(&self, position: u64) {
-        let previous = self.position.swap(position, Ordering::AcqRel);
-        let moved = previous != position;
-        self.variant.register_session_seek(position, moved);
+    fn projected_position(&self) -> SessionPosition {
+        let provisional = self.position.load(Ordering::Acquire);
+        let Some(projection) = self.variant.resolved_seek_projection(provisional) else {
+            return SessionPosition {
+                byte: provisional,
+                projection: None,
+            };
+        };
+        let exact = projection.exact_anchor();
+        self.variant.set_prefetch_anchor(exact);
+        SessionPosition {
+            byte: exact,
+            projection: Some(projection),
+        }
     }
 
     pub(crate) fn seek_time_anchor(
@@ -356,6 +299,63 @@ impl HlsSession {
             self.set_position(anchor.byte_offset);
         }
         Ok(anchor)
+    }
+
+    pub(crate) fn seek_to_byte(&self, position: u64) {
+        let previous = self.position.swap(position, Ordering::AcqRel);
+        let moved = previous != position;
+        self.variant.register_session_seek(position, moved);
+    }
+
+    pub(crate) fn set_position(&self, position: u64) {
+        self.position.store(position, Ordering::Release);
+    }
+
+    /// Whether the reader's own consumption has made a deferred prefetch
+    /// decision stale. The session owns the byte cursor, so it is the session
+    /// that answers this; the variant only owns the threshold.
+    pub(crate) fn take_prefetch_resume(&self) -> bool {
+        self.variant
+            .take_prefetch_resume_at(self.position.load(Ordering::Acquire))
+    }
+
+    pub(crate) fn variant(&self) -> Arc<HlsVariant> {
+        Arc::clone(&self.variant)
+    }
+
+    pub(crate) fn variant_index(&self) -> usize {
+        self.variant_index
+    }
+
+    /// Session-scoped twin of [`HlsCoord::wait_range`]: `Some(_)` is the
+    /// wake-free RT probe, `None` the off-RT construction wait that parks on the
+    /// readiness gate. The variant plans nothing by itself — the reader driver
+    /// wakes the peer for the range — so the blocking probe notifies the peer
+    /// before parking, the same consumer-wake shape `Stream::read` uses off-RT.
+    pub(crate) fn wait_range(
+        &self,
+        range: Range<u64>,
+        timeout: Option<Duration>,
+    ) -> StreamResult<WaitOutcome> {
+        match timeout {
+            Some(_) => self.variant.wait_range(range, timeout),
+            None => HlsCoord::wait_range_blocking(&self.signal, &self.cancel.root, || {
+                let outcome = self.variant.wait_range(range.clone(), Some(Duration::ZERO));
+                if matches!(
+                    outcome,
+                    Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+                ) {
+                    self.signal.wake_peer();
+                }
+                outcome
+            }),
+        }
+    }
+
+    /// Ask the peer to plan for a session that answered [`Self::is_ready`] with
+    /// `false`. Call it only with no transition lock held.
+    pub(crate) fn wake_peer_for_readiness(&self) {
+        self.signal.wake_peer();
     }
 }
 

@@ -16,8 +16,8 @@ impl Consts {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct FfiAssetStore {
     inner: AssetStore,
-    region: Region,
     shutdown: CancelScope,
+    region: Region,
 }
 
 impl FfiAssetStore {
@@ -40,9 +40,14 @@ impl FfiAssetStore {
             .build();
         Self {
             inner,
-            region,
             shutdown,
+            region,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cancel_token(&self) -> kithara_platform::CancelToken {
+        self.shutdown.token()
     }
 
     pub(crate) fn handle(&self) -> &AssetStore {
@@ -51,11 +56,6 @@ impl FfiAssetStore {
 
     pub(crate) fn region(&self) -> &Region {
         &self.region
-    }
-
-    #[cfg(test)]
-    pub(crate) fn cancel_token(&self) -> kithara_platform::CancelToken {
-        self.shutdown.token()
     }
 }
 
@@ -111,12 +111,12 @@ mod tests {
     }
 
     impl FfiAssetLayout for FixedLayout {
-        fn root(&self, _source: FfiAssetSource) -> String {
-            format!("{}-root", self.tag)
-        }
-
         fn path(&self, _resource: FfiAssetResource) -> String {
             format!("{}/resource.bin", self.tag)
+        }
+
+        fn root(&self, _source: FfiAssetSource) -> String {
+            format!("{}-root", self.tag)
         }
     }
 

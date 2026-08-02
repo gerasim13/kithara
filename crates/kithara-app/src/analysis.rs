@@ -636,12 +636,12 @@ mod tests {
     struct InvalidLayout;
 
     impl AssetLayout for InvalidLayout {
-        fn root(&self, _source: &AssetSource) -> String {
-            "root".to_string()
-        }
-
         fn path(&self, _resource: &AssetResource) -> String {
             "../escape".to_string()
+        }
+
+        fn root(&self, _source: &AssetSource) -> String {
+            "root".to_string()
         }
     }
 

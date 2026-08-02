@@ -39,9 +39,9 @@ impl ReaderWarmup {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct ReaderProfile {
+    read_ahead_bytes: NonZeroU64,
     input: ReaderInput,
     warmup: ReaderWarmup,
-    read_ahead_bytes: NonZeroU64,
 }
 
 impl ReaderProfile {
@@ -54,9 +54,9 @@ impl ReaderProfile {
         read_ahead_bytes: NonZeroU64,
     ) -> Self {
         Self {
+            read_ahead_bytes,
             input,
             warmup,
-            read_ahead_bytes,
         }
     }
 
@@ -66,16 +66,16 @@ impl ReaderProfile {
         self.input
     }
 
-    /// Return the reader's behind-position warmup requirement.
-    #[must_use]
-    pub const fn warmup(&self) -> ReaderWarmup {
-        self.warmup
-    }
-
     /// Return the forward byte window the reader may consume.
     #[must_use]
     pub const fn read_ahead_bytes(&self) -> NonZeroU64 {
         self.read_ahead_bytes
+    }
+
+    /// Return the reader's behind-position warmup requirement.
+    #[must_use]
+    pub const fn warmup(&self) -> ReaderWarmup {
+        self.warmup
     }
 }
 

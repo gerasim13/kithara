@@ -18,9 +18,9 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Toggle<'path, 'value, 'data, 'skin> {
+    skin: &'skin Skin,
     path: &'path str,
     value: Option<&'value ReadValue<'data>>,
-    skin: &'skin Skin,
 }
 
 impl<'a> Widget<'a> for Toggle<'_, '_, '_, '_> {
@@ -41,9 +41,9 @@ impl<'a> Widget<'a> for Toggle<'_, '_, '_, '_> {
 
 #[derive(bon::Builder)]
 pub(crate) struct Checkbox<'path, 'value, 'data, 'skin> {
+    skin: &'skin Skin,
     path: &'path str,
     value: Option<&'value ReadValue<'data>>,
-    skin: &'skin Skin,
 }
 
 impl<'a> Widget<'a> for Checkbox<'_, '_, '_, '_> {
@@ -64,9 +64,9 @@ impl<'a> Widget<'a> for Checkbox<'_, '_, '_, '_> {
 
 #[derive(bon::Builder)]
 struct BinaryControl<'path, 'value, 'data, 'skin> {
+    skin: &'skin Skin,
     path: &'path str,
     value: Option<&'value ReadValue<'data>>,
-    skin: &'skin Skin,
     shape: Shape,
 }
 
@@ -105,10 +105,10 @@ enum Shape {
 }
 
 struct BinaryControlCanvas {
-    active: bool,
     click: ClickActivate,
     palette: RenderPalette,
     shape: Shape,
+    active: bool,
 }
 
 impl canvas::Program<UiEvent> for BinaryControlCanvas {

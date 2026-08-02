@@ -40,11 +40,11 @@ impl<T> SessionReader for T where T: Read + Seek + Send + Sync + 'static {}
 /// Reader capability and byte-stream facts captured when opening a decoder.
 #[non_exhaustive]
 pub struct OpenedReader {
+    input: Box<dyn SessionReader>,
     byte_len: Option<u64>,
     byte_map: Option<Arc<dyn ByteMap>>,
     construction_gate: Option<ConstructionGate>,
     event_sink: Option<BoxedEventSink>,
-    input: Box<dyn SessionReader>,
 }
 
 impl OpenedReader {
@@ -84,15 +84,15 @@ impl OpenedReader {
         self.construction_gate.clone()
     }
 
-    /// Transfer reader-side observation to the decoder.
-    pub fn take_event_sink(&mut self) -> Option<BoxedEventSink> {
-        self.event_sink.take()
-    }
-
     /// Transfer byte input to the decoder.
     #[must_use]
     pub fn into_inner(self) -> Box<dyn SessionReader> {
         self.input
+    }
+
+    /// Transfer reader-side observation to the decoder.
+    pub fn take_event_sink(&mut self) -> Option<BoxedEventSink> {
+        self.event_sink.take()
     }
 }
 
@@ -121,10 +121,10 @@ impl VariantReaderPlan {
         }
     }
 
-    /// Exact transition that owns the planned reader.
+    /// Content time where the incoming decoder must land.
     #[must_use]
-    pub const fn transition(&self) -> VariantTransition {
-        self.transition
+    pub const fn landing_time(&self) -> Duration {
+        self.landing_time
     }
 
     /// Media facts used to select the decoder and reader profile.
@@ -133,43 +133,25 @@ impl VariantReaderPlan {
         &self.media_info
     }
 
-    /// Content time where the incoming decoder must land.
+    /// Exact transition that owns the planned reader.
     #[must_use]
-    pub const fn landing_time(&self) -> Duration {
-        self.landing_time
+    pub const fn transition(&self) -> VariantTransition {
+        self.transition
     }
 }
 
 /// Move-only incoming reader bound to one exact variant reader plan.
 #[non_exhaustive]
 pub struct OpenedVariantReader {
-    plan: VariantReaderPlan,
     reader: OpenedReader,
+    plan: VariantReaderPlan,
 }
 
 impl OpenedVariantReader {
     /// Bind byte capabilities to the exact facts used to prepare the session.
     #[must_use]
     pub fn new(plan: VariantReaderPlan, reader: OpenedReader) -> Self {
-        Self { plan, reader }
-    }
-
-    /// Exact pre-open plan used to construct this reader.
-    #[must_use]
-    pub const fn plan(&self) -> &VariantReaderPlan {
-        &self.plan
-    }
-
-    /// Target media facts captured with the reader.
-    #[must_use]
-    pub const fn media_info(&self) -> &MediaInfo {
-        self.plan.media_info()
-    }
-
-    /// Exact transition that owns this reader.
-    #[must_use]
-    pub const fn transition(&self) -> VariantTransition {
-        self.plan.transition()
+        Self { reader, plan }
     }
 
     /// Content time where the incoming decoder must land.
@@ -178,10 +160,28 @@ impl OpenedVariantReader {
         self.plan.landing_time()
     }
 
+    /// Target media facts captured with the reader.
+    #[must_use]
+    pub const fn media_info(&self) -> &MediaInfo {
+        self.plan.media_info()
+    }
+
+    /// Exact pre-open plan used to construct this reader.
+    #[must_use]
+    pub const fn plan(&self) -> &VariantReaderPlan {
+        &self.plan
+    }
+
     /// Split the move-only bundle for decoder construction.
     #[must_use]
     pub fn split(self) -> (VariantReaderPlan, OpenedReader) {
         (self.plan, self.reader)
+    }
+
+    /// Exact transition that owns this reader.
+    #[must_use]
+    pub const fn transition(&self) -> VariantTransition {
+        self.plan.transition()
     }
 }
 

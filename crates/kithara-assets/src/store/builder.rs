@@ -74,6 +74,7 @@ impl Default for StorageBackend {
 /// `asset_root` and mints self-contained keys; per-resource ops live on
 /// the store.
 struct AssetStoreBuildArgs {
+    pool: BytePool,
     backend: Option<StorageBackend>,
     cache_capacity: Option<NonZeroUsize>,
     cancel: Option<CancelToken>,
@@ -83,7 +84,6 @@ struct AssetStoreBuildArgs {
     max_assets: Option<usize>,
     max_bytes: Option<u64>,
     mem_resource_capacity: Option<usize>,
-    pool: BytePool,
 }
 
 struct AssetStoreBuilderFactory;
@@ -109,6 +109,7 @@ impl AssetStoreBuilderFactory {
         #[builder(default = BytePool::default())] pool: BytePool,
     ) -> AssetStoreBuildArgs {
         AssetStoreBuildArgs {
+            pool,
             backend,
             cache_capacity,
             cancel,
@@ -118,7 +119,6 @@ impl AssetStoreBuilderFactory {
             max_assets,
             max_bytes,
             mem_resource_capacity,
-            pool,
         }
     }
 }
@@ -182,12 +182,12 @@ impl AssetStoreBuildArgs {
             let _ = self.backend.take();
             let store = self.build_mem_with_availability(&availability, &eviction);
             AssetStore::new_handle(AssetStoreInner {
-                backend: StoreBackendInner::Memory { store },
                 availability,
                 demand,
                 transactions,
                 eviction,
                 layouts,
+                backend: StoreBackendInner::Memory { store },
             })
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -199,27 +199,27 @@ impl AssetStoreBuildArgs {
                 StorageBackend::Memory => {
                     let store = self.build_mem_with_availability(&availability, &eviction);
                     AssetStore::new_handle(AssetStoreInner {
-                        backend: StoreBackendInner::Memory { store },
                         availability,
                         demand,
                         transactions,
                         eviction,
                         layouts,
+                        backend: StoreBackendInner::Memory { store },
                     })
                 }
                 StorageBackend::Disk { root } => {
                     let (store, base) =
                         self.build_disk_with_availability(root, availability.clone());
                     AssetStore::new_handle(AssetStoreInner {
-                        backend: StoreBackendInner::Disk {
-                            store,
-                            base: Some(base),
-                        },
                         availability,
                         demand,
                         transactions,
                         eviction,
                         layouts,
+                        backend: StoreBackendInner::Disk {
+                            store,
+                            base: Some(base),
+                        },
                     })
                 }
             }

@@ -105,11 +105,6 @@ impl PlayerImpl {
             .set_prefetch_duration(seconds, |cmd| self.send_to_slot(cmd));
     }
 
-    /// Pump audio backend/runtime state.
-    pub fn tick(&self) -> Result<(), PlayError> {
-        self.core.engine.tick()
-    }
-
     /// Set playback rate.
     ///
     /// Stores the speed in the shared time-stretch controls (the single source
@@ -133,5 +128,10 @@ impl PlayerImpl {
             |slot, volume| self.core.engine.set_slot_volume(slot, volume),
             self.core.engine.bus(),
         );
+    }
+
+    /// Pump audio backend/runtime state.
+    pub fn tick(&self) -> Result<(), PlayError> {
+        self.core.engine.tick()
     }
 }

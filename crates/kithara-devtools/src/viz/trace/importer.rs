@@ -27,10 +27,10 @@ pub(crate) enum TraceState {
 #[derive(Debug, Serialize)]
 pub(crate) struct TraceSummary {
     pub(crate) state: TraceState,
-    pub(crate) records: usize,
-    pub(crate) matched_records: usize,
-    pub(crate) unmatched_records: usize,
     pub(crate) diagnostics: Vec<String>,
+    pub(crate) matched_records: usize,
+    pub(crate) records: usize,
+    pub(crate) unmatched_records: usize,
 }
 
 pub(crate) fn import(
@@ -100,16 +100,16 @@ fn import_records(
 
 struct ImportContext<'a> {
     graph: &'a mut EvidenceGraph,
-    source_index: SourceIndex,
     scenario: &'a str,
-    scenario_id: NodeId,
-    manual: bool,
-    spans: BTreeMap<String, NodeId>,
     sends: BTreeMap<String, NodeId>,
+    spans: BTreeMap<String, NodeId>,
     tasks: BTreeMap<String, NodeId>,
-    matched_records: usize,
+    scenario_id: NodeId,
+    source_index: SourceIndex,
     diagnostics: Vec<String>,
     first_record: bool,
+    manual: bool,
+    matched_records: usize,
 }
 
 impl<'a> ImportContext<'a> {
@@ -137,27 +137,84 @@ impl<'a> ImportContext<'a> {
         }
     }
 
-    fn import_record(&mut self, record: &TraceRecord) {
-        let evidence = self.evidence(record.sequence);
-        let current = self.current_id(record);
-        self.attach_current(record, &current, &evidence);
-        self.link_context(record, &current, &evidence);
-        self.apply_kind(record, &current, &evidence);
-        self.link_receive(record, &current);
+    fn add_resource(
+        &mut self,
+        record: &TraceRecord,
+        current: &NodeId,
+        kind: EdgeKind,
+        evidence: &Evidence,
+    ) {
+        let (Some(resource_id), Some(resource_type)) = (
+            record.resource_id.as_deref(),
+            record.resource_type.as_deref(),
+        ) else {
+            self.diagnostics.push(format!(
+                "trace record {} `{}` has no resource identity",
+                record.sequence, record.name
+            ));
+            return;
+        };
+        let resource = NodeId::resource(
+            "<runtime>",
+            self.scenario,
+            &format!("{resource_type}:{resource_id}"),
+        );
+        self.graph.merge_node(Node::new(
+            resource.clone(),
+            NodeKind::Resource,
+            format!("{resource_type} #{resource_id}"),
+            evidence.clone(),
+        ));
+        self.graph
+            .merge_edge(Edge::new(current.clone(), resource, kind, evidence.clone()));
     }
 
-    fn current_id(&self, record: &TraceRecord) -> NodeId {
-        self.source_index
-            .resolve(record)
-            .cloned()
-            .unwrap_or_else(|| {
-                NodeId::symbol(
-                    "<runtime>",
-                    self.scenario,
-                    "<trace>",
-                    format!("{:020}:{}", record.sequence, record.name),
-                )
-            })
+    fn add_task(&mut self, record: &TraceRecord, current: &NodeId, evidence: &Evidence) {
+        let task_name = record.task_id.as_deref().unwrap_or(&record.name);
+        let task = NodeId::site(
+            "<runtime>",
+            self.scenario,
+            "<task>",
+            &format!("task:{task_name}"),
+        );
+        self.graph.merge_node(Node::new(
+            task.clone(),
+            NodeKind::Task,
+            task_name,
+            evidence.clone(),
+        ));
+        self.graph.merge_edge(Edge::new(
+            current.clone(),
+            task.clone(),
+            EdgeKind::Spawns,
+            evidence.clone(),
+        ));
+        self.tasks.insert(task_name.to_string(), task);
+    }
+
+    fn apply_kind(&mut self, record: &TraceRecord, current: &NodeId, evidence: &Evidence) {
+        match record.kind {
+            TraceRecordKind::TaskSpawn => self.add_task(record, current, evidence),
+            TraceRecordKind::ResourceCreate => {
+                self.add_resource(record, current, EdgeKind::Constructs, evidence);
+            }
+            TraceRecordKind::ResourceClone => {
+                self.add_resource(record, current, EdgeKind::Clones, evidence);
+            }
+            TraceRecordKind::ResourceTransfer | TraceRecordKind::Receive => {
+                self.add_resource(record, current, EdgeKind::Transfers, evidence);
+            }
+            TraceRecordKind::ResourceDrop => {
+                self.add_resource(record, current, EdgeKind::Drops, evidence);
+            }
+            TraceRecordKind::Send => {
+                if let Some(correlation) = &record.correlation_id {
+                    self.sends.insert(correlation.clone(), current.clone());
+                }
+                self.add_resource(record, current, EdgeKind::Sends, evidence);
+            }
+            TraceRecordKind::SpanEnter | TraceRecordKind::SpanExit | TraceRecordKind::Event => {}
+        }
     }
 
     fn attach_current(&mut self, record: &TraceRecord, current: &NodeId, evidence: &Evidence) {
@@ -196,6 +253,53 @@ impl<'a> ImportContext<'a> {
         }
     }
 
+    fn current_id(&self, record: &TraceRecord) -> NodeId {
+        self.source_index
+            .resolve(record)
+            .cloned()
+            .unwrap_or_else(|| {
+                NodeId::symbol(
+                    "<runtime>",
+                    self.scenario,
+                    "<trace>",
+                    format!("{:020}:{}", record.sequence, record.name),
+                )
+            })
+    }
+
+    fn evidence(&self, sequence: u64) -> Evidence {
+        trace_evidence(self.manual, format!("trace:{}:{sequence}", self.scenario))
+    }
+
+    fn finish(mut self, total: usize, truncated: bool) -> TraceSummary {
+        if truncated {
+            self.diagnostics.push(format!(
+                "trace has {total} records; imported first {TRACE_EVENT_BUDGET}"
+            ));
+        }
+        let imported = total.min(TRACE_EVENT_BUDGET);
+        TraceSummary {
+            state: if truncated {
+                TraceState::Truncated
+            } else {
+                TraceState::Complete
+            },
+            records: imported,
+            matched_records: self.matched_records,
+            unmatched_records: imported - self.matched_records,
+            diagnostics: self.diagnostics,
+        }
+    }
+
+    fn import_record(&mut self, record: &TraceRecord) {
+        let evidence = self.evidence(record.sequence);
+        let current = self.current_id(record);
+        self.attach_current(record, &current, &evidence);
+        self.link_context(record, &current, &evidence);
+        self.apply_kind(record, &current, &evidence);
+        self.link_receive(record, &current);
+    }
+
     fn link_context(&mut self, record: &TraceRecord, current: &NodeId, evidence: &Evidence) {
         if let Some(parent) = record
             .parent_span_id
@@ -227,86 +331,6 @@ impl<'a> ImportContext<'a> {
         }
     }
 
-    fn apply_kind(&mut self, record: &TraceRecord, current: &NodeId, evidence: &Evidence) {
-        match record.kind {
-            TraceRecordKind::TaskSpawn => self.add_task(record, current, evidence),
-            TraceRecordKind::ResourceCreate => {
-                self.add_resource(record, current, EdgeKind::Constructs, evidence);
-            }
-            TraceRecordKind::ResourceClone => {
-                self.add_resource(record, current, EdgeKind::Clones, evidence);
-            }
-            TraceRecordKind::ResourceTransfer | TraceRecordKind::Receive => {
-                self.add_resource(record, current, EdgeKind::Transfers, evidence);
-            }
-            TraceRecordKind::ResourceDrop => {
-                self.add_resource(record, current, EdgeKind::Drops, evidence);
-            }
-            TraceRecordKind::Send => {
-                if let Some(correlation) = &record.correlation_id {
-                    self.sends.insert(correlation.clone(), current.clone());
-                }
-                self.add_resource(record, current, EdgeKind::Sends, evidence);
-            }
-            TraceRecordKind::SpanEnter | TraceRecordKind::SpanExit | TraceRecordKind::Event => {}
-        }
-    }
-
-    fn add_task(&mut self, record: &TraceRecord, current: &NodeId, evidence: &Evidence) {
-        let task_name = record.task_id.as_deref().unwrap_or(&record.name);
-        let task = NodeId::site(
-            "<runtime>",
-            self.scenario,
-            "<task>",
-            &format!("task:{task_name}"),
-        );
-        self.graph.merge_node(Node::new(
-            task.clone(),
-            NodeKind::Task,
-            task_name,
-            evidence.clone(),
-        ));
-        self.graph.merge_edge(Edge::new(
-            current.clone(),
-            task.clone(),
-            EdgeKind::Spawns,
-            evidence.clone(),
-        ));
-        self.tasks.insert(task_name.to_string(), task);
-    }
-
-    fn add_resource(
-        &mut self,
-        record: &TraceRecord,
-        current: &NodeId,
-        kind: EdgeKind,
-        evidence: &Evidence,
-    ) {
-        let (Some(resource_id), Some(resource_type)) = (
-            record.resource_id.as_deref(),
-            record.resource_type.as_deref(),
-        ) else {
-            self.diagnostics.push(format!(
-                "trace record {} `{}` has no resource identity",
-                record.sequence, record.name
-            ));
-            return;
-        };
-        let resource = NodeId::resource(
-            "<runtime>",
-            self.scenario,
-            &format!("{resource_type}:{resource_id}"),
-        );
-        self.graph.merge_node(Node::new(
-            resource.clone(),
-            NodeKind::Resource,
-            format!("{resource_type} #{resource_id}"),
-            evidence.clone(),
-        ));
-        self.graph
-            .merge_edge(Edge::new(current.clone(), resource, kind, evidence.clone()));
-    }
-
     fn link_receive(&mut self, record: &TraceRecord, current: &NodeId) {
         if record.kind != TraceRecordKind::Receive {
             return;
@@ -324,30 +348,6 @@ impl<'a> ImportContext<'a> {
             EdgeKind::Sends,
             self.evidence(record.sequence),
         ));
-    }
-
-    fn evidence(&self, sequence: u64) -> Evidence {
-        trace_evidence(self.manual, format!("trace:{}:{sequence}", self.scenario))
-    }
-
-    fn finish(mut self, total: usize, truncated: bool) -> TraceSummary {
-        if truncated {
-            self.diagnostics.push(format!(
-                "trace has {total} records; imported first {TRACE_EVENT_BUDGET}"
-            ));
-        }
-        let imported = total.min(TRACE_EVENT_BUDGET);
-        TraceSummary {
-            state: if truncated {
-                TraceState::Truncated
-            } else {
-                TraceState::Complete
-            },
-            records: imported,
-            matched_records: self.matched_records,
-            unmatched_records: imported - self.matched_records,
-            diagnostics: self.diagnostics,
-        }
     }
 }
 

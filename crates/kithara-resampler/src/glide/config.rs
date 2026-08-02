@@ -12,10 +12,10 @@ pub enum GlideInterpolation {
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct GlideConfig {
-    #[builder(default = true)]
-    pub anti_alias: bool,
     #[builder(default)]
     pub interpolation: GlideInterpolation,
+    #[builder(default = true)]
+    pub anti_alias: bool,
 }
 
 impl Default for GlideConfig {

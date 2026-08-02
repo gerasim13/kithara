@@ -51,10 +51,10 @@ impl GainState {
 
 pub(crate) struct GainBank {
     gains: Vec<GainState>,
-    smooth_coeff: f32,
-    block_counter: usize,
     bypass_active: bool,
     silence_active: bool,
+    smooth_coeff: f32,
+    block_counter: usize,
 }
 
 impl GainBank {
@@ -71,6 +71,23 @@ impl GainBank {
         bank
     }
 
+    pub(crate) fn bypass_active(&self) -> bool {
+        self.bypass_active
+    }
+
+    #[cfg(test)]
+    pub(crate) fn force_current(&mut self, band: usize, linear: f32) {
+        self.gains[band].current_linear = linear;
+        self.refresh_fastpath();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_smoothing(&self) -> bool {
+        self.gains.iter().any(|gain| {
+            (gain.target_linear - gain.current_linear).abs() > Consts::SMOOTH_CONVERGENCE_THRESHOLD
+        })
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.gains.len()
     }
@@ -79,24 +96,16 @@ impl GainBank {
         self.gains[band].current_linear
     }
 
-    pub(crate) fn tick(&mut self) {
-        self.block_counter += 1;
-        if self.block_counter < Consts::SMOOTH_BLOCK_SIZE {
-            return;
-        }
-        self.block_counter = 0;
-        for gain in &mut self.gains {
-            gain.smooth(self.smooth_coeff);
-        }
-        self.refresh_fastpath();
-    }
-
-    pub(crate) fn bypass_active(&self) -> bool {
-        self.bypass_active
-    }
-
-    pub(crate) fn silence_active(&self) -> bool {
-        self.silence_active
+    fn refresh_fastpath(&mut self) {
+        self.bypass_active = !self.gains.is_empty()
+            && self.gains.iter().all(|gain| {
+                (gain.target_linear - 1.0).abs() < f32::EPSILON
+                    && (gain.current_linear - 1.0).abs() < f32::EPSILON
+            });
+        self.silence_active = !self.gains.is_empty()
+            && self.gains.iter().all(|gain| {
+                gain.target_linear.abs() < f32::EPSILON && gain.current_linear.abs() < f32::EPSILON
+            });
     }
 
     pub(crate) fn reset(&mut self) {
@@ -116,37 +125,28 @@ impl GainBank {
         self.refresh_fastpath();
     }
 
+    pub(crate) fn silence_active(&self) -> bool {
+        self.silence_active
+    }
+
     pub(crate) fn target(&self, band: usize) -> Option<f32> {
         self.gains.get(band).map(|state| state.target_db)
     }
 
-    pub(crate) fn update_sample_rate(&mut self, sample_rate: f32) {
-        self.smooth_coeff = compute_smooth_coeff(sample_rate);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_smoothing(&self) -> bool {
-        self.gains.iter().any(|gain| {
-            (gain.target_linear - gain.current_linear).abs() > Consts::SMOOTH_CONVERGENCE_THRESHOLD
-        })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn force_current(&mut self, band: usize, linear: f32) {
-        self.gains[band].current_linear = linear;
+    pub(crate) fn tick(&mut self) {
+        self.block_counter += 1;
+        if self.block_counter < Consts::SMOOTH_BLOCK_SIZE {
+            return;
+        }
+        self.block_counter = 0;
+        for gain in &mut self.gains {
+            gain.smooth(self.smooth_coeff);
+        }
         self.refresh_fastpath();
     }
 
-    fn refresh_fastpath(&mut self) {
-        self.bypass_active = !self.gains.is_empty()
-            && self.gains.iter().all(|gain| {
-                (gain.target_linear - 1.0).abs() < f32::EPSILON
-                    && (gain.current_linear - 1.0).abs() < f32::EPSILON
-            });
-        self.silence_active = !self.gains.is_empty()
-            && self.gains.iter().all(|gain| {
-                gain.target_linear.abs() < f32::EPSILON && gain.current_linear.abs() < f32::EPSILON
-            });
+    pub(crate) fn update_sample_rate(&mut self, sample_rate: f32) {
+        self.smooth_coeff = compute_smooth_coeff(sample_rate);
     }
 }
 

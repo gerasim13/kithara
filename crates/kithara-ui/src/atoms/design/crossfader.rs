@@ -21,10 +21,10 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Crossfader<'path, 'value, 'data, 'skin> {
-    path: &'path str,
-    ticks: bool,
-    value: Option<&'value ReadValue<'data>>,
     skin: &'skin Skin,
+    path: &'path str,
+    value: Option<&'value ReadValue<'data>>,
+    ticks: bool,
 }
 
 impl<'a, 'path, 'value, 'data, 'skin> Widget<'a> for Crossfader<'path, 'value, 'data, 'skin>
@@ -85,6 +85,7 @@ where
             .then(|| TickRail::new(TickAxis::Horizontal, metrics.ticks, self.skin));
         let slider_height = ticks.as_ref().map_or(0.0, TickRail::reserved) + metrics.thumb_height;
         let slider = Canvas::new(CrossfaderCanvas {
+            ticks,
             drag: ScalarDrag::builder()
                 .path(self.path.to_owned())
                 .mode(ScalarDragMode::Horizontal)
@@ -100,7 +101,6 @@ where
             thumb_notch_color: self.skin.color(metrics.thumb_notch_color),
             thumb_notch_height: metrics.thumb_notch_height,
             thumb_notch_width: metrics.thumb_notch_width,
-            ticks,
             value: value.clamp(0.0, 1.0).as_(),
         })
         .width(Length::Fill)
@@ -128,18 +128,18 @@ where
 }
 
 struct CrossfaderCanvas {
-    drag: ScalarDrag,
     rail_background: Color,
     rail_color: Color,
-    rail_frame: FrameSkin,
-    rail_height: f32,
     thumb_color: Color,
-    thumb_height: f32,
-    thumb_width: f32,
     thumb_notch_color: Color,
+    rail_frame: FrameSkin,
+    ticks: Option<TickRail>,
+    drag: ScalarDrag,
+    rail_height: f32,
+    thumb_height: f32,
     thumb_notch_height: f32,
     thumb_notch_width: f32,
-    ticks: Option<TickRail>,
+    thumb_width: f32,
     value: f32,
 }
 
@@ -150,10 +150,10 @@ pub(crate) enum TickAxis {
 }
 
 pub(crate) struct TickRail {
+    center_color: Color,
+    color: Color,
     axis: TickAxis,
     metrics: TickSkin,
-    color: Color,
-    center_color: Color,
 }
 
 impl TickRail {
@@ -164,19 +164,6 @@ impl TickRail {
             color: skin.color(metrics.color),
             center_color: skin.color(metrics.center_color),
         }
-    }
-
-    fn last(&self) -> Option<usize> {
-        self.metrics.count.checked_sub(1).filter(|last| *last > 0)
-    }
-
-    pub(crate) fn extent(&self) -> f32 {
-        self.metrics.center_length.max(self.metrics.length)
-    }
-
-    pub(crate) fn reserved(&self) -> f32 {
-        self.last()
-            .map_or(0.0, |_| self.extent() + self.metrics.gap)
     }
 
     pub(crate) fn draw(&self, frame: &mut Frame, rail: Rectangle) {
@@ -218,6 +205,19 @@ impl TickRail {
             };
             frame.fill_rectangle(corner, size, color);
         }
+    }
+
+    pub(crate) fn extent(&self) -> f32 {
+        self.metrics.center_length.max(self.metrics.length)
+    }
+
+    fn last(&self) -> Option<usize> {
+        self.metrics.count.checked_sub(1).filter(|last| *last > 0)
+    }
+
+    pub(crate) fn reserved(&self) -> f32 {
+        self.last()
+            .map_or(0.0, |_| self.extent() + self.metrics.gap)
     }
 }
 

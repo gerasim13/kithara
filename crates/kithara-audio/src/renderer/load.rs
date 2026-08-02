@@ -98,6 +98,12 @@ pub struct EngineLoadSnapshot {
 }
 
 impl EngineLoadSnapshot {
+    /// `true` once the worker has produced at least one measurement.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.realtime > 0.0
+    }
+
     /// Fraction of realtime spent producing (`0.05` = 5% load).
     #[must_use]
     pub fn load(&self) -> f32 {
@@ -114,12 +120,6 @@ impl EngineLoadSnapshot {
     #[must_use]
     pub fn realtime(&self) -> f32 {
         self.realtime
-    }
-
-    /// `true` once the worker has produced at least one measurement.
-    #[must_use]
-    pub fn is_active(&self) -> bool {
-        self.realtime > 0.0
     }
 }
 

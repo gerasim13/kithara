@@ -14,16 +14,16 @@ use crate::{
 };
 
 pub struct GlideResampler {
-    channels: NonZeroUsize,
     config: GlideConfig,
-    current_ratio: f64,
-    glide: GlideState,
     engine: GlideEngine,
-    input_frames: usize,
+    glide: GlideState,
+    channels: NonZeroUsize,
     mode: ResamplerMode,
     options: ResamplerOptions,
     previous: SmallVec<[PcmBuf; 8]>,
+    current_ratio: f64,
     cursor: f64,
+    input_frames: usize,
 }
 
 impl GlideResampler {
@@ -242,9 +242,9 @@ impl ResamplerControl for GlideResampler {
 
 #[derive(Clone, Copy, Debug, Default)]
 struct GlideState {
-    remaining: u32,
     step: f64,
     target: f64,
+    remaining: u32,
 }
 
 fn advance_glide_values(current_ratio: &mut f64, glide: &mut GlideState) {

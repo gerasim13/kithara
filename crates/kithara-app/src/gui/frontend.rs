@@ -43,10 +43,10 @@ pub(crate) fn window_settings() -> Settings {
 }
 
 struct Boot {
+    config: AppConfig,
+    catalog: Catalog,
     session: DeckSet,
     decks: Decks,
-    catalog: Catalog,
-    config: AppConfig,
     studio: StudioUi,
 }
 
@@ -96,10 +96,10 @@ impl Frontend for GuiFrontend {
 
         let boot = Mutex::new(Some(Boot {
             session,
+            studio,
             decks: Decks::new(controllers).ok_or("no decks to render")?,
             catalog: Catalog::new(config.tracks.clone()),
             config: config.clone(),
-            studio,
         }));
 
         let daemon = iced::daemon(

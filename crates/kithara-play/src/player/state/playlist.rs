@@ -10,9 +10,9 @@ pub(crate) struct QueuedResource {
 
 #[derive(Default)]
 pub(crate) struct Playlist {
+    last_announced: Option<usize>,
     items: Vec<Option<QueuedResource>>,
     current: usize,
-    last_announced: Option<usize>,
 }
 
 impl Playlist {

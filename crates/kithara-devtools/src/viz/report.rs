@@ -531,10 +531,10 @@ mod tests {
             })
             .collect();
         let model = DiagramModel {
-            kind: ViewKind::Overview,
-            lod: crate::viz::view::DetailLevel::Full,
             nodes,
             edges,
+            kind: ViewKind::Overview,
+            lod: crate::viz::view::DetailLevel::Full,
             groups: Vec::new(),
             hidden_nodes: 0,
         };

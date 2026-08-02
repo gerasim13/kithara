@@ -15,10 +15,10 @@ pub(crate) struct BeatPassConfig<B>
 where
     B: ResamplerBackend,
 {
-    source_rate: u32,
-    params: GridParams,
     resampler: BeatAnalysisConfig<B>,
+    params: GridParams,
     pcm_pool: PcmPool,
+    source_rate: u32,
 }
 
 impl<B> BeatPassConfig<B>
@@ -32,10 +32,10 @@ where
         pcm_pool: PcmPool,
     ) -> Self {
         Self {
-            source_rate,
-            params,
             resampler,
+            params,
             pcm_pool,
+            source_rate,
         }
     }
 }
@@ -48,9 +48,9 @@ pub(crate) struct BeatAnalyzer<B>
 where
     B: ResamplerBackend,
 {
-    failure: Option<BeatDetectError>,
     params: GridParams,
     feed: MonoFeed,
+    failure: Option<BeatDetectError>,
     resampler: Option<MonoStream<B>>,
     windows: WindowedBeats,
     source_rate: u32,
@@ -84,12 +84,12 @@ where
         };
 
         Self {
-            failure: None,
             params,
             feed,
             resampler,
-            windows: WindowedBeats::new(&config, &pcm_pool),
             source_rate,
+            failure: None,
+            windows: WindowedBeats::new(&config, &pcm_pool),
         }
     }
 
@@ -206,11 +206,11 @@ where
 
 struct WindowedBeats {
     buffer: PcmBuf,
-    hop_frames: usize,
-    offset_frames: u64,
-    ready_frames: usize,
     raw: RawBeats,
     sample_rate: u32,
+    offset_frames: u64,
+    hop_frames: usize,
+    ready_frames: usize,
     window_frames: usize,
 }
 

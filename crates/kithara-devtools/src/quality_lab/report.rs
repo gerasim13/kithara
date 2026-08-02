@@ -7,10 +7,10 @@ use super::manifest::{Profile, ToolManifest};
 
 #[derive(Serialize)]
 struct Summary<'a> {
-    schema_version: u32,
+    tools: &'a [ToolManifest],
     revision: &'a str,
     profile: Profile,
-    tools: &'a [ToolManifest],
+    schema_version: u32,
 }
 
 pub(super) struct SummaryPaths {
@@ -30,9 +30,9 @@ pub(super) fn write(
     let json_path = directory.join(format!("{stem}.json"));
     let markdown_path = directory.join(format!("{stem}.md"));
     let summary = Summary {
-        schema_version: 1,
         revision,
         profile,
+        schema_version: 1,
         tools: manifests,
     };
     let json = serde_json::to_string_pretty(&summary).context("serialize Quality Lab summary")?;
@@ -98,12 +98,12 @@ mod tests {
 
     fn manifest(tool: Tool, status: Status) -> ToolManifest {
         ToolManifest {
+            tool,
+            status,
             schema_version: 1,
             revision: "abc123".to_owned(),
             profile: Profile::Scheduled,
-            tool,
             tool_version: "1.0.0".to_owned(),
-            status,
             duration_ms: 10,
             invocations: Vec::new(),
             note: None,

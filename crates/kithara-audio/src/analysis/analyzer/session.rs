@@ -13,8 +13,8 @@ where
     B: ResamplerBackend,
 {
     pub(super) beat: beat::Slot<B>,
-    pub(super) source_frames: u64,
     pub(super) waveform: waveform::Slot,
+    pub(super) source_frames: u64,
 }
 
 impl<B> TrackAnalyzers<B>

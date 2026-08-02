@@ -16,8 +16,8 @@ where
     B: ResamplerBackend,
 {
     job_scope: JobScope,
-    jobs: mpsc::Sender<Job>,
     scheduler: SchedulerHandle<AnalysisNode<B>>,
+    jobs: mpsc::Sender<Job>,
 }
 
 struct JobScope(CancelToken);
@@ -46,8 +46,8 @@ where
         scheduler.register(ANALYSIS_NODE_ID, node);
         Self {
             job_scope,
-            jobs,
             scheduler,
+            jobs,
         }
     }
 
@@ -57,7 +57,7 @@ where
         cancel: CancelToken,
     ) -> watch::Receiver<Option<TrackAnalysis>> {
         let (tx, rx) = watch::channel(None);
-        if self.jobs.send(Job { cancel, reader, tx }).is_err() {
+        if self.jobs.send(Job { reader, cancel, tx }).is_err() {
             warn!("analysis worker stopped; job dropped");
         } else {
             self.scheduler.wake();

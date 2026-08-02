@@ -72,16 +72,16 @@ pub(super) fn collapse(model: &mut DiagramModel) {
             .iter()
             .find_map(|id| nodes_by_id.get(id).and_then(|node| node.parent.clone()));
         group_nodes.push(DiagramNode {
-            id: group_id.clone(),
-            kind: NodeKind::CycleGroup,
-            label: format!("cycle ({}): {}", members.len(), labels.join(", ")),
             location,
             style,
             parent,
+            id: group_id.clone(),
+            kind: NodeKind::CycleGroup,
+            label: format!("cycle ({}): {}", members.len(), labels.join(", ")),
         });
         model.groups.push(DiagramGroup {
-            node: group_id,
             members,
+            node: group_id,
         });
     }
 

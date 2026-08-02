@@ -30,14 +30,6 @@ pub(super) enum Kind {
 }
 
 impl Kind {
-    pub(super) const fn id(self) -> &'static str {
-        match self {
-            Self::From => "derivable_from",
-            Self::Deref => "derivable_deref",
-            Self::Display => "derivable_display",
-        }
-    }
-
     const fn derive(self) -> &'static str {
         match self {
             Self::From => "derive_more::From",
@@ -45,22 +37,30 @@ impl Kind {
             Self::Display => "derive_more::Display",
         }
     }
+
+    pub(super) const fn id(self) -> &'static str {
+        match self {
+            Self::From => "derivable_from",
+            Self::Deref => "derivable_deref",
+            Self::Display => "derivable_display",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 struct Candidate {
-    type_name: String,
-    impl_ranges: Vec<Range<usize>>,
-    line: usize,
-    additions: Vec<Insertion>,
-    replacements: Vec<Replacement>,
     skip: Option<&'static str>,
+    type_name: String,
+    additions: Vec<Insertion>,
+    impl_ranges: Vec<Range<usize>>,
+    replacements: Vec<Replacement>,
+    line: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 struct Insertion {
-    at: usize,
     text: String,
+    at: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

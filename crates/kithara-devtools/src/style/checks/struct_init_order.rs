@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, collections::HashSet, ops::Range};
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use proc_macro2::Span;
 use syn::{
     ExprStruct, FieldValue, Member,
@@ -28,29 +28,47 @@ impl Check for StructInitOrder {
         let cfg = &ctx.config.thresholds.struct_init_order;
         let mut outcome = FixOutcome::default();
         for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let Ok(src) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(file) = syn::parse_file(&src) else {
-                continue;
-            };
             let rel = relative_to(ctx.workspace_root, &path)
                 .to_string_lossy()
                 .replace('\\', "/");
-            let mut rw = SourceRewriter::new(&src);
-            let mut visitor = FixVisitor {
-                cfg,
-                rel: &rel,
-                src: &src,
-                rw: &mut rw,
-                skipped: &mut outcome.skipped,
-            };
-            visitor.visit_file(&file);
-            if !rw.is_empty() {
-                let new_src = rw.finish()?;
+            // Reordering a literal moves nested literals with it, so the
+            // visitor defers them (see `visit_expr_struct`) and each write
+            // exposes the next nesting level; loop until a clean pass.
+            let mut skipped = HashSet::new();
+            let mut wrote = false;
+            for pass in 0.. {
+                let Ok(src) = std::fs::read_to_string(&path) else {
+                    break;
+                };
+                let Ok(file) = syn::parse_file(&src) else {
+                    break;
+                };
+                let mut rw = SourceRewriter::new(&src);
+                let mut pass_skipped = Vec::new();
+                let mut visitor = FixVisitor {
+                    cfg,
+                    rel: &rel,
+                    src: &src,
+                    rw: &mut rw,
+                    skipped: &mut pass_skipped,
+                };
+                visitor.visit_file(&file);
+                skipped.extend(pass_skipped);
+                if rw.is_empty() {
+                    break;
+                }
+                if pass == MAX_FIX_PASSES {
+                    skipped.insert(format!("{rel}: nested reorder did not converge"));
+                    break;
+                }
+                let new_src = rw
+                    .finish()
+                    .with_context(|| format!("{ID} fix failed for {rel}"))?;
                 std::fs::write(&path, new_src)?;
-                outcome.writes += 1;
+                wrote = true;
             }
+            outcome.writes += usize::from(wrote);
+            outcome.skipped.extend(skipped);
         }
         Ok(outcome)
     }
@@ -92,29 +110,39 @@ struct FixVisitor<'a, 'src> {
 
 impl<'ast> Visit<'ast> for FixVisitor<'_, '_> {
     fn visit_expr_struct(&mut self, e: &'ast ExprStruct) {
-        if let Err(reason) = try_fix_expr_struct(self.cfg, self.src, e, self.rw) {
-            self.skipped.push(format!(
-                "{}:{}: {reason}",
-                self.rel,
-                e.path.span().start().line
-            ));
+        match try_fix_expr_struct(self.cfg, self.src, e, self.rw) {
+            // Reordered: nested literals travel inside the moved blocks, so
+            // touching them now would stage overlapping edits. The caller's
+            // fix loop revisits them on the next pass.
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(reason) => {
+                self.skipped.push(format!(
+                    "{}:{}: {reason}",
+                    self.rel,
+                    e.path.span().start().line
+                ));
+            }
         }
         visit::visit_expr_struct(self, e);
     }
 }
 
-/// Reorder one `Foo { ... }` literal in place. Returns `Ok(())` whether
-/// the literal was already ordered, was patched, or was a no-op; returns
-/// `Err(reason)` only when the engine refused (floating comment, missing
-/// trailing comma, `..base` rest, etc.) so the caller can log it.
+const MAX_FIX_PASSES: usize = 8;
+
+/// Reorder one `Foo { ... }` literal in place. Returns `Ok(true)` when a
+/// reorder was staged, `Ok(false)` when the literal was already ordered or
+/// too small to matter; returns `Err(reason)` only when the engine refused
+/// (floating comment, missing trailing comma, `..base` rest, etc.) so the
+/// caller can log it.
 fn try_fix_expr_struct(
     cfg: &StructInitOrderConfig,
     src: &str,
     e: &ExprStruct,
     rw: &mut SourceRewriter<'_>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     if e.fields.len() < 2 {
-        return Ok(());
+        return Ok(false);
     }
     if e.dot2_token.is_some() || e.rest.is_some() {
         return Err("contains `..base` rest".to_string());
@@ -140,7 +168,7 @@ fn try_fix_expr_struct(
         .map(|k| k.idx)
         .eq(expected.iter().map(|k| k.idx))
     {
-        return Ok(());
+        return Ok(false);
     }
 
     let scope_start = e.brace_token.span.open().byte_range().end;
@@ -177,7 +205,7 @@ fn try_fix_expr_struct(
         }
         rw.replace(blocks[slot_idx].bytes.clone(), texts[source_idx].clone());
     }
-    Ok(())
+    Ok(true)
 }
 
 struct InitVisitor<'a> {
@@ -326,6 +354,16 @@ struct IdentScanner<'a> {
 }
 
 impl<'ast> Visit<'ast> for IdentScanner<'_> {
+    fn visit_macro(&mut self, m: &'ast syn::Macro) {
+        // `Visit` does not parse macro bodies, so a `vec![x.clone()]` read
+        // of a shorthand field is invisible to `visit_path`. Scan the raw
+        // token stream instead.
+        if !self.found && tokens_contain_ident(m.tokens.clone(), self.names) {
+            self.found = true;
+        }
+        visit::visit_macro(self, m);
+    }
+
     fn visit_path(&mut self, p: &'ast syn::Path) {
         if let Some(first) = p.segments.first()
             && p.leading_colon.is_none()
@@ -336,6 +374,14 @@ impl<'ast> Visit<'ast> for IdentScanner<'_> {
         }
         visit::visit_path(self, p);
     }
+}
+
+fn tokens_contain_ident(tokens: proc_macro2::TokenStream, names: &HashSet<String>) -> bool {
+    tokens.into_iter().any(|tt| match tt {
+        proc_macro2::TokenTree::Ident(id) => names.contains(&id.to_string()),
+        proc_macro2::TokenTree::Group(g) => tokens_contain_ident(g.stream(), names),
+        proc_macro2::TokenTree::Punct(_) | proc_macro2::TokenTree::Literal(_) => false,
+    })
 }
 
 fn type_span_start_line(e: &ExprStruct) -> usize {
@@ -405,6 +451,35 @@ mod fix_tests {
         assert!(
             out.contains("Foo { y, x: 1, }"),
             "expected shorthand first, got: {out}"
+        );
+    }
+
+    #[test]
+    fn nested_literal_inside_moved_field_defers_then_converges() {
+        let src = "fn main() { let _ = Foo { x: Bar { b: 2, a, }, y, }; }";
+        let (pass1, skipped) = run_fix(src);
+        assert!(skipped.is_empty(), "skipped: {skipped:?}");
+        assert!(
+            pass1.contains("Foo { y, x: Bar { b: 2, a, }, }"),
+            "outer reordered, inner deferred: {pass1}"
+        );
+        let (pass2, skipped) = run_fix(&pass1);
+        assert!(skipped.is_empty(), "skipped: {skipped:?}");
+        assert!(
+            pass2.contains("Foo { y, x: Bar { a, b: 2, }, }"),
+            "inner reordered on the next pass: {pass2}"
+        );
+    }
+
+    #[test]
+    fn shorthand_read_inside_macro_blocks_reorder() {
+        let src = "fn main() { let _ = Foo { nodes: vec![sig.clone()], sig, }; }";
+        let (out, skipped) = run_fix(src);
+        assert_eq!(out, src, "macro read of `sig` must block the reorder");
+        assert_eq!(skipped.len(), 1, "skipped: {skipped:?}");
+        assert!(
+            skipped[0].contains("shorthand field is moved"),
+            "{skipped:?}"
         );
     }
 

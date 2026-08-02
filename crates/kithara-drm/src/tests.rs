@@ -136,25 +136,20 @@ mod registry {
 
     #[derive(Debug)]
     struct FakeResolver {
-        final_url: Url,
         headers: HashMap<String, String>,
-        matches: bool,
         processor: ProcessorKind,
+        final_url: Url,
+        matches: bool,
     }
 
     impl FakeResolver {
         fn matching(final_url: &str, processor: ProcessorKind) -> Self {
             Self {
+                processor,
                 final_url: Url::parse(final_url).expect("test URL is valid"),
                 headers: HashMap::new(),
                 matches: true,
-                processor,
             }
-        }
-
-        fn with_header(mut self, name: &str, value: &str) -> Self {
-            self.headers.insert(name.to_string(), value.to_string());
-            self
         }
 
         fn not_matching() -> Self {
@@ -164,6 +159,11 @@ mod registry {
                 matches: false,
                 processor: ProcessorKind::Identity,
             }
+        }
+
+        fn with_header(mut self, name: &str, value: &str) -> Self {
+            self.headers.insert(name.to_string(), value.to_string());
+            self
         }
     }
 

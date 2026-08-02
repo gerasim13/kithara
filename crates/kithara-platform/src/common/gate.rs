@@ -106,10 +106,10 @@ impl WaitGate for CondvarGate<u64> {
 /// Single-waiter edge gate with a non-blocking signal path and timed backstop.
 /// Sequence and waiter registration share one atomic to prevent lost wakeups.
 pub struct ThreadGate {
-    backend: thread::GateBackend,
     state: AtomicU64,
-    waiter: Mutex<Option<Thread>>,
     waiter_id: AtomicU64,
+    backend: thread::GateBackend,
+    waiter: Mutex<Option<Thread>>,
 }
 
 impl Default for ThreadGate {

@@ -49,8 +49,8 @@ impl Consts {
 }
 
 struct MenuTrack {
-    title: &'static str,
     meta: &'static str,
+    title: &'static str,
     energy: f64,
 }
 
@@ -63,11 +63,11 @@ enum MenuGroup {
 }
 
 struct MenuWindow {
+    caption: String,
+    title: String,
+    modules: [bool; 11],
     display: usize,
     layout: usize,
-    modules: [bool; 11],
-    title: String,
-    caption: String,
 }
 
 impl MenuWindow {
@@ -87,18 +87,18 @@ impl MenuWindow {
 }
 
 pub(super) struct MenuState {
-    open: bool,
     group: MenuGroup,
-    windows: Vec<MenuWindow>,
-    active: usize,
-    wave_follow: bool,
-    autogain: bool,
-    mono: bool,
-    recording: bool,
-    casting: bool,
     count_label: String,
-    modules_title: String,
     modules_count: String,
+    modules_title: String,
+    windows: Vec<MenuWindow>,
+    autogain: bool,
+    casting: bool,
+    mono: bool,
+    open: bool,
+    recording: bool,
+    wave_follow: bool,
+    active: usize,
 }
 
 impl Default for MenuState {
@@ -126,26 +126,47 @@ impl Default for MenuState {
 }
 
 impl MenuState {
-    fn rebuild(&mut self) {
-        for (index, window) in self.windows.iter_mut().enumerate() {
-            let number = index + 1;
-            window.title = format!("ОКНО {number} · {}", Consts::LAYOUTS[window.layout]);
-            window.caption = format!(
-                "{} · {} МОД.",
-                Consts::DISPLAYS[window.display],
-                window.modules_on()
-            );
-        }
-        let count = self.windows.len();
-        self.count_label = if count == 1 {
-            "1 ОКНО".to_owned()
-        } else {
-            format!("{count} ОКНА")
+    pub(super) fn activate(&mut self, path: &str) -> bool {
+        let Some(id) = path.strip_prefix("app-menu/") else {
+            return false;
         };
-        let active = self.active + 1;
-        self.modules_title = format!("Модули · ОКНО {active}");
-        let on = self.windows[self.active].modules_on();
-        self.modules_count = format!("{on} ИЗ 11");
+        let (instance, node) = id.split_once('/').unwrap_or((id, ""));
+        if let Some(number) = instance.strip_prefix("window-") {
+            return self.window_row(number, node);
+        }
+        if let Some(key) = instance.strip_prefix("module-") {
+            return self.toggle_module(key);
+        }
+        if let Some(number) = instance.strip_prefix("layout-") {
+            return self.apply_layout(number);
+        }
+        match instance {
+            // The widget publishes the dismissal on the popover's own path, so
+            // this handler sets false; the burger stays the only toggle.
+            "pop" | "header-close" => self.open = false,
+            "burger" => self.open = !self.open,
+            "new-window" => self.open_window(),
+            "modules-head" => self.toggle_group(MenuGroup::Mod),
+            "layouts-head" => self.toggle_group(MenuGroup::Lay),
+            "wave-follow" => self.wave_follow = !self.wave_follow,
+            "autogain" => self.autogain = !self.autogain,
+            "mono" => self.mono = !self.mono,
+            "record" => self.recording = !self.recording,
+            "cast" => self.casting = !self.casting,
+            "full-screen" | "add-folder" | "settings" => {}
+            _ => return false,
+        }
+        true
+    }
+
+    fn apply_layout(&mut self, number: &str) -> bool {
+        let Some(index) = row_index(number).filter(|index| *index < Consts::LAYOUTS.len()) else {
+            return false;
+        };
+        let active = self.active;
+        self.windows[active].layout = index;
+        self.rebuild();
+        true
     }
 
     const fn can_open(&self) -> bool {
@@ -156,11 +177,29 @@ impl MenuState {
         self.windows.len() > 1 && index != 0
     }
 
-    fn group_open(&self, scope: &str) -> bool {
-        match self.group {
-            MenuGroup::Mod => scope == "group=mod",
-            MenuGroup::Lay => scope == "group=lay",
-            MenuGroup::Win | MenuGroup::None => false,
+    fn close(&mut self, index: usize) {
+        if !self.closable(index) {
+            return;
+        }
+        self.windows.remove(index);
+        if self.active >= index {
+            self.active -= 1;
+        }
+        self.rebuild();
+    }
+
+    fn cycle_display(&mut self, index: usize) {
+        let Some(window) = self.windows.get_mut(index) else {
+            return;
+        };
+        window.display = (window.display + 1) % Consts::DISPLAYS.len();
+        self.rebuild();
+    }
+
+    fn focus(&mut self, index: usize) {
+        if index < self.windows.len() {
+            self.active = index;
+            self.rebuild();
         }
     }
 
@@ -216,76 +255,12 @@ impl MenuState {
         Some(value)
     }
 
-    pub(super) fn activate(&mut self, path: &str) -> bool {
-        let Some(id) = path.strip_prefix("app-menu/") else {
-            return false;
-        };
-        let (instance, node) = id.split_once('/').unwrap_or((id, ""));
-        if let Some(number) = instance.strip_prefix("window-") {
-            return self.window_row(number, node);
+    fn group_open(&self, scope: &str) -> bool {
+        match self.group {
+            MenuGroup::Mod => scope == "group=mod",
+            MenuGroup::Lay => scope == "group=lay",
+            MenuGroup::Win | MenuGroup::None => false,
         }
-        if let Some(key) = instance.strip_prefix("module-") {
-            return self.toggle_module(key);
-        }
-        if let Some(number) = instance.strip_prefix("layout-") {
-            return self.apply_layout(number);
-        }
-        match instance {
-            // The widget publishes the dismissal on the popover's own path, so
-            // this handler sets false; the burger stays the only toggle.
-            "pop" | "header-close" => self.open = false,
-            "burger" => self.open = !self.open,
-            "new-window" => self.open_window(),
-            "modules-head" => self.toggle_group(MenuGroup::Mod),
-            "layouts-head" => self.toggle_group(MenuGroup::Lay),
-            "wave-follow" => self.wave_follow = !self.wave_follow,
-            "autogain" => self.autogain = !self.autogain,
-            "mono" => self.mono = !self.mono,
-            "record" => self.recording = !self.recording,
-            "cast" => self.casting = !self.casting,
-            "full-screen" | "add-folder" | "settings" => {}
-            _ => return false,
-        }
-        true
-    }
-
-    fn window_row(&mut self, number: &str, node: &str) -> bool {
-        let Some(index) = row_index(number) else {
-            return false;
-        };
-        match node {
-            "focus" => self.focus(index),
-            "display" => self.cycle_display(index),
-            "close" => self.close(index),
-            _ => return false,
-        }
-        true
-    }
-
-    fn focus(&mut self, index: usize) {
-        if index < self.windows.len() {
-            self.active = index;
-            self.rebuild();
-        }
-    }
-
-    fn cycle_display(&mut self, index: usize) {
-        let Some(window) = self.windows.get_mut(index) else {
-            return;
-        };
-        window.display = (window.display + 1) % Consts::DISPLAYS.len();
-        self.rebuild();
-    }
-
-    fn close(&mut self, index: usize) {
-        if !self.closable(index) {
-            return;
-        }
-        self.windows.remove(index);
-        if self.active >= index {
-            self.active -= 1;
-        }
-        self.rebuild();
     }
 
     fn open_window(&mut self) {
@@ -299,6 +274,28 @@ impl MenuState {
             Consts::NEW_WINDOW_MODULES,
         ));
         self.rebuild();
+    }
+
+    fn rebuild(&mut self) {
+        for (index, window) in self.windows.iter_mut().enumerate() {
+            let number = index + 1;
+            window.title = format!("ОКНО {number} · {}", Consts::LAYOUTS[window.layout]);
+            window.caption = format!(
+                "{} · {} МОД.",
+                Consts::DISPLAYS[window.display],
+                window.modules_on()
+            );
+        }
+        let count = self.windows.len();
+        self.count_label = if count == 1 {
+            "1 ОКНО".to_owned()
+        } else {
+            format!("{count} ОКНА")
+        };
+        let active = self.active + 1;
+        self.modules_title = format!("Модули · ОКНО {active}");
+        let on = self.windows[self.active].modules_on();
+        self.modules_count = format!("{on} ИЗ 11");
     }
 
     fn toggle_group(&mut self, group: MenuGroup) {
@@ -319,21 +316,24 @@ impl MenuState {
         true
     }
 
-    fn apply_layout(&mut self, number: &str) -> bool {
-        let Some(index) = row_index(number).filter(|index| *index < Consts::LAYOUTS.len()) else {
+    fn window_row(&mut self, number: &str, node: &str) -> bool {
+        let Some(index) = row_index(number) else {
             return false;
         };
-        let active = self.active;
-        self.windows[active].layout = index;
-        self.rebuild();
+        match node {
+            "focus" => self.focus(index),
+            "display" => self.cycle_display(index),
+            "close" => self.close(index),
+            _ => return false,
+        }
         true
     }
 }
 
 pub(super) struct ContextState {
     open: Option<usize>,
-    selected: usize,
     action: String,
+    selected: usize,
 }
 
 impl Default for ContextState {
@@ -347,24 +347,6 @@ impl Default for ContextState {
 }
 
 impl ContextState {
-    pub(super) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
-        if endpoint == "gallery.menu.action" {
-            return Some(ReadValue::Text(&self.action));
-        }
-        let (id, scope) = endpoint.split_once('@').unwrap_or((endpoint, ""));
-        let row = scoped_index(scope, "row")?;
-        let track = Consts::TRACKS.get(row)?;
-        let value = match id {
-            "gallery.menu.context" => ReadValue::Bool(self.open == Some(row)),
-            "gallery.menu.selected" => ReadValue::Bool(self.selected == row),
-            "gallery.menu.track" => ReadValue::Text(track.title),
-            "gallery.menu.bpm" => ReadValue::Text(track.meta),
-            "gallery.menu.energy" => ReadValue::Scalar(track.energy),
-            _ => return None,
-        };
-        Some(value)
-    }
-
     pub(super) fn activate(&mut self, path: &str) -> bool {
         let Some((row, action)) = track_address(path) else {
             return false;
@@ -384,16 +366,34 @@ impl ContextState {
         true
     }
 
-    pub(super) fn secondary(&mut self, path: &str) {
-        if let Some((row, "row")) = track_address(path) {
-            self.open = Some(row);
+    pub(super) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        if endpoint == "gallery.menu.action" {
+            return Some(ReadValue::Text(&self.action));
         }
+        let (id, scope) = endpoint.split_once('@').unwrap_or((endpoint, ""));
+        let row = scoped_index(scope, "row")?;
+        let track = Consts::TRACKS.get(row)?;
+        let value = match id {
+            "gallery.menu.context" => ReadValue::Bool(self.open == Some(row)),
+            "gallery.menu.selected" => ReadValue::Bool(self.selected == row),
+            "gallery.menu.track" => ReadValue::Text(track.title),
+            "gallery.menu.bpm" => ReadValue::Text(track.meta),
+            "gallery.menu.energy" => ReadValue::Scalar(track.energy),
+            _ => return None,
+        };
+        Some(value)
     }
 
     fn run(&mut self, row: usize, label: &str) {
         let track = row + 1;
         self.action = format!("{label} · {track}");
         self.open = None;
+    }
+
+    pub(super) fn secondary(&mut self, path: &str) {
+        if let Some((row, "row")) = track_address(path) {
+            self.open = Some(row);
+        }
     }
 }
 

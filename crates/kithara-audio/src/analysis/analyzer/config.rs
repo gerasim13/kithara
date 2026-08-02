@@ -18,23 +18,23 @@ impl Consts {
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct BeatAnalysisConfig<B> {
-    /// Mono resampler input block size in frames.
-    #[builder(default = Consts::DEFAULT_BEAT_BLOCK_FRAMES)]
-    block_frames: usize,
-    /// Detector input sample rate in Hz.
-    #[builder(default = Consts::DEFAULT_BEAT_TARGET_RATE)]
-    target_rate: u32,
+    /// Standalone mono resampler backend used before detector windows.
+    resampler_backend: B,
     /// Quality used by the configured beat-resampler backend.
     #[builder(default = Consts::DEFAULT_BEAT_RESAMPLER_QUALITY)]
     resampler_quality: ResamplerQuality,
-    /// Standalone mono resampler backend used before detector windows.
-    resampler_backend: B,
-    /// Maximum NN detector window length in seconds.
-    #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS)]
-    detector_window_seconds: u32,
     /// Seconds carried from the end of one detector window into the next.
     #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS)]
     detector_overlap_seconds: u32,
+    /// Maximum NN detector window length in seconds.
+    #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS)]
+    detector_window_seconds: u32,
+    /// Detector input sample rate in Hz.
+    #[builder(default = Consts::DEFAULT_BEAT_TARGET_RATE)]
+    target_rate: u32,
+    /// Mono resampler input block size in frames.
+    #[builder(default = Consts::DEFAULT_BEAT_BLOCK_FRAMES)]
+    block_frames: usize,
 }
 
 impl<B> BeatAnalysisConfig<B>
@@ -66,6 +66,10 @@ where
         &self.resampler_backend
     }
 
+    fn resampler_backend_name(&self) -> &'static str {
+        self.resampler_backend.name()
+    }
+
     #[must_use]
     pub fn resampler_quality(&self) -> ResamplerQuality {
         self.resampler_quality
@@ -74,10 +78,6 @@ where
     #[must_use]
     pub fn target_rate(&self) -> u32 {
         self.target_rate
-    }
-
-    fn resampler_backend_name(&self) -> &'static str {
-        self.resampler_backend.name()
     }
 }
 

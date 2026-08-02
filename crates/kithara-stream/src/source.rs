@@ -348,6 +348,20 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
 /// mutability, so callers hold an `Arc<dyn VariantControl>` and never
 /// need `&mut`.
 pub trait VariantControl: Send + Sync + 'static {
+    /// Cancel one exact incoming session without disturbing the authoritative
+    /// outgoing variant or a newer ABR intent.
+    #[must_use]
+    fn abort_variant(&self, transition: VariantTransition) -> bool;
+
+    /// Byte range of the header the decoder must re-read after a format
+    /// change (HLS ABR cross-codec switch).
+    ///
+    /// # Errors
+    /// `Err(SourceError::FormatChangeNotApplicable)` when the active variant
+    /// was served with a non-zero `served_from` so the init prefix lives
+    /// outside the virtual range.
+    fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
+
     /// Capture the exact target media facts needed to select a decoder and
     /// compute its reader profile before an incoming session is opened.
     ///
@@ -377,6 +391,14 @@ pub trait VariantControl: Send + Sync + 'static {
         profile: ReaderProfile,
     ) -> StreamResult<Option<VariantTransition>>;
 
+    /// Publish the incoming variant only when `transition` still identifies
+    /// the exact pending ABR intent in the same seek epoch.
+    fn promote_variant(&self, transition: VariantTransition) -> VariantPromotion;
+
+    /// Variant that a seek replacement must open. A pending manual or
+    /// automatic selection wins even while transition publication is locked.
+    fn selected_variant_for_seek(&self) -> usize;
+
     /// Transfer the prepared reader exactly once. The typed result keeps
     /// readiness, prior transfer, and stale identity distinct.
     ///
@@ -387,28 +409,6 @@ pub trait VariantControl: Send + Sync + 'static {
         &self,
         transition: VariantTransition,
     ) -> StreamResult<VariantReaderTake>;
-
-    /// Publish the incoming variant only when `transition` still identifies
-    /// the exact pending ABR intent in the same seek epoch.
-    fn promote_variant(&self, transition: VariantTransition) -> VariantPromotion;
-
-    /// Cancel one exact incoming session without disturbing the authoritative
-    /// outgoing variant or a newer ABR intent.
-    #[must_use]
-    fn abort_variant(&self, transition: VariantTransition) -> bool;
-
-    /// Variant that a seek replacement must open. A pending manual or
-    /// automatic selection wins even while transition publication is locked.
-    fn selected_variant_for_seek(&self) -> usize;
-
-    /// Byte range of the header the decoder must re-read after a format
-    /// change (HLS ABR cross-codec switch).
-    ///
-    /// # Errors
-    /// `Err(SourceError::FormatChangeNotApplicable)` when the active variant
-    /// was served with a non-zero `served_from` so the init prefix lives
-    /// outside the virtual range.
-    fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
 }
 
 /// Segment-table view exposed by segmented sources (HLS, fragmented

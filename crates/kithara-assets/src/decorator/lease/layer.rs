@@ -43,9 +43,9 @@ impl LeaseEvents {
             return;
         };
         bus.publish(AssetEvent::Committed {
+            final_len,
             asset_root: asset_root.to_string(),
             rel_path: rel_path.to_string(),
-            final_len,
         });
     }
 
@@ -80,8 +80,8 @@ where
     inner: Arc<A>,
     live: Arc<LiveRegistry>,
     cancel: CancelToken,
-    byte_recorder: Option<Arc<dyn ByteRecorder>>,
     event_bus: LeaseEvents,
+    byte_recorder: Option<Arc<dyn ByteRecorder>>,
     /// Shared pins index — same instance held by `EvictAssets` and
     /// `DiskAssetDeleter`. Mutations (`add` / `remove`) flush
     /// immediately via the index's internal best-effort persistence.

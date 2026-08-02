@@ -24,8 +24,8 @@ impl PooledPlanar {
             })
             .collect::<Result<Vec<_>, BudgetExhausted>>()?;
         Ok(Self {
-            pool: pool.clone(),
             channels,
+            pool: pool.clone(),
         })
     }
 

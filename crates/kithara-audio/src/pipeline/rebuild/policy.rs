@@ -32,8 +32,8 @@ pub(crate) fn observed_seek(seek: &dyn SeekObserve, min_epoch: u64) -> Option<Se
     }
     Some(SeekRequest {
         seek: SeekContext {
-            target: seek.target()?,
             epoch,
+            target: seek.target()?,
         },
         emit_request: false,
     })

@@ -65,21 +65,21 @@ pub struct PlayerNodeProcessor {
     pub(super) crossfade: CrossfadeSettings,
     pub(super) cmd_rx: HeapCons<PlayerCmd>,
     pub(super) notif_tx: HeapProd<PlayerNotification>,
-    trash_tx: HeapProd<PlayerTrack>,
     pub(super) sample_rate: NonZeroU32,
-    pub(super) tracks_transitions: VecDeque<TrackTransition>,
     pub(super) render: RenderPass,
-    pub(super) prefetch_duration: f32,
+    pub(super) tracks_transitions: VecDeque<TrackTransition>,
     /// Media seconds consumed per output second, applied to every track the
     /// processor owns and seeded into every track it loads.
     pub(super) playback_rate: f32,
+    pub(super) prefetch_duration: f32,
+    trash_tx: HeapProd<PlayerTrack>,
 }
 
 /// Stream dimensions needed to pre-size RT scratch buffers.
 #[derive(Clone, Copy)]
 pub struct StreamShape {
-    pub sample_rate: NonZeroU32,
     pub max_block_frames: NonZeroU32,
+    pub sample_rate: NonZeroU32,
 }
 
 impl PlayerNodeProcessor {
@@ -105,11 +105,6 @@ impl PlayerNodeProcessor {
             tracks: ArenaRegistry::with_capacity(Self::MAX_TRACKS),
             tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
         }
-    }
-
-    /// Update fade duration for all tracks.
-    pub(super) fn discard_track(&mut self, track: PlayerTrack) {
-        let _ = self.trash_tx.try_push(track);
     }
 
     /// Clean up finished tracks.
@@ -179,6 +174,11 @@ impl PlayerNodeProcessor {
         }
     }
 
+    /// Update fade duration for all tracks.
+    pub(super) fn discard_track(&mut self, track: PlayerTrack) {
+        let _ = self.trash_tx.try_push(track);
+    }
+
     /// Evict tracks to make room when at capacity.
     ///
     /// Tracks are evicted in priority order: `Finished` first, then `FadingOut`,
@@ -225,22 +225,6 @@ impl PlayerNodeProcessor {
         &self.playback
     }
 
-    delegate::delegate! {
-        to self.tracks {
-            /// Look up a track by its source identifier.
-            #[must_use]
-            #[call(get)]
-            pub fn track(&self, src: &Arc<str>) -> Option<&PlayerTrack>;
-            /// Number of tracks currently held in the processor arena.
-            #[must_use]
-            #[call(len)]
-            pub fn track_count(&self) -> usize;
-            /// Look up a track by its source identifier (mutable).
-            #[call(get_mut)]
-            pub fn track_mut(&mut self, src: &Arc<str>) -> Option<&mut PlayerTrack>;
-        }
-    }
-
     pub fn render_audio(
         &mut self,
         buffers: &mut ProcBuffers,
@@ -258,6 +242,12 @@ impl PlayerNodeProcessor {
         )
     }
 
+    fn set_tracks_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
+        self.tracks
+            .iter()
+            .for_each(|(_, track)| track.resource().set_host_sample_rate(sample_rate));
+    }
+
     /// Unload a track from the arena.
     pub(super) fn unload_track(&mut self, src: &Arc<str>) {
         if let Some(track) = self.tracks.remove(src) {
@@ -267,6 +257,17 @@ impl PlayerNodeProcessor {
                     src: Arc::clone(src),
                 })
                 .ok();
+        }
+    }
+
+    fn update_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
+        let rate_changed = self.sample_rate != sample_rate;
+        self.sample_rate = sample_rate;
+        self.playback
+            .sample_rate
+            .store(sample_rate.get(), Ordering::Relaxed);
+        if rate_changed {
+            self.set_tracks_host_sample_rate(sample_rate);
         }
     }
 
@@ -315,20 +316,19 @@ impl PlayerNodeProcessor {
         }
     }
 
-    fn set_tracks_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
-        self.tracks
-            .iter()
-            .for_each(|(_, track)| track.resource().set_host_sample_rate(sample_rate));
-    }
-
-    fn update_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
-        let rate_changed = self.sample_rate != sample_rate;
-        self.sample_rate = sample_rate;
-        self.playback
-            .sample_rate
-            .store(sample_rate.get(), Ordering::Relaxed);
-        if rate_changed {
-            self.set_tracks_host_sample_rate(sample_rate);
+    delegate::delegate! {
+        to self.tracks {
+            /// Look up a track by its source identifier.
+            #[must_use]
+            #[call(get)]
+            pub fn track(&self, src: &Arc<str>) -> Option<&PlayerTrack>;
+            /// Number of tracks currently held in the processor arena.
+            #[must_use]
+            #[call(len)]
+            pub fn track_count(&self) -> usize;
+            /// Look up a track by its source identifier (mutable).
+            #[call(get_mut)]
+            pub fn track_mut(&mut self, src: &Arc<str>) -> Option<&mut PlayerTrack>;
         }
     }
 }

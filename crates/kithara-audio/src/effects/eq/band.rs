@@ -55,11 +55,6 @@ pub struct EqBandConfig {
 
 impl EqBandConfig {
     #[must_use]
-    pub fn kind(&self) -> FilterKind {
-        self.kind
-    }
-
-    #[must_use]
     pub fn frequency(&self) -> f32 {
         self.frequency
     }
@@ -67,6 +62,11 @@ impl EqBandConfig {
     #[must_use]
     pub fn gain_db(&self) -> f32 {
         self.gain_db
+    }
+
+    #[must_use]
+    pub fn kind(&self) -> FilterKind {
+        self.kind
     }
 
     #[must_use]

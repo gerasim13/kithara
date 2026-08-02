@@ -148,6 +148,13 @@ impl DiskAssetStore {
         self.root_dir.join("_index").join("lru.bin")
     }
 
+    fn open_absolute_resource(&self, key: &ResourceKey) -> AssetsResult<Option<BaseReader>> {
+        let Some(path) = key.as_absolute_path() else {
+            return Ok(None);
+        };
+        Ok(Some(BaseReader::open_read_only_file(path, &self.cancel)?))
+    }
+
     /// Open a fresh segment as an `AtomicChunked<MmapResource>`. The
     /// inner mmap is bound to `<path>.tmp`; on `commit()` the tmp
     /// file is `sync_data`'d and renamed atomically to `path`. The
@@ -187,13 +194,6 @@ impl DiskAssetStore {
                 .mode(OpenMode::ReadWrite)
                 .build(),
         )?)
-    }
-
-    fn open_absolute_resource(&self, key: &ResourceKey) -> AssetsResult<Option<BaseReader>> {
-        let Some(path) = key.as_absolute_path() else {
-            return Ok(None);
-        };
-        Ok(Some(BaseReader::open_read_only_file(path, &self.cancel)?))
     }
 
     fn open_storage_resource(

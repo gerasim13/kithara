@@ -24,15 +24,15 @@ use crate::{
 /// Async track loader: `ResourceConfig` -> `Resource`, run in two
 /// isolated permit lanes with one abortable attempt per track.
 pub(crate) struct Loader {
-    player: Arc<PlayerImpl>,
-    store: AssetStore,
-    /// Background prefetch lane (`max_concurrent_loads` permits).
-    prefetch_lane: Arc<Semaphore>,
     /// User-selection lane: one dedicated permit, isolated from prefetch.
     interactive_lane: Arc<Semaphore>,
+    player: Arc<PlayerImpl>,
+    /// Background prefetch lane (`max_concurrent_loads` permits).
+    prefetch_lane: Arc<Semaphore>,
     /// Same `Arc<Tracks>` as `Queue::tracks`: owns per-track status and the live attempt,
     /// so both change under one lock.
     tracks: Arc<Tracks>,
+    store: AssetStore,
 }
 
 impl Loader {
@@ -49,6 +49,20 @@ impl Loader {
             prefetch_lane: Arc::new(Semaphore::new(max_concurrent_loads.get())),
             interactive_lane: Arc::new(Semaphore::new(1)),
         }
+    }
+
+    fn attempt_config(
+        &self,
+        id: TrackId,
+        source: TrackSource,
+    ) -> Result<(ResourceConfig, CancelToken), QueueError> {
+        let config = self.build_config(id, source)?;
+        let Some(cancel) = config.cancel().cloned() else {
+            return Err(QueueError::Resource(format!(
+                "track {id:?}: resource config missing per-track cancel"
+            )));
+        };
+        Ok((config, cancel))
     }
 
     /// Build a [`ResourceConfig`] for the given [`TrackSource`].
@@ -104,22 +118,6 @@ impl Loader {
         }
     }
 
-    /// Spawn a fresh async load in the given lane. `None` when a live
-    /// attempt already exists - one track never occupies two permits.
-    pub(crate) fn spawn_load(
-        self: &Arc<Self>,
-        id: TrackId,
-        source: TrackSource,
-        class: LoadClass,
-    ) -> Option<JoinHandle<Result<Resource, QueueError>>> {
-        let (config, cancel) = match self.attempt_config(id, source) {
-            Ok(pair) => pair,
-            Err(err) => return Some(self.spawn_config_failure(id, err)),
-        };
-        let ticket = self.tracks.begin_attempt(id, cancel.clone())?;
-        Some(self.spawn_attempt(ticket, config, cancel, class))
-    }
-
     /// Move a track's pending load into the interactive lane.
     pub(crate) fn promote_load(
         self: &Arc<Self>,
@@ -132,20 +130,6 @@ impl Loader {
         };
         let ticket = self.tracks.promote_attempt(id, cancel.clone())?;
         Some(self.spawn_attempt(ticket, config, cancel, LoadClass::Interactive))
-    }
-
-    fn attempt_config(
-        &self,
-        id: TrackId,
-        source: TrackSource,
-    ) -> Result<(ResourceConfig, CancelToken), QueueError> {
-        let config = self.build_config(id, source)?;
-        let Some(cancel) = config.cancel().cloned() else {
-            return Err(QueueError::Resource(format!(
-                "track {id:?}: resource config missing per-track cancel"
-            )));
-        };
-        Ok((config, cancel))
     }
 
     fn spawn_attempt(
@@ -204,6 +188,22 @@ impl Loader {
             tracks.set_status(id, TrackStatus::Failed(format!("{err}")));
             Err(err)
         })
+    }
+
+    /// Spawn a fresh async load in the given lane. `None` when a live
+    /// attempt already exists - one track never occupies two permits.
+    pub(crate) fn spawn_load(
+        self: &Arc<Self>,
+        id: TrackId,
+        source: TrackSource,
+        class: LoadClass,
+    ) -> Option<JoinHandle<Result<Resource, QueueError>>> {
+        let (config, cancel) = match self.attempt_config(id, source) {
+            Ok(pair) => pair,
+            Err(err) => return Some(self.spawn_config_failure(id, err)),
+        };
+        let ticket = self.tracks.begin_attempt(id, cancel.clone())?;
+        Some(self.spawn_attempt(ticket, config, cancel, class))
     }
 
     /// Watches the [`EventBus`] for the first

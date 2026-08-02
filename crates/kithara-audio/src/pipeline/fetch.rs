@@ -22,12 +22,6 @@ impl<C> Fetch<C> {
         Self::NaturalEof { epoch }
     }
 
-    /// Create a failure marker distinct from natural end-of-stream.
-    #[must_use]
-    pub fn failure(epoch: u64) -> Self {
-        Self::Failure { epoch }
-    }
-
     /// Return the seek-invalidation epoch.
     pub const fn epoch(&self) -> u64 {
         match self {
@@ -35,6 +29,12 @@ impl<C> Fetch<C> {
                 *epoch
             }
         }
+    }
+
+    /// Create a failure marker distinct from natural end-of-stream.
+    #[must_use]
+    pub fn failure(epoch: u64) -> Self {
+        Self::Failure { epoch }
     }
 }
 

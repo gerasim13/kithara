@@ -11,13 +11,13 @@ use crate::audio::event::{
 };
 
 pub(crate) struct GenerationInstalled<'a> {
+    pub(crate) generation: &'a DecoderGeneration,
+    pub(crate) playback_resampler_backend: &'static str,
     pub(crate) backend: DecoderBackend,
     pub(crate) cause: DecoderChangeCause,
-    pub(crate) epoch: u64,
-    pub(crate) generation: &'a DecoderGeneration,
-    pub(crate) host_sample_rate: u32,
-    pub(crate) playback_resampler_backend: &'static str,
     pub(crate) recreates_on_route: bool,
+    pub(crate) host_sample_rate: u32,
+    pub(crate) epoch: u64,
 }
 
 pub(crate) fn enqueue_generation_installed(
@@ -43,11 +43,11 @@ pub(crate) fn enqueue_generation_installed(
             backend,
             media_info,
             spec,
-            track_info: &track_info,
             epoch,
             cause,
-            base_offset: generation.base_offset(),
             duration,
+            track_info: &track_info,
+            base_offset: generation.base_offset(),
         })
         .into(),
     );

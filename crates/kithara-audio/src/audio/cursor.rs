@@ -14,14 +14,14 @@ use super::{
 
 #[derive(Clone, Copy)]
 pub(super) struct CursorRead {
-    pub(super) outcome: ReadOutcome,
     pub(super) last_output_meta: Option<PcmMeta>,
+    pub(super) outcome: ReadOutcome,
 }
 
 pub(super) struct ChunkCursor {
-    current_chunk_consumed_frames: u64,
-    spec: PcmSpec,
     interleaved: Option<PcmBuf>,
+    spec: PcmSpec,
+    current_chunk_consumed_frames: u64,
 }
 
 impl ChunkCursor {
@@ -37,14 +37,10 @@ impl ChunkCursor {
             }
         });
         Self {
-            current_chunk_consumed_frames: 0,
             spec,
+            current_chunk_consumed_frames: 0,
             interleaved: Some(interleaved),
         }
-    }
-
-    pub(super) fn spec(&self) -> PcmSpec {
-        self.spec
     }
 
     pub(super) fn begin_chunk(&mut self, chunk: &PcmChunk) {
@@ -54,6 +50,46 @@ impl ChunkCursor {
 
     pub(super) fn clear(&mut self) {
         self.current_chunk_consumed_frames = 0;
+    }
+
+    fn copy_into(
+        &mut self,
+        chunk: &PcmChunk,
+        output: &mut [f32],
+        playhead: &dyn PlayheadWrite,
+    ) -> Result<CopyOutcome, DecodeError> {
+        let channels = u64::from(chunk.meta.spec.channels.max(1));
+        let total_frames = u64::from(chunk.meta.frames);
+        let consumed = self.current_chunk_consumed_frames;
+        if consumed >= total_frames {
+            return Ok(CopyOutcome {
+                samples: 0,
+                finished: true,
+            });
+        }
+
+        let remaining_frames = total_frames - consumed;
+        let output_frames = (output.len() as u64) / channels;
+        let take_frames = remaining_frames.min(output_frames);
+        if take_frames == 0 {
+            return Ok(CopyOutcome {
+                samples: 0,
+                finished: false,
+            });
+        }
+
+        let start_sample = frames_to_samples(consumed, channels)?;
+        let samples = frames_to_samples(take_frames, channels)?;
+        output[..samples].copy_from_slice(&chunk.samples[start_sample..start_sample + samples]);
+        let consumed_total = consumed + take_frames;
+        self.current_chunk_consumed_frames = consumed_total;
+        let finished = take_frames == remaining_frames;
+        if finished {
+            playhead.advance(&ChunkPosition::from(&chunk.meta));
+        } else {
+            playhead.advance_partial(interpolated_position(chunk.meta, consumed_total));
+        }
+        Ok(CopyOutcome { finished, samples })
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -122,8 +158,8 @@ impl ChunkCursor {
                     .is_none_or(|duration| position <= duration)
             );
             return Ok(CursorRead {
-                outcome: ReadOutcome::Frames { count, position },
                 last_output_meta,
+                outcome: ReadOutcome::Frames { count, position },
             });
         }
 
@@ -180,50 +216,14 @@ impl ChunkCursor {
         result
     }
 
-    fn copy_into(
-        &mut self,
-        chunk: &PcmChunk,
-        output: &mut [f32],
-        playhead: &dyn PlayheadWrite,
-    ) -> Result<CopyOutcome, DecodeError> {
-        let channels = u64::from(chunk.meta.spec.channels.max(1));
-        let total_frames = u64::from(chunk.meta.frames);
-        let consumed = self.current_chunk_consumed_frames;
-        if consumed >= total_frames {
-            return Ok(CopyOutcome {
-                samples: 0,
-                finished: true,
-            });
-        }
-
-        let remaining_frames = total_frames - consumed;
-        let output_frames = (output.len() as u64) / channels;
-        let take_frames = remaining_frames.min(output_frames);
-        if take_frames == 0 {
-            return Ok(CopyOutcome {
-                samples: 0,
-                finished: false,
-            });
-        }
-
-        let start_sample = frames_to_samples(consumed, channels)?;
-        let samples = frames_to_samples(take_frames, channels)?;
-        output[..samples].copy_from_slice(&chunk.samples[start_sample..start_sample + samples]);
-        let consumed_total = consumed + take_frames;
-        self.current_chunk_consumed_frames = consumed_total;
-        let finished = take_frames == remaining_frames;
-        if finished {
-            playhead.advance(&ChunkPosition::from(&chunk.meta));
-        } else {
-            playhead.advance_partial(interpolated_position(chunk.meta, consumed_total));
-        }
-        Ok(CopyOutcome { samples, finished })
+    pub(super) fn spec(&self) -> PcmSpec {
+        self.spec
     }
 }
 
 struct CopyOutcome {
-    samples: usize,
     finished: bool,
+    samples: usize,
 }
 
 fn frames_to_samples(frames: u64, channels: u64) -> Result<usize, DecodeError> {
@@ -296,8 +296,8 @@ mod tests {
         let (mut data_tx, data_rx) = connect::<Fetch<PcmChunk>>(4, None);
         let (trash_tx, _trash_rx) = connect::<PcmChunk>(8, None);
         let mut ring = RingConsumer::new(RingParts {
-            pcm_rx: data_rx,
             trash_tx,
+            pcm_rx: data_rx,
             reader_wake: Arc::new(ThreadWake::default()),
             epoch: Arc::new(AtomicU64::new(0)),
             block_on_underrun: false,
@@ -340,8 +340,8 @@ mod tests {
         let (mut data_tx, data_rx) = connect::<Fetch<PcmChunk>>(1, None);
         let (trash_tx, mut trash_rx) = connect::<PcmChunk>(3, None);
         let mut ring = RingConsumer::new(RingParts {
-            pcm_rx: data_rx,
             trash_tx,
+            pcm_rx: data_rx,
             reader_wake: Arc::new(ThreadWake::default()),
             epoch: Arc::new(AtomicU64::new(0)),
             block_on_underrun: false,

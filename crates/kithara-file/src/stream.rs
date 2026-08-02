@@ -126,8 +126,8 @@ fn remote_key(
     extension: Option<&str>,
 ) -> Result<ResourceKey, SourceError> {
     let source = AssetSource::Remote {
-        url: url.clone(),
         discriminator,
+        url: url.clone(),
     };
     let scope = store.scope::<File>(&source)?;
     let resource = AssetResource::Source {

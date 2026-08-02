@@ -27,77 +27,6 @@ const MAX_RAW_STRING_HASHES: usize = 255;
 pub(crate) struct DerivableDelegation;
 
 impl Check for DerivableDelegation {
-    fn id(&self) -> &'static str {
-        ID
-    }
-
-    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        let cfg = &ctx.config.thresholds.derivable_delegation;
-        if !cfg.enabled {
-            return Ok(Vec::new());
-        }
-        let mut violations = Vec::new();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let Ok(src) = fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(file) = syn::parse_file(&src) else {
-                continue;
-            };
-            let rel = relative_to(ctx.workspace_root, &path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            for candidate in candidates(
-                &src,
-                &file,
-                cfg.trait_min_methods,
-                cfg.inherent_min_methods,
-                &cfg.blocking_impl_attrs,
-                &cfg.keep_manual_method_attrs,
-            ) {
-                let detail = candidate.skip.map_or_else(
-                    || {
-                        if candidate.existing_blocks == 0 {
-                            format!(
-                                "{} impl for {} has {} derivable forwarders across {} field group(s); wrap the forwarding subset in a delegate::delegate! block.",
-                                candidate.kind,
-                                candidate.target,
-                                candidate.methods,
-                                candidate.fields
-                            )
-                        } else {
-                            format!(
-                                "{} impl for {} has {} existing delegate block(s) and {} derivable forwarder(s) across {} target(s); normalize them into one delegate::delegate! block.",
-                                candidate.kind,
-                                candidate.target,
-                                candidate.existing_blocks,
-                                candidate.methods,
-                                candidate.fields
-                            )
-                        }
-                    },
-                    |ref reason| {
-                        format!(
-                            "{} impl for {} has {} existing delegate block(s) and {} derivable forwarder(s) across {} target(s) but autofix will skip: {reason}",
-                            candidate.kind,
-                            candidate.target,
-                            candidate.existing_blocks,
-                            candidate.methods,
-                            candidate.fields
-                        )
-                    },
-                );
-                violations.push(Violation::warn(
-                    ID,
-                    format!("{rel}:{}:0", candidate.line),
-                    detail,
-                ));
-            }
-        }
-        violations.sort_by(|a, b| a.key.cmp(&b.key));
-        Ok(violations)
-    }
-
     fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
         let cfg = &ctx.config.thresholds.derivable_delegation;
         if !cfg.enabled {
@@ -171,17 +100,88 @@ impl Check for DerivableDelegation {
         }
         Ok(outcome)
     }
+
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
+        let cfg = &ctx.config.thresholds.derivable_delegation;
+        if !cfg.enabled {
+            return Ok(Vec::new());
+        }
+        let mut violations = Vec::new();
+        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
+            let Ok(src) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(file) = syn::parse_file(&src) else {
+                continue;
+            };
+            let rel = relative_to(ctx.workspace_root, &path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            for candidate in candidates(
+                &src,
+                &file,
+                cfg.trait_min_methods,
+                cfg.inherent_min_methods,
+                &cfg.blocking_impl_attrs,
+                &cfg.keep_manual_method_attrs,
+            ) {
+                let detail = candidate.skip.map_or_else(
+                    || {
+                        if candidate.existing_blocks == 0 {
+                            format!(
+                                "{} impl for {} has {} derivable forwarders across {} field group(s); wrap the forwarding subset in a delegate::delegate! block.",
+                                candidate.kind,
+                                candidate.target,
+                                candidate.methods,
+                                candidate.fields
+                            )
+                        } else {
+                            format!(
+                                "{} impl for {} has {} existing delegate block(s) and {} derivable forwarder(s) across {} target(s); normalize them into one delegate::delegate! block.",
+                                candidate.kind,
+                                candidate.target,
+                                candidate.existing_blocks,
+                                candidate.methods,
+                                candidate.fields
+                            )
+                        }
+                    },
+                    |ref reason| {
+                        format!(
+                            "{} impl for {} has {} existing delegate block(s) and {} derivable forwarder(s) across {} target(s) but autofix will skip: {reason}",
+                            candidate.kind,
+                            candidate.target,
+                            candidate.existing_blocks,
+                            candidate.methods,
+                            candidate.fields
+                        )
+                    },
+                );
+                violations.push(Violation::warn(
+                    ID,
+                    format!("{rel}:{}:0", candidate.line),
+                    detail,
+                ));
+            }
+        }
+        violations.sort_by(|a, b| a.key.cmp(&b.key));
+        Ok(violations)
+    }
 }
 
 struct Candidate {
-    target: String,
     kind: &'static str,
+    skip: Option<String>,
+    target: String,
+    edits: Vec<Edit>,
     existing_blocks: usize,
     fields: usize,
-    methods: usize,
     line: usize,
-    edits: Vec<Edit>,
-    skip: Option<String>,
+    methods: usize,
 }
 
 struct Edit {
@@ -242,15 +242,15 @@ enum ParamModifier {
 
 struct ForwardSpec {
     target: DelegateTarget,
-    call: Option<Ident>,
     modifier: Modifier,
+    call: Option<Ident>,
     param_modifiers: Vec<ParamModifier>,
 }
 
 struct ForwardMethod<'a> {
-    index: usize,
     method: &'a syn::ImplItemFn,
     spec: ForwardSpec,
+    index: usize,
 }
 
 struct TargetGroup<'a> {
@@ -259,9 +259,9 @@ struct TargetGroup<'a> {
 }
 
 struct ExistingSegment {
-    attrs: Vec<String>,
-    target: String,
     body: ExistingBody,
+    target: String,
+    attrs: Vec<String>,
 }
 
 struct ExistingBody {
@@ -270,8 +270,8 @@ struct ExistingBody {
 }
 
 struct DelegateSegment<'a> {
-    attrs: Vec<String>,
     target: String,
+    attrs: Vec<String>,
     bodies: Vec<ExistingBody>,
     methods: Vec<ForwardMethod<'a>>,
 }
@@ -355,17 +355,17 @@ fn collect_impl_items<'a>(
                     .find(|group| group.target.key == spec.target.key);
                 if let Some(group) = group {
                     group.methods.push(ForwardMethod {
-                        index,
                         method,
                         spec,
+                        index,
                     });
                 } else {
                     groups.push(TargetGroup {
                         target: spec.target.clone(),
                         methods: vec![ForwardMethod {
-                            index,
                             method,
                             spec,
+                            index,
                         }],
                     });
                 }
@@ -428,10 +428,10 @@ fn candidate(
         return Some(Candidate {
             target,
             kind,
+            line,
             existing_blocks: delegate_macros.len(),
             fields: groups.len(),
             methods: groups.iter().map(|group| group.methods.len()).sum(),
-            line,
             edits: Vec::new(),
             skip: Some("impl has a non-simple delegate! target".to_owned()),
         });
@@ -501,10 +501,10 @@ fn candidate(
             return Some(Candidate {
                 target,
                 kind,
-                existing_blocks: delegate_macros.len(),
                 fields,
                 methods,
                 line,
+                existing_blocks: delegate_macros.len(),
                 edits: Vec::new(),
                 skip: Some(format!("impl item ranges are unsafe: {reason}")),
             });
@@ -532,11 +532,11 @@ fn candidate(
     Some(Candidate {
         target,
         kind,
-        existing_blocks: delegate_macros.len(),
         fields,
         methods,
         line,
         edits,
+        existing_blocks: delegate_macros.len(),
         skip: None,
     })
 }
@@ -1246,10 +1246,10 @@ fn call_spec_with_modifiers(
         return None;
     }
     Some(ForwardSpec {
-        target: delegate_target(src, &call.receiver)?,
-        call: (call.method != method.sig.ident).then(|| call.method.clone()),
         modifier,
         param_modifiers,
+        target: delegate_target(src, &call.receiver)?,
+        call: (call.method != method.sig.ident).then(|| call.method.clone()),
     })
 }
 
@@ -1266,8 +1266,8 @@ fn delegate_target(src: &str, receiver: &Expr) -> Option<DelegateTarget> {
     }
     let source = src.get(receiver.span().byte_range())?.to_owned();
     Some(DelegateTarget {
-        key: receiver.to_token_stream().to_string(),
         source,
+        key: receiver.to_token_stream().to_string(),
         simple: false,
     })
 }

@@ -17,25 +17,19 @@ use crate::{BusEvent, Envelope, Event, EventBus, EventMeta};
 /// The element is the narrow per-domain event (`HlsEvent` / `FileEvent`),
 /// converted to [`Event`] only at publish time, so the ring stays small.
 pub struct DeferredBus<E> {
-    pending: ArrayQueue<DeferredEvent<E>>,
-    bus: EventBus,
     next_seq: kithara_platform::sync::Arc<AtomicU64>,
+    pending: ArrayQueue<DeferredEvent<E>>,
     dropped: AtomicU64,
+    bus: EventBus,
 }
 
 struct DeferredEvent<E> {
+    event: E,
     seq: u64,
     ts_micros: u64,
-    event: E,
 }
 
 impl<E: Into<Event>> DeferredBus<E> {
-    /// The underlying scoped bus this ring flushes into.
-    #[must_use]
-    pub fn bus(&self) -> &EventBus {
-        &self.bus
-    }
-
     /// Build a deferred sink over `bus` with a fixed ring of `capacity`
     /// slots. `capacity` is clamped to at least one.
     #[must_use]
@@ -49,6 +43,12 @@ impl<E: Into<Event>> DeferredBus<E> {
         }
     }
 
+    /// The underlying scoped bus this ring flushes into.
+    #[must_use]
+    pub fn bus(&self) -> &EventBus {
+        &self.bus
+    }
+
     /// Queue a resolved event for shell-side publish.
     ///
     /// Lock-free and alloc-free, so it is safe to call from the decode core.
@@ -57,9 +57,9 @@ impl<E: Into<Event>> DeferredBus<E> {
     /// one, so a drop under burst is self-healing.
     pub fn enqueue(&self, event: E) {
         let pending = DeferredEvent {
+            event,
             seq: self.next_seq.fetch_add(1, Ordering::Relaxed),
             ts_micros: crate::bus::ts_micros(),
-            event,
         };
         if self.pending.push(pending).is_err() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
@@ -86,8 +86,8 @@ impl<E: Into<Event>> DeferredBus<E> {
         let dropped = self.dropped.swap(0, Ordering::Relaxed);
         if dropped > 0 {
             self.bus.publish(BusEvent::Overflow {
-                scope: self.bus.scope.id(),
                 dropped,
+                scope: self.bus.scope.id(),
             });
         }
     }

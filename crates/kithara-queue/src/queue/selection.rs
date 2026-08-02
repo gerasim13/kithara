@@ -134,6 +134,13 @@ impl Queue {
         }
     }
 
+    pub(super) fn promote_pending_load(&self, id: TrackId) {
+        if let Some(source) = self.tracks.source(id) {
+            let handle = self.loader.promote_load(id, source);
+            self.watch_apply(id, handle);
+        }
+    }
+
     /// Go back to the previous track. Returns the newly selected id, or
     /// `None` at index 0.
     pub fn return_to_previous(&self, transition: Transition) -> Option<TrackId> {
@@ -203,8 +210,8 @@ impl Queue {
                 )?;
                 self.lock_navigation_mut().select(index);
                 self.bus.publish(QueueEvent::CurrentTrackAdvance {
-                    id: Some(id),
                     reason,
+                    id: Some(id),
                 });
                 self.set_status(id, TrackStatus::Consumed);
                 Ok(())
@@ -238,11 +245,60 @@ impl Queue {
         self.watch_apply(id, handle);
     }
 
-    pub(super) fn promote_pending_load(&self, id: TrackId) {
-        if let Some(source) = self.tracks.source(id) {
-            let handle = self.loader.promote_load(id, source);
-            self.watch_apply(id, handle);
+    /// Test-only path: if a respawn resource was pre-supplied via
+    /// `supply_test_resource_for_respawn`, plant it directly and select
+    /// synchronously, bypassing the real loader. Returns `Some(result)`
+    /// when the test path took the request, `None` to fall through to
+    /// the production loader respawn.
+    #[cfg(any(test, feature = "probe"))]
+    fn try_replant_test_resource(
+        &self,
+        id: TrackId,
+        index: usize,
+        transition: Transition,
+    ) -> Option<Result<(), QueueError>> {
+        let cached = self
+            .test_resources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&id);
+        let resource = cached?;
+        self.player.replace_item(index, resource);
+        self.set_status(id, TrackStatus::Loaded);
+        let was_playing = !self.is_paused();
+        let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
+        if was_playing && crossfade > 0.0 {
+            self.bus.publish(QueueEvent::CrossfadeStarted {
+                duration_seconds: crossfade,
+            });
         }
+        if let Err(err) = self.player.select_item_with_crossfade(
+            index,
+            SelectTransition {
+                autoplay: true,
+                crossfade_seconds: crossfade,
+            },
+        ) {
+            return Some(Err(err.into()));
+        }
+        self.lock_navigation_mut().select(index);
+        self.bus.publish(QueueEvent::CurrentTrackAdvance {
+            id: Some(id),
+            reason: AdvanceReason::UserSelect,
+        });
+        self.set_status(id, TrackStatus::Consumed);
+        Some(Ok(()))
+    }
+
+    #[cfg(not(any(test, feature = "probe")))]
+    fn try_replant_test_resource(
+        &self,
+        _id: TrackId,
+        _index: usize,
+        _transition: Transition,
+    ) -> Option<Result<(), QueueError>> {
+        let _ = self;
+        None
     }
 
     fn watch_apply(
@@ -271,7 +327,6 @@ impl Queue {
 
             // Held across the whole synchronous block (never across .await):
             // the Cancelled re-check and select_item must be atomic w.r.t. a
-            // superseding select.
             let _apply = select_apply.lock().unwrap_or_else(PoisonError::into_inner);
 
             let was_cancelled = tracks
@@ -352,62 +407,6 @@ impl Queue {
                 }
             }
         }));
-    }
-
-    /// Test-only path: if a respawn resource was pre-supplied via
-    /// `supply_test_resource_for_respawn`, plant it directly and select
-    /// synchronously, bypassing the real loader. Returns `Some(result)`
-    /// when the test path took the request, `None` to fall through to
-    /// the production loader respawn.
-    #[cfg(any(test, feature = "probe"))]
-    fn try_replant_test_resource(
-        &self,
-        id: TrackId,
-        index: usize,
-        transition: Transition,
-    ) -> Option<Result<(), QueueError>> {
-        let cached = self
-            .test_resources
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&id);
-        let resource = cached?;
-        self.player.replace_item(index, resource);
-        self.set_status(id, TrackStatus::Loaded);
-        let was_playing = !self.is_paused();
-        let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
-        if was_playing && crossfade > 0.0 {
-            self.bus.publish(QueueEvent::CrossfadeStarted {
-                duration_seconds: crossfade,
-            });
-        }
-        if let Err(err) = self.player.select_item_with_crossfade(
-            index,
-            SelectTransition {
-                autoplay: true,
-                crossfade_seconds: crossfade,
-            },
-        ) {
-            return Some(Err(err.into()));
-        }
-        self.lock_navigation_mut().select(index);
-        self.bus.publish(QueueEvent::CurrentTrackAdvance {
-            id: Some(id),
-            reason: AdvanceReason::UserSelect,
-        });
-        self.set_status(id, TrackStatus::Consumed);
-        Some(Ok(()))
-    }
-
-    #[cfg(not(any(test, feature = "probe")))]
-    fn try_replant_test_resource(
-        &self,
-        _id: TrackId,
-        _index: usize,
-        _transition: Transition,
-    ) -> Option<Result<(), QueueError>> {
-        let _ = self;
-        None
     }
 }
 

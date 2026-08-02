@@ -43,28 +43,28 @@ impl From<std::io::Error> for ClientError {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct Position {
-    pub(super) line: u32,
     pub(super) character: u32,
+    pub(super) line: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct Range {
-    pub(super) start: Position,
     pub(super) end: Position,
+    pub(super) start: Position,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct CallHierarchyItem {
-    pub(super) name: String,
-    pub(super) kind: u32,
-    pub(super) uri: Url,
-    pub(super) range: Range,
-    pub(super) selection_range: Range,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) data: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) detail: Option<String>,
+    pub(super) range: Range,
+    pub(super) selection_range: Range,
+    pub(super) name: String,
+    pub(super) uri: Url,
+    pub(super) kind: u32,
 }
 
 impl CallHierarchyItem {
@@ -76,9 +76,9 @@ impl CallHierarchyItem {
             end: position,
         };
         Self {
+            uri,
             name: name.to_string(),
             kind: 12,
-            uri,
             range: range.clone(),
             selection_range: range,
             detail: None,
@@ -93,14 +93,122 @@ pub(super) struct OutgoingCall {
 }
 
 pub(super) struct Client {
-    child: Option<Child>,
     stdin: ChildStdin,
+    deadline: Instant,
+    child: Option<Child>,
     responses: Receiver<Result<Value, String>>,
     next_id: u64,
-    deadline: Instant,
 }
 
 impl Client {
+    fn notify(&mut self, method: &str, params: &Value) -> Result<(), ClientError> {
+        write_message(
+            &mut self.stdin,
+            &json!({
+                "jsonrpc": "2.0",
+                "method": method,
+                "params": params
+            }),
+        )
+        .map_err(ClientError::from)
+    }
+
+    pub(super) fn open(&mut self, uri: &Url, text: &str) -> Result<(), ClientError> {
+        let params = json!({
+            "textDocument": {
+                "uri": uri,
+                "languageId": "rust",
+                "version": 1,
+                "text": text
+            }
+        });
+        self.notify("textDocument/didOpen", &params)
+    }
+
+    pub(super) fn outgoing(
+        &mut self,
+        item: &CallHierarchyItem,
+    ) -> Result<Vec<OutgoingCall>, ClientError> {
+        let result: Option<Vec<OutgoingCall>> =
+            self.request("callHierarchy/outgoingCalls", &json!({"item": item}))?;
+        Ok(result.unwrap_or_default())
+    }
+
+    pub(super) fn prepare(
+        &mut self,
+        uri: &Url,
+        line: usize,
+        column: usize,
+    ) -> Result<Vec<CallHierarchyItem>, ClientError> {
+        let params = json!({
+            "textDocument": {"uri": uri},
+            "position": {
+                "line": line.saturating_sub(1),
+                "character": column
+            }
+        });
+        let result: Option<Vec<CallHierarchyItem>> =
+            self.request("textDocument/prepareCallHierarchy", &params)?;
+        Ok(result.unwrap_or_default())
+    }
+
+    fn remaining(&self, method: &str) -> Result<Duration, ClientError> {
+        self.deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| ClientError::TimedOut {
+                method: method.to_string(),
+            })
+    }
+
+    fn request<T: DeserializeOwned>(
+        &mut self,
+        method: &str,
+        params: &Value,
+    ) -> Result<T, ClientError> {
+        let id = self.next_id;
+        self.next_id += 1;
+        write_message(
+            &mut self.stdin,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": method,
+                "params": params
+            }),
+        )?;
+        let request_timeout = self.remaining(method)?;
+        let response = match receive_response(&self.responses, &mut self.stdin, id, request_timeout)
+        {
+            Ok(response) => response,
+            Err(ClientError::TimedOut { .. }) => {
+                let _ = self.notify("$/cancelRequest", &json!({"id": id}));
+                return Err(ClientError::TimedOut {
+                    method: method.to_string(),
+                });
+            }
+            Err(error) => return Err(error),
+        };
+        if let Some(error) = response.get("error") {
+            return Err(ClientError::Protocol(format!(
+                "rust-analyzer {method} failed: {error}"
+            )));
+        }
+        let result = response.get("result").cloned().unwrap_or(Value::Null);
+        serde_json::from_value(result).map_err(|error| {
+            ClientError::Protocol(format!("invalid rust-analyzer {method} result: {error}"))
+        })
+    }
+
+    pub(super) fn shutdown(mut self) -> Result<(), ClientError> {
+        let _: Value = self.request("shutdown", &Value::Null)?;
+        self.notify("exit", &Value::Null)?;
+        if let Some(mut child) = self.child.take() {
+            let _ = child.wait();
+        }
+        Ok(())
+    }
+
     pub(super) fn start(root: &Path, timeout: Duration) -> Result<Self, ClientError> {
         let mut child = Command::new("rust-analyzer")
             .current_dir(root)
@@ -144,9 +252,9 @@ impl Client {
             }
         });
         let mut client = Self {
-            child: Some(child),
             stdin,
             responses,
+            child: Some(child),
             next_id: 1,
             deadline: Instant::now() + timeout,
         };
@@ -179,114 +287,6 @@ impl Client {
         let ready_timeout = client.remaining("workspace loading")?;
         wait_until_ready(&client.responses, &mut client.stdin, ready_timeout)?;
         Ok(client)
-    }
-
-    pub(super) fn prepare(
-        &mut self,
-        uri: &Url,
-        line: usize,
-        column: usize,
-    ) -> Result<Vec<CallHierarchyItem>, ClientError> {
-        let params = json!({
-            "textDocument": {"uri": uri},
-            "position": {
-                "line": line.saturating_sub(1),
-                "character": column
-            }
-        });
-        let result: Option<Vec<CallHierarchyItem>> =
-            self.request("textDocument/prepareCallHierarchy", &params)?;
-        Ok(result.unwrap_or_default())
-    }
-
-    pub(super) fn open(&mut self, uri: &Url, text: &str) -> Result<(), ClientError> {
-        let params = json!({
-            "textDocument": {
-                "uri": uri,
-                "languageId": "rust",
-                "version": 1,
-                "text": text
-            }
-        });
-        self.notify("textDocument/didOpen", &params)
-    }
-
-    pub(super) fn outgoing(
-        &mut self,
-        item: &CallHierarchyItem,
-    ) -> Result<Vec<OutgoingCall>, ClientError> {
-        let result: Option<Vec<OutgoingCall>> =
-            self.request("callHierarchy/outgoingCalls", &json!({"item": item}))?;
-        Ok(result.unwrap_or_default())
-    }
-
-    pub(super) fn shutdown(mut self) -> Result<(), ClientError> {
-        let _: Value = self.request("shutdown", &Value::Null)?;
-        self.notify("exit", &Value::Null)?;
-        if let Some(mut child) = self.child.take() {
-            let _ = child.wait();
-        }
-        Ok(())
-    }
-
-    fn request<T: DeserializeOwned>(
-        &mut self,
-        method: &str,
-        params: &Value,
-    ) -> Result<T, ClientError> {
-        let id = self.next_id;
-        self.next_id += 1;
-        write_message(
-            &mut self.stdin,
-            &json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "method": method,
-                "params": params
-            }),
-        )?;
-        let request_timeout = self.remaining(method)?;
-        let response = match receive_response(&self.responses, &mut self.stdin, id, request_timeout)
-        {
-            Ok(response) => response,
-            Err(ClientError::TimedOut { .. }) => {
-                let _ = self.notify("$/cancelRequest", &json!({"id": id}));
-                return Err(ClientError::TimedOut {
-                    method: method.to_string(),
-                });
-            }
-            Err(error) => return Err(error),
-        };
-        if let Some(error) = response.get("error") {
-            return Err(ClientError::Protocol(format!(
-                "rust-analyzer {method} failed: {error}"
-            )));
-        }
-        let result = response.get("result").cloned().unwrap_or(Value::Null);
-        serde_json::from_value(result).map_err(|error| {
-            ClientError::Protocol(format!("invalid rust-analyzer {method} result: {error}"))
-        })
-    }
-
-    fn notify(&mut self, method: &str, params: &Value) -> Result<(), ClientError> {
-        write_message(
-            &mut self.stdin,
-            &json!({
-                "jsonrpc": "2.0",
-                "method": method,
-                "params": params
-            }),
-        )
-        .map_err(ClientError::from)
-    }
-
-    fn remaining(&self, method: &str) -> Result<Duration, ClientError> {
-        self.deadline
-            .checked_duration_since(Instant::now())
-            .filter(|remaining| !remaining.is_zero())
-            .ok_or_else(|| ClientError::TimedOut {
-                method: method.to_string(),
-            })
     }
 }
 

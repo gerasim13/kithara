@@ -37,61 +37,6 @@ pub(crate) const ID: &str = "derivable_getter";
 pub(crate) struct DerivableGetter;
 
 impl Check for DerivableGetter {
-    fn id(&self) -> &'static str {
-        ID
-    }
-
-    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        let cfg = &ctx.config.thresholds.derivable_getter;
-        if !cfg.enabled {
-            return Ok(Vec::new());
-        }
-        let redundant =
-            crate::arch::redundant_accessor_keys(ctx.metadata, ctx.workspace_root, ctx.scope)?;
-        let mut violations = Vec::new();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let Ok(src) = fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(file) = syn::parse_file(&src) else {
-                continue;
-            };
-            let rel = relative_to(ctx.workspace_root, &path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            let analysis = analyze(&src, &file, &rel, &redundant, &cfg.qualified_deref_remaps);
-            for finding in analysis.findings {
-                let detail = finding.skip.map_or_else(
-                    || {
-                        format!(
-                            "{} accessor {}::{} for field `{}` can be generated with fieldwork",
-                            finding.kind.label(),
-                            finding.type_name,
-                            finding.method,
-                            finding.field
-                        )
-                    },
-                    |reason| {
-                        format!(
-                            "{} accessor {}::{} for field `{}` is derivable but autofix will skip: {reason}",
-                            finding.kind.label(),
-                            finding.type_name,
-                            finding.method,
-                            finding.field
-                        )
-                    },
-                );
-                violations.push(Violation::warn(
-                    ID,
-                    format!("{rel}:{}:0", finding.line),
-                    detail,
-                ));
-            }
-        }
-        violations.sort_by(|a, b| a.key.cmp(&b.key));
-        Ok(violations)
-    }
-
     fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
         let cfg = &ctx.config.thresholds.derivable_getter;
         if !cfg.enabled {
@@ -157,6 +102,61 @@ impl Check for DerivableGetter {
         }
         Ok(outcome)
     }
+
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
+        let cfg = &ctx.config.thresholds.derivable_getter;
+        if !cfg.enabled {
+            return Ok(Vec::new());
+        }
+        let redundant =
+            crate::arch::redundant_accessor_keys(ctx.metadata, ctx.workspace_root, ctx.scope)?;
+        let mut violations = Vec::new();
+        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
+            let Ok(src) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(file) = syn::parse_file(&src) else {
+                continue;
+            };
+            let rel = relative_to(ctx.workspace_root, &path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let analysis = analyze(&src, &file, &rel, &redundant, &cfg.qualified_deref_remaps);
+            for finding in analysis.findings {
+                let detail = finding.skip.map_or_else(
+                    || {
+                        format!(
+                            "{} accessor {}::{} for field `{}` can be generated with fieldwork",
+                            finding.kind.label(),
+                            finding.type_name,
+                            finding.method,
+                            finding.field
+                        )
+                    },
+                    |reason| {
+                        format!(
+                            "{} accessor {}::{} for field `{}` is derivable but autofix will skip: {reason}",
+                            finding.kind.label(),
+                            finding.type_name,
+                            finding.method,
+                            finding.field
+                        )
+                    },
+                );
+                violations.push(Violation::warn(
+                    ID,
+                    format!("{rel}:{}:0", finding.line),
+                    detail,
+                ));
+            }
+        }
+        violations.sort_by(|a, b| a.key.cmp(&b.key));
+        Ok(violations)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -201,25 +201,25 @@ struct MethodPlan {
 }
 
 struct DetectedAccessor<'a> {
-    body: BodyKind,
-    field: String,
-    kind: AccessorKind,
     return_ty: &'a Type,
+    kind: AccessorKind,
+    body: BodyKind,
     value_ty: Option<&'a Type>,
+    field: String,
 }
 
 #[derive(Clone)]
 struct RawAccessor<'a> {
+    method: &'a ImplItemFn,
+    impl_block: &'a ItemImpl,
+    return_ty: &'a Type,
+    kind: AccessorKind,
+    body: BodyKind,
     block: Option<Range<usize>>,
     block_error: Option<String>,
-    body: BodyKind,
-    field: String,
-    impl_block: &'a ItemImpl,
-    kind: AccessorKind,
-    method: &'a ImplItemFn,
-    return_ty: &'a Type,
-    type_name: String,
     value_ty: Option<&'a Type>,
+    field: String,
+    type_name: String,
 }
 
 struct Converted<'a> {
@@ -228,12 +228,12 @@ struct Converted<'a> {
 }
 
 struct Finding {
-    field: String,
     kind: AccessorKind,
-    line: usize,
-    method: String,
     skip: Option<String>,
+    field: String,
+    method: String,
     type_name: String,
+    line: usize,
 }
 
 struct Edit {
@@ -252,14 +252,14 @@ enum FieldworkMode {
 }
 
 struct Completion<'a, 'out> {
+    insertions: &'out mut BTreeMap<usize, Vec<String>>,
+    redundant: &'a BTreeSet<String>,
+    scoped_names: &'a BTreeSet<String>,
     edits: &'out mut Vec<Edit>,
     findings: &'out mut Vec<Finding>,
-    insertions: &'out mut BTreeMap<usize, Vec<String>>,
-    mod_prefix: &'a str,
     qualified_deref_remaps: &'a [QualifiedDerefRemap],
-    redundant: &'a BTreeSet<String>,
+    mod_prefix: &'a str,
     rel: &'a str,
-    scoped_names: &'a BTreeSet<String>,
     src: &'a str,
 }
 
@@ -324,11 +324,11 @@ fn analyze(
                     .push(RawAccessor {
                         block,
                         block_error,
+                        impl_block,
+                        method,
                         body: detected.body,
                         field: detected.field,
-                        impl_block,
                         kind: detected.kind,
-                        method,
                         return_ty: detected.return_ty,
                         type_name: type_name.clone(),
                         value_ty: detected.value_ty,
@@ -356,15 +356,15 @@ fn analyze(
                 continue;
             }
             let mut completion = Completion {
+                qualified_deref_remaps,
+                redundant,
+                rel,
+                src,
                 edits: &mut edits,
                 findings: &mut findings,
                 insertions: &mut insertions,
                 mod_prefix: &mod_prefix,
-                qualified_deref_remaps,
-                redundant,
-                rel,
                 scoped_names: &scoped_names,
-                src,
             };
             complete_type(&mut completion, local, raw);
         }
@@ -394,11 +394,11 @@ fn complete_type<'a>(
             Err(reason) => (None, Some(reason.to_owned())),
         };
         completion.findings.push(Finding {
+            skip,
             field: accessor.field.clone(),
             kind: accessor.kind,
             line: accessor.method.sig.fn_token.span.start().line,
             method: accessor.method.sig.ident.to_string(),
-            skip,
             type_name: accessor.type_name.clone(),
         });
         if let Some(plan) = plan {
@@ -772,37 +772,37 @@ fn detect(method: &ImplItemFn) -> Option<DetectedAccessor<'_>> {
         reference.mutability?;
         let field = direct_self_field(&reference.expr)?;
         return Some(DetectedAccessor {
-            body: BodyKind::BorrowMut,
             field,
-            kind: AccessorKind::GetMut,
             return_ty,
+            body: BodyKind::BorrowMut,
+            kind: AccessorKind::GetMut,
             value_ty: None,
         });
     }
 
     match body {
         Expr::Reference(reference) if reference.mutability.is_none() => Some(DetectedAccessor {
+            return_ty,
             body: BodyKind::Borrow,
             field: direct_self_field(&reference.expr)?,
             kind: AccessorKind::Get,
-            return_ty,
             value_ty: None,
         }),
         Expr::Field(_) => Some(DetectedAccessor {
+            return_ty,
             body: BodyKind::Move,
             field: direct_self_field(body)?,
             kind: AccessorKind::Get,
-            return_ty,
             value_ty: None,
         }),
         Expr::MethodCall(call)
             if call.method == "clone" && call.args.is_empty() && call.turbofish.is_none() =>
         {
             Some(DetectedAccessor {
+                return_ty,
                 body: BodyKind::Clone,
                 field: direct_self_field(&call.receiver)?,
                 kind: AccessorKind::Get,
-                return_ty,
                 value_ty: None,
             })
         }
@@ -857,9 +857,9 @@ fn detect_with(method: &ImplItemFn) -> Option<DetectedAccessor<'_>> {
     };
     Some(DetectedAccessor {
         body,
+        return_ty,
         field: direct_self_field(&assign.left)?,
         kind: AccessorKind::With,
-        return_ty,
         value_ty: Some(&value.ty),
     })
 }

@@ -190,12 +190,12 @@ pub(super) struct Layout {
     /// gates (`wait_range` / `phase_at` / `read_at`) read it without taking
     /// the lock, alongside `total`.
     sizes_complete: AtomicBool,
-    total: AtomicU64,
     /// Odd while a writer is publishing size atoms, geometry, and the EOF
     /// snapshot; even while the published view is stable. Exact-size gates
     /// sample it without spinning so they cannot combine a new size with an
     /// old frame.
     publication_seq: AtomicU64,
+    total: AtomicU64,
     /// Serializes off-RT writers so a concurrent load-clone-mutate-store pair
     /// cannot lose an update (the old `RwLock` serialized writes; `ArcSwap`
     /// alone does not). Never taken on the produce-core read path.
@@ -260,18 +260,12 @@ impl Layout {
         self.finish_publication();
     }
 
-    delegate::delegate! {
-        to self.frame.load() {
-            pub(super) fn bisect_left(&self, byte: u64) -> usize;
-            #[call(find_virtual)]
-            pub(super) fn find_at_offset(
-                &self,
-                byte_virtual: u64,
-                segments: &[Segment],
-            ) -> Option<(u32, u64, u64)>;
-            pub(super) fn find_natural(&self, byte: u64, segments: &[Segment]) -> Option<(u32, u64, u64)>;
-            pub(super) fn segment_byte_offset(&self, idx: u32) -> Option<u64>;
-        }
+    fn begin_publication(&self) {
+        self.publication_seq.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn finish_publication(&self) {
+        self.publication_seq.fetch_add(1, Ordering::Release);
     }
 
     /// True when the frame is already the canonical single-variant
@@ -333,28 +327,6 @@ impl Layout {
             .store(snapshot.sizes_complete, Ordering::Release);
     }
 
-    fn begin_publication(&self) {
-        self.publication_seq.fetch_add(1, Ordering::AcqRel);
-    }
-
-    fn finish_publication(&self) {
-        self.publication_seq.fetch_add(1, Ordering::Release);
-    }
-
-    /// Run one lock-free read against a stable layout publication. A writer
-    /// in progress or a publication change returns `None`; callers keep their
-    /// metadata gate closed and retry on the next tick.
-    pub(super) fn try_published<T>(&self, read: impl FnOnce() -> Option<T>) -> Option<T> {
-        let before = self.publication_seq.load(Ordering::Acquire);
-        if before & 1 != 0 {
-            return None;
-        }
-        let value = read()?;
-        fence(Ordering::Acquire);
-        let after = self.publication_seq.load(Ordering::Acquire);
-        (before == after).then_some(value)
-    }
-
     /// Collapse to a single-variant layout: `byte_shift = 0`,
     /// `served = [0, num_segments)`, offsets recomputed from the existing
     /// seed.
@@ -388,5 +360,33 @@ impl Layout {
     /// frame lock, so it cannot spin on a concurrent activation/commit.
     pub(super) fn total_bytes(&self) -> u64 {
         self.total.load(Ordering::Acquire)
+    }
+
+    /// Run one lock-free read against a stable layout publication. A writer
+    /// in progress or a publication change returns `None`; callers keep their
+    /// metadata gate closed and retry on the next tick.
+    pub(super) fn try_published<T>(&self, read: impl FnOnce() -> Option<T>) -> Option<T> {
+        let before = self.publication_seq.load(Ordering::Acquire);
+        if before & 1 != 0 {
+            return None;
+        }
+        let value = read()?;
+        fence(Ordering::Acquire);
+        let after = self.publication_seq.load(Ordering::Acquire);
+        (before == after).then_some(value)
+    }
+
+    delegate::delegate! {
+        to self.frame.load() {
+            pub(super) fn bisect_left(&self, byte: u64) -> usize;
+            #[call(find_virtual)]
+            pub(super) fn find_at_offset(
+                &self,
+                byte_virtual: u64,
+                segments: &[Segment],
+            ) -> Option<(u32, u64, u64)>;
+            pub(super) fn find_natural(&self, byte: u64, segments: &[Segment]) -> Option<(u32, u64, u64)>;
+            pub(super) fn segment_byte_offset(&self, idx: u32) -> Option<u64>;
+        }
     }
 }

@@ -24,84 +24,84 @@ pub(crate) enum MetricsScopeKind {
 #[derive(Debug, Serialize)]
 pub(crate) struct MetricsScope {
     pub(crate) kind: MetricsScopeKind,
-    pub(crate) package: Option<String>,
     pub(crate) module: Option<String>,
+    pub(crate) package: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(test, derive(Default))]
 pub(crate) struct MetricsProfile {
-    pub(crate) node_count: usize,
-    pub(crate) internal_relations: usize,
-    pub(crate) incoming_relations: usize,
-    pub(crate) outgoing_relations: usize,
-    pub(crate) afferent_coupling: usize,
-    pub(crate) efferent_coupling: usize,
-    pub(crate) instability: Option<f64>,
-    pub(crate) cohesion: Option<f64>,
-    pub(crate) boundary_alignment: Option<f64>,
-    pub(crate) propagation_cost: f64,
-    pub(crate) normalized_propagation: f64,
-    pub(crate) cyclic_scc_count: usize,
-    pub(crate) cyclic_nodes: usize,
-    pub(crate) cyclicity: f64,
-    pub(crate) largest_cycle: usize,
-    pub(crate) normalized_depth: f64,
-    pub(crate) bottleneck_concentration: Option<f64>,
-    pub(crate) boundary_load: Option<f64>,
-    pub(crate) shared_resource_ratio: Option<f64>,
-    pub(crate) multi_owner_resources: usize,
-    pub(crate) external_coupling_ratio: Option<f64>,
     pub(crate) abstractness: Option<f64>,
+    pub(crate) bottleneck_concentration: Option<f64>,
+    pub(crate) boundary_alignment: Option<f64>,
+    pub(crate) boundary_load: Option<f64>,
+    pub(crate) cohesion: Option<f64>,
+    pub(crate) external_coupling_ratio: Option<f64>,
+    pub(crate) instability: Option<f64>,
     pub(crate) main_sequence_distance: Option<f64>,
+    pub(crate) shared_resource_ratio: Option<f64>,
+    pub(crate) cyclicity: f64,
+    pub(crate) normalized_depth: f64,
+    pub(crate) normalized_propagation: f64,
+    pub(crate) propagation_cost: f64,
+    pub(crate) afferent_coupling: usize,
+    pub(crate) cyclic_nodes: usize,
+    pub(crate) cyclic_scc_count: usize,
+    pub(crate) efferent_coupling: usize,
+    pub(crate) incoming_relations: usize,
+    pub(crate) internal_relations: usize,
+    pub(crate) largest_cycle: usize,
+    pub(crate) multi_owner_resources: usize,
+    pub(crate) node_count: usize,
+    pub(crate) outgoing_relations: usize,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RuntimeMetrics {
-    pub(crate) observed_relations: usize,
     pub(crate) manual_relations: usize,
+    pub(crate) observed_relations: usize,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ArchitectureMetrics {
-    pub(crate) schema_version: u32,
-    pub(crate) scope: MetricsScope,
+    pub(crate) candidate_contributions: BTreeMap<&'static str, f64>,
+    pub(crate) contours: BTreeMap<String, Box<Self>>,
+    pub(crate) contributions: BTreeMap<&'static str, f64>,
     pub(crate) confirmed: MetricsProfile,
     pub(crate) including_candidates: MetricsProfile,
-    pub(crate) runtime: RuntimeMetrics,
+    pub(crate) scope: MetricsScope,
     pub(crate) architecture_complexity_index: Option<f64>,
     pub(crate) including_candidates_complexity_index: Option<f64>,
-    pub(crate) contributions: BTreeMap<&'static str, f64>,
-    pub(crate) candidate_contributions: BTreeMap<&'static str, f64>,
+    pub(crate) runtime: RuntimeMetrics,
     pub(crate) limitations: Vec<&'static str>,
-    pub(crate) contours: BTreeMap<String, Box<Self>>,
+    pub(crate) schema_version: u32,
 }
 
 pub(crate) struct MetricsAnalyzer<'a> {
-    graph: &'a EvidenceGraph,
     filter: &'a ArchitectureFilter,
     contours: &'a ContourIndex,
+    graph: &'a EvidenceGraph,
 }
 
 struct MetricsRequest<'a> {
-    graph: &'a EvidenceGraph,
-    model: &'a DiagramModel,
     filter: &'a ArchitectureFilter,
-    package: Option<&'a str>,
+    model: &'a DiagramModel,
+    graph: &'a EvidenceGraph,
     module: Option<&'a str>,
+    package: Option<&'a str>,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct Relation {
+    kind: EdgeKind,
     source: NodeId,
     target: NodeId,
-    kind: EdgeKind,
 }
 
 struct ContractedGraph {
-    subjects: BTreeSet<NodeId>,
-    selected: BTreeSet<NodeId>,
     relations: BTreeMap<Relation, Certainty>,
+    selected: BTreeSet<NodeId>,
+    subjects: BTreeSet<NodeId>,
 }
 
 impl<'a> MetricsAnalyzer<'a> {
@@ -111,9 +111,9 @@ impl<'a> MetricsAnalyzer<'a> {
         contours: &'a ContourIndex,
     ) -> Self {
         Self {
-            graph,
             filter,
             contours,
+            graph,
         }
     }
 
@@ -125,11 +125,11 @@ impl<'a> MetricsAnalyzer<'a> {
     ) -> ArchitectureMetrics {
         analyze(
             &MetricsRequest {
-                graph: self.graph,
                 model,
-                filter: self.filter,
                 package,
                 module,
+                graph: self.graph,
+                filter: self.filter,
             },
             self.contours,
         )
@@ -149,9 +149,9 @@ fn analyze(request: &MetricsRequest<'_>, contours: &ContourIndex) -> Architectur
         .and_then(|package| crate_surface(&subjects, package));
     let relations = collect_relations(request, contours, &selected, crate_surface.as_ref());
     let contracted = ContractedGraph {
-        subjects,
-        selected,
         relations,
+        selected,
+        subjects,
     };
     let confirmed_relations = contracted
         .relations
@@ -191,6 +191,13 @@ fn analyze(request: &MetricsRequest<'_>, contours: &ContourIndex) -> Architectur
     );
 
     ArchitectureMetrics {
+        confirmed,
+        including_candidates,
+        runtime,
+        architecture_complexity_index,
+        including_candidates_complexity_index,
+        contributions,
+        candidate_contributions,
         schema_version: METRICS_SCHEMA_VERSION,
         scope: MetricsScope {
             kind: match (request.package, request.module) {
@@ -201,13 +208,6 @@ fn analyze(request: &MetricsRequest<'_>, contours: &ContourIndex) -> Architectur
             package: request.package.map(str::to_string),
             module: request.module.map(str::to_string),
         },
-        confirmed,
-        including_candidates,
-        runtime,
-        architecture_complexity_index,
-        including_candidates_complexity_index,
-        contributions,
-        candidate_contributions,
         limitations: vec![
             "candidate-only relations are excluded from the stable index",
             "runtime evidence is reported separately from static complexity",

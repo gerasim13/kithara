@@ -38,10 +38,10 @@ const WAIT_HANG_TIMEOUT: Duration = Duration::from_secs(180);
 /// and the per-track [`AssetStore`] used by reader paths and by every
 /// variant's `dispatch` closures.
 pub(crate) struct HlsCoordEnv {
+    pub(crate) emit: Arc<DeferredBus<HlsEvent>>,
     pub(crate) scope: AssetScope,
     pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
-    pub(crate) emit: Arc<DeferredBus<HlsEvent>>,
     /// Unified reader-wake handle: the shared readiness gate paired with the
     /// late-bound audio-worker wake. Every transition that can flip a blocked
     /// reader's `wait_range` predicate (segment write/commit/fail, seek reset,
@@ -58,11 +58,14 @@ pub(crate) struct HlsCoordEnv {
 /// The optional incoming session stays private until exact audio promotion.
 pub(crate) struct HlsCoord {
     pub(crate) abr: AbrHandle,
-    pub(super) abr_publisher: AbrPublisher,
+    pub(crate) emit: Arc<DeferredBus<HlsEvent>>,
     pub(crate) variants: Arc<[Arc<HlsVariant>]>,
     pub(crate) scope: AssetScope,
     pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
+    pub(super) abr_publisher: AbrPublisher,
+    /// One authoritative active session and at most one exact incoming session.
+    pub(super) sessions: SessionSlots,
     /// Backing playhead state — the coord owns the `Arc` directly and
     /// vends narrow trait-object handles from it.
     playhead: Arc<PlayheadState>,
@@ -72,14 +75,11 @@ pub(crate) struct HlsCoord {
     /// Narrow seek-observe handle — derived from `seek` at construction.
     /// Used by internal methods that only need epoch/target/pending reads.
     seek_obs: Arc<dyn SeekObserve>,
-    /// One authoritative active session and at most one exact incoming session.
-    pub(super) sessions: SessionSlots,
     /// Unified reader-wake handle for the off-RT blocking `wait_range(_, None)`.
     /// Shared with every variant's fetch closures (write/commit/fail
     /// [`SizeSignal::fire`] it) and signalled by the coord on a seek reset
     /// ([`SizeSignal::fire_ready_only`]). See [`HlsCoordEnv::signal`].
     signal: SizeSignal,
-    pub(crate) emit: Arc<DeferredBus<HlsEvent>>,
 }
 
 impl HlsCoord {
@@ -150,6 +150,10 @@ impl HlsCoord {
         Arc::clone(&self.seek) as Arc<dyn Activity>
     }
 
+    pub(crate) fn advance(&self, n: u64) {
+        self.active_session().advance(n);
+    }
+
     /// Process one evicted resource key. Marks the lost segment
     /// `Missing` on every variant that owned it. When the active
     /// variant is among them, fires a full `rebuild` from the reader's
@@ -170,6 +174,13 @@ impl HlsCoord {
         if active_lost {
             self.active().rebuild(ctx, seg_at_reader);
         }
+    }
+
+    pub(super) fn commit_if_seek_epoch<T, F>(&self, epoch: u64, commit: F) -> Option<T>
+    where
+        F: FnOnce() -> T,
+    {
+        self.seek.commit_if_epoch(epoch, commit)
     }
 
     /// Resolve the segment whose fetch queue owns the reader cursor.
@@ -239,6 +250,10 @@ impl HlsCoord {
 
     pub(crate) fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
         Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
+    }
+
+    pub(crate) fn position(&self) -> u64 {
+        self.active_session().position()
     }
 
     /// Seek entry point. Collapses cross-variant byte-continuity layering,
@@ -325,19 +340,25 @@ impl HlsCoord {
         Arc::clone(&self.seek) as Arc<dyn SeekControl>
     }
 
-    pub(super) fn commit_if_seek_epoch<T, F>(&self, epoch: u64, commit: F) -> Option<T>
-    where
-        F: FnOnce() -> T,
-    {
-        self.seek.commit_if_epoch(epoch, commit)
-    }
-
     pub(crate) fn seek_epoch_handle(&self) -> Arc<AtomicU64> {
         self.seek.seek_epoch_arc()
     }
 
     pub(crate) fn seek_observe(&self) -> Arc<dyn SeekObserve> {
         Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+    }
+
+    pub(crate) fn seek_time_anchor(
+        &self,
+        position: Duration,
+    ) -> StreamResult<Option<SourceSeekAnchor>> {
+        self.active_session().seek_time_anchor(position)
+    }
+
+    pub(crate) fn selected_variant_for_seek(&self) -> usize {
+        self.abr
+            .selected_variant_for_seek()
+            .expect("HlsCoord always owns a stateful ABR handle")
     }
 
     /// Install the peer's `reader_advanced` wake so the `on_slow` hook can
@@ -349,6 +370,10 @@ impl HlsCoord {
         direct: Arc<dyn kithara_stream::WorkerWake>,
     ) {
         self.signal.set_peer_wake(deferred, direct);
+    }
+
+    pub(crate) fn set_position(&self, pos: u64) {
+        self.active_session().seek_to_byte(pos);
     }
 
     /// Install the audio worker's data-arrival wake (idempotent — only the
@@ -485,31 +510,6 @@ impl HlsCoord {
         }
     }
 
-    pub(crate) fn position(&self) -> u64 {
-        self.active_session().position()
-    }
-
-    pub(crate) fn advance(&self, n: u64) {
-        self.active_session().advance(n);
-    }
-
-    pub(crate) fn set_position(&self, pos: u64) {
-        self.active_session().seek_to_byte(pos);
-    }
-
-    pub(crate) fn seek_time_anchor(
-        &self,
-        position: Duration,
-    ) -> StreamResult<Option<SourceSeekAnchor>> {
-        self.active_session().seek_time_anchor(position)
-    }
-
-    pub(crate) fn selected_variant_for_seek(&self) -> usize {
-        self.abr
-            .selected_variant_for_seek()
-            .expect("HlsCoord always owns a stateful ABR handle")
-    }
-
     delegate! {
         to self.active().as_ref() {
             pub(crate) fn download_head(&self) -> u32;
@@ -536,6 +536,14 @@ pub(super) fn variant_switch_target_time(
 /// methods — non-adaptive sources vend `None` instead of implementing
 /// these.
 impl VariantControl for HlsCoord {
+    fn abort_variant(&self, transition: VariantTransition) -> bool {
+        Self::abort_variant(self, transition)
+    }
+
+    fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
+        Self::format_change_segment_range(self)
+    }
+
     fn plan_variant_reader(
         &self,
         landing: Option<Duration>,
@@ -551,27 +559,19 @@ impl VariantControl for HlsCoord {
         Self::prepare_planned_variant_reader(self, plan, profile)
     }
 
-    fn take_prepared_variant_reader(
-        &self,
-        transition: VariantTransition,
-    ) -> StreamResult<VariantReaderTake> {
-        Self::take_prepared_variant_reader(self, transition)
-    }
-
     fn promote_variant(&self, transition: VariantTransition) -> VariantPromotion {
         Self::promote_planned_variant(self, transition)
-    }
-
-    fn abort_variant(&self, transition: VariantTransition) -> bool {
-        Self::abort_variant(self, transition)
     }
 
     fn selected_variant_for_seek(&self) -> usize {
         Self::selected_variant_for_seek(self)
     }
 
-    fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
-        Self::format_change_segment_range(self)
+    fn take_prepared_variant_reader(
+        &self,
+        transition: VariantTransition,
+    ) -> StreamResult<VariantReaderTake> {
+        Self::take_prepared_variant_reader(self, transition)
     }
 }
 
@@ -590,16 +590,12 @@ impl ByteMap for HlsCoord {
         self.active().stream_len()
     }
 
-    fn segment_at_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
-        self.variant_serving(byte).descriptor_at_byte(byte)
-    }
-
-    fn segment_count(&self) -> Option<u32> {
-        Some(self.active().num_segments())
-    }
-
     fn segment_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
         self.active().descriptor_after_byte(byte)
+    }
+
+    fn segment_at_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
+        self.variant_serving(byte).descriptor_at_byte(byte)
     }
 
     fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
@@ -608,6 +604,10 @@ impl ByteMap for HlsCoord {
 
     fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
         self.active().descriptor_at_time(t)
+    }
+
+    fn segment_count(&self) -> Option<u32> {
+        Some(self.active().num_segments())
     }
 }
 
@@ -779,11 +779,11 @@ mod tests {
         abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
         let coord = Arc::new(HlsCoord::new(
             HlsCoordEnv {
-                scope: ctx.scope.clone(),
                 cancel,
+                signal,
+                scope: ctx.scope.clone(),
                 headers: None,
                 emit: Arc::new(DeferredBus::new(bus.clone(), 8)),
-                signal,
             },
             Arc::new(PlayheadState::new()),
             Arc::new(SeekState::new()),

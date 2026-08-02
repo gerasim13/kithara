@@ -37,12 +37,6 @@ impl ReadinessGate {
         }
     }
 
-    pub(crate) fn flush_peer_wake(&self) {
-        if let Some(ref wake) = self.peer_wake {
-            wake.flush();
-        }
-    }
-
     /// Clear seek-pending and arm the peer in one wait-free produce-core step.
     ///
     /// The peer needs one more `poll_next` after completion to release its ABR
@@ -52,16 +46,14 @@ impl ReadinessGate {
         self.arm_peer_wake();
     }
 
-    pub(crate) fn source_is_ready<T: StreamType>(&self, stream: &SharedStream<T>) -> bool {
-        self.source_ready_for_range(stream, chunk_lookahead_range(stream, stream.position()))
+    pub(crate) fn flush_peer_wake(&self) {
+        if let Some(ref wake) = self.peer_wake {
+            wake.flush();
+        }
     }
 
-    pub(crate) fn source_is_ready_for_chunk<T: StreamType>(
-        &self,
-        stream: &SharedStream<T>,
-        byte: u64,
-    ) -> bool {
-        self.source_ready_for_range(stream, chunk_lookahead_range(stream, byte))
+    pub(crate) fn source_is_ready<T: StreamType>(&self, stream: &SharedStream<T>) -> bool {
+        self.source_ready_for_range(stream, chunk_lookahead_range(stream, stream.position()))
     }
 
     pub(crate) fn source_is_ready_for_apply_seek<T: StreamType>(
@@ -80,6 +72,23 @@ impl ReadinessGate {
         }
     }
 
+    pub(crate) fn source_is_ready_for_chunk<T: StreamType>(
+        &self,
+        stream: &SharedStream<T>,
+        byte: u64,
+    ) -> bool {
+        self.source_ready_for_range(stream, chunk_lookahead_range(stream, byte))
+    }
+
+    fn source_is_ready_for_seek_landing<T: StreamType>(
+        &self,
+        stream: &SharedStream<T>,
+        byte: u64,
+    ) -> bool {
+        let end = seek_landing_end(stream, byte);
+        self.source_ready_for_range(stream, byte..end)
+    }
+
     pub(crate) fn source_park<T: StreamType>(
         &self,
         stream: &SharedStream<T>,
@@ -96,12 +105,12 @@ impl ReadinessGate {
         Some(reason)
     }
 
-    pub(crate) fn source_ready_for_recreate<T: StreamType>(
+    fn source_ready_for_range<T: StreamType>(
         &self,
         stream: &SharedStream<T>,
-        recreate: &RecreateState,
+        range: Range<u64>,
     ) -> bool {
-        let phase = recreate_phase(stream, recreate);
+        let phase = stream.phase_at(range);
         if self.source_park(stream, phase).is_some() {
             return false;
         }
@@ -111,21 +120,12 @@ impl ReadinessGate {
         )
     }
 
-    fn source_is_ready_for_seek_landing<T: StreamType>(
+    pub(crate) fn source_ready_for_recreate<T: StreamType>(
         &self,
         stream: &SharedStream<T>,
-        byte: u64,
+        recreate: &RecreateState,
     ) -> bool {
-        let end = seek_landing_end(stream, byte);
-        self.source_ready_for_range(stream, byte..end)
-    }
-
-    fn source_ready_for_range<T: StreamType>(
-        &self,
-        stream: &SharedStream<T>,
-        range: Range<u64>,
-    ) -> bool {
-        let phase = stream.phase_at(range);
+        let phase = recreate_phase(stream, recreate);
         if self.source_park(stream, phase).is_some() {
             return false;
         }

@@ -88,6 +88,9 @@ impl TryFrom<&DecoderEvent> for FfiItemEvent {
                         (span.leading_frames, span.trailing_frames, true)
                     });
                 Ok(Self::DecoderChanged {
+                    gapless_leading,
+                    gapless_trailing,
+                    has_gapless,
                     backend: (*backend).into(),
                     codec: codec.map(Into::into),
                     container: container.map(Into::into),
@@ -100,9 +103,6 @@ impl TryFrom<&DecoderEvent> for FfiItemEvent {
                     variant: *variant,
                     base_offset: *base_offset,
                     duration_seconds: duration.map(duration_to_seconds),
-                    gapless_leading,
-                    gapless_trailing,
-                    has_gapless,
                 })
             }
             DecoderEvent::DecodeError {

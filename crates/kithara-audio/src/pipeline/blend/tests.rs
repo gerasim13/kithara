@@ -18,12 +18,12 @@ fn chunk(spec: PcmSpec, samples: Vec<f32>) -> PcmChunk {
     let frames = samples.len() / usize::from(spec.channels);
     PcmChunk::new(
         PcmMeta {
+            spec,
             end_timestamp: Duration::from_millis(42),
             timestamp: Duration::from_millis(21),
             segment_index: Some(7),
             source_byte_offset: Some(1_024),
             variant_index: Some(2),
-            spec,
             frames: u32::try_from(frames).expect("fixture frame count"),
             epoch: 11,
             frame_offset: 9_876,

@@ -18,18 +18,18 @@ pub enum Dim {
 }
 
 impl Dim {
-    /// Returns the lower bound in logical pixels, or zero when the toolkit
-    /// decides the axis ([`Dim::Fill`], [`Dim::Shrink`]).
-    #[must_use]
-    pub fn min(self) -> f32 {
-        Bounds::from(self).min
-    }
-
     /// Returns the upper bound, or `None` for an open range and for the axes
     /// the toolkit decides ([`Dim::Fill`], [`Dim::Shrink`]).
     #[must_use]
     pub fn max(self) -> Option<f32> {
         Bounds::from(self).max
+    }
+
+    /// Returns the lower bound in logical pixels, or zero when the toolkit
+    /// decides the axis ([`Dim::Fill`], [`Dim::Shrink`]).
+    #[must_use]
+    pub fn min(self) -> f32 {
+        Bounds::from(self).min
     }
 }
 
@@ -37,8 +37,8 @@ impl Dim {
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct SizeSpec {
-    pub w: Dim,
     pub h: Dim,
+    pub w: Dim,
 }
 
 impl SizeSpec {
@@ -49,14 +49,14 @@ impl SizeSpec {
 
     #[must_use]
     pub const fn new(w: Dim, h: Dim) -> Self {
-        Self { w, h }
+        Self { h, w }
     }
 }
 
 #[derive(Clone, Copy)]
 struct Bounds {
-    min: f32,
     max: Option<f32>,
+    min: f32,
 }
 
 impl Bounds {
@@ -65,17 +65,17 @@ impl Bounds {
         max: Some(0.0),
     };
 
-    fn sum(self, dim: Dim) -> Self {
-        Self {
-            min: self.min + dim.min(),
-            max: self.max.zip(dim.max()).map(|(left, right)| left + right),
-        }
-    }
-
     fn max(self, dim: Dim) -> Self {
         Self {
             min: self.min.max(dim.min()),
             max: self.max.zip(dim.max()).map(|(left, right)| left.max(right)),
+        }
+    }
+
+    fn sum(self, dim: Dim) -> Self {
+        Self {
+            min: self.min + dim.min(),
+            max: self.max.zip(dim.max()).map(|(left, right)| left + right),
         }
     }
 }
@@ -87,7 +87,7 @@ impl From<Dim> for Bounds {
                 min: value,
                 max: Some(value),
             },
-            Dim::Range { min, max } => Self { min, max },
+            Dim::Range { min, max } => Self { max, min },
             Dim::Fill | Dim::Shrink => Self {
                 min: 0.0,
                 max: None,
@@ -433,9 +433,10 @@ mod tests {
 
     fn row(children: Vec<ExpandedNode>, size: Option<SizeSpec>, gap: Option<f32>) -> ExpandedNode {
         ExpandedNode::Row {
-            id: None,
             size,
             gap,
+            children,
+            id: None,
             pad: None,
             pad_x: None,
             pad_y: None,
@@ -447,15 +448,15 @@ mod tests {
             frame_color: None,
             active_frame_color: None,
             surface: None,
-            children,
         }
     }
 
     fn column(children: Vec<ExpandedNode>, gap: Option<f32>) -> ExpandedNode {
         ExpandedNode::Column {
+            gap,
+            children,
             id: None,
             size: None,
-            gap,
             pad: None,
             pad_x: None,
             pad_y: None,
@@ -463,7 +464,6 @@ mod tests {
             background: None,
             background_alpha: None,
             surface: None,
-            children,
         }
     }
 
@@ -529,6 +529,7 @@ mod tests {
             panic!("expected a row");
         };
         let node = ExpandedNode::Row {
+            children,
             id: None,
             size: None,
             gap: Some(0.0),
@@ -543,7 +544,6 @@ mod tests {
             frame_color: None,
             active_frame_color: None,
             surface: None,
-            children,
         };
 
         let size = compute_size(&node, builtin::skin_doc(), VISIBLE);
@@ -590,8 +590,8 @@ mod tests {
         let glyph = |style| {
             control_size(
                 &ControlSpec::Glyph {
-                    icon: IconName::Menu,
                     style,
+                    icon: IconName::Menu,
                     color: None,
                     active_color: None,
                     active: None,

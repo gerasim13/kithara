@@ -74,6 +74,10 @@ impl Headers {
         Self::default()
     }
 
+    pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
+        self.inner.insert(key.into(), value.into());
+    }
+
     delegate::delegate! {
         to self.inner {
             #[expr($.map(String::as_str))]
@@ -83,10 +87,6 @@ impl Headers {
             #[expr($.map(|(k, v)| (k.as_str(), v.as_str())))]
             pub fn iter(&self) -> impl Iterator<Item = (&str, &str)>;
         }
-    }
-
-    pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
-        self.inner.insert(key.into(), value.into());
     }
 }
 
@@ -154,6 +154,10 @@ impl RetryPolicy {
 #[derive(Clone, Debug, Builder)]
 #[non_exhaustive]
 pub struct NetOptions {
+    /// Shared byte buffer pool used by backends that must copy platform-owned
+    /// response buffers before handing bytes to Rust consumers.
+    #[builder(default = BytePool::default())]
+    pub byte_pool: BytePool,
     /// Codings advertised and decoded for whole-body native requests.
     /// Defaults to all four; byte-addressed requests always use `identity`.
     #[builder(default = Compression::all())]
@@ -181,10 +185,7 @@ pub struct NetOptions {
     /// backend and on wasm32 (no emulation there).
     #[builder(default)]
     pub impersonate: ImpersonatePreset,
-    /// Shared byte buffer pool used by backends that must copy platform-owned
-    /// response buffers before handing bytes to Rust consumers.
-    #[builder(default = BytePool::default())]
-    pub byte_pool: BytePool,
+    pub observer: Option<Observer>,
     #[builder(default)]
     pub retry_policy: RetryPolicy,
     /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
@@ -206,7 +207,6 @@ pub struct NetOptions {
     /// Set to 0 to disable pooling.
     #[builder(default = 8)]
     pub pool_max_idle_per_host: usize,
-    pub observer: Option<Observer>,
 }
 
 impl Default for NetOptions {

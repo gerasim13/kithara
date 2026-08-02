@@ -12,10 +12,10 @@ use crate::{
 /// current frame renders from, and the view-local state that belongs to no
 /// one else.
 pub(crate) struct DeckUi {
-    pub(crate) id: DeckId,
     pub(crate) controller: Arc<StateController>,
-    pub(crate) ui: UiState,
+    pub(crate) id: DeckId,
     pub(crate) view: DeckView,
+    pub(crate) ui: UiState,
 }
 
 impl DeckUi {

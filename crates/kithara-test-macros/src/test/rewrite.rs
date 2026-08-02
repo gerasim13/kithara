@@ -90,20 +90,6 @@ impl VisitMut for FlashRewrite {
         visit_mut::visit_expr_call_mut(self, call);
     }
 
-    /// Remember `let started = Instant::now();` — and forget the name again if a
-    /// later binding shadows it with anything else.
-    fn visit_local_mut(&mut self, local: &mut syn::Local) {
-        visit_mut::visit_local_mut(self, local);
-        let syn::Pat::Ident(pat) = &local.pat else {
-            return;
-        };
-        if let Some(init) = &local.init
-            && init.diverge.is_none()
-        {
-            self.track_binding(&pat.ident, &init.expr);
-        }
-    }
-
     /// Put both ends of the measurement on the same clock. `started.elapsed()`
     /// becomes `virtual_now().saturating_duration_since(started)` when `started`
     /// holds a virtual instant, and is left untouched otherwise — so a body that
@@ -134,6 +120,20 @@ impl VisitMut for FlashRewrite {
             ::kithara_test_utils::kithara_platform::flash::virtual_now()
                 .saturating_duration_since(#ident)
         );
+    }
+
+    /// Remember `let started = Instant::now();` — and forget the name again if a
+    /// later binding shadows it with anything else.
+    fn visit_local_mut(&mut self, local: &mut syn::Local) {
+        visit_mut::visit_local_mut(self, local);
+        let syn::Pat::Ident(pat) = &local.pat else {
+            return;
+        };
+        if let Some(init) = &local.init
+            && init.diverge.is_none()
+        {
+            self.track_binding(&pat.ident, &init.expr);
+        }
     }
 }
 

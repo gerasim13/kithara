@@ -53,8 +53,8 @@ impl DecoderFactory {
         configured_media_info: Option<MediaInfo>,
     ) -> Self {
         Self {
-            builder: Arc::new(builder),
             configured_media_info,
+            builder: Arc::new(builder),
         }
     }
 
@@ -86,24 +86,24 @@ impl DecoderFactory {
 
 /// Decoder construction state shared by initial installation and later rebuilds.
 pub(crate) struct DecodeInit {
-    pub(crate) decoder: Box<dyn Decoder>,
-    pub(crate) decoder_factory: DecoderFactory,
-    pub(crate) decoder_backend: kithara_decode::DecoderBackend,
-    pub(crate) gapless_mode: GaplessMode,
-    pub(crate) host_sample_rate: Arc<AtomicU32>,
-    pub(crate) media_info: Option<MediaInfo>,
     pub(crate) playback_resampler_backend: &'static str,
+    pub(crate) host_sample_rate: Arc<AtomicU32>,
+    pub(crate) decoder: Box<dyn Decoder>,
+    pub(crate) decoder_backend: kithara_decode::DecoderBackend,
+    pub(crate) decoder_factory: DecoderFactory,
+    pub(crate) gapless_mode: GaplessMode,
+    pub(crate) media_info: Option<MediaInfo>,
     pub(crate) recreate_on_host_rate_change: bool,
 }
 
 pub(crate) struct DecodeParts {
+    pub(crate) playback_resampler_backend: &'static str,
     pub(crate) active: ActiveDecode,
-    pub(crate) factory: DecoderFactory,
     pub(crate) host_sample_rate: Arc<AtomicU32>,
+    pub(crate) decoder_backend: kithara_decode::DecoderBackend,
+    pub(crate) factory: DecoderFactory,
     pub(crate) recreate_on_host_rate_change: bool,
     pub(crate) decoder_host_sample_rate: u32,
-    pub(crate) decoder_backend: kithara_decode::DecoderBackend,
-    pub(crate) playback_resampler_backend: &'static str,
 }
 
 impl DecodeInit {
@@ -136,13 +136,13 @@ impl DecodeInit {
             gapless_mode,
         );
         DecodeParts {
-            active: ActiveDecode::new(active, gapless_mode, effects),
-            factory: decoder_factory,
             host_sample_rate,
             recreate_on_host_rate_change,
             decoder_host_sample_rate,
             decoder_backend,
             playback_resampler_backend,
+            active: ActiveDecode::new(active, gapless_mode, effects),
+            factory: decoder_factory,
         }
     }
 }
@@ -150,20 +150,20 @@ impl DecodeInit {
 pub(crate) struct ActiveDecode {
     pub(super) active: DecoderGeneration,
     pub(super) incoming: Option<IncomingDecode>,
-    gapless_mode: GaplessMode,
     pub(super) blender: PcmBlender,
-    effects: Vec<Box<dyn AudioEffect>>,
     drain: EofDrain,
+    gapless_mode: GaplessMode,
+    effects: Vec<Box<dyn AudioEffect>>,
 }
 
 pub(crate) struct DecodeCtx<'a, T: StreamType> {
-    pub(crate) emit: Option<&'a DeferredBus<Event>>,
-    pub(crate) playhead: &'a dyn PlayheadWrite,
-    pub(crate) resume: Option<&'a mut ResumeState>,
     pub(crate) cursor: &'a mut ResumeCursor,
     pub(crate) seek: &'a SeekEngine,
-    pub(crate) seek_observe: &'a dyn SeekObserve,
     pub(crate) stream: &'a SharedStream<T>,
+    pub(crate) playhead: &'a dyn PlayheadWrite,
+    pub(crate) seek_observe: &'a dyn SeekObserve,
+    pub(crate) emit: Option<&'a DeferredBus<Event>>,
+    pub(crate) resume: Option<&'a mut ResumeState>,
 }
 
 pub(crate) enum DecodeAction {
@@ -185,11 +185,11 @@ impl ActiveDecode {
         let blender = PcmBlender::new(active.blender_profile());
         Self {
             active,
-            incoming: None,
             gapless_mode,
             blender,
             effects,
             drain,
+            incoming: None,
         }
     }
 
@@ -197,52 +197,13 @@ impl ActiveDecode {
         &self.active
     }
 
+    pub(crate) fn flush_reader_signals(&mut self) {
+        self.active.decoder_mut().flush_reader_signals();
+        self.flush_incoming_reader_signals();
+    }
+
     pub(crate) fn gapless_mode(&self) -> GaplessMode {
         self.gapless_mode
-    }
-
-    pub(crate) fn reset(&mut self) {
-        reset_effects(&mut self.effects);
-        self.drain.reset();
-    }
-
-    pub(crate) fn notify_seek(&mut self) {
-        self.active.notify_seek();
-    }
-
-    pub(crate) fn set_tail_compensation(&mut self) {
-        self.active.finish();
-    }
-
-    pub(crate) fn push(&mut self, chunk: PcmChunk) {
-        self.active.push(chunk);
-    }
-
-    pub(crate) fn track(
-        &mut self,
-        chunk: &PcmChunk,
-        playhead: &dyn PlayheadWrite,
-        emit: Option<&DeferredBus<Event>>,
-    ) {
-        self.drain.track(chunk, playhead, emit);
-    }
-
-    pub(crate) fn next_output(&mut self) -> Option<PcmChunk> {
-        while let Some(chunk) = self.active.next() {
-            let chunk = self.blender.process_active(chunk);
-            if let Some(output) = apply_effects(&mut self.effects, chunk) {
-                return Some(output);
-            }
-        }
-        None
-    }
-
-    pub(crate) fn next_drain(&mut self) -> Option<PcmChunk> {
-        self.drain.next(&mut self.effects)
-    }
-
-    pub(crate) fn stats(&self) -> (u64, u64) {
-        self.drain.stats()
     }
 
     #[kithara::rtsan_allow_blocking]
@@ -264,6 +225,38 @@ impl ActiveDecode {
             Ok(DecoderChunkOutcome::Chunk(_) | DecoderChunkOutcome::Pending(_)) => {}
         }
         outcome
+    }
+
+    pub(crate) fn next_drain(&mut self) -> Option<PcmChunk> {
+        self.drain.next(&mut self.effects)
+    }
+
+    pub(crate) fn next_output(&mut self) -> Option<PcmChunk> {
+        while let Some(chunk) = self.active.next() {
+            let chunk = self.blender.process_active(chunk);
+            if let Some(output) = apply_effects(&mut self.effects, chunk) {
+                return Some(output);
+            }
+        }
+        None
+    }
+
+    pub(crate) fn notify_seek(&mut self) {
+        self.active.notify_seek();
+    }
+
+    pub(crate) fn push(&mut self, chunk: PcmChunk) {
+        self.active.push(chunk);
+    }
+
+    pub(crate) fn replace_active(&mut self, active: DecoderGeneration) -> DecoderGeneration {
+        self.blender.replace_active(active.blender_profile());
+        mem::replace(&mut self.active, active)
+    }
+
+    pub(crate) fn reset(&mut self) {
+        reset_effects(&mut self.effects);
+        self.drain.reset();
     }
 
     #[kithara::rtsan_allow_blocking]
@@ -298,18 +291,25 @@ impl ActiveDecode {
         outcome
     }
 
+    pub(crate) fn set_tail_compensation(&mut self) {
+        self.active.finish();
+    }
+
+    pub(crate) fn stats(&self) -> (u64, u64) {
+        self.drain.stats()
+    }
+
+    pub(crate) fn track(
+        &mut self,
+        chunk: &PcmChunk,
+        playhead: &dyn PlayheadWrite,
+        emit: Option<&DeferredBus<Event>>,
+    ) {
+        self.drain.track(chunk, playhead, emit);
+    }
+
     pub(crate) fn update_len(&self, len: u64) {
         self.active.decoder().update_byte_len(len);
-    }
-
-    pub(crate) fn replace_active(&mut self, active: DecoderGeneration) -> DecoderGeneration {
-        self.blender.replace_active(active.blender_profile());
-        mem::replace(&mut self.active, active)
-    }
-
-    pub(crate) fn flush_reader_signals(&mut self) {
-        self.active.decoder_mut().flush_reader_signals();
-        self.flush_incoming_reader_signals();
     }
 }
 

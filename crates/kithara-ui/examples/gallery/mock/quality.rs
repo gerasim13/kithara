@@ -26,10 +26,10 @@ impl Consts {
 }
 
 pub(super) struct QualityState {
-    open: bool,
-    auto: bool,
-    current: usize,
     value: String,
+    auto: bool,
+    open: bool,
+    current: usize,
 }
 
 impl Default for QualityState {
@@ -46,13 +46,18 @@ impl Default for QualityState {
 }
 
 impl QualityState {
-    fn rebuild(&mut self) {
-        let label = Consts::VARIANTS[self.current].label;
-        self.value = if self.auto {
-            format!("AUTO·{label}")
-        } else {
-            label.to_owned()
+    pub(super) fn activate(&mut self, path: &str) -> bool {
+        let Some((_, id)) = path.split_once("/stream/") else {
+            return false;
         };
+        let (node, _) = id.split_once('/').unwrap_or((id, ""));
+        match node {
+            "pop" => self.open = false,
+            "cell" => self.open = !self.open,
+            "auto" => self.select(None),
+            _ => return self.select_variant(node),
+        }
+        true
     }
 
     fn active(&self, variant: &str) -> Option<bool> {
@@ -79,22 +84,25 @@ impl QualityState {
         Some(value)
     }
 
-    fn text(variant: &str) -> Option<&'static QualityVariant> {
-        Consts::VARIANTS.get(index(variant)?)
+    fn rebuild(&mut self) {
+        let label = Consts::VARIANTS[self.current].label;
+        self.value = if self.auto {
+            format!("AUTO·{label}")
+        } else {
+            label.to_owned()
+        };
     }
 
-    pub(super) fn activate(&mut self, path: &str) -> bool {
-        let Some((_, id)) = path.split_once("/stream/") else {
-            return false;
-        };
-        let (node, _) = id.split_once('/').unwrap_or((id, ""));
-        match node {
-            "pop" => self.open = false,
-            "cell" => self.open = !self.open,
-            "auto" => self.select(None),
-            _ => return self.select_variant(node),
+    fn select(&mut self, variant: Option<usize>) {
+        match variant {
+            Some(index) => {
+                self.auto = false;
+                self.current = index;
+            }
+            None => self.auto = true,
         }
-        true
+        self.open = false;
+        self.rebuild();
     }
 
     fn select_variant(&mut self, node: &str) -> bool {
@@ -109,16 +117,8 @@ impl QualityState {
         true
     }
 
-    fn select(&mut self, variant: Option<usize>) {
-        match variant {
-            Some(index) => {
-                self.auto = false;
-                self.current = index;
-            }
-            None => self.auto = true,
-        }
-        self.open = false;
-        self.rebuild();
+    fn text(variant: &str) -> Option<&'static QualityVariant> {
+        Consts::VARIANTS.get(index(variant)?)
     }
 }
 

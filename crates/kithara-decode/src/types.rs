@@ -28,10 +28,10 @@ pub struct DecoderTrackInfo {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct GaplessProfile {
-    fallback_priming_frames: u64,
     gapless: Option<GaplessInfo>,
-    spec: PcmSpec,
     tail_compensation: Option<GaplessTailCompensation>,
+    spec: PcmSpec,
+    fallback_priming_frames: u64,
 }
 
 impl GaplessProfile {
@@ -43,10 +43,10 @@ impl GaplessProfile {
         fallback_priming_frames: u64,
     ) -> Self {
         Self {
-            fallback_priming_frames,
             gapless,
-            spec,
             tail_compensation,
+            spec,
+            fallback_priming_frames,
         }
     }
 

@@ -25,24 +25,24 @@ use crate::{
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct ModuleDoc {
-    pub schema: String,
-    pub version: u32,
-    pub id: DocId,
     #[serde(default)]
-    pub title: Option<String>,
+    pub chrome: ChromeStyle,
+    pub root: ControlNode,
+    pub id: DocId,
     #[serde(default)]
     pub chip: Option<String>,
     #[serde(default)]
-    pub assign: Vec<String>,
-    #[serde(default)]
-    pub chrome: ChromeStyle,
+    pub drop: Option<ModuleDrop>,
     #[serde(default)]
     pub footer: Option<BindingRef>,
     #[serde(default)]
-    pub drop: Option<ModuleDrop>,
+    pub title: Option<String>,
+    pub schema: String,
+    #[serde(default)]
+    pub assign: Vec<String>,
     #[serde(default)]
     pub parameters: Vec<String>,
-    pub root: ControlNode,
+    pub version: u32,
 }
 
 /// The module takes items dropped on it. The pointer crossing its bounds is
@@ -52,9 +52,9 @@ pub struct ModuleDoc {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct ModuleDrop {
-    pub write: BindingRef,
     /// Reads true while a dragged item is over the module.
     pub read: BindingRef,
+    pub write: BindingRef,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -666,6 +666,54 @@ pub enum ControlNode {
 }
 
 impl ControlNode {
+    pub(crate) fn bindings(&self) -> (Option<&BindingRef>, Option<&BindingRef>) {
+        match self {
+            Self::Row { write, .. } | Self::Column { write, .. } => (None, write.as_ref()),
+            Self::Optional { hidden, .. } => (Some(hidden), None),
+            Self::Popover { open, .. } => (Some(open), None),
+            Self::Pressable { press, .. } => (None, Some(press)),
+            Self::Include { .. }
+            | Self::Slot { .. }
+            | Self::WindowDrag { .. }
+            | Self::TitleBar { .. }
+            | Self::WindowControls { .. }
+            | Self::Swatch { .. } => (None, None),
+            Self::DeckSummary { read, write, .. }
+            | Self::Brand { read, write, .. }
+            | Self::Spacer { read, write, .. }
+            | Self::Meter { read, write, .. }
+            | Self::Divider { read, write, .. }
+            | Self::PresetSelector { read, write, .. }
+            | Self::SettingsButton { read, write, .. }
+            | Self::Text { read, write, .. }
+            | Self::Glyph { read, write, .. }
+            | Self::NavItem { read, write, .. }
+            | Self::TabLarge { read, write, .. }
+            | Self::Button { read, write, .. }
+            | Self::Bpm { read, write, .. }
+            | Self::Time { read, write, .. }
+            | Self::Scalar { read, write, .. }
+            | Self::Crossfader { read, write, .. }
+            | Self::Fader { read, write, .. }
+            | Self::Wave { read, write, .. }
+            | Self::Vis { read, write, .. }
+            | Self::TrackList { read, write, .. }
+            | Self::Tree { read, write, .. }
+            | Self::ContextBar { read, write, .. }
+            | Self::Toggle { read, write, .. }
+            | Self::Checkbox { read, write, .. }
+            | Self::Segmented { read, write, .. }
+            | Self::Select { read, write, .. }
+            | Self::StatusDot { read, write, .. }
+            | Self::Cell { read, write, .. }
+            | Self::Readout { read, write, .. }
+            | Self::Chip { read, write, .. }
+            | Self::Knob { read, write, .. }
+            | Self::VuStereo { read, write, .. }
+            | Self::VuVertical { read, write, .. } => (read.as_ref(), write.as_ref()),
+        }
+    }
+
     pub(crate) fn size(&self) -> Option<&SizeSpec> {
         match self {
             Self::Include { .. }
@@ -712,54 +760,6 @@ impl ControlNode {
             | Self::Knob { size, .. }
             | Self::VuStereo { size, .. }
             | Self::VuVertical { size, .. } => size.as_ref(),
-        }
-    }
-
-    pub(crate) fn bindings(&self) -> (Option<&BindingRef>, Option<&BindingRef>) {
-        match self {
-            Self::Row { write, .. } | Self::Column { write, .. } => (None, write.as_ref()),
-            Self::Optional { hidden, .. } => (Some(hidden), None),
-            Self::Popover { open, .. } => (Some(open), None),
-            Self::Pressable { press, .. } => (None, Some(press)),
-            Self::Include { .. }
-            | Self::Slot { .. }
-            | Self::WindowDrag { .. }
-            | Self::TitleBar { .. }
-            | Self::WindowControls { .. }
-            | Self::Swatch { .. } => (None, None),
-            Self::DeckSummary { read, write, .. }
-            | Self::Brand { read, write, .. }
-            | Self::Spacer { read, write, .. }
-            | Self::Meter { read, write, .. }
-            | Self::Divider { read, write, .. }
-            | Self::PresetSelector { read, write, .. }
-            | Self::SettingsButton { read, write, .. }
-            | Self::Text { read, write, .. }
-            | Self::Glyph { read, write, .. }
-            | Self::NavItem { read, write, .. }
-            | Self::TabLarge { read, write, .. }
-            | Self::Button { read, write, .. }
-            | Self::Bpm { read, write, .. }
-            | Self::Time { read, write, .. }
-            | Self::Scalar { read, write, .. }
-            | Self::Crossfader { read, write, .. }
-            | Self::Fader { read, write, .. }
-            | Self::Wave { read, write, .. }
-            | Self::Vis { read, write, .. }
-            | Self::TrackList { read, write, .. }
-            | Self::Tree { read, write, .. }
-            | Self::ContextBar { read, write, .. }
-            | Self::Toggle { read, write, .. }
-            | Self::Checkbox { read, write, .. }
-            | Self::Segmented { read, write, .. }
-            | Self::Select { read, write, .. }
-            | Self::StatusDot { read, write, .. }
-            | Self::Cell { read, write, .. }
-            | Self::Readout { read, write, .. }
-            | Self::Chip { read, write, .. }
-            | Self::Knob { read, write, .. }
-            | Self::VuStereo { read, write, .. }
-            | Self::VuVertical { read, write, .. } => (read.as_ref(), write.as_ref()),
         }
     }
 }

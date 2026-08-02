@@ -10,10 +10,10 @@ use crate::policy::domain::DomainPattern;
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct DomainKeyRule {
-    domains: Vec<DomainPattern>,
-    headers: Option<HashMap<String, String>>,
     key_request_factory: KeyRequestFactory,
+    headers: Option<HashMap<String, String>>,
     query_params: Option<HashMap<String, String>>,
+    domains: Vec<DomainPattern>,
 }
 
 impl fmt::Debug for DomainKeyRule {
@@ -114,6 +114,12 @@ impl fmt::Debug for DomainKeyRuleBuilder {
 }
 
 impl DomainKeyRuleBuilder {
+    /// Finish the rule.
+    #[must_use]
+    pub fn build(self) -> DomainKeyRule {
+        self.rule
+    }
+
     /// Set static headers added before the per-request factory headers.
     pub fn headers(mut self, headers: HashMap<String, String>) -> Self {
         self.rule.headers = Some(headers);
@@ -126,22 +132,16 @@ impl DomainKeyRuleBuilder {
         self
     }
 
-    /// Set query parameters appended to matching key URLs.
-    pub fn query_params(mut self, query_params: HashMap<String, String>) -> Self {
-        self.rule.query_params = Some(query_params);
-        self
-    }
-
     /// Set query parameters when present.
     pub fn maybe_query_params(mut self, query_params: Option<HashMap<String, String>>) -> Self {
         self.rule.query_params = query_params;
         self
     }
 
-    /// Finish the rule.
-    #[must_use]
-    pub fn build(self) -> DomainKeyRule {
-        self.rule
+    /// Set query parameters appended to matching key URLs.
+    pub fn query_params(mut self, query_params: HashMap<String, String>) -> Self {
+        self.rule.query_params = Some(query_params);
+        self
     }
 }
 

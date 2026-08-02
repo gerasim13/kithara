@@ -99,11 +99,11 @@ pub enum DecoderBackend {
 #[non_exhaustive]
 pub struct DecoderResamplerConfig<B = NoResamplerBackend> {
     pub backend: B,
+    pub target_sample_rate: NonZeroU32,
     #[builder(default)]
     pub options: ResamplerOptions,
     #[builder(default)]
     pub quality: ResamplerQuality,
-    pub target_sample_rate: NonZeroU32,
 }
 
 impl<B> DecoderResamplerConfig<B>
@@ -119,9 +119,9 @@ where
     ) -> Self {
         Self {
             backend,
+            target_sample_rate,
             options,
             quality,
-            target_sample_rate,
         }
     }
 
@@ -167,6 +167,8 @@ where
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct DecoderConfig<B = NoResamplerBackend> {
+    /// Raw byte buffer pool, propagated from the host.
+    pub byte_pool: BytePool,
     /// Which decoder backend to use. See [`DecoderBackend`].
     #[builder(default)]
     pub backend: DecoderBackend,
@@ -174,18 +176,16 @@ pub struct DecoderConfig<B = NoResamplerBackend> {
     pub byte_len_handle: Option<Arc<AtomicU64>>,
     /// Optional byte-map handle over the underlying source.
     pub byte_map: Option<Arc<dyn ByteMap>>,
-    /// Raw byte buffer pool, propagated from the host.
-    pub byte_pool: BytePool,
     /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
     pub hint: Option<String>,
     /// Reader-side observer hooks. Single-owner; moved into
     /// [`ComposedDecoder`] by the chosen backend path.
     pub hooks: Option<BoxedEventSink>,
-    /// PCM buffer pool, propagated from the host.
-    pub pcm_pool: PcmPool,
     /// Optional decoder-side resampler plan. `None` means the decoder emits
     /// at the source rate.
     pub resampler: Option<DecoderResamplerConfig<B>>,
+    /// PCM buffer pool, propagated from the host.
+    pub pcm_pool: PcmPool,
     /// Enable gapless trim wiring through the per-backend codec.
     #[builder(default = true)]
     pub gapless: bool,
@@ -985,10 +985,10 @@ mod apple_factory_tests {
     struct PacketDemuxer {
         track: TrackInfo,
         held: Vec<u8>,
-        next_index: u64,
-        packet_count: u64,
         packet_frames: u32,
         source_rate: u32,
+        next_index: u64,
+        packet_count: u64,
     }
 
     impl Demuxer for PacketDemuxer {
@@ -1037,9 +1037,9 @@ mod apple_factory_tests {
     }
 
     struct OutputDomainCodec {
+        track_info: DecoderTrackInfo,
         spec: PcmSpec,
         frames_per_call: u32,
-        track_info: DecoderTrackInfo,
     }
 
     impl FrameCodec for OutputDomainCodec {
@@ -1086,12 +1086,12 @@ mod apple_factory_tests {
 
     fn aac_track(sample_rate: u32, gapless: Option<GaplessInfo>) -> TrackInfo {
         TrackInfo {
-            codec: AudioCodec::AacLc,
             sample_rate,
+            gapless,
+            codec: AudioCodec::AacLc,
             channels: 2,
             extra_data: Vec::new(),
             duration: None,
-            gapless,
         }
     }
 
@@ -1194,8 +1194,8 @@ mod apple_factory_tests {
             source_rate: SOURCE_RATE,
         };
         let codec = OutputDomainCodec {
-            spec: PcmSpec::new(2, NonZeroU32::new(OUTPUT_RATE).expect("test rate")),
             frames_per_call,
+            spec: PcmSpec::new(2, NonZeroU32::new(OUTPUT_RATE).expect("test rate")),
             track_info: DecoderTrackInfo {
                 gapless: Some(output_gapless),
                 ..DecoderTrackInfo::default()

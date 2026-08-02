@@ -39,6 +39,18 @@ impl PcmPool {
         Self(SharedPool::new(max_buffers, trim_capacity))
     }
 
+    /// Current number of tracked bytes across all live PCM buffers.
+    #[must_use]
+    pub fn allocated_bytes(&self) -> usize {
+        self.0.allocated_bytes()
+    }
+
+    /// Wrap an already charged PCM buffer for automatic recycling.
+    #[must_use]
+    pub fn attach(&self, value: Vec<f32>) -> PcmBuf {
+        PcmBuf(self.0.attach(value))
+    }
+
     /// Get a PCM buffer from the shared pool.
     #[must_use]
     pub fn get(&self) -> PcmBuf {
@@ -59,6 +71,17 @@ impl PcmPool {
         F: Fn(&mut Vec<f32>),
     {
         self.0.pre_warm(count, init);
+    }
+
+    /// Return a PCM buffer to the pool for reuse.
+    pub fn recycle(&self, value: Vec<f32>) {
+        self.0.recycle(value);
+    }
+
+    /// Get pool hit/miss statistics.
+    #[must_use]
+    pub fn stats(&self) -> PoolStats {
+        self.0.stats()
     }
 
     /// Create a shared PCM pool with a byte budget limit.
@@ -82,29 +105,6 @@ impl PcmPool {
             budget,
         ))
     }
-
-    /// Current number of tracked bytes across all live PCM buffers.
-    #[must_use]
-    pub fn allocated_bytes(&self) -> usize {
-        self.0.allocated_bytes()
-    }
-
-    /// Wrap an already charged PCM buffer for automatic recycling.
-    #[must_use]
-    pub fn attach(&self, value: Vec<f32>) -> PcmBuf {
-        PcmBuf(self.0.attach(value))
-    }
-
-    /// Return a PCM buffer to the pool for reuse.
-    pub fn recycle(&self, value: Vec<f32>) {
-        self.0.recycle(value);
-    }
-
-    /// Get pool hit/miss statistics.
-    #[must_use]
-    pub fn stats(&self) -> PoolStats {
-        self.0.stats()
-    }
 }
 
 /// Pooled PCM buffer that auto-recycles to the source pool on drop.
@@ -114,20 +114,15 @@ impl PcmPool {
 pub struct PcmBuf(PooledOwned<8, Vec<f32>>);
 
 impl PcmBuf {
-    /// Remove all samples while retaining the allocated capacity.
-    pub fn clear(&mut self) {
-        self.0.clear();
-    }
-
-    /// Shorten the buffer to `len` samples.
-    pub fn truncate(&mut self, len: usize) {
-        self.0.truncate(len);
-    }
-
     /// Return the allocated sample capacity.
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.0.capacity()
+    }
+
+    /// Remove all samples while retaining the allocated capacity.
+    pub fn clear(&mut self) {
+        self.0.clear();
     }
 
     /// Remove and yield the specified sample range.
@@ -152,6 +147,11 @@ impl PcmBuf {
     #[must_use]
     pub fn into_inner(self) -> Vec<f32> {
         self.0.into_inner()
+    }
+
+    /// Shorten the buffer to `len` samples.
+    pub fn truncate(&mut self, len: usize) {
+        self.0.truncate(len);
     }
 }
 

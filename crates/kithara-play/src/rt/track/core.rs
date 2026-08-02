@@ -12,20 +12,20 @@ use crate::bridge::TrackState;
 /// Parameters used to create a track around an owned resource.
 #[derive(Builder)]
 pub struct TrackParams {
-    item_id: Option<Arc<str>>,
     src: Arc<str>,
-    #[builder(default)]
-    fade_duration: f32,
-    #[builder(default)]
-    prefetch_duration: f32,
-    sample_rate: NonZeroU32,
     #[builder(default = FadeCurve::SquareRoot)]
     fade_curve: FadeCurve,
+    sample_rate: NonZeroU32,
+    item_id: Option<Arc<str>>,
+    #[builder(default)]
+    fade_duration: f32,
     /// Media seconds consumed per output second. Seeds the track's media
     /// clock so a track loaded while the player already runs off-unity
     /// reports media time, not output time.
     #[builder(default = 1.0)]
     playback_rate: f32,
+    #[builder(default)]
+    prefetch_duration: f32,
 }
 
 /// Per-track state in the processor arena.
@@ -36,10 +36,11 @@ pub struct TrackParams {
 #[fieldwork(opt_in, get)]
 pub struct PlayerTrack {
     pub(super) resource: Box<PlayerResource>,
-    pub(super) fade: TrackFade,
     pub(super) item_id: Option<Arc<str>>,
+    pub(super) fade: TrackFade,
     #[field(get, copy)]
     pub(super) state: TrackState,
+    pub(super) triggers: TrackTriggers,
     /// Set only when the track reaches *natural* EOF (`handle_natural_end`).
     /// Marks a played-out track as eligible to be kept warm at end-of-queue
     /// and revived by a later in-range seek (Superpowered-style resume).
@@ -47,8 +48,13 @@ pub struct PlayerTrack {
     /// faded-out crossfade leaves this `false`, so those are discarded as usual.
     #[field(get)]
     pub(super) ended_at_eof: bool,
-    pub(super) triggers: TrackTriggers,
     pub(super) state_dirty: bool,
+    /// Media seconds consumed per output second, mirroring the speed the
+    /// time-stretch slot runs the source at. The mix output is on the output
+    /// clock; `duration`, the near-end triggers and every position consumer
+    /// are on the media clock, so served output frames only become a position
+    /// once scaled by this.
+    pub(super) playback_rate: f32,
     /// Lead time before EOF at which the prefetch trigger fires.
     ///
     /// Effective preload threshold is
@@ -61,13 +67,6 @@ pub struct PlayerTrack {
     /// Mirrors `PlayerResource::duration()` (post-gapless-trim, visible
     /// duration) captured under the resource lock.
     pub(super) observed_duration: f64,
-    pub(super) sample_rate: u32,
-    /// Media seconds consumed per output second, mirroring the speed the
-    /// time-stretch slot runs the source at. The mix output is on the output
-    /// clock; `duration`, the near-end triggers and every position consumer
-    /// are on the media clock, so served output frames only become a position
-    /// once scaled by this.
-    pub(super) playback_rate: f32,
     /// Cumulative *media* frames this track has served into the mix output:
     /// output frames scaled by [`Self::playback_rate`].
     ///
@@ -76,6 +75,7 @@ pub struct PlayerTrack {
     /// decoder's pre-buffered position (which can be ~200 ms ahead of the
     /// mixer thanks to `PlayerResource`'s scratch buffer).
     pub(super) served_media_frames: f64,
+    pub(super) sample_rate: u32,
 }
 
 impl PlayerTrack {
@@ -98,31 +98,31 @@ impl PlayerTrack {
         let track = Self {
             resource,
             item_id,
+            playback_rate,
+            observed_duration,
             state: TrackState::Preloading,
             state_dirty: false,
             triggers: TrackTriggers::default(),
             fade: TrackFade::new(fade_duration, fade_curve, sample_rate),
             prefetch_duration: prefetch_duration.max(0.0),
             sample_rate: sample_rate.get(),
-            playback_rate,
             served_media_frames: 0.0,
-            observed_duration,
             ended_at_eof: false,
         };
         track.update_service_class(TrackState::Preloading);
         track
     }
 
-    /// Decoded-ahead frontier in seconds.
-    #[must_use]
-    pub fn decoded_frontier(&self) -> f64 {
-        self.resource.decoded_frontier()
-    }
-
     /// Cached span in seconds: how much of the source is on disk.
     #[must_use]
     pub fn cached_span(&self) -> f64 {
         self.resource.cached_span()
+    }
+
+    /// Decoded-ahead frontier in seconds.
+    #[must_use]
+    pub fn decoded_frontier(&self) -> f64 {
+        self.resource.decoded_frontier()
     }
 
     /// Current visible (post-gapless-trim) duration in seconds.

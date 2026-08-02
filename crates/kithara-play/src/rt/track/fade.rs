@@ -13,8 +13,8 @@ use firewheel::dsp::{
 
 pub(super) struct TrackFade {
     curve: FadeCurve,
-    duration: f32,
     mix: MixDSP,
+    duration: f32,
 }
 
 impl TrackFade {
@@ -77,6 +77,13 @@ impl TrackFade {
         self.mix.reset_to_target();
     }
 
+    fn smoother_config(duration: f32) -> SmootherConfig {
+        SmootherConfig {
+            smooth_seconds: duration,
+            settle_epsilon: DEFAULT_SETTLE_EPSILON,
+        }
+    }
+
     pub(super) fn stop(&mut self) {
         self.mix.set_mix(Mix::FULLY_WET, self.curve);
         self.mix.reset_to_target();
@@ -100,12 +107,5 @@ impl TrackFade {
             sample_rate,
         );
         self.duration = duration;
-    }
-
-    fn smoother_config(duration: f32) -> SmootherConfig {
-        SmootherConfig {
-            smooth_seconds: duration,
-            settle_epsilon: DEFAULT_SETTLE_EPSILON,
-        }
     }
 }

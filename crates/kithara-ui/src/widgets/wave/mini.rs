@@ -34,13 +34,13 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct MiniWave<'path, 'value, 'data, 'scope, 'reads, 'skin> {
+    skin: &'skin Skin,
+    reads: &'reads dyn Reads,
     path: &'path str,
-    style: WaveStyle,
+    scope: &'scope str,
     badge: Option<&'path str>,
     value: Option<&'value ReadValue<'data>>,
-    scope: &'scope str,
-    reads: &'reads dyn Reads,
-    skin: &'skin Skin,
+    style: WaveStyle,
     zoom: f32,
 }
 
@@ -123,46 +123,46 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
 }
 
 struct MiniWaveCanvas {
-    metrics: WaveSkin,
     background: Color,
     border_color: Color,
     cue_badge_background: Color,
     cue_badge_text_color: Color,
-    drag: ScalarDrag,
     overlay: Option<OverlayData>,
+    wave_revision: Option<u64>,
+    waveform: Option<WaveformData>,
     overlay_palette: OverlayPalette,
     palette: RenderPalette,
+    drag: ScalarDrag,
+    metrics: WaveSkin,
     style: WaveStyle,
-    waveform: Option<WaveformData>,
     progress: f32,
-    wave_revision: Option<u64>,
     zoom: f32,
 }
 
 #[derive(Default)]
 struct MiniWaveState {
-    drag: ScalarDragState,
-    loop_start: Option<f32>,
-    modifiers: Modifiers,
     wave: canvas::Cache,
     wave_revision: Cell<Option<u64>>,
+    modifiers: Modifiers,
+    loop_start: Option<f32>,
+    drag: ScalarDragState,
 }
 
 struct WaveformData {
-    buckets: Box<[WaveBucket]>,
     beats: Box<[f32]>,
+    buckets: Box<[WaveBucket]>,
+    cues: Box<[f32]>,
     downbeats: Box<[f32]>,
     loop_region: Option<[f32; 2]>,
-    cues: Box<[f32]>,
 }
 
 struct OverlayData {
-    title: String,
     artist: String,
+    badge: String,
     bpm: String,
     key: String,
     remain: String,
-    badge: String,
+    title: String,
 }
 
 #[derive(Clone, Copy)]
@@ -176,32 +176,32 @@ struct ReadoutData<'a> {
 #[derive(Clone, Copy)]
 struct CanvasText<'a> {
     content: &'a str,
-    position: Point,
-    max_width: f32,
-    color: Color,
-    skin: FontSkin,
-    font: Font,
     align_x: text::Alignment,
+    color: Color,
+    font: Font,
+    skin: FontSkin,
+    position: Point,
     align_y: Vertical,
+    max_width: f32,
 }
 
 #[derive(Clone, Copy)]
 struct OverlayPalette {
-    background: Color,
     art_background: Color,
     art_border: Color,
     art_label: Color,
-    title: Color,
     artist: Color,
-    readout_background: Color,
-    readout_border: Color,
-    readout_label: Color,
-    bpm: Color,
-    key: Color,
-    remain: Color,
+    background: Color,
     badge_background: Color,
     badge_border: Color,
     badge_text: Color,
+    bpm: Color,
+    key: Color,
+    readout_background: Color,
+    readout_border: Color,
+    readout_label: Color,
+    remain: Color,
+    title: Color,
 }
 
 impl OverlayPalette {
@@ -342,16 +342,6 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
 }
 
 impl MiniWaveCanvas {
-    const fn hero(&self) -> bool {
-        matches!(self.style, WaveStyle::Hero)
-    }
-
-    fn has_waveform(&self) -> bool {
-        self.waveform
-            .as_ref()
-            .is_some_and(|waveform| !waveform.buckets.is_empty())
-    }
-
     fn draw_wave(&self, frame: &mut Frame, bounds: Rectangle) {
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.background);
         if let Some(waveform) = &self.waveform {
@@ -393,6 +383,16 @@ impl MiniWaveCanvas {
                 cue_text: self.cue_badge_text_color,
             },
         );
+    }
+
+    fn has_waveform(&self) -> bool {
+        self.waveform
+            .as_ref()
+            .is_some_and(|waveform| !waveform.buckets.is_empty())
+    }
+
+    const fn hero(&self) -> bool {
+        matches!(self.style, WaveStyle::Hero)
     }
 
     fn track_position(&self, bounds: Rectangle, cursor: Cursor) -> Option<f32> {

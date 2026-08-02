@@ -32,17 +32,17 @@ pub enum TraceRecordKind {
 #[non_exhaustive]
 pub struct TraceSource {
     pub path: String,
-    pub line: usize,
     pub column: usize,
+    pub line: usize,
 }
 
 impl TraceSource {
     #[must_use]
     pub fn new<P: Into<String>>(path: P, line: usize, column: usize) -> Self {
         Self {
-            path: path.into(),
             line,
             column,
+            path: path.into(),
         }
     }
 }
@@ -51,35 +51,35 @@ impl TraceSource {
 #[non_exhaustive]
 #[serde(deny_unknown_fields)]
 pub struct TraceRecord {
-    schema_version: u32,
-    sequence: u64,
-    kind: TraceRecordKind,
-    name: String,
+    #[serde(default)]
+    correlation_id: Option<String>,
+    #[serde(default)]
+    parent_span_id: Option<String>,
+    #[serde(default)]
+    resource_id: Option<String>,
+    #[serde(default)]
+    resource_type: Option<String>,
     #[serde(default)]
     source: Option<TraceSource>,
     #[serde(default)]
     span_id: Option<String>,
     #[serde(default)]
-    parent_span_id: Option<String>,
-    #[serde(default)]
     task_id: Option<String>,
     #[serde(default)]
     thread_id: Option<String>,
-    #[serde(default)]
-    correlation_id: Option<String>,
-    #[serde(default)]
-    resource_id: Option<String>,
-    #[serde(default)]
-    resource_type: Option<String>,
+    name: String,
+    kind: TraceRecordKind,
+    schema_version: u32,
+    sequence: u64,
 }
 
 impl TraceRecord {
     #[must_use]
     pub fn new<N: Into<String>>(sequence: u64, kind: TraceRecordKind, name: N) -> Self {
         Self {
-            schema_version: TRACE_SCHEMA_VERSION,
             sequence,
             kind,
+            schema_version: TRACE_SCHEMA_VERSION,
             name: name.into(),
             source: None,
             span_id: None,
@@ -90,6 +90,29 @@ impl TraceRecord {
             resource_id: None,
             resource_type: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_correlation<C: Into<String>>(mut self, correlation_id: C) -> Self {
+        self.correlation_id = Some(correlation_id.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_parent_span<S: Into<String>>(mut self, span_id: S) -> Self {
+        self.parent_span_id = Some(span_id.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_resource<T: Into<String>, I: Into<String>>(
+        mut self,
+        resource_type: T,
+        resource_id: I,
+    ) -> Self {
+        self.resource_type = Some(resource_type.into());
+        self.resource_id = Some(resource_id.into());
+        self
     }
 
     #[must_use]
@@ -105,12 +128,6 @@ impl TraceRecord {
     }
 
     #[must_use]
-    pub fn with_parent_span<S: Into<String>>(mut self, span_id: S) -> Self {
-        self.parent_span_id = Some(span_id.into());
-        self
-    }
-
-    #[must_use]
     pub fn with_task<T: Into<String>>(mut self, task_id: T) -> Self {
         self.task_id = Some(task_id.into());
         self
@@ -119,23 +136,6 @@ impl TraceRecord {
     #[must_use]
     pub fn with_thread<T: Into<String>>(mut self, thread_id: T) -> Self {
         self.thread_id = Some(thread_id.into());
-        self
-    }
-
-    #[must_use]
-    pub fn with_correlation<C: Into<String>>(mut self, correlation_id: C) -> Self {
-        self.correlation_id = Some(correlation_id.into());
-        self
-    }
-
-    #[must_use]
-    pub fn with_resource<T: Into<String>, I: Into<String>>(
-        mut self,
-        resource_type: T,
-        resource_id: I,
-    ) -> Self {
-        self.resource_type = Some(resource_type.into());
-        self.resource_id = Some(resource_id.into());
         self
     }
 }
@@ -158,6 +158,15 @@ impl TraceWriter {
         })
     }
 
+    /// Flushes the trace to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying file cannot be flushed.
+    pub fn finish(mut self) -> Result<()> {
+        self.writer.flush().context("flush architecture trace")
+    }
+
     /// Appends one neutral trace record.
     ///
     /// # Errors
@@ -167,14 +176,5 @@ impl TraceWriter {
         serde_json::to_writer(&mut self.writer, record)?;
         self.writer.write_all(b"\n")?;
         Ok(())
-    }
-
-    /// Flushes the trace to disk.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the underlying file cannot be flushed.
-    pub fn finish(mut self) -> Result<()> {
-        self.writer.flush().context("flush architecture trace")
     }
 }

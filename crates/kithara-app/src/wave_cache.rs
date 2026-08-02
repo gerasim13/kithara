@@ -28,8 +28,8 @@ impl Consts {
 /// Physical analysis resource together with the store that owns it.
 #[derive(Clone, Debug)]
 pub(crate) struct AnalysisTarget {
-    key: ResourceKey,
     store: AssetStore,
+    key: ResourceKey,
 }
 
 impl AnalysisTarget {
@@ -44,18 +44,18 @@ impl AnalysisTarget {
         })
     }
 
-    pub(crate) fn key(&self) -> &ResourceKey {
-        &self.key
-    }
-
     pub(crate) fn is_same(&self, other: &Self) -> bool {
         self.key == other.key && self.store.is_same(&other.store)
+    }
+
+    pub(crate) fn key(&self) -> &ResourceKey {
+        &self.key
     }
 }
 
 struct MemoryEntry {
-    analysis: TrackAnalysis,
     target: AnalysisTarget,
+    analysis: TrackAnalysis,
 }
 
 /// Two-tier track-analysis memoization: a session in-memory map plus durable
@@ -493,12 +493,12 @@ mod tests {
     struct InvalidLayout;
 
     impl AssetLayout for InvalidLayout {
-        fn root(&self, _source: &AssetSource) -> String {
-            "root".to_string()
-        }
-
         fn path(&self, _resource: &AssetResource) -> String {
             "../escape".to_string()
+        }
+
+        fn root(&self, _source: &AssetSource) -> String {
+            "root".to_string()
         }
     }
 

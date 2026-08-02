@@ -38,10 +38,6 @@ pub struct QueueConfig {
     #[builder(default = DEFAULT_MAX_CONCURRENT_LOADS)]
     pub max_concurrent_loads: NonZeroUsize,
 
-    /// Shared store used for bare URI track sources.
-    #[field(with, option_set_some)]
-    pub store: Option<AssetStore>,
-
     /// Master cancel for the queue. `Some` threads the app master so the
     /// queue subtree cascades from one app-wide owner; `None` falls back
     /// to a fresh standalone token (test / library use). Must never be
@@ -52,6 +48,10 @@ pub struct QueueConfig {
     /// Externally-owned player. `None` means Queue builds a default.
     #[field(with, option_set_some)]
     pub player: Option<Arc<PlayerImpl>>,
+
+    /// Shared store used for bare URI track sources.
+    #[field(with, option_set_some)]
+    pub store: Option<AssetStore>,
 
     /// Whether the queue auto-advances to the next track at EOF.
     #[builder(default = true)]

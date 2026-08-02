@@ -155,8 +155,8 @@ pub(crate) struct NativeInner {
     /// identity + active per-item observer wiring).
     items: Arc<Mutex<ItemRegistry>>,
     queue: Arc<Queue>,
-    /// Store-owned pools shared by cache, network, decode, and playback.
-    region: Region,
+    /// Rust-owned asset store shared by the queue and every item resource.
+    store: Arc<FfiAssetStore>,
     /// Cancellation root for player-owned work; the shared store owns a
     /// separate scope.
     shutdown: CancelToken,
@@ -180,8 +180,8 @@ pub(crate) struct NativeInner {
     /// drives the ABR cap unless cellular is tighter; cellular is held
     /// for future network-state-aware switching.
     peak_bitrate: Mutex<PeakBitrate>,
-    /// Rust-owned asset store shared by the queue and every item resource.
-    store: Arc<FfiAssetStore>,
+    /// Store-owned pools shared by cache, network, decode, and playback.
+    region: Region,
 }
 
 impl NativeInner {
@@ -216,12 +216,12 @@ impl NativeInner {
         Self {
             downloader,
             region,
+            store,
             shutdown: cancel,
             key_options: Mutex::new(key_options),
             player_headers: player_headers_map,
             peak_bitrate: Mutex::default(),
             queue: Arc::new(Queue::new(queue_config)),
-            store,
             observer: Mutex::default(),
             event_bridge: Mutex::default(),
             items: Arc::new(Mutex::default()),
@@ -250,31 +250,6 @@ impl NativeInner {
         self.items.lock().insert(id, Arc::clone(item));
         item.restart_bridge();
         Ok(())
-    }
-
-    delegate::delegate! {
-        to self.queue {
-            pub(crate) fn crossfade_duration(&self) -> f32;
-            #[expr($.unwrap_or(0.0))]
-            #[call(position_seconds)]
-            pub(crate) fn current_time(&self) -> f64;
-            pub(crate) fn is_muted(&self) -> bool;
-            pub(crate) fn pause(&self);
-            pub(crate) fn play(&self);
-            #[call(default_rate)]
-            pub(crate) fn playing_rate(&self) -> f32;
-            pub(crate) fn rate(&self) -> f32;
-            #[expr($.into())]
-            pub(crate) fn repeat_mode(&self) -> FfiRepeatMode;
-            #[expr($.map_err(FfiError::from))]
-            pub(crate) fn reset_eq(&self) -> Result<(), FfiError>;
-            pub(crate) fn set_crossfade_duration(&self, seconds: f32);
-            pub(crate) fn set_muted(&self, muted: bool);
-            #[call(set_default_rate)]
-            pub(crate) fn set_playing_rate(&self, rate: f32);
-            pub(crate) fn set_volume(&self, volume: f32);
-            pub(crate) fn volume(&self) -> f32;
-        }
     }
 
     pub(crate) fn current_item(&self) -> Option<Arc<AudioPlayerItem>> {
@@ -555,6 +530,31 @@ impl NativeInner {
             handle.set_max_bandwidth_bps(updated.effective_cap());
         }
     }
+
+    delegate::delegate! {
+        to self.queue {
+            pub(crate) fn crossfade_duration(&self) -> f32;
+            #[expr($.unwrap_or(0.0))]
+            #[call(position_seconds)]
+            pub(crate) fn current_time(&self) -> f64;
+            pub(crate) fn is_muted(&self) -> bool;
+            pub(crate) fn pause(&self);
+            pub(crate) fn play(&self);
+            #[call(default_rate)]
+            pub(crate) fn playing_rate(&self) -> f32;
+            pub(crate) fn rate(&self) -> f32;
+            #[expr($.into())]
+            pub(crate) fn repeat_mode(&self) -> FfiRepeatMode;
+            #[expr($.map_err(FfiError::from))]
+            pub(crate) fn reset_eq(&self) -> Result<(), FfiError>;
+            pub(crate) fn set_crossfade_duration(&self, seconds: f32);
+            pub(crate) fn set_muted(&self, muted: bool);
+            #[call(set_default_rate)]
+            pub(crate) fn set_playing_rate(&self, rate: f32);
+            pub(crate) fn set_volume(&self, volume: f32);
+            pub(crate) fn volume(&self) -> f32;
+        }
+    }
 }
 
 /// Build a [`TrackSource::Config`] from the item's fields. Also attaches
@@ -657,8 +657,8 @@ mod tests {
         let store = Arc::new(FfiAssetStore::default());
         let cancel = store.cancel_token();
         let config = |store| FfiPlayerConfig {
-            key_options: crate::types::FfiKeyOptions::default(),
             store,
+            key_options: crate::types::FfiKeyOptions::default(),
             eq_band_count: 10,
         };
         let first = NativeInner::new(config(Arc::clone(&store)));

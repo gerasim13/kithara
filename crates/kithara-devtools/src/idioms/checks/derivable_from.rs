@@ -6,18 +6,18 @@ use crate::common::{fix::FixOutcome, violation::Violation};
 pub(crate) struct DerivableFrom;
 
 impl Check for DerivableFrom {
-    fn id(&self) -> &'static str {
-        derivable_support::Kind::From.id()
-    }
-    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        derivable_support::run(
+    fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
+        derivable_support::fix(
             ctx,
             derivable_support::Kind::From,
             ctx.config.thresholds.derivable_from.enabled,
         )
     }
-    fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
-        derivable_support::fix(
+    fn id(&self) -> &'static str {
+        derivable_support::Kind::From.id()
+    }
+    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
+        derivable_support::run(
             ctx,
             derivable_support::Kind::From,
             ctx.config.thresholds.derivable_from.enabled,

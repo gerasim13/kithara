@@ -19,6 +19,8 @@ pub struct PlayerConfig {
     /// worker effect chain (see `kithara_audio::StretchControls`).
     #[builder(default = StretchControls::new(1.0))]
     pub(crate) timestretch: Arc<StretchControls>,
+    /// Byte buffer pool shared by resources created for this player.
+    pub(crate) byte_pool: BytePool,
     /// How resources created for this player trim leading/trailing PCM.
     #[builder(default)]
     pub(crate) gapless_mode: GaplessMode,
@@ -28,12 +30,10 @@ pub struct PlayerConfig {
     pub(crate) bus: Option<EventBus>,
     /// Master cancel token for this player.
     pub(crate) cancel: Option<CancelToken>,
-    /// Byte buffer pool shared by resources created for this player.
-    pub(crate) byte_pool: BytePool,
-    /// PCM buffer pool for audio-thread scratch buffers.
-    pub(crate) pcm_pool: PcmPool,
     /// Pre-built audio session dispatcher.
     pub(crate) session: Option<Arc<dyn SessionDispatcher>>,
+    /// PCM buffer pool for audio-thread scratch buffers.
+    pub(crate) pcm_pool: PcmPool,
     /// EQ band layout. Default: 10-band log-spaced.
     #[builder(default = generate_log_spaced_bands(10))]
     pub(crate) eq_layout: Vec<EqBandConfig>,

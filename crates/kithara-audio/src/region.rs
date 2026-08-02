@@ -135,6 +135,11 @@ impl ActiveRegion {
     }
 
     #[must_use]
+    pub fn contains(&self, frame: u64) -> bool {
+        self.start <= frame && frame < self.end
+    }
+
+    #[must_use]
     pub fn correction(&self) -> f64 {
         self.correction
     }
@@ -147,11 +152,6 @@ impl ActiveRegion {
     #[must_use]
     pub fn start(&self) -> u64 {
         self.start
-    }
-
-    #[must_use]
-    pub fn contains(&self, frame: u64) -> bool {
-        self.start <= frame && frame < self.end
     }
 }
 

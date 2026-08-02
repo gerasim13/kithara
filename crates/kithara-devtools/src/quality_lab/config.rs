@@ -15,18 +15,18 @@ const SCHEMA_VERSION: u32 = 1;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct QualityLabConfig {
-    pub(super) schema_version: u32,
-    pub(super) output_dir: String,
     pub(super) profiles: Profiles,
+    pub(super) output_dir: String,
     pub(super) tools: Tools,
+    pub(super) schema_version: u32,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Profiles {
     pub(super) coverage: ProfileConfig,
-    pub(super) scheduled: ProfileConfig,
     pub(super) manual: ProfileConfig,
+    pub(super) scheduled: ProfileConfig,
 }
 
 impl Profiles {
@@ -42,8 +42,8 @@ impl Profiles {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ProfileConfig {
-    pub(super) timeout_secs: u64,
     pub(super) tools: Vec<Tool>,
+    pub(super) timeout_secs: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,11 +51,11 @@ pub(super) struct ProfileConfig {
 pub(super) struct Tools {
     #[serde(rename = "cargo-crap")]
     cargo_crap: ToolConfig,
-    cha: ToolConfig,
-    rustqual: ToolConfig,
     #[serde(rename = "cargo-dupes")]
     cargo_dupes: ToolConfig,
+    cha: ToolConfig,
     pmat: ToolConfig,
+    rustqual: ToolConfig,
 }
 
 impl Tools {
@@ -73,8 +73,8 @@ impl Tools {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ToolConfig {
-    pub(super) timeout_secs: u64,
     pub(super) version: String,
+    pub(super) timeout_secs: u64,
 }
 
 impl QualityLabConfig {

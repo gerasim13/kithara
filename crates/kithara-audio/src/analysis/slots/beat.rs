@@ -16,9 +16,9 @@ struct BeatConfig<B>
 where
     B: ResamplerBackend,
 {
-    detector: Option<Detector>,
-    params: GridParams,
     resampler: BeatAnalysisConfig<B>,
+    params: GridParams,
+    detector: Option<Detector>,
 }
 
 pub(crate) struct Config<B>(Option<BeatConfig<B>>)
@@ -51,11 +51,15 @@ where
         }
     }
 
+    pub(crate) fn take_detector(&mut self) -> Option<Detector> {
+        self.0.as_mut().and_then(|config| config.detector.take())
+    }
+
     pub(crate) fn with_default(&mut self, resampler: BeatAnalysisConfig<B>) {
         self.0 = default_beat_detector().map(|detector| BeatConfig {
+            resampler,
             detector: Some(detector),
             params: GridParams::default(),
-            resampler,
         });
     }
 
@@ -67,14 +71,10 @@ where
         resampler: BeatAnalysisConfig<B>,
     ) {
         self.0 = Some(BeatConfig {
-            detector: Some(detector),
             params,
             resampler,
+            detector: Some(detector),
         });
-    }
-
-    pub(crate) fn take_detector(&mut self) -> Option<Detector> {
-        self.0.as_mut().and_then(|config| config.detector.take())
     }
 }
 

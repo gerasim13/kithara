@@ -31,19 +31,19 @@ pub(crate) struct PlayerCore {
     /// Constructed once and kept address-stable for the player's lifetime.
     pub(crate) engine_load: Arc<EngineLoad>,
 
-    pub(crate) params: PlayerParams,
     pub(crate) timestretch: Arc<StretchControls>,
-    pub(crate) gapless_mode: GaplessMode,
     pub(crate) byte_pool: BytePool,
     /// Engine drops last — worker shutdown happens after all tracks
     /// unregister and after `items` releases their resources.
     pub(crate) engine: EngineImpl,
+    pub(crate) gapless_mode: GaplessMode,
     /// Items drop before engine — Audio tracks unregister from worker
     /// while it is still alive.
     pub(crate) items: ItemQueue,
     /// Status kept explicit (not derived from phase): `set_status` emits
     /// `StatusChanged` only on change and its values are not 1:1 with phase.
     pub(crate) status: Mutex<PlayerStatus>,
+    pub(crate) params: PlayerParams,
 }
 
 /// Concrete Player implementation managing items queue.
@@ -96,6 +96,7 @@ impl PlayerImpl {
         // Seed the single speed source with the configured default rate.
         config.timestretch.set_speed(config.default_rate);
         let core = PlayerCore {
+            engine,
             engine_load: Arc::new(EngineLoad::default()),
             params: PlayerParams::from(&config),
             timestretch: config.timestretch,
@@ -103,24 +104,11 @@ impl PlayerImpl {
             byte_pool: config.byte_pool,
             status: Mutex::default(),
             items: ItemQueue::new(bus),
-            engine,
         };
         Self {
             core,
             phase: Mutex::new(PlayerPhase::Idle),
         }
-    }
-
-    /// Byte pool used for resources created by this player.
-    #[must_use]
-    pub fn byte_pool(&self) -> &BytePool {
-        &self.core.byte_pool
-    }
-
-    /// PCM pool used by this player's audio engine.
-    #[must_use]
-    pub fn pcm_pool(&self) -> &PcmPool {
-        self.core.engine.pcm_pool()
     }
 
     /// Advance to the next item in the queue.
@@ -137,6 +125,12 @@ impl PlayerImpl {
         self.core.items.announce_current_item(index);
     }
 
+    /// Byte pool used for resources created by this player.
+    #[must_use]
+    pub fn byte_pool(&self) -> &BytePool {
+        &self.core.byte_pool
+    }
+
     /// Drop the resource at `index` so the auto-advance prefetch path
     /// (`arm_next`) cannot plant it into the audio thread.
     ///
@@ -147,17 +141,6 @@ impl PlayerImpl {
     /// handover, surfacing as a barge-in.
     pub fn clear_item(&self, index: usize) {
         self.core.items.clear_item(index);
-    }
-
-    /// Insert a resource with optional queue-item identity metadata at a
-    /// specific position, or append to the end.
-    pub fn insert(
-        &self,
-        resource: Resource,
-        item_id: Option<Arc<str>>,
-        at_position: Option<usize>,
-    ) {
-        self.core.items.insert(resource, item_id, at_position);
     }
 
     pub(crate) fn enqueue_to_processor(&self, index: usize) -> Option<(Arc<str>, f64)> {
@@ -176,15 +159,21 @@ impl PlayerImpl {
         Some((src, item.duration_seconds))
     }
 
-    /// Remove item at index. Returns the removed resource, or `None` if out of
-    /// bounds or already consumed.
-    pub fn remove_at(&self, index: usize) -> Option<Resource> {
-        self.unarm_next();
+    /// Insert a resource with optional queue-item identity metadata at a
+    /// specific position, or append to the end.
+    pub fn insert(
+        &self,
+        resource: Resource,
+        item_id: Option<Arc<str>>,
+        at_position: Option<usize>,
+    ) {
+        self.core.items.insert(resource, item_id, at_position);
+    }
 
-        self.core
-            .items
-            .remove_at(index)
-            .map(|queued| queued.resource)
+    /// PCM pool used by this player's audio engine.
+    #[must_use]
+    pub fn pcm_pool(&self) -> &PcmPool {
+        self.core.engine.pcm_pool()
     }
 
     /// Remove all items from the queue.
@@ -195,6 +184,17 @@ impl PlayerImpl {
         let _ = self.send_to_slot(PlayerCmd::Clear);
         self.enter_stopped();
         debug!("all items removed");
+    }
+
+    /// Remove item at index. Returns the removed resource, or `None` if out of
+    /// bounds or already consumed.
+    pub fn remove_at(&self, index: usize) -> Option<Resource> {
+        self.unarm_next();
+
+        self.core
+            .items
+            .remove_at(index)
+            .map(|queued| queued.resource)
     }
 
     /// Replace a consumed (or existing) resource at the given index.

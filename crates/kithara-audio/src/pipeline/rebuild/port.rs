@@ -31,10 +31,10 @@ use crate::pipeline::{
 
 struct JobDeps {
     incoming_completion: Arc<ArrayQueue<DecoderBuildComplete>>,
-    factory: DecoderFactory,
-    gapless_mode: GaplessMode,
     replacement_completion: Arc<ArrayQueue<DecoderBuildComplete>>,
     wake: Arc<dyn WorkerWake>,
+    factory: DecoderFactory,
+    gapless_mode: GaplessMode,
 }
 
 impl Clone for JobDeps {
@@ -59,26 +59,26 @@ enum PendingInput<T: StreamType> {
 
 struct PendingJob<T: StreamType> {
     build: BuildId,
-    deps: JobDeps,
-    input: PendingInput<T>,
-    landing: Option<Duration>,
-    media_info: MediaInfo,
-    offset: u64,
     purpose: DecoderBuildPurpose,
+    deps: JobDeps,
+    media_info: MediaInfo,
+    landing: Option<Duration>,
+    input: PendingInput<T>,
+    offset: u64,
     seek_epoch: u64,
 }
 
 pub(crate) struct RebuildPort<T: StreamType> {
     deps: JobDeps,
-    next_build: u64,
     pending: Option<PendingJob<T>>,
     ready_replacement: Option<DecoderBuildComplete>,
     runtime: RuntimeHandle,
+    next_build: u64,
 }
 
 pub(crate) struct RebuildRuntime {
-    pub(crate) handle: RuntimeHandle,
     pub(crate) wake: Arc<dyn WorkerWake>,
+    pub(crate) handle: RuntimeHandle,
 }
 
 impl<T: StreamType> RebuildPort<T> {
@@ -91,9 +91,9 @@ impl<T: StreamType> RebuildPort<T> {
     ) -> Self {
         Self {
             deps: JobDeps {
-                incoming_completion: Arc::new(ArrayQueue::new(Self::COMPLETION_CAPACITY)),
                 factory,
                 gapless_mode,
+                incoming_completion: Arc::new(ArrayQueue::new(Self::COMPLETION_CAPACITY)),
                 replacement_completion: Arc::new(ArrayQueue::new(Self::COMPLETION_CAPACITY)),
                 wake: runtime.wake,
             },
@@ -102,6 +102,36 @@ impl<T: StreamType> RebuildPort<T> {
             ready_replacement: None,
             runtime: runtime.handle,
         }
+    }
+
+    pub(crate) fn cache_replacement(
+        &mut self,
+        complete: DecoderBuildComplete,
+    ) -> Option<DecoderBuildComplete> {
+        self.ready_replacement.replace(complete)
+    }
+
+    pub(crate) const fn can_prepare(&self) -> bool {
+        self.pending.is_none()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn completion(&self) -> Arc<ArrayQueue<DecoderBuildComplete>> {
+        self.deps.replacement_completion.clone()
+    }
+
+    fn next_build(&mut self) -> BuildId {
+        let build = BuildId::new(self.next_build);
+        self.next_build = self.next_build.wrapping_add(1);
+        build
+    }
+
+    pub(crate) fn pop_incoming_completion(&self) -> Option<DecoderBuildComplete> {
+        self.deps.incoming_completion.pop()
+    }
+
+    pub(crate) fn pop_replacement_completion(&self) -> Option<DecoderBuildComplete> {
+        self.deps.replacement_completion.pop()
     }
 
     pub(crate) fn prepare(
@@ -139,9 +169,9 @@ impl<T: StreamType> RebuildPort<T> {
         });
         Ok(RebuildState {
             build,
-            superseded_seek: None,
             recreate,
             started_seek_epoch,
+            superseded_seek: None,
         })
     }
 
@@ -160,19 +190,15 @@ impl<T: StreamType> RebuildPort<T> {
         let build = self.next_build();
         self.pending = Some(PendingJob {
             build,
+            media_info,
+            seek_epoch,
             deps: self.deps.clone(),
             input: PendingInput::Opened(reader),
             landing: Some(landing),
-            media_info,
             offset: 0,
             purpose: DecoderBuildPurpose::Incoming(transition),
-            seek_epoch,
         });
         Some((transition, build))
-    }
-
-    pub(crate) const fn can_prepare(&self) -> bool {
-        self.pending.is_none()
     }
 
     pub(crate) fn reader_profile(
@@ -183,19 +209,23 @@ impl<T: StreamType> RebuildPort<T> {
         self.deps.factory.reader_profile(media_info, byte_map)
     }
 
-    pub(crate) fn pop_incoming_completion(&self) -> Option<DecoderBuildComplete> {
-        self.deps.incoming_completion.pop()
+    #[cfg(test)]
+    pub(crate) fn run_inline(&mut self) {
+        if let Some(job) = self.pending.take() {
+            run(job);
+        }
     }
 
-    pub(crate) fn pop_replacement_completion(&self) -> Option<DecoderBuildComplete> {
-        self.deps.replacement_completion.pop()
+    #[cfg(test)]
+    pub(crate) fn runtime(&self) -> &RuntimeHandle {
+        &self.runtime
     }
 
-    pub(crate) fn cache_replacement(
-        &mut self,
-        complete: DecoderBuildComplete,
-    ) -> Option<DecoderBuildComplete> {
-        self.ready_replacement.replace(complete)
+    pub(crate) fn submit(&mut self) {
+        let Some(job) = self.pending.take() else {
+            return;
+        };
+        drop(spawn_blocking_on(&self.runtime, move || run(job)));
     }
 
     pub(crate) fn take_replacement(&mut self, build: BuildId) -> Option<DecoderBuildComplete> {
@@ -210,38 +240,8 @@ impl<T: StreamType> RebuildPort<T> {
         }
     }
 
-    pub(crate) fn submit(&mut self) {
-        let Some(job) = self.pending.take() else {
-            return;
-        };
-        drop(spawn_blocking_on(&self.runtime, move || run(job)));
-    }
-
     pub(crate) fn wake(&self) {
         self.deps.wake.wake();
-    }
-
-    fn next_build(&mut self) -> BuildId {
-        let build = BuildId::new(self.next_build);
-        self.next_build = self.next_build.wrapping_add(1);
-        build
-    }
-
-    #[cfg(test)]
-    pub(crate) fn completion(&self) -> Arc<ArrayQueue<DecoderBuildComplete>> {
-        self.deps.replacement_completion.clone()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn run_inline(&mut self) {
-        if let Some(job) = self.pending.take() {
-            run(job);
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn runtime(&self) -> &RuntimeHandle {
-        &self.runtime
     }
 }
 

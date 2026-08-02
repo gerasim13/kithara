@@ -24,11 +24,11 @@ use crate::{
 #[non_exhaustive]
 pub struct CompiledUi {
     pub root: CompiledNode,
+    /// Names the item the pointer is carrying; drawn at the pointer.
+    pub dragged: Option<Binding>,
     pub size: SizeSpec,
     /// The layout asked to be framed by its own resize edges.
     pub resize_edges: bool,
-    /// Names the item the pointer is carrying; drawn at the pointer.
-    pub dragged: Option<Binding>,
     arena: StrArena,
 }
 
@@ -106,8 +106,8 @@ pub fn compile(
     let bytes = loaded.text.len();
     if bytes > config.limits.max_bytes {
         return Err(UiDocError::TooLarge {
-            origin: loaded.uri,
             bytes,
+            origin: loaded.uri,
             max: config.limits.max_bytes,
         });
     }
@@ -135,19 +135,19 @@ pub fn compile(
     Ok(CompiledUi {
         root,
         size,
-        resize_edges: document.resize_edges,
         dragged,
         arena,
+        resize_edges: document.resize_edges,
     })
 }
 
 struct Compiler<'a> {
-    resolver: &'a dyn SourceResolver,
-    endpoints: &'a dyn EndpointRegistry,
-    skin: &'a SkinDoc,
-    config: &'a UiConfig,
     budget: &'a mut Budget,
     interner: &'a mut Interner,
+    skin: &'a SkinDoc,
+    config: &'a UiConfig,
+    endpoints: &'a dyn EndpointRegistry,
+    resolver: &'a dyn SourceResolver,
 }
 
 impl Compiler<'_> {
@@ -170,10 +170,10 @@ impl Compiler<'_> {
                 };
                 let blocks = children.iter().any(|(_, child)| child.blocks());
                 Ok(CompiledNode::Split {
-                    axis: *axis,
                     children,
                     size,
                     blocks,
+                    axis: *axis,
                 })
             }
             LayoutNode::Optional { id, hidden, node } => {
@@ -230,6 +230,8 @@ impl Compiler<'_> {
                 let instance = self.interner.intern(&instance.0, layout_uri)?;
                 Ok(CompiledNode::Module {
                     instance,
+                    size,
+                    blocks,
                     module: expanded.module,
                     title: expanded.title,
                     chip: expanded.chip,
@@ -241,8 +243,6 @@ impl Compiler<'_> {
                     drop: expanded.drop,
                     collapsed: expanded.collapsed,
                     root: Box::new(expanded.root),
-                    size,
-                    blocks,
                 })
             }
         }

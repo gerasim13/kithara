@@ -18,14 +18,14 @@ pub(super) struct ArtifactSet {
 
 #[derive(Serialize)]
 struct Manifest<'a> {
-    schema_version: u32,
     revision: &'a str,
-    status: &'static str,
-    profile: super::AssessmentProfile,
-    depth: super::AssessmentDepth,
     scope: &'a str,
+    status: &'static str,
     verdict: &'static str,
+    depth: super::AssessmentDepth,
+    profile: super::AssessmentProfile,
     files: BTreeMap<&'static str, &'static str>,
+    schema_version: u32,
 }
 
 pub(super) fn write(assessment: &Assessment, root: &Path) -> Result<ArtifactSet> {

@@ -13,12 +13,12 @@ use crate::ResamplerError;
 #[derive(fieldwork::Fieldwork)]
 pub(super) struct AppleResamplerInputState {
     staged: SmallVec<[PcmBuf; 8]>,
+    eos: bool,
     channels: usize,
-    frames: usize,
-    offset: usize,
     #[field(get(copy, vis = "pub(super)"))]
     consumed: usize,
-    eos: bool,
+    frames: usize,
+    offset: usize,
 }
 
 impl AppleResamplerInputState {

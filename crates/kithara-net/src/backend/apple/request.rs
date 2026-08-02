@@ -60,10 +60,6 @@ impl AppleRequest {
         self.accept_encoding
     }
 
-    pub(super) fn url(&self) -> &Url {
-        &self.url
-    }
-
     pub(super) fn into_ns_request(
         self,
         accept_encoding: &str,
@@ -94,6 +90,10 @@ impl AppleRequest {
         }
 
         Ok(request)
+    }
+
+    pub(super) fn url(&self) -> &Url {
+        &self.url
     }
 }
 

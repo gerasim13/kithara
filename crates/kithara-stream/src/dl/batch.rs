@@ -31,47 +31,47 @@ struct RequestObserver {
 impl NetObserver for RequestObserver {
     fn body_resumed(&self, resume_number: u32, from_offset: u64, honoured_range: bool) {
         self.bus.publish(DownloaderEvent::BodyResumed {
-            request_id: self.request_id,
             resume_number,
             from_offset,
             honoured_range,
+            request_id: self.request_id,
         });
     }
 
     fn body_stalled(&self, consumed: u64, expected: Option<u64>, stall: Duration) {
         self.bus.publish(DownloaderEvent::BodyStalled {
-            request_id: self.request_id,
             consumed,
             expected,
             stall,
+            request_id: self.request_id,
         });
     }
 
     fn first_byte(&self, ttfb: Duration, status: u16, partial: bool) {
         self.bus.publish(DownloaderEvent::FirstByte {
-            request_id: self.request_id,
             ttfb,
             status,
             partial,
+            request_id: self.request_id,
         });
     }
 
     fn retry_exhausted(&self, max_retries: u32, consumed: u64, error: &NetError) {
         self.bus.publish(DownloaderEvent::RetryExhausted {
-            request_id: self.request_id,
             max_retries,
             consumed,
+            request_id: self.request_id,
             error: error.clone(),
         });
     }
 
     fn retrying(&self, attempt: u32, max_retries: u32, error: &NetError, backoff: Duration) {
         self.bus.publish(DownloaderEvent::RequestRetrying {
-            request_id: self.request_id,
             attempt,
             max_retries,
-            error: error.clone(),
             backoff,
+            request_id: self.request_id,
+            error: error.clone(),
         });
     }
 }
@@ -168,8 +168,8 @@ pub(super) struct BatchGroup {
 }
 
 pub(super) struct BatchResult {
-    pub(super) dispatched: usize,
     pub(super) pending: Vec<SlotEntry>,
+    pub(super) dispatched: usize,
 }
 
 impl FromIterator<SlotEntry> for BatchGroup {
@@ -223,8 +223,8 @@ impl BatchGroup {
             }
         }
         BatchResult {
-            dispatched,
             pending,
+            dispatched,
         }
     }
 }

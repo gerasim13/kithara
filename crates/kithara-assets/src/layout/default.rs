@@ -19,15 +19,6 @@ impl Consts {
 pub struct DefaultLayout;
 
 impl AssetLayout for DefaultLayout {
-    fn root(&self, source: &AssetSource) -> String {
-        match source {
-            AssetSource::Remote { url, discriminator } => {
-                remote_root(url, discriminator.as_deref())
-            }
-            AssetSource::Local { path } => local_root(path),
-        }
-    }
-
     fn path(&self, resource: &AssetResource) -> String {
         match resource {
             AssetResource::Source { extension } => source_path(extension),
@@ -35,6 +26,15 @@ impl AssetLayout for DefaultLayout {
             AssetResource::Named { namespace, name } => {
                 format!("{}/{}", named_namespace(namespace), encode_component(name))
             }
+        }
+    }
+
+    fn root(&self, source: &AssetSource) -> String {
+        match source {
+            AssetSource::Remote { url, discriminator } => {
+                remote_root(url, discriminator.as_deref())
+            }
+            AssetSource::Local { path } => local_root(path),
         }
     }
 }

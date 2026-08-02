@@ -37,8 +37,28 @@ impl StretchControls {
     }
 
     #[must_use]
+    pub fn backend(&self) -> StretchKind {
+        StretchKind::from(self.engine.backend.load(Ordering::Relaxed))
+    }
+
+    #[must_use]
+    pub fn keylock(&self) -> bool {
+        self.engine.keylock.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
     pub fn region_plan(&self) -> Option<Arc<RegionPlan>> {
         self.region_plan.load_full()
+    }
+
+    pub fn set_backend(&self, backend: StretchKind) {
+        self.engine
+            .backend
+            .store(u8::from(backend), Ordering::Relaxed);
+    }
+
+    pub fn set_keylock(&self, on: bool) {
+        self.engine.keylock.store(on, Ordering::Relaxed);
     }
 
     pub fn set_region_plan(&self, plan: Option<Arc<RegionPlan>>) {
@@ -52,25 +72,5 @@ impl StretchControls {
     #[must_use]
     pub fn speed(&self) -> f32 {
         self.speed.load(Ordering::Relaxed)
-    }
-
-    #[must_use]
-    pub fn backend(&self) -> StretchKind {
-        StretchKind::from(self.engine.backend.load(Ordering::Relaxed))
-    }
-
-    #[must_use]
-    pub fn keylock(&self) -> bool {
-        self.engine.keylock.load(Ordering::Relaxed)
-    }
-
-    pub fn set_backend(&self, backend: StretchKind) {
-        self.engine
-            .backend
-            .store(u8::from(backend), Ordering::Relaxed);
-    }
-
-    pub fn set_keylock(&self, on: bool) {
-        self.engine.keylock.store(on, Ordering::Relaxed);
     }
 }

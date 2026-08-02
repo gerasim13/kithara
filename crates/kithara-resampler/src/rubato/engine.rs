@@ -42,30 +42,6 @@ impl RubatoEngine {
         }
     }
 
-    fn with_inner(
-        inner: Box<dyn RubatoResamplerTrait<f32>>,
-        channels: NonZeroUsize,
-        pcm_pool: PcmPool,
-    ) -> Result<Self, ResamplerConstructionError> {
-        let output_frames = inner.output_frames_max();
-        Ok(Self {
-            inner,
-            output_scratch: PooledScratch::new(pcm_pool, channels, output_frames)?,
-        })
-    }
-
-    delegate::delegate! {
-        to self.inner {
-            pub(super) fn input_frames_max(&self) -> usize;
-            pub(super) fn input_frames_next(&self) -> usize;
-            pub(super) fn output_delay(&self) -> usize;
-            pub(super) fn output_frames_max(&self) -> usize;
-            pub(super) fn output_frames_next(&self) -> usize;
-            pub(super) fn resample_ratio(&self) -> f64;
-            pub(super) fn reset(&mut self);
-        }
-    }
-
     fn new_async(
         quality: ResamplerQuality,
         source_rate: u32,
@@ -161,6 +137,30 @@ impl RubatoEngine {
         }
 
         Ok(ResamplerProcess::new(input_frames, output_frames))
+    }
+
+    fn with_inner(
+        inner: Box<dyn RubatoResamplerTrait<f32>>,
+        channels: NonZeroUsize,
+        pcm_pool: PcmPool,
+    ) -> Result<Self, ResamplerConstructionError> {
+        let output_frames = inner.output_frames_max();
+        Ok(Self {
+            inner,
+            output_scratch: PooledScratch::new(pcm_pool, channels, output_frames)?,
+        })
+    }
+
+    delegate::delegate! {
+        to self.inner {
+            pub(super) fn input_frames_max(&self) -> usize;
+            pub(super) fn input_frames_next(&self) -> usize;
+            pub(super) fn output_delay(&self) -> usize;
+            pub(super) fn output_frames_max(&self) -> usize;
+            pub(super) fn output_frames_next(&self) -> usize;
+            pub(super) fn resample_ratio(&self) -> f64;
+            pub(super) fn reset(&mut self);
+        }
     }
 }
 

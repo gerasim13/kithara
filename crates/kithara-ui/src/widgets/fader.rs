@@ -27,11 +27,11 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Fader<'path, 'value, 'data, 'skin> {
+    skin: &'skin Skin,
     path: &'path str,
     style: FaderStyle,
     label: Option<&'path str>,
     value: Option<&'value ReadValue<'data>>,
-    skin: &'skin Skin,
 }
 
 impl<'a> Widget<'a> for Fader<'_, '_, '_, '_> {
@@ -175,8 +175,8 @@ fn slider_style(skin: &Skin) -> impl Fn(&Theme, SliderStatus) -> SliderStyle + '
 }
 
 struct FaderTicks {
-    metrics: FaderSkin,
     color: Color,
+    metrics: FaderSkin,
 }
 
 impl canvas::Program<UiEvent> for FaderTicks {
@@ -206,10 +206,10 @@ impl canvas::Program<UiEvent> for FaderTicks {
 }
 
 struct SegmentedVolumeCanvas {
-    drag: ScalarDrag,
-    metrics: FaderSkin,
     border_color: Color,
+    metrics: FaderSkin,
     palette: RenderPalette,
+    drag: ScalarDrag,
     volume: f32,
 }
 

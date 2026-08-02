@@ -25,7 +25,6 @@ type SlotHandle = SlotControl;
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct EngineImpl {
-    session: SessionHandle,
     running: AtomicBool,
     master_volume: AtomicF32,
     #[field(get)]
@@ -37,6 +36,7 @@ pub struct EngineImpl {
     start_lock: Mutex<()>,
     runtime: Option<RuntimeHandle>,
     pcm_pool: PcmPool,
+    session: SessionHandle,
 }
 
 impl EngineImpl {
@@ -84,8 +84,15 @@ impl EngineImpl {
         self.config.sample_rate
     }
 
-    pub(crate) fn eq_band_count(&self) -> usize {
-        self.config.eq_layout.len()
+    pub(crate) fn drain_slot_trash(&self, slot: SlotId) -> bool {
+        self.slots.lock().get_mut(slot).is_some_and(|handle| {
+            Self::drain_slot_trash_handle(handle);
+            true
+        })
+    }
+
+    fn drain_slot_trash_handle(handle: &mut SlotHandle) {
+        while handle.trash_rx.try_pop().is_some() {}
     }
 
     fn emit(&self, event: EngineEvent) {
@@ -104,6 +111,21 @@ impl EngineImpl {
         *player_id = Some(id);
         drop(player_id);
         Ok(id)
+    }
+
+    pub(crate) fn eq_band_count(&self) -> usize {
+        self.config.eq_layout.len()
+    }
+
+    pub(crate) fn pcm_pool(&self) -> &PcmPool {
+        &self.pcm_pool
+    }
+
+    pub(crate) fn pop_slot_notification(&self, slot: SlotId) -> Option<PlayerNotification> {
+        self.slots
+            .lock()
+            .get_mut(slot)
+            .and_then(|handle| handle.notif_rx.try_pop())
     }
 
     /// Runtime handle captured at engine creation.
@@ -149,30 +171,8 @@ impl EngineImpl {
         self.slots.lock().playback(slot)
     }
 
-    pub(crate) fn drain_slot_trash(&self, slot: SlotId) -> bool {
-        self.slots.lock().get_mut(slot).is_some_and(|handle| {
-            Self::drain_slot_trash_handle(handle);
-            true
-        })
-    }
-
-    fn drain_slot_trash_handle(handle: &mut SlotHandle) {
-        while handle.trash_rx.try_pop().is_some() {}
-    }
-
-    pub(crate) fn pop_slot_notification(&self, slot: SlotId) -> Option<PlayerNotification> {
-        self.slots
-            .lock()
-            .get_mut(slot)
-            .and_then(|handle| handle.notif_rx.try_pop())
-    }
-
     pub(crate) fn tick(&self) -> Result<(), PlayError> {
         self.session.tick()
-    }
-
-    pub(crate) fn pcm_pool(&self) -> &PcmPool {
-        &self.pcm_pool
     }
 }
 
@@ -220,6 +220,12 @@ impl EngineImpl {
         Ok(slot_id)
     }
 
+    /// Store the desired gain without dispatching: the mixer batch already
+    /// actuated the graph.
+    pub(super) fn commit_desired_master_volume(&self, level: f32) {
+        self.master_volume.store(level, Ordering::Relaxed);
+    }
+
     pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
         if !self.running.load(Ordering::Acquire) {
             debug!(
@@ -235,30 +241,29 @@ impl EngineImpl {
         self.running.load(Ordering::Acquire)
     }
 
+    /// Effective sample rate of the audio host (from Firewheel / `CoreAudio`).
+    ///
+    /// Returns the config default if the engine is not running yet.
+    /// Used to pre-initialise the resampler in `ResourceConfig` so that
+    /// `make_sincs` runs during `Audio::new()` (off the worker thread)
+    /// instead of lazily on the first `step_track()` call.
+    pub fn master_sample_rate(&self) -> u32 {
+        if !self.running.load(Ordering::Acquire) {
+            return self.config.sample_rate;
+        }
+        self.session.query_sample_rate(self.config.sample_rate)
+    }
+
     pub fn master_volume(&self) -> f32 {
         self.master_volume.load(Ordering::Relaxed)
     }
 
-    pub(super) fn start_lock(&self) -> &Mutex<()> {
-        &self.start_lock
+    pub fn max_slots(&self) -> usize {
+        self.config.max_slots
     }
 
     pub(super) fn registered_player_id(&self) -> Option<PlayerId> {
         *self.player_id.lock()
-    }
-
-    pub(super) fn session_handle(&self) -> &SessionHandle {
-        &self.session
-    }
-
-    /// Store the desired gain without dispatching: the mixer batch already
-    /// actuated the graph.
-    pub(super) fn commit_desired_master_volume(&self, level: f32) {
-        self.master_volume.store(level, Ordering::Relaxed);
-    }
-
-    pub fn max_slots(&self) -> usize {
-        self.config.max_slots
     }
 
     pub fn release_slot(&self, slot: SlotId) -> Result<(), PlayError> {
@@ -281,6 +286,10 @@ impl EngineImpl {
         debug!(?slot, player_id, "slot released");
         self.emit(EngineEvent::SlotReleased { slot });
         Ok(())
+    }
+
+    pub(super) fn session_handle(&self) -> &SessionHandle {
+        &self.session
     }
 
     pub fn start(&self) -> Result<(), PlayError> {
@@ -307,6 +316,10 @@ impl EngineImpl {
         Ok(())
     }
 
+    pub(super) fn start_lock(&self) -> &Mutex<()> {
+        &self.start_lock
+    }
+
     pub fn stop(&self) -> Result<(), PlayError> {
         if !self.running.load(Ordering::Acquire) {
             return Err(PlayError::EngineNotRunning);
@@ -325,19 +338,6 @@ impl EngineImpl {
 
     pub fn subscribe(&self) -> kithara_events::EventReceiver {
         self.bus.subscribe()
-    }
-
-    /// Effective sample rate of the audio host (from Firewheel / `CoreAudio`).
-    ///
-    /// Returns the config default if the engine is not running yet.
-    /// Used to pre-initialise the resampler in `ResourceConfig` so that
-    /// `make_sincs` runs during `Audio::new()` (off the worker thread)
-    /// instead of lazily on the first `step_track()` call.
-    pub fn master_sample_rate(&self) -> u32 {
-        if !self.running.load(Ordering::Acquire) {
-            return self.config.sample_rate;
-        }
-        self.session.query_sample_rate(self.config.sample_rate)
     }
 }
 

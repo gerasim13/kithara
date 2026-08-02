@@ -44,16 +44,20 @@ impl SemanticState {
 #[derive(Debug, Serialize)]
 pub(crate) struct SemanticSummary {
     pub(crate) state: SemanticState,
-    pub(crate) requested_symbols: usize,
-    pub(crate) prepared_symbols: usize,
-    pub(crate) outgoing_calls: usize,
-    pub(crate) resolved_edges: usize,
-    pub(crate) unmatched_targets: usize,
-    pub(crate) skipped_symbols: usize,
     pub(crate) diagnostics: Vec<String>,
+    pub(crate) outgoing_calls: usize,
+    pub(crate) prepared_symbols: usize,
+    pub(crate) requested_symbols: usize,
+    pub(crate) resolved_edges: usize,
+    pub(crate) skipped_symbols: usize,
+    pub(crate) unmatched_targets: usize,
 }
 
 impl SemanticSummary {
+    pub(crate) fn is_incomplete(&self) -> bool {
+        matches!(self.state, SemanticState::TimedOut | SemanticState::Failed)
+    }
+
     pub(crate) fn static_only(diagnostic: impl Into<String>) -> Self {
         Self {
             state: SemanticState::Unavailable,
@@ -65,10 +69,6 @@ impl SemanticSummary {
             skipped_symbols: 0,
             diagnostics: vec![diagnostic.into()],
         }
-    }
-
-    pub(crate) fn is_incomplete(&self) -> bool {
-        matches!(self.state, SemanticState::TimedOut | SemanticState::Failed)
     }
 }
 
@@ -168,11 +168,11 @@ fn select_symbols(
 
 #[derive(Default)]
 struct SemanticProgress {
-    prepared_symbols: usize,
+    diagnostics: Vec<String>,
     outgoing_calls: usize,
+    prepared_symbols: usize,
     resolved_edges: usize,
     unmatched_targets: usize,
-    diagnostics: Vec<String>,
 }
 
 type ResolutionResult = Result<SemanticProgress, (ClientError, SemanticProgress)>;
@@ -268,11 +268,11 @@ fn complete_summary(
     SemanticSummary {
         state,
         requested_symbols,
+        skipped_symbols,
         prepared_symbols: progress.prepared_symbols,
         outgoing_calls: progress.outgoing_calls,
         resolved_edges: progress.resolved_edges,
         unmatched_targets: progress.unmatched_targets,
-        skipped_symbols,
         diagnostics: progress.diagnostics,
     }
 }
@@ -309,18 +309,18 @@ fn failed_summary(
     SemanticSummary {
         state,
         requested_symbols,
+        skipped_symbols,
         prepared_symbols: progress.prepared_symbols,
         outgoing_calls: progress.outgoing_calls,
         resolved_edges: progress.resolved_edges,
         unmatched_targets: progress.unmatched_targets,
-        skipped_symbols,
         diagnostics: progress.diagnostics,
     }
 }
 
 struct LocationIndex {
-    root: PathBuf,
     by_location: BTreeMap<(String, usize), Vec<NodeId>>,
+    root: PathBuf,
 }
 
 impl LocationIndex {
@@ -340,8 +340,8 @@ impl LocationIndex {
             }
         }
         Self {
-            root: root.to_path_buf(),
             by_location,
+            root: root.to_path_buf(),
         }
     }
 

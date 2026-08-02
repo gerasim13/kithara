@@ -12,10 +12,10 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Telemetry<'value, 'data, 'skin> {
+    skin: &'skin Skin,
+    value: Option<&'value ReadValue<'data>>,
     format: ScalarFormat,
     framed: bool,
-    value: Option<&'value ReadValue<'data>>,
-    skin: &'skin Skin,
 }
 
 impl<'a> Widget<'a> for Telemetry<'_, '_, '_> {

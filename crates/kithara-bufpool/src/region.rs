@@ -38,20 +38,20 @@ impl Default for RegionConfig {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct RegionStats {
-    /// Current bytes tracked across both pools.
-    pub allocated_bytes: usize,
     /// Post-initialization growth events that exceeded the shared budget.
     pub budget_overshoots: u64,
     /// Total home and steal hits for the byte pool.
     pub byte_pool_hits: u64,
     /// Fresh allocations by the byte pool.
     pub byte_pool_misses: u64,
-    /// Maximum bytes available to both pools.
-    pub max_bytes: usize,
     /// Total home and steal hits for the PCM pool.
     pub pcm_pool_hits: u64,
     /// Fresh allocations by the PCM pool.
     pub pcm_pool_misses: u64,
+    /// Current bytes tracked across both pools.
+    pub allocated_bytes: usize,
+    /// Maximum bytes available to both pools.
+    pub max_bytes: usize,
 }
 
 /// Canonical owner of byte and PCM pools sharing one byte budget.
@@ -61,9 +61,9 @@ pub struct Region {
 }
 
 struct RegionInner {
-    budget: RegionBudget,
     byte_pool: BytePool,
     pcm_pool: PcmPool,
+    budget: RegionBudget,
 }
 
 impl Region {
@@ -77,9 +77,9 @@ impl Region {
             PcmPool::with_region_budget(PCM_MAX_BUFFERS, PCM_TRIM_CAPACITY, budget.clone());
         Self {
             inner: Arc::new(RegionInner {
-                budget,
                 byte_pool,
                 pcm_pool,
+                budget,
             }),
         }
     }

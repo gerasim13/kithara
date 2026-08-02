@@ -68,14 +68,6 @@ impl<R: AtomicResource> AtomicFetch<R> {
         }
     }
 
-    /// Execute a custom fetch command through the underlying downloader.
-    ///
-    /// # Errors
-    /// Returns the underlying [`NetError`] when the fetch fails.
-    pub(crate) async fn execute(&self, cmd: FetchCmd) -> Result<FetchResponse, NetError> {
-        self.downloader.execute(cmd).await
-    }
-
     async fn download(
         &self,
         key: &ResourceKey,
@@ -90,6 +82,14 @@ impl<R: AtomicResource> AtomicFetch<R> {
             "kithara-hls: fetching from network"
         );
         download_atomic_bytes(&self.downloader, url.clone(), headers).await
+    }
+
+    /// Execute a custom fetch command through the underlying downloader.
+    ///
+    /// # Errors
+    /// Returns the underlying [`NetError`] when the fetch fails.
+    pub(crate) async fn execute(&self, cmd: FetchCmd) -> Result<FetchResponse, NetError> {
+        self.downloader.execute(cmd).await
     }
 
     fn invalidate(&self, key: &ResourceKey) -> HlsResult<()> {

@@ -11,17 +11,17 @@ use url::Url;
 
 #[derive(Debug)]
 struct HostileLayout {
-    root: &'static str,
     path: &'static str,
+    root: &'static str,
 }
 
 impl AssetLayout for HostileLayout {
-    fn root(&self, _source: &AssetSource) -> String {
-        self.root.to_owned()
-    }
-
     fn path(&self, _resource: &AssetResource) -> String {
         self.path.to_owned()
+    }
+
+    fn root(&self, _source: &AssetSource) -> String {
+        self.root.to_owned()
     }
 }
 

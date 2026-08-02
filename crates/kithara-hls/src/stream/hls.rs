@@ -140,9 +140,9 @@ impl StreamType for Hls {
         let emit = Arc::new(DeferredBus::new(bus.clone(), 256));
 
         let plan_ctx = PlanCtx {
-            bus: bus.clone(),
             look_ahead_bytes,
             look_ahead_segments,
+            bus: bus.clone(),
             scope: stream_peer.scope(),
             headers: config.headers.clone(),
             prefetch_budget: config.download_batch_size.max(1),

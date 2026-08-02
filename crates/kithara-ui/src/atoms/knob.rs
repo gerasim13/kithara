@@ -20,10 +20,10 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Knob<'path, 'value, 'data, 'skin> {
+    skin: &'skin Skin,
     path: &'path str,
     label: Option<&'data str>,
     value: Option<&'value ReadValue<'data>>,
-    skin: &'skin Skin,
 }
 
 impl<'a> Widget<'a> for Knob<'_, '_, '_, '_> {
@@ -75,13 +75,13 @@ impl<'a> Widget<'a> for Knob<'_, '_, '_, '_> {
 }
 
 struct KnobCanvas {
-    body_fill: Color,
     body_border: Color,
+    body_fill: Color,
+    indicator_color: Color,
     track_color: Color,
     value_color: Color,
-    indicator_color: Color,
-    drag: ScalarDrag,
     metrics: KnobSkin,
+    drag: ScalarDrag,
     value: f32,
 }
 

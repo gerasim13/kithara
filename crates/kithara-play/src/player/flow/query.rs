@@ -7,6 +7,86 @@ use super::super::core::PlayerImpl;
 use crate::{api::PlayerStatus, bridge::PlaybackSnapshot, engine::EngineImpl};
 
 impl PlayerImpl {
+    /// ABR handle of the currently loaded item, if any.
+    ///
+    /// Reads the stash populated by `enqueue_to_processor` — stays valid for
+    /// the whole life of the track, including after `items[idx]` has been
+    /// emptied by the load handoff.
+    #[must_use]
+    pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        self.phase.lock().abr_handle()
+    }
+
+    /// Current item index in the queue.
+    pub fn current_index(&self) -> usize {
+        self.core.items.current_index()
+    }
+
+    /// Current media duration in seconds.
+    ///
+    /// Returns `None` while duration is unknown — the engine sets the shared
+    /// atomic from the demuxer once mvhd / fmt-equivalent metadata is parsed.
+    /// The atomic's default `0.0` conflates "unknown" with "empty track";
+    /// callers that distinguish (e.g. `seek_seconds`'s `target >= dur` check,
+    /// queue auto-advance) need the `None` to avoid false-EOF on a freshly-
+    /// loaded track whose demuxer has not yet seen the metadata box.
+    pub fn duration_seconds(&self) -> Option<f64> {
+        let dur = self.playback_snapshot()?.duration;
+        (dur > 0.0).then_some(dur)
+    }
+
+    /// Live cost snapshot of the audio engine (decode + effects).
+    #[must_use]
+    pub fn engine_load(&self) -> EngineLoadSnapshot {
+        self.core.engine_load.snapshot()
+    }
+
+    /// Get EQ gain for a band in dB.
+    pub fn eq_gain(&self, band: usize) -> Option<f32> {
+        let slot_id = self.slot()?;
+        self.core
+            .engine
+            .slot_eq(slot_id)
+            .and_then(|eq| eq.gain(band))
+    }
+
+    /// Get the number of items in the queue (including consumed items).
+    pub fn item_count(&self) -> usize {
+        self.core.items.item_count()
+    }
+
+    /// Whether the queue slot at `index` still holds a resource.
+    ///
+    /// Loading an item into the processor empties its slot, so this is the
+    /// owning answer to "has this item been consumed" — the same fact
+    /// [`select_item`](Self::select_item) refuses to guess at. Callers that
+    /// mirror item state read it here instead of inferring the consumption
+    /// from their own bookkeeping.
+    #[must_use]
+    pub fn item_has_resource(&self, index: usize) -> bool {
+        self.core.items.has_resource(index)
+    }
+
+    /// Single coherent read of the active slot's live playback scalars.
+    ///
+    /// `None` when no slot is allocated. The standalone `position_seconds`
+    /// / `duration_seconds` / `is_playing` / `buffered_seconds` getters are
+    /// thin derivations of this snapshot — one shared read primitive.
+    pub fn playback_snapshot(&self) -> Option<PlaybackSnapshot> {
+        let slot_id = self.slot()?;
+        Some(self.core.engine.slot_playback(slot_id)?.snapshot())
+    }
+
+    /// Get current player status.
+    pub fn status(&self) -> PlayerStatus {
+        *self.core.status.lock()
+    }
+
+    /// Subscribe to player events.
+    pub fn subscribe(&self) -> kithara_events::EventReceiver {
+        self.core.engine.bus().subscribe()
+    }
+
     delegate! {
         to self.core {
             /// Get a reference to the underlying engine.
@@ -53,85 +133,5 @@ impl PlayerImpl {
             #[call(playback_snapshot)]
             pub fn position_seconds(&self) -> Option<f64>;
         }
-    }
-
-    /// Current item index in the queue.
-    pub fn current_index(&self) -> usize {
-        self.core.items.current_index()
-    }
-
-    /// Whether the queue slot at `index` still holds a resource.
-    ///
-    /// Loading an item into the processor empties its slot, so this is the
-    /// owning answer to "has this item been consumed" — the same fact
-    /// [`select_item`](Self::select_item) refuses to guess at. Callers that
-    /// mirror item state read it here instead of inferring the consumption
-    /// from their own bookkeeping.
-    #[must_use]
-    pub fn item_has_resource(&self, index: usize) -> bool {
-        self.core.items.has_resource(index)
-    }
-
-    /// ABR handle of the currently loaded item, if any.
-    ///
-    /// Reads the stash populated by `enqueue_to_processor` — stays valid for
-    /// the whole life of the track, including after `items[idx]` has been
-    /// emptied by the load handoff.
-    #[must_use]
-    pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
-        self.phase.lock().abr_handle()
-    }
-
-    /// Live cost snapshot of the audio engine (decode + effects).
-    #[must_use]
-    pub fn engine_load(&self) -> EngineLoadSnapshot {
-        self.core.engine_load.snapshot()
-    }
-
-    /// Current media duration in seconds.
-    ///
-    /// Returns `None` while duration is unknown — the engine sets the shared
-    /// atomic from the demuxer once mvhd / fmt-equivalent metadata is parsed.
-    /// The atomic's default `0.0` conflates "unknown" with "empty track";
-    /// callers that distinguish (e.g. `seek_seconds`'s `target >= dur` check,
-    /// queue auto-advance) need the `None` to avoid false-EOF on a freshly-
-    /// loaded track whose demuxer has not yet seen the metadata box.
-    pub fn duration_seconds(&self) -> Option<f64> {
-        let dur = self.playback_snapshot()?.duration;
-        (dur > 0.0).then_some(dur)
-    }
-
-    /// Get EQ gain for a band in dB.
-    pub fn eq_gain(&self, band: usize) -> Option<f32> {
-        let slot_id = self.slot()?;
-        self.core
-            .engine
-            .slot_eq(slot_id)
-            .and_then(|eq| eq.gain(band))
-    }
-
-    /// Get the number of items in the queue (including consumed items).
-    pub fn item_count(&self) -> usize {
-        self.core.items.item_count()
-    }
-
-    /// Single coherent read of the active slot's live playback scalars.
-    ///
-    /// `None` when no slot is allocated. The standalone `position_seconds`
-    /// / `duration_seconds` / `is_playing` / `buffered_seconds` getters are
-    /// thin derivations of this snapshot — one shared read primitive.
-    pub fn playback_snapshot(&self) -> Option<PlaybackSnapshot> {
-        let slot_id = self.slot()?;
-        Some(self.core.engine.slot_playback(slot_id)?.snapshot())
-    }
-
-    /// Get current player status.
-    pub fn status(&self) -> PlayerStatus {
-        *self.core.status.lock()
-    }
-
-    /// Subscribe to player events.
-    pub fn subscribe(&self) -> kithara_events::EventReceiver {
-        self.core.engine.bus().subscribe()
     }
 }

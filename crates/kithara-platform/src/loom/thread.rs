@@ -10,8 +10,8 @@ use crate::common::{thread_id::thread_id_hash, time::Duration};
 pub(crate) type Thread = ::loom::thread::Thread;
 
 pub struct JoinHandle<T> {
-    finished: LoomArc<AtomicBool>,
     inner: ::loom::thread::JoinHandle<T>,
+    finished: LoomArc<AtomicBool>,
 }
 
 impl<T> JoinHandle<T> {

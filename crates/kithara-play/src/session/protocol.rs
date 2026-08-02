@@ -121,8 +121,8 @@ mod wire {
 
     #[non_exhaustive]
     pub struct AllocatedSlot {
-        pub slot: SlotId,
         pub control: SlotControl,
+        pub slot: SlotId,
     }
 }
 
@@ -154,11 +154,6 @@ mod handle {
             Self(dispatcher)
         }
 
-        #[must_use]
-        pub fn dispatcher(&self) -> Arc<dyn SessionDispatcher> {
-            Arc::clone(&self.0)
-        }
-
         pub fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
             match self.exec_ok(Cmd::AllocateSlot { player_id })? {
                 Reply::SlotAllocated(allocated) => Ok(allocated),
@@ -166,6 +161,11 @@ mod handle {
                     "unexpected reply for session allocate slot".into(),
                 )),
             }
+        }
+
+        #[must_use]
+        pub fn dispatcher(&self) -> Arc<dyn SessionDispatcher> {
+            Arc::clone(&self.0)
         }
 
         pub fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {

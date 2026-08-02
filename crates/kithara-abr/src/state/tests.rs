@@ -609,7 +609,6 @@ fn request_target_accepts_manual_pin_target() {
 
 // Wall-clock interval measured against the instant `AbrState` captured at
 // construction: both must come from the same clock, so this one opts out
-// of the virtual one.
 #[kithara::test(flash(false))]
 fn min_switch_interval_prevents_oscillation() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
@@ -649,7 +648,6 @@ fn min_switch_interval_prevents_oscillation() {
 
 // Wall-clock interval measured against the instant `AbrState` captured at
 // construction: both must come from the same clock, so this one opts out
-// of the virtual one.
 #[kithara::test(flash(false))]
 fn min_switch_interval_guards_the_first_switch_of_a_session() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
@@ -863,7 +861,6 @@ async fn tick_already_optimal_retracts_stale_throughput_pending() {
 
 // Wall-clock interval measured against the instant `AbrState` captured at
 // construction: both must come from the same clock, so this one opts out
-// of the virtual one.
 #[kithara::test(flash(false))]
 fn tick_min_interval_hold_preserves_pending() {
     let settings = AbrSettings {

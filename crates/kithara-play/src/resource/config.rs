@@ -45,28 +45,30 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     /// Initial ABR mode passed to the HLS stream.
     #[builder(default)]
     pub(crate) initial_abr_mode: AbrMode,
+    /// Shared asset store used by playback and derived resources.
+    pub(crate) store: AssetStore,
     /// Decoder construction settings: backend selection, gapless mode, and
     /// decoder-side resampling.
     #[builder(default = default_resource_decoder_config())]
     pub(crate) decoder: AudioDecoderConfig<B>,
+    /// Shared byte pool for temporary buffers (probe, etc.).
+    pub(crate) byte_pool: BytePool,
     /// Encryption key handling configuration.
     #[builder(default)]
     pub(crate) keys: KeyOptions,
     /// Number of chunks to buffer before signaling preload readiness.
     #[builder(default = DEFAULT_PRELOAD_CHUNKS)]
     pub(crate) preload_chunks: NonZeroUsize,
-    /// Shared asset store used by playback and derived resources.
-    pub(crate) store: AssetStore,
     /// Unified event bus for streaming, decode, and audio events.
     #[builder(name = events)]
     pub(crate) bus: Option<EventBus>,
-    /// Shared byte pool for temporary buffers (probe, etc.).
-    pub(crate) byte_pool: BytePool,
     /// Per-track parent cancel. The atomic flag reaches the HLS coord's
     /// lock-free `is_cancelled()` read; downloader / file / decode paths derive
     /// children via [`CancelToken::child`]. `None` lets each subsystem own a
     /// standalone scope (see [`CancelScope::new`](kithara_platform::CancelScope)).
     pub(crate) cancel: Option<CancelToken>,
+    /// Optional cache discriminator mixed into the asset root.
+    pub(crate) discriminator: Option<String>,
     /// Shared downloader instance.
     pub(crate) downloader: Option<Downloader>,
     /// Shared live audio-engine cost meter (decode + effects).
@@ -81,10 +83,6 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     pub(crate) host_sample_rate: Option<NonZeroU32>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     pub(crate) look_ahead_bytes: Option<u64>,
-    /// Optional cache discriminator mixed into the asset root.
-    pub(crate) discriminator: Option<String>,
-    /// Shared PCM pool for temporary buffers.
-    pub(crate) pcm_pool: PcmPool,
     /// Shared playback rate atomic for the audio pipeline resampler in the
     /// non-tempo (no-`stretch`) chain.
     pub(crate) playback_rate: Option<Arc<AtomicF32>>,
@@ -94,6 +92,8 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     pub(crate) stretch: Option<Arc<StretchControls>>,
     /// Shared audio worker handle for cooperative multi-track decoding.
     pub(crate) worker: Option<AudioWorkerHandle>,
+    /// Shared PCM pool for temporary buffers.
+    pub(crate) pcm_pool: PcmPool,
     /// Audio resource source (URL or local path).
     pub(crate) src: ResourceSrc,
     /// Method used by HLS size estimation to probe segment lengths.

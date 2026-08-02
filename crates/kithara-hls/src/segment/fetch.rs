@@ -150,15 +150,15 @@ impl FetchClaim<Downloading> {
         }
     }
 
+    pub(crate) fn planned(&self) -> PlannedFetch {
+        self.data.planned
+    }
+
     /// Share the slot's CAS cell so the `on_slow` hook can flag the in-flight
     /// fetch slow without owning the claim. Cloned before the claim moves into
     /// the `FetchSlot`'s `on_complete`.
     pub(crate) fn slot_state(&self) -> Arc<SegmentSlotState> {
         Arc::clone(&self.data.slot)
-    }
-
-    pub(crate) fn planned(&self) -> PlannedFetch {
-        self.data.planned
     }
 
     pub(crate) fn variant(&self) -> Option<Arc<HlsVariant>> {
@@ -213,6 +213,7 @@ pub(crate) struct FetchSlot {
     /// Sole commit owner (non-`Clone`); consumed in `settle`.
     pub(crate) writer: AssetWriter,
     pub(crate) cancel: CancelToken,
+    pub(crate) bus: EventBus,
     pub(crate) handle: FetchClaim<Downloading>,
     /// Clone-able streaming-write handle for the fetch body closure.
     pub(crate) raw: RawWriteHandle,
@@ -223,7 +224,6 @@ pub(crate) struct FetchSlot {
     /// readable (the decrypt gate opens here for DRM segments), not on its
     /// 10 ms poll.
     pub(crate) signal: SizeSignal,
-    pub(crate) bus: EventBus,
 }
 
 impl From<FetchSlot> for OnCompleteFn {
@@ -367,8 +367,8 @@ impl FetchSlot {
                     decrypt_failure_site(planned, variant.as_ref())
                 {
                     bus.publish(DrmEvent::SegmentDecryptFailed {
-                        variant: variant_idx,
                         segment_index,
+                        variant: variant_idx,
                         detail: e.to_string(),
                     });
                 }

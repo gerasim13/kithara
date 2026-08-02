@@ -7,10 +7,10 @@ use crate::{config::AppConfig, sources::build_source};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogEntry {
     pub name: String,
-    /// Source string as the user supplied it; used for display and loading.
-    pub url: String,
     /// Canonical form of `url`; matches `TrackEntry::url` on deck queues.
     pub source: String,
+    /// Source string as the user supplied it; used for display and loading.
+    pub url: String,
 }
 
 impl CatalogEntry {

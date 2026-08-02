@@ -21,17 +21,6 @@ pub struct SelectTransition {
 }
 
 impl PlayerImpl {
-    /// Ensure the audio engine is started.
-    pub fn ensure_engine_started(&self) -> Result<(), PlayError> {
-        if self.core.engine.is_running() {
-            return Ok(());
-        }
-        match self.core.engine.start() {
-            Ok(()) | Err(PlayError::EngineAlreadyRunning) => Ok(()),
-            Err(e) => Err(e),
-        }
-    }
-
     /// Apply autoplay: resume at the default rate (and move to `Playing`) or
     /// hold at rate 0 (and move to `Paused`).
     ///
@@ -53,6 +42,17 @@ impl PlayerImpl {
                 .engine
                 .bus()
                 .publish(PlayerEvent::RateChanged { rate: 0.0 });
+        }
+    }
+
+    /// Ensure the audio engine is started.
+    pub fn ensure_engine_started(&self) -> Result<(), PlayError> {
+        if self.core.engine.is_running() {
+            return Ok(());
+        }
+        match self.core.engine.start() {
+            Ok(()) | Err(PlayError::EngineAlreadyRunning) => Ok(()),
+            Err(e) => Err(e),
         }
     }
 

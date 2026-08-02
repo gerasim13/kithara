@@ -30,8 +30,8 @@ pub(crate) fn detect<T: StreamType>(
         return FormatDecision::None;
     };
     FormatDecision::Recreate(RecreateState {
-        cause: RecreateCause::FormatBoundary,
         media_info,
+        cause: RecreateCause::FormatBoundary,
         next: RecreateNext::Decode,
         offset: range.start,
     })

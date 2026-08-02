@@ -13,13 +13,13 @@ impl BuildId {
         Self(value)
     }
 
-    pub(super) const fn get(self) -> u64 {
-        self.0
-    }
-
     #[cfg(test)]
     pub(crate) const fn fixture(value: u64) -> Self {
         Self(value)
+    }
+
+    pub(super) const fn get(self) -> u64 {
+        self.0
     }
 }
 

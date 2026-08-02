@@ -64,10 +64,10 @@ pub struct FetchCmd {
     /// fetch has not completed. `None` for callers that don't observe
     /// slowness. The request keeps running regardless.
     pub on_slow: Option<OnSlowFn>,
-    /// Optional byte range (HTTP Range request).
-    pub range: Option<RangeSpec>,
     /// Scheduling priority for proactive peer fetches.
     pub priority: Option<RequestPriority>,
+    /// Optional byte range (HTTP Range request).
+    pub range: Option<RangeSpec>,
     /// Optional per-request response validator.
     /// Called with the response headers after a successful HTTP response.
     /// Return `Err` to reject the response before the body is consumed.

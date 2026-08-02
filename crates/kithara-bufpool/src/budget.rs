@@ -28,8 +28,8 @@ impl RegionBudget {
     pub(crate) fn new(max_bytes: usize) -> Self {
         Self {
             inner: Arc::new(RegionBudgetInner {
-                allocated_bytes: AtomicUsize::new(0),
                 max_bytes,
+                allocated_bytes: AtomicUsize::new(0),
             }),
         }
     }

@@ -5,30 +5,30 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct MockData {
-    title: String,
+    vis_indices: (String, String, String),
+    vis_presets: (String, String, String),
     artist: String,
     breadcrumb: String,
     footer_tokens_anatomy: String,
-    vis_indices: (String, String, String),
-    vis_presets: (String, String, String),
-    tree: Vec<MockTreeRow>,
+    title: String,
     tracks: Vec<MockTrack>,
+    tree: Vec<MockTreeRow>,
 }
 
 #[derive(Deserialize)]
 struct MockTreeRow {
-    #[serde(default)]
-    depth: u8,
-    label: String,
     icon: MockTreeIcon,
     #[serde(default)]
     count: Option<u32>,
     #[serde(default)]
     expanded: Option<bool>,
+    label: String,
+    #[serde(default)]
+    muted: bool,
     #[serde(default)]
     selected: bool,
     #[serde(default)]
-    muted: bool,
+    depth: u8,
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -70,26 +70,26 @@ impl From<MockTreeIcon> for TreeIcon {
 
 #[derive(Deserialize)]
 struct MockTrack {
-    title: String,
     artist: String,
-    time: String,
-    search: String,
-    deck: String,
     bpm: String,
+    deck: String,
     key: String,
-    energy: u8,
+    search: String,
+    time: String,
+    title: String,
     transition: String,
+    energy: u8,
 }
 
 pub(crate) struct Catalog {
-    pub(crate) title: &'static str,
+    pub(crate) rows: &'static [TrackRow<'static>],
+    pub(crate) tree: &'static [TreeRow<'static>],
     pub(crate) artist: &'static str,
     pub(crate) breadcrumb: &'static str,
     pub(crate) footer_tokens_anatomy: &'static str,
+    pub(crate) title: &'static str,
     pub(crate) vis_indices: [&'static str; 3],
     pub(crate) vis_presets: [&'static str; 3],
-    pub(crate) rows: &'static [TrackRow<'static>],
-    pub(crate) tree: &'static [TreeRow<'static>],
 }
 
 pub(crate) static CATALOG: LazyLock<Catalog> = LazyLock::new(load_catalog);

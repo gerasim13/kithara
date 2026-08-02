@@ -22,8 +22,8 @@ pub(crate) struct Ticket {
 /// A track's live load attempt. Dropping the guard armed cancels the
 /// attempt's per-track token, so removing a track aborts the load without an explicit call.
 pub(crate) struct AttemptGuard {
-    pub(crate) generation: u64,
     pub(crate) waiting: bool,
+    pub(crate) generation: u64,
     /// `None` = disarmed: the token now belongs to the built `Resource`.
     cancel: Option<CancelToken>,
 }
@@ -37,13 +37,13 @@ impl AttemptGuard {
         }
     }
 
-    pub(crate) fn is_cancelled(&self) -> bool {
-        self.cancel.as_ref().is_none_or(CancelToken::is_cancelled)
-    }
-
     /// Give the token up to its next owner; dropping then cancels nothing.
     pub(crate) fn disarm(&mut self) {
         self.cancel = None;
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancel.as_ref().is_none_or(CancelToken::is_cancelled)
     }
 }
 

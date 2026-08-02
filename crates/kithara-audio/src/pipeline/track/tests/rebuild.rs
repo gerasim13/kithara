@@ -70,13 +70,13 @@ impl Consts {
 }
 
 pub(super) struct TestDecoder {
-    id: u64,
     drops: Arc<Mutex<Vec<u64>>>,
+    id: u64,
 }
 
 impl TestDecoder {
     pub(super) fn new(id: u64, drops: Arc<Mutex<Vec<u64>>>) -> Self {
-        Self { id, drops }
+        Self { drops, id }
     }
 }
 
@@ -145,13 +145,13 @@ struct ProfileCountingDecoder {
 }
 
 impl Decoder for ProfileCountingDecoder {
+    fn duration(&self) -> Option<Duration> {
+        Some(Duration::from_secs(60))
+    }
+
     fn gapless_profile(&self, _codec: Option<AudioCodec>) -> GaplessProfile {
         self.gapless_profile_reads.fetch_add(1, Ordering::AcqRel);
         GaplessProfile::new(self.spec(), None, None, 0)
-    }
-
-    fn duration(&self) -> Option<Duration> {
-        Some(Duration::from_secs(60))
     }
 
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
@@ -176,9 +176,9 @@ impl Decoder for ProfileCountingDecoder {
 
 struct RouteSignalDecoder {
     drops: Arc<Mutex<Vec<u64>>>,
+    sample_rate: u32,
     id: u64,
     next_frame: u64,
-    sample_rate: u32,
 }
 
 impl RouteSignalDecoder {
@@ -186,8 +186,8 @@ impl RouteSignalDecoder {
         Self {
             drops,
             id,
-            next_frame: 0,
             sample_rate,
+            next_frame: 0,
         }
     }
 
@@ -289,20 +289,20 @@ impl WorkerWake for CountingWake {
 }
 
 pub(super) struct TestControl {
-    aborted_transition: Mutex<Option<VariantTransition>>,
     byte_map_enabled: AtomicBool,
-    exact_plan: Mutex<Option<VariantReaderPlan>>,
     exact_reader_ready: AtomicBool,
     exact_reader_taken: AtomicBool,
-    landing: Mutex<Option<Duration>>,
-    media_info: Mutex<Option<MediaInfo>>,
     plan_calls: AtomicU64,
     prepare_calls: AtomicU64,
-    prepared_profile: Mutex<Option<ReaderProfile>>,
     promote_calls: AtomicU64,
-    promotion: Mutex<VariantPromotion>,
     take_calls: AtomicU64,
+    aborted_transition: Mutex<Option<VariantTransition>>,
+    exact_plan: Mutex<Option<VariantReaderPlan>>,
     format_range: Mutex<Option<Range<u64>>>,
+    landing: Mutex<Option<Duration>>,
+    media_info: Mutex<Option<MediaInfo>>,
+    prepared_profile: Mutex<Option<ReaderProfile>>,
+    promotion: Mutex<VariantPromotion>,
 }
 
 impl TestControl {
@@ -325,35 +325,20 @@ impl TestControl {
         }
     }
 
-    pub(super) fn set_exact_plan(&self, plan: VariantReaderPlan) {
-        *self.exact_plan.lock() = Some(plan);
-        *self.prepared_profile.lock() = None;
-        self.exact_reader_ready.store(false, Ordering::Release);
-        self.exact_reader_taken.store(false, Ordering::Release);
+    pub(super) fn aborted_transition(&self) -> Option<VariantTransition> {
+        *self.aborted_transition.lock()
     }
 
     pub(super) fn enable_byte_map(&self) {
         self.byte_map_enabled.store(true, Ordering::Release);
     }
 
-    pub(super) fn set_exact_reader_ready(&self) {
-        self.exact_reader_ready.store(true, Ordering::Release);
-    }
-
-    pub(super) fn set_promotion(&self, promotion: VariantPromotion) {
-        *self.promotion.lock() = promotion;
-    }
-
-    pub(super) fn aborted_transition(&self) -> Option<VariantTransition> {
-        *self.aborted_transition.lock()
+    pub(super) fn landing(&self) -> Option<Duration> {
+        *self.landing.lock()
     }
 
     pub(super) fn plan_calls(&self) -> u64 {
         self.plan_calls.load(Ordering::Acquire)
-    }
-
-    pub(super) fn landing(&self) -> Option<Duration> {
-        *self.landing.lock()
     }
 
     pub(super) fn prepare_calls(&self) -> u64 {
@@ -368,8 +353,15 @@ impl TestControl {
         self.promote_calls.load(Ordering::Acquire)
     }
 
-    pub(super) fn take_calls(&self) -> u64 {
-        self.take_calls.load(Ordering::Acquire)
+    pub(super) fn set_exact_plan(&self, plan: VariantReaderPlan) {
+        *self.exact_plan.lock() = Some(plan);
+        *self.prepared_profile.lock() = None;
+        self.exact_reader_ready.store(false, Ordering::Release);
+        self.exact_reader_taken.store(false, Ordering::Release);
+    }
+
+    pub(super) fn set_exact_reader_ready(&self) {
+        self.exact_reader_ready.store(true, Ordering::Release);
     }
 
     /// Publish a new active variant on the source, the way a promoted ABR
@@ -377,9 +369,37 @@ impl TestControl {
     fn set_media_info(&self, media_info: MediaInfo) {
         *self.media_info.lock() = Some(media_info);
     }
+
+    pub(super) fn set_promotion(&self, promotion: VariantPromotion) {
+        *self.promotion.lock() = promotion;
+    }
+
+    pub(super) fn take_calls(&self) -> u64 {
+        self.take_calls.load(Ordering::Acquire)
+    }
 }
 
 impl VariantControl for TestControl {
+    fn abort_variant(&self, transition: VariantTransition) -> bool {
+        let mut exact_plan = self.exact_plan.lock();
+        if exact_plan
+            .as_ref()
+            .is_none_or(|plan| plan.transition() != transition)
+        {
+            return false;
+        }
+        *exact_plan = None;
+        *self.aborted_transition.lock() = Some(transition);
+        true
+    }
+
+    fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
+        self.format_range
+            .lock()
+            .clone()
+            .ok_or(StreamError::Source(SourceError::FormatChangeNotApplicable))
+    }
+
     fn plan_variant_reader(
         &self,
         landing: Option<Duration>,
@@ -399,6 +419,27 @@ impl VariantControl for TestControl {
         self.prepare_calls.fetch_add(1, Ordering::AcqRel);
         *self.prepared_profile.lock() = Some(profile);
         Ok((self.exact_plan.lock().as_ref() == Some(&plan)).then(|| plan.transition()))
+    }
+
+    fn promote_variant(&self, transition: VariantTransition) -> VariantPromotion {
+        self.promote_calls.fetch_add(1, Ordering::AcqRel);
+        if !self
+            .exact_plan
+            .lock()
+            .as_ref()
+            .is_some_and(|plan| plan.transition() == transition)
+        {
+            return VariantPromotion::Stale;
+        }
+        let promotion = *self.promotion.lock();
+        if promotion == VariantPromotion::Promoted {
+            *self.exact_plan.lock() = None;
+        }
+        promotion
+    }
+
+    fn selected_variant_for_seek(&self) -> usize {
+        0
     }
 
     fn take_prepared_variant_reader(
@@ -425,47 +466,6 @@ impl VariantControl for TestControl {
             plan, reader,
         )))
     }
-
-    fn promote_variant(&self, transition: VariantTransition) -> VariantPromotion {
-        self.promote_calls.fetch_add(1, Ordering::AcqRel);
-        if !self
-            .exact_plan
-            .lock()
-            .as_ref()
-            .is_some_and(|plan| plan.transition() == transition)
-        {
-            return VariantPromotion::Stale;
-        }
-        let promotion = *self.promotion.lock();
-        if promotion == VariantPromotion::Promoted {
-            *self.exact_plan.lock() = None;
-        }
-        promotion
-    }
-
-    fn abort_variant(&self, transition: VariantTransition) -> bool {
-        let mut exact_plan = self.exact_plan.lock();
-        if exact_plan
-            .as_ref()
-            .is_none_or(|plan| plan.transition() != transition)
-        {
-            return false;
-        }
-        *exact_plan = None;
-        *self.aborted_transition.lock() = Some(transition);
-        true
-    }
-
-    fn selected_variant_for_seek(&self) -> usize {
-        0
-    }
-
-    fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
-        self.format_range
-            .lock()
-            .clone()
-            .ok_or(StreamError::Source(SourceError::FormatChangeNotApplicable))
-    }
 }
 
 pub(super) struct TestSource {
@@ -479,8 +479,8 @@ pub(super) struct TestSource {
 impl TestSource {
     fn new(control: Arc<TestControl>) -> Self {
         Self {
-            byte_map: Arc::new(TestByteMap),
             control,
+            byte_map: Arc::new(TestByteMap),
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             seek: Arc::new(SeekState::new()),
@@ -696,10 +696,10 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
         Err(err) => panic!("test requires tokio runtime: {err}"),
     };
     let decode = DecodeInit {
-        decoder: Box::new(TestDecoder::new(1, drops.clone())),
         decoder_factory,
-        decoder_backend: kithara_decode::DecoderBackend::default(),
         gapless_mode,
+        decoder: Box::new(TestDecoder::new(1, drops.clone())),
+        decoder_backend: kithara_decode::DecoderBackend::default(),
         host_sample_rate: Arc::new(AtomicU32::new(Consts::SAMPLE_RATE)),
         media_info: Some(media_info(0)),
         playback_resampler_backend: "none",
@@ -729,8 +729,8 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
 /// source has neither, so no recreate origin other than `base_offset` is
 /// even reachable on it.
 struct RouteParams {
-    initial_host_rate: u32,
     segmented: bool,
+    initial_host_rate: u32,
 }
 
 pub(super) async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
@@ -783,12 +783,12 @@ async fn route_source(params: RouteParams) -> RouteFixture {
         Err(err) => panic!("test requires tokio runtime: {err}"),
     };
     let decode = DecodeInit {
+        decoder_factory,
         decoder: Box::new(RouteSignalDecoder::new(
             1,
             Consts::SAMPLE_RATE,
             drops.clone(),
         )),
-        decoder_factory,
         decoder_backend: kithara_decode::DecoderBackend::default(),
         gapless_mode: GaplessMode::Disabled,
         host_sample_rate: host_sample_rate.clone(),
@@ -872,8 +872,8 @@ fn enter_rebuilding(
     recreate: RecreateState,
 ) {
     source.state = Track::<RebuildingDecoder>::new(RebuildState {
-        build: BuildId::fixture(ticket),
         recreate,
+        build: BuildId::fixture(ticket),
         started_seek_epoch: source.seek_obs.epoch(),
         superseded_seek: None,
     })

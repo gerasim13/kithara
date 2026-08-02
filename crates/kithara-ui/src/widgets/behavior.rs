@@ -43,9 +43,9 @@ pub(crate) struct ItemDrag {
 
 #[derive(Default)]
 pub(crate) struct ItemDragState {
-    held: bool,
     origin: Option<Point>,
     active: bool,
+    held: bool,
 }
 
 impl ItemDragState {
@@ -111,10 +111,10 @@ impl ItemDrag {
 
 #[derive(bon::Builder)]
 pub(crate) struct HorizontalPixelDrag {
-    path: String,
-    value: f32,
-    minimum: f32,
     hover: HoverState,
+    path: String,
+    minimum: f32,
+    value: f32,
 }
 
 #[derive(Default)]
@@ -174,8 +174,8 @@ impl HorizontalPixelDrag {
 
 #[derive(bon::Builder)]
 pub(crate) struct ClickActivate {
-    path: String,
     hover: HoverState,
+    path: String,
 }
 
 impl ClickActivate {
@@ -221,17 +221,17 @@ pub(crate) enum ScalarDragMode {
 /// Opt-in wheel stepping: the current normalized value plus the per-tick step.
 #[derive(Clone, Copy)]
 pub(crate) struct WheelStep {
-    pub(crate) value: f32,
     pub(crate) step: f32,
+    pub(crate) value: f32,
 }
 
 #[derive(bon::Builder)]
 pub(crate) struct ScalarDrag {
-    path: String,
-    mode: ScalarDragMode,
     hover: HoverState,
     double_click_value: Option<f32>,
     wheel: Option<WheelStep>,
+    mode: ScalarDragMode,
+    path: String,
 }
 
 #[derive(Default)]
@@ -257,10 +257,10 @@ impl DoubleClickState {
 
 #[derive(Default)]
 pub(crate) struct ScalarDragState {
+    double_click: DoubleClickState,
     active: bool,
     start_position: f32,
     start_value: f32,
-    double_click: DoubleClickState,
     wheel_accum: f32,
 }
 
@@ -279,6 +279,18 @@ impl ScalarDrag {
             | ScalarDragMode::RelativeVertical { .. } => return None,
         };
         Some(self.publish(value.clamp(0.0, 1.0)))
+    }
+
+    fn double_click_action(
+        &self,
+        state: &mut ScalarDragState,
+        cursor: Cursor,
+    ) -> Option<Action<UiEvent>> {
+        let value = self.double_click_value?;
+        state
+            .double_click
+            .register(cursor.position()?)
+            .then(|| self.publish(value))
     }
 
     pub(crate) fn mouse_interaction(
@@ -304,18 +316,6 @@ impl ScalarDrag {
             action: ControlAction::SetScalar(f64::from(value)),
         })
         .and_capture()
-    }
-
-    fn double_click_action(
-        &self,
-        state: &mut ScalarDragState,
-        cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
-        let value = self.double_click_value?;
-        state
-            .double_click
-            .register(cursor.position()?)
-            .then(|| self.publish(value))
     }
 
     pub(crate) fn update(

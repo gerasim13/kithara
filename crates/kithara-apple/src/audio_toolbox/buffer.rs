@@ -138,8 +138,8 @@ impl AudioBufferListTarget for SingleAudioBufferList<'_> {
 
 pub struct AudioBufferListWriter<'a> {
     pub(super) ptr: NonNull<AudioBufferList>,
-    pub(super) capacity: usize,
     pub(super) _marker: PhantomData<&'a mut AudioBufferList>,
+    pub(super) capacity: usize,
 }
 
 impl AudioBufferListWriter<'_> {
@@ -227,9 +227,9 @@ impl AudioBufferListWriter<'_> {
         self.write_buffer(
             index,
             AudioBuffer {
-                number_channels: channels,
                 data_byte_size,
                 data,
+                number_channels: channels,
             },
         );
     }

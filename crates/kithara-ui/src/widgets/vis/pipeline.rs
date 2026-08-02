@@ -7,10 +7,10 @@ use iced::{Rectangle, wgpu, widget::shader};
 
 #[derive(Debug)]
 pub(super) struct VisPrimitive {
-    level: f32,
-    preset: u32,
     slot: AtomicUsize,
+    level: f32,
     time: f32,
+    preset: u32,
 }
 
 impl VisPrimitive {
@@ -18,14 +18,24 @@ impl VisPrimitive {
         Self {
             level,
             preset,
-            slot: AtomicUsize::new(usize::MAX),
             time,
+            slot: AtomicUsize::new(usize::MAX),
         }
     }
 }
 
 impl shader::Primitive for VisPrimitive {
     type Pipeline = VisPipeline;
+
+    fn draw(&self, pipeline: &Self::Pipeline, render_pass: &mut wgpu::RenderPass<'_>) -> bool {
+        let Some(slot) = pipeline.slots.get(self.slot.load(Ordering::Relaxed)) else {
+            return true;
+        };
+        render_pass.set_pipeline(&pipeline.render_pipeline);
+        render_pass.set_bind_group(0, &slot.bind_group, &[]);
+        render_pass.draw(0..3, 0..1);
+        true
+    }
 
     fn prepare(
         &self,
@@ -56,23 +66,13 @@ impl shader::Primitive for VisPrimitive {
         queue.write_buffer(&slot.buffer, 0, &uniforms.bytes());
         self.slot.store(index, Ordering::Relaxed);
     }
-
-    fn draw(&self, pipeline: &Self::Pipeline, render_pass: &mut wgpu::RenderPass<'_>) -> bool {
-        let Some(slot) = pipeline.slots.get(self.slot.load(Ordering::Relaxed)) else {
-            return true;
-        };
-        render_pass.set_pipeline(&pipeline.render_pipeline);
-        render_pass.set_bind_group(0, &slot.bind_group, &[]);
-        render_pass.draw(0..3, 0..1);
-        true
-    }
 }
 
 pub(super) struct VisPipeline {
     bind_group_layout: wgpu::BindGroupLayout,
-    prepared: usize,
     render_pipeline: wgpu::RenderPipeline,
     slots: Vec<UniformSlot>,
+    prepared: usize,
 }
 
 impl shader::Pipeline for VisPipeline {
@@ -131,8 +131,8 @@ impl shader::Pipeline for VisPipeline {
         });
         Self {
             bind_group_layout,
-            prepared: 0,
             render_pipeline,
+            prepared: 0,
             slots: Vec::new(),
         }
     }
@@ -158,8 +158,8 @@ impl UniformSlot {
             mapped_at_creation: false,
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("kithara_ui.vis.bind_group"),
             layout,
+            label: Some("kithara_ui.vis.bind_group"),
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: buffer.as_entire_binding(),
@@ -171,10 +171,10 @@ impl UniformSlot {
 
 #[derive(Clone, Copy)]
 struct Uniforms {
-    resolution: [f32; 2],
     origin: [f32; 2],
-    time: f32,
+    resolution: [f32; 2],
     level: f32,
+    time: f32,
     preset: u32,
 }
 

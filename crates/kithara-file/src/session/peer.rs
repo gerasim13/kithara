@@ -324,16 +324,16 @@ mod tests {
         Arc::new(FileInner::new(
             crate::session::inner::FileSourceCtx {
                 coord,
-                cancel: CancelToken::never(),
                 bus,
+                cancel: CancelToken::never(),
             },
             crate::session::inner::FileAssetCtx {
+                key,
                 backend: store,
                 reader: writer.reader(),
                 writer: Mutex::new(Some(writer)),
                 headers: None,
                 raw: None,
-                key,
                 url: Url::parse("http://127.0.0.1/test.mp3").expect("test url"),
             },
             FilePhase::Init,

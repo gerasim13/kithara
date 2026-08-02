@@ -24,15 +24,6 @@ impl SharedEq {
         Self { gains }
     }
 
-    delegate::delegate! {
-        to self.gains {
-            #[expr($.map(|v| v.load(Ordering::Relaxed)))]
-            #[call(get)]
-            pub(crate) fn gain(&self, band: usize) -> Option<f32>;
-            pub(crate) fn len(&self) -> usize;
-        }
-    }
-
     pub(crate) fn reset(&self) {
         for gain in &*self.gains {
             gain.store(0.0, Ordering::Relaxed);
@@ -55,5 +46,14 @@ impl SharedEq {
         (0..self.gains.len())
             .map(|idx| self.gain(idx).unwrap_or(0.0))
             .collect()
+    }
+
+    delegate::delegate! {
+        to self.gains {
+            #[expr($.map(|v| v.load(Ordering::Relaxed)))]
+            #[call(get)]
+            pub(crate) fn gain(&self, band: usize) -> Option<f32>;
+            pub(crate) fn len(&self) -> usize;
+        }
     }
 }

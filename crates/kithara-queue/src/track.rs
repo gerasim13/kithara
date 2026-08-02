@@ -81,12 +81,12 @@ impl From<ResourceConfig> for TrackSource {
 /// Single owner of everything the queue knows about one track. Dropping the record aborts its
 /// attempt via [`AttemptGuard`].
 pub(crate) struct TrackRecord {
-    pub(crate) id: TrackId,
-    pub(crate) name: String,
-    pub(crate) url: Option<String>,
-    pub(crate) status: TrackStatus,
-    pub(crate) source: TrackSource,
     pub(crate) load: Option<AttemptGuard>,
+    pub(crate) url: Option<String>,
+    pub(crate) name: String,
+    pub(crate) id: TrackId,
+    pub(crate) source: TrackSource,
+    pub(crate) status: TrackStatus,
 }
 
 impl TrackRecord {
@@ -119,9 +119,9 @@ impl TrackRecord {
 /// below) so the polled view and the reactive
 /// [`QueueEvent::TrackStatusChanged`] stream never drift.
 pub(crate) struct Tracks {
+    next_generation: AtomicU64,
     bus: EventBus,
     inner: Mutex<Vec<TrackRecord>>,
-    next_generation: AtomicU64,
 }
 
 impl Tracks {
@@ -131,40 +131,6 @@ impl Tracks {
             inner: Mutex::new(Vec::new()),
             next_generation: AtomicU64::new(0),
         }
-    }
-
-    /// Lock the underlying `Vec<TrackRecord>` for direct read/write.
-    /// Callers that only need to flip status should prefer
-    /// [`Self::set_status`].
-    pub(crate) fn lock(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord>> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Atomically mutate `record.status` and publish
-    /// [`QueueEvent::TrackStatusChanged`]. `Cancelled` also aborts the
-    /// track's live attempt — a cancelled track never keeps loading.
-    /// No-op when `id` is not present (caller raced `Queue::remove`).
-    pub(crate) fn set_status(&self, id: TrackId, status: TrackStatus) {
-        let mut guard = self.lock();
-        let Some(record) = guard.iter_mut().find(|r| r.id == id) else {
-            return;
-        };
-        record.status = status.clone();
-        let aborted = matches!(status, TrackStatus::Cancelled)
-            .then(|| record.load.take())
-            .flatten();
-        drop(guard);
-        drop(aborted);
-        self.bus
-            .publish(QueueEvent::TrackStatusChanged { id, status });
-    }
-
-    /// Original source for `id`, if still queued.
-    pub(crate) fn source(&self, id: TrackId) -> Option<TrackSource> {
-        self.lock()
-            .iter()
-            .find(|r| r.id == id)
-            .map(|r| r.source.clone())
     }
 
     /// Register a fresh attempt. Dedupes against a live attempt; replaces
@@ -179,57 +145,6 @@ impl Tracks {
         };
         drop(guard);
         ticket
-    }
-
-    /// Move a track's pending load into the interactive lane: replace a
-    /// still-waiting (or cancelled-but-unwinding) attempt. An attempt
-    /// already holding a permit is kept - its download is progressing.
-    /// Vacant means the attempt just finished; the completion path owns
-    /// what happens next, so no new attempt starts.
-    pub(crate) fn promote_attempt(&self, id: TrackId, cancel: CancelToken) -> Option<Ticket> {
-        let mut guard = self.lock();
-        let ticket = match guard.iter_mut().find(|r| r.id == id) {
-            Some(record)
-                if record
-                    .load
-                    .as_ref()
-                    .is_some_and(|a| a.waiting || a.is_cancelled()) =>
-            {
-                Some(install(record, &self.next_generation, cancel))
-            }
-            _ => None,
-        };
-        drop(guard);
-        ticket
-    }
-
-    /// Attempt won its lane permit: flip the track to `Loading`. `false`
-    /// means the ticket was replaced or cancelled while waiting - the
-    /// caller must release the permit and bail out without loading.
-    pub(crate) fn mark_loading(&self, ticket: &Ticket) -> bool {
-        let mut guard = self.lock();
-        let claimed = guard
-            .iter_mut()
-            .find(|r| r.id == ticket.id)
-            .is_some_and(|r| {
-                let Some(attempt) = r.load.as_mut() else {
-                    return false;
-                };
-                if attempt.generation != ticket.generation || attempt.is_cancelled() {
-                    return false;
-                }
-                attempt.waiting = false;
-                r.status = TrackStatus::Loading;
-                true
-            });
-        drop(guard);
-        if claimed {
-            self.bus.publish(QueueEvent::TrackStatusChanged {
-                id: ticket.id,
-                status: TrackStatus::Loading,
-            });
-        }
-        claimed
     }
 
     /// Attempt finished. Disarms and removes the guard this ticket owns
@@ -261,16 +176,100 @@ impl Tracks {
             status: TrackStatus::Failed(reason),
         });
     }
+
+    /// Lock the underlying `Vec<TrackRecord>` for direct read/write.
+    /// Callers that only need to flip status should prefer
+    /// [`Self::set_status`].
+    pub(crate) fn lock(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord>> {
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Attempt won its lane permit: flip the track to `Loading`. `false`
+    /// means the ticket was replaced or cancelled while waiting - the
+    /// caller must release the permit and bail out without loading.
+    pub(crate) fn mark_loading(&self, ticket: &Ticket) -> bool {
+        let mut guard = self.lock();
+        let claimed = guard
+            .iter_mut()
+            .find(|r| r.id == ticket.id)
+            .is_some_and(|r| {
+                let Some(attempt) = r.load.as_mut() else {
+                    return false;
+                };
+                if attempt.generation != ticket.generation || attempt.is_cancelled() {
+                    return false;
+                }
+                attempt.waiting = false;
+                r.status = TrackStatus::Loading;
+                true
+            });
+        drop(guard);
+        if claimed {
+            self.bus.publish(QueueEvent::TrackStatusChanged {
+                id: ticket.id,
+                status: TrackStatus::Loading,
+            });
+        }
+        claimed
+    }
+
+    /// Move a track's pending load into the interactive lane: replace a
+    /// still-waiting (or cancelled-but-unwinding) attempt. An attempt
+    /// already holding a permit is kept - its download is progressing.
+    /// Vacant means the attempt just finished; the completion path owns
+    /// what happens next, so no new attempt starts.
+    pub(crate) fn promote_attempt(&self, id: TrackId, cancel: CancelToken) -> Option<Ticket> {
+        let mut guard = self.lock();
+        let ticket = match guard.iter_mut().find(|r| r.id == id) {
+            Some(record)
+                if record
+                    .load
+                    .as_ref()
+                    .is_some_and(|a| a.waiting || a.is_cancelled()) =>
+            {
+                Some(install(record, &self.next_generation, cancel))
+            }
+            _ => None,
+        };
+        drop(guard);
+        ticket
+    }
+
+    /// Atomically mutate `record.status` and publish
+    /// [`QueueEvent::TrackStatusChanged`]. `Cancelled` also aborts the
+    /// track's live attempt — a cancelled track never keeps loading.
+    /// No-op when `id` is not present (caller raced `Queue::remove`).
+    pub(crate) fn set_status(&self, id: TrackId, status: TrackStatus) {
+        let mut guard = self.lock();
+        let Some(record) = guard.iter_mut().find(|r| r.id == id) else {
+            return;
+        };
+        record.status = status.clone();
+        let aborted = matches!(status, TrackStatus::Cancelled)
+            .then(|| record.load.take())
+            .flatten();
+        drop(guard);
+        drop(aborted);
+        self.bus
+            .publish(QueueEvent::TrackStatusChanged { id, status });
+    }
+
+    /// Original source for `id`, if still queued.
+    pub(crate) fn source(&self, id: TrackId) -> Option<TrackSource> {
+        self.lock()
+            .iter()
+            .find(|r| r.id == id)
+            .map(|r| r.source.clone())
+    }
 }
 
 fn install(record: &mut TrackRecord, generations: &AtomicU64, cancel: CancelToken) -> Ticket {
     let generation = generations.fetch_add(1, Ordering::Relaxed);
     // Replacing the guard drops the old one armed, cancelling the
-    // superseded attempt.
     record.load = Some(AttemptGuard::new(generation, cancel));
     Ticket {
-        id: record.id,
         generation,
+        id: record.id,
     }
 }
 

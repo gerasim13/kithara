@@ -15,18 +15,18 @@ use crate::{
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct LayoutDoc {
-    pub schema: String,
-    pub version: u32,
     pub id: DocId,
-    /// A window without system decorations has to be resized by its own edges;
-    /// the renderer frames the root with them when this is set.
-    #[serde(default)]
-    pub resize_edges: bool,
+    pub root: LayoutNode,
     /// Names the item the pointer is carrying. While it reads as text, the
     /// layout draws that text at the pointer, over everything it lays out.
     #[serde(default)]
     pub dragged: Option<BindingRef>,
-    pub root: LayoutNode,
+    pub schema: String,
+    /// A window without system decorations has to be resized by its own edges;
+    /// the renderer frames the root with them when this is set.
+    #[serde(default)]
+    pub resize_edges: bool,
+    pub version: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -65,13 +65,13 @@ pub enum LayoutNode {
 #[non_exhaustive]
 pub struct FrameSides {
     #[serde(default = "default_frame_side")]
-    pub top: bool,
-    #[serde(default = "default_frame_side")]
-    pub right: bool,
-    #[serde(default = "default_frame_side")]
     pub bottom: bool,
     #[serde(default = "default_frame_side")]
     pub left: bool,
+    #[serde(default = "default_frame_side")]
+    pub right: bool,
+    #[serde(default = "default_frame_side")]
+    pub top: bool,
 }
 
 impl Default for FrameSides {
@@ -96,9 +96,9 @@ pub enum Axis {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct SplitChild {
+    pub node: LayoutNode,
     #[serde(default = "default_weight")]
     pub weight: f32,
-    pub node: LayoutNode,
 }
 
 fn default_weight() -> f32 {

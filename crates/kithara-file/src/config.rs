@@ -24,6 +24,8 @@ pub enum FileSrc {
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct FileConfig {
+    /// Shared asset store used by local and remote sources.
+    pub store: AssetStore,
     /// File source (remote URL or local path).
     pub src: FileSrc,
     /// Event bus (optional - if not provided, one is created internally).
@@ -31,20 +33,18 @@ pub struct FileConfig {
     pub bus: Option<EventBus>,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancelToken>,
+    /// Optional cache discriminator.
+    pub discriminator: Option<String>,
     /// Shared downloader (created lazily if not provided).
     pub downloader: Option<Downloader>,
+    /// Explicit source-extension hint used before the URL-path extension.
+    pub extension: Option<String>,
     /// Additional HTTP headers to include in all requests.
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     pub look_ahead_bytes: Option<u64>,
-    /// Explicit source-extension hint used before the URL-path extension.
-    pub extension: Option<String>,
-    /// Optional cache discriminator.
-    pub discriminator: Option<String>,
     /// Shared byte pool for cache and fallback network buffers.
     pub pool: Option<BytePool>,
-    /// Shared asset store used by local and remote sources.
-    pub store: AssetStore,
     /// Event bus channel capacity (used when `bus` is not provided).
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,

@@ -12,16 +12,16 @@ const CONTOUR_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ContourSnapshot {
-    schema_version: u32,
     contours: Vec<ContourRecord>,
+    schema_version: u32,
 }
 
 #[derive(Debug, Serialize)]
 struct ContourRecord {
     id: NodeId,
     kind: NodeKind,
-    label: String,
     parent: Option<NodeId>,
+    label: String,
     primary_visible: bool,
 }
 
@@ -40,8 +40,9 @@ impl ContourIndex {
         Self { parents }
     }
 
-    pub(crate) fn parents(&self) -> &BTreeMap<NodeId, NodeId> {
-        &self.parents
+    pub(crate) fn is_subsystem(node: &Node) -> bool {
+        node.kind == NodeKind::Module
+            && (node.id.module == "crate" || !node.id.module.contains("::"))
     }
 
     pub(crate) fn nearest_selected(
@@ -62,9 +63,8 @@ impl ContourIndex {
         }
     }
 
-    pub(crate) fn is_subsystem(node: &Node) -> bool {
-        node.kind == NodeKind::Module
-            && (node.id.module == "crate" || !node.id.module.contains("::"))
+    pub(crate) fn parents(&self) -> &BTreeMap<NodeId, NodeId> {
+        &self.parents
     }
 }
 
@@ -95,8 +95,8 @@ pub(crate) fn snapshot(
         })
         .collect();
     ContourSnapshot {
-        schema_version: CONTOUR_SCHEMA_VERSION,
         contours,
+        schema_version: CONTOUR_SCHEMA_VERSION,
     }
 }
 

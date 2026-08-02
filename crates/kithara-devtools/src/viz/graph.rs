@@ -7,39 +7,13 @@ use serde::Serialize;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) struct NodeId {
-    pub(crate) package: String,
-    pub(crate) target: String,
     pub(crate) module: String,
+    pub(crate) package: String,
     pub(crate) symbol: String,
+    pub(crate) target: String,
 }
 
 impl NodeId {
-    pub(crate) fn symbol(
-        package: impl Into<String>,
-        target: impl Into<String>,
-        module: impl Into<String>,
-        symbol: impl Into<String>,
-    ) -> Self {
-        Self {
-            package: package.into(),
-            target: target.into(),
-            module: module.into(),
-            symbol: symbol.into(),
-        }
-    }
-
-    pub(crate) fn package(package: &str) -> Self {
-        Self::symbol(package, "<workspace>", "<package>", "<package>")
-    }
-
-    pub(crate) fn module(package: &str, target: &str, module: &str) -> Self {
-        Self::symbol(package, target, module, "<module>")
-    }
-
-    pub(crate) fn site(package: &str, target: &str, module: &str, site: &str) -> Self {
-        Self::symbol(package, target, module, site)
-    }
-
     pub(crate) fn abstraction(
         package: &str,
         target: &str,
@@ -55,12 +29,38 @@ impl NodeId {
         )
     }
 
+    pub(crate) fn module(package: &str, target: &str, module: &str) -> Self {
+        Self::symbol(package, target, module, "<module>")
+    }
+
     pub(crate) fn module_functions(package: &str, target: &str, module: &str) -> Self {
         Self::abstraction(package, target, module, "functions", module)
     }
 
+    pub(crate) fn package(package: &str) -> Self {
+        Self::symbol(package, "<workspace>", "<package>", "<package>")
+    }
+
     pub(crate) fn resource(package: &str, target: &str, resource: &str) -> Self {
         Self::symbol(package, target, "<resource>", resource)
+    }
+
+    pub(crate) fn site(package: &str, target: &str, module: &str, site: &str) -> Self {
+        Self::symbol(package, target, module, site)
+    }
+
+    pub(crate) fn symbol(
+        package: impl Into<String>,
+        target: impl Into<String>,
+        module: impl Into<String>,
+        symbol: impl Into<String>,
+    ) -> Self {
+        Self {
+            package: package.into(),
+            target: target.into(),
+            module: module.into(),
+            symbol: symbol.into(),
+        }
     }
 }
 
@@ -144,18 +144,18 @@ pub(crate) enum MergedCertainty {
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) struct Evidence {
-    pub(crate) class: EvidenceClass,
     pub(crate) certainty: Certainty,
+    pub(crate) class: EvidenceClass,
     pub(crate) origin: String,
 }
 
 impl Evidence {
-    pub(crate) fn static_fact(origin: impl Into<String>) -> Self {
-        Self::new(EvidenceClass::Static, Certainty::Resolved, origin)
-    }
-
-    pub(crate) fn resolved(origin: impl Into<String>) -> Self {
-        Self::new(EvidenceClass::Resolved, Certainty::Resolved, origin)
+    fn new(class: EvidenceClass, certainty: Certainty, origin: impl Into<String>) -> Self {
+        Self {
+            class,
+            certainty,
+            origin: origin.into(),
+        }
     }
 
     pub(crate) fn conditional(origin: impl Into<String>) -> Self {
@@ -166,42 +166,42 @@ impl Evidence {
         Self::new(EvidenceClass::Inferred, Certainty::Candidate, origin)
     }
 
-    pub(crate) fn observed(origin: impl Into<String>) -> Self {
-        Self::new(EvidenceClass::Observed, Certainty::Resolved, origin)
-    }
-
     pub(crate) fn manual(origin: impl Into<String>) -> Self {
         Self::new(EvidenceClass::Manual, Certainty::Resolved, origin)
     }
 
-    pub(crate) fn unresolved(origin: impl Into<String>) -> Self {
-        Self::new(EvidenceClass::Unresolved, Certainty::Unresolved, origin)
+    pub(crate) fn observed(origin: impl Into<String>) -> Self {
+        Self::new(EvidenceClass::Observed, Certainty::Resolved, origin)
     }
 
-    fn new(class: EvidenceClass, certainty: Certainty, origin: impl Into<String>) -> Self {
-        Self {
-            class,
-            certainty,
-            origin: origin.into(),
-        }
+    pub(crate) fn resolved(origin: impl Into<String>) -> Self {
+        Self::new(EvidenceClass::Resolved, Certainty::Resolved, origin)
+    }
+
+    pub(crate) fn static_fact(origin: impl Into<String>) -> Self {
+        Self::new(EvidenceClass::Static, Certainty::Resolved, origin)
+    }
+
+    pub(crate) fn unresolved(origin: impl Into<String>) -> Self {
+        Self::new(EvidenceClass::Unresolved, Certainty::Unresolved, origin)
     }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) struct SourceLocation {
     pub(crate) path: String,
-    pub(crate) line: usize,
     pub(crate) column: usize,
+    pub(crate) line: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct Node {
+    pub(crate) diagnostics: BTreeSet<String>,
+    pub(crate) evidence: BTreeSet<Evidence>,
     pub(crate) id: NodeId,
     pub(crate) kind: NodeKind,
-    pub(crate) label: String,
     pub(crate) location: Option<SourceLocation>,
-    pub(crate) evidence: BTreeSet<Evidence>,
-    pub(crate) diagnostics: BTreeSet<String>,
+    pub(crate) label: String,
 }
 
 impl Node {
@@ -232,9 +232,9 @@ impl Node {
         column: usize,
     ) -> Self {
         self.location = Some(SourceLocation {
-            path: path.into(),
             line,
             column,
+            path: path.into(),
         });
         self
     }
@@ -246,10 +246,10 @@ impl Node {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct Edge {
+    pub(crate) evidence: BTreeSet<Evidence>,
+    pub(crate) kind: EdgeKind,
     pub(crate) source: NodeId,
     pub(crate) target: NodeId,
-    pub(crate) kind: EdgeKind,
-    pub(crate) evidence: BTreeSet<Evidence>,
 }
 
 impl Edge {
@@ -283,18 +283,52 @@ fn merge_certainty(certainties: impl Iterator<Item = Certainty>) -> MergedCertai
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct EdgeKey {
+    kind: EdgeKind,
     source: NodeId,
     target: NodeId,
-    kind: EdgeKind,
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct EvidenceGraph {
-    nodes: BTreeMap<NodeId, Node>,
     edges: BTreeMap<EdgeKey, Edge>,
+    nodes: BTreeMap<NodeId, Node>,
 }
 
 impl EvidenceGraph {
+    pub(crate) fn add_node_evidence(&mut self, id: &NodeId, evidence: Evidence) -> bool {
+        let Some(node) = self.nodes.get_mut(id) else {
+            return false;
+        };
+        node.evidence.insert(evidence);
+        true
+    }
+
+    #[cfg(test)]
+    fn edge(&self, source: &NodeId, target: &NodeId, kind: EdgeKind) -> Option<&Edge> {
+        self.edges.get(&EdgeKey {
+            kind,
+            source: source.clone(),
+            target: target.clone(),
+        })
+    }
+
+    pub(crate) fn edges(&self) -> impl Iterator<Item = &Edge> {
+        self.edges.values()
+    }
+
+    pub(crate) fn merge_edge(&mut self, edge: Edge) {
+        let key = EdgeKey {
+            source: edge.source.clone(),
+            target: edge.target.clone(),
+            kind: edge.kind,
+        };
+        if let Some(current) = self.edges.get_mut(&key) {
+            current.evidence.extend(edge.evidence);
+        } else {
+            self.edges.insert(key, edge);
+        }
+    }
+
     pub(crate) fn merge_node(&mut self, node: Node) {
         if let Some(current) = self.nodes.get_mut(&node.id) {
             if current.kind != node.kind || current.label != node.label {
@@ -313,46 +347,12 @@ impl EvidenceGraph {
         }
     }
 
-    pub(crate) fn merge_edge(&mut self, edge: Edge) {
-        let key = EdgeKey {
-            source: edge.source.clone(),
-            target: edge.target.clone(),
-            kind: edge.kind,
-        };
-        if let Some(current) = self.edges.get_mut(&key) {
-            current.evidence.extend(edge.evidence);
-        } else {
-            self.edges.insert(key, edge);
-        }
-    }
-
-    pub(crate) fn add_node_evidence(&mut self, id: &NodeId, evidence: Evidence) -> bool {
-        let Some(node) = self.nodes.get_mut(id) else {
-            return false;
-        };
-        node.evidence.insert(evidence);
-        true
-    }
-
     pub(crate) fn node(&self, id: &NodeId) -> Option<&Node> {
         self.nodes.get(id)
     }
 
-    #[cfg(test)]
-    fn edge(&self, source: &NodeId, target: &NodeId, kind: EdgeKind) -> Option<&Edge> {
-        self.edges.get(&EdgeKey {
-            source: source.clone(),
-            target: target.clone(),
-            kind,
-        })
-    }
-
     pub(crate) fn nodes(&self) -> impl Iterator<Item = &Node> {
         self.nodes.values()
-    }
-
-    pub(crate) fn edges(&self) -> impl Iterator<Item = &Edge> {
-        self.edges.values()
     }
 }
 
@@ -362,8 +362,8 @@ mod tests {
 
     fn evidence(certainty: Certainty, origin: &str) -> Evidence {
         Evidence {
-            class: EvidenceClass::Static,
             certainty,
+            class: EvidenceClass::Static,
             origin: origin.to_string(),
         }
     }

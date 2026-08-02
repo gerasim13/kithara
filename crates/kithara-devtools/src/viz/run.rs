@@ -58,8 +58,8 @@ pub(crate) fn run(args: &VizArgs, ctx: &Ctx) -> Result<()> {
     let output = ctx.root.join("target/architecture").join(&revision);
     let runtime = scenario::run(
         &RunRequest {
-            config: &ctx.config.architecture,
             metadata,
+            config: &ctx.config.architecture,
             root: &ctx.root,
             output: &output,
             selected: args.scenario.as_deref(),
@@ -112,10 +112,10 @@ pub(crate) fn run(args: &VizArgs, ctx: &Ctx) -> Result<()> {
     let diagrams = mermaid::render_set(&model, details)?;
     let filter_summary = filter.summary(&graph);
     let artifacts = manifest::write(&ArtifactRequest {
+        args,
         root: &ctx.root,
         revision: &revision,
         project: &ctx.config.project.name,
-        args,
         graph: &graph,
         model: &model,
         diagrams: &diagrams,

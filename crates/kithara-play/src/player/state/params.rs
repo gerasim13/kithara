@@ -15,9 +15,9 @@ use crate::{
 #[derive(Debug)]
 pub(crate) struct PlayerParams {
     auto_advance_enabled: AtomicBool,
+    muted: AtomicBool,
     crossfade_duration: AtomicF32,
     default_rate: AtomicF32,
-    muted: AtomicBool,
     prefetch_duration: AtomicF32,
     rate: AtomicF32,
     volume: AtomicF32,
@@ -25,6 +25,21 @@ pub(crate) struct PlayerParams {
 
 impl PlayerParams {
     pub(crate) const MIN_PLAYBACK_RATE: f32 = 0.01;
+
+    fn apply_effective_volume(
+        volume: f32,
+        slot: Option<SlotId>,
+        set_slot_volume: impl FnOnce(SlotId, f32) -> Result<(), PlayError>,
+    ) {
+        if let Some(slot_id) = slot {
+            debug!(volume, ?slot_id, "applying effective volume to slot");
+            if let Err(e) = set_slot_volume(slot_id, volume) {
+                warn!(?e, volume, "failed to set slot volume");
+            }
+        } else {
+            debug!(volume, "apply_effective_volume: no slot allocated yet");
+        }
+    }
 
     pub(crate) fn auto_advance_enabled(&self) -> bool {
         self.auto_advance_enabled.load(Ordering::Relaxed)
@@ -95,12 +110,6 @@ impl PlayerParams {
         let _ = send(PlayerCmd::SetPrefetchDuration(clamped));
     }
 
-    pub(crate) fn set_rate_value(&self, rate: f32) -> f32 {
-        let clamped = rate.max(Self::MIN_PLAYBACK_RATE);
-        self.rate.store(clamped, Ordering::Relaxed);
-        clamped
-    }
-
     pub(crate) fn set_rate(
         &self,
         rate: f32,
@@ -112,6 +121,12 @@ impl PlayerParams {
         timestretch.set_speed(clamped);
         let _ = send(PlayerCmd::SetPlaybackRate(clamped));
         bus.publish(PlayerEvent::RateChanged { rate: clamped });
+    }
+
+    pub(crate) fn set_rate_value(&self, rate: f32) -> f32 {
+        let clamped = rate.max(Self::MIN_PLAYBACK_RATE);
+        self.rate.store(clamped, Ordering::Relaxed);
+        clamped
     }
 
     pub(crate) fn set_volume(
@@ -131,21 +146,6 @@ impl PlayerParams {
 
     pub(crate) fn volume(&self) -> f32 {
         self.volume.load(Ordering::Relaxed)
-    }
-
-    fn apply_effective_volume(
-        volume: f32,
-        slot: Option<SlotId>,
-        set_slot_volume: impl FnOnce(SlotId, f32) -> Result<(), PlayError>,
-    ) {
-        if let Some(slot_id) = slot {
-            debug!(volume, ?slot_id, "applying effective volume to slot");
-            if let Err(e) = set_slot_volume(slot_id, volume) {
-                warn!(?e, volume, "failed to set slot volume");
-            }
-        } else {
-            debug!(volume, "apply_effective_volume: no slot allocated yet");
-        }
     }
 }
 

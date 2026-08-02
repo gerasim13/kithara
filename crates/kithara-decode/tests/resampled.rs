@@ -127,8 +127,8 @@ impl ResamplerBackend for DelayedProbeBackend {
 
 struct DelayedProbeResampler {
     channels: NonZeroUsize,
-    has_pending: bool,
     mode: ResamplerMode,
+    has_pending: bool,
 }
 
 impl Resampler for DelayedProbeResampler {

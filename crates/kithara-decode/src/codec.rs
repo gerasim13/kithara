@@ -61,11 +61,6 @@ pub(crate) trait FrameCodec: Send + 'static {
         input_pts
     }
 
-    /// Decoder-owned packet-time bias removed before the first PCM frame.
-    fn timestamp_bias_frames(&self) -> u64 {
-        0
-    }
-
     /// Decoder-side algorithmic delay in PCM frames for `codec` — the
     /// silent lead-in this concrete decoder emits **in addition to**
     /// the encoder-declared priming. LAME-convention MP3 decoders
@@ -92,6 +87,14 @@ pub(crate) trait FrameCodec: Send + 'static {
     /// reset.
     fn flush(&mut self) -> DecodeResult<()>;
 
+    /// Whether demux EOF must drive empty-frame decode calls until the codec
+    /// returns zero frames. The default preserves the fused sample-rate
+    /// conversion contract: only a codec whose output rate differs from the
+    /// source rate needs an explicit tail drain.
+    fn needs_eof_drain(&self, source_sample_rate: u32) -> bool {
+        self.spec().sample_rate.get() != source_sample_rate
+    }
+
     /// Seek priming requirements for `codec` — packets/frames/bytes the
     /// demuxer must back off before the seek target so this codec can
     /// fully prime its MDCT/SBR overlap-add state. Default returns
@@ -102,16 +105,13 @@ pub(crate) trait FrameCodec: Send + 'static {
         CodecPriming::default()
     }
 
-    /// Whether demux EOF must drive empty-frame decode calls until the codec
-    /// returns zero frames. The default preserves the fused sample-rate
-    /// conversion contract: only a codec whose output rate differs from the
-    /// source rate needs an explicit tail drain.
-    fn needs_eof_drain(&self, source_sample_rate: u32) -> bool {
-        self.spec().sample_rate.get() != source_sample_rate
-    }
-
     /// PCM output specification.
     fn spec(&self) -> PcmSpec;
+
+    /// Decoder-owned packet-time bias removed before the first PCM frame.
+    fn timestamp_bias_frames(&self) -> u64 {
+        0
+    }
 
     /// Codec-owned playback contract — currently the captured
     /// [`crate::GaplessInfo`] (encoder priming + trailing padding in

@@ -82,6 +82,10 @@ impl ResourceKey {
         self.as_absolute_path().is_some()
     }
 
+    pub(crate) fn kind(&self) -> &ResourceKeyKind {
+        &self.0
+    }
+
     /// Returns the layout-owned relative path, or `None` for an absolute key.
     #[must_use]
     pub fn rel_path(&self) -> Option<&str> {
@@ -96,10 +100,6 @@ impl ResourceKey {
             asset_root: asset_root.into(),
             rel_path: rel_path.into(),
         })
-    }
-
-    pub(crate) fn kind(&self) -> &ResourceKeyKind {
-        &self.0
     }
 }
 

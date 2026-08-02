@@ -69,18 +69,6 @@ where
         self.backend
     }
 
-    /// Return the gapless playback mode.
-    #[must_use]
-    pub fn gapless_mode(&self) -> GaplessMode {
-        self.gapless_mode
-    }
-
-    /// Return the decoder-side resampler settings.
-    #[must_use]
-    pub fn resampler(&self) -> Option<&DecoderResamplerSettings<B>> {
-        self.resampler.as_ref()
-    }
-
     pub(crate) fn build_resampler_config(
         &self,
         target_sample_rate: Option<NonZeroU32>,
@@ -100,8 +88,20 @@ where
         )
     }
 
+    /// Return the gapless playback mode.
+    #[must_use]
+    pub fn gapless_mode(&self) -> GaplessMode {
+        self.gapless_mode
+    }
+
     pub(crate) fn recreates_on_host_rate_change(&self) -> bool {
         self.resampler.is_some()
+    }
+
+    /// Return the decoder-side resampler settings.
+    #[must_use]
+    pub fn resampler(&self) -> Option<&DecoderResamplerSettings<B>> {
+        self.resampler.as_ref()
     }
 }
 

@@ -26,9 +26,9 @@ where
         let detector = builder.take_detector();
         Self {
             builder,
-            current: None,
             detector,
             jobs,
+            current: None,
         }
     }
 

@@ -8,8 +8,8 @@ use crate::HlsError;
 
 #[derive(Clone, Copy)]
 pub(crate) struct ResolvedSeekProjection {
-    alias_generation: u64,
     demand_generation: Option<u64>,
+    alias_generation: u64,
     exact_anchor: u64,
 }
 
@@ -20,130 +20,10 @@ impl ResolvedSeekProjection {
 }
 
 impl HlsVariant {
-    delegate::delegate! {
-        to self.seek.alias {
-            #[call(clear)]
-            pub(super) fn clear_seek_alias(&self);
-            #[call(set)]
-            pub(super) fn set_seek_alias(&self, anchor: u64, segment: u32);
-        }
-        to self {
-            /// Seek reset is layout-only. Active body fetches stay live: segment-aware
-            /// decoders re-resolve media ranges by segment index, and canceling the
-            /// in-flight target segment would put a streaming seek behind tail prefetch.
-            #[call(reset_layout_to_full_range)]
-            pub(crate) fn reset_for_seek(&self);
-            #[expr($.and_then(|idx| u32::try_from(idx).ok()))]
-            #[call(index_at_time)]
-            pub(crate) fn segment_index_at_time(&self, t: Duration) -> Option<u32>;
-        }
-    }
-
-    pub(crate) fn retire_seek_projection_if_moved(&self, pos: u64) {
-        // RT-reachable (via `advance`): a lock-free, alloc-free load + atomic
-        // clear. The base is single-writer (on-core), so the `Some -> None`
-        // store never races a concurrent base writer.
-        if self
-            .seek
-            .alias
-            .load()
-            .is_some_and(|alias| !alias.covers_position(pos))
-        {
-            self.seek.alias.clear();
-            self.clear_exact_seek();
-        }
-    }
-
     fn clear_segment_aware_seek_tail(&self) {
         self.seek
             .segment_aware_tail
             .store(Self::NO_SEEK_TAIL, Ordering::Release);
-    }
-
-    /// Reset variant to a "fresh" single-variant layout: `byte_shift = 0`,
-    /// `served_from = 0`, `served_until = num_segments`. Called from
-    /// [`HlsCoord::reset_for_seek`] so a random seek collapses the
-    /// cross-variant byte continuity layering — variants archived from
-    /// earlier auto-switches no longer co-serve the byte address space,
-    /// and the (single) active variant addresses its segments by their
-    /// natural offsets. Subsequent ABR commits at boundary will re-build
-    /// the layering as usual.
-    pub(crate) fn reset_to_full_range(&self) {
-        self.clear_seek_alias();
-        self.clear_exact_seek();
-        self.clear_exact_byte_seek();
-        self.clear_segment_aware_seek_tail();
-        self.reset_layout_to_full_range();
-    }
-
-    pub(super) fn resolve_seek_alias(&self, demand: ExactSeekDemand, exact_anchor: u64) {
-        // Off-RT (exact-prefix settle): a lock-free, alloc-free store of the
-        // resolved exact anchor onto the matching base, tagged with the base
-        // generation so a stale resolver cannot attach to a newer alias.
-        self.seek
-            .alias
-            .resolve(demand.segment, demand.anchor, exact_anchor);
-    }
-
-    pub(crate) fn resolved_seek_anchor(&self, anchor: u64) -> Option<u64> {
-        self.seek
-            .alias
-            .load()
-            .filter(|alias| alias.anchor == anchor)
-            .and_then(|alias| alias.exact_anchor)
-    }
-
-    pub(crate) fn resolved_seek_projection(&self, anchor: u64) -> Option<ResolvedSeekProjection> {
-        let alias = self
-            .seek
-            .alias
-            .load()
-            .filter(|alias| alias.anchor == anchor)?;
-        let demand_generation = self
-            .seek
-            .exact_seek
-            .load()
-            .filter(|demand| demand.segment == alias.segment && demand.anchor == alias.anchor)
-            .map(|demand| demand.generation);
-        Some(ResolvedSeekProjection {
-            alias_generation: alias.generation,
-            demand_generation,
-            exact_anchor: alias.exact_anchor?,
-        })
-    }
-
-    pub(crate) fn retire_seek_projection(&self, projection: ResolvedSeekProjection) {
-        if !self
-            .seek
-            .alias
-            .clear_if_generation(projection.alias_generation)
-        {
-            return;
-        }
-        if let Some(generation) = projection.demand_generation {
-            let _ = self.seek.exact_seek.clear_if_generation(generation);
-        }
-    }
-
-    pub(super) fn seek_alias_at(&self, byte: u64) -> Option<(u32, u64, u64)> {
-        let alias = self.seek.alias.load()?;
-        if byte < alias.anchor {
-            return None;
-        }
-        if !needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
-            return self.segment_aware_seek_alias_at(alias, byte);
-        }
-        let size = self.segment_size(alias.segment as usize)?;
-        let end = alias.anchor.saturating_add(size);
-        (byte < end).then_some((alias.segment, alias.anchor, size))
-    }
-
-    pub(super) fn seek_readahead_start_segment(&self, target_segment: u32) -> u32 {
-        if needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
-            target_segment
-        } else {
-            target_segment.saturating_sub(1)
-        }
     }
 
     pub(crate) fn prepare_seek_time_anchor(
@@ -195,6 +75,107 @@ impl HlsVariant {
         Ok(Some(anchor))
     }
 
+    /// Reset variant to a "fresh" single-variant layout: `byte_shift = 0`,
+    /// `served_from = 0`, `served_until = num_segments`. Called from
+    /// [`HlsCoord::reset_for_seek`] so a random seek collapses the
+    /// cross-variant byte continuity layering — variants archived from
+    /// earlier auto-switches no longer co-serve the byte address space,
+    /// and the (single) active variant addresses its segments by their
+    /// natural offsets. Subsequent ABR commits at boundary will re-build
+    /// the layering as usual.
+    pub(crate) fn reset_to_full_range(&self) {
+        self.clear_seek_alias();
+        self.clear_exact_seek();
+        self.clear_exact_byte_seek();
+        self.clear_segment_aware_seek_tail();
+        self.reset_layout_to_full_range();
+    }
+
+    pub(super) fn resolve_seek_alias(&self, demand: ExactSeekDemand, exact_anchor: u64) {
+        // Off-RT (exact-prefix settle): a lock-free, alloc-free store of the
+        // resolved exact anchor onto the matching base, tagged with the base
+        // generation so a stale resolver cannot attach to a newer alias.
+        self.seek
+            .alias
+            .resolve(demand.segment, demand.anchor, exact_anchor);
+    }
+
+    pub(crate) fn resolved_seek_anchor(&self, anchor: u64) -> Option<u64> {
+        self.seek
+            .alias
+            .load()
+            .filter(|alias| alias.anchor == anchor)
+            .and_then(|alias| alias.exact_anchor)
+    }
+
+    pub(crate) fn resolved_seek_projection(&self, anchor: u64) -> Option<ResolvedSeekProjection> {
+        let alias = self
+            .seek
+            .alias
+            .load()
+            .filter(|alias| alias.anchor == anchor)?;
+        let demand_generation = self
+            .seek
+            .exact_seek
+            .load()
+            .filter(|demand| demand.segment == alias.segment && demand.anchor == alias.anchor)
+            .map(|demand| demand.generation);
+        Some(ResolvedSeekProjection {
+            demand_generation,
+            alias_generation: alias.generation,
+            exact_anchor: alias.exact_anchor?,
+        })
+    }
+
+    pub(crate) fn retire_seek_projection(&self, projection: ResolvedSeekProjection) {
+        if !self
+            .seek
+            .alias
+            .clear_if_generation(projection.alias_generation)
+        {
+            return;
+        }
+        if let Some(generation) = projection.demand_generation {
+            let _ = self.seek.exact_seek.clear_if_generation(generation);
+        }
+    }
+
+    pub(crate) fn retire_seek_projection_if_moved(&self, pos: u64) {
+        // RT-reachable (via `advance`): a lock-free, alloc-free load + atomic
+        // clear. The base is single-writer (on-core), so the `Some -> None`
+        // store never races a concurrent base writer.
+        if self
+            .seek
+            .alias
+            .load()
+            .is_some_and(|alias| !alias.covers_position(pos))
+        {
+            self.seek.alias.clear();
+            self.clear_exact_seek();
+        }
+    }
+
+    pub(super) fn seek_alias_at(&self, byte: u64) -> Option<(u32, u64, u64)> {
+        let alias = self.seek.alias.load()?;
+        if byte < alias.anchor {
+            return None;
+        }
+        if !needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
+            return self.segment_aware_seek_alias_at(alias, byte);
+        }
+        let size = self.segment_size(alias.segment as usize)?;
+        let end = alias.anchor.saturating_add(size);
+        (byte < end).then_some((alias.segment, alias.anchor, size))
+    }
+
+    pub(super) fn seek_readahead_start_segment(&self, target_segment: u32) -> u32 {
+        if needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
+            target_segment
+        } else {
+            target_segment.saturating_sub(1)
+        }
+    }
+
     fn segment_aware_seek_alias_at(
         &self,
         alias: AliasSnapshot,
@@ -238,6 +219,25 @@ impl HlsVariant {
             self.seek
                 .segment_aware_tail
                 .store(segment, Ordering::Release);
+        }
+    }
+
+    delegate::delegate! {
+        to self.seek.alias {
+            #[call(clear)]
+            pub(super) fn clear_seek_alias(&self);
+            #[call(set)]
+            pub(super) fn set_seek_alias(&self, anchor: u64, segment: u32);
+        }
+        to self {
+            /// Seek reset is layout-only. Active body fetches stay live: segment-aware
+            /// decoders re-resolve media ranges by segment index, and canceling the
+            /// in-flight target segment would put a streaming seek behind tail prefetch.
+            #[call(reset_layout_to_full_range)]
+            pub(crate) fn reset_for_seek(&self);
+            #[expr($.and_then(|idx| u32::try_from(idx).ok()))]
+            #[call(index_at_time)]
+            pub(crate) fn segment_index_at_time(&self, t: Duration) -> Option<u32>;
         }
     }
 }

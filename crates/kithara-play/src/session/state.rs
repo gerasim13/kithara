@@ -64,9 +64,9 @@ impl PlayerState {
 
 pub struct SessionState<B: AudioBackend> {
     pub(super) ctx: Option<FirewheelCtx<B>>,
+    pub(super) session_limiter_node_id: Option<NodeID>,
     pub(super) session_output_memo: Option<Memo<VolumePanNode>>,
     pub(super) session_output_node_id: Option<NodeID>,
-    pub(super) session_limiter_node_id: Option<NodeID>,
     pub(super) next_player_id: PlayerId,
     pub(super) session_ducking: SessionDuckingMode,
     pub(super) start_stream_fn: StartStreamFn<B>,

@@ -15,9 +15,9 @@ use super::{
 use crate::{error::NetError, metrics::ConnectionMetrics, types::AcceptEncodingPolicy};
 
 pub(super) struct AppleSessionEvents {
-    allow_invalid_tls: bool,
     streams: DashMap<TaskId, StreamState>,
     task_metrics: DashMap<TaskId, ConnectionMetrics>,
+    allow_invalid_tls: bool,
 }
 
 pub(super) struct StreamState {

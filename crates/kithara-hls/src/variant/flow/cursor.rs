@@ -5,16 +5,30 @@ use kithara_test_utils::kithara;
 use super::HlsVariant;
 
 impl HlsVariant {
-    pub(crate) fn prefetch_anchor(&self) -> u64 {
-        self.flow.prefetch_anchor.load(Ordering::Acquire)
-    }
-
     /// Record the cursor byte at which the front-of-queue segment enters the
     /// look-ahead window, or `u64::MAX` when nothing is deferred. Written by
     /// [`HlsVariant::dispatch`] on every pass, so it always describes the
     /// decision the peer last took.
     pub(super) fn defer_prefetch_until(&self, byte: u64) {
         self.flow.prefetch_resume_at.store(byte, Ordering::Release);
+    }
+
+    pub(crate) fn prefetch_anchor(&self) -> u64 {
+        self.flow.prefetch_anchor.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn register_session_seek(&self, pos: u64, moved: bool) {
+        if !self.flow.reader.is_seek_active() {
+            self.retire_seek_projection_if_moved(pos);
+        }
+        if moved {
+            self.set_exact_byte_seek_demand(pos);
+        }
+    }
+
+    #[kithara::probe(variant = self.variant as u64, byte)]
+    pub(crate) fn set_prefetch_anchor(&self, byte: u64) {
+        self.flow.prefetch_anchor.store(byte, Ordering::Release);
     }
 
     /// Whether the reader at `consumed` just made the deferred dispatch
@@ -37,19 +51,5 @@ impl HlsVariant {
                 .prefetch_resume_at
                 .swap(u64::MAX, Ordering::AcqRel)
                 != u64::MAX
-    }
-
-    pub(crate) fn register_session_seek(&self, pos: u64, moved: bool) {
-        if !self.flow.reader.is_seek_active() {
-            self.retire_seek_projection_if_moved(pos);
-        }
-        if moved {
-            self.set_exact_byte_seek_demand(pos);
-        }
-    }
-
-    #[kithara::probe(variant = self.variant as u64, byte)]
-    pub(crate) fn set_prefetch_anchor(&self, byte: u64) {
-        self.flow.prefetch_anchor.store(byte, Ordering::Release);
     }
 }

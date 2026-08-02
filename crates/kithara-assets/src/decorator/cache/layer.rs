@@ -79,12 +79,12 @@ pub struct CachedAssets<A>
 where
     A: Assets,
 {
-    capacity: NonZeroUsize,
     inner: Arc<A>,
     pinned: Arc<DashSet<ResourceKey>>,
+    capacity: NonZeroUsize,
+    enforce_capacity: Option<EnforceCapacity>,
     on_invalidated: Option<crate::store::OnInvalidatedFn>,
     cache: SharedCache<A>,
-    enforce_capacity: Option<EnforceCapacity>,
     /// True when dropping a resource handle frees its bytes (ephemeral
     /// backing). Only then does LRU displacement mean the data is gone
     /// and `on_invalidated` must fire. For durable backends the bytes
@@ -117,102 +117,8 @@ where
         Self::with_max_bytes(inner, capacity, on_invalidated, volatile, None)
     }
 
-    pub(crate) fn with_max_bytes(
-        inner: Arc<A>,
-        capacity: NonZeroUsize,
-        on_invalidated: Option<crate::store::OnInvalidatedFn>,
-        volatile: bool,
-        max_bytes: Option<u64>,
-    ) -> Self {
-        let cache = Arc::new(Mutex::new(LruCache::new(capacity)));
-        let pinned = Arc::new(DashSet::new());
-        let enforce_capacity = max_bytes.map(|max_bytes| {
-            let cache = Arc::clone(&cache);
-            let pinned = Arc::clone(&pinned);
-            let on_invalidated = on_invalidated.clone();
-            Arc::new(move || {
-                let invalidated = {
-                    let mut cache = cache.lock();
-                    Self::trim_to_max_bytes(&mut cache, &pinned, max_bytes)
-                };
-                if let Some(cb) = &on_invalidated {
-                    for key in invalidated {
-                        cb(&key);
-                    }
-                }
-            }) as EnforceCapacity
-        });
-        Self {
-            capacity,
-            inner,
-            pinned,
-            on_invalidated,
-            cache,
-            enforce_capacity,
-            volatile,
-        }
-    }
-
-    fn committed_bytes(entry: &CacheEntry<A::ReadyRes, A::IndexRes>) -> Option<u64> {
-        let CacheEntry::Resource { reader, .. } = entry else {
-            return None;
-        };
-        let ResourceStatus::Committed { final_len } = reader.status() else {
-            return None;
-        };
-        Some(final_len.or_else(|| reader.len()).unwrap_or(u64::MAX))
-    }
-
-    fn retained_bytes(cache: &CacheMap<A>, pinned: &DashSet<ResourceKey>) -> u64 {
-        cache
-            .iter()
-            .filter(|(key, _)| !Self::is_pinned(pinned, key))
-            .filter_map(|(_, entry)| Self::committed_bytes(entry))
-            .fold(0_u64, u64::saturating_add)
-    }
-
-    fn trim_to_max_bytes(
-        cache: &mut CacheMap<A>,
-        pinned: &DashSet<ResourceKey>,
-        max_bytes: u64,
-    ) -> Vec<ResourceKey> {
-        let mut invalidated = Vec::new();
-        while Self::retained_bytes(cache, pinned) > max_bytes {
-            let Some(key) = cache
-                .iter()
-                .filter_map(|(key, entry)| {
-                    let bytes = Self::committed_bytes(entry)?;
-                    if bytes == 0 || Self::is_pinned(pinned, key) {
-                        return None;
-                    }
-                    Some((key.clone(), Self::entry_hits(entry)))
-                })
-                .reduce(|best, candidate| {
-                    if candidate.1 <= best.1 {
-                        candidate
-                    } else {
-                        best
-                    }
-                })
-                .map(|(key, _)| key)
-            else {
-                break;
-            };
-            let Some(entry) = cache.pop(&key) else {
-                continue;
-            };
-            if let (
-                CacheKey::Resource {
-                    key: resource_key, ..
-                },
-                CacheEntry::Resource { .. },
-            ) = (key, entry)
-                && !invalidated.contains(&resource_key)
-            {
-                invalidated.push(resource_key);
-            }
-        }
-        invalidated
+    pub(crate) fn cache_capacity(&self) -> NonZeroUsize {
+        self.capacity
     }
 
     fn cache_entry(
@@ -312,6 +218,16 @@ where
         committed
     }
 
+    fn committed_bytes(entry: &CacheEntry<A::ReadyRes, A::IndexRes>) -> Option<u64> {
+        let CacheEntry::Resource { reader, .. } = entry else {
+            return None;
+        };
+        let ResourceStatus::Committed { final_len } = reader.status() else {
+            return None;
+        };
+        Some(final_len.or_else(|| reader.len()).unwrap_or(u64::MAX))
+    }
+
     fn entry_hits(entry: &CacheEntry<A::ReadyRes, A::IndexRes>) -> usize {
         match entry {
             CacheEntry::Resource { hits, .. } => *hits,
@@ -323,10 +239,6 @@ where
         self.inner.capabilities().contains(Capabilities::CACHE)
     }
 
-    fn is_pinned_key(&self, key: &CacheKey) -> bool {
-        Self::is_pinned(&self.pinned, key)
-    }
-
     fn is_pinned(pinned: &DashSet<ResourceKey>, key: &CacheKey) -> bool {
         match key {
             CacheKey::Resource {
@@ -334,6 +246,10 @@ where
             } => pinned.contains(resource_key),
             _ => false,
         }
+    }
+
+    fn is_pinned_key(&self, key: &CacheKey) -> bool {
+        Self::is_pinned(&self.pinned, key)
     }
 
     fn is_protected_resource(entry: &CacheEntry<A::ReadyRes, A::IndexRes>) -> bool {
@@ -391,8 +307,92 @@ where
         cache.pop(&key).map(|entry| (key, entry))
     }
 
-    pub(crate) fn cache_capacity(&self) -> NonZeroUsize {
-        self.capacity
+    fn retained_bytes(cache: &CacheMap<A>, pinned: &DashSet<ResourceKey>) -> u64 {
+        cache
+            .iter()
+            .filter(|(key, _)| !Self::is_pinned(pinned, key))
+            .filter_map(|(_, entry)| Self::committed_bytes(entry))
+            .fold(0_u64, u64::saturating_add)
+    }
+
+    fn trim_to_max_bytes(
+        cache: &mut CacheMap<A>,
+        pinned: &DashSet<ResourceKey>,
+        max_bytes: u64,
+    ) -> Vec<ResourceKey> {
+        let mut invalidated = Vec::new();
+        while Self::retained_bytes(cache, pinned) > max_bytes {
+            let Some(key) = cache
+                .iter()
+                .filter_map(|(key, entry)| {
+                    let bytes = Self::committed_bytes(entry)?;
+                    if bytes == 0 || Self::is_pinned(pinned, key) {
+                        return None;
+                    }
+                    Some((key.clone(), Self::entry_hits(entry)))
+                })
+                .reduce(|best, candidate| {
+                    if candidate.1 <= best.1 {
+                        candidate
+                    } else {
+                        best
+                    }
+                })
+                .map(|(key, _)| key)
+            else {
+                break;
+            };
+            let Some(entry) = cache.pop(&key) else {
+                continue;
+            };
+            if let (
+                CacheKey::Resource {
+                    key: resource_key, ..
+                },
+                CacheEntry::Resource { .. },
+            ) = (key, entry)
+                && !invalidated.contains(&resource_key)
+            {
+                invalidated.push(resource_key);
+            }
+        }
+        invalidated
+    }
+
+    pub(crate) fn with_max_bytes(
+        inner: Arc<A>,
+        capacity: NonZeroUsize,
+        on_invalidated: Option<crate::store::OnInvalidatedFn>,
+        volatile: bool,
+        max_bytes: Option<u64>,
+    ) -> Self {
+        let cache = Arc::new(Mutex::new(LruCache::new(capacity)));
+        let pinned = Arc::new(DashSet::new());
+        let enforce_capacity = max_bytes.map(|max_bytes| {
+            let cache = Arc::clone(&cache);
+            let pinned = Arc::clone(&pinned);
+            let on_invalidated = on_invalidated.clone();
+            Arc::new(move || {
+                let invalidated = {
+                    let mut cache = cache.lock();
+                    Self::trim_to_max_bytes(&mut cache, &pinned, max_bytes)
+                };
+                if let Some(cb) = &on_invalidated {
+                    for key in invalidated {
+                        cb(&key);
+                    }
+                }
+            }) as EnforceCapacity
+        });
+        Self {
+            inner,
+            pinned,
+            capacity,
+            enforce_capacity,
+            on_invalidated,
+            cache,
+            volatile,
+        }
     }
 
     /// Wrap an [`AcquisitionResult`] from the inner store in cache wrappers
@@ -763,6 +763,15 @@ mod tests {
             self.inner.acquire_resource(key, identity)
         }
 
+        fn open_resource_with_ctx(
+            &self,
+            key: &ResourceKey,
+            identity: Option<&RequestIdentity>,
+            _ctx: Option<Self::Context>,
+        ) -> AssetsResult<BaseReader> {
+            self.inner.open_resource(key, identity)
+        }
+
         delegate::delegate! {
             to self.inner {
                 fn capabilities(&self) -> Capabilities;
@@ -772,15 +781,6 @@ mod tests {
                 fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState>;
                 fn root_dir(&self) -> &Path;
             }
-        }
-
-        fn open_resource_with_ctx(
-            &self,
-            key: &ResourceKey,
-            identity: Option<&RequestIdentity>,
-            _ctx: Option<Self::Context>,
-        ) -> AssetsResult<BaseReader> {
-            self.inner.open_resource(key, identity)
         }
     }
 

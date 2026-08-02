@@ -17,8 +17,8 @@ struct TrackReadContext<'a> {
 
 #[derive(Clone, Copy)]
 struct PartialRead {
-    frames: usize,
     duration: f64,
+    frames: usize,
 }
 
 /// Result of a single track render attempt.
@@ -112,11 +112,11 @@ impl PlayerTrack {
             &mut self.triggers,
             ctx.notification_tx,
             TriggerInput {
-                block_frames: range_len,
                 duration,
-                fade_duration: self.fade.duration(),
                 frames_until_eof,
                 position,
+                block_frames: range_len,
+                fade_duration: self.fade.duration(),
                 prefetch_duration: self.prefetch_duration,
                 sample_rate: self.sample_rate,
             },
@@ -176,9 +176,9 @@ impl PlayerTrack {
             TriggerInput {
                 block_frames,
                 duration,
+                position,
                 fade_duration: self.fade.duration(),
                 frames_until_eof: Some(0),
-                position,
                 prefetch_duration: self.prefetch_duration,
                 sample_rate: self.sample_rate,
             },
@@ -248,7 +248,7 @@ impl PlayerTrack {
                     notification_tx,
                     range,
                 },
-                PartialRead { frames, duration },
+                PartialRead { duration, frames },
             ),
             TrackReadOutcome::Eof => {
                 self.handle_natural_end(notification_tx);
@@ -275,8 +275,8 @@ impl PlayerTrack {
 
         match resource.read(&mut scratch_window, 0..range.len()) {
             ReadOutcome::Full { frames } => TrackReadOutcome::Full {
-                duration: resource.duration(),
                 frames,
+                duration: resource.duration(),
                 frames_until_eof: resource.frames_until_eof(),
                 position: 0.0,
             },

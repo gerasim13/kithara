@@ -25,8 +25,8 @@ use crate::{coord::FileCoord, error::SourceError};
 /// by the caller.
 pub(crate) struct FileStreamState {
     pub(crate) backend: AssetStore,
-    pub(crate) acq: ResourceAcquisition,
     pub(crate) bus: EventBus,
+    pub(crate) acq: ResourceAcquisition,
     pub(crate) key: ResourceKey,
 }
 
@@ -77,8 +77,8 @@ pub(crate) struct FileSourceCtx {
 /// present only on the download path; `raw` is the clone-able streaming-write
 /// handle a fetch closure uses to land bytes into the writer's generation.
 pub(crate) struct FileAssetCtx {
-    pub(crate) backend: AssetStore,
     pub(crate) reader: AssetReader,
+    pub(crate) backend: AssetStore,
     pub(crate) writer: Mutex<Option<AssetWriter>>,
     pub(crate) headers: Option<Headers>,
     pub(crate) raw: Option<RawWriteHandle>,
@@ -109,10 +109,10 @@ pub(crate) struct FileInner {
     /// election if the original producer drops. `None` for local /
     /// already-cached sources that never download.
     pub(crate) demand_lease: Option<DemandLease>,
-    opened_emitted: OnceLock<()>,
-
     /// FSM phase as `FilePhase as u8`. Lock-free transitions.
     phase: AtomicU8,
+
+    opened_emitted: OnceLock<()>,
 
     /// Late-bound audio-worker wake. Remote file sources can underrun while
     /// HTTP bytes are still arriving, so each write wakes the worker that
@@ -171,6 +171,40 @@ impl FileInner {
         }
     }
 
+    pub(crate) fn publish_opened(
+        &self,
+        total_bytes: Option<u64>,
+        cached: bool,
+        source: Option<TotalBytesSource>,
+    ) {
+        if self.opened_emitted.set(()).is_err() {
+            return;
+        }
+        let (codec, container) = self
+            .content_type_info
+            .get()
+            .map_or((None, None), map_media_info);
+        self.source.bus.publish(FileEvent::Opened {
+            codec,
+            container,
+            total_bytes,
+            cached,
+        });
+        if let (Some(total_bytes), Some(source)) = (total_bytes, source) {
+            self.source.bus.publish(FileEvent::TotalBytesResolved {
+                total_bytes,
+                source,
+            });
+        }
+    }
+
+    pub(crate) fn publish_total_bytes_resolved(&self, total_bytes: u64, source: TotalBytesSource) {
+        self.source.bus.publish(FileEvent::TotalBytesResolved {
+            total_bytes,
+            source,
+        });
+    }
+
     /// Lock-free FSM transition. The one-shot fragmented-mp4 parse runs
     /// on the `Complete` edge so the hot-path `byte_map` audit
     /// can short-circuit on `segment_index.get()` without re-reading the
@@ -216,40 +250,6 @@ impl FileInner {
         if let Some(wake) = self.worker_wake.get() {
             wake.wake();
         }
-    }
-
-    pub(crate) fn publish_opened(
-        &self,
-        total_bytes: Option<u64>,
-        cached: bool,
-        source: Option<TotalBytesSource>,
-    ) {
-        if self.opened_emitted.set(()).is_err() {
-            return;
-        }
-        let (codec, container) = self
-            .content_type_info
-            .get()
-            .map_or((None, None), map_media_info);
-        self.source.bus.publish(FileEvent::Opened {
-            codec,
-            container,
-            total_bytes,
-            cached,
-        });
-        if let (Some(total_bytes), Some(source)) = (total_bytes, source) {
-            self.source.bus.publish(FileEvent::TotalBytesResolved {
-                total_bytes,
-                source,
-            });
-        }
-    }
-
-    pub(crate) fn publish_total_bytes_resolved(&self, total_bytes: u64, source: TotalBytesSource) {
-        self.source.bus.publish(FileEvent::TotalBytesResolved {
-            total_bytes,
-            source,
-        });
     }
 }
 

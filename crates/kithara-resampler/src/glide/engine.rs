@@ -5,12 +5,12 @@ use crate::ResamplerMode;
 
 pub(in crate::glide) struct RenderRequest<'a, 'out, 'channel> {
     pub(in crate::glide) input: &'a [&'a [f32]],
-    pub(in crate::glide) previous: &'a [PcmBuf],
     pub(in crate::glide) output: &'out mut [&'channel mut [f32]],
-    pub(in crate::glide) produced: usize,
+    pub(in crate::glide) previous: &'a [PcmBuf],
     pub(in crate::glide) config: GlideConfig,
-    pub(in crate::glide) filter_ratio: f64,
     pub(in crate::glide) mode: ResamplerMode,
+    pub(in crate::glide) filter_ratio: f64,
+    pub(in crate::glide) produced: usize,
 }
 
 #[cfg(all(
@@ -42,14 +42,14 @@ mod imp {
 
     #[derive(fieldwork::Fieldwork)]
     pub(in crate::glide) struct GlideEngine {
+        filter_cutoff: Option<f64>,
         positions: PcmBuf,
-        padded: SmallVec<[PcmBuf; 8]>,
         filtered: SmallVec<[PcmBuf; 8]>,
         filters: SmallVec<[Option<BiquadFilter>; 8]>,
+        padded: SmallVec<[PcmBuf; 8]>,
         max_input_frames: usize,
         #[field(get(copy, name = position_capacity, vis = "pub(in crate::glide)"))]
         max_output_frames: usize,
-        filter_cutoff: Option<f64>,
     }
 
     impl GlideEngine {
@@ -268,14 +268,14 @@ mod imp {
 
     #[derive(fieldwork::Fieldwork)]
     pub(in crate::glide) struct GlideEngine {
+        filter_cutoff: Option<f64>,
         positions: PcmBuf,
-        padded: SmallVec<[PcmBuf; 8]>,
         filtered: SmallVec<[PcmBuf; 8]>,
         filters: SmallVec<[Option<ScalarBiquad>; 8]>,
+        padded: SmallVec<[PcmBuf; 8]>,
         max_input_frames: usize,
         #[field(get(copy, name = position_capacity, vis = "pub(in crate::glide)"))]
         max_output_frames: usize,
-        filter_cutoff: Option<f64>,
     }
 
     impl GlideEngine {

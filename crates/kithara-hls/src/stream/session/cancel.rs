@@ -1,14 +1,14 @@
 use kithara_platform::{CancelToken, sync::RwLock};
 
 pub(super) struct SessionCancel {
-    fetch: RwLock<CancelToken>,
     pub(super) root: CancelToken,
+    fetch: RwLock<CancelToken>,
 }
 
 impl SessionCancel {
     pub(super) fn new(root: CancelToken) -> Self {
         let fetch = RwLock::new(root.child());
-        Self { fetch, root }
+        Self { root, fetch }
     }
 
     pub(super) fn abort(&self) {

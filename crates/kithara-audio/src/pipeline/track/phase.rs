@@ -39,11 +39,11 @@ impl<S: TrackPhase> Track<S> {
         &mut self.data
     }
 
-    pub(crate) fn into_inner(self) -> S::Data {
-        self.data
-    }
-
     pub(crate) fn erase(self) -> CurrentFsm {
         S::erase(self)
+    }
+
+    pub(crate) fn into_inner(self) -> S::Data {
+        self.data
     }
 }

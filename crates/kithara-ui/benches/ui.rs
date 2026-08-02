@@ -64,8 +64,8 @@ const TRACKS: [TrackRow<'static>; 3] = [
 ];
 
 struct Fixture {
-    resolver: MemResolver,
     registry: BenchRegistry,
+    resolver: MemResolver,
     config: UiConfig,
 }
 
@@ -104,9 +104,9 @@ impl EndpointRegistry for BenchRegistry {
 
 struct BenchReads {
     levels: [StereoLevels; 8],
+    waveforms: [Vec<WaveBucket>; 4],
     phase: f32,
     scalar: f64,
-    waveforms: [Vec<WaveBucket>; 4],
 }
 
 impl BenchReads {
@@ -388,6 +388,7 @@ fn model(id: &str) -> BindingRef {
 
 fn row(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
     ControlNode::Row {
+        children,
         id: id.map(NodeId),
         size: None,
         gap: None,
@@ -402,12 +403,12 @@ fn row(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
         frame_color: None,
         active_frame_color: None,
         write: None,
-        children,
     }
 }
 
 fn column(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
     ControlNode::Column {
+        children,
         id: id.map(NodeId),
         size: None,
         gap: None,
@@ -418,7 +419,6 @@ fn column(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
         background: None,
         background_alpha: None,
         write: None,
-        children,
     }
 }
 

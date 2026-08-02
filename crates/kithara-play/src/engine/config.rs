@@ -16,10 +16,10 @@ pub struct EngineConfig {
     /// `child()` so its produce-core's lock-free `is_cancelled()` read
     /// observes a master cancel.
     pub(crate) cancel: Option<CancelToken>,
-    /// PCM buffer pool for audio-thread scratch buffers.
-    pub(crate) pcm_pool: PcmPool,
     /// Pre-built audio session dispatcher.
     pub(crate) session: Option<Arc<dyn SessionDispatcher>>,
+    /// PCM buffer pool for audio-thread scratch buffers.
+    pub(crate) pcm_pool: PcmPool,
     /// EQ band layout per player. Default: 10-band log-spaced.
     #[builder(default = generate_log_spaced_bands(10))]
     pub(crate) eq_layout: Vec<EqBandConfig>,

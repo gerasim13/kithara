@@ -39,10 +39,10 @@ impl Consts {
 /// `RefCell` shared across the worker's command loop: setters mutate it,
 /// and each track build snapshots it into a [`ResourceConfig`].
 struct BuildState {
+    store: AssetStore,
     headers: HashMap<String, String>,
     keys: KeyOptions,
     region: Region,
-    store: AssetStore,
 }
 
 impl Default for BuildState {
@@ -55,10 +55,10 @@ impl Default for BuildState {
             .pool(region.byte_pool())
             .build();
         Self {
-            headers: HashMap::new(),
-            keys: KeyOptions::default(),
             region,
             store,
+            headers: HashMap::new(),
+            keys: KeyOptions::default(),
         }
     }
 }

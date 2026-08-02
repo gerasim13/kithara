@@ -17,10 +17,10 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Segmented<'a, 'value, 'data, 'skin> {
-    path: &'a str,
-    items: Vec<&'a str>,
-    value: Option<&'value ReadValue<'data>>,
     skin: &'skin Skin,
+    path: &'a str,
+    value: Option<&'value ReadValue<'data>>,
+    items: Vec<&'a str>,
 }
 
 impl<'a> Widget<'a> for Segmented<'a, '_, '_, '_> {
@@ -33,9 +33,9 @@ impl<'a> Widget<'a> for Segmented<'a, '_, '_, '_> {
             .to_usize()
             .filter(|index| *index < self.items.len());
         Canvas::new(SegmentedCanvas {
+            active,
             path: self.path.to_owned(),
             items: self.items,
-            active,
             metrics: self.skin.segmented,
             colors: SegmentedColors {
                 background: self.skin.color(self.skin.segmented.background),
@@ -52,20 +52,20 @@ impl<'a> Widget<'a> for Segmented<'a, '_, '_, '_> {
 }
 
 struct SegmentedCanvas<'a> {
+    active: Option<usize>,
+    colors: SegmentedColors,
+    metrics: SegmentedSkin,
     path: String,
     items: Vec<&'a str>,
-    active: Option<usize>,
-    metrics: SegmentedSkin,
-    colors: SegmentedColors,
 }
 
 #[derive(Clone, Copy)]
 struct SegmentedColors {
-    background: Color,
     active_background: Color,
     active_text: Color,
-    inactive_text: Color,
+    background: Color,
     frame: Color,
+    inactive_text: Color,
 }
 
 impl canvas::Program<UiEvent> for SegmentedCanvas<'_> {
@@ -125,6 +125,19 @@ impl canvas::Program<UiEvent> for SegmentedCanvas<'_> {
         vec![frame.into_geometry()]
     }
 
+    fn mouse_interaction(
+        &self,
+        _state: &(),
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> mouse::Interaction {
+        if self.items.is_empty() || !cursor.is_over(bounds) {
+            mouse::Interaction::default()
+        } else {
+            mouse::Interaction::Pointer
+        }
+    }
+
     fn update(
         &self,
         _state: &mut (),
@@ -148,19 +161,6 @@ impl canvas::Program<UiEvent> for SegmentedCanvas<'_> {
             })
             .and_capture(),
         )
-    }
-
-    fn mouse_interaction(
-        &self,
-        _state: &(),
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> mouse::Interaction {
-        if self.items.is_empty() || !cursor.is_over(bounds) {
-            mouse::Interaction::default()
-        } else {
-            mouse::Interaction::Pointer
-        }
     }
 }
 

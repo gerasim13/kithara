@@ -71,28 +71,18 @@ impl SizeSignal {
     /// once in `Hls::create` and cloned down into every consumer.
     pub(crate) fn new(ready: Arc<ThreadGate>, worker_wake: WorkerWakeCell) -> Self {
         Self {
-            peer_poll_wake: Arc::new(OnceLock::new()),
             ready,
             worker_wake,
+            peer_poll_wake: Arc::new(OnceLock::new()),
             peer_wake: Arc::new(OnceLock::new()),
         }
     }
 
-    delegate::delegate! {
-        to self.ready {
-            /// Pre-park snapshot of the gate generation (seqlock guard for the off-RT
-            /// `wait_range` loop). Pass-through to [`WaitGate::current`].
-            pub(crate) fn current(&self) -> u64;
-            /// Signal only the gate. Used at the coord's RT-reachable transitions
-            /// (fence clear, seek reset, cancel waker) that flip a blocked reader's
-            /// predicate without producing new bytes — the audio worker re-discovers the
-            /// state on its next scheduler poll, so it is deliberately not re-ticked.
-            #[call(signal)]
-            pub(crate) fn fire_ready_only(&self);
-            /// Park on the gate until its generation advances past `since` or `timeout`
-            /// elapses. Returns `true` on a signal, `false` on timeout. Pass-through to
-            /// [`WaitGate::wait_timeout`].
-            pub(crate) fn wait_timeout(&self, since: u64, timeout: Duration) -> bool;
+    /// Arm the peer wake from a non-blocking decoder reader. The scheduler
+    /// shell flushes the stored wake off the real-time path.
+    pub(crate) fn arm_peer(&self) {
+        if let Some(wake) = self.peer_wake.get() {
+            wake.arm();
         }
     }
 
@@ -104,12 +94,6 @@ impl SizeSignal {
     /// are both allowed there.
     pub(crate) fn fire(&self) {
         self.ready.signal();
-        wake_worker(&self.worker_wake);
-    }
-
-    /// Re-tick the audio worker after publishing work that it owns, without
-    /// claiming that reader bytes or readiness changed.
-    pub(crate) fn wake_worker(&self) {
         wake_worker(&self.worker_wake);
     }
 
@@ -142,11 +126,27 @@ impl SizeSignal {
         }
     }
 
-    /// Arm the peer wake from a non-blocking decoder reader. The scheduler
-    /// shell flushes the stored wake off the real-time path.
-    pub(crate) fn arm_peer(&self) {
-        if let Some(wake) = self.peer_wake.get() {
-            wake.arm();
+    /// Re-tick the audio worker after publishing work that it owns, without
+    /// claiming that reader bytes or readiness changed.
+    pub(crate) fn wake_worker(&self) {
+        wake_worker(&self.worker_wake);
+    }
+
+    delegate::delegate! {
+        to self.ready {
+            /// Pre-park snapshot of the gate generation (seqlock guard for the off-RT
+            /// `wait_range` loop). Pass-through to [`WaitGate::current`].
+            pub(crate) fn current(&self) -> u64;
+            /// Signal only the gate. Used at the coord's RT-reachable transitions
+            /// (fence clear, seek reset, cancel waker) that flip a blocked reader's
+            /// predicate without producing new bytes — the audio worker re-discovers the
+            /// state on its next scheduler poll, so it is deliberately not re-ticked.
+            #[call(signal)]
+            pub(crate) fn fire_ready_only(&self);
+            /// Park on the gate until its generation advances past `since` or `timeout`
+            /// elapses. Returns `true` on a signal, `false` on timeout. Pass-through to
+            /// [`WaitGate::wait_timeout`].
+            pub(crate) fn wait_timeout(&self, since: u64, timeout: Duration) -> bool;
         }
     }
 }

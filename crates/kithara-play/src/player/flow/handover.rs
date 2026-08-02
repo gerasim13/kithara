@@ -162,6 +162,20 @@ impl Handover<'_> {
         Ok(())
     }
 
+    fn publish_crossfade_started(&self) {
+        let Some(slot) = self.slot() else {
+            return;
+        };
+        self.core
+            .engine
+            .bus()
+            .publish(EngineEvent::CrossfadeStarted {
+                from: slot,
+                to: slot,
+                duration: Duration::from_secs_f32(self.crossfade_duration().max(0.0)),
+            });
+    }
+
     /// Drop the armed next slot without committing.
     ///
     /// Sends `UnloadTrack` to the audio thread for the armed src and
@@ -188,20 +202,6 @@ impl Handover<'_> {
             }
             let _ = self.send_to_slot(PlayerCmd::UnloadTrack { src: pending.src });
         }
-    }
-
-    fn publish_crossfade_started(&self) {
-        let Some(slot) = self.slot() else {
-            return;
-        };
-        self.core
-            .engine
-            .bus()
-            .publish(EngineEvent::CrossfadeStarted {
-                from: slot,
-                to: slot,
-                duration: Duration::from_secs_f32(self.crossfade_duration().max(0.0)),
-            });
     }
 }
 

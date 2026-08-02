@@ -49,9 +49,11 @@ impl GaplessStage {
         self.replace_pending(output);
     }
 
-    pub(crate) fn set_tail_compensation(&mut self, profile: GaplessProfile) {
-        self.trimmer
-            .set_tail_compensation(profile.tail_compensation());
+    #[must_use]
+    pub(crate) fn has_output(&self) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(|pending| pending.len() != 0)
     }
 
     /// Return the next trimmed chunk from the current output batch.
@@ -63,13 +65,6 @@ impl GaplessStage {
             self.pending = None;
         }
         next
-    }
-
-    #[must_use]
-    pub(crate) fn has_output(&self) -> bool {
-        self.pending
-            .as_ref()
-            .is_some_and(|pending| pending.len() != 0)
     }
 
     /// Drop pending output and reset seek-sensitive trimming state.
@@ -92,6 +87,11 @@ impl GaplessStage {
                 .is_none_or(|pending| pending.len() == 0)
         );
         self.pending = (!output.is_empty()).then(|| output.into_iter());
+    }
+
+    pub(crate) fn set_tail_compensation(&mut self, profile: GaplessProfile) {
+        self.trimmer
+            .set_tail_compensation(profile.tail_compensation());
     }
 }
 

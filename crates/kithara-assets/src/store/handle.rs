@@ -42,12 +42,12 @@ pub struct AssetStore {
 
 #[derive(Debug)]
 pub(super) struct AssetStoreInner {
-    pub(super) backend: StoreBackendInner,
+    pub(super) layouts: AssetLayoutRegistry,
     pub(super) availability: AvailabilityIndex,
     pub(super) demand: DemandIndex,
-    pub(super) transactions: ResourceTransactionIndex,
     pub(super) eviction: EvictionRouter,
-    pub(super) layouts: AssetLayoutRegistry,
+    pub(super) transactions: ResourceTransactionIndex,
+    pub(super) backend: StoreBackendInner,
 }
 
 #[derive(Debug)]
@@ -63,18 +63,6 @@ pub(super) enum StoreBackendInner {
 }
 
 impl AssetStore {
-    pub(super) fn new_handle(inner: AssetStoreInner) -> Self {
-        Self {
-            inner: Arc::new(inner),
-        }
-    }
-
-    /// Return whether both handles refer to the same store instance.
-    #[must_use]
-    pub fn is_same(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
-    }
-
     /// Acquire a resource explicitly for mutation.
     ///
     /// # Errors
@@ -207,8 +195,16 @@ impl AssetStore {
         &self.inner.demand
     }
 
-    fn transactions(&self) -> &ResourceTransactionIndex {
-        &self.inner.transactions
+    /// Return the fixed handle-cache capacity for an ephemeral memory store.
+    /// Durable stores return `None` because handle displacement does not remove
+    /// their committed bytes.
+    #[must_use]
+    pub fn ephemeral_cache_capacity(&self) -> Option<NonZeroUsize> {
+        match &self.inner.backend {
+            #[cfg(not(target_arch = "wasm32"))]
+            StoreBackendInner::Disk { .. } => None,
+            StoreBackendInner::Memory { store } => Some(store.cache_capacity()),
+        }
     }
 
     /// Return the crate-private eviction-router handle.
@@ -231,8 +227,20 @@ impl AssetStore {
         None
     }
 
+    /// Return whether both handles refer to the same store instance.
+    #[must_use]
+    pub fn is_same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     fn layouts(&self) -> &AssetLayoutRegistry {
         &self.inner.layouts
+    }
+
+    pub(super) fn new_handle(inner: AssetStoreInner) -> Self {
+        Self {
+            inner: Arc::new(inner),
+        }
     }
 
     /// Open a resource by key (no processing context).
@@ -275,18 +283,6 @@ impl AssetStore {
         delegate_to_store!(self, remove_resource, key)
     }
 
-    /// Return the fixed handle-cache capacity for an ephemeral memory store.
-    /// Durable stores return `None` because handle displacement does not remove
-    /// their committed bytes.
-    #[must_use]
-    pub fn ephemeral_cache_capacity(&self) -> Option<NonZeroUsize> {
-        match &self.inner.backend {
-            #[cfg(not(target_arch = "wasm32"))]
-            StoreBackendInner::Disk { .. } => None,
-            StoreBackendInner::Memory { store } => Some(store.cache_capacity()),
-        }
-    }
-
     /// Inspect the current resource state.
     ///
     /// # Errors
@@ -321,6 +317,10 @@ impl AssetStore {
         tx: mpsc::UnboundedSender<ResourceKey>,
     ) -> EvictionSubscription {
         self.eviction().subscribe(asset_root, tx)
+    }
+
+    fn transactions(&self) -> &ResourceTransactionIndex {
+        &self.inner.transactions
     }
 
     /// Serialize a closure per key across clones of this store. The closure

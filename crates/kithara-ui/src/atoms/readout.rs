@@ -11,11 +11,11 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Readout<'a, 'value, 'data, 'skin> {
+    skin: &'skin Skin,
     label: Option<&'a str>,
+    value: Option<&'value ReadValue<'data>>,
     tone: Tone,
     framed: bool,
-    value: Option<&'value ReadValue<'data>>,
-    skin: &'skin Skin,
 }
 
 impl<'a> Widget<'a> for Readout<'a, '_, '_, '_> {
