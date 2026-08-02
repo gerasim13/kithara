@@ -9,8 +9,7 @@ port of CPJKU `beat_this` (ISMIR 2024, MIT — code and weights).
   `beat-this-rs/tests/fixtures/golden_small.json`.
 - `it_dont_mean_a_thing_mono_22050.f32le` — the same track pre-decoded to raw
   mono f32 little-endian PCM at 22 050 Hz (3 432 959 samples, 155.69 s).
-  Produced offline from `beat-this-rs/test_files/It Don't Mean A Thing -
-  Kings of Swing.mp3` via that crate's own `load_audio` path (symphonia 0.6
+  Produced offline from `beat-this-rs/test_files/It Don't Mean A Thing - Kings of Swing.mp3` via that crate's own `load_audio` path (symphonia 0.6
   decode → channel-average downmix → rubato 3.0 sinc resample, `sinc_len` 256,
   Blackman-Harris2) — the exact input its parity suite fed the pipeline.
   Pre-decoding keeps `kithara-beat` free of decoder/resampler dependencies:

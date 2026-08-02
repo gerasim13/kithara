@@ -5,11 +5,11 @@ Detailed contracts and invariants for the kithara-abr crate; the README is the o
 ## Decision Logic
 
 1. If in Manual mode → return current variant (`ManualOverride`).
-2. If less than `min_switch_interval` (default 30 s) since last switch → `MinInterval`.
-3. Estimate throughput via dual-track EWMA (seeded at construction from `initial_throughput_bps` if set).
-4. Select highest-bandwidth variant not exceeding `estimate / throughput_safety_factor` (default 1.5).
-5. **Up-switch**: requires buffer ≥ `min_buffer_for_up_switch` (10 s) AND throughput ≥ `candidate_bw × up_hysteresis_ratio` (1.3×).
-6. **Down-switch**: triggered by buffer ≤ `urgent_downswitch_buffer` (5 s) OR throughput ≤ `current_bw × down_hysteresis_ratio` (0.8×).
+1. If less than `min_switch_interval` (default 30 s) since last switch → `MinInterval`.
+1. Estimate throughput via dual-track EWMA (seeded at construction from `initial_throughput_bps` if set).
+1. Select highest-bandwidth variant not exceeding `estimate / throughput_safety_factor` (default 1.5).
+1. **Up-switch**: requires buffer ≥ `min_buffer_for_up_switch` (10 s) AND throughput ≥ `candidate_bw × up_hysteresis_ratio` (1.3×).
+1. **Down-switch**: triggered by buffer ≤ `urgent_downswitch_buffer` (5 s) OR throughput ≤ `current_bw × down_hysteresis_ratio` (0.8×).
 
 ## Initial Bandwidth Seed
 
@@ -63,12 +63,12 @@ src/
 - **`AbrState::current_variant_index()` has two legitimate writers**, both go through
   [`AbrState::apply_decision`](src/state/core.rs):
   1. `controller::tick` when the auto-mode FSM picks a new variant;
-  2. `kithara-hls` scheduler when the user manually selects a variant — HLS
-     holds `Arc<AbrState>` and applies a `Manual` decision so the layout
-     switch and the ABR state stay in sync.
-  `kithara-hls`'s `HlsCoord` reads the variant via `Arc<AbrState>` (no
-  cloneable `Arc<AtomicUsize>` handle is exposed) — see `redundant_accessors`
-  in `crates/kithara-devtools/src/arch/checks` for the rationale.
+  1. `kithara-hls` scheduler when the user manually selects a variant — HLS
+    holds `Arc<AbrState>` and applies a `Manual` decision so the layout
+    switch and the ABR state stay in sync.
+    `kithara-hls`'s `HlsCoord` reads the variant via `Arc<AbrState>` (no
+    cloneable `Arc<AtomicUsize>` handle is exposed) — see `redundant_accessors`
+    in `crates/kithara-devtools/src/arch/checks` for the rationale.
 
 ## Decision flow
 

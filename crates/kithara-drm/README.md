@@ -1,5 +1,7 @@
 <div align="center">
+
   <img src="../../logo.svg" alt="kithara" width="300">
+
 </div>
 
 <div align="center">
@@ -32,18 +34,31 @@ let decrypted = &output[..len];
 ## Key Types
 
 <table>
+
 <tr><th>Item</th><th>Kind</th><th>Role</th></tr>
+
 <tr><td><code>DecryptContext</code></td><td>struct</td><td>Holds the 16-byte AES key, IV, and chunk-cursor state for a segment</td></tr>
+
 <tr><td><code>aes128_cbc_process_chunk</code></td><td>fn</td><td>Decrypts a chunk in place; handles PKCS7 padding on the final chunk</td></tr>
+
 <tr><td><code>UniqueBinaryCipher</code></td><td>struct</td><td>Helper cipher used by app-side key processors (e.g. to unwrap server-encrypted keys with an app-embedded master key)</td></tr>
+
 <tr><td><code>KeyProcessor</code></td><td>type alias</td><td><code>Arc&lt;dyn Fn(Bytes) -&gt; KeyProcessResult + Send + Sync&gt;</code> invoked before decryption to transform / unwrap a fetched key</td></tr>
+
 <tr><td><code>KeyRequest</code></td><td>struct</td><td>Fresh per-fetch headers paired with the processor that can unwrap the corresponding response</td></tr>
+
 <tr><td><code>KeyRequestFactory</code></td><td>type alias</td><td>Factory that returns a fresh <code>KeyRequest</code> for each key fetch</td></tr>
+
 <tr><td><code>PreparedKeyRequest</code></td><td>struct</td><td>Final wire URL, policy headers, and response processor returned by a resolver</td></tr>
+
 <tr><td><code>KeyRequestResolver</code></td><td>trait</td><td>Policy-neutral callback that optionally prepares a key request for a URL</td></tr>
+
 <tr><td><code>KeyProcessorRegistry</code></td><td>struct</td><td>Ordered resolver registry; <code>prepare()</code> returns the first prepared request</td></tr>
+
 <tr><td><code>KeyProcessResult</code></td><td>type alias</td><td><code>Result&lt;Bytes, DrmError&gt;</code> returned by a <code>KeyProcessor</code> callback</td></tr>
+
 <tr><td><code>DrmError</code></td><td>enum</td><td>Crate-level error</td></tr>
+
 </table>
 
 ## Integration

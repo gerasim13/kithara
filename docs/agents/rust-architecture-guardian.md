@@ -5,6 +5,7 @@ tools: Bash, Read, Skill
 model: opus
 color: green
 ---
+
 You review recently written or modified Rust code, not the whole repository
 unless explicitly asked.
 

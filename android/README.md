@@ -1,5 +1,7 @@
 <div align="center">
+
   <img src="../logo.svg" alt="kithara" width="300">
+
 </div>
 
 <div align="center">
@@ -46,6 +48,7 @@ just platform android build --profile release
 ```
 
 Output:
+
 - `android/lib/build/generated/jniLibs/` — native `.so` libraries per ABI
 - `android/lib/build/generated/uniffi/kotlin/` — generated Kotlin bindings
 

@@ -5,14 +5,23 @@ Detailed contracts and invariants for the kithara-platform crate; the README is 
 ## Synchronization Backends
 
 <table>
+
 <tr><th>Type</th><th>System</th><th>Loom</th><th>wasm32</th></tr>
+
 <tr><td><code>Arc&lt;T&gt;</code></td><td><code>std::sync::Arc</code></td><td>system backend</td><td><code>std::sync::Arc</code></td></tr>
+
 <tr><td><code>Mutex&lt;T&gt;</code></td><td><code>parking_lot::Mutex</code> wrapper</td><td><code>loom::sync::Mutex</code> wrapper</td><td><code>wasm_safe_thread::Mutex</code> wrapper</td></tr>
+
 <tr><td><code>RwLock&lt;T&gt;</code></td><td><code>parking_lot::RwLock</code> wrapper</td><td><code>loom::sync::RwLock</code> wrapper</td><td><code>wasm_safe_thread::rwlock::RwLock</code> wrapper</td></tr>
+
 <tr><td><code>Condvar</code></td><td><code>parking_lot::Condvar</code> wrapper</td><td><code>loom::sync::Condvar</code> wrapper</td><td><code>wasm_safe_thread::condvar::Condvar</code> wrapper</td></tr>
+
 <tr><td><code>atomic::*</code></td><td><code>std::sync::atomic</code></td><td><code>loom::sync::atomic</code></td><td><code>std::sync::atomic</code></td></tr>
+
 <tr><td><code>MaybeSend</code></td><td>Equivalent to <code>Send</code></td><td>Equivalent to <code>Send</code></td><td>Blanket trait (no Send requirement)</td></tr>
+
 <tr><td><code>MaybeSync</code></td><td>Equivalent to <code>Sync</code></td><td>Equivalent to <code>Sync</code></td><td>Blanket trait (no Sync requirement)</td></tr>
+
 </table>
 
 `Arc<T>`, `Weak<T>`, and `OnceLock<T>` always route through the system backend.
@@ -25,11 +34,17 @@ crate rather than importing `std` directly.
 The backend composition is compile-time only:
 
 <table>
+
 <tr><th>Features</th><th>Facade</th><th>Primitive backend</th></tr>
+
 <tr><td>none</td><td>system</td><td>system</td></tr>
+
 <tr><td><code>flash</code></td><td>Flash wrappers</td><td>system</td></tr>
+
 <tr><td><code>loom</code></td><td>Loom</td><td>Loom</td></tr>
+
 <tr><td><code>flash,loom</code></td><td>Flash wrappers</td><td>Loom</td></tr>
+
 </table>
 
 `system` and `loom` are private implementation modules. The only consumer
@@ -68,12 +83,19 @@ waiter observes the changed sequence or returns through its timed backstop.
 ## Thread and Task Primitives
 
 <table>
+
 <tr><th>API</th><th>Native</th><th>wasm32</th></tr>
+
 <tr><td><code>thread::spawn</code></td><td><code>std::thread::spawn</code></td><td><code>wasm_safe_thread::Builder::spawn</code> (Web Worker)</td></tr>
+
 <tr><td><code>tokio::task::spawn</code></td><td><code>tokio</code> task runtime</td><td>Worker-aware wrapper over <code>tokio_with_wasm</code> with lifecycle hooks</td></tr>
+
 <tr><td><code>tokio::task::spawn_blocking</code></td><td><code>tokio</code> blocking pool</td><td>Dedicated worker-thread execution</td></tr>
+
 <tr><td><code>thread::is_main_thread / is_worker_thread</code></td><td>always main / false</td><td>detects browser main vs Worker global scope</td></tr>
+
 <tr><td><code>thread::assert_main_thread / assert_not_main_thread</code></td><td>no-op</td><td>panic on wrong thread affinity</td></tr>
+
 </table>
 
 ## Time Utilities
@@ -87,13 +109,21 @@ On native these delegate to `tokio` runtime primitives, on wasm they use `setTim
 ## Feature Flags
 
 <table>
+
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
+
 <tr><td><code>flash</code></td><td>no</td><td>Native test-only virtual clock and flash-aware primitive wrappers</td></tr>
+
 <tr><td><code>loom</code></td><td>no</td><td>Native test-only exhaustive concurrency backend; independent from <code>flash</code></td></tr>
+
 <tr><td><code>no-block</code></td><td>no</td><td>Native test-only async poll blocking detector; inert twin off the feature</td></tr>
+
 <tr><td><code>signal</code></td><td>no</td><td>Enable <code>tokio::signal</code> forwarding for desktop binaries that own process shutdown</td></tr>
+
 <tr><td><code>tokio-net</code></td><td>no</td><td>Enable native <code>tokio::net</code> and async I/O extension traits for test/server plumbing</td></tr>
+
 <tr><td><code>tokio-rt-multi-thread</code></td><td>no</td><td>Forward Tokio's multi-thread runtime feature</td></tr>
+
 </table>
 
 ### Virtual time (`flash`)
@@ -199,8 +229,7 @@ Contract:
     `active_async` slot across the yield while its other primitives are real, so
     an engine-backed yield could never be granted — a circular wedge. Gating on
     ambient keeps the build behavior-transparent for non-ambient callers.
-
-    The advance rule carries a sharper invariant than "jump to the earliest
+The advance rule carries a sharper invariant than "jump to the earliest
     deadline once all roots are parked": **the clock must not advance while
     anything is runnable at the current instant, and a pending yield-waiter IS
     runnable-now.** So when every other parked waiter is an event-driven `Thread`
@@ -267,24 +296,24 @@ Two detection levels, both scoped by the `Watched` per-poll combinator
 spawn chokepoints — native and flash `tokio::task::spawn`/`spawn_on`):
 
 1. **Chokepoint (`forbid`)** — deterministic, timing-independent. The native
-   blocking primitives (`thread::sleep`/`park`/`park_timeout`,
-   `Condvar::wait`/`wait_timeout`, `mpsc::recv`/`recv_timeout`) refuse to run
-   inside a poll, attributing the caller via an unbroken `#[track_caller]`
-   chain. `Mutex`/`RwLock` locks, `spawn_blocking`, and wake operations are
-   deliberately NOT intercepted (short locks in async are legal; long waits
-   are level 2's job).
-2. **Budget** — wall/CPU timing of each poll on the REAL clock (`std::time`,
-   never the virtualized platform clock; thread-CPU is sampled through a
-   per-thread bounded snapshot with 1 ms max age, so each poll can include up to
-   1 ms of pre-poll CPU in its window and `KITHARA_NO_BLOCK=off` skips timing
-   entirely). Blanket default 3000 ms (measured:
-   legitimate IO-bound polls reach 1.05 s; `KITHARA_NO_BLOCK_BUDGET_MS`
-   overrides); the strict 25 ms tier is opt-in via
-   `#[kithara::no_block(budget_ms = N)]`. Over-budget reports classify
-   CPU-spin vs blocked-wait from the thread-CPU/wall ratio.
-   Blanket coverage panics only on CPU-spin; blocked-wait/unclassified
-   blanket budget hits keep emitting census lines even in panic mode, while
-   the strict tier panics on every over-budget class.
+  blocking primitives (`thread::sleep`/`park`/`park_timeout`,
+  `Condvar::wait`/`wait_timeout`, `mpsc::recv`/`recv_timeout`) refuse to run
+  inside a poll, attributing the caller via an unbroken `#[track_caller]`
+  chain. `Mutex`/`RwLock` locks, `spawn_blocking`, and wake operations are
+  deliberately NOT intercepted (short locks in async are legal; long waits
+  are level 2's job).
+1. **Budget** — wall/CPU timing of each poll on the REAL clock (`std::time`,
+  never the virtualized platform clock; thread-CPU is sampled through a
+  per-thread bounded snapshot with 1 ms max age, so each poll can include up to
+  1 ms of pre-poll CPU in its window and `KITHARA_NO_BLOCK=off` skips timing
+  entirely). Blanket default 3000 ms (measured:
+  legitimate IO-bound polls reach 1.05 s; `KITHARA_NO_BLOCK_BUDGET_MS`
+  overrides); the strict 25 ms tier is opt-in via
+  `#[kithara::no_block(budget_ms = N)]`. Over-budget reports classify
+  CPU-spin vs blocked-wait from the thread-CPU/wall ratio.
+  Blanket coverage panics only on CPU-spin; blocked-wait/unclassified
+  blanket budget hits keep emitting census lines even in panic mode, while
+  the strict tier panics on every over-budget class.
 
 Modes via `KITHARA_NO_BLOCK`: `panic` (default), `census` (log-only; add
 `KITHARA_NO_BLOCK_LOG=<file>` for an append-mode sink — nextest swallows

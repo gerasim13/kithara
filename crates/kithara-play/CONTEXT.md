@@ -34,8 +34,7 @@ source of truth, shared between the UI and the worker's effect chain, which read
 it each chunk. Rate setters (`set_rate`, `play`) and `set_keylock` / `set_backend`
 all write this one handle; there is no second rate atomic and no manual mirror.
 
-`prepare_config` always passes the shared controls into every track (`stretch =
-Some(..)`). With a compiled-in backend the effect chain runs a source-domain
+`prepare_config` always passes the shared controls into every track (`stretch = Some(..)`). With a compiled-in backend the effect chain runs a source-domain
 `TimeStretchProcessor`; fixed-ratio sample-rate conversion is handled by Apple
 codec-embedded decode when that placement is selected, otherwise by the
 standalone playback resampler stage:
@@ -62,12 +61,19 @@ consumer directly on the shared `StretchControls` handle.
 `tokio::sync::broadcast`, via `player.subscribe()` / `engine.subscribe()`.
 
 <table>
+
 <tr><th>Enum</th><th>Scope</th></tr>
+
 <tr><td><code>PlayerEvent</code></td><td>Status, rate, volume, mute, current item, prefetch/handover, EOF, failure</td></tr>
+
 <tr><td><code>ItemEvent</code></td><td>Item status, buffering, seek, stall, end-of-stream</td></tr>
+
 <tr><td><code>EngineEvent</code></td><td>Slot lifecycle, master volume</td></tr>
+
 <tr><td><code>SessionEvent</code></td><td>Interruption, route change, media services</td></tr>
+
 <tr><td><code>DjEvent</code></td><td>BPM detected, beat tick, sync engage/disengage, phase aligned</td></tr>
+
 </table>
 
 Status types: `PlayerStatus`, `TimeControlStatus`, `ItemStatus`,
@@ -283,24 +289,43 @@ through separate resource-level resampler fields.
 ## Feature Flags
 
 <table>
+
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
+
 <tr><td><code>backend-cpal</code></td><td>yes</td><td>CPAL output via <code>firewheel/cpal</code></td></tr>
+
 <tr><td><code>backend-web-audio</code></td><td>no</td><td>WebAudio backend (wasm32)</td></tr>
+
 <tr><td><code>wasm-bindgen</code></td><td>no</td><td>WASM bindings via <code>firewheel/wasm-bindgen</code></td></tr>
+
 <tr><td><code>symphonia</code></td><td>yes</td><td>Software decode forwarding to <code>kithara-audio</code> and <code>kithara-decode</code></td></tr>
+
 <tr><td><code>fdk-aac</code></td><td>no</td><td>FDK-AAC decode forwarding to <code>kithara-audio</code> and <code>kithara-decode</code></td></tr>
+
 <tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox decode via <code>kithara-audio/apple</code> and <code>kithara-decode/apple</code>; does not imply Rubato</td></tr>
+
 <tr><td><code>apple-fused-src</code></td><td>no</td><td>Apple AudioToolbox fused decode+SRC through decoder-embedded resampler placement</td></tr>
+
 <tr><td><code>resample-rubato</code></td><td>yes</td><td>Default fixed-ratio Rubato backend for playback decode adapters and beat analysis in default builds</td></tr>
+
 <tr><td><code>resample-glide</code></td><td>no</td><td>Glide resampler backend forwarding for explicit config selection without Rubato</td></tr>
+
 <tr><td><code>analysis-beat</code></td><td>yes</td><td>Beat-analysis pass forwarding to <code>kithara-audio</code>; absent from Apple FFI device sets</td></tr>
+
 <tr><td><code>analysis-waveform</code></td><td>yes</td><td>RealFFT waveform analyzer forwarding to <code>kithara-audio</code></td></tr>
+
 <tr><td><code>client-reqwest</code></td><td>yes</td><td>Forward the reqwest HTTP backend to network-reaching deps</td></tr>
+
 <tr><td><code>client-wreq</code></td><td>no</td><td>Forward the wreq HTTP backend to network-reaching deps</td></tr>
+
 <tr><td><code>tls-rustls</code></td><td>yes</td><td>Forward rustls TLS selection to network-reaching deps</td></tr>
+
 <tr><td><code>tls-native</code></td><td>no</td><td>Forward native TLS selection to network-reaching deps</td></tr>
+
 <tr><td><code>probe</code></td><td>no</td><td>USDT runtime tracing</td></tr>
+
 <tr><td><code>mock</code></td><td>no</td><td><code>unimock</code> trait mocks</td></tr>
+
 </table>
 
 File and HLS pipelines are unconditional: `kithara-play` always links

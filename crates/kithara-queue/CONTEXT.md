@@ -96,19 +96,19 @@ Each `append` allocates a monotonic [`TrackId`] and a queue entry with
 status `Pending`, then spawns a background load attempt:
 
 1. Acquire a permit in the attempt's lane (see "Load Lanes" below).
-2. Publish `TrackStatusChanged { Loading }`.
-3. Build the `ResourceConfig` (either from `TrackSource::Uri` templates
-   or the caller-supplied `Config`) and call `Resource::new`.
-4. Spawn a LoadSlow listener on the config's `EventBus` — if
-   `FileEvent::LoadSlow` or `HlsEvent::LoadSlow` fires,
-   `TrackStatusChanged { Slow }` is published before completion.
-5. On success: `PlayerImpl::replace_item(index, resource)`,
-   `TrackStatusChanged { Loaded }`.
-6. If the loaded track was stashed in `pending_select` (a `select(id, transition)`
-   arrived before loading finished), complete the apply-after-load path through
-   `select_item_with_crossfade`.
-   Otherwise the track stays `Loaded` and does nothing until the caller
-   explicitly selects it.
+1. Publish `TrackStatusChanged { Loading }`.
+1. Build the `ResourceConfig` (either from `TrackSource::Uri` templates
+  or the caller-supplied `Config`) and call `Resource::new`.
+1. Spawn a LoadSlow listener on the config's `EventBus` — if
+  `FileEvent::LoadSlow` or `HlsEvent::LoadSlow` fires,
+  `TrackStatusChanged { Slow }` is published before completion.
+1. On success: `PlayerImpl::replace_item(index, resource)`,
+  `TrackStatusChanged { Loaded }`.
+1. If the loaded track was stashed in `pending_select` (a `select(id, transition)`
+  arrived before loading finished), complete the apply-after-load path through
+  `select_item_with_crossfade`.
+  Otherwise the track stays `Loaded` and does nothing until the caller
+  explicitly selects it.
 
 After `select_item` succeeds the engine has consumed `items[index]`, so
 the Queue immediately transitions the entry to `TrackStatus::Consumed`.
@@ -178,17 +178,17 @@ EOF/drain.
 The previous `kithara-app::{playlist, controls}` combination collapses
 into a single [`Queue`]:
 
-| Old (`kithara-app`)                          | New (`kithara-queue`)                             |
+| Old (`kithara-app`) | New (`kithara-queue`) |
 |----------------------------------------------|---------------------------------------------------|
 | `Arc<PlayerImpl>` + `Arc<Playlist>` + `AppController` + `TrackLoadParams` | `Arc<Queue>` |
 | `AppController::load_params.load_and_apply` | `queue.set_tracks(sources)` / `queue.append(src)` |
-| `playlist.track_name(i)`                     | `queue.tracks()[i].name`                          |
-| `playlist.track_status(i)`                   | `queue.tracks()[i].status`                        |
-| `playlist.get_next_track()` + switch         | `queue.advance_to_next()`                         |
-| `playlist.get_prev_track()` + switch         | `queue.return_to_previous()`                      |
-| `player.seek_seconds(s)`                     | `queue.seek(s)`                                   |
-| `player.select_item(idx, true)`              | `queue.select(id, transition)`                    |
-| `player.tick()`                              | `queue.tick()`                                    |
+| `playlist.track_name(i)` | `queue.tracks()[i].name` |
+| `playlist.track_status(i)` | `queue.tracks()[i].status` |
+| `playlist.get_next_track()` + switch | `queue.advance_to_next()` |
+| `playlist.get_prev_track()` + switch | `queue.return_to_previous()` |
+| `player.seek_seconds(s)` | `queue.seek(s)` |
+| `player.select_item(idx, true)` | `queue.select(id, transition)` |
+| `player.tick()` | `queue.tick()` |
 
 DRM stays in the caller. `kithara-queue` is DRM-agnostic; apps that
 need zvuk DRM keys build a `ResourceConfig::new(url).with_keys(..)` and

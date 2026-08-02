@@ -119,10 +119,15 @@ resampler is codec-embedded or adapter-based.
 ## Feature Flags
 
 <table>
+
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
+
 <tr><td><code>resample-rubato</code></td><td>no</td><td>Rubato fixed-ratio backend; algorithm selection lives in <code>RubatoConfig</code></td></tr>
+
 <tr><td><code>resample-glide</code></td><td>no</td><td>Glide backend with fixed-ratio, variable-ratio, and glide capability</td></tr>
+
 <tr><td><code>apple-accelerate</code></td><td>no</td><td>Apple-target Glide acceleration through <code>kithara-apple::accelerate</code>; ignored on non-Apple targets</td></tr>
+
 </table>
 
 ## Module Layout

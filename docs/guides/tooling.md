@@ -28,8 +28,7 @@ These are suitable for local pre-commit feedback.
   focused call graph. A crate scope hides Cargo dependencies and incoming
   callers while keeping concrete outgoing public interactions as compact
   external ports.
-- `--view hierarchy|ownership` changes only the projection. `--semantic
-  off|required`, `--runtime off`, `--scenario <name>`, and `--trace <jsonl>`
+- `--view hierarchy|ownership` changes only the projection. `--semantic off|required`, `--runtime off`, `--scenario <name>`, and `--trace <jsonl>`
   control evidence collection.
 - `[architecture.filters]` supplies project-default crate/module exclusions.
   Repeat `--exclude-crate <glob>` or `--exclude-module <glob>` for additive

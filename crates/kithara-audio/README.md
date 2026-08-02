@@ -1,5 +1,7 @@
 <div align="center">
+
   <img src="../../logo.svg" alt="kithara" width="300">
+
 </div>
 
 <div align="center">
@@ -20,23 +22,41 @@ processed chunks to the caller through lock-free rings.
 ## Features
 
 <table>
+
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
+
 <tr><td><code>default</code></td><td>yes</td><td><code>symphonia</code> + <code>stretch-signalsmith</code> + <code>client-reqwest</code> + <code>tls-rustls</code></td></tr>
+
 <tr><td><code>symphonia</code></td><td>yes</td><td>Symphonia software decoder path via <code>kithara-decode/symphonia</code></td></tr>
+
 <tr><td><code>stretch-signalsmith</code></td><td>yes</td><td>Native <code>signalsmith-stretch</code> key-lock backend through <code>kithara-stretch</code></td></tr>
+
 <tr><td><code>client-reqwest</code></td><td>yes</td><td>Forward the default HTTP backend selection to network-reaching deps</td></tr>
+
 <tr><td><code>tls-rustls</code></td><td>yes</td><td>Forward rustls TLS selection to network-reaching deps</td></tr>
+
 <tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox hardware decoder via <code>kithara-decode/apple</code></td></tr>
+
 <tr><td><code>android</code></td><td>no</td><td>Android <code>MediaExtractor</code>/<code>MediaCodec</code> via <code>kithara-decode/android</code></td></tr>
+
 <tr><td><code>fdk-aac</code></td><td>no</td><td>Enable libfdk-aac HE-AAC v1/v2 decode in the software path</td></tr>
+
 <tr><td><code>beat-nn</code></td><td>no</td><td>Enable NN beat/downbeat analysis through <code>kithara-beat</code></td></tr>
+
 <tr><td><code>stretch-bungee</code></td><td>no</td><td>Native <code>bungee-rs</code> key-lock backend through <code>kithara-stretch</code></td></tr>
+
 <tr><td><code>client-wreq</code></td><td>no</td><td>Forward the native <code>wreq</code> HTTP backend selection to network-reaching deps</td></tr>
+
 <tr><td><code>tls-native</code></td><td>no</td><td>Forward native TLS selection to network-reaching deps</td></tr>
+
 <tr><td><code>probe</code></td><td>no</td><td>USDT probes for tracing</td></tr>
+
 <tr><td><code>mock</code></td><td>no</td><td>Generated mocks for tests</td></tr>
+
 <tr><td><code>perf</code></td><td>no</td><td>Hotpath timing instrumentation</td></tr>
+
 <tr><td><code>memprof</code></td><td>no</td><td>Allocation tracking for profiling examples</td></tr>
+
 </table>
 
 ## Key Types

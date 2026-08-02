@@ -91,12 +91,19 @@ The global index (`_index/*`) stores small best-effort metadata files. The files
 Requests flow through five layers (outermost to innermost):
 
 <table>
+
 <tr><th>Layer</th><th>Responsibility</th></tr>
+
 <tr><td><code>LeaseAssets</code></td><td>RAII-based pinning; <code>LeaseGuard</code> unpins on drop; prevents eviction of in-use assets</td></tr>
+
 <tr><td><code>CachedAssets</code></td><td>In-memory LRU cache (default 5 entries); prevents duplicate mmap opens</td></tr>
+
 <tr><td><code>ProcessingAssets</code></td><td>Optional chunk-based transformation on <code>commit()</code> (e.g., AES-128-CBC decryption)</td></tr>
+
 <tr><td><code>EvictAssets</code></td><td>LRU eviction by asset count and/or byte size; pinned assets excluded</td></tr>
+
 <tr><td><code>DiskAssetStore</code> / <code>MemAssetStore</code></td><td>Base storage backend; maps <code>ResourceKey</code> to filesystem paths or in-memory resources</td></tr>
+
 </table>
 
 Decorator behavior is capability-gated per call. For an absolute `ResourceKey` (local-file mode), the cache/lease/evict layers bypass and become pass-through; for a relative key under an `asset_root` they apply normally.
@@ -158,10 +165,15 @@ sequenceDiagram
 Three index types are persisted under `_index/` for crash recovery:
 
 <table>
+
 <tr><th>Index</th><th>File</th><th>Purpose</th></tr>
+
 <tr><td>Pins</td><td><code>_index/pins.bin</code></td><td>Persists pinned asset roots</td></tr>
+
 <tr><td>LRU</td><td><code>_index/lru.bin</code></td><td>Monotonic clock + byte accounting for eviction</td></tr>
+
 <tr><td>Availability</td><td><code>_index/availability.bin</code></td><td>Per-resource byte ranges and committed final length — the aggregate snapshot of <code>AvailabilityIndex</code> (see below)</td></tr>
+
 </table>
 
 All indices use `Atomic<R>` for crash-safe writes. **Availability persistence is two-tier**: the background flush worker writes `availability.bin` best-effort and **non-durable** (atomic rename, no `sync_data`) shortly after commits — giving other instances sharing the store fast visibility of committed bytes and speeding crash-recovery hydration after an abnormal exit — while `AssetStore::checkpoint()` performs the **durable** (`sync_data`), authoritative write. Neither write is a correctness dependency: a missing, stale, or corrupt `availability.bin` is recovered by the slow path (rebuild from the committed segment files) plus the one-shot cold-miss fallback to `resource_state`. Pins and the LRU index instead flush eagerly on every boundary mutation.

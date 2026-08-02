@@ -21,14 +21,14 @@ let raw: RawBeats = bt.analyze(&mono_22050)?;
 ## Pipeline
 
 1. `mel.rs` — mel spectrogram via `mel_spectrogram.onnx` (rten with `fft`):
-   input `"audio_pcm"` `[1, N]` → `[1, T, 128]`; 128 bands (30 Hz–10 kHz),
-   window 1024, hop 441 → 50 fps, log scaling `ln(1 + 1000·x)`. The ONNX mel
-   (not hand-rolled DSP) is what guarantees parity with the training pipeline.
-2. `inference.rs` — chunked inference: windows of 1500 frames (30 s), 6 border
-   frames trimmed per side, overlaps aggregated keep-first.
-3. `postprocess.rs` — minimal peak picking (no DBN): a frame is a beat if it
-   is the max of a 7-frame window (±3 = ±60 ms) and its logit > 0; equal
-   plateaus collapse to their centre; each downbeat snaps to the nearest beat.
+  input `"audio_pcm"` `[1, N]` → `[1, T, 128]`; 128 bands (30 Hz–10 kHz),
+  window 1024, hop 441 → 50 fps, log scaling `ln(1 + 1000·x)`. The ONNX mel
+  (not hand-rolled DSP) is what guarantees parity with the training pipeline.
+1. `inference.rs` — chunked inference: windows of 1500 frames (30 s), 6 border
+  frames trimmed per side, overlaps aggregated keep-first.
+1. `postprocess.rs` — minimal peak picking (no DBN): a frame is a beat if it
+  is the max of a 7-frame window (±3 = ±60 ms) and its logit > 0; equal
+  plateaus collapse to their centre; each downbeat snaps to the nearest beat.
 
 The pipeline constants (chunk 1500, border 6, stride 1488, 50 fps, hop 441,
 threshold 0, ±3 window) are **frozen**: they define numerical parity with the

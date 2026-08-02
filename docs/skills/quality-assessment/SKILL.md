@@ -44,29 +44,29 @@ require a bounded crate or module scope first.
 ## Build and verify the assessment
 
 1. Confirm the exact checkout and worktree before running anything.
-2. Run the mapped `just quality assess` command and retain the printed report
-   path.
-   - Standard runs portable gates as separate attributable stages.
-   - Deep runs the full health pipeline and every applicable configured
-     heavyweight stage.
-3. Read `manifest.json` in the same directory first.
-   - `complete`: continue.
-   - `partial`: report the broken stages from `stages/*.json` and their logs;
-     do not make a complete health claim.
-4. Read `assessment.json` for exact values and `assessment.md` for the
-   decision-oriented view.
-5. Verify the tool coverage matrix. Every relevant tool must be classified as
-   `executed`, `reused`, `covered-by`, `not-applicable`, or `evidence-gap`.
-   Never silently omit a gap.
-6. Follow evidence links to the canonical owner instead of recomputing its
-   metric:
-   - architecture: `target/architecture/<revision>/`;
-   - similarity: `target/similarity/<revision>/`;
-   - health and test structure: `target/health-report.md` and
-     `target/quality-report.md`;
-   - heavyweight analyzers and CRAP:
-     `target/quality-lab/<revision>/`;
-   - stage commands and logs: the assessment's `stages/` and `logs/`.
+1. Run the mapped `just quality assess` command and retain the printed report
+  path.
+  - Standard runs portable gates as separate attributable stages.
+  - Deep runs the full health pipeline and every applicable configured
+    heavyweight stage.
+1. Read `manifest.json` in the same directory first.
+  - `complete`: continue.
+  - `partial`: report the broken stages from `stages/*.json` and their logs;
+    do not make a complete health claim.
+1. Read `assessment.json` for exact values and `assessment.md` for the
+  decision-oriented view.
+1. Verify the tool coverage matrix. Every relevant tool must be classified as
+  `executed`, `reused`, `covered-by`, `not-applicable`, or `evidence-gap`.
+  Never silently omit a gap.
+1. Follow evidence links to the canonical owner instead of recomputing its
+  metric:
+  - architecture: `target/architecture/<revision>/`;
+  - similarity: `target/similarity/<revision>/`;
+  - health and test structure: `target/health-report.md` and
+    `target/quality-report.md`;
+  - heavyweight analyzers and CRAP:
+    `target/quality-lab/<revision>/`;
+  - stage commands and logs: the assessment's `stages/` and `logs/`.
 
 The assessment revision includes a content/diff digest for a dirty worktree.
 Do not claim that a committed Cha artifact covers dirty content. Trust the
@@ -107,14 +107,14 @@ When the user requests deep analysis, do more than repeat the generated
 Markdown:
 
 1. Start from the highest-debt files, highest-ACI contours, hard invariants,
-   baseline regressions, CRAP risks, and independently corroborated locations.
-2. Inspect the top ambiguous source locations and their canonical owner,
-   callers, owned resources, data flow, and public boundary.
-3. Prefer a bounded refactor boundary where multiple signals overlap.
-4. Distinguish a confirmed issue from an inference, and name the evidence for
-   each conclusion.
-5. Use the complete tool coverage matrix, including baseline findings. Missing
-   or skipped tools are part of the result.
+  baseline regressions, CRAP risks, and independently corroborated locations.
+1. Inspect the top ambiguous source locations and their canonical owner,
+  callers, owned resources, data flow, and public boundary.
+1. Prefer a bounded refactor boundary where multiple signals overlap.
+1. Distinguish a confirmed issue from an inference, and name the evidence for
+  each conclusion.
+1. Use the complete tool coverage matrix, including baseline findings. Missing
+  or skipped tools are part of the result.
 
 Do not update lint baselines, edit production code, start a refactor, commit, or
 push unless the user explicitly requests that next action.
@@ -124,14 +124,14 @@ push unless the user explicitly requests that next action.
 Lead with:
 
 1. deterministic tool verdict and assessment status;
-2. scope/profile/depth and revision;
-3. debt versus threshold and baseline delta;
-4. hard invariants and corroborated hotspots;
-5. highest architecture contours and the metrics that make them worth
-   inspecting;
-6. the smallest useful refactor boundaries;
-7. evidence gaps or broken stages;
-8. a separate section labelled as agent interpretation.
+1. scope/profile/depth and revision;
+1. debt versus threshold and baseline delta;
+1. hard invariants and corroborated hotspots;
+1. highest architecture contours and the metrics that make them worth
+  inspecting;
+1. the smallest useful refactor boundaries;
+1. evidence gaps or broken stages;
+1. a separate section labelled as agent interpretation.
 
 Link the assessment report, its JSON, the relevant Mermaid architecture page,
 and the canonical source artifacts. Preserve the distinction between an

@@ -39,11 +39,17 @@ sequenceDiagram
 ## Mmap vs Mem
 
 <table>
+
 <tr><th>Aspect</th><th>MmapDriver</th><th>MemDriver</th></tr>
+
 <tr><td>Backing</td><td><code>mmap-io::MemoryMappedFile</code></td><td><code>PooledOwned&lt;32, Vec&lt;u8&gt;&gt;</code> plus <code>ArcSwapOption&lt;Vec&lt;u8&gt;&gt;</code> committed snapshots</td></tr>
+
 <tr><td>Lock-free fast path</td><td>Yes (<code>SegQueue</code> for write notifications)</td><td>No</td></tr>
+
 <tr><td>Auto-resize</td><td>2x growth on overflow</td><td>Extend on write</td></tr>
+
 <tr><td><code>path()</code></td><td><code>Some</code></td><td><code>None</code></td></tr>
+
 </table>
 
 ## Chunked atomic claim

@@ -163,6 +163,7 @@ The carve-out is intentionally leaf-scoped:
 `post_bytes` (POST a body, read the full response body) flows through the same retry and timeout layers as the read methods. It is therefore retried on transient errors like the rest, so it is **at-least-once**: a transient failure after the server already accepted the write can re-send it. Callers issuing non-idempotent requests must carry their own dedup or idempotency key. The caller owns `Content-Type` (and any auth) via the `headers` argument — the layer stays body-agnostic.
 
 Decorators compose via the `NetExt` extension trait:
+
 ```rust
 use kithara_net::{HttpClient, Net, NetExt, NetOptions, RetryPolicy};
 use std::time::Duration;

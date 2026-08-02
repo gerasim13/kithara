@@ -1,5 +1,7 @@
 <div align="center">
+
   <img src="../logo.svg" alt="kithara" width="300">
+
 </div>
 
 <div align="center">
@@ -253,7 +255,6 @@ just perf bench               # build benches only (default mode)
 RUN_BENCHMARKS=1 BENCH_CANDIDATE_NAME=local just perf bench ci
 ```
 
-
 ## Fuzzing (`tests/fuzz`)
 
 Fuzz targets use `cargo-fuzz` / `libfuzzer-sys`:
@@ -278,33 +279,33 @@ cargo +nightly fuzz run hls_parsing -- -max_total_time=60
 Integration tests:
 
 1. Add module/file under `tests/tests/` (group by crate/domain).
-2. Register light tests in `tests/tests/suite_light.rs`.
-3. Register heavy or browser-integration tests in `tests/tests/suite_heavy.rs`.
-4. Register perf-only tests in `tests/perf/suite_perf.rs`.
-5. Prefer deterministic fixtures and local servers over external network.
-6. Use `#[kithara::test(tokio, browser, ...)]` for tests that need a server — they'll run on both native and WASM.
-7. Use `#[kithara::test(wasm, ...)]` for pure logic tests that can run on WASM.
-8. Use `#[kithara::test(native, ...)]` for tests that require filesystem or OS-specific features.
-9. Use `#[kithara::test(selenium, ...)]` for Selenium E2E tests (auto-ignored, multi-thread runtime).
-10. Use `#[case::name(value)]` for parameterized test cases.
+1. Register light tests in `tests/tests/suite_light.rs`.
+1. Register heavy or browser-integration tests in `tests/tests/suite_heavy.rs`.
+1. Register perf-only tests in `tests/perf/suite_perf.rs`.
+1. Prefer deterministic fixtures and local servers over external network.
+1. Use `#[kithara::test(tokio, browser, ...)]` for tests that need a server — they'll run on both native and WASM.
+1. Use `#[kithara::test(wasm, ...)]` for pure logic tests that can run on WASM.
+1. Use `#[kithara::test(native, ...)]` for tests that require filesystem or OS-specific features.
+1. Use `#[kithara::test(selenium, ...)]` for Selenium E2E tests (auto-ignored, multi-thread runtime).
+1. Use `#[case::name(value)]` for parameterized test cases.
 
 Performance tests:
 
 1. Add file in `tests/perf/`.
-2. Gate file with `#![cfg(feature = "perf")]`.
-3. Mark heavy tests as `#[test] #[ignore]`.
-4. Register test target in `tests/Cargo.toml` (`[[test]] ... required-features = ["perf"]`).
+1. Gate file with `#![cfg(feature = "perf")]`.
+1. Mark heavy tests as `#[test] #[ignore]`.
+1. Register test target in `tests/Cargo.toml` (`[[test]] ... required-features = ["perf"]`).
 
 Benchmarks:
 
 1. Add benchmark file in `tests/benches/`.
-2. Register `[[bench]]` target in `tests/Cargo.toml` (if new).
+1. Register `[[bench]]` target in `tests/Cargo.toml` (if new).
 
 Fuzz targets:
 
 1. Add fuzz target in `tests/fuzz/fuzz_targets/`.
-2. Register `[[bin]]` target in `tests/fuzz/Cargo.toml`.
-3. Use workspace dependencies from root `Cargo.toml`.
+1. Register `[[bin]]` target in `tests/fuzz/Cargo.toml`.
+1. Use workspace dependencies from root `Cargo.toml`.
 
 ## Nextest Profiles
 

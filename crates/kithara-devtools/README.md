@@ -1,5 +1,7 @@
 <div align="center">
+
   <img src="../../logo.svg" alt="kithara" width="300">
+
 </div>
 
 <div align="center">
@@ -167,8 +169,7 @@ timeout_secs = 120
 ```
 
 The test or binary receives `ARCHITECTURE_TRACE_PATH`. It can write neutral
-records through `viz::trace::{TraceRecord, TraceRecordKind, TraceSource,
-TraceWriter}`; no Kithara domain type or macro is required. `just arch viz`
+records through `viz::trace::{TraceRecord, TraceRecordKind, TraceSource, TraceWriter}`; no Kithara domain type or macro is required. `just arch viz`
 runs every configured scenario. `just arch viz --scenario queue-playback`
 runs and projects one flow, while `--trace <path>` merges an existing trace as
 manual evidence. `--semantic off|required` and `--runtime off` control optional
@@ -224,8 +225,7 @@ path = "junit.xml"
 Quality Lab intentionally has a separate, required
 `.config/quality-lab.toml`. It pins analyzer versions, tool/profile time
 budgets, and the output directory without adding heavyweight tools to the fast
-lint path. Use `quality lab list` to inspect policy and `quality lab run
-coverage|scheduled|manual|<tool>` to execute it.
+lint path. Use `quality lab list` to inspect policy and `quality lab run coverage|scheduled|manual|<tool>` to execute it.
 
 ## Features
 

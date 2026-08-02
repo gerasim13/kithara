@@ -73,28 +73,28 @@ A track plays out through a pull-driven pipeline. Each layer pulls from the one
 below; backpressure and wakeups propagate the same way.
 
 1. **Source / stream.** A `Peer` (file or HLS) is registered with the global
-   `Downloader`. The `Downloader` is the single HTTP pool; the `Peer` exposes a
-   per-track API. Bytes land in `kithara-storage` (`AssetStore` resources, mmap
-   or in-memory) via `kithara-assets`, which is the single source of truth for
-   byte availability. `kithara-stream` bridges the async fetch world to a
-   **synchronous `Stream::Read`** that the decoder can block on.
-2. **Decode.** `kithara-decode`'s `UniversalDecoder<D, C>` (Demuxer + FrameCodec)
-   demuxes the container and produces PCM frames, handling gapless priming/trim
-   and seek pre-roll. Backend codecs are feature-gated (symphonia / apple /
-   android / fmp4).
-3. **Audio pipeline.** `kithara-audio` drives the decode worker on its own
-   thread, fills a lock-free ring behind a preload gate, resamples to the device
-   format, routes optional time-stretch through `kithara-stretch`, and applies
-   waveform/beat taps. Seek and format-change are state machines (seek-epoch,
-   recreate) so a re-aim never replays stale audio.
-4. **Play / queue.** `kithara-play` owns transport: start/stop, crossfade between
-   decks, tempo/key-lock, session hosting, and the current-item announce
-   contract. `kithara-queue` stacks multiple tracks on top with auto-advance and
-   a pause gate, handing decks to `kithara-play`.
-5. **Surfaces.** `kithara-ffi` exposes an `AudioPlayer` facade across the FFI /
-   wasm boundary (worker-vs-main-thread ownership protocol); `kithara-app` is the
-   desktop studio and adds the track-analysis cache. Both consume the `kithara`
-   facade, not the internals.
+  `Downloader`. The `Downloader` is the single HTTP pool; the `Peer` exposes a
+  per-track API. Bytes land in `kithara-storage` (`AssetStore` resources, mmap
+  or in-memory) via `kithara-assets`, which is the single source of truth for
+  byte availability. `kithara-stream` bridges the async fetch world to a
+  **synchronous `Stream::Read`** that the decoder can block on.
+1. **Decode.** `kithara-decode`'s `UniversalDecoder<D, C>` (Demuxer + FrameCodec)
+  demuxes the container and produces PCM frames, handling gapless priming/trim
+  and seek pre-roll. Backend codecs are feature-gated (symphonia / apple /
+  android / fmp4).
+1. **Audio pipeline.** `kithara-audio` drives the decode worker on its own
+  thread, fills a lock-free ring behind a preload gate, resamples to the device
+  format, routes optional time-stretch through `kithara-stretch`, and applies
+  waveform/beat taps. Seek and format-change are state machines (seek-epoch,
+  recreate) so a re-aim never replays stale audio.
+1. **Play / queue.** `kithara-play` owns transport: start/stop, crossfade between
+  decks, tempo/key-lock, session hosting, and the current-item announce
+  contract. `kithara-queue` stacks multiple tracks on top with auto-advance and
+  a pause gate, handing decks to `kithara-play`.
+1. **Surfaces.** `kithara-ffi` exposes an `AudioPlayer` facade across the FFI /
+  wasm boundary (worker-vs-main-thread ownership protocol); `kithara-app` is the
+  desktop studio and adds the track-analysis cache. Both consume the `kithara`
+  facade, not the internals.
 
 ### How HLS and file differ
 

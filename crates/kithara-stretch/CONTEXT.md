@@ -54,14 +54,14 @@ not depend on `kithara-decode::PcmSpec`.
 To add a backend:
 
 1. Add `src/backends/<name>.rs` with a concrete adapter implementing
-   `StretchBackend`.
-2. Add a feature `stretch-<name>` in `Cargo.toml`, and add it to the `any(...)`
-   guard of the `compile_error!` in `lib.rs` (the crate requires ≥1 backend).
-3. Gate the adapter module, the `StretchKind` variant, its `all()` entry,
-   its `From`/`u8` arms, and the `build_backend` factory arm on
-   `#[cfg(feature = "stretch-<name>")]`; keep the variant's discriminant stable.
-4. Re-export the adapter from `backends/mod.rs` under the same gate.
-5. Document any target or tail-drain limitations here.
+  `StretchBackend`.
+1. Add a feature `stretch-<name>` in `Cargo.toml`, and add it to the `any(...)`
+  guard of the `compile_error!` in `lib.rs` (the crate requires ≥1 backend).
+1. Gate the adapter module, the `StretchKind` variant, its `all()` entry,
+  its `From`/`u8` arms, and the `build_backend` factory arm on
+  `#[cfg(feature = "stretch-<name>")]`; keep the variant's discriminant stable.
+1. Re-export the adapter from `backends/mod.rs` under the same gate.
+1. Document any target or tail-drain limitations here.
 
 Bungee on iOS is an opt-in backend. Its CMake C++ build must see
 `IPHONEOS_DEPLOYMENT_TARGET=15.6`; `xtask apple` exports the workspace Apple

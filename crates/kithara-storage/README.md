@@ -1,5 +1,7 @@
 <div align="center">
+
   <img src="../../logo.svg" alt="kithara" width="300">
+
 </div>
 
 <div align="center">
@@ -33,16 +35,27 @@ let outcome = resource.wait_range(0..1024)?;
 ## Key Types
 
 <table>
+
 <tr><th>Type</th><th>Role</th></tr>
+
 <tr><td><code>ResourceRead</code> (sealed trait)</td><td>Consumer-facing read API: <code>read_at</code>, <code>wait_range</code>, <code>contains_range</code>, status, length, and path helpers</td></tr>
+
 <tr><td><code>ResourceWriter</code> / <code>ResourceReader</code></td><td>Typestate handles; writers own <code>write_at</code>, <code>commit</code>, and <code>fail</code>, while readers are cloneable read-only views</td></tr>
+
 <tr><td><code>StorageResource</code></td><td>Enum dispatching to <code>MmapResource</code> or <code>MemResource</code></td></tr>
+
 <tr><td><code>OpenMode</code></td><td>Access mode: <code>Auto</code>, <code>ReadWrite</code>, or <code>ReadOnly</code></td></tr>
+
 <tr><td><code>ResourceStatus</code></td><td><code>Active</code>, <code>Committed { final_len }</code>, <code>Failed(String)</code>, or <code>Cancelled</code></td></tr>
+
 <tr><td><code>WaitOutcome</code></td><td><code>Ready</code>, <code>Eof</code>, or <code>Interrupted</code>; storage core returns ready/EOF/errors, and higher-level wrappers may surface interruption</td></tr>
+
 <tr><td><code>Atomic&lt;R&gt;</code></td><td>Decorator for crash-safe writes via write-temp-rename</td></tr>
+
 <tr><td><code>AvailabilityObserver</code> (trait)</td><td>Hook for downstream layers (e.g. <code>kithara-assets</code>) to observe coverage changes as new ranges land</td></tr>
+
 <tr><td><code>Driver</code> / <code>DriverIo</code> (traits)</td><td>Backend abstraction; <code>Resource&lt;S, D&gt;</code> is parameterised by lifecycle phase and driver</td></tr>
+
 </table>
 
 ## Features

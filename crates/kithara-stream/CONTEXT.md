@@ -28,18 +28,31 @@ flowchart LR
 ## Key Public Items
 
 <table>
+
 <tr><th>Item</th><th>Kind</th><th>Role</th></tr>
+
 <tr><td><code>Source</code></td><td>trait</td><td>Sync random-access surface for decoders. Drives <code>wait_range</code>, <code>read_at</code>, <code>position</code>, <code>len</code>, <code>media_info</code>, <code>byte_map</code>, plus adaptive handles (<code>variant_control</code>, <code>abr_handle</code>)</td></tr>
+
 <tr><td><code>ByteMap</code></td><td>trait</td><td>Optional segment-aware view returned by <code>Source::byte_map()</code>: <code>init_segment_range</code>, <code>anchor_at_time</code>, <code>segment_at_byte</code>, <code>segment_after_byte</code>, <code>len</code></td></tr>
+
 <tr><td><code>Stream&lt;T&gt;</code></td><td>struct</td><td><code>Read + Seek</code> wrapper around any <code>T: StreamType</code></td></tr>
+
 <tr><td><code>StreamType</code></td><td>trait</td><td>Marker for protocol types (<code>File</code>, <code>Hls</code>) with associated <code>Config</code> and <code>Events</code></td></tr>
+
 <tr><td><code>dl::Downloader</code></td><td>struct</td><td>Shared HTTP pool; <code>register(peer)</code> attaches a peer; spawns one async fetch task per active <code>FetchCmd</code></td></tr>
+
 <tr><td><code>dl::Peer</code></td><td>trait</td><td>Pull-driven per-track API: <code>poll_next() -&gt; Poll&lt;Option&lt;Vec&lt;FetchCmd&gt;&gt;&gt;</code>, plus ABR-driven decisions</td></tr>
+
 <tr><td><code>dl::PeerHandle</code></td><td>struct</td><td>Handle returned by <code>Downloader::register(peer)</code> for canceling and inspecting a peer's state</td></tr>
+
 <tr><td><code>dl::FetchCmd</code></td><td>struct</td><td>HTTP GET/Head command with self-contained <code>writer</code> + <code>on_complete</code> closures and a <code>CancelToken</code></td></tr>
+
 <tr><td><code>dl::DownloaderConfig</code></td><td>struct (bon-builder)</td><td>Pool sizing, retry, timeouts, cancel-token wiring</td></tr>
+
 <tr><td><code>ReaderEventSink</code> / <code>BoxedEventSink</code></td><td>trait / alias</td><td>Single-owner reader-side event sink (<code>ReaderChunkSignal</code>, <code>ReaderSeekSignal</code>); the decoder owns the <code>Box&lt;dyn ReaderEventSink&gt;</code> and invokes it lock-free via <code>&amp;mut</code></td></tr>
+
 <tr><td><code>ChunkPosition</code> / <code>PlayheadState</code></td><td>structs</td><td>Position bookkeeping exposed through the <code>PlayheadRead</code> / <code>PlayheadWrite</code> traits</td></tr>
+
 </table>
 
 ## Canonical Media Types
@@ -53,10 +66,10 @@ Defined here as the single source of truth and re-exported by other crates:
 ## Async-to-Sync Bridge
 
 1. The `Downloader` is async; peers and `FetchCmd` callbacks run on the tokio runtime.
-2. `FetchCmd.writer(chunk)` writes bytes directly into the `StorageResource` shared with the sync reader.
-3. The sync reader inside `Stream<T>` calls `Source::wait_range(range)` as a single non-blocking readiness probe on the worker path: it returns `Ready`/`Eof`/`Interrupted` immediately, and on a not-yet-available range returns `WaitBudgetExceeded`, which `try_read` maps to `Pending(NotReady)` without sleeping. The backoff between probes lives in the audio scheduler's `Waiting` park (10ms), so the worker decode path never blocks on a syscall. The consumer-thread `Seek` path primes metadata through `Stream::prime_seek_range`, which calls `wait_range(_, None)` and parks event-driven until the range resolves, a segment fails, or cancellation fires.
-4. `Source::read_at(offset, buf)` performs the actual sync copy once the range is present.
-5. Cancellation flows top-down through the cancel-token hierarchy described in `crates/kithara-play/CONTEXT.md`.
+1. `FetchCmd.writer(chunk)` writes bytes directly into the `StorageResource` shared with the sync reader.
+1. The sync reader inside `Stream<T>` calls `Source::wait_range(range)` as a single non-blocking readiness probe on the worker path: it returns `Ready`/`Eof`/`Interrupted` immediately, and on a not-yet-available range returns `WaitBudgetExceeded`, which `try_read` maps to `Pending(NotReady)` without sleeping. The backoff between probes lives in the audio scheduler's `Waiting` park (10ms), so the worker decode path never blocks on a syscall. The consumer-thread `Seek` path primes metadata through `Stream::prime_seek_range`, which calls `wait_range(_, None)` and parks event-driven until the range resolves, a segment fails, or cancellation fires.
+1. `Source::read_at(offset, buf)` performs the actual sync copy once the range is present.
+1. Cancellation flows top-down through the cancel-token hierarchy described in `crates/kithara-play/CONTEXT.md`.
 
 ### End-of-stream contract
 
@@ -70,16 +83,27 @@ A premature `Eof` for a withheld in-range segment latches the audio consumer int
 ## Features
 
 <table>
+
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
+
 <tr><td><code>default</code></td><td>yes</td><td><code>client-reqwest</code> + <code>tls-rustls</code></td></tr>
+
 <tr><td><code>probe</code></td><td>no</td><td>USDT probe points for tracing</td></tr>
+
 <tr><td><code>mock</code></td><td>no</td><td><code>unimock</code>-generated mocks of the public traits</td></tr>
+
 <tr><td><code>perf</code></td><td>no</td><td>Hotpath instrumentation</td></tr>
+
 <tr><td><code>client-reqwest</code></td><td>yes</td><td>Forward the reqwest HTTP backend to <code>kithara-net</code>, <code>kithara-events</code>, and <code>kithara-abr</code></td></tr>
+
 <tr><td><code>client-wreq</code></td><td>no</td><td>Forward the wreq HTTP backend to <code>kithara-net</code>, <code>kithara-events</code>, and <code>kithara-abr</code></td></tr>
+
 <tr><td><code>client-apple</code></td><td>no</td><td>Forward the Apple HTTP backend to <code>kithara-net</code></td></tr>
+
 <tr><td><code>tls-rustls</code></td><td>yes</td><td>Forward rustls TLS selection to network-reaching deps</td></tr>
+
 <tr><td><code>tls-native</code></td><td>no</td><td>Forward native TLS selection to network-reaching deps</td></tr>
+
 </table>
 
 ## Agent Guardrails

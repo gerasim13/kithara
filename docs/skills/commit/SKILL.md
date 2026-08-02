@@ -43,25 +43,26 @@ type(scope): short summary in lowercase
 ## Workflow
 
 1. **Inspect changes.** Run `git status` (never `-uall`) and `git diff` (staged + unstaged) to understand what changed.
-2. **Group by intent.** If changes serve different purposes (e.g., a feature + an unrelated lint fix), propose splitting into multiple commits. Ask the user to confirm before proceeding.
-3. **Run linters on changed files.**
-   - `cargo fmt -p <crate> -- --check` for each affected crate.
-   - If formatting fails, run `cargo fmt -p <crate>` to fix, then re-check.
-   - `cargo clippy -p <crate> -- -D warnings` for each affected crate.
-   - If clippy fails on a **pre-existing** issue unrelated to the current changes, note it but do not block the commit.
-   - If clippy fails on **new code**, fix the issue before committing.
-4. **Stage files.** Add specific files by name. Never use `git add -A` or `git add .`.
-5. **Commit.** Write the message following the conventions above. Use a HEREDOC:
-   ```sh
-   git commit -m "$(cat <<'EOF'
-   type(scope): subject line
+1. **Group by intent.** If changes serve different purposes (e.g., a feature + an unrelated lint fix), propose splitting into multiple commits. Ask the user to confirm before proceeding.
+1. **Run linters on changed files.**
+  - `cargo fmt -p <crate> -- --check` for each affected crate.
+  - If formatting fails, run `cargo fmt -p <crate>` to fix, then re-check.
+  - `cargo clippy -p <crate> -- -D warnings` for each affected crate.
+  - If clippy fails on a **pre-existing** issue unrelated to the current changes, note it but do not block the commit.
+  - If clippy fails on **new code**, fix the issue before committing.
+1. **Stage files.** Add specific files by name. Never use `git add -A` or `git add .`.
+1. **Commit.** Write the message following the conventions above. Use a HEREDOC:
 
-   Optional body.
-   EOF
-   )"
-   ```
-6. **Verify.** Run `git status` after the commit to confirm a clean state or remaining changes.
-7. If the pre-commit hook fails, fix the issue and create a **new** commit (do not amend).
+```sh
+git commit -m "$(cat <<'EOF'
+type(scope): subject line
+
+Optional body.
+EOF
+)"
+```
+1. **Verify.** Run `git status` after the commit to confirm a clean state or remaining changes.
+1. If the pre-commit hook fails, fix the issue and create a **new** commit (do not amend).
 
 ## Rules
 

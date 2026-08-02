@@ -40,18 +40,31 @@ The crate's public surface is `Hls`, `HlsConfig`, `HlsSource`, the playlist pars
 ## Public Items
 
 <table>
+
 <tr><th>Item</th><th>Kind</th><th>Role</th></tr>
+
 <tr><td><code>Hls</code></td><td>struct (marker)</td><td>Zero-sized type implementing <code>kithara_stream::StreamType</code> for HLS streams</td></tr>
+
 <tr><td><code>HlsConfig</code></td><td>struct (bon-builder)</td><td>HLS stream configuration — URL, ABR caps, key handling, downloader, asset store, cancel token, event bus</td></tr>
+
 <tr><td><code>KeyOptions</code></td><td>struct</td><td>DRM key-resolution options consumed by <code>HlsConfig</code></td></tr>
+
 <tr><td><code>HlsSource</code></td><td>struct</td><td><code>Source</code> implementation backed by <code>HlsCoord</code>; what <code>Stream&lt;Hls&gt;</code> wraps</td></tr>
+
 <tr><td><code>HlsError</code> / <code>HlsResult</code></td><td>enum / alias</td><td>Crate-level error type and result alias</td></tr>
+
 <tr><td><code>VariantIndex</code></td><td>type</td><td>Position of a variant in the master playlist</td></tr>
+
 <tr><td><code>KeyStore</code></td><td>struct</td><td>Coordinates AES-128 key fetches and caches resolved keys</td></tr>
+
 <tr><td><code>PlaylistCache</code></td><td>struct</td><td>In-memory cache of parsed playlists keyed by URL</td></tr>
+
 <tr><td><code>ParsedMaster</code>, <code>MediaPlaylist</code>, <code>VariantStream</code>, <code>VariantId</code></td><td>types</td><td>Parsed playlist representations from <code>playlist::parse</code></td></tr>
+
 <tr><td><code>parse_master_playlist</code>, <code>parse_media_playlist</code></td><td>fns</td><td>Standalone playlist parsers usable without the rest of the stack</td></tr>
+
 <tr><td><code>PlaylistState</code>, <code>SegmentState</code>, <code>VariantState</code></td><td>types</td><td>Runtime view into playlist and segment state for the player / ABR</td></tr>
+
 </table>
 
 Re-exports: `AbrMode` from `kithara-abr`; `KeyProcessor`,
@@ -212,14 +225,23 @@ keeps its parsed value in memory for the rest of that cache instance.
 ## Features
 
 <table>
+
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
+
 <tr><td><code>default</code></td><td>yes</td><td><code>client-reqwest</code> + <code>tls-rustls</code></td></tr>
+
 <tr><td><code>probe</code></td><td>no</td><td>USDT probe points for tracing</td></tr>
+
 <tr><td><code>perf</code></td><td>no</td><td>Hotpath instrumentation (also enables <code>kithara-net/perf</code>)</td></tr>
+
 <tr><td><code>client-reqwest</code></td><td>yes</td><td>Forward the reqwest HTTP backend to network-reaching deps</td></tr>
+
 <tr><td><code>client-wreq</code></td><td>no</td><td>Forward the wreq HTTP backend to network-reaching deps</td></tr>
+
 <tr><td><code>tls-rustls</code></td><td>yes</td><td>Forward rustls TLS selection to network-reaching deps</td></tr>
+
 <tr><td><code>tls-native</code></td><td>no</td><td>Forward native TLS selection to network-reaching deps</td></tr>
+
 </table>
 
 ## Integration

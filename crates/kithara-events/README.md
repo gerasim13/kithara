@@ -1,5 +1,7 @@
 <div align="center">
+
   <img src="../../logo.svg" alt="kithara" width="300">
+
 </div>
 
 <div align="center">
@@ -37,12 +39,19 @@ while let Ok(event) = rx.recv().await {
 ## Key Types
 
 <table>
+
 <tr><th>Type</th><th>Role</th></tr>
+
 <tr><td><code>EventBus</code></td><td>Clone-able broadcast publisher; <code>publish()</code> works from both async and blocking contexts</td></tr>
+
 <tr><td><code>BusScope</code></td><td>Hierarchical scope used to attribute events to player/track/peer subtrees</td></tr>
+
 <tr><td><code>EventReceiver</code></td><td>Subscriber handle returned by <code>EventBus::subscribe()</code></td></tr>
+
 <tr><td><code>Event</code></td><td>Top-level enum — variants are feature-gated</td></tr>
+
 <tr><td><code>SeekEpoch</code></td><td>Monotonic seek-generation tag carried across subsystems</td></tr>
+
 </table>
 
 ## Features

@@ -240,19 +240,24 @@ format frame; each artifact only implements its body.
   overwrites. There is no in-place migration of old blobs.
 - **Boundary**: `BlobError` is the only piece that crosses the crate boundary
   (it is the public `TryFrom<&[u8]>` error). `Blob`, `Reader`, and `Writer` are
-  crate-internal; consumers serialize through the artifacts' `From<&Self> for
-  Vec<u8>` / `TryFrom<&[u8]>` impls. The composite track-analysis blob (version +
+  crate-internal; consumers serialize through the artifacts' `From<&Self> for Vec<u8>` / `TryFrom<&[u8]>` impls. The composite track-analysis blob (version +
   config fingerprint + per-artifact sections) is a separate app-layer concern
   owned by `kithara-app`, not this codec.
 
 ## Resampler Quality Levels
 
 <table>
+
 <tr><th>Quality</th><th>Algorithm</th><th>Use Case</th></tr>
+
 <tr><td>Fast</td><td>Polynomial (cubic)</td><td>Low-power, previews</td></tr>
+
 <tr><td>Normal</td><td>64-tap sinc, linear</td><td>Standard playback</td></tr>
+
 <tr><td>Good</td><td>128-tap sinc, linear</td><td>Better quality</td></tr>
+
 <tr><td>High (default)</td><td>256-tap sinc, cubic</td><td>Recommended for music</td></tr>
+
 </table>
 
 ## Sample-rate Conversion
@@ -382,8 +387,8 @@ A `VariantChange`/`SeekPending` at construction is **not** a rebuild trigger: th
 On a cross-codec ABR variant switch, the `DecoderNode` detects the format change via `Source::media_info()` polling and then:
 
 1. Seeks to the first segment of the new variant (where init data lives).
-2. Recreates the decoder via `DecoderFactory`.
-3. Resets the effects chain to avoid audio artifacts.
+1. Recreates the decoder via `DecoderFactory`.
+1. Resets the effects chain to avoid audio artifacts.
 
 Known same-codec HLS switches are not decoder format changes. The HLS source retargets byte mapping at the segment boundary and keeps byte-continuity for the existing decoder; the audio layer must not turn a variant-index-only change into a recreate.
 
@@ -440,6 +445,7 @@ There are two distinct epoch atomics: the **seek-state** epoch, bumped by the co
 ### Coordinate spaces
 
 The whole pipeline runs in one space: **decoder/song time** (`PcmMeta.timestamp` / `end_timestamp` / `frame_offset`, `Timeline`, `total_duration`, the seek target, the UI playhead). A duration-changing `AudioEffect` changes frame counts but is the sole timeline authority: it restamps only `spec`+`frames` and carries the consumed input's song-time meta forward. The consumer keeps reading `end_timestamp` for position, so no translation layer and no parallel frame counter exist (single source of truth). Reporting perceived/elapsed output time instead would need an explicit translation owner.
+
 - **Buffers**: If a backpressure boundary or rate-matching is needed (e.g. between the worker and the audio callback), a separate buffer `Node` should be introduced explicitly.
 - **Push with Backpressure**: Producer nodes call `Outlet::try_push` directly. The outlet has a built-in single-slot overflow that absorbs one backpressure miss per tick, so a producer that emits at most one chunk per tick treats `try_push` as infallible. Each tick begins with `Outlet::flush()` to forward the parked item to the ring once the consumer drains it; if the ring is still full the node returns `TickResult::Waiting`. Under normal operation, the source's FSM is ticked every pass. However, if the outlet is completely saturated (both the ring buffer and the overflow slot are full), the node will return `Waiting` immediately without ticking the FSM. This provides strict backpressure, pausing all internal state transitions (including seeks) until the consumer drains the ring.
 - **Cancellation**: Playback nodes do not use `CancelToken`; unregistering a

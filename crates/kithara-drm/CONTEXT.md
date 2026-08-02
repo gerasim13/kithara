@@ -9,9 +9,9 @@ pair in `kithara-hls/src/decrypt_processor.rs`. When an encrypted segment is
 processed:
 
 1. The segment data is read from disk in 64 KB chunks.
-2. Each chunk is decrypted via `aes128_cbc_process_chunk()`.
-3. The decrypted data is written back to the same location.
-4. On the final chunk, PKCS7 padding is removed and the actual output length is returned.
+1. Each chunk is decrypted via `aes128_cbc_process_chunk()`.
+1. The decrypted data is written back to the same location.
+1. On the final chunk, PKCS7 padding is removed and the actual output length is returned.
 
 Input must be aligned to the 16-byte AES block size. All operations are in-place (no buffer allocation).
 

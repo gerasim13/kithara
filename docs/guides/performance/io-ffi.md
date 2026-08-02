@@ -5,6 +5,7 @@
 ## Strings, logging & IO
 
 **Allocating tracing / telemetry on the audio path**
+
 ```rust
 // bad: `?`/`%` field args evaluate at every callsite even when TRACE is off
 trace!(stats = ?compute_stats(&buf));
@@ -17,18 +18,22 @@ bus.publish(Event::Progress(format!("read {read}/{total}")));
 // good: typed Copy enum through the bounded, deferred EventBus (drop-oldest on full)
 bus.enqueue(ReadProgress { read, total });          // one per chunk, flushed later
 ```
+
 Also floor out verbosity in ship builds via tracing's `release_max_level_info` (not set in any Cargo.toml today).
 *tier: warm | detector: manual | present in kithara (EventBus enqueue/flush; hot loops already field-clean)*
 
 **Premature itoa/ryu for control-rate numbers**
+
 ```rust
 // bad: pull in itoa/ryu to format a once-per-request Range header
 // good: control-rate Display is fine; reserve itoa/ryu for per-frame numeric IO (kithara has none)
 impl fmt::Display for RangeSpec { /* ... */ }        // range.to_string() once per HTTP GET
 ```
+
 *tier: warm | detector: enforced-ast-grep (rust.no-inherent-to-string) | already-enforced*
 
 **Fresh, un-sized buffer per IO read**
+
 ```rust
 // bad: grow from empty, then hand off
 let mut buf = Vec::new();
@@ -39,9 +44,11 @@ let mut buf = Vec::with_capacity(content_length);
 // ...extend...
 Bytes::from(buf)                                     // per-segment scratch -> kithara-bufpool
 ```
+
 *tier: warm | detector: enforced-ast-grep (perf.prefer-byte-pool) | present in kithara (Bytes handoff; missing with_capacity in net/client body_bytes)*
 
 Absent in kithara today - watch for regressions:
+
 - **`BufRead::lines()` per-line String** - parse small manifests from one `str::from_utf8(data)` + borrowed line iteration; `lines()` allocates a String per line. *(kithara-hls parses borrowed.)*
 - **`serde_json::from_reader` on a raw File** - use `from_str`/`from_slice` over in-memory bytes; if a file path appears, `fs::read` then `from_slice`. *(All JSON is `from_str` today.)*
 - **Unbuffered byte-at-a-time IO** - container/ADTS parsing goes through symphonia's buffered `MediaSourceStream` over in-memory `Bytes`/mmap, never raw `File`/`TcpStream` per-field reads.
@@ -52,6 +59,7 @@ Absent in kithara today - watch for regressions:
 ## FFI & platform boundaries
 
 **Chatty fine-grained FFI / wasm getters**
+
 ```rust
 // bad: per-frame getter marshals a record/String across the boundary on every call
 #[uniffi::export] fn now_playing(&self) -> TrackInfo { /* String+Vec via copying RustBuffer */ }
@@ -63,10 +71,12 @@ Absent in kithara today - watch for regressions:
 // wasm-bindgen: same rule - numeric IDs, batch snapshots, DSP stays in the worker
 #[wasm_bindgen] pub fn current_time_ms_js(&self) -> f64 { ... }
 ```
+
 Why: UniFFI lowers every `String`/`Vec`/record/enum through a copying RustBuffer (UTF-8 per call); wasm-bindgen copies via TextEncoder/TextDecoder per crossing. The RT audio callback stays entirely in Rust behind opaque `Arc<AudioPlayerItem>` handles.
 *tier: cold | detector: manual | present in kithara (facade scalars + snapshot + observer)*
 
 Absent in kithara today - watch for regressions:
+
 - **Mobile periodic-polling wakeup storm** - drive buffer-health/position/ABR from events, not independent `tokio::time::interval` polls; coalesce/stop timers when paused or backgrounded; route all timing through kithara-platform. *(Prevented by arch.no-direct-time / no-implicit-clock / no-implicit-sleep.)*
 
 All three sections are in hand. Here is the dense markdown for the assigned sections.

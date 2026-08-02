@@ -5,7 +5,7 @@ Detailed contracts and invariants for the kithara-decode crate; the README is th
 ## Initialization Paths
 
 1. **Direct reader creation** (`container` specified): Creates format reader directly without probing. Used for HLS fMP4 where format is known but byte length is unknown. Seek is disabled during init to prevent `IsoMp4Reader` from seeking to end.
-2. **Probe** (`container` not specified): Uses Symphonia's auto-detection. Supports `probe_no_seek` for ABR variant switches where reported byte length may not match.
+1. **Probe** (`container` not specified): Uses Symphonia's auto-detection. Supports `probe_no_seek` for ABR variant switches where reported byte length may not match.
 
 ## Decoder recreate strategy
 
@@ -91,36 +91,34 @@ sample-accurate count.
 Seeking is a two-step contract shared by the demuxer and `ComposedDecoder`:
 
 1. **Demuxer back-off (pre-roll).** `Demuxer::seek` parks the cursor
-   *before* the user-requested target. The back-off magnitude comes from
-   `FrameCodec::priming(codec)` (a `CodecPriming`) and covers two needs:
-   - **Codec warm-up.** MDCT/SBR/PS codecs must decode pre-target packets
-     to converge overlap-add and QMF state, otherwise a cold flush leaks
-     artifacts. AAC (incl. HE-AAC v1/v2, which the fMP4 init parse and the
-     codec layer both see only as `AacLc` — fdk-aac auto-detects SBR from
-     the bitstream) requests **2 access units** of pre-roll; a plain-LC
-     stream just decode-discards one harmless extra AU. Codecs that
-     converge instantly, or that Symphonia primes internally (MP3, FLAC,
-     …), keep the empty `CodecPriming::default()`.
-   - **At least one whole codec packet** so the trim step below lands on a
-     packet boundary. Back-off is derived from codec facts (1024
-     frames/packet for AAC, 1152 for MP3) and the track `sample_rate` — no
-     magic millisecond constants.
-
-   For fMP4 the back-off (`target − warmup`) can cross a segment boundary;
-   `Fmp4SegmentDemuxer::seek` then decodes the tail of the prior segment as
-   decode-and-discard warm-up so SBR converges across the boundary instead
-   of starting cold. Reads stay confined to the pre-roll segment plus the
-   target segment — never a prefix walk from seg-0.
-
-2. **Sample-accurate trim.** Landing on a packet boundary means the first
-   decoded frame straddles the target. `ComposedDecoder::pending_seek_target`
-   drops whole pre-target frames, then trims the leading samples of the
-   straddling frame (`frames_to_trim`, round-to-nearest sample) so the
-   emitted chunk starts exactly at `target` rather than at the packet
-   boundary. Queue codecs retain the pending target across zero-frame decode
-   calls and report the timestamp of the PCM that eventually surfaces, so trim
-   is evaluated against decoded output rather than the later packet being fed.
-   Without this trim a seek leaks up to one packet of pre-target audio.
+  *before* the user-requested target. The back-off magnitude comes from
+  `FrameCodec::priming(codec)` (a `CodecPriming`) and covers two needs:
+  - **Codec warm-up.** MDCT/SBR/PS codecs must decode pre-target packets
+    to converge overlap-add and QMF state, otherwise a cold flush leaks
+    artifacts. AAC (incl. HE-AAC v1/v2, which the fMP4 init parse and the
+    codec layer both see only as `AacLc` — fdk-aac auto-detects SBR from
+    the bitstream) requests **2 access units** of pre-roll; a plain-LC
+    stream just decode-discards one harmless extra AU. Codecs that
+    converge instantly, or that Symphonia primes internally (MP3, FLAC,
+    …), keep the empty `CodecPriming::default()`.
+  - **At least one whole codec packet** so the trim step below lands on a
+    packet boundary. Back-off is derived from codec facts (1024
+    frames/packet for AAC, 1152 for MP3) and the track `sample_rate` — no
+    magic millisecond constants.
+For fMP4 the back-off (`target − warmup`) can cross a segment boundary;
+  `Fmp4SegmentDemuxer::seek` then decodes the tail of the prior segment as
+  decode-and-discard warm-up so SBR converges across the boundary instead
+  of starting cold. Reads stay confined to the pre-roll segment plus the
+  target segment — never a prefix walk from seg-0.
+1. **Sample-accurate trim.** Landing on a packet boundary means the first
+  decoded frame straddles the target. `ComposedDecoder::pending_seek_target`
+  drops whole pre-target frames, then trims the leading samples of the
+  straddling frame (`frames_to_trim`, round-to-nearest sample) so the
+  emitted chunk starts exactly at `target` rather than at the packet
+  boundary. Queue codecs retain the pending target across zero-frame decode
+  calls and report the timestamp of the PCM that eventually surfaces, so trim
+  is evaluated against decoded output rather than the later packet being fed.
+  Without this trim a seek leaks up to one packet of pre-target audio.
 
 Current metadata sources:
 
@@ -162,18 +160,31 @@ This keeps the strand contained in the decode layer: it never reaches into the
 ## Feature Flags
 
 <table>
+
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
+
 <tr><td><code>symphonia</code></td><td>yes</td><td>Software decoder path (Symphonia)</td></tr>
+
 <tr><td><code>fdk-aac</code></td><td>yes</td><td>Override Symphonia's LC-only AAC decoder with the in-tree libfdk-aac adapter for HE-AAC v1/v2</td></tr>
+
 <tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox hardware decoder (gated on <code>target_os = "macos" | "ios"</code>)</td></tr>
+
 <tr><td><code>android</code></td><td>no</td><td>Android <code>MediaExtractor</code>/<code>MediaCodec</code> hardware decoder (gated on <code>target_os = "android"</code>)</td></tr>
+
 <tr><td><code>probe</code></td><td>no</td><td>USDT probes for tracing</td></tr>
+
 <tr><td><code>mock</code></td><td>no</td><td><code>unimock</code>-generated mocks of the public traits</td></tr>
+
 <tr><td><code>perf</code></td><td>no</td><td>Performance instrumentation via <code>hotpath</code></td></tr>
+
 <tr><td><code>client-reqwest</code></td><td>yes</td><td>Forward the default HTTP backend selection to <code>kithara-stream</code></td></tr>
+
 <tr><td><code>client-wreq</code></td><td>no</td><td>Forward the native <code>wreq</code> HTTP backend selection to <code>kithara-stream</code></td></tr>
+
 <tr><td><code>tls-rustls</code></td><td>yes</td><td>Forward rustls TLS selection to network-reaching deps</td></tr>
+
 <tr><td><code>tls-native</code></td><td>no</td><td>Forward native TLS selection to network-reaching deps</td></tr>
+
 </table>
 
 When `symphonia` is disabled (`default-features = false` + only `apple` / `android`), the factory has no software fallback — it errors if the active hardware backend cannot handle a codec/container.
@@ -306,28 +317,27 @@ The gapless pipeline splits "where does silence come from?" into two
 independent layers:
 
 1. **Encoder-side priming / padding** — silence the *encoder* added at
-   compress time. `probe_codec_gapless` reads container metadata
-   (`iTunSMPB` / `elst` for AAC LC inside MP4, Xing/Info+LAME for MP3
-   inside MPEG audio) and returns `Some(GaplessInfo)` when it found
-   real values. **No fallback chains** — when metadata is absent the
-   probe returns `None` and the pipeline falls back through
-   `GaplessMode::CodecPriming` to `AudioCodec::encoder_priming_frames`
-   (libmp3lame default 576, AAC LC MDCT block 1024, Opus RFC pre-skip
-   312, others 0).
-
-2. **Decoder-side algorithmic delay** — silence the *decoder* itself
-   emits before it converges. Lives on `FrameCodec::decoder_algo_delay`
-   and is per-backend:
-   - Symphonia `mpa` (LAME convention): +529 leading, −529 trailing
-     for MP3. Symphonia's own demuxer parses the LAME tag and sets
-     `track.delay = enc_delay + 528 + 1`, but the 0.6.0-alpha.1
-     demuxer does NOT populate per-packet `trim_start` / `trim_end`,
-     so the decoder's `opts.gapless` flag is a no-op for MP3 — the
-     caller must apply the trim.
-   - Apple `AudioConverter` MP3: +0 (internally compensated; the
-     converter emits exactly `enc_delay` samples of leading silence).
-   - Android `MediaCodec`: +0 (no surfaced priming; metadata comes
-     from the demuxer's MP4 udta probe).
+  compress time. `probe_codec_gapless` reads container metadata
+  (`iTunSMPB` / `elst` for AAC LC inside MP4, Xing/Info+LAME for MP3
+  inside MPEG audio) and returns `Some(GaplessInfo)` when it found
+  real values. **No fallback chains** — when metadata is absent the
+  probe returns `None` and the pipeline falls back through
+  `GaplessMode::CodecPriming` to `AudioCodec::encoder_priming_frames`
+  (libmp3lame default 576, AAC LC MDCT block 1024, Opus RFC pre-skip
+  312, others 0).
+1. **Decoder-side algorithmic delay** — silence the *decoder* itself
+  emits before it converges. Lives on `FrameCodec::decoder_algo_delay`
+  and is per-backend:
+  - Symphonia `mpa` (LAME convention): +529 leading, −529 trailing
+    for MP3. Symphonia's own demuxer parses the LAME tag and sets
+    `track.delay = enc_delay + 528 + 1`, but the 0.6.0-alpha.1
+    demuxer does NOT populate per-packet `trim_start` / `trim_end`,
+    so the decoder's `opts.gapless` flag is a no-op for MP3 — the
+    caller must apply the trim.
+  - Apple `AudioConverter` MP3: +0 (internally compensated; the
+    converter emits exactly `enc_delay` samples of leading silence).
+  - Android `MediaCodec`: +0 (no surfaced priming; metadata comes
+    from the demuxer's MP4 udta probe).
 
 `SymphoniaCodec::open_with_config` folds its own algo delay into the
 probed `GaplessInfo` before exposing it through `track_info()`; the
