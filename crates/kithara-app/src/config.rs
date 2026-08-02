@@ -54,7 +54,7 @@ impl Default for AppDrm {
     }
 }
 
-/// Application configuration passed to frontends.
+/// Application configuration passed to the GUI frontend.
 ///
 /// Shared owners and the downloader are mandatory; product knobs default to
 /// values baked at compile time from `app.toml`.

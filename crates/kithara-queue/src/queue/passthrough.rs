@@ -67,7 +67,7 @@ impl Queue {
             /// Current track duration in seconds.
             #[must_use]
             pub fn duration_seconds(&self) -> Option<f64>;
-            /// Underlying [`EventBus`]. FFI/TUI bridges use `.scoped()` /
+            /// Underlying [`EventBus`]. FFI bridges use `.scoped()` /
             /// `.clone()` to wire their own subscriptions; typical callers
             /// should prefer [`Self::subscribe`].
             #[must_use]

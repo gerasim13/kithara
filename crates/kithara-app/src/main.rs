@@ -15,7 +15,6 @@ use kithara_app::{
     baked,
     config::AppConfig,
     deck::{Deck, DeckId, DeckSet},
-    frontend::Frontend,
     gui::GuiFrontend,
     tracing_init::init_tracing,
 };
