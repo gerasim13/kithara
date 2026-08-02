@@ -31,7 +31,7 @@ pub struct GaplessProfile {
     gapless: Option<GaplessInfo>,
     tail_compensation: Option<GaplessTailCompensation>,
     spec: PcmSpec,
-    fallback_priming_frames: u64,
+    default_priming_frames: u64,
 }
 
 impl GaplessProfile {
@@ -40,19 +40,19 @@ impl GaplessProfile {
         spec: PcmSpec,
         gapless: Option<GaplessInfo>,
         tail_compensation: Option<GaplessTailCompensation>,
-        fallback_priming_frames: u64,
+        default_priming_frames: u64,
     ) -> Self {
         Self {
             gapless,
             tail_compensation,
             spec,
-            fallback_priming_frames,
+            default_priming_frames,
         }
     }
 
     #[must_use]
-    pub const fn fallback_priming_frames(self) -> u64 {
-        self.fallback_priming_frames
+    pub const fn default_priming_frames(self) -> u64 {
+        self.default_priming_frames
     }
 
     #[must_use]

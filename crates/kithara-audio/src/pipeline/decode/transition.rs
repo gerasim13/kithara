@@ -547,10 +547,10 @@ fn incoming_origin_from(
     mode: kithara_decode::GaplessMode,
 ) -> u64 {
     let incoming_profile = incoming.gapless_profile();
-    let same_fallback_profile = active_profile.gapless().is_none()
+    let same_default_profile = active_profile.gapless().is_none()
         && incoming_profile.gapless().is_none()
-        && active_profile.fallback_priming_frames() == incoming_profile.fallback_priming_frames();
-    let gap = if same_fallback_profile {
+        && active_profile.default_priming_frames() == incoming_profile.default_priming_frames();
+    let gap = if same_default_profile {
         active_gap.max(incoming.timeline_gap())
     } else {
         incoming.timeline_gap()

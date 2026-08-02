@@ -96,7 +96,7 @@ impl GaplessStage {
 }
 
 fn resolve_codec_priming(profile: GaplessProfile) -> GaplessTrimmer {
-    let frames = profile.fallback_priming_frames();
+    let frames = profile.default_priming_frames();
     if frames == 0 {
         GaplessTrimmer::disabled()
     } else {

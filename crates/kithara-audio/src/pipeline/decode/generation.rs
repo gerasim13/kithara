@@ -160,7 +160,7 @@ impl DecoderGeneration {
             0
         } else {
             self.gapless_profile.gapless().map_or_else(
-                || self.gapless_profile.fallback_priming_frames(),
+                || self.gapless_profile.default_priming_frames(),
                 |info| info.leading_frames,
             )
         };
