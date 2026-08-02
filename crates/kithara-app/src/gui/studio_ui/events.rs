@@ -4,10 +4,10 @@ use num_traits::cast::AsPrimitive;
 use super::{
     cache::{DeckLayout, StudioCache},
     endpoints::{EQ_MAX_DB, EQ_MIN_DB},
-    scope::deck_index,
+    scope::{deck_index, eq_band},
 };
 use crate::{
-    deck::DeckId,
+    deck::{DeckId, EqMode},
     gui::{
         app::Kithara,
         deck::{DeckMsg, TEMPO_STEP},
@@ -18,7 +18,7 @@ use crate::{
 
 /// Translate a compiled-UI event into an app message, applying host-owned
 /// view state (zoom, module collapse, deck layout) in place. Control paths
-/// come from the studio documents: `<instance>/<control-id>`.
+/// come from the studio documents and may contain nested include segments.
 pub(crate) fn translate(state: &mut Kithara, event: UiEvent) -> Option<Message> {
     match event {
         UiEvent::Control { path, action } => control(state, &path, &action),
@@ -59,6 +59,9 @@ fn deck_control(
     if zoom_control(&mut state.studio.cache, index, control, action).is_some() {
         return None;
     }
+    if let Some(rest) = control.strip_prefix("stream/") {
+        return stream_control(state, index, rest, action);
+    }
     let id = deck_id(state, index)?;
     let msg = match (control, action) {
         ("drop", ControlAction::Drag(DragPhase::Over(over))) => {
@@ -70,7 +73,7 @@ fn deck_control(
             DeckMsg::SeekTo(position.clamp(0.0, 1.0) * duration)
         }
         ("wave/zoom", ControlAction::SetScalar(zoom)) => {
-            state.studio.cache.deck_mut(index)?.zoom = Some(zoom.clamp(0.0, 1.0));
+            state.studio.cache.deck_mut(index)?.view.zoom = Some(zoom.clamp(0.0, 1.0));
             return None;
         }
         ("tempo", ControlAction::StepScalar(steps)) => DeckMsg::SetTempo(
@@ -85,6 +88,39 @@ fn deck_control(
     Some(Message::Deck(id, msg))
 }
 
+fn stream_control(
+    state: &mut Kithara,
+    index: usize,
+    control: &str,
+    action: &ControlAction,
+) -> Option<Message> {
+    if !matches!(action, ControlAction::Activate) {
+        return None;
+    }
+    let open = match control {
+        "cell" => !state.studio.cache.deck_mut(index)?.view.quality_menu,
+        "pop" => false,
+        row => {
+            let msg = quality_msg(state, index, row)?;
+            state.studio.cache.deck_mut(index)?.view.quality_menu = false;
+            return Some(Message::Deck(deck_id(state, index)?, msg));
+        }
+    };
+    state.studio.cache.deck_mut(index)?.view.quality_menu = open;
+    None
+}
+
+fn quality_msg(state: &Kithara, index: usize, path: &str) -> Option<DeckMsg> {
+    let (row, _) = path.split_once('/')?;
+    if row == "auto" {
+        return Some(DeckMsg::SetQuality(None));
+    }
+    let slot: usize = row.strip_prefix("variant-")?.parse().ok()?;
+    let id = deck_id(state, index)?;
+    let rung = state.decks.get(id)?.ui.abr_variants.get(slot)?.index;
+    Some(DeckMsg::SetQuality(Some(rung)))
+}
+
 fn zoom_control(
     cache: &mut StudioCache,
     index: usize,
@@ -97,7 +133,7 @@ fn zoom_control(
         _ => return None,
     };
     let deck = cache.deck_mut(index)?;
-    deck.zoom = Some(step(deck.zoom.map_or(DEFAULT_ZOOM, AsPrimitive::as_)).into());
+    deck.view.zoom = Some(step(deck.view.zoom.map_or(DEFAULT_ZOOM, AsPrimitive::as_)).into());
     Some(())
 }
 
@@ -112,7 +148,7 @@ fn bar_control(cache: &mut StudioCache, control: &str, action: &ControlAction) -
     Some(Message::PauseHiddenDecks)
 }
 
-fn mixer_control(state: &Kithara, control: &str, action: &ControlAction) -> Option<Message> {
+fn mixer_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
     match (control, action) {
         ("xfade", ControlAction::SetScalar(position)) => Some(Message::Mix(MixMsg::Crossfader(
             position.clamp(0.0, 1.0).as_(),
@@ -123,20 +159,37 @@ fn mixer_control(state: &Kithara, control: &str, action: &ControlAction) -> Opti
 
 /// The channel strip owns both mix-side controls and the deck's tone, so its
 /// instance letter addresses the deck.
-fn strip_control(state: &Kithara, control: &str, action: &ControlAction) -> Option<Message> {
-    let (letter, name) = control.split_once('/')?;
+fn strip_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
+    let (letter, control) = control.split_once('/')?;
+    let name = control.rsplit('/').next()?;
     let index = deck_index(letter)?;
-    let id = deck_id(state, index)?;
-    let msg = match (name, action) {
-        ("volume", ControlAction::SetScalar(trim)) => {
-            Message::Mix(MixMsg::Trim(id, trim.clamp(0.0, 1.0).as_()))
+    match (name, action) {
+        ("eq-menu-anchor", ControlAction::SecondaryActivate) => {
+            state.studio.cache.set_eq_menu_open(index, true)?;
+            None
         }
-        ("low", ControlAction::SetScalar(value)) => Message::Deck(id, eq_msg(0, *value)),
-        ("mid", ControlAction::SetScalar(value)) => Message::Deck(id, eq_msg(1, *value)),
-        ("high", ControlAction::SetScalar(value)) => Message::Deck(id, eq_msg(2, *value)),
-        _ => return None,
-    };
-    Some(msg)
+        ("eq-menu", ControlAction::Activate) => {
+            state.studio.cache.set_eq_menu_open(index, false)?;
+            None
+        }
+        ("eq-3", ControlAction::Activate) => {
+            state.studio.cache.close_eq_menus();
+            Some(Message::SetEqMode(EqMode::ThreeBand))
+        }
+        ("eq-4", ControlAction::Activate) => {
+            state.studio.cache.close_eq_menus();
+            Some(Message::SetEqMode(EqMode::FourBand))
+        }
+        ("volume", ControlAction::SetScalar(trim)) => Some(Message::Mix(MixMsg::Trim(
+            deck_id(state, index)?,
+            trim.clamp(0.0, 1.0).as_(),
+        ))),
+        (_, ControlAction::SetScalar(value)) => Some(Message::Deck(
+            deck_id(state, index)?,
+            eq_msg(eq_band(state.eq_mode, name)?, *value),
+        )),
+        _ => None,
+    }
 }
 
 /// The library hands a row to whichever deck the pointer released it over.
@@ -178,7 +231,7 @@ mod tests {
 
     fn press_zoom(cache: &mut StudioCache, control: &str) -> f64 {
         zoom_control(cache, 0, control, &ControlAction::Activate);
-        cache.deck_mut(0).and_then(|deck| deck.zoom).unwrap()
+        cache.deck_mut(0).and_then(|deck| deck.view.zoom).unwrap()
     }
 
     #[kithara::test]

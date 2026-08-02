@@ -960,15 +960,6 @@ pub enum FfiItemEvent {
         source_sample_rate: u32,
         active: bool,
     },
-    HlsVariantSwitchFenced {
-        from_variant: u32,
-        to_variant: u32,
-        cross_codec: bool,
-    },
-    HlsVariantSwitchAcked {
-        variant: u32,
-        generation: u64,
-    },
     HlsCacheComplete {
         total_bytes: Option<u64>,
     },

@@ -19,7 +19,9 @@ impl HlsVariant {
     /// `SizeDemand::Init` request and land on stale bytes once the init
     /// commit shifts offsets.
     fn all_sizes_complete(&self) -> bool {
-        self.sizes_complete() && self.exact_init_complete()
+        self.layout
+            .try_published(|| Some(self.sizes_complete() && self.exact_init_complete()))
+            .unwrap_or(false)
     }
 
     pub(super) fn clear_exact_byte_seek(&self) {
@@ -33,36 +35,36 @@ impl HlsVariant {
     }
 
     pub(super) fn complete_exact_seek_if_ready(&self) {
-        let entry = {
-            let Some(entry) = self.seek.exact_seek.load() else {
-                return;
-            };
-            if !self.exact_prefix_complete(entry.segment) {
-                return;
-            }
-            // Consume the demand only if the slot is still the exact generation
-            // we validated. Losing the CAS means a concurrent completer (off-RT
-            // settle or a fresh SET) already took it — `exact_prefix_complete`
-            // is monotonic, so the winner runs the follow-up; we bail.
-            if !self.seek.exact_seek.take_if(entry.generation) {
-                return;
-            }
-            entry
+        let Some(entry) = self.seek.exact_seek.load() else {
+            return;
         };
         let demand = ExactSeekDemand {
             segment: entry.segment,
             anchor: entry.anchor,
         };
-        let Some(exact_anchor) = self.segment_byte_offset(demand.segment) else {
+        let Some(exact_anchor) = self.layout.try_published(|| {
+            self.exact_prefix_complete_now(demand.segment)
+                .then(|| self.segment_byte_offset(demand.segment))
+                .flatten()
+        }) else {
             return;
         };
-        if self.flow.reader.position() == demand.anchor {
-            // Keep the stale seek alias alive: audio still gates the
-            // SourceSeekAnchor byte returned before exact prefix resolution.
-            self.resolve_seek_alias(demand, exact_anchor);
-            self.flow.reader.set_position(exact_anchor);
-            self.set_prefetch_anchor(exact_anchor);
-        }
+        // Keep the demand live until the reader moves. A committed body may
+        // revise an already exact prefix size, so every metadata poll must be
+        // able to refresh this projection before the first byte is consumed.
+        self.resolve_seek_alias(demand, exact_anchor);
+    }
+
+    fn exact_seek_projection_ready(&self, demand: ExactSeekDemand) -> bool {
+        self.layout
+            .try_published(|| {
+                let exact_anchor = self
+                    .exact_prefix_complete_now(demand.segment)
+                    .then(|| self.segment_byte_offset(demand.segment))
+                    .flatten()?;
+                Some(self.resolved_seek_anchor(demand.anchor) == Some(exact_anchor))
+            })
+            .unwrap_or(false)
     }
 
     fn enqueue_body_fetch_for_size(&self, demand: SizeDemand) {
@@ -87,11 +89,17 @@ impl HlsVariant {
     }
 
     fn exact_byte_position_ready(&self, byte: u64) -> bool {
-        if self.all_sizes_complete() {
-            return true;
-        }
-        self.find_at_offset(byte)
-            .is_some_and(|(segment, _, _)| self.exact_prefix_complete(segment))
+        self.layout
+            .try_published(|| {
+                let ready = if self.sizes_complete() && self.exact_init_complete() {
+                    true
+                } else {
+                    self.find_at_offset(byte)
+                        .is_some_and(|(segment, _, _)| self.exact_prefix_complete_now(segment))
+                };
+                Some(ready)
+            })
+            .unwrap_or(false)
     }
 
     fn exact_init_complete(&self) -> bool {
@@ -101,7 +109,7 @@ impl HlsVariant {
             .is_none_or(|init| init.size().is_exact())
     }
 
-    fn exact_prefix_complete(&self, segment: u32) -> bool {
+    fn exact_prefix_complete_now(&self, segment: u32) -> bool {
         if self
             .segments
             .init
@@ -122,32 +130,18 @@ impl HlsVariant {
     }
 
     pub(super) fn exact_seek_metadata_phase(&self) -> Option<SourcePhase> {
-        let demand = self.seek.exact_seek.load()?;
-        if self.exact_prefix_complete(demand.segment) {
+        self.seek.exact_seek.load()?;
+        self.complete_exact_seek_if_ready();
+        let entry = self.seek.exact_seek.load()?;
+        let demand = ExactSeekDemand {
+            segment: entry.segment,
+            anchor: entry.anchor,
+        };
+        if self.exact_seek_projection_ready(demand) {
             return None;
         }
         self.request_exact_prefix_through(demand.segment);
         Some(SourcePhase::WaitingDemand)
-    }
-
-    pub(crate) fn prepare_exact_prefix_for_boundary(&self, boundary: u32) -> bool {
-        if !needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
-            return true;
-        }
-        let boundary = boundary.min(self.num_segments());
-        if self
-            .segments
-            .init
-            .as_ref()
-            .is_some_and(|init| !init.size().is_exact())
-        {
-            self.request_exact_size(SizeDemand::Init);
-        }
-        let Some(last) = boundary.checked_sub(1) else {
-            return self.exact_init_complete();
-        };
-        self.request_exact_prefix_through(last);
-        self.exact_prefix_complete(last)
     }
 
     fn request_exact_prefix_for_byte(&self, byte: u64) {

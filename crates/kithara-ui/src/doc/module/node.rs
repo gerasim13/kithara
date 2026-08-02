@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 use super::{
     binding::{AdaptivePolicy, BindingRef},
     style::{
-        ButtonStyle, ChipStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAt,
-        ScalarFormat, TextAlign, TextStyle, Tone, TrackColumn, WaveStyle, WindowControlsStyle,
+        ButtonStyle, ChipStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign,
+        PopoverAt, ScalarFormat, TextAlign, TextStyle, Tone, TrackColumn, WaveStyle,
+        WindowControlsStyle,
     },
 };
 use crate::{ids::NodeId, layout::FrameSides, param::Param, size::SizeSpec, skin::ColorRole};
@@ -61,6 +62,8 @@ pub enum ControlNode {
         #[serde(default)]
         gap: Option<f32>,
         #[serde(default)]
+        align: TextAlign,
+        #[serde(default)]
         pad: Option<f32>,
         /// Per-axis override of `pad`.
         #[serde(default)]
@@ -99,6 +102,8 @@ pub enum ControlNode {
         open: BindingRef,
         #[serde(default)]
         at: PopoverAt,
+        #[serde(default)]
+        align: PopoverAlign,
         anchor: Box<Self>,
         content: Box<Self>,
     },

@@ -39,14 +39,12 @@ fn wake_worker(cell: &WorkerWakeCell) {
 /// the same worker cell.
 #[derive(Clone)]
 pub(crate) struct SizeSignal {
-    /// Late-bound peer-poll wake — the `HlsPeer`'s `reader_advanced` handle.
-    /// Fired by [`wake_peer`](Self::wake_peer) from the `on_slow` hook when an
-    /// in-flight fetch crosses `soft_timeout` without settling: the peer re-polls
-    /// and `reconcile_escape` marks the ABR escape against the now-stalled slot.
-    /// This is the anti-event twin of `worker_wake`/`ready` (data is *not*
-    /// arriving), so the escape is edge-triggered by the stall rather than left
-    /// to an incidental reader-progress wake. Empty until the peer activates
-    /// (`HlsCoord::set_peer_wake`), then set once.
+    /// Direct off-RT peer-poll wake. Unlike `peer_wake`, this invokes the
+    /// downloader's registered task waker without waiting for a forwarding
+    /// micro-task to be scheduled.
+    peer_poll_wake: Arc<OnceLock<Arc<dyn WorkerWake>>>,
+    /// Deferred peer wake used by RT callers, which arm it for the scheduler
+    /// shell to flush without invoking a task waker on the produce core.
     peer_wake: Arc<OnceLock<Arc<DeferredWake>>>,
     /// Shared readiness gate. Every transition that can flip a blocked reader's
     /// `wait_range` predicate (segment write/commit/fail, fence raise/clear,
@@ -73,6 +71,7 @@ impl SizeSignal {
     /// once in `Hls::create` and cloned down into every consumer.
     pub(crate) fn new(ready: Arc<ThreadGate>, worker_wake: WorkerWakeCell) -> Self {
         Self {
+            peer_poll_wake: Arc::new(OnceLock::new()),
             ready,
             worker_wake,
             peer_wake: Arc::new(OnceLock::new()),
@@ -108,17 +107,23 @@ impl SizeSignal {
         wake_worker(&self.worker_wake);
     }
 
+    /// Re-tick the audio worker after publishing work that it owns, without
+    /// claiming that reader bytes or readiness changed.
+    pub(crate) fn wake_worker(&self) {
+        wake_worker(&self.worker_wake);
+    }
+
     /// Re-vend the underlying readiness gate. Used by the cancel waker, which
     /// must capture a hard-`Send + Sync` handle in its `on_cancel` closure.
     pub(crate) fn ready_gate(&self) -> Arc<ThreadGate> {
         Arc::clone(&self.ready)
     }
 
-    /// Install the peer's `reader_advanced` wake (idempotent — only the first
-    /// set sticks). Called by `HlsPeer::activate`; [`wake_peer`](Self::wake_peer)
-    /// reads it lock-free thereafter.
-    pub(crate) fn set_peer_wake(&self, wake: Arc<DeferredWake>) {
-        let _ = self.peer_wake.set(wake);
+    /// Install the context-specific peer wakes (idempotent — only the first set
+    /// sticks). Called by `HlsPeer::activate`.
+    pub(crate) fn set_peer_wake(&self, deferred: Arc<DeferredWake>, direct: Arc<dyn WorkerWake>) {
+        let _ = self.peer_wake.set(deferred);
+        let _ = self.peer_poll_wake.set(direct);
     }
 
     /// Install the audio worker's data-arrival wake (idempotent — only the first
@@ -128,14 +133,20 @@ impl SizeSignal {
         let _ = self.worker_wake.set(wake);
     }
 
-    /// Wake the HLS peer's `poll_next` so it re-runs `reconcile_escape` against
-    /// the just-flagged stalled slot. Called from the `on_slow` hook on the
-    /// downloader thread (off-RT — `notify_now`'s cross-thread `notify_one` is
-    /// allowed here). A no-op until the peer activates; the stored-permit
-    /// semantics mean a wake delivered between the peer's polls is not lost.
+    /// Wake the HLS peer's `poll_next` directly from an off-RT caller. This
+    /// covers both slow-fetch escape and incoming-session readiness work. A
+    /// no-op until the peer activates.
     pub(crate) fn wake_peer(&self) {
+        if let Some(wake) = self.peer_poll_wake.get() {
+            wake.wake();
+        }
+    }
+
+    /// Arm the peer wake from a non-blocking decoder reader. The scheduler
+    /// shell flushes the stored wake off the real-time path.
+    pub(crate) fn arm_peer(&self) {
         if let Some(wake) = self.peer_wake.get() {
-            wake.notify_now();
+            wake.arm();
         }
     }
 }

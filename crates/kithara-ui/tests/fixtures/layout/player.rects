@@ -18,12 +18,10 @@ split[0] 0.000 0.000 1280.000 720.000
         deck-a/transport/loop 236.000 333.857 74.000 30.000
         deck-a/transport/jump-back 310.000 333.857 52.000 30.000
         deck-a/transport/jump-forward 362.000 333.857 52.000 30.000
-        deck-a/column[0]/row[1]/spacer 414.000 333.857 545.000 30.000
-        deck-a/transport/zoom-out 959.000 333.857 36.000 30.000
-        deck-a/transport/zoom-in 995.000 333.857 36.000 30.000
-        deck-a/column[0]/row[1]/stream 1031.000 333.857 158.200 30.000
-          deck-a/transport/stream-label 1042.000 339.857 115.200 18.000
-          deck-a/transport/stream-chevron 1164.200 333.857 14.000 30.000
+        deck-a/column[0]/row[1]/spacer 414.000 333.857 644.920 30.000
+        deck-a/transport/zoom-out 1058.920 333.857 36.000 30.000
+        deck-a/transport/zoom-in 1094.920 333.857 36.000 30.000
+        deck-a/transport/stream/pop 1130.920 333.857 58.280 30.000
         deck-a/column[0]/row[1]/tempo 1189.200 333.857 90.800 30.000
           deck-a/transport/tempo-label 1200.200 339.857 28.800 18.000
           deck-a/transport/tempo-value 1236.000 339.857 33.000 18.000
@@ -51,12 +49,10 @@ split[0] 0.000 0.000 960.000 600.000
         deck-a/transport/loop 236.000 276.714 74.000 30.000
         deck-a/transport/jump-back 310.000 276.714 52.000 30.000
         deck-a/transport/jump-forward 362.000 276.714 52.000 30.000
-        deck-a/column[0]/row[1]/spacer 414.000 276.714 225.000 30.000
-        deck-a/transport/zoom-out 639.000 276.714 36.000 30.000
-        deck-a/transport/zoom-in 675.000 276.714 36.000 30.000
-        deck-a/column[0]/row[1]/stream 711.000 276.714 158.200 30.000
-          deck-a/transport/stream-label 722.000 282.714 115.200 18.000
-          deck-a/transport/stream-chevron 844.200 276.714 14.000 30.000
+        deck-a/column[0]/row[1]/spacer 414.000 276.714 324.920 30.000
+        deck-a/transport/zoom-out 738.920 276.714 36.000 30.000
+        deck-a/transport/zoom-in 774.920 276.714 36.000 30.000
+        deck-a/transport/stream/pop 810.920 276.714 58.280 30.000
         deck-a/column[0]/row[1]/tempo 869.200 276.714 90.800 30.000
           deck-a/transport/tempo-label 880.200 282.714 28.800 18.000
           deck-a/transport/tempo-value 916.000 282.714 33.000 18.000
@@ -87,9 +83,7 @@ split[0] 0.000 0.000 320.000 240.000
         deck-a/column[0]/row[1]/spacer 320.000 105.286 0.000 30.000
         deck-a/transport/zoom-out 320.000 105.286 0.000 30.000
         deck-a/transport/zoom-in 320.000 105.286 0.000 30.000
-        deck-a/column[0]/row[1]/stream 320.000 105.286 0.000 30.000
-          deck-a/transport/stream-label 320.000 111.286 0.000 18.000
-          deck-a/transport/stream-chevron 327.000 105.286 0.000 30.000
+        deck-a/transport/stream/pop 320.000 105.286 0.000 30.000
         deck-a/column[0]/row[1]/tempo 320.000 105.286 0.000 30.000
           deck-a/transport/tempo-label 320.000 111.286 0.000 18.000
           deck-a/transport/tempo-value 327.000 111.286 0.000 18.000

@@ -19,11 +19,15 @@ use crate::{
     expand::{ExpandedNode, SurfaceSpec},
     ids::InternId,
     layout::{Axis, FrameSides},
-    module::ChromeStyle,
+    module::{ChromeStyle, TextAlign},
     render::{ControlAction, InputOwner, ReadValue, Reads, Skin, UiEvent, control_event},
     size::{Dim, Hidden, is_hidden},
     skin::ColorRole,
-    widgets::{DropZone, ModuleChrome, Widget, anchored::Anchored, wheel::WheelSurface},
+    widgets::{
+        DropZone, ModuleChrome, Widget,
+        anchored::{Anchored, Placement},
+        wheel::WheelSurface,
+    },
 };
 
 pub(super) fn render_compiled<'a>(
@@ -240,6 +244,7 @@ fn render_node<'a>(
             render_group(
                 Group {
                     axis: Axis::Horizontal,
+                    alignment: Alignment::Center,
                     children,
                     gap: *gap,
                     pad: *pad,
@@ -260,6 +265,7 @@ fn render_node<'a>(
         ExpandedNode::Column {
             children,
             gap,
+            align,
             pad,
             pad_x,
             pad_y,
@@ -271,6 +277,7 @@ fn render_node<'a>(
         } => render_group(
             Group {
                 axis: Axis::Vertical,
+                alignment: column_alignment(*align),
                 children,
                 gap: *gap,
                 pad: *pad,
@@ -291,6 +298,7 @@ fn render_node<'a>(
             path,
             open,
             at,
+            align,
             anchor,
             content,
         } => {
@@ -305,7 +313,10 @@ fn render_node<'a>(
                     render_child(anchor, address, 0, context),
                     content,
                     open,
-                    *at,
+                    Placement {
+                        at: *at,
+                        align: *align,
+                    },
                     control_event(ui.resolve(*path), ControlAction::Activate),
                     skin,
                 )
@@ -353,6 +364,7 @@ pub(super) fn render_engine_node<'a>(
 #[derive(Clone, Copy)]
 struct Group<'a> {
     axis: Axis,
+    alignment: Alignment,
     children: &'a [ExpandedNode],
     gap: Option<f32>,
     pad: Option<f32>,
@@ -374,6 +386,7 @@ fn render_group<'a>(
 ) -> Rendered<'a> {
     let Group {
         axis,
+        alignment,
         children,
         gap,
         pad,
@@ -397,7 +410,7 @@ fn render_group<'a>(
             ))
         }))
         .spacing(spacing)
-        .align(Alignment::Center)
+        .align(alignment)
         .width(size.0)
         .height(size.1),
         Axis::Vertical => Flex::column(children.iter().enumerate().filter_map(|(index, child)| {
@@ -410,7 +423,7 @@ fn render_group<'a>(
             ))
         }))
         .spacing(spacing)
-        .align(Alignment::Start)
+        .align(alignment)
         .width(size.0),
     };
     Rendered::leading(wheeled(
@@ -474,9 +487,11 @@ fn child_address(parent: &[usize], index: usize) -> Vec<usize> {
     address
 }
 
-const HOSTED_MODULES: [&str; 19] = [
+const HOSTED_MODULES: [&str; 21] = [
     "studio-deck",
     "studio-strip",
+    "studio-strip-eq-3-band",
+    "studio-strip-eq-4-band",
     "studio-mixer",
     "studio-mixer-single",
     "studio-overview",
@@ -504,6 +519,14 @@ fn hosts_engine(ui: &CompiledUi, owner: InternId, address: &[usize]) -> bool {
     HOSTED_MODULES
         .iter()
         .any(|module| ui.includes_module(owner, address, module))
+}
+
+const fn column_alignment(align: TextAlign) -> Alignment {
+    match align {
+        TextAlign::Start => Alignment::Start,
+        TextAlign::Center => Alignment::Center,
+        TextAlign::End => Alignment::End,
+    }
 }
 
 fn main_minimum(node: &ExpandedNode, axis: Axis, skin: &Skin) -> Option<f32> {

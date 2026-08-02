@@ -3,6 +3,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::value::Value;
 use crate::{
+    deck::EqMode,
     gui::{
         deck::{DeckView, TEMPO_RANGE, TimestretchState},
         studio_ui::{
@@ -12,7 +13,7 @@ use crate::{
         },
         view::playhead,
     },
-    state::UiState,
+    state::{AbrVariant, UiState},
 };
 
 #[derive(Clone, Copy)]
@@ -41,6 +42,7 @@ pub(super) struct DeckNode<'a> {
     ui: &'a UiState,
     view: DeckView,
     cache: &'a DeckCache,
+    eq_mode: EqMode,
     focused: bool,
 }
 
@@ -49,12 +51,14 @@ impl<'a> DeckNode<'a> {
         ui: &'a UiState,
         view: DeckView,
         cache: &'a DeckCache,
+        eq_mode: EqMode,
         focused: bool,
     ) -> Self {
         Self {
             ui,
             view,
             cache,
+            eq_mode,
             focused,
         }
     }
@@ -74,7 +78,15 @@ impl<'a> Node<'a> for DeckNode<'a> {
             "tempo" => Box::new(TempoNode {
                 timestretch: self.view.timestretch,
             }),
-            "eq" => Box::new(EqNode { ui: self.ui }),
+            "eq" => Box::new(EqNode {
+                ui: self.ui,
+                cache: self.cache,
+                mode: self.eq_mode,
+            }),
+            "stream" => Box::new(StreamNode {
+                ui: self.ui,
+                cache: self.cache,
+            }),
             "view" => Box::new(ViewNode { cache: self.cache }),
             "focused" => Box::new(Value(ReadValue::Bool(self.focused))),
             _ => return None,
@@ -160,19 +172,62 @@ impl<'a> Node<'a> for TempoNode {
 }
 
 #[derive(Clone, Copy)]
+struct StreamNode<'a> {
+    ui: &'a UiState,
+    cache: &'a DeckCache,
+}
+
+impl<'a> StreamNode<'a> {
+    const AUTO_SLOT: &'static str = "auto";
+
+    fn rung(self, slot: &str) -> Option<&'a AbrVariant> {
+        self.ui.abr_variants.get(slot.parse::<usize>().ok()?)
+    }
+
+    fn active(self, slot: &str) -> bool {
+        if slot == Self::AUTO_SLOT {
+            return self.ui.abr_mode_is_auto;
+        }
+        let picked = self.ui.selected_variant;
+        !self.ui.abr_mode_is_auto
+            && self
+                .rung(slot)
+                .is_some_and(|rung| picked == Some(rung.index))
+    }
+}
+
+impl<'a> Node<'a> for StreamNode<'a> {
+    fn child(&self, segment: &str, scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
+        let stream = *self;
+        let value = match segment {
+            "quality" => ReadValue::Text(&stream.cache.quality),
+            "quality_menu" => ReadValue::Bool(stream.cache.view.quality_menu),
+            "quality_hidden" => ReadValue::Bool(stream.ui.abr_variants.is_empty()),
+            "variant_active" => ReadValue::Bool(stream.active(scope.get("variant")?)),
+            "variant_hidden" => ReadValue::Bool(stream.rung(scope.get("variant")?).is_none()),
+            "variant_label" => ReadValue::Text(&stream.rung(scope.get("variant")?)?.label),
+            "variant_sub" => ReadValue::Text(&stream.rung(scope.get("variant")?)?.detail),
+            _ => return None,
+        };
+        Some(Box::new(Value(value)))
+    }
+}
+
+#[derive(Clone, Copy)]
 struct EqNode<'a> {
     ui: &'a UiState,
+    cache: &'a DeckCache,
+    mode: EqMode,
 }
 
 impl<'a> Node<'a> for EqNode<'a> {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
-        let band = match segment {
-            "low" => 0,
-            "mid" => 1,
-            "high" => 2,
-            _ => return None,
+        let value = match segment {
+            "menu_open" => ReadValue::Bool(self.cache.view.eq_menu_open),
+            "three_band" => ReadValue::Bool(self.mode == EqMode::ThreeBand),
+            "four_band" => ReadValue::Bool(self.mode == EqMode::FourBand),
+            band => eq_value(self.ui.eq_bands.get(self.mode.band(band)?))?,
         };
-        let value = eq_value(self.ui.eq_bands.get(band))?;
         Some(Box::new(Value(value)))
     }
 }
@@ -185,7 +240,7 @@ struct ViewNode<'a> {
 impl<'a> Node<'a> for ViewNode<'a> {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
         let value = match segment {
-            "zoom" => ReadValue::Scalar(self.cache.zoom?),
+            "zoom" => ReadValue::Scalar(self.cache.view.zoom?),
             _ => return None,
         };
         Some(Box::new(Value(value)))

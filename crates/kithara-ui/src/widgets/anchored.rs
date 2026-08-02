@@ -11,15 +11,27 @@ use iced::{
     keyboard::{self, key::Named},
 };
 
-use crate::{module::PopoverAt, render::Skin, skin::PopSkin};
+use crate::{
+    module::{PopoverAlign, PopoverAt},
+    render::Skin,
+    skin::PopSkin,
+};
 
-const OVERHANG: f32 = 1.0;
+const FRAME_OVERHANG: f32 = 1.0;
+
+/// Where the surface sits: the geometry it opens from and the edge of that
+/// geometry its own edge lines up with.
+#[derive(Clone, Copy)]
+pub(crate) struct Placement {
+    pub(crate) at: PopoverAt,
+    pub(crate) align: PopoverAlign,
+}
 
 pub(crate) struct Anchored<'a, Message> {
     anchor: Element<'a, Message>,
     content: Element<'a, Message>,
     open: bool,
-    at: PopoverAt,
+    placement: Placement,
     on_dismiss: Message,
     chrome: PopChrome,
 }
@@ -29,7 +41,7 @@ impl<'a, Message> Anchored<'a, Message> {
         anchor: Element<'a, Message>,
         content: Element<'a, Message>,
         open: bool,
-        at: PopoverAt,
+        placement: Placement,
         on_dismiss: Message,
         skin: &Skin,
     ) -> Self {
@@ -37,7 +49,7 @@ impl<'a, Message> Anchored<'a, Message> {
             anchor,
             content,
             open,
-            at,
+            placement,
             on_dismiss,
             chrome: PopChrome::new(skin),
         }
@@ -107,7 +119,13 @@ fn open_point(at: PopoverAt, latched: Option<Point>, translation: Vector) -> Opt
     }
 }
 
-fn place(anchor: Rectangle, pointer: Option<Point>, surface: Size, viewport: Size) -> Rectangle {
+fn place(
+    anchor: Rectangle,
+    pointer: Option<Point>,
+    surface: Size,
+    viewport: Size,
+    align: PopoverAlign,
+) -> Rectangle {
     let from = pointer.map_or(anchor, |point| Rectangle::new(point, Size::ZERO));
     let below = from.y + from.height;
     let y = if surface.height <= viewport.height - below {
@@ -115,8 +133,12 @@ fn place(anchor: Rectangle, pointer: Option<Point>, surface: Size, viewport: Siz
     } else {
         from.y - surface.height
     };
+    let x = match align {
+        PopoverAlign::Start => from.x - FRAME_OVERHANG,
+        PopoverAlign::End => from.x + from.width + FRAME_OVERHANG - surface.width,
+    };
     let position = Point::new(
-        inside(from.x - OVERHANG, surface.width, viewport.width),
+        inside(x, surface.width, viewport.width),
         inside(y, surface.height, viewport.height),
     );
     Rectangle::new(position, surface)
@@ -291,7 +313,7 @@ where
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
         let pointer = open_point(
-            self.at,
+            self.placement.at,
             tree.state.downcast_ref::<State>().pointer,
             translation,
         );
@@ -311,6 +333,7 @@ where
                 tree: content_tree,
                 anchor: layout.bounds() + translation,
                 pointer,
+                align: self.placement.align,
                 on_dismiss: self.on_dismiss.clone(),
                 chrome: self.chrome,
             })))
@@ -337,6 +360,7 @@ struct Popover<'a, 'b, Message> {
     tree: &'b mut Tree,
     anchor: Rectangle,
     pointer: Option<Point>,
+    align: PopoverAlign,
     on_dismiss: Message,
     chrome: PopChrome,
 }
@@ -357,6 +381,7 @@ where
             self.pointer,
             chrome.expand(content.size()),
             bounds,
+            self.align,
         );
         layout::Node::with_children(surface.size(), vec![content.translate(chrome.offset())])
             .move_to(surface.position())
@@ -439,7 +464,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use consts::{POPOVER, SURFACE, VIEWPORT};
     use iced::{
         keyboard::{Location, Modifiers, key::Physical},
         mouse::{Button, ScrollDelta},
@@ -453,20 +477,18 @@ mod tests {
         render::{ControlAction, UiEvent, control_event},
     };
 
-    mod consts {
-        use super::{Rectangle, Size};
+    struct Consts;
 
-        pub(super) const VIEWPORT: Size = Size {
+    impl Consts {
+        const VIEWPORT: Size = Size {
             width: 1280.0,
             height: 800.0,
         };
-
-        pub(super) const SURFACE: Size = Size {
+        const SURFACE: Size = Size {
             width: 300.0,
             height: 404.0,
         };
-
-        pub(super) const POPOVER: Rectangle = Rectangle {
+        const POPOVER: Rectangle = Rectangle {
             x: 35.0,
             y: 36.0,
             width: 300.0,
@@ -495,7 +517,13 @@ mod tests {
     #[kithara::test]
     fn a_popover_with_room_below_hangs_one_pixel_left_of_the_anchor() {
         assert_eq!(
-            place(burger(36.0, 0.0), None, SURFACE, VIEWPORT),
+            place(
+                burger(36.0, 0.0),
+                None,
+                Consts::SURFACE,
+                Consts::VIEWPORT,
+                PopoverAlign::Start
+            ),
             Rectangle {
                 x: 35.0,
                 y: 36.0,
@@ -507,9 +535,35 @@ mod tests {
     }
 
     #[kithara::test]
+    fn an_end_aligned_popover_lines_its_right_edge_up_with_the_anchor() {
+        assert_eq!(
+            place(
+                burger(600.0, 0.0),
+                None,
+                Consts::SURFACE,
+                Consts::VIEWPORT,
+                PopoverAlign::End
+            ),
+            Rectangle {
+                x: 337.0,
+                y: 36.0,
+                width: 300.0,
+                height: 404.0,
+            },
+            "the frame overhangs the anchor so the content column ends at its right edge"
+        );
+    }
+
+    #[kithara::test]
     fn a_popover_without_room_below_flips_above_the_anchor() {
         assert_eq!(
-            place(burger(36.0, 700.0), None, SURFACE, VIEWPORT),
+            place(
+                burger(36.0, 700.0),
+                None,
+                Consts::SURFACE,
+                Consts::VIEWPORT,
+                PopoverAlign::Start
+            ),
             Rectangle {
                 x: 35.0,
                 y: 296.0,
@@ -521,19 +575,45 @@ mod tests {
 
     #[kithara::test]
     fn a_popover_at_the_left_edge_clamps_into_the_viewport() {
-        assert_eq!(place(burger(0.0, 0.0), None, SURFACE, VIEWPORT).x, 0.0);
+        assert_eq!(
+            place(
+                burger(0.0, 0.0),
+                None,
+                Consts::SURFACE,
+                Consts::VIEWPORT,
+                PopoverAlign::Start
+            )
+            .x,
+            0.0
+        );
     }
 
     #[kithara::test]
     fn a_popover_at_the_right_edge_clamps_into_the_viewport() {
-        assert_eq!(place(burger(1260.0, 0.0), None, SURFACE, VIEWPORT).x, 980.0);
+        assert_eq!(
+            place(
+                burger(1260.0, 0.0),
+                None,
+                Consts::SURFACE,
+                Consts::VIEWPORT,
+                PopoverAlign::Start
+            )
+            .x,
+            980.0
+        );
     }
 
     #[kithara::test]
     fn a_popover_taller_than_the_viewport_starts_at_its_top() {
         let tall = Size::new(300.0, 900.0);
         assert_eq!(
-            place(burger(36.0, 0.0), None, tall, VIEWPORT),
+            place(
+                burger(36.0, 0.0),
+                None,
+                tall,
+                Consts::VIEWPORT,
+                PopoverAlign::Start
+            ),
             Rectangle {
                 x: 35.0,
                 y: 0.0,
@@ -550,8 +630,9 @@ mod tests {
             place(
                 row(0.0, 200.0),
                 Some(Point::new(420.0, 214.0)),
-                SURFACE,
-                VIEWPORT
+                Consts::SURFACE,
+                Consts::VIEWPORT,
+                PopoverAlign::Start,
             ),
             Rectangle {
                 x: 419.0,
@@ -569,8 +650,9 @@ mod tests {
             place(
                 row(0.0, 200.0),
                 Some(Point::new(1270.0, 214.0)),
-                SURFACE,
-                VIEWPORT
+                Consts::SURFACE,
+                Consts::VIEWPORT,
+                PopoverAlign::Start,
             )
             .x,
             980.0
@@ -583,8 +665,9 @@ mod tests {
             place(
                 row(0.0, 700.0),
                 Some(Point::new(420.0, 714.0)),
-                SURFACE,
-                VIEWPORT
+                Consts::SURFACE,
+                Consts::VIEWPORT,
+                PopoverAlign::Start,
             ),
             Rectangle {
                 x: 419.0,
@@ -705,17 +788,25 @@ mod tests {
     #[kithara::test]
     fn the_surface_claims_the_cursor_over_itself_and_nowhere_else() {
         assert_eq!(
-            claims(mouse::Interaction::None, POPOVER, at(100.0, 100.0)),
+            claims(mouse::Interaction::None, Consts::POPOVER, at(100.0, 100.0)),
             mouse::Interaction::Idle,
             "an inert row still covers what the surface hides"
         );
         assert_eq!(
-            claims(mouse::Interaction::Pointer, POPOVER, at(100.0, 100.0)),
+            claims(
+                mouse::Interaction::Pointer,
+                Consts::POPOVER,
+                at(100.0, 100.0)
+            ),
             mouse::Interaction::Pointer,
             "the content keeps the stronger claim"
         );
         assert_eq!(
-            claims(mouse::Interaction::Pointer, POPOVER, at(600.0, 500.0)),
+            claims(
+                mouse::Interaction::Pointer,
+                Consts::POPOVER,
+                at(600.0, 500.0)
+            ),
             mouse::Interaction::None,
             "outside the surface the base tree keeps its cursor"
         );
@@ -724,13 +815,13 @@ mod tests {
     #[kithara::test]
     fn a_press_outside_the_popover_dismisses_it() {
         let press = Event::Mouse(mouse::Event::ButtonPressed(Button::Left));
-        assert!(dismisses(&press, POPOVER, at(600.0, 500.0)));
+        assert!(dismisses(&press, Consts::POPOVER, at(600.0, 500.0)));
         assert!(
-            !dismisses(&press, POPOVER, at(100.0, 100.0)),
+            !dismisses(&press, Consts::POPOVER, at(100.0, 100.0)),
             "a press on the surface belongs to the menu"
         );
         assert!(
-            !dismisses(&press, POPOVER, at(35.0, 36.0)),
+            !dismisses(&press, Consts::POPOVER, at(35.0, 36.0)),
             "the frame is part of the surface"
         );
     }
@@ -738,13 +829,13 @@ mod tests {
     #[kithara::test]
     fn a_secondary_press_outside_the_popover_dismisses_it() {
         let press = Event::Mouse(mouse::Event::ButtonPressed(Button::Right));
-        assert!(dismisses(&press, POPOVER, at(600.0, 500.0)));
+        assert!(dismisses(&press, Consts::POPOVER, at(600.0, 500.0)));
     }
 
     #[kithara::test]
     fn escape_dismisses_wherever_the_cursor_is() {
-        assert!(dismisses(&escape(), POPOVER, at(100.0, 100.0)));
-        assert!(dismisses(&escape(), POPOVER, at(600.0, 500.0)));
+        assert!(dismisses(&escape(), Consts::POPOVER, at(100.0, 100.0)));
+        assert!(dismisses(&escape(), Consts::POPOVER, at(600.0, 500.0)));
     }
 
     #[kithara::test]
@@ -760,7 +851,7 @@ mod tests {
             }),
         ] {
             assert!(
-                !dismisses(&event, POPOVER, away),
+                !dismisses(&event, Consts::POPOVER, away),
                 "the press that opens the menu releases over the fresh overlay: {event:?}"
             );
         }
@@ -777,7 +868,7 @@ mod tests {
         );
         assert_eq!(chrome.offset(), Vector::new(1.0, 3.0));
         assert_eq!(
-            chrome.cap(POPOVER),
+            chrome.cap(Consts::POPOVER),
             Rectangle {
                 x: 36.0,
                 y: 37.0,
@@ -797,7 +888,10 @@ mod tests {
             anchor,
             content,
             open,
-            PopoverAt::Anchor,
+            Placement {
+                at: PopoverAt::Anchor,
+                align: PopoverAlign::Start,
+            },
             control_event("menu", ControlAction::Activate),
             builtin::skin(),
         )

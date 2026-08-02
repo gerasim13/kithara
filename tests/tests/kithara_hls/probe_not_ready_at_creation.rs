@@ -48,7 +48,14 @@ use kithara::{
     platform::{
         CancelToken,
         sync::Arc,
-        time::{Duration, Instant},
+        // "Did construction hang?" is a question about the caller's own wall
+        // clock, so it is asked on the wall clock. The alias is what asks it
+        // there: the flash rewriter matches `Instant::now` lexically, so a
+        // name it does not recognise keeps the platform clock unvirtualised —
+        // the same opt-out `flash_attr.rs` uses. Under virtual time a run that
+        // parks jumps the clock by the whole blocking-read budget while the
+        // caller waits for a fraction of it.
+        time::{Duration, Instant, Instant as RealInstant},
         tokio,
     },
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
@@ -155,7 +162,7 @@ async fn audio_new_bounded_failure_when_first_segment_withheld() {
     // decoder probe's read window then spills past the init into the withheld
     // body, which the blocking read waits the full budget for and then fails.
     let (server, _gate) = HlsTestServer::with_segment_gate(fixture_config(), 0, 0).await;
-    let started = Instant::now();
+    let started = RealInstant::now();
     let result = Audio::<Stream<Hls>>::new(audio_config(&server)).await;
     let elapsed = started.elapsed();
 

@@ -283,6 +283,24 @@ fn read_phase_until_samples<S: StreamType>(
     target_samples: u64,
     label: &str,
 ) -> PhaseReadStats {
+    read_phase_until(audio, target_samples, label, || true)
+}
+
+/// Pump until the sample target is met *and* `settled` holds.
+///
+/// A sample target alone does not bound a phase that is meant to observe a
+/// switch: a consumer reading a warm cache produces those samples in less
+/// wall-clock time than one fetch takes, so the whole budget can be spent on
+/// the outgoing variant and the phase ends before the switch it is watching
+/// for has issued a request. `settled` keeps the window open until the thing
+/// under observation has actually happened; the harness timeout, not the
+/// sample budget, is what fails a switch that never comes.
+fn read_phase_until<S: StreamType>(
+    audio: &mut Audio<Stream<S>>,
+    target_samples: u64,
+    label: &str,
+    settled: impl Fn() -> bool,
+) -> PhaseReadStats {
     let mut buf = vec![0f32; 4096 * 2];
     let mut stats = PhaseReadStats {
         samples: 0,
@@ -290,7 +308,7 @@ fn read_phase_until_samples<S: StreamType>(
         saw_eof: false,
     };
 
-    while stats.samples < target_samples {
+    while stats.samples < target_samples || !settled() {
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) => {
                 let n = count.get();
@@ -484,11 +502,18 @@ async fn vod_manual_switch_affects_future_segments() {
 
     let v0 = segments.iter().filter(|s| s.variant == 0).count();
     let v1 = segments.iter().filter(|s| s.variant == 1).count();
+    let mut v0_net: Vec<usize> = segments
+        .iter()
+        .filter(|s| s.variant == 0 && !s.cached)
+        .map(|s| s.segment_index)
+        .collect();
+    v0_net.sort_unstable();
     info!(
         switches,
         total_segments = segments.len(),
         v0,
         v1,
+        ?v0_net,
         "VOD test result"
     );
 
@@ -536,9 +561,14 @@ async fn vod_manual_switch_affects_future_segments() {
         net_v1.iter().max()
     );
     let v0_max = net_v0.iter().max().copied().unwrap_or(0);
+    let mut v0_fetched: Vec<usize> = net_v0.iter().copied().collect();
+    v0_fetched.sort_unstable();
     assert!(
         v0_max < last_seg,
-        "V0 must stop at an early prefix after downswitch, not reach the end. v0_max={v0_max}, last={last_seg}"
+        "V0 must stop at an early prefix after downswitch, not reach the end. \
+         v0_max={v0_max}, last={last_seg}, switch_count={switches}, \
+         applied_targets={targets:?}, v0_network_segments={v0_fetched:?}, \
+         reader_segments={reader_segments:?}"
     );
 }
 
@@ -1181,11 +1211,18 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
 
     // download_batch_size larger than total segments → peer fetches the
     // full variant 0 then parks itself idle.
+    //
+    // The variant is pinned rather than left to `auto(0)`: the subject here is
+    // the Manual click, and under Auto the controller reaches its own
+    // down-switch off the initial bandwidth estimate before the click lands.
+    // The player is then already on variant 1 and a Manual(1) click is a
+    // correct no-op — the assertion below would be waiting for a switch the
+    // user never asked for.
     let hls_config = HlsConfig::for_url(url)
         .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(auto(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .download_batch_size(segment_count * 2)
         .build();
 
@@ -1597,21 +1634,21 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
 
-    // First switch: cross-codec to FLAC. Closes the variant_generation fence.
+    // First switch: cross-codec to FLAC, which forces a decoder recreate.
     handle
         .set_mode(AbrMode::manual(3))
         .expect("Manual(3) (FLAC) target valid");
 
-    // Race window: same-codec switch must land BEFORE
-    // `clear_variant_fence` fires for the cross-codec recreate. In
-    // local test environment (in-process server, no CDN latency)
-    // recreate completes in ~50-100ms vs ~3-4s in prod. Sleep 0
-    // (immediate) maximizes the chance of hitting the race here.
+    // Race window: the same-codec switch must land BEFORE the cross-codec
+    // recreate installs its decoder. In the local test environment
+    // (in-process server, no CDN latency) the recreate completes in
+    // ~50-100ms vs ~3-4s in prod, so a short sleep maximizes the chance of
+    // hitting the race here.
     kithara::platform::time::sleep(Duration::from_millis(10)).await;
 
-    // Second switch: same-codec sibling of v=0 (AAC v=1) — does NOT
-    // bump fence, but shrinks `served_until` on whatever variant is
-    // active and activates v=1 with `served_from = switch_at`.
+    // Second switch: same-codec sibling of v=0 (AAC v=1) — byte continuity,
+    // so it shrinks `served_until` on whatever variant is active and
+    // activates v=1 with `served_from = switch_at`.
     handle
         .set_mode(AbrMode::manual(1))
         .expect("Manual(1) (AAC sibling) target valid");
@@ -1698,7 +1735,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
-    let collector = EventCollector::new(&bus);
+    let collector = Arc::new(EventCollector::new(&bus));
 
     let hls_config = HlsConfig::for_url(url)
         .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
@@ -1786,11 +1823,21 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     // Capping at `phase4_target` (≈ 11 s of audio) keeps us far short of the
     // true tail: any `Eof` before the cap is the premature/false EOS the
     // contract guards against, and is still recorded in `saw_eof`.
+    //
+    // The sample target alone does not bound this window either: the outgoing
+    // variant is warm after phase 1, so those samples come out in less
+    // wall-clock time than the incoming variant needs for a single fetch, and
+    // the phase can close before the switch has issued one request. It runs
+    // until the switch is seen as well.
     let phase4_target: u64 = 500_000;
-    let phase4 =
-        spawn_blocking(move || read_phase_until_samples(&mut audio, phase4_target, "phase 4"))
-            .await
-            .expect("phase 4 join");
+    let switch_seen = Arc::clone(&collector);
+    let phase4 = spawn_blocking(move || {
+        read_phase_until(&mut audio, phase4_target, "phase 4", || {
+            switch_seen.applied_targets().contains(&0)
+        })
+    })
+    .await
+    .expect("phase 4 join");
 
     let targets = collector.applied_targets();
     let audio_trace = collector.audio_trace();

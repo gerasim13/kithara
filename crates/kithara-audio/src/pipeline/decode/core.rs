@@ -11,15 +11,20 @@ use kithara_decode::{
 };
 use kithara_events::{DeferredBus, Event};
 use kithara_platform::sync::Arc;
-use kithara_stream::{MediaInfo, PlayheadWrite, SeekObserve, StreamType};
+use kithara_stream::{
+    ByteMap, MediaInfo, OpenedReader, PlayheadWrite, ReaderProfile, SeekObserve, StreamType,
+};
 use kithara_test_utils::kithara;
 use tracing::{debug, warn};
 
 use crate::{
     pipeline::{
-        decode::{drain::EofDrain, resume::ResumeCursor},
+        blend::PcmBlender,
+        decode::{
+            drain::EofDrain, generation::DecoderGeneration, resume::ResumeCursor,
+            transition::IncomingDecode,
+        },
         fetch::Fetch,
-        gapless::GaplessStage,
         rebuild::RecreateState,
         seek::{ResumeState, SeekEngine, emit::commit_outcome},
         stream::shared::SharedStream,
@@ -29,27 +34,60 @@ use crate::{
     traits::AudioEffect,
 };
 
-/// Decoder and its associated metadata, installed as an atomic unit.
-pub(crate) struct DecoderSession {
-    pub(crate) decoder: Box<dyn Decoder>,
-    pub(crate) media_info: Option<MediaInfo>,
-    pub(crate) base_offset: u64,
-    pub(crate) installed_at_seek_epoch: u64,
+type DecoderBuilder =
+    dyn Fn(OpenedReader, MediaInfo) -> Result<Box<dyn Decoder>, DecodeError> + Send + Sync;
+
+/// Decoder construction and reader-profile policy for one configured track.
+#[derive(Clone)]
+pub(crate) struct DecoderFactory {
+    builder: Arc<DecoderBuilder>,
+    configured_media_info: Option<MediaInfo>,
 }
 
-/// Factory closure that creates a new decoder from stream, media info, and base offset.
-///
-/// Production creates a Symphonia decoder via `OffsetReader`; tests may return
-/// a mock decoder without real I/O. Interrupted construction remains distinct
-/// from a hard decoder or codec error so recreation can wait for source bytes.
-pub(crate) type DecoderFactory<T> = Arc<
-    dyn Fn(SharedStream<T>, MediaInfo, u64) -> Result<Box<dyn Decoder>, DecodeError> + Send + Sync,
->;
+impl DecoderFactory {
+    pub(crate) fn new(
+        builder: impl Fn(OpenedReader, MediaInfo) -> Result<Box<dyn Decoder>, DecodeError>
+        + Send
+        + Sync
+        + 'static,
+        configured_media_info: Option<MediaInfo>,
+    ) -> Self {
+        Self {
+            builder: Arc::new(builder),
+            configured_media_info,
+        }
+    }
+
+    pub(crate) fn create(
+        &self,
+        reader: OpenedReader,
+        media_info: MediaInfo,
+    ) -> Result<Box<dyn Decoder>, DecodeError> {
+        (self.builder)(reader, media_info)
+    }
+
+    pub(crate) fn reader_profile(
+        &self,
+        media_info: &MediaInfo,
+        byte_map: Option<&dyn ByteMap>,
+    ) -> ReaderProfile {
+        let mut resolved = media_info.clone();
+        if let Some(configured) = &self.configured_media_info {
+            if configured.codec.is_some() {
+                resolved.codec = configured.codec;
+            }
+            if configured.container.is_some() {
+                resolved.container = configured.container;
+            }
+        }
+        kithara_decode::DecoderFactory::reader_profile(&resolved, byte_map)
+    }
+}
 
 /// Decoder construction state shared by initial installation and later rebuilds.
-pub(crate) struct DecodeInit<T: StreamType> {
+pub(crate) struct DecodeInit {
     pub(crate) decoder: Box<dyn Decoder>,
-    pub(crate) decoder_factory: DecoderFactory<T>,
+    pub(crate) decoder_factory: DecoderFactory,
     pub(crate) decoder_backend: kithara_decode::DecoderBackend,
     pub(crate) gapless_mode: GaplessMode,
     pub(crate) host_sample_rate: Arc<AtomicU32>,
@@ -58,9 +96,9 @@ pub(crate) struct DecodeInit<T: StreamType> {
     pub(crate) recreate_on_host_rate_change: bool,
 }
 
-pub(crate) struct DecodeParts<T: StreamType> {
-    pub(crate) core: DecodeCore,
-    pub(crate) factory: DecoderFactory<T>,
+pub(crate) struct DecodeParts {
+    pub(crate) active: ActiveDecode,
+    pub(crate) factory: DecoderFactory,
     pub(crate) host_sample_rate: Arc<AtomicU32>,
     pub(crate) recreate_on_host_rate_change: bool,
     pub(crate) decoder_host_sample_rate: u32,
@@ -68,15 +106,7 @@ pub(crate) struct DecodeParts<T: StreamType> {
     pub(crate) playback_resampler_backend: &'static str,
 }
 
-impl<T: StreamType> DecodeInit<T> {
-    pub(crate) fn build_gapless(&self) -> GaplessStage {
-        GaplessStage::build(
-            self.decoder.as_ref(),
-            self.gapless_mode,
-            self.media_info.as_ref(),
-        )
-    }
-
+impl DecodeInit {
     pub(crate) fn decoder_host_sample_rate(&self) -> u32 {
         self.host_sample_rate.load(Ordering::Acquire)
     }
@@ -85,8 +115,7 @@ impl<T: StreamType> DecodeInit<T> {
         self,
         effects: Vec<Box<dyn AudioEffect>>,
         installed_at_seek_epoch: u64,
-    ) -> DecodeParts<T> {
-        let gapless = self.build_gapless();
+    ) -> DecodeParts {
         let decoder_host_sample_rate = self.decoder_host_sample_rate();
         let Self {
             decoder,
@@ -98,18 +127,16 @@ impl<T: StreamType> DecodeInit<T> {
             playback_resampler_backend,
             recreate_on_host_rate_change,
         } = self;
+        let active = DecoderGeneration::new(
+            decoder,
+            media_info,
+            0,
+            installed_at_seek_epoch,
+            None,
+            gapless_mode,
+        );
         DecodeParts {
-            core: DecodeCore::new(
-                DecoderSession {
-                    decoder,
-                    base_offset: 0,
-                    media_info,
-                    installed_at_seek_epoch,
-                },
-                gapless_mode,
-                gapless,
-                effects,
-            ),
+            active: ActiveDecode::new(active, gapless_mode, effects),
             factory: decoder_factory,
             host_sample_rate,
             recreate_on_host_rate_change,
@@ -120,10 +147,11 @@ impl<T: StreamType> DecodeInit<T> {
     }
 }
 
-pub(crate) struct DecodeCore {
-    session: DecoderSession,
+pub(crate) struct ActiveDecode {
+    pub(super) active: DecoderGeneration,
+    pub(super) incoming: Option<IncomingDecode>,
     gapless_mode: GaplessMode,
-    gapless: GaplessStage,
+    pub(super) blender: PcmBlender,
     effects: Vec<Box<dyn AudioEffect>>,
     drain: EofDrain,
 }
@@ -147,25 +175,26 @@ pub(crate) enum DecodeAction {
     Failed(TrackFailure),
 }
 
-impl DecodeCore {
+impl ActiveDecode {
     fn new(
-        session: DecoderSession,
+        active: DecoderGeneration,
         gapless_mode: GaplessMode,
-        gapless: GaplessStage,
         effects: Vec<Box<dyn AudioEffect>>,
     ) -> Self {
         let drain = EofDrain::new(effects.len());
+        let blender = PcmBlender::new(active.blender_profile());
         Self {
-            session,
+            active,
+            incoming: None,
             gapless_mode,
-            gapless,
+            blender,
             effects,
             drain,
         }
     }
 
-    pub(crate) fn session(&self) -> &DecoderSession {
-        &self.session
+    pub(crate) fn active(&self) -> &DecoderGeneration {
+        &self.active
     }
 
     pub(crate) fn gapless_mode(&self) -> GaplessMode {
@@ -178,17 +207,15 @@ impl DecodeCore {
     }
 
     pub(crate) fn notify_seek(&mut self) {
-        self.gapless.notify_seek();
+        self.active.notify_seek();
     }
 
     pub(crate) fn set_tail_compensation(&mut self) {
-        self.gapless
-            .set_tail_compensation(self.session.decoder.track_info().gapless_tail);
-        self.gapless.flush();
+        self.active.finish();
     }
 
     pub(crate) fn push(&mut self, chunk: PcmChunk) {
-        self.gapless.push(chunk);
+        self.active.push(chunk);
     }
 
     pub(crate) fn track(
@@ -200,8 +227,9 @@ impl DecodeCore {
         self.drain.track(chunk, playhead, emit);
     }
 
-    pub(crate) fn next_gapless(&mut self) -> Option<PcmChunk> {
-        while let Some(chunk) = self.gapless.next() {
+    pub(crate) fn next_output(&mut self) -> Option<PcmChunk> {
+        while let Some(chunk) = self.active.next() {
+            let chunk = self.blender.process_active(chunk);
             if let Some(output) = apply_effects(&mut self.effects, chunk) {
                 return Some(output);
             }
@@ -219,15 +247,7 @@ impl DecodeCore {
 
     #[kithara::rtsan_allow_blocking]
     pub(crate) fn next_chunk(&mut self, stream_position: u64) -> DecodeResult<DecoderChunkOutcome> {
-        let outcome = match catch_unwind(AssertUnwindSafe(|| self.session.decoder.next_chunk())) {
-            Ok(result) => result,
-            Err(payload) => {
-                warn!(panic = %panic_message(payload), "decoder panicked during next_chunk");
-                Err(DecodeError::InvalidData {
-                    detail: "decoder panicked during next_chunk",
-                })
-            }
-        };
+        let outcome = self.active.next_chunk();
         let (chunks, samples) = self.stats();
         match &outcome {
             Ok(DecoderChunkOutcome::Eof) => {
@@ -254,7 +274,9 @@ impl DecodeCore {
         position: kithara_platform::time::Duration,
     ) -> DecodeResult<DecoderSeekOutcome> {
         let before = stream.position();
-        let outcome = match catch_unwind(AssertUnwindSafe(|| self.session.decoder.seek(position))) {
+        let outcome = match catch_unwind(AssertUnwindSafe(|| {
+            self.active.decoder_mut().seek(position)
+        })) {
             Ok(result) => result,
             Err(payload) => {
                 warn!(panic = %panic_message(payload), "decoder panicked during seek");
@@ -264,7 +286,7 @@ impl DecodeCore {
             }
         };
         if let Ok(ref outcome) = outcome {
-            commit_outcome(&self.session, stream, playhead, outcome);
+            commit_outcome(&self.active, stream, playhead, outcome);
         }
         debug!(
             ?position,
@@ -277,28 +299,17 @@ impl DecodeCore {
     }
 
     pub(crate) fn update_len(&self, len: u64) {
-        self.session.decoder.update_byte_len(len);
+        self.active.decoder().update_byte_len(len);
     }
 
-    pub(crate) fn install(
-        &mut self,
-        decoder: Box<dyn Decoder>,
-        media_info: MediaInfo,
-        offset: u64,
-        seek_epoch: u64,
-    ) -> Box<dyn Decoder> {
-        let session = DecoderSession {
-            decoder,
-            media_info: Some(media_info),
-            base_offset: offset,
-            installed_at_seek_epoch: seek_epoch,
-        };
-        let old = mem::replace(&mut self.session, session);
-        old.decoder
+    pub(crate) fn replace_active(&mut self, active: DecoderGeneration) -> DecoderGeneration {
+        self.blender.replace_active(active.blender_profile());
+        mem::replace(&mut self.active, active)
     }
 
     pub(crate) fn flush_reader_signals(&mut self) {
-        self.session.decoder.flush_reader_signals();
+        self.active.decoder_mut().flush_reader_signals();
+        self.flush_incoming_reader_signals();
     }
 }
 
@@ -309,5 +320,30 @@ fn panic_message(payload: Box<dyn Any + Send>) -> String {
             |_| "unknown panic payload".to_string(),
             |message| (*message).to_string(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_stream::{AudioCodec, ContainerFormat, ReaderInput};
+
+    use super::*;
+
+    #[kithara::test]
+    fn configured_container_selects_the_incoming_reader_profile() {
+        let factory = DecoderFactory::new(
+            |_reader, _media_info| -> Result<Box<dyn Decoder>, DecodeError> {
+                panic!("reader-profile test must not construct a decoder")
+            },
+            Some(MediaInfo::new(
+                Some(AudioCodec::Pcm),
+                Some(ContainerFormat::Wav),
+            )),
+        );
+        let playlist_info = MediaInfo::new(None, Some(ContainerFormat::Fmp4));
+
+        let profile = factory.reader_profile(&playlist_info, None);
+
+        assert_eq!(profile.input(), ReaderInput::InitOnly);
     }
 }

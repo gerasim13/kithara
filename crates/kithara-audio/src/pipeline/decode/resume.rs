@@ -1,11 +1,11 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use kithara_decode::{DecoderSeekOutcome, PcmChunk, duration_for_frames};
+use kithara_decode::{PcmChunk, duration_for_frames};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::StreamType;
 
 use crate::pipeline::{
-    decode::DecoderSession,
+    decode::DecoderGeneration,
     rebuild::{RecreateCause, RecreateNext, RecreateState},
     seek::{SeekContext, SeekEngine, SeekRequest, anchor},
     stream::shared::SharedStream,
@@ -22,15 +22,8 @@ pub(crate) struct RouteCtx<'a, T: StreamType> {
     pub(crate) committed: Duration,
     pub(crate) seek: &'a SeekEngine,
     pub(crate) seek_active: bool,
-    pub(crate) session: &'a DecoderSession,
+    pub(crate) active: &'a DecoderGeneration,
     pub(crate) stream: &'a SharedStream<T>,
-}
-
-pub(crate) fn seek_position(outcome: DecoderSeekOutcome) -> Duration {
-    match outcome {
-        DecoderSeekOutcome::Landed { landed_at, .. } => landed_at,
-        DecoderSeekOutcome::PastEof { duration } => duration,
-    }
 }
 
 impl ResumeCursor {
@@ -58,6 +51,12 @@ impl ResumeCursor {
         ));
     }
 
+    pub(crate) fn decode_head(&self, epoch: u64) -> Option<(u64, u32)> {
+        self.decode_head
+            .filter(|&(head_epoch, _, _)| head_epoch == epoch)
+            .map(|(_, frame, rate)| (frame, rate))
+    }
+
     pub(crate) fn resume_position(
         &self,
         epoch: u64,
@@ -65,9 +64,8 @@ impl ResumeCursor {
         resume_target: Option<(u64, Duration)>,
     ) -> Duration {
         let head = self
-            .decode_head
-            .filter(|&(head_epoch, _, _)| head_epoch == epoch)
-            .map(|(_, frame, rate)| duration_for_frames(rate, frame))
+            .decode_head(epoch)
+            .map(|(frame, rate)| duration_for_frames(rate, frame))
             .filter(|&position| position > committed)
             .unwrap_or(committed);
         match resume_target {
@@ -100,7 +98,7 @@ impl ResumeCursor {
         if host_rate == 0 {
             return None;
         }
-        if self.decoder_rate == 0 && ctx.session.decoder.spec().sample_rate.get() == host_rate {
+        if self.decoder_rate == 0 && ctx.active.decoder().spec().sample_rate.get() == host_rate {
             self.decoder_rate = host_rate;
             return None;
         }
@@ -108,15 +106,19 @@ impl ResumeCursor {
             return None;
         }
         let media_info = ctx
-            .session
-            .media_info
-            .clone()
+            .active
+            .media_info()
+            .cloned()
             .or_else(|| ctx.stream.media_info())?;
+        // A route change keeps the container, so the rebuilt demuxer must start
+        // where the container starts — not at the byte the resume time maps to.
+        // Seeking the anchor by time lands past the init and the demuxer never
+        // sees its own header.
         let offset = anchor::recreate_offset(
             ctx.stream,
             media_info.container,
             false,
-            ctx.session.base_offset,
+            ctx.active.base_offset(),
         )?;
         let epoch = ctx.seek.epoch();
         let target = self.resume_position(epoch, ctx.committed, None);

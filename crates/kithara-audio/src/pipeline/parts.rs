@@ -1,11 +1,13 @@
 use std::sync::atomic::AtomicU64;
 
 use kithara_platform::sync::Arc;
-use kithara_stream::{Activity, PlayheadWrite, SeekControl, SeekObserve, StreamType};
+use kithara_stream::{
+    Activity, PlayheadWrite, SeekControl, SeekObserve, StreamType, VariantControl,
+};
 
 use crate::pipeline::{
     decode::{
-        core::{DecodeCore, DecodeParts},
+        core::{ActiveDecode, DecodeParts},
         gate::ReadinessGate,
         resume::ResumeCursor,
     },
@@ -16,7 +18,7 @@ use crate::pipeline::{
 
 pub(crate) struct SourceParts<T: StreamType> {
     pub(crate) activity: Arc<dyn Activity>,
-    pub(crate) decode: DecodeCore,
+    pub(crate) decode: ActiveDecode,
     pub(crate) decoder_backend: kithara_decode::DecoderBackend,
     pub(crate) playhead: Arc<dyn PlayheadWrite>,
     pub(crate) playback_resampler_backend: &'static str,
@@ -26,17 +28,19 @@ pub(crate) struct SourceParts<T: StreamType> {
     pub(crate) seek: Arc<dyn SeekControl>,
     pub(crate) seek_engine: SeekEngine,
     pub(crate) seek_obs: Arc<dyn SeekObserve>,
+    pub(crate) variant_control: Option<Arc<dyn VariantControl>>,
 }
 
 impl<T: StreamType> SourceParts<T> {
     pub(crate) fn new(
         stream: &SharedStream<T>,
-        decode: DecodeParts<T>,
+        decode: DecodeParts,
         epoch: Arc<AtomicU64>,
         rebuild: RebuildRuntime,
+        variant_control: Option<Arc<dyn VariantControl>>,
     ) -> Self {
         let DecodeParts {
-            core,
+            active,
             factory,
             host_sample_rate,
             recreate_on_host_rate_change,
@@ -44,14 +48,15 @@ impl<T: StreamType> SourceParts<T> {
             decoder_backend,
             playback_resampler_backend,
         } = decode;
+        let gapless_mode = active.gapless_mode();
         Self {
             activity: stream.activity(),
-            decode: core,
+            decode: active,
             decoder_backend,
             playhead: stream.playhead_write(),
             playback_resampler_backend,
             readiness: ReadinessGate::new(stream.peer_wake()),
-            rebuild: RebuildPort::new(factory, rebuild),
+            rebuild: RebuildPort::new(factory, gapless_mode, rebuild),
             resume: ResumeCursor::new(
                 host_sample_rate,
                 recreate_on_host_rate_change,
@@ -60,6 +65,7 @@ impl<T: StreamType> SourceParts<T> {
             seek: stream.seek_control(),
             seek_engine: SeekEngine::new(epoch),
             seek_obs: stream.seek_observe(),
+            variant_control,
         }
     }
 }

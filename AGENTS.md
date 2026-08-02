@@ -36,6 +36,9 @@ Use it for repo-wide coding conventions, path routing, and stable coordination s
 - Keep code readable and easy to understand.
 - Optimize for performance in hot paths.
 - Use repo harnesses for acceptance and formatting: `just test` and `just fmt`. Raw `cargo test`, `cargo nextest`, or direct formatter commands are scoped probes only, not final validation claims.
+- Do not preserve backward compatibility.
+- Choose the simplest implementation that fully meets the current requirements.
+- Prefer established, well-maintained libraries over custom implementations.
 
 ## Command Routing
 

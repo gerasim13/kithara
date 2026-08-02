@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-#[path = "state/cancel.rs"]
-mod cancel_epoch;
 #[path = "flow/cas_anchor.rs"]
 mod cas_anchor;
 mod core;
@@ -27,10 +25,14 @@ mod media;
 mod offsets;
 #[path = "flow/probe.rs"]
 mod probe;
+#[path = "profile.rs"]
+mod profile;
 #[path = "flow/queue.rs"]
 mod queue;
 #[path = "io/read.rs"]
 mod read;
+#[path = "io/read_data.rs"]
+mod read_data;
 #[path = "state/reader.rs"]
 mod reader_runtime;
 #[path = "flow/seek.rs"]
@@ -42,9 +44,13 @@ mod size;
 
 #[cfg(test)]
 pub(crate) use self::core::VariantParts;
-pub(crate) use self::core::{HlsVariant, PlanCtx, SegmentActivateParams, VariantParams};
 #[cfg(test)]
 pub(in crate::variant) use self::{core::segment_placeholder_size, probe::SizeDemand};
+pub(crate) use self::{
+    core::{HlsVariant, PlanCtx, VariantParams},
+    profile::VariantReaderPreparation,
+    seek::ResolvedSeekProjection,
+};
 
 #[cfg(test)]
 mod tests;

@@ -1,6 +1,6 @@
 use std::{
     io::{Read, Seek},
-    num::NonZeroU32,
+    num::{NonZeroU32, NonZeroU64},
     sync::atomic::AtomicU64,
 };
 
@@ -9,7 +9,8 @@ use kithara_bufpool::{BytePool, PcmPool};
 use kithara_platform::sync::Arc;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
 use kithara_stream::{
-    AudioCodec, BoxedEventSink, ByteMap, ContainerFormat, MediaInfo, needs_exact_byte_sizes,
+    AudioCodec, BoxedEventSink, ByteMap, ContainerFormat, MediaInfo, ReaderInput, ReaderProfile,
+    ReaderWarmup, needs_exact_byte_sizes,
 };
 
 use super::probe::{
@@ -19,10 +20,15 @@ use super::probe::{
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 use crate::GaplessInfo;
 use crate::{
-    Decoder, InputRequirement,
+    Decoder,
     error::{DecodeError, DecodeResult},
     mp4::sniff_mp4_codec,
     traits::BoxedSource,
+};
+
+const READER_READ_AHEAD_BYTES: NonZeroU64 = match NonZeroU64::new(32 * 1_024) {
+    Some(bytes) => bytes,
+    None => unreachable!(),
 };
 
 /// Explicit backend selection for [`DecoderFactory`].
@@ -320,16 +326,11 @@ impl DecoderFactory {
         }
     }
 
-    /// Input contract of the demuxer this factory would build for `media_info`,
-    /// for the kithara-audio readiness gate. Mirrors [`should_use_segment_aware`]:
-    /// only the segment-aware fMP4 path is `InitOnly`. See the crate `CONTEXT.md`
-    /// "Decoder input contract".
+    /// Reader contract of the demuxer this factory would build for
+    /// `media_info`, for the kithara-audio readiness gate.
     #[must_use]
-    pub fn input_requirement(
-        media_info: &MediaInfo,
-        byte_map: Option<&dyn ByteMap>,
-    ) -> InputRequirement {
-        match byte_map {
+    pub fn reader_profile(media_info: &MediaInfo, byte_map: Option<&dyn ByteMap>) -> ReaderProfile {
+        let input = match byte_map {
             Some(_)
                 if media_info
                     .codec
@@ -337,8 +338,12 @@ impl DecoderFactory {
             {
                 <crate::fmp4::Fmp4SegmentDemuxer as crate::demuxer::Demuxer>::required_input()
             }
-            _ => InputRequirement::Incremental,
-        }
+            _ if matches!(media_info.container, Some(ContainerFormat::Wav)) => {
+                ReaderInput::InitOnly
+            }
+            _ => ReaderInput::Incremental,
+        };
+        ReaderProfile::new(input, ReaderWarmup::None, READER_READ_AHEAD_BYTES)
     }
 }
 
@@ -836,7 +841,7 @@ fn should_use_segment_aware(
 }
 
 /// Codec+container half of the segment-aware fMP4 decision, factored out of
-/// [`should_use_segment_aware`] so [`DecoderFactory::input_requirement`] can
+/// [`should_use_segment_aware`] so [`DecoderFactory::reader_profile`] can
 /// ask the same question without a [`DecoderConfig`]. AAC / FLAC in fMP4 is
 /// the only segment-aware path; everything else reads incrementally.
 fn segment_aware_container(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
@@ -914,6 +919,24 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wav_reader_profile_requires_gated_input() {
+        let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+
+        let profile = DecoderFactory::reader_profile(&media_info, None);
+
+        assert_eq!(profile.input(), ReaderInput::InitOnly);
+    }
+
+    #[test]
+    fn self_framing_reader_profile_remains_incremental() {
+        let media_info = MediaInfo::new(Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio));
+
+        let profile = DecoderFactory::reader_profile(&media_info, None);
+
+        assert_eq!(profile.input(), ReaderInput::Incremental);
+    }
 
     #[test]
     fn decoder_resampler_config_keeps_typed_backend() {

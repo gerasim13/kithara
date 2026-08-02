@@ -2,6 +2,7 @@
 #[path = "../common/offline_player_harness.rs"]
 mod offline_player_harness;
 
+mod cochlea_continuity_oracle;
 mod engine_tests;
 mod gapless_offline_e2e;
 mod gapless_startup_regressions;
@@ -16,6 +17,7 @@ mod player_processor_internal;
 mod player_queue_api_regressions;
 mod player_resource_internal;
 mod player_track_internal;
+mod quality_switch_continuity;
 mod red_crossfade_hls_to_mp3_blocks_render;
 mod resource_internal;
 mod resource_regressions;

@@ -4,53 +4,75 @@ use std::{
 };
 
 use crossbeam_queue::ArrayQueue;
+use kithara_decode::{DecoderSeekOutcome, GaplessMode};
 use kithara_platform::{
     sync::Arc,
+    time::Duration,
     tokio::{runtime::Handle as RuntimeHandle, task::spawn_blocking_on},
 };
-use kithara_stream::{MediaInfo, StreamType, WorkerWake};
+use kithara_stream::{
+    ByteMap, MediaInfo, OpenedReader, OpenedVariantReader, ReaderProfile, StreamType,
+    VariantTransition, WorkerWake,
+};
 use tracing::warn;
 
 use crate::pipeline::{
-    decode::core::DecoderFactory,
+    decode::{core::DecoderFactory, generation::DecoderGeneration},
     rebuild::{
         policy::classify,
         state::{
-            DecoderRebuildComplete, RebuildState, RecreateCause, RecreateNext, RecreateOutcome,
-            RecreateState,
+            BuildId, DecoderBuildComplete, DecoderBuildPurpose, RebuildState, RecreateCause,
+            RecreateNext, RecreateOutcome, RecreateState,
         },
     },
+    seek::{ResumeState, SeekContext},
     stream::shared::SharedStream,
 };
 
-struct JobDeps<T: StreamType> {
-    completion: Arc<ArrayQueue<DecoderRebuildComplete>>,
-    factory: DecoderFactory<T>,
+struct JobDeps {
+    incoming_completion: Arc<ArrayQueue<DecoderBuildComplete>>,
+    factory: DecoderFactory,
+    gapless_mode: GaplessMode,
+    replacement_completion: Arc<ArrayQueue<DecoderBuildComplete>>,
     wake: Arc<dyn WorkerWake>,
 }
 
-impl<T: StreamType> Clone for JobDeps<T> {
+impl Clone for JobDeps {
     fn clone(&self) -> Self {
         Self {
-            completion: self.completion.clone(),
+            incoming_completion: self.incoming_completion.clone(),
             factory: self.factory.clone(),
+            gapless_mode: self.gapless_mode,
+            replacement_completion: self.replacement_completion.clone(),
             wake: self.wake.clone(),
         }
     }
 }
 
+enum PendingInput<T: StreamType> {
+    Opened(OpenedReader),
+    Shared {
+        stream: SharedStream<T>,
+        offset: u64,
+    },
+}
+
 struct PendingJob<T: StreamType> {
-    deps: JobDeps<T>,
-    stream: SharedStream<T>,
+    build: BuildId,
+    deps: JobDeps,
+    input: PendingInput<T>,
+    landing: Option<Duration>,
     media_info: MediaInfo,
     offset: u64,
-    ticket: u64,
+    purpose: DecoderBuildPurpose,
+    seek_epoch: u64,
 }
 
 pub(crate) struct RebuildPort<T: StreamType> {
-    deps: JobDeps<T>,
-    next_ticket: u64,
+    deps: JobDeps,
+    next_build: u64,
     pending: Option<PendingJob<T>>,
+    ready_replacement: Option<DecoderBuildComplete>,
     runtime: RuntimeHandle,
 }
 
@@ -60,15 +82,24 @@ pub(crate) struct RebuildRuntime {
 }
 
 impl<T: StreamType> RebuildPort<T> {
-    pub(crate) fn new(factory: DecoderFactory<T>, runtime: RebuildRuntime) -> Self {
+    const COMPLETION_CAPACITY: usize = 4;
+
+    pub(crate) fn new(
+        factory: DecoderFactory,
+        gapless_mode: GaplessMode,
+        runtime: RebuildRuntime,
+    ) -> Self {
         Self {
             deps: JobDeps {
-                completion: Arc::new(ArrayQueue::new(2)),
+                incoming_completion: Arc::new(ArrayQueue::new(Self::COMPLETION_CAPACITY)),
                 factory,
+                gapless_mode,
+                replacement_completion: Arc::new(ArrayQueue::new(Self::COMPLETION_CAPACITY)),
                 wake: runtime.wake,
             },
-            next_ticket: 1,
+            next_build: 1,
             pending: None,
+            ready_replacement: None,
             runtime: runtime.handle,
         }
     }
@@ -79,13 +110,9 @@ impl<T: StreamType> RebuildPort<T> {
         recreate: RecreateState,
         started_seek_epoch: u64,
     ) -> Result<RebuildState, (RecreateState, RecreateOutcome)> {
-        // Open the read gate so the rebuild's own construction reads are not
-        // short-circuited by the switch they exist to resolve. The switch
-        // itself stays outstanding until the rebuilt decoder is installed —
-        // this call must never ack it, or a rebuild that comes back
-        // interrupted leaves the session on the old variant with the signal
-        // already consumed.
-        stream.open_variant_read_gate();
+        if self.pending.is_some() {
+            return Err((recreate, RecreateOutcome::SoftFailed));
+        }
         if recreate.cause == RecreateCause::FormatBoundary
             && matches!(recreate.next, RecreateNext::Decode)
         {
@@ -96,26 +123,91 @@ impl<T: StreamType> RebuildPort<T> {
         } else if stream.probe_seek(SeekFrom::Start(recreate.offset)).is_err() {
             return Err((recreate, RecreateOutcome::SoftFailed));
         }
-        let ticket = self.next_ticket;
-        self.next_ticket = self.next_ticket.wrapping_add(1);
+        let build = self.next_build();
         self.pending = Some(PendingJob {
+            build,
             deps: self.deps.clone(),
-            stream: stream.clone(),
+            input: PendingInput::Shared {
+                stream: stream.clone(),
+                offset: recreate.offset,
+            },
+            landing: None,
             media_info: recreate.media_info.clone(),
             offset: recreate.offset,
-            ticket,
+            purpose: DecoderBuildPurpose::Replacement,
+            seek_epoch: started_seek_epoch,
         });
         Ok(RebuildState {
-            completion: self.completion(),
+            build,
             superseded_seek: None,
             recreate,
             started_seek_epoch,
-            ticket,
         })
     }
 
-    pub(crate) fn completion(&self) -> Arc<ArrayQueue<DecoderRebuildComplete>> {
-        self.deps.completion.clone()
+    pub(crate) fn prepare_incoming(
+        &mut self,
+        opened: OpenedVariantReader,
+    ) -> Option<(VariantTransition, BuildId)> {
+        if self.pending.is_some() {
+            return None;
+        }
+        let transition = opened.transition();
+        let landing = opened.landing_time();
+        let media_info = opened.media_info().clone();
+        let seek_epoch = transition.id().seek_epoch();
+        let (_plan, reader) = opened.split();
+        let build = self.next_build();
+        self.pending = Some(PendingJob {
+            build,
+            deps: self.deps.clone(),
+            input: PendingInput::Opened(reader),
+            landing: Some(landing),
+            media_info,
+            offset: 0,
+            purpose: DecoderBuildPurpose::Incoming(transition),
+            seek_epoch,
+        });
+        Some((transition, build))
+    }
+
+    pub(crate) const fn can_prepare(&self) -> bool {
+        self.pending.is_none()
+    }
+
+    pub(crate) fn reader_profile(
+        &self,
+        media_info: &MediaInfo,
+        byte_map: Option<&dyn ByteMap>,
+    ) -> ReaderProfile {
+        self.deps.factory.reader_profile(media_info, byte_map)
+    }
+
+    pub(crate) fn pop_incoming_completion(&self) -> Option<DecoderBuildComplete> {
+        self.deps.incoming_completion.pop()
+    }
+
+    pub(crate) fn pop_replacement_completion(&self) -> Option<DecoderBuildComplete> {
+        self.deps.replacement_completion.pop()
+    }
+
+    pub(crate) fn cache_replacement(
+        &mut self,
+        complete: DecoderBuildComplete,
+    ) -> Option<DecoderBuildComplete> {
+        self.ready_replacement.replace(complete)
+    }
+
+    pub(crate) fn take_replacement(&mut self, build: BuildId) -> Option<DecoderBuildComplete> {
+        if self
+            .ready_replacement
+            .as_ref()
+            .is_some_and(|complete| complete.build == build)
+        {
+            self.ready_replacement.take()
+        } else {
+            None
+        }
     }
 
     pub(crate) fn submit(&mut self) {
@@ -123,6 +215,21 @@ impl<T: StreamType> RebuildPort<T> {
             return;
         };
         drop(spawn_blocking_on(&self.runtime, move || run(job)));
+    }
+
+    pub(crate) fn wake(&self) {
+        self.deps.wake.wake();
+    }
+
+    fn next_build(&mut self) -> BuildId {
+        let build = BuildId::new(self.next_build);
+        self.next_build = self.next_build.wrapping_add(1);
+        build
+    }
+
+    #[cfg(test)]
+    pub(crate) fn completion(&self) -> Arc<ArrayQueue<DecoderBuildComplete>> {
+        self.deps.replacement_completion.clone()
     }
 
     #[cfg(test)]
@@ -140,19 +247,60 @@ impl<T: StreamType> RebuildPort<T> {
 
 fn run<T: StreamType>(job: PendingJob<T>) {
     let PendingJob {
+        build,
         deps,
-        stream,
+        input,
+        landing,
         media_info,
         offset,
-        ticket,
+        purpose,
+        seek_epoch,
     } = job;
-    let result = match catch_unwind(AssertUnwindSafe(|| {
-        (deps.factory)(stream, media_info, offset)
-    })) {
+    let reader = match input {
+        PendingInput::Opened(reader) => reader,
+        PendingInput::Shared { stream, offset } => stream.open_rebuild_reader(offset),
+    };
+    let construction_gate = reader.construction_gate();
+    if let Some(gate) = &construction_gate {
+        gate.arm();
+    }
+    let built = catch_unwind(AssertUnwindSafe(|| {
+        let mut decoder = deps.factory.create(reader, media_info.clone())?;
+        let pending_head_skip = match landing {
+            Some(landing) => match decoder.seek(landing)? {
+                DecoderSeekOutcome::Landed { .. } => Some(ResumeState {
+                    trim_head: true,
+                    seek: SeekContext {
+                        target: landing,
+                        epoch: seek_epoch,
+                    },
+                    ..Default::default()
+                }),
+                DecoderSeekOutcome::PastEof { .. } => None,
+            },
+            None => None,
+        };
+        let mut generation = DecoderGeneration::new(
+            decoder,
+            Some(media_info),
+            offset,
+            seek_epoch,
+            pending_head_skip,
+            deps.gapless_mode,
+        );
+        if landing.is_some_and(|landing| !landing.is_zero()) {
+            generation.notify_seek();
+        }
+        Ok(generation)
+    }));
+    if let Some(gate) = &construction_gate {
+        gate.disarm();
+    }
+    let result = match built {
         Ok(result) => result.map_err(|error| classify(&error)),
         Err(payload) => {
             warn!(
-                ticket,
+                build = build.get(),
                 offset,
                 panic = %panic_message(payload),
                 "decoder factory panicked during rebuild; failing track"
@@ -160,11 +308,22 @@ fn run<T: StreamType>(job: PendingJob<T>) {
             Err(RecreateOutcome::SoftFailed)
         }
     };
-    let complete = DecoderRebuildComplete { result, ticket };
-    if let Err(complete) = deps.completion.push(complete) {
-        let _ = deps.completion.pop();
-        if deps.completion.push(complete).is_err() {
-            warn!(ticket, "decoder rebuild completion queue overflowed");
+    let complete = DecoderBuildComplete {
+        build,
+        purpose,
+        result,
+    };
+    let completion = match purpose {
+        DecoderBuildPurpose::Replacement => &deps.replacement_completion,
+        DecoderBuildPurpose::Incoming(_) => &deps.incoming_completion,
+    };
+    if let Err(complete) = completion.push(complete) {
+        let _ = completion.pop();
+        if completion.push(complete).is_err() {
+            warn!(
+                build = build.get(),
+                "decoder build completion queue overflowed"
+            );
         }
     }
     deps.wake.wake();

@@ -24,7 +24,6 @@ apple = [
     "dep:core-foundation",
     "dep:core-foundation-sys",
     "dep:kithara-apple",
-    "dep:symphonia-core",
     "kithara-apple/audio-toolbox",
 ]
 # Select Apple codec-embedded resampling as the default decoder placement.
@@ -39,7 +38,7 @@ symphonia = ["dep:symphonia"]
 # v1/v2). Off by default — opt in per-target if needed.
 fdk-aac = ["symphonia", "dep:symphonia-core", "dep:fdk-aac"]
 probe = []
-mock = []
+mock = ["dep:unimock"]
 resample-glide = ["kithara-resampler/resample-glide"]
 resample-rubato = ["kithara-resampler/resample-rubato"]
 # HTTP backend forwarding (kithara-net reached via kithara-stream).
@@ -69,7 +68,7 @@ symphonia = { workspace = true, optional = true }
 symphonia-core = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-unimock = { workspace = true }
+unimock = { workspace = true, optional = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
@@ -97,6 +96,7 @@ ndk-context = { workspace = true }
 [dev-dependencies]
 kithara-storage = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

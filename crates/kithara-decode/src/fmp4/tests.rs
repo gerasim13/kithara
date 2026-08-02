@@ -9,12 +9,12 @@ use std::{
 
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_stream::ByteMap;
+use kithara_stream::{AudioCodec, ByteMap};
 use kithara_test_utils::kithara;
 
 use super::test_layout::{FakeSegmented, TestLayoutCodec, build_test_layout, read_fixture};
 use crate::{
-    codec::{CodecPriming, FrameCodec},
+    codec::{CodecPriming, FrameCodec, access_unit_frames},
     composed::{ComposedDecoder, DecoderRuntime},
     demuxer::{Demuxer, TrackInfo},
     fmp4::{
@@ -368,5 +368,38 @@ fn symphonia_aac_warm_decode_does_not_grow_pool_alloc_misses() {
         pool.stats().alloc_misses,
         warm_misses,
         "warm AAC decode must not allocate fresh pool buffers per packet"
+    );
+}
+
+/// A decoder instance strips its own algorithmic delay from the head of the
+/// PCM it emits. The observed strip is the difference between packet frames
+/// supplied and PCM frames emitted, and is not any declared constant: the
+/// fdk-aac adapter drops `stream_info.outputDelay`, 1685 frames on this fixture,
+/// while `timestamp_bias_frames` models one access unit, 1024.
+///
+/// The 661-frame remainder decides where an exact variant splice cuts. A decode
+/// that started at the head sees it as a container timeline gap the moment the
+/// next packet's timestamp runs past what the decoder has emitted; a decode
+/// that started mid-stream records no such jump, because `seek` resyncs the
+/// frame offset onto the packet timestamp instead. Observing the strip in
+/// `ComposedDecoder` is what lets its live timeline-gap query hand both the
+/// same figure.
+#[kithara::test]
+fn aac_head_strip_exceeds_the_bias_the_timeline_models() {
+    let pool = PcmPool::default();
+    let (mut codec, seg, ranges) = aac_codec_and_frames();
+    let supplied = ranges.len() as u64 * u64::from(access_unit_frames(AudioCodec::AacLc));
+    let pcm = decode_all_aac(&mut codec, &seg, &ranges, &pool);
+
+    let channels = u64::from(codec.spec().channels.max(1));
+    let emitted = pcm.len() as u64 / channels;
+    let head_strip = supplied.saturating_sub(emitted);
+
+    assert!(
+        head_strip > codec.timestamp_bias_frames(),
+        "the declared bias is expected to fall short of the real strip on this \
+         fixture — that shortfall is the whole point of reporting the observed \
+         one: strip={head_strip}, bias={}",
+        codec.timestamp_bias_frames()
     );
 }

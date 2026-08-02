@@ -22,7 +22,7 @@ where
     B: ResamplerBackend,
 {
     pub(crate) fn finish_beat(self, detector: Option<&mut beat::Detector>) -> Option<BeatGrid> {
-        self.beat.finish(detector)
+        beat::Slot::finish(self.beat, detector)
     }
 
     pub(crate) fn finish_waveform(&mut self) -> Option<Waveform> {
@@ -30,7 +30,7 @@ where
     }
 
     pub(crate) fn has_beat(&self) -> bool {
-        !self.beat.is_empty()
+        !beat::Slot::is_empty(&self.beat)
     }
 
     pub(crate) fn push(&mut self, chunk: &PcmChunk, detector: Option<&mut beat::Detector>) {
@@ -38,7 +38,7 @@ where
         self.source_frames = self.source_frames.saturating_add(frames);
 
         waveform::push(&mut self.waveform, chunk);
-        self.beat.push(chunk, detector);
+        beat::Slot::push(&mut self.beat, chunk, detector);
     }
 
     pub(crate) fn source_frames(&self) -> u64 {

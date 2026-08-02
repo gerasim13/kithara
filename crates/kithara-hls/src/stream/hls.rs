@@ -143,7 +143,6 @@ impl StreamType for Hls {
             bus: bus.clone(),
             look_ahead_bytes,
             look_ahead_segments,
-            master_cancel: cancel.clone(),
             scope: stream_peer.scope(),
             headers: config.headers.clone(),
             prefetch_budget: config.download_batch_size.max(1),
@@ -183,8 +182,8 @@ impl StreamType for Hls {
             playhead,
             seek,
             stream_peer.peer_handle().abr().clone(),
+            hls_peer.abr_publisher(),
             Arc::clone(&variants),
-            Arc::clone(&playlist_state),
         ));
 
         let mut source = HlsSource::new(Arc::clone(&coord), emit, stream_scope);

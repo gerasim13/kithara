@@ -8,14 +8,12 @@ use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_platform::{
-    CancelToken,
     sync::{Arc, Mutex},
     time::Duration,
 };
 use kithara_stream::{AudioCodec, ContainerFormat, SeekObserve};
 
 use super::{
-    cancel_epoch::CancelEpoch,
     cas_anchor::CasAnchorCell,
     offsets::Layout,
     probe::SizeDemandState,
@@ -35,7 +33,6 @@ pub(super) const INIT_PLACEHOLDER_BYTES: u64 = 16 * 1024;
 pub(crate) struct PlanCtx {
     pub(crate) bus: EventBus,
     pub(crate) scope: kithara_assets::AssetScope,
-    pub(crate) master_cancel: CancelToken,
     /// Per-resource HTTP headers applied to every init/segment fetch.
     /// Mirrors `HlsConfig::headers`; threaded through so DRM-style auth
     /// tokens carried by the playlist load also reach segment GETs.
@@ -44,7 +41,7 @@ pub(crate) struct PlanCtx {
     /// `dispatch` pauses emitting `FetchCmd`s. Mirrors
     /// `HlsConfig::look_ahead_bytes`:
     /// - `Some(n)` — when a segment's start offset exceeds
-    ///   `variant.position() + n`, leave it (and everything after)
+    ///   `session.position() + n`, leave it (and everything after)
     ///   in the queue; further prefetch waits for the reader to
     ///   advance.
     /// - `None` — no cap (download as fast as possible).
@@ -74,16 +71,6 @@ pub(crate) struct PlanCtx {
     /// the scheduler issued *after* observing the new epoch.
     pub(crate) seek_epoch: u64,
     pub(crate) prefetch_budget: usize,
-}
-
-/// Inputs to [`HlsVariant::activate_at_segment_with_shift`]: pin `from_seg`
-/// at `seg_boundary` in virtual byte space and move the reader to
-/// `reader_pos`.
-#[derive(Clone, Copy)]
-pub(crate) struct SegmentActivateParams {
-    pub(crate) from_seg: u32,
-    pub(crate) reader_pos: u64,
-    pub(crate) seg_boundary: u64,
 }
 
 pub(crate) struct HlsVariant {
@@ -123,17 +110,8 @@ pub(super) struct VariantFlow {
     /// reaching it is what re-opens the decision — see
     /// [`HlsVariant::take_prefetch_resume`].
     pub(super) prefetch_resume_at: AtomicU64,
-    /// The variant's cancel epoch: the per-track parent (mirror of
-    /// `coord.cancel` = `PlanCtx::master_cancel`) plus the rotating
-    /// per-activation child. Survives variant re-activation — a cross-codec
-    /// `commit_variant_switch` may flip from `v_old` to `v_new` and back to
-    /// `v_old`, and the second activation of `v_old` must dispatch fetches
-    /// under a *live* cancel, so [`HlsVariant::rearm_cancel`] rotates the child.
-    pub(super) cancel_epoch: CancelEpoch,
     pub(super) queue: Mutex<VecDeque<PlannedFetch>>,
-    /// Reader-side runtime: the shared byte cursor, peer wake handle, and the
-    /// timeline consulted for `is_flushing` gating. The probe-tagged
-    /// `get_position` / `set_position` stay on the facade and delegate here.
+    /// Timeline state consulted for `is_flushing` and active-seek gating.
     pub(super) reader: ReaderRuntime,
 }
 
@@ -152,11 +130,11 @@ pub(super) struct VariantSeek {
     pub(super) segment_aware_tail: AtomicU32,
     /// Lock-free, allocation-free exact-seek demand, read on the produce-core
     /// metadata-phase gate ([`HlsVariant::exact_seek_metadata_phase`]). Body is
-    /// MULTI-writer: the on-core seek path (`seek_time_anchor`) and the off-RT
-    /// downloader seek-epoch reset (`rebuild_at_time`) both SET it with no lock
-    /// between them, so the cell serializes writers with a CAS-acquired version
-    /// and the RT reader bails to not-ready (never spins) on a write-in-flight.
-    /// Off-RT completers CAS-consume the generation.
+    /// MULTI-writer: the on-core seek path (`seek_time_anchor`) and profiled
+    /// reader preparation both SET it with no shared lock, so the cell
+    /// serializes writers with a CAS-acquired version and the RT reader bails
+    /// to not-ready (never spins) on a write-in-flight. Off-RT completers
+    /// CAS-consume the generation.
     pub(super) exact_seek: CasAnchorCell,
     pub(super) size_demand: Mutex<SizeDemandState>,
 }
@@ -196,13 +174,8 @@ impl VariantSegments {
 }
 
 impl VariantFlow {
-    fn new(
-        master_cancel: CancelToken,
-        seek_obs: Arc<dyn SeekObserve>,
-        queue_capacity: usize,
-    ) -> Self {
+    fn new(seek_obs: Arc<dyn SeekObserve>, queue_capacity: usize) -> Self {
         Self {
-            cancel_epoch: CancelEpoch::new(master_cancel),
             prefetch_anchor: AtomicU64::new(0),
             prefetch_resume_at: AtomicU64::new(u64::MAX),
             // Preallocate to the worst-case rebuild size (init + every media
@@ -333,11 +306,7 @@ impl VariantParts {
         Arc::new(HlsVariant {
             variant,
             layout,
-            flow: VariantFlow::new(
-                ctx.master_cancel.clone(),
-                seek_obs,
-                segments.len().saturating_add(2),
-            ),
+            flow: VariantFlow::new(seek_obs, segments.len().saturating_add(2)),
             profile: VariantProfile {
                 codec,
                 container,

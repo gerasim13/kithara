@@ -51,6 +51,15 @@ pub enum PopoverAt {
     Pointer,
 }
 
+/// Which edge of the popover surface lines up with that geometry.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum PopoverAlign {
+    #[default]
+    Start,
+    End,
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub enum GlyphStyle {

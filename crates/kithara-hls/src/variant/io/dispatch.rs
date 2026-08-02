@@ -1,4 +1,5 @@
-use kithara_platform::sync::Arc;
+use kithara_events::RequestPriority;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::dl::FetchCmd;
 use kithara_test_utils::kithara;
 use tracing::debug;
@@ -12,8 +13,37 @@ impl HlsVariant {
         budget = budget as u64,
         queue_len = self.flow.queue.lock().len() as u64
     )]
+    /// Owed fetches carry `High`. The downloader serves its slots in strict
+    /// order and drains the tagged one completely first, so an untagged fetch
+    /// queues behind every tagged one — which makes the tag, not the peer's
+    /// budget split, the thing that decides who waits for whom.
+    ///
+    /// A session that is not yet audible has no look-ahead of its own: it asks
+    /// only for what a decoder being built or primed is blocked on, and its
+    /// pass is already bounded by the construction window or by that decoder's
+    /// reads. Every fetch it plans is owed. Bounding it the way an audible
+    /// session is bounded strands the priming phase, whose reads sit at the
+    /// landing while the session's own position still reads zero.
+    ///
+    /// The audible session is the opposite: it plans look-ahead every poll, and
+    /// only the segment its reader is stopped at is owed. Leaving that segment
+    /// untagged is what let a cold target — whose segments are deliberately
+    /// slow — hold the downloader while the speaker ran dry.
+    ///
+    /// So both owed sets share one slot, where arrival order decides: the
+    /// audible variant adds a single segment per poll and cannot bury a
+    /// decoder being built, and the session being prepared cannot outrank the
+    /// audio that is playing.
     #[kithara::hang_watchdog]
-    pub(crate) fn dispatch(self: &Arc<Self>, ctx: &PlanCtx, budget: usize) -> Vec<FetchCmd> {
+    pub(crate) fn dispatch_from(
+        self: &Arc<Self>,
+        ctx: &PlanCtx,
+        budget: usize,
+        position: u64,
+        construction_segment_end: Option<u32>,
+        audible: bool,
+        cancel: CancelToken,
+    ) -> Vec<FetchCmd> {
         let mut out = Vec::new();
         // Popped segments that could not be dispatched this pass but are NOT
         // terminal (a slot still `Downloading` under an orphaned/in-flight
@@ -25,9 +55,13 @@ impl HlsVariant {
         // references it, so it is never re-fetched and the reader hangs (the
         // `player_worker_hls_then_unavailable_mp3_then_mp3_recovery` deadlock).
         let mut deferred: Vec<PlannedFetch> = Vec::new();
+        let owed_through = audible
+            .then(|| self.find_at_offset(position).map(|(seg_idx, _, _)| seg_idx))
+            .flatten();
+        let owed = |seg_idx: u32| !audible || owed_through.is_some_and(|last| seg_idx <= last);
         let mut remaining = budget;
-        self.dispatch_size_demands(ctx, &mut out, &mut remaining);
-        let prefetch_base = self.get_position().max(self.prefetch_anchor());
+        self.dispatch_size_demands(ctx, &mut out, &mut remaining, &cancel);
+        let prefetch_base = position.max(self.prefetch_anchor());
         let prefetch_byte_cap = ctx
             .look_ahead_bytes
             .map(|n| prefetch_base.saturating_add(n));
@@ -44,6 +78,9 @@ impl HlsVariant {
                     None => break,
                     Some(PlannedFetch::Init) => queue.pop_front(),
                     Some(PlannedFetch::Segment(seg_idx)) => {
+                        if construction_segment_end.is_some_and(|end| seg_idx > end) {
+                            break;
+                        }
                         if let Some(cap) = prefetch_byte_cap
                             && let Some(seg_off) = self.segment_byte_offset(seg_idx)
                             && seg_off > cap
@@ -86,7 +123,7 @@ impl HlsVariant {
                         ctx.signal.fire();
                         continue;
                     }
-                    let Some(cmd) = self.build_init_cmd(ctx, handle) else {
+                    let Some(mut cmd) = self.build_init_cmd(ctx, handle, cancel.clone()) else {
                         if self
                             .init()
                             .is_some_and(|i| !i.state().is_loaded() && !i.state().is_failed())
@@ -95,6 +132,9 @@ impl HlsVariant {
                         }
                         continue;
                     };
+                    // A decoder cannot start without its init, so it is never
+                    // look-ahead.
+                    cmd.priority = Some(RequestPriority::High);
                     out.push(cmd);
                 }
                 PlannedFetch::Segment(seg_idx) => {
@@ -119,12 +159,16 @@ impl HlsVariant {
                         ctx.signal.fire();
                         continue;
                     }
-                    let Some(cmd) = self.emit_fetch_cmd(ctx, seg_idx, handle) else {
+                    let Some(mut cmd) = self.emit_fetch_cmd(ctx, seg_idx, handle, cancel.clone())
+                    else {
                         // Acquire raced (the claim was reverted to `Missing`
                         // inside `emit_fetch_cmd`): re-queue, don't drop it.
                         deferred.push(planned);
                         continue;
                     };
+                    if owed(seg_idx) {
+                        cmd.priority = Some(RequestPriority::High);
+                    }
                     out.push(cmd);
                 }
             }
@@ -150,6 +194,7 @@ impl HlsVariant {
         ctx: &PlanCtx,
         seg_idx: u32,
         handle: FetchClaim<Downloading>,
+        cancel: CancelToken,
     ) -> Option<FetchCmd> {
         let entry = &self.segments[seg_idx as usize];
         let Some(resource_handle) = self.segment_handle(seg_idx) else {
@@ -174,6 +219,7 @@ impl HlsVariant {
             resource,
             handle,
             ctx.signal.clone(),
+            cancel,
         )
     }
 

@@ -7,8 +7,6 @@
 //!
 //! * Three parallel peers holding independent state — no cross-track
 //!   leak (`multi_track_contention`).
-//! * `AbrEvent::VariantApplied` fires without a trailing `Incoherence`
-//!   when the reader keeps advancing (`variant_switch_coherence`).
 //! * Switch during a pending fetch must not leave orphan bytes on the
 //!   shared state (`switch_midfetch`).
 //! * Canonical bandwidth profiles produce the expected switch sequence
@@ -21,4 +19,3 @@
 mod bandwidth_scenarios_golden;
 mod multi_track_contention;
 mod switch_midfetch;
-mod variant_switch_coherence;

@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, VecDeque};
 
 use kithara_net::Headers;
-use kithara_platform::sync::Arc;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::dl::{FetchCmd, OnCompleteFn, WriterFn};
 use tracing::{debug, trace};
 use url::Url;
@@ -60,39 +60,79 @@ impl HlsVariant {
     }
 
     pub(super) fn apply_resolved_size(&self, demand: SizeDemand, len: u64) -> bool {
-        if len == 0 {
-            return false;
-        }
-        let mut changed = false;
-        self.layout.apply_commit(&self.segments, || {
-            changed = match demand {
-                SizeDemand::Init => self
-                    .segments
-                    .init
-                    .as_ref()
-                    .filter(|segment| matches!(segment.content(), SegmentContent::Plain))
-                    .is_some_and(|segment| segment.set_resolved_size(len)),
-                SizeDemand::Segment(idx) => self
-                    .segments
-                    .get(idx as usize)
-                    .filter(|segment| matches!(segment.content(), SegmentContent::Plain))
-                    .is_some_and(|segment| segment.set_resolved_size(len)),
-            };
-            self.init_route_size()
-        });
+        let changed = self.store_resolved_size(demand, len);
         if changed {
             self.complete_exact_seek_if_ready();
         }
         changed
     }
 
+    #[cfg(test)]
+    pub(in crate::variant) fn apply_resolved_size_without_seek_completion(
+        &self,
+        demand: SizeDemand,
+        len: u64,
+    ) -> bool {
+        self.store_resolved_size(demand, len)
+    }
+
+    #[cfg(test)]
+    pub(in crate::variant) fn apply_resolved_size_before_layout_publication(
+        &self,
+        demand: SizeDemand,
+        len: u64,
+        before_publish: impl FnOnce(),
+    ) -> bool {
+        if len == 0 {
+            return false;
+        }
+        let mut changed = false;
+        self.layout.apply_commit_before_publish(
+            &self.segments,
+            || {
+                changed = self.store_resolved_size_atom(demand, len);
+                self.init_route_size()
+            },
+            before_publish,
+        );
+        changed
+    }
+
+    fn store_resolved_size(&self, demand: SizeDemand, len: u64) -> bool {
+        if len == 0 {
+            return false;
+        }
+        let mut changed = false;
+        self.layout.apply_commit(&self.segments, || {
+            changed = self.store_resolved_size_atom(demand, len);
+            self.init_route_size()
+        });
+        changed
+    }
+
+    fn store_resolved_size_atom(&self, demand: SizeDemand, len: u64) -> bool {
+        match demand {
+            SizeDemand::Init => self
+                .segments
+                .init
+                .as_ref()
+                .filter(|segment| matches!(segment.content(), SegmentContent::Plain))
+                .is_some_and(|segment| segment.set_resolved_size(len)),
+            SizeDemand::Segment(idx) => self
+                .segments
+                .get(idx as usize)
+                .filter(|segment| matches!(segment.content(), SegmentContent::Plain))
+                .is_some_and(|segment| segment.set_resolved_size(len)),
+        }
+    }
+
     fn build_size_probe_cmd(
         self: &Arc<Self>,
         ctx: &PlanCtx,
         demand: SizeDemand,
+        cancel: CancelToken,
     ) -> Option<FetchCmd> {
         let url = self.size_probe_url(demand)?;
-        let cancel = self.cancel_handle();
         let weak = Arc::downgrade(self);
         let signal = ctx.signal.clone();
         let writer: WriterFn = Box::new(|_| Ok(()));
@@ -111,6 +151,7 @@ impl HlsVariant {
         ctx: &PlanCtx,
         out: &mut Vec<FetchCmd>,
         remaining: &mut usize,
+        cancel: &CancelToken,
     ) {
         while *remaining > 0 {
             let Some(demand) = self.dispatchable_size_demand() else {
@@ -135,7 +176,7 @@ impl HlsVariant {
                 );
                 continue;
             }
-            let Some(cmd) = self.build_size_probe_cmd(ctx, demand) else {
+            let Some(cmd) = self.build_size_probe_cmd(ctx, demand, cancel.clone()) else {
                 self.finish_size_demand(demand);
                 trace!(
                     variant = self.variant,
@@ -153,17 +194,6 @@ impl HlsVariant {
             out.push(cmd);
             *remaining -= 1;
         }
-    }
-
-    pub(crate) fn dispatch_size_only(
-        self: &Arc<Self>,
-        ctx: &PlanCtx,
-        budget: usize,
-    ) -> Vec<FetchCmd> {
-        let mut out = Vec::new();
-        let mut remaining = budget;
-        self.dispatch_size_demands(ctx, &mut out, &mut remaining);
-        out
     }
 
     delegate::delegate! {

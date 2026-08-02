@@ -45,13 +45,7 @@ fn read_exact_retry(stream: &mut Stream<Hls>, buf: &mut [u8], timeout: Duration)
             Ok(0) => thread::sleep(Duration::from_millis(5)),
             Ok(n) => filled += n,
             Err(e) if e.kind() == ErrorKind::Interrupted => continue,
-            Err(e) => {
-                if e.to_string().contains("variant change") {
-                    stream.clear_variant_fence();
-                    continue;
-                }
-                break;
-            }
+            Err(_) => break,
         }
     }
     filled
@@ -207,10 +201,6 @@ async fn drm_stream_byte_integrity(
                 Ok(n) => total_read += n as u64,
                 Err(e) if e.kind() == ErrorKind::Interrupted => continue,
                 Err(e) => {
-                    if e.to_string().contains("variant change") {
-                        stream.clear_variant_fence();
-                        continue;
-                    }
                     error!("[{label}] read error: {e}");
                     read_error = Some(e.to_string());
                     break;
@@ -225,7 +215,6 @@ async fn drm_stream_byte_integrity(
         let stream_len = stream.len().unwrap_or(0);
         info!("[{label}] Phase 1 done: total_read={total_read} stream_len={stream_len}");
 
-        stream.clear_variant_fence();
         info!("[{label}] Phase 2: scanning fMP4 from pos 0");
         let (boxes, last_end) = scan_boxes(&mut stream, 0, stream_len.max(total_read), label);
 

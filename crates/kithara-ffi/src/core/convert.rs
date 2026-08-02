@@ -241,22 +241,6 @@ impl TryFrom<&HlsEvent> for FfiItemEvent {
 
     fn try_from(event: &HlsEvent) -> Result<Self, NotForwarded> {
         match event {
-            HlsEvent::VariantSwitchFenced {
-                from_variant,
-                to_variant,
-                cross_codec,
-            } => Ok(Self::HlsVariantSwitchFenced {
-                from_variant: u32::try_from(*from_variant).unwrap_or(u32::MAX),
-                to_variant: u32::try_from(*to_variant).unwrap_or(u32::MAX),
-                cross_codec: *cross_codec,
-            }),
-            HlsEvent::VariantSwitchAcked {
-                variant,
-                generation,
-            } => Ok(Self::HlsVariantSwitchAcked {
-                variant: u32::try_from(*variant).unwrap_or(u32::MAX),
-                generation: *generation,
-            }),
             HlsEvent::CacheComplete { total_bytes } => Ok(Self::HlsCacheComplete {
                 total_bytes: *total_bytes,
             }),

@@ -1,5 +1,6 @@
 //! Generic audio pipeline that runs in a separate blocking thread.
 
+pub(crate) mod blend;
 pub(crate) mod config;
 pub(crate) mod consumer;
 pub(crate) mod decode;

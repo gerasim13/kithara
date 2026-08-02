@@ -1,13 +1,13 @@
 use kithara_events::{AbrEvent, AbrMode, EventBus, VariantIndex, VariantInfo};
 use kithara_platform::{
     sync::{Arc, RwLock},
-    time::{Duration, Instant},
+    time::Instant,
 };
 use kithara_test_utils::kithara;
 
 use crate::{
     controller::{AbrController, AbrPeerId},
-    state::{AbrDecision, AbrError, AbrState},
+    state::{AbrDecision, AbrError, AbrState, PendingAbrClaim, PendingAbrDecision},
 };
 
 /// Clone-able handle returned by [`AbrController::register`].
@@ -45,14 +45,30 @@ impl AbrHandle {
         }
     }
 
-    /// Apply a decision previously obtained from
-    /// [`peek_pending_decision`](Self::peek_pending_decision). Mirrors
-    /// [`AbrState::apply_decision`]. No-op for stateless handles.
-    #[kithara::probe(decision)]
-    pub fn apply_decision(&self, decision: &AbrDecision, now: Instant) {
-        if let Some(state) = self.inner.state.as_ref() {
-            state.apply_decision(decision, now);
-        }
+    /// Claim the exact pending request without consuming it.
+    #[must_use]
+    pub fn claim_pending_decision(&self) -> Option<PendingAbrDecision> {
+        let state = self.inner.state.as_ref()?;
+        state.claim_pending_decision(state.current_variant_index())
+    }
+
+    /// Observe whether the exact pending intent is absent, locked, or ready.
+    #[must_use]
+    pub fn pending_claim(&self) -> PendingAbrClaim {
+        let Some(state) = self.inner.state.as_ref() else {
+            return PendingAbrClaim::Absent;
+        };
+        state.pending_claim(state.current_variant_index())
+    }
+
+    /// Variant selected for a seek replacement, including a locked pending
+    /// intent. Stateless handles return `None`.
+    #[must_use]
+    pub fn selected_variant_for_seek(&self) -> Option<usize> {
+        self.inner
+            .state
+            .as_ref()
+            .map(|state| state.selected_variant_for_seek().get())
     }
 
     /// Clear the escape condition — see [`AbrState::clear_escape`]. No-op for
@@ -134,16 +150,19 @@ impl AbrHandle {
         }
     }
 
-    /// Side-effects after HLS scheduler committed a variant switch:
-    /// emits `VariantApplied` via bus + schedules incoherence watchdog.
+    /// Side-effects after an exact transition promoted its incoming
+    /// generation: emits `VariantApplied` via bus and nothing else.
+    ///
+    /// The caller is the audio worker, which is not a runtime thread, so this
+    /// path must not schedule async work. The stuck-reader watchdog is a
+    /// boundary-switch diagnostic and does not apply here: exact promotion
+    /// already proved the incoming reader produced staged PCM.
     #[kithara::probe(current_before)]
-    pub fn notify_commit(
-        &self,
-        decision: AbrDecision,
-        current_before: usize,
-        reader_pt: Duration,
-        now: Instant,
-    ) {
+    pub fn notify_exact_commit(&self, decision: AbrDecision, current_before: usize) {
+        self.publish_variant_applied(decision, current_before);
+    }
+
+    fn publish_variant_applied(&self, decision: AbrDecision, current_before: usize) {
         let bus = self.inner.bus.read().clone();
         if let Some(bus) = bus {
             bus.publish(AbrEvent::VariantApplied {
@@ -152,9 +171,6 @@ impl AbrHandle {
                 reason: decision.reason(),
             });
         }
-        self.inner
-            .controller
-            .schedule_incoherence_watch(self.inner.peer_id, reader_pt, now);
     }
 
     /// Read-only: peek at the pending boundary commit. Mirrors
@@ -162,8 +178,8 @@ impl AbrHandle {
     #[must_use]
     #[kithara::probe]
     pub fn peek_pending_decision(&self) -> Option<AbrDecision> {
-        let state = self.inner.state.as_ref()?;
-        state.peek_pending_decision(state.current_variant_index())
+        self.claim_pending_decision()
+            .map(PendingAbrDecision::decision)
     }
 
     #[must_use]
@@ -263,7 +279,7 @@ mod tests {
         AbrEvent, AbrReason, DEFAULT_EVENT_BUS_CAPACITY, Envelope, Event, EventBus,
         VariantDuration, VariantIndex, VariantInfo,
     };
-    use kithara_platform::CancelToken;
+    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -322,13 +338,13 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn peek_then_apply_happy_path() {
+    async fn handle_observes_legacy_publication_from_the_state_owner() {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
-            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+        let publisher = state.publisher();
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
         });
@@ -348,8 +364,38 @@ mod tests {
             "peek must not mutate"
         );
 
-        handle.apply_decision(&decision, Instant::now());
+        assert!(
+            publisher.commit_pending(
+                state
+                    .claim_pending_decision(state.current_variant_index())
+                    .expect("pending claim"),
+                Instant::now(),
+            )
+        );
         assert_eq!(state.current_variant_index(), VariantIndex::new(2));
+    }
+
+    #[kithara::test(tokio)]
+    async fn handle_observes_exact_publication_from_the_state_owner() {
+        let controller = AbrController::with_estimator(
+            settings_fast(),
+            Arc::new(ThroughputEstimator::new()) as Arc<_>,
+        );
+        let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+        let publisher = state.publisher();
+        let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
+            state: Arc::clone(&state),
+        });
+        let handle = controller.register(&peer);
+
+        state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+        let claim = handle
+            .claim_pending_decision()
+            .expect("pending request must be claimable");
+
+        assert!(publisher.commit_pending(claim, Instant::now()));
+        assert_eq!(state.current_variant_index(), VariantIndex::new(2));
+        assert!(handle.claim_pending_decision().is_none());
     }
 
     #[kithara::test(tokio)]
@@ -357,7 +403,6 @@ mod tests {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
-            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
@@ -381,7 +426,6 @@ mod tests {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
-            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(1)))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
@@ -417,7 +461,6 @@ mod tests {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
-            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let handle = {
@@ -434,13 +477,14 @@ mod tests {
         );
         assert!(handle.current_variant().is_none());
     }
-
-    #[kithara::test(tokio)]
-    async fn notify_commit_emits_variant_applied() {
+    /// Exact promotion runs on the audio worker, which is not a runtime
+    /// thread. Deliberately *not* a `tokio` test: a reactor here would hide a
+    /// `task::spawn` creeping back into this path.
+    #[kithara::test]
+    fn notify_exact_commit_emits_variant_applied_without_a_runtime() {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
-            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
@@ -456,7 +500,7 @@ mod tests {
             to: VariantIndex::new(2),
             reason: AbrReason::UpSwitch,
         };
-        handle.notify_commit(decision, 0, Duration::ZERO, Instant::now());
+        handle.notify_exact_commit(decision, 0);
 
         let found =
             std::iter::from_fn(|| rx.try_recv().ok()).find_map(|Envelope { event, .. }| {

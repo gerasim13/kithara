@@ -90,7 +90,7 @@ impl PlayerImpl {
             .build();
         let engine = EngineImpl::new(engine_config, bus.clone());
         if config.abr.is_none() {
-            config.abr = Some(AbrController::new(AbrSettings::default(), cancel.child()));
+            config.abr = Some(AbrController::new(AbrSettings::default()));
         }
 
         // Seed the single speed source with the configured default rate.
@@ -451,6 +451,21 @@ mod tests {
             .build();
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[kithara::test]
+    fn eq_band_count_tracks_a_replacement_layout_before_start() {
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .eq_layout(generate_log_spaced_bands(3))
+                .byte_pool(BytePool::default())
+                .pcm_pool(PcmPool::default())
+                .build(),
+        );
+        assert_eq!(player.eq_band_count(), 3);
+
+        player.set_eq_layout(generate_log_spaced_bands(4)).unwrap();
+        assert_eq!(player.eq_band_count(), 4);
     }
 
     #[kithara::test]

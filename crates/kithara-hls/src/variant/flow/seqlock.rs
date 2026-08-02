@@ -81,6 +81,12 @@ impl SeqAnchorCell {
         self.active.store(0, Ordering::Release);
     }
 
+    fn clear_if_generation(&self, generation: u64) -> bool {
+        self.active
+            .compare_exchange(generation, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
     pub(super) fn load(&self) -> Option<AnchorEntry> {
         loop {
             let generation = self.active.load(Ordering::Acquire);
@@ -152,6 +158,7 @@ pub(super) struct AtomicSeekAlias {
 #[derive(Clone, Copy)]
 pub(super) struct AliasSnapshot {
     pub(super) exact_anchor: Option<u64>,
+    pub(super) generation: u64,
     pub(super) segment: u32,
     pub(super) anchor: u64,
 }
@@ -177,6 +184,16 @@ impl AtomicSeekAlias {
         self.exact_anchor.store(NONE_ANCHOR, Ordering::Relaxed);
     }
 
+    pub(super) fn clear_if_generation(&self, generation: u64) -> bool {
+        if !self.base.clear_if_generation(generation) {
+            return false;
+        }
+        let _ = self
+            .exact_gen
+            .compare_exchange(generation, 0, Ordering::AcqRel, Ordering::Acquire);
+        true
+    }
+
     pub(super) fn load(&self) -> Option<AliasSnapshot> {
         let base = self.base.load()?;
         // Accept `exact_anchor` only when its tag matches the live base
@@ -191,6 +208,7 @@ impl AtomicSeekAlias {
         };
         Some(AliasSnapshot {
             exact_anchor,
+            generation: base.generation,
             segment: base.segment,
             anchor: base.anchor,
         })

@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering, fence};
 
 use arc_swap::ArcSwap;
 use kithara_platform::sync::{Arc, Mutex};
@@ -181,15 +181,6 @@ impl Frame {
 /// (`wait_range` / `range_ready` / `read_at`) loads it without taking the
 /// lock — closing the contended frame-lock spin the `rtsan` lane flagged on the
 /// decode core.
-/// Inputs to [`Layout::activate_with_shift`]: pin `from_seg` at
-/// `seg_boundary` in virtual space, using `init_size` for offset recompute.
-#[derive(Clone, Copy)]
-pub(super) struct ActivateParams {
-    pub(super) from_seg: u32,
-    pub(super) init_size: u64,
-    pub(super) seg_boundary: u64,
-}
-
 pub(super) struct Layout {
     /// Immutable published geometry. Readers `load` it lock-free and
     /// allocation-free; writers swap in a fresh `Arc<Frame>` under `write_lock`.
@@ -200,6 +191,11 @@ pub(super) struct Layout {
     /// the lock, alongside `total`.
     sizes_complete: AtomicBool,
     total: AtomicU64,
+    /// Odd while a writer is publishing size atoms, geometry, and the EOF
+    /// snapshot; even while the published view is stable. Exact-size gates
+    /// sample it without spinning so they cannot combine a new size with an
+    /// old frame.
+    publication_seq: AtomicU64,
     /// Serializes off-RT writers so a concurrent load-clone-mutate-store pair
     /// cannot lose an update (the old `RwLock` serialized writes; `ArcSwap`
     /// alone does not). Never taken on the produce-core read path.
@@ -223,37 +219,8 @@ impl Layout {
             write_lock: Mutex::new(()),
             total: AtomicU64::new(snapshot.total),
             sizes_complete: AtomicBool::new(snapshot.sizes_complete),
+            publication_seq: AtomicU64::new(0),
         }
-    }
-
-    /// Pin `from_seg` at `seg_boundary` in virtual space and serve
-    /// `[from_seg, num_segments)`. The seed, offset recompute, shift and
-    /// served bounds are published in one frame swap so no reader sees a
-    /// half-built frame.
-    pub(super) fn activate_with_shift(&self, params: ActivateParams, segments: &[Segment]) {
-        let ActivateParams {
-            from_seg,
-            seg_boundary,
-            init_size,
-        } = params;
-        let num = u32::try_from(segments.len()).unwrap_or(u32::MAX);
-        self.mutate_frame(segments, init_size, |frame| {
-            frame.init_seed = init_size.max(1);
-            frame.recompute(init_size, segments);
-            let natural = frame
-                .offsets
-                .get(from_seg as usize)
-                .copied()
-                .unwrap_or_else(|| frame.total_bytes(segments, init_size));
-            let shift = i64::try_from(seg_boundary)
-                .ok()
-                .zip(i64::try_from(natural).ok())
-                .and_then(|(v, n)| v.checked_sub(n))
-                .unwrap_or(0);
-            frame.byte_shift = shift;
-            frame.served_from = from_seg;
-            frame.served_until = num;
-        });
     }
 
     /// Apply a settled size and recompute offsets in one frame swap. `store`
@@ -262,13 +229,35 @@ impl Layout {
     /// observes a new size against a stale offset table. The store runs under
     /// `write_lock` so it serializes with the frame mutation.
     pub(super) fn apply_commit(&self, segments: &[Segment], store: impl FnOnce() -> u64) {
+        self.apply_commit_with(segments, store, || {});
+    }
+
+    #[cfg(test)]
+    pub(super) fn apply_commit_before_publish(
+        &self,
+        segments: &[Segment],
+        store: impl FnOnce() -> u64,
+        before_publish: impl FnOnce(),
+    ) {
+        self.apply_commit_with(segments, store, before_publish);
+    }
+
+    fn apply_commit_with(
+        &self,
+        segments: &[Segment],
+        store: impl FnOnce() -> u64,
+        before_publish: impl FnOnce(),
+    ) {
         let _w = self.write_lock.lock();
+        self.begin_publication();
         let init_size = store();
+        before_publish();
         let mut frame = (**self.frame.load()).clone();
         frame.recompute(init_size, segments);
         let snapshot = frame.snapshot(segments, init_size);
         self.frame.store(Arc::new(frame));
         self.republish(snapshot);
+        self.finish_publication();
     }
 
     delegate::delegate! {
@@ -283,13 +272,6 @@ impl Layout {
             pub(super) fn find_natural(&self, byte: u64, segments: &[Segment]) -> Option<(u32, u64, u64)>;
             pub(super) fn segment_byte_offset(&self, idx: u32) -> Option<u64>;
         }
-    }
-
-    pub(super) fn clear_init_seed(&self) {
-        let _w = self.write_lock.lock();
-        let mut frame = (**self.frame.load()).clone();
-        frame.init_seed = 0;
-        self.frame.store(Arc::new(frame));
     }
 
     /// True when the frame is already the canonical single-variant
@@ -328,11 +310,13 @@ impl Layout {
     /// because each runs the whole cycle under `write_lock`.
     fn mutate_frame(&self, segments: &[Segment], init_size: u64, f: impl FnOnce(&mut Frame)) {
         let _w = self.write_lock.lock();
+        self.begin_publication();
         let mut frame = (**self.frame.load()).clone();
         f(&mut frame);
         let snapshot = frame.snapshot(segments, init_size);
         self.frame.store(Arc::new(frame));
         self.republish(snapshot);
+        self.finish_publication();
     }
 
     pub(super) fn natural_offset(&self, idx: usize) -> Option<u64> {
@@ -347,6 +331,28 @@ impl Layout {
         self.total.store(snapshot.total, Ordering::Release);
         self.sizes_complete
             .store(snapshot.sizes_complete, Ordering::Release);
+    }
+
+    fn begin_publication(&self) {
+        self.publication_seq.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn finish_publication(&self) {
+        self.publication_seq.fetch_add(1, Ordering::Release);
+    }
+
+    /// Run one lock-free read against a stable layout publication. A writer
+    /// in progress or a publication change returns `None`; callers keep their
+    /// metadata gate closed and retry on the next tick.
+    pub(super) fn try_published<T>(&self, read: impl FnOnce() -> Option<T>) -> Option<T> {
+        let before = self.publication_seq.load(Ordering::Acquire);
+        if before & 1 != 0 {
+            return None;
+        }
+        let value = read()?;
+        fence(Ordering::Acquire);
+        let after = self.publication_seq.load(Ordering::Acquire);
+        (before == after).then_some(value)
     }
 
     /// Collapse to a single-variant layout: `byte_shift = 0`,
@@ -368,12 +374,6 @@ impl Layout {
 
     pub(super) fn served_from(&self) -> u32 {
         self.frame.load().served_from
-    }
-
-    pub(super) fn set_served_until(&self, until: u32, segments: &[Segment], init_size: u64) {
-        self.mutate_frame(segments, init_size, |frame| {
-            frame.served_until = until;
-        });
     }
 
     /// Lock-free `sizes_complete` read for the produce-core EOF gates. `false`

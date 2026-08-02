@@ -1,15 +1,16 @@
 use std::{
     io::{self, Read, Seek, SeekFrom},
     ops::Range,
-    sync::atomic::{AtomicBool, Ordering},
 };
 
 use delegate::delegate;
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_stream::{
-    Activity, ByteMap, MediaInfo, PlayheadWrite, SeekControl, SeekObserve, SourcePhase,
-    SourceSeekAnchor, Stream, StreamType, WorkerWake,
+    Activity, ByteMap, ConstructionGate, MediaInfo, OpenedReader, PlayheadWrite, SeekControl,
+    SeekObserve, SourcePhase, SourceSeekAnchor, Stream, StreamType, WorkerWake,
 };
+
+use super::offset::OffsetReader;
 
 /// Shared stream wrapper for format change detection.
 ///
@@ -20,14 +21,11 @@ pub(crate) struct SharedStream<T: StreamType> {
     /// Construction-phase read mode, shared across clones. When set, `Read`
     /// routes through the blocking off-RT [`Stream::read`] adapter (waits for
     /// the seeked range to download, cancel-bounded by its own timeout)
-    /// instead of the non-blocking RT [`Stream::probe_read`]. `Audio::new`
-    /// arms it for the single up-front decoder build (with the init body
-    /// prefetched, the build read normally hits committed bytes; the blocking
-    /// adapter is the bounded safety net for residual lateness) and disarms it
-    /// before the worker is registered, so the RT decode loop the worker then
-    /// drives always uses `probe_read`. See the crate `CONTEXT.md`
+    /// instead of the non-blocking RT [`Stream::probe_read`]. Decoder builders
+    /// arm it only around their off-RT factory call and disarm it before
+    /// steady-state decoding resumes. See the crate `CONTEXT.md`
     /// "Construction reads".
-    blocking: Arc<AtomicBool>,
+    blocking: ConstructionGate,
     inner: Arc<Mutex<Stream<T>>>,
 }
 
@@ -35,17 +33,42 @@ impl<T: StreamType> SharedStream<T> {
     pub(crate) fn new(stream: Stream<T>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(stream)),
-            blocking: Arc::new(AtomicBool::new(false)),
+            blocking: ConstructionGate::default(),
         }
     }
 
-    /// Arm/disarm the construction-phase blocking read mode (see the
-    /// `blocking` field). Shared across all clones derived from this handle,
-    /// so arming before the decoder build and disarming before worker
-    /// registration is a staged construction → steady-state ownership
-    /// transfer — never a live toggle once the RT worker runs.
+    pub(crate) fn open_initial_reader(&self) -> OpenedReader {
+        OpenedReader::new(
+            self.clone(),
+            self.len(),
+            self.byte_map(),
+            Some(self.blocking.clone()),
+            self.take_reader_event_sink(),
+        )
+    }
+
+    pub(crate) fn open_rebuild_reader(&self, base_offset: u64) -> OpenedReader {
+        let byte_len = self.len().map(|length| length.saturating_sub(base_offset));
+        let byte_map = self.byte_map();
+        let event_sink = self.take_reader_event_sink();
+        let input = OffsetReader::new(self.clone(), base_offset);
+        OpenedReader::new(
+            input,
+            byte_len,
+            byte_map,
+            Some(self.blocking.clone()),
+            event_sink,
+        )
+    }
+
+    /// Arm/disarm the initial construction read mode. Rebuilds use the same
+    /// gate through [`OpenedReader`].
     pub(crate) fn set_blocking(&self, on: bool) {
-        self.blocking.store(on, Ordering::Release);
+        if on {
+            self.blocking.arm();
+        } else {
+            self.blocking.disarm();
+        }
     }
 
     delegate! {
@@ -59,10 +82,6 @@ impl<T: StreamType> SharedStream<T> {
             pub(crate) fn media_info(&self) -> Option<MediaInfo>;
             pub(crate) fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
             pub(crate) fn format_change_segment_range(&self) -> kithara_stream::StreamResult<Range<u64>>;
-            pub(crate) fn clear_variant_fence(&self);
-            pub(crate) fn open_variant_read_gate(&self);
-            pub(crate) fn has_variant_change_pending(&self) -> bool;
-            pub(crate) fn variant_change_target(&self) -> Option<usize>;
             pub(crate) fn seek_time_anchor(&self, position: kithara_platform::time::Duration) -> Result<Option<SourceSeekAnchor>, io::Error>;
             /// Build a fresh reader-side event-sink instance from the inner source.
             pub(crate) fn take_reader_event_sink(&self) -> Option<kithara_stream::BoxedEventSink>;
@@ -104,7 +123,7 @@ impl<T: StreamType> Clone for SharedStream<T> {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
-            blocking: Arc::clone(&self.blocking),
+            blocking: self.blocking.clone(),
         }
     }
 }
@@ -113,12 +132,12 @@ impl<T: StreamType> Read for SharedStream<T> {
     /// Steady state (RT worker / `OffsetReader`): the non-blocking
     /// [`Stream::probe_read`] — a not-ready range surfaces immediately so the
     /// scheduler parks and re-ticks. During construction only (the `blocking`
-    /// flag armed by `Audio::new`), routes through the blocking off-RT
-    /// [`Stream::read`] adapter so the single up-front decoder build waits for
-    /// residual init lateness instead of erroring on the first not-ready probe.
+    /// flag armed by a decoder builder), routes through the blocking off-RT
+    /// [`Stream::read`] adapter so construction waits for residual init
+    /// lateness instead of erroring on the first not-ready probe.
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let mut stream = self.inner.lock();
-        if self.blocking.load(Ordering::Acquire) {
+        if self.blocking.is_armed() {
             stream.read(buf)
         } else {
             stream.probe_read(buf)

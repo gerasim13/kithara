@@ -9,9 +9,10 @@ use kithara_stream::AudioCodec;
 use smallvec::SmallVec;
 
 use crate::{
-    DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderResamplerConfig,
-    DecoderSeekOutcome, DecoderTrackInfo, GaplessInfo, GaplessTailCompensation, PcmChunk, PcmMeta,
-    PcmSpec, TrackMetadata, duration_for_frames, frames_for_duration,
+    BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
+    DecoderResamplerConfig, DecoderSeekOutcome, DecoderTrackInfo, GaplessInfo,
+    GaplessTailCompensation, PcmChunk, PcmMeta, PcmSpec, TrackMetadata, duration_for_frames,
+    frames_for_duration,
 };
 
 pub(crate) fn wrap<B>(
@@ -350,6 +351,18 @@ where
             self.source_spec.sample_rate.get(),
             self.target_sample_rate.get(),
         )
+    }
+
+    fn timeline_gap_frames(&self) -> u64 {
+        round_scaled_frames_lossy(
+            self.decoder.timeline_gap_frames(),
+            self.source_spec.sample_rate.get(),
+            self.target_sample_rate.get(),
+        )
+    }
+
+    fn blender_profile(&self) -> BlenderProfile {
+        BlenderProfile::new(self.target_spec)
     }
 
     delegate::delegate! {

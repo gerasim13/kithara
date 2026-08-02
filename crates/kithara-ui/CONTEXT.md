@@ -302,7 +302,18 @@ document depth. The walk descends the document tree and iced's layout tree toget
 wrapper step from the node itself, and proves the correspondence twice: it attributes every iced
 node to a document rect, a named wrapper, an opaque control's interior or named furniture and
 asserts the count balances, and a second counter walks the document without consulting iced so a
-subtree cannot be mistaken for furniture and vanish while the totals still add up. The reads fixture answers
+subtree cannot be mistaken for furniture and vanish while the totals still add up.
+
+Three expanded nodes carry no layout node of their own, and the walk treats them exactly as the
+hosted-descriptor walker in `render/tree/host.rs` does. `Optional` is transparent - it renders as
+its child and the walk passes straight through, so the child keeps the parent's path and position.
+`Popover` and `Pressable` are opaque: `Anchored` returns its anchor's layout node and `mouse_area`
+delegates to its content, so each is one document rect whose interior belongs to it, named by its
+own control path. Both mirror `HostedControl::new`, where `Optional` recurses into the child and
+`Popover`/`Pressable` are `Passive`. Diverging here would let the fixture disagree with the
+descriptor inventory about the same document.
+
+The reads fixture answers
 with constant values rather than `None` so text intrinsic sizing participates; a corpus of empty
 strings would measure nothing and pin nothing. Byte-identical builtin fixtures through the root flip
 prove parity for the shipped weights, including final edge rounding, spacing distribution, and
@@ -1008,13 +1019,17 @@ document-local rule would let `Popover(content: Include(m))` through whenever `m
 Enforcing it once, where the include graph is flattened, is what makes "no submenus" a schema fact
 rather than a shape nobody happened to write.
 
-The document names which geometry the surface opens from; the widget owns how. `at: PopoverAt`
-chooses between the anchor rectangle and the pointer, and defaults to `Anchor`, so a document
-that declares nothing opens under its anchor. Everything else stays in `widgets/anchored.rs`:
-`place` puts the surface below whichever geometry it opens from, overhangs it a pixel to the left
-so the content column starts flush, flips above when the room below runs out, and clamps both
-axes into the viewport; a surface taller than the viewport starts at the top and overflows
-downward. A menu on a full-width row needs `Pointer` — an anchor rectangle spanning the list
+The document names which geometry the surface opens from and which of its edges lines up with
+that geometry; the widget owns how. `at: PopoverAt` chooses between the anchor rectangle and the
+pointer, and defaults to `Anchor`, so a document that declares nothing opens under its anchor.
+`align: PopoverAlign` picks the edge and defaults to `Start`; `End` lines the surface's right edge
+up with the anchor's, which a cell at the right end of a bar needs. Everything else stays in
+`widgets/anchored.rs`: `place` puts the surface below whichever geometry it opens from, overhangs
+it a pixel past the aligned edge so the content column lands flush, flips above when the room
+below runs out, and clamps both axes into the viewport; a surface taller than the viewport starts
+at the top and overflows downward.
+
+A menu on a full-width row needs `Pointer` — an anchor rectangle spanning the list
 cannot say where the user clicked — and a burger under a fixed cell needs `Anchor`. That is the
 whole of the choice, which is why the enum names geometry and not the menus that use it.
 
@@ -1089,6 +1104,26 @@ that reports a hint are one template each, taken as many times as the menu needs
 `Include`. Each instance's control paths are `app-menu/<include id>/<node id>`, so the template's
 own ids stay plain. The three rows carrying a literal shortcut and the settings row keep their own
 geometry and stay written out.
+
+## Stream Quality Ownership
+
+`assets/modules/deck/quality.kmodule.ron` is the deck's stream-quality cell and its menu, taken
+per deck through `parameters: ["deck"]`. It is markup over `Popover`, `Pressable` and the row
+template in `assets/modules/deck/quality/`, so the crate gains no control for it. Its surface is
+the crate's own `Pop`, which is where it departs from the design's `HlsCell` and its own panel.
+The transport bar holds it before `TEMPO`, as an `Optional` block: a ladder belongs to the stream,
+so a deck on a plain file answers `deck.stream.quality_hidden` and the cell leaves the row with
+its seam.
+
+The ladder is host-owned and the document holds six slots for it, each an `Optional` the host
+hides through `deck.stream.variant_hidden`. The row inside names `deck.stream.variant_label`,
+`variant_sub` and `variant_active` under the `deck` and `variant` scopes, and writes
+`deck.stream.select_variant`. Automatic selection is the `variant=auto` row on the same template
+and the same endpoints, so the host owns what automatic means.
+
+The cell reads `deck.stream.quality` for what it shows and `deck.stream.quality_menu` for both its
+open state and its two-state fill; `deck.stream.toggle_quality_menu` is its only toggle, and the
+popover's own path carries the set-false the widget publishes on dismissal.
 
 ## Window Chrome Ownership
 

@@ -1,11 +1,59 @@
 use kithara::{
-    audio::generate_log_spaced_bands,
+    audio::{EqBandConfig, generate_log_spaced_bands},
     play::{PlayError, PlayerConfig, PlayerImpl, SessionHandle, StretchControls, apply_mix},
 };
 use kithara_platform::sync::Arc;
 use kithara_queue::{Queue, QueueConfig};
 
 use crate::{config::AppConfig, mix::MixState};
+
+/// EQ topology shared by every studio deck and its player graph.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum EqMode {
+    #[default]
+    ThreeBand,
+    FourBand,
+}
+
+impl EqMode {
+    const THREE_BANDS: [&str; 3] = ["low", "mid", "high"];
+    const FOUR_BANDS: [&str; 4] = ["low", "low_mid", "high_mid", "high"];
+
+    #[must_use]
+    pub(crate) const fn bands(self) -> &'static [&'static str] {
+        match self {
+            Self::ThreeBand => &Self::THREE_BANDS,
+            Self::FourBand => &Self::FOUR_BANDS,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn band(self, name: &str) -> Option<usize> {
+        self.bands().iter().position(|band| *band == name)
+    }
+
+    #[must_use]
+    pub(crate) fn remap(self, next: Self, gains: &[f32]) -> Option<Vec<f32>> {
+        match (self, next, gains) {
+            (Self::ThreeBand, Self::FourBand, [low, mid, high]) => {
+                Some(vec![*low, *mid, *mid, *high])
+            }
+            (Self::FourBand, Self::ThreeBand, [low, low_mid, high_mid, high]) => {
+                Some(vec![*low, (*low_mid + *high_mid) * 0.5, *high])
+            }
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn layout(self, gains: &[f32]) -> Vec<EqBandConfig> {
+        let mut layout = generate_log_spaced_bands(self.bands().len());
+        for (band, gain) in layout.iter_mut().zip(gains) {
+            band.set_gain_db(*gain);
+        }
+        layout
+    }
+}
 
 /// App-local deck identity; never crosses into a shared playback crate.
 ///
@@ -33,7 +81,7 @@ impl Deck {
             PlayerConfig::builder()
                 .cancel(config.shutdown.child())
                 .crossfade_duration(config.crossfade_seconds)
-                .eq_layout(generate_log_spaced_bands(config.eq_band_count))
+                .eq_layout(generate_log_spaced_bands(EqMode::default().bands().len()))
                 .byte_pool(config.byte_pool.clone())
                 .pcm_pool(config.pcm_pool.clone())
                 .session(session.dispatcher())
@@ -237,6 +285,19 @@ mod tests {
 
     fn deck_set(count: usize) -> DeckSet {
         deck_set_on(count, &SessionHandle::spawn_native())
+    }
+
+    #[test]
+    fn eq_mode_maps_the_middle_band_without_moving_the_outer_bands() {
+        let four = EqMode::ThreeBand
+            .remap(EqMode::FourBand, &[-6.0, 2.0, 5.0])
+            .unwrap();
+        assert_eq!(four, [-6.0, 2.0, 2.0, 5.0]);
+
+        let three = EqMode::FourBand
+            .remap(EqMode::ThreeBand, &[-6.0, -2.0, 4.0, 5.0])
+            .unwrap();
+        assert_eq!(three, [-6.0, 1.0, 5.0]);
     }
 
     #[test]

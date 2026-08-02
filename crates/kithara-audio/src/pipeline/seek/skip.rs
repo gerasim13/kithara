@@ -1,8 +1,9 @@
 use kithara_decode::{PcmChunk, PcmSpec};
 use kithara_platform::time::Duration;
 use kithara_stream::StreamType;
+use tracing::debug;
 
-use crate::pipeline::{decode::DecoderSession, seek::ResumeState, stream::shared::SharedStream};
+use crate::pipeline::{decode::DecoderGeneration, seek::ResumeState, stream::shared::SharedStream};
 
 struct Consts;
 
@@ -32,16 +33,16 @@ pub(crate) fn frames(spec: PcmSpec, duration: Duration) -> usize {
 }
 
 pub(crate) fn estimate_target_byte<T: StreamType>(
-    session: &DecoderSession,
+    active: &DecoderGeneration,
     stream: &SharedStream<T>,
     position: Duration,
 ) -> Option<u64> {
-    let duration = session.decoder.duration()?;
+    let duration = active.decoder().duration()?;
     let len = stream.len()?;
-    if duration.is_zero() || len <= session.base_offset {
+    if duration.is_zero() || len <= active.base_offset() {
         return None;
     }
-    let payload = len - session.base_offset;
+    let payload = len - active.base_offset();
     let relative = u64::try_from(
         position
             .as_nanos()
@@ -50,7 +51,7 @@ pub(crate) fn estimate_target_byte<T: StreamType>(
     )
     .expect("seek target byte fits u64")
     .min(payload);
-    Some(session.base_offset.saturating_add(relative))
+    Some(active.base_offset().saturating_add(relative))
 }
 
 pub(crate) fn apply(
@@ -61,28 +62,55 @@ pub(crate) fn apply(
     let Some(resume) = resume else {
         return Some(chunk);
     };
-    let Some(remaining) = resume.skip else {
+    if !resume.trim_head {
         return Some(chunk);
-    };
-    if resume.seek.epoch != epoch || remaining.is_zero() {
-        resume.skip = None;
+    }
+    if resume.seek.epoch != epoch {
+        resume.trim_head = false;
         return Some(chunk);
     }
     let spec = chunk.spec();
-    let channels = usize::from(spec.channels.max(1));
     let chunk_frames = chunk.frames();
     if chunk_frames == 0 {
         return None;
     }
-    let mut drop_frames = frames(spec, remaining);
-    if drop_frames == 0 {
-        drop_frames = 1;
-    }
+    let drop_frames = frames(
+        spec,
+        resume.seek.target.saturating_sub(chunk.meta.timestamp),
+    );
     if drop_frames >= chunk_frames {
-        let remaining = remaining.saturating_sub(duration(spec, chunk_frames));
-        resume.skip = (!remaining.is_zero()).then_some(remaining);
         return None;
     }
+    debug!(
+        target = ?resume.seek.target,
+        chunk_at = ?chunk.meta.timestamp,
+        frame_offset = chunk.meta.frame_offset,
+        drop_frames,
+        "trimmed the head of a resumed generation"
+    );
+    trim_start(&mut chunk, drop_frames);
+    resume.trim_head = false;
+    Some(chunk)
+}
+
+pub(crate) fn apply_frames(mut chunk: PcmChunk, remaining: &mut u64) -> Option<PcmChunk> {
+    if *remaining == 0 {
+        return Some(chunk);
+    }
+    let chunk_frames = u64::try_from(chunk.frames()).unwrap_or(u64::MAX);
+    if chunk_frames <= *remaining {
+        *remaining = remaining.saturating_sub(chunk_frames);
+        return None;
+    }
+    let drop_frames = usize::try_from(*remaining).unwrap_or(usize::MAX);
+    trim_start(&mut chunk, drop_frames);
+    *remaining = 0;
+    Some(chunk)
+}
+
+fn trim_start(chunk: &mut PcmChunk, drop_frames: usize) {
+    let spec = chunk.spec();
+    let channels = usize::from(spec.channels.max(1));
     let drop_samples = drop_frames.saturating_mul(channels);
     let len = chunk.samples.len();
     chunk.samples.copy_within(drop_samples..len, 0);
@@ -96,6 +124,4 @@ pub(crate) fn apply(
         .meta
         .frames
         .saturating_sub(u32::try_from(drop_frames).unwrap_or(u32::MAX));
-    resume.skip = None;
-    Some(chunk)
 }

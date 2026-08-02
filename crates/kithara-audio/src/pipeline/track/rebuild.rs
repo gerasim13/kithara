@@ -69,12 +69,15 @@ impl Track<RebuildingDecoder> {
     pub(crate) fn step<T: StreamType>(self, src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
         let mut rebuild = self.into_inner();
         rebuild.record_seek_preempt(src.seek_obs.as_ref(), src.seek_engine.epoch());
-        while let Some(complete) = rebuild.completion.pop() {
-            if complete.ticket == rebuild.ticket {
+        if let Some(complete) = src.rebuild.take_replacement(rebuild.build) {
+            return finish_rebuild(src, rebuild, complete);
+        }
+        while let Some(complete) = src.rebuild.pop_replacement_completion() {
+            if complete.build == rebuild.build {
                 return finish_rebuild(src, rebuild, complete);
             }
-            if let Ok(decoder) = complete.result {
-                src.retired.retire(decoder);
+            if let Ok(generation) = complete.result {
+                src.retired.retire_generation(generation);
             }
         }
         src.update_state(Self::new(rebuild).erase());
@@ -112,7 +115,7 @@ pub(crate) fn start_route_change_recreate_if_needed<T: StreamType>(
         committed: src.playhead.position(),
         seek: &src.seek_engine,
         seek_active: active_epoch(&src.state).is_some(),
-        session: src.decode.session(),
+        active: src.decode.active(),
         stream: &src.shared_stream,
     }) else {
         return false;

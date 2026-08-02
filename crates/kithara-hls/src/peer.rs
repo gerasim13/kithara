@@ -1,21 +1,21 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     task::{Context, Poll, Waker},
 };
 
-use kithara_abr::{Abr, AbrState};
+use kithara_abr::{Abr, AbrPublisher, AbrState};
 use kithara_assets::ResourceKey;
 use kithara_events::{AbrMode, AbrProgressSnapshot, VariantDuration, VariantInfo};
 use kithara_platform::{
     CancelToken,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
     time::Duration,
     tokio::{self, sync::mpsc, task::spawn},
 };
 use kithara_stream::{
-    Activity, DeferredWake, SeekObserve,
+    Activity, DeferredWake, SeekObserve, WorkerWake,
     dl::{FetchCmd, Peer, RequestPriority},
 };
 use kithara_test_utils::kithara;
@@ -65,12 +65,61 @@ struct HlsTrackState {
     reader_variant: usize,
 }
 
+struct PeerPollWake(Weak<HlsPeer>);
+
+impl WorkerWake for PeerPollWake {
+    fn wake(&self) {
+        if let Some(peer) = self.0.upgrade() {
+            peer.wake_poll();
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SessionSlot {
+    Active,
+    Incoming,
+}
+
+impl SessionSlot {
+    const fn other(self) -> Self {
+        match self {
+            Self::Active => Self::Incoming,
+            Self::Incoming => Self::Active,
+        }
+    }
+}
+
+#[derive(Default)]
+struct SessionTurns {
+    incoming: AtomicBool,
+}
+
+impl SessionTurns {
+    fn next(&self, has_incoming: bool) -> SessionSlot {
+        if !has_incoming {
+            self.incoming.store(false, Ordering::Relaxed);
+            return SessionSlot::Active;
+        }
+        if self.incoming.fetch_xor(true, Ordering::Relaxed) {
+            SessionSlot::Incoming
+        } else {
+            SessionSlot::Active
+        }
+    }
+
+    fn reset(&self) {
+        self.incoming.store(false, Ordering::Relaxed);
+    }
+}
+
 /// HLS peer — one per track. Pre-init: `poll_next` returns Pending.
 /// After [`activate`](Self::activate): each `poll_next` drains seek/ABR
 /// commit/eviction events and asks the active [`HlsVariant`] for the
 /// next batch of `FetchCmd`s (thin event router per spec).
 pub(crate) struct HlsPeer {
     abr: Arc<AbrState>,
+    abr_publisher: AbrPublisher,
     /// Narrow activity handle. Used by `priority()` to check whether
     /// the track is currently playing.
     activity: Arc<dyn Activity>,
@@ -81,6 +130,7 @@ pub(crate) struct HlsPeer {
     /// of the peer, not of shared state.
     reader_advanced: Arc<DeferredWake>,
     reader_segment: Arc<AtomicUsize>,
+    session_turns: SessionTurns,
     /// Narrow seek-observe handle. Used by `poll_next`'s inner logic
     /// (via `HlsTrackState`) to read the current epoch/target without
     /// holding a wide seek/playhead aggregate.
@@ -106,17 +156,25 @@ impl HlsPeer {
         activity: Arc<dyn Activity>,
         initial_mode: AbrMode,
     ) -> Self {
+        let abr = Arc::new(AbrState::new(initial_mode));
+        let abr_publisher = abr.publisher();
         Self {
             seek_obs,
             activity,
             state: Arc::new(Mutex::new(None)),
             pending_waker: Mutex::default(),
             wake_signal: CancelToken::never(),
-            abr: Arc::new(AbrState::new(initial_mode)),
+            abr,
+            abr_publisher,
             variants: Mutex::default(),
             reader_segment: Arc::new(AtomicUsize::new(0)),
             reader_advanced: Arc::new(DeferredWake::default()),
+            session_turns: SessionTurns::default(),
         }
+    }
+
+    pub(crate) fn abr_publisher(&self) -> AbrPublisher {
+        self.abr_publisher.clone()
     }
 
     pub(crate) fn activate(
@@ -132,27 +190,28 @@ impl HlsPeer {
         // Let the `on_slow` hook wake this peer's `poll_next` when an in-flight
         // fetch stalls past `soft_timeout`, so `reconcile_escape` runs without
         // waiting for an incidental reader-progress wake.
-        coord.set_peer_wake(Arc::clone(&self.reader_advanced));
+        coord.set_peer_wake(
+            Arc::clone(&self.reader_advanced),
+            Arc::new(PeerPollWake(Arc::downgrade(self))),
+        );
         let cancel = coord.cancel.clone();
 
         let initial_seg = coord
             .find_at_offset(coord.position())
             .map_or(0, |(idx, _, _)| idx);
-        if let Some(active) = coord.active() {
-            let plan_ctx = PlanCtx {
-                bus: active.event_bus(),
-                prefetch_budget,
-                look_ahead_bytes,
-                size_probe_method,
-                look_ahead_segments,
-                master_cancel: coord.cancel.clone(),
-                scope: coord.scope.clone(),
-                headers: coord.headers.clone(),
-                seek_epoch: self.seek_obs.epoch(),
-                signal: coord.signal(),
-            };
-            active.rebuild(&plan_ctx, initial_seg);
-        }
+        let active = coord.active();
+        let plan_ctx = PlanCtx {
+            bus: active.event_bus(),
+            prefetch_budget,
+            look_ahead_bytes,
+            size_probe_method,
+            look_ahead_segments,
+            scope: coord.scope.clone(),
+            headers: coord.headers.clone(),
+            seek_epoch: self.seek_obs.epoch(),
+            signal: coord.signal(),
+        };
+        active.rebuild(&plan_ctx, initial_seg);
         self.reader_segment
             .store(initial_seg as usize, Ordering::Release);
 
@@ -201,26 +260,6 @@ impl HlsPeer {
         });
     }
 
-    fn commit_manual_switch_locked(state: Option<&mut HlsTrackState>) {
-        let Some(state) = state else {
-            return;
-        };
-        if !matches!(state.coord.abr.mode(), Some(AbrMode::Manual(_))) {
-            return;
-        }
-        let coord = Arc::clone(&state.coord);
-        if coord.cancel.is_cancelled() {
-            return;
-        }
-        let ctx = state.plan_ctx();
-        state.apply_seek_change(&coord, &ctx);
-        state.apply_boundary_crossing(&coord, &ctx);
-    }
-
-    fn commit_manual_switch_now(&self) {
-        Self::commit_manual_switch_locked(self.state.lock().as_mut());
-    }
-
     /// Shared wake handle the `Source` clones to resume `poll_next` after a
     /// reader progress event. The reader drivers arm/notify it; this micro-task
     /// awaits [`DeferredWake::notified`].
@@ -230,6 +269,21 @@ impl HlsPeer {
 
     pub(crate) fn set_abr_variants(&self, variants: Vec<VariantInfo>) {
         *self.variants.lock() = variants;
+    }
+
+    fn wake_poll(&self) {
+        let waker = self
+            .state
+            .lock()
+            .as_ref()
+            .and_then(|state| state.waker.clone())
+            .or_else(|| self.pending_waker.lock().clone());
+        // A wake that finds no waker is silently dropped, and the caller has no
+        // way to tell that apart from a wake that landed and produced nothing.
+        tracing::trace!(found = waker.is_some(), "hls peer wake requested");
+        if let Some(waker) = waker {
+            waker.wake();
+        }
     }
 
     /// Release the stashed [`HlsTrackState`] and cancel the waker task so
@@ -286,19 +340,15 @@ impl Abr for HlsPeer {
     }
 
     fn wake(&self) {
-        self.commit_manual_switch_now();
-        let waker = self
-            .state
-            .lock()
-            .as_ref()
-            .and_then(|state| state.waker.clone())
-            .or_else(|| self.pending_waker.lock().clone());
-        // The ABR controller is off the RT produce core: an explicit mode
-        // change must re-poll the producer without waiting for reader motion.
+        let signal = self.state.lock().as_ref().map(|state| state.coord.signal());
+        // The ABR controller is off the RT produce core. The peer owns fetch
+        // dispatch, while the audio worker owns the exact incoming-session
+        // plan, so publishing a decision wakes both consumers.
         self.reader_advanced.notify_now();
-        if let Some(waker) = waker {
-            waker.wake();
+        if let Some(signal) = signal {
+            signal.wake_worker();
         }
+        self.wake_poll();
     }
 }
 
@@ -317,20 +367,61 @@ impl Peer for HlsPeer {
                 .broadcast_eviction(&outcome.ctx, &key, outcome.seg_at_reader);
         }
 
-        let mut cmds = outcome
-            .coord
-            .dispatch_pending_size_demands(&outcome.ctx, outcome.ctx.prefetch_budget);
-        let remaining = outcome.ctx.prefetch_budget.saturating_sub(cmds.len());
-        if remaining > 0 {
-            cmds.extend(
-                outcome
-                    .coord
-                    .active()
-                    .map(|active| active.dispatch(&outcome.ctx, remaining))
-                    .unwrap_or_default(),
-            );
+        let mut cmds = Vec::new();
+        if outcome.ctx.prefetch_budget > 0 {
+            let has_incoming = outcome.coord.has_incoming();
+            if has_incoming && outcome.ctx.prefetch_budget == 1 {
+                let first = self.session_turns.next(true);
+                cmds.extend(dispatch_session(&outcome.coord, &outcome.ctx, first, 1));
+                if cmds.len() < outcome.ctx.prefetch_budget {
+                    cmds.extend(dispatch_session(
+                        &outcome.coord,
+                        &outcome.ctx,
+                        first.other(),
+                        1,
+                    ));
+                }
+                if cmds.is_empty() {
+                    return Poll::Pending;
+                }
+                return Poll::Ready(Some(cmds));
+            }
+            self.session_turns.reset();
+            // The active session feeds the speaker; the incoming one is only
+            // preparation. Serve the active first and reserve a single slot for
+            // the incoming, so a switch can never starve the audio that is
+            // currently playing.
+            let active_budget = if has_incoming && outcome.ctx.prefetch_budget > 1 {
+                outcome.ctx.prefetch_budget - 1
+            } else {
+                outcome.ctx.prefetch_budget
+            };
+            cmds.extend(outcome.coord.dispatch_active(&outcome.ctx, active_budget));
+            // Whatever the active session declined is idle capacity, not
+            // contention: hand it to the incoming session so a switch the user
+            // asked for is not serviced one fetch per poll while the active
+            // variant sits fully cached. The incoming never draws past its own
+            // reader position and look-ahead, so this changes when its bytes
+            // arrive, never how far ahead of itself it fetches.
+            let mut remaining = outcome.ctx.prefetch_budget.saturating_sub(cmds.len());
+            if has_incoming && remaining > 0 {
+                cmds.extend(outcome.coord.dispatch_incoming(&outcome.ctx, remaining));
+                remaining = outcome.ctx.prefetch_budget.saturating_sub(cmds.len());
+            }
+            if remaining > 0 {
+                cmds.extend(outcome.coord.dispatch_active(&outcome.ctx, remaining));
+            }
         }
         if cmds.is_empty() {
+            // Parking with a session still waiting on bytes is the stall shape:
+            // from here only an external wake re-drives this peer, and the one
+            // an unready incoming session raises comes from a readiness poll its
+            // own consumer cannot make while it waits.
+            tracing::trace!(
+                has_incoming = outcome.coord.has_incoming(),
+                budget = outcome.ctx.prefetch_budget,
+                "hls peer parked without commands"
+            );
             return Poll::Pending;
         }
         Poll::Ready(Some(cmds))
@@ -342,6 +433,18 @@ impl Peer for HlsPeer {
         } else {
             RequestPriority::Low
         }
+    }
+}
+
+fn dispatch_session(
+    coord: &HlsCoord,
+    ctx: &PlanCtx,
+    slot: SessionSlot,
+    budget: usize,
+) -> Vec<FetchCmd> {
+    match slot {
+        SessionSlot::Active => coord.dispatch_active(ctx, budget),
+        SessionSlot::Incoming => coord.dispatch_incoming(ctx, budget),
     }
 }
 
@@ -412,20 +515,10 @@ impl HlsTrackState {
     /// `dispatch` pops, so a boundary crossing alone does not need to
     /// refill the queue.
     ///
-    /// Decide when to call `commit_variant_switch`:
-    ///
-    /// - **Auto mode**: commit fires only on *actual* boundary crossings
-    ///   (`prev != resolved`). Pending decisions from the bandwidth
-    ///   controller wait for the reader to physically advance to the
-    ///   next segment, so an aggressive in-segment up-switch does not
-    ///   pin `v_new` prematurely.
-    /// - **Manual mode**: commit fires on every poll. User click
-    ///   `handle.set_mode(Manual(N))` is an explicit intent — wait for
-    ///   a boundary cross that may never come (all-cached, idle peer)
-    ///   makes the switch silently fail. The cross-variant byte
-    ///   routing in [`HlsCoord::variant_serving`] + the no-forward-jump
-    ///   guarantee in `activate_at_segment_with_shift` keep decoder
-    ///   continuity intact even when commit lands mid-segment.
+    /// Variant switching itself is not decided here: exact sessions publish
+    /// their own commit once the incoming reader is ready, so this poll only
+    /// tracks the reader's segment and re-aims the fetch plan when the byte
+    /// space under the cursor was re-keyed.
     fn apply_boundary_crossing(&mut self, coord: &HlsCoord, ctx: &PlanCtx) -> u32 {
         let pos = coord.position();
         let prev = self.reader_segment.load(Ordering::Acquire);
@@ -444,19 +537,6 @@ impl HlsTrackState {
         // a `None` lookup falls back to `prev` and must NOT be read as "caught
         // up", or a later valid low lookup re-opens the race.
         if let Some(floor) = self.seek_settle_floor {
-            // A pending Manual switch is explicit user intent and must commit
-            // on a seek poll REGARDLESS of which floor sub-case applies. Left
-            // behind the floor it self-reinforces: the reader cannot resolve
-            // at/after the floor while the switch is uncommitted (the scheduler
-            // no longer fetches the old variant), and a coincident decoder
-            // backoff landing would route through the re-aim arm below before
-            // the switch ever commits. Commit it up-front, then keep the floor
-            // for the re-key suppression. Auto never matches (no `Manual`), so
-            // the seek-no-switch freeze contract is untouched; a single-variant
-            // `Manual(N)` with no pending decision is a no-op.
-            if matches!(self.coord.abr.mode(), Some(AbrMode::Manual(_))) {
-                coord.commit_variant_switch_at_segment(ctx, floor);
-            }
             if demand_segment.is_some_and(|idx| idx >= floor) {
                 self.seek_settle_floor = None;
             } else if let Some(landing) = demand_segment
@@ -477,9 +557,7 @@ impl HlsTrackState {
                 // the codec preroll bound: a stale *lagging* cursor resolves
                 // many segments below the floor and stays suppressed (the
                 // prefix re-download guard the floor was built for is intact).
-                if let Some(active) = coord.active() {
-                    active.rebuild(ctx, landing);
-                }
+                coord.active().rebuild(ctx, landing);
                 self.seek_settle_floor = Some(landing);
                 return landing;
             } else {
@@ -493,19 +571,6 @@ impl HlsTrackState {
         if boundary_crossed {
             self.reader_segment.store(resolved_us, Ordering::Release);
         }
-        let manual_mode = matches!(self.coord.abr.mode(), Some(AbrMode::Manual(_)));
-        let switch_landed = match coord.urgent_rescue_boundary(resolved) {
-            Some(rescue_seg) => coord.commit_variant_switch(ctx, rescue_seg),
-            // Reader pinned at a clean boundary on a non-delivering segment with
-            // a pending switch — the current variant cannot cross the boundary,
-            // so commit the target AT the stalled segment instead of waiting for
-            // a reader advance that can never happen (startup/stall livelock).
-            None if coord.stalled_escape(resolved) => {
-                coord.commit_variant_switch_at_segment(ctx, resolved)
-            }
-            None if boundary_crossed || manual_mode => coord.commit_variant_switch(ctx, resolved),
-            None => false,
-        };
         let prev_u32 = u32::try_from(prev).unwrap_or(0);
         let discontinuous_advance = boundary_crossed && resolved != prev_u32.saturating_add(1);
         // A switch committed since the last poll re-keys the byte space
@@ -522,19 +587,12 @@ impl HlsTrackState {
         // cannot host a FormatBoundary recreate — `header_byte_range`
         // is not applicable there — and the reader still reads the
         // pre-switch range from `v_old`).
-        let aligned_rescue = variant_changed
-            && !switch_landed
-            && demand_segment.is_some()
-            && coord.active().is_some_and(|a| a.served_from() == 0);
+        let aligned_rescue =
+            variant_changed && demand_segment.is_some() && coord.active().served_from() == 0;
         if aligned_rescue {
-            if let Some(active) = coord.active() {
-                active.rebuild_with_decoder_probe(ctx, resolved);
-            }
-        } else if discontinuous_advance
-            && !switch_landed
-            && let Some(active) = coord.active()
-        {
-            active.rebuild(ctx, resolved);
+            coord.active().rebuild_with_decoder_probe(ctx, resolved);
+        } else if discontinuous_advance {
+            coord.active().rebuild(ctx, resolved);
         }
         resolved
     }
@@ -571,7 +629,6 @@ impl HlsTrackState {
     fn plan_ctx(&self) -> PlanCtx {
         PlanCtx {
             bus: self.coord.emit.bus().clone(),
-            master_cancel: self.coord.cancel.clone(),
             scope: self.coord.scope.clone(),
             headers: self.coord.headers.clone(),
             prefetch_budget: self.prefetch_budget,
@@ -596,12 +653,36 @@ impl HlsTrackState {
     )]
     fn seek_epoch_reset(&mut self, coord: &HlsCoord, ctx: &PlanCtx) {
         if let Some(target) = self.seek_obs.target()
-            && let Some(active) = coord.active()
-            && let Some(seg) = active.rebuild_at_time(ctx, target)
+            && let Some(seg) = coord.active().rebuild_at_time(ctx, target)
         {
             self.reader_segment.store(seg as usize, Ordering::Release);
             self.reader_variant = coord.variant_index();
             self.seek_settle_floor = Some(seg);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[kithara::test]
+    fn one_slot_scheduler_alternates_active_and_incoming() {
+        let turns = SessionTurns::default();
+
+        assert_eq!(turns.next(true), SessionSlot::Active);
+        assert_eq!(turns.next(true), SessionSlot::Incoming);
+        assert_eq!(turns.next(true), SessionSlot::Active);
+        assert_eq!(turns.next(true), SessionSlot::Incoming);
+    }
+
+    #[kithara::test]
+    fn one_slot_scheduler_resets_when_no_incoming_session_exists() {
+        let turns = SessionTurns::default();
+        assert_eq!(turns.next(true), SessionSlot::Active);
+        assert_eq!(turns.next(true), SessionSlot::Incoming);
+
+        assert_eq!(turns.next(false), SessionSlot::Active);
+        assert_eq!(turns.next(true), SessionSlot::Active);
     }
 }

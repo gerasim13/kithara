@@ -6,7 +6,7 @@ use kithara::{
     events::AbrMode,
     hls::{Hls, HlsConfig},
     platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
-    stream::{Stream, VariantChangeError},
+    stream::Stream,
 };
 use kithara_integration_tests::{
     TestTempDir,
@@ -22,13 +22,6 @@ const FIRST_SEGMENT_DELAY_MS: u64 = 2_000;
 const BANDWIDTHS: [u64; VARIANT_COUNT] = [64_000, 192_000, 512_000];
 const CAPS: [Option<u64>; VARIANT_COUNT] = [Some(96_000), Some(256_000), None];
 const READ_DEADLINE: Duration = Duration::from_secs(30);
-const RETRY_BACKOFF: Duration = Duration::from_millis(50);
-
-fn is_variant_fence(error: &std::io::Error) -> bool {
-    error
-        .get_ref()
-        .is_some_and(|source| source.downcast_ref::<VariantChangeError>().is_some())
-}
 
 /// Toggling auto/manual ABR and bandwidth caps while the first
 /// segment is buffering must not wedge the stream; a subsequent read must
@@ -82,43 +75,24 @@ async fn abr_mode_storm_does_not_wedge_loading(temp_dir: TestTempDir, rt_cancel:
     handle.set_max_bandwidth_bps(None);
 
     // The storm lands while the stream is still fetching its delayed first
-    // segment — the state the report describes. `VariantChangeError` is the
-    // documented cross-variant fence, not a failure: the fixture declares no
-    // `CODECS`, so every ABR commit takes the decoder-recreate branch, and the
-    // gate stays shut until the consumer acks it with `clear_variant_fence`.
-    // Retrying without that ack deadlocks the reader, not the framework.
-    // Acking and reading on keeps the assertion on the reported symptom, a
-    // stream that never yields bytes.
-    let read = time::timeout(READ_DEADLINE, async move {
-        loop {
-            let attempt = spawn_blocking(move || {
-                let mut buffer = [0u8; 64 * 1024];
-                let outcome = stream.read(&mut buffer);
-                (stream, outcome)
-            })
-            .await
-            .expect("read task panicked");
-            stream = attempt.0;
-            match attempt.1 {
-                Ok(bytes) => return Ok(bytes),
-                Err(error) if is_variant_fence(&error) => {
-                    stream.clear_variant_fence();
-                }
-                Err(error) => return Err(error),
-            }
-            time::sleep(RETRY_BACKOFF).await;
-        }
+    // segment — the state the report describes. The assertion stays on the
+    // reported symptom: a stream that never yields bytes.
+    let bytes = time::timeout(
+        READ_DEADLINE,
+        spawn_blocking(move || {
+            let mut buffer = [0u8; 64 * 1024];
+            stream.read(&mut buffer)
+        }),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "the stream never yielded bytes within {READ_DEADLINE:?} after the \
+             ABR mode and bitrate-cap storm — loading is wedged"
+        )
     })
-    .await;
-
-    let bytes = read
-        .unwrap_or_else(|_| {
-            panic!(
-                "the stream never yielded bytes within {READ_DEADLINE:?} after the \
-                 ABR mode and bitrate-cap storm — loading is wedged"
-            )
-        })
-        .unwrap_or_else(|error| panic!("read after the ABR storm failed: {error}"));
+    .expect("read task panicked")
+    .unwrap_or_else(|error| panic!("read after the ABR storm failed: {error}"));
     assert!(
         bytes > 0,
         "the stream reported end-of-input rather than audio after the ABR storm"

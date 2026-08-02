@@ -8,7 +8,8 @@ pub use self::{
     doc::{ChromeStyle, ModuleDoc, ModuleDrop, parse_module},
     node::ControlNode,
     style::{
-        ButtonStyle, ChipStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAt,
-        ScalarFormat, TextAlign, TextStyle, Tone, TrackColumn, WaveStyle, WindowControlsStyle,
+        ButtonStyle, ChipStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign,
+        PopoverAt, ScalarFormat, TextAlign, TextStyle, Tone, TrackColumn, WaveStyle,
+        WindowControlsStyle,
     },
 };

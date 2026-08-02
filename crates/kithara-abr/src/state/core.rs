@@ -8,7 +8,12 @@ use kithara_platform::{
 };
 use num_traits::ToPrimitive;
 
-use super::{decision::AbrDecision, view::AbrView};
+use super::{
+    decision::AbrDecision,
+    pending::{AbrTicket, PendingAbrClaim, PendingAbrDecision},
+    publisher::AbrPublisher,
+    view::AbrView,
+};
 
 bitflags! {
     /// Composable boolean control-state for [`AbrState`], orthogonal to the
@@ -45,7 +50,22 @@ pub struct AbrState {
     /// Replace-pending semantics: a fresh `request_target` overwrites
     /// any prior unobserved entry (latest-wins, matching the
     /// "switch-only-on-boundaries" contract from the two-cursor plan).
-    pending: Mutex<Option<PendingApply>>,
+    pending: Mutex<PendingState>,
+}
+
+#[derive(Debug)]
+struct PendingState {
+    next_ticket: u64,
+    pending: Option<PendingApply>,
+}
+
+impl Default for PendingState {
+    fn default() -> Self {
+        Self {
+            next_ticket: 1,
+            pending: None,
+        }
+    }
 }
 
 /// Captured intent of a pending switch: the target variant index plus
@@ -55,6 +75,7 @@ pub struct AbrState {
 struct PendingApply {
     reason: AbrReason,
     target: VariantIndex,
+    ticket: AbrTicket,
 }
 
 /// `true` for `AbrReason` variants that originate from a throughput
@@ -68,6 +89,18 @@ fn is_throughput_driven(reason: AbrReason) -> bool {
             | AbrReason::DownSwitch
             | AbrReason::UrgentDownSwitch
             | AbrReason::EscapeStalled
+    )
+}
+
+/// A switch the active variant's failure forced, rather than one taken to
+/// improve quality. Its premise is that the variant stopped delivering, and
+/// no amount of throughput evidence speaks to that: an estimate recovers as
+/// soon as some *other* variant's segment lands, while the stalled one is
+/// still stalled.
+pub(super) fn is_rescue(reason: AbrReason) -> bool {
+    matches!(
+        reason,
+        AbrReason::EscapeStalled | AbrReason::UrgentDownSwitch
     )
 }
 
@@ -109,6 +142,12 @@ impl AbrState {
         }
     }
 
+    /// Mint the publication capability retained by this state's source owner.
+    #[must_use]
+    pub fn publisher(self: &Arc<Self>) -> AbrPublisher {
+        AbrPublisher::new(Arc::clone(self))
+    }
+
     /// Publish the switch: a [`AbrDecision::Stay`] is a no-op; otherwise
     /// atomically clear the pending slot **iff** it still references the
     /// same target as `decision`, then store `current_variant :=
@@ -125,11 +164,14 @@ impl AbrState {
             return;
         }
         let target = decision.target();
-        let mut slot = self.pending.lock();
-        if slot.as_ref().is_some_and(|p| p.target == target) {
-            *slot = None;
+        let mut state = self.pending.lock();
+        if state
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.target == target)
+        {
+            state.pending = None;
         }
-        drop(slot);
         // Clear escape BEFORE publishing the new variant: a concurrent tick
         // that observes the new `current_variant` (Acquire) is then guaranteed
         // to observe the cleared flag, so it cannot immediately re-escape off
@@ -137,15 +179,40 @@ impl AbrState {
         self.clear_escape();
         self.current_variant.store(target.get(), Ordering::Release);
         self.record_switch(now);
+        drop(state);
     }
 
+    /// Drop the pending request only when `ticket` still identifies it.
+    ///
+    /// Returns `true` when the matching request was removed. A stale ticket
+    /// leaves a newer request untouched.
+    #[must_use]
+    pub fn abort_pending(&self, ticket: AbrTicket) -> bool {
+        let mut state = self.pending.lock();
+        if state
+            .pending
+            .as_ref()
+            .is_none_or(|pending| pending.ticket != ticket)
+        {
+            return false;
+        }
+        state.pending = None;
+        true
+    }
+
+    /// Whether the anti-oscillation interval has elapsed. Before the first
+    /// switch it is measured from the start of the session: that is when the
+    /// throughput estimate rests on the fewest samples, so a fast first segment
+    /// must not be enough to flip the variant out from under a listener who has
+    /// barely started playing.
     pub(super) fn can_switch_now(&self, now: Instant, min_interval: Duration) -> bool {
         let nanos = self.last_switch_at_nanos.load(Ordering::Acquire);
-        if nanos == Self::NO_SWITCH {
-            return true;
-        }
-        let last = self.reference_instant + Duration::from_nanos(nanos);
-        now.duration_since(last) >= min_interval
+        let since = if nanos == Self::NO_SWITCH {
+            self.reference_instant
+        } else {
+            self.reference_instant + Duration::from_nanos(nanos)
+        };
+        now.duration_since(since) >= min_interval
     }
 
     /// Clear the escape condition — the active variant is delivering again, or
@@ -164,6 +231,35 @@ impl AbrState {
     #[must_use]
     pub fn decide(&self, view: &AbrView<'_>, now: Instant) -> AbrDecision {
         super::decision::evaluate(self, view, now)
+    }
+
+    /// Publish `claim` only when it still identifies the pending request.
+    ///
+    /// Returns `true` after publishing and consuming the matching request. A
+    /// stale claim leaves both the audible variant and any newer intent
+    /// untouched.
+    #[must_use]
+    pub fn commit_pending(&self, claim: PendingAbrDecision, now: Instant) -> bool {
+        let mut state = self.pending.lock();
+        if self.is_locked() {
+            return false;
+        }
+        let Some(pending) = state.pending else {
+            return false;
+        };
+        let current = self.current_variant_index();
+        let decision = pending_decision(current, pending.target, pending.reason);
+        if pending.ticket != claim.ticket() || decision != claim.decision() {
+            return false;
+        }
+
+        state.pending = None;
+        let target = decision.target();
+        self.clear_escape();
+        self.current_variant.store(target.get(), Ordering::Release);
+        self.record_switch(now);
+        drop(state);
+        true
     }
 
     fn instant_to_nanos(&self, instant: Instant) -> u64 {
@@ -195,12 +291,13 @@ impl AbrState {
     /// `peek_pending_decision_returns_none_during_seek`). Invalidating
     /// is destructive and happens only at semantic seek boundaries.
     pub fn invalidate_pending(&self) {
-        let mut slot = self.pending.lock();
-        if slot
+        let mut state = self.pending.lock();
+        if state
+            .pending
             .as_ref()
             .is_some_and(|p| is_throughput_driven(p.reason))
         {
-            *slot = None;
+            state.pending = None;
         }
     }
 
@@ -224,7 +321,9 @@ impl AbrState {
     /// [`invalidate_pending`](Self::invalidate_pending), called from
     /// `coord::reset_for_seek` on a semantic seek boundary.
     pub fn lock(&self) {
+        let state = self.pending.lock();
         self.lock_count.fetch_add(1, Ordering::AcqRel);
+        drop(state);
     }
 
     #[must_use]
@@ -271,21 +370,65 @@ impl AbrState {
     /// pinned snapshot.
     #[must_use]
     pub fn peek_pending_decision(&self, current: VariantIndex) -> Option<AbrDecision> {
-        if self.is_locked() {
-            return None;
-        }
-        let pending = *self.pending.lock().as_ref()?;
+        self.claim_pending_decision(current)
+            .map(PendingAbrDecision::decision)
+    }
+
+    /// Observe whether an exact pending intent is absent, temporarily locked,
+    /// or ready to claim.
+    #[must_use]
+    pub fn pending_claim(&self, current: VariantIndex) -> PendingAbrClaim {
+        let state = self.pending.lock();
+        let Some(pending) = state.pending else {
+            return PendingAbrClaim::Absent;
+        };
         if pending.target == current {
-            return None;
+            return PendingAbrClaim::Absent;
         }
-        Some(pending_decision(current, pending.target, pending.reason))
+        let claim = PendingAbrDecision::new(
+            pending.ticket,
+            pending_decision(current, pending.target, pending.reason),
+        );
+        let locked = self.is_locked();
+        drop(state);
+        if locked {
+            return PendingAbrClaim::Locked(claim);
+        }
+        PendingAbrClaim::Ready(claim)
+    }
+
+    /// Claim the exact pending request without consuming it.
+    ///
+    /// Returns `None` while locked, when no request exists, or when the
+    /// pending target already equals `current`.
+    #[must_use]
+    pub fn claim_pending_decision(&self, current: VariantIndex) -> Option<PendingAbrDecision> {
+        match self.pending_claim(current) {
+            PendingAbrClaim::Ready(claim) => Some(claim),
+            PendingAbrClaim::Absent | PendingAbrClaim::Locked(_) => None,
+        }
     }
 
     /// Phase 2 read-only view of the unobserved pending switch (if any).
     /// Used by the Phase 3 scheduler boundary check and by tests.
     #[must_use]
     pub fn pending_target(&self) -> Option<VariantIndex> {
-        self.pending.lock().as_ref().map(|p| p.target)
+        self.pending
+            .lock()
+            .pending
+            .as_ref()
+            .map(|pending| pending.target)
+    }
+
+    /// Variant a seek replacement must open. A pending selection intent wins
+    /// even while ABR publication is locked.
+    #[must_use]
+    pub fn selected_variant_for_seek(&self) -> VariantIndex {
+        self.pending
+            .lock()
+            .pending
+            .as_ref()
+            .map_or_else(|| self.current_variant_index(), |pending| pending.target)
     }
 
     fn record_switch(&self, now: Instant) {
@@ -293,16 +436,43 @@ impl AbrState {
             .store(self.instant_to_nanos(now), Ordering::Release);
     }
 
+    /// Drop a throughput-driven pending whose target the live decision no
+    /// longer wants. Called from the controller tick's
+    /// `Stay { AlreadyOptimal }` arm — the one verdict that re-affirms
+    /// `current` against fresh evidence. Without it, an urgent down-switch
+    /// latched on the initial throughput seed outlives the estimate that
+    /// justified it and commits a quality drop at the next boundary.
+    ///
+    /// Narrower than [`invalidate_pending`](Self::invalidate_pending), which
+    /// drops every throughput-driven pending across a position jump: manual and
+    /// first-pick intents are not throughput claims, and a rescue is not one
+    /// either — see [`is_rescue`]. A pending that already targets `current`
+    /// describes no divergence and is left untouched.
+    pub(crate) fn retract_throughput_pending(&self, current: VariantIndex) {
+        let mut state = self.pending.lock();
+        if state.pending.as_ref().is_some_and(|p| {
+            is_throughput_driven(p.reason) && !is_rescue(p.reason) && p.target != current
+        }) {
+            state.pending = None;
+        }
+    }
+
     /// Phase 2 of the two-cursor refactor: record the intent to switch
     /// to `target` without committing the variant change. The boundary
     /// commit is driven by [`commit_pending`](Self::commit_pending) at
     /// segment boundaries (Phase 3 wires the scheduler to call it).
     ///
-    /// Replace-pending semantics: a fresh `request_target` overwrites
-    /// any prior unobserved entry. This honours the user-stated
+    /// Replace-pending semantics: a request for a *different* target
+    /// overwrites any prior unobserved entry. This honours the user-stated
     /// contract that a switch only commits at the next segment boundary
     /// — between two boundaries we keep the latest intent and discard
     /// stale ones.
+    ///
+    /// A repeat request for the target already queued is a no-op, ticket and
+    /// reason included. The ticket names the exact transition the consumer
+    /// built its incoming session and decoder against, so re-minting one for
+    /// an unchanged intent would cancel that live session on every tick and
+    /// the switch could never finish.
     ///
     /// The pending intent is written regardless of `is_locked` — the
     /// publish gate lives in
@@ -320,14 +490,31 @@ impl AbrState {
     /// through would queue a switch the live mode never decided. The
     /// mode is read under the slot lock, pairing with the
     /// store-mode-then-clear-slot order in `set_mode`.
+    ///
+    /// # Panics
+    ///
+    /// Panics after exhausting the monotonic ABR ticket space.
     pub fn request_target(&self, target: VariantIndex, reason: AbrReason) {
-        let mut slot = self.pending.lock();
+        let mut state = self.pending.lock();
         if let AbrMode::Manual(idx) = self.mode()
             && idx != target
         {
             return;
         }
-        *slot = Some(PendingApply { reason, target });
+        if state
+            .pending
+            .is_some_and(|pending| pending.target == target)
+        {
+            return;
+        }
+        assert!(state.next_ticket < u64::MAX, "ABR ticket space exhausted");
+        let ticket = AbrTicket::new(state.next_ticket);
+        state.next_ticket += 1;
+        state.pending = Some(PendingApply {
+            reason,
+            target,
+            ticket,
+        });
     }
 
     pub fn set_max_bandwidth_bps(&self, cap: Option<u64>) {
@@ -346,9 +533,22 @@ impl AbrState {
     /// `on_mode_changed`). The mode is stored before the slot clears so
     /// a [`request_target`](Self::request_target) that acquires the slot
     /// lock afterwards observes the new mode in its consistency check.
+    ///
+    /// A manual pin that names the target already queued restates that intent
+    /// instead of superseding it, so its entry survives. The ticket identifies
+    /// the transition a consumer is already building against; clearing it here
+    /// would cancel that work only for the re-derived tick to ask for the very
+    /// same switch under a new identity.
     pub fn set_mode(&self, mode: AbrMode) {
+        let mut state = self.pending.lock();
         self.mode.store(mode.into(), Ordering::Release);
-        *self.pending.lock() = None;
+        let restates_queued_intent = matches!(
+            mode,
+            AbrMode::Manual(target) if state.pending.is_some_and(|pending| pending.target == target)
+        );
+        if !restates_queued_intent {
+            state.pending = None;
+        }
     }
 
     pub fn unlock(&self) {

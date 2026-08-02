@@ -105,14 +105,13 @@ impl StdError for StreamReadError {
 /// own decoder.
 #[derive(Debug, Clone, Copy, derive_more::Display)]
 #[display(
-    "{reason}: pos={pos} want={want} len={len:?} phase={phase:?} epoch={epoch} flushing={flushing} variant_fence={variant_fence}"
+    "{reason}: pos={pos} want={want} len={len:?} phase={phase:?} epoch={epoch} flushing={flushing}"
 )]
 pub struct StreamPending {
     pub len: Option<u64>,
     pub reason: PendingReason,
     pub phase: SourcePhase,
     pub flushing: bool,
-    pub variant_fence: bool,
     pub epoch: u64,
     pub pos: u64,
     pub want: usize,
@@ -232,23 +231,6 @@ impl<T: StreamType> Stream<T> {
         }
     }
 
-    /// Acknowledge the variant switch — a decoder for the new variant is
-    /// installed. No-op for non-adaptive sources.
-    pub fn clear_variant_fence(&mut self) {
-        if let Some(vc) = self.source.variant_control() {
-            vc.clear_variant_fence();
-        }
-    }
-
-    /// Allow reads from the next variant so a decoder can be built against
-    /// it, leaving the switch itself unacknowledged. No-op for non-adaptive
-    /// sources.
-    pub fn open_variant_read_gate(&mut self) {
-        if let Some(vc) = self.source.variant_control() {
-            vc.open_variant_read_gate();
-        }
-    }
-
     /// Header byte range for decoder recreate after a format change.
     ///
     /// # Errors
@@ -261,24 +243,6 @@ impl<T: StreamType> Stream<T> {
             Err(StreamError::Source(SourceError::FormatChangeNotApplicable)),
             |vc| vc.format_change_segment_range(),
         )
-    }
-
-    /// `true` while a committed cross-variant switch still has no decoder
-    /// built against it.
-    #[must_use]
-    pub fn has_variant_change_pending(&self) -> bool {
-        self.source
-            .variant_control()
-            .is_some_and(|vc| vc.has_variant_change_pending())
-    }
-
-    /// `true` while a cross-variant fence keeps `read_at` / `wait_range`
-    /// short-circuited to `Pending(VariantChange)` / `Interrupted`.
-    #[must_use]
-    pub fn variant_read_pending(&self) -> bool {
-        self.source
-            .variant_control()
-            .is_some_and(|vc| vc.variant_read_pending())
     }
 
     pub fn is_empty(&self) -> Option<bool> {
@@ -305,15 +269,6 @@ impl<T: StreamType> Stream<T> {
     /// Get shared reference to inner source.
     pub fn source(&self) -> &T::Source {
         &self.source
-    }
-
-    /// Target variant index of the pending fence, `None` when no fence
-    /// is up (or the source is non-adaptive).
-    #[must_use]
-    pub fn variant_change_target(&self) -> Option<usize> {
-        self.source
-            .variant_control()
-            .and_then(|vc| vc.variant_change_target())
     }
 }
 
@@ -407,19 +362,11 @@ impl<T: StreamType> Stream<T> {
             });
         }
 
-        let variant_control = self.source.variant_control();
         let seek_obs = self.source.seek_observe();
         loop {
             let read_epoch = seek_obs.epoch();
             let pos = self.source.position();
             let range = pos..pos.saturating_add(buf.len() as u64);
-
-            if variant_control
-                .as_ref()
-                .is_some_and(|vc| vc.variant_read_pending())
-            {
-                return Ok(StreamReadOutcome::Pending(PendingReason::VariantChange));
-            }
 
             let wait_result = self
                 .source
@@ -676,9 +623,9 @@ impl<T: StreamType> Stream<T> {
     /// `Pending(NotReady|Retry)` surfaced through `impl Read`. Pulls
     /// live source/timeline state at the moment of the wrap so the
     /// resulting `io::Error` carries the real reason ("data not ready
-    /// (`wait_budget_exhausted`): pos=N len=M phase=… epoch=E flushing=…
-    /// `variant_fence`=…") instead of a bare "data not ready". Decoders
-    /// downcast on `StreamPending` to recover the typed [`PendingReason`].
+    /// (`wait_budget_exhausted`): pos=N len=M phase=… epoch=E flushing=…")
+    /// instead of a bare "data not ready". Decoders downcast on
+    /// `StreamPending` to recover the typed [`PendingReason`].
     fn snapshot_pending(&self, reason: PendingReason, want: usize) -> StreamPending {
         let pos = self.source.position();
         let len = self.source.len();
@@ -692,10 +639,6 @@ impl<T: StreamType> Stream<T> {
             phase,
             epoch: seek_obs.epoch(),
             flushing: seek_obs.is_flushing(),
-            variant_fence: self
-                .source
-                .variant_control()
-                .is_some_and(|vc| vc.variant_read_pending()),
         }
     }
 }

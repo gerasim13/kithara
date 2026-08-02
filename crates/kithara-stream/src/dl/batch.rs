@@ -1,6 +1,5 @@
 use std::sync::atomic::Ordering;
 
-use futures::StreamExt;
 use kithara_abr::{AbrController, AbrPeerId};
 use kithara_events::{
     BandwidthSource, CancelReason, DownloaderEvent, EventBus, RequestId, RequestMethod,
@@ -163,90 +162,70 @@ fn fail_request(bus: Option<&EventBus>, request_id: RequestId, err: &NetError, r
     }
 }
 
-/// Group of slot entries sharing the same cancel-token identity (epoch).
-struct EpochGroup {
-    cancel: CancelGroup,
+/// Collects slot entries and executes them via fire-and-forget spawn.
+pub(super) struct BatchGroup {
     entries: Vec<SlotEntry>,
 }
 
-/// Collects slot entries, groups by epoch, executes via fire-and-forget spawn.
-pub(super) struct BatchGroup {
-    epochs: Vec<EpochGroup>,
+pub(super) struct BatchResult {
+    pub(super) dispatched: usize,
+    pub(super) pending: Vec<SlotEntry>,
 }
 
 impl FromIterator<SlotEntry> for BatchGroup {
     fn from_iter<I: IntoIterator<Item = SlotEntry>>(entries: I) -> Self {
-        let mut epochs: Vec<EpochGroup> = Vec::new();
-        for entry in entries {
-            let found = epochs.iter_mut().find(|g| g.cancel == entry.cmd.cancel);
-            match found {
-                Some(group) => group.entries.push(entry),
-                None => epochs.push(EpochGroup {
-                    cancel: entry.cmd.cancel.clone(),
-                    entries: vec![entry],
-                }),
-            }
+        Self {
+            entries: entries.into_iter().collect(),
         }
-        Self { epochs }
     }
 }
 
 impl BatchGroup {
     pub(super) fn is_empty(&self) -> bool {
-        self.epochs.is_empty()
+        self.entries.is_empty()
     }
 
-    /// Spawn every live fetch in FIFO order, gating on `max_concurrent`, and
-    /// deliver-cancel the rest. Returns the number of fetches actually spawned
-    /// (cancelled cmds don't count), so
+    /// Spawn the live FIFO prefix that fits the current concurrency capacity,
+    /// return the remaining entries to the registry, and deliver-cancel dead
+    /// entries. The registry can then admit newly urgent work before revisiting
+    /// the pending demand tail.
+    ///
+    /// Returns the number of fetches actually spawned (cancelled cmds don't
+    /// count), so
     /// [`Registry::tick`](super::registry::Registry::tick) can treat a non-zero
     /// dispatch as forward progress for the hang watchdog.
-    ///
-    /// Epoch grouping keys on the same cancel token each entry carries, so one
-    /// flattened pass with a per-entry cancel check reproduces both the
-    /// group-level and per-entry cancellation of the grouped form.
     ///
     /// The `batch_size` / `first_request_id` probe values are written as
     /// `name = expr`: the macro gates them behind `cfg(any(test, feature =
     /// "probe"))`, so the metric computation is free in production builds.
     #[kithara::flash(true)]
     #[kithara::probe(
-        batch_size = self.epochs.iter().map(|group| group.entries.len()).sum::<usize>(),
+        batch_size = self.entries.len(),
         first_request_id = self
-            .epochs
+            .entries
             .first()
-            .and_then(|group| group.entries.first())
             .map_or(0, |entry| entry.cmd.request_id.get())
     )]
-    pub(super) async fn process(self, inner: &DownloaderInner) -> usize {
-        let entries = self.epochs.into_iter().flat_map(|group| group.entries);
-        futures::stream::iter(entries)
-            .fold(
-                0_usize,
-                move |dispatched, SlotEntry { cmd, peer_cancel }| async move {
-                    if cmd.cancel.is_cancelled() {
-                        deliver_cancelled_with_event(cmd, &peer_cancel);
-                        dispatched
-                    } else {
-                        // Backpressure is the capacity gate alone: `spawn_fetch` bumps
-                        // `inflight` synchronously (`start_request`), so the next
-                        // iteration sees the updated count. No unconditional per-spawn
-                        // yield: under `flash` this loop runs on the virtual clock while
-                        // the spawned fetch tasks run real-socket I/O, and an engine
-                        // `yield_now` only resolves on a clock advance (grant needs
-                        // `active_async == 0`). The in-flight fetches' `fetch_waker`
-                        // churn keeps `active_async` non-zero, so a mid-batch yield can
-                        // never be granted — it strands the rest of the batch (a popped
-                        // segment that the peer no longer holds is then lost forever).
-                        while inner.inflight.load(Ordering::Relaxed) >= inner.max_concurrent {
-                            task::yield_now().await;
-                        }
-                        spawn_fetch(inner, cmd, peer_cancel);
-                        dispatched + 1
-                    }
-                },
-            )
-            .await
+    pub(super) fn process(self, inner: &DownloaderInner) -> BatchResult {
+        let capacity = inner
+            .max_concurrent
+            .saturating_sub(inner.inflight.load(Ordering::Relaxed));
+        let mut dispatched = 0;
+        let mut pending = Vec::new();
+        for SlotEntry { cmd, peer_cancel } in self.entries {
+            if cmd.cancel.is_cancelled() {
+                deliver_cancelled_with_event(cmd, &peer_cancel);
+            } else if dispatched < capacity {
+                spawn_fetch(inner, cmd, peer_cancel);
+                dispatched += 1;
+            } else {
+                pending.push(SlotEntry { peer_cancel, cmd });
+            }
+        }
+        BatchResult {
+            dispatched,
+            pending,
+        }
     }
 }
 
@@ -256,6 +235,7 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     let soft_timeout = inner.soft_timeout;
     let inflight = inner.inflight.clone();
     let fetch_waker = inner.fetch_waker.clone();
+    let capacity_notify = Arc::clone(&inner.capacity_notify);
     let abr = Arc::clone(&inner.abr);
     let downloader_cancel = inner.cancel.clone();
     let peer_id = internal.peer_id;
@@ -305,6 +285,7 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
         )
         .await;
         inflight.fetch_sub(1, Ordering::Relaxed);
+        capacity_notify.notify_one();
         fetch_waker.wake();
     });
 }

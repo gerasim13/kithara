@@ -37,7 +37,7 @@ impl Track<Decoding> {
             if !src.seek_obs.is_pending()
                 && let FormatDecision::Recreate(recreate) = detect(
                     &src.shared_stream,
-                    src.decode.session(),
+                    src.decode.active(),
                     src.seek_obs.as_ref(),
                 )
             {

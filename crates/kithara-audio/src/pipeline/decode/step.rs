@@ -1,4 +1,4 @@
-use kithara_decode::{DecodeError, DecoderChunkOutcome, ErrorClass, PcmChunk};
+use kithara_decode::{DecoderChunkOutcome, ErrorClass, PcmChunk};
 use kithara_events::{AudioEvent, DecoderEvent, SeekLifecycleStage, SegmentLocation};
 use kithara_stream::{PendingReason, StreamType};
 use kithara_test_utils::kithara;
@@ -9,8 +9,8 @@ use crate::{
     },
     pipeline::{
         decode::{
-            core::{DecodeAction, DecodeCore, DecodeCtx},
-            format::{FormatDecision, detect, handle_variant_change},
+            core::{ActiveDecode, DecodeAction, DecodeCtx},
+            format::{FormatDecision, detect},
         },
         fetch::Fetch,
         gapless::visible_duration,
@@ -19,19 +19,17 @@ use crate::{
     },
 };
 
-struct Consts;
-
-impl Consts {
-    const VARIANT_CHANGE: &str = "variant change signal without observable format transition";
-}
-
 #[kithara::hang_watchdog]
 pub(crate) fn tick<T: StreamType>(
-    core: &mut DecodeCore,
+    core: &mut ActiveDecode,
     mut ctx: DecodeCtx<'_, T>,
 ) -> DecodeAction {
-    if let Some(duration) = visible_duration(core.session().decoder.as_ref(), core.gapless_mode())
-        && Some(duration) > ctx.playhead.duration()
+    let active = core.active();
+    if let Some(duration) = visible_duration(
+        active.decoder().duration(),
+        active.gapless_profile(),
+        core.gapless_mode(),
+    ) && Some(duration) > ctx.playhead.duration()
     {
         ctx.playhead.set_duration(Some(duration));
     }
@@ -40,27 +38,12 @@ pub(crate) fn tick<T: StreamType>(
         if ctx.seek_observe.is_flushing() || ctx.seek_observe.is_pending() {
             return DecodeAction::SeekInterrupted;
         }
-        if let Some(chunk) = core.next_gapless() {
+        if let Some(chunk) = core.next_output() {
             return produced(chunk, epoch, &mut ctx);
         }
         match core.next_chunk(ctx.stream.position()) {
             Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
-                return variant_change(
-                    core,
-                    &ctx,
-                    &DecodeError::InvalidData {
-                        detail: Consts::VARIANT_CHANGE,
-                    },
-                );
-            }
-            Ok(DecoderChunkOutcome::Pending(_)) if ctx.stream.has_variant_change_pending() => {
-                return variant_change(
-                    core,
-                    &ctx,
-                    &DecodeError::InvalidData {
-                        detail: Consts::VARIANT_CHANGE,
-                    },
-                );
+                return variant_change(core, &ctx);
             }
             Ok(DecoderChunkOutcome::Pending(_)) => {
                 return DecodeAction::Pending(WaitingReason::Waiting);
@@ -78,11 +61,11 @@ pub(crate) fn tick<T: StreamType>(
             }
             Ok(DecoderChunkOutcome::Eof) => {
                 core.set_tail_compensation();
-                if let Some(chunk) = core.next_gapless() {
+                if let Some(chunk) = core.next_output() {
                     return produced(chunk, epoch, &mut ctx);
                 }
                 if let FormatDecision::Recreate(recreate) =
-                    detect(ctx.stream, core.session(), ctx.seek_observe)
+                    detect(ctx.stream, core.active(), ctx.seek_observe)
                 {
                     return DecodeAction::StartRecreate(recreate);
                 }
@@ -95,7 +78,7 @@ pub(crate) fn tick<T: StreamType>(
                 return DecodeAction::Eof;
             }
             Err(error) if error.classify() == ErrorClass::VariantChange => {
-                return variant_change(core, &ctx, &error);
+                return variant_change(core, &ctx);
             }
             Err(error) if error.classify() == ErrorClass::Interrupted => {}
             Err(error) => {
@@ -105,9 +88,8 @@ pub(crate) fn tick<T: StreamType>(
                             class: map_decode_error_class(error.classify()),
                             kind: map_decode_error_kind(&error),
                             codec: core
-                                .session()
-                                .media_info
-                                .as_ref()
+                                .active()
+                                .media_info()
                                 .and_then(|info| info.codec)
                                 .map(map_audio_codec_kind),
                             detail: decode_error_detail(&error),
@@ -151,18 +133,11 @@ pub(crate) fn produced<T: StreamType>(
 }
 
 pub(crate) fn variant_change<T: StreamType>(
-    core: &DecodeCore,
+    core: &ActiveDecode,
     ctx: &DecodeCtx<'_, T>,
-    error: &DecodeError,
 ) -> DecodeAction {
-    match handle_variant_change(ctx.stream, core.session(), ctx.seek_observe, error) {
-        Ok(recreate) => DecodeAction::StartRecreate(recreate),
-        Err(error) => {
-            if error.is_interrupted() {
-                DecodeAction::SeekInterrupted
-            } else {
-                DecodeAction::Failed(TrackFailure::Decode(error))
-            }
-        }
+    match detect(ctx.stream, core.active(), ctx.seek_observe) {
+        FormatDecision::Recreate(recreate) => DecodeAction::StartRecreate(recreate),
+        FormatDecision::None => DecodeAction::SeekInterrupted,
     }
 }

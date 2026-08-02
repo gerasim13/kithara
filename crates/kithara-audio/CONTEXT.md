@@ -76,20 +76,23 @@ State has one domain owner:
   decode epoch, through `commit_decode_epoch`.
 - `ResumeCursor` owns `decode_head` and resolves recreate resume positions from
   the current epoch, committed position, and `resume_target`.
-- `DecodeCore` owns the complete `DecoderSession` and replaces it atomically;
-  it also owns gapless processing, time-domain effects, and EOF drain.
+- `ActiveDecode` owns the authoritative `DecoderGeneration`, the always-on
+  `PcmBlender`, time-domain effects, and EOF drain. Each `DecoderGeneration`
+  owns its decoder facts and per-generation gapless stage.
 - `FormatPolicy` makes pure `detect` and `handle_variant_change` decisions and
   returns `RecreateState` without starting recreation itself.
 - `ReadinessGate` is the only owner of byte-range calculations used by both
   gate and wait paths. Those paths must use the same range and source phase.
 - `RebuildPort` owns the two-phase recreation submission boundary: preparation
   produces a pending job, and the coordinator submits it outside the RT step.
-- `RetiredDecoders` owns `retire` and off-RT `drain`; decoder destruction does
-  not occur in the RT region.
+  The job constructs a complete `DecoderGeneration`; RT installation only
+  moves it into `ActiveDecode`.
+- `RetiredGenerations` owns retirement and off-RT drain; generation destruction
+  does not occur in the RT region.
 - `RouteChange` detects real host-rate changes. It enters the same
   `RecreateState` machine as `FormatBoundary` and `VariantSwitch`; it is not a
   separate lightweight recreation path.
-- `StreamHandle` and `SharedStream` own byte-space and fence ground truth.
+- `StreamHandle` and `SharedStream` own byte-space ground truth.
   Other owners do not clone byte-range policy.
 - `StreamAudioSource` remains a thin coordinator. It dispatches work and is the
   sole track-state mutator through `update_state`; it contains no domain logic.
@@ -366,24 +369,23 @@ The audio worker measures its own processing cost and publishes it to a shared `
 
 One `Arc<EngineLoad>` is created in `PlayerImpl`, threaded through `AudioConfig::engine_load` → `TrackRegistration` into every track's `DecoderNode`, and read back via `PlayerImpl::engine_load()` → `Queue::engine_load()` for the DJ-studio status bar. The atomics double as the EWMA state; the worker thread is the only writer, so the read-blend-store needs no lock. It reflects whichever track is currently producing and is meaningful whenever audio is flowing — independent of key-lock. `realtime == 0` means "no measurement yet" (paused / not started).
 
-## Construction reads (initial decoder)
+## Construction reads
 
-`Audio::new` builds the initial decoder **exactly once** (`create_initial_decoder` → one `spawn_blocking`), with **no retry loop and no readiness gate**. The construction read goes through the **blocking** off-RT `Stream::read` adapter — `SharedStream` carries a construction-phase `blocking` flag that `Audio::new` arms before the build and disarms before the RT worker is registered, so the decode loop the worker then drives always uses the non-blocking `probe_read`. (This is a staged construction → steady-state ownership transfer of the read mode, never a live toggle.)
+`Audio::new` builds the initial decoder **exactly once** (`create_initial_decoder` → one `spawn_blocking`), with **no retry loop and no readiness gate**. The construction read goes through the **blocking** off-RT `Stream::read` adapter — `SharedStream` carries a construction gate that `Audio::new` arms before the build and disarms before the RT worker is registered. `RebuildPort` uses the same gate carried by `OpenedReader` around its one `spawn_blocking_on` factory call for both opened incoming sessions and shared-stream replacements. It disarms after either a normal return or a caught panic. Steady-state reads use the non-blocking `probe_read`.
 
 The blocking adapter is what makes construction wait — off the RT worker — for the bytes the build reads (the container header in the init segment, spilling into the first packet). A slow-but-arriving prefix waits up to the stream's blocking-read budget and the build then succeeds, instead of erroring on the first not-ready probe (the old `Audio::new -> Interrupted` flake under load); the wait lives in the stream/byte layer (`Stream::read` wakes the peer downloader), not in a retry loop here. A construction-range byte that genuinely never arrives surfaces the **stream layer's** typed terminal (`Stream::read` → source `io::Error` / typed `StreamPending`) verbatim, bounded by the blocking-read budget — the audio layer never mints its own construction error type, and there is no synthetic `TimedOut`.
 
-A `VariantChange`/`SeekPending` at construction is **not** a rebuild trigger: the variant is settled before the build, and construction never calls `clear_variant_fence` (that stays a recreate-path delegate). Construction always probes at offset 0; a concurrent user seek (play-then-seek) is applied by the post-construction seek path. A `VariantChange` genuinely surfacing at construction would be a stream-state bug to fix in the stream layer, not papered over with a loop. Pinned by `tests/tests/kithara_hls/probe_not_ready_at_creation.rs`.
+A `VariantChange`/`SeekPending` at construction is **not** a rebuild trigger: the variant is settled before the build. Construction always probes at offset 0; a concurrent user seek (play-then-seek) is applied by the post-construction seek path. A `VariantChange` genuinely surfacing at construction would be a stream-state bug to fix in the stream layer, not papered over with a loop. Pinned by `tests/tests/kithara_hls/probe_not_ready_at_creation.rs`.
 
 ## Format Change Handling
 
-On a fenced cross-codec ABR variant switch, the `DecoderNode` detects the format change via `Source::media_info()` polling and then:
+On a cross-codec ABR variant switch, the `DecoderNode` detects the format change via `Source::media_info()` polling and then:
 
-1. Uses the variant fence on the source to prevent cross-variant reads.
-2. Seeks to the first segment of the new variant (where init data lives).
-3. Recreates the decoder via `DecoderFactory`.
-4. Resets the effects chain to avoid audio artifacts.
+1. Seeks to the first segment of the new variant (where init data lives).
+2. Recreates the decoder via `DecoderFactory`.
+3. Resets the effects chain to avoid audio artifacts.
 
-Known same-codec HLS switches are not decoder format changes. The HLS source retargets byte mapping at the segment boundary and keeps byte-continuity for the existing decoder; the audio layer must not turn a variant-index-only change into a recreate/fence.
+Known same-codec HLS switches are not decoder format changes. The HLS source retargets byte mapping at the segment boundary and keeps byte-continuity for the existing decoder; the audio layer must not turn a variant-index-only change into a recreate.
 
 ### Decoder recreate policy
 
@@ -392,10 +394,9 @@ Known same-codec HLS switches are not decoder format changes. The HLS source ret
 - Recreate path is metadata-first (`MediaInfo`) with native Symphonia probe fallback from a fresh source.
 - Decoder recreate always uses seek target anchor/base offset from timeline/source, so new decoder starts from stream timeline truth.
 - **Seek-epoch suppression**: `detect_format_change` returns `NoChange` while a seek is pending and the session was installed at that same seek epoch. The decoder is already aligned with the seek's landing variant, so a second cross-variant recreate inside one seek epoch is wasted work and would discard the freshly-built decoder before it emits a sample.
-- **Rebuild supersession retains seek ownership**: when a variant fence makes an in-flight decoder rebuild stale, a newer seek epoch wins first; otherwise a `RecreateNext::Seek` / `ApplySeek` request carried by that rebuild returns to `SeekRequested` and re-resolves against the now-current variant. Only a decode-only rebuild may continue through a fresh `FormatBoundary` recreate. Dropping the carried request leaves the seek flag pending after its one-shot preemption latch was consumed, permanently starving the producer.
+- **Rebuild supersession retains seek ownership**: when a variant change makes an in-flight decoder rebuild stale, a newer seek epoch wins first; otherwise a `RecreateNext::Seek` / `ApplySeek` request carried by that rebuild returns to `SeekRequested` and re-resolves against the now-current variant. Only a decode-only rebuild may continue through a fresh `FormatBoundary` recreate. Dropping the carried request leaves the seek flag pending after its one-shot preemption latch was consumed, permanently starving the producer.
 - **Seek anchor ownership**: a `SourceSeekAnchor` byte offset is valid only in the variant byte space that resolved it. `ApplyingSeek` re-resolves the seek when the active ABR variant no longer matches the anchor's `variant_index` before `decoder.seek()` runs; `AwaitingResume` may gate on the anchor offset only while the current ABR variant still matches it. After a manual switch or boundary commit changes the active variant, the old byte offset is discarded. This prevents a stale same-codec seek anchor from holding the worker on bytes that are meaningful only in the previous variant layout.
 - **Mid-playback recreate continues from the decode head, not `committed`**: a `FormatBoundary` recreate that fires during sustained playback (a variant switch taking effect at a segment boundary, no pending user seek) does **not** bump the seek epoch and does **not** flush the outlet ring. The producer has already emitted chunks ahead of the consumer's lagging `committed_position`, up to its decode head (`source.rs::decode_head`); re-seeking the rebuilt decoder to `committed` would re-emit the `[committed..decode_head]` range that is still queued in the ring — duplicated content the consumer reads as a backward phase jump (the variant-switch phase-drift seam). `execute_recreation` therefore resumes at the decode head. A pending user seek (`resume_target` for the current epoch) takes precedence only while it has not yet materialized in produced chunks (`target > decode_head`): once the producer has trimmed past the seek target, `[target..decode_head]` is already queued in the ring and resuming at `target` would re-emit it — the same duplicated-content seam, gated on CPU contention (the consumer's `committed` lags behind `target` while the producer is already past it; comparing `target` against `committed` mislabeled exactly that case). The decode head is stored as an exact frame and converted to a seek target with `duration_for_frames`; the demuxer quantizes that landing to a sample, and the rebuilt decoder relabels its first chunk via `frame_offset_for`, which rounds the landing PTS to the nearest frame (consistent with `frames_to_trim`). A floored `frame_offset_for` disagreed with that round by one frame when the landing fell a fraction of a sample below the target, leaving a residual −1-sample label seam (the audio stayed continuous); rounding to nearest closes it.
-- **Aligned-fence forced recreate (switch-back-to-current race)**: `HlsCoord::commit_variant_switch` raises the read fence only for decoder-recreate switches and publishes the fence's **target variant** (`VariantControl::variant_change_target`) before the generation bump. When the fence targets the variant the session already labels itself with (a seek recreate landed on the switch target before the commit raised the fence — typical for a manual switch back to the variant a racing seek just anchored to), no format diff will ever become observable, and the fence blocks the very reads that drive the seek/recreate paths that clear fences — without intervention the producer would recheck `NoChange` forever and the consumer starves into the watchdog (the pre-recheck code killed the producer with `InvalidData` in the same state). `handle_variant_change` therefore detects this shape (fence target == session variant == published `media_info` variant, no pending seek, init range resolvable) and forces the `FormatBoundary` recreate instead of bare-acking the fence: the session label can lie about the demuxer's actual bitstream (a stale seek anchor stamps the pre-commit variant), so the recreate re-primes the demuxer on the active variant's real bytes, clears the fence inside `apply_format_change`, and resumes from the decode head. A transient pre-publish observation (fence bumped before `abr.apply_decision`) fails the published-`media_info` check and falls through to the bounded recheck.
 
 ### Recreate readiness gating
 

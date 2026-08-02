@@ -2,28 +2,31 @@ use kithara_test_utils::kithara;
 use kithara_ui::{
     compile::{CompiledNode, CompiledUi},
     expand::{ControlSpec, ExpandedNode},
-    module::{ButtonStyle, IconName, TextStyle, WaveStyle},
+    module::{ButtonStyle, IconName, TextAlign, TextStyle, WaveStyle},
 };
 
 use super::{cache::DeckLayout, compile::compile_studio};
-
 const LAYOUTS: [DeckLayout; 2] = [DeckLayout::Single, DeckLayout::Dual];
 
-const SINGLE_HOSTED_CLAIMS: [(&str, &str); 11] = [
+const SINGLE_HOSTED_CLAIMS: [(&str, &str); 15] = [
     ("deck-a/next", "activation"),
     ("deck-a/play", "activation"),
     ("deck-a/prev", "activation"),
     ("deck-a/wave", "hero-wave"),
     ("deck-a/zoom-in", "activation"),
     ("deck-a/zoom-out", "activation"),
-    ("mixer/a/high", "knob"),
-    ("mixer/a/low", "knob"),
-    ("mixer/a/mid", "knob"),
+    ("mixer/a/four-band/high-4", "knob"),
+    ("mixer/a/four-band/high-mid-4", "knob"),
+    ("mixer/a/four-band/low-4", "knob"),
+    ("mixer/a/four-band/low-mid-4", "knob"),
+    ("mixer/a/three-band/high-3", "knob"),
+    ("mixer/a/three-band/low-3", "knob"),
+    ("mixer/a/three-band/mid-3", "knob"),
     ("mixer/a/volume", "vertical-vu"),
     ("overview/a/wave", "wave"),
 ];
 
-const DUAL_HOSTED_CLAIMS: [(&str, &str); 23] = [
+const DUAL_HOSTED_CLAIMS: [(&str, &str); 31] = [
     ("deck-a/next", "activation"),
     ("deck-a/play", "activation"),
     ("deck-a/prev", "activation"),
@@ -36,13 +39,21 @@ const DUAL_HOSTED_CLAIMS: [(&str, &str); 23] = [
     ("deck-b/wave", "hero-wave"),
     ("deck-b/zoom-in", "activation"),
     ("deck-b/zoom-out", "activation"),
-    ("mixer/a/high", "knob"),
-    ("mixer/a/low", "knob"),
-    ("mixer/a/mid", "knob"),
+    ("mixer/a/four-band/high-4", "knob"),
+    ("mixer/a/four-band/high-mid-4", "knob"),
+    ("mixer/a/four-band/low-4", "knob"),
+    ("mixer/a/four-band/low-mid-4", "knob"),
+    ("mixer/a/three-band/high-3", "knob"),
+    ("mixer/a/three-band/low-3", "knob"),
+    ("mixer/a/three-band/mid-3", "knob"),
     ("mixer/a/volume", "vertical-vu"),
-    ("mixer/b/high", "knob"),
-    ("mixer/b/low", "knob"),
-    ("mixer/b/mid", "knob"),
+    ("mixer/b/four-band/high-4", "knob"),
+    ("mixer/b/four-band/high-mid-4", "knob"),
+    ("mixer/b/four-band/low-4", "knob"),
+    ("mixer/b/four-band/low-mid-4", "knob"),
+    ("mixer/b/three-band/high-3", "knob"),
+    ("mixer/b/three-band/low-3", "knob"),
+    ("mixer/b/three-band/mid-3", "knob"),
     ("mixer/b/volume", "vertical-vu"),
     ("mixer/xfade", "crossfader"),
     ("overview/a/wave", "wave"),
@@ -59,6 +70,15 @@ fn each_node(ui: &CompiledUi, visit: &mut impl FnMut(&ExpandedNode)) {
                 for child in children {
                     walk(child, visit);
                 }
+            }
+            ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
+                walk(child, visit);
+            }
+            ExpandedNode::Popover {
+                anchor, content, ..
+            } => {
+                walk(anchor, visit);
+                walk(content, visit);
             }
             _ => {}
         }
@@ -102,6 +122,12 @@ fn controls(ui: &CompiledUi) -> Vec<(&str, Vec<&str>)> {
             ui.resolve(surface.path),
             vec![ui.resolve(surface.write.key)],
         )),
+        ExpandedNode::Pressable { path, press, .. } => {
+            out.push((ui.resolve(*path), vec![ui.resolve(press.key)]));
+        }
+        ExpandedNode::Popover { path, open, .. } => {
+            out.push((ui.resolve(*path), vec![ui.resolve(open.key)]));
+        }
         _ => {}
     });
     out
@@ -225,10 +251,9 @@ fn deck_scoped_controls_are_routed_to_the_deck_they_read() {
         let ui = compile_studio(layout).unwrap();
         for (path, keys) in controls(&ui) {
             for key in keys {
-                let Some(letter) = key
-                    .split_once('@')
-                    .and_then(|(_, scope)| scope.strip_prefix("deck="))
-                else {
+                let Some(letter) = key.split_once('@').and_then(|(_, scope)| {
+                    scope.split(',').find_map(|pair| pair.strip_prefix("deck="))
+                }) else {
                     continue;
                 };
                 let routed = [
@@ -294,12 +319,49 @@ fn the_bar_owns_the_window_chrome() {
     }
 }
 
+const EQ_KNOBS: [&str; 7] = [
+    "high-3",
+    "mid-3",
+    "low-3",
+    "high-4",
+    "high-mid-4",
+    "low-mid-4",
+    "low-4",
+];
+
+/// The controls one channel strip carries, named by their leaf id: a knob bank
+/// reaches the strip through an include, so the path carries that segment too.
+fn strip_controls<'a>(paths: &[&'a str], letter: &str) -> Vec<&'a str> {
+    let prefix = format!("mixer/{letter}/");
+    paths
+        .iter()
+        .copied()
+        .filter_map(|path| path.strip_prefix(&prefix))
+        .filter_map(|path| path.rsplit('/').next())
+        .collect()
+}
+
 #[kithara::test]
 fn every_channel_strip_carries_the_supported_control_set() {
     let ui = compile_studio(DeckLayout::Dual).unwrap();
     let paths = control_paths(&ui);
     for letter in ["a", "b"] {
-        for name in ["low", "mid", "high", "volume"] {
+        let controls = strip_controls(&paths, letter);
+        for name in EQ_KNOBS.into_iter().chain(["volume"]) {
+            assert!(
+                controls.contains(&name),
+                "missing control `mixer/{letter}/{name}`"
+            );
+        }
+    }
+}
+
+#[kithara::test]
+fn every_eq_bank_carries_its_pointer_menu() {
+    let ui = compile_studio(DeckLayout::Dual).unwrap();
+    let paths = control_paths(&ui);
+    for letter in ["a", "b"] {
+        for name in ["eq-menu-anchor", "eq-3", "eq-4"] {
             let want = format!("mixer/{letter}/{name}");
             assert!(paths.contains(&want.as_str()), "missing control `{want}`");
         }
@@ -321,6 +383,43 @@ fn hosted_studio_controls_claimed_by_the_engine_keep_descriptor_shapes() {
              passive controls, and containers are intentionally absent"
         );
     }
+}
+
+#[kithara::test]
+fn eq_banks_stack_their_knobs_from_high_to_low() {
+    let ui = compile_studio(DeckLayout::Dual).unwrap();
+    let paths = control_paths(&ui);
+    for letter in ["a", "b"] {
+        let order: Vec<&str> = strip_controls(&paths, letter)
+            .into_iter()
+            .filter(|name| EQ_KNOBS.contains(name))
+            .collect();
+        assert_eq!(order, EQ_KNOBS);
+    }
+}
+
+#[kithara::test]
+fn every_eq_bank_centers_its_knobs() {
+    let ui = compile_studio(DeckLayout::Dual).unwrap();
+    let mut centered = 0;
+    each_node(&ui, &mut |node| {
+        let ExpandedNode::Column {
+            id: Some(id),
+            align,
+            ..
+        } = node
+        else {
+            return;
+        };
+        if matches!(
+            ui.resolve(*id).rsplit('/').next(),
+            Some("eq-3-knobs" | "eq-4-knobs")
+        ) {
+            assert_eq!(*align, TextAlign::Center);
+            centered += 1;
+        }
+    });
+    assert_eq!(centered, 4, "two banks on each of two decks");
 }
 
 #[kithara::test]
@@ -500,5 +599,47 @@ fn deck_letter_captions_name_their_deck() {
             }
         });
         assert!(seen > 0, "{layout:?}: no deck letter caption");
+    }
+}
+
+fn pressables(ui: &CompiledUi) -> Vec<(&str, &str)> {
+    let mut out = Vec::new();
+    each_node(ui, &mut |node| {
+        if let ExpandedNode::Pressable { path, press, .. } = node {
+            out.push((ui.resolve(*path), ui.resolve(press.key)));
+        }
+    });
+    out
+}
+
+#[kithara::test]
+fn each_deck_picks_its_own_stream_quality() {
+    for layout in LAYOUTS {
+        let ui = compile_studio(layout).unwrap();
+        let letters = ["a", "b"].into_iter().take(layout.decks());
+        for letter in letters {
+            let cell = format!("deck-{letter}/stream/cell");
+            let auto = format!("deck-{letter}/stream/auto/pick");
+            let rung = format!("deck-{letter}/stream/variant-0/pick");
+            let pressed = pressables(&ui);
+
+            assert!(
+                pressed.contains(&(
+                    cell.as_str(),
+                    format!("deck.stream.toggle_quality_menu@deck={letter}").as_str()
+                )),
+                "{layout:?}: the cell of deck {letter} must toggle its own menu",
+            );
+            for (path, variant) in [(&auto, "auto"), (&rung, "0")] {
+                assert!(
+                    pressed.contains(&(
+                        path.as_str(),
+                        format!("deck.stream.select_variant@deck={letter},variant={variant}")
+                            .as_str()
+                    )),
+                    "{layout:?}: `{path}` must pick rung `{variant}` on deck {letter}",
+                );
+            }
+        }
     }
 }

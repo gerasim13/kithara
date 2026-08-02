@@ -4,7 +4,7 @@ use kithara_assets::AssetResource;
 #[cfg(test)]
 use kithara_assets::ResourceKey;
 use kithara_drm::DecryptContext;
-use kithara_platform::sync::Arc;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::{StreamResult, dl::FetchCmd, needs_exact_byte_sizes};
 
 use super::{HlsVariant, PlanCtx, core::INIT_PLACEHOLDER_BYTES};
@@ -23,6 +23,7 @@ impl HlsVariant {
         self: &Arc<Self>,
         ctx: &PlanCtx,
         handle: FetchClaim<Downloading>,
+        cancel: CancelToken,
     ) -> Option<FetchCmd> {
         let init = self.init()?;
         let resource_handle = self.init_handle()?;
@@ -43,6 +44,7 @@ impl HlsVariant {
             resource,
             handle,
             ctx.signal.clone(),
+            cancel,
         )
     }
 
@@ -167,18 +169,6 @@ impl HlsVariant {
     #[cfg(test)]
     pub(crate) fn init_resource(&self) -> Option<ResourceKey> {
         Some(self.segments.init.as_ref()?.resource_id().clone())
-    }
-
-    /// Flip the init slot to `Missing`, clearing the Layout seed when the
-    /// variant actually carries an init segment.
-    pub(crate) fn invalidate_init(&self) {
-        let had_init = self.segments.init.as_ref().is_some_and(|seg| {
-            seg.state().mark_missing();
-            true
-        });
-        if had_init {
-            self.layout.clear_init_seed();
-        }
     }
 
     /// Whether the next dispatch should issue the separate init fetch

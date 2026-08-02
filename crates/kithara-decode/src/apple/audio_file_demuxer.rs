@@ -514,7 +514,6 @@ mod tests {
                 phase: SourcePhase::Waiting,
                 epoch: 0,
                 flushing: false,
-                variant_fence: false,
             },
         )
     }

@@ -1,3 +1,4 @@
+use kithara::abr::AbrMode;
 use kithara_platform::sync::Arc;
 use kithara_queue::{TrackId, Transition};
 use tracing::{debug, error};
@@ -65,6 +66,7 @@ pub(crate) enum DeckMsg {
     EqBandChanged(usize, f32),
     DeleteTrack,
     SetTempo(f32),
+    SetQuality(Option<usize>),
 }
 
 /// Apply a deck message to its own deck. Nothing here reaches another deck.
@@ -87,7 +89,22 @@ pub(crate) fn handle(deck: &mut DeckUi, msg: &DeckMsg) {
         DeckMsg::EqBandChanged(band, db) => eq_band_changed(deck, band, db),
         DeckMsg::DeleteTrack => delete_track(deck),
         DeckMsg::SetTempo(tempo) => set_tempo(deck, tempo),
+        DeckMsg::SetQuality(variant) => set_quality(deck, variant),
     }
+}
+
+fn set_quality(deck: &DeckUi, variant: Option<usize>) {
+    if let Some(handle) = deck.controller.queue().current_abr_handle() {
+        let mode = variant.map_or(AbrMode::Auto(None), AbrMode::manual);
+        if let Err(error) = handle.set_mode(mode) {
+            error!("abr mode failed: {error:?}");
+            return;
+        }
+    }
+    deck.controller.mutate(|st| {
+        st.abr_mode_is_auto = variant.is_none();
+        st.selected_variant = variant;
+    });
 }
 
 fn toggle_play_pause(deck: &DeckUi) {
@@ -113,17 +130,19 @@ fn seek(deck: &DeckUi, target: f64) {
 }
 
 fn eq_band_changed(deck: &DeckUi, band: usize, db: f32) {
-    if band >= deck.ui.eq_bands.len() {
-        return;
-    }
     // `eq_bands` is the user's desired EQ and the source of truth: record it
     // regardless of whether a playback slot exists yet. The listener re-applies
     // it to the engine once a track becomes active.
-    deck.controller.mutate(|st| {
-        if let Some(slot) = st.eq_bands.get_mut(band) {
-            *slot = db;
-        }
+    let known = deck.controller.mutate(|st| {
+        let Some(slot) = st.eq_bands.get_mut(band) else {
+            return false;
+        };
+        *slot = db;
+        true
     });
+    if !known {
+        return;
+    }
     if let Err(e) = deck.controller.queue().set_eq_gain(band, db) {
         // Expected before playback starts (no active slot yet); the gain is
         // retained in `eq_bands` and pushed down when playback begins.

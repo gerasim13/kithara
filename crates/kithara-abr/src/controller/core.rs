@@ -1,16 +1,12 @@
 use std::{
     num::NonZeroU64,
-    sync::{
-        Weak,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use bon::Builder;
 use dashmap::DashMap;
 use kithara_events::{AbrEvent, AbrMode, EventBus};
 use kithara_platform::{
-    CancelToken,
     sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
@@ -55,9 +51,6 @@ pub struct AbrSettings {
     /// Minimum interval between `AbrEvent::BufferAhead` emits.
     #[builder(default = Duration::from_millis(500))]
     pub buffer_emit_min_interval: Duration,
-    /// Deadline for the incoherence watcher spawned after a variant switch.
-    #[builder(default = Duration::from_secs(5))]
-    pub incoherence_deadline: Duration,
     /// Minimum buffer-ahead required before an up-switch is allowed.
     #[builder(default = Duration::from_secs(10))]
     pub min_buffer_for_up_switch: Duration,
@@ -102,11 +95,6 @@ pub struct AbrController {
     #[field(get)]
     pub(super) settings: AbrSettings,
     pub(super) estimator: Arc<dyn Estimator>,
-    /// Parent cancel gating this controller's background watches. Per-watch
-    /// incoherence tokens derive from it (`parent_cancel.child()`), so a parent
-    /// cancel (player/downloader teardown) gates every in-flight watch.
-    pub(super) parent_cancel: CancelToken,
-    pub(super) self_weak: Weak<Self>,
     next_peer_id: AtomicU64,
     peers: DashMap<AbrPeerId, Arc<PeerEntry>>,
 }
@@ -120,8 +108,8 @@ impl AbrController {
     /// `cancel` is the parent token whose subtree gates this controller's
     /// background incoherence watches.
     #[must_use]
-    pub fn new(settings: AbrSettings, cancel: CancelToken) -> Arc<Self> {
-        Self::with_estimator(settings, Arc::new(ThroughputEstimator::new()), cancel)
+    pub fn new(settings: AbrSettings) -> Arc<Self> {
+        Self::with_estimator(settings, Arc::new(ThroughputEstimator::new()))
     }
 
     pub(super) fn allocate_peer_id(&self) -> AbrPeerId {
@@ -160,6 +148,14 @@ impl AbrController {
             bus.publish(AbrEvent::ModeChanged { mode });
         }
         self.tick(peer_id, Instant::now());
+        if let Some(entry) = self.peer_entry(peer_id)
+            && let Some(peer) = entry.peer_weak.upgrade()
+        {
+            // A mode change is work even when the synchronous decision is
+            // temporarily locked by a seek. Re-polling the peer synchronizes
+            // that lock; its existing unlock edge then re-evaluates the mode.
+            peer.wake();
+        }
     }
 
     pub(crate) fn on_unlocked(&self, peer_id: AbrPeerId) {
@@ -187,8 +183,6 @@ impl AbrController {
             bus: Arc::clone(&bus),
             variants_registered_published: AtomicBool::new(false),
             bytes_downloaded: AtomicU64::new(0),
-            incoherence_cancel: Mutex::default(),
-            last_variant_switch: Mutex::default(),
             throttle: Mutex::default(),
             state: state.clone(),
         });
@@ -204,27 +198,17 @@ impl AbrController {
 
     /// Called from [`AbrHandle::drop`].
     pub(crate) fn unregister(&self, id: AbrPeerId) {
-        if let Some((_, entry)) = self.peers.remove(&id)
-            && let Some(token) = entry.incoherence_cancel.lock().take()
-        {
-            token.cancel();
-        }
+        self.peers.remove(&id);
     }
 
     /// Create a new controller with a custom estimator. Used in tests to
     /// inject a mock.
     #[must_use]
-    pub fn with_estimator(
-        settings: AbrSettings,
-        estimator: Arc<dyn Estimator>,
-        cancel: CancelToken,
-    ) -> Arc<Self> {
+    pub fn with_estimator(settings: AbrSettings, estimator: Arc<dyn Estimator>) -> Arc<Self> {
         Self::seed_estimator(&settings, &estimator);
-        Arc::new_cyclic(|weak| Self {
+        Arc::new(Self {
             settings,
             estimator,
-            self_weak: weak.clone(),
-            parent_cancel: cancel,
             next_peer_id: AtomicU64::new(0),
             peers: DashMap::new(),
         })

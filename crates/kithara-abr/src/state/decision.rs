@@ -87,8 +87,33 @@ impl IntoProbeArg for &AbrDecision {
     }
 }
 
-/// Produce a decision without mutating state.
+/// Produce a decision without mutating state, then hold it back if the
+/// anti-oscillation interval has not elapsed.
 ///
+/// The interval is applied to the decision rather than ahead of it, so urgency
+/// is known before it is judged: a rescue off a variant that stopped delivering
+/// must not wait out an interval whose whole purpose is to settle *quality*
+/// choices. A manual pin is the user's own decision and is never held.
+pub(crate) fn evaluate(state: &AbrState, view: &AbrView<'_>, now: Instant) -> AbrDecision {
+    let decision = decide(state, view);
+    if !decision.changed() || is_rescue(&decision) || matches!(state.mode(), AbrMode::Manual(_)) {
+        return decision;
+    }
+    if state.can_switch_now(now, view.settings.min_switch_interval) {
+        return decision;
+    }
+    AbrDecision::Stay {
+        current: state.current_variant_index(),
+        reason: AbrReason::MinInterval,
+    }
+}
+
+/// The anti-oscillation interval must not hold a rescue: waiting it out
+/// starves the reader instead of settling the choice.
+fn is_rescue(decision: &AbrDecision) -> bool {
+    super::core::is_rescue(decision.reason())
+}
+
 /// Phase 1: parallel computes. None of the `let X = expr` lines branches —
 /// the compiler can reorder/coalesce these atomic reads, and the CPU
 /// schedules them in parallel.
@@ -99,7 +124,7 @@ impl IntoProbeArg for &AbrDecision {
 ///
 /// Phase 3: bandwidth-aware switch logic (`up_switch` / `down_switch`)
 /// runs on the gates' shared output; no further early returns.
-pub(crate) fn evaluate(state: &AbrState, view: &AbrView<'_>, now: Instant) -> AbrDecision {
+fn decide(state: &AbrState, view: &AbrView<'_>) -> AbrDecision {
     let current = state.current_variant_index();
 
     let locked = state.is_locked();
@@ -107,30 +132,23 @@ pub(crate) fn evaluate(state: &AbrState, view: &AbrView<'_>, now: Instant) -> Ab
         AbrMode::Manual(idx) => Some(idx),
         AbrMode::Auto(_) => None,
     };
-    let cant_switch = !state.can_switch_now(now, view.settings.min_switch_interval);
     let estimate_bps = view.estimate_bps;
 
-    let estimate_bps: u64 = match (locked, manual_target, cant_switch, estimate_bps) {
-        (true, _, _, _) => {
+    let estimate_bps: u64 = match (locked, manual_target, estimate_bps) {
+        (true, _, _) => {
             return AbrDecision::Stay {
                 current,
                 reason: AbrReason::Locked,
             };
         }
-        (_, Some(idx), _, _) => return manual_decision(current, idx),
-        (_, _, true, _) => {
-            return AbrDecision::Stay {
-                current,
-                reason: AbrReason::MinInterval,
-            };
-        }
-        (_, _, _, None) => {
+        (_, Some(idx), _) => return manual_decision(current, idx),
+        (_, _, None) => {
             return AbrDecision::Stay {
                 current,
                 reason: AbrReason::NoEstimate,
             };
         }
-        (false, None, false, Some(bps)) => bps,
+        (false, None, Some(bps)) => bps,
     };
 
     let escaping = state.is_escaping();

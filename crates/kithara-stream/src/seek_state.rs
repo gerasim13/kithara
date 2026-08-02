@@ -1,9 +1,15 @@
 #![forbid(unsafe_code)]
 
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::{
+    fmt,
+    sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
+};
 
 use bitflags::bitflags;
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 bitflags! {
     /// Boolean playback-state flags stored in a single `AtomicU8` on [`SeekState`].
@@ -52,8 +58,10 @@ pub trait Activity: Send + Sync {
 ///
 /// Implements `SeekObserve`, `SeekControl`, and `Activity`. Coords hold an
 /// `Arc<SeekState>` and vend the narrow trait handles to readers/writers.
-#[derive(Debug)]
 pub struct SeekState {
+    /// Serializes seek-epoch publication with off-RT commits that must belong
+    /// to one exact epoch. Observers remain lock-free.
+    epoch_commit: Mutex<()>,
     /// Kept as `Arc<AtomicU64>` so callers can hand out a cheap `Arc`
     /// clone of the shared seek epoch atomic.
     seek_epoch: Arc<AtomicU64>,
@@ -71,6 +79,16 @@ pub struct SeekState {
     flags: AtomicU8,
 }
 
+impl fmt::Debug for SeekState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SeekState")
+            .field("epoch", &self.seek_epoch.load(Ordering::Acquire))
+            .field("target", &self.target())
+            .field("flags", &self.flags.load(Ordering::Acquire))
+            .finish_non_exhaustive()
+    }
+}
+
 impl SeekState {
     const NO_PENDING_SEEK: u64 = u64::MAX;
     const NO_SEEK_TARGET: u64 = u64::MAX;
@@ -79,6 +97,7 @@ impl SeekState {
     // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self {
+            epoch_commit: Mutex::new(()),
             seek_epoch: Arc::new(AtomicU64::new(0)),
             seek_target_ns: AtomicU64::new(Self::NO_SEEK_TARGET),
             pending_seek_epoch: AtomicU64::new(Self::NO_PENDING_SEEK),
@@ -106,6 +125,17 @@ impl SeekState {
     /// the atomic directly (e.g. a shared seek-epoch handle).
     pub fn seek_epoch_arc(&self) -> Arc<AtomicU64> {
         Arc::clone(&self.seek_epoch)
+    }
+
+    /// Run an off-RT commit only while `epoch` is still current. A concurrent
+    /// seek begins strictly before or after the closure.
+    #[must_use]
+    pub fn commit_if_epoch<T, F>(&self, epoch: u64, commit: F) -> Option<T>
+    where
+        F: FnOnce() -> T,
+    {
+        let _guard = self.epoch_commit.lock();
+        (self.seek_epoch.load(Ordering::Acquire) == epoch).then(commit)
     }
 }
 
@@ -180,6 +210,7 @@ impl SeekControl for SeekState {
     /// Panics if `target` overflows `u64::MAX` nanoseconds (≈584 years —
     /// not reachable for any realistic seek target).
     fn begin(&self, target: Duration) -> u64 {
+        let _guard = self.epoch_commit.lock();
         let nanos = u64::try_from(target.as_nanos())
             .expect("BUG: initiate_seek target.as_nanos() fits in u64 for any realistic Duration");
         let epoch = self.seek_epoch.fetch_add(1, Ordering::SeqCst) + 1;
@@ -280,6 +311,17 @@ mod tests {
         assert_eq!(e2, 2);
         assert_eq!(e3, 3);
         assert_eq!(s.epoch(), 3);
+    }
+
+    #[kithara::test]
+    fn commit_if_epoch_runs_only_for_the_current_epoch() {
+        let s = state();
+        assert_eq!(s.commit_if_epoch(0, || 7), Some(7));
+
+        let current = s.begin(Duration::from_secs(1));
+
+        assert_eq!(s.commit_if_epoch(0, || 9), None);
+        assert_eq!(s.commit_if_epoch(current, || 11), Some(11));
     }
 
     /// `complete(old_epoch)` must NOT clear a newer seek's flushing flag.

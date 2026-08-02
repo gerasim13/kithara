@@ -2,7 +2,7 @@ use std::{
     num::NonZeroUsize,
     ops::Range,
     path::Path,
-    sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
+    sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 
 use kithara_bufpool::{BytePool, PcmPool};
@@ -15,9 +15,10 @@ use kithara_platform::{
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, AudioCodec, ByteMap, ChunkPosition, ContainerFormat, MediaInfo, PlayheadRead,
-    PlayheadState, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SeekState,
+    PlayheadState, PlayheadWrite, ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekState,
     SegmentDescriptor, Source, SourceError, SourcePhase, SourceSeekAnchor, Stream, StreamError,
-    StreamResult, StreamType, VariantControl, WorkerWake,
+    StreamResult, StreamType, VariantControl, VariantPromotion, VariantReaderPlan,
+    VariantReaderTake, VariantTransition, WorkerWake,
 };
 use kithara_test_utils::kithara;
 
@@ -29,7 +30,7 @@ use crate::{
         rebuild::{RecreateCause, RecreateNext, RecreateState, port::RebuildRuntime},
         seek::{SeekContext, SeekRequest},
         source::StreamAudioSource,
-        stream::{offset::OffsetReader, shared::SharedStream},
+        stream::shared::SharedStream,
         track::{self, TrackStep},
     },
     renderer::AudioWorkerSource,
@@ -64,9 +65,6 @@ struct VariantLayout {
 struct SpliceState {
     active: AtomicUsize,
     media_info: Mutex<Option<MediaInfo>>,
-    pending_variant_change: AtomicBool,
-    read_gate_open: AtomicBool,
-    target_variant: Mutex<Option<usize>>,
     variants: Vec<VariantLayout>,
     warmup_landing: Mutex<Option<SegmentDescriptor>>,
 }
@@ -76,9 +74,6 @@ impl SpliceState {
         Self {
             active: AtomicUsize::new(Consts::SLQ_VARIANT),
             media_info: Mutex::new(Some(media_info(Consts::SLQ_VARIANT))),
-            pending_variant_change: AtomicBool::new(false),
-            read_gate_open: AtomicBool::new(true),
-            target_variant: Mutex::new(None),
             variants,
             warmup_landing: Mutex::new(None),
         }
@@ -97,9 +92,6 @@ impl SpliceState {
     fn switch_to(&self, variant: usize) {
         self.active.store(variant, Ordering::Release);
         *self.media_info.lock() = Some(media_info(variant));
-        *self.target_variant.lock() = Some(variant);
-        self.read_gate_open.store(false, Ordering::Release);
-        self.pending_variant_change.store(true, Ordering::Release);
     }
 
     fn warmup_landing(&self) -> Option<SegmentDescriptor> {
@@ -108,10 +100,38 @@ impl SpliceState {
 }
 
 impl VariantControl for SpliceState {
-    fn clear_variant_fence(&self) {
-        self.pending_variant_change.store(false, Ordering::Release);
-        self.read_gate_open.store(true, Ordering::Release);
-        *self.target_variant.lock() = None;
+    fn plan_variant_reader(
+        &self,
+        _landing: Option<Duration>,
+    ) -> StreamResult<Option<VariantReaderPlan>> {
+        Ok(None)
+    }
+
+    fn prepare_variant_reader(
+        &self,
+        _plan: VariantReaderPlan,
+        _profile: ReaderProfile,
+    ) -> StreamResult<Option<VariantTransition>> {
+        Ok(None)
+    }
+
+    fn take_prepared_variant_reader(
+        &self,
+        _transition: VariantTransition,
+    ) -> StreamResult<VariantReaderTake> {
+        Ok(VariantReaderTake::Stale)
+    }
+
+    fn promote_variant(&self, _transition: VariantTransition) -> VariantPromotion {
+        VariantPromotion::Stale
+    }
+
+    fn abort_variant(&self, _transition: VariantTransition) -> bool {
+        false
+    }
+
+    fn selected_variant_for_seek(&self) -> usize {
+        0
     }
 
     fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
@@ -121,25 +141,6 @@ impl VariantControl for SpliceState {
         } else {
             Ok(range)
         }
-    }
-
-    fn has_variant_change_pending(&self) -> bool {
-        self.pending_variant_change.load(Ordering::Acquire)
-    }
-
-    fn open_variant_read_gate(&self) {
-        self.read_gate_open.store(true, Ordering::Release);
-    }
-
-    fn variant_change_target(&self) -> Option<usize> {
-        self.has_variant_change_pending()
-            .then(|| *self.target_variant.lock())
-            .flatten()
-    }
-
-    fn variant_read_pending(&self) -> bool {
-        self.pending_variant_change.load(Ordering::Acquire)
-            && !self.read_gate_open.load(Ordering::Acquire)
     }
 }
 
@@ -432,11 +433,9 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
     let effects =
         crate::pipeline::config::create_effects(initial_spec, None, &pcm_pool, Vec::new());
     let factory_byte_len = Arc::new(AtomicU64::new(0));
-    let decoder_factory: DecoderFactory<SpliceStream> =
-        Arc::new(move |stream, info, base_offset| {
-            let byte_len = stream
-                .len()
-                .map_or(0, |len| len.saturating_sub(base_offset));
+    let decoder_factory = DecoderFactory::new(
+        move |mut reader, info| {
+            let byte_len = reader.byte_len().unwrap_or(0);
             factory_byte_len.store(byte_len, Ordering::Release);
             let config: DecoderConfig<kithara_resampler::NoResamplerBackend> =
                 DecoderConfig::builder()
@@ -444,14 +443,17 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
                     .byte_pool(BytePool::default())
                     .pcm_pool(PcmPool::default())
                     .byte_len_handle(factory_byte_len.clone())
-                    .maybe_byte_map(stream.byte_map())
+                    .maybe_byte_map(reader.byte_map())
+                    .maybe_hooks(reader.take_event_sink())
                     .gapless(false)
                     .build();
-            let input = OffsetReader::new(stream, base_offset);
+            let input = reader.into_inner();
             let decoder = DecodeFactory::create_from_media_info(input, &info, config)?;
             decoder.update_byte_len(byte_len);
             Ok(decoder)
-        });
+        },
+        None,
+    );
     let decode = DecodeInit {
         decoder: initial_decoder,
         decoder_factory,
@@ -471,6 +473,7 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
             handle: RuntimeHandle::try_current().expect("test requires tokio runtime"),
             wake: Arc::new(TestWake),
         },
+        Some(state.clone() as Arc<dyn VariantControl>),
     );
     SpliceFixture {
         source: StreamAudioSource::new(shared_stream, parts),
@@ -480,6 +483,7 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
 
 fn run_pending_rebuild_inline(source: &mut StreamAudioSource<SpliceStream>) {
     source.rebuild.run_inline();
+    source.flush_deferred();
 }
 
 fn append_left_channel(left: &mut Vec<f32>, chunk: &PcmChunk) {

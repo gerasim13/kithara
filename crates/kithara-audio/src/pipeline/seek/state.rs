@@ -38,7 +38,14 @@ pub(crate) struct ResumeState {
     pub(crate) anchor_offset: Option<u64>,
     /// Variant that owns `anchor_offset`.
     pub(crate) anchor_variant_index: Option<usize>,
-    pub(crate) skip: Option<Duration>,
+    /// The head of this generation still has to be trimmed to `seek.target`.
+    ///
+    /// How far to trim is not recorded here: a decoder's own report of where
+    /// it landed is a prediction, and a codec that swallows its first packet
+    /// after a seek delivers a chunk further along than it promised. The
+    /// chunk carries its own presentation time, so the trim is measured
+    /// against that and this flag only says whether it is still owed.
+    pub(crate) trim_head: bool,
     pub(crate) seek: SeekContext,
 }
 

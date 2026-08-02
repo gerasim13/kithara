@@ -120,15 +120,20 @@ impl DriverIo for MmapDriver {
         let mut mmap_guard = self.mmap.lock();
 
         match &*mmap_guard {
-            // Already active (initial download in flight) — nothing to do.
-            MmapState::Active(_) => {}
+            // Already active (initial download in flight) — nothing to do, but
+            // only while the file this maps still exists. A cancelled or failed
+            // fetch unlinks its partial temp, which leaves the mapping over a
+            // deleted inode; treating that as "download in flight" lets the
+            // refetch write into a file no commit can ever find, and the retry
+            // dies on a missing path instead of re-downloading.
+            MmapState::Active(active) if active.path().exists() => {}
             // Re-download. Keep the committed snapshot PUBLISHED so in-flight
             // readers keep serving the immutable prior generation zero-copy via
             // the old RO mmap. Write the new generation to a fresh temp file;
             // `commit` atomically renames it into place. The committed file
             // mapped by the snapshot is never overwritten in place, so a
             // concurrent read can never tear across the generation boundary.
-            MmapState::Committed(_) | MmapState::Empty => {
+            MmapState::Active(_) | MmapState::Committed(_) | MmapState::Empty => {
                 let temp = self.rewrite_temp_path();
                 // Drop any stale temp left by a previously-cancelled rewrite.
                 let _ = fs::remove_file(&temp);

@@ -42,10 +42,20 @@ impl Consts {
     const MAX_CONCURRENT: usize = 3;
     /// Loader settle deadline.
     const LOAD_DEADLINE: Duration = Duration::from_secs(20);
-    /// Window for collecting post-seek events. Four delay windows is
-    /// generous: enough for the reader to actually start consuming
-    /// the target segment if the seek path works.
-    const POST_SEEK_OBSERVATION: Duration = Duration::from_millis(Self::SEGMENT_DELAY_MS * 4);
+    /// Give-up deadline for collecting post-seek events, so a seek that never
+    /// reaches the reader fails on the discriminating panic below instead of on
+    /// the harness timeout. It bounds diagnostics, not the contract — the
+    /// contract is bounded by this test's own `timeout(60s)`.
+    ///
+    /// Deliberately NOT derived from `SEGMENT_DELAY_MS`. That delay is served by
+    /// the fixture's own HTTP thread, which a full-suite run starves along with
+    /// everything else, so "four delay windows" stops being four windows of
+    /// anything: the healthy path lands in well under a second solo and needed
+    /// more than 3.2 s under suite contention, which is the same sequence of
+    /// states, just later. A flat deadline an order of magnitude above the
+    /// healthy latency keeps the panic precise without pinning the test to a
+    /// clock the fixture cannot hold.
+    const POST_SEEK_OBSERVATION: Duration = Duration::from_secs(30);
     /// Allow 1 segment of slack between the nominal target and the
     /// observed value (warmup vs `seek_at` race).
     const WARMUP_TOLERANCE: usize = 1;
@@ -441,17 +451,20 @@ async fn observe_post_seek(
     let mut enqueue_url: HashMap<RequestId, String> = HashMap::new();
     let mut target_segment: Option<usize> = None;
 
-    // Collect until the three discriminating facts are observed — ReaderSeek,
-    // the first post-seek SegmentReadStart, and the first post-seek
-    // RequestStarted — then exit immediately. `POST_SEEK_OBSERVATION` is a
-    // bounded *virtual* give-up budget (via `time::timeout`, which collapses on
-    // the flash clock), NOT a real-wall window: `rx.recv().await` parks on the
-    // virtual clock between events so the engine advances and delivers them. A
-    // genuinely broken seek that never populates a field still terminates here
-    // with a partial `obs`; the discriminating panics live in the caller and
-    // fire on the missing field, so this give-up never silently passes an
-    // assertion. Previously this loop spun on `Instant::now() < deadline`
-    // (real wall time), incommensurable with the virtual event delivery.
+    // Collect until the two discriminating facts are observed — ReaderSeek and
+    // the first post-seek SegmentReadStart — then exit immediately, picking up
+    // the diagnostic-only RequestStarted on the way if it arrives first.
+    //
+    // `POST_SEEK_OBSERVATION` is a give-up budget, not a measurement. It does
+    // NOT collapse on the flash clock the way an earlier revision claimed:
+    // `time::timeout` is virtual only while flash is on, and the `--flash=off`
+    // lane runs it against the wall — which is exactly the lane that can
+    // observe this test's contract at all, since flash collapses the fixture's
+    // per-segment delay and with it the queue ordering the seek path is
+    // supposed to get right. A genuinely broken seek that never populates a
+    // field still terminates here with a partial `obs`; the discriminating
+    // panics live in the caller and fire on the missing field, so this give-up
+    // never silently passes an assertion.
     let _ = time::timeout(Consts::POST_SEEK_OBSERVATION, async {
         loop {
             match rx.recv().await {
@@ -495,10 +508,11 @@ async fn observe_post_seek(
                 Err(RecvError::Closed) => break,
             }
 
-            if obs.reader_seek.is_some()
-                && obs.first_segment_read_start.is_some()
-                && obs.target_started_wait.is_some()
-            {
+            // Exit on the facts the assertions read. `target_started_wait` is
+            // diagnostic only, so waiting for it made termination depend on
+            // something no assertion requires — a healthy run that never
+            // produced it sat here until the deadline.
+            if obs.reader_seek.is_some() && obs.first_segment_read_start.is_some() {
                 break;
             }
         }

@@ -20,6 +20,76 @@ pub struct DecoderTrackInfo {
     pub gapless_tail: Option<GaplessTailCompensation>,
 }
 
+/// Immutable decoder facts consumed when constructing a gapless trimmer.
+///
+/// This profile references the existing [`GaplessInfo`] and
+/// [`GaplessTailCompensation`] contracts; it does not duplicate their frame
+/// counts or introduce a second source of truth.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct GaplessProfile {
+    fallback_priming_frames: u64,
+    gapless: Option<GaplessInfo>,
+    spec: PcmSpec,
+    tail_compensation: Option<GaplessTailCompensation>,
+}
+
+impl GaplessProfile {
+    #[must_use]
+    pub const fn new(
+        spec: PcmSpec,
+        gapless: Option<GaplessInfo>,
+        tail_compensation: Option<GaplessTailCompensation>,
+        fallback_priming_frames: u64,
+    ) -> Self {
+        Self {
+            fallback_priming_frames,
+            gapless,
+            spec,
+            tail_compensation,
+        }
+    }
+
+    #[must_use]
+    pub const fn fallback_priming_frames(self) -> u64 {
+        self.fallback_priming_frames
+    }
+
+    #[must_use]
+    pub const fn gapless(self) -> Option<GaplessInfo> {
+        self.gapless
+    }
+
+    #[must_use]
+    pub const fn spec(self) -> PcmSpec {
+        self.spec
+    }
+
+    #[must_use]
+    pub const fn tail_compensation(self) -> Option<GaplessTailCompensation> {
+        self.tail_compensation
+    }
+}
+
+/// Construction-time PCM specification used to build a PCM blender.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct BlenderProfile {
+    spec: PcmSpec,
+}
+
+impl BlenderProfile {
+    #[must_use]
+    pub const fn new(spec: PcmSpec) -> Self {
+        Self { spec }
+    }
+
+    #[must_use]
+    pub const fn spec(self) -> PcmSpec {
+        self.spec
+    }
+}
+
 /// Audio track metadata extracted from Symphonia tags.
 ///
 /// Intentionally without `#[non_exhaustive]` — this is a stable POD of

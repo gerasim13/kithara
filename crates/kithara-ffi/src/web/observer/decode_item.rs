@@ -127,15 +127,6 @@ pub(crate) fn decode_item_event(data: &JsValue) -> Option<FfiItemEvent> {
             source_sample_rate: ItemDecode::narrow_u32(get_f64(data, "source_sample_rate")?),
             active: get_bool(data, "active")?,
         },
-        "HlsVariantSwitchFenced" => FfiItemEvent::HlsVariantSwitchFenced {
-            from_variant: ItemDecode::narrow_u32(get_f64(data, "from_variant")?),
-            to_variant: ItemDecode::narrow_u32(get_f64(data, "to_variant")?),
-            cross_codec: get_bool(data, "cross_codec")?,
-        },
-        "HlsVariantSwitchAcked" => FfiItemEvent::HlsVariantSwitchAcked {
-            variant: ItemDecode::narrow_u32(get_f64(data, "variant")?),
-            generation: ItemDecode::narrow_u64(get_f64(data, "generation")?),
-        },
         "HlsCacheComplete" => FfiItemEvent::HlsCacheComplete {
             total_bytes: get_f64(data, "total_bytes").map(ItemDecode::narrow_u64),
         },

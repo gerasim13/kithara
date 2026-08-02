@@ -1,18 +1,19 @@
-use std::{num::NonZeroUsize, ops::Range};
+use std::ops::Range;
 
-use kithara_platform::time::Duration;
-use kithara_storage::WaitOutcome;
-use kithara_stream::{
-    PendingReason, ReadOutcome, SourcePhase, StreamError, StreamResult, needs_exact_byte_sizes,
-};
-use kithara_test_utils::kithara;
-use tracing::trace;
+use kithara_stream::{SourcePhase, needs_exact_byte_sizes};
 
 use super::HlsVariant;
-use crate::{HlsError, segment::PlannedFetch};
+use crate::segment::PlannedFetch;
+
+pub(super) enum RangeGate {
+    Eof,
+    Metadata(SourcePhase),
+    Pending,
+    Ready,
+}
 
 impl HlsVariant {
-    fn fetch_is_planned(&self, planned: PlannedFetch) -> bool {
+    pub(super) fn fetch_is_planned(&self, planned: PlannedFetch) -> bool {
         self.flow.queue.lock().contains(&planned)
     }
 
@@ -21,32 +22,67 @@ impl HlsVariant {
     }
 
     pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase {
-        // EOF wins over `range_ready`'s zero-width "ready" at `range.start ==
-        // total` so the phase is observable as `Eof` at the stream end (see
-        // `wait_range`); a flush in flight takes precedence.
-        let total = self.total_bytes();
-        let uses_seek_alias = self.seek_alias_at(range.start).is_some();
-        if !uses_seek_alias
-            && total > 0
-            && range.start >= total
-            && self.eof_ready()
-            && !self.flow.reader.is_flushing()
-        {
-            return SourcePhase::Eof;
+        self.phase_at_with(range, || {})
+    }
+
+    fn phase_at_with(&self, range: Range<u64>, after_eof: impl FnOnce()) -> SourcePhase {
+        match self.range_gate_with(&range, after_eof) {
+            Some(RangeGate::Eof) => SourcePhase::Eof,
+            Some(RangeGate::Metadata(phase)) => phase,
+            Some(RangeGate::Ready) => SourcePhase::Ready,
+            Some(RangeGate::Pending) => {
+                if self.flow.reader.is_flushing() {
+                    SourcePhase::Seeking
+                } else {
+                    self.range_wait_phase(&range)
+                }
+            }
+            None => {
+                if self.flow.reader.is_flushing() {
+                    SourcePhase::Seeking
+                } else {
+                    SourcePhase::WaitingDemand
+                }
+            }
         }
-        if let Some(phase) = self.exact_seek_metadata_phase() {
-            return phase;
-        }
-        if let Some(phase) = self.exact_byte_metadata_phase() {
-            return phase;
-        }
-        if self.range_ready(&range) {
-            return SourcePhase::Ready;
-        }
-        if self.flow.reader.is_flushing() {
-            return SourcePhase::Seeking;
-        }
-        self.range_wait_phase(&range)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn phase_at_after_eof(
+        &self,
+        range: Range<u64>,
+        after_eof: impl FnOnce(),
+    ) -> SourcePhase {
+        self.phase_at_with(range, after_eof)
+    }
+
+    pub(super) fn range_gate(&self, range: &Range<u64>) -> Option<RangeGate> {
+        self.range_gate_with(range, || {})
+    }
+
+    fn range_gate_with(&self, range: &Range<u64>, after_eof: impl FnOnce()) -> Option<RangeGate> {
+        self.layout.try_published(|| {
+            let uses_seek_alias = self.seek_alias_at(range.start).is_some();
+            let total = self.total_bytes();
+            let eof = !uses_seek_alias
+                && self.eof_at_published(range.start, total)
+                && !self.flow.reader.is_flushing();
+            after_eof();
+            if eof {
+                return Some(RangeGate::Eof);
+            }
+            if let Some(phase) = self.exact_seek_metadata_phase() {
+                return Some(RangeGate::Metadata(phase));
+            }
+            if let Some(phase) = self.exact_byte_metadata_phase() {
+                return Some(RangeGate::Metadata(phase));
+            }
+            Some(if self.range_ready_published_with(range, || {}) {
+                RangeGate::Ready
+            } else {
+                RangeGate::Pending
+            })
+        })
     }
 
     /// Whether any init/media segment covering `range` settled terminally
@@ -54,10 +90,10 @@ impl HlsVariant {
     /// will never load. [`wait_range`](Self::wait_range) consults this when
     /// a range is not ready to tell "still downloading" (spin) from
     /// "permanently failed" (terminal error). Walks the same descriptors as
-    /// [`range_ready`](Self::range_ready), checking slot state rather than
+    /// `range_ready_published_with`, checking slot state rather than
     /// on-disk bytes; the per-byte `contains_range` walk stays out so this
     /// only fires on a real terminal settle, never on a transient gap.
-    fn range_has_failed(&self, range: &Range<u64>) -> bool {
+    pub(super) fn range_has_failed(&self, range: &Range<u64>) -> bool {
         let total = self.total_bytes();
         let uses_seek_alias = self.seek_alias_at(range.start).is_some();
         let end = if !uses_seek_alias && total > 0 {
@@ -88,8 +124,9 @@ impl HlsVariant {
         false
     }
 
-    pub(crate) fn range_ready(&self, range: &Range<u64>) -> bool {
+    fn range_ready_published_with(&self, range: &Range<u64>, after_total: impl FnOnce()) -> bool {
         let total = self.total_bytes();
+        after_total();
         let uses_seek_alias = self.seek_alias_at(range.start).is_some();
         let clamp_alias_to_eof = uses_seek_alias
             && !needs_exact_byte_sizes(self.profile.codec, self.profile.container)
@@ -147,7 +184,34 @@ impl HlsVariant {
         cursor >= end
     }
 
+    #[cfg(test)]
+    fn range_ready_with(&self, range: &Range<u64>, after_total: impl FnOnce()) -> bool {
+        self.layout
+            .try_published(|| Some(self.range_ready_published_with(range, after_total)))
+            .unwrap_or(false)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn range_ready(&self, range: &Range<u64>) -> bool {
+        self.range_ready_with(range, || {})
+    }
+
+    #[cfg(test)]
+    pub(crate) fn range_ready_after_total(
+        &self,
+        range: &Range<u64>,
+        after_total: impl FnOnce(),
+    ) -> bool {
+        self.range_ready_with(range, after_total)
+    }
+
     fn range_wait_phase(&self, range: &Range<u64>) -> SourcePhase {
+        self.layout
+            .try_published(|| Some(self.range_wait_phase_published(range)))
+            .unwrap_or(SourcePhase::WaitingDemand)
+    }
+
+    fn range_wait_phase_published(&self, range: &Range<u64>) -> SourcePhase {
         let total = self.total_bytes();
         let uses_seek_alias = self.seek_alias_at(range.start).is_some();
         let clamp_alias_to_eof = uses_seek_alias
@@ -217,180 +281,5 @@ impl HlsVariant {
         } else {
             SourcePhase::Waiting
         }
-    }
-
-    #[kithara::hang_watchdog]
-    pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
-        let total = self.total_bytes();
-        if total > 0 && offset >= total && self.eof_ready() {
-            return Ok(ReadOutcome::Eof);
-        }
-        if self.exact_seek_metadata_phase().is_some() || self.exact_byte_metadata_phase().is_some()
-        {
-            trace!(
-                variant = self.variant,
-                offset, "read_at: gated by exact-size metadata demand"
-            );
-            return Ok(Self::wrap(0));
-        }
-
-        let buf_len = u64::try_from(buf.len()).unwrap_or(u64::MAX);
-        let mut written: usize = 0;
-        let mut cursor = offset;
-        let read_end = offset.saturating_add(buf_len);
-
-        while let Some(init_range) = self.init_descriptor_at(cursor) {
-            hang_tick!();
-            if cursor >= init_range.end {
-                break;
-            }
-            let slice_end = read_end.min(init_range.end);
-            let local_start = cursor - init_range.start;
-            let local_end = slice_end - init_range.start;
-            let take = usize::try_from(local_end - local_start).unwrap_or(usize::MAX);
-            let dst = &mut buf[written..written + take];
-            match self.init_read_at(local_start..local_end, dst)? {
-                Some(n) => {
-                    written += n;
-                    cursor += n as u64;
-                    if n < take {
-                        return Ok(Self::wrap(written));
-                    }
-                    if cursor >= read_end {
-                        return Ok(Self::wrap(written));
-                    }
-                }
-                None => return Ok(Self::wrap(written)),
-            }
-        }
-
-        // An `#EXT-X-MAP` init occupies the virtual prefix `[0, init_size)`.
-        // While the init is declared (`has_init`) but not yet sized
-        // (`init_size() == 0` — before lazy probe or body commit resolves it),
-        // the offset table transiently seeds segment 0 at
-        // offset 0. Serving media here would hand the demuxer segment 0's
-        // container where the init's `ftyp`/`moov` belongs
-        // ("re_mp4: ftyp not found"), or wedge the reader. Hold the read
-        // pending: `needs_init_fetch` keeps the init enqueued and its commit
-        // sizes the prefix, after which `init_descriptor_at` routes offset 0
-        // to the init. Only the fresh-activation frame (`served_from() == 0`)
-        // places the init at offset 0; a switched-in variant's init is
-        // orphaned in natural space (see `init_descriptor_at`), so its reads
-        // continue past offset 0 and must not be gated here. A terminally
-        // failed init (`init_failed`) stops reserving the prefix so the read
-        // surfaces an error instead of waiting forever.
-        if self.has_init()
-            && self.init_size() == 0
-            && self.served_from() == 0
-            && !self.init_failed()
-        {
-            return Ok(Self::wrap(written));
-        }
-
-        while cursor < read_end {
-            hang_tick!();
-            let Some((seg_idx, seg_off, seg_size)) = self.find_at_offset(cursor) else {
-                break;
-            };
-            let seg_end = seg_off + seg_size;
-            let slice_end = read_end.min(seg_end);
-            let local_start = cursor - seg_off;
-            let local_end = slice_end - seg_off;
-            let take = usize::try_from(local_end - local_start).unwrap_or(usize::MAX);
-            let dst = &mut buf[written..written + take];
-            let Some(n) = self.segment_read_at(seg_idx, local_start..local_end, dst)? else {
-                trace!(
-                    variant = self.variant,
-                    seg_idx,
-                    cursor,
-                    size_exact = self
-                        .segments
-                        .get(seg_idx as usize)
-                        .is_some_and(|s| s.size().is_exact()),
-                    loaded = self
-                        .segments
-                        .get(seg_idx as usize)
-                        .is_some_and(|s| s.state().is_loaded()),
-                    "read_at: segment bytes unavailable"
-                );
-                break;
-            };
-            written += n;
-            cursor += n as u64;
-            if n < take {
-                trace!(
-                    variant = self.variant,
-                    seg_idx, cursor, n, take, "read_at: short segment read"
-                );
-                break;
-            }
-        }
-
-        Ok(Self::wrap(written))
-    }
-
-    fn segment_has_demand(&self, seg_idx: u32) -> bool {
-        self.segment_downloading(seg_idx) || self.fetch_is_planned(PlannedFetch::Segment(seg_idx))
-    }
-
-    #[kithara::hang_watchdog]
-    pub(crate) fn wait_range(
-        &self,
-        range: Range<u64>,
-        _timeout: Option<Duration>,
-    ) -> StreamResult<WaitOutcome> {
-        // EOF must win over `range_ready`'s zero-width "ready" at the stream
-        // end: a read at `range.start == total` clamps to a `[total, total)`
-        // range that `range_ready` reports ready, so the gate would mint
-        // `Ready`, `read_at` then returns `Eof`, and the consumer's
-        // `phase()` stays `Ready` forever — EOF never becomes observable and a
-        // reader polling on phase spins. A seek in flight may pull the
-        // position back into the stream, so let the flush path win first.
-        let total = self.total_bytes();
-        let eof = total > 0
-            && range.start >= total
-            && self.eof_ready()
-            && !self.flow.reader.is_flushing();
-        let metadata_pending = !eof
-            && (self.exact_seek_metadata_phase().is_some()
-                || self.exact_byte_metadata_phase().is_some());
-        let ready = !metadata_pending && !eof && self.range_ready(&range);
-        let flushing = !eof && !ready && self.flow.reader.is_flushing();
-        // A segment covering this range settled terminally (the downloader
-        // exhausted its retries): the bytes will never arrive, so surface a
-        // terminal error instead of `WaitBudgetExceeded` — the reader stops
-        // here rather than spinning. Checked AFTER flushing/EOF: a seek in
-        // flight may be moving the read position off the failed range, and
-        // the failed check is scoped to the requested range so seeking away
-        // from it can clear the terminal range.
-        let failed = !eof && !ready && !flushing && self.range_has_failed(&range);
-        match (eof, ready, flushing, failed) {
-            (true, _, _, _) => Ok(WaitOutcome::Eof),
-            (_, true, _, _) => {
-                hang_reset!();
-                Ok(WaitOutcome::Ready)
-            }
-            (_, _, true, _) => Ok(WaitOutcome::Interrupted),
-            (_, _, _, true) => Err(StreamError::Source(HlsError::SegmentUnavailable.into())),
-            (false, false, false, false) => {
-                // Not ready: the reader driver (`Stream::probe_read` / `read` /
-                // `prime_seek_range`) wakes the peer for this range, per its own
-                // on-core/off-core context — this method stays wake-free.
-                trace!(
-                    variant = self.variant,
-                    start = range.start,
-                    end = range.end,
-                    "wait_range: range not ready (budget exceeded)"
-                );
-                Err(StreamError::Source(HlsError::WaitBudgetExceeded.into()))
-            }
-        }
-    }
-
-    fn wrap(written: usize) -> ReadOutcome {
-        NonZeroUsize::new(written).map_or(
-            ReadOutcome::Pending(PendingReason::Retry),
-            ReadOutcome::Bytes,
-        )
     }
 }

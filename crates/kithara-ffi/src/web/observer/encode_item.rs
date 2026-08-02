@@ -259,28 +259,6 @@ pub(crate) fn encode_item_event(event: &FfiItemEvent) -> JsValue {
             set_f64(&obj, "source_sample_rate", f64::from(*source_sample_rate));
             set_bool(&obj, "active", *active);
         }
-        FfiItemEvent::HlsVariantSwitchFenced {
-            from_variant,
-            to_variant,
-            cross_codec,
-        } => {
-            set_str(&obj, KIND, "HlsVariantSwitchFenced");
-            set_f64(&obj, "from_variant", f64::from(*from_variant));
-            set_f64(&obj, "to_variant", f64::from(*to_variant));
-            set_bool(&obj, "cross_codec", *cross_codec);
-        }
-        FfiItemEvent::HlsVariantSwitchAcked {
-            variant,
-            generation,
-        } => {
-            set_str(&obj, KIND, "HlsVariantSwitchAcked");
-            set_f64(&obj, "variant", f64::from(*variant));
-            set_f64(
-                &obj,
-                "generation",
-                num_traits::cast(*generation).unwrap_or(0.0),
-            );
-        }
         FfiItemEvent::HlsCacheComplete { total_bytes } => {
             set_str(&obj, KIND, "HlsCacheComplete");
             set_opt_f64(

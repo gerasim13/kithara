@@ -2,7 +2,7 @@ use kithara_decode::DecodeError;
 use kithara_stream::{ContainerFormat, MediaInfo, SourceSeekAnchor, StreamType};
 
 use crate::pipeline::{
-    decode::DecoderSession,
+    decode::DecoderGeneration,
     rebuild::{RecreateCause, RecreateNext, RecreateState},
     seek::SeekRequest,
     stream::shared::SharedStream,
@@ -95,7 +95,7 @@ pub(crate) fn recreate_offset<T: StreamType>(
 
 pub(crate) fn resolve<T: StreamType>(
     stream: &SharedStream<T>,
-    session: &DecoderSession,
+    active: &DecoderGeneration,
     request: SeekRequest,
     anchor: SourceSeekAnchor,
 ) -> AnchorPlan {
@@ -106,20 +106,16 @@ pub(crate) fn resolve<T: StreamType>(
             .and_then(|info| info.variant_index)
             .and_then(|variant| usize::try_from(variant).ok())
     });
-    if !format_boundary(
-        session.media_info.as_ref(),
-        stream_info.as_ref(),
-        target_variant,
-    ) {
+    if !format_boundary(active.media_info(), stream_info.as_ref(), target_variant) {
         return AnchorPlan::Seek;
     }
-    let current_codec = session.media_info.as_ref().and_then(|info| info.codec);
+    let current_codec = active.media_info().and_then(|info| info.codec);
     let target_codec = stream_info.as_ref().and_then(|info| info.codec);
     let codec_changed = matches!((current_codec, target_codec), (Some(a), Some(b)) if a != b);
     let container = stream_info
         .as_ref()
         .and_then(|info| info.container)
-        .or_else(|| session.media_info.as_ref().and_then(|info| info.container));
+        .or_else(|| active.media_info().and_then(|info| info.container));
     let Some(offset) = recreate_offset(stream, container, codec_changed, anchor.byte_offset) else {
         return AnchorPlan::Failed {
             context: "seek anchor alignment: no init segment range",
@@ -129,7 +125,7 @@ pub(crate) fn resolve<T: StreamType>(
         };
     };
     let variant = target_variant.and_then(|value| u32::try_from(value).ok());
-    let Some(mut media_info) = stream_info.or_else(|| session.media_info.clone()) else {
+    let Some(mut media_info) = stream_info.or_else(|| active.media_info().cloned()) else {
         return AnchorPlan::Failed {
             context: "seek anchor alignment failed",
             error: DecodeError::InvalidData {

@@ -1,8 +1,7 @@
-use kithara_decode::DecodeError;
 use kithara_stream::{MediaInfo, SeekObserve, StreamType};
 
 use crate::pipeline::{
-    decode::DecoderSession,
+    decode::DecoderGeneration,
     rebuild::{RecreateCause, RecreateNext, RecreateState},
     seek::anchor::variant_boundary,
     stream::shared::SharedStream,
@@ -15,16 +14,16 @@ pub(crate) enum FormatDecision {
 
 pub(crate) fn detect<T: StreamType>(
     stream: &SharedStream<T>,
-    session: &DecoderSession,
+    active: &DecoderGeneration,
     seek: &dyn SeekObserve,
 ) -> FormatDecision {
-    if seek.is_pending() && session.installed_at_seek_epoch == seek.epoch() {
+    if seek.is_pending() && active.installed_at_seek_epoch() == seek.epoch() {
         return FormatDecision::None;
     }
     let Some(current) = stream.media_info() else {
         return FormatDecision::None;
     };
-    let Some(media_info) = resolve_target(session.media_info.as_ref(), &current) else {
+    let Some(media_info) = resolve_target(active.media_info(), &current) else {
         return FormatDecision::None;
     };
     let Ok(range) = stream.format_change_segment_range() else {
@@ -36,42 +35,6 @@ pub(crate) fn detect<T: StreamType>(
         next: RecreateNext::Decode,
         offset: range.start,
     })
-}
-
-pub(crate) fn handle_variant_change<T: StreamType>(
-    stream: &SharedStream<T>,
-    session: &DecoderSession,
-    seek: &dyn SeekObserve,
-    no_change: &DecodeError,
-) -> Result<RecreateState, DecodeError> {
-    if let FormatDecision::Recreate(recreate) = detect(stream, session, seek) {
-        return Ok(recreate);
-    }
-    if !seek.is_pending()
-        && let Some(target) = stream.variant_change_target()
-        && let Some(session_info) = session.media_info.clone()
-        && let Some(session_variant) = session_info.variant_index
-        && usize::try_from(session_variant) == Ok(target)
-        && let Some(current) = stream.media_info()
-        && current.variant_index == Some(session_variant)
-        && let Ok(range) = stream.format_change_segment_range()
-    {
-        let mut media_info = session_info;
-        if media_info.codec.is_none() {
-            media_info.codec = current.codec;
-        }
-        if media_info.container.is_none() {
-            media_info.container = current.container;
-        }
-        return Ok(RecreateState {
-            cause: RecreateCause::FormatBoundary,
-            media_info,
-            next: RecreateNext::Decode,
-            offset: range.start,
-        });
-    }
-    let _ = no_change;
-    Err(DecodeError::Interrupted)
 }
 
 pub(crate) fn resolve_target(cached: Option<&MediaInfo>, current: &MediaInfo) -> Option<MediaInfo> {

@@ -2,14 +2,13 @@ use kithara_events::{
     AbrMode, AbrReason, BandwidthSource, VariantDuration, VariantIndex, VariantInfo,
 };
 use kithara_platform::{
-    CancelToken,
     sync::Arc,
     time::{Duration, Duration as StdDuration, Instant},
 };
 use kithara_test_utils::kithara;
 use proptest::prelude::*;
 
-use super::{AbrDecision, AbrState, AbrView};
+use super::{AbrDecision, AbrState, AbrView, PendingAbrClaim, PendingAbrDecision};
 use crate::{Abr, AbrController, AbrSettings, ThroughputEstimator};
 
 /// Canonical 3-variant fixture used by every test in this module. Private
@@ -247,6 +246,189 @@ fn request_target_replace_pending_latest_wins() {
 }
 
 #[kithara::test]
+fn request_target_repeat_same_target_keeps_the_ticket() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    let first = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("first request must be claimable");
+
+    state.request_target(VariantIndex::new(2), AbrReason::UrgentDownSwitch);
+
+    assert_eq!(
+        state
+            .claim_pending_decision(VariantIndex::new(0))
+            .map(PendingAbrDecision::ticket),
+        Some(first.ticket()),
+        "a repeat request for the queued target must not re-mint the ticket \
+         the consumer built its incoming session against"
+    );
+    assert!(state.commit_pending(first, Instant::now()));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(2));
+}
+
+#[kithara::test]
+fn stale_claim_cannot_commit_after_same_target_aba() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    let stale = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("first request must be claimable");
+
+    state.request_target(VariantIndex::new(1), AbrReason::DownSwitch);
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    let current = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("replacement request must be claimable");
+
+    assert_ne!(stale.ticket(), current.ticket());
+    assert_eq!(stale.decision(), current.decision());
+    assert!(!state.commit_pending(stale, Instant::now()));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(0));
+    assert_eq!(
+        state
+            .claim_pending_decision(VariantIndex::new(0))
+            .map(PendingAbrDecision::ticket),
+        Some(current.ticket()),
+        "stale commit must preserve the replacement request"
+    );
+    assert!(state.commit_pending(current, Instant::now()));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(2));
+    assert_eq!(state.pending_target(), None);
+}
+
+#[kithara::test]
+fn claim_from_old_current_cannot_commit_after_variant_changes() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    let stale = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("request must be claimable from the initial variant");
+
+    state.apply_decision(
+        &AbrDecision::UpSwitch {
+            from: VariantIndex::new(0),
+            to: VariantIndex::new(1),
+            reason: AbrReason::UpSwitch,
+        },
+        Instant::now(),
+    );
+
+    assert!(!state.commit_pending(stale, Instant::now()));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(1));
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
+
+    let current = state
+        .claim_pending_decision(VariantIndex::new(1))
+        .expect("pending request must be reclaimable from the live variant");
+    assert!(state.commit_pending(current, Instant::now()));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(2));
+}
+
+#[kithara::test]
+fn claim_before_lock_cannot_commit_until_reclaimed_after_unlock() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    let before_lock = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("request must be claimable before lock");
+
+    state.lock();
+    assert!(!state.commit_pending(before_lock, Instant::now()));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(0));
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
+
+    state.unlock();
+    let after_unlock = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("pending request must be reclaimable after unlock");
+    assert!(state.commit_pending(after_unlock, Instant::now()));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(2));
+}
+
+#[kithara::test]
+fn pending_claim_distinguishes_absent_from_locked() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    assert_eq!(
+        state.pending_claim(VariantIndex::new(0)),
+        PendingAbrClaim::Absent
+    );
+
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    assert!(matches!(
+        state.pending_claim(VariantIndex::new(0)),
+        PendingAbrClaim::Ready(_)
+    ));
+
+    state.lock();
+    assert!(matches!(
+        state.pending_claim(VariantIndex::new(0)),
+        PendingAbrClaim::Locked(_)
+    ));
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
+}
+
+#[kithara::test]
+fn abort_pending_only_clears_matching_ticket() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(1), AbrReason::UpSwitch);
+    let stale = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("first request must be claimable");
+
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    let current = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("replacement request must be claimable");
+
+    assert!(!state.abort_pending(stale.ticket()));
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
+    assert!(state.abort_pending(current.ticket()));
+    assert_eq!(state.pending_target(), None);
+}
+
+#[kithara::test]
+fn retract_throughput_pending_drops_intent_without_moving_variant() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(2))));
+    state.request_target(VariantIndex::new(0), AbrReason::DownSwitch);
+    state.retract_throughput_pending(VariantIndex::new(2));
+    assert_eq!(state.pending_target(), None);
+    assert_eq!(
+        state.current_variant_index(),
+        VariantIndex::new(2),
+        "retracting an intent must not move the audible variant"
+    );
+}
+
+#[kithara::test]
+fn retract_throughput_pending_preserves_manual_intent() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::ManualOverride);
+    state.retract_throughput_pending(VariantIndex::new(0));
+    assert_eq!(
+        state.pending_target(),
+        Some(VariantIndex::new(2)),
+        "a user-driven pending must not be retracted by a throughput verdict"
+    );
+}
+
+#[kithara::test]
+#[case::urgent_down(AbrReason::UrgentDownSwitch)]
+#[case::escape_stalled(AbrReason::EscapeStalled)]
+fn retract_throughput_pending_preserves_a_rescue(#[case] reason: AbrReason) {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), reason);
+    state.retract_throughput_pending(VariantIndex::new(0));
+    assert_eq!(
+        state.pending_target(),
+        Some(VariantIndex::new(2)),
+        "a rescue off a variant that stopped delivering must survive a \
+         recovered throughput estimate — the estimate recovers as soon as \
+         another variant's segment lands, while the stalled one is still stalled"
+    );
+}
+
+#[kithara::test]
 fn peek_pending_decision_returns_none_when_no_request() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     assert!(state.peek_pending_decision(VariantIndex::new(0)).is_none());
@@ -425,7 +607,10 @@ fn request_target_accepts_manual_pin_target() {
     );
 }
 
-#[kithara::test]
+// Wall-clock interval measured against the instant `AbrState` captured at
+// construction: both must come from the same clock, so this one opts out
+// of the virtual one.
+#[kithara::test(flash(false))]
 fn min_switch_interval_prevents_oscillation() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     let variants = test_variants_3();
@@ -442,11 +627,84 @@ fn min_switch_interval_prevents_oscillation() {
         variants: &variants,
         settings: &settings,
     };
-    let d1 = state.decide(&view, now);
+    // The interval also guards the first switch of a session, so let it elapse
+    // before the pair of decisions this test is about.
+    let settled = now + Duration::from_secs(30);
+    let d1 = state.decide(&view, settled);
     assert!(d1.changed());
-    state.apply_decision(&d1, now);
-    let d2 = state.decide(&view, now + Duration::from_secs(1));
+    state.apply_decision(&d1, settled);
+
+    // Evidence that would immediately send the variant back down — this is the
+    // oscillation the interval exists to damp.
+    let reversal = AbrView {
+        estimate_bps: Some(1),
+        buffer_ahead: None,
+        bytes_downloaded: 10 * 1024 * 1024,
+        variants: &variants,
+        settings: &settings,
+    };
+    let d2 = state.decide(&reversal, settled + Duration::from_secs(1));
     assert_eq!(d2.reason(), AbrReason::MinInterval);
+}
+
+// Wall-clock interval measured against the instant `AbrState` captured at
+// construction: both must come from the same clock, so this one opts out
+// of the virtual one.
+#[kithara::test(flash(false))]
+fn min_switch_interval_guards_the_first_switch_of_a_session() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    let variants = test_variants_3();
+    let settings = AbrSettings {
+        min_switch_interval: Duration::from_secs(30),
+        min_buffer_for_up_switch: Duration::ZERO,
+        ..AbrSettings::default()
+    };
+    let now = Instant::now();
+    let view = AbrView {
+        estimate_bps: Some(3_000_000),
+        buffer_ahead: None,
+        bytes_downloaded: 10 * 1024 * 1024,
+        variants: &variants,
+        settings: &settings,
+    };
+
+    assert_eq!(
+        state.decide(&view, now + Duration::from_secs(1)).reason(),
+        AbrReason::MinInterval,
+        "a fast first sample must not flip the variant out from under a \
+         listener who has barely started playing"
+    );
+    assert!(
+        state.decide(&view, now + Duration::from_secs(30)).changed(),
+        "once the interval has elapsed the same evidence must be acted on"
+    );
+}
+
+#[kithara::test]
+fn urgent_down_switch_is_not_held_by_the_switch_interval() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(2))));
+    let variants = test_variants_3();
+    let settings = AbrSettings {
+        min_switch_interval: Duration::from_secs(30),
+        urgent_downswitch_buffer: Duration::from_secs(5),
+        ..AbrSettings::default()
+    };
+    let now = Instant::now();
+    let view = AbrView {
+        estimate_bps: Some(1),
+        buffer_ahead: Some(Duration::ZERO),
+        bytes_downloaded: 10 * 1024 * 1024,
+        variants: &variants,
+        settings: &settings,
+    };
+
+    let decision = state.decide(&view, now + Duration::from_secs(1));
+    assert_eq!(
+        decision.reason(),
+        AbrReason::UrgentDownSwitch,
+        "a starving reader must not be held on a variant that cannot feed it"
+    );
+    assert!(decision.changed());
 }
 
 /// A locked `AbrState` must never change variant, regardless of bandwidth
@@ -520,7 +778,7 @@ async fn auto_mode_with_default_seed_picks_high_variant_on_cold_start() {
         .min_switch_interval(Duration::ZERO)
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
-    let controller = AbrController::new(settings, CancelToken::never());
+    let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
         state: Arc::clone(&state),
@@ -548,7 +806,7 @@ async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
         min_buffer_for_up_switch: Duration::ZERO,
         ..AbrSettings::default()
     };
-    let controller = AbrController::new(settings, CancelToken::never());
+    let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
         state: Arc::clone(&state),
@@ -561,6 +819,80 @@ async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
     drop(handle);
 }
 
+/// Prod trace (`runtime_manual_switch_works_when_all_segments_cached`): an
+/// `UrgentDownSwitch` latched on the initial 2 Mbps seed survived nine
+/// `AlreadyOptimal` ticks after the estimate recovered, then committed a
+/// quality drop the controller no longer wanted. `AlreadyOptimal` is the
+/// live verdict for the current variant, so the tick must retract the
+/// stale throughput-driven pending.
+#[kithara::test(tokio)]
+async fn tick_already_optimal_retracts_stale_throughput_pending() {
+    let controller = AbrController::new(settings_fast());
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(2)))));
+    let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
+        state: Arc::clone(&state),
+        variants: test_variants_3(),
+    });
+    let handle = controller.register(&peer);
+
+    // A quality down-switch, not a rescue: a rescue answers a variant that
+    // stopped delivering, and a recovered estimate is no evidence about that.
+    state.request_target(VariantIndex::new(0), AbrReason::DownSwitch);
+
+    // A fast real sample recovers the estimate far above every tier, so the
+    // tick inside `record_bandwidth` reports `AlreadyOptimal` at variant 2.
+    controller.record_bandwidth(
+        handle.peer_id(),
+        30_000_000,
+        Duration::from_secs(1),
+        BandwidthSource::Network,
+    );
+
+    assert_eq!(
+        state.pending_target(),
+        None,
+        "an AlreadyOptimal verdict must drop the stale throughput pending"
+    );
+    assert_eq!(
+        state.current_variant_index(),
+        VariantIndex::new(2),
+        "retraction drops the intent, never the audible variant"
+    );
+    drop(handle);
+}
+
+// Wall-clock interval measured against the instant `AbrState` captured at
+// construction: both must come from the same clock, so this one opts out
+// of the virtual one.
+#[kithara::test(flash(false))]
+fn tick_min_interval_hold_preserves_pending() {
+    let settings = AbrSettings {
+        min_switch_interval: Duration::from_secs(30),
+        min_buffer_for_up_switch: Duration::ZERO,
+        ..AbrSettings::default()
+    };
+    let controller = AbrController::new(settings);
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
+        state: Arc::clone(&state),
+        variants: audio_variants_4tier(),
+    });
+    let handle = controller.register(&peer);
+    state.request_target(VariantIndex::new(3), AbrReason::UpSwitch);
+
+    // The 2 Mbps seed still wants the up-switch; only the interval holds it,
+    // so `evaluate()` reports `Stay { MinInterval }` on this tick.
+    controller.tick(handle.peer_id(), Instant::now());
+
+    assert_eq!(
+        state.pending_target(),
+        Some(VariantIndex::new(3)),
+        "a MinInterval hold wraps a switch evaluate() still wants — the \
+         pending must survive it"
+    );
+    drop(handle);
+}
+
 /// Full production path of the #107 ping-pong: pinning to 2 queues a
 /// boundary switch via the synchronous tick inside `set_mode`; re-pinning
 /// back to the current variant must kill that queued switch instead of
@@ -568,7 +900,7 @@ async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
 /// choice.
 #[kithara::test(tokio)]
 async fn set_mode_back_to_current_kills_queued_switch() {
-    let controller = AbrController::new(settings_fast(), CancelToken::never());
+    let controller = AbrController::new(settings_fast());
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
         state: Arc::clone(&state),
@@ -598,11 +930,8 @@ async fn set_mode_back_to_current_kills_queued_switch() {
 #[kithara::test(tokio)]
 async fn lock_refcount_holds_across_record_bandwidth() {
     let settings = settings_fast();
-    let controller = AbrController::with_estimator(
-        settings,
-        Arc::new(ThroughputEstimator::new()) as Arc<_>,
-        CancelToken::never(),
-    );
+    let controller =
+        AbrController::with_estimator(settings, Arc::new(ThroughputEstimator::new()) as Arc<_>);
 
     struct LockedPeer {
         state: Arc<AbrState>,

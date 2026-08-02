@@ -14,19 +14,19 @@ impl<B> Config<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn build(&self, _spec: PcmSpec, _pcm_pool: &PcmPool) -> Slot<B> {
+    pub(crate) fn build(_config: &Self, _spec: PcmSpec, _pcm_pool: &PcmPool) -> Slot<B> {
         Slot(PhantomData)
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(_config: &Self) -> bool {
         true
     }
 
-    pub(crate) fn set_resampler(&mut self, _resampler: BeatAnalysisConfig<B>) {}
+    pub(crate) fn set_resampler(_config: &mut Self, _resampler: BeatAnalysisConfig<B>) {}
 
-    pub(crate) fn with_default(&mut self, _resampler: BeatAnalysisConfig<B>) {}
+    pub(crate) fn with_default(_config: &mut Self, _resampler: BeatAnalysisConfig<B>) {}
 
-    pub(crate) fn take_detector(&mut self) -> Option<Detector> {
+    pub(crate) fn take_detector(_config: &mut Self) -> Option<Detector> {
         None
     }
 }
@@ -49,13 +49,13 @@ impl<B> Slot<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn finish(self, _detector: Option<&mut Detector>) -> Option<BeatGrid> {
+    pub(crate) fn finish(_slot: Self, _detector: Option<&mut Detector>) -> Option<BeatGrid> {
         None
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(_slot: &Self) -> bool {
         true
     }
 
-    pub(crate) fn push(&mut self, _chunk: &PcmChunk, _detector: Option<&mut Detector>) {}
+    pub(crate) fn push(_slot: &mut Self, _chunk: &PcmChunk, _detector: Option<&mut Detector>) {}
 }

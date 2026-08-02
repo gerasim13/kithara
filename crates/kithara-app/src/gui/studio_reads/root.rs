@@ -28,7 +28,7 @@ impl<'a> StudioRoot<'a> {
             .zip(cache.decks())
             .enumerate()
             .map(|(at, (deck, deck_cache))| {
-                DeckNode::new(&deck.ui, deck.view, deck_cache, at == focus)
+                DeckNode::new(&deck.ui, deck.view, deck_cache, state.eq_mode, at == focus)
             })
             .collect();
         let engine = EngineNode::new(&decks);
@@ -72,6 +72,7 @@ mod tests {
     use super::*;
     use crate::{
         catalog::Catalog,
+        deck::EqMode,
         gui::{
             deck::DeckView,
             studio_ui::{
@@ -80,7 +81,7 @@ mod tests {
             },
         },
         mix::MixState,
-        state::UiState,
+        state::{AbrVariant, UiState},
     };
 
     const DERIVED: [&str; 5] = [
@@ -96,6 +97,7 @@ mod tests {
         marks: CatalogRowMarks,
         collapsed: CollapsedModules,
         mix: MixState,
+        eq_mode: EqMode,
         decks: Vec<(UiState, DeckCache)>,
     }
 
@@ -106,6 +108,7 @@ mod tests {
                 marks: CatalogRowMarks::default(),
                 collapsed: CollapsedModules::default(),
                 mix: MixState::new(tempos.len()),
+                eq_mode: EqMode::default(),
                 decks: tempos.into_iter().map(deck).collect(),
             }
         }
@@ -116,7 +119,9 @@ mod tests {
                 .decks
                 .iter()
                 .enumerate()
-                .map(|(at, (ui, cache))| DeckNode::new(ui, DeckView::default(), cache, at == 0))
+                .map(|(at, (ui, cache))| {
+                    DeckNode::new(ui, DeckView::default(), cache, self.eq_mode, at == 0)
+                })
                 .collect();
             let engine = EngineNode::new(&decks);
             let drag = DragNode::new(library.title(0), Some(1), decks.len());
@@ -132,37 +137,108 @@ mod tests {
         }
     }
 
+    fn hls_ladder() -> Vec<AbrVariant> {
+        vec![
+            AbrVariant {
+                index: 0,
+                label: "128k".to_string(),
+                detail: "128 kbps \u{b7} AAC".to_string(),
+            },
+            AbrVariant {
+                index: 1,
+                label: "320k".to_string(),
+                detail: "320 kbps \u{b7} AAC".to_string(),
+            },
+        ]
+    }
+
     fn deck(tempo: &str) -> (UiState, DeckCache) {
         let mut ui = UiState::empty();
         ui.track_name = "Loaded".to_string();
         ui.eq_bands = vec![0.0; 3];
         ui.duration = 120.0;
+        ui.abr_variants = hls_ladder();
         let mut cache = DeckCache::default();
         cache.tempo = tempo.to_string();
         cache.remain = "-02:00".to_string();
         cache.subtitle = "file".to_string();
-        cache.zoom = Some(1.0);
+        cache.view.zoom = Some(1.0);
         (ui, cache)
+    }
+
+    fn studio_in(mode: EqMode) -> Studio {
+        let mut studio = Studio::new(["+2.0%", "-1.0%"]);
+        studio.eq_mode = mode;
+        for (ui, _) in &mut studio.decks {
+            ui.eq_bands = vec![0.0; mode.bands().len()];
+        }
+        studio
+    }
+
+    #[kithara::test]
+    fn the_menu_marks_the_rung_in_force_and_hides_the_slots_the_ladder_lacks() {
+        let mut studio = Studio::new(["+0.0%", "+0.0%"]);
+        studio.decks[0].0.abr_mode_is_auto = false;
+        studio.decks[0].0.selected_variant = Some(1);
+        let root = studio.root();
+        let walk = Walk::new(&root);
+
+        assert_eq!(
+            walk.get("deck.stream.quality_hidden@deck=a"),
+            Some(ReadValue::Bool(false)),
+        );
+        assert_eq!(
+            walk.get("deck.stream.variant_active@deck=a,variant=1"),
+            Some(ReadValue::Bool(true)),
+        );
+        for absent in [
+            "deck.stream.variant_active@deck=a,variant=auto",
+            "deck.stream.variant_active@deck=a,variant=0",
+        ] {
+            assert_eq!(walk.get(absent), Some(ReadValue::Bool(false)), "{absent}");
+        }
+        assert_eq!(
+            walk.get("deck.stream.variant_sub@deck=a,variant=1"),
+            Some(ReadValue::Text("320 kbps \u{b7} AAC")),
+        );
+        assert_eq!(
+            walk.get("deck.stream.variant_hidden@deck=a,variant=2"),
+            Some(ReadValue::Bool(true)),
+            "the ladder has two rungs, so the third slot stays hidden",
+        );
     }
 
     #[kithara::test]
     fn the_studio_tree_answers_every_key_the_renderer_asks_for() {
-        let studio = Studio::new(["+2.0%", "-1.0%"]);
-        let root = studio.root();
-        let walk = Walk::new(&root);
-
-        let documented = readable_endpoints().map(|(id, deck_scoped)| {
-            if deck_scoped {
-                format!("{id}@deck=a")
-            } else {
+        let documented = readable_endpoints().map(|(id, scopes)| {
+            let scope: Vec<String> = scopes
+                .iter()
+                .map(|scope| match *scope {
+                    "deck" => "deck=a".to_owned(),
+                    other => format!("{other}=0"),
+                })
+                .collect();
+            if scope.is_empty() {
                 id.to_string()
+            } else {
+                format!("{id}@{}", scope.join(","))
             }
         });
         let synthesized = DERIVED.into_iter().map(|id| format!("{id}@deck=b"));
-        for key in documented.chain(synthesized) {
-            assert!(walk.get(&key).is_some(), "no owner answers `{key}`");
+        // A mode-scoped endpoint is answered only by the mode that draws it,
+        // so ownership is a claim about the modes together.
+        let mut unowned: Vec<String> = documented.chain(synthesized).collect();
+        for mode in [EqMode::ThreeBand, EqMode::FourBand] {
+            let studio = studio_in(mode);
+            let root = studio.root();
+            let walk = Walk::new(&root);
+            unowned.retain(|key| walk.get(key).is_none());
         }
+        assert!(unowned.is_empty(), "no owner answers {unowned:?}");
 
+        let studio = Studio::new(["+2.0%", "-1.0%"]);
+        let root = studio.root();
+        let walk = Walk::new(&root);
         assert_eq!(
             walk.get("deck.playback.tempo@deck=a"),
             Some(ReadValue::Text("+2.0%")),
@@ -176,5 +252,38 @@ mod tests {
             None,
             "the session has two decks",
         );
+    }
+
+    #[kithara::test]
+    fn every_deck_reads_the_shared_eq_mode() {
+        let studio = studio_in(EqMode::FourBand);
+        let root = studio.root();
+        let walk = Walk::new(&root);
+
+        for deck in ["a", "b"] {
+            assert_eq!(
+                walk.get(&format!("deck.eq.three_band@deck={deck}")),
+                Some(ReadValue::Bool(false))
+            );
+            assert_eq!(
+                walk.get(&format!("deck.eq.four_band@deck={deck}")),
+                Some(ReadValue::Bool(true))
+            );
+            assert!(walk.get(&format!("deck.eq.low_mid@deck={deck}")).is_some());
+        }
+    }
+
+    #[kithara::test]
+    fn a_three_band_studio_answers_no_four_band_key() {
+        let studio = studio_in(EqMode::ThreeBand);
+        let root = studio.root();
+        let walk = Walk::new(&root);
+
+        for deck in ["a", "b"] {
+            for band in ["low_mid", "high_mid"] {
+                let key = format!("deck.eq.{band}@deck={deck}");
+                assert_eq!(walk.get(&key), None, "three-band decks have no `{key}`");
+            }
+        }
     }
 }

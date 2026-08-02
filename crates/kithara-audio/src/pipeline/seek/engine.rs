@@ -8,7 +8,7 @@ use tracing::{trace, warn};
 
 use crate::pipeline::{
     decode::{
-        core::DecodeCore,
+        core::ActiveDecode,
         format::{FormatDecision, detect},
         gate::ReadinessGate,
     },
@@ -30,7 +30,7 @@ pub(crate) struct SeekEngine {
 }
 
 pub(crate) struct SeekApplyCtx<'a, T: StreamType> {
-    pub(crate) decode: &'a mut DecodeCore,
+    pub(crate) decode: &'a mut ActiveDecode,
     pub(crate) emit: Option<&'a DeferredBus<Event>>,
     pub(crate) playhead: &'a dyn PlayheadWrite,
     pub(crate) readiness: &'a ReadinessGate,
@@ -114,7 +114,7 @@ impl SeekEngine {
         if let Some(duration) = ctx.playhead.duration()
             && position >= duration
         {
-            land_eof(ctx.decode.session(), ctx.playhead, duration);
+            land_eof(ctx.decode.active(), ctx.playhead, duration);
             ctx.seek.complete(epoch);
             return SeekTransition::AtEof { epoch };
         }
@@ -128,16 +128,12 @@ impl SeekEngine {
             request.emit_request = false;
         }
         let anchor = ctx.stream.seek_time_anchor(position);
-        // The seek's own reads must cross the fence, but nothing has been
-        // recreated yet: the switch is acked either by `apply_anchor` (the
-        // running decoder carries across) or at the rebuild install site.
-        ctx.stream.open_variant_read_gate();
         ctx.seek.complete(epoch);
         ctx.readiness.arm_peer_wake();
         let mode = match anchor {
             Ok(Some(anchor)) => SeekMode::Anchor(anchor),
             Ok(None) => SeekMode::Direct {
-                target_byte: estimate_target_byte(ctx.decode.session(), ctx.stream, position),
+                target_byte: estimate_target_byte(ctx.decode.active(), ctx.stream, position),
             },
             Err(error) => {
                 warn!(?error, "seek anchor resolution failed");
@@ -182,7 +178,7 @@ impl SeekEngine {
         anchor_value: SourceSeekAnchor,
         ctx: &mut SeekApplyCtx<'_, T>,
     ) -> SeekTransition {
-        match anchor::resolve(ctx.stream, ctx.decode.session(), request, anchor_value) {
+        match anchor::resolve(ctx.stream, ctx.decode.active(), request, anchor_value) {
             anchor::AnchorPlan::Failed { context, error } => {
                 return SeekTransition::Failed {
                     request,
@@ -195,7 +191,6 @@ impl SeekEngine {
             }
             anchor::AnchorPlan::Seek => {}
         }
-        ctx.stream.clear_variant_fence();
         update_len(ctx.decode, ctx.stream);
         match ctx
             .decode
@@ -218,7 +213,7 @@ impl SeekEngine {
         ctx: &mut SeekApplyCtx<'_, T>,
     ) -> SeekTransition {
         if let FormatDecision::Recreate(recreate) =
-            detect(ctx.stream, ctx.decode.session(), ctx.observe)
+            detect(ctx.stream, ctx.decode.active(), ctx.observe)
         {
             return SeekTransition::Recreate(RecreateState {
                 cause: RecreateCause::VariantSwitch,
@@ -234,9 +229,9 @@ impl SeekEngine {
         {
             Ok(_) => self.applied(request, None, ctx),
             Err(error) => {
-                let offset = ctx.decode.session().base_offset;
+                let offset = ctx.decode.active().base_offset();
                 let target =
-                    estimate_target_byte(ctx.decode.session(), ctx.stream, request.seek.target);
+                    estimate_target_byte(ctx.decode.active(), ctx.stream, request.seek.target);
                 SeekRecovery::new(
                     request,
                     request.seek.target,

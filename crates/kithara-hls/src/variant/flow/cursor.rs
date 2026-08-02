@@ -5,19 +5,6 @@ use kithara_test_utils::kithara;
 use super::HlsVariant;
 
 impl HlsVariant {
-    #[kithara::probe(variant = self.variant as u64, n)]
-    pub(crate) fn advance(&self, n: u64) {
-        self.flow.reader.advance(n);
-        if !self.flow.reader.is_seek_active() {
-            self.clear_seek_alias_if_moved(self.flow.reader.position());
-        }
-    }
-
-    #[kithara::probe(variant = self.variant as u64, pos = self.flow.reader.position())]
-    pub(crate) fn get_position(&self) -> u64 {
-        self.flow.reader.position()
-    }
-
     pub(crate) fn prefetch_anchor(&self) -> u64 {
         self.flow.prefetch_anchor.load(Ordering::Acquire)
     }
@@ -30,15 +17,21 @@ impl HlsVariant {
         self.flow.prefetch_resume_at.store(byte, Ordering::Release);
     }
 
-    /// Whether the reader just made the deferred dispatch decision stale.
-    /// Consumes the threshold, so it answers `true` exactly once per deferred
-    /// segment: the next `dispatch` publishes the threshold for the segment
-    /// after it. This is the reader's own progress re-opening a decision that
-    /// was taken against an older cursor — no timer re-checks it.
-    pub(crate) fn take_prefetch_resume(&self) -> bool {
+    /// Whether the reader at `consumed` just made the deferred dispatch
+    /// decision stale. Consumes the threshold, so it answers `true` exactly once
+    /// per deferred segment: the next `dispatch` publishes the threshold for the
+    /// segment after it. This is the reader's own progress re-opening a decision
+    /// that was taken against an older cursor — no timer re-checks it.
+    ///
+    /// The caller supplies the position because the two facts have different
+    /// owners: the variant plans, so it owns the threshold; the session reads,
+    /// so it owns the byte cursor. Reading the variant's own prefetch anchor
+    /// instead answers a different question — where the reader is *aimed*, not
+    /// how far it has *consumed* — and leaves the peer asleep on real progress.
+    pub(crate) fn take_prefetch_resume_at(&self, consumed: u64) -> bool {
         let at = self.flow.prefetch_resume_at.load(Ordering::Acquire);
         at != u64::MAX
-            && self.flow.reader.position() >= at
+            && consumed >= at
             && self
                 .flow
                 .prefetch_resume_at
@@ -46,20 +39,13 @@ impl HlsVariant {
                 != u64::MAX
     }
 
-    #[kithara::probe(variant = self.variant as u64, pos)]
-    pub(crate) fn set_position(&self, pos: u64) {
-        let moved = self.flow.reader.position() != pos;
-        self.set_position_without_byte_demand(pos);
+    pub(crate) fn register_session_seek(&self, pos: u64, moved: bool) {
+        if !self.flow.reader.is_seek_active() {
+            self.retire_seek_projection_if_moved(pos);
+        }
         if moved {
             self.set_exact_byte_seek_demand(pos);
         }
-    }
-
-    pub(super) fn set_position_without_byte_demand(&self, pos: u64) {
-        if !self.flow.reader.is_seek_active() {
-            self.clear_seek_alias_if_moved(pos);
-        }
-        self.flow.reader.set_position(pos);
     }
 
     #[kithara::probe(variant = self.variant as u64, byte)]

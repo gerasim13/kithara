@@ -172,7 +172,6 @@ mod tests {
     use super::*;
     use crate::{
         config::SizeProbeMethod,
-        ids::SegmentIndex,
         peer::HlsPeer,
         playlist::{PlaylistState, SegmentState, VariantState},
         segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
@@ -198,6 +197,7 @@ mod tests {
         source: HlsSource,
         variant: Arc<HlsVariant>,
         wake: Arc<DeferredWake>,
+        cancel: CancelToken,
     }
 
     impl Fixture {
@@ -206,13 +206,14 @@ mod tests {
 
         fn with_look_ahead(look_ahead_bytes: u64) -> Self {
             let bus = EventBus::new(8);
-            let ctx = Self::plan_ctx(&bus, look_ahead_bytes);
-            let coord = Self::coord(&bus, &ctx);
-            let variant = Arc::clone(coord.active().expect("active variant"));
+            let cancel = CancelToken::never();
+            let ctx = Self::plan_ctx(&bus, look_ahead_bytes, &cancel);
+            let coord = Self::coord(&bus, &ctx, cancel.clone());
+            let variant = coord.active();
             let mut source = HlsSource::new(
                 Arc::clone(&coord),
                 Arc::new(DeferredBus::new(bus, 8)),
-                CancelScope::new(Some(CancelToken::never())),
+                CancelScope::new(Some(cancel.clone())),
             );
             let peer = Arc::new(HlsPeer::new(
                 coord.seek_observe(),
@@ -226,6 +227,7 @@ mod tests {
                 source,
                 variant,
                 wake,
+                cancel,
             }
         }
 
@@ -235,8 +237,7 @@ mod tests {
                 .expect("segment url")
         }
 
-        fn plan_ctx(bus: &EventBus, look_ahead_bytes: u64) -> PlanCtx {
-            let cancel = CancelToken::never();
+        fn plan_ctx(bus: &EventBus, look_ahead_bytes: u64, cancel: &CancelToken) -> PlanCtx {
             let store = Arc::new(
                 AssetStoreBuilder::default()
                     .backend(StorageBackend::Memory)
@@ -246,7 +247,6 @@ mod tests {
             PlanCtx {
                 bus: bus.clone(),
                 prefetch_budget: 8,
-                master_cancel: cancel,
                 scope: store
                     .scope::<crate::Hls>(&AssetSource::Remote {
                         url: "https://example.com/master.m3u8"
@@ -265,7 +265,6 @@ mod tests {
         }
 
         fn playlist_state() -> Arc<PlaylistState> {
-            let count = usize::try_from(Self::SEGMENT_COUNT).expect("segment count fits usize");
             Arc::new(PlaylistState::new(vec![VariantState {
                 codec: Some(AudioCodec::AacLc),
                 container: Some(ContainerFormat::Fmp4),
@@ -275,17 +274,12 @@ mod tests {
                         url: Self::segment_url(idx),
                         duration: PlatformDuration::from_secs(2),
                         byte_range_len: Some(Self::SEGMENT_BYTES),
-                        index: SegmentIndex::try_new(
-                            usize::try_from(idx).expect("segment index fits usize"),
-                            count,
-                        )
-                        .expect("segment index"),
                     })
                     .collect(),
             }]))
         }
 
-        fn coord(bus: &EventBus, ctx: &PlanCtx) -> Arc<HlsCoord> {
+        fn coord(bus: &EventBus, ctx: &PlanCtx, cancel: CancelToken) -> Arc<HlsCoord> {
             let playlist = Self::playlist_state();
             let segments: Vec<Segment> = (0..Self::SEGMENT_COUNT)
                 .map(|idx| {
@@ -311,17 +305,14 @@ mod tests {
                 container: playlist.variant_container(0),
             }
             .into_variant(0, ctx);
-            let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer {
-                state: Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))))),
-            });
-            let controller = Arc::new(AbrController::new(
-                AbrSettings::default(),
-                CancelToken::never(),
-            ));
+            let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+            let publisher = state.publisher();
+            let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer { state });
+            let controller = AbrController::new(AbrSettings::default());
             Arc::new(HlsCoord::new(
                 HlsCoordEnv {
                     scope: ctx.scope.clone(),
-                    cancel: ctx.master_cancel.clone(),
+                    cancel,
                     headers: None,
                     emit: Arc::new(DeferredBus::new(bus.clone(), 8)),
                     signal: ctx.signal.clone(),
@@ -329,8 +320,8 @@ mod tests {
                 Arc::new(PlayheadState::new()),
                 Arc::new(SeekState::new()),
                 controller.register(&peer),
+                publisher,
                 Arc::from(vec![variant]),
-                playlist,
             ))
         }
     }
@@ -351,7 +342,14 @@ mod tests {
         let fixture = Fixture::with_look_ahead(look_ahead);
 
         fixture.variant.rebuild(&fixture.ctx, 0);
-        let opening = fixture.variant.dispatch(&fixture.ctx, 8);
+        let opening = fixture.variant.dispatch_from(
+            &fixture.ctx,
+            8,
+            fixture.source.position(),
+            None,
+            true,
+            fixture.cancel.clone(),
+        );
         assert_eq!(
             opening.len(),
             2,
@@ -368,7 +366,14 @@ mod tests {
             fixture.wake.flush(),
             "the reader consumed a segment: that progress must wake the peer on its own"
         );
-        let after_consumption = fixture.variant.dispatch(&fixture.ctx, 8);
+        let after_consumption = fixture.variant.dispatch_from(
+            &fixture.ctx,
+            8,
+            fixture.source.position(),
+            None,
+            true,
+            fixture.cancel.clone(),
+        );
         assert_eq!(
             after_consumption.len(),
             1,

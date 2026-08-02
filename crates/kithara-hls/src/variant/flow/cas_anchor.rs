@@ -9,18 +9,17 @@ use super::seqlock::AnchorEntry;
 /// plus a present/absent generation. Unlike [`SeqAnchorCell`](super::seqlock::SeqAnchorCell)
 /// (a single on-core body writer), the exact-seek demand is body-written from
 /// BOTH the produce-core seek path (`seek_time_anchor`) and the off-RT
-/// downloader seek-epoch reset (`rebuild_at_time`), with no lock shared between
-/// them. The version is therefore acquired with a CAS (even -> odd): the two
-/// writers serialize, the loser retries — writes are short (five atomic stores,
-/// no alloc/lock/log) and rare. The RT read path never spins on a
+/// profiled reader preparation, with no lock shared between them. The version
+/// is therefore acquired with a CAS (even -> odd): the two writers serialize,
+/// the loser retries — writes are short (five atomic stores, no alloc/lock/log)
+/// and rare. The RT read path never spins on a
 /// write-in-flight: an odd or changed version returns `None` (not-ready) for
 /// this poll and relies on the existing level-triggered re-poll
 /// (`SchedulerWake` / `WAITING_TIMEOUT` / next `read_at`) to observe the demand
 /// a tick later — the non-blocking analog of the original `Mutex`'s blocking
 /// wait. `active` is the present generation (0 = `None`), published *inside* the
 /// version critical section so two writers' publishes can never lost-update
-/// each other; off-RT consumers may CAS it to 0. See the crate `CONTEXT.md`
-/// "Seek-state primitives".
+/// each other. See the crate `CONTEXT.md` "Seek-state primitives".
 pub(super) struct CasAnchorCell {
     segment: AtomicU32,
     /// Seqlock version: even = stable, odd = a writer owns the body. Acquired
@@ -49,6 +48,12 @@ impl CasAnchorCell {
         self.active.store(0, Ordering::Release);
     }
 
+    pub(super) fn clear_if_generation(&self, generation: u64) -> bool {
+        self.active
+            .compare_exchange(generation, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
     pub(super) fn load(&self) -> Option<AnchorEntry> {
         let start = self.version.load(Ordering::Acquire);
         if start & 1 != 0 {
@@ -71,7 +76,7 @@ impl CasAnchorCell {
         if self.version.load(Ordering::Acquire) != start {
             return None;
         }
-        // Reject a snapshot a concurrent `clear`/`take_if` already retired.
+        // Reject a snapshot a concurrent `clear` already retired.
         if self.active.load(Ordering::Acquire) != generation {
             return None;
         }
@@ -126,13 +131,5 @@ impl CasAnchorCell {
         self.active.store(generation, Ordering::Release);
         // Release the version lock (odd -> even).
         self.version.store(held.wrapping_add(1), Ordering::Release);
-    }
-
-    /// Consume the demand iff it is still generation `generation`. Safe from any
-    /// thread; the CAS picks a single winner across concurrent completers.
-    pub(super) fn take_if(&self, generation: u64) -> bool {
-        self.active
-            .compare_exchange(generation, 0, Ordering::AcqRel, Ordering::Relaxed)
-            .is_ok()
     }
 }

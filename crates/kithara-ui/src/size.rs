@@ -411,7 +411,7 @@ mod tests {
         builtin,
         expand::{Binding, BindingKind},
         ids::{Interner, SourceUri},
-        module::{AdaptivePolicy, GlyphStyle, IconName, PopoverAt, TextAlign},
+        module::{AdaptivePolicy, GlyphStyle, IconName, PopoverAlign, PopoverAt, TextAlign},
     };
 
     fn control(interner: &mut Interner, id: &str, size: SizeSpec) -> ExpandedNode {
@@ -456,6 +456,7 @@ mod tests {
             id: None,
             size: None,
             gap,
+            align: TextAlign::Start,
             pad: None,
             pad_x: None,
             pad_y: None,
@@ -655,6 +656,7 @@ mod tests {
                 with: BTreeMap::new(),
             },
             at: PopoverAt::Anchor,
+            align: PopoverAlign::Start,
             anchor: Box::new(control(&mut interner, "burger", fixed(36.0, 36.0))),
             content: Box::new(control(&mut interner, "pop", fixed(300.0, 400.0))),
         };

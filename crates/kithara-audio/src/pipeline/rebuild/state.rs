@@ -1,9 +1,27 @@
-use crossbeam_queue::ArrayQueue;
-use kithara_decode::Decoder;
-use kithara_platform::sync::Arc;
-use kithara_stream::{MediaInfo, SeekObserve};
+use kithara_stream::{MediaInfo, SeekObserve, VariantTransition};
 
-use crate::pipeline::seek::{SeekContext, SeekRequest};
+use crate::pipeline::{
+    decode::DecoderGeneration,
+    seek::{SeekContext, SeekRequest},
+};
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct BuildId(u64);
+
+impl BuildId {
+    pub(super) const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub(super) const fn get(self) -> u64 {
+        self.0
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn fixture(value: u64) -> Self {
+        Self(value)
+    }
+}
 
 /// What to do once decoder recreation succeeds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,11 +44,10 @@ pub(crate) struct RecreateState {
 }
 
 pub(crate) struct RebuildState {
-    pub(crate) completion: Arc<ArrayQueue<DecoderRebuildComplete>>,
+    pub(crate) build: BuildId,
     pub(crate) superseded_seek: Option<SeekRequest>,
     pub(crate) recreate: RecreateState,
     pub(crate) started_seek_epoch: u64,
-    pub(crate) ticket: u64,
 }
 
 impl RebuildState {
@@ -55,9 +72,16 @@ impl RebuildState {
     }
 }
 
-pub(crate) struct DecoderRebuildComplete {
-    pub(crate) result: Result<Box<dyn Decoder>, RecreateOutcome>,
-    pub(crate) ticket: u64,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DecoderBuildPurpose {
+    Replacement,
+    Incoming(VariantTransition),
+}
+
+pub(crate) struct DecoderBuildComplete {
+    pub(crate) build: BuildId,
+    pub(crate) purpose: DecoderBuildPurpose,
+    pub(crate) result: Result<DecoderGeneration, RecreateOutcome>,
 }
 
 /// Outcome of one decoder recreation attempt.

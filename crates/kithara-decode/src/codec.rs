@@ -61,6 +61,11 @@ pub(crate) trait FrameCodec: Send + 'static {
         input_pts
     }
 
+    /// Decoder-owned packet-time bias removed before the first PCM frame.
+    fn timestamp_bias_frames(&self) -> u64 {
+        0
+    }
+
     /// Decoder-side algorithmic delay in PCM frames for `codec` — the
     /// silent lead-in this concrete decoder emits **in addition to**
     /// the encoder-declared priming. LAME-convention MP3 decoders

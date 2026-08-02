@@ -14,7 +14,7 @@ flash = ["kithara-platform/flash"]
 hang = ["dep:serde", "dep:serde_json"]
 mock = ["dep:unimock"]
 no-block = ["kithara-platform/no-block"]
-probe = ["dep:usdt", "tracing-subscriber/env-filter"]
+probe = ["dep:backtrace", "dep:usdt", "tracing-subscriber/env-filter"]
 # HTTP backend forwarding (kithara-net reached via kithara-events).
 client-reqwest = ["kithara-events/client-reqwest"]
 client-wreq = ["kithara-events/client-wreq"]
@@ -41,7 +41,7 @@ url = { workspace = true }
 usdt = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-backtrace = { workspace = true }
+backtrace = { workspace = true, optional = true }
 
 [target.'cfg(rtsan)'.dependencies]
 pin-project-lite = { workspace = true }

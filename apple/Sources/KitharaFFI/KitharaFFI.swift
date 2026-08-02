@@ -3486,7 +3486,7 @@ public func FfiConverterTypeSeekCallback_lower(_ value: SeekCallback) -> UInt64 
 
 
 /**
- * Domain-scoped query parameters that identify progressive-file content.
+ * Domain-scoped query parameters that identify remote media content.
  */
 public struct FfiCacheIdentityRule: Equatable, Hashable {
     /**
@@ -5769,10 +5769,6 @@ public enum FfiItemEvent: Equatable, Hashable {
     )
     case playbackResamplerConfigured(backend: FfiPlaybackResamplerKind, hostSampleRate: UInt32, sourceSampleRate: UInt32, active: Bool
     )
-    case hlsVariantSwitchFenced(fromVariant: UInt32, toVariant: UInt32, crossCodec: Bool
-    )
-    case hlsVariantSwitchAcked(variant: UInt32, generation: UInt64
-    )
     case hlsCacheComplete(totalBytes: UInt64?
     )
     case downloadStarted(requestId: UInt64, waitInQueueSeconds: Double
@@ -5898,58 +5894,52 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
         case 25: return .playbackResamplerConfigured(backend: try FfiConverterTypeFfiPlaybackResamplerKind.read(from: &buf), hostSampleRate: try FfiConverterUInt32.read(from: &buf), sourceSampleRate: try FfiConverterUInt32.read(from: &buf), active: try FfiConverterBool.read(from: &buf)
         )
 
-        case 26: return .hlsVariantSwitchFenced(fromVariant: try FfiConverterUInt32.read(from: &buf), toVariant: try FfiConverterUInt32.read(from: &buf), crossCodec: try FfiConverterBool.read(from: &buf)
+        case 26: return .hlsCacheComplete(totalBytes: try FfiConverterOptionUInt64.read(from: &buf)
         )
 
-        case 27: return .hlsVariantSwitchAcked(variant: try FfiConverterUInt32.read(from: &buf), generation: try FfiConverterUInt64.read(from: &buf)
+        case 27: return .downloadStarted(requestId: try FfiConverterUInt64.read(from: &buf), waitInQueueSeconds: try FfiConverterDouble.read(from: &buf)
         )
 
-        case 28: return .hlsCacheComplete(totalBytes: try FfiConverterOptionUInt64.read(from: &buf)
+        case 28: return .downloadSlow(requestId: try FfiConverterUInt64.read(from: &buf), elapsedSeconds: try FfiConverterDouble.read(from: &buf)
         )
 
-        case 29: return .downloadStarted(requestId: try FfiConverterUInt64.read(from: &buf), waitInQueueSeconds: try FfiConverterDouble.read(from: &buf)
+        case 29: return .downloadCompleted(requestId: try FfiConverterUInt64.read(from: &buf), bytesTransferred: try FfiConverterUInt64.read(from: &buf), durationSeconds: try FfiConverterDouble.read(from: &buf), bandwidthBps: try FfiConverterUInt64.read(from: &buf)
         )
 
-        case 30: return .downloadSlow(requestId: try FfiConverterUInt64.read(from: &buf), elapsedSeconds: try FfiConverterDouble.read(from: &buf)
+        case 30: return .downloadRetrying(requestId: try FfiConverterUInt64.read(from: &buf), attempt: try FfiConverterUInt32.read(from: &buf), maxRetries: try FfiConverterUInt32.read(from: &buf), error: try FfiConverterString.read(from: &buf), backoffSeconds: try FfiConverterDouble.read(from: &buf)
         )
 
-        case 31: return .downloadCompleted(requestId: try FfiConverterUInt64.read(from: &buf), bytesTransferred: try FfiConverterUInt64.read(from: &buf), durationSeconds: try FfiConverterDouble.read(from: &buf), bandwidthBps: try FfiConverterUInt64.read(from: &buf)
+        case 31: return .downloadBodyStalled(requestId: try FfiConverterUInt64.read(from: &buf), consumed: try FfiConverterUInt64.read(from: &buf), expected: try FfiConverterOptionUInt64.read(from: &buf), stallSeconds: try FfiConverterDouble.read(from: &buf)
         )
 
-        case 32: return .downloadRetrying(requestId: try FfiConverterUInt64.read(from: &buf), attempt: try FfiConverterUInt32.read(from: &buf), maxRetries: try FfiConverterUInt32.read(from: &buf), error: try FfiConverterString.read(from: &buf), backoffSeconds: try FfiConverterDouble.read(from: &buf)
+        case 32: return .downloadBodyResumed(requestId: try FfiConverterUInt64.read(from: &buf), resumeNumber: try FfiConverterUInt32.read(from: &buf), fromOffset: try FfiConverterUInt64.read(from: &buf), honouredRange: try FfiConverterBool.read(from: &buf)
         )
 
-        case 33: return .downloadBodyStalled(requestId: try FfiConverterUInt64.read(from: &buf), consumed: try FfiConverterUInt64.read(from: &buf), expected: try FfiConverterOptionUInt64.read(from: &buf), stallSeconds: try FfiConverterDouble.read(from: &buf)
+        case 33: return .downloadRetryExhausted(requestId: try FfiConverterUInt64.read(from: &buf), maxRetries: try FfiConverterUInt32.read(from: &buf), consumed: try FfiConverterUInt64.read(from: &buf), error: try FfiConverterString.read(from: &buf)
         )
 
-        case 34: return .downloadBodyResumed(requestId: try FfiConverterUInt64.read(from: &buf), resumeNumber: try FfiConverterUInt32.read(from: &buf), fromOffset: try FfiConverterUInt64.read(from: &buf), honouredRange: try FfiConverterBool.read(from: &buf)
+        case 34: return .downloadFirstByte(requestId: try FfiConverterUInt64.read(from: &buf), ttfbSeconds: try FfiConverterDouble.read(from: &buf), status: try FfiConverterUInt16.read(from: &buf), partial: try FfiConverterBool.read(from: &buf)
         )
 
-        case 35: return .downloadRetryExhausted(requestId: try FfiConverterUInt64.read(from: &buf), maxRetries: try FfiConverterUInt32.read(from: &buf), consumed: try FfiConverterUInt64.read(from: &buf), error: try FfiConverterString.read(from: &buf)
+        case 35: return .downloadCancelled(requestId: try FfiConverterUInt64.read(from: &buf), reason: try FfiConverterTypeFfiCancelReason.read(from: &buf), bytesTransferred: try FfiConverterUInt64.read(from: &buf)
         )
 
-        case 36: return .downloadFirstByte(requestId: try FfiConverterUInt64.read(from: &buf), ttfbSeconds: try FfiConverterDouble.read(from: &buf), status: try FfiConverterUInt16.read(from: &buf), partial: try FfiConverterBool.read(from: &buf)
+        case 36: return .fileOpened(codec: try FfiConverterOptionTypeFfiAudioCodecKind.read(from: &buf), container: try FfiConverterOptionTypeFfiContainerKind.read(from: &buf), totalBytes: try FfiConverterOptionUInt64.read(from: &buf), cached: try FfiConverterBool.read(from: &buf)
         )
 
-        case 37: return .downloadCancelled(requestId: try FfiConverterUInt64.read(from: &buf), reason: try FfiConverterTypeFfiCancelReason.read(from: &buf), bytesTransferred: try FfiConverterUInt64.read(from: &buf)
+        case 37: return .fileTotalBytesResolved(totalBytes: try FfiConverterUInt64.read(from: &buf), source: try FfiConverterTypeFfiTotalBytesSource.read(from: &buf)
         )
 
-        case 38: return .fileOpened(codec: try FfiConverterOptionTypeFfiAudioCodecKind.read(from: &buf), container: try FfiConverterOptionTypeFfiContainerKind.read(from: &buf), totalBytes: try FfiConverterOptionUInt64.read(from: &buf), cached: try FfiConverterBool.read(from: &buf)
+        case 38: return .fileCacheComplete(totalBytes: try FfiConverterUInt64.read(from: &buf)
         )
 
-        case 39: return .fileTotalBytesResolved(totalBytes: try FfiConverterUInt64.read(from: &buf), source: try FfiConverterTypeFfiTotalBytesSource.read(from: &buf)
+        case 39: return .drmKeyFetchFailed(keyHost: try FfiConverterOptionString.read(from: &buf), stage: try FfiConverterTypeFfiKeyFailureStage.read(from: &buf), detail: try FfiConverterString.read(from: &buf)
         )
 
-        case 40: return .fileCacheComplete(totalBytes: try FfiConverterUInt64.read(from: &buf)
+        case 40: return .drmKeyAcquired(keyHost: try FfiConverterOptionString.read(from: &buf), source: try FfiConverterTypeFfiKeySource.read(from: &buf), bytes: try FfiConverterUInt64.read(from: &buf), latencyMs: try FfiConverterOptionUInt64.read(from: &buf)
         )
 
-        case 41: return .drmKeyFetchFailed(keyHost: try FfiConverterOptionString.read(from: &buf), stage: try FfiConverterTypeFfiKeyFailureStage.read(from: &buf), detail: try FfiConverterString.read(from: &buf)
-        )
-
-        case 42: return .drmKeyAcquired(keyHost: try FfiConverterOptionString.read(from: &buf), source: try FfiConverterTypeFfiKeySource.read(from: &buf), bytes: try FfiConverterUInt64.read(from: &buf), latencyMs: try FfiConverterOptionUInt64.read(from: &buf)
-        )
-
-        case 43: return .drmSegmentDecryptFailed(variant: try FfiConverterUInt32.read(from: &buf), segmentIndex: try FfiConverterUInt32.read(from: &buf), detail: try FfiConverterString.read(from: &buf)
+        case 41: return .drmSegmentDecryptFailed(variant: try FfiConverterUInt32.read(from: &buf), segmentIndex: try FfiConverterUInt32.read(from: &buf), detail: try FfiConverterString.read(from: &buf)
         )
 
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -6124,38 +6114,25 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
             FfiConverterBool.write(active, into: &buf)
 
 
-        case let .hlsVariantSwitchFenced(fromVariant,toVariant,crossCodec):
-            writeInt(&buf, Int32(26))
-            FfiConverterUInt32.write(fromVariant, into: &buf)
-            FfiConverterUInt32.write(toVariant, into: &buf)
-            FfiConverterBool.write(crossCodec, into: &buf)
-
-
-        case let .hlsVariantSwitchAcked(variant,generation):
-            writeInt(&buf, Int32(27))
-            FfiConverterUInt32.write(variant, into: &buf)
-            FfiConverterUInt64.write(generation, into: &buf)
-
-
         case let .hlsCacheComplete(totalBytes):
-            writeInt(&buf, Int32(28))
+            writeInt(&buf, Int32(26))
             FfiConverterOptionUInt64.write(totalBytes, into: &buf)
 
 
         case let .downloadStarted(requestId,waitInQueueSeconds):
-            writeInt(&buf, Int32(29))
+            writeInt(&buf, Int32(27))
             FfiConverterUInt64.write(requestId, into: &buf)
             FfiConverterDouble.write(waitInQueueSeconds, into: &buf)
 
 
         case let .downloadSlow(requestId,elapsedSeconds):
-            writeInt(&buf, Int32(30))
+            writeInt(&buf, Int32(28))
             FfiConverterUInt64.write(requestId, into: &buf)
             FfiConverterDouble.write(elapsedSeconds, into: &buf)
 
 
         case let .downloadCompleted(requestId,bytesTransferred,durationSeconds,bandwidthBps):
-            writeInt(&buf, Int32(31))
+            writeInt(&buf, Int32(29))
             FfiConverterUInt64.write(requestId, into: &buf)
             FfiConverterUInt64.write(bytesTransferred, into: &buf)
             FfiConverterDouble.write(durationSeconds, into: &buf)
@@ -6163,7 +6140,7 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
 
 
         case let .downloadRetrying(requestId,attempt,maxRetries,error,backoffSeconds):
-            writeInt(&buf, Int32(32))
+            writeInt(&buf, Int32(30))
             FfiConverterUInt64.write(requestId, into: &buf)
             FfiConverterUInt32.write(attempt, into: &buf)
             FfiConverterUInt32.write(maxRetries, into: &buf)
@@ -6172,7 +6149,7 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
 
 
         case let .downloadBodyStalled(requestId,consumed,expected,stallSeconds):
-            writeInt(&buf, Int32(33))
+            writeInt(&buf, Int32(31))
             FfiConverterUInt64.write(requestId, into: &buf)
             FfiConverterUInt64.write(consumed, into: &buf)
             FfiConverterOptionUInt64.write(expected, into: &buf)
@@ -6180,7 +6157,7 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
 
 
         case let .downloadBodyResumed(requestId,resumeNumber,fromOffset,honouredRange):
-            writeInt(&buf, Int32(34))
+            writeInt(&buf, Int32(32))
             FfiConverterUInt64.write(requestId, into: &buf)
             FfiConverterUInt32.write(resumeNumber, into: &buf)
             FfiConverterUInt64.write(fromOffset, into: &buf)
@@ -6188,7 +6165,7 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
 
 
         case let .downloadRetryExhausted(requestId,maxRetries,consumed,error):
-            writeInt(&buf, Int32(35))
+            writeInt(&buf, Int32(33))
             FfiConverterUInt64.write(requestId, into: &buf)
             FfiConverterUInt32.write(maxRetries, into: &buf)
             FfiConverterUInt64.write(consumed, into: &buf)
@@ -6196,7 +6173,7 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
 
 
         case let .downloadFirstByte(requestId,ttfbSeconds,status,partial):
-            writeInt(&buf, Int32(36))
+            writeInt(&buf, Int32(34))
             FfiConverterUInt64.write(requestId, into: &buf)
             FfiConverterDouble.write(ttfbSeconds, into: &buf)
             FfiConverterUInt16.write(status, into: &buf)
@@ -6204,14 +6181,14 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
 
 
         case let .downloadCancelled(requestId,reason,bytesTransferred):
-            writeInt(&buf, Int32(37))
+            writeInt(&buf, Int32(35))
             FfiConverterUInt64.write(requestId, into: &buf)
             FfiConverterTypeFfiCancelReason.write(reason, into: &buf)
             FfiConverterUInt64.write(bytesTransferred, into: &buf)
 
 
         case let .fileOpened(codec,container,totalBytes,cached):
-            writeInt(&buf, Int32(38))
+            writeInt(&buf, Int32(36))
             FfiConverterOptionTypeFfiAudioCodecKind.write(codec, into: &buf)
             FfiConverterOptionTypeFfiContainerKind.write(container, into: &buf)
             FfiConverterOptionUInt64.write(totalBytes, into: &buf)
@@ -6219,25 +6196,25 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
 
 
         case let .fileTotalBytesResolved(totalBytes,source):
-            writeInt(&buf, Int32(39))
+            writeInt(&buf, Int32(37))
             FfiConverterUInt64.write(totalBytes, into: &buf)
             FfiConverterTypeFfiTotalBytesSource.write(source, into: &buf)
 
 
         case let .fileCacheComplete(totalBytes):
-            writeInt(&buf, Int32(40))
+            writeInt(&buf, Int32(38))
             FfiConverterUInt64.write(totalBytes, into: &buf)
 
 
         case let .drmKeyFetchFailed(keyHost,stage,detail):
-            writeInt(&buf, Int32(41))
+            writeInt(&buf, Int32(39))
             FfiConverterOptionString.write(keyHost, into: &buf)
             FfiConverterTypeFfiKeyFailureStage.write(stage, into: &buf)
             FfiConverterString.write(detail, into: &buf)
 
 
         case let .drmKeyAcquired(keyHost,source,bytes,latencyMs):
-            writeInt(&buf, Int32(42))
+            writeInt(&buf, Int32(40))
             FfiConverterOptionString.write(keyHost, into: &buf)
             FfiConverterTypeFfiKeySource.write(source, into: &buf)
             FfiConverterUInt64.write(bytes, into: &buf)
@@ -6245,7 +6222,7 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
 
 
         case let .drmSegmentDecryptFailed(variant,segmentIndex,detail):
-            writeInt(&buf, Int32(43))
+            writeInt(&buf, Int32(41))
             FfiConverterUInt32.write(variant, into: &buf)
             FfiConverterUInt32.write(segmentIndex, into: &buf)
             FfiConverterString.write(detail, into: &buf)
