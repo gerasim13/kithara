@@ -131,6 +131,15 @@ mod tests {
 
     use super::*;
 
+    /// Budget for the tests whose subject is not the budget.
+    ///
+    /// [`terminates_timed_out_process`] owns the timeout contract and proves it
+    /// against a script that never finishes on its own. Everywhere else a
+    /// reachable budget can only decide the outcome by firing, and a killed
+    /// child reports no exit code — so a busy host would quietly substitute
+    /// "the machine was slow" for the exit-status mapping under test.
+    const NOT_UNDER_TEST: Duration = Duration::MAX;
+
     #[test]
     fn missing_executable_is_typed() {
         let temp = tempdir().expect("tempdir");
@@ -141,7 +150,7 @@ mod tests {
             cwd: temp.path(),
             stdout_path: &temp.path().join("stdout.log"),
             stderr_path: &temp.path().join("stderr.log"),
-            timeout: Duration::from_secs(1),
+            timeout: NOT_UNDER_TEST,
         })
         .expect_err("missing executable");
 
@@ -188,7 +197,7 @@ mod tests {
             cwd: temp.path(),
             stdout_path: &stdout,
             stderr_path: &stderr,
-            timeout: Duration::from_secs(1),
+            timeout: NOT_UNDER_TEST,
         })
         .expect("process");
 
