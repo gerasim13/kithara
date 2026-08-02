@@ -19,8 +19,8 @@ pub(crate) fn input(event: &Event) -> Option<Input> {
         Event::Mouse(mouse::Event::CursorLeft) => Some(Input::PointerLeft),
         Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) => Some(Input::PointerUp),
         Event::Mouse(mouse::Event::WheelScrolled { delta }) => Some(Input::Wheel(match delta {
-            ScrollDelta::Lines { y, .. } => Scroll::Lines(*y),
-            ScrollDelta::Pixels { y, .. } => Scroll::Pixels(*y),
+            ScrollDelta::Lines { x, y } => Scroll::Lines { x: *x, y: *y },
+            ScrollDelta::Pixels { x, y } => Scroll::Pixels { x: *x, y: *y },
         })),
         _ => None,
     }
@@ -130,6 +130,24 @@ mod tests {
                 input(&Event::Mouse(mouse::Event::ButtonReleased(button))).is_none(),
                 "{button:?} must stay with the child"
             );
+        }
+    }
+
+    #[kithara::test]
+    fn wheel_decode_preserves_both_axes_and_units() {
+        for (delta, expected_x, expected_y, pixels) in [
+            (ScrollDelta::Lines { x: 3.0, y: -2.0 }, 3.0, -2.0, false),
+            (ScrollDelta::Pixels { x: -7.5, y: 4.25 }, -7.5, 4.25, true),
+        ] {
+            let Some(Input::Wheel(scroll)) =
+                input(&Event::Mouse(mouse::Event::WheelScrolled { delta }))
+            else {
+                panic!("a mouse wheel must become portable input");
+            };
+
+            assert_eq!(scroll.x(), expected_x);
+            assert_eq!(scroll.y(), expected_y);
+            assert_eq!(scroll.is_pixels(), pixels);
         }
     }
 }

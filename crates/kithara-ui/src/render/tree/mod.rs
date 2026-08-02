@@ -7,6 +7,7 @@ mod node;
 mod panel;
 mod read;
 mod size;
+mod track_list;
 mod window;
 
 pub(crate) use geometry::active_tone;

@@ -71,6 +71,10 @@ impl ItemDrag {
             CursorShape::None
         }
     }
+
+    pub(crate) const fn is_held(&self) -> bool {
+        self.held
+    }
 }
 
 #[cfg(test)]

@@ -16,12 +16,15 @@ use num_traits::cast::AsPrimitive;
 use super::{
     geometry::effective_size,
     read::{read_flag, read_scope, resolve, wave_zoom},
+    track_list::TrackListHost,
 };
 use crate::{
     compile::CompiledUi,
-    engine::{Descriptor, Engine, Target},
+    engine::{Descriptor, Engine, ScrollConfig, Target},
     expand::{ControlSpec, ExpandedNode},
-    interact::{CursorShape, Hover, Input, iced as iced_interact, recognizers::WheelStep},
+    interact::{
+        CursorShape, Hover, Input, ScrollAxis, iced as iced_interact, recognizers::WheelStep,
+    },
     module::{ChromeStyle, FaderStyle, WaveStyle},
     render::{
         ReadValue, Reads, Skin, UiEvent,
@@ -29,11 +32,12 @@ use crate::{
         engine as engine_event,
         icons::document_icon,
         model::derived,
-        toggle_module,
+        sync_track_list_scroll, toggle_module,
     },
     size::{Hidden, is_hidden},
     widgets::{
         fader::fader_input_layout,
+        track_list::column_layouts,
         wave::zoom_math::{clamp_zoom, window_bounds, zoom_for_wheel},
     },
 };
@@ -133,14 +137,19 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
             .as_widget_mut()
             .layout(&mut tree.children[0], renderer, limits);
         let child_layout = Layout::new(&node);
-        let targets = self
-            .layout
-            .targets(child_layout, mouse::Cursor::Unavailable);
         let state = tree.state.downcast_mut::<State>();
+        let targets = self.layout.targets_with_engine(
+            child_layout,
+            mouse::Cursor::Unavailable,
+            Some(&state.engine),
+        );
+        state
+            .engine
+            .reconcile(active_descriptors(&self.layout, &targets));
         for target in &targets {
             state
                 .engine
-                .set_scroll_viewport(target.path, target.hit.area().h);
+                .set_scroll_viewport(target.path, target.hit.area());
         }
         sync_scrolls(
             &mut self.child,
@@ -166,8 +175,11 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
     ) {
         let state = tree.state.downcast_mut::<State>();
         let input = iced_interact::input(event);
+        let item_was_pressed = state.engine.has_pressed_item();
         let (captured, scroll_captured) = if let Some(input) = input {
-            let targets = self.layout.targets(layout, cursor);
+            let targets = self
+                .layout
+                .targets_with_engine(layout, cursor, Some(&state.engine));
             if let Some(emission) = state.engine.handle(input, &targets, Instant::now()) {
                 let captured = emission.outcome.is_captured();
                 let scroll_captured = captured
@@ -203,8 +215,13 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
                 viewport,
             );
         }
-        if scroll_captured {
-            let targets = self.layout.targets(layout, mouse::Cursor::Unavailable);
+        let item_projection_changed = item_was_pressed || state.engine.has_pressed_item();
+        if scroll_captured || item_projection_changed {
+            let targets = self.layout.targets_with_engine(
+                layout,
+                mouse::Cursor::Unavailable,
+                Some(&state.engine),
+            );
             sync_scrolls(
                 &mut self.child,
                 &mut tree.children[0],
@@ -220,7 +237,9 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
         }
 
         if shell.redraw_request() != window::RedrawRequest::NextFrame {
-            let targets = self.layout.targets(layout, cursor);
+            let targets = self
+                .layout
+                .targets_with_engine(layout, cursor, Some(&state.engine));
             let interaction = state.engine.cursor(&targets).into();
             let hovered = hovered_control(&targets);
             if matches!(event, Event::Window(window::Event::RedrawRequested(_))) {
@@ -332,6 +351,13 @@ fn sync_scrolls(
         child
             .as_widget_mut()
             .operate(tree, layout, renderer, &mut sync);
+        let horizontal_path = format!("{}/scroll-x", target.path);
+        let horizontal = engine.scroll_offset(&horizontal_path).unwrap_or(0.0);
+        let pressed = engine.pressed_item_index(target.path);
+        let mut sync = sync_track_list_scroll(target.path, horizontal, pressed, offset);
+        child
+            .as_widget_mut()
+            .operate(tree, layout, renderer, &mut sync);
     }
 }
 
@@ -341,7 +367,22 @@ fn interaction(
     layout: Layout<'_>,
     cursor: mouse::Cursor,
 ) -> mouse::Interaction {
-    engine.cursor(&layout_tree.targets(layout, cursor)).into()
+    engine
+        .cursor(&layout_tree.targets_with_engine(layout, cursor, Some(engine)))
+        .into()
+}
+
+fn active_descriptors(layout: &HostedLayout, targets: &[Target<'_>]) -> Vec<Descriptor> {
+    layout
+        .descriptors()
+        .into_iter()
+        .filter(|descriptor| match descriptor {
+            Descriptor::Scroll { path, config } if config.axis() == ScrollAxis::Horizontal => {
+                targets.iter().any(|target| target.path == path)
+            }
+            _ => true,
+        })
+        .collect()
 }
 
 fn hovered_control<'a>(targets: &[Target<'a>]) -> Option<&'a str> {
@@ -470,15 +511,25 @@ impl HostedLayout {
                 }
             }
             Self::Control(Some(control)) | Self::SelfMeasuredControl(Some(control)) => {
-                descriptors.push(control.into());
+                append_control_descriptors(control, descriptors);
             }
             Self::Control(None) | Self::SelfMeasuredControl(None) | Self::Passive => {}
         }
     }
 
+    #[cfg(test)]
     fn targets<'a>(&'a self, layout: Layout<'_>, cursor: mouse::Cursor) -> Vec<Target<'a>> {
+        self.targets_with_engine(layout, cursor, None)
+    }
+
+    fn targets_with_engine<'a>(
+        &'a self,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        engine: Option<&Engine>,
+    ) -> Vec<Target<'a>> {
         let mut targets = Vec::new();
-        self.append_targets(layout, cursor, &mut targets);
+        self.append_targets(layout, cursor, engine, &mut targets);
         targets
     }
 
@@ -486,6 +537,7 @@ impl HostedLayout {
         &'a self,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
+        engine: Option<&Engine>,
         targets: &mut Vec<Target<'a>>,
     ) {
         match self {
@@ -538,7 +590,7 @@ impl HostedLayout {
                     return;
                 };
                 for (child, layout) in children.iter().zip(layout.children()) {
-                    child.append_targets(layout, cursor, targets);
+                    child.append_targets(layout, cursor, engine, targets);
                 }
             }
             Self::Slot { sized, children } => {
@@ -546,29 +598,17 @@ impl HostedLayout {
                     return;
                 };
                 for (child, layout) in children.iter().zip(layout.children()) {
-                    child.append_targets(layout, cursor, targets);
+                    child.append_targets(layout, cursor, engine, targets);
                 }
             }
             Self::Control(Some(control)) => {
                 let Some(layout) = first_child(layout) else {
                     return;
                 };
-                let Some(layout) = control.input_layout(layout) else {
-                    return;
-                };
-                targets.push(Target::new(
-                    control.path(),
-                    iced_interact::hit(layout.bounds(), cursor),
-                ));
+                append_control_targets(control, layout, cursor, engine, targets);
             }
             Self::SelfMeasuredControl(Some(control)) => {
-                let Some(layout) = control.input_layout(layout) else {
-                    return;
-                };
-                targets.push(Target::new(
-                    control.path(),
-                    iced_interact::hit(layout.bounds(), cursor),
-                ));
+                append_control_targets(control, layout, cursor, engine, targets);
             }
             Self::Control(None) | Self::SelfMeasuredControl(None) | Self::Passive => {}
         }
@@ -600,10 +640,9 @@ enum HostedControl {
     },
     Scroll {
         path: String,
-        row_count: usize,
-        row_height: f32,
-        row_right_inset: f32,
+        config: ScrollConfig,
     },
+    TrackList(Box<TrackListHost>),
     Fader {
         path: String,
         style: FaderStyle,
@@ -681,10 +720,33 @@ impl HostedControl {
             }
             (ControlSpec::Tree { .. }, Some(ReadValue::Tree(rows))) => Some(Self::Scroll {
                 path: path.to_owned(),
-                row_count: rows.len(),
-                row_height: skin.tree.row_height,
-                row_right_inset: skin.tree.scrollbar_margin + skin.tree.scrollbar_width,
+                config: ScrollConfig::items(
+                    ScrollAxis::Vertical,
+                    AsPrimitive::<f32>::as_(rows.len()) * skin.tree.row_height,
+                    rows.len(),
+                    skin.tree.row_height,
+                    skin.tree.row_height,
+                    skin.tree.scrollbar_margin + skin.tree.scrollbar_width,
+                ),
             }),
+            (
+                ControlSpec::TrackList {
+                    columns,
+                    columns_state,
+                },
+                Some(ReadValue::TrackList(rows)),
+            ) => {
+                let state = columns_state
+                    .as_ref()
+                    .map(|binding| (ui.resolve(binding.id), read_scope(Some(binding), ui)));
+                let columns = column_layouts(columns, reads, state, skin);
+                Some(Self::TrackList(Box::new(TrackListHost::new(
+                    path,
+                    columns,
+                    rows.len(),
+                    skin,
+                ))))
+            }
             (ControlSpec::Fader { style, label }, Some(ReadValue::Scalar(value))) => {
                 let (drag_step, wheel) = match style {
                     FaderStyle::Default => (Some(skin.fader.step), None),
@@ -762,6 +824,7 @@ impl HostedControl {
             | Self::VerticalVu { path }
             | Self::Wave { path }
             | Self::HeroWave { path, .. } => path,
+            Self::TrackList(track_list) => track_list.path(),
         }
     }
 
@@ -776,60 +839,89 @@ impl HostedControl {
     }
 }
 
-impl From<&HostedControl> for Descriptor {
-    fn from(control: &HostedControl) -> Self {
-        match control {
-            HostedControl::Activation { path } => Self::activation(path.clone()),
-            HostedControl::Segmented { path, item_count } => {
-                Self::segmented(path.clone(), *item_count)
-            }
-            HostedControl::Scroll {
-                path,
-                row_count,
-                row_height,
-                row_right_inset,
-            } => Self::scroll(path.clone(), *row_count, *row_height, *row_right_inset),
-            HostedControl::Fader {
-                path,
-                style,
-                drag_step,
-                wheel,
-                ..
-            } => Self::fader(
-                path.clone(),
-                Hover::new(match style {
-                    FaderStyle::Default => CursorShape::Grab,
-                    FaderStyle::Volume => CursorShape::ResizeH,
-                }),
-                *drag_step,
-                *wheel,
-            ),
-            HostedControl::Crossfader { path } => Self::crossfader(path.clone()),
-            HostedControl::Knob {
-                path,
-                current,
-                drag_range,
-                wheel_step,
-            } => Self::knob(path.clone(), *current, *drag_range, *wheel_step),
-            HostedControl::StereoMeter { path } => Self::stereo_meter(path.clone()),
-            HostedControl::VerticalVu { path } => Self::vertical_vu(path.clone()),
-            HostedControl::Wave { path } => Self::wave(path.clone()),
-            HostedControl::HeroWave {
-                path,
-                scale,
-                progress,
-                visible,
-                wheel_positive,
-                wheel_non_positive,
-            } => Self::hero_wave(
-                path.clone(),
-                *scale,
-                *progress,
-                visible.clone(),
-                *wheel_positive,
-                *wheel_non_positive,
-            ),
+fn append_control_targets<'a>(
+    control: &'a HostedControl,
+    layout: Layout<'_>,
+    cursor: mouse::Cursor,
+    engine: Option<&Engine>,
+    targets: &mut Vec<Target<'a>>,
+) {
+    let Some(layout) = control.input_layout(layout) else {
+        return;
+    };
+    if let HostedControl::TrackList(track_list) = control {
+        track_list.append_targets(layout, cursor, engine, targets);
+    } else {
+        targets.push(Target::new(
+            control.path(),
+            iced_interact::hit(layout.bounds(), cursor),
+        ));
+    }
+}
+
+fn append_control_descriptors(control: &HostedControl, descriptors: &mut Vec<Descriptor>) {
+    match control {
+        HostedControl::Activation { path } => {
+            descriptors.push(Descriptor::activation(path.clone()));
         }
+        HostedControl::Segmented { path, item_count } => {
+            descriptors.push(Descriptor::segmented(path.clone(), *item_count));
+        }
+        HostedControl::Scroll { path, config } => {
+            descriptors.push(Descriptor::scroll(path.clone(), *config));
+        }
+        HostedControl::TrackList(track_list) => track_list.append_descriptors(descriptors),
+        HostedControl::Fader {
+            path,
+            style,
+            drag_step,
+            wheel,
+            ..
+        } => descriptors.push(Descriptor::fader(
+            path.clone(),
+            Hover::new(match style {
+                FaderStyle::Default => CursorShape::Grab,
+                FaderStyle::Volume => CursorShape::ResizeH,
+            }),
+            *drag_step,
+            *wheel,
+        )),
+        HostedControl::Crossfader { path } => {
+            descriptors.push(Descriptor::crossfader(path.clone()));
+        }
+        HostedControl::Knob {
+            path,
+            current,
+            drag_range,
+            wheel_step,
+        } => descriptors.push(Descriptor::knob(
+            path.clone(),
+            *current,
+            *drag_range,
+            *wheel_step,
+        )),
+        HostedControl::StereoMeter { path } => {
+            descriptors.push(Descriptor::stereo_meter(path.clone()));
+        }
+        HostedControl::VerticalVu { path } => {
+            descriptors.push(Descriptor::vertical_vu(path.clone()));
+        }
+        HostedControl::Wave { path } => descriptors.push(Descriptor::wave(path.clone())),
+        HostedControl::HeroWave {
+            path,
+            scale,
+            progress,
+            visible,
+            wheel_positive,
+            wheel_non_positive,
+        } => descriptors.push(Descriptor::hero_wave(
+            path.clone(),
+            *scale,
+            *progress,
+            visible.clone(),
+            *wheel_positive,
+            *wheel_non_positive,
+        )),
     }
 }
 
@@ -893,8 +985,8 @@ mod tests {
         ids::EndpointId,
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
         render::{
-            ControlAction, DragPhase, InputOwner, StereoLevels, TreeIcon, TreeRow, WaveBucket,
-            WaveformView,
+            ControlAction, DragPhase, InputOwner, StereoLevels, TrackRow, TreeIcon, TreeRow,
+            WaveBucket, WaveformView,
             fonts::{FONT_BYTES, SANS},
         },
         source::{MemResolver, UiConfig},
@@ -902,11 +994,24 @@ mod tests {
     };
 
     struct Fixtures {
+        track_rows: [TrackRow<'static>; 9],
         tree_rows: [TreeRow<'static>; 8],
         wave_buckets: [WaveBucket; 2],
     }
 
     const FIXTURES: Fixtures = Fixtures {
+        track_rows: [TrackRow {
+            title: "Track",
+            artist: Some("Artist"),
+            time: Some("04:12"),
+            search: None,
+            deck: Some("A"),
+            bpm: Some("124.0"),
+            key: Some("8A"),
+            energy: Some(7),
+            transition: Some("blend"),
+            selected: false,
+        }; 9],
         tree_rows: [TreeRow {
             depth: 1,
             label: "Row",
@@ -936,6 +1041,7 @@ mod tests {
         scoped_scalar: EndpointDesc,
         stereo: EndpointDesc,
         text: EndpointDesc,
+        track_list: EndpointDesc,
         tree: EndpointDesc,
         waveform: EndpointDesc,
     }
@@ -948,6 +1054,7 @@ mod tests {
                 scoped_scalar: EndpointDesc::new(ValueKind::Scalar).with_scope("deck"),
                 stereo: EndpointDesc::new(ValueKind::Stereo),
                 text: EndpointDesc::new(ValueKind::Text),
+                track_list: EndpointDesc::new(ValueKind::TrackList),
                 tree: EndpointDesc::new(ValueKind::Tree),
                 waveform: EndpointDesc::new(ValueKind::Waveform).with_scope("deck"),
             }
@@ -988,7 +1095,18 @@ mod tests {
                     Some(&self.boolean)
                 }
                 (EndpointCategory::Model, "mock.wave") => Some(&self.waveform),
+                (EndpointCategory::Model, "library.visible_tracks") => Some(&self.track_list),
                 (EndpointCategory::Model, "library.tree") => Some(&self.tree),
+                (EndpointCategory::Model, "gallery.tracklist.preset") => Some(&self.scalar),
+                (EndpointCategory::Model, endpoint)
+                    if endpoint.starts_with("gallery.tracklist.columns.") =>
+                {
+                    if endpoint.starts_with("gallery.tracklist.columns.width.") {
+                        Some(&self.scalar)
+                    } else {
+                        Some(&self.boolean)
+                    }
+                }
                 (EndpointCategory::Command, "mock.seek")
                 | (EndpointCategory::Telemetry, "deck.playback.position_normalized") => {
                     Some(&self.scoped_scalar)
@@ -1030,6 +1148,8 @@ mod tests {
                 "mock.chip.active" => Some(ReadValue::Bool(true)),
                 "mock.chip.inactive" => Some(ReadValue::Bool(false)),
                 "mock.cells.segmented" => Some(ReadValue::Scalar(2.0)),
+                "gallery.tracklist.preset" => Some(ReadValue::Scalar(0.0)),
+                "library.visible_tracks" => Some(ReadValue::TrackList(&FIXTURES.track_rows)),
                 "library.tree" => Some(ReadValue::Tree(&FIXTURES.tree_rows)),
                 "gallery.label.meters" => Some(ReadValue::Text("VU / STEREO / VERTICAL")),
                 "gallery.label.toggles" => Some(ReadValue::Text("TOGGLES / CHECKBOXES")),
@@ -1046,6 +1166,10 @@ mod tests {
                 }
                 endpoint if endpoint.starts_with("gallery.module.") => {
                     Some(ReadValue::Bool(endpoint == "gallery.module.deck"))
+                }
+                endpoint if endpoint.starts_with("gallery.tracklist.columns.width.") => None,
+                endpoint if endpoint.starts_with("gallery.tracklist.columns.") => {
+                    Some(ReadValue::Bool(true))
                 }
                 "mock.wave@deck=a" => Some(ReadValue::Waveform(WaveformView {
                     buckets: &FIXTURES.wave_buckets,
@@ -1204,6 +1328,27 @@ mod tests {
         .unwrap_or_else(|error| panic!("gallery cells fixture must compile: {error}"))
     }
 
+    fn compiled_gallery_track_list() -> CompiledUi {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "gallery.klayout.ron",
+            r#"(schema: "kithara.layout", version: 1, id: "gallery-track-list-host",
+                root: Module(instance: "tracklist", source: "tracklist.kmodule.ron"))"#,
+        );
+        resolver.insert(
+            "tracklist.kmodule.ron",
+            include_str!("../../../examples/gallery/assets/modules/tabs/tracklist.kmodule.ron"),
+        );
+        compile(
+            "gallery.klayout.ron",
+            &resolver,
+            &Registry::default(),
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap_or_else(|error| panic!("gallery track-list fixture must compile: {error}"))
+    }
+
     fn compiled_gallery_faders() -> CompiledUi {
         let mut resolver = MemResolver::default();
         resolver.insert(
@@ -1360,6 +1505,9 @@ mod tests {
                 ControlSpec::Segmented { .. } => {
                     components.push("segmented");
                 }
+                ControlSpec::TrackList { .. } => {
+                    components.push("track-list");
+                }
                 ControlSpec::Fader { .. } => {
                     components.push("fader");
                 }
@@ -1397,6 +1545,7 @@ mod tests {
             | Descriptor::Crossing { path }
             | Descriptor::Segmented { path, .. }
             | Descriptor::Scroll { path, .. }
+            | Descriptor::ColumnDivider { path, .. }
             | Descriptor::Fader { path, .. }
             | Descriptor::Crossfader { path }
             | Descriptor::Knob { path, .. }
@@ -1404,6 +1553,7 @@ mod tests {
             | Descriptor::VerticalVu { path }
             | Descriptor::Wave { path }
             | Descriptor::HeroWave { path, .. } => path,
+            Descriptor::Item { target, .. } => target,
         }
     }
 
@@ -1734,10 +1884,16 @@ mod tests {
             descriptors.as_slice(),
             [Descriptor::Scroll {
                 path,
-                row_count: 8,
-                row_height: 24.0,
-                row_right_inset: 6.0,
+                config,
             }] if path == "tree/browser"
+                && *config == ScrollConfig::items(
+                    ScrollAxis::Vertical,
+                    192.0,
+                    8,
+                    24.0,
+                    24.0,
+                    6.0,
+                )
         ));
         let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
         let [target] = targets.as_slice() else {
@@ -2627,6 +2783,207 @@ mod tests {
                 path: "cells/beat".to_owned(),
                 action: ControlAction::SelectIndex(2),
             }]
+        );
+    }
+
+    #[kithara::test]
+    fn gallery_track_list_hosts_its_exact_conditional_inventory() {
+        let ui = compiled_gallery_track_list();
+        let reads = FixtureReads::default();
+        let CompiledNode::Module {
+            instance,
+            module,
+            root,
+            ..
+        } = &ui.root
+        else {
+            panic!("gallery track-list fixture root must be a module");
+        };
+
+        assert_eq!(ui.resolve(*module), "gallery-tracklist-tab");
+        let mut components = Vec::new();
+        claimed_components(root, &mut components);
+        assert_eq!(
+            components,
+            [
+                "segmented",
+                "track-list",
+                "activation",
+                "activation",
+                "activation",
+                "activation",
+                "activation",
+                "activation",
+                "activation",
+                "activation",
+                "activation",
+                "activation",
+            ]
+        );
+
+        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full_tree = Tree::new(full.as_widget());
+        assert_eq!(
+            host_count(&full_tree),
+            1,
+            "the track-list page owns one engine"
+        );
+
+        let renderer = headless_renderer();
+        let narrow = Size::new(1_000.0, 640.0);
+        let child = super::super::node::render_engine_node(
+            root,
+            &[],
+            *instance,
+            &ui,
+            &reads,
+            builtin::skin(),
+        );
+        let mut element = host(child, root, &ui, &reads, builtin::skin());
+        let mut tree = Tree::new(element.as_widget());
+        let node =
+            element
+                .as_widget_mut()
+                .layout(&mut tree, &renderer, &Limits::new(Size::ZERO, narrow));
+        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        assert_eq!(
+            targets
+                .iter()
+                .filter(|target| target.path.starts_with("tracklist/table"))
+                .map(|target| target.path)
+                .collect::<Vec<_>>(),
+            [
+                "tracklist/table/scroll-x",
+                "tracklist/table",
+                "tracklist/table/rows",
+                "tracklist/table/width/index",
+                "tracklist/table/width/deck",
+                "tracklist/table/width/artist",
+                "tracklist/table/width/bpm",
+                "tracklist/table/width/key",
+                "tracklist/table/width/time",
+            ]
+        );
+        let descriptors = active_descriptors(&hosted, &targets);
+        assert_eq!(
+            descriptors.iter().map(descriptor_path).collect::<Vec<_>>(),
+            [
+                "tracklist/column-preset",
+                "tracklist/table/scroll-x",
+                "tracklist/table",
+                "tracklist/table/rows",
+                "tracklist/table/width/index",
+                "tracklist/table/width/deck",
+                "tracklist/table/width/artist",
+                "tracklist/table/width/bpm",
+                "tracklist/table/width/key",
+                "tracklist/table/width/time",
+                "tracklist/table/width/energy",
+                "tracklist/column-index",
+                "tracklist/column-deck",
+                "tracklist/column-title",
+                "tracklist/column-artist",
+                "tracklist/column-bpm",
+                "tracklist/column-key",
+                "tracklist/column-time",
+                "tracklist/column-energy",
+                "tracklist/column-transition",
+                "tracklist/reset-columns",
+            ]
+        );
+        assert!(matches!(
+            descriptors.as_slice(),
+            [
+                Descriptor::Segmented { item_count: 3, .. },
+                Descriptor::Scroll { config: horizontal, .. },
+                Descriptor::Scroll { config: vertical, .. },
+                Descriptor::Item { .. },
+                Descriptor::ColumnDivider { .. },
+                Descriptor::ColumnDivider { .. },
+                Descriptor::ColumnDivider { .. },
+                Descriptor::ColumnDivider { .. },
+                Descriptor::ColumnDivider { .. },
+                Descriptor::ColumnDivider { .. },
+                Descriptor::ColumnDivider { .. },
+                Descriptor::Activation { .. },
+                Descriptor::Activation { .. },
+                Descriptor::Activation { .. },
+                Descriptor::Activation { .. },
+                Descriptor::Activation { .. },
+                Descriptor::Activation { .. },
+                Descriptor::Activation { .. },
+                Descriptor::Activation { .. },
+                Descriptor::Activation { .. },
+                Descriptor::Activation { .. },
+            ] if horizontal.axis() == ScrollAxis::Horizontal
+                && vertical.axis() == ScrollAxis::Vertical
+        ));
+        let divider_targets: Vec<_> = targets
+            .iter()
+            .filter(|target| target.path.contains("/width/"))
+            .collect();
+        assert_eq!(divider_targets.len(), 6);
+        assert!(
+            divider_targets.iter().all(|target| {
+                target.hit.area().w == builtin::skin().track_list.divider_hit_width
+            })
+        );
+        let viewport = targets
+            .iter()
+            .find(|target| target.path == "tracklist/table/scroll-x")
+            .map_or_else(
+                || panic!("the narrow table must expose its horizontal viewport"),
+                |target| target.hit.area(),
+            );
+        assert!(divider_targets.iter().all(|target| {
+            let hit = target.hit.area();
+            hit.x >= viewport.x && hit.x + hit.w <= viewport.x + viewport.w
+        }));
+
+        let wide = Size::new(1_200.0, 640.0);
+        let mut child = super::super::node::render_engine_node(
+            root,
+            &[],
+            *instance,
+            &ui,
+            &reads,
+            builtin::skin(),
+        );
+        let mut child_tree = Tree::new(child.as_widget());
+        let wide_node = child.as_widget_mut().layout(
+            &mut child_tree,
+            &renderer,
+            &Limits::new(Size::ZERO, wide),
+        );
+        let wide_targets = hosted.targets(Layout::new(&wide_node), Cursor::Unavailable);
+        assert_eq!(
+            wide_targets
+                .iter()
+                .filter(|target| target.path.starts_with("tracklist/table"))
+                .map(|target| target.path)
+                .collect::<Vec<_>>(),
+            [
+                "tracklist/table",
+                "tracklist/table/rows",
+                "tracklist/table/width/index",
+                "tracklist/table/width/deck",
+                "tracklist/table/width/artist",
+                "tracklist/table/width/bpm",
+                "tracklist/table/width/key",
+                "tracklist/table/width/time",
+                "tracklist/table/width/energy",
+            ]
+        );
+        assert!(
+            wide_targets
+                .iter()
+                .all(|target| target.path != "tracklist/table/scroll-x")
+        );
+        assert!(
+            active_descriptors(&hosted, &wide_targets)
+                .iter()
+                .all(|descriptor| descriptor_path(descriptor) != "tracklist/table/scroll-x")
         );
     }
 

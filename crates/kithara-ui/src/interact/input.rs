@@ -33,21 +33,49 @@ impl Modifiers {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ScrollAxis {
+    Horizontal,
+    Vertical,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum Scroll {
-    Lines(f32),
-    Pixels(f32),
+    Lines { x: f32, y: f32 },
+    Pixels { x: f32, y: f32 },
 }
 
 impl Scroll {
-    /// The vertical delta in whatever unit the host reported. A consumer that
-    /// only needs a direction or a raw magnitude reads this; turning a delta
-    /// into whole steps goes through `recognizers::wheel`, which is the one
-    /// place that knows how many pixels make one.
+    pub(crate) const fn lines(y: f32) -> Self {
+        Self::Lines { x: 0.0, y }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn pixels(y: f32) -> Self {
+        Self::Pixels { x: 0.0, y }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn x(self) -> f32 {
+        self.delta(ScrollAxis::Horizontal)
+    }
+
     pub(crate) const fn y(self) -> f32 {
-        match self {
-            Self::Lines(y) | Self::Pixels(y) => y,
+        self.delta(ScrollAxis::Vertical)
+    }
+
+    pub(crate) const fn delta(self, axis: ScrollAxis) -> f32 {
+        let (x, y) = match self {
+            Self::Lines { x, y } | Self::Pixels { x, y } => (x, y),
+        };
+        match axis {
+            ScrollAxis::Horizontal => x,
+            ScrollAxis::Vertical => y,
         }
+    }
+
+    pub(crate) const fn is_pixels(self) -> bool {
+        matches!(self, Self::Pixels { .. })
     }
 }
 

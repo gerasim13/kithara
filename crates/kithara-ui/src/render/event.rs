@@ -88,6 +88,9 @@ pub(crate) fn engine(
             drag_phase(path, typed_outcome(DragPhase::Over(over), captured))
         }
         Some(EngineEvent::Index(selected)) => index(path, typed_outcome(selected, captured)),
+        Some(EngineEvent::Drag { event, index }) => {
+            drag(path, index, typed_outcome(event, captured))
+        }
         None => captured.then(Action::capture),
     }
 }
@@ -223,6 +226,27 @@ mod tests {
             Some(UiEvent::Control {
                 path: "cells/beat".to_owned(),
                 action: ControlAction::SelectIndex(3),
+            })
+        );
+    }
+
+    #[kithara::test]
+    fn an_engine_item_drag_uses_the_existing_index_binder() {
+        let action = engine(
+            "library/tracks",
+            None,
+            Outcome::observed(EngineEvent::Drag {
+                event: DragEvent::Started,
+                index: 3,
+            }),
+        )
+        .unwrap_or_else(|| panic!("an item drag must publish through the existing binder"));
+
+        assert_eq!(
+            action.into_inner().0,
+            Some(UiEvent::Control {
+                path: "library/tracks".to_owned(),
+                action: ControlAction::Drag(DragPhase::Start(3)),
             })
         );
     }

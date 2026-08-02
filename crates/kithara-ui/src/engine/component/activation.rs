@@ -33,6 +33,7 @@ impl Component for ActivationComponent {
         &mut self,
         input: Input,
         hit: &Hit,
+        _index: Option<usize>,
         _now: Instant,
     ) -> (Outcome<EngineEvent>, Option<&'static str>) {
         (

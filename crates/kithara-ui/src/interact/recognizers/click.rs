@@ -55,7 +55,7 @@ mod tests {
                 at: Pt { x: 13.0, y: 13.0 },
             },
             Input::PointerUp,
-            Input::Wheel(Scroll::Lines(1.0)),
+            Input::Wheel(Scroll::lines(1.0)),
         ] {
             assert_eq!(
                 on_input(input, &over),

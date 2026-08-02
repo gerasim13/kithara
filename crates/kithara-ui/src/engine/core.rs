@@ -5,7 +5,10 @@ use super::{
     model::{Descriptor, Emission, Kind, Target},
     router::Router,
 };
-use crate::interact::{CursorShape, Input};
+use crate::{
+    draw::Rect,
+    interact::{CursorShape, Input},
+};
 
 #[derive(Default)]
 pub(crate) struct Engine {
@@ -52,18 +55,35 @@ impl Engine {
             .and_then(RetainedComponent::scroll_offset)
     }
 
-    pub(crate) fn set_scroll_viewport(&mut self, path: &str, height: f32) {
+    pub(crate) fn pressed_item_index(&self, path: &str) -> Option<usize> {
+        self.components
+            .iter()
+            .find(|component| component.kind() == Kind::Item && component.event_path() == path)
+            .and_then(RetainedComponent::pressed_item_index)
+    }
+
+    pub(crate) fn has_pressed_item(&self) -> bool {
+        self.components
+            .iter()
+            .any(|component| component.pressed_item_index().is_some())
+    }
+
+    pub(crate) fn set_scroll_viewport(&mut self, path: &str, area: Rect) {
         if let Some(component) = self
             .components
             .iter_mut()
             .find(|component| component.path() == path && component.kind() == Kind::Scroll)
         {
-            component.set_scroll_viewport(height);
+            component.set_scroll_viewport(area);
         }
     }
 
     pub(crate) const fn captures_pointer(&self) -> bool {
         self.router.captures_pointer()
+    }
+
+    pub(crate) fn captures(&self, path: &str) -> bool {
+        self.router.captures(path)
     }
 }
 
@@ -74,7 +94,11 @@ mod tests {
     use super::{super::model::EngineEvent, *};
     use crate::{
         draw::{Pt, Rect},
-        interact::{Hit, Hover, Modifiers, Outcome, Scroll, recognizers::WheelStep},
+        engine::ScrollConfig,
+        interact::{
+            Hit, Hover, Modifiers, Outcome, Scroll, ScrollAxis,
+            recognizers::{DragEvent, WheelStep},
+        },
     };
 
     fn knob(path: &str, current: f32) -> Descriptor {
@@ -82,7 +106,14 @@ mod tests {
     }
 
     fn scroll(path: &str) -> Descriptor {
-        Descriptor::scroll(path.to_owned(), 10, 20.0, 8.0)
+        Descriptor::scroll(
+            path.to_owned(),
+            ScrollConfig::items(ScrollAxis::Vertical, 200.0, 10, 20.0, 20.0, 8.0),
+        )
+    }
+
+    fn plain_scroll(path: &str, axis: ScrollAxis) -> Descriptor {
+        Descriptor::scroll(path.to_owned(), ScrollConfig::plain(axis, 200.0))
     }
 
     fn target(path: &str, x: f32, y: f32) -> Target<'_> {
@@ -100,10 +131,34 @@ mod tests {
         )
     }
 
+    fn item_target(path: &str, index: usize, x: f32, y: f32) -> Target<'_> {
+        let target = target(path, x, y);
+        Target::item(path, target.hit, index)
+    }
+
+    fn axis_lines(axis: ScrollAxis, delta: f32) -> Scroll {
+        match axis {
+            ScrollAxis::Horizontal => Scroll::Lines { x: delta, y: 0.0 },
+            ScrollAxis::Vertical => Scroll::Lines { x: 0.0, y: delta },
+        }
+    }
+
+    fn axis_pixels(axis: ScrollAxis, delta: f32) -> Scroll {
+        match axis {
+            ScrollAxis::Horizontal => Scroll::Pixels { x: delta, y: 0.0 },
+            ScrollAxis::Vertical => Scroll::Pixels { x: 0.0, y: delta },
+        }
+    }
+
     fn value(emission: Option<Emission>) -> Option<f64> {
         emission.and_then(|emission| match emission.outcome.value() {
             Some(EngineEvent::Scalar(value)) => Some(value),
-            Some(EngineEvent::Activate | EngineEvent::Crossing(_) | EngineEvent::Index(_))
+            Some(
+                EngineEvent::Activate
+                | EngineEvent::Crossing(_)
+                | EngineEvent::Index(_)
+                | EngineEvent::Drag { .. },
+            )
             | None => None,
         })
     }
@@ -171,7 +226,7 @@ mod tests {
             Some(f64::from(29.0_f32 / 200.0_f32))
         );
         assert_eq!(
-            value(engine.handle(Input::Wheel(Scroll::Lines(1.0)), &targets, Instant::now(),)),
+            value(engine.handle(Input::Wheel(Scroll::lines(1.0)), &targets, Instant::now(),)),
             Some(f64::from(0.49_f32))
         );
     }
@@ -332,6 +387,168 @@ mod tests {
                     Instant::now(),
                 )
                 .is_none()
+        );
+    }
+
+    #[kithara::test]
+    fn retained_item_drag_keeps_its_target_identity_and_publishes_the_row_index() {
+        let mut engine = Engine::default();
+        let path = "library/tracks";
+        let target_path = "library/tracks/rows";
+        let now = Instant::now();
+        engine.reconcile([Descriptor::item(target_path.to_owned(), path.to_owned(), 4)]);
+
+        assert_eq!(
+            engine
+                .handle(
+                    Input::PointerDown,
+                    &[item_target(target_path, 3, 10.0, 13.0)],
+                    now,
+                )
+                .map(|emission| emission.outcome),
+            Some(Outcome::captured())
+        );
+        assert_eq!(engine.pressed_item_index(path), Some(3));
+        assert!(
+            engine
+                .handle(
+                    Input::PointerMoved {
+                        at: Pt { x: 11.0, y: 13.0 },
+                    },
+                    &[item_target(target_path, 3, 11.0, 13.0)],
+                    now,
+                )
+                .is_none()
+        );
+        let started = engine
+            .handle(
+                Input::PointerMoved {
+                    at: Pt { x: 40.0, y: 13.0 },
+                },
+                &[item_target(target_path, 3, 40.0, 13.0)],
+                now,
+            )
+            .unwrap_or_else(|| panic!("crossing the threshold must start the row drag"));
+
+        assert_eq!(started.path, path);
+        assert_eq!(
+            started.outcome,
+            Outcome::observed(EngineEvent::Drag {
+                event: DragEvent::Started,
+                index: 3,
+            })
+        );
+        assert!(!engine.captures_pointer());
+
+        let dropped = engine
+            .handle(Input::PointerUp, &[target(target_path, 200.0, 200.0)], now)
+            .unwrap_or_else(|| panic!("the row watcher must publish after its hit leaves view"));
+        assert_eq!(
+            dropped.outcome,
+            Outcome::observed(EngineEvent::Drag {
+                event: DragEvent::Dropped,
+                index: 3,
+            })
+        );
+        assert_eq!(engine.pressed_item_index(path), None);
+    }
+
+    #[kithara::test]
+    fn retained_item_selects_on_release_without_starting_a_drag() {
+        let mut engine = Engine::default();
+        let path = "library/tracks";
+        let target_path = "library/tracks/rows";
+        let now = Instant::now();
+        engine.reconcile([Descriptor::item(target_path.to_owned(), path.to_owned(), 4)]);
+
+        let _ = engine.handle(
+            Input::PointerDown,
+            &[item_target(target_path, 2, 10.0, 13.0)],
+            now,
+        );
+        let selected = engine
+            .handle(
+                Input::PointerUp,
+                &[item_target(target_path, 2, 10.0, 13.0)],
+                now,
+            )
+            .unwrap_or_else(|| panic!("a plain row release must publish its index"));
+
+        assert_eq!(selected.path, path);
+        assert_eq!(selected.outcome, Outcome::set(EngineEvent::Index(2)));
+        assert_eq!(engine.pressed_item_index(path), None);
+    }
+
+    #[kithara::test]
+    fn retained_item_cancels_a_held_index_removed_by_reconciliation() {
+        let mut engine = Engine::default();
+        let path = "library/tracks";
+        let target_path = "library/tracks/rows";
+        let now = Instant::now();
+        engine.reconcile([Descriptor::item(target_path.to_owned(), path.to_owned(), 4)]);
+        let _ = engine.handle(
+            Input::PointerDown,
+            &[item_target(target_path, 3, 10.0, 13.0)],
+            now,
+        );
+
+        engine.reconcile([Descriptor::item(target_path.to_owned(), path.to_owned(), 3)]);
+        assert_eq!(engine.pressed_item_index(path), None);
+        assert!(
+            engine
+                .handle(
+                    Input::PointerMoved {
+                        at: Pt { x: 40.0, y: 13.0 },
+                    },
+                    &[Target::new(
+                        target_path,
+                        Hit::new(
+                            None,
+                            Rect {
+                                h: 0.0,
+                                w: 0.0,
+                                x: 0.0,
+                                y: 0.0,
+                            },
+                        ),
+                    )],
+                    now,
+                )
+                .is_none()
+        );
+    }
+
+    #[kithara::test]
+    fn column_divider_uses_the_wide_hit_rect_and_publishes_pixel_width() {
+        let mut engine = Engine::default();
+        let path = "library/tracks/width/deck";
+        let now = Instant::now();
+        let hit_rect = Rect {
+            h: 22.0,
+            w: 7.0,
+            x: 100.0,
+            y: 0.0,
+        };
+        let divider = Target::new(path, Hit::new(Some(Pt { x: 100.5, y: 11.0 }), hit_rect));
+        engine.reconcile([Descriptor::column_divider(path.to_owned(), 64.0, 28.0)]);
+
+        assert_eq!(divider.hit.area(), hit_rect);
+        assert_eq!(
+            engine
+                .handle(Input::PointerDown, &[divider], now)
+                .map(|emission| emission.outcome),
+            Some(Outcome::captured()),
+            "the outer half-pixel of the seven-pixel grab area must arm the drag"
+        );
+        assert_eq!(
+            value(engine.handle(
+                Input::PointerMoved {
+                    at: Pt { x: 140.5, y: 11.0 },
+                },
+                &[divider],
+                now,
+            )),
+            Some(104.0)
         );
     }
 
@@ -516,7 +733,7 @@ mod tests {
         for (delta, expected) in [(1.0, 0.625_f32), (-1.0, 0.4), (0.0, 0.4)] {
             let emission = engine
                 .handle(
-                    Input::Wheel(Scroll::Lines(delta)),
+                    Input::Wheel(Scroll::lines(delta)),
                     &[target(path, 50.0, 50.0)],
                     Instant::now(),
                 )
@@ -649,7 +866,10 @@ mod tests {
                 let value = match emission.outcome.value() {
                     Some(EngineEvent::Scalar(value)) => Some(value),
                     Some(
-                        EngineEvent::Activate | EngineEvent::Crossing(_) | EngineEvent::Index(_),
+                        EngineEvent::Activate
+                        | EngineEvent::Crossing(_)
+                        | EngineEvent::Index(_)
+                        | EngineEvent::Drag { .. },
                     )
                     | None => None,
                 };
@@ -738,7 +958,7 @@ mod tests {
         engine.reconcile([knob("studio/back", 0.5), knob("studio/front", 0.5)]);
 
         let wheel = engine.handle(
-            Input::Wheel(Scroll::Lines(0.0)),
+            Input::Wheel(Scroll::lines(0.0)),
             &[
                 target("studio/back", 50.0, 50.0),
                 target("studio/front", 50.0, 50.0),
@@ -775,7 +995,7 @@ mod tests {
 
         let emission = engine
             .handle(
-                Input::Wheel(Scroll::Lines(-1.0)),
+                Input::Wheel(Scroll::lines(-1.0)),
                 &[target("outer", 50.0, 50.0), target("inner", 50.0, 50.0)],
                 now,
             )
@@ -788,6 +1008,71 @@ mod tests {
     }
 
     #[kithara::test]
+    fn vertical_scroll_passes_a_horizontal_wheel_to_the_outer_horizontal_scroll() {
+        let mut engine = Engine::default();
+        let now = Instant::now();
+        engine.reconcile([
+            plain_scroll("table/scroll-x", ScrollAxis::Horizontal),
+            plain_scroll("table", ScrollAxis::Vertical),
+        ]);
+
+        let emission = engine
+            .handle(
+                Input::Wheel(Scroll::Lines { x: -1.0, y: 0.0 }),
+                &[
+                    target("table/scroll-x", 50.0, 50.0),
+                    target("table", 50.0, 50.0),
+                ],
+                now,
+            )
+            .unwrap_or_else(|| panic!("the outer horizontal scroll must consume the wheel"));
+
+        assert_eq!(emission.path, "table/scroll-x");
+        assert_eq!(emission.outcome, Outcome::captured());
+        assert_eq!(engine.scroll_offset("table"), Some(0.0));
+        assert_eq!(engine.scroll_offset("table/scroll-x"), Some(60.0));
+    }
+
+    #[kithara::test]
+    fn each_scroll_axis_consumes_both_directions_only_while_it_can_move() {
+        for axis in [ScrollAxis::Horizontal, ScrollAxis::Vertical] {
+            let mut engine = Engine::default();
+            let now = Instant::now();
+            let path = match axis {
+                ScrollAxis::Horizontal => "horizontal",
+                ScrollAxis::Vertical => "vertical",
+            };
+            let target = target(path, 50.0, 50.0);
+            engine.reconcile([plain_scroll(path, axis)]);
+
+            assert!(
+                engine
+                    .handle(Input::Wheel(axis_lines(axis, 1.0)), &[target], now)
+                    .is_none(),
+                "a wheel past the leading boundary must remain ignored for {axis:?}"
+            );
+            let toward_end = engine
+                .handle(Input::Wheel(axis_lines(axis, -1.0)), &[target], now)
+                .unwrap_or_else(|| panic!("{axis:?} must consume travel toward its end"));
+            assert_eq!(toward_end.outcome, Outcome::captured());
+
+            let _ = engine.handle(Input::Wheel(axis_pixels(axis, -1_000.0)), &[target], now);
+            assert_eq!(engine.scroll_offset(path), Some(100.0));
+            assert!(
+                engine
+                    .handle(Input::Wheel(axis_pixels(axis, -1.0)), &[target], now)
+                    .is_none(),
+                "a wheel past the trailing boundary must remain ignored for {axis:?}"
+            );
+            let toward_start = engine
+                .handle(Input::Wheel(axis_lines(axis, 1.0)), &[target], now)
+                .unwrap_or_else(|| panic!("{axis:?} must consume travel toward its start"));
+            assert_eq!(toward_start.outcome, Outcome::captured());
+            assert_eq!(engine.scroll_offset(path), Some(40.0));
+        }
+    }
+
+    #[kithara::test]
     fn scroll_outside_the_hit_is_ignored() {
         let mut engine = Engine::default();
         let path = "tree/browser";
@@ -796,7 +1081,7 @@ mod tests {
         assert!(
             engine
                 .handle(
-                    Input::Wheel(Scroll::Lines(-1.0)),
+                    Input::Wheel(Scroll::lines(-1.0)),
                     &[target(path, 150.0, 150.0)],
                     Instant::now(),
                 )
@@ -812,12 +1097,12 @@ mod tests {
         engine.reconcile([scroll("outer"), scroll("inner")]);
         let inner = target("inner", 50.0, 50.0);
 
-        let _ = engine.handle(Input::Wheel(Scroll::Pixels(-1_000.0)), &[inner], now);
+        let _ = engine.handle(Input::Wheel(Scroll::pixels(-1_000.0)), &[inner], now);
         assert_eq!(engine.scroll_offset("inner"), Some(100.0));
 
         let emission = engine
             .handle(
-                Input::Wheel(Scroll::Pixels(-10.0)),
+                Input::Wheel(Scroll::pixels(-10.0)),
                 &[target("outer", 50.0, 50.0), inner],
                 now,
             )
@@ -838,20 +1123,20 @@ mod tests {
         engine.reconcile([scroll(path)]);
 
         let down = engine
-            .handle(Input::Wheel(Scroll::Pixels(-1_000.0)), &[target], now)
+            .handle(Input::Wheel(Scroll::pixels(-1_000.0)), &[target], now)
             .unwrap_or_else(|| panic!("the scroll must consume travel to the bottom"));
         assert_eq!(down.outcome, Outcome::captured());
         assert_eq!(engine.scroll_offset(path), Some(100.0));
 
         assert!(
             engine
-                .handle(Input::Wheel(Scroll::Pixels(-1.0)), &[target], now)
+                .handle(Input::Wheel(Scroll::pixels(-1.0)), &[target], now)
                 .is_none(),
             "a downward wheel at the bottom must remain ignored"
         );
 
         let up = engine
-            .handle(Input::Wheel(Scroll::Lines(1.0)), &[target], now)
+            .handle(Input::Wheel(Scroll::lines(1.0)), &[target], now)
             .unwrap_or_else(|| panic!("an upward wheel at the bottom must be consumed"));
         assert_eq!(up.outcome, Outcome::captured());
         assert_eq!(engine.scroll_offset(path), Some(40.0));
@@ -882,13 +1167,21 @@ mod tests {
         engine.reconcile([scroll(path)]);
 
         let _ = engine.handle(
-            Input::Wheel(Scroll::Pixels(-1_000.0)),
+            Input::Wheel(Scroll::pixels(-1_000.0)),
             &[target],
             Instant::now(),
         );
         assert_eq!(engine.scroll_offset(path), Some(100.0));
 
-        engine.set_scroll_viewport(path, 180.0);
+        engine.set_scroll_viewport(
+            path,
+            Rect {
+                h: 180.0,
+                w: 100.0,
+                x: 0.0,
+                y: 0.0,
+            },
+        );
 
         assert_eq!(engine.scroll_offset(path), Some(20.0));
     }
@@ -899,7 +1192,7 @@ mod tests {
         let path = "tree/browser";
         let target = target(path, 50.0, 50.0);
         engine.reconcile([scroll(path)]);
-        let _ = engine.handle(Input::Wheel(Scroll::Lines(-1.0)), &[target], Instant::now());
+        let _ = engine.handle(Input::Wheel(Scroll::lines(-1.0)), &[target], Instant::now());
 
         engine.reconcile([scroll(path)]);
 
@@ -915,7 +1208,7 @@ mod tests {
         let target = target(path, 50.0, 10.0);
 
         let wheel = engine
-            .handle(Input::Wheel(Scroll::Lines(-1.0)), &[target], now)
+            .handle(Input::Wheel(Scroll::lines(-1.0)), &[target], now)
             .unwrap_or_else(|| panic!("the tree must scroll before the row click"));
         assert_eq!(wheel.outcome, Outcome::captured());
         assert_eq!(wheel.outcome.value(), None);

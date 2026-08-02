@@ -1,10 +1,12 @@
 use kithara_platform::time::Instant;
 
 use super::{
-    activation::ActivationComponent, crossing::CrossingComponent, scalar::ScalarComponent,
-    scroll::ScrollComponent, segmented::SegmentedComponent, wave::HeroWaveComponent,
+    activation::ActivationComponent, crossing::CrossingComponent, item::ItemComponent,
+    scalar::ScalarComponent, scroll::ScrollComponent, segmented::SegmentedComponent,
+    wave::HeroWaveComponent,
 };
 use crate::{
+    draw::Rect,
     engine::model::{Descriptor, EngineEvent, Identity, Kind},
     interact::{
         CursorShape, Hit, Hover, Input, Outcome,
@@ -14,11 +16,15 @@ use crate::{
 
 pub(super) trait Component {
     fn path(&self) -> &str;
+    fn event_path(&self) -> &str {
+        self.path()
+    }
     fn kind(&self) -> Kind;
     fn handle(
         &mut self,
         input: Input,
         hit: &Hit,
+        index: Option<usize>,
         now: Instant,
     ) -> (Outcome<EngineEvent>, Option<&'static str>);
     fn cursor(&self, hit: &Hit) -> CursorShape;
@@ -31,6 +37,7 @@ pub(in crate::engine) enum RetainedComponent {
     Crossing(CrossingComponent),
     Segmented(SegmentedComponent),
     Scroll(ScrollComponent),
+    Item(ItemComponent),
     HeroWave(HeroWaveComponent),
 }
 
@@ -47,6 +54,7 @@ impl RetainedComponent {
             (Self::Scroll(component), Self::Scroll(next)) => {
                 Self::Scroll(component.reconcile(next))
             }
+            (Self::Item(component), Self::Item(next)) => Self::Item(component.reconcile(next)),
             (Self::Crossing(component), Self::Crossing(_)) => Self::Crossing(component),
             (_, next) => next,
         }
@@ -71,13 +79,18 @@ impl RetainedComponent {
         self.component().kind()
     }
 
+    pub(in crate::engine) fn event_path(&self) -> &str {
+        self.component().event_path()
+    }
+
     pub(in crate::engine) fn handle(
         &mut self,
         input: Input,
         hit: &Hit,
+        index: Option<usize>,
         now: Instant,
     ) -> (Outcome<EngineEvent>, Option<&'static str>) {
-        self.component_mut().handle(input, hit, now)
+        self.component_mut().handle(input, hit, index, now)
     }
 
     pub(in crate::engine) fn cursor(&self, hit: &Hit) -> CursorShape {
@@ -96,9 +109,17 @@ impl RetainedComponent {
         }
     }
 
-    pub(in crate::engine) fn set_scroll_viewport(&mut self, height: f32) {
+    pub(in crate::engine) fn pressed_item_index(&self) -> Option<usize> {
+        if let Self::Item(component) = self {
+            component.pressed_index()
+        } else {
+            None
+        }
+    }
+
+    pub(in crate::engine) fn set_scroll_viewport(&mut self, area: Rect) {
         if let Self::Scroll(component) = self {
-            component.set_viewport(height);
+            component.set_viewport(area);
         }
     }
 
@@ -109,6 +130,7 @@ impl RetainedComponent {
             Self::Crossing(component) => component,
             Self::Segmented(component) => component,
             Self::Scroll(component) => component,
+            Self::Item(component) => component,
             Self::HeroWave(component) => component,
         }
     }
@@ -120,6 +142,7 @@ impl RetainedComponent {
             Self::Crossing(component) => component,
             Self::Segmented(component) => component,
             Self::Scroll(component) => component,
+            Self::Item(component) => component,
             Self::HeroWave(component) => component,
         }
     }
@@ -133,16 +156,17 @@ impl From<Descriptor> for RetainedComponent {
             Descriptor::Segmented { path, item_count } => {
                 Self::Segmented(SegmentedComponent::new(path, item_count))
             }
-            Descriptor::Scroll {
+            Descriptor::Scroll { path, config } => Self::Scroll(ScrollComponent::new(path, config)),
+            Descriptor::Item {
+                target,
                 path,
-                row_count,
-                row_height,
-                row_right_inset,
-            } => Self::Scroll(ScrollComponent::new(
+                count,
+            } => Self::Item(ItemComponent::new(target, path, count)),
+            Descriptor::ColumnDivider { path, scalar } => Self::Scalar(ScalarComponent::new(
                 path,
-                row_count,
-                row_height,
-                row_right_inset,
+                Kind::ColumnDivider,
+                scalar,
+                None,
             )),
             Descriptor::Fader {
                 path,

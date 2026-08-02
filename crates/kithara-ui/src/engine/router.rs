@@ -16,6 +16,12 @@ impl Router {
         self.capture.is_some()
     }
 
+    pub(super) fn captures(&self, path: &str) -> bool {
+        self.capture
+            .as_ref()
+            .is_some_and(|identity| identity.path == path)
+    }
+
     pub(super) fn reconcile(&mut self, components: &[RetainedComponent]) {
         let missing = self.capture.as_ref().is_some_and(|identity| {
             !components
@@ -40,7 +46,7 @@ impl Router {
                     .iter_mut()
                     .find(|component| component.path() == target.path)
                 {
-                    let _ = component.handle(input, &target.hit, now);
+                    let _ = component.handle(input, &target.hit, target.index, now);
                 }
             }
             return None;
@@ -51,8 +57,8 @@ impl Router {
                 .position(|component| component.has_identity(identity))?;
             let target = targets.iter().find(|target| target.path == identity.path)?;
             let component = &mut components[component_index];
-            let (outcome, child) = component.handle(input, &target.hit, now);
-            let path = component.path().to_owned();
+            let (outcome, child) = component.handle(input, &target.hit, target.index, now);
+            let path = component.event_path().to_owned();
             if !component.captures_pointer() {
                 self.capture = None;
             }
@@ -66,14 +72,14 @@ impl Router {
             else {
                 continue;
             };
-            let (outcome, child) = component.handle(input, &target.hit, now);
+            let (outcome, child) = component.handle(input, &target.hit, target.index, now);
             if outcome == Outcome::IGNORED {
                 continue;
             }
             if component.captures_pointer() {
                 self.capture = Some(component.identity());
             }
-            return emission(component.path().to_owned(), child, outcome);
+            return emission(component.event_path().to_owned(), child, outcome);
         }
         None
     }

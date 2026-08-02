@@ -104,34 +104,33 @@ impl Scalar {
                     }
                 }
             }
-            Input::PointerMoved { .. } if state.active => {
-                hit.at()
-                    .map_or(Outcome::IGNORED, |position| match self.track {
-                        Track::RelativeVertical { range, .. } => Outcome::set(
-                            (state.start_value + (state.start_position - position.y) / range)
+            Input::PointerMoved { at } if state.active => match self.track {
+                Track::RelativeVertical { range, .. } => Outcome::set(
+                    (state.start_value + (state.start_position - at.y) / range).clamp(0.0, 1.0),
+                ),
+                Track::RelativeHorizontal { scale, .. } => {
+                    let width = hit.area().w;
+                    if width > 0.0 {
+                        Outcome::set(
+                            (state.start_value - (at.x - state.start_position) / width * scale)
                                 .clamp(0.0, 1.0),
-                        ),
-                        Track::RelativeHorizontal { scale, .. } => {
-                            let width = hit.area().w;
-                            if width > 0.0 {
-                                Outcome::set(
-                                    (state.start_value
-                                        - (position.x - state.start_position) / width * scale)
-                                        .clamp(0.0, 1.0),
-                                )
-                            } else {
-                                Outcome::IGNORED
-                            }
-                        }
-                        Track::HorizontalPixels { minimum, .. } => Outcome::set(
-                            (state.start_value + position.x - state.start_position).max(minimum),
-                        ),
-                        Track::AbsoluteVertical => seek_down(position, hit.area()),
-                        Track::AbsoluteHorizontal | Track::HorizontalClick => {
-                            seek_across(position, hit.area())
-                        }
+                        )
+                    } else {
+                        Outcome::IGNORED
+                    }
+                }
+                Track::HorizontalPixels { minimum, .. } => {
+                    Outcome::set((state.start_value + at.x - state.start_position).max(minimum))
+                }
+                Track::AbsoluteVertical => hit
+                    .at()
+                    .map_or(Outcome::IGNORED, |position| seek_down(position, hit.area())),
+                Track::AbsoluteHorizontal | Track::HorizontalClick => {
+                    hit.at().map_or(Outcome::IGNORED, |position| {
+                        seek_across(position, hit.area())
                     })
-            }
+                }
+            },
             Input::PointerUp if state.active => {
                 state.active = false;
                 Outcome::captured()
@@ -358,22 +357,22 @@ mod tests {
         let now = Instant::now();
 
         assert_eq!(
-            drag.on_input(&mut state, Input::Wheel(Scroll::Lines(-1.0)), &cursor, now,),
+            drag.on_input(&mut state, Input::Wheel(Scroll::lines(-1.0)), &cursor, now,),
             Outcome::set(0.75)
         );
         assert_eq!(
-            drag.on_input(&mut state, Input::Wheel(Scroll::Lines(1.0)), &cursor, now,),
+            drag.on_input(&mut state, Input::Wheel(Scroll::lines(1.0)), &cursor, now,),
             Outcome::set(0.25)
         );
         assert_eq!(
-            drag.on_input(&mut state, Input::Wheel(Scroll::Lines(0.0)), &cursor, now,),
+            drag.on_input(&mut state, Input::Wheel(Scroll::lines(0.0)), &cursor, now,),
             Outcome::captured(),
             "zero delta must still capture over an opted-in control"
         );
         assert_eq!(
             drag.on_input(
                 &mut state,
-                Input::Wheel(Scroll::Lines(1.0)),
+                Input::Wheel(Scroll::lines(1.0)),
                 &hit(100.0),
                 now,
             ),
@@ -391,7 +390,7 @@ mod tests {
         assert_eq!(
             drag.on_input(
                 &mut state,
-                Input::Wheel(Scroll::Pixels(-12.0)),
+                Input::Wheel(Scroll::pixels(-12.0)),
                 &cursor,
                 now,
             ),
@@ -401,14 +400,14 @@ mod tests {
         assert_eq!(
             drag.on_input(
                 &mut state,
-                Input::Wheel(Scroll::Pixels(-12.0)),
+                Input::Wheel(Scroll::pixels(-12.0)),
                 &cursor,
                 now,
             ),
             Outcome::set(0.75)
         );
         assert_eq!(
-            drag.on_input(&mut state, Input::Wheel(Scroll::Pixels(45.0)), &cursor, now,),
+            drag.on_input(&mut state, Input::Wheel(Scroll::pixels(45.0)), &cursor, now,),
             Outcome::set(0.0)
         );
     }
@@ -643,7 +642,7 @@ mod tests {
         assert_eq!(
             seeking.on_input(
                 &mut state,
-                Input::Wheel(Scroll::Lines(1.0)),
+                Input::Wheel(Scroll::lines(1.0)),
                 &on_meter(30.0),
                 Instant::now(),
             ),

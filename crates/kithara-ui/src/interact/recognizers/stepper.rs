@@ -85,14 +85,14 @@ impl Stepper {
     /// accumulated". The two policies do not merge.
     fn step(&mut self, scroll: Scroll, now: Instant) -> f32 {
         match scroll {
-            Scroll::Lines(_) => direction(scroll),
-            Scroll::Pixels(y) => {
+            Scroll::Lines { .. } => direction(scroll),
+            Scroll::Pixels { y, .. } => {
                 if self.last_step.is_some_and(|previous| {
                     now.saturating_duration_since(previous).as_millis() < Self::STEP_INTERVAL_MS
                 }) {
                     return 0.0;
                 }
-                let step = direction(Scroll::Lines(y));
+                let step = direction(Scroll::lines(y));
                 if step != 0.0 {
                     self.last_step = Some(now);
                 }
@@ -144,12 +144,12 @@ mod tests {
 
         for (delta, expected) in [(-1.0, 1.0), (1.0, -1.0)] {
             assert_eq!(
-                Stepper::default().on_input(Input::Wheel(Scroll::Lines(delta)), &inside(), now),
+                Stepper::default().on_input(Input::Wheel(Scroll::lines(delta)), &inside(), now),
                 Outcome::set(StepEvent::By(expected))
             );
         }
         assert_eq!(
-            Stepper::default().on_input(Input::Wheel(Scroll::Lines(-1.0)), &at(400.0), now),
+            Stepper::default().on_input(Input::Wheel(Scroll::lines(-1.0)), &at(400.0), now),
             Outcome::IGNORED,
             "a detent outside the surface belongs to whatever is under it"
         );
@@ -161,7 +161,7 @@ mod tests {
         let now = Instant::now();
 
         assert_eq!(
-            stepper.on_input(Input::Wheel(Scroll::Pixels(-14.0)), &inside(), now),
+            stepper.on_input(Input::Wheel(Scroll::pixels(-14.0)), &inside(), now),
             Outcome::set(StepEvent::By(1.0)),
             "any pixel delta is one detent, not an accumulated fraction"
         );
@@ -169,7 +169,7 @@ mod tests {
         for tail in [-11.0, -8.0, -5.0, -3.0, -1.5, -0.6, -0.2] {
             assert_eq!(
                 stepper.on_input(
-                    Input::Wheel(Scroll::Pixels(tail)),
+                    Input::Wheel(Scroll::pixels(tail)),
                     &inside(),
                     now + Duration::from_millis(199),
                 ),
@@ -179,7 +179,7 @@ mod tests {
         }
         assert_eq!(
             stepper.on_input(
-                Input::Wheel(Scroll::Pixels(-11.0)),
+                Input::Wheel(Scroll::pixels(-11.0)),
                 &inside(),
                 now + Duration::from_millis(200),
             ),

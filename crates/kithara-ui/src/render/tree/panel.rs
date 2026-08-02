@@ -58,13 +58,14 @@ pub(super) fn vis<'a>(value: Option<&ReadValue<'_>>, reads: &dyn Reads) -> Eleme
 
 pub(super) fn track_list<'a>(
     path: &'a str,
-    columns: &[TrackColumn],
-    columns_state: Option<&Binding>,
+    columns: (&[TrackColumn], Option<&Binding>),
     value: Option<&ReadValue<'_>>,
     ui: &'a CompiledUi,
     reads: &dyn Reads,
-    skin: &Skin,
+    skin: &'a Skin,
+    owner: InputOwner,
 ) -> Element<'a, UiEvent> {
+    let (columns, columns_state) = columns;
     TrackList::builder()
         .path(path)
         .columns(columns)
@@ -73,6 +74,7 @@ pub(super) fn track_list<'a>(
         .maybe_value(value)
         .reads(reads)
         .skin(skin)
+        .owner(owner)
         .build()
         .view()
 }

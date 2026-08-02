@@ -35,6 +35,7 @@ impl Component for SegmentedComponent {
         &mut self,
         input: Input,
         hit: &Hit,
+        _index: Option<usize>,
         _now: Instant,
     ) -> (Outcome<EngineEvent>, Option<&'static str>) {
         let outcome = click::on_input(input, hit)

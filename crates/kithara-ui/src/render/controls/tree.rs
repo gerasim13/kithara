@@ -8,15 +8,12 @@ use iced::{
 };
 use num_traits::ToPrimitive;
 
-use super::{
-    scroll::{ScrollCanvas, ScrollCanvasState},
-    tree_row::TreeRowPaint,
-};
+use super::{RetainedCanvas, RetainedCanvasState, tree_row::TreeRowPaint};
 use crate::{
     backends::IcedBackend,
     draw::{DrawList, DrawListBuilder, Rect, replay},
-    engine::ScrollState,
-    interact::iced as iced_interact,
+    engine::{ScrollConfig, ScrollState},
+    interact::{ScrollAxis, iced as iced_interact},
     render::{InputOwner, Skin, TreeRow, UiEvent, index},
     text::TextContext,
 };
@@ -31,21 +28,22 @@ pub(crate) fn tree_rows<'a>(
     let row_count = paint.rows.len();
     let row_height = skin.tree.row_height;
     let row_right_inset = skin.tree.scrollbar_margin + skin.tree.scrollbar_width;
+    let config = TreeConfig {
+        row_count,
+        row_height,
+        row_right_inset,
+    };
     match owner {
-        InputOwner::Leaf => ScrollCanvas::new(
+        InputOwner::Leaf => RetainedCanvas::new(
             TreeProgram {
                 paint,
                 path: path.to_owned(),
             },
             path,
-            row_count,
-            row_height,
-            row_right_inset,
+            config,
         )
         .view(),
-        InputOwner::Engine => {
-            ScrollCanvas::new(paint, path, row_count, row_height, row_right_inset).view()
-        }
+        InputOwner::Engine => RetainedCanvas::new(paint, path, config).view(),
     }
 }
 
@@ -219,15 +217,20 @@ struct TreeState {
     text: RefCell<Option<TextContext>>,
 }
 
+#[derive(Clone, Copy)]
+struct TreeConfig {
+    row_count: usize,
+    row_height: f32,
+    row_right_inset: f32,
+}
+
 impl TreeState {
     fn sync(&mut self, path: &str, offset: f32) {
         if self.path == path {
             self.scroll.sync_offset(offset);
         }
     }
-}
 
-impl ScrollCanvasState for TreeState {
     fn reconcile_scroll(
         &mut self,
         path: &str,
@@ -235,17 +238,51 @@ impl ScrollCanvasState for TreeState {
         row_height: f32,
         row_right_inset: f32,
     ) {
+        self.reconcile_canvas(
+            path,
+            &TreeConfig {
+                row_count,
+                row_height,
+                row_right_inset,
+            },
+        );
+    }
+}
+
+impl RetainedCanvasState for TreeState {
+    type Config = TreeConfig;
+
+    fn reconcile_canvas(&mut self, path: &str, config: &Self::Config) {
         if self.path == path {
-            self.scroll
-                .reconcile(row_count, row_height, row_right_inset);
+            self.scroll.reconcile(ScrollConfig::items(
+                ScrollAxis::Vertical,
+                config
+                    .row_count
+                    .to_f32()
+                    .map_or(f32::MAX, |count| count * config.row_height),
+                config.row_count,
+                config.row_height,
+                config.row_height,
+                config.row_right_inset,
+            ));
         } else {
             self.path = path.to_owned();
-            self.scroll = ScrollState::new(row_count, row_height, row_right_inset);
+            self.scroll = ScrollState::new(ScrollConfig::items(
+                ScrollAxis::Vertical,
+                config
+                    .row_count
+                    .to_f32()
+                    .map_or(f32::MAX, |count| count * config.row_height),
+                config.row_count,
+                config.row_height,
+                config.row_height,
+                config.row_right_inset,
+            ));
         }
     }
 
-    fn set_scroll_viewport(&mut self, height: f32) {
-        self.scroll.set_viewport(height);
+    fn set_canvas_viewport(&mut self, size: iced::Size, _config: &Self::Config) {
+        self.scroll.set_viewport(size.height);
     }
 }
 

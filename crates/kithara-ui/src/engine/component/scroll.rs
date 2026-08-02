@@ -3,36 +3,37 @@ use num_traits::ToPrimitive;
 
 use super::retained::Component;
 use crate::{
-    engine::model::{EngineEvent, Kind},
-    interact::{CursorShape, Hit, Input, Outcome, Scroll, recognizers::click},
+    draw::Rect,
+    engine::model::{EngineEvent, Kind, ScrollConfig},
+    interact::{CursorShape, Hit, Input, Outcome, Scroll, ScrollAxis, recognizers::click},
 };
 
 const LINE_STEP_PX: f32 = 60.0;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ScrollState {
+    config: ScrollConfig,
     offset: f32,
-    row_count: usize,
-    row_height: f32,
-    row_right_inset: f32,
-    viewport_height: f32,
+    viewport_extent: f32,
+}
+
+impl Default for ScrollState {
+    fn default() -> Self {
+        Self::new(ScrollConfig::plain(ScrollAxis::Vertical, 0.0))
+    }
 }
 
 impl ScrollState {
-    pub(crate) fn new(row_count: usize, row_height: f32, row_right_inset: f32) -> Self {
+    pub(crate) const fn new(config: ScrollConfig) -> Self {
         Self {
+            config,
             offset: 0.0,
-            row_count,
-            row_height,
-            row_right_inset,
-            viewport_height: 0.0,
+            viewport_extent: 0.0,
         }
     }
 
-    pub(crate) fn reconcile(&mut self, row_count: usize, row_height: f32, row_right_inset: f32) {
-        self.row_count = row_count;
-        self.row_height = row_height;
-        self.row_right_inset = row_right_inset;
+    pub(crate) fn reconcile(&mut self, config: ScrollConfig) {
+        self.config = config;
         self.clamp_offset();
     }
 
@@ -44,8 +45,8 @@ impl ScrollState {
         self.offset = offset.clamp(0.0, self.max_offset());
     }
 
-    pub(crate) fn set_viewport(&mut self, height: f32) {
-        self.viewport_height = height.max(0.0);
+    pub(crate) fn set_viewport(&mut self, extent: f32) {
+        self.viewport_extent = extent.max(0.0);
         self.clamp_offset();
     }
 
@@ -63,10 +64,19 @@ impl ScrollState {
         if !hit.over() {
             return Outcome::IGNORED;
         }
-        self.set_viewport(hit.area().h);
-        let delta = match scroll {
-            Scroll::Lines(y) => y * LINE_STEP_PX,
-            Scroll::Pixels(y) => y,
+        let area = hit.area();
+        self.set_viewport(match self.config.axis() {
+            ScrollAxis::Horizontal => area.w,
+            ScrollAxis::Vertical => area.h,
+        });
+        let delta = scroll.delta(self.config.axis());
+        if delta == 0.0 {
+            return Outcome::IGNORED;
+        }
+        let delta = if scroll.is_pixels() {
+            delta
+        } else {
+            delta * LINE_STEP_PX
         };
         let next = (self.offset - delta).clamp(0.0, self.max_offset());
         if next == self.offset {
@@ -78,10 +88,11 @@ impl ScrollState {
 
     fn row_at(&self, hit: &Hit) -> Option<usize> {
         let point = hit.inside()?;
-        if self.row_height <= 0.0 {
+        let items = self.config.item_layout()?;
+        if self.config.axis() != ScrollAxis::Vertical || items.extent <= 0.0 || items.size <= 0.0 {
             return None;
         }
-        let row_right = hit.area().x + (hit.area().w - self.row_right_inset).max(0.0);
+        let row_right = hit.area().x + (hit.area().w - items.cross_inset).max(0.0);
         if self.max_offset() > 0.0 && point.x >= row_right {
             return None;
         }
@@ -89,8 +100,11 @@ impl ScrollState {
         if y < 0.0 {
             return None;
         }
-        let index = (y / self.row_height).floor().to_usize()?;
-        (index < self.row_count).then_some(index)
+        let index = (y / items.extent).floor().to_usize()?;
+        if index >= items.count || y - index.to_f32()? * items.extent >= items.size {
+            return None;
+        }
+        Some(index)
     }
 
     fn clamp_offset(&mut self) {
@@ -98,9 +112,7 @@ impl ScrollState {
     }
 
     fn max_offset(&self) -> f32 {
-        let rows = self.row_count.to_f32().unwrap_or(f32::MAX);
-        rows.mul_add(self.row_height.max(0.0), -self.viewport_height)
-            .max(0.0)
+        (self.config.content_extent().max(0.0) - self.viewport_extent).max(0.0)
     }
 }
 
@@ -110,25 +122,16 @@ pub(in crate::engine) struct ScrollComponent {
 }
 
 impl ScrollComponent {
-    pub(super) fn new(
-        path: String,
-        row_count: usize,
-        row_height: f32,
-        row_right_inset: f32,
-    ) -> Self {
+    pub(super) fn new(path: String, config: ScrollConfig) -> Self {
         Self {
             path,
-            state: ScrollState::new(row_count, row_height, row_right_inset),
+            state: ScrollState::new(config),
         }
     }
 
     pub(super) fn reconcile(mut self, next: Self) -> Self {
         self.path = next.path;
-        self.state.reconcile(
-            next.state.row_count,
-            next.state.row_height,
-            next.state.row_right_inset,
-        );
+        self.state.reconcile(next.state.config);
         self
     }
 
@@ -136,8 +139,11 @@ impl ScrollComponent {
         self.state.offset()
     }
 
-    pub(super) fn set_viewport(&mut self, height: f32) {
-        self.state.set_viewport(height);
+    pub(super) fn set_viewport(&mut self, area: Rect) {
+        self.state.set_viewport(match self.state.config.axis() {
+            ScrollAxis::Horizontal => area.w,
+            ScrollAxis::Vertical => area.h,
+        });
     }
 }
 
@@ -154,6 +160,7 @@ impl Component for ScrollComponent {
         &mut self,
         input: Input,
         hit: &Hit,
+        _index: Option<usize>,
         _now: Instant,
     ) -> (Outcome<EngineEvent>, Option<&'static str>) {
         (self.state.handle(input, hit).map(EngineEvent::Index), None)

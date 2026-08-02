@@ -681,6 +681,29 @@ mod tests {
     }
 
     #[kithara::test]
+    fn the_hosted_track_list_keeps_its_descriptor_backed_controls() {
+        assert_hosted_page_claims(
+            Tab::Tracklist,
+            "track-list",
+            |path| path.starts_with("tracklist/"),
+            &[
+                ("tracklist/column-artist", "activation"),
+                ("tracklist/column-bpm", "activation"),
+                ("tracklist/column-deck", "activation"),
+                ("tracklist/column-energy", "activation"),
+                ("tracklist/column-index", "activation"),
+                ("tracklist/column-key", "activation"),
+                ("tracklist/column-preset", "segmented"),
+                ("tracklist/column-time", "activation"),
+                ("tracklist/column-title", "activation"),
+                ("tracklist/column-transition", "activation"),
+                ("tracklist/reset-columns", "activation"),
+                ("tracklist/table", "track-list"),
+            ],
+        );
+    }
+
+    #[kithara::test]
     fn the_hosted_module_tabs_keep_their_descriptor_backed_controls() {
         assert_hosted_page_claims(
             Tab::Modules,
@@ -745,6 +768,8 @@ mod tests {
             ControlSpec::Crossfader { .. } => Some("crossfader"),
             ControlSpec::Fader { .. } => Some("fader"),
             ControlSpec::Knob { .. } => Some("knob"),
+            ControlSpec::Segmented { .. } => Some("segmented"),
+            ControlSpec::TrackList { .. } => Some("track-list"),
             ControlSpec::VuStereo => Some("stereo-meter"),
             ControlSpec::VuVertical { .. } => Some("vertical-vu"),
             ControlSpec::Tree { .. } => Some("scroll"),

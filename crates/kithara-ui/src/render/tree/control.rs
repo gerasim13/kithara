@@ -177,12 +177,12 @@ pub(super) fn render_control<'a>(
             columns_state,
         } => track_list(
             path,
-            columns,
-            columns_state.as_ref(),
+            (columns, columns_state.as_ref()),
             value,
             ui,
             reads,
             skin,
+            owner,
         ),
         ControlSpec::Tree { query } => tree(path, query.as_ref(), value, ui, reads, skin, owner),
         ControlSpec::ContextBar { scope_items, scope } => {

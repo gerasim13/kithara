@@ -95,6 +95,7 @@ impl Component for HeroWaveComponent {
         &mut self,
         input: Input,
         hit: &Hit,
+        _index: Option<usize>,
         now: Instant,
     ) -> (Outcome<EngineEvent>, Option<&'static str>) {
         match input {

@@ -5,5 +5,5 @@ mod outcome;
 pub(crate) mod recognizers;
 
 pub(crate) use cursor::{CursorShape, Hover};
-pub(crate) use input::{Hit, Input, Modifiers, Scroll};
+pub(crate) use input::{Hit, Input, Modifiers, Scroll, ScrollAxis};
 pub(crate) use outcome::Outcome;

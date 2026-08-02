@@ -52,6 +52,7 @@ impl Component for ScalarComponent {
         &mut self,
         input: Input,
         hit: &Hit,
+        _index: Option<usize>,
         now: Instant,
     ) -> (Outcome<EngineEvent>, Option<&'static str>) {
         let outcome = self.scalar.on_input(&mut self.state, input, hit, now);

@@ -11,53 +11,43 @@ use iced::{
 
 use crate::render::UiEvent;
 
-pub(super) trait ScrollCanvasState: Default {
-    fn reconcile_scroll(
-        &mut self,
-        path: &str,
-        row_count: usize,
-        row_height: f32,
-        row_right_inset: f32,
-    );
-    fn set_scroll_viewport(&mut self, height: f32);
+pub(in crate::render) trait RetainedCanvasState: Default {
+    type Config;
+
+    fn reconcile_canvas(&mut self, path: &str, config: &Self::Config);
+    fn set_canvas_viewport(&mut self, size: Size, config: &Self::Config);
 }
 
-pub(super) struct ScrollCanvas<P>
+pub(in crate::render) struct RetainedCanvas<P>
 where
     P: Program<UiEvent, Theme, Renderer>,
-    P::State: ScrollCanvasState,
+    P::State: RetainedCanvasState,
 {
     canvas: Canvas<P, UiEvent>,
+    config: <P::State as RetainedCanvasState>::Config,
     path: String,
-    row_count: usize,
-    row_height: f32,
-    row_right_inset: f32,
 }
 
-impl<P> ScrollCanvas<P>
+impl<P> RetainedCanvas<P>
 where
     P: Program<UiEvent, Theme, Renderer>,
-    P::State: ScrollCanvasState,
+    P::State: RetainedCanvasState,
 {
-    pub(super) fn new(
+    pub(in crate::render) fn new(
         program: P,
         path: &str,
-        row_count: usize,
-        row_height: f32,
-        row_right_inset: f32,
+        config: <P::State as RetainedCanvasState>::Config,
     ) -> Self {
         Self {
             canvas: Canvas::new(program)
                 .width(Length::Fill)
                 .height(Length::Fill),
+            config,
             path: path.to_owned(),
-            row_count,
-            row_height,
-            row_right_inset,
         }
     }
 
-    pub(super) fn view<'a>(self) -> Element<'a, UiEvent>
+    pub(in crate::render) fn view<'a>(self) -> Element<'a, UiEvent>
     where
         P: 'a,
     {
@@ -65,10 +55,10 @@ where
     }
 }
 
-impl<P> IcedWidget<UiEvent, Theme, Renderer> for ScrollCanvas<P>
+impl<P> IcedWidget<UiEvent, Theme, Renderer> for RetainedCanvas<P>
 where
     P: Program<UiEvent, Theme, Renderer>,
-    P::State: ScrollCanvasState,
+    P::State: RetainedCanvasState,
 {
     fn tag(&self) -> iced::advanced::widget::tree::Tag {
         self.canvas.tag()
@@ -76,23 +66,15 @@ where
 
     fn state(&self) -> iced::advanced::widget::tree::State {
         let mut state = P::State::default();
-        state.reconcile_scroll(
-            &self.path,
-            self.row_count,
-            self.row_height,
-            self.row_right_inset,
-        );
+        state.reconcile_canvas(&self.path, &self.config);
         iced::advanced::widget::tree::State::new(state)
     }
 
     fn diff(&self, tree: &mut Tree) {
         self.canvas.diff(tree);
-        tree.state.downcast_mut::<P::State>().reconcile_scroll(
-            &self.path,
-            self.row_count,
-            self.row_height,
-            self.row_right_inset,
-        );
+        tree.state
+            .downcast_mut::<P::State>()
+            .reconcile_canvas(&self.path, &self.config);
     }
 
     fn size(&self) -> Size<Length> {
@@ -112,7 +94,7 @@ where
         let node = self.canvas.layout(tree, renderer, limits);
         tree.state
             .downcast_mut::<P::State>()
-            .set_scroll_viewport(node.size().height);
+            .set_canvas_viewport(node.size(), &self.config);
         node
     }
 

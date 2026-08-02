@@ -334,11 +334,12 @@ Routing the document event through the recognizer or engine instead would point 
 crate's orchestration layer, and every base peer points strictly downward: `draw` to `text`, `text`
 to `skin`, `solve` to `layout::Axis`.
 
-The retained interaction boundary explicitly names seventeen documents: `studio-deck`,
+The retained interaction boundary explicitly names eighteen documents: `studio-deck`,
 `studio-strip`, `studio-mixer`, `studio-mixer-single`, `studio-overview`,
 `studio-overview-row`, `studio-overview-single`, `gallery-knobs`, `gallery-meters`,
 `gallery-toggles`, `gallery-chips`, `gallery-buttons-tab`, `gallery-cells-tab`,
-`gallery-faders-tab`, `gallery-tree-tab`, `gallery-module-tabs`, and `gallery-nav`. A direct layout
+`gallery-faders-tab`, `gallery-tracklist-tab`, `gallery-tree-tab`, `gallery-module-tabs`, and
+`gallery-nav`. A direct layout
 module is selected by its compiled
 module ID; expansion records each nested
 include root by structural address and module ID without adding a node wrapper, so the existing
@@ -348,7 +349,7 @@ Reconciliation matches an owned resolved control path plus component kind; it re
 configuration and preserves recognizer state, and never retains an `InternId` across compiled UI
 lifetimes. The ordinary click wave and Hero Wave have distinct descriptor identities. The Hero
 descriptor refreshes its scalar drag, visible window, and wheel answers from current progress and
-zoom on every view. The seventeen module IDs form a named set in the render tree; subtree contents never
+zoom on every view. The eighteen module IDs form a named set in the render tree; subtree contents never
 silently opt another document into the engine.
 
 The mixer host absorbs the expanded roots of both included strips. Rendering beneath that host
@@ -1079,16 +1080,38 @@ one declarative column inventory while allowing library, playlist, and set-queue
 presets without introducing renderer-owned mutable state.
 
 The `Deck` column marks assignment and does not offer it: it shows the letters
-the host put on the row and nothing when there are none. A row is a drag source
-instead — pulling it past the gesture threshold emits
-`ControlAction::Drag(DragPhase::Start)` on the control path, and the release
-emits `DragPhase::Drop`. The gesture captures no event, so the row keeps its own
-click and whatever the drag is released over sees the same release.
+the host put on the row and nothing when there are none. One row-item owner arms selection on press
+and feeds the same index to the existing `ItemDrag` recognizer. A plain release over that row emits
+`SelectIndex`; crossing the drag threshold suppresses selection, emits
+`ControlAction::Drag(DragPhase::Start)` on the control path, and makes the release emit
+`DragPhase::Drop`. Drag observation captures no event, so whatever the drag is released over sees
+the same release. Reconciliation cancels a held index if its row has disappeared.
 
 Column widths are host-owned through Scalar reads at `<binding-id>.width.<column-name>` and
 `SetScalar` controls emitted at `<track-list-path>/width/<column-name>`. A missing width read uses
 the skin default. The renderer retains only canvas drag state, clamps resizable fixed columns to
 the skin minimum, and keeps the required Title column flexible with its skin-owned minimum.
+
+The retained painter draws the header, rows, cells, dividers, footer, and both scrollbar indicators
+from that resolved column layout. Input geometry remains independent of paint geometry: each
+resizable edge exposes the skin's wider `divider_hit_width` rectangle to the engine while the
+painter emits only the centered `divider_width` rectangle. The distinction is intentional: a
+usable resize band must not make the rule look thick, and the thin rule must not shrink the band
+that can start `SetScalar` drag input. Completely clipped bands expose no new hit target; a divider
+already captured before a relayout retains a zero-area watcher only until release, so its scalar
+gesture cannot strand engine capture after the painted edge moves offscreen.
+
+For a hosted list, the engine retains one row-item owner, column dividers, and vertical scroll under
+the document's canonical track-list path. It also retains a sibling horizontal scroll at
+`<track-list-path>/scroll-x` only when the resolved columns overflow the laid-out viewport. Target
+order is outer horizontal, inner vertical, one row watcher, then the visible divider bands; reverse
+routing therefore tries the most specific input first. The watcher derives its index and clipped
+row hit from the current cursor, but remains as a zero-area target away from a row so an offscreen
+release can still publish `DragPhase::Drop` for the index held at press. A visible vertical
+scrollbar reserves its painted rail and trailing margin as one non-row interaction lane. Both
+canonical engine offsets are synchronized into the canvas's two `ScrollState` owners, along with
+the pressed row; there are no parallel offset fields. A leaf-owned list uses the same recognizers
+and scroll state locally, never a second hosted owner.
 
 ## Browser Tree Ownership
 
@@ -1110,13 +1133,17 @@ overflow contract. The solid scrollbar is an offset indicator in this wheel slic
 excluded from row activation, but rail/thumb dragging and touch panning are not input contracts of
 M5a.
 
-Wheel arbitration is directional and consume-or-observe. In reverse document order, the
-innermost scroll viewport under the pointer that can still move in the requested direction changes
-its offset and captures the event. A viewport already at that directional boundary returns
-`Ignored`, so routing continues to an outer engine component and then unchanged to an unported iced
-ancestor. At the bottom, a further downward wheel is therefore ignored while an upward wheel is
-still consumed. Search text editing and the scope pick-list remain iced-owned until their popup and
-text-input slice; hosting the row viewport does not intercept their keyboard input.
+Wheel arbitration is axis-aware, directional, and consume-or-observe. Portable wheel packets keep
+both horizontal and vertical deltas and whether the host reported lines or pixels; every retained
+scroll declares the single axis it owns. In reverse document order, the innermost viewport under
+the pointer consumes only a non-zero delta on its own axis that actually changes its clamped
+offset. A wrong-axis delta or travel beyond either boundary returns `Ignored`, so routing continues
+to the next outer engine target and then unchanged to an unported iced ancestor. Consequently a
+movable vertical track-list body passes a horizontal wheel to its conditional horizontal parent;
+at the bottom a further downward wheel is ignored while an upward wheel is still consumed, and the
+same two-direction boundary rule holds for the horizontal axis. Search text editing and the scope
+pick-list remain iced-owned until their popup and text-input slice; hosting the row viewport does
+not intercept their keyboard input.
 
 ## Application Consumer
 

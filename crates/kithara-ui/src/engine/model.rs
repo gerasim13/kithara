@@ -1,9 +1,66 @@
 use std::ops::Range;
 
 use crate::interact::{
-    Hit, Hover, Outcome,
-    recognizers::{Scalar, Track, WheelStep},
+    CursorShape, Hit, Hover, Outcome, ScrollAxis,
+    recognizers::{DragEvent, Scalar, Track, WheelStep},
 };
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ScrollConfig {
+    axis: ScrollAxis,
+    content_extent: f32,
+    items: Option<ScrollItems>,
+}
+
+impl ScrollConfig {
+    pub(crate) const fn plain(axis: ScrollAxis, content_extent: f32) -> Self {
+        Self {
+            axis,
+            content_extent,
+            items: None,
+        }
+    }
+
+    pub(crate) const fn items(
+        axis: ScrollAxis,
+        content_extent: f32,
+        count: usize,
+        extent: f32,
+        size: f32,
+        cross_inset: f32,
+    ) -> Self {
+        Self {
+            axis,
+            content_extent,
+            items: Some(ScrollItems {
+                count,
+                cross_inset,
+                extent,
+                size,
+            }),
+        }
+    }
+
+    pub(crate) const fn axis(self) -> ScrollAxis {
+        self.axis
+    }
+
+    pub(crate) const fn content_extent(self) -> f32 {
+        self.content_extent
+    }
+
+    pub(super) const fn item_layout(self) -> Option<ScrollItems> {
+        self.items
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct ScrollItems {
+    pub(super) count: usize,
+    pub(super) cross_inset: f32,
+    pub(super) extent: f32,
+    pub(super) size: f32,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Kind {
@@ -11,6 +68,8 @@ pub(super) enum Kind {
     Crossing,
     Segmented,
     Scroll,
+    Item,
+    ColumnDivider,
     Fader,
     Crossfader,
     Knob,
@@ -39,9 +98,16 @@ pub(crate) enum Descriptor {
     },
     Scroll {
         path: String,
-        row_count: usize,
-        row_height: f32,
-        row_right_inset: f32,
+        config: ScrollConfig,
+    },
+    Item {
+        target: String,
+        path: String,
+        count: usize,
+    },
+    ColumnDivider {
+        path: String,
+        scalar: Scalar,
     },
     Fader {
         path: String,
@@ -89,17 +155,25 @@ impl Descriptor {
         Self::Segmented { path, item_count }
     }
 
-    pub(crate) fn scroll(
-        path: String,
-        row_count: usize,
-        row_height: f32,
-        row_right_inset: f32,
-    ) -> Self {
-        Self::Scroll {
+    pub(crate) fn scroll(path: String, config: ScrollConfig) -> Self {
+        Self::Scroll { path, config }
+    }
+
+    pub(crate) fn item(target: String, path: String, count: usize) -> Self {
+        Self::Item {
+            target,
             path,
-            row_count,
-            row_height,
-            row_right_inset,
+            count,
+        }
+    }
+
+    pub(crate) fn column_divider(path: String, value: f32, minimum: f32) -> Self {
+        Self::ColumnDivider {
+            path,
+            scalar: Scalar::builder()
+                .track(Track::HorizontalPixels { minimum, value })
+                .hover(Hover::new(CursorShape::ResizeH))
+                .build(),
         }
     }
 
@@ -169,6 +243,7 @@ impl Descriptor {
             | Self::Crossing { path }
             | Self::Segmented { path, .. }
             | Self::Scroll { path, .. }
+            | Self::ColumnDivider { path, .. }
             | Self::Fader { path, .. }
             | Self::Crossfader { path }
             | Self::Knob { path, .. }
@@ -176,6 +251,7 @@ impl Descriptor {
             | Self::VerticalVu { path }
             | Self::Wave { path, .. }
             | Self::HeroWave { path, .. } => path,
+            Self::Item { target, .. } => target,
         }
     }
 
@@ -185,6 +261,8 @@ impl Descriptor {
             Self::Crossing { .. } => Kind::Crossing,
             Self::Segmented { .. } => Kind::Segmented,
             Self::Scroll { .. } => Kind::Scroll,
+            Self::Item { .. } => Kind::Item,
+            Self::ColumnDivider { .. } => Kind::ColumnDivider,
             Self::Fader { .. } => Kind::Fader,
             Self::Crossfader { .. } => Kind::Crossfader,
             Self::Knob { .. } => Kind::Knob,
@@ -202,17 +280,31 @@ pub(crate) enum EngineEvent {
     Activate,
     Crossing(bool),
     Index(usize),
+    Drag { event: DragEvent, index: usize },
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct Target<'a> {
     pub(crate) path: &'a str,
     pub(crate) hit: Hit,
+    pub(crate) index: Option<usize>,
 }
 
 impl<'a> Target<'a> {
     pub(crate) const fn new(path: &'a str, hit: Hit) -> Self {
-        Self { path, hit }
+        Self {
+            path,
+            hit,
+            index: None,
+        }
+    }
+
+    pub(crate) const fn item(path: &'a str, hit: Hit, index: usize) -> Self {
+        Self {
+            path,
+            hit,
+            index: Some(index),
+        }
     }
 }
 

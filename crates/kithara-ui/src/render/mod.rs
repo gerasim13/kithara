@@ -7,6 +7,8 @@ pub mod model;
 mod owner;
 pub mod skin;
 pub mod theme;
+mod track_list;
+mod track_list_paint;
 pub mod tree;
 pub mod typography;
 
@@ -22,6 +24,7 @@ pub use model::{
 };
 pub(crate) use owner::InputOwner;
 pub use skin::Skin;
+pub(crate) use track_list::{sync_track_list_scroll, track_list};
 pub use typography::shaped_text;
 
 pub use crate::widgets::wave::zoom_math::{DEFAULT_ZOOM, zoom_in, zoom_out};
