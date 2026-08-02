@@ -210,11 +210,13 @@ impl super::core::ActiveDecode {
         let gapless_mode = self.gapless_mode();
         let outgoing_origin = self.active.timeline_origin(gapless_mode);
         let incoming_origin = incoming_origin(&self.active, generation, gapless_mode);
+        let outgoing_end = outgoing_staged_end(&self.active, outgoing_origin);
         let overlap = overlap_span(
             generation,
             outgoing_frontier,
             outgoing_origin,
             incoming_origin,
+            outgoing_end,
         )?;
         Some(ReadyToPromote {
             overlap,
@@ -271,6 +273,7 @@ impl super::core::ActiveDecode {
         let outgoing_origin = self.active.timeline_origin(gapless_mode);
         let active_profile = self.active.gapless_profile();
         let active_gap = self.active.timeline_gap();
+        let outgoing_end = outgoing_staged_end(&self.active, outgoing_origin);
         let Some(IncomingDecode::Priming { generation, .. }) = self.incoming.as_mut() else {
             return IncomingPrime::Idle;
         };
@@ -281,6 +284,7 @@ impl super::core::ActiveDecode {
             outgoing_frontier,
             outgoing_origin,
             incoming_origin,
+            outgoing_end,
         )
         .is_some()
         {
@@ -303,6 +307,7 @@ impl super::core::ActiveDecode {
                         outgoing_frontier,
                         outgoing_origin,
                         incoming_origin,
+                        outgoing_end,
                     )
                     .is_some()
                     {
@@ -320,6 +325,7 @@ impl super::core::ActiveDecode {
                         outgoing_frontier,
                         outgoing_origin,
                         incoming_origin,
+                        outgoing_end,
                     )
                     .is_some()
                     {
@@ -369,11 +375,33 @@ impl super::core::ActiveDecode {
     }
 }
 
+/// How far the outgoing generation has itself decoded, on the shared timeline.
+///
+/// The splice proof only asks whether the incoming covers the frame the
+/// outgoing is about to emit. Covering that instant is not the same as being
+/// able to carry on from it: an incoming that is staged a sliver past the cut
+/// hands the consumer that sliver and then answers `Pending`, and a starved
+/// render block is written as silence. Measured on a cold target, the sliver
+/// was 12 to 80 ms and the silence that followed was the same size.
+///
+/// So the proof also asks that the incoming be no further behind than the
+/// generation it replaces. The bar calibrates itself — it is the outgoing's own
+/// depth, not a number — and it is reachable, because a priming generation is
+/// not being consumed and its staged span only grows.
+fn outgoing_staged_end(active: &DecoderGeneration, outgoing_origin: u64) -> Option<Duration> {
+    let (_, end, rate) = active.staged_span()?;
+    Some(duration_for_frames(
+        rate,
+        end.saturating_sub(outgoing_origin),
+    ))
+}
+
 fn overlap_span(
     generation: &DecoderGeneration,
     outgoing_frontier: OutgoingFrontier,
     outgoing_origin: u64,
     incoming_origin: u64,
+    outgoing_end: Option<Duration>,
 ) -> Option<OverlapSpan> {
     let (incoming_first, incoming_end, incoming_rate) = generation.staged_span()?;
     let (outgoing_frame, outgoing_rate) = match outgoing_frontier {
@@ -417,6 +445,17 @@ fn overlap_span(
             outgoing_rate,
             landed_late = incoming_first_time > outgoing_next,
             "incoming generation does not cover the outgoing frontier"
+        );
+        return None;
+    }
+    if let Some(outgoing_end) = outgoing_end
+        && incoming_end_time < outgoing_end
+    {
+        trace!(
+            ?incoming_end_time,
+            ?outgoing_end,
+            ?outgoing_next,
+            "incoming generation covers the frontier but is shallower than the outgoing"
         );
         return None;
     }
