@@ -5,10 +5,12 @@ use super::super::{Hit, Input, Outcome};
 /// later event has nothing to change and the cursor rule stays with [`Hover`].
 ///
 /// [`Hover`]: super::super::Hover
-pub(crate) fn on_input(input: Input, hit: &Hit) -> Outcome<()> {
+pub(crate) fn on_input(input: Input<'_>, hit: &Hit) -> Outcome<()> {
     match input {
         Input::PointerDown if hit.over() => Outcome::set(()),
-        Input::ModifiersChanged(_)
+        Input::KeyPressed { .. }
+        | Input::KeyReleased { .. }
+        | Input::ModifiersChanged(_)
         | Input::PointerDown
         | Input::PointerLeft
         | Input::PointerMoved { .. }

@@ -70,7 +70,7 @@ impl Scalar {
     pub(crate) fn on_input(
         &self,
         state: &mut ScalarState,
-        input: Input,
+        input: Input<'_>,
         hit: &Hit,
         now: Instant,
     ) -> Outcome {
@@ -146,7 +146,9 @@ impl Scalar {
                 let value = wheel.step.mul_add(steps, wheel.value);
                 Outcome::set(value.clamp(0.0, 1.0))
             }
-            Input::ModifiersChanged(_)
+            Input::KeyPressed { .. }
+            | Input::KeyReleased { .. }
+            | Input::ModifiersChanged(_)
             | Input::PointerLeft
             | Input::PointerMoved { .. }
             | Input::PointerUp
@@ -192,13 +194,13 @@ mod tests {
 
     /// This recognizer normalizes against the area, so it reads the hit and not
     /// the event; the event carries the same point so the fixture reads true.
-    fn moved(y: f32) -> Input {
+    fn moved(y: f32) -> Input<'static> {
         Input::PointerMoved {
             at: Pt { x: 17.0, y },
         }
     }
 
-    fn moved_on_meter(y: f32) -> Input {
+    fn moved_on_meter(y: f32) -> Input<'static> {
         Input::PointerMoved {
             at: Pt { x: 6.0, y },
         }
@@ -486,7 +488,7 @@ mod tests {
         Hit::new(Some(Pt { x, y: 24.0 }), rail())
     }
 
-    fn across(x: f32) -> Input {
+    fn across(x: f32) -> Input<'static> {
         Input::PointerMoved {
             at: Pt { x, y: 24.0 },
         }

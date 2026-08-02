@@ -1,7 +1,7 @@
 use kithara_platform::time::Instant;
 
 use super::{
-    component::RetainedComponent,
+    component::{PickerSnapshot, RetainedComponent},
     model::{Descriptor, Emission, Kind, Target},
     router::Router,
 };
@@ -36,7 +36,7 @@ impl Engine {
 
     pub(crate) fn handle(
         &mut self,
-        input: Input,
+        input: Input<'_>,
         targets: &[Target<'_>],
         now: Instant,
     ) -> Option<Emission> {
@@ -62,6 +62,13 @@ impl Engine {
             .and_then(RetainedComponent::pressed_item_index)
     }
 
+    pub(crate) fn picker_snapshot(&self, path: &str) -> Option<PickerSnapshot> {
+        self.components
+            .iter()
+            .find(|component| component.path() == path && component.kind() == Kind::Picker)
+            .and_then(RetainedComponent::picker_snapshot)
+    }
+
     pub(crate) fn has_pressed_item(&self) -> bool {
         self.components
             .iter()
@@ -85,6 +92,10 @@ impl Engine {
     pub(crate) fn captures(&self, path: &str) -> bool {
         self.router.captures(path)
     }
+
+    pub(crate) fn focused_path(&self) -> Option<&str> {
+        self.router.focused_path()
+    }
 }
 
 #[cfg(test)]
@@ -96,7 +107,7 @@ mod tests {
         draw::{Pt, Rect},
         engine::ScrollConfig,
         interact::{
-            Hit, Hover, Modifiers, Outcome, Scroll, ScrollAxis,
+            Hit, Hover, Key, Modifiers, Outcome, Scroll, ScrollAxis,
             recognizers::{DragEvent, WheelStep},
         },
     };
@@ -136,6 +147,25 @@ mod tests {
         Target::item(path, target.hit, index)
     }
 
+    fn picker_target(path: &str, index: Option<usize>, pointer_y: f32, top: f32) -> Target<'_> {
+        let hit = Hit::new(
+            Some(Pt {
+                x: 50.0,
+                y: pointer_y,
+            }),
+            Rect {
+                h: 20.0,
+                w: 100.0,
+                x: 0.0,
+                y: top,
+            },
+        );
+        index.map_or_else(
+            || Target::new(path, hit),
+            |index| Target::item(path, hit, index),
+        )
+    }
+
     fn axis_lines(axis: ScrollAxis, delta: f32) -> Scroll {
         match axis {
             ScrollAxis::Horizontal => Scroll::Lines { x: delta, y: 0.0 },
@@ -147,6 +177,20 @@ mod tests {
         match axis {
             ScrollAxis::Horizontal => Scroll::Pixels { x: delta, y: 0.0 },
             ScrollAxis::Vertical => Scroll::Pixels { x: 0.0, y: delta },
+        }
+    }
+
+    fn key_pressed(key: Key<'static>) -> Input<'static> {
+        Input::KeyPressed {
+            key,
+            modifiers: Modifiers::default(),
+        }
+    }
+
+    fn key_released(key: Key<'static>) -> Input<'static> {
+        Input::KeyReleased {
+            key,
+            modifiers: Modifiers::default(),
         }
     }
 
@@ -644,7 +688,7 @@ mod tests {
         assert!(
             engine
                 .handle(
-                    Input::ModifiersChanged(Modifiers::new(true)),
+                    Input::ModifiersChanged(Modifiers::new(false, false, false, true)),
                     &[target(path, 25.0, 50.0)],
                     now,
                 )
@@ -1292,6 +1336,405 @@ mod tests {
                 Instant::now(),
             )),
             Some(0.25)
+        );
+    }
+
+    #[kithara::test]
+    fn focused_picker_navigates_and_selects_with_the_keyboard() {
+        let mut engine = Engine::default();
+        let path = "library/scope";
+        let target = target(path, 50.0, 50.0);
+        let now = Instant::now();
+        engine.reconcile([Descriptor::picker(path.to_owned(), 4, Some(1))]);
+
+        let opened = engine
+            .handle(Input::PointerDown, &[target], now)
+            .unwrap_or_else(|| panic!("pressing the picker anchor must open it"));
+        assert_eq!(opened.outcome, Outcome::captured());
+        let snapshot = engine
+            .picker_snapshot(path)
+            .unwrap_or_else(|| panic!("the picker must expose its retained paint state"));
+        assert!(snapshot.open);
+        assert_eq!(snapshot.highlighted, Some(1));
+
+        let navigated = engine
+            .handle(key_pressed(Key::ArrowDown), &[], now)
+            .unwrap_or_else(|| panic!("a focused picker must consume arrow navigation"));
+        assert_eq!(navigated.outcome, Outcome::captured());
+        assert_eq!(
+            engine
+                .picker_snapshot(path)
+                .and_then(|snapshot| snapshot.highlighted),
+            Some(2)
+        );
+
+        let selected = engine
+            .handle(key_pressed(Key::Enter), &[], now)
+            .unwrap_or_else(|| panic!("enter must select the highlighted option"));
+        assert_eq!(selected.outcome, Outcome::set(EngineEvent::Index(2)));
+        assert_eq!(
+            engine.picker_snapshot(path).map(|snapshot| snapshot.open),
+            Some(false)
+        );
+
+        for expected in [true, false] {
+            let toggled = engine
+                .handle(key_pressed(Key::Space), &[], now)
+                .unwrap_or_else(|| panic!("space must toggle a focused picker"));
+            assert_eq!(toggled.outcome, Outcome::captured());
+            assert_eq!(
+                engine.picker_snapshot(path).map(|snapshot| snapshot.open),
+                Some(expected)
+            );
+            assert_eq!(
+                engine
+                    .handle(key_released(Key::Space), &[], now)
+                    .map(|emission| emission.outcome),
+                Some(Outcome::captured())
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn picker_toggle_and_commit_repeats_are_inert_until_release_or_blur() {
+        let mut engine = Engine::default();
+        let path = "library/scope";
+        let now = Instant::now();
+        let anchor = target(path, 50.0, 50.0);
+        engine.reconcile([Descriptor::picker(path.to_owned(), 2, Some(0))]);
+        let _ = engine.handle(Input::PointerDown, &[anchor], now);
+
+        let selected = engine
+            .handle(key_pressed(Key::Enter), &[], now)
+            .unwrap_or_else(|| panic!("the first Enter must commit the highlighted option"));
+        assert_eq!(selected.outcome, Outcome::set(EngineEvent::Index(0)));
+        let repeated = engine
+            .handle(key_pressed(Key::Enter), &[], now)
+            .unwrap_or_else(|| panic!("the repeated Enter must remain owned"));
+        assert_eq!(repeated.outcome, Outcome::captured());
+        assert_eq!(
+            engine.picker_snapshot(path).map(|snapshot| snapshot.open),
+            Some(false)
+        );
+
+        let _ = engine.handle(key_released(Key::Enter), &[], now);
+        let _ = engine.handle(key_pressed(Key::Space), &[], now);
+        let _ = engine.handle(key_pressed(Key::Space), &[], now);
+        assert_eq!(
+            engine.picker_snapshot(path).map(|snapshot| snapshot.open),
+            Some(true)
+        );
+
+        let _ = engine.handle(Input::PointerDown, &[target(path, 150.0, 150.0)], now);
+        let _ = engine.handle(Input::PointerDown, &[anchor], now);
+        let selected = engine
+            .handle(key_pressed(Key::Enter), &[], now)
+            .unwrap_or_else(|| panic!("blur must release retained key-down state"));
+        assert_eq!(selected.outcome, Outcome::set(EngineEvent::Index(0)));
+    }
+
+    #[kithara::test]
+    fn picker_focus_survives_reorder_and_layout_swap_but_not_removal() {
+        let mut engine = Engine::default();
+        let path = "library/scope";
+        let other = "library/action";
+        let now = Instant::now();
+        engine.reconcile([
+            Descriptor::activation(other.to_owned()),
+            Descriptor::picker(path.to_owned(), 2, Some(0)),
+        ]);
+        let _ = engine.handle(
+            Input::PointerDown,
+            &[target(other, 150.0, 150.0), target(path, 50.0, 50.0)],
+            now,
+        );
+        let _ = engine.handle(key_pressed(Key::Escape), &[target(path, 50.0, 50.0)], now);
+
+        engine.reconcile([
+            Descriptor::picker(path.to_owned(), 2, Some(0)),
+            Descriptor::activation(other.to_owned()),
+        ]);
+        let opened = engine.handle(
+            key_pressed(Key::Enter),
+            &[target(path, 25.0, 25.0), target(other, 75.0, 75.0)],
+            now,
+        );
+        assert_eq!(
+            opened.map(|emission| emission.outcome),
+            Some(Outcome::captured())
+        );
+        assert_eq!(
+            engine.picker_snapshot(path).map(|snapshot| snapshot.open),
+            Some(true)
+        );
+
+        engine.reconcile([Descriptor::activation(other.to_owned())]);
+        engine.reconcile([
+            Descriptor::picker(path.to_owned(), 2, Some(0)),
+            Descriptor::activation(other.to_owned()),
+        ]);
+        assert!(
+            engine
+                .handle(key_pressed(Key::Enter), &[target(path, 50.0, 50.0)], now)
+                .is_none(),
+            "removing the focused path must clear focus before it is re-added"
+        );
+        assert_eq!(
+            engine.picker_snapshot(path).map(|snapshot| snapshot.open),
+            Some(false)
+        );
+    }
+
+    #[kithara::test]
+    fn outside_pointer_press_clears_picker_focus() {
+        let mut engine = Engine::default();
+        let path = "library/scope";
+        let now = Instant::now();
+        engine.reconcile([Descriptor::picker(path.to_owned(), 2, Some(0))]);
+        let _ = engine.handle(Input::PointerDown, &[target(path, 50.0, 50.0)], now);
+        let _ = engine.handle(key_pressed(Key::Escape), &[target(path, 50.0, 50.0)], now);
+
+        assert!(
+            engine
+                .handle(Input::PointerDown, &[target(path, 150.0, 150.0)], now)
+                .is_none()
+        );
+        assert!(
+            engine
+                .handle(key_pressed(Key::Enter), &[target(path, 50.0, 50.0)], now)
+                .is_none()
+        );
+        assert_eq!(
+            engine.picker_snapshot(path).map(|snapshot| snapshot.open),
+            Some(false)
+        );
+    }
+
+    #[kithara::test]
+    fn pointer_capture_and_keyboard_focus_are_independent() {
+        let mut engine = Engine::default();
+        let picker = "library/scope";
+        let knob = "studio/gain";
+        let now = Instant::now();
+        engine.reconcile([
+            Descriptor::picker(picker.to_owned(), 2, Some(0)),
+            Descriptor::knob(knob.to_owned(), 0.5, 100.0, 0.1),
+        ]);
+        let _ = engine.handle(Input::PointerDown, &[target(knob, 50.0, 50.0)], now);
+        assert!(engine.captures(knob));
+
+        let _ = engine.handle(
+            Input::PointerDown,
+            &[target(knob, 150.0, 150.0), target(picker, 50.0, 50.0)],
+            now,
+        );
+        let opened = engine
+            .handle(
+                key_pressed(Key::Enter),
+                &[target(knob, 150.0, 150.0), target(picker, 50.0, 50.0)],
+                now,
+            )
+            .unwrap_or_else(|| panic!("keyboard focus must route before pointer capture"));
+        assert_eq!(opened.path, picker);
+        assert_eq!(opened.outcome, Outcome::captured());
+        assert!(engine.captures(knob));
+
+        let _ = engine.handle(Input::PointerUp, &[target(knob, 150.0, 150.0)], now);
+        assert!(!engine.captures_pointer());
+        let closed = engine
+            .handle(key_pressed(Key::Escape), &[target(picker, 50.0, 50.0)], now)
+            .unwrap_or_else(|| panic!("releasing capture must not change focus"));
+        assert_eq!(closed.path, picker);
+        assert_eq!(closed.outcome, Outcome::captured());
+    }
+
+    #[kithara::test]
+    fn picker_pointer_hover_select_and_dismiss_keep_committed_value_silent() {
+        let mut engine = Engine::default();
+        let path = "library/scope";
+        let now = Instant::now();
+        engine.reconcile([Descriptor::picker(path.to_owned(), 4, Some(1))]);
+        let anchor = target(path, 50.0, 50.0);
+        let option = item_target(path, 3, 50.0, 50.0);
+        let _ = engine.handle(Input::PointerDown, &[anchor], now);
+
+        let hovered = engine
+            .handle(
+                Input::PointerMoved {
+                    at: Pt { x: 50.0, y: 50.0 },
+                },
+                &[option],
+                now,
+            )
+            .unwrap_or_else(|| panic!("moving over an open option must be consumed"));
+        assert_eq!(hovered.outcome, Outcome::captured());
+        assert_eq!(
+            engine
+                .picker_snapshot(path)
+                .and_then(|snapshot| snapshot.highlighted),
+            Some(3)
+        );
+
+        let selected = engine
+            .handle(Input::PointerDown, &[option], now)
+            .unwrap_or_else(|| panic!("pressing an open option must select it"));
+        assert_eq!(selected.outcome, Outcome::set(EngineEvent::Index(3)));
+        let _ = engine.handle(Input::PointerDown, &[anchor], now);
+        let dismissed = engine
+            .handle(Input::PointerDown, &[target(path, 150.0, 150.0)], now)
+            .unwrap_or_else(|| panic!("an outside press must dismiss an open picker"));
+        assert_eq!(dismissed.outcome, Outcome::captured());
+        assert_eq!(dismissed.outcome.value(), None);
+        assert_eq!(
+            engine.picker_snapshot(path),
+            Some(PickerSnapshot {
+                open: false,
+                highlighted: Some(3),
+            })
+        );
+
+        engine.reconcile([Descriptor::picker(path.to_owned(), 2, Some(1))]);
+        assert_eq!(
+            engine.picker_snapshot(path),
+            Some(PickerSnapshot {
+                open: false,
+                highlighted: Some(1),
+            })
+        );
+    }
+
+    #[kithara::test]
+    fn focused_picker_consumes_owned_shortcuts_and_releases_only() {
+        let mut engine = Engine::default();
+        let path = "library/scope";
+        let now = Instant::now();
+        let target = target(path, 50.0, 50.0);
+        engine.reconcile([Descriptor::picker(path.to_owned(), 2, Some(0))]);
+
+        for key in [Key::Delete, Key::Backspace] {
+            assert!(
+                engine.handle(key_pressed(key), &[target], now).is_none(),
+                "an unfocused picker must not consume {key:?}"
+            );
+        }
+        let _ = engine.handle(Input::PointerDown, &[target], now);
+        for key in [
+            Key::ArrowDown,
+            Key::ArrowUp,
+            Key::Backspace,
+            Key::Delete,
+            Key::Enter,
+            Key::Escape,
+            Key::Space,
+        ] {
+            let emission = engine
+                .handle(key_released(key), &[target], now)
+                .unwrap_or_else(|| panic!("a focused picker must consume the {key:?} release"));
+            assert_eq!(emission.outcome, Outcome::captured());
+        }
+        for key in [Key::Delete, Key::Backspace] {
+            for input in [key_pressed(key), key_released(key)] {
+                let emission = engine
+                    .handle(input, &[target], now)
+                    .unwrap_or_else(|| panic!("a focused picker must consume {key:?}"));
+                assert_eq!(emission.outcome, Outcome::captured());
+                assert_eq!(emission.outcome.value(), None);
+            }
+        }
+        assert!(
+            engine
+                .handle(key_pressed(Key::Character("x")), &[target], now)
+                .is_none()
+        );
+        assert!(
+            engine
+                .handle(key_pressed(Key::Other), &[target], now)
+                .is_none()
+        );
+
+        let escaped = engine
+            .handle(key_pressed(Key::Escape), &[target], now)
+            .unwrap_or_else(|| panic!("escape must close a focused picker"));
+        assert_eq!(escaped.outcome, Outcome::captured());
+        assert_eq!(escaped.outcome.value(), None);
+        assert_eq!(
+            engine.picker_snapshot(path).map(|snapshot| snapshot.open),
+            Some(false)
+        );
+    }
+
+    #[kithara::test]
+    fn picker_reconcile_retains_open_state_and_clamps_highlight() {
+        let mut engine = Engine::default();
+        let path = "library/scope";
+        let now = Instant::now();
+        engine.reconcile([Descriptor::picker(path.to_owned(), 4, Some(0))]);
+        let _ = engine.handle(Input::PointerDown, &[target(path, 50.0, 50.0)], now);
+        let _ = engine.handle(
+            Input::PointerMoved {
+                at: Pt { x: 50.0, y: 50.0 },
+            },
+            &[item_target(path, 3, 50.0, 50.0)],
+            now,
+        );
+
+        engine.reconcile([Descriptor::picker(path.to_owned(), 2, Some(1))]);
+
+        assert_eq!(
+            engine.picker_snapshot(path),
+            Some(PickerSnapshot {
+                open: true,
+                highlighted: Some(1),
+            })
+        );
+    }
+
+    #[kithara::test]
+    fn picker_routes_past_later_option_misses_to_the_hit_option_and_anchor() {
+        let mut engine = Engine::default();
+        let path = "library/scope";
+        let now = Instant::now();
+        engine.reconcile([Descriptor::picker(path.to_owned(), 3, Some(0))]);
+
+        for (index, pointer_y) in [(0, 30.0), (1, 50.0)] {
+            let anchor_targets = [
+                picker_target(path, None, 10.0, 0.0),
+                picker_target(path, Some(0), 10.0, 20.0),
+                picker_target(path, Some(1), 10.0, 40.0),
+                picker_target(path, Some(2), 10.0, 60.0),
+            ];
+            let _ = engine.handle(Input::PointerDown, &anchor_targets, now);
+            assert_eq!(
+                engine.picker_snapshot(path).map(|snapshot| snapshot.open),
+                Some(true)
+            );
+
+            let option_targets = [
+                picker_target(path, None, pointer_y, 0.0),
+                picker_target(path, Some(0), pointer_y, 20.0),
+                picker_target(path, Some(1), pointer_y, 40.0),
+                picker_target(path, Some(2), pointer_y, 60.0),
+            ];
+            let selected = engine
+                .handle(Input::PointerDown, &option_targets, now)
+                .unwrap_or_else(|| panic!("option {index} must route past later misses"));
+            assert_eq!(selected.outcome, Outcome::set(EngineEvent::Index(index)));
+        }
+
+        let anchor_targets = [
+            picker_target(path, None, 10.0, 0.0),
+            picker_target(path, Some(0), 10.0, 20.0),
+            picker_target(path, Some(1), 10.0, 40.0),
+            picker_target(path, Some(2), 10.0, 60.0),
+        ];
+        let _ = engine.handle(Input::PointerDown, &anchor_targets, now);
+        let closed = engine
+            .handle(Input::PointerDown, &anchor_targets, now)
+            .unwrap_or_else(|| panic!("the open anchor must route past option misses"));
+        assert_eq!(closed.outcome, Outcome::captured());
+        assert_eq!(
+            engine.picker_snapshot(path).map(|snapshot| snapshot.open),
+            Some(false)
         );
     }
 }

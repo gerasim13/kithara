@@ -107,13 +107,14 @@ pub(super) fn tree<'a>(
 
 pub(super) fn context_bar<'a>(
     path: &'a str,
-    scope_items: &[InternId],
-    scope: Option<&Binding>,
+    scope: (&[InternId], Option<&Binding>),
     value: Option<&ReadValue<'_>>,
     ui: &'a CompiledUi,
     reads: &dyn Reads,
-    skin: &Skin,
+    skin: &'a Skin,
+    owner: InputOwner,
 ) -> Element<'a, UiEvent> {
+    let (scope_items, scope) = scope;
     let scope_value = scope.and_then(|binding| resolve(reads, binding, ui));
     ContextBar::builder()
         .path(path)
@@ -121,6 +122,7 @@ pub(super) fn context_bar<'a>(
         .maybe_scope_value(scope_value.as_ref())
         .maybe_value(value)
         .skin(skin)
+        .owner(owner)
         .build()
         .view()
 }

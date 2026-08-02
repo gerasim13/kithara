@@ -1,8 +1,13 @@
 use kithara_platform::time::Instant;
 
 use super::{
-    activation::ActivationComponent, crossing::CrossingComponent, item::ItemComponent,
-    scalar::ScalarComponent, scroll::ScrollComponent, segmented::SegmentedComponent,
+    activation::ActivationComponent,
+    crossing::CrossingComponent,
+    item::ItemComponent,
+    picker::{PickerComponent, PickerSnapshot},
+    scalar::ScalarComponent,
+    scroll::ScrollComponent,
+    segmented::SegmentedComponent,
     wave::HeroWaveComponent,
 };
 use crate::{
@@ -22,13 +27,20 @@ pub(super) trait Component {
     fn kind(&self) -> Kind;
     fn handle(
         &mut self,
-        input: Input,
+        input: Input<'_>,
         hit: &Hit,
         index: Option<usize>,
         now: Instant,
     ) -> (Outcome<EngineEvent>, Option<&'static str>);
+    fn handle_key(&mut self, _input: Input<'_>) -> (Outcome<EngineEvent>, Option<&'static str>) {
+        (Outcome::IGNORED, None)
+    }
     fn cursor(&self, hit: &Hit) -> CursorShape;
     fn captures_pointer(&self) -> bool;
+    fn focusable(&self) -> bool {
+        false
+    }
+    fn blur(&mut self) {}
 }
 
 pub(in crate::engine) enum RetainedComponent {
@@ -36,6 +48,7 @@ pub(in crate::engine) enum RetainedComponent {
     Activation(ActivationComponent),
     Crossing(CrossingComponent),
     Segmented(SegmentedComponent),
+    Picker(PickerComponent),
     Scroll(ScrollComponent),
     Item(ItemComponent),
     HeroWave(HeroWaveComponent),
@@ -53,6 +66,9 @@ impl RetainedComponent {
             }
             (Self::Scroll(component), Self::Scroll(next)) => {
                 Self::Scroll(component.reconcile(next))
+            }
+            (Self::Picker(component), Self::Picker(next)) => {
+                Self::Picker(component.reconcile(next))
             }
             (Self::Item(component), Self::Item(next)) => Self::Item(component.reconcile(next)),
             (Self::Crossing(component), Self::Crossing(_)) => Self::Crossing(component),
@@ -85,7 +101,7 @@ impl RetainedComponent {
 
     pub(in crate::engine) fn handle(
         &mut self,
-        input: Input,
+        input: Input<'_>,
         hit: &Hit,
         index: Option<usize>,
         now: Instant,
@@ -97,8 +113,31 @@ impl RetainedComponent {
         self.component().cursor(hit)
     }
 
+    pub(in crate::engine) fn handle_key(
+        &mut self,
+        input: Input<'_>,
+    ) -> (Outcome<EngineEvent>, Option<&'static str>) {
+        self.component_mut().handle_key(input)
+    }
+
     pub(in crate::engine) fn captures_pointer(&self) -> bool {
         self.component().captures_pointer()
+    }
+
+    pub(in crate::engine) fn focusable(&self) -> bool {
+        self.component().focusable()
+    }
+
+    pub(in crate::engine) fn blur(&mut self) {
+        self.component_mut().blur();
+    }
+
+    pub(in crate::engine) fn picker_snapshot(&self) -> Option<PickerSnapshot> {
+        if let Self::Picker(component) = self {
+            Some(component.snapshot())
+        } else {
+            None
+        }
     }
 
     pub(in crate::engine) fn scroll_offset(&self) -> Option<f32> {
@@ -129,6 +168,7 @@ impl RetainedComponent {
             Self::Activation(component) => component,
             Self::Crossing(component) => component,
             Self::Segmented(component) => component,
+            Self::Picker(component) => component,
             Self::Scroll(component) => component,
             Self::Item(component) => component,
             Self::HeroWave(component) => component,
@@ -141,6 +181,7 @@ impl RetainedComponent {
             Self::Activation(component) => component,
             Self::Crossing(component) => component,
             Self::Segmented(component) => component,
+            Self::Picker(component) => component,
             Self::Scroll(component) => component,
             Self::Item(component) => component,
             Self::HeroWave(component) => component,
@@ -156,6 +197,11 @@ impl From<Descriptor> for RetainedComponent {
             Descriptor::Segmented { path, item_count } => {
                 Self::Segmented(SegmentedComponent::new(path, item_count))
             }
+            Descriptor::Picker {
+                path,
+                item_count,
+                selected,
+            } => Self::Picker(PickerComponent::new(path, item_count, selected)),
             Descriptor::Scroll { path, config } => Self::Scroll(ScrollComponent::new(path, config)),
             Descriptor::Item {
                 target,

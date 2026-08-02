@@ -1,5 +1,3 @@
-use std::ops::Range;
-
 use iced::{
     Element, Event, Length, Rectangle, Renderer, Size, Theme, Vector,
     advanced::{
@@ -11,35 +9,25 @@ use iced::{
     window,
 };
 use kithara_platform::time::Instant;
-use num_traits::cast::AsPrimitive;
 
 use super::{
     geometry::effective_size,
-    read::{read_flag, read_scope, resolve, wave_zoom},
-    track_list::TrackListHost,
+    read::{read_flag, read_scope, resolve},
 };
 use crate::{
     compile::CompiledUi,
-    engine::{Descriptor, Engine, ScrollConfig, Target},
-    expand::{ControlSpec, ExpandedNode},
-    interact::{
-        CursorShape, Hover, Input, ScrollAxis, iced as iced_interact, recognizers::WheelStep,
-    },
-    module::{ChromeStyle, FaderStyle, WaveStyle},
+    engine::{Descriptor, Engine, PickerSnapshot, Target},
+    expand::ExpandedNode,
+    interact::{Input, ScrollAxis, iced as iced_interact},
+    module::ChromeStyle,
     render::{
-        ReadValue, Reads, Skin, UiEvent,
-        controls::{nav_item_supports_engine_input, supports_engine_input, sync_tree_scroll},
-        engine as engine_event,
-        icons::document_icon,
-        model::derived,
-        sync_track_list_scroll, toggle_module,
+        Reads, Skin, UiEvent,
+        controls::sync_tree_scroll,
+        engine as engine_event, picker_option_bounds, sync_picker, sync_track_list_scroll,
+        toggle_module,
+        tree::control::{HostedControl, append_control_descriptors, append_control_targets},
     },
     size::{Hidden, is_hidden},
-    widgets::{
-        fader::fader_input_layout,
-        track_list::column_layouts,
-        wave::zoom_math::{clamp_zoom, window_bounds, zoom_for_wheel},
-    },
 };
 
 #[derive(Clone, Copy)]
@@ -159,6 +147,14 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
             &state.engine,
             &targets,
         );
+        sync_pickers(
+            &mut self.child,
+            &mut tree.children[0],
+            child_layout,
+            renderer,
+            &self.layout,
+            &state.engine,
+        );
         node
     }
 
@@ -175,8 +171,10 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
     ) {
         let state = tree.state.downcast_mut::<State>();
         let input = iced_interact::input(event);
+        let focus_before = state.engine.focused_path().map(ToOwned::to_owned);
         let item_was_pressed = state.engine.has_pressed_item();
-        let (captured, scroll_captured) = if let Some(input) = input {
+        let picker_before = self.layout.picker_snapshots(&state.engine);
+        let (captured, scroll_captured, picker_pointer_captured) = if let Some(input) = input {
             let targets = self
                 .layout
                 .targets_with_engine(layout, cursor, Some(&state.engine));
@@ -185,6 +183,9 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
                 let scroll_captured = captured
                     && matches!(input, Input::Wheel(_))
                     && state.engine.scroll_offset(&emission.path).is_some();
+                let picker_pointer_captured = captured
+                    && matches!(input, Input::PointerDown | Input::PointerMoved { .. })
+                    && state.engine.picker_snapshot(&emission.path).is_some();
                 let action = self.layout.header_module(&emission.path).map_or_else(
                     || engine_event(&emission.path, emission.child, emission.outcome),
                     |module| toggle_module(module, emission.outcome.map(|_| ())),
@@ -196,13 +197,24 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
                         shell.publish(message);
                     }
                 }
-                (captured, scroll_captured)
+                (captured, scroll_captured, picker_pointer_captured)
             } else {
-                (false, false)
+                (false, false, false)
             }
         } else {
-            (false, false)
+            (false, false, false)
         };
+        if state.engine.focused_path().is_some()
+            && focus_before.as_deref() != state.engine.focused_path()
+        {
+            let mut unfocus = widget::operation::focusable::unfocus();
+            self.child.as_widget_mut().operate(
+                &mut tree.children[0],
+                layout,
+                renderer,
+                &mut unfocus,
+            );
+        }
         if !captured {
             self.child.as_widget_mut().update(
                 &mut tree.children[0],
@@ -216,7 +228,19 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
             );
         }
         let item_projection_changed = item_was_pressed || state.engine.has_pressed_item();
-        if scroll_captured || item_projection_changed {
+        let picker_after = self.layout.picker_snapshots(&state.engine);
+        let picker_projection_changed = picker_before != picker_after;
+        let picker_overlay_needs_rebuild = captured
+            && matches!(
+                input,
+                Some(Input::KeyPressed { .. } | Input::KeyReleased { .. })
+            )
+            && picker_after.iter().any(|(_, snapshot)| snapshot.open);
+        if scroll_captured
+            || item_projection_changed
+            || picker_projection_changed
+            || picker_overlay_needs_rebuild
+        {
             let targets = self.layout.targets_with_engine(
                 layout,
                 mouse::Cursor::Unavailable,
@@ -230,9 +254,28 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
                 &state.engine,
                 &targets,
             );
+            if picker_projection_changed {
+                sync_pickers(
+                    &mut self.child,
+                    &mut tree.children[0],
+                    layout,
+                    renderer,
+                    &self.layout,
+                    &state.engine,
+                );
+            }
+            if picker_projection_changed || picker_overlay_needs_rebuild {
+                shell.invalidate_layout();
+            }
             shell.request_redraw();
         }
-        if input.is_some() && (scroll_captured || state.engine.captures_pointer()) {
+        if captures_event(
+            input,
+            captured,
+            scroll_captured,
+            picker_pointer_captured,
+            state.engine.captures_pointer(),
+        ) {
             shell.capture_event();
         }
 
@@ -361,6 +404,25 @@ fn sync_scrolls(
     }
 }
 
+fn sync_pickers(
+    child: &mut Element<'_, UiEvent>,
+    tree: &mut Tree,
+    layout: Layout<'_>,
+    renderer: &Renderer,
+    layout_tree: &HostedLayout,
+    engine: &Engine,
+) {
+    for (path, _, _) in layout_tree.pickers() {
+        let Some(snapshot) = engine.picker_snapshot(path) else {
+            continue;
+        };
+        let mut sync = sync_picker(path, snapshot);
+        child
+            .as_widget_mut()
+            .operate(tree, layout, renderer, &mut sync);
+    }
+}
+
 fn interaction(
     engine: &Engine,
     layout_tree: &HostedLayout,
@@ -391,6 +453,31 @@ fn hovered_control<'a>(targets: &[Target<'a>]) -> Option<&'a str> {
         .rev()
         .find(|target| target.hit.over())
         .map(|target| target.path)
+}
+
+fn captures_event(
+    input: Option<Input<'_>>,
+    answered: bool,
+    scroll_answered: bool,
+    picker_pointer_answered: bool,
+    pointer_captured: bool,
+) -> bool {
+    let keyboard_answered = answered
+        && matches!(
+            input,
+            Some(Input::KeyPressed { .. } | Input::KeyReleased { .. })
+        );
+    let pointer_retained = pointer_captured
+        && matches!(
+            input,
+            Some(
+                Input::PointerDown
+                    | Input::PointerMoved { .. }
+                    | Input::PointerLeft
+                    | Input::PointerUp
+            )
+        );
+    scroll_answered || keyboard_answered || picker_pointer_answered || pointer_retained
 }
 
 enum HostedLayout {
@@ -530,7 +617,94 @@ impl HostedLayout {
     ) -> Vec<Target<'a>> {
         let mut targets = Vec::new();
         self.append_targets(layout, cursor, engine, &mut targets);
+        if let Some(engine) = engine {
+            self.append_open_picker_targets(engine, cursor, &mut targets);
+        }
         targets
+    }
+
+    fn append_open_picker_targets<'a>(
+        &'a self,
+        engine: &Engine,
+        cursor: mouse::Cursor,
+        targets: &mut Vec<Target<'a>>,
+    ) {
+        for (path, item_count, item_height) in self.pickers() {
+            if !engine
+                .picker_snapshot(path)
+                .is_some_and(|snapshot| snapshot.open)
+            {
+                continue;
+            }
+            let Some(position) = targets
+                .iter()
+                .position(|target| target.path == path && target.index.is_none())
+            else {
+                continue;
+            };
+            let anchor = targets.remove(position);
+            let area = anchor.hit.area();
+            targets.push(anchor);
+            for index in 0..item_count {
+                let bounds = picker_option_bounds(area, item_height, index);
+                targets.push(Target::item(
+                    path,
+                    iced_interact::hit(
+                        Rectangle {
+                            x: bounds.x,
+                            y: bounds.y,
+                            width: bounds.w,
+                            height: bounds.h,
+                        },
+                        cursor,
+                    ),
+                    index,
+                ));
+            }
+        }
+    }
+
+    fn pickers(&self) -> Vec<(&str, usize, f32)> {
+        let mut pickers = Vec::new();
+        self.append_pickers(&mut pickers);
+        pickers
+    }
+
+    fn append_pickers<'a>(&'a self, pickers: &mut Vec<(&'a str, usize, f32)>) {
+        match self {
+            Self::Group { children, .. } | Self::Slot { children, .. } => {
+                for child in children {
+                    child.append_pickers(pickers);
+                }
+            }
+            Self::Control(Some(HostedControl::Picker {
+                path,
+                item_count,
+                item_height,
+                ..
+            }))
+            | Self::SelfMeasuredControl(Some(HostedControl::Picker {
+                path,
+                item_count,
+                item_height,
+                ..
+            })) => pickers.push((path, *item_count, *item_height)),
+            Self::Chrome { .. }
+            | Self::Control(_)
+            | Self::SelfMeasuredControl(_)
+            | Self::Passive => {}
+        }
+    }
+
+    fn picker_snapshots<'a>(&'a self, engine: &Engine) -> Vec<(&'a str, PickerSnapshot)> {
+        self.pickers()
+            .into_iter()
+            .filter_map(|(path, _, _)| {
+                engine
+                    .picker_snapshot(path)
+                    .map(|snapshot| (path, snapshot))
+            })
+            .collect()
     }
 
     fn append_targets<'a>(
@@ -630,307 +804,18 @@ impl HostedLayout {
     }
 }
 
-enum HostedControl {
-    Activation {
-        path: String,
-    },
-    Segmented {
-        path: String,
-        item_count: usize,
-    },
-    Scroll {
-        path: String,
-        config: ScrollConfig,
-    },
-    TrackList(Box<TrackListHost>),
-    Fader {
-        path: String,
-        style: FaderStyle,
-        labelled: bool,
-        drag_step: Option<f64>,
-        wheel: Option<WheelStep>,
-    },
-    Crossfader {
-        path: String,
-    },
-    Knob {
-        path: String,
-        current: f32,
-        drag_range: f32,
-        wheel_step: f32,
-    },
-    StereoMeter {
-        path: String,
-    },
-    VerticalVu {
-        path: String,
-    },
-    Wave {
-        path: String,
-    },
-    HeroWave {
-        path: String,
-        scale: f32,
-        progress: f32,
-        visible: Range<f32>,
-        wheel_positive: f32,
-        wheel_non_positive: f32,
-    },
-}
-
-impl HostedControl {
-    fn new(
-        path: &str,
-        spec: &ControlSpec,
-        value: Option<ReadValue<'_>>,
-        scope: &str,
-        reads: &dyn Reads,
-        ui: &CompiledUi,
-        skin: &Skin,
-    ) -> Option<Self> {
-        match (spec, value) {
-            (ControlSpec::Button { style, icon, .. }, _)
-                if supports_engine_input(*style, icon.map(document_icon)) =>
-            {
-                Some(Self::Activation {
-                    path: path.to_owned(),
-                })
-            }
-            (ControlSpec::NavItem { icon, .. }, Some(ReadValue::Bool(_)))
-                if nav_item_supports_engine_input(document_icon(*icon)) =>
-            {
-                Some(Self::Activation {
-                    path: path.to_owned(),
-                })
-            }
-            (
-                ControlSpec::TabLarge { .. }
-                | ControlSpec::Toggle
-                | ControlSpec::Checkbox
-                | ControlSpec::Chip { .. },
-                Some(ReadValue::Bool(_)),
-            ) => Some(Self::Activation {
-                path: path.to_owned(),
-            }),
-            (ControlSpec::Segmented { items }, Some(ReadValue::Scalar(_))) if !items.is_empty() => {
-                Some(Self::Segmented {
-                    path: path.to_owned(),
-                    item_count: items.len(),
-                })
-            }
-            (ControlSpec::Tree { .. }, Some(ReadValue::Tree(rows))) => Some(Self::Scroll {
-                path: path.to_owned(),
-                config: ScrollConfig::items(
-                    ScrollAxis::Vertical,
-                    AsPrimitive::<f32>::as_(rows.len()) * skin.tree.row_height,
-                    rows.len(),
-                    skin.tree.row_height,
-                    skin.tree.row_height,
-                    skin.tree.scrollbar_margin + skin.tree.scrollbar_width,
-                ),
-            }),
-            (
-                ControlSpec::TrackList {
-                    columns,
-                    columns_state,
-                },
-                Some(ReadValue::TrackList(rows)),
-            ) => {
-                let state = columns_state
-                    .as_ref()
-                    .map(|binding| (ui.resolve(binding.id), read_scope(Some(binding), ui)));
-                let columns = column_layouts(columns, reads, state, skin);
-                Some(Self::TrackList(Box::new(TrackListHost::new(
-                    path,
-                    columns,
-                    rows.len(),
-                    skin,
-                ))))
-            }
-            (ControlSpec::Fader { style, label }, Some(ReadValue::Scalar(value))) => {
-                let (drag_step, wheel) = match style {
-                    FaderStyle::Default => (Some(skin.fader.step), None),
-                    FaderStyle::Volume => (
-                        None,
-                        Some(WheelStep {
-                            value: value.clamp(0.0, 1.0).as_(),
-                            step: skin.fader.step.as_(),
-                        }),
-                    ),
-                };
-                Some(Self::Fader {
-                    path: path.to_owned(),
-                    style: *style,
-                    labelled: label.is_some(),
-                    drag_step,
-                    wheel,
-                })
-            }
-            (ControlSpec::Crossfader { .. }, Some(ReadValue::Scalar(_))) => {
-                Some(Self::Crossfader {
-                    path: path.to_owned(),
-                })
-            }
-            (ControlSpec::Knob { .. }, Some(ReadValue::Scalar(value))) => Some(Self::Knob {
-                path: path.to_owned(),
-                current: value.clamp(0.0, 1.0).as_(),
-                drag_range: skin.knob.drag_range,
-                wheel_step: skin.knob.wheel_step,
-            }),
-            (ControlSpec::VuStereo, Some(ReadValue::Stereo(_))) => Some(Self::StereoMeter {
-                path: path.to_owned(),
-            }),
-            (ControlSpec::VuVertical { .. }, Some(ReadValue::Stereo(_))) => {
-                Some(Self::VerticalVu {
-                    path: path.to_owned(),
-                })
-            }
-            (ControlSpec::Wave { style, zoom, .. }, Some(ReadValue::Waveform(waveform)))
-                if !waveform.buckets.is_empty() =>
-            {
-                if *style != WaveStyle::Hero {
-                    return Some(Self::Wave {
-                        path: path.to_owned(),
-                    });
-                }
-                let progress = match reads.get(&derived("deck.playback.position_normalized", scope))
-                {
-                    Some(ReadValue::Scalar(value)) => value.as_(),
-                    _ => 0.0,
-                };
-                let scale = clamp_zoom(wave_zoom(zoom.as_ref(), reads, ui));
-                Some(Self::HeroWave {
-                    path: path.to_owned(),
-                    scale,
-                    progress,
-                    visible: window_bounds(progress, scale),
-                    wheel_positive: zoom_for_wheel(scale, 1.0),
-                    wheel_non_positive: zoom_for_wheel(scale, 0.0),
-                })
-            }
-            _ => None,
-        }
-    }
-
-    fn path(&self) -> &str {
-        match self {
-            Self::Activation { path }
-            | Self::Segmented { path, .. }
-            | Self::Scroll { path, .. }
-            | Self::Fader { path, .. }
-            | Self::Crossfader { path }
-            | Self::Knob { path, .. }
-            | Self::StereoMeter { path }
-            | Self::VerticalVu { path }
-            | Self::Wave { path }
-            | Self::HeroWave { path, .. } => path,
-            Self::TrackList(track_list) => track_list.path(),
-        }
-    }
-
-    fn input_layout<'a>(&self, layout: Layout<'a>) -> Option<Layout<'a>> {
-        match self {
-            Self::Fader {
-                style, labelled, ..
-            } => fader_input_layout(layout, *style, *labelled),
-            Self::Scroll { .. } => tree_input_layout(layout),
-            _ => Some(layout),
-        }
-    }
-}
-
-fn append_control_targets<'a>(
-    control: &'a HostedControl,
-    layout: Layout<'_>,
-    cursor: mouse::Cursor,
-    engine: Option<&Engine>,
-    targets: &mut Vec<Target<'a>>,
-) {
-    let Some(layout) = control.input_layout(layout) else {
-        return;
-    };
-    if let HostedControl::TrackList(track_list) = control {
-        track_list.append_targets(layout, cursor, engine, targets);
-    } else {
-        targets.push(Target::new(
-            control.path(),
-            iced_interact::hit(layout.bounds(), cursor),
-        ));
-    }
-}
-
-fn append_control_descriptors(control: &HostedControl, descriptors: &mut Vec<Descriptor>) {
-    match control {
-        HostedControl::Activation { path } => {
-            descriptors.push(Descriptor::activation(path.clone()));
-        }
-        HostedControl::Segmented { path, item_count } => {
-            descriptors.push(Descriptor::segmented(path.clone(), *item_count));
-        }
-        HostedControl::Scroll { path, config } => {
-            descriptors.push(Descriptor::scroll(path.clone(), *config));
-        }
-        HostedControl::TrackList(track_list) => track_list.append_descriptors(descriptors),
-        HostedControl::Fader {
-            path,
-            style,
-            drag_step,
-            wheel,
-            ..
-        } => descriptors.push(Descriptor::fader(
-            path.clone(),
-            Hover::new(match style {
-                FaderStyle::Default => CursorShape::Grab,
-                FaderStyle::Volume => CursorShape::ResizeH,
-            }),
-            *drag_step,
-            *wheel,
-        )),
-        HostedControl::Crossfader { path } => {
-            descriptors.push(Descriptor::crossfader(path.clone()));
-        }
-        HostedControl::Knob {
-            path,
-            current,
-            drag_range,
-            wheel_step,
-        } => descriptors.push(Descriptor::knob(
-            path.clone(),
-            *current,
-            *drag_range,
-            *wheel_step,
-        )),
-        HostedControl::StereoMeter { path } => {
-            descriptors.push(Descriptor::stereo_meter(path.clone()));
-        }
-        HostedControl::VerticalVu { path } => {
-            descriptors.push(Descriptor::vertical_vu(path.clone()));
-        }
-        HostedControl::Wave { path } => descriptors.push(Descriptor::wave(path.clone())),
-        HostedControl::HeroWave {
-            path,
-            scale,
-            progress,
-            visible,
-            wheel_positive,
-            wheel_non_positive,
-        } => descriptors.push(Descriptor::hero_wave(
-            path.clone(),
-            *scale,
-            *progress,
-            visible.clone(),
-            *wheel_positive,
-            *wheel_non_positive,
-        )),
-    }
-}
-
-fn tree_input_layout(layout: Layout<'_>) -> Option<Layout<'_>> {
+pub(super) fn tree_input_layout(layout: Layout<'_>) -> Option<Layout<'_>> {
     let panel = layout.children().nth(1)?;
     first_child(panel)
 }
 
-fn group_children(
+pub(super) fn picker_input_layout(layout: Layout<'_>) -> Option<Layout<'_>> {
+    let content = first_child(layout)?;
+    let row = first_child(content)?;
+    row.children().nth(1)
+}
+
+pub(super) fn group_children(
     mut layout: Layout<'_>,
     sized: bool,
     surfaced: bool,
@@ -948,14 +833,14 @@ fn group_children(
     first_child(layout)
 }
 
-fn slot_children(mut layout: Layout<'_>, sized: bool) -> Option<Layout<'_>> {
+pub(super) fn slot_children(mut layout: Layout<'_>, sized: bool) -> Option<Layout<'_>> {
     if sized {
         layout = first_child(layout)?;
     }
     first_child(layout)
 }
 
-fn first_child(layout: Layout<'_>) -> Option<Layout<'_>> {
+pub(super) fn first_child(layout: Layout<'_>) -> Option<Layout<'_>> {
     layout.children().next()
 }
 
@@ -971,23 +856,35 @@ mod tests {
             layout::{Layout, Limits},
             widget::{Tree, tree::Tag},
         },
+        keyboard::{
+            self, Location, Modifiers as IcedModifiers,
+            key::{Code, Named, Physical},
+        },
         mouse::{self, Button, Cursor},
         widget::{Space, container, mouse_area},
     };
     use iced_renderer::fallback::Renderer as FallbackRenderer;
     use iced_tiny_skia::Renderer as TinySkiaRenderer;
     use kithara_test_utils::kithara;
+    use num_traits::cast::AsPrimitive;
 
     use super::*;
     use crate::{
         builtin,
         compile::{CompiledNode, compile},
+        draw::Pt,
+        engine::ScrollConfig,
+        expand::ControlSpec,
         ids::EndpointId,
+        interact::{Key, Modifiers},
+        module::WaveStyle,
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
         render::{
-            ControlAction, DragPhase, InputOwner, StereoLevels, TrackRow, TreeIcon, TreeRow,
-            WaveBucket, WaveformView,
+            ControlAction, DragPhase, InputOwner, ReadValue, StereoLevels, TrackRow, TreeIcon,
+            TreeRow, WaveBucket, WaveformView,
+            controls::{nav_item_supports_engine_input, supports_engine_input},
             fonts::{FONT_BYTES, SANS},
+            icons::document_icon,
         },
         source::{MemResolver, UiConfig},
         widgets::{DropZone, ModuleChrome, Widget, wheel::WheelSurface},
@@ -1095,9 +992,14 @@ mod tests {
                     Some(&self.boolean)
                 }
                 (EndpointCategory::Model, "mock.wave") => Some(&self.waveform),
+                (EndpointCategory::Model, "gallery.tracklist.preset" | "library.scope") => {
+                    Some(&self.scalar)
+                }
+                (EndpointCategory::Model, "library.breadcrumb" | "library.query") => {
+                    Some(&self.text)
+                }
                 (EndpointCategory::Model, "library.visible_tracks") => Some(&self.track_list),
                 (EndpointCategory::Model, "library.tree") => Some(&self.tree),
-                (EndpointCategory::Model, "gallery.tracklist.preset") => Some(&self.scalar),
                 (EndpointCategory::Model, endpoint)
                     if endpoint.starts_with("gallery.tracklist.columns.") =>
                 {
@@ -1148,7 +1050,9 @@ mod tests {
                 "mock.chip.active" => Some(ReadValue::Bool(true)),
                 "mock.chip.inactive" => Some(ReadValue::Bool(false)),
                 "mock.cells.segmented" => Some(ReadValue::Scalar(2.0)),
-                "gallery.tracklist.preset" => Some(ReadValue::Scalar(0.0)),
+                "gallery.tracklist.preset" | "library.scope" => Some(ReadValue::Scalar(0.0)),
+                "library.breadcrumb" => Some(ReadValue::Text("All Tracks")),
+                "library.query" => Some(ReadValue::Text("")),
                 "library.visible_tracks" => Some(ReadValue::TrackList(&FIXTURES.track_rows)),
                 "library.tree" => Some(ReadValue::Tree(&FIXTURES.tree_rows)),
                 "gallery.label.meters" => Some(ReadValue::Text("VU / STEREO / VERTICAL")),
@@ -1237,6 +1141,27 @@ mod tests {
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("tree surface fixture must compile: {error}"))
+    }
+
+    fn compiled_gallery_library() -> CompiledUi {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "library.klayout.ron",
+            r#"(schema: "kithara.layout", version: 1, id: "gallery-library-host",
+                root: Module(instance: "library2", source: "library2.kmodule.ron"))"#,
+        );
+        resolver.insert(
+            "library2.kmodule.ron",
+            include_str!("../../../examples/gallery/assets/modules/tabs/library2.kmodule.ron"),
+        );
+        compile(
+            "library.klayout.ron",
+            &resolver,
+            &Registry::default(),
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap_or_else(|error| panic!("gallery library fixture must compile: {error}"))
     }
 
     fn compiled_gallery_primitive(page: &str, source: &str) -> CompiledUi {
@@ -1470,6 +1395,40 @@ mod tests {
         FallbackRenderer::Secondary(TinySkiaRenderer::new(SANS, Pixels(14.0)))
     }
 
+    fn key_event(key: Named, code: Code) -> Event {
+        Event::Keyboard(keyboard::Event::KeyPressed {
+            key: keyboard::Key::Named(key),
+            modified_key: keyboard::Key::Named(key),
+            physical_key: Physical::Code(code),
+            location: Location::Standard,
+            modifiers: IcedModifiers::empty(),
+            text: None,
+            repeat: false,
+        })
+    }
+
+    fn key_release_event(key: Named, code: Code) -> Event {
+        Event::Keyboard(keyboard::Event::KeyReleased {
+            key: keyboard::Key::Named(key),
+            modified_key: keyboard::Key::Named(key),
+            physical_key: Physical::Code(code),
+            location: Location::Standard,
+            modifiers: IcedModifiers::empty(),
+        })
+    }
+
+    fn character_event(character: &str, code: Code) -> Event {
+        Event::Keyboard(keyboard::Event::KeyPressed {
+            key: keyboard::Key::Character(character.into()),
+            modified_key: keyboard::Key::Character(character.into()),
+            physical_key: Physical::Code(code),
+            location: Location::Standard,
+            modifiers: IcedModifiers::empty(),
+            text: Some(character.into()),
+            repeat: false,
+        })
+    }
+
     fn host_count(tree: &Tree) -> usize {
         usize::from(tree.tag == Tag::of::<State>())
             + tree.children.iter().map(host_count).sum::<usize>()
@@ -1504,6 +1463,9 @@ mod tests {
                 }
                 ControlSpec::Segmented { .. } => {
                     components.push("segmented");
+                }
+                ControlSpec::ContextBar { .. } => {
+                    components.push("picker");
                 }
                 ControlSpec::TrackList { .. } => {
                     components.push("track-list");
@@ -1544,6 +1506,7 @@ mod tests {
             Descriptor::Activation { path }
             | Descriptor::Crossing { path }
             | Descriptor::Segmented { path, .. }
+            | Descriptor::Picker { path, .. }
             | Descriptor::Scroll { path, .. }
             | Descriptor::ColumnDivider { path, .. }
             | Descriptor::Fader { path, .. }
@@ -1797,6 +1760,44 @@ mod tests {
         drop(shell);
 
         assert_eq!(messages, [UiEvent::OpenSettings]);
+    }
+
+    #[kithara::test]
+    fn only_keys_answered_by_focus_are_reported_captured_to_the_host() {
+        for key in [Key::Delete, Key::Backspace] {
+            let input = Some(Input::KeyPressed {
+                key,
+                modifiers: Modifiers::default(),
+            });
+            assert!(
+                captures_event(input, true, false, false, false),
+                "a focused component's answer must suppress the app shortcut"
+            );
+            assert!(
+                !captures_event(input, false, false, false, true),
+                "an unrelated pointer capture must not swallow a key focus declined"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn answered_picker_pointer_input_is_reported_captured_to_the_host() {
+        assert!(captures_event(
+            Some(Input::PointerDown),
+            true,
+            false,
+            true,
+            false,
+        ));
+        assert!(captures_event(
+            Some(Input::PointerMoved {
+                at: Pt { x: 1.0, y: 1.0 },
+            }),
+            true,
+            false,
+            true,
+            false,
+        ));
     }
 
     #[kithara::test]
@@ -2985,6 +2986,393 @@ mod tests {
                 .iter()
                 .all(|descriptor| descriptor_path(descriptor) != "tracklist/table/scroll-x")
         );
+    }
+
+    #[kithara::test]
+    fn gallery_library_hosts_the_picker_and_its_exact_descriptor_inventory() {
+        let ui = compiled_gallery_library();
+        let reads = FixtureReads::default();
+        let CompiledNode::Module {
+            instance,
+            module,
+            root,
+            ..
+        } = &ui.root
+        else {
+            panic!("gallery library fixture root must be a module");
+        };
+
+        assert_eq!(ui.resolve(*module), "gallery-library2-tab");
+        let mut components = Vec::new();
+        claimed_components(root, &mut components);
+        assert_eq!(components, ["scroll", "picker", "track-list"]);
+
+        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full_tree = Tree::new(full.as_widget());
+        assert_eq!(
+            host_count(&full_tree),
+            1,
+            "the library page owns one engine"
+        );
+
+        let renderer = headless_renderer();
+        let viewport = Size::new(900.0, 600.0);
+        let child = super::super::node::render_engine_node(
+            root,
+            &[],
+            *instance,
+            &ui,
+            &reads,
+            builtin::skin(),
+        );
+        let mut element = host(child, root, &ui, &reads, builtin::skin());
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let descriptors = hosted.descriptors();
+        assert_eq!(
+            descriptors.iter().map(descriptor_path).collect::<Vec<_>>(),
+            [
+                "library2/browser",
+                "library2/context",
+                "library2/table/scroll-x",
+                "library2/table",
+                "library2/table/rows",
+                "library2/table/width/index",
+                "library2/table/width/artist",
+                "library2/table/width/bpm",
+                "library2/table/width/key",
+            ]
+        );
+        assert!(matches!(
+            &descriptors[1],
+            Descriptor::Picker {
+                path,
+                item_count: 2,
+                selected: Some(0),
+            } if path == "library2/context"
+        ));
+
+        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        assert_eq!(
+            targets.iter().map(|target| target.path).collect::<Vec<_>>(),
+            [
+                "library2/browser",
+                "library2/context",
+                "library2/table",
+                "library2/table/rows",
+                "library2/table/width/index",
+                "library2/table/width/artist",
+                "library2/table/width/bpm",
+                "library2/table/width/key",
+            ]
+        );
+        let picker = targets
+            .iter()
+            .find(|target| target.path == "library2/context")
+            .unwrap_or_else(|| panic!("the ContextBar picker target must exist"));
+        assert_eq!(picker.hit.area().h, builtin::skin().tree.scope_item_height);
+        assert_eq!(
+            active_descriptors(&hosted, &targets).len(),
+            8,
+            "the non-overflowing table omits only its horizontal scroll descriptor"
+        );
+
+        let area = picker.hit.area();
+        let picker_cursor =
+            Cursor::Available(Point::new(area.x + area.w / 2.0, area.y + area.h / 2.0));
+        let viewport_bounds = Rectangle::with_size(viewport);
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        let browser = targets[0].hit.area();
+        let search_cursor = Cursor::Available(Point::new(
+            browser.x + browser.w / 2.0,
+            browser.y - builtin::skin().tree.search_height / 2.0,
+        ));
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            Layout::new(&node),
+            search_cursor,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &viewport_bounds,
+        );
+        drop(shell);
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &character_event("x", Code::KeyX),
+            Layout::new(&node),
+            Cursor::Unavailable,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &viewport_bounds,
+        );
+        drop(shell);
+        assert_eq!(messages, [UiEvent::LibraryQuery("x".to_owned())]);
+        messages.clear();
+
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            Layout::new(&node),
+            picker_cursor,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &viewport_bounds,
+        );
+        assert!(
+            shell.is_event_captured(),
+            "the engine picker press must not click through its iced host"
+        );
+        drop(shell);
+        assert_eq!(
+            tree.state
+                .downcast_ref::<State>()
+                .engine
+                .picker_snapshot("library2/context"),
+            Some(PickerSnapshot {
+                open: true,
+                highlighted: Some(0),
+            })
+        );
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &character_event("y", Code::KeyY),
+            Layout::new(&node),
+            Cursor::Unavailable,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &viewport_bounds,
+        );
+        drop(shell);
+        assert!(
+            messages.is_empty(),
+            "engine focus must unfocus the iced search editor before ignored text is forwarded"
+        );
+        assert!(
+            element
+                .as_widget_mut()
+                .overlay(
+                    &mut tree,
+                    Layout::new(&node),
+                    &renderer,
+                    &viewport_bounds,
+                    Vector::ZERO,
+                )
+                .is_some(),
+            "the open picker must escape through the host's iced overlay route"
+        );
+
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &key_event(Named::ArrowDown, Code::ArrowDown),
+            Layout::new(&node),
+            Cursor::Unavailable,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &viewport_bounds,
+        );
+        assert!(shell.is_event_captured());
+        drop(shell);
+        assert_eq!(
+            tree.state
+                .downcast_ref::<State>()
+                .engine
+                .picker_snapshot("library2/context")
+                .and_then(|snapshot| snapshot.highlighted),
+            Some(1)
+        );
+
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &key_event(Named::Enter, Code::Enter),
+            Layout::new(&node),
+            Cursor::Unavailable,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &viewport_bounds,
+        );
+        assert!(shell.is_event_captured());
+        drop(shell);
+        assert_eq!(
+            messages,
+            [UiEvent::Control {
+                path: "library2/context".to_owned(),
+                action: ControlAction::SelectIndex(1),
+            }]
+        );
+        assert_eq!(
+            tree.state
+                .downcast_ref::<State>()
+                .engine
+                .picker_snapshot("library2/context")
+                .map(|snapshot| snapshot.open),
+            Some(false)
+        );
+
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &key_release_event(Named::Enter, Code::Enter),
+            Layout::new(&node),
+            Cursor::Unavailable,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &viewport_bounds,
+        );
+        assert!(shell.is_event_captured());
+        drop(shell);
+
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &key_event(Named::Enter, Code::Enter),
+            Layout::new(&node),
+            Cursor::Unavailable,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &viewport_bounds,
+        );
+        assert!(shell.is_event_captured());
+        drop(shell);
+        assert_eq!(
+            tree.state
+                .downcast_ref::<State>()
+                .engine
+                .picker_snapshot("library2/context")
+                .map(|snapshot| snapshot.open),
+            Some(true)
+        );
+
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &key_event(Named::Enter, Code::Enter),
+            Layout::new(&node),
+            Cursor::Unavailable,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &viewport_bounds,
+        );
+        assert!(shell.is_event_captured());
+        assert!(
+            shell.is_layout_invalid(),
+            "an inert captured repeat must rebuild iced's cached open overlay"
+        );
+        drop(shell);
+        assert_eq!(
+            tree.state
+                .downcast_ref::<State>()
+                .engine
+                .picker_snapshot("library2/context")
+                .map(|snapshot| snapshot.open),
+            Some(true)
+        );
+
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &key_event(Named::Escape, Code::Escape),
+            Layout::new(&node),
+            Cursor::Unavailable,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &viewport_bounds,
+        );
+        assert!(shell.is_event_captured());
+        drop(shell);
+        assert_eq!(
+            tree.state
+                .downcast_ref::<State>()
+                .engine
+                .picker_snapshot("library2/context")
+                .map(|snapshot| snapshot.open),
+            Some(false)
+        );
+        assert_eq!(
+            messages.len(),
+            1,
+            "closing the picker without selection must publish nothing"
+        );
+
+        for (key, code) in [
+            (Named::Delete, Code::Delete),
+            (Named::Backspace, Code::Backspace),
+        ] {
+            let mut shell = Shell::new(&mut messages);
+            element.as_widget_mut().update(
+                &mut tree,
+                &key_event(key, code),
+                Layout::new(&node),
+                Cursor::Unavailable,
+                &renderer,
+                &mut clipboard,
+                &mut shell,
+                &viewport_bounds,
+            );
+            assert!(
+                shell.is_event_captured(),
+                "the focused picker must suppress the app shortcut"
+            );
+        }
+
+        let browser_cursor = Cursor::Available(Point::new(
+            browser.x + browser.w / 2.0,
+            browser.y + browser.h / 2.0,
+        ));
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            Layout::new(&node),
+            browser_cursor,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &viewport_bounds,
+        );
+        drop(shell);
+        for (key, code) in [
+            (Named::Delete, Code::Delete),
+            (Named::Backspace, Code::Backspace),
+        ] {
+            let mut shell = Shell::new(&mut messages);
+            element.as_widget_mut().update(
+                &mut tree,
+                &key_event(key, code),
+                Layout::new(&node),
+                Cursor::Unavailable,
+                &renderer,
+                &mut clipboard,
+                &mut shell,
+                &viewport_bounds,
+            );
+            assert!(
+                !shell.is_event_captured(),
+                "a key with engine focus elsewhere must reach the app as Ignored"
+            );
+        }
     }
 
     #[kithara::test]

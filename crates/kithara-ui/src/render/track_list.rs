@@ -205,7 +205,7 @@ impl TrackListProgram<'_> {
     fn divider_input(
         &self,
         state: &mut TrackListState,
-        input: Input,
+        input: Input<'_>,
         bounds: Rect,
         point: Option<Pt>,
         origin: Pt,
@@ -246,7 +246,7 @@ impl TrackListProgram<'_> {
     fn row_drag_input(
         &self,
         state: &mut TrackListState,
-        input: Input,
+        input: Input<'_>,
         bounds: Rect,
         point: Option<Pt>,
     ) -> Option<Action<UiEvent>> {

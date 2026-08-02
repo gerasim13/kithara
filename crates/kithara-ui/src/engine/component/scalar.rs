@@ -50,7 +50,7 @@ impl Component for ScalarComponent {
 
     fn handle(
         &mut self,
-        input: Input,
+        input: Input<'_>,
         hit: &Hit,
         _index: Option<usize>,
         now: Instant,
@@ -71,7 +71,7 @@ impl Component for ScalarComponent {
     }
 }
 
-pub(crate) fn scalar_value(input: Input, value: f32, drag_step: Option<f64>) -> f64 {
+pub(crate) fn scalar_value(input: Input<'_>, value: f32, drag_step: Option<f64>) -> f64 {
     let value = f64::from(value);
     if value == 0.0 || value == 1.0 {
         return value;

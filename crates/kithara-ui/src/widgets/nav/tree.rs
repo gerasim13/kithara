@@ -1,19 +1,15 @@
-use std::fmt;
-
 use iced::{
-    Alignment, Background, Border, Element, Length, Padding, Pixels, Shadow, Theme,
+    Alignment, Background, Border, Element, Length, Padding, Pixels, Theme,
     alignment::{Horizontal, Vertical},
     widget::{
-        Row, Space, column, container, container::Style as ContainerStyle, overlay::menu,
-        pick_list, row, text_input, text_input::Style as TextInputStyle,
+        Row, Space, column, container, container::Style as ContainerStyle, row, text_input,
+        text_input::Style as TextInputStyle,
     },
 };
-use num_traits::ToPrimitive;
 
 use crate::{
     render::{
-        ControlAction, Icon, InputOwner, ReadValue, Skin, UiEvent, control_event, fonts,
-        shaped_text, tree_rows,
+        Icon, InputOwner, ReadValue, Skin, UiEvent, fonts, scope_picker, shaped_text, tree_rows,
     },
     widgets::Widget,
 };
@@ -60,10 +56,11 @@ pub(crate) struct ContextBar<'a, 'scope_value, 'value, 'data, 'skin> {
     scope_items: Vec<&'a str>,
     scope_value: Option<&'scope_value ReadValue<'data>>,
     value: Option<&'value ReadValue<'data>>,
+    owner: InputOwner,
     skin: &'skin Skin,
 }
 
-impl<'a> Widget<'a> for ContextBar<'a, '_, '_, '_, '_> {
+impl<'a, 'skin: 'a> Widget<'a> for ContextBar<'a, '_, '_, '_, 'skin> {
     fn view(self) -> Element<'a, UiEvent> {
         let Some(ReadValue::Text(label)) = self.value else {
             return Space::new().into();
@@ -87,6 +84,7 @@ impl<'a> Widget<'a> for ContextBar<'a, '_, '_, '_, '_> {
                     self.scope_items,
                     self.scope_value,
                     self.skin,
+                    self.owner,
                 ))
                 .push(
                     shaped_text("\u{203a}")
@@ -120,84 +118,6 @@ impl<'a> Widget<'a> for ContextBar<'a, '_, '_, '_, '_> {
             .height(Length::Fixed(self.skin.tree.context_height))
             .into()
     }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-struct ScopeOption<'a> {
-    index: usize,
-    label: &'a str,
-}
-
-impl fmt::Display for ScopeOption<'_> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.label)
-    }
-}
-
-fn scope_picker<'a>(
-    path: &'a str,
-    items: Vec<&'a str>,
-    value: Option<&ReadValue<'_>>,
-    skin: &Skin,
-) -> Element<'a, UiEvent> {
-    let options: Vec<_> = items
-        .into_iter()
-        .enumerate()
-        .map(|(index, label)| ScopeOption { index, label })
-        .collect();
-    let last = options.len().saturating_sub(1);
-    let selected = match value {
-        Some(ReadValue::Scalar(value)) => {
-            let index = value.round().to_usize().map_or(0, |index| index.min(last));
-            options.get(index).copied()
-        }
-        _ => None,
-    };
-    let padding_y = ((skin.tree.scope_item_height - skin.tree.scope_text.size) / 2.0).max(0.0);
-    pick_list(options, selected, move |option| {
-        control_event(path, ControlAction::SelectIndex(option.index))
-    })
-    .padding(Padding {
-        top: padding_y,
-        right: skin.tree.scope_padding_x,
-        bottom: padding_y,
-        left: skin.tree.scope_padding_x,
-    })
-    .text_size(skin.tree.scope_text.size)
-    .text_line_height(Pixels(skin.tree.scope_text.size))
-    .font(fonts::mono(skin.tree.scope_text.weight))
-    .handle(pick_list::Handle::Arrow {
-        size: Some(Pixels(skin.tree.scope_chevron_size)),
-    })
-    .style({
-        let background = skin.color(skin.tree.scope_background);
-        let text = skin.color(skin.tree.scope_text_color);
-        let chevron = skin.color(skin.tree.scope_chevron_color);
-        let border = skin.border(skin.tree.scope_frame);
-        move |_theme: &Theme, _status| pick_list::Style {
-            text_color: text,
-            placeholder_color: text,
-            handle_color: chevron,
-            background: Background::Color(background),
-            border,
-        }
-    })
-    .menu_style({
-        let background = skin.color(skin.tree.scope_menu_background);
-        let text = skin.color(skin.tree.scope_menu_text);
-        let selected_background = skin.color(skin.tree.scope_selected_background);
-        let selected_text = skin.color(skin.tree.scope_selected_text);
-        let border = skin.border(skin.tree.scope_menu_frame);
-        move |_theme: &Theme| menu::Style {
-            background: Background::Color(background),
-            border,
-            text_color: text,
-            selected_text_color: selected_text,
-            selected_background: Background::Color(selected_background),
-            shadow: Shadow::default(),
-        }
-    })
-    .into()
 }
 
 fn search_bar(query: &str, skin: &Skin) -> Element<'static, UiEvent> {

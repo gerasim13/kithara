@@ -60,7 +60,7 @@ impl Component for ItemComponent {
 
     fn handle(
         &mut self,
-        input: Input,
+        input: Input<'_>,
         hit: &Hit,
         target_index: Option<usize>,
         _now: Instant,
@@ -92,7 +92,9 @@ impl Component for ItemComponent {
                     Outcome::captured()
                 }
             }),
-            Input::ModifiersChanged(_)
+            Input::KeyPressed { .. }
+            | Input::KeyReleased { .. }
+            | Input::ModifiersChanged(_)
             | Input::PointerDown
             | Input::PointerLeft
             | Input::PointerMoved { .. }

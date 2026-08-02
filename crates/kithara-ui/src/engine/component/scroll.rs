@@ -50,7 +50,7 @@ impl ScrollState {
         self.clamp_offset();
     }
 
-    pub(crate) fn handle(&mut self, input: Input, hit: &Hit) -> Outcome<usize> {
+    pub(crate) fn handle(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<usize> {
         if let Input::Wheel(scroll) = input {
             return self.wheel(scroll, hit);
         }
@@ -158,7 +158,7 @@ impl Component for ScrollComponent {
 
     fn handle(
         &mut self,
-        input: Input,
+        input: Input<'_>,
         hit: &Hit,
         _index: Option<usize>,
         _now: Instant,

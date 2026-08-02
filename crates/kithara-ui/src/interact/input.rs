@@ -1,7 +1,15 @@
 use crate::draw::{Pt, Rect};
 
 #[derive(Clone, Copy)]
-pub(crate) enum Input {
+pub(crate) enum Input<'a> {
+    KeyPressed {
+        key: Key<'a>,
+        modifiers: Modifiers,
+    },
+    KeyReleased {
+        key: Key<'a>,
+        modifiers: Modifiers,
+    },
     ModifiersChanged(Modifiers),
     PointerDown,
     /// `at` is where the host says the pointer went. It answers a different
@@ -18,14 +26,35 @@ pub(crate) enum Input {
     Wheel(Scroll),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Key<'a> {
+    ArrowDown,
+    ArrowUp,
+    Backspace,
+    Delete,
+    Enter,
+    Escape,
+    Space,
+    Character(&'a str),
+    Other,
+}
+
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
 pub(crate) struct Modifiers {
+    alt: bool,
+    control: bool,
+    logo: bool,
     shift: bool,
 }
 
 impl Modifiers {
-    pub(crate) const fn new(shift: bool) -> Self {
-        Self { shift }
+    pub(crate) const fn new(alt: bool, control: bool, logo: bool, shift: bool) -> Self {
+        Self {
+            alt,
+            control,
+            logo,
+            shift,
+        }
     }
 
     pub(crate) const fn shift(self) -> bool {

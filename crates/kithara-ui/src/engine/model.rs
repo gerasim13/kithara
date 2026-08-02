@@ -67,6 +67,7 @@ pub(super) enum Kind {
     Activation,
     Crossing,
     Segmented,
+    Picker,
     Scroll,
     Item,
     ColumnDivider,
@@ -95,6 +96,11 @@ pub(crate) enum Descriptor {
     Segmented {
         path: String,
         item_count: usize,
+    },
+    Picker {
+        path: String,
+        item_count: usize,
+        selected: Option<usize>,
     },
     Scroll {
         path: String,
@@ -153,6 +159,14 @@ impl Descriptor {
 
     pub(crate) fn segmented(path: String, item_count: usize) -> Self {
         Self::Segmented { path, item_count }
+    }
+
+    pub(crate) fn picker(path: String, item_count: usize, selected: Option<usize>) -> Self {
+        Self::Picker {
+            path,
+            item_count,
+            selected,
+        }
     }
 
     pub(crate) fn scroll(path: String, config: ScrollConfig) -> Self {
@@ -242,6 +256,7 @@ impl Descriptor {
             Self::Activation { path }
             | Self::Crossing { path }
             | Self::Segmented { path, .. }
+            | Self::Picker { path, .. }
             | Self::Scroll { path, .. }
             | Self::ColumnDivider { path, .. }
             | Self::Fader { path, .. }
@@ -260,6 +275,7 @@ impl Descriptor {
             Self::Activation { .. } => Kind::Activation,
             Self::Crossing { .. } => Kind::Crossing,
             Self::Segmented { .. } => Kind::Segmented,
+            Self::Picker { .. } => Kind::Picker,
             Self::Scroll { .. } => Kind::Scroll,
             Self::Item { .. } => Kind::Item,
             Self::ColumnDivider { .. } => Kind::ColumnDivider,

@@ -315,72 +315,84 @@ inherent to the iced path being pinned until those text sites are ported.
 
 ## Interaction Ownership
 
-`interact` owns gesture recognition: the pointer, wheel, and modifier-change vocabulary, the gesture
-state machines, their pixel and time constants, and the cursor vocabulary. It imports
+`interact` owns the portable pointer, wheel, key-press, key-release, and modifier vocabulary, the
+gesture state machines, their pixel and time constants, and the cursor vocabulary. It imports
 `draw::{Pt, Rect}` and nothing else from this crate - it does not know what a `UiEvent` is. A scalar
 recognizer answers with an `Outcome<f32>` and a click answers with an `Outcome<()>`, each carrying
 its capture flag. A component widens a recognizer scalar exactly once at its boundary, and
 `EngineEvent::Scalar` carries `f64` from there through `ControlAction::SetScalar`; render event
 publication performs no later widening or narrow round trip. The engine maps the other values into
 `EngineEvent::{Activate, Crossing, Index}` without losing capture. `EngineEvent::Index` carries
-the selected `usize`; the
-stateless segmented component derives it from the click's hit rectangle and item count. An engine
-`Emission` may address one fixed child endpoint, and `render::event` binds the result to the document
-publisher one layer up and in the same file as the `UiEvent` it names, including binding an index to
-`ControlAction::SelectIndex`. The fourth emission kind, `Crossing(bool)`, is retained hover state:
+the selected `usize`; the stateless segmented component derives it from the click's hit rectangle
+and item count. An engine `Emission` may address one fixed child endpoint. `render::event` binds the
+result to the document publisher one layer up and in the same file as the `UiEvent` it names,
+including binding an index to `ControlAction::SelectIndex`. The fourth emission kind,
+`Crossing(bool)`, is retained hover state:
 it observes exactly one entry and one exit for a target boundary, emits nothing for motion within
 the target, and never captures. Its render binding reuses `ControlAction::Drag(DragPhase::Over)`.
 Routing the document event through the recognizer or engine instead would point the base at the
 crate's orchestration layer, and every base peer points strictly downward: `draw` to `text`, `text`
 to `skin`, `solve` to `layout::Axis`.
 
-The retained interaction boundary explicitly names eighteen documents: `studio-deck`,
+The retained interaction boundary explicitly names nineteen documents: `studio-deck`,
 `studio-strip`, `studio-mixer`, `studio-mixer-single`, `studio-overview`,
 `studio-overview-row`, `studio-overview-single`, `gallery-knobs`, `gallery-meters`,
 `gallery-toggles`, `gallery-chips`, `gallery-buttons-tab`, `gallery-cells-tab`,
-`gallery-faders-tab`, `gallery-tracklist-tab`, `gallery-tree-tab`, `gallery-module-tabs`, and
-`gallery-nav`. A direct layout
-module is selected by its compiled
-module ID; expansion records each nested
-include root by structural address and module ID without adding a node wrapper, so the existing
-render-tree shape and layout stay unchanged. The iced host at each selected root keeps one `Engine`
-in widget-tree state while its descriptor snapshot is rebuilt from the current reads on every view.
+`gallery-faders-tab`, `gallery-library2-tab`, `gallery-tracklist-tab`, `gallery-tree-tab`,
+`gallery-module-tabs`, and `gallery-nav`. A direct layout module is selected by its compiled module
+ID. Expansion records each nested include root by structural address and module ID without adding a
+node wrapper, so the existing render-tree shape and layout stay unchanged. The iced host at each
+selected root keeps one `Engine` in widget-tree state while its descriptor snapshot is rebuilt from
+the current reads on every view.
 Reconciliation matches an owned resolved control path plus component kind; it refreshes
 configuration and preserves recognizer state, and never retains an `InternId` across compiled UI
 lifetimes. The ordinary click wave and Hero Wave have distinct descriptor identities. The Hero
 descriptor refreshes its scalar drag, visible window, and wheel answers from current progress and
-zoom on every view. The eighteen module IDs form a named set in the render tree; subtree contents never
-silently opt another document into the engine.
+zoom on every view. The nineteen module IDs form a named set in the render tree; subtree contents
+never silently opt another document into the engine.
+
+Keyboard focus is a second engine slot beside pointer capture, not another interpretation of the
+capture owner. It retains one resolved control path. A pointer press inside a focusable target moves
+focus to that path; a press that lands on no focusable target clears it. Acquiring, transferring, or
+releasing pointer capture never moves focus. `KeyPressed` and `KeyReleased` bypass the pointer holder
+and route only to the focusable component at the focused path. Reconciliation retains that path while
+the component still exists and remains focusable, and clears it when the path disappears instead of
+retargeting by document order or component kind.
 
 The mixer host absorbs the expanded roots of both included strips. Rendering beneath that host
 propagates `InputOwner::Engine`, while only `InputOwner::Leaf` may open a host, so the nested
 `studio-strip` markers cannot open second hosts. The descriptor and target walks recurse through the
 already-expanded rows and columns into both strips. One mixer therefore owns one engine and one
-capture slot for its crossfader, knobs, and VUs; a captured drag in one strip remains exclusive while
-the pointer crosses the other strip.
+pointer-capture slot for its crossfader, knobs, and VUs; a captured drag in one strip remains
+exclusive while the pointer crosses the other strip.
 
-The engine carries six component shapes in one `RetainedComponent` enum. `ScalarComponent` owns
+The engine carries eight component shapes in one `RetainedComponent` enum. `ScalarComponent` owns
 its resolved path, `Kind`, `Scalar`, and `ScalarState`; `ActivationComponent` owns a path, the
 pointer hover, and the stateless `click::on_input` gesture shared by Button, Toggle, and Checkbox;
 `CrossingComponent` owns the previous boundary state and preserves it across reconciliation so a
 view rebuild while still inside cannot publish a second entry;
 `SegmentedComponent` owns a path, item count, pointer hover, and the same stateless click gesture;
+the `ContextBar` picker shape owns the focusable index selection and its open/highlighted projection;
 `ScrollComponent` owns a path and the one mutable scroll offset, retains it across reconciliation,
 and refreshes row count, row height, and viewport extent without notifying the document;
+`ItemComponent` owns one list target, its document publisher, and the pressed row index;
 `HeroWaveComponent` owns modifier and loop state while reusing `Scalar` for the plain drag. A narrow
-`Component` trait gives the router only path, kind, event handling, cursor, and capture-slot state.
-The dispatch exists because activation, segmented selection, and the Hero Wave have emissions or
-state a scalar alone cannot express, not because controls happened to have different names. `Kind`
-belongs to the retained identity, so reconciling a different component shape at the same path
-rebuilds recognizer state and clears capture. One router owns the subtree's sole capture identity:
-the holder receives input exclusively until it releases, otherwise reverse document order chooses
-the topmost non-ignored component. Cursor resolution follows the holder first, then the topmost
-non-default cursor. Hosted leaves the engine claims use paint-only canvas programs; engine events
-cross through `render::event`, so `render::event::control_event` remains the only production
-`UiEvent::Control` constructor. Button was the first activation control whose fill, frame, and label
-or Lucide glyph were all painted by a toolkit-neutral base atom through one `DrawListBuilder`
-instead of by iced; NavItem now owns its background, marker, icon glyph, and label through the same
-seam.
+`Component` trait gives the router only path, kind, event handling, cursor, capture-slot state, and
+whether the component accepts keyboard focus.
+The dispatch exists because activation, segmented and picker selection, and the Hero Wave have
+emissions or state a scalar alone cannot express, not because controls happened to have different
+names. `Kind` belongs to the retained identity, so reconciling a different component shape at the
+same path rebuilds recognizer state and clears capture. One router owns the subtree's sole
+pointer-capture identity and sole keyboard-focus path. The holder receives pointer input
+exclusively until it releases; otherwise reverse document order chooses the topmost non-ignored
+component. Key input uses only the focused path and never the capture identity. Cursor resolution
+follows the pointer holder first, then the topmost non-default cursor. Hosted leaves the engine claims
+use paint-only canvas programs. Engine events cross through `render::event`, so
+`render::event::control_event`
+remains the only production `UiEvent::Control` constructor. Button was the first activation control
+whose fill, frame, and label or Lucide glyph were all painted by a toolkit-neutral base atom through
+one `DrawListBuilder` instead of by iced; NavItem now owns its background, marker, icon glyph, and
+label through the same seam.
 
 The Leaf adapter owns the transient pressed visual while its click recognizer sees the pointer
 gesture. The Engine adapter is paint-only and derives only idle or hovered paint from the cursor;
@@ -388,14 +400,14 @@ the required existing `Descriptor::Activation` is stateless and carries no held 
 second pressed-state channel merely for paint would create the parallel mutable ownership this
 transition forbids.
 
-The interactive `canvas::Program` for a button, nav item, segmented control, fader, crossfader, knob,
-vertical VU, stereo meter, toggle, checkbox, tree, or wave is therefore not gone: `InputOwner` picks the
-paint-only variant for `InputOwner::Engine` only when the host has a matching descriptor, and the
-interactive variant answers everywhere else under `InputOwner::Leaf`. An effective SVG button or
-nav item is one deliberate example: it has no descriptor and remains an iced leaf until its painting
-is ported. Two input paths for one control are a transition, not the design - each disappears when
-its last unhosted site flips, and the pair must not grow a third reader or a second capture slot in
-the meantime.
+The interactive `canvas::Program` for a button, nav item, segmented control, fader, crossfader,
+knob, vertical VU, stereo meter, toggle, checkbox, tree, or wave is therefore not gone: `InputOwner`
+picks the paint-only variant for `InputOwner::Engine` only when the host has a matching descriptor,
+and the interactive variant answers everywhere else under `InputOwner::Leaf`. An effective SVG
+button or nav item is one deliberate example: it has no descriptor and remains an iced leaf until
+its painting is ported. Two input paths for one control are a transition, not the design - each
+disappears when its last unhosted site flips, and the pair must not grow a third reader or a second
+capture slot in the meantime.
 
 The host observes decoded input before its child. An engine emission is bound once; a captured
 outcome suppresses child delivery, while an observed outcome publishes and still forwards the same
@@ -403,8 +415,16 @@ iced event unchanged. This is the drop-zone crossing contract: `Over(true)` once
 `Over(false)` once on exit, no message for motion within the zone, and no capture. Cursor resolution
 follows the same order: a non-default engine shape wins, otherwise the child decides. A hosted
 subtree may therefore contain interactive controls and wheel-catching containers the engine does
-not answer. Modifier changes enter the portable vocabulary so the Hero Wave sees shift state, but
-`KeyPressed` and `KeyReleased` still decode to nothing and touch does not enter this boundary.
+not answer. `KeyPressed` and `KeyReleased` enter the portable vocabulary with their modifiers, and
+modifier changes still reach the Hero Wave's shift state; touch does not enter this boundary. A key
+consumed by the focused component is reported to iced as `Captured`. A declined key, or any key with
+no focused component, remains `Ignored` even while an unrelated pointer gesture owns capture. This
+preserves the app's `Delete` and `Backspace` shortcuts unless the focused control actually consumes
+them. Picker arrows may repeat, while held Enter and Space presses are inert until release or focus
+loss so native key repeat cannot alternate open and commit states. When engine focus is acquired,
+the host unfocuses iced descendants without replaying the press; ignored character or IME events
+therefore cannot edit a previously focused search field behind the popup. Answered picker pointer
+input is also reported as captured to iced, preventing click-through outside the hosted subtree.
 
 Module chrome remains iced-composed during this transition: its header `Row`, panel column, footer,
 and frame stack keep their existing layout ownership until the root flip removes `render/tree`.
@@ -428,9 +448,13 @@ two activations for cue and play, four base-painted chip activations, one segmen
 `item_count: 4`, and four activations for its two toggles and two checkboxes. Its cells, select, and
 status dots remain iced-answered controls, and unanswered input continues unchanged through the
 child.
+`gallery-library2-tab` mounts the engine-owned `ContextBar` scope picker. Its document-level hosted
+inventory is the vertical scroll at `library2/browser`, the picker at `library2/context`, and the
+track-list family at `library2/table`. The picker is not mounted by `gallery-tree-tab`:
 `gallery-tree-tab` has one scroll descriptor at `tree/browser`. Its retained row canvas and offset
-are engine-answered, while its widget-internal search input remains iced-answered; the descriptor
-inventory deliberately does not claim that text editor or the separate iced scope picker.
+are engine-answered, while its widget-internal search input remains iced-answered. Tree search stays
+an iced `text_input`, including its text focus and IME behaviour; moving that editor onto the engine
+belongs to M6b.
 `gallery-faders-tab` has one descriptor kind for both configurations: the default fader has an
 optional drag step, the Volume fader keeps continuous drag plus its own wheel step, and the vertical
 VU keeps its scalar descriptor. The page's telemetry `Scalar` is an inert readout and is not hosted.
@@ -486,7 +510,9 @@ whoever owns the list. It answers `DragEvent::{Started, Dropped}` and `render::e
 substitutes the index, which is why the base never learns what a row is.
 
 Exactly one file, `interact::iced`, names a toolkit. It translates an `iced::Event` into an `Input`,
-builds a `Hit` from bounds and a cursor, and converts a `CursorShape` into `mouse::Interaction`.
+including portable `KeyPressed` and `KeyReleased` values with modifiers, builds a `Hit` from bounds
+and a cursor, and converts a `CursorShape` into `mouse::Interaction`. Key identity therefore enters
+the engine without bringing iced with it.
 `Hit` is constructed separately from event translation on purpose: `mouse_interaction` receives no
 event, so a `Hit` that only fell out of an event would grow a second, unwritten hit-test path.
 `Hit::at` and `Hit::inside` are different questions - a gesture already under way tracks the pointer
@@ -1010,14 +1036,25 @@ patterns, not fallback branches.
 overlay's own layout node is the whole surface with the content column as its single child, so
 `layout.bounds()` means "the popover" in every method and a press on the frame belongs to the menu.
 
-`Widget::overlay` wraps whatever it produces in `overlay::Group`, including a group of one.
+`Anchored::overlay` wraps whatever it produces in `overlay::Group`, including a group of one.
 `overlay::Nested::draw` draws the top-level overlay element inside a layer bounded by that
 element's own layout node. `overlay::Group::layout` returns a node the size of the whole viewport,
 while a bare `Anchored` element is exactly the surface — so its shadow, offset below and blurred
 outward, falls outside the layer. Skipping the `Group` when it holds one child deletes the shadow
 and nothing else.
-`Anchored` declares no overlay index, so its surface takes iced's default; it is the crate's only
-overlay-producing widget.
+`Anchored` declares no overlay index, so its surface takes iced's default.
+
+The engine-owned `ContextBar` scope picker is the crate's second overlay-producing widget, but it
+does not introduce a neutral layer contract. Its base `DrawList` replays in the ordinary canvas and
+therefore remains under the subtree's clip. When the picker is open, its popup `DrawList` replays in
+a fresh iced overlay frame after that subtree draw and clip have completed. The two retained lists
+are separate adapter outputs; no `DrawCmd` escapes a `DrawCmd::Clip`, and the code does not assemble
+a synthetic combined command tree. The Leaf widget state contains its local engine; the Engine
+variant contains only the host-projected picker snapshot, so there is no dormant second mutable
+engine. An answered base-tree key invalidates layout while the popup is open, including when its
+retained snapshot is unchanged, because iced clears its cached overlay on base capture and rebuilds
+it only during revalidation. General retained layering and cross-backend base/popup ordering belong
+to the M7 root flip.
 
 Dismissal fires only on a mouse press with the cursor outside the surface, or on Escape — never on
 a release, a move or a scroll. The press that opens the menu is captured while the popover is
@@ -1141,9 +1178,8 @@ offset. A wrong-axis delta or travel beyond either boundary returns `Ignored`, s
 to the next outer engine target and then unchanged to an unported iced ancestor. Consequently a
 movable vertical track-list body passes a horizontal wheel to its conditional horizontal parent;
 at the bottom a further downward wheel is ignored while an upward wheel is still consumed, and the
-same two-direction boundary rule holds for the horizontal axis. Search text editing and the scope
-pick-list remain iced-owned until their popup and text-input slice; hosting the row viewport does
-not intercept their keyboard input.
+same two-direction boundary rule holds for the horizontal axis. Search text editing remains
+iced-owned until M6b; hosting the row viewport does not intercept its keyboard or IME input.
 
 ## Application Consumer
 

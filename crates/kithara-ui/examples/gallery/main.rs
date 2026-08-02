@@ -681,6 +681,20 @@ mod tests {
     }
 
     #[kithara::test]
+    fn the_hosted_library_keeps_its_exact_descriptor_inventory() {
+        assert_hosted_page_claims(
+            Tab::Library2,
+            "library",
+            |path| path.starts_with("library2/"),
+            &[
+                ("library2/browser", "scroll"),
+                ("library2/context", "picker"),
+                ("library2/table", "track-list"),
+            ],
+        );
+    }
+
+    #[kithara::test]
     fn the_hosted_track_list_keeps_its_descriptor_backed_controls() {
         assert_hosted_page_claims(
             Tab::Tracklist,
@@ -765,6 +779,7 @@ mod tests {
             | ControlSpec::Toggle
             | ControlSpec::Checkbox
             | ControlSpec::Chip { .. } => Some("activation"),
+            ControlSpec::ContextBar { .. } => Some("picker"),
             ControlSpec::Crossfader { .. } => Some("crossfader"),
             ControlSpec::Fader { .. } => Some("fader"),
             ControlSpec::Knob { .. } => Some("knob"),

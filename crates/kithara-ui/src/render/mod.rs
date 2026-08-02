@@ -5,6 +5,7 @@ pub mod fonts;
 mod icons;
 pub mod model;
 mod owner;
+mod picker;
 pub mod skin;
 pub mod theme;
 mod track_list;
@@ -23,6 +24,7 @@ pub use model::{
     ReadValue, Reads, StereoLevels, TrackRow, TreeIcon, TreeRow, WaveBucket, WaveformView,
 };
 pub(crate) use owner::InputOwner;
+pub(crate) use picker::{picker_option_bounds, picker_selected_index, scope_picker, sync_picker};
 pub use skin::Skin;
 pub(crate) use track_list::{sync_track_list_scroll, track_list};
 pub use typography::shaped_text;

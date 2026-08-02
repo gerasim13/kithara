@@ -9,6 +9,7 @@ use crate::interact::{CursorShape, Input, Outcome};
 #[derive(Default)]
 pub(super) struct Router {
     capture: Option<Identity>,
+    focus: Option<String>,
 }
 
 impl Router {
@@ -22,6 +23,10 @@ impl Router {
             .is_some_and(|identity| identity.path == path)
     }
 
+    pub(super) fn focused_path(&self) -> Option<&str> {
+        self.focus.as_deref()
+    }
+
     pub(super) fn reconcile(&mut self, components: &[RetainedComponent]) {
         let missing = self.capture.as_ref().is_some_and(|identity| {
             !components
@@ -31,15 +36,31 @@ impl Router {
         if missing {
             self.capture = None;
         }
+        let missing = self.focus.as_ref().is_some_and(|path| {
+            !components
+                .iter()
+                .any(|component| component.path() == path && component.focusable())
+        });
+        if missing {
+            self.focus = None;
+        }
     }
 
     pub(super) fn handle(
         &mut self,
         components: &mut [RetainedComponent],
-        input: Input,
+        input: Input<'_>,
         targets: &[Target<'_>],
         now: Instant,
     ) -> Option<Emission> {
+        if matches!(input, Input::KeyPressed { .. } | Input::KeyReleased { .. }) {
+            let path = self.focus.as_deref()?;
+            let component = components
+                .iter_mut()
+                .find(|component| component.path() == path && component.focusable())?;
+            let (outcome, child) = component.handle_key(input);
+            return emission(component.event_path().to_owned(), child, outcome);
+        }
         if matches!(input, Input::ModifiersChanged(_)) {
             for target in targets {
                 if let Some(component) = components
@@ -50,6 +71,27 @@ impl Router {
                 }
             }
             return None;
+        }
+        if matches!(input, Input::PointerDown) {
+            let focus = targets.iter().rev().find_map(|target| {
+                if !target.hit.over() {
+                    return None;
+                }
+                components
+                    .iter()
+                    .find(|component| component.path() == target.path && component.focusable())
+                    .map(|component| component.path().to_owned())
+            });
+            if self.focus != focus {
+                if let Some(component) = self.focus.as_deref().and_then(|path| {
+                    components
+                        .iter_mut()
+                        .find(|component| component.path() == path && component.focusable())
+                }) {
+                    component.blur();
+                }
+                self.focus = focus;
+            }
         }
         if let Some(identity) = &self.capture {
             let component_index = components

@@ -1,14 +1,13 @@
-use iced::{
-    Event as IcedEvent, Subscription, Task, Theme, event,
-    event::Status,
-    keyboard::{Event as KeyboardEvent, Key, key::Named},
-    time as iced_time, window,
-};
+use iced::{Subscription, Task, Theme, event, time as iced_time, window};
 use kithara_platform::{sync::Arc, time::Duration};
 
 use super::{
-    deck::DeckUi, frontend::window_settings, message::Message, studio_ui::StudioUi,
-    subscription::subscription_config, theme,
+    deck::DeckUi,
+    frontend::window_settings,
+    message::Message,
+    studio_ui::{StudioUi, deletes_focused_track},
+    subscription::subscription_config,
+    theme,
 };
 use crate::{
     catalog::Catalog,
@@ -112,14 +111,8 @@ impl Kithara {
         );
         subs.push(window::close_requests().map(|_| Message::WindowCloseRequested));
         if cfg.is_keyboard_enabled {
-            subs.push(event::listen_with(|e, status, _window| match e {
-                // Only act on Delete/Backspace the focused widget left
-                // unhandled.
-                IcedEvent::Keyboard(KeyboardEvent::KeyPressed {
-                    key: Key::Named(Named::Delete | Named::Backspace),
-                    ..
-                }) if status == Status::Ignored => Some(Message::DeleteFocusedTrack),
-                _ => None,
+            subs.push(event::listen_with(|event, status, _window| {
+                deletes_focused_track(&event, status).then_some(Message::DeleteFocusedTrack)
             }));
         }
         Subscription::batch(subs)

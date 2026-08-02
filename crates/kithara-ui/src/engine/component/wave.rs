@@ -93,7 +93,7 @@ impl Component for HeroWaveComponent {
 
     fn handle(
         &mut self,
-        input: Input,
+        input: Input<'_>,
         hit: &Hit,
         _index: Option<usize>,
         now: Instant,

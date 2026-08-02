@@ -29,7 +29,12 @@ impl Stepper {
     const STEP_INTERVAL_MS: u128 = 200;
     const DRAG_STEPS_PER_PIXEL: f32 = 0.25;
 
-    pub(crate) fn on_input(&mut self, input: Input, hit: &Hit, now: Instant) -> Outcome<StepEvent> {
+    pub(crate) fn on_input(
+        &mut self,
+        input: Input<'_>,
+        hit: &Hit,
+        now: Instant,
+    ) -> Outcome<StepEvent> {
         match input {
             Input::Wheel(scroll) if hit.over() => {
                 let steps = self.step(scroll, now);
@@ -65,7 +70,11 @@ impl Stepper {
                     Outcome::IGNORED
                 }
             }
-            Input::ModifiersChanged(_) | Input::PointerLeft | Input::Wheel(_) => Outcome::IGNORED,
+            Input::KeyPressed { .. }
+            | Input::KeyReleased { .. }
+            | Input::ModifiersChanged(_)
+            | Input::PointerLeft
+            | Input::Wheel(_) => Outcome::IGNORED,
         }
     }
 
@@ -132,7 +141,7 @@ mod tests {
         at(19.0)
     }
 
-    fn moved(y: f32) -> Input {
+    fn moved(y: f32) -> Input<'static> {
         Input::PointerMoved {
             at: Pt { x: 40.0, y },
         }

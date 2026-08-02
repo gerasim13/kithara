@@ -28,7 +28,7 @@ impl ItemDrag {
     /// press stays a plain click.
     const THRESHOLD: f32 = 4.0;
 
-    pub(crate) fn on_input(&mut self, input: Input, hit: &Hit) -> Outcome<DragEvent> {
+    pub(crate) fn on_input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<DragEvent> {
         match input {
             Input::PointerDown if hit.over() => {
                 *self = Self {
@@ -56,7 +56,9 @@ impl ItemDrag {
                     Outcome::IGNORED
                 }
             }
-            Input::ModifiersChanged(_)
+            Input::KeyPressed { .. }
+            | Input::KeyReleased { .. }
+            | Input::ModifiersChanged(_)
             | Input::PointerDown
             | Input::PointerLeft
             | Input::PointerMoved { .. }
@@ -102,7 +104,7 @@ mod tests {
         Hit::new(None, row())
     }
 
-    fn moved(x: f32) -> Input {
+    fn moved(x: f32) -> Input<'static> {
         Input::PointerMoved {
             at: Pt { x, y: 13.0 },
         }

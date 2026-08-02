@@ -6,11 +6,13 @@ pub(crate) struct Crossing {
 }
 
 impl Crossing {
-    pub(crate) fn on_input(&mut self, input: Input, hit: &Hit) -> Outcome<bool> {
+    pub(crate) fn on_input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<bool> {
         let over = match input {
             Input::PointerMoved { .. } => hit.over(),
             Input::PointerLeft => false,
-            Input::ModifiersChanged(_)
+            Input::KeyPressed { .. }
+            | Input::KeyReleased { .. }
+            | Input::ModifiersChanged(_)
             | Input::PointerDown
             | Input::PointerUp
             | Input::Wheel(_) => return Outcome::IGNORED,
@@ -45,7 +47,7 @@ mod tests {
         )
     }
 
-    fn moved() -> Input {
+    fn moved() -> Input<'static> {
         Input::PointerMoved {
             at: Pt { x: 0.0, y: 0.0 },
         }

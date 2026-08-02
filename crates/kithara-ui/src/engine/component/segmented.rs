@@ -33,7 +33,7 @@ impl Component for SegmentedComponent {
 
     fn handle(
         &mut self,
-        input: Input,
+        input: Input<'_>,
         hit: &Hit,
         _index: Option<usize>,
         _now: Instant,
