@@ -14,11 +14,14 @@ use super::{
     Check, Context,
     derivable_support::{crate_manifest, deletion_range, item_blocks, line_start},
 };
-use crate::common::{
-    fix::{FixOutcome, SourceRewriter, block::BlockRange},
-    parse::{collect_scopes, self_ty_name},
-    violation::Violation,
-    walker::{relative_to, workspace_rs_files_scoped},
+use crate::{
+    common::{
+        fix::{FixOutcome, SourceRewriter, block::BlockRange},
+        parse::{collect_scopes, self_ty_name},
+        violation::Violation,
+        walker::{relative_to, workspace_rs_files_scoped},
+    },
+    idioms::config::DerivableSeverity,
 };
 
 pub(crate) const ID: &str = "derivable_delegation";
@@ -161,8 +164,8 @@ impl Check for DerivableDelegation {
                         )
                     },
                 );
-                violations.push(Violation::warn(
-                    ID,
+                violations.push(emit(
+                    cfg.severity,
                     format!("{rel}:{}:0", candidate.line),
                     detail,
                 ));
@@ -170,6 +173,13 @@ impl Check for DerivableDelegation {
         }
         violations.sort_by(|a, b| a.key.cmp(&b.key));
         Ok(violations)
+    }
+}
+
+fn emit(severity: DerivableSeverity, key: String, message: String) -> Violation {
+    match severity {
+        DerivableSeverity::Warn => Violation::warn(ID, key, message),
+        DerivableSeverity::Deny => Violation::deny(ID, key, message),
     }
 }
 
@@ -1548,6 +1558,7 @@ fn fix_source_with_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{common::violation::Severity, idioms::config::DerivableDelegationConfig};
 
     fn count(source: &str) -> usize {
         count_with_thresholds(source, 2, 2)
@@ -1568,6 +1579,22 @@ mod tests {
             &[],
         )
         .len()
+    }
+
+    fn emitted_severity(severity: DerivableSeverity) -> Severity {
+        emit(severity, String::new(), String::new()).severity
+    }
+
+    #[test]
+    fn severity_is_warn_by_default_and_deny_when_configured() -> Result<()> {
+        let default = DerivableDelegationConfig::default();
+        let omitted: DerivableDelegationConfig = toml::from_str("")?;
+        let denied: DerivableDelegationConfig = toml::from_str(r#"severity = "deny""#)?;
+
+        assert_eq!(emitted_severity(default.severity), Severity::Warn);
+        assert_eq!(emitted_severity(omitted.severity), Severity::Warn);
+        assert_eq!(emitted_severity(denied.severity), Severity::Deny);
+        Ok(())
     }
 
     #[test]

@@ -80,6 +80,14 @@ impl Default for DerivableConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum DerivableSeverity {
+    #[default]
+    Warn,
+    Deny,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DerivableGetterConfig {
@@ -87,6 +95,8 @@ pub(crate) struct DerivableGetterConfig {
     pub(crate) qualified_deref_remaps: Vec<QualifiedDerefRemap>,
     #[serde(default = "default_true")]
     pub(crate) enabled: bool,
+    #[serde(default)]
+    pub(crate) severity: DerivableSeverity,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,6 +118,7 @@ impl Default for DerivableGetterConfig {
         Self {
             enabled: true,
             qualified_deref_remaps: default_qualified_deref_remaps(),
+            severity: DerivableSeverity::Warn,
         }
     }
 }
@@ -123,6 +134,8 @@ pub(crate) struct DerivableDelegationConfig {
     pub(crate) enabled: bool,
     #[serde(default = "default_inherent_delegation_methods")]
     pub(crate) inherent_min_methods: usize,
+    #[serde(default)]
+    pub(crate) severity: DerivableSeverity,
     #[serde(default = "default_trait_delegation_methods")]
     pub(crate) trait_min_methods: usize,
 }
@@ -159,6 +172,7 @@ impl Default for DerivableDelegationConfig {
             inherent_min_methods: default_inherent_delegation_methods(),
             blocking_impl_attrs: default_blocking_impl_attrs(),
             keep_manual_method_attrs: default_keep_manual_method_attrs(),
+            severity: DerivableSeverity::Warn,
         }
     }
 }

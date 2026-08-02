@@ -29,7 +29,7 @@ use crate::{
         violation::Violation,
         walker::{relative_to, workspace_rs_files_scoped},
     },
-    idioms::config::QualifiedDerefRemap,
+    idioms::config::{DerivableSeverity, QualifiedDerefRemap},
 };
 
 pub(crate) const ID: &str = "derivable_getter";
@@ -147,8 +147,8 @@ impl Check for DerivableGetter {
                         )
                     },
                 );
-                violations.push(Violation::warn(
-                    ID,
+                violations.push(emit(
+                    cfg.severity,
                     format!("{rel}:{}:0", finding.line),
                     detail,
                 ));
@@ -156,6 +156,13 @@ impl Check for DerivableGetter {
         }
         violations.sort_by(|a, b| a.key.cmp(&b.key));
         Ok(violations)
+    }
+}
+
+fn emit(severity: DerivableSeverity, key: String, message: String) -> Violation {
+    match severity {
+        DerivableSeverity::Warn => Violation::warn(ID, key, message),
+        DerivableSeverity::Deny => Violation::deny(ID, key, message),
     }
 }
 
@@ -733,8 +740,7 @@ fn plan_method(
 
 fn detect(method: &ImplItemFn) -> Option<DetectedAccessor<'_>> {
     let signature = &method.sig;
-    if signature.constness.is_some()
-        || signature.asyncness.is_some()
+    if signature.asyncness.is_some()
         || matches!(signature.safety, Safety::Unsafe(_))
         || signature.abi.is_some()
         || signature.variadic.is_some()
@@ -1519,6 +1525,7 @@ fn fix_source_with_remaps(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::violation::Severity;
 
     fn fix(source: &str) -> Result<(String, FixOutcome, Vec<Finding>)> {
         fix_source(source, &BTreeSet::new())
@@ -1543,6 +1550,22 @@ mod tests {
         )
         .findings
         .len()
+    }
+
+    fn emitted_severity(severity: DerivableSeverity) -> Severity {
+        emit(severity, String::new(), String::new()).severity
+    }
+
+    #[test]
+    fn severity_is_warn_by_default_and_deny_when_configured() -> Result<()> {
+        let default = DerivableGetterConfig::default();
+        let omitted: DerivableGetterConfig = toml::from_str("")?;
+        let denied: DerivableGetterConfig = toml::from_str(r#"severity = "deny""#)?;
+
+        assert_eq!(emitted_severity(default.severity), Severity::Warn);
+        assert_eq!(emitted_severity(omitted.severity), Severity::Warn);
+        assert_eq!(emitted_severity(denied.severity), Severity::Deny);
+        Ok(())
     }
 
     #[test]
@@ -1664,6 +1687,22 @@ mod tests {
         assert!(outcome.skipped.is_empty());
         assert!(fixed.contains("#[derive(fieldwork::Fieldwork)]"));
         assert!(!fixed.contains("fn count"));
+        Ok(())
+    }
+
+    #[test]
+    fn const_getter_is_detected_and_fixed() -> Result<()> {
+        let source = "struct Foo {\n    count: u64,\n}\nimpl Foo {\n    pub const fn count(&self) -> u64 { self.count }\n}\n";
+
+        assert_eq!(count(source), 1);
+        let (fixed, outcome, findings) = fix(source)?;
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(outcome.changes, ["count"]);
+        assert!(outcome.skipped.is_empty());
+        assert!(fixed.contains("#[derive(fieldwork::Fieldwork)]"));
+        assert!(!fixed.contains("fn count"));
+        syn::parse_file(&fixed)?;
         Ok(())
     }
 
