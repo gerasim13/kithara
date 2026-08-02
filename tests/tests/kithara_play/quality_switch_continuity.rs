@@ -353,6 +353,20 @@ async fn prepare_player(
     }
 }
 
+/// Consume one block and let the modelled playback clock advance by exactly
+/// its duration.
+///
+/// The guard is what puts that advance on the same clock as everything else
+/// this test observes. Fixture delays already burn virtual time
+/// (`release_after_delay`), and the decode worker is a registered pacer, so the
+/// clock only moves once the worker has parked. Without the guard this `sleep`
+/// is a real `tokio` timer — the test macro rewrites time calls in the test
+/// body, not in the helpers it calls — and the consumer then advances at host
+/// speed against a producer advancing at virtual speed. With a one-chunk output
+/// ring that mismatch is audible: a loaded host drains the ring and the feeder
+/// hands out zeros, so the length of the silence is a property of the machine
+/// rather than of the pipeline under test.
+#[kithara::flash(true)]
 async fn render_paced(player: &mut OfflinePlayer, frames: usize) -> Vec<f32> {
     let block = player.render(frames);
     sleep(Duration::from_secs_f64(
