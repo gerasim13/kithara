@@ -2,7 +2,7 @@ use kithara_platform::time::Instant;
 
 use super::{
     activation::ActivationComponent, crossing::CrossingComponent, scalar::ScalarComponent,
-    segmented::SegmentedComponent, wave::HeroWaveComponent,
+    scroll::ScrollComponent, segmented::SegmentedComponent, wave::HeroWaveComponent,
 };
 use crate::{
     engine::model::{Descriptor, EngineEvent, Identity, Kind},
@@ -30,6 +30,7 @@ pub(in crate::engine) enum RetainedComponent {
     Activation(ActivationComponent),
     Crossing(CrossingComponent),
     Segmented(SegmentedComponent),
+    Scroll(ScrollComponent),
     HeroWave(HeroWaveComponent),
 }
 
@@ -42,6 +43,9 @@ impl RetainedComponent {
             }
             (Self::HeroWave(component), Self::HeroWave(next)) => {
                 Self::HeroWave(component.reconcile(next))
+            }
+            (Self::Scroll(component), Self::Scroll(next)) => {
+                Self::Scroll(component.reconcile(next))
             }
             (Self::Crossing(component), Self::Crossing(_)) => Self::Crossing(component),
             (_, next) => next,
@@ -84,12 +88,27 @@ impl RetainedComponent {
         self.component().captures_pointer()
     }
 
+    pub(in crate::engine) fn scroll_offset(&self) -> Option<f32> {
+        if let Self::Scroll(component) = self {
+            Some(component.offset())
+        } else {
+            None
+        }
+    }
+
+    pub(in crate::engine) fn set_scroll_viewport(&mut self, height: f32) {
+        if let Self::Scroll(component) = self {
+            component.set_viewport(height);
+        }
+    }
+
     fn component(&self) -> &dyn Component {
         match self {
             Self::Scalar(component) => component,
             Self::Activation(component) => component,
             Self::Crossing(component) => component,
             Self::Segmented(component) => component,
+            Self::Scroll(component) => component,
             Self::HeroWave(component) => component,
         }
     }
@@ -100,6 +119,7 @@ impl RetainedComponent {
             Self::Activation(component) => component,
             Self::Crossing(component) => component,
             Self::Segmented(component) => component,
+            Self::Scroll(component) => component,
             Self::HeroWave(component) => component,
         }
     }
@@ -113,6 +133,17 @@ impl From<Descriptor> for RetainedComponent {
             Descriptor::Segmented { path, item_count } => {
                 Self::Segmented(SegmentedComponent::new(path, item_count))
             }
+            Descriptor::Scroll {
+                path,
+                row_count,
+                row_height,
+                row_right_inset,
+            } => Self::Scroll(ScrollComponent::new(
+                path,
+                row_count,
+                row_height,
+                row_right_inset,
+            )),
             Descriptor::Fader {
                 path,
                 scalar,

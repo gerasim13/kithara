@@ -11,7 +11,7 @@ pub mod tree;
 pub mod typography;
 
 pub use address::{Node, Scope, Walk};
-pub(crate) use controls::{ChromeLeaf, chrome_leaf, fader_slider, header_chevron};
+pub(crate) use controls::{ChromeLeaf, chrome_leaf, fader_slider, header_chevron, tree_rows};
 pub use event::{ControlAction, DragPhase, UiEvent, WindowCommand, WindowEdge};
 pub(crate) use event::{
     activate, control_event, drag, engine, index, scalar, scalar_child, step, toggle_module,

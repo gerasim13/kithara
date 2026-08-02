@@ -10,6 +10,7 @@ pub(super) enum Kind {
     Activation,
     Crossing,
     Segmented,
+    Scroll,
     Fader,
     Crossfader,
     Knob,
@@ -35,6 +36,12 @@ pub(crate) enum Descriptor {
     Segmented {
         path: String,
         item_count: usize,
+    },
+    Scroll {
+        path: String,
+        row_count: usize,
+        row_height: f32,
+        row_right_inset: f32,
     },
     Fader {
         path: String,
@@ -80,6 +87,20 @@ impl Descriptor {
 
     pub(crate) fn segmented(path: String, item_count: usize) -> Self {
         Self::Segmented { path, item_count }
+    }
+
+    pub(crate) fn scroll(
+        path: String,
+        row_count: usize,
+        row_height: f32,
+        row_right_inset: f32,
+    ) -> Self {
+        Self::Scroll {
+            path,
+            row_count,
+            row_height,
+            row_right_inset,
+        }
     }
 
     pub(crate) fn fader(
@@ -147,6 +168,7 @@ impl Descriptor {
             Self::Activation { path }
             | Self::Crossing { path }
             | Self::Segmented { path, .. }
+            | Self::Scroll { path, .. }
             | Self::Fader { path, .. }
             | Self::Crossfader { path }
             | Self::Knob { path, .. }
@@ -162,6 +184,7 @@ impl Descriptor {
             Self::Activation { .. } => Kind::Activation,
             Self::Crossing { .. } => Kind::Crossing,
             Self::Segmented { .. } => Kind::Segmented,
+            Self::Scroll { .. } => Kind::Scroll,
             Self::Fader { .. } => Kind::Fader,
             Self::Crossfader { .. } => Kind::Crossfader,
             Self::Knob { .. } => Kind::Knob,

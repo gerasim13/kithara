@@ -21,11 +21,11 @@ use crate::{
     compile::CompiledUi,
     engine::{Descriptor, Engine, Target},
     expand::{ControlSpec, ExpandedNode},
-    interact::{CursorShape, Hover, iced as iced_interact, recognizers::WheelStep},
+    interact::{CursorShape, Hover, Input, iced as iced_interact, recognizers::WheelStep},
     module::{ChromeStyle, FaderStyle, WaveStyle},
     render::{
         ReadValue, Reads, Skin, UiEvent,
-        controls::{nav_item_supports_engine_input, supports_engine_input},
+        controls::{nav_item_supports_engine_input, supports_engine_input, sync_tree_scroll},
         engine as engine_event,
         icons::document_icon,
         model::derived,
@@ -128,9 +128,29 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
         renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        self.child
+        let node = self
+            .child
             .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, limits)
+            .layout(&mut tree.children[0], renderer, limits);
+        let child_layout = Layout::new(&node);
+        let targets = self
+            .layout
+            .targets(child_layout, mouse::Cursor::Unavailable);
+        let state = tree.state.downcast_mut::<State>();
+        for target in &targets {
+            state
+                .engine
+                .set_scroll_viewport(target.path, target.hit.area().h);
+        }
+        sync_scrolls(
+            &mut self.child,
+            &mut tree.children[0],
+            child_layout,
+            renderer,
+            &state.engine,
+            &targets,
+        );
+        node
     }
 
     fn update(
@@ -146,10 +166,13 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
     ) {
         let state = tree.state.downcast_mut::<State>();
         let input = iced_interact::input(event);
-        let captured = if let Some(input) = input {
+        let (captured, scroll_captured) = if let Some(input) = input {
             let targets = self.layout.targets(layout, cursor);
             if let Some(emission) = state.engine.handle(input, &targets, Instant::now()) {
                 let captured = emission.outcome.is_captured();
+                let scroll_captured = captured
+                    && matches!(input, Input::Wheel(_))
+                    && state.engine.scroll_offset(&emission.path).is_some();
                 let action = self.layout.header_module(&emission.path).map_or_else(
                     || engine_event(&emission.path, emission.child, emission.outcome),
                     |module| toggle_module(module, emission.outcome.map(|_| ())),
@@ -161,12 +184,12 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
                         shell.publish(message);
                     }
                 }
-                captured
+                (captured, scroll_captured)
             } else {
-                false
+                (false, false)
             }
         } else {
-            false
+            (false, false)
         };
         if !captured {
             self.child.as_widget_mut().update(
@@ -180,7 +203,19 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
                 viewport,
             );
         }
-        if input.is_some() && state.engine.captures_pointer() {
+        if scroll_captured {
+            let targets = self.layout.targets(layout, mouse::Cursor::Unavailable);
+            sync_scrolls(
+                &mut self.child,
+                &mut tree.children[0],
+                layout,
+                renderer,
+                &state.engine,
+                &targets,
+            );
+            shell.request_redraw();
+        }
+        if input.is_some() && (scroll_captured || state.engine.captures_pointer()) {
             shell.capture_event();
         }
 
@@ -278,6 +313,25 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
             viewport,
             translation,
         )
+    }
+}
+
+fn sync_scrolls(
+    child: &mut Element<'_, UiEvent>,
+    tree: &mut Tree,
+    layout: Layout<'_>,
+    renderer: &Renderer,
+    engine: &Engine,
+    targets: &[Target<'_>],
+) {
+    for target in targets {
+        let Some(offset) = engine.scroll_offset(target.path) else {
+            continue;
+        };
+        let mut sync = sync_tree_scroll(target.path, offset);
+        child
+            .as_widget_mut()
+            .operate(tree, layout, renderer, &mut sync);
     }
 }
 
@@ -544,6 +598,12 @@ enum HostedControl {
         path: String,
         item_count: usize,
     },
+    Scroll {
+        path: String,
+        row_count: usize,
+        row_height: f32,
+        row_right_inset: f32,
+    },
     Fader {
         path: String,
         style: FaderStyle,
@@ -619,6 +679,12 @@ impl HostedControl {
                     item_count: items.len(),
                 })
             }
+            (ControlSpec::Tree { .. }, Some(ReadValue::Tree(rows))) => Some(Self::Scroll {
+                path: path.to_owned(),
+                row_count: rows.len(),
+                row_height: skin.tree.row_height,
+                row_right_inset: skin.tree.scrollbar_margin + skin.tree.scrollbar_width,
+            }),
             (ControlSpec::Fader { style, label }, Some(ReadValue::Scalar(value))) => {
                 let (drag_step, wheel) = match style {
                     FaderStyle::Default => (Some(skin.fader.step), None),
@@ -688,6 +754,7 @@ impl HostedControl {
         match self {
             Self::Activation { path }
             | Self::Segmented { path, .. }
+            | Self::Scroll { path, .. }
             | Self::Fader { path, .. }
             | Self::Crossfader { path }
             | Self::Knob { path, .. }
@@ -703,6 +770,7 @@ impl HostedControl {
             Self::Fader {
                 style, labelled, ..
             } => fader_input_layout(layout, *style, *labelled),
+            Self::Scroll { .. } => tree_input_layout(layout),
             _ => Some(layout),
         }
     }
@@ -715,6 +783,12 @@ impl From<&HostedControl> for Descriptor {
             HostedControl::Segmented { path, item_count } => {
                 Self::segmented(path.clone(), *item_count)
             }
+            HostedControl::Scroll {
+                path,
+                row_count,
+                row_height,
+                row_right_inset,
+            } => Self::scroll(path.clone(), *row_count, *row_height, *row_right_inset),
             HostedControl::Fader {
                 path,
                 style,
@@ -757,6 +831,11 @@ impl From<&HostedControl> for Descriptor {
             ),
         }
     }
+}
+
+fn tree_input_layout(layout: Layout<'_>) -> Option<Layout<'_>> {
+    let panel = layout.children().nth(1)?;
+    first_child(panel)
 }
 
 fn group_children(
@@ -814,25 +893,42 @@ mod tests {
         ids::EndpointId,
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
         render::{
-            ControlAction, DragPhase, InputOwner, StereoLevels, WaveBucket, WaveformView,
+            ControlAction, DragPhase, InputOwner, StereoLevels, TreeIcon, TreeRow, WaveBucket,
+            WaveformView,
             fonts::{FONT_BYTES, SANS},
         },
         source::{MemResolver, UiConfig},
         widgets::{DropZone, ModuleChrome, Widget, wheel::WheelSurface},
     };
 
-    const WAVE_BUCKETS: [WaveBucket; 2] = [
-        WaveBucket {
-            low: 0.2,
-            mid: 0.4,
-            high: 0.6,
-        },
-        WaveBucket {
-            low: 0.3,
-            mid: 0.5,
-            high: 0.7,
-        },
-    ];
+    struct Fixtures {
+        tree_rows: [TreeRow<'static>; 8],
+        wave_buckets: [WaveBucket; 2],
+    }
+
+    const FIXTURES: Fixtures = Fixtures {
+        tree_rows: [TreeRow {
+            depth: 1,
+            label: "Row",
+            icon: TreeIcon::Folder,
+            count: None,
+            expanded: None,
+            selected: false,
+            muted: false,
+        }; 8],
+        wave_buckets: [
+            WaveBucket {
+                low: 0.2,
+                mid: 0.4,
+                high: 0.6,
+            },
+            WaveBucket {
+                low: 0.3,
+                mid: 0.5,
+                high: 0.7,
+            },
+        ],
+    };
 
     struct Registry {
         boolean: EndpointDesc,
@@ -840,6 +936,7 @@ mod tests {
         scoped_scalar: EndpointDesc,
         stereo: EndpointDesc,
         text: EndpointDesc,
+        tree: EndpointDesc,
         waveform: EndpointDesc,
     }
 
@@ -851,6 +948,7 @@ mod tests {
                 scoped_scalar: EndpointDesc::new(ValueKind::Scalar).with_scope("deck"),
                 stereo: EndpointDesc::new(ValueKind::Stereo),
                 text: EndpointDesc::new(ValueKind::Text),
+                tree: EndpointDesc::new(ValueKind::Tree),
                 waveform: EndpointDesc::new(ValueKind::Waveform).with_scope("deck"),
             }
         }
@@ -890,6 +988,7 @@ mod tests {
                     Some(&self.boolean)
                 }
                 (EndpointCategory::Model, "mock.wave") => Some(&self.waveform),
+                (EndpointCategory::Model, "library.tree") => Some(&self.tree),
                 (EndpointCategory::Command, "mock.seek")
                 | (EndpointCategory::Telemetry, "deck.playback.position_normalized") => {
                     Some(&self.scoped_scalar)
@@ -931,6 +1030,7 @@ mod tests {
                 "mock.chip.active" => Some(ReadValue::Bool(true)),
                 "mock.chip.inactive" => Some(ReadValue::Bool(false)),
                 "mock.cells.segmented" => Some(ReadValue::Scalar(2.0)),
+                "library.tree" => Some(ReadValue::Tree(&FIXTURES.tree_rows)),
                 "gallery.label.meters" => Some(ReadValue::Text("VU / STEREO / VERTICAL")),
                 "gallery.label.toggles" => Some(ReadValue::Text("TOGGLES / CHECKBOXES")),
                 "gallery.label.chips" => Some(ReadValue::Text("CHIP")),
@@ -948,7 +1048,7 @@ mod tests {
                     Some(ReadValue::Bool(endpoint == "gallery.module.deck"))
                 }
                 "mock.wave@deck=a" => Some(ReadValue::Waveform(WaveformView {
-                    buckets: &WAVE_BUCKETS,
+                    buckets: &FIXTURES.wave_buckets,
                     beats: &[],
                     downbeats: &[],
                     bpm: None,
@@ -985,6 +1085,34 @@ mod tests {
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("retained host fixture must compile: {error}"))
+    }
+
+    fn compiled_tree_surface() -> CompiledUi {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "tree.klayout.ron",
+            r#"(schema: "kithara.layout", version: 1, id: "tree-surface-host",
+                root: Module(instance: "tree", source: "tree.kmodule.ron"))"#,
+        );
+        resolver.insert(
+            "tree.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "gallery-tree-tab",
+                root: Column(
+                    id: "surface",
+                    write: Parameter(id: "gain"),
+                    children: [
+                        Tree(id: "browser", read: Model(id: "library.tree")),
+                    ],
+                ))"#,
+        );
+        compile(
+            "tree.klayout.ron",
+            &resolver,
+            &Registry::default(),
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap_or_else(|error| panic!("tree surface fixture must compile: {error}"))
     }
 
     fn compiled_gallery_primitive(page: &str, source: &str) -> CompiledUi {
@@ -1254,6 +1382,9 @@ mod tests {
                         "wave"
                     });
                 }
+                ControlSpec::Tree { .. } => {
+                    components.push("scroll");
+                }
                 _ => {}
             },
             ExpandedNode::Popover { .. } | ExpandedNode::Pressable { .. } => {}
@@ -1265,6 +1396,7 @@ mod tests {
             Descriptor::Activation { path }
             | Descriptor::Crossing { path }
             | Descriptor::Segmented { path, .. }
+            | Descriptor::Scroll { path, .. }
             | Descriptor::Fader { path, .. }
             | Descriptor::Crossfader { path }
             | Descriptor::Knob { path, .. }
@@ -1561,6 +1693,199 @@ mod tests {
                 action: ControlAction::StepScalar(1.0),
             }],
             "the unanswered detent must reach the child exactly once"
+        );
+    }
+
+    #[kithara::test]
+    fn tree_boundary_passes_downward_wheel_to_the_iced_surface_but_keeps_upward_wheel() {
+        let ui = compiled_tree_surface();
+        let reads = FixtureReads::default();
+        let CompiledNode::Module {
+            instance,
+            module,
+            root,
+            ..
+        } = &ui.root
+        else {
+            panic!("tree surface fixture root must be a module");
+        };
+        assert_eq!(ui.resolve(*module), "gallery-tree-tab");
+
+        let child = super::super::node::render_engine_node(
+            root,
+            &[],
+            *instance,
+            &ui,
+            &reads,
+            builtin::skin(),
+        );
+        let mut element = host(child, root, &ui, &reads, builtin::skin());
+        let renderer = headless_renderer();
+        let viewport = Size::new(232.0, 120.0);
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let descriptors = hosted.descriptors();
+        assert!(matches!(
+            descriptors.as_slice(),
+            [Descriptor::Scroll {
+                path,
+                row_count: 8,
+                row_height: 24.0,
+                row_right_inset: 6.0,
+            }] if path == "tree/browser"
+        ));
+        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let [target] = targets.as_slice() else {
+            panic!("the tree document must expose exactly its scroll viewport");
+        };
+        let area = target.hit.area();
+        let cursor = Cursor::Available(Point::new(area.x + area.w / 2.0, area.y + area.h / 2.0));
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::WheelScrolled {
+                delta: mouse::ScrollDelta::Pixels {
+                    x: 0.0,
+                    y: -1_000.0,
+                },
+            }),
+            Layout::new(&node),
+            cursor,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert!(shell.is_event_captured());
+        drop(shell);
+        let bottom = tree
+            .state
+            .downcast_ref::<State>()
+            .engine
+            .scroll_offset("tree/browser")
+            .unwrap_or_else(|| panic!("the retained tree must own an offset"));
+        assert!(bottom > 0.0);
+        assert!(
+            messages.is_empty(),
+            "engine-owned scrolling emits no UiEvent"
+        );
+
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::WheelScrolled {
+                delta: mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 },
+            }),
+            Layout::new(&node),
+            cursor,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert!(shell.is_event_captured());
+        drop(shell);
+        assert_eq!(
+            messages,
+            [UiEvent::Control {
+                path: "tree/surface".to_owned(),
+                action: ControlAction::StepScalar(1.0),
+            }],
+            "a downward wheel at the tree boundary must continue to the iced ancestor"
+        );
+
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::WheelScrolled {
+                delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 },
+            }),
+            Layout::new(&node),
+            cursor,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        assert!(shell.is_event_captured());
+        drop(shell);
+        assert_eq!(
+            messages.len(),
+            1,
+            "the movable tree must keep the upward wheel"
+        );
+        assert!(
+            tree.state
+                .downcast_ref::<State>()
+                .engine
+                .scroll_offset("tree/browser")
+                .is_some_and(|offset| offset < bottom)
+        );
+
+        let offset = tree
+            .state
+            .downcast_ref::<State>()
+            .engine
+            .scroll_offset("tree/browser")
+            .unwrap_or_else(|| panic!("the retained offset must survive the upward wheel"));
+        let expected = ((offset + 1.0) / builtin::skin().tree.row_height)
+            .floor()
+            .as_();
+        let row_cursor = Cursor::Available(Point::new(area.x + 20.0, area.y + 1.0));
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            Layout::new(&node),
+            row_cursor,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        drop(shell);
+        assert_eq!(
+            messages.last(),
+            Some(&UiEvent::Control {
+                path: "tree/browser".to_owned(),
+                action: ControlAction::SelectIndex(expected),
+            }),
+            "row activation must keep the existing SelectIndex emission"
+        );
+    }
+
+    #[kithara::test]
+    fn compiled_tree_surface_installs_the_retained_host() {
+        let ui = compiled_tree_surface();
+        let reads = FixtureReads::default();
+        let element = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let tree = Tree::new(element.as_widget());
+
+        fn retained_hosts(tree: &Tree) -> usize {
+            usize::from(tree.tag == Tag::of::<State>())
+                + tree.children.iter().map(retained_hosts).sum::<usize>()
+        }
+
+        fn retained_state(tree: &Tree) -> Option<&State> {
+            if tree.tag == Tag::of::<State>() {
+                return Some(tree.state.downcast_ref::<State>());
+            }
+            tree.children.iter().find_map(retained_state)
+        }
+
+        assert_eq!(retained_hosts(&tree), 1);
+        assert!(
+            retained_state(&tree)
+                .and_then(|state| state.engine.scroll_offset("tree/browser"))
+                .is_some()
         );
     }
 

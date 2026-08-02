@@ -671,6 +671,16 @@ mod tests {
     }
 
     #[kithara::test]
+    fn the_hosted_tree_keeps_its_exact_descriptor_inventory() {
+        assert_hosted_page_claims(
+            Tab::Tree,
+            "tree",
+            |path| path.starts_with("tree/"),
+            &[("tree/browser", "scroll")],
+        );
+    }
+
+    #[kithara::test]
     fn the_hosted_module_tabs_keep_their_descriptor_backed_controls() {
         assert_hosted_page_claims(
             Tab::Modules,
@@ -737,6 +747,7 @@ mod tests {
             ControlSpec::Knob { .. } => Some("knob"),
             ControlSpec::VuStereo => Some("stereo-meter"),
             ControlSpec::VuVertical { .. } => Some("vertical-vu"),
+            ControlSpec::Tree { .. } => Some("scroll"),
             ControlSpec::Wave {
                 style: WaveStyle::Hero,
                 ..

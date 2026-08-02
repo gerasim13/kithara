@@ -109,6 +109,16 @@ deliberately absent. A kithara-bufpool byte budget would not enforce a retained-
 `Pool::track_byte_delta` runs only inside `Pool::acquire`, never when a caller grows a vector with
 `push`. Any future cap must be a builder-side contract, not a pool property.
 
+A viewport is retained as `DrawCmd::Clip { region, list }`: the region and the nested `DrawList`
+travel as one scoped command. The nesting is required by iced, not a convenience chosen by the
+builder. `Frame::with_clip` is iced's only public clipping route and receives a closure that draws
+into a drafted frame; the lower-level draft and paste operations are private, so a neutral
+push/pop pair could not be replayed against that backend. `Backend::clip` therefore receives the
+region and borrowed nested list. The iced backend enters `Frame::with_clip` and recursively
+replays into the drafted frame, while Vello pushes a clip layer, recursively replays into the same
+scene, and pops the layer. The command tree is the clipping acceptance surface; tests assert the
+nested commands rather than backend pixels.
+
 `TickRail` paints through the builder, so the shared atom names no toolkit and `atoms::vu` draws
 entirely through one seam. The button is the production consumer that asked for the rounded
 rectangle: its fill and uniform-radius border stay one native shape in the retained list, iced
@@ -189,6 +199,19 @@ For an embedded segment, the Vello backend still builds a `FontData` per text ca
 already owns the exact `FontData` Parley shaped, so Vello borrows it directly. Caching the embedded
 conversion would mean an exported font-cache type whose only caller is a test, because no shipped
 host encodes a Vello scene yet — the architectural ratchet refuses that, and it is right to.
+
+Vello 0.6 has a known scoped-clip defect tracked as vello#1198: blend layers opened beneath
+`Scene::push_clip_layer`, including those used by COLR/CPAL or bitmap color-glyph drawing, may
+compose incorrectly before the outer clip is popped. Vello 0.9 does not resolve it, and the 0.6 pin
+is independently required by the prospective masonry host. The backend contract remains
+unrestricted: it does not replace the clip with a composition layer, narrow text to outline-only
+faces, or route color text around the clip, because each would introduce a different local
+rendering contract or a forbidden fallback path. Instead every Vello clip whose nested command
+tree contains text with a `GlyphFace::System` segment emits one `tracing::warn!` naming
+`vello#1198` and the affected region. The paint path checks only the face discriminant and never
+parses font tables. All ten embedded faces are plain outlines, and no shipped host encodes a Vello
+scene, so the incorrect case is not production-reachable today; the warning is the contract until
+the upstream fix lands.
 
 `text::FontId` owns family/weight-to-face selection and the face-to-byte mapping. Its tenth value is
 the embedded Lucide face, and `render::fonts` re-exports the same catalog bytes for iced host
@@ -311,11 +334,12 @@ Routing the document event through the recognizer or engine instead would point 
 crate's orchestration layer, and every base peer points strictly downward: `draw` to `text`, `text`
 to `skin`, `solve` to `layout::Axis`.
 
-The retained interaction boundary explicitly names thirteen documents: `studio-deck`, `studio-mixer`,
-`studio-mixer-single`, their nested `studio-strip`, the nested `studio-overview-row`, the
-`gallery-knobs`, `gallery-meters`, and `gallery-toggles` includes inside the Atoms gallery page, and
-the direct `gallery-buttons-tab`, `gallery-cells-tab`, `gallery-faders-tab`,
-`gallery-module-tabs`, and `gallery-nav` modules. A direct layout module is selected by its compiled
+The retained interaction boundary explicitly names seventeen documents: `studio-deck`,
+`studio-strip`, `studio-mixer`, `studio-mixer-single`, `studio-overview`,
+`studio-overview-row`, `studio-overview-single`, `gallery-knobs`, `gallery-meters`,
+`gallery-toggles`, `gallery-chips`, `gallery-buttons-tab`, `gallery-cells-tab`,
+`gallery-faders-tab`, `gallery-tree-tab`, `gallery-module-tabs`, and `gallery-nav`. A direct layout
+module is selected by its compiled
 module ID; expansion records each nested
 include root by structural address and module ID without adding a node wrapper, so the existing
 render-tree shape and layout stay unchanged. The iced host at each selected root keeps one `Engine`
@@ -324,7 +348,7 @@ Reconciliation matches an owned resolved control path plus component kind; it re
 configuration and preserves recognizer state, and never retains an `InternId` across compiled UI
 lifetimes. The ordinary click wave and Hero Wave have distinct descriptor identities. The Hero
 descriptor refreshes its scalar drag, visible window, and wheel answers from current progress and
-zoom on every view. The thirteen module IDs form a named set in the render tree; subtree contents never
+zoom on every view. The seventeen module IDs form a named set in the render tree; subtree contents never
 silently opt another document into the engine.
 
 The mixer host absorbs the expanded roots of both included strips. Rendering beneath that host
@@ -334,12 +358,14 @@ already-expanded rows and columns into both strips. One mixer therefore owns one
 capture slot for its crossfader, knobs, and VUs; a captured drag in one strip remains exclusive while
 the pointer crosses the other strip.
 
-The engine carries five component shapes in one `RetainedComponent` enum. `ScalarComponent` owns
+The engine carries six component shapes in one `RetainedComponent` enum. `ScalarComponent` owns
 its resolved path, `Kind`, `Scalar`, and `ScalarState`; `ActivationComponent` owns a path, the
 pointer hover, and the stateless `click::on_input` gesture shared by Button, Toggle, and Checkbox;
 `CrossingComponent` owns the previous boundary state and preserves it across reconciliation so a
 view rebuild while still inside cannot publish a second entry;
 `SegmentedComponent` owns a path, item count, pointer hover, and the same stateless click gesture;
+`ScrollComponent` owns a path and the one mutable scroll offset, retains it across reconciliation,
+and refreshes row count, row height, and viewport extent without notifying the document;
 `HeroWaveComponent` owns modifier and loop state while reusing `Scalar` for the plain drag. A narrow
 `Component` trait gives the router only path, kind, event handling, cursor, and capture-slot state.
 The dispatch exists because activation, segmented selection, and the Hero Wave have emissions or
@@ -362,7 +388,7 @@ second pressed-state channel merely for paint would create the parallel mutable 
 transition forbids.
 
 The interactive `canvas::Program` for a button, nav item, segmented control, fader, crossfader, knob,
-vertical VU, stereo meter, toggle, checkbox, or wave is therefore not gone: `InputOwner` picks the
+vertical VU, stereo meter, toggle, checkbox, tree, or wave is therefore not gone: `InputOwner` picks the
 paint-only variant for `InputOwner::Engine` only when the host has a matching descriptor, and the
 interactive variant answers everywhere else under `InputOwner::Leaf`. An effective SVG button or
 nav item is one deliberate example: it has no descriptor and remains an iced leaf until its painting
@@ -401,6 +427,9 @@ two activations for cue and play, four base-painted chip activations, one segmen
 `item_count: 4`, and four activations for its two toggles and two checkboxes. Its cells, select, and
 status dots remain iced-answered controls, and unanswered input continues unchanged through the
 child.
+`gallery-tree-tab` has one scroll descriptor at `tree/browser`. Its retained row canvas and offset
+are engine-answered, while its widget-internal search input remains iced-answered; the descriptor
+inventory deliberately does not claim that text editor or the separate iced scope picker.
 `gallery-faders-tab` has one descriptor kind for both configurations: the default fader has an
 optional drag step, the Volume fader keeps continuous drag plus its own wheel step, and the vertical
 VU keeps its scalar descriptor. The page's telemetry `Scalar` is an inert readout and is not hosted.
@@ -443,9 +472,11 @@ the drag overlay watches the same gesture, and that non-capture is the pinned re
 press may capture without emitting a value, activation emits once without holding the router slot,
 segmented selection emits one index without holding it, and the Hero Wave emits loop and zoom values
 under its own children. `Component::captures_pointer` alone decides whether the router retains an
-owner. For decoded input answered by the engine, the host reports iced `Captured` if and only if
-that router slot remains held; consumed-without-capture and observed outcomes report `Ignored`.
-Only `render::event` turns an engine emission into an `Action`, routing parent scalars, activation,
+owner. A scroll wheel that moves is a consumed event and the host reports iced `Captured` even
+though scrolling retains no pointer slot; at a directional boundary its outcome is `Ignored` and
+the unchanged wheel continues to the child and outward. Other consumed-without-retained-capture
+and observed outcomes keep their established host status. Only `render::event` turns an engine
+emission into an `Action`, routing parent scalars, activation,
 and index selection through their existing publishers and child scalars through `scalar_child`.
 
 `ItemDrag` is one value rather than the config-plus-state pair the other recognizers use, because it
@@ -1067,6 +1098,25 @@ are host-owned. The renderer never mutates or filters that state; activating any
 branch or selects a leaf. `TreeSkin` owns the search, row, indentation, panel, and Zvuk context-bar
 metrics. `ContextBar` keeps breadcrumb text read-only; optional scope items use a separate Scalar
 read binding and emit `SelectIndex` on the control path so scope state remains host-owned.
+
+Rows paint through `DrawListBuilder` inside one viewport clip. `InputOwner::Leaf` selects the
+interactive canvas program; `InputOwner::Engine` selects the paint-only program and receives a
+derived offset snapshot after host reconciliation and layout. The retained `ScrollComponent` is
+the canonical mutable owner for a hosted path, while the leaf program owns the same `ScrollState`
+only where no engine exists. Neither path sends offset changes through `UiEvent`; only row
+activation crosses the existing index publisher. The painter shapes and retains only rows that
+intersect the viewport, including partially visible boundary rows, while the clip remains the
+overflow contract. The solid scrollbar is an offset indicator in this wheel slice: its lane is
+excluded from row activation, but rail/thumb dragging and touch panning are not input contracts of
+M5a.
+
+Wheel arbitration is directional and consume-or-observe. In reverse document order, the
+innermost scroll viewport under the pointer that can still move in the requested direction changes
+its offset and captures the event. A viewport already at that directional boundary returns
+`Ignored`, so routing continues to an outer engine component and then unchanged to an unported iced
+ancestor. At the bottom, a further downward wheel is therefore ignored while an upward wheel is
+still consumed. Search text editing and the scope pick-list remain iced-owned until their popup and
+text-input slice; hosting the row viewport does not intercept their keyboard input.
 
 ## Application Consumer
 

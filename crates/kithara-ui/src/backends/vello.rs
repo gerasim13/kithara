@@ -10,8 +10,8 @@ use vello::{
 };
 
 use crate::{
-    draw::{Backend, Geom, Pt, Rgba, Transform},
-    text::GlyphRun,
+    draw::{Backend, DrawCmd, DrawList, Geom, Pt, Rect, Rgba, Transform, replay},
+    text::{GlyphFace, GlyphRun},
 };
 
 /// A backend that encodes drawing commands into a Vello [`Scene`].
@@ -46,7 +46,39 @@ impl<'scene> VelloBackend<'scene> {
     }
 }
 
+fn has_system_text(list: &DrawList) -> bool {
+    list.commands().iter().any(|command| match command {
+        DrawCmd::Clip { list, .. } => has_system_text(list),
+        DrawCmd::Text { run, .. } => run
+            .segments()
+            .iter()
+            .any(|segment| matches!(segment.face(), GlyphFace::System(_))),
+        DrawCmd::Fill { .. } | DrawCmd::Stroke { .. } => false,
+    })
+}
+
 impl Backend for VelloBackend<'_> {
+    fn clip(&mut self, region: Rect, list: &DrawList) {
+        if has_system_text(list) {
+            tracing::warn!(
+                issue = "vello#1198",
+                ?region,
+                "system-backed text inside a Vello clip may paint incorrectly"
+            );
+        }
+        self.scene.push_clip_layer(
+            Affine::IDENTITY,
+            &KurboRect::new(
+                f64::from(region.x),
+                f64::from(region.y),
+                f64::from(region.x + region.w),
+                f64::from(region.y + region.h),
+            ),
+        );
+        replay(list, self);
+        self.scene.pop_layer();
+    }
+
     fn fill(&mut self, geom: Geom, color: Rgba) {
         match geom {
             Geom::Arc {
@@ -188,7 +220,7 @@ mod tests {
     use crate::{
         draw::{DrawCmd, DrawListBuilder, Rect, replay},
         skin::{ColorRole, FontFamily, FontWeight, TextRoleSkin},
-        text::TextContext,
+        text::{FontPolicy, GlyphRun, TextContext, TextResources},
     };
 
     #[kithara::test]
@@ -212,6 +244,41 @@ mod tests {
 
         assert_eq!(scene.encoding().n_paths, 7);
         assert!(!scene.encoding().resources.glyphs.is_empty());
+    }
+
+    #[kithara::test]
+    fn clip_replay_balances_the_layer_and_encodes_nested_commands() {
+        let mut nested = DrawListBuilder::default();
+        nested.fill_rect(FIXTURE.bounds, FIXTURE.color);
+        let mut builder = DrawListBuilder::default();
+        builder.clip(FIXTURE.bounds, nested.finish());
+        let mut scene = Scene::new();
+
+        replay(&builder.finish(), &mut VelloBackend::new(&mut scene));
+
+        assert_eq!(scene.encoding().n_clips, 2);
+        assert_eq!(scene.encoding().n_open_clips, 0);
+        assert_eq!(scene.encoding().n_paths, 3);
+    }
+
+    #[kithara::test]
+    fn system_text_detection_covers_direct_and_nested_clips_only() {
+        let system = system_run();
+        let mut direct = DrawListBuilder::default();
+        direct.text(&system, "fallback", Transform::IDENTITY, FIXTURE.color);
+        let direct = direct.finish();
+        assert!(has_system_text(&direct));
+
+        let mut nested = DrawListBuilder::default();
+        nested.clip(FIXTURE.bounds, direct);
+        assert!(has_system_text(&nested.finish()));
+
+        let embedded = TextContext::new()
+            .unwrap_or_else(|error| panic!("embedded text context must build: {error}"))
+            .shape("GAIN", FIXTURE.role, None);
+        let mut embedded_list = DrawListBuilder::default();
+        embedded_list.text(&embedded, "GAIN", Transform::IDENTITY, FIXTURE.color);
+        assert!(!has_system_text(&embedded_list.finish()));
     }
 
     #[kithara::test]
@@ -272,6 +339,23 @@ mod tests {
         let mut scene = Scene::new();
         replay(&builder.finish(), &mut VelloBackend::new(&mut scene));
         scene
+    }
+
+    fn system_run() -> GlyphRun {
+        let resources = TextResources::new(FontPolicy::System)
+            .unwrap_or_else(|error| panic!("system text resources must build: {error}"));
+        let mut text = TextContext::from(&resources);
+        for content in ["曲名", "שלום", "مرحبا", "ಜಗ", "ชื่อ"] {
+            let run = text.shape(content, FIXTURE.role, None);
+            if run
+                .segments()
+                .iter()
+                .any(|segment| matches!(segment.face(), GlyphFace::System(_)))
+            {
+                return run;
+            }
+        }
+        panic!("a system face must answer at least one script outside the embedded catalog");
     }
 
     #[derive(Clone, Copy)]

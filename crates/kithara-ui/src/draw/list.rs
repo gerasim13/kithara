@@ -20,6 +20,11 @@ pub struct DrawListBuilder {
 }
 
 impl DrawListBuilder {
+    /// Adds a nested list scoped to a rectangular clip region.
+    pub fn clip(&mut self, region: Rect, list: DrawList) {
+        self.commands.push(DrawCmd::Clip { region, list });
+    }
+
     pub fn fill_circle(&mut self, center: Pt, radius: f32, color: Rgba) {
         self.commands.push(DrawCmd::Fill {
             geom: Geom::Circle { center, radius },
@@ -171,6 +176,44 @@ mod tests {
                     width: 1.5,
                 },
             ]
+        );
+    }
+
+    #[kithara::test]
+    fn a_clip_retains_its_region_and_nested_list() {
+        let region = Rect {
+            h: 20.0,
+            w: 40.0,
+            x: 3.0,
+            y: 6.0,
+        };
+        let color = Rgba {
+            a: 1.0,
+            b: 0.25,
+            g: 0.5,
+            r: 0.75,
+        };
+        let mut nested = DrawListBuilder::default();
+        nested.fill_rect(
+            Rect {
+                h: 40.0,
+                w: 80.0,
+                x: -10.0,
+                y: -20.0,
+            },
+            color,
+        );
+        let nested = nested.finish();
+        let mut builder = DrawListBuilder::default();
+
+        builder.clip(region, nested.clone());
+
+        assert_eq!(
+            builder.finish().commands(),
+            [DrawCmd::Clip {
+                region,
+                list: nested,
+            }]
         );
     }
 }

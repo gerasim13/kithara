@@ -1,6 +1,7 @@
 #[cfg(feature = "render")]
 use num_traits::ToPrimitive;
 
+use super::list::DrawList;
 use crate::text::GlyphRun;
 
 /// A toolkit-neutral RGBA colour.
@@ -127,6 +128,11 @@ pub enum Geom {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum DrawCmd {
+    /// A nested list scoped to a rectangular clip region.
+    Clip {
+        region: Rect,
+        list: DrawList,
+    },
     Fill {
         geom: Geom,
         color: Rgba,

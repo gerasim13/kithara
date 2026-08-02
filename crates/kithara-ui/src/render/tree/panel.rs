@@ -6,7 +6,7 @@ use crate::{
     expand::Binding,
     ids::InternId,
     module::{DeckSummaryStyle, TrackColumn},
-    render::{ReadValue, Reads, Skin, UiEvent, icons::tree_icon},
+    render::{InputOwner, ReadValue, Reads, Skin, UiEvent},
     widgets::{
         Widget,
         deck::{DeckSummary, Time},
@@ -77,13 +77,14 @@ pub(super) fn track_list<'a>(
         .view()
 }
 
-pub(super) fn browser_tree<'a>(
+pub(super) fn tree<'a>(
     path: &'a str,
     query: Option<&Binding>,
     value: Option<&ReadValue<'_>>,
     ui: &CompiledUi,
     reads: &dyn Reads,
-    skin: &Skin,
+    skin: &'a Skin,
+    owner: InputOwner,
 ) -> Element<'a, UiEvent> {
     let query = query
         .and_then(|binding| resolve(reads, binding, ui))
@@ -96,7 +97,7 @@ pub(super) fn browser_tree<'a>(
         .path(path)
         .query(query)
         .maybe_value(value)
-        .icon(tree_icon)
+        .owner(owner)
         .skin(skin)
         .build()
         .view()

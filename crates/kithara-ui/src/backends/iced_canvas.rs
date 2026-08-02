@@ -1,5 +1,5 @@
 use iced::{
-    Color, Font, Point, Radians, Size,
+    Color, Font, Point, Radians, Rectangle, Size,
     font::{Family, Stretch, Style, Weight},
     widget::canvas::{
         Frame, Path, Stroke,
@@ -13,7 +13,7 @@ use skrifa::{
 };
 
 use crate::{
-    draw::{Backend, Geom, Pt, Rgba, Transform},
+    draw::{Backend, DrawList, Geom, Pt, Rect, Rgba, Transform, replay},
     skin::{FontFamily, FontWeight},
     text::{GlyphFace, GlyphRun, GlyphSegment, TextResources, select},
 };
@@ -30,6 +30,19 @@ impl<'frame> IcedBackend<'frame> {
 }
 
 impl Backend for IcedBackend<'_> {
+    fn clip(&mut self, region: Rect, list: &DrawList) {
+        let resources = self.resources;
+        self.frame.with_clip(
+            Rectangle {
+                height: region.h,
+                width: region.w,
+                x: region.x,
+                y: region.y,
+            },
+            |frame| replay(list, &mut IcedBackend::new(frame, resources)),
+        );
+    }
+
     fn fill(&mut self, geom: Geom, color: Rgba) {
         if let Geom::Rect(rect) = geom {
             self.frame.fill_rectangle(

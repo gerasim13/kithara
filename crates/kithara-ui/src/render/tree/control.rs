@@ -6,7 +6,7 @@ use super::{
         select, status_dot, swatch, tab_large, toggle, vu_stereo, vu_vertical,
     },
     geometry::Rendered,
-    panel::{browser_tree, context_bar, deck_summary, time, track_list, vis},
+    panel::{context_bar, deck_summary, time, track_list, tree, vis},
     read::{read_flag, read_scope, resolve, wave_zoom},
     window::{titlebar, window_controls},
 };
@@ -184,7 +184,7 @@ pub(super) fn render_control<'a>(
             reads,
             skin,
         ),
-        ControlSpec::Tree { query } => browser_tree(path, query.as_ref(), value, ui, reads, skin),
+        ControlSpec::Tree { query } => tree(path, query.as_ref(), value, ui, reads, skin, owner),
         ControlSpec::ContextBar { scope_items, scope } => {
             context_bar(path, scope_items, scope.as_ref(), value, ui, reads, skin)
         }

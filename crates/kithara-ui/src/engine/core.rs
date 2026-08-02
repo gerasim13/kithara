@@ -2,7 +2,7 @@ use kithara_platform::time::Instant;
 
 use super::{
     component::RetainedComponent,
-    model::{Descriptor, Emission, Target},
+    model::{Descriptor, Emission, Kind, Target},
     router::Router,
 };
 use crate::interact::{CursorShape, Input};
@@ -45,6 +45,23 @@ impl Engine {
         self.router.cursor(&self.components, targets)
     }
 
+    pub(crate) fn scroll_offset(&self, path: &str) -> Option<f32> {
+        self.components
+            .iter()
+            .find(|component| component.path() == path && component.kind() == Kind::Scroll)
+            .and_then(RetainedComponent::scroll_offset)
+    }
+
+    pub(crate) fn set_scroll_viewport(&mut self, path: &str, height: f32) {
+        if let Some(component) = self
+            .components
+            .iter_mut()
+            .find(|component| component.path() == path && component.kind() == Kind::Scroll)
+        {
+            component.set_scroll_viewport(height);
+        }
+    }
+
     pub(crate) const fn captures_pointer(&self) -> bool {
         self.router.captures_pointer()
     }
@@ -62,6 +79,10 @@ mod tests {
 
     fn knob(path: &str, current: f32) -> Descriptor {
         Descriptor::knob(path.to_owned(), current, 100.0, 0.1)
+    }
+
+    fn scroll(path: &str) -> Descriptor {
+        Descriptor::scroll(path.to_owned(), 10, 20.0, 8.0)
     }
 
     fn target(path: &str, x: f32, y: f32) -> Target<'_> {
@@ -744,6 +765,165 @@ mod tests {
             )
             .map(|emission| emission.path);
         assert_eq!(next.as_deref(), Some("studio/back"));
+    }
+
+    #[kithara::test]
+    fn innermost_scroll_that_can_move_consumes_the_wheel() {
+        let mut engine = Engine::default();
+        let now = Instant::now();
+        engine.reconcile([scroll("outer"), scroll("inner")]);
+
+        let emission = engine
+            .handle(
+                Input::Wheel(Scroll::Lines(-1.0)),
+                &[target("outer", 50.0, 50.0), target("inner", 50.0, 50.0)],
+                now,
+            )
+            .unwrap_or_else(|| panic!("the innermost movable scroll must consume the wheel"));
+
+        assert_eq!(emission.path, "inner");
+        assert_eq!(emission.outcome, Outcome::captured());
+        assert_eq!(engine.scroll_offset("inner"), Some(60.0));
+        assert_eq!(engine.scroll_offset("outer"), Some(0.0));
+    }
+
+    #[kithara::test]
+    fn scroll_outside_the_hit_is_ignored() {
+        let mut engine = Engine::default();
+        let path = "tree/browser";
+        engine.reconcile([scroll(path)]);
+
+        assert!(
+            engine
+                .handle(
+                    Input::Wheel(Scroll::Lines(-1.0)),
+                    &[target(path, 150.0, 150.0)],
+                    Instant::now(),
+                )
+                .is_none()
+        );
+        assert_eq!(engine.scroll_offset(path), Some(0.0));
+    }
+
+    #[kithara::test]
+    fn wheel_continues_outward_when_the_inner_scroll_is_at_its_boundary() {
+        let mut engine = Engine::default();
+        let now = Instant::now();
+        engine.reconcile([scroll("outer"), scroll("inner")]);
+        let inner = target("inner", 50.0, 50.0);
+
+        let _ = engine.handle(Input::Wheel(Scroll::Pixels(-1_000.0)), &[inner], now);
+        assert_eq!(engine.scroll_offset("inner"), Some(100.0));
+
+        let emission = engine
+            .handle(
+                Input::Wheel(Scroll::Pixels(-10.0)),
+                &[target("outer", 50.0, 50.0), inner],
+                now,
+            )
+            .unwrap_or_else(|| panic!("the movable outer scroll must receive the wheel"));
+
+        assert_eq!(emission.path, "outer");
+        assert_eq!(emission.outcome, Outcome::captured());
+        assert_eq!(engine.scroll_offset("inner"), Some(100.0));
+        assert_eq!(engine.scroll_offset("outer"), Some(10.0));
+    }
+
+    #[kithara::test]
+    fn bottom_scroll_ignores_downward_wheel_but_consumes_upward_wheel() {
+        let mut engine = Engine::default();
+        let now = Instant::now();
+        let path = "tree/browser";
+        let target = target(path, 50.0, 50.0);
+        engine.reconcile([scroll(path)]);
+
+        let down = engine
+            .handle(Input::Wheel(Scroll::Pixels(-1_000.0)), &[target], now)
+            .unwrap_or_else(|| panic!("the scroll must consume travel to the bottom"));
+        assert_eq!(down.outcome, Outcome::captured());
+        assert_eq!(engine.scroll_offset(path), Some(100.0));
+
+        assert!(
+            engine
+                .handle(Input::Wheel(Scroll::Pixels(-1.0)), &[target], now)
+                .is_none(),
+            "a downward wheel at the bottom must remain ignored"
+        );
+
+        let up = engine
+            .handle(Input::Wheel(Scroll::Lines(1.0)), &[target], now)
+            .unwrap_or_else(|| panic!("an upward wheel at the bottom must be consumed"));
+        assert_eq!(up.outcome, Outcome::captured());
+        assert_eq!(engine.scroll_offset(path), Some(40.0));
+    }
+
+    #[kithara::test]
+    fn scrollbar_lane_does_not_activate_the_row_behind_it() {
+        let mut engine = Engine::default();
+        let path = "tree/browser";
+        engine.reconcile([scroll(path)]);
+
+        assert!(
+            engine
+                .handle(
+                    Input::PointerDown,
+                    &[target(path, 99.0, 10.0)],
+                    Instant::now(),
+                )
+                .is_none()
+        );
+    }
+
+    #[kithara::test]
+    fn layout_viewport_clamps_the_canonical_offset() {
+        let mut engine = Engine::default();
+        let path = "tree/browser";
+        let target = target(path, 50.0, 50.0);
+        engine.reconcile([scroll(path)]);
+
+        let _ = engine.handle(
+            Input::Wheel(Scroll::Pixels(-1_000.0)),
+            &[target],
+            Instant::now(),
+        );
+        assert_eq!(engine.scroll_offset(path), Some(100.0));
+
+        engine.set_scroll_viewport(path, 180.0);
+
+        assert_eq!(engine.scroll_offset(path), Some(20.0));
+    }
+
+    #[kithara::test]
+    fn scroll_offset_survives_descriptor_reconciliation() {
+        let mut engine = Engine::default();
+        let path = "tree/browser";
+        let target = target(path, 50.0, 50.0);
+        engine.reconcile([scroll(path)]);
+        let _ = engine.handle(Input::Wheel(Scroll::Lines(-1.0)), &[target], Instant::now());
+
+        engine.reconcile([scroll(path)]);
+
+        assert_eq!(engine.scroll_offset(path), Some(60.0));
+    }
+
+    #[kithara::test]
+    fn scrolled_row_click_emits_the_visible_index() {
+        let mut engine = Engine::default();
+        let now = Instant::now();
+        let path = "tree/browser";
+        engine.reconcile([scroll(path)]);
+        let target = target(path, 50.0, 10.0);
+
+        let wheel = engine
+            .handle(Input::Wheel(Scroll::Lines(-1.0)), &[target], now)
+            .unwrap_or_else(|| panic!("the tree must scroll before the row click"));
+        assert_eq!(wheel.outcome, Outcome::captured());
+        assert_eq!(wheel.outcome.value(), None);
+
+        let click = engine
+            .handle(Input::PointerDown, &[target], now)
+            .unwrap_or_else(|| panic!("the visible row must activate"));
+        assert_eq!(click.outcome, Outcome::set(EngineEvent::Index(3)));
     }
 
     #[kithara::test]
