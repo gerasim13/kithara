@@ -52,18 +52,20 @@ impl<'a> RunnerManager<'a> {
         }
         self.copy_shared_tool("xcodegen")?;
         let current = std::env::current_exe().context("resolving CI executable")?;
-        fs::copy(
-            current,
-            self.config
+        replace_file(
+            &current,
+            &self
+                .config
                 .host
                 .host_root
                 .join("toolchains/shared-bin/kithara-ci"),
         )
         .context("installing CI executable for Cilicon guests")?;
         for name in ["host.toml", "pins.toml"] {
-            fs::copy(
-                self.config.host.host_root.join("services").join(name),
-                self.config
+            replace_file(
+                &self.config.host.host_root.join("services").join(name),
+                &self
+                    .config
                     .host
                     .host_root
                     .join("toolchains/shared-bin")
@@ -79,10 +81,6 @@ impl<'a> RunnerManager<'a> {
         write_secure(
             &home.join("cilicon.yml"),
             &self.cilicon_config(&home, &tokens, &cilicon_password)?,
-        )?;
-        write_secure(
-            &config_root.join("cilicon-image.digest"),
-            &format!("{}\n", self.config.pins.cilicon_image_digest),
         )?;
         self.install_runner_agents(&home)?;
         self.process.run(
@@ -174,7 +172,7 @@ impl<'a> RunnerManager<'a> {
              \"{shared}/kithara-tools/pins.toml\" guest-prepare"
         );
         let config = CiliconConfig {
-            source: &self.config.pins.cilicon_image,
+            source: &format!("file://{}", self.config.host.cilicon_vm_bundle.display()),
             runner_name: "kithara-mac-mini-macos",
             vm_clone_path: root.join("vm/cilicon-clone"),
             retry_delay: 30,
@@ -215,6 +213,11 @@ impl<'a> RunnerManager<'a> {
                     guest_folder: "kithara-tools",
                     read_only: true,
                 },
+                DirectoryMount {
+                    host_path: self.config.host.host_xcode_app()?.to_path_buf(),
+                    guest_folder: "Xcode.app",
+                    read_only: true,
+                },
             ],
             pre_run: &pre_run,
             provisioner: Provisioner {
@@ -245,6 +248,7 @@ impl<'a> RunnerManager<'a> {
             .brew_tool("gitlab-runner")
             .display()
             .to_string();
+        let agent_path = self.config.host.agent_path(home);
         let agents = [
             (
                 "colima",
@@ -269,6 +273,7 @@ impl<'a> RunnerManager<'a> {
                         "virtiofs",
                     ],
                     &logs.join("colima.log"),
+                    &agent_path,
                     "<key>KeepAlive</key><true/><key>ProcessType</key><string>Background</string>",
                 ),
             ),
@@ -294,6 +299,7 @@ impl<'a> RunnerManager<'a> {
                             .to_string(),
                     ],
                     &logs.join("gitlab-runner.log"),
+                    &agent_path,
                     "<key>KeepAlive</key><true/><key>ProcessType</key><string>Background</string>",
                 ),
             ),
@@ -327,9 +333,10 @@ impl<'a> RunnerManager<'a> {
                             .join("services/pins.toml")
                             .display()
                             .to_string(),
-                        "start-cilicon",
+                        "run-macos-runner",
                     ],
                     &logs.join("cilicon.log"),
+                    &agent_path,
                     "<key>KeepAlive</key><true/><key>ProcessType</key><string>Interactive</string>",
                 ),
             ),
@@ -346,16 +353,16 @@ impl<'a> RunnerManager<'a> {
     }
 
     fn copy_shared_tool(&self, name: &str) -> Result<()> {
-        fs::copy(
-            self.config.host.brew_tool(name),
-            self.config
+        replace_file(
+            &self.config.host.brew_tool(name),
+            &self
+                .config
                 .host
                 .host_root
                 .join("toolchains/shared-bin")
                 .join(name),
         )
-        .with_context(|| format!("installing shared {name}"))?;
-        Ok(())
+        .with_context(|| format!("installing shared {name}"))
     }
 
     pub(super) fn require_ci_user(&self) -> Result<()> {
@@ -409,7 +416,7 @@ struct CiliconConfig<'a> {
     console_devices: [&'a str; 1],
     ssh_credentials: SshCredentials<'a>,
     hardware: Hardware,
-    directory_mounts: [DirectoryMount<'a>; 4],
+    directory_mounts: [DirectoryMount<'a>; 5],
     pre_run: &'a str,
     provisioner: Provisioner<'a>,
 }
@@ -485,7 +492,7 @@ fn read_token(root: &Path, name: &str) -> Result<String> {
     Ok(token)
 }
 
-fn read_secret(path: &Path) -> Result<String> {
+pub(super) fn read_secret(path: &Path) -> Result<String> {
     let metadata = fs::symlink_metadata(path)
         .with_context(|| format!("reading metadata for {}", path.display()))?;
     if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
@@ -525,6 +532,18 @@ pub(super) fn write_secure(path: &Path, contents: &str) -> Result<()> {
 pub(super) fn path_text(path: &Path) -> Result<&str> {
     path.to_str()
         .with_context(|| format!("path is not UTF-8: {}", path.display()))
+}
+
+/// Provisioning reruns, and some sources are mode `0555` (Homebrew binaries),
+/// so the destination cannot be reopened for writing. Replace, never overwrite.
+fn replace_file(source: &Path, destination: &Path) -> Result<()> {
+    if destination.exists() {
+        fs::remove_file(destination)
+            .with_context(|| format!("removing stale {}", destination.display()))?;
+    }
+    fs::copy(source, destination)
+        .with_context(|| format!("copying into {}", destination.display()))?;
+    Ok(())
 }
 
 pub(super) fn require_macos() -> Result<()> {
@@ -615,6 +634,24 @@ mod tests {
             }
         }
         assert!(runner.contains(&config.host.gitlab_origin()));
+    }
+
+    /// Homebrew ships tools as mode `0555`, so a plain `fs::copy` onto a
+    /// previous provisioning pass fails with EACCES.
+    #[cfg(unix)]
+    #[test]
+    fn replacing_a_read_only_file_succeeds() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        let destination = directory.path().join("destination");
+        fs::write(&source, "new").unwrap();
+        fs::write(&destination, "old").unwrap();
+        fs::set_permissions(&destination, fs::Permissions::from_mode(0o555)).unwrap();
+
+        replace_file(&source, &destination).unwrap();
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "new");
     }
 
     #[cfg(unix)]

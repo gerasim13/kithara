@@ -30,6 +30,8 @@ pub(crate) struct CiHost {
     pub(crate) ci_user: String,
     pub(crate) cilicon_guest_shared_root: PathBuf,
     pub(crate) cilicon_ssh_user: String,
+    /// Locally built macOS VM bundle Cilicon clones for every job.
+    pub(crate) cilicon_vm_bundle: PathBuf,
     pub(crate) cilicon_xcode_developer_dir: PathBuf,
     pub(crate) gitlab_url: Url,
     pub(crate) host_root: PathBuf,
@@ -65,6 +67,7 @@ impl CiHost {
             ("cache_root_linux", &self.cache_root_linux),
             ("cache_root_windows", &self.cache_root_windows),
             ("cilicon_guest_shared_root", &self.cilicon_guest_shared_root),
+            ("cilicon_vm_bundle", &self.cilicon_vm_bundle),
             (
                 "cilicon_xcode_developer_dir",
                 &self.cilicon_xcode_developer_dir,
@@ -118,6 +121,7 @@ impl CiHost {
             ("brew_root", &self.brew_root),
             ("cache_root_cilicon", &self.cache_root_cilicon),
             ("cilicon_guest_shared_root", &self.cilicon_guest_shared_root),
+            ("cilicon_vm_bundle", &self.cilicon_vm_bundle),
             (
                 "cilicon_xcode_developer_dir",
                 &self.cilicon_xcode_developer_dir,
@@ -137,6 +141,27 @@ impl CiHost {
 
     pub(crate) fn gitlab_origin(&self) -> String {
         self.gitlab_url.as_str().trim_end_matches('/').to_string()
+    }
+
+    /// The guest mounts this bundle instead of carrying its own Xcode, so the
+    /// pinned version is whatever the host has, and the image stays small.
+    pub(crate) fn host_xcode_app(&self) -> Result<&Path> {
+        self.host_xcode_developer_dir
+            .parent()
+            .and_then(Path::parent)
+            .filter(|bundle| bundle.extension().is_some_and(|kind| kind == "app"))
+            .context("host_xcode_developer_dir must be <Xcode>.app/Contents/Developer")
+    }
+
+    /// `launchd` starts agents with a minimal PATH, so any agent that shells
+    /// out to a Homebrew or Cargo tool has to be told where they live.
+    pub(crate) fn agent_path(&self, home: &Path) -> String {
+        format!(
+            "{}:{}:{}:/usr/bin:/bin:/usr/sbin:/sbin",
+            self.brew_root.join("bin").display(),
+            self.brew_root.join("sbin").display(),
+            home.join(".cargo/bin").display()
+        )
     }
 
     pub(crate) fn brew_tool(&self, name: &str) -> PathBuf {

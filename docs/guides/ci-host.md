@@ -68,17 +68,34 @@ Create four project runner authentication tokens in corporate GitLab:
 
 | File under `~/.config/kithara-ci` | Tag | Executor |
 | --- | --- | --- |
-| `runner-macos.token` | `kithara-macos` | Cilicon disposable macOS VM |
+| `runner-macos.token` | `kithara-macos` | throwaway `tart` macOS VM |
 | `runner-linux.token` | `kithara-linux` | pinned local Docker image |
 | `runner-android.token` | `kithara-android` | macOS shell |
 | `runner-release.token` | `kithara-release` | protected macOS shell |
 
 Each token file must contain one `glrt-...` token and have mode `0600`. Also
 create `~/.config/kithara-ci/cilicon-ssh.password` with the SSH password of the
-pinned Cilicon image and mode `0600`; this value is written only to the local
-`cilicon.yml`.
+macOS guest account and mode `0600`.
 
-GitLab is reached over its public certificate chain, so runners, Cilicon
+The macOS lane runs each job in a throwaway VM. `xtask ci host run-macos-runner`
+clones the base image named by `cilicon_vm_bundle`, boots the clone headless
+with Xcode and the Rust toolchain mounted from the host, lets GitLab hand it a
+single build through `gitlab-runner run-single --max-builds 1`, and destroys the
+clone afterwards. Build that base image once, from the Apple restore image
+matching `macos_guest_build`:
+
+```text
+tart create --from-ipsw <UniversalMac_<version>_<build>_Restore.ipsw> kithara-macos-base
+tart run kithara-macos-base
+```
+
+Complete Setup Assistant in the guest, create the `cilicon_ssh_user` account
+with the password above, enable Remote Login, authorise the CI account's SSH
+key, grant that account passwordless `sudo`, and accept the Xcode licence once
+with the host Xcode mounted. The image carries no Xcode of its own, so it stays
+small and always matches `expected_xcode_version` on the host.
+
+GitLab is reached over its public certificate chain, so runners, macOS
 guests, and the bridge all validate `gitlab_url` against the platform trust
 store. No private CA is installed or configured anywhere. A host that cannot
 build that chain is a network fault to fix upstream, never a certificate to

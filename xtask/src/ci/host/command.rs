@@ -53,8 +53,8 @@ enum HostCommand {
     SmokeLinux,
     /// Boot the Android emulator and verify it reaches a ready state.
     SmokeAndroid,
-    /// Verify the pinned Cilicon image and start Cilicon.
-    StartCilicon,
+    /// Serve `GitLab` jobs from throwaway macOS VMs.
+    RunMacosRunner,
     /// Reject a job before it can fill or damage the CI volume.
     Preflight,
     /// Remove expired job state and bounded cache entries.
@@ -92,7 +92,7 @@ pub(crate) fn run(args: &HostArgs) -> Result<()> {
         }
         HostCommand::SmokeLinux => RunnerManager::new(&config, &process).smoke_linux(),
         HostCommand::SmokeAndroid => RunnerManager::new(&config, &process).smoke_android(),
-        HostCommand::StartCilicon => RunnerManager::new(&config, &process).start_cilicon(),
+        HostCommand::RunMacosRunner => RunnerManager::new(&config, &process).run_macos_runner(),
         HostCommand::Preflight => HostStorage::new(&config, &process)?.preflight(),
         HostCommand::Cleanup => HostStorage::new(&config, &process)?.cleanup(),
         HostCommand::Health => HostStorage::new(&config, &process)?.health(),
@@ -132,7 +132,7 @@ mod tests {
             ["build-linux-image", "docker/ci.Dockerfile"].as_slice(),
             ["smoke-linux"].as_slice(),
             ["smoke-android"].as_slice(),
-            ["start-cilicon"].as_slice(),
+            ["run-macos-runner"].as_slice(),
             ["preflight"].as_slice(),
             ["cleanup"].as_slice(),
             ["health"].as_slice(),

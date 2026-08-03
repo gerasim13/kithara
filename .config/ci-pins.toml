@@ -18,8 +18,6 @@ brew_formulae = [
   "rustup",
   "xcodegen",
 ]
-cilicon_image = "oci://ghcr.io/cirruslabs/macos-runner:tahoe"
-cilicon_image_digest = "sha256:90fa5647e02962a5c222d67bf805e40714f9394443cfd30d89fbfd018603d309"
 cilicon_sha256 = "b4886bc74d6c4a802b24ef3bc40afa894d8cc13e9c25a912fdc6940a1a79a17c"
 cilicon_version = "2.4.2"
 expected_xcode_version = "26.6"
@@ -30,6 +28,7 @@ gitleaks_linux_arm64_sha256 = "e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3
 gitleaks_version = "8.30.1"
 linux_base_digest = "77fac8b98f9f46062bb680b6d25d5bcaabfc400143952ebc572e924bcbedc3fa"
 linux_image = "kithara-ci:linux-20260729"
+macos_guest_build = "25G72"
 msrv_toolchain = "1.89.0"
 nightly_toolchain = "nightly-2026-07-29"
 stable_toolchain = "1.97.1"

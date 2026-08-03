@@ -31,6 +31,12 @@ impl RunnerManager<'_> {
             ],
             "select guest Xcode",
         )?;
+        // A freshly installed macOS has no /usr/local/bin, so `install` into it
+        // fails until the directory exists.
+        sudo(
+            &["install", "-d", "-m", "0755", "/usr/local/bin"],
+            "create guest local bin directory",
+        )?;
         sudo(
             &[
                 "install",

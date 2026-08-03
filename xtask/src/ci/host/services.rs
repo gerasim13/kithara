@@ -254,12 +254,14 @@ impl<'a> ServiceInstaller<'a> {
         let config = self.installed_config().display().to_string();
         let pins = self.installed_pins().display().to_string();
         let logs = &self.config.host.host_root.join("logs");
+        let path = self.config.host.agent_path(&self.ci_home());
         let cleanup = launchd(
             "com.zvuk.kithara-ci.cleanup",
             &[
                 &binary, "ci", "host", "--config", &config, "--pins", &pins, "cleanup",
             ],
             &logs.join("cleanup.log"),
+            &path,
             "<key>StartCalendarInterval</key><dict><key>Minute</key><integer>17</integer></dict>",
         );
         let health = launchd(
@@ -268,6 +270,7 @@ impl<'a> ServiceInstaller<'a> {
                 &binary, "ci", "host", "--config", &config, "--pins", &pins, "health",
             ],
             &logs.join("health.log"),
+            &path,
             "<key>StartInterval</key><integer>300</integer>",
         );
         self.write_agent("cleanup", &cleanup)?;
@@ -290,6 +293,7 @@ impl<'a> ServiceInstaller<'a> {
             "com.zvuk.kithara-ci.bridge",
             &[&binary, "ci", "bridge", "reconcile", "--config", &config],
             &log,
+            &self.config.host.agent_path(&self.sync_home()),
             &extra,
         );
         let pending = self
@@ -447,17 +451,27 @@ pub(super) fn xml(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-pub(super) fn launchd(label: &str, arguments: &[&str], log: &Path, extra: &str) -> String {
+pub(super) fn launchd(
+    label: &str,
+    arguments: &[&str],
+    log: &Path,
+    path: &str,
+    extra: &str,
+) -> String {
     let arguments = arguments
         .iter()
         .map(|argument| format!("<string>{}</string>", xml(argument)))
         .collect::<String>();
     let log = xml(&log.display().to_string());
+    let path = xml(path);
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
          \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
          <plist version=\"1.0\"><dict>\
+         <key>EnvironmentVariables</key><dict>\
+         <key>PATH</key><string>{path}</string>\
+         </dict>\
          <key>Label</key><string>{label}</string>\
          <key>ProgramArguments</key><array>{arguments}</array>\
          <key>RunAtLoad</key><true/>{extra}\
@@ -473,8 +487,31 @@ mod tests {
 
     #[test]
     fn generated_agent_escapes_paths() {
-        let plist = launchd("test", &["/a&b", "ci"], Path::new("/tmp/a&b.log"), "");
+        let plist = launchd(
+            "test",
+            &["/a&b", "ci"],
+            Path::new("/tmp/a&b.log"),
+            "/opt/homebrew/bin:/usr/bin",
+            "",
+        );
         assert!(plist.contains("<string>/a&amp;b</string>"));
         assert!(plist.contains("<string>/tmp/a&amp;b.log</string>"));
+    }
+
+    /// `launchd` hands agents a minimal PATH, so an agent that shells out to a
+    /// Homebrew tool (colima -> limactl) dies unless PATH is spelled out.
+    #[test]
+    fn generated_agent_declares_a_path() {
+        let plist = launchd(
+            "test",
+            &["/opt/homebrew/bin/colima"],
+            Path::new("/tmp/a.log"),
+            "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin",
+            "",
+        );
+        assert!(plist.contains("<key>EnvironmentVariables</key>"));
+        assert!(plist.contains(
+            "<key>PATH</key><string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin</string>"
+        ));
     }
 }

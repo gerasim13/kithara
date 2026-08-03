@@ -9,6 +9,7 @@ ci_uid = 503
 ci_user = "kithara-ci"
 cilicon_guest_shared_root = "/Volumes/My Shared Files"
 cilicon_ssh_user = "admin"
+cilicon_vm_bundle = "/Volumes/KitharaCI/vm/tart/vms/kithara-macos-base"
 cilicon_xcode_developer_dir = "/Applications/Xcode-26.6.app/Contents/Developer"
 gitlab_url = "https://gitlab.example.com"
 host_root = "/Volumes/KitharaCI"
