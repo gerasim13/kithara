@@ -27,6 +27,9 @@ pub(crate) enum IncomingDecode {
         transition: VariantTransition,
         generation: DecoderGeneration,
     },
+    Relanding {
+        transition: VariantTransition,
+    },
     Failed {
         transition: VariantTransition,
         generation: DecoderGeneration,
@@ -39,6 +42,7 @@ impl IncomingDecode {
             Self::Preparing { transition }
             | Self::Building { transition, .. }
             | Self::Priming { transition, .. }
+            | Self::Relanding { transition }
             | Self::Failed { transition, .. } => *transition,
         }
     }
@@ -49,7 +53,9 @@ impl From<IncomingDecode> for Option<DecoderGeneration> {
         match incoming {
             IncomingDecode::Priming { generation, .. }
             | IncomingDecode::Failed { generation, .. } => Some(generation),
-            IncomingDecode::Preparing { .. } | IncomingDecode::Building { .. } => None,
+            IncomingDecode::Preparing { .. }
+            | IncomingDecode::Building { .. }
+            | IncomingDecode::Relanding { .. } => None,
         }
     }
 }
@@ -140,6 +146,15 @@ impl super::core::ActiveDecode {
         )
     }
 
+    pub(crate) fn incoming_is_relanding(&self, transition: VariantTransition) -> bool {
+        matches!(
+            self.incoming,
+            Some(IncomingDecode::Relanding {
+                transition: current
+            }) if current == transition
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn incoming_is_building(&self, transition: VariantTransition) -> bool {
         matches!(
@@ -187,6 +202,46 @@ impl super::core::ActiveDecode {
                 build: current_build,
             }) if current == transition && current_build == build
         ) {
+            return Some(generation);
+        }
+        self.incoming = Some(IncomingDecode::Priming {
+            transition,
+            generation,
+        });
+        None
+    }
+
+    pub(crate) fn take_incoming_for_reland(
+        &mut self,
+        outgoing_frontier: OutgoingFrontier,
+    ) -> Option<(VariantTransition, DecoderGeneration, Duration)> {
+        let landing = self.landing_for(outgoing_frontier)?;
+        let incoming = self.incoming.take()?;
+        match incoming {
+            IncomingDecode::Priming {
+                transition,
+                generation,
+            } if generation.staged_span().is_none()
+                && generation
+                    .planned_landing()
+                    .is_some_and(|planned| landing > planned) =>
+            {
+                self.incoming = Some(IncomingDecode::Relanding { transition });
+                Some((transition, generation, landing))
+            }
+            incoming => {
+                self.incoming = Some(incoming);
+                None
+            }
+        }
+    }
+
+    pub(crate) fn restore_relanded(
+        &mut self,
+        transition: VariantTransition,
+        generation: DecoderGeneration,
+    ) -> Option<DecoderGeneration> {
+        if !self.incoming_is_relanding(transition) {
             return Some(generation);
         }
         self.incoming = Some(IncomingDecode::Priming {
@@ -370,7 +425,12 @@ impl super::core::ActiveDecode {
             | Some(IncomingDecode::Failed { generation, .. }) => {
                 generation.decoder_mut().flush_reader_signals();
             }
-            Some(IncomingDecode::Preparing { .. } | IncomingDecode::Building { .. }) | None => {}
+            Some(
+                IncomingDecode::Preparing { .. }
+                | IncomingDecode::Building { .. }
+                | IncomingDecode::Relanding { .. },
+            )
+            | None => {}
         }
     }
 }

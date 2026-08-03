@@ -1,10 +1,17 @@
 use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
-use kithara_decode::{DecoderFactory as DecoderBuilder, GaplessMode};
+use kithara_decode::{
+    DecodeResult, Decoder, DecoderChunkOutcome, DecoderFactory as DecoderBuilder,
+    DecoderSeekOutcome, GaplessMode, PcmSpec,
+};
 use kithara_events::{DecoderChangeCause, DecoderEvent, DeferredBus, Event, EventBus};
-use kithara_platform::{sync::Arc, time::Duration, tokio::task::yield_now};
+use kithara_platform::{
+    sync::{Arc, Mutex},
+    time::Duration,
+    tokio::task::yield_now,
+};
 use kithara_stream::{
-    AudioCodec, ContainerFormat, MediaInfo, VariantPromotion, VariantReaderPlan, VariantTransition,
-    VariantTransitionId,
+    AudioCodec, ContainerFormat, MediaInfo, PendingReason, VariantPromotion, VariantReaderPlan,
+    VariantTransition, VariantTransitionId,
 };
 use kithara_test_utils::kithara;
 
@@ -15,6 +22,7 @@ use crate::{
     pipeline::{
         decode::DecoderGeneration,
         rebuild::{DecoderBuildComplete, DecoderBuildPurpose, state::BuildId},
+        seek::{ResumeState, SeekContext},
         track::{AtEof, CurrentFsm, Failed, Track, TrackFailure, TrackStep},
     },
     renderer::AudioWorkerSource,
@@ -481,4 +489,88 @@ async fn exact_promotion_emits_variant_switch_decoder_event() {
         );
     }
     assert!(changed);
+}
+
+struct RelandPendingDecoder {
+    inner: TestDecoder,
+    seek_target: Arc<Mutex<Option<Duration>>>,
+}
+
+impl Decoder for RelandPendingDecoder {
+    fn duration(&self) -> Option<Duration> {
+        self.inner.duration()
+    }
+
+    fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        Ok(DecoderChunkOutcome::Pending(PendingReason::Retry))
+    }
+
+    fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        *self.seek_target.lock() = Some(pos);
+        self.inner.seek(pos)
+    }
+
+    fn spec(&self) -> PcmSpec {
+        self.inner.spec()
+    }
+
+    fn update_byte_len(&self, len: u64) {
+        self.inner.update_byte_len(len);
+    }
+}
+
+#[kithara::test(tokio)]
+async fn unstaged_priming_generation_relands_to_current_outgoing_frontier() {
+    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+    let plan = incoming_plan();
+    let transition = plan.transition();
+    fixture.control.set_exact_plan(plan);
+
+    let TrackStep::Produced(outgoing) = fixture.source.step_track() else {
+        panic!("outgoing must establish an exact decode frontier");
+    };
+    let expected_landing = produced_data(outgoing).meta.end_timestamp;
+    let seek_target = Arc::new(Mutex::new(None));
+    let build = BuildId::fixture(42);
+    assert!(fixture.source.decode.begin_incoming(transition).is_none());
+    assert!(
+        fixture
+            .source
+            .decode
+            .mark_incoming_building(transition, build)
+    );
+    let generation = DecoderGeneration::new(
+        Box::new(RelandPendingDecoder {
+            inner: TestDecoder::new(77, fixture.drops.clone()),
+            seek_target: seek_target.clone(),
+        }),
+        Some(media_info(1)),
+        0,
+        transition.id().seek_epoch(),
+        Some(ResumeState {
+            trim_head: true,
+            seek: SeekContext {
+                target: Duration::ZERO,
+                epoch: transition.id().seek_epoch(),
+            },
+            ..Default::default()
+        }),
+        GaplessMode::Disabled,
+    );
+    assert!(
+        fixture
+            .source
+            .decode
+            .install_incoming(transition, build, generation)
+            .is_none()
+    );
+    assert!(fixture.source.decode.incoming_is_priming(transition));
+
+    fixture.source.flush_deferred();
+
+    assert!(fixture.source.decode.incoming_is_relanding(transition));
+    wait_for_incoming_priming(&mut fixture, transition).await;
+
+    assert!(fixture.source.decode.incoming_is_priming(transition));
+    assert_eq!(*seek_target.lock(), Some(expected_landing));
 }

@@ -7,6 +7,7 @@ use kithara_decode::{
     BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, GaplessMode,
     GaplessProfile, PcmChunk,
 };
+use kithara_platform::time::Duration;
 use kithara_stream::MediaInfo;
 use tracing::warn;
 
@@ -19,6 +20,7 @@ pub(crate) struct DecoderGeneration {
     installed_at_seek_epoch: u64,
     gapless_profile: GaplessProfile,
     gapless: GaplessStage,
+    planned_landing: Option<Duration>,
     pending_head_skip: Option<ResumeState>,
     staged: VecDeque<PcmChunk>,
 }
@@ -35,6 +37,7 @@ impl DecoderGeneration {
         let codec = media_info.as_ref().and_then(|info| info.codec);
         let gapless_profile = decoder.gapless_profile(codec);
         let gapless = GaplessStage::build(gapless_profile, gapless_mode);
+        let planned_landing = pending_head_skip.as_ref().map(|state| state.seek.target);
         Self {
             decoder,
             media_info,
@@ -42,6 +45,7 @@ impl DecoderGeneration {
             installed_at_seek_epoch,
             gapless_profile,
             gapless,
+            planned_landing,
             pending_head_skip,
             staged: VecDeque::new(),
         }
@@ -81,6 +85,18 @@ impl DecoderGeneration {
 
     pub(crate) fn pending_head_skip_mut(&mut self) -> Option<&mut ResumeState> {
         self.pending_head_skip.as_mut()
+    }
+
+    pub(crate) fn set_pending_head_skip(&mut self, state: Option<ResumeState>) {
+        self.pending_head_skip = state;
+    }
+
+    pub(crate) fn planned_landing(&self) -> Option<Duration> {
+        self.planned_landing
+    }
+
+    pub(crate) fn set_planned_landing(&mut self, landing: Duration) {
+        self.planned_landing = Some(landing);
     }
 
     pub(crate) fn gapless_profile(&self) -> GaplessProfile {

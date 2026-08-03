@@ -76,6 +76,7 @@ impl RebuildState {
 pub(crate) enum DecoderBuildPurpose {
     Replacement,
     Incoming(VariantTransition),
+    Reland(VariantTransition),
 }
 
 pub(crate) struct DecoderBuildComplete {
