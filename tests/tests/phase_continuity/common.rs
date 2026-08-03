@@ -231,8 +231,18 @@ fn check_against_previous(
     if frames_in_buf < 2 {
         return None;
     }
+    // The source is mono: both channels carry the same sine
+    // (`signal_pcm`), so the timeline this asserts on is the channel mean.
+    // Reading one channel measures the decoder's stereo synthesis as well:
+    // HE-AAC v2 reconstructs L and R from a mono core plus quantised spatial
+    // parameters, and that reconstruction error is antisymmetric between the
+    // channels — it cancels in the mean and shows up in either channel alone.
     let mono: Vec<f64> = (0..frames_in_buf)
-        .map(|f| f64::from(buf[f * chan]))
+        .map(|f| {
+            let frame = &buf[f * chan..f * chan + chan];
+            let sum: f64 = frame.iter().map(|s| f64::from(*s)).sum();
+            sum / chan.to_f64().unwrap_or(1.0)
+        })
         .collect();
     let delta = sine.delta_rad_per_sample();
     let (measured, amp) = measure_phase_rad_window(&mono, delta);
