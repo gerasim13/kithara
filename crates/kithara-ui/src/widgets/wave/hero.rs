@@ -1,33 +1,27 @@
 use std::ops::Range;
 
-use iced::{
-    Color, Point, Rectangle, Size,
-    alignment::Vertical,
-    widget::{
-        canvas,
-        canvas::{Frame, Path, Stroke},
-        text,
-    },
-};
 use num_traits::cast::AsPrimitive;
 
 use super::{
     bars,
+    paint::WavePalette,
     zoom_math::{
         bar_bucket_range, bar_grid, max_bucket, norm_to_x, visible_mark_range, visible_marks,
         window_bounds,
     },
 };
 use crate::{
-    render::{WaveBucket, fonts, theme::RenderPalette},
-    skin::WaveSkin,
+    draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
+    render::WaveBucket,
+    skin::{ColorRole, FontFamily, TextRoleSkin, WaveSkin},
+    text::TextContext,
 };
 
 #[derive(Clone, Copy)]
 pub(crate) struct HeroPalette {
-    pub(crate) base: RenderPalette,
-    pub(crate) cue_badge: Color,
-    pub(crate) cue_text: Color,
+    pub(crate) base: WavePalette,
+    pub(crate) cue_badge: Rgba,
+    pub(crate) cue_text: Rgba,
 }
 
 #[derive(Clone, Copy)]
@@ -42,15 +36,16 @@ pub(crate) struct HeroWave<'a> {
 }
 
 pub(crate) fn draw(
-    frame: &mut Frame,
-    bounds: Rectangle,
+    list: &mut DrawListBuilder,
+    text: &mut TextContext,
+    bounds: Rect,
     data: HeroWave<'_>,
     metrics: WaveSkin,
     palette: HeroPalette,
 ) {
     let window = window_bounds(data.position, data.zoom);
     draw_bars(
-        frame,
+        list,
         bounds,
         data.buckets,
         data.zoom,
@@ -58,66 +53,66 @@ pub(crate) fn draw(
         metrics,
         palette.base,
     );
-    draw_grid(frame, bounds, data, &window, metrics, palette.base);
+    draw_grid(list, bounds, data, &window, metrics, palette.base);
     if let Some(region) = data.loop_region {
-        draw_loop(frame, bounds, region, &window, metrics, palette.base);
+        draw_loop(list, bounds, region, &window, metrics, palette.base);
     }
     bars::draw_played(
-        frame,
+        list,
         bounds,
-        norm_to_x(data.position.clamp(0.0, 1.0), &window, bounds.width),
+        norm_to_x(data.position.clamp(0.0, 1.0), &window, bounds.w),
         metrics.played_alpha,
-        palette.base,
+        palette.base.bg_deep,
     );
-    draw_cues(frame, bounds, data.cues, &window, metrics, palette);
-    draw_playhead(frame, bounds, data.position, &window, metrics, palette.base);
+    draw_cues(list, text, bounds, data.cues, &window, metrics, palette);
+    draw_playhead(list, bounds, data.position, &window, metrics, palette.base);
 }
 
 fn draw_bars(
-    frame: &mut Frame,
-    bounds: Rectangle,
+    list: &mut DrawListBuilder,
+    bounds: Rect,
     buckets: &[WaveBucket],
     zoom: f32,
     window: &Range<f32>,
     metrics: WaveSkin,
-    palette: RenderPalette,
+    palette: WavePalette,
 ) {
     let step = bars::step(metrics);
-    let content_width = (bounds.width - metrics.content_inset * 2.0).max(0.0);
+    let content_width = (bounds.w - metrics.content_inset * 2.0).max(0.0);
     let columns: usize = ((content_width + metrics.bar_gap) / step).floor().as_();
     let Some(grid) = bar_grid(columns, zoom, window) else {
         return;
     };
-    let available_height = (bounds.height - metrics.content_inset * 2.0).max(0.0);
+    let available_height = (bounds.h - metrics.content_inset * 2.0).max(0.0);
     for bar in grid.first..grid.last {
         let range = bar_bucket_range(bar, grid.norm_width, buckets.len());
         let Some(bucket) = max_bucket(buckets, range) else {
             continue;
         };
         let bar_f: f32 = bar.as_();
-        let center_x = norm_to_x((bar_f + 0.5) * grid.norm_width, window, bounds.width);
+        let center_x = bounds.x + norm_to_x((bar_f + 0.5) * grid.norm_width, window, bounds.w);
         bars::draw_column(
-            frame,
+            list,
             bounds,
             center_x,
             bucket,
             available_height,
             metrics,
-            palette,
+            [palette.wave_low, palette.wave_mid, palette.wave_high],
         );
     }
 }
 
 fn draw_grid(
-    frame: &mut Frame,
-    bounds: Rectangle,
+    list: &mut DrawListBuilder,
+    bounds: Rect,
     data: HeroWave<'_>,
     window: &Range<f32>,
     metrics: WaveSkin,
-    palette: RenderPalette,
+    palette: WavePalette,
 ) {
     draw_marks(
-        frame,
+        list,
         bounds,
         visible_marks(data.beats, window),
         window,
@@ -125,7 +120,7 @@ fn draw_grid(
         metrics.grid_width,
     );
     draw_marks(
-        frame,
+        list,
         bounds,
         visible_marks(data.downbeats, window),
         window,
@@ -135,122 +130,165 @@ fn draw_grid(
 }
 
 fn draw_marks(
-    frame: &mut Frame,
-    bounds: Rectangle,
+    list: &mut DrawListBuilder,
+    bounds: Rect,
     marks: &[f32],
     window: &Range<f32>,
-    color: Color,
+    color: Rgba,
     width: f32,
 ) {
     for &mark in marks {
-        let x = norm_to_x(mark, window, bounds.width);
-        frame.stroke(
-            &Path::line(Point::new(x, 0.0), Point::new(x, bounds.height)),
-            Stroke::default().with_color(color).with_width(width),
+        let x = bounds.x + norm_to_x(mark, window, bounds.w);
+        list.stroke_line(
+            Pt { x, y: bounds.y },
+            Pt {
+                x,
+                y: bounds.y + bounds.h,
+            },
+            color,
+            width,
         );
     }
 }
 
 fn draw_loop(
-    frame: &mut Frame,
-    bounds: Rectangle,
+    list: &mut DrawListBuilder,
+    bounds: Rect,
     region: [f32; 2],
     window: &Range<f32>,
     metrics: WaveSkin,
-    palette: RenderPalette,
+    palette: WavePalette,
 ) {
     let start = region[0].min(region[1]).clamp(0.0, 1.0);
     let end = region[0].max(region[1]).clamp(0.0, 1.0);
-    let start_x = norm_to_x(start, window, bounds.width);
-    let end_x = norm_to_x(end, window, bounds.width);
-    let visible_start = start_x.clamp(0.0, bounds.width);
-    let visible_end = end_x.clamp(0.0, bounds.width);
+    let start_x = norm_to_x(start, window, bounds.w);
+    let end_x = norm_to_x(end, window, bounds.w);
+    let visible_start = start_x.clamp(0.0, bounds.w);
+    let visible_end = end_x.clamp(0.0, bounds.w);
     if visible_end > visible_start {
-        frame.fill_rectangle(
-            Point::new(visible_start, 0.0),
-            Size::new(visible_end - visible_start, bounds.height),
+        list.fill_rect(
+            Rect {
+                h: bounds.h,
+                w: visible_end - visible_start,
+                x: bounds.x + visible_start,
+                y: bounds.y,
+            },
             with_alpha(palette.accent, metrics.loop_fill_alpha),
         );
     }
     for x in [start_x, end_x] {
-        if (0.0..=bounds.width).contains(&x) {
-            frame.stroke(
-                &Path::line(Point::new(x, 0.0), Point::new(x, bounds.height)),
-                Stroke::default()
-                    .with_color(palette.accent)
-                    .with_width(metrics.loop_bound_width),
+        if (0.0..=bounds.w).contains(&x) {
+            let x = bounds.x + x;
+            list.stroke_line(
+                Pt { x, y: bounds.y },
+                Pt {
+                    x,
+                    y: bounds.y + bounds.h,
+                },
+                palette.accent,
+                metrics.loop_bound_width,
             );
         }
     }
 }
 
 fn draw_cues(
-    frame: &mut Frame,
-    bounds: Rectangle,
+    list: &mut DrawListBuilder,
+    text: &mut TextContext,
+    bounds: Rect,
     cues: &[f32],
     window: &Range<f32>,
     metrics: WaveSkin,
     palette: HeroPalette,
 ) {
     for index in visible_mark_range(cues, window) {
-        let x = norm_to_x(cues[index], window, bounds.width);
-        frame.stroke(
-            &Path::line(Point::new(x, 0.0), Point::new(x, bounds.height)),
-            Stroke::default()
-                .with_color(palette.base.wave_high)
-                .with_width(metrics.cue_line_width),
+        let x = bounds.x + norm_to_x(cues[index], window, bounds.w);
+        list.stroke_line(
+            Pt { x, y: bounds.y },
+            Pt {
+                x,
+                y: bounds.y + bounds.h,
+            },
+            palette.base.wave_high,
+            metrics.cue_line_width,
         );
-        let badge = Rectangle::new(
-            Point::new(x - metrics.cue_badge_size / 2.0, 0.0),
-            Size::new(metrics.cue_badge_size, metrics.cue_badge_size),
-        );
-        frame.fill_rectangle(badge.position(), badge.size(), palette.cue_badge);
-        frame.fill_text(canvas::Text {
-            content: (index + 1).to_string(),
-            position: badge.center(),
-            max_width: badge.width,
-            color: palette.cue_text,
-            size: metrics.cue_badge_text.size.into(),
-            font: fonts::mono(metrics.cue_badge_text.weight),
-            align_x: text::Alignment::Center,
-            align_y: Vertical::Center,
-            shaping: text::Shaping::Advanced,
-            ..canvas::Text::default()
-        });
+        let badge = Rect {
+            h: metrics.cue_badge_size,
+            w: metrics.cue_badge_size,
+            x: x - metrics.cue_badge_size / 2.0,
+            y: bounds.y,
+        };
+        list.fill_rect(badge, palette.cue_badge);
+        draw_cue_text(list, text, badge, index + 1, metrics, palette.cue_text);
     }
 }
 
+fn draw_cue_text(
+    list: &mut DrawListBuilder,
+    text: &mut TextContext,
+    bounds: Rect,
+    index: usize,
+    metrics: WaveSkin,
+    color: Rgba,
+) {
+    let content = index.to_string();
+    let run = text.shape(
+        &content,
+        TextRoleSkin {
+            color: ColorRole::Text,
+            font: FontFamily::Mono,
+            size: metrics.cue_badge_text.size,
+            spacing: 0.0,
+            weight: metrics.cue_badge_text.weight,
+        },
+        Some(bounds.w),
+    );
+    list.text(
+        &run,
+        &content,
+        Transform::translate(Pt {
+            x: bounds.x + (bounds.w - run.width()) / 2.0,
+            y: bounds.y + (bounds.h - run.height()) / 2.0,
+        }),
+        color,
+    );
+}
+
 fn draw_playhead(
-    frame: &mut Frame,
-    bounds: Rectangle,
+    list: &mut DrawListBuilder,
+    bounds: Rect,
     position: f32,
     window: &Range<f32>,
     metrics: WaveSkin,
-    palette: RenderPalette,
+    palette: WavePalette,
 ) {
-    let x = norm_to_x(position.clamp(0.0, 1.0), window, bounds.width);
-    frame.stroke(
-        &Path::line(Point::new(x, 0.0), Point::new(x, bounds.height)),
-        Stroke::default()
-            .with_color(palette.accent)
-            .with_width(metrics.playhead_width),
+    let x = bounds.x + norm_to_x(position.clamp(0.0, 1.0), window, bounds.w);
+    list.stroke_line(
+        Pt { x, y: bounds.y },
+        Pt {
+            x,
+            y: bounds.y + bounds.h,
+        },
+        palette.accent,
+        metrics.playhead_width,
     );
     let marker_x = x - metrics.playhead_marker_width / 2.0;
     for y in [
-        0.0,
-        (bounds.height - metrics.playhead_marker_height).max(0.0),
+        bounds.y,
+        bounds.y + (bounds.h - metrics.playhead_marker_height).max(0.0),
     ] {
-        frame.fill_rectangle(
-            Point::new(marker_x, y),
-            Size::new(
-                metrics.playhead_marker_width,
-                metrics.playhead_marker_height,
-            ),
+        list.fill_rect(
+            Rect {
+                h: metrics.playhead_marker_height,
+                w: metrics.playhead_marker_width,
+                x: marker_x,
+                y,
+            },
             palette.accent,
         );
     }
 }
 
-fn with_alpha(color: Color, alpha: f32) -> Color {
-    Color { a: alpha, ..color }
+const fn with_alpha(color: Rgba, alpha: f32) -> Rgba {
+    Rgba { a: alpha, ..color }
 }

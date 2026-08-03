@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    compile::{CompiledNode, compiled_node_size},
     expand::{BlockSpec, ControlSpec, ExpandedNode},
     module::{ButtonStyle, ChromeStyle, GlyphStyle, TextStyle},
     skin::{SkinDoc, WindowControlSkin},
@@ -268,6 +269,59 @@ pub(crate) fn visible<'a, N: BlockNode>(
     children
         .iter()
         .filter(move |child| !is_hidden(*child, hidden))
+}
+
+pub(crate) fn visible_compiled_children<'a>(
+    children: &'a [(f32, CompiledNode)],
+    hidden: Hidden<'a>,
+) -> impl Iterator<Item = (f32, &'a CompiledNode)> {
+    children
+        .iter()
+        .filter(move |(_, child)| !is_hidden(child, hidden))
+        .map(|(weight, child)| (*weight, child))
+}
+
+pub(crate) fn compiled_node_size_with_hidden(
+    node: &CompiledNode,
+    skin: &SkinDoc,
+    hidden: Hidden<'_>,
+) -> SizeSpec {
+    match node {
+        CompiledNode::Optional { child, .. } => compiled_node_size_with_hidden(child, skin, hidden),
+        node if !node.blocks() => compiled_node_size(node),
+        CompiledNode::Split { axis, children, .. } => {
+            let sizes = visible_compiled_children(children, hidden)
+                .map(|(_, child)| compiled_node_size_with_hidden(child, skin, hidden));
+            match axis {
+                crate::layout::Axis::Horizontal => combine_horizontal(sizes),
+                crate::layout::Axis::Vertical => combine_vertical(sizes),
+            }
+        }
+        CompiledNode::Module { chrome, root, .. } => {
+            crate::compile::module_size(root, *chrome, skin, hidden)
+        }
+    }
+}
+
+pub(crate) fn effective_size(node: &ExpandedNode, skin: &SkinDoc) -> Option<SizeSpec> {
+    let declared = match node {
+        ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
+            return effective_size(child, skin);
+        }
+        ExpandedNode::Popover { anchor, .. } => return effective_size(anchor, skin),
+        ExpandedNode::Row { size, .. }
+        | ExpandedNode::Column { size, .. }
+        | ExpandedNode::Slot { size, .. }
+        | ExpandedNode::Control { size, .. } => *size,
+    };
+    declared.or_else(|| match node {
+        ExpandedNode::Control {
+            spec: ControlSpec::TabLarge { .. },
+            ..
+        } => None,
+        ExpandedNode::Control { spec, .. } => Some(control_size(spec, skin)),
+        _ => None,
+    })
 }
 
 /// Computes a node's intrinsic size from its override, children, or control specification.

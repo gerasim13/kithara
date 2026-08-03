@@ -1,5 +1,6 @@
 pub mod address;
 mod controls;
+pub mod document;
 pub mod event;
 pub mod fonts;
 mod icons;
@@ -28,7 +29,7 @@ pub(crate) use layer::{
 pub use model::{
     ReadValue, Reads, StereoLevels, TrackRow, TreeIcon, TreeRow, WaveBucket, WaveformView,
 };
-pub(crate) use owner::InputOwner;
+pub use owner::InputOwner;
 pub(crate) use picker::{
     hosted_picker_overlay, picker_hits, picker_selected_index, scope_picker, sync_picker,
 };

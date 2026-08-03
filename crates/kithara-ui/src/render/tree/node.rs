@@ -6,23 +6,26 @@ use iced::{
 use super::{
     control::render_control,
     flex::Flex,
-    geometry::{
-        Rendered, active_tone, apply_size, bordered, content_size, effective_size, filled,
-        frame_tone, padding,
-    },
+    geometry::{Rendered, apply_size, bordered, filled, length_for, padding},
     host,
-    read::{read_flag, resolve},
-    size::{node_size, visible_children},
+    read::read_flag,
 };
+#[cfg(test)]
+use crate::compile::CompiledNode;
 use crate::{
-    compile::{CompiledNode, CompiledUi},
-    expand::{ExpandedNode, SurfaceSpec},
+    compile::CompiledUi,
+    expand::{Binding, ControlSpec, ExpandedNode, SurfaceSpec},
     ids::InternId,
-    layout::{Axis, FrameSides},
-    module::{ChromeStyle, TextAlign},
-    render::{ControlAction, InputOwner, ReadValue, Reads, Skin, UiEvent, control_event},
-    size::{Dim, Hidden, is_hidden},
-    skin::ColorRole,
+    layout::Axis,
+    module::TextAlign,
+    render::{
+        ControlAction, InputOwner, Reads, Skin, UiEvent,
+        document::{
+            Group, Host as DocumentHost, Module as DocumentModule, Popover as DocumentPopover,
+        },
+        window_layers,
+    },
+    size::{Dim, SizeSpec},
     widgets::{
         DropZone, ModuleChrome, Widget,
         anchored::{Anchored, Placement},
@@ -30,26 +33,26 @@ use crate::{
     },
 };
 
-pub(super) fn render_compiled<'a>(
-    node: &CompiledNode,
+pub(super) struct IcedHost<'a, 'reads> {
     ui: &'a CompiledUi,
-    reads: &dyn Reads,
+    reads: &'reads dyn Reads,
     skin: &'a Skin,
-) -> Element<'a, UiEvent> {
-    let hidden: Hidden<'_> = &|block| read_flag(Some(&block.hidden), reads, ui);
-    match node {
-        CompiledNode::Optional { child, .. } => render_compiled(child, ui, reads, skin),
-        CompiledNode::Split { axis, children, .. } => match axis {
+}
+
+impl<'a, 'reads> IcedHost<'a, 'reads> {
+    pub(super) const fn new(ui: &'a CompiledUi, reads: &'reads dyn Reads, skin: &'a Skin) -> Self {
+        Self { ui, reads, skin }
+    }
+}
+
+impl<'a> DocumentHost for IcedHost<'a, '_> {
+    type Output = Element<'a, UiEvent>;
+
+    fn split(&mut self, axis: Axis, children: Vec<(f32, SizeSpec, Self::Output)>) -> Self::Output {
+        match axis {
             Axis::Horizontal => container(
-                Flex::row_weighted(visible_children(children, hidden).map(|(weight, child)| {
-                    (
-                        render_compiled(child, ui, reads, skin),
-                        Size::new(
-                            main_length(node_size(child, skin.document(), hidden).w),
-                            Length::Fill,
-                        ),
-                        weight,
-                    )
+                Flex::row_weighted(children.into_iter().map(|(weight, size, child)| {
+                    (child, Size::new(main_length(size.w), Length::Fill), weight)
                 }))
                 .width(Length::Fill)
                 .height(Length::Fill),
@@ -58,15 +61,8 @@ pub(super) fn render_compiled<'a>(
             .height(Length::Fill)
             .into(),
             Axis::Vertical => container(
-                Flex::column_weighted(visible_children(children, hidden).map(|(weight, child)| {
-                    (
-                        render_compiled(child, ui, reads, skin),
-                        Size::new(
-                            Length::Fill,
-                            main_length(node_size(child, skin.document(), hidden).h),
-                        ),
-                        weight,
-                    )
+                Flex::column_weighted(children.into_iter().map(|(weight, size, child)| {
+                    (child, Size::new(Length::Fill, main_length(size.h)), weight)
                 }))
                 .width(Length::Fill)
                 .height(Length::Fill),
@@ -74,94 +70,190 @@ pub(super) fn render_compiled<'a>(
             .width(Length::Fill)
             .height(Length::Fill)
             .into(),
-        },
-        CompiledNode::Module {
-            instance,
-            module,
-            title,
-            chip,
-            assign,
-            chrome,
-            frame,
-            corners,
-            footer,
-            drop,
-            collapsed,
-            root,
-            ..
-        } => {
-            let instance_id = *instance;
-            let instance = ui.resolve(*instance);
-            let module = ui.resolve(*module);
-            let collapsed = *chrome == ChromeStyle::Full
-                && matches!(
-                    reads.get(ui.resolve(*collapsed)),
-                    Some(ReadValue::Bool(true))
-                );
-            let footer = footer
-                .as_ref()
-                .and_then(|binding| resolve(reads, binding, ui))
-                .and_then(|value| match value {
-                    ReadValue::Text(text) => Some(text.to_owned()),
-                    _ => None,
-                });
-            let content_hosted = hosted_module(module);
-            let chrome_hosted = *chrome == ChromeStyle::Full || drop.is_some();
-            let content: Element<'a, UiEvent> = if collapsed {
-                Space::new().into()
-            } else if content_hosted {
-                let child = render_engine_node(root, &[], instance_id, ui, reads, skin);
-                host::host(child, root, ui, reads, skin)
+        }
+    }
+
+    fn module(
+        &mut self,
+        mut module: DocumentModule<'_>,
+        content: Option<Self::Output>,
+    ) -> Self::Output {
+        let instance = self.ui.resolve(module.instance());
+        let module_name = self.ui.resolve(module.module());
+        let content = content.unwrap_or_else(|| Space::new().into());
+        let chrome_hosted = module.chrome_hosted();
+        let child = ModuleChrome::builder()
+            .content(content)
+            .module(module_name)
+            .maybe_title(module.title().map(|id| self.ui.resolve(id)))
+            .maybe_chip(module.chip().map(|id| self.ui.resolve(id)))
+            .assign(
+                module
+                    .assign()
+                    .iter()
+                    .map(|id| self.ui.resolve(*id))
+                    .collect(),
+            )
+            .style(module.chrome())
+            .frame(module.frame())
+            .corners(module.corners())
+            .maybe_footer(module.take_footer())
+            .input_owner(if chrome_hosted {
+                InputOwner::Engine
             } else {
-                render_node(
-                    root,
-                    &[],
-                    NodeContext {
-                        owner: instance_id,
-                        ui,
-                        reads,
-                        skin,
-                        input_owner: InputOwner::Leaf,
-                    },
-                )
-            };
-            let child = ModuleChrome::builder()
-                .content(content)
-                .module(module)
-                .maybe_title(title.map(|id| ui.resolve(id)))
-                .maybe_chip(chip.map(|id| ui.resolve(id)))
-                .assign(assign.iter().map(|id| ui.resolve(*id)).collect())
-                .style(*chrome)
-                .frame(*frame)
-                .corners(*corners)
-                .maybe_footer(footer)
-                .input_owner(if chrome_hosted {
-                    InputOwner::Engine
-                } else {
-                    InputOwner::Leaf
-                })
-                .maybe_drop(
-                    drop.as_ref()
-                        .map(|drop| DropZone::new(read_flag(Some(&drop.read), reads, ui))),
-                )
-                .collapsed(collapsed)
-                .skin(skin)
-                .build()
-                .view();
-            if chrome_hosted {
-                host::module_host(
-                    child,
-                    host::ModuleHost {
-                        instance,
-                        module,
-                        chrome: *chrome,
-                        collapsed,
-                        drop: drop.is_some(),
-                    },
-                )
-            } else {
-                child
-            }
+                InputOwner::Leaf
+            })
+            .maybe_drop(
+                module
+                    .drop()
+                    .map(|drop| DropZone::new(read_flag(Some(&drop.read), self.reads, self.ui))),
+            )
+            .collapsed(module.collapsed())
+            .skin(self.skin)
+            .build()
+            .view();
+        if chrome_hosted {
+            host::module_host(
+                child,
+                host::ModuleHost {
+                    instance,
+                    module: module_name,
+                    chrome: module.chrome(),
+                    collapsed: module.collapsed(),
+                    drop: module.drop().is_some(),
+                },
+            )
+        } else {
+            child
+        }
+    }
+
+    fn group(
+        &mut self,
+        group: Group<'_>,
+        children: Vec<(Option<f32>, Self::Output)>,
+    ) -> Self::Output {
+        let size = content_size(group.size());
+        let flex = match group.axis() {
+            Axis::Horizontal => Flex::row(
+                children
+                    .into_iter()
+                    .map(|(minimum, child)| (child, minimum)),
+            )
+            .spacing(group.gap())
+            .align(column_alignment(group.alignment()))
+            .width(size.0)
+            .height(size.1),
+            Axis::Vertical => Flex::column(
+                children
+                    .into_iter()
+                    .map(|(minimum, child)| (child, minimum)),
+            )
+            .spacing(group.gap())
+            .align(column_alignment(group.alignment()))
+            .width(size.0),
+        };
+        let element = wheeled(
+            bordered(
+                filled(
+                    container(flex)
+                        .padding(padding(group.padding_x(), group.padding_y()))
+                        .width(size.0)
+                        .height(size.1),
+                    group.background(),
+                    group.background_alpha(),
+                    self.skin,
+                ),
+                group.frame(),
+                (group.frame_color(), group.frame_width()),
+                size,
+                self.skin,
+            ),
+            group.surface(),
+            size,
+            self.ui,
+        );
+        apply_size(Rendered::leading(element), group.size())
+    }
+
+    fn popover(
+        &mut self,
+        popover: DocumentPopover,
+        anchor: Self::Output,
+        content: Option<Self::Output>,
+    ) -> Self::Output {
+        let content = content.unwrap_or_else(|| Space::new().into());
+        let element = Anchored::new(
+            anchor,
+            content,
+            popover.is_open(),
+            Placement {
+                at: popover.at(),
+                align: popover.align(),
+            },
+            crate::render::control_event(self.ui.resolve(popover.path()), ControlAction::Activate),
+            self.skin,
+        )
+        .into();
+        apply_size(Rendered::leading(element), popover.size())
+    }
+
+    fn pressable(
+        &mut self,
+        path: InternId,
+        child: Self::Output,
+        size: Option<SizeSpec>,
+    ) -> Self::Output {
+        let path = self.ui.resolve(path);
+        let element = mouse_area(child)
+            .on_press(crate::render::control_event(path, ControlAction::Activate))
+            .on_right_press(crate::render::control_event(
+                path,
+                ControlAction::SecondaryActivate,
+            ))
+            .into();
+        apply_size(Rendered::leading(element), size)
+    }
+
+    fn slot(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output {
+        let element = container(
+            Flex::column(children.into_iter().map(|child| (child, None)))
+                .spacing(self.skin.layout.grid_gap)
+                .width(Length::Fill),
+        )
+        .width(Length::Fill)
+        .into();
+        apply_size(Rendered::leading(element), size)
+    }
+
+    fn control(
+        &mut self,
+        path: InternId,
+        spec: &ControlSpec,
+        read: Option<&Binding>,
+        owner: InputOwner,
+        size: Option<SizeSpec>,
+    ) -> Self::Output {
+        apply_size(
+            render_control(path, spec, read, self.ui, self.reads, self.skin, owner),
+            size,
+        )
+    }
+
+    fn hosted(&mut self, node: &ExpandedNode, child: Self::Output) -> Self::Output {
+        host::host(child, node, self.ui, self.reads, self.skin)
+    }
+
+    fn window(
+        &mut self,
+        content: Self::Output,
+        dragged: Option<String>,
+        resize_edges: bool,
+    ) -> Self::Output {
+        if !resize_edges && dragged.is_none() {
+            content
+        } else {
+            window_layers(content, dragged, resize_edges, self.skin)
         }
     }
 }
@@ -171,6 +263,15 @@ fn main_length(dim: Dim) -> Length {
         Dim::Fixed(value) => Length::Fixed(value),
         _ => Length::Fill,
     }
+}
+
+fn content_size(size: Option<SizeSpec>) -> (Length, Length) {
+    size.map_or((Length::Fill, Length::Fill), |size| {
+        (
+            length_for(size.w, Length::Fill),
+            length_for(size.h, Length::Fill),
+        )
+    })
 }
 
 fn wheeled<'a>(
@@ -192,335 +293,6 @@ fn wheeled<'a>(
         .into()
 }
 
-#[derive(Clone, Copy)]
-struct NodeContext<'a, 'reads> {
-    owner: InternId,
-    ui: &'a CompiledUi,
-    reads: &'reads dyn Reads,
-    skin: &'a Skin,
-    input_owner: InputOwner,
-}
-
-fn render_node<'a>(
-    node: &ExpandedNode,
-    address: &[usize],
-    context: NodeContext<'a, '_>,
-) -> Element<'a, UiEvent> {
-    let NodeContext {
-        owner,
-        ui,
-        reads,
-        skin,
-        input_owner,
-    } = context;
-    if matches!(input_owner, InputOwner::Leaf) && hosts_engine(ui, owner, address) {
-        let child = render_engine_node(node, address, owner, ui, reads, skin);
-        return host::host(child, node, ui, reads, skin);
-    }
-
-    let size = content_size(node, skin);
-    let hidden: Hidden<'_> = &|block| read_flag(Some(&block.hidden), reads, ui);
-    let rendered = match node {
-        ExpandedNode::Optional { child, .. } => {
-            return render_child(child, address, 0, context);
-        }
-        ExpandedNode::Row {
-            children,
-            gap,
-            pad,
-            pad_x,
-            pad_y,
-            frame,
-            background,
-            background_alpha,
-            active,
-            active_background,
-            frame_color,
-            active_frame_color,
-            surface,
-            ..
-        } => {
-            let active = read_flag(active.as_ref(), reads, ui);
-            render_group(
-                Group {
-                    axis: Axis::Horizontal,
-                    alignment: Alignment::Center,
-                    children,
-                    gap: *gap,
-                    pad: *pad,
-                    pad_x: *pad_x,
-                    pad_y: *pad_y,
-                    frame: *frame,
-                    background: active_tone(*background, *active_background, active),
-                    background_alpha: *background_alpha,
-                    frame_tone: frame_tone(*frame_color, *active_frame_color, active, skin),
-                    surface: surface.as_ref(),
-                },
-                address,
-                context,
-                size,
-                hidden,
-            )
-        }
-        ExpandedNode::Column {
-            children,
-            gap,
-            align,
-            pad,
-            pad_x,
-            pad_y,
-            frame,
-            background,
-            background_alpha,
-            surface,
-            ..
-        } => render_group(
-            Group {
-                axis: Axis::Vertical,
-                alignment: column_alignment(*align),
-                children,
-                gap: *gap,
-                pad: *pad,
-                pad_x: *pad_x,
-                pad_y: *pad_y,
-                frame: *frame,
-                background: *background,
-                background_alpha: *background_alpha,
-                frame_tone: frame_tone(None, None, false, skin),
-                surface: surface.as_ref(),
-            },
-            address,
-            context,
-            size,
-            hidden,
-        ),
-        ExpandedNode::Popover {
-            path,
-            open,
-            at,
-            align,
-            anchor,
-            content,
-        } => {
-            let open = read_flag(Some(open), reads, ui);
-            let content: Element<'a, UiEvent> = if open {
-                render_child(content, address, 1, context)
-            } else {
-                Space::new().into()
-            };
-            Rendered::leading(
-                Anchored::new(
-                    render_child(anchor, address, 0, context),
-                    content,
-                    open,
-                    Placement {
-                        at: *at,
-                        align: *align,
-                    },
-                    control_event(ui.resolve(*path), ControlAction::Activate),
-                    skin,
-                )
-                .into(),
-            )
-        }
-        ExpandedNode::Pressable { path, child, .. } => {
-            let path = ui.resolve(*path);
-            Rendered::leading(
-                mouse_area(render_child(child, address, 0, context))
-                    .on_press(control_event(path, ControlAction::Activate))
-                    .on_right_press(control_event(path, ControlAction::SecondaryActivate))
-                    .into(),
-            )
-        }
-        ExpandedNode::Slot { children, .. } => render_slot(children, address, context, hidden),
-        ExpandedNode::Control {
-            path, spec, read, ..
-        } => render_control(*path, spec, read.as_ref(), ui, reads, skin, input_owner),
-    };
-    apply_size(rendered, effective_size(node, skin))
-}
-
-pub(super) fn render_engine_node<'a>(
-    node: &ExpandedNode,
-    address: &[usize],
-    owner: InternId,
-    ui: &'a CompiledUi,
-    reads: &dyn Reads,
-    skin: &'a Skin,
-) -> Element<'a, UiEvent> {
-    render_node(
-        node,
-        address,
-        NodeContext {
-            owner,
-            ui,
-            reads,
-            skin,
-            input_owner: InputOwner::Engine,
-        },
-    )
-}
-
-#[derive(Clone, Copy)]
-struct Group<'a> {
-    axis: Axis,
-    alignment: Alignment,
-    children: &'a [ExpandedNode],
-    gap: Option<f32>,
-    pad: Option<f32>,
-    pad_x: Option<f32>,
-    pad_y: Option<f32>,
-    frame: Option<FrameSides>,
-    background: Option<ColorRole>,
-    background_alpha: Option<f32>,
-    frame_tone: (ColorRole, f32),
-    surface: Option<&'a SurfaceSpec>,
-}
-
-fn render_group<'a>(
-    group: Group<'_>,
-    address: &[usize],
-    context: NodeContext<'a, '_>,
-    size: (Length, Length),
-    hidden: Hidden<'_>,
-) -> Rendered<'a> {
-    let Group {
-        axis,
-        alignment,
-        children,
-        gap,
-        pad,
-        pad_x,
-        pad_y,
-        frame,
-        background,
-        background_alpha,
-        frame_tone,
-        surface,
-    } = group;
-    let spacing = gap.unwrap_or(context.skin.layout.grid_gap);
-    let flex = match axis {
-        Axis::Horizontal => Flex::row(children.iter().enumerate().filter_map(|(index, child)| {
-            if is_hidden(child, hidden) {
-                return None;
-            }
-            Some((
-                render_child(child, address, index, context),
-                main_minimum(child, axis, context.skin),
-            ))
-        }))
-        .spacing(spacing)
-        .align(alignment)
-        .width(size.0)
-        .height(size.1),
-        Axis::Vertical => Flex::column(children.iter().enumerate().filter_map(|(index, child)| {
-            if is_hidden(child, hidden) {
-                return None;
-            }
-            Some((
-                render_child(child, address, index, context),
-                main_minimum(child, axis, context.skin),
-            ))
-        }))
-        .spacing(spacing)
-        .align(alignment)
-        .width(size.0),
-    };
-    Rendered::leading(wheeled(
-        bordered(
-            filled(
-                container(flex)
-                    .padding(padding(pad, pad_x, pad_y, context.skin))
-                    .width(size.0)
-                    .height(size.1),
-                background,
-                background_alpha,
-                context.skin,
-            ),
-            frame,
-            frame_tone,
-            size,
-            context.skin,
-        ),
-        surface,
-        size,
-        context.ui,
-    ))
-}
-
-fn render_child<'a>(
-    node: &ExpandedNode,
-    parent: &[usize],
-    index: usize,
-    context: NodeContext<'a, '_>,
-) -> Element<'a, UiEvent> {
-    let address = child_address(parent, index);
-    render_node(node, &address, context)
-}
-
-fn render_slot<'a>(
-    children: &[ExpandedNode],
-    address: &[usize],
-    context: NodeContext<'a, '_>,
-    hidden: Hidden<'_>,
-) -> Rendered<'a> {
-    Rendered::leading(
-        container(
-            Flex::column(children.iter().enumerate().filter_map(|(index, child)| {
-                if is_hidden(child, hidden) {
-                    return None;
-                }
-                Some((render_child(child, address, index, context), None))
-            }))
-            .spacing(context.skin.layout.grid_gap)
-            .width(Length::Fill),
-        )
-        .width(Length::Fill)
-        .into(),
-    )
-}
-
-fn child_address(parent: &[usize], index: usize) -> Vec<usize> {
-    let mut address = Vec::with_capacity(parent.len() + 1);
-    address.extend_from_slice(parent);
-    address.push(index);
-    address
-}
-
-const HOSTED_MODULES: [&str; 21] = [
-    "studio-deck",
-    "studio-strip",
-    "studio-strip-eq-3-band",
-    "studio-strip-eq-4-band",
-    "studio-mixer",
-    "studio-mixer-single",
-    "studio-overview",
-    "studio-overview-row",
-    "studio-overview-single",
-    "gallery-knobs",
-    "gallery-meters",
-    "gallery-toggles",
-    "gallery-chips",
-    "gallery-buttons-tab",
-    "gallery-cells-tab",
-    "gallery-faders-tab",
-    "gallery-library2-tab",
-    "gallery-tracklist-tab",
-    "gallery-tree-tab",
-    "gallery-module-tabs",
-    "gallery-nav",
-];
-
-fn hosted_module(module: &str) -> bool {
-    HOSTED_MODULES.contains(&module)
-}
-
-fn hosts_engine(ui: &CompiledUi, owner: InternId, address: &[usize]) -> bool {
-    HOSTED_MODULES
-        .iter()
-        .any(|module| ui.includes_module(owner, address, module))
-}
-
 const fn column_alignment(align: TextAlign) -> Alignment {
     match align {
         TextAlign::Start => Alignment::Start,
@@ -529,14 +301,38 @@ const fn column_alignment(align: TextAlign) -> Alignment {
     }
 }
 
-fn main_minimum(node: &ExpandedNode, axis: Axis, skin: &Skin) -> Option<f32> {
-    let size = effective_size(node, skin)?;
-    let dim = match axis {
-        Axis::Horizontal => size.w,
-        Axis::Vertical => size.h,
-    };
-    match dim {
-        Dim::Range { min, .. } => Some(min),
-        _ => None,
-    }
+#[cfg(test)]
+pub(super) fn render_compiled<'a>(
+    node: &CompiledNode,
+    ui: &'a CompiledUi,
+    reads: &dyn Reads,
+    skin: &'a Skin,
+) -> Element<'a, UiEvent> {
+    crate::render::document::render(
+        node,
+        ui,
+        reads,
+        skin.document(),
+        IcedHost::new(ui, reads, skin),
+    )
+}
+
+#[cfg(test)]
+pub(super) fn render_engine_node<'a>(
+    node: &ExpandedNode,
+    address: &[usize],
+    owner: InternId,
+    ui: &'a CompiledUi,
+    reads: &dyn Reads,
+    skin: &'a Skin,
+) -> Element<'a, UiEvent> {
+    crate::render::document::render_engine_subtree(
+        node,
+        address,
+        owner,
+        ui,
+        reads,
+        skin.document(),
+        IcedHost::new(ui, reads, skin),
+    )
 }

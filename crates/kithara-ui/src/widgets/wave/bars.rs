@@ -1,7 +1,6 @@
-use iced::{Color, Point, Rectangle, Size, widget::canvas::Frame};
-
 use crate::{
-    render::{WaveBucket, theme::RenderPalette},
+    draw::{DrawListBuilder, Rect, Rgba},
+    render::WaveBucket,
     skin::WaveSkin,
 };
 
@@ -10,51 +9,52 @@ pub(crate) fn step(metrics: WaveSkin) -> f32 {
     metrics.bar_width + metrics.bar_gap
 }
 
-/// Dim everything left of the playhead. `played_x` is the playhead in canvas
-/// pixels, so callers own the norm-to-pixel mapping their window implies.
+/// Dim everything left of the playhead. `played_width` is measured in logical
+/// pixels within `bounds`.
 pub(crate) fn draw_played(
-    frame: &mut Frame,
-    bounds: Rectangle,
-    played_x: f32,
+    list: &mut DrawListBuilder,
+    bounds: Rect,
+    played_width: f32,
     alpha: f32,
-    palette: RenderPalette,
+    color: Rgba,
 ) {
-    frame.fill_rectangle(
-        Point::ORIGIN,
-        Size::new(played_x.clamp(0.0, bounds.width), bounds.height),
-        Color {
-            a: alpha,
-            ..palette.bg_deep
+    list.fill_rect(
+        Rect {
+            h: bounds.h,
+            w: played_width.clamp(0.0, bounds.w),
+            x: bounds.x,
+            y: bounds.y,
         },
+        Rgba { a: alpha, ..color },
     );
 }
 
 /// One column of the waveform: the three bands share a width and nest by
 /// level, each drawn from the vertical centre over the previous one.
 pub(crate) fn draw_column(
-    frame: &mut Frame,
-    bounds: Rectangle,
+    list: &mut DrawListBuilder,
+    bounds: Rect,
     center_x: f32,
     bucket: WaveBucket,
     available_height: f32,
     metrics: WaveSkin,
-    palette: RenderPalette,
+    colors: [Rgba; 3],
 ) {
-    for (level, color) in [
-        (bucket.low, palette.wave_low),
-        (bucket.mid, palette.wave_mid),
-        (bucket.high, palette.wave_high),
-    ] {
+    for (level, color) in [bucket.low, bucket.mid, bucket.high]
+        .into_iter()
+        .zip(colors)
+    {
         let height = level.clamp(0.0, 1.0) * available_height;
         if height <= 0.0 {
             continue;
         }
-        frame.fill_rectangle(
-            Point::new(
-                center_x - metrics.bar_width / 2.0,
-                (bounds.height - height) / 2.0,
-            ),
-            Size::new(metrics.bar_width, height),
+        list.fill_rect(
+            Rect {
+                h: height,
+                w: metrics.bar_width,
+                x: center_x - metrics.bar_width / 2.0,
+                y: bounds.y + (bounds.h - height) / 2.0,
+            },
             color,
         );
     }

@@ -1,37 +1,33 @@
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     hash::{DefaultHasher, Hash, Hasher},
 };
 
 use iced::{
-    Color, Element, Event, Font, Length, Point, Rectangle, Renderer, Size, Theme,
-    alignment::Vertical,
+    Element, Event, Length, Rectangle, Renderer, Size, Theme,
     keyboard::{Event as KeyboardEvent, Modifiers},
     mouse::{self, Cursor},
-    widget::{
-        canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
-        text,
-    },
+    widget::canvas::{self, Action, Canvas, Frame, Geometry},
 };
 use kithara_platform::time::Instant;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
+    backends::IcedBackend,
+    draw::{DrawList, DrawListBuilder, Rect, Rgba, replay},
     interact::{
         CursorShape, Hover, Input, iced as iced_interact,
         recognizers::{Scalar, ScalarState, Track},
     },
     module::WaveStyle,
-    render::{
-        ReadValue, Reads, Skin, UiEvent, WaveBucket, fonts, model::derived, scalar, scalar_child,
-        theme::RenderPalette,
-    },
-    skin::{FontSkin, FrameSkin, WaveOverlaySkin, WaveSkin},
+    render::{ReadValue, Reads, Skin, UiEvent, WaveformView, model::derived, scalar, scalar_child},
+    text::TextContext,
     widgets::{
         Widget,
         wave::{
-            bars,
-            hero::{HeroPalette, HeroWave, draw as draw_hero_wave},
+            overlay::{Overlay, OverlayPalette},
+            paint::{WavePaint, WavePalette},
+            snapshot::{OverlayData, WaveformData},
             zoom_math::{clamp_zoom, window_bounds, x_to_norm, zoom_for_wheel},
         },
     },
@@ -49,7 +45,7 @@ pub(crate) struct MiniWave<'path, 'value, 'data, 'scope, 'reads, 'skin> {
     zoom: f32,
 }
 
-impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
+impl<'a, 'skin: 'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, 'skin> {
     fn view(self) -> Element<'a, UiEvent> {
         let path = self.path.to_owned();
         let paint = self.paint();
@@ -76,15 +72,18 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
     }
 }
 
-impl<'a> MiniWave<'_, '_, '_, '_, '_, '_> {
-    pub(crate) fn painted(self) -> Element<'a, UiEvent> {
+impl<'skin> MiniWave<'_, '_, '_, '_, '_, 'skin> {
+    pub(crate) fn painted<'a>(self) -> Element<'a, UiEvent>
+    where
+        'skin: 'a,
+    {
         Canvas::new(self.paint())
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
     }
 
-    fn paint(self) -> MiniWavePaint {
+    fn paint(self) -> MiniWavePaint<'skin> {
         let waveform = match self.value {
             Some(ReadValue::Waveform(waveform)) => Some(*waveform),
             _ => None,
@@ -125,41 +124,31 @@ impl<'a> MiniWave<'_, '_, '_, '_, '_, '_> {
             badge: self.badge.unwrap_or_default().to_owned(),
         });
         MiniWavePaint {
-            metrics: self.skin.wave,
-            background: self.skin.color(self.skin.wave.background),
-            border_color: self.skin.color(self.skin.wave.frame.border),
-            cue_badge_background: self.skin.color(self.skin.wave.cue_badge_background),
-            cue_badge_text_color: self.skin.color(self.skin.wave.cue_badge_text_color),
             overlay,
-            overlay_palette: OverlayPalette::new(self.skin),
-            palette: self.skin.palette,
+            overlay_palette: overlay_palette(self.skin),
+            progress,
+            skin: self.skin,
             style: self.style,
             waveform,
-            progress,
             wave_revision,
             zoom,
         }
     }
 }
 
-struct MiniWaveCanvas {
+struct MiniWaveCanvas<'skin> {
     path: String,
     drag: Scalar,
-    paint: MiniWavePaint,
+    paint: MiniWavePaint<'skin>,
 }
 
-struct MiniWavePaint {
-    metrics: WaveSkin,
-    background: Color,
-    border_color: Color,
-    cue_badge_background: Color,
-    cue_badge_text_color: Color,
+struct MiniWavePaint<'skin> {
     overlay: Option<OverlayData>,
     overlay_palette: OverlayPalette,
-    palette: RenderPalette,
+    progress: f32,
+    skin: &'skin Skin,
     style: WaveStyle,
     waveform: Option<WaveformData>,
-    progress: f32,
     wave_revision: Option<u64>,
     zoom: f32,
 }
@@ -174,90 +163,12 @@ struct MiniWaveState {
 
 #[derive(Default)]
 struct MiniWavePaintState {
+    text: RefCell<Option<TextContext>>,
     wave: canvas::Cache,
     wave_revision: Cell<Option<u64>>,
 }
 
-struct WaveformData {
-    buckets: Box<[WaveBucket]>,
-    beats: Box<[f32]>,
-    downbeats: Box<[f32]>,
-    loop_region: Option<[f32; 2]>,
-    cues: Box<[f32]>,
-}
-
-struct OverlayData {
-    title: String,
-    artist: String,
-    bpm: String,
-    key: String,
-    remain: String,
-    badge: String,
-}
-
-#[derive(Clone, Copy)]
-struct ReadoutData<'a> {
-    label: &'a str,
-    value: &'a str,
-    value_color: Color,
-    framed: bool,
-}
-
-#[derive(Clone, Copy)]
-struct CanvasText<'a> {
-    content: &'a str,
-    position: Point,
-    max_width: f32,
-    color: Color,
-    skin: FontSkin,
-    font: Font,
-    align_x: text::Alignment,
-    align_y: Vertical,
-}
-
-#[derive(Clone, Copy)]
-struct OverlayPalette {
-    background: Color,
-    art_background: Color,
-    art_border: Color,
-    art_label: Color,
-    title: Color,
-    artist: Color,
-    readout_background: Color,
-    readout_border: Color,
-    readout_label: Color,
-    bpm: Color,
-    key: Color,
-    remain: Color,
-    badge_background: Color,
-    badge_border: Color,
-    badge_text: Color,
-}
-
-impl OverlayPalette {
-    fn new(skin: &Skin) -> Self {
-        let overlay = skin.wave.overlay;
-        Self {
-            background: with_alpha(skin.color(overlay.background), overlay.background_alpha),
-            art_background: skin.color(overlay.art_background),
-            art_border: skin.color(overlay.art_frame.border),
-            art_label: skin.color(overlay.art_label_color),
-            title: skin.color(overlay.title_color),
-            artist: skin.color(overlay.artist_color),
-            readout_background: skin.color(overlay.readout_background),
-            readout_border: skin.color(overlay.readout_frame.border),
-            readout_label: skin.color(overlay.readout_label_color),
-            bpm: skin.color(overlay.bpm_color),
-            key: skin.color(overlay.key_color),
-            remain: skin.color(overlay.remain_color),
-            badge_background: skin.color(overlay.badge_background),
-            badge_border: skin.color(overlay.badge_frame.border),
-            badge_text: skin.color(overlay.badge_text_color),
-        }
-    }
-}
-
-impl canvas::Program<UiEvent> for MiniWaveCanvas {
+impl canvas::Program<UiEvent> for MiniWaveCanvas<'_> {
     type State = MiniWaveState;
 
     fn draw(
@@ -340,7 +251,7 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
     }
 }
 
-impl MiniWaveCanvas {
+impl MiniWaveCanvas<'_> {
     fn track_position(&self, bounds: Rectangle, cursor: Cursor) -> Option<f32> {
         let position = cursor.position()?;
         let window = window_bounds(self.paint.progress, self.paint.zoom);
@@ -348,7 +259,7 @@ impl MiniWaveCanvas {
     }
 }
 
-impl canvas::Program<UiEvent> for MiniWavePaint {
+impl canvas::Program<UiEvent> for MiniWavePaint<'_> {
     type State = MiniWavePaintState;
 
     fn draw(
@@ -363,7 +274,7 @@ impl canvas::Program<UiEvent> for MiniWavePaint {
     }
 }
 
-impl MiniWavePaint {
+impl MiniWavePaint<'_> {
     fn geometries(
         &self,
         state: &MiniWavePaintState,
@@ -372,46 +283,45 @@ impl MiniWavePaint {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Vec<Geometry> {
-        let wave = self.wave_revision.map_or_else(
-            || {
-                let mut frame = Frame::new(renderer, bounds.size());
-                self.draw_wave(&mut frame, bounds);
-                frame.into_geometry()
-            },
-            |revision| {
-                if state.wave_revision.get() != Some(revision) {
-                    state.wave.clear();
-                    state.wave_revision.set(Some(revision));
-                }
-                state.wave.draw(renderer, bounds.size(), |frame| {
-                    self.draw_wave(frame, bounds);
-                })
-            },
-        );
+        let paint = self.program();
+        let overlay_bounds = paint.overlay_bounds(Rect {
+            h: bounds.height,
+            w: bounds.width,
+            x: bounds.x,
+            y: bounds.y,
+        });
+        let bounds = local_bounds(&bounds);
+        let mut text = state.text.borrow_mut();
+        let text = text.get_or_insert_with(|| self.skin.text_resources().into());
 
-        let mut layers = vec![wave];
-        if !self.hero() {
-            let mut frame = Frame::new(renderer, bounds.size());
-            let head_x = self.progress.clamp(0.0, 1.0) * bounds.width;
-            frame.stroke(
-                &Path::line(Point::new(head_x, 0.0), Point::new(head_x, bounds.height)),
-                Stroke::default()
-                    .with_color(self.palette.accent_strong)
-                    .with_width(self.metrics.playhead_width),
-            );
-            layers.push(frame.into_geometry());
+        if self.wave_revision.is_none() {
+            let mut list = DrawListBuilder::default();
+            paint.paint(&mut list, text, bounds, false);
+            return vec![geometry(renderer, bounds, &list.finish(), self.skin)];
         }
-        let header = overlay_strip(bounds, self.metrics.overlay);
-        if let Some(overlay) = self.overlay.as_ref().filter(|_| !cursor.is_over(header)) {
-            let mut frame = Frame::new(renderer, bounds.size());
-            draw_overlay(
-                &mut frame,
-                bounds,
-                overlay,
-                self.metrics.overlay,
-                self.overlay_palette,
-            );
-            layers.push(frame.into_geometry());
+
+        let revision = self.wave_revision.unwrap_or_default();
+        if state.wave_revision.get() != Some(revision) {
+            state.wave.clear();
+            state.wave_revision.set(Some(revision));
+        }
+        let wave = state
+            .wave
+            .draw(renderer, Size::new(bounds.w, bounds.h), |frame| {
+                let mut list = DrawListBuilder::default();
+                paint.paint_wave(&mut list, text, bounds);
+                replay(
+                    &list.finish(),
+                    &mut IcedBackend::new(frame, self.skin.text_resources()),
+                );
+            });
+        let mut layers = vec![wave];
+        let show_overlay = !cursor.is_over(iced_bounds(overlay_bounds));
+        let mut foreground = DrawListBuilder::default();
+        paint.paint_foreground(&mut foreground, text, bounds, show_overlay);
+        let foreground = foreground.finish();
+        if !foreground.commands().is_empty() {
+            layers.push(geometry(renderer, bounds, &foreground, self.skin));
         }
         layers
     }
@@ -426,48 +336,99 @@ impl MiniWavePaint {
             .is_some_and(|waveform| !waveform.buckets.is_empty())
     }
 
-    fn draw_wave(&self, frame: &mut Frame, bounds: Rectangle) {
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.background);
-        if let Some(waveform) = &self.waveform {
-            if self.hero() {
-                self.draw_zoom_wave(frame, bounds, waveform);
-            } else {
-                draw_bars(frame, bounds, &waveform.buckets, self.metrics, self.palette);
-                if self.style == WaveStyle::Default {
-                    bars::draw_played(
-                        frame,
-                        bounds,
-                        self.progress.clamp(0.0, 1.0) * bounds.width,
-                        self.metrics.overview_played_alpha,
-                        self.palette,
-                    );
-                }
-            }
+    fn program(&self) -> WavePaint<'_> {
+        let waveform = self.waveform.as_ref().map(|waveform| WaveformView {
+            buckets: &waveform.buckets,
+            beats: &waveform.beats,
+            downbeats: &waveform.downbeats,
+            bpm: None,
+            r#loop: waveform.loop_region,
+            cues: &waveform.cues,
+        });
+        let overlay = self.overlay.as_ref().map(|overlay| Overlay {
+            title: &overlay.title,
+            artist: &overlay.artist,
+            bpm: &overlay.bpm,
+            key: &overlay.key,
+            remain: &overlay.remain,
+            badge: &overlay.badge,
+            palette: self.overlay_palette,
+        });
+        WavePaint {
+            background: self.skin.rgba(self.skin.wave.background),
+            border: self.skin.rgba(self.skin.wave.frame.border),
+            cue_badge: self.skin.rgba(self.skin.wave.cue_badge_background),
+            cue_text: self.skin.rgba(self.skin.wave.cue_badge_text_color),
+            metrics: self.skin.wave,
+            overlay,
+            palette: WavePalette {
+                bg_deep: self.skin.palette.bg_deep.into(),
+                line: self.skin.palette.line.into(),
+                text_dim: self.skin.palette.text_dim.into(),
+                accent: self.skin.palette.accent.into(),
+                accent_strong: self.skin.palette.accent_strong.into(),
+                wave_low: self.skin.palette.wave_low.into(),
+                wave_mid: self.skin.palette.wave_mid.into(),
+                wave_high: self.skin.palette.wave_high.into(),
+            },
+            progress: self.progress,
+            style: self.style,
+            waveform,
+            zoom: self.zoom,
         }
-        draw_border(frame, bounds, self.metrics.frame, self.border_color);
     }
+}
 
-    fn draw_zoom_wave(&self, frame: &mut Frame, bounds: Rectangle, data: &WaveformData) {
-        draw_hero_wave(
-            frame,
-            bounds,
-            HeroWave {
-                beats: &data.beats,
-                buckets: &data.buckets,
-                cues: &data.cues,
-                downbeats: &data.downbeats,
-                loop_region: data.loop_region,
-                position: self.progress,
-                zoom: self.zoom,
-            },
-            self.metrics,
-            HeroPalette {
-                base: self.palette,
-                cue_badge: self.cue_badge_background,
-                cue_text: self.cue_badge_text_color,
-            },
-        );
+fn geometry(renderer: &Renderer, bounds: Rect, list: &DrawList, skin: &Skin) -> Geometry {
+    let mut frame = Frame::new(renderer, Size::new(bounds.w, bounds.h));
+    replay(
+        list,
+        &mut IcedBackend::new(&mut frame, skin.text_resources()),
+    );
+    frame.into_geometry()
+}
+
+const fn local_bounds(bounds: &Rectangle) -> Rect {
+    Rect {
+        h: bounds.height,
+        w: bounds.width,
+        x: 0.0,
+        y: 0.0,
     }
+}
+
+const fn iced_bounds(bounds: Rect) -> Rectangle {
+    Rectangle {
+        height: bounds.h,
+        width: bounds.w,
+        x: bounds.x,
+        y: bounds.y,
+    }
+}
+
+fn overlay_palette(skin: &Skin) -> OverlayPalette {
+    let metrics = skin.wave.overlay;
+    OverlayPalette {
+        background: with_alpha(skin.rgba(metrics.background), metrics.background_alpha),
+        art_background: skin.rgba(metrics.art_background),
+        art_border: skin.rgba(metrics.art_frame.border),
+        art_label: skin.rgba(metrics.art_label_color),
+        title: skin.rgba(metrics.title_color),
+        artist: skin.rgba(metrics.artist_color),
+        readout_background: skin.rgba(metrics.readout_background),
+        readout_border: skin.rgba(metrics.readout_frame.border),
+        readout_label: skin.rgba(metrics.readout_label_color),
+        bpm: skin.rgba(metrics.bpm_color),
+        key: skin.rgba(metrics.key_color),
+        remain: skin.rgba(metrics.remain_color),
+        badge_background: skin.rgba(metrics.badge_background),
+        badge_border: skin.rgba(metrics.badge_frame.border),
+        badge_text: skin.rgba(metrics.badge_text_color),
+    }
+}
+
+const fn with_alpha(color: Rgba, alpha: f32) -> Rgba {
+    Rgba { a: alpha, ..color }
 }
 
 fn wave_revision(waveform: Option<&WaveformData>, progress: f32, zoom: f32) -> u64 {
@@ -495,301 +456,6 @@ fn wave_revision(waveform: Option<&WaveformData>, progress: f32, zoom: f32) -> u
     hasher.finish()
 }
 
-fn overlay_strip(bounds: Rectangle, metrics: WaveOverlaySkin) -> Rectangle {
-    Rectangle::new(
-        bounds.position(),
-        Size::new(bounds.width, metrics.height.min(bounds.height)),
-    )
-}
-
-fn draw_overlay(
-    frame: &mut Frame,
-    bounds: Rectangle,
-    data: &OverlayData,
-    metrics: WaveOverlaySkin,
-    palette: OverlayPalette,
-) {
-    let height = overlay_strip(bounds, metrics).height;
-    frame.fill_rectangle(
-        Point::ORIGIN,
-        Size::new(bounds.width, height),
-        palette.background,
-    );
-    let summary_x = draw_art(frame, height, metrics, palette);
-    let telemetry_x = draw_telemetry(frame, bounds.width, height, data, metrics, palette);
-    draw_summary(
-        frame,
-        height,
-        Rectangle::new(
-            Point::new(summary_x, metrics.padding_y),
-            Size::new(
-                (telemetry_x - metrics.gap - summary_x).max(0.0),
-                (height - metrics.padding_y * 2.0).max(0.0),
-            ),
-        ),
-        data,
-        metrics,
-        palette,
-    );
-}
-
-fn draw_art(
-    frame: &mut Frame,
-    height: f32,
-    metrics: WaveOverlaySkin,
-    palette: OverlayPalette,
-) -> f32 {
-    let content_y = (height - metrics.art_size) / 2.0;
-    let art = Rectangle::new(
-        Point::new(metrics.padding_x, content_y),
-        Size::new(metrics.art_size, metrics.art_size),
-    );
-    draw_box(
-        frame,
-        art,
-        metrics.art_frame,
-        palette.art_background,
-        palette.art_border,
-    );
-    draw_text(
-        frame,
-        CanvasText {
-            content: "ART",
-            position: art.center(),
-            max_width: art.width,
-            color: palette.art_label,
-            skin: metrics.art_label,
-            font: fonts::mono(metrics.art_label.weight),
-            align_x: text::Alignment::Center,
-            align_y: Vertical::Center,
-        },
-    );
-    art.x + art.width + metrics.gap
-}
-
-fn draw_telemetry(
-    frame: &mut Frame,
-    width: f32,
-    height: f32,
-    data: &OverlayData,
-    metrics: WaveOverlaySkin,
-    palette: OverlayPalette,
-) -> f32 {
-    let readout_height = metrics
-        .readout_height
-        .min((height - metrics.padding_y * 2.0).max(0.0));
-    let readout_y = (height - readout_height) / 2.0;
-    let mut right = width - metrics.padding_x;
-    let badge = Rectangle::new(
-        Point::new(
-            right - metrics.badge_size,
-            (height - metrics.badge_size) / 2.0,
-        ),
-        Size::new(metrics.badge_size, metrics.badge_size),
-    );
-    draw_box(
-        frame,
-        badge,
-        metrics.badge_frame,
-        palette.badge_background,
-        palette.badge_border,
-    );
-    draw_text(
-        frame,
-        CanvasText {
-            content: &data.badge,
-            position: badge.center(),
-            max_width: badge.width,
-            color: palette.badge_text,
-            skin: metrics.badge_text,
-            font: fonts::display(metrics.badge_text.weight),
-            align_x: text::Alignment::Center,
-            align_y: Vertical::Center,
-        },
-    );
-    right = badge.x - metrics.gap;
-
-    let remain = Rectangle::new(
-        Point::new(right - metrics.remain_width, readout_y),
-        Size::new(metrics.remain_width, readout_height),
-    );
-    draw_readout(
-        frame,
-        remain,
-        ReadoutData {
-            label: "REMAIN",
-            value: &data.remain,
-            value_color: palette.remain,
-            framed: false,
-        },
-        metrics,
-        palette,
-    );
-    right = remain.x - metrics.gap;
-
-    let key = Rectangle::new(
-        Point::new(right - metrics.key_width, readout_y),
-        Size::new(metrics.key_width, readout_height),
-    );
-    draw_readout(
-        frame,
-        key,
-        ReadoutData {
-            label: "KEY",
-            value: &data.key,
-            value_color: palette.key,
-            framed: true,
-        },
-        metrics,
-        palette,
-    );
-    right = key.x - metrics.gap;
-
-    let bpm = Rectangle::new(
-        Point::new(right - metrics.bpm_width, readout_y),
-        Size::new(metrics.bpm_width, readout_height),
-    );
-    draw_readout(
-        frame,
-        bpm,
-        ReadoutData {
-            label: "BPM",
-            value: &data.bpm,
-            value_color: palette.bpm,
-            framed: true,
-        },
-        metrics,
-        palette,
-    );
-    bpm.x
-}
-
-fn draw_summary(
-    frame: &mut Frame,
-    height: f32,
-    bounds: Rectangle,
-    data: &OverlayData,
-    metrics: WaveOverlaySkin,
-    palette: OverlayPalette,
-) {
-    let total_text_height = metrics.title.size + metrics.summary_gap + metrics.artist.size;
-    let title_y = (height - total_text_height) / 2.0;
-    frame.with_clip(bounds, |frame| {
-        draw_text(
-            frame,
-            CanvasText {
-                content: &data.title,
-                position: Point::new(bounds.x, title_y),
-                max_width: bounds.width,
-                color: palette.title,
-                skin: metrics.title,
-                font: fonts::display(metrics.title.weight),
-                align_x: text::Alignment::Left,
-                align_y: Vertical::Top,
-            },
-        );
-        draw_text(
-            frame,
-            CanvasText {
-                content: &data.artist,
-                position: Point::new(bounds.x, title_y + metrics.title.size + metrics.summary_gap),
-                max_width: bounds.width,
-                color: palette.artist,
-                skin: metrics.artist,
-                font: fonts::sans(metrics.artist.weight),
-                align_x: text::Alignment::Left,
-                align_y: Vertical::Top,
-            },
-        );
-    });
-}
-
-fn draw_readout(
-    frame: &mut Frame,
-    bounds: Rectangle,
-    data: ReadoutData<'_>,
-    metrics: WaveOverlaySkin,
-    palette: OverlayPalette,
-) {
-    if data.framed {
-        draw_box(
-            frame,
-            bounds,
-            metrics.readout_frame,
-            palette.readout_background,
-            palette.readout_border,
-        );
-    }
-    let inner_height = (bounds.height - metrics.readout_padding_y * 2.0).max(0.0);
-    let total_height =
-        metrics.readout_label.size + metrics.readout_gap + metrics.readout_value.size;
-    let label_y = bounds.y + metrics.readout_padding_y + (inner_height - total_height) / 2.0;
-    let x = bounds.x + bounds.width - metrics.readout_padding_x;
-    draw_text(
-        frame,
-        CanvasText {
-            content: data.label,
-            position: Point::new(x, label_y),
-            max_width: (bounds.width - metrics.readout_padding_x * 2.0).max(0.0),
-            color: palette.readout_label,
-            skin: metrics.readout_label,
-            font: fonts::mono(metrics.readout_label.weight),
-            align_x: text::Alignment::Right,
-            align_y: Vertical::Top,
-        },
-    );
-    draw_text(
-        frame,
-        CanvasText {
-            content: data.value,
-            position: Point::new(
-                x,
-                label_y + metrics.readout_label.size + metrics.readout_gap,
-            ),
-            max_width: (bounds.width - metrics.readout_padding_x * 2.0).max(0.0),
-            color: data.value_color,
-            skin: metrics.readout_value,
-            font: fonts::mono(metrics.readout_value.weight),
-            align_x: text::Alignment::Right,
-            align_y: Vertical::Top,
-        },
-    );
-}
-
-fn draw_box(
-    frame: &mut Frame,
-    bounds: Rectangle,
-    skin: FrameSkin,
-    background: Color,
-    border: Color,
-) {
-    let path = Path::rounded_rectangle(bounds.position(), bounds.size(), skin.radius.into());
-    frame.fill(&path, background);
-    if skin.border_width > 0.0 {
-        frame.stroke(
-            &path,
-            Stroke::default()
-                .with_color(border)
-                .with_width(skin.border_width),
-        );
-    }
-}
-
-fn draw_text(frame: &mut Frame, text: CanvasText<'_>) {
-    frame.fill_text(canvas::Text {
-        content: text.content.to_owned(),
-        position: text.position,
-        max_width: text.max_width,
-        color: text.color,
-        size: text.skin.size.into(),
-        font: text.font,
-        align_x: text.align_x,
-        align_y: text.align_y,
-        shaping: text::Shaping::Advanced,
-        ..canvas::Text::default()
-    });
-}
-
 const fn em_dash() -> &'static str {
     "\u{2014}"
 }
@@ -801,84 +467,16 @@ fn read_text<'a>(reads: &'a dyn Reads, endpoint: &str) -> Option<&'a str> {
     }
 }
 
-fn draw_bars(
-    frame: &mut Frame,
-    bounds: Rectangle,
-    buckets: &[WaveBucket],
-    metrics: WaveSkin,
-    palette: RenderPalette,
-) {
-    let step = bars::step(metrics);
-    let content_width = (bounds.width - metrics.content_inset * 2.0).max(0.0);
-    let max_columns: usize = ((content_width + metrics.bar_gap) / step).floor().as_();
-    let columns = max_columns.min(buckets.len());
-    if columns == 0 {
-        return;
-    }
-
-    let available_height = (bounds.height - metrics.content_inset * 2.0).max(0.0);
-    for column in 0..columns {
-        let start = column * buckets.len() / columns;
-        let end = ((column + 1) * buckets.len() / columns)
-            .max(start + 1)
-            .min(buckets.len());
-        let peak = buckets[start..end].iter().fold(
-            WaveBucket {
-                low: 0.0,
-                mid: 0.0,
-                high: 0.0,
-            },
-            |peak, bucket| WaveBucket {
-                low: peak.low.max(bucket.low),
-                mid: peak.mid.max(bucket.mid),
-                high: peak.high.max(bucket.high),
-            },
-        );
-        let column_x: f32 = column.as_();
-        let center_x = metrics.content_inset + column_x * step + metrics.bar_width / 2.0;
-        bars::draw_column(
-            frame,
-            bounds,
-            center_x,
-            peak,
-            available_height,
-            metrics,
-            palette,
-        );
-    }
-}
-
-fn with_alpha(color: Color, alpha: f32) -> Color {
-    Color { a: alpha, ..color }
-}
-
-fn draw_border(frame: &mut Frame, bounds: Rectangle, skin: FrameSkin, color: Color) {
-    if skin.border_width <= 0.0 {
-        return;
-    }
-    let inset = skin.border_width / 2.0;
-    let path = Path::rounded_rectangle(
-        Point::new(inset, inset),
-        Size::new(
-            (bounds.width - skin.border_width).max(0.0),
-            (bounds.height - skin.border_width).max(0.0),
-        ),
-        skin.radius.into(),
-    );
-    frame.stroke(
-        &path,
-        Stroke::default()
-            .with_color(color)
-            .with_width(skin.border_width),
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use iced::advanced::widget::{Tree, tree::State};
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::{
+        draw::{DrawCmd, Geom},
+        render::WaveBucket,
+    };
 
     struct EmptyReads;
 
@@ -919,19 +517,131 @@ mod tests {
     #[kithara::test]
     fn overlay_hides_only_when_the_cursor_is_inside_the_header_strip() {
         let metrics = crate::builtin::skin_doc().wave.overlay;
-        let bounds = Rectangle::new(Point::new(100.0, 50.0), Size::new(400.0, 300.0));
-        let strip = overlay_strip(bounds, metrics);
+        let bounds = Rect {
+            h: 300.0,
+            w: 400.0,
+            x: 100.0,
+            y: 50.0,
+        };
+        let strip = crate::widgets::wave::overlay::strip(bounds, metrics);
 
-        let inside = Cursor::Available(Point::new(150.0, 50.0 + metrics.height / 2.0));
-        let below = Cursor::Available(Point::new(150.0, 50.0 + metrics.height + 40.0));
-        assert!(inside.is_over(strip));
-        assert!(!below.is_over(strip));
+        assert!(strip.contains(crate::draw::Pt {
+            x: 150.0,
+            y: 50.0 + metrics.height / 2.0,
+        }));
+        assert!(!strip.contains(crate::draw::Pt {
+            x: 150.0,
+            y: 50.0 + metrics.height + 40.0,
+        }));
     }
 
     #[kithara::test]
     fn overlay_strip_clamps_to_short_bounds() {
         let metrics = crate::builtin::skin_doc().wave.overlay;
-        let bounds = Rectangle::new(Point::ORIGIN, Size::new(200.0, metrics.height / 2.0));
-        assert_eq!(overlay_strip(bounds, metrics).height, bounds.height);
+        let bounds = Rect {
+            h: metrics.height / 2.0,
+            w: 200.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        assert_eq!(
+            crate::widgets::wave::overlay::strip(bounds, metrics).h,
+            bounds.h
+        );
+    }
+
+    #[kithara::test]
+    fn hero_wave_paints_every_layer_through_the_draw_seam() {
+        struct WaveReads {
+            buckets: [WaveBucket; 2],
+        }
+
+        impl Reads for WaveReads {
+            fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+                let endpoint = endpoint.split_once('@').map_or(endpoint, |(id, _)| id);
+                match endpoint {
+                    "deck.playback.waveform" => Some(ReadValue::Waveform(WaveformView {
+                        buckets: &self.buckets,
+                        beats: &[0.25],
+                        downbeats: &[0.5],
+                        bpm: Some(128.0),
+                        r#loop: Some([0.2, 0.6]),
+                        cues: &[0.4],
+                    })),
+                    "deck.playback.position_normalized" => Some(ReadValue::Scalar(0.3)),
+                    "deck.track.title" => Some(ReadValue::Text("Track")),
+                    "deck.track.source_kind" => Some(ReadValue::Text("Source")),
+                    "deck.track.key" => Some(ReadValue::Text("8A")),
+                    "deck.playback.remain" => Some(ReadValue::Text("-01:00")),
+                    _ => None,
+                }
+            }
+        }
+
+        let reads = WaveReads {
+            buckets: [
+                WaveBucket {
+                    low: 0.25,
+                    mid: 0.5,
+                    high: 0.75,
+                },
+                WaveBucket {
+                    low: 0.75,
+                    mid: 0.5,
+                    high: 0.25,
+                },
+            ],
+        };
+        let snapshot = MiniWave::builder()
+            .path("deck-a/wave")
+            .style(WaveStyle::Hero)
+            .badge("A")
+            .value(&reads.get("deck.playback.waveform").unwrap())
+            .scope("@deck=a")
+            .reads(&reads)
+            .skin(crate::builtin::skin())
+            .zoom(1.0)
+            .build()
+            .paint();
+        let mut text = TextContext::from(snapshot.skin.text_resources());
+        let mut list = DrawListBuilder::default();
+        snapshot.program().paint(
+            &mut list,
+            &mut text,
+            Rect {
+                h: 120.0,
+                w: 640.0,
+                x: 0.0,
+                y: 0.0,
+            },
+            true,
+        );
+        let list = list.finish();
+
+        assert!(list.commands().iter().any(|command| matches!(
+            command,
+            DrawCmd::Fill {
+                geom: Geom::Rect(_),
+                ..
+            }
+        )));
+        assert!(list.commands().iter().any(|command| matches!(
+            command,
+            DrawCmd::Stroke {
+                geom: Geom::Line { .. },
+                ..
+            }
+        )));
+        assert!(list.commands().iter().any(|command| matches!(
+            command,
+            DrawCmd::Text { content, .. } if content == "1"
+        )));
+        assert!(list.commands().iter().any(|command| matches!(
+            command,
+            DrawCmd::Clip { list, .. } if list.commands().iter().any(|nested| matches!(
+                nested,
+                DrawCmd::Text { content, .. } if content == "Track"
+            ))
+        )));
     }
 }
