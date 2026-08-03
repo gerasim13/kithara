@@ -373,7 +373,17 @@ async fn read_some(resource: &mut Resource, stage: &str) -> usize {
             Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => return count.get(),
             Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Pending { .. }) => {}
             Ok(ReadOutcome::Eof { .. }) => {
-                panic!("unexpected EOF while waiting for stage={stage}")
+                // The duration decides where a seek lands: the seek engine
+                // reports EOF outright when the target is at or past it. A
+                // wrong duration therefore produces this EOF without any
+                // decode, and the startup probe that measures it gives up on
+                // the first byte range that is not ready yet — so print what
+                // was measured alongside where we are.
+                panic!(
+                    "unexpected EOF while waiting for stage={stage}                      (duration={:?}, position={:?})",
+                    resource.duration(),
+                    Resource::position(resource),
+                )
             }
             Err(e) => panic!("decode error while waiting for stage={stage}: {e}"),
         }
