@@ -230,28 +230,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                         }
                     }
                 },
-                DecoderBuildPurpose::Reland(transition) => match complete.result {
-                    Ok(generation) => {
-                        if let Some(generation) =
-                            self.decode.restore_relanded(transition, generation)
-                        {
-                            self.retired.retire_generation(generation);
-                        }
-                    }
-                    Err(outcome) => {
-                        warn!(
-                            ?transition,
-                            ?outcome,
-                            "incoming decoder reland failed; aborting variant transition"
-                        );
-                        if self.decode.incoming_is_relanding(transition) {
-                            self.discard_local_incoming();
-                            if let Some(ref control) = self.variant_control {
-                                let _ = control.abort_variant(transition);
-                            }
-                        }
-                    }
-                },
             }
         }
     }
@@ -297,24 +275,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         // immediately below. A publication lock leaves both generations intact
         // and the next pass extends the staged range to the newer frontier.
         let prime = self.decode.prime_incoming(outgoing_frontier);
-        if self
-            .decode
-            .incoming_transition()
-            .is_some_and(|transition| self.decode.incoming_is_relanding(transition))
-        {
-            return;
-        }
-        if self.rebuild.can_prepare()
-            && let Some((transition, generation, landing)) =
-                self.decode.take_incoming_for_reland(outgoing_frontier)
-        {
-            if let Some(generation) = self.rebuild.prepare_reland(transition, generation, landing)
-                && let Some(generation) = self.decode.restore_relanded(transition, generation)
-            {
-                self.retired.retire_generation(generation);
-            }
-            return;
-        }
         if let Some(incoming) = self.decode.incoming_transition() {
             // The frontier and the prime outcome together are the only thing
             // that separates "the incoming is still staging" from "the splice

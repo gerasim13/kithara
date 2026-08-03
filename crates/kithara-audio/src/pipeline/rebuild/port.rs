@@ -4,7 +4,7 @@ use std::{
 };
 
 use crossbeam_queue::ArrayQueue;
-use kithara_decode::{DecodeResult, DecoderSeekOutcome, GaplessMode};
+use kithara_decode::{DecoderSeekOutcome, GaplessMode};
 use kithara_platform::{
     sync::Arc,
     time::Duration,
@@ -60,22 +60,12 @@ enum PendingInput<T: StreamType> {
 struct PendingJob<T: StreamType> {
     build: BuildId,
     deps: JobDeps,
+    input: PendingInput<T>,
+    landing: Option<Duration>,
+    media_info: MediaInfo,
+    offset: u64,
     purpose: DecoderBuildPurpose,
-    task: PendingTask<T>,
-}
-
-enum PendingTask<T: StreamType> {
-    Build {
-        input: PendingInput<T>,
-        landing: Option<Duration>,
-        media_info: MediaInfo,
-        offset: u64,
-        seek_epoch: u64,
-    },
-    Reland {
-        generation: Box<DecoderGeneration>,
-        landing: Duration,
-    },
+    seek_epoch: u64,
 }
 
 pub(crate) struct RebuildPort<T: StreamType> {
@@ -137,17 +127,15 @@ impl<T: StreamType> RebuildPort<T> {
         self.pending = Some(PendingJob {
             build,
             deps: self.deps.clone(),
-            purpose: DecoderBuildPurpose::Replacement,
-            task: PendingTask::Build {
-                input: PendingInput::Shared {
-                    stream: stream.clone(),
-                    offset: recreate.offset,
-                },
-                landing: None,
-                media_info: recreate.media_info.clone(),
+            input: PendingInput::Shared {
+                stream: stream.clone(),
                 offset: recreate.offset,
-                seek_epoch: started_seek_epoch,
             },
+            landing: None,
+            media_info: recreate.media_info.clone(),
+            offset: recreate.offset,
+            purpose: DecoderBuildPurpose::Replacement,
+            seek_epoch: started_seek_epoch,
         });
         Ok(RebuildState {
             build,
@@ -173,38 +161,14 @@ impl<T: StreamType> RebuildPort<T> {
         self.pending = Some(PendingJob {
             build,
             deps: self.deps.clone(),
+            input: PendingInput::Opened(reader),
+            landing: Some(landing),
+            media_info,
+            offset: 0,
             purpose: DecoderBuildPurpose::Incoming(transition),
-            task: PendingTask::Build {
-                input: PendingInput::Opened(reader),
-                landing: Some(landing),
-                media_info,
-                offset: 0,
-                seek_epoch,
-            },
+            seek_epoch,
         });
         Some((transition, build))
-    }
-
-    pub(crate) fn prepare_reland(
-        &mut self,
-        transition: VariantTransition,
-        generation: DecoderGeneration,
-        landing: Duration,
-    ) -> Option<DecoderGeneration> {
-        if self.pending.is_some() {
-            return Some(generation);
-        }
-        let build = self.next_build();
-        self.pending = Some(PendingJob {
-            build,
-            deps: self.deps.clone(),
-            purpose: DecoderBuildPurpose::Reland(transition),
-            task: PendingTask::Reland {
-                generation: Box::new(generation),
-                landing,
-            },
-        });
-        None
     }
 
     pub(crate) const fn can_prepare(&self) -> bool {
@@ -285,54 +249,13 @@ fn run<T: StreamType>(job: PendingJob<T>) {
     let PendingJob {
         build,
         deps,
+        input,
+        landing,
+        media_info,
+        offset,
         purpose,
-        task,
+        seek_epoch,
     } = job;
-    let result = match task {
-        PendingTask::Build {
-            input,
-            landing,
-            media_info,
-            offset,
-            seek_epoch,
-        } => run_build(build, &deps, input, landing, media_info, offset, seek_epoch),
-        PendingTask::Reland {
-            generation,
-            landing,
-        } => run_reland(build, *generation, landing),
-    };
-    let complete = DecoderBuildComplete {
-        build,
-        purpose,
-        result,
-    };
-    let completion = match purpose {
-        DecoderBuildPurpose::Replacement => &deps.replacement_completion,
-        DecoderBuildPurpose::Incoming(_) | DecoderBuildPurpose::Reland(_) => {
-            &deps.incoming_completion
-        }
-    };
-    if let Err(complete) = completion.push(complete) {
-        let _ = completion.pop();
-        if completion.push(complete).is_err() {
-            warn!(
-                build = build.get(),
-                "decoder build completion queue overflowed"
-            );
-        }
-    }
-    deps.wake.wake();
-}
-
-fn run_build<T: StreamType>(
-    build: BuildId,
-    deps: &JobDeps,
-    input: PendingInput<T>,
-    landing: Option<Duration>,
-    media_info: MediaInfo,
-    offset: u64,
-    seek_epoch: u64,
-) -> Result<DecoderGeneration, RecreateOutcome> {
     let reader = match input {
         PendingInput::Opened(reader) => reader,
         PendingInput::Shared { stream, offset } => stream.open_rebuild_reader(offset),
@@ -365,9 +288,6 @@ fn run_build<T: StreamType>(
             pending_head_skip,
             deps.gapless_mode,
         );
-        if let Some(landing) = landing {
-            generation.set_planned_landing(landing);
-        }
         if landing.is_some_and(|landing| !landing.is_zero()) {
             generation.notify_seek();
         }
@@ -376,7 +296,7 @@ fn run_build<T: StreamType>(
     if let Some(gate) = &construction_gate {
         gate.disarm();
     }
-    match built {
+    let result = match built {
         Ok(result) => result.map_err(|error| classify(&error)),
         Err(payload) => {
             warn!(
@@ -387,45 +307,26 @@ fn run_build<T: StreamType>(
             );
             Err(RecreateOutcome::SoftFailed)
         }
-    }
-}
-
-fn run_reland(
-    build: BuildId,
-    mut generation: DecoderGeneration,
-    landing: Duration,
-) -> Result<DecoderGeneration, RecreateOutcome> {
-    let relanded = catch_unwind(AssertUnwindSafe(|| -> DecodeResult<_> {
-        let epoch = generation.installed_at_seek_epoch();
-        let pending_head_skip = match generation.decoder_mut().seek(landing)? {
-            DecoderSeekOutcome::Landed { .. } => Some(ResumeState {
-                trim_head: true,
-                seek: SeekContext {
-                    target: landing,
-                    epoch,
-                },
-                ..Default::default()
-            }),
-            DecoderSeekOutcome::PastEof { .. } => None,
-        };
-        generation.set_pending_head_skip(pending_head_skip);
-        generation.set_planned_landing(landing);
-        if !landing.is_zero() {
-            generation.notify_seek();
-        }
-        Ok(generation)
-    }));
-    match relanded {
-        Ok(result) => result.map_err(|error| classify(&error)),
-        Err(payload) => {
+    };
+    let complete = DecoderBuildComplete {
+        build,
+        purpose,
+        result,
+    };
+    let completion = match purpose {
+        DecoderBuildPurpose::Replacement => &deps.replacement_completion,
+        DecoderBuildPurpose::Incoming(_) => &deps.incoming_completion,
+    };
+    if let Err(complete) = completion.push(complete) {
+        let _ = completion.pop();
+        if completion.push(complete).is_err() {
             warn!(
                 build = build.get(),
-                panic = %panic_message(payload),
-                "decoder seek panicked during incoming reland"
+                "decoder build completion queue overflowed"
             );
-            Err(RecreateOutcome::SoftFailed)
         }
     }
+    deps.wake.wake();
 }
 
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
