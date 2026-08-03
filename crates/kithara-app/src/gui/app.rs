@@ -13,7 +13,7 @@ use super::{
 use crate::{
     catalog::Catalog,
     config::AppConfig,
-    deck::{DeckId, DeckSet},
+    deck::{DeckId, DeckSet, EqMode},
     state::StateController,
     theme::gui,
 };
@@ -31,6 +31,8 @@ pub(crate) struct Kithara {
     pub(crate) catalog: Catalog,
     pub(crate) session: DeckSet,
     pub(crate) decks: Decks,
+    /// One EQ topology shared by every deck in the studio.
+    pub(crate) eq_mode: EqMode,
     pub(crate) palette: gui::GuiPalette,
 
     /// The studio window; window-chrome commands execute against it.
@@ -91,6 +93,7 @@ impl Kithara {
             catalog,
             config,
             studio,
+            eq_mode: EqMode::default(),
             palette,
             window_id,
             selected_track: None,

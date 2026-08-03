@@ -13,7 +13,7 @@ categories = ["multimedia::audio", "asynchronous"]
 default = ["client-reqwest", "tls-rustls"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 probe = []
-mock = []
+mock = ["dep:unimock"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = ["kithara-net/client-reqwest", "kithara-events/client-reqwest", "kithara-abr/client-reqwest"]
 client-wreq = ["kithara-net/client-wreq", "kithara-events/client-wreq", "kithara-abr/client-wreq"]
@@ -39,7 +39,7 @@ futures = { workspace = true }
 thiserror = { workspace = true }
 thunderdome = { workspace = true }
 tracing = { workspace = true }
-unimock = { workspace = true }
+unimock = { workspace = true, optional = true }
 url = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
@@ -59,6 +59,7 @@ kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "prob
 
 dashmap = { workspace = true }
 tempfile = { workspace = true }
+unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

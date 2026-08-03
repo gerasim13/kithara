@@ -2,12 +2,10 @@ use kithara_test_utils::kithara;
 use kithara_ui::{
     compile::{CompiledNode, CompiledUi},
     expand::{ControlSpec, ExpandedNode},
-    module::TextStyle,
+    module::{TextAlign, TextStyle},
 };
 
 use super::{cache::DeckLayout, compile::compile_studio};
-use crate::deck::EQ_BANDS;
-
 const LAYOUTS: [DeckLayout; 2] = [DeckLayout::Single, DeckLayout::Dual];
 
 fn each_node(ui: &CompiledUi, visit: &mut impl FnMut(&ExpandedNode)) {
@@ -72,6 +70,12 @@ fn controls(ui: &CompiledUi) -> Vec<(&str, Vec<&str>)> {
             ui.resolve(surface.path),
             vec![ui.resolve(surface.write.key)],
         )),
+        ExpandedNode::Pressable { path, press, .. } => {
+            out.push((ui.resolve(*path), vec![ui.resolve(press.key)]));
+        }
+        ExpandedNode::Popover { path, open, .. } => {
+            out.push((ui.resolve(*path), vec![ui.resolve(open.key)]));
+        }
         _ => {}
     });
     out
@@ -221,16 +225,90 @@ fn the_bar_owns_the_window_chrome() {
     }
 }
 
+const EQ_KNOBS: [&str; 7] = [
+    "high-3",
+    "mid-3",
+    "low-3",
+    "high-4",
+    "high-mid-4",
+    "low-mid-4",
+    "low-4",
+];
+
+/// The controls one channel strip carries, named by their leaf id: a knob bank
+/// reaches the strip through an include, so the path carries that segment too.
+fn strip_controls<'a>(paths: &[&'a str], letter: &str) -> Vec<&'a str> {
+    let prefix = format!("mixer/{letter}/");
+    paths
+        .iter()
+        .copied()
+        .filter_map(|path| path.strip_prefix(&prefix))
+        .filter_map(|path| path.rsplit('/').next())
+        .collect()
+}
+
 #[kithara::test]
 fn every_channel_strip_carries_the_supported_control_set() {
     let ui = compile_studio(DeckLayout::Dual).unwrap();
     let paths = control_paths(&ui);
     for letter in ["a", "b"] {
-        for name in EQ_BANDS.into_iter().chain(["volume"]) {
+        let controls = strip_controls(&paths, letter);
+        for name in EQ_KNOBS.into_iter().chain(["volume"]) {
+            assert!(
+                controls.contains(&name),
+                "missing control `mixer/{letter}/{name}`"
+            );
+        }
+    }
+}
+
+#[kithara::test]
+fn every_eq_bank_carries_its_pointer_menu() {
+    let ui = compile_studio(DeckLayout::Dual).unwrap();
+    let paths = control_paths(&ui);
+    for letter in ["a", "b"] {
+        for name in ["eq-menu-anchor", "eq-3", "eq-4"] {
             let want = format!("mixer/{letter}/{name}");
             assert!(paths.contains(&want.as_str()), "missing control `{want}`");
         }
     }
+}
+
+#[kithara::test]
+fn eq_banks_stack_their_knobs_from_high_to_low() {
+    let ui = compile_studio(DeckLayout::Dual).unwrap();
+    let paths = control_paths(&ui);
+    for letter in ["a", "b"] {
+        let order: Vec<&str> = strip_controls(&paths, letter)
+            .into_iter()
+            .filter(|name| EQ_KNOBS.contains(name))
+            .collect();
+        assert_eq!(order, EQ_KNOBS);
+    }
+}
+
+#[kithara::test]
+fn every_eq_bank_centers_its_knobs() {
+    let ui = compile_studio(DeckLayout::Dual).unwrap();
+    let mut centered = 0;
+    each_node(&ui, &mut |node| {
+        let ExpandedNode::Column {
+            id: Some(id),
+            align,
+            ..
+        } = node
+        else {
+            return;
+        };
+        if matches!(
+            ui.resolve(*id).rsplit('/').next(),
+            Some("eq-3-knobs" | "eq-4-knobs")
+        ) {
+            assert_eq!(*align, TextAlign::Center);
+            centered += 1;
+        }
+    });
+    assert_eq!(centered, 4, "two banks on each of two decks");
 }
 
 #[kithara::test]

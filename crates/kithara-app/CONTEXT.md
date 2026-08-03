@@ -51,6 +51,15 @@ A drop focuses the deck it landed on: `deck.focused` marks it in the overview ro
   which sets the ABR mode on the deck's own `current_abr_handle` and mirrors it in the deck state.
 - The mixer channel keeps the EQ; `EQ_MIN_DB` / `EQ_MAX_DB` are the knob's dB travel.
 
+`Kithara` owns one EQ mode for the whole studio; every deck keeps only its own
+desired gains in `UiState`. Right-clicking either knob bank opens its host-owned
+pointer popover in `StudioCache`; the popover itself owns no product state.
+Selecting a mode replaces every deck's player layout before the shared mode is
+committed. Three-band mode lays out HIGH / MID / LOW vertically, four-band mode
+HIGH / HI-MID / LO-MID / LOW. Switching modes remaps each deck's middle gains
+independently: one MID is copied to both four-band mids, and two mids are
+averaged on the way back.
+
 ### Window chrome and telemetry
 
 The window opens without system decorations, so the top bar is the chrome: `bar/drag` is a `WindowDrag` surface and

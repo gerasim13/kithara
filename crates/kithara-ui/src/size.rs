@@ -457,6 +457,7 @@ mod tests {
             children,
             id: None,
             size: None,
+            align: TextAlign::Start,
             pad: None,
             pad_x: None,
             pad_y: None,

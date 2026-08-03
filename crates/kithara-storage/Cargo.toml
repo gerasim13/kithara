@@ -12,7 +12,7 @@ categories = ["caching"]
 [features]
 default = ["client-reqwest", "tls-rustls"]
 probe = []
-mock = []
+mock = ["dep:unimock"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 # HTTP backend forwarding. kithara-storage reaches the single kithara-net
 # package only through kithara-test-utils -> kithara-events (downloader event
@@ -41,7 +41,7 @@ fieldwork = { workspace = true }
 rangemap = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-unimock = { workspace = true }
+unimock = { workspace = true, optional = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
@@ -58,6 +58,7 @@ tempfile = { workspace = true }
 kithara-storage = { path = ".", default-features = false }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 tempfile = { workspace = true }
+unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [lints]

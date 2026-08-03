@@ -94,20 +94,22 @@ Two-step contract shared by the demuxer and `ComposedDecoder`.
 
 1. **Demuxer back-off (pre-roll).** `Demuxer::seek(target, priming)` parks the
   cursor *before* the target; magnitude comes from `FrameCodec::priming(codec) -> CodecPriming { packets, frames, byte_margin }`, covering two needs.
-  - **Codec warm-up** — MDCT/SBR/PS codecs must decode pre-target packets to
-    converge overlap-add and QMF state. `SymphoniaCodec` requests 2 packets for
-    AAC (HE-AAC v1/v2 are seen as `AacLc` by both the fMP4 init parse and the
-    codec layer; fdk-aac auto-detects SBR). `AppleCodec` per-codec table:
-    HE-AACv2 `frames 4096 / packets 3 / byte_margin 32768`, HE-AAC
-    `2048 / 2 / 16384`, AAC-LC `1024 / 2 / 8192`, MP3 `1152 / 1 / 4608`; codecs
-    that converge instantly keep `CodecPriming::default()`.
-  - **At least one whole codec packet**, so the trim lands on a packet boundary.
-    Derived from codec facts (`access_unit_frames`: 1024 AAC, 1152 MP3) and the
-    track `sample_rate` — no magic millisecond constants.
-For fMP4 the back-off can cross a segment boundary; `Fmp4SegmentDemuxer::seek`
+
+- **Codec warm-up** — MDCT/SBR/PS codecs must decode pre-target packets to
+  converge overlap-add and QMF state. `SymphoniaCodec` requests 2 packets for
+  AAC (HE-AAC v1/v2 are seen as `AacLc` by both the fMP4 init parse and the
+  codec layer; fdk-aac auto-detects SBR). `AppleCodec` per-codec table:
+  HE-AACv2 `frames 4096 / packets 3 / byte_margin 32768`, HE-AAC
+  `2048 / 2 / 16384`, AAC-LC `1024 / 2 / 8192`, MP3 `1152 / 1 / 4608`; codecs
+  that converge instantly keep `CodecPriming::default()`.
+- **At least one whole codec packet**, so the trim lands on a packet boundary.
+  Derived from codec facts (`access_unit_frames`: 1024 AAC, 1152 MP3) and the
+  track `sample_rate` — no magic millisecond constants.
+  For fMP4 the back-off can cross a segment boundary; `Fmp4SegmentDemuxer::seek`
   then decode-and-discards the tail of the prior segment so SBR converges across
   it. Reads stay confined to the pre-roll segment plus the target segment — never
   a prefix walk from seg-0. `byte_margin` drives the returned `PrerollHint`.
+
 1. **Sample-accurate trim.** `ComposedDecoder::pending_seek_target` drops whole
   pre-target frames, then trims leading samples of the straddling frame
   (`frames_to_trim`, round-to-nearest) so the emitted chunk starts exactly at
@@ -201,18 +203,19 @@ Silence has two independent layers.
   skips it rather than widening the window. A short read means the source ran out
   of ready bytes, not a long tag — the probe stays put then.
 1. **Decoder-side algorithmic delay**, on `FrameCodec::decoder_algo_delay`:
-  - Symphonia `mpa` (LAME convention): +529 leading, −529 trailing for MP3 (528
-    polyphase convergence + 1 sync sample). Its demuxer parses the LAME tag into
-    `track.delay`, but the 0.6.0-alpha demuxer does not populate per-packet
-    `trim_start` / `trim_end`, so `opts.gapless` is a no-op for MP3 — the caller
-    must apply the trim.
-  - Apple `AudioConverter` MP3: +529 as well (the converter leaves the
-    LAME-convention delay un-compensated). AAC priming instead comes from
-    `kAudioConverterPrimeInfo`, captured at open and refreshed once after the
-    first decoded chunk because AAC populates it only after decoding starts.
-  - Android `MediaCodec`: 0 — it surfaces no priming; `AndroidCodec` passes
-    `TrackInfo.gapless` through verbatim and the standalone
-    `AndroidMediaExtractorDemuxer` reports `gapless: None`.
+
+- Symphonia `mpa` (LAME convention): +529 leading, −529 trailing for MP3 (528
+  polyphase convergence + 1 sync sample). Its demuxer parses the LAME tag into
+  `track.delay`, but the 0.6.0-alpha demuxer does not populate per-packet
+  `trim_start` / `trim_end`, so `opts.gapless` is a no-op for MP3 — the caller
+  must apply the trim.
+- Apple `AudioConverter` MP3: +529 as well (the converter leaves the
+  LAME-convention delay un-compensated). AAC priming instead comes from
+  `kAudioConverterPrimeInfo`, captured at open and refreshed once after the
+  first decoded chunk because AAC populates it only after decoding starts.
+- Android `MediaCodec`: 0 — it surfaces no priming; `AndroidCodec` passes
+  `TrackInfo.gapless` through verbatim and the standalone
+  `AndroidMediaExtractorDemuxer` reports `gapless: None`.
 
 `SymphoniaCodec::open_with_config` folds its own algo delay into the probed
 `GaplessInfo` before exposing it through `track_info()`, so the audio pipeline
