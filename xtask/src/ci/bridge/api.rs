@@ -11,7 +11,7 @@ use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
 use reqwest::{
-    Certificate, Method, Url,
+    Method, Url,
     blocking::{Client, RequestBuilder},
 };
 use serde_json::{Value, json};
@@ -28,14 +28,10 @@ struct Api {
 }
 
 impl Api {
-    fn new(ca_pem: Option<&[u8]>) -> Result<Self> {
-        let mut builder = Client::builder()
+    fn new() -> Result<Self> {
+        let builder = Client::builder()
             .timeout(Duration::from_secs(60))
             .user_agent("kithara-git-bridge/1");
-        if let Some(pem) = ca_pem {
-            let certificate = Certificate::from_pem(pem).context("parsing configured GitLab CA")?;
-            builder = builder.add_root_certificate(certificate);
-        }
         Ok(Self {
             client: builder.build().context("building bridge HTTP client")?,
         })
@@ -89,7 +85,7 @@ impl Github {
     pub(super) fn new(config: &BridgeConfig) -> Result<Self> {
         Ok(Self {
             config: config.clone(),
-            api: Api::new(None)?,
+            api: Api::new()?,
         })
     }
 
@@ -239,11 +235,9 @@ impl Gitlab {
         if token.is_empty() {
             bail!("GitLab token file is empty");
         }
-        let ca = fs::read(&config.gitlab_ca_file)
-            .with_context(|| format!("reading GitLab CA {}", config.gitlab_ca_file.display()))?;
         Ok(Self {
             config: config.clone(),
-            api: Api::new(Some(&ca))?,
+            api: Api::new()?,
             token,
         })
     }
