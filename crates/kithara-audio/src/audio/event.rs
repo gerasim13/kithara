@@ -18,7 +18,10 @@ impl Consts {
     const PROGRESS_EMIT_MIN_DELTA_MS: u64 = 100;
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(super) struct AudioEvents {
+    #[field(get, vis = "pub(super)")]
     bus: EventBus,
     last_progress_emit: Option<(u64, u64)>,
     underrun_active: bool,
@@ -31,67 +34,6 @@ impl AudioEvents {
             last_progress_emit: None,
             underrun_active: false,
         }
-    }
-
-    pub(super) fn bus(&self) -> &EventBus {
-        &self.bus
-    }
-
-    pub(super) fn deferred(bus: &EventBus) -> Arc<DeferredBus<Event>> {
-        Arc::new(DeferredBus::new(bus.clone(), Consts::AUDIO_EVENT_CAPACITY))
-    }
-
-    pub(super) fn publish(&self, event: AudioEvent) {
-        self.bus.publish(event);
-    }
-
-    pub(super) fn progress(&mut self, playhead: &dyn PlayheadWrite, epoch: u64) {
-        let position_ms = clamp_millis(playhead.position());
-        if let Some((last_epoch, last_ms)) = self.last_progress_emit
-            && last_epoch == epoch
-            && position_ms.abs_diff(last_ms) < Consts::PROGRESS_EMIT_MIN_DELTA_MS
-        {
-            return;
-        }
-        self.last_progress_emit = Some((epoch, position_ms));
-
-        let total_ms = playhead.duration().map(clamp_millis);
-        let decoded_ms = clamp_millis(playhead.decoded_frontier());
-        let buffered_ms = Some(total_ms.map_or(decoded_ms, |total| decoded_ms.min(total)));
-        self.publish(AudioEvent::PlaybackProgress {
-            position_ms,
-            total_ms,
-            buffered_ms,
-            seek_epoch: epoch,
-        });
-    }
-
-    pub(super) fn post_seek_output(
-        &self,
-        seek: &dyn SeekObserve,
-        epoch: u64,
-        meta: Option<PcmMeta>,
-        position: Duration,
-    ) {
-        let Some(seek_epoch) = seek.pending_epoch() else {
-            return;
-        };
-        if seek_epoch != epoch {
-            return;
-        }
-
-        let variant = meta.as_ref().and_then(|value| value.variant_index);
-        let segment_index = meta.as_ref().and_then(|value| value.segment_index);
-        self.publish(AudioEvent::SeekLifecycle {
-            seek_epoch,
-            stage: SeekLifecycleStage::OutputCommitted,
-            location: SegmentLocation::new(variant, segment_index, None, None),
-        });
-        self.publish(AudioEvent::SeekComplete {
-            seek_epoch,
-            position,
-        });
-        let _ = seek.clear_pending_epoch(seek_epoch);
     }
 
     pub(super) fn commit_read(
@@ -110,6 +52,10 @@ impl AudioEvents {
             self.progress(session.playhead.as_ref(), epoch);
         }
         outcome
+    }
+
+    pub(super) fn deferred(bus: &EventBus) -> Arc<DeferredBus<Event>> {
+        Arc::new(DeferredBus::new(bus.clone(), Consts::AUDIO_EVENT_CAPACITY))
     }
 
     pub(super) fn fill_result(
@@ -141,6 +87,59 @@ impl AudioEvents {
         }
     }
 
+    pub(super) fn post_seek_output(
+        &self,
+        seek: &dyn SeekObserve,
+        epoch: u64,
+        meta: Option<PcmMeta>,
+        position: Duration,
+    ) {
+        let Some(seek_epoch) = seek.pending_epoch() else {
+            return;
+        };
+        if seek_epoch != epoch {
+            return;
+        }
+
+        let variant = meta.as_ref().and_then(|value| value.variant_index);
+        let segment_index = meta.as_ref().and_then(|value| value.segment_index);
+        self.publish(AudioEvent::SeekLifecycle {
+            seek_epoch,
+            stage: SeekLifecycleStage::OutputCommitted,
+            location: SegmentLocation::new(variant, segment_index, None, None),
+        });
+        self.publish(AudioEvent::SeekComplete {
+            seek_epoch,
+            position,
+        });
+        let _ = seek.clear_pending_epoch(seek_epoch);
+    }
+
+    pub(super) fn progress(&mut self, playhead: &dyn PlayheadWrite, epoch: u64) {
+        let position_ms = clamp_millis(playhead.position());
+        if let Some((last_epoch, last_ms)) = self.last_progress_emit
+            && last_epoch == epoch
+            && position_ms.abs_diff(last_ms) < Consts::PROGRESS_EMIT_MIN_DELTA_MS
+        {
+            return;
+        }
+        self.last_progress_emit = Some((epoch, position_ms));
+
+        let total_ms = playhead.duration().map(clamp_millis);
+        let decoded_ms = clamp_millis(playhead.decoded_frontier());
+        let buffered_ms = Some(total_ms.map_or(decoded_ms, |total| decoded_ms.min(total)));
+        self.publish(AudioEvent::PlaybackProgress {
+            position_ms,
+            total_ms,
+            buffered_ms,
+            seek_epoch: epoch,
+        });
+    }
+
+    pub(super) fn publish(&self, event: AudioEvent) {
+        self.bus.publish(event);
+    }
+
     pub(super) fn reset_underrun(&mut self) {
         self.underrun_active = false;
     }
@@ -152,27 +151,27 @@ impl AudioEvents {
 }
 
 pub(super) struct ReaderOutputWake {
-    thread: Arc<ThreadWake>,
     emit: Arc<DeferredBus<Event>>,
+    thread: Arc<ThreadWake>,
 }
 
 impl ReaderOutputWake {
     pub(super) fn new(thread: Arc<ThreadWake>, emit: Arc<DeferredBus<Event>>) -> Self {
-        Self { thread, emit }
+        Self { emit, thread }
     }
 }
 
 impl WakeSignal for ReaderOutputWake {
-    fn wake(&self) {
-        WakeSignal::wake(self.thread.as_ref());
+    fn flush_deferred(&self) {
+        self.emit.flush();
     }
 
     fn on_data_available(&self) {
         self.emit.enqueue(AudioEvent::OutputAvailable.into());
     }
 
-    fn flush_deferred(&self) {
-        self.emit.flush();
+    fn wake(&self) {
+        WakeSignal::wake(self.thread.as_ref());
     }
 }
 
@@ -293,14 +292,14 @@ fn gapless_span(track_info: &kithara_decode::DecoderTrackInfo) -> Option<Gapless
 
 #[derive(Clone, Copy)]
 pub(crate) struct DecoderChangedEventData<'a> {
+    pub(crate) track_info: &'a kithara_decode::DecoderTrackInfo,
     pub(crate) backend: kithara_decode::DecoderBackend,
+    pub(crate) cause: DecoderChangeCause,
+    pub(crate) duration: Option<Duration>,
     pub(crate) media_info: Option<&'a MediaInfo>,
     pub(crate) spec: PcmSpec,
-    pub(crate) track_info: &'a kithara_decode::DecoderTrackInfo,
-    pub(crate) epoch: u64,
-    pub(crate) cause: DecoderChangeCause,
     pub(crate) base_offset: u64,
-    pub(crate) duration: Option<Duration>,
+    pub(crate) epoch: u64,
 }
 
 pub(crate) fn decoder_changed_event(data: DecoderChangedEventData<'_>) -> DecoderEvent {
@@ -335,9 +334,9 @@ pub(crate) fn decoder_gapless_event(
 ) -> Option<DecoderEvent> {
     let gapless = track_info.gapless?;
     Some(DecoderEvent::GaplessResolved {
+        domain,
         leading_frames: gapless.leading_frames,
         trailing_frames: gapless.trailing_frames,
-        domain,
         codec: media_info
             .and_then(|info| info.codec)
             .map(map_audio_codec_kind),

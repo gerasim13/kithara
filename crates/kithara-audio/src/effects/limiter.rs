@@ -17,8 +17,8 @@ pub enum LimiterError {
 /// release toward unity, exact unity bypass below the ceiling.
 #[derive(Debug, Clone)]
 pub struct PeakLimiter {
-    envelope: f32,
     ceiling: f32,
+    envelope: f32,
     release_coeff: f32,
     channels: usize,
 }
@@ -46,16 +46,11 @@ impl PeakLimiter {
         let release_coeff = (-1.0 / samples).exp();
 
         Ok(Self {
-            envelope: 1.0,
             ceiling,
             release_coeff,
+            envelope: 1.0,
             channels: channels.get(),
         })
-    }
-
-    /// Reset the gain envelope to unity.
-    pub fn reset(&mut self) {
-        self.envelope = 1.0;
     }
 
     /// Apply the limiter in place to a planar block, linking channels by frame
@@ -74,6 +69,11 @@ impl PeakLimiter {
                 channel[frame] *= gain;
             }
         }
+    }
+
+    /// Reset the gain envelope to unity.
+    pub fn reset(&mut self) {
+        self.envelope = 1.0;
     }
 
     #[inline]

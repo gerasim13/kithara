@@ -53,6 +53,6 @@ pub struct FfiCacheIdentityRule {
 /// case-insensitive. The store rejects invalid output instead of rewriting it.
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 pub trait FfiAssetLayout: Send + Sync {
-    fn root(&self, source: FfiAssetSource) -> String;
     fn path(&self, resource: FfiAssetResource) -> String;
+    fn root(&self, source: FfiAssetSource) -> String;
 }

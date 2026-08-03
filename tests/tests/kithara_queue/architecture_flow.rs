@@ -41,9 +41,10 @@ async fn queue_playback_architecture() {
         SAMPLE_RATE,
     );
     let queue = Queue::new(
-        QueueConfig::default()
-            .with_player(Arc::clone(harness.player()))
-            .with_store(store.clone()),
+        QueueConfig::builder()
+            .player(Arc::clone(harness.player()))
+            .store(store.clone())
+            .build(),
     );
     let downloader = create_test_downloader();
     let config = resource_config(url.as_str(), downloader, store);
@@ -113,8 +114,7 @@ async fn queue_playback_architecture() {
 }
 
 fn resource_config(url: &str, downloader: Downloader, store: AssetStore) -> ResourceConfig {
-    ResourceConfig::for_src(url)
-        .expect("valid local fixture URL")
+    ResourceConfig::for_src(ResourceConfig::parse_src(url).expect("valid local fixture URL"))
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader)

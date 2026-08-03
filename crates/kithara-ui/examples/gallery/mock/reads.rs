@@ -19,9 +19,31 @@ use crate::{
     sections::{ModuleDemo, Tab},
 };
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct MockReads {
+    tracklist_widths: BTreeMap<TrackColumn, f64>,
+    collapsed: BTreeSet<String>,
+    context: ContextState,
+    transport: DeckTransport,
+    menu: MenuState,
+    mixer: MixerState,
+    #[field(get, vis = "pub(crate)", copy)]
     active_module: ModuleDemo,
+    quality: QualityState,
+    stress: StressState,
+    library_query: String,
+    #[field(get, vis = "pub(crate)", copy)]
     active_tab: Tab,
+    tree_expanded: Vec<bool>,
+    tree_rows: Vec<TreeRow<'static>>,
+    tree_visible_indices: Vec<usize>,
+    wave_beats: Vec<f32>,
+    wave_downbeats: Vec<f32>,
+    waveform: Vec<WaveBucket>,
+    tracklist_columns: [bool; 9],
+    vis_levels: [f32; 2],
+    knobs: [f64; 4],
     button_cue: bool,
     button_play: bool,
     button_sync: bool,
@@ -29,36 +51,18 @@ pub(crate) struct MockReads {
     checkbox_on: bool,
     chip_active: bool,
     chip_inactive: bool,
-    collapsed: BTreeSet<String>,
-    context: ContextState,
-    knobs: [f64; 4],
-    levels_volume: f64,
-    library_query: String,
-    library_scope: usize,
-    menu: MenuState,
-    mixer: MixerState,
-    quality: QualityState,
-    segmented_index: f64,
-    stress: StressState,
     toggle_off: bool,
     toggle_on: bool,
-    volume: f64,
-    wave_beats: Vec<f32>,
-    wave_downbeats: Vec<f32>,
-    waveform: Vec<WaveBucket>,
-    transport: DeckTransport,
-    tracklist_columns: [bool; 9],
-    tracklist_preset: usize,
-    tracklist_widths: BTreeMap<TrackColumn, f64>,
-    tree_expanded: Vec<bool>,
-    tree_rows: Vec<TreeRow<'static>>,
-    tree_selected: usize,
-    tree_visible_indices: Vec<usize>,
-    vis_levels: [f32; 2],
     vis_phase: f32,
-    vis_preset: usize,
+    levels_volume: f64,
+    segmented_index: f64,
     vis_time_secs: f64,
+    volume: f64,
     vis_rng: u32,
+    library_scope: usize,
+    tracklist_preset: usize,
+    tree_selected: usize,
+    vis_preset: usize,
 }
 
 impl Default for MockReads {
@@ -75,6 +79,10 @@ impl Default for MockReads {
             .position(|row| row.selected)
             .unwrap_or_default();
         let mut reads = Self {
+            wave_beats,
+            wave_downbeats,
+            tree_expanded,
+            tree_selected,
             active_module: ModuleDemo::Deck,
             active_tab: Tab::Atoms,
             button_cue: false,
@@ -98,8 +106,6 @@ impl Default for MockReads {
             toggle_off: false,
             toggle_on: true,
             volume: 0.7,
-            wave_beats,
-            wave_downbeats,
             waveform: waveform(),
             transport: DeckTransport::new(
                 Consts::BPM_VALUE,
@@ -112,9 +118,7 @@ impl Default for MockReads {
             tracklist_columns: Consts::TRACKLIST_QUEUE,
             tracklist_preset: Consts::TRACKLIST_QUEUE_PRESET,
             tracklist_widths: BTreeMap::new(),
-            tree_expanded,
             tree_rows: Vec::with_capacity(CATALOG.tree.len()),
-            tree_selected,
             tree_visible_indices: Vec::with_capacity(CATALOG.tree.len()),
             vis_levels: [0.66, 0.52],
             vis_phase: 0.0,
@@ -128,178 +132,6 @@ impl Default for MockReads {
 }
 
 impl MockReads {
-    pub(crate) const fn active_module(&self) -> ModuleDemo {
-        self.active_module
-    }
-
-    pub(crate) const fn active_tab(&self) -> Tab {
-        self.active_tab
-    }
-
-    pub(crate) fn select_tab(&mut self, tab: Tab) {
-        if self.active_tab != tab {
-            self.stress.reset_clock();
-        }
-        self.active_tab = tab;
-    }
-
-    pub(crate) fn tick(&mut self) {
-        match self.active_tab {
-            Tab::Stress => self.stress.tick(),
-            Tab::Vis => self.tick_vis(),
-            _ => {}
-        }
-    }
-
-    pub(crate) fn set_library_query(&mut self, query: String) {
-        self.library_query = query;
-    }
-
-    pub(crate) fn toggle_module(&mut self, module: String) {
-        if !self.collapsed.remove(&module) {
-            self.collapsed.insert(module);
-        }
-    }
-
-    pub(crate) fn apply(&mut self, path: &str, action: &ControlAction) {
-        match action {
-            ControlAction::SetScalar(value) => self.set_scalar(path, *value),
-            ControlAction::Activate => self.activate(path),
-            ControlAction::SecondaryActivate => self.context.secondary(path),
-            ControlAction::SelectIndex(index) => self.select_index(path, *index),
-            _ => {}
-        }
-    }
-
-    fn select_index(&mut self, path: &str, index: usize) {
-        if path == "cells/beat" {
-            self.segmented_index = index.as_();
-        } else if path == "tracklist/column-preset" {
-            self.set_tracklist_preset(index);
-        } else if path == "library2/context" {
-            self.library_scope = index;
-        } else if matches!(path, "tree/browser" | "library2/browser") {
-            self.select_tree_row(index);
-        } else if path == "vis/shader" && index < CATALOG.vis_presets.len() {
-            self.vis_preset = index;
-        }
-    }
-
-    fn select_tree_row(&mut self, index: usize) {
-        let Some(base_index) = self.tree_visible_indices.get(index).copied() else {
-            return;
-        };
-        let row = CATALOG.tree[base_index];
-        if row.muted {
-            return;
-        }
-        if row.expanded.is_some() {
-            self.tree_expanded[base_index] = !self.tree_expanded[base_index];
-        } else {
-            self.tree_selected = base_index;
-        }
-        self.rebuild_tree();
-    }
-
-    fn rebuild_tree(&mut self) {
-        self.tree_rows.clear();
-        self.tree_visible_indices.clear();
-        let mut ancestors = Vec::new();
-        for (index, base) in CATALOG.tree.iter().copied().enumerate() {
-            let depth = usize::from(base.depth);
-            ancestors.truncate(depth);
-            let visible = ancestors.iter().all(|expanded| *expanded);
-            if visible {
-                self.tree_rows.push(TreeRow {
-                    expanded: base.expanded.map(|_| self.tree_expanded[index]),
-                    selected: index == self.tree_selected,
-                    ..base
-                });
-                self.tree_visible_indices.push(index);
-            }
-            if base.expanded.is_some() {
-                ancestors.push(self.tree_expanded[index]);
-            }
-        }
-    }
-
-    fn set_tracklist_preset(&mut self, index: usize) {
-        let Some(columns) = [
-            Consts::TRACKLIST_LIBRARY,
-            Consts::TRACKLIST_QUEUE,
-            Consts::TRACKLIST_MICRO,
-        ]
-        .get(index)
-        .copied() else {
-            return;
-        };
-        self.tracklist_preset = index;
-        self.tracklist_columns = columns;
-    }
-
-    fn reset_tracklist_columns(&mut self) {
-        self.set_tracklist_preset(self.tracklist_preset);
-    }
-
-    fn toggle_tracklist_column(&mut self, name: &str) {
-        let Some(index) = Consts::TRACK_COLUMNS
-            .iter()
-            .position(|column| column.endpoint_name() == name)
-        else {
-            return;
-        };
-        self.tracklist_columns[index] = !self.tracklist_columns[index];
-    }
-
-    fn set_tracklist_width(&mut self, name: &str, value: f64) {
-        let Some(column) = Consts::TRACK_COLUMNS
-            .iter()
-            .find(|column| column.endpoint_name() == name)
-            .copied()
-        else {
-            return;
-        };
-        if value.is_finite() {
-            let minimum = f64::from(kithara_ui::builtin::skin().track_list.min_column_width);
-            self.tracklist_widths.insert(column, value.max(minimum));
-        }
-    }
-
-    fn set_scalar(&mut self, path: &str, value: f64) {
-        if self.mixer.set_scalar(path, value) {
-            return;
-        }
-        if self.stress.set_scalar(path, value) {
-            return;
-        }
-        if let Some((_, name)) = path.rsplit_once("/width/") {
-            self.set_tracklist_width(name, value);
-            return;
-        }
-        let value = value.clamp(0.0, 1.0);
-        if path.ends_with("/loop_start") {
-            self.transport.set_loop_start(value);
-        } else if path.ends_with("/loop_end") {
-            self.transport.set_loop_end(value);
-        } else if path.ends_with("/zoom") {
-            self.transport.set_zoom(value);
-        } else if let Some(index) = match path {
-            "atoms/knobs/size-26" => Some(0),
-            "atoms/knobs/size-28" => Some(1),
-            "atoms/knobs/size-34" => Some(2),
-            "atoms/knobs/size-38" => Some(3),
-            _ => None,
-        } {
-            self.knobs[index] = value;
-        } else if path.starts_with("atoms/meters/") {
-            self.levels_volume = value;
-        } else if path.starts_with("faders/") || path.ends_with("/volume") {
-            self.volume = value;
-        } else if path.ends_with("/wave") {
-            self.transport.seek_normalized(value);
-        }
-    }
-
     fn activate(&mut self, path: &str) {
         if self.menu.activate(path) {
             return;
@@ -352,6 +184,146 @@ impl MockReads {
         }
     }
 
+    pub(crate) fn apply(&mut self, path: &str, action: &ControlAction) {
+        match action {
+            ControlAction::SetScalar(value) => self.set_scalar(path, *value),
+            ControlAction::Activate => self.activate(path),
+            ControlAction::SecondaryActivate => self.context.secondary(path),
+            ControlAction::SelectIndex(index) => self.select_index(path, *index),
+            _ => {}
+        }
+    }
+
+    fn rebuild_tree(&mut self) {
+        self.tree_rows.clear();
+        self.tree_visible_indices.clear();
+        let mut ancestors = Vec::new();
+        for (index, base) in CATALOG.tree.iter().copied().enumerate() {
+            let depth = usize::from(base.depth);
+            ancestors.truncate(depth);
+            let visible = ancestors.iter().all(|expanded| *expanded);
+            if visible {
+                self.tree_rows.push(TreeRow {
+                    expanded: base.expanded.map(|_| self.tree_expanded[index]),
+                    selected: index == self.tree_selected,
+                    ..base
+                });
+                self.tree_visible_indices.push(index);
+            }
+            if base.expanded.is_some() {
+                ancestors.push(self.tree_expanded[index]);
+            }
+        }
+    }
+
+    fn reset_tracklist_columns(&mut self) {
+        self.set_tracklist_preset(self.tracklist_preset);
+    }
+
+    fn select_index(&mut self, path: &str, index: usize) {
+        if path == "cells/beat" {
+            self.segmented_index = index.as_();
+        } else if path == "tracklist/column-preset" {
+            self.set_tracklist_preset(index);
+        } else if path == "library2/context" {
+            self.library_scope = index;
+        } else if matches!(path, "tree/browser" | "library2/browser") {
+            self.select_tree_row(index);
+        } else if path == "vis/shader" && index < CATALOG.vis_presets.len() {
+            self.vis_preset = index;
+        }
+    }
+
+    pub(crate) fn select_tab(&mut self, tab: Tab) {
+        if self.active_tab != tab {
+            self.stress.reset_clock();
+        }
+        self.active_tab = tab;
+    }
+
+    fn select_tree_row(&mut self, index: usize) {
+        let Some(base_index) = self.tree_visible_indices.get(index).copied() else {
+            return;
+        };
+        let row = CATALOG.tree[base_index];
+        if row.muted {
+            return;
+        }
+        if row.expanded.is_some() {
+            self.tree_expanded[base_index] = !self.tree_expanded[base_index];
+        } else {
+            self.tree_selected = base_index;
+        }
+        self.rebuild_tree();
+    }
+
+    pub(crate) fn set_library_query(&mut self, query: String) {
+        self.library_query = query;
+    }
+
+    fn set_scalar(&mut self, path: &str, value: f64) {
+        if self.mixer.set_scalar(path, value) {
+            return;
+        }
+        if self.stress.set_scalar(path, value) {
+            return;
+        }
+        if let Some((_, name)) = path.rsplit_once("/width/") {
+            self.set_tracklist_width(name, value);
+            return;
+        }
+        let value = value.clamp(0.0, 1.0);
+        if path.ends_with("/loop_start") {
+            self.transport.set_loop_start(value);
+        } else if path.ends_with("/loop_end") {
+            self.transport.set_loop_end(value);
+        } else if path.ends_with("/zoom") {
+            self.transport.set_zoom(value);
+        } else if let Some(index) = match path {
+            "atoms/knobs/size-26" => Some(0),
+            "atoms/knobs/size-28" => Some(1),
+            "atoms/knobs/size-34" => Some(2),
+            "atoms/knobs/size-38" => Some(3),
+            _ => None,
+        } {
+            self.knobs[index] = value;
+        } else if path.starts_with("atoms/meters/") {
+            self.levels_volume = value;
+        } else if path.starts_with("faders/") || path.ends_with("/volume") {
+            self.volume = value;
+        } else if path.ends_with("/wave") {
+            self.transport.seek_normalized(value);
+        }
+    }
+
+    fn set_tracklist_preset(&mut self, index: usize) {
+        let Some(columns) = [
+            Consts::TRACKLIST_LIBRARY,
+            Consts::TRACKLIST_QUEUE,
+            Consts::TRACKLIST_MICRO,
+        ]
+        .get(index)
+        .copied() else {
+            return;
+        };
+        self.tracklist_preset = index;
+        self.tracklist_columns = columns;
+    }
+
+    fn set_tracklist_width(&mut self, name: &str, value: f64) {
+        let Some(column) = Consts::TRACK_COLUMNS
+            .iter()
+            .find(|column| column.endpoint_name() == name)
+            .copied()
+        else {
+            return;
+        };
+        if value.is_finite() {
+            let minimum = f64::from(kithara_ui::builtin::skin().track_list.min_column_width);
+            self.tracklist_widths.insert(column, value.max(minimum));
+        }
+    }
+
     fn shell(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         let value = match endpoint {
             "gallery.tab.atoms" => self.active_tab == Tab::Atoms,
@@ -382,6 +354,14 @@ impl MockReads {
         Some(ReadValue::Bool(value))
     }
 
+    pub(crate) fn tick(&mut self) {
+        match self.active_tab {
+            Tab::Stress => self.stress.tick(),
+            Tab::Vis => self.tick_vis(),
+            _ => {}
+        }
+    }
+
     fn tick_vis(&mut self) {
         self.vis_time_secs += Consts::VIS_TICK_SECS;
         self.vis_phase += 0.17;
@@ -397,6 +377,22 @@ impl MockReads {
             (0.38 + (self.vis_phase * 1.31).sin().abs() * 0.29 + right_noise / scale * 0.12)
                 .clamp(0.0, 1.0),
         ];
+    }
+
+    pub(crate) fn toggle_module(&mut self, module: String) {
+        if !self.collapsed.remove(&module) {
+            self.collapsed.insert(module);
+        }
+    }
+
+    fn toggle_tracklist_column(&mut self, name: &str) {
+        let Some(index) = Consts::TRACK_COLUMNS
+            .iter()
+            .position(|column| column.endpoint_name() == name)
+        else {
+            return;
+        };
+        self.tracklist_columns[index] = !self.tracklist_columns[index];
     }
 }
 

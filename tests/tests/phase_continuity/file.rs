@@ -1,7 +1,7 @@
 use std::{io::Write, num::NonZeroUsize};
 
 use kithara::{
-    assets::{AssetStoreBuilder, StorageBackend},
+    assets::{AssetStore, StorageBackend},
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
     file::{File, FileConfig, FileSrc},
@@ -57,12 +57,12 @@ async fn run_case(
 
     let temp_dir = TestTempDir::new();
     let store = if ephemeral {
-        AssetStoreBuilder::default()
+        AssetStore::builder()
             .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
             .backend(StorageBackend::Memory)
             .build()
     } else {
-        AssetStoreBuilder::default()
+        AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: temp_dir.path().into(),
             })
@@ -389,7 +389,7 @@ async fn decode_pcm_seconds(
         bit_rate,
     };
     let url = helper.sine(&spec, FREQ_HZ).await;
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
         .backend(StorageBackend::Memory)
         .build();
@@ -702,7 +702,7 @@ async fn bit_rate_e2e_does_not_hang(#[case] format: SignalFormat, #[case] bit_ra
     };
     let url = helper.sine(&spec, FREQ_HZ).await;
 
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
         .backend(StorageBackend::Memory)
         .build();
@@ -971,7 +971,7 @@ async fn build_aac_sine_audio(backend: DecoderBackend) -> Audio<Stream<File>> {
     // leaking it: the source reads from `url` (an HTTP path) and only uses
     // the store as an ephemeral cache, so the leaked guard is harmless in
     // this short-lived test and avoids threading a guard through the caller.
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
         .backend(StorageBackend::Memory)
         .build();

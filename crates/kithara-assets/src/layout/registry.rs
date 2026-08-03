@@ -24,6 +24,12 @@ impl AssetLayoutRegistry {
         }
     }
 
+    pub(crate) fn layout<T: 'static>(&self) -> &Arc<dyn AssetLayout> {
+        self.overrides
+            .get(&TypeId::of::<T>())
+            .unwrap_or(&self.default)
+    }
+
     /// Register or replace the layout selected for marker `T`.
     ///
     /// Returns the replaced layout so callers can control where its destructor
@@ -40,12 +46,6 @@ impl AssetLayoutRegistry {
     pub fn with<T: 'static>(mut self, layout: Arc<dyn AssetLayout>) -> Self {
         drop(self.register::<T>(layout));
         self
-    }
-
-    pub(crate) fn layout<T: 'static>(&self) -> &Arc<dyn AssetLayout> {
-        self.overrides
-            .get(&TypeId::of::<T>())
-            .unwrap_or(&self.default)
     }
 }
 
@@ -68,12 +68,12 @@ mod tests {
     struct FixedLayout(&'static str);
 
     impl AssetLayout for FixedLayout {
-        fn root(&self, _source: &AssetSource) -> String {
-            self.0.to_string()
-        }
-
         fn path(&self, _resource: &AssetResource) -> String {
             format!("{}/resource", self.0)
+        }
+
+        fn root(&self, _source: &AssetSource) -> String {
+            self.0.to_string()
         }
     }
 

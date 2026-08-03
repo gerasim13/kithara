@@ -54,8 +54,8 @@ impl SeekRecovery {
         };
         if matches!(error, DecodeError::SeekOutOfRange { .. }) {
             return SeekTransition::Reject {
-                request: self.request,
                 error,
+                request: self.request,
                 context: fail_context,
             };
         }
@@ -72,8 +72,8 @@ impl SeekRecovery {
                 .source_park(ctx.stream, phase)
                 .unwrap_or(WaitingReason::Waiting);
             return SeekTransition::Wait {
-                context: wait,
                 reason,
+                context: wait,
             };
         }
         let Some(media_info) = ctx
@@ -82,8 +82,8 @@ impl SeekRecovery {
             .or_else(|| ctx.decode.active().media_info().cloned())
         else {
             return SeekTransition::Failed {
-                request: self.request,
                 error,
+                request: self.request,
                 context: fail_context,
             };
         };
@@ -99,10 +99,10 @@ impl SeekRecovery {
             };
         };
         SeekTransition::Recreate(RecreateState {
-            cause: RecreateCause::VariantSwitch,
             media_info,
-            next: RecreateNext::ApplySeek(self.request),
             offset,
+            cause: RecreateCause::VariantSwitch,
+            next: RecreateNext::ApplySeek(self.request),
         })
     }
 }

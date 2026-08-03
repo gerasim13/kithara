@@ -6,10 +6,10 @@ use crate::{asset::FfiAssetStore, types::FfiKeyOptions};
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FfiPlayerConfig {
-    /// DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
-    pub key_options: FfiKeyOptions,
     /// Shared asset store used by every item created by this player.
     pub store: Arc<FfiAssetStore>,
+    /// DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
+    pub key_options: FfiKeyOptions,
     /// Number of EQ bands (log-spaced). Default: 10.
     pub eq_band_count: u32,
 }

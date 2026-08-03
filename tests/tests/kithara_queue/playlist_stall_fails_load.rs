@@ -86,16 +86,16 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
 
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_millis(200))
-        .retry_policy(RetryPolicy::new(
-            1,
-            Duration::from_millis(1),
-            Duration::from_millis(10),
-        ))
+        .retry_policy(
+            RetryPolicy::builder()
+                .max_retries(1)
+                .base_delay(Duration::from_millis(1))
+                .max_delay(Duration::from_millis(10))
+                .build(),
+        )
         .build();
     let downloader = Downloader::new(
-        DownloaderConfig::builder()
-            .client(HttpClient::new(net, CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
 
     let player = Arc::new(PlayerImpl::new(
@@ -105,11 +105,10 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
     let tick_handle = spawn_ticker(Arc::clone(&queue));
 
-    let cfg = ResourceConfig::for_src(url.as_str())
-        .expect("valid URL")
+    let cfg = ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid URL"))
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader)

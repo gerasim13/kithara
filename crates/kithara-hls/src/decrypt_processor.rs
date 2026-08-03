@@ -1,6 +1,3 @@
-//! AES-128-CBC adapter binding the `kithara-drm` cipher to the
-//! `kithara-assets` `ResourceProcessor` / `ChunkSink` contract.
-
 use std::fmt;
 
 use kithara_assets::{ChunkSink, ProcessCtx, ResourceProcessor};

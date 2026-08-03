@@ -11,19 +11,22 @@ use crate::pipeline::{
     stream::shared::SharedStream,
 };
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct ResumeCursor {
-    decode_head: Option<(u64, u64, u32)>,
     host_rate: Arc<AtomicU32>,
+    decode_head: Option<(u64, u64, u32)>,
+    #[field(get = recreates_on_route, vis = "pub(crate)")]
     recreate_on_route: bool,
     decoder_rate: u32,
 }
 
 pub(crate) struct RouteCtx<'a, T: StreamType> {
-    pub(crate) committed: Duration,
-    pub(crate) seek: &'a SeekEngine,
-    pub(crate) seek_active: bool,
     pub(crate) active: &'a DecoderGeneration,
+    pub(crate) seek: &'a SeekEngine,
     pub(crate) stream: &'a SharedStream<T>,
+    pub(crate) committed: Duration,
+    pub(crate) seek_active: bool,
 }
 
 impl ResumeCursor {
@@ -33,11 +36,26 @@ impl ResumeCursor {
         decoder_rate: u32,
     ) -> Self {
         Self {
-            decode_head: None,
             host_rate,
             recreate_on_route,
             decoder_rate,
+            decode_head: None,
         }
+    }
+
+    pub(crate) fn decode_head(&self, epoch: u64) -> Option<(u64, u32)> {
+        self.decode_head
+            .filter(|&(head_epoch, _, _)| head_epoch == epoch)
+            .map(|(_, frame, rate)| (frame, rate))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn decoder_rate(&self) -> u32 {
+        self.decoder_rate
+    }
+
+    pub(crate) fn host_rate(&self) -> u32 {
+        self.host_rate.load(Ordering::Acquire)
     }
 
     pub(crate) fn record(&mut self, chunk: &PcmChunk, epoch: u64) {
@@ -49,12 +67,6 @@ impl ResumeCursor {
                 .saturating_add(u64::from(chunk.meta.frames)),
             chunk.meta.spec.sample_rate.get(),
         ));
-    }
-
-    pub(crate) fn decode_head(&self, epoch: u64) -> Option<(u64, u32)> {
-        self.decode_head
-            .filter(|&(head_epoch, _, _)| head_epoch == epoch)
-            .map(|(_, frame, rate)| (frame, rate))
     }
 
     pub(crate) fn resume_position(
@@ -72,19 +84,6 @@ impl ResumeCursor {
             Some((target_epoch, target)) if target_epoch == epoch && target > head => target,
             _ => head,
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn decoder_rate(&self) -> u32 {
-        self.decoder_rate
-    }
-
-    pub(crate) fn host_rate(&self) -> u32 {
-        self.host_rate.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn recreates_on_route(&self) -> bool {
-        self.recreate_on_route
     }
 
     pub(crate) fn route_change<T: StreamType>(
@@ -113,7 +112,6 @@ impl ResumeCursor {
         // A route change keeps the container, so the rebuilt demuxer must start
         // where the container starts — not at the byte the resume time maps to.
         // Seeking the anchor by time lands past the init and the demuxer never
-        // sees its own header.
         let offset = anchor::recreate_offset(
             ctx.stream,
             media_info.container,
@@ -124,13 +122,13 @@ impl ResumeCursor {
         let target = self.resume_position(epoch, ctx.committed, None);
         self.decoder_rate = host_rate;
         Some(RecreateState {
-            cause: RecreateCause::RouteChange,
             media_info,
+            offset,
+            cause: RecreateCause::RouteChange,
             next: RecreateNext::ApplySeek(SeekRequest {
                 seek: SeekContext { target, epoch },
                 emit_request: false,
             }),
-            offset,
         })
     }
 }

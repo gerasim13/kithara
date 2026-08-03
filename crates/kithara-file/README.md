@@ -17,30 +17,39 @@ Single-file media streaming (MP3, AAC, FLAC, ALAC, WAV …). Implements `kithara
 ## Usage
 
 ```rust
-use kithara_assets::AssetStoreBuilder;
+use kithara_assets::AssetStore;
 use kithara_stream::Stream;
 use kithara_file::{File, FileConfig, FileSrc};
 
-let store = AssetStoreBuilder::default().build();
+let store = AssetStore::builder().build();
 
 // Remote HTTP source
-let config = FileConfig::new(FileSrc::Remote(url), store.clone());
+let config = FileConfig::for_src(FileSrc::Remote(url))
+    .store(store.clone())
+    .build();
 let stream = Stream::<File>::new(config).await?;
 
 // Local file source
-let local = FileConfig::new(FileSrc::Local(path), store);
+let local = FileConfig::for_src(FileSrc::Local(path))
+    .store(store)
+    .build();
 let stream = Stream::<File>::new(local).await?;
 ```
 
-`FileConfig` is a [`bon`](https://crates.io/crates/bon) builder. The shared `AssetStore` is required. `FileConfig::for_src(src)` returns the chained builder for non-default settings (event channel capacity, downloader, cache discriminator, extension hint, asset store, cancel token).
+`FileConfig` is a [`bon`](https://crates.io/crates/bon) builder. Start with `FileConfig::for_src(src)`, set the required shared asset store with `.store(store)`, and call `.build()`. The same chain accepts non-default settings such as event channel capacity, downloader, cache discriminator, extension hint, and cancel token.
 
 ## Public Items
 
 <table>
+
 <tr><th>Item</th><th>Kind</th><th>Role</th></tr>
+
 <tr><td><code>File</code></td><td>struct (marker)</td><td>Zero-sized type implementing <code>StreamType</code></td></tr>
+
 <tr><td><code>FileConfig</code></td><td>struct (bon-builder)</td><td>Source, event-bus, downloader, asset store, cancel token</td></tr>
+
 <tr><td><code>FileSrc</code></td><td>enum</td><td><code>Local(PathBuf)</code> for direct disk playback, <code>Remote(Url)</code> for HTTP streaming</td></tr>
+
 </table>
 
 `FileSource` is the `StreamType::Source` associated type; it is exported through `kithara_stream::Stream<File>` and is rarely constructed directly. `FilePeer`, `FileCoord`, and the rest of the orchestration types are internal.
@@ -50,14 +59,23 @@ Local sources (`FileSrc::Local`) open directly via `AssetStore` and skip all net
 ## Features
 
 <table>
+
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
+
 <tr><td><code>default</code></td><td>yes</td><td><code>client-reqwest</code> + <code>tls-rustls</code></td></tr>
+
 <tr><td><code>perf</code></td><td>no</td><td>Hotpath instrumentation (also enables <code>kithara-net/perf</code>)</td></tr>
+
 <tr><td><code>probe</code></td><td>no</td><td>Compatibility feature for probe-aware test macro expansions</td></tr>
+
 <tr><td><code>client-reqwest</code></td><td>yes</td><td>Forward the reqwest HTTP backend to network-reaching deps</td></tr>
+
 <tr><td><code>client-wreq</code></td><td>no</td><td>Forward the wreq HTTP backend to network-reaching deps</td></tr>
+
 <tr><td><code>tls-rustls</code></td><td>yes</td><td>Forward rustls TLS selection to network-reaching deps</td></tr>
+
 <tr><td><code>tls-native</code></td><td>no</td><td>Forward native TLS selection to network-reaching deps</td></tr>
+
 </table>
 
 ## Integration

@@ -17,8 +17,8 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct WindowControls<'skin> {
-    style: WindowControlsStyle,
     skin: &'skin Skin,
+    style: WindowControlsStyle,
 }
 
 impl<'a> Widget<'a> for WindowControls<'_> {
@@ -142,10 +142,10 @@ enum Glyph {
 }
 
 struct WindowGlyph {
-    glyph: Glyph,
-    size: f32,
     color: Color,
     hover_color: Color,
+    glyph: Glyph,
+    size: f32,
     stroke_width: f32,
 }
 
@@ -194,8 +194,8 @@ impl<Message> canvas::Program<Message> for WindowGlyph {
 }
 
 struct Divider {
-    width: f32,
     color: Color,
+    width: f32,
 }
 
 impl<Message> canvas::Program<Message> for Divider {

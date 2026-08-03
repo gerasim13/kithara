@@ -61,7 +61,7 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {
@@ -73,18 +73,19 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
         }
     });
 
-    let cfg = ResourceConfig::for_src(master.as_str())
-        .expect("valid master URL")
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .downloader(downloader.clone())
-        .store(store)
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(backend)
-                .build(),
-        )
-        .build();
+    let cfg = ResourceConfig::for_src(
+        ResourceConfig::parse_src(master.as_str()).expect("valid master URL"),
+    )
+    .byte_pool(kithara::bufpool::BytePool::default())
+    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .downloader(downloader.clone())
+    .store(store)
+    .decoder(
+        kithara::audio::AudioDecoderConfig::builder()
+            .backend(backend)
+            .build(),
+    )
+    .build();
     let source = TrackSource::Config(Box::new(cfg));
 
     let id = queue.append(source);

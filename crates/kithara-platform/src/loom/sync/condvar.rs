@@ -7,15 +7,6 @@ use crate::common::time::Instant;
 pub(crate) struct Condvar(LoomCondvar);
 
 impl Condvar {
-    delegate::delegate! {
-        to self.0 {
-            #[inline]
-            pub(crate) fn notify_all(&self);
-            #[inline]
-            pub(crate) fn notify_one(&self);
-        }
-    }
-
     #[inline]
     #[track_caller]
     pub(crate) fn wait<'a, T>(&self, mut guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
@@ -39,5 +30,14 @@ impl Condvar {
     #[track_caller]
     pub(crate) fn wait_timeout_ref<T>(&self, _guard: &mut MutexGuard<'_, T>, _deadline: Instant) {
         panic!("timed condvar waits require the flash backend when loom is enabled");
+    }
+
+    delegate::delegate! {
+        to self.0 {
+            #[inline]
+            pub(crate) fn notify_all(&self);
+            #[inline]
+            pub(crate) fn notify_one(&self);
+        }
     }
 }

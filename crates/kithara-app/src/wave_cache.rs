@@ -26,10 +26,12 @@ impl Consts {
 }
 
 /// Physical analysis resource together with the store that owns it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct AnalysisTarget {
-    key: ResourceKey,
     store: AssetStore,
+    #[field(get, vis = "pub(crate)")]
+    key: ResourceKey,
 }
 
 impl AnalysisTarget {
@@ -44,18 +46,14 @@ impl AnalysisTarget {
         })
     }
 
-    pub(crate) fn key(&self) -> &ResourceKey {
-        &self.key
-    }
-
     pub(crate) fn is_same(&self, other: &Self) -> bool {
         self.key == other.key && self.store.is_same(&other.store)
     }
 }
 
 struct MemoryEntry {
-    analysis: TrackAnalysis,
     target: AnalysisTarget,
+    analysis: TrackAnalysis,
 }
 
 /// Two-tier track-analysis memoization: a session in-memory map plus durable
@@ -317,7 +315,7 @@ mod tests {
     use ::kithara::{
         assets::{
             AssetLayout, AssetLayoutRegistry, AssetResource, AssetResourceState, AssetSource,
-            AssetStore, AssetStoreBuilder, StorageBackend,
+            AssetStore, StorageBackend,
         },
         audio::{BeatGrid, GridSegment, Waveform},
         bufpool::{BytePool, PcmPool},
@@ -360,25 +358,25 @@ mod tests {
     }
 
     fn store_in(dir: &Path) -> AssetStore {
-        AssetStoreBuilder::default()
+        AssetStore::builder()
             .backend(StorageBackend::Disk { root: dir.into() })
             .build()
     }
 
     fn memory_store() -> AssetStore {
-        AssetStoreBuilder::default()
+        AssetStore::builder()
             .backend(StorageBackend::Memory)
             .build()
     }
 
     fn config(store: &AssetStore, src: &str, discriminator: Option<&str>) -> ResourceConfig {
-        let builder = ResourceConfig::for_src(src)
-            .expect("valid test source")
-            .store(store.clone())
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default());
+        let builder =
+            ResourceConfig::for_src(ResourceConfig::parse_src(src).expect("valid test source"))
+                .store(store.clone())
+                .byte_pool(BytePool::default())
+                .pcm_pool(PcmPool::default());
         match discriminator {
-            Some(discriminator) => builder.discriminator(discriminator.to_string()).build(),
+            Some(discriminator) => builder.discriminator(discriminator).build(),
             None => builder.build(),
         }
     }
@@ -493,19 +491,19 @@ mod tests {
     struct InvalidLayout;
 
     impl AssetLayout for InvalidLayout {
-        fn root(&self, _source: &AssetSource) -> String {
-            "root".to_string()
-        }
-
         fn path(&self, _resource: &AssetResource) -> String {
             "../escape".to_string()
+        }
+
+        fn root(&self, _source: &AssetSource) -> String {
+            "root".to_string()
         }
     }
 
     #[kithara::test]
     fn invalid_layout_is_not_treated_as_an_uncacheable_source() {
         let layouts = AssetLayoutRegistry::default().with::<File>(Arc::new(InvalidLayout));
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .layouts(layouts)
             .build();

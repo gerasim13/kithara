@@ -1,9 +1,7 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::{
-        AcquisitionResult, AssetScope, AssetStoreBuilder, ReadSide, StorageBackend, WriteSide,
-    },
+    assets::{AcquisitionResult, AssetScope, AssetStore, ReadSide, StorageBackend, WriteSide},
     platform::{thread, time::Duration},
 };
 use kithara_integration_tests::temp_dir;
@@ -31,7 +29,7 @@ fn asset_scope_with_root(
 ) -> AssetScope {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        AssetStoreBuilder::default()
+        AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: (temp_dir.path()).into(),
             })
@@ -43,7 +41,7 @@ fn asset_scope_with_root(
     #[cfg(target_arch = "wasm32")]
     {
         let _ = temp_dir;
-        AssetStoreBuilder::default()
+        AssetStore::builder()
             .backend(StorageBackend::Memory)
             .layouts(literal_layouts())
             .build()

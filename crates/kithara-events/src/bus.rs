@@ -63,9 +63,9 @@ impl EventBus {
         senders.push(tx);
         Self {
             registry,
-            label: ScopeLabel::default(),
             next_seq,
             senders,
+            label: ScopeLabel::default(),
             scope: BusScope::root(id),
         }
     }
@@ -74,6 +74,10 @@ impl EventBus {
     #[must_use]
     pub fn id(&self) -> u64 {
         self.scope.id()
+    }
+
+    pub(crate) fn next_seq_counter(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.next_seq)
     }
 
     /// Publish an event to this scope and all ancestor scopes.
@@ -105,10 +109,6 @@ impl EventBus {
         }
         self.senders[len - 1].send(event).ok();
     }
-
-    pub(crate) fn next_seq_counter(&self) -> Arc<AtomicU64> {
-        Arc::clone(&self.next_seq)
-    }
     /// Create a child scope sharing the same topic registry.
     ///
     /// Events published to the child are visible to all ancestors.
@@ -130,9 +130,9 @@ impl EventBus {
         senders.extend(self.senders.iter().cloned());
         Self {
             scope,
+            senders,
             label: self.label.merged_with(label),
             next_seq: Arc::clone(&self.next_seq),
-            senders,
             registry: Arc::clone(&self.registry),
         }
     }

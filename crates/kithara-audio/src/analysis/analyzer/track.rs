@@ -19,16 +19,19 @@ pub(crate) trait Analyzer: Send {
 }
 
 /// The output of one analysis pass.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, fieldwork::Fieldwork)]
 #[non_exhaustive]
+#[fieldwork(opt_in, get)]
 pub struct TrackAnalysis {
     /// Cleaned beat grid (source frames).
     beat: Option<BeatGrid>,
     /// Track waveform.
     waveform: Option<Waveform>,
     /// Total decoded source frames: the denominator for `BeatGrid` frame to fraction.
+    #[field(get)]
     source_frames: u64,
     /// Sample-rate axis of `source_frames` and the beat-grid markers.
+    #[field(get, copy)]
     source_sample_rate: Option<NonZeroU32>,
 }
 
@@ -66,17 +69,6 @@ impl TrackAnalysis {
     #[must_use]
     pub fn beat(&self) -> Option<&BeatGrid> {
         self.beat.as_ref()
-    }
-
-    #[must_use]
-    pub fn source_frames(&self) -> u64 {
-        self.source_frames
-    }
-
-    /// Returns the sample-rate axis shared by source frames and beat markers.
-    #[must_use]
-    pub fn source_sample_rate(&self) -> Option<NonZeroU32> {
-        self.source_sample_rate
     }
 
     #[must_use]

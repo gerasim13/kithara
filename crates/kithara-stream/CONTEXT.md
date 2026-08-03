@@ -1,103 +1,123 @@
 # kithara-stream — Context
 
-Detailed contracts and invariants for the kithara-stream crate; the README is the overview.
+Contracts and invariants for the kithara-stream crate; the README is the overview.
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    Peer["Peer impl<br/>(HlsPeer / FilePeer)"]
-    DL["Downloader<br/>(shared HTTP pool)"]
-    FC["FetchCmd<br/>writer + on_complete"]
-    SR["StorageResource<br/>(kithara-storage)"]
-    Stream["Stream&lt;T&gt;<br/>(Read + Seek)"]
-    Source["Source impl<br/>wait_range / read_at"]
+`Peer::poll_next()` yields `FetchCmd`s to the `Downloader` (shared HTTP pool),
+which writes chunks into a `StorageResource` and calls `on_complete()` on the peer;
+`Stream<T>` (`Read + Seek`) reads that same resource through a `Source` impl
+(`wait_range` / `read_at`). The halves meet only at the `StorageResource` — async
+writes go through each `FetchCmd`'s self-contained `writer`, sync reads happen once
+the range is present, no shared mutable state crosses. Cancellation flows top-down
+through the cancel-token hierarchy in `crates/kithara-play/CONTEXT.md`.
 
-    Peer -- "poll_next()" --> FC
-    FC --> DL
-    DL -- "writer(chunk)" --> SR
-    DL -- "on_complete()" --> Peer
-    Stream --> Source
-    Source -- "wait_range / read_at" --> SR
-```
+## Read and Wait Policy
 
-- A protocol peer (`HlsPeer`, `FilePeer`) registers with the shared `Downloader` via `Downloader::register(peer)` and emits batches of `FetchCmd` from `Peer::poll_next()`.
-- Each `FetchCmd` carries closures: a per-chunk `writer` that lands bytes into `StorageResource`, and an `on_complete` that lets the peer advance its state.
-- The sync side reads through `Stream<T>`, which delegates to a `Source` implementation. `Source::wait_range` blocks (with a bounded retry budget) until the requested byte range is present in the underlying `StorageResource`.
+Two read paths, selected by the caller's statically-known context; `WaitMode` is
+internal plumbing, never a public knob.
 
-## Key Public Items
+- Real-time worker: `try_read` / `probe_read` pass `Some(WAIT_RANGE_TIMEOUT)`
+  (10ms) to `Source::wait_range` — one readiness probe, not a sleep; the backoff
+  lives in the audio scheduler's `Waiting` park, so the produce core never blocks
+  on a syscall.
+- Off-RT consumer: `impl Read` passes `None` and parks event-driven until the range
+  resolves. Deliberately **no** wall-clock budget here: give-up authority lives
+  lower (downloader per-fetch inactivity timeout, cancel hierarchy), which can tell
+  a slow-but-live transfer from a stall. A budget here would surface as
+  `Interrupted`, which decoders misread as a seek; a real wedge is caught by the
+  source's hang watchdog.
 
-<table>
-<tr><th>Item</th><th>Kind</th><th>Role</th></tr>
-<tr><td><code>Source</code></td><td>trait</td><td>Sync random-access surface for decoders. Drives <code>wait_range</code>, <code>read_at</code>, <code>position</code>, <code>len</code>, <code>media_info</code>, <code>byte_map</code>, plus adaptive handles (<code>variant_control</code>, <code>abr_handle</code>)</td></tr>
-<tr><td><code>ByteMap</code></td><td>trait</td><td>Optional segment-aware view returned by <code>Source::byte_map()</code>: <code>init_segment_range</code>, <code>anchor_at_time</code>, <code>segment_at_byte</code>, <code>segment_after_byte</code>, <code>len</code></td></tr>
-<tr><td><code>Stream&lt;T&gt;</code></td><td>struct</td><td><code>Read + Seek</code> wrapper around any <code>T: StreamType</code></td></tr>
-<tr><td><code>StreamType</code></td><td>trait</td><td>Marker for protocol types (<code>File</code>, <code>Hls</code>) with associated <code>Config</code> and <code>Events</code></td></tr>
-<tr><td><code>dl::Downloader</code></td><td>struct</td><td>Shared HTTP pool; <code>register(peer)</code> attaches a peer; spawns one async fetch task per active <code>FetchCmd</code></td></tr>
-<tr><td><code>dl::Peer</code></td><td>trait</td><td>Pull-driven per-track API: <code>poll_next() -&gt; Poll&lt;Option&lt;Vec&lt;FetchCmd&gt;&gt;&gt;</code>, plus ABR-driven decisions</td></tr>
-<tr><td><code>dl::PeerHandle</code></td><td>struct</td><td>Handle returned by <code>Downloader::register(peer)</code> for canceling and inspecting a peer's state</td></tr>
-<tr><td><code>dl::FetchCmd</code></td><td>struct</td><td>HTTP GET/Head command with self-contained <code>writer</code> + <code>on_complete</code> closures and a <code>CancelToken</code></td></tr>
-<tr><td><code>dl::DownloaderConfig</code></td><td>struct (bon-builder)</td><td>Pool sizing, retry, timeouts, cancel-token wiring</td></tr>
-<tr><td><code>ReaderEventSink</code> / <code>BoxedEventSink</code></td><td>trait / alias</td><td>Single-owner reader-side event sink (<code>ReaderChunkSignal</code>, <code>ReaderSeekSignal</code>); the decoder owns the <code>Box&lt;dyn ReaderEventSink&gt;</code> and invokes it lock-free via <code>&amp;mut</code></td></tr>
-<tr><td><code>ChunkPosition</code> / <code>PlayheadState</code></td><td>structs</td><td>Position bookkeeping exposed through the <code>PlayheadRead</code> / <code>PlayheadWrite</code> traits</td></tr>
-</table>
+Outcome mapping in `try_read_with`: `SourceError::WaitBudgetExceeded` →
+`Pending(NotReady(WaitBudgetExhausted))`; `WaitOutcome::Interrupted` →
+`Pending(SeekPending)` while flushing, else `Pending(NotReady(WaitInterrupted))`; a
+seek-epoch change at any checkpoint (before the wait, after the wait, after the
+read) → `Pending(SeekPending)`; an empty `buf` → `Eof`, so callers must never probe
+with a zero-length buffer. `impl Read` maps `Bytes` → `Ok(n)`, `Eof` → `Ok(0)`, and
+re-loops on `NotReady`/`Retry` after notifying the peer; `probe_read` never loops —
+it arms the peer wake and returns. Both pending kinds surface as
+`ErrorKind::Interrupted` carrying `StreamPending` (never `WouldBlock`) so
+Symphonia's fragmented-MP4 reader treats the pause as transient; a variant fence
+surfaces as `io::Error::other(VariantChangeError)`. Both payloads are
+downcastable, so decoders recover the typed `PendingReason` without string
+matching.
+
+`Seek::seek` runs on the consumer thread and primes through `prime_seek_range`,
+which returns immediately when `phase_at` already reports `Ready`/`Eof` (a re-seek
+into resident bytes fires no cross-thread peer wake) and otherwise wakes the peer
+once to re-aim the prefetch window, then blocks in `wait_range(_, None)`. Priming
+is advisory; `seek` re-checks `source.len()` afterwards. `probe_seek` is the
+real-time counterpart and never primes. The wake pair belongs to the source:
+`peer_wake` is reader→peer (armed on the produce core, `notify_now` off-core),
+`set_worker_wake` is peer→worker (fired from off-RT write/commit sites so an
+underran worker re-ticks the instant bytes land); sources whose data is always
+resident have neither. `take_reader_event_sink` must return a **fresh** sink on
+every call — decoder recreation (ABR / format change) needs a clean state cursor.
+
+## End-of-stream contract
+
+`Stream::try_read` surfaces `StreamReadOutcome::Eof` only from a `Source` proving
+the end is genuinely reached — `WaitOutcome::Eof` from `wait_range` or
+`ReadOutcome::Eof` from `read_at`. A `Source` must **never** mint `Eof` for an
+in-range range whose bytes have not arrived; that case is `WaitBudgetExceeded` /
+`Pending(NotReady)` so the reader holds at need-data. A premature `Eof` for a
+withheld in-range segment latches the audio consumer into `AtEof` and drives the
+queue's silent auto-advance — pinned by
+`tests/tests/kithara_queue/early_seek_size_withheld_advance.rs`.
+
+- File (`FileSource`): `known_len` prefers `FileCoord::total_bytes()` (seeded from
+  the announced `Content-Length`) over the reader's committed length. A range
+  starting past that length is `Eof` only while the resource is `Committed`; on an
+  `Active` resource it is `Waiting`.
+- HLS (`HlsSource` / `HlsCoord`): EOF keys off the variant layout's published total
+  size **gated by `sizes_complete()`** (every served segment's size known). While
+  any served size is unknown the total is a lower bound and the gate holds
+  `Pending`. See `crates/kithara-hls/CONTEXT.md` "Seek and wait_range Contract".
 
 ## Canonical Media Types
 
-Defined here as the single source of truth and re-exported by other crates:
+`AudioCodec`, `ContainerFormat`, and `MediaInfo` are defined here as the single
+source of truth and re-exported by other crates. The conversions are the contract:
+`AudioCodec → MediaInfo` (`From`, container filled only when the codec implies
+one), `AudioCodec → ContainerFormat` (`TryFrom`, ambiguous codecs fail), `&[u8] → AudioCodec` (`TryFrom`, magic-prefix detection), `MediaInfo::parse_mime` (codec
+*and* container from a `Content-Type`). `needs_exact_byte_sizes(codec, container)`
+is the cross-crate size policy: only AAC (LC/HE/HEv2) and FLAC inside fMP4 tolerate
+unknown byte sizes; everything else — including an unknown codec — requires exact
+sizes. `kithara-decode` reads it when deciding whether a stream can open without a
+complete size map.
 
-- `AudioCodec` — codec identifier (`AacLc`, `Mp3`, `Flac`, …)
-- `ContainerFormat` — container identifier (`Fmp4`, `MpegTs`, `Adts`, `Flac`, `Wav`, `Ogg`, …)
-- `MediaInfo` — format metadata: channels, codec, container, sample rate, variant index
+## Downloader and Peers
 
-## Async-to-Sync Bridge
+`Downloader` is the sole `HttpClient` owner: created once at application level,
+shared by `Clone` across protocol configs. `register(Arc<dyn Peer>)` returns a
+`PeerHandle` whose cancel token fires when the last clone drops, letting the
+registry release the peer entry. Peers are pull-driven — `Peer::poll_next` returns
+`Poll<Option<Vec<FetchCmd>>>`; one-off requests go through `PeerHandle::execute`.
+`FetchCmd::get(url)` / `head(url)` start its bon builder; each command owns its
+`writer`, `on_complete`, and an optional epoch `CancelToken` combined by the
+downloader with the track-level cancel.
 
-1. The `Downloader` is async; peers and `FetchCmd` callbacks run on the tokio runtime.
-2. `FetchCmd.writer(chunk)` writes bytes directly into the `StorageResource` shared with the sync reader.
-3. The sync reader inside `Stream<T>` calls `Source::wait_range(range)` as a single non-blocking readiness probe on the worker path: it returns `Ready`/`Eof`/`Interrupted` immediately, and on a not-yet-available range returns `WaitBudgetExceeded`, which `try_read` maps to `Pending(NotReady)` without sleeping. The backoff between probes lives in the audio scheduler's `Waiting` park (10ms), so the worker decode path never blocks on a syscall. The consumer-thread `Seek` path primes metadata through `Stream::prime_seek_range`, which calls `wait_range(_, None)` and parks event-driven until the range resolves, a segment fails, or cancellation fires.
-4. `Source::read_at(offset, buf)` performs the actual sync copy once the range is present.
-5. Cancellation flows top-down through the cancel-token hierarchy described in `crates/kithara-play/CONTEXT.md`.
-
-### End-of-stream contract
-
-`Stream::try_read` surfaces `StreamReadOutcome::Eof` only from a `Source` that proves the end is genuinely reached — `WaitOutcome::Eof` from `wait_range` or `ReadOutcome::Eof` from `read_at`. A `Source` must **never** mint `Eof` for an in-range range whose bytes have not yet arrived; that case is `WaitBudgetExceeded`/`Pending(NotReady)` so the reader holds at need-data. Per source:
-
-- File (`FileSource`): EOF currently uses `FileCoord::total_bytes()` (seeded from the announced `Content-Length`) when available, otherwise the committed `AssetReader::len()`. Strict committed-length EOF is a planned hardening, not today's behavior.
-- HLS (`HlsVariant`): EOF keys off the variant layout's published `total_bytes()` **gated by `sizes_complete()`** (every served segment's size known). While any served size is still unknown, `total_bytes()` is a lower bound and the gate holds `Pending`, not `Eof`. See `crates/kithara-hls/CONTEXT.md` "Seek and wait_range Contract".
-
-A premature `Eof` for a withheld in-range segment latches the audio consumer into `AtEof` and drives the queue's silent auto-advance; the empty-buffer (`buf.is_empty()`) zero-length return is a distinct, non-terminal case. Pinned by `tests/tests/kithara_queue/early_seek_size_withheld_advance.rs` (`immediate_seek_size_and_body_withheld`).
+`DownloaderConfig::for_client(client)` carries `abr_settings` for the shared ABR
+controller, `demand_throttle`, `soft_timeout` (2s — publishes
+`DownloaderEvent::LoadSlow` on the peer's bus without aborting the request),
+`max_concurrent` (5 — global in-flight cap across all peers and command types), an
+optional `runtime` handle, and an optional parent `cancel` (`Some` composes a child
+scope, `None` owns a standalone one). Ownership sits above this crate: the
+embedding surface (`kithara-app`, `kithara-ffi`) builds one `Downloader` and
+threads it through `kithara-play::ResourceConfig::downloader`, so every peer shares
+one HTTP pool; with none supplied, `kithara-play` builds a per-resource one.
 
 ## Features
 
-<table>
-<tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
-<tr><td><code>default</code></td><td>yes</td><td><code>client-reqwest</code> + <code>tls-rustls</code></td></tr>
-<tr><td><code>probe</code></td><td>no</td><td>USDT probe points for tracing</td></tr>
-<tr><td><code>mock</code></td><td>no</td><td><code>unimock</code>-generated mocks of the public traits</td></tr>
-<tr><td><code>perf</code></td><td>no</td><td>Hotpath instrumentation</td></tr>
-<tr><td><code>client-reqwest</code></td><td>yes</td><td>Forward the reqwest HTTP backend to <code>kithara-net</code>, <code>kithara-events</code>, and <code>kithara-abr</code></td></tr>
-<tr><td><code>client-wreq</code></td><td>no</td><td>Forward the wreq HTTP backend to <code>kithara-net</code>, <code>kithara-events</code>, and <code>kithara-abr</code></td></tr>
-<tr><td><code>client-apple</code></td><td>no</td><td>Forward the Apple HTTP backend to <code>kithara-net</code></td></tr>
-<tr><td><code>tls-rustls</code></td><td>yes</td><td>Forward rustls TLS selection to network-reaching deps</td></tr>
-<tr><td><code>tls-native</code></td><td>no</td><td>Forward native TLS selection to network-reaching deps</td></tr>
-</table>
+Default is `client-reqwest` + `tls-rustls`. `client-reqwest` / `client-wreq`
+forward the HTTP backend to `kithara-net`, `kithara-events`, and `kithara-abr`;
+`client-apple` forwards only to `kithara-net`; `tls-rustls` / `tls-native` forward
+TLS selection. `probe` adds USDT probe points, `perf` hotpath instrumentation, and
+`mock` exposes the `#[kithara::mock]` (unimock) trait mocks otherwise compiled only
+under `cfg(test)`.
 
 ## Agent Guardrails
 
-- Keep `kithara-stream` generic. Do not move HLS-, file-, or surface-specific policy into shared contracts.
-- Treat `wait_range`, `read_at`, and the pull-driven `Peer` contract as the surface of this crate. Fix the owned invariant instead of papering over it with surface-specific hacks.
-- Shared media vocabulary stays here. Reuse `AudioCodec`, `ContainerFormat`, and `MediaInfo` instead of creating parallel cross-crate types.
-
-## Trait Bridges
-
-- `AudioCodec` → `MediaInfo` (`From`) — codec-only media info, container inferred
-- `AudioCodec` → `ContainerFormat` (`TryFrom`) — standalone container, ambiguous codecs fail
-- `&[u8]` → `AudioCodec` (`TryFrom`) — codec detection from magic prefix
-- `E: Into<SourceError>` → `StreamError` (`From`) — lift source errors into stream errors
-- `Iterator<SlotEntry>` → `BatchGroup` (`FromIterator`) — group fetch slots by cancel epoch
-- `NotReadyCause` / `PendingReason` (`Display`) — human-readable not-ready / pending reasons
-- `StreamSeekPastEof` / `StreamReadError` / `StreamPending` / `VariantChangeError` (`Display`) — reader error rendering
-
-## Integration
-
-Central orchestration layer. Protocol crates (`kithara-file`, `kithara-hls`) implement `StreamType` and `dl::Peer`. `kithara-decode` consumes `Stream<T>`. The `Downloader` is owned at the consumer-crate top (`kithara-play::PlayerImpl`, `kithara-queue::Queue`, etc.) so all peers share one HTTP pool. Other crates re-export `AudioCodec`, `ContainerFormat`, `MediaInfo` from here.
+Keep `kithara-stream` generic: no HLS-, file-, or surface-specific policy in shared
+contracts. `wait_range`, `read_at`, and the pull-driven `Peer` contract are this
+crate's surface — fix the owned invariant, never paper over it.

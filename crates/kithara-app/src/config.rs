@@ -2,7 +2,7 @@ use std::fmt;
 
 use bon::Builder;
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, BytePool, FlushHub, StorageBackend},
+    assets::{AssetStore, BytePool},
     audio::analysis::BeatAnalysisConfig,
     bufpool::PcmPool,
     hls::SizeProbeMethod,
@@ -17,10 +17,12 @@ use url::Url;
 use crate::{baked, theme::Palette};
 
 /// App-owned snapshot of one DRM policy and its ordinary resolver registry.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, fieldwork::Fieldwork)]
 #[non_exhaustive]
+#[fieldwork(opt_in, get)]
 pub struct AppDrm {
     policy: Arc<DomainKeyPolicy>,
+    #[field(get)]
     registry: KeyProcessorRegistry,
 }
 
@@ -33,12 +35,6 @@ impl AppDrm {
         let mut registry = KeyProcessorRegistry::new();
         registry.register(policy.clone());
         Self { policy, registry }
-    }
-
-    /// Return the opaque key-request registry.
-    #[must_use]
-    pub fn registry(&self) -> &KeyProcessorRegistry {
-        &self.registry
     }
 
     /// Return resource headers selected by the same registered policy.
@@ -54,7 +50,7 @@ impl Default for AppDrm {
     }
 }
 
-/// Application configuration passed to frontends.
+/// Application configuration passed to the GUI frontend.
 ///
 /// Shared owners and the downloader are mandatory; product knobs default to
 /// values baked at compile time from `app.toml`.
@@ -62,12 +58,16 @@ impl Default for AppDrm {
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct AppConfig {
+    /// App-owned DRM policy and its opaque key-request registry.
+    #[builder(default)]
+    pub drm: AppDrm,
     /// App-wide shared asset store.
     pub store: AssetStore,
+    /// Source beat-analysis tunables.
+    #[builder(default)]
+    pub beat_analysis: BeatAnalysisConfig<PlaybackResamplerBackend>,
     /// App-wide shared byte pool for network and cache buffers.
     pub byte_pool: BytePool,
-    /// App-wide shared PCM pool for playback and track analysis.
-    pub pcm_pool: PcmPool,
     /// App master cancel. Single owner for the whole app subtree; the
     /// queue, player, stores, and UI listener all derive children from
     /// it (see `main.rs`). The chain flag reaches the audio worker and HLS
@@ -76,12 +76,11 @@ pub struct AppConfig {
     pub shutdown: CancelToken,
     /// Shared HTTP downloader for every track.
     pub downloader: Downloader,
-    /// App-owned DRM policy and its opaque key-request registry.
-    #[builder(default)]
-    pub drm: AppDrm,
     /// Color palette for the UI.
     #[builder(default)]
     pub palette: Palette,
+    /// App-wide shared PCM pool for playback and track analysis.
+    pub pcm_pool: PcmPool,
     /// HLS size-estimation probe strategy (see
     /// [`kithara::hls::SizeProbeMethod`]).
     #[builder(default = baked::BAKED_SIZE_PROBE_METHOD)]
@@ -98,9 +97,6 @@ pub struct AppConfig {
     /// Crossfade duration in seconds.
     #[builder(default = baked::BAKED_CROSSFADE_SECONDS)]
     pub crossfade_seconds: f32,
-    /// Source beat-analysis tunables.
-    #[builder(default)]
-    pub beat_analysis: BeatAnalysisConfig<PlaybackResamplerBackend>,
 }
 
 fn default_tracks() -> Vec<String> {
@@ -127,32 +123,5 @@ impl fmt::Debug for AppConfig {
             .field("beat_analysis", &self.beat_analysis)
             .field("size_probe_method", &self.size_probe_method)
             .finish_non_exhaustive()
-    }
-}
-
-impl AppConfig {
-    /// Create a default config around the injected app-wide owners.
-    #[must_use]
-    pub fn new(
-        downloader: Downloader,
-        flush_hub: Arc<FlushHub>,
-        cancel: CancelToken,
-        byte_pool: BytePool,
-        pcm_pool: PcmPool,
-    ) -> Self {
-        let store = AssetStoreBuilder::default()
-            .cancel(cancel.child())
-            .backend(StorageBackend::default())
-            .pool(byte_pool.clone())
-            .flush_hub(flush_hub)
-            .layouts(baked::build_baked_asset_layouts())
-            .build();
-        Self::builder()
-            .downloader(downloader)
-            .shutdown(cancel)
-            .byte_pool(byte_pool)
-            .pcm_pool(pcm_pool)
-            .store(store)
-            .build()
     }
 }

@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara::{
-    assets::{AssetStoreBuilder, StorageBackend},
+    assets::{AssetStore, StorageBackend},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
         CancelToken, thread,
@@ -146,7 +146,7 @@ async fn drm_stream_byte_integrity(
     let cancel = CancelToken::never();
 
     let store = if ephemeral {
-        AssetStoreBuilder::default()
+        AssetStore::builder()
             .backend(StorageBackend::Memory)
             .cache_capacity(NonZeroUsize::new(40).expect("nonzero"))
             .build()

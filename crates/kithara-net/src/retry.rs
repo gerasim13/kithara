@@ -167,15 +167,15 @@ pub trait RetryPolicyTrait: Send + Sync {
 }
 
 impl RetryPolicyTrait for DefaultRetryPolicy {
+    fn max_attempts(&self) -> u32 {
+        self.policy.max_retries
+    }
+
     delegate::delegate! {
         to self {
             fn delay_for_attempt(&self, attempt: u32) -> Duration;
             fn should_retry(&self, error: &NetError, attempt: u32) -> bool;
         }
-    }
-
-    fn max_attempts(&self) -> u32 {
-        self.policy.max_retries
     }
 }
 
@@ -207,7 +207,7 @@ mod tests {
     }
 
     fn empty_stream() -> ByteStream {
-        ByteStream::new(Headers::new(), Box::pin(stream::empty()))
+        ByteStream::new(Headers::default(), Box::pin(stream::empty()))
     }
 
     fn fast_retry_policy(max_retries: u32) -> RetryPolicy {
@@ -484,7 +484,7 @@ mod tests {
         let mock = Unimock::new(
             NetMock::head
                 .some_call(matching!(_, _))
-                .returns(Ok(Headers::new())),
+                .returns(Ok(Headers::default())),
         );
         let retry_net = retry_net_default(mock);
 
@@ -505,7 +505,7 @@ mod tests {
                 .returns(Err(NetError::Timeout)),
             NetMock::head
                 .next_call(matching!(_, _))
-                .returns(Ok(Headers::new())),
+                .returns(Ok(Headers::default())),
         ));
         let retry_net = retry_net(mock, fast_retry_policy(3));
 

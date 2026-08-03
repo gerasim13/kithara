@@ -12,8 +12,8 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Meter<'value, 'data, 'skin> {
-    value: Option<&'value ReadValue<'data>>,
     skin: &'skin Skin,
+    value: Option<&'value ReadValue<'data>>,
 }
 
 impl<'a> Widget<'a> for Meter<'_, '_, '_> {
@@ -37,11 +37,11 @@ impl<'a> Widget<'a> for Meter<'_, '_, '_> {
 }
 
 struct MeterCanvas {
-    level: f32,
-    border_width: f32,
-    border_color: Color,
     background: Color,
+    border_color: Color,
     fill: Color,
+    border_width: f32,
+    level: f32,
 }
 
 impl canvas::Program<UiEvent> for MeterCanvas {

@@ -19,10 +19,21 @@ impl ElasticCapabilities {
         }
     }
 
-    /// Prepared interleaved channel count.
-    #[must_use]
-    pub const fn channels(self) -> usize {
-        self.config.channels()
+    delegate::delegate! {
+        to self.config {
+            /// Prepared interleaved channel count.
+            #[must_use]
+            pub fn channels(&self) -> usize;
+            /// Largest accepted output block in frames.
+            #[must_use]
+            pub fn max_output_frames(&self) -> usize;
+            /// Largest accepted source block in frames.
+            #[must_use]
+            pub fn max_source_frames(&self) -> usize;
+            /// Prepared source sample rate in Hz.
+            #[must_use]
+            pub fn sample_rate(&self) -> u32;
+        }
     }
 
     /// Fixed algorithmic latency in both coordinate spaces.
@@ -31,27 +42,9 @@ impl ElasticCapabilities {
         self.latency
     }
 
-    /// Largest accepted output block in frames.
-    #[must_use]
-    pub const fn max_output_frames(self) -> usize {
-        self.config.max_output_frames()
-    }
-
-    /// Largest accepted source block in frames.
-    #[must_use]
-    pub const fn max_source_frames(self) -> usize {
-        self.config.max_source_frames()
-    }
-
     /// Supported source-frame advance range.
     #[must_use]
     pub const fn rate_envelope(self) -> ElasticRateEnvelope {
         self.rate_envelope
-    }
-
-    /// Prepared source sample rate in Hz.
-    #[must_use]
-    pub const fn sample_rate(self) -> u32 {
-        self.config.sample_rate()
     }
 }

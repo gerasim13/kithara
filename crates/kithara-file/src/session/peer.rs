@@ -282,8 +282,8 @@ impl FileInner {
 #[cfg(test)]
 mod tests {
     use kithara_assets::{
-        AcquisitionResult, AssetResource, AssetResourceState, AssetSource, AssetStore,
-        AssetStoreBuilder, ResourceKey, StorageBackend,
+        AcquisitionResult, AssetResource, AssetResourceState, AssetSource, AssetStore, ResourceKey,
+        StorageBackend,
     };
     use kithara_events::{Envelope, Event, EventBus};
     use kithara_platform::{CancelToken, sync::Arc};
@@ -308,7 +308,7 @@ mod tests {
     }
 
     fn make_inner() -> Arc<FileInner> {
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .cancel(CancelToken::never())
             .build();
@@ -324,16 +324,16 @@ mod tests {
         Arc::new(FileInner::new(
             crate::session::inner::FileSourceCtx {
                 coord,
-                cancel: CancelToken::never(),
                 bus,
+                cancel: CancelToken::never(),
             },
             crate::session::inner::FileAssetCtx {
+                key,
                 backend: store,
                 reader: writer.reader(),
                 writer: Mutex::new(Some(writer)),
                 headers: None,
                 raw: None,
-                key,
                 url: Url::parse("http://127.0.0.1/test.mp3").expect("test url"),
             },
             FilePhase::Init,
@@ -345,7 +345,7 @@ mod tests {
     fn remote_capture_metadata_publishes_opened() {
         let inner = make_inner();
         let mut rx = inner.source.bus.subscribe();
-        let mut headers = Headers::new();
+        let mut headers = Headers::default();
         headers.insert("content-type", "audio/mpeg");
         headers.insert("content-length", "12");
 

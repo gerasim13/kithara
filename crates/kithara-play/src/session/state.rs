@@ -44,7 +44,10 @@ pub(super) struct PlayerState {
 
 impl PlayerState {
     fn new(player_id: PlayerId, eq_layout: Vec<EqBandConfig>, pcm_pool: PcmPool) -> Self {
+        let (eq_layout, gains) = prepare_eq_layout(eq_layout);
         let band_count = eq_layout.len();
+        let shared_eq = SharedEq::new(band_count);
+        shared_eq.replace(&gains);
         Self {
             eq_layout,
             pcm_pool,
@@ -55,18 +58,26 @@ impl PlayerState {
             master_vol_pan_memo: None,
             master_vol_pan_node_id: None,
             next_slot_id: 1,
-            shared_eq: SharedEq::new(band_count),
+            shared_eq,
             slots: Vec::new(),
             started: false,
         }
     }
 }
 
+pub(super) fn prepare_eq_layout(mut eq_layout: Vec<EqBandConfig>) -> (Vec<EqBandConfig>, Vec<f32>) {
+    for band in &mut eq_layout {
+        band.set_gain_db(band.gain_db());
+    }
+    let gains = eq_layout.iter().map(EqBandConfig::gain_db).collect();
+    (eq_layout, gains)
+}
+
 pub struct SessionState<B: AudioBackend> {
     pub(super) ctx: Option<FirewheelCtx<B>>,
+    pub(super) session_limiter_node_id: Option<NodeID>,
     pub(super) session_output_memo: Option<Memo<VolumePanNode>>,
     pub(super) session_output_node_id: Option<NodeID>,
-    pub(super) session_limiter_node_id: Option<NodeID>,
     pub(super) next_player_id: PlayerId,
     pub(super) session_ducking: SessionDuckingMode,
     pub(super) start_stream_fn: StartStreamFn<B>,

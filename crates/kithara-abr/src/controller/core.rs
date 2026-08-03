@@ -61,6 +61,7 @@ pub struct AbrSettings {
     #[builder(default = Duration::from_secs(5))]
     pub urgent_downswitch_buffer: Duration,
     /// Seed throughput estimate (bps) applied at controller construction.
+    #[builder(required, with = Some, default = Some(2_000_000))]
     pub initial_throughput_bps: Option<u64>,
     /// Global data-saver cap.
     pub max_bandwidth_bps: Option<u64>,
@@ -80,7 +81,7 @@ pub struct AbrSettings {
 
 impl Default for AbrSettings {
     fn default() -> Self {
-        Self::builder().initial_throughput_bps(2_000_000).build()
+        Self::builder().build()
     }
 }
 

@@ -1,35 +1,13 @@
 schema_version = 1
 
-[accumulator_loops]
-"crates/kithara-ffi/src/web/observer/shim.rs:151:12" = 1
-"crates/kithara-ffi/src/web/observer/shim.rs:163:12" = 1
-
 [fat_loop_body]
 "crates/kithara-decode/src/composed.rs:loop_body" = 1
 "crates/kithara-decode/src/fmp4/source_io.rs:loop_body" = 1
 "crates/kithara-encode/src/ffmpeg/pcm.rs:while_body" = 1
-"crates/kithara-hls/src/variant.rs:loop_body" = 1
 "crates/kithara-storage/src/backend/resource/wait.rs:loop_body" = 1
-"crates/kithara-stream/src/stream.rs:loop_body" = 1
-
-[function_branch_density]
-"crates/kithara-hls/src/variant.rs:786:4" = 1
-"crates/kithara-play/src/impls/player_processor.rs:453:4" = 1
-"crates/kithara-play/src/impls/player_resource.rs:140:4" = 1
-"crates/kithara-play/src/impls/player_track.rs:376:4" = 1
-"crates/kithara-stream/src/stream.rs:327:4" = 1
 
 [loop_allocation]
-"crates/kithara-assets/src/index/availability/disk.rs:102:33" = 1
 "crates/kithara-assets/src/index/availability/disk.rs:85:27" = 1
-"crates/kithara-encode/src/fdk/aac_he_v2.rs:96:23" = 1
-"crates/kithara-encode/src/ffmpeg/aac.rs:183:19" = 1
-"crates/kithara-encode/src/ffmpeg/flac.rs:294:19" = 1
-"crates/kithara-ffi/src/native/inner.rs:102:34" = 1
-"crates/kithara-play/src/impls/player/queue.rs:218:21" = 1
 
 [nested_if_let_pyramid]
 "crates/kithara-storage/src/decorator/chunked/core.rs:depth_2" = 1
-
-[retry_fallback]
-"crates/kithara-events/src/audio.rs:attempts" = 1

@@ -35,9 +35,17 @@ available when `hls` is enabled.
 
 ```rust
 use kithara::audio::ReadOutcome;
+use kithara::assets::AssetStore;
+use kithara::bufpool::{BytePool, PcmPool};
 use kithara::prelude::*;
 
-let config = ResourceConfig::new("https://example.com/song.mp3")?;
+let config: ResourceConfig = ResourceConfig::for_src(ResourceConfig::parse_src(
+    "https://example.com/song.mp3",
+)?)
+    .store(AssetStore::builder().build())
+    .byte_pool(BytePool::default())
+    .pcm_pool(PcmPool::default())
+    .build();
 let mut resource = Resource::new(config).await?;
 resource.preload().await?;
 

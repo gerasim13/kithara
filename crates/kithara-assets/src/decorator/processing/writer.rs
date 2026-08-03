@@ -136,14 +136,14 @@ where
         self.guard.disarm();
     }
 
+    fn reader(&self) -> ProcessedReader<W::Reader> {
+        self.build_reader(self.inner.reader())
+    }
+
     delegate::delegate! {
         to self.inner {
             fn raw_write_handle(&self) -> RawWriteHandle;
             fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
         }
-    }
-
-    fn reader(&self) -> ProcessedReader<W::Reader> {
-        self.build_reader(self.inner.reader())
     }
 }

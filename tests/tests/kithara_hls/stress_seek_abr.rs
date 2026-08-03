@@ -175,11 +175,10 @@ async fn seek_sequence_from_log_real_stream(
         .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .initial_abr_mode(auto(0))
         .build();
-    let config = AudioConfig::<Hls>::new(
-        hls_config,
-        kithara::bufpool::BytePool::default(),
-        kithara::bufpool::PcmPool::default(),
-    );
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("audio creation");

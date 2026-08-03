@@ -58,21 +58,6 @@ impl<T> Outlet<T> {
         }
     }
 
-    delegate::delegate! {
-        to self.overflow {
-            /// Whether an item is currently parked in the overflow slot.
-            #[call(is_some)]
-            pub(crate) fn has_pending(&self) -> bool;
-            /// Discard the parked overflow item, returning it to the caller.
-            ///
-            /// Useful when a producer needs to invalidate previously enqueued data
-            /// (e.g. on a seek epoch change) without waiting for the consumer to
-            /// drain the ring.
-            #[call(take)]
-            pub(crate) fn take_pending(&mut self) -> Option<T>;
-        }
-    }
-
     /// Whether both the ring buffer and the overflow slot are full.
     ///
     /// When `true`, the next [`try_push`](Self::try_push) is guaranteed to
@@ -137,6 +122,21 @@ impl<T> Outlet<T> {
         }
         let _ = self.push_or_park(item);
         Ok(())
+    }
+
+    delegate::delegate! {
+        to self.overflow {
+            /// Whether an item is currently parked in the overflow slot.
+            #[call(is_some)]
+            pub(crate) fn has_pending(&self) -> bool;
+            /// Discard the parked overflow item, returning it to the caller.
+            ///
+            /// Useful when a producer needs to invalidate previously enqueued data
+            /// (e.g. on a seek epoch change) without waiting for the consumer to
+            /// drain the ring.
+            #[call(take)]
+            pub(crate) fn take_pending(&mut self) -> Option<T>;
+        }
     }
 }
 

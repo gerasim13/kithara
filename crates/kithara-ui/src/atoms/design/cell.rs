@@ -10,9 +10,9 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Cell<'a, 'skin> {
+    skin: &'skin Skin,
     label: Option<&'a str>,
     highlighted: bool,
-    skin: &'skin Skin,
 }
 
 impl<'a> Widget<'a> for Cell<'a, '_> {

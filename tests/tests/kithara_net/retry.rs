@@ -99,7 +99,11 @@ async fn try_with_retry(
     base_delay: Duration,
 ) -> Result<Bytes, NetError> {
     let mock_net = make_retry_mock(failures_before_success, error);
-    let retry_policy = RetryPolicy::new(max_retries, base_delay, Duration::from_secs(5));
+    let retry_policy = RetryPolicy::builder()
+        .max_retries(max_retries)
+        .base_delay(base_delay)
+        .max_delay(Duration::from_secs(5))
+        .build();
     let retry_net = mock_net.with_retry(retry_policy, CancelToken::never());
     retry_net.get_bytes(test_url(), None).await
 }
@@ -181,7 +185,11 @@ async fn test_exponential_backoff_with_max_delay(
     #[case] max_delay: Duration,
 ) {
     let mock_net = make_retry_mock((max_retries + 1) as usize, http_500());
-    let retry_policy = RetryPolicy::new(max_retries, base_delay, max_delay);
+    let retry_policy = RetryPolicy::builder()
+        .max_retries(max_retries)
+        .base_delay(base_delay)
+        .max_delay(max_delay)
+        .build();
     let retry_net = mock_net.with_retry(retry_policy, CancelToken::never());
     let result = retry_net.get_bytes(test_url(), None).await;
     assert!(result.is_err());
@@ -192,11 +200,11 @@ async fn test_exponential_backoff_with_max_delay(
 #[case(2)]
 async fn test_all_net_methods_with_retry(#[case] failures_before_success: usize) {
     let mock_net = make_retry_mock(failures_before_success, http_500());
-    let retry_policy = RetryPolicy::new(
-        failures_before_success as u32,
-        Duration::from_millis(10),
-        Duration::from_secs(5),
-    );
+    let retry_policy = RetryPolicy::builder()
+        .max_retries(failures_before_success as u32)
+        .base_delay(Duration::from_millis(10))
+        .max_delay(Duration::from_secs(5))
+        .build();
     let retry_net = mock_net.with_retry(retry_policy, CancelToken::never());
     assert_success_all_net_methods(&retry_net).await;
 }
@@ -206,11 +214,11 @@ async fn test_all_net_methods_with_retry(#[case] failures_before_success: usize)
 #[case(2)]
 async fn test_timeout_retry_chaining(#[case] failures_before_success: usize) {
     let mock_net = make_retry_mock(failures_before_success, http_500());
-    let retry_policy = RetryPolicy::new(
-        failures_before_success as u32,
-        Duration::from_millis(10),
-        Duration::from_secs(5),
-    );
+    let retry_policy = RetryPolicy::builder()
+        .max_retries(failures_before_success as u32)
+        .base_delay(Duration::from_millis(10))
+        .max_delay(Duration::from_secs(5))
+        .build();
     let net = mock_net
         .with_timeout(Duration::from_secs(5))
         .with_retry(retry_policy, CancelToken::never());

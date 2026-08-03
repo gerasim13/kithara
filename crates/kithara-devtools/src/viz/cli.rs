@@ -66,10 +66,6 @@ impl Lod {
 
 #[derive(Debug, Args)]
 pub struct VizArgs {
-    /// Projection rendered from the shared evidence graph.
-    #[arg(long, value_enum, default_value_t)]
-    pub(crate) view: ViewName,
-
     /// Architecture detail from crates (0) to the full evidence graph (4).
     #[arg(long, value_enum, default_value_t)]
     pub(crate) lod: Lod,
@@ -82,22 +78,6 @@ pub struct VizArgs {
     #[arg(long)]
     pub(crate) module: Option<String>,
 
-    /// Exclude Cargo packages from semantic selection and the visible projection.
-    #[arg(long = "exclude-crate")]
-    pub(crate) exclude_crates: Vec<String>,
-
-    /// Exclude canonical `package::module` subtrees from the visible projection.
-    #[arg(long = "exclude-module")]
-    pub(crate) exclude_modules: Vec<String>,
-
-    /// Ignore project-default exclusions while preserving explicit filters.
-    #[arg(long)]
-    pub(crate) include_default_excluded: bool,
-
-    /// Semantic call resolution policy.
-    #[arg(long, value_enum, default_value_t)]
-    pub(crate) semantic: SemanticMode,
-
     /// Run only one configured runtime scenario.
     #[arg(long)]
     pub(crate) scenario: Option<String>,
@@ -109,6 +89,26 @@ pub struct VizArgs {
     /// Configured runtime scenario policy.
     #[arg(long, value_enum, default_value_t)]
     pub(crate) runtime: RuntimeMode,
+
+    /// Semantic call resolution policy.
+    #[arg(long, value_enum, default_value_t)]
+    pub(crate) semantic: SemanticMode,
+
+    /// Exclude Cargo packages from semantic selection and the visible projection.
+    #[arg(long = "exclude-crate")]
+    pub(crate) exclude_crates: Vec<String>,
+
+    /// Exclude canonical `package::module` subtrees from the visible projection.
+    #[arg(long = "exclude-module")]
+    pub(crate) exclude_modules: Vec<String>,
+
+    /// Projection rendered from the shared evidence graph.
+    #[arg(long, value_enum, default_value_t)]
+    pub(crate) view: ViewName,
+
+    /// Ignore project-default exclusions while preserving explicit filters.
+    #[arg(long)]
+    pub(crate) include_default_excluded: bool,
 }
 
 #[cfg(test)]

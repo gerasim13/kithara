@@ -15,7 +15,7 @@ use std::{
 use axum::{Router, body::Body, extract::State, http::header, response::Response, routing::get};
 use bytes::Bytes;
 use kithara::{
-    assets::{AssetStoreBuilder, StorageBackend},
+    assets::{AssetStore, StorageBackend},
     file::{File, FileConfig},
     platform::{sync::Arc, time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
@@ -69,7 +69,7 @@ async fn shared_store_one_get() {
     let server = TestHttpServer::new(app).await;
     let url = server.url("/audio.mp3");
 
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
         .build();
 

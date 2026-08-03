@@ -14,5 +14,5 @@ ignores:
 rule:
   all:
     - kind: line_comment
-    - regex: "[=─-]{3,}"
+    - regex: "^//[/!]?\\s*[=─-]{3,}\\s*$"
 fix: ""

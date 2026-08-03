@@ -23,6 +23,15 @@ impl StretchControls {
         })
     }
 
+    pub fn set_speed(&self, speed: f32) {
+        self.speed.store(speed, Ordering::Relaxed);
+    }
+
+    #[must_use]
+    pub fn speed(&self) -> f32 {
+        self.speed.load(Ordering::Relaxed)
+    }
+
     delegate::delegate! {
         to self.region_plan {
             /// The active region-stretch plan, if any.
@@ -33,14 +42,5 @@ impl StretchControls {
             #[call(store)]
             pub fn set_region_plan(&self, plan: Option<Arc<RegionPlan>>);
         }
-    }
-
-    pub fn set_speed(&self, speed: f32) {
-        self.speed.store(speed, Ordering::Relaxed);
-    }
-
-    #[must_use]
-    pub fn speed(&self) -> f32 {
-        self.speed.load(Ordering::Relaxed)
     }
 }

@@ -127,8 +127,8 @@ impl ResamplerBackend for DelayedProbeBackend {
 
 struct DelayedProbeResampler {
     channels: NonZeroUsize,
-    has_pending: bool,
     mode: ResamplerMode,
+    has_pending: bool,
 }
 
 impl Resampler for DelayedProbeResampler {
@@ -229,7 +229,10 @@ fn decoder_factory_uses_configured_pcm_pool() {
         .byte_pool(BytePool::new(4, 4_096))
         .pcm_pool(pcm_pool.clone())
         .build();
-    let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let media_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     let mut decoder =
         DecoderFactory::create_from_media_info(Cursor::new(test_wav()), &media_info, config)
             .expect("decoder builds");
@@ -251,7 +254,10 @@ fn decoder_with_resampler<B>(
 where
     B: ResamplerBackend,
 {
-    let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let media_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     let config = DecoderConfig::builder()
         .byte_pool(BytePool::default())
         .pcm_pool(PcmPool::default())

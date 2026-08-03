@@ -74,7 +74,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::{BytePool, PcmPool};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -92,13 +91,7 @@ mod tests {
     }
 
     fn player(session: Arc<dyn SessionDispatcher>) -> PlayerImpl {
-        PlayerImpl::new(
-            PlayerConfig::builder()
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
-                .session(session)
-                .build(),
-        )
+        PlayerImpl::new(PlayerConfig::test_builder().session(session).build())
     }
 
     #[kithara::test]

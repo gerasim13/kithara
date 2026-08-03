@@ -29,9 +29,9 @@ impl AssetScope {
         let asset_root = layout.root(source);
         validate_root(&asset_root)?;
         Ok(Self {
-            asset_root: Arc::from(asset_root),
             layout,
             store,
+            asset_root: Arc::from(asset_root),
         })
     }
 

@@ -32,13 +32,13 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) const_group_enum_shape: ConstGroupEnumShapeConfig,
     #[serde(default)]
-    pub(crate) derivable_delegation: DerivableDelegationConfig,
+    pub(crate) derivable_deref: DerivableConfig,
     #[serde(default)]
     pub(crate) derivable_display: DerivableConfig,
     #[serde(default)]
-    pub(crate) derivable_deref: DerivableConfig,
-    #[serde(default)]
     pub(crate) derivable_from: DerivableConfig,
+    #[serde(default)]
+    pub(crate) derivable_delegation: DerivableDelegationConfig,
     #[serde(default)]
     pub(crate) derivable_getter: DerivableGetterConfig,
     #[serde(default)]
@@ -80,13 +80,25 @@ impl Default for DerivableConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum DerivableSeverity {
+    #[default]
+    Warn,
+    Deny,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DerivableGetterConfig {
-    #[serde(default = "default_true")]
-    pub(crate) enabled: bool,
+    #[serde(default = "default_blocking_impl_attrs")]
+    pub(crate) blocking_impl_attrs: Vec<String>,
     #[serde(default = "default_qualified_deref_remaps")]
     pub(crate) qualified_deref_remaps: Vec<QualifiedDerefRemap>,
+    #[serde(default = "default_true")]
+    pub(crate) enabled: bool,
+    #[serde(default)]
+    pub(crate) severity: DerivableSeverity,
 }
 
 #[derive(Debug, Deserialize)]
@@ -106,8 +118,10 @@ fn default_qualified_deref_remaps() -> Vec<QualifiedDerefRemap> {
 impl Default for DerivableGetterConfig {
     fn default() -> Self {
         Self {
+            blocking_impl_attrs: default_blocking_impl_attrs(),
             enabled: true,
             qualified_deref_remaps: default_qualified_deref_remaps(),
+            severity: DerivableSeverity::Warn,
         }
     }
 }
@@ -115,16 +129,18 @@ impl Default for DerivableGetterConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DerivableDelegationConfig {
-    #[serde(default = "default_delegation_enabled")]
-    pub(crate) enabled: bool,
-    #[serde(default = "default_trait_delegation_methods")]
-    pub(crate) trait_min_methods: usize,
-    #[serde(default = "default_inherent_delegation_methods")]
-    pub(crate) inherent_min_methods: usize,
     #[serde(default = "default_blocking_impl_attrs")]
     pub(crate) blocking_impl_attrs: Vec<String>,
     #[serde(default = "default_keep_manual_method_attrs")]
     pub(crate) keep_manual_method_attrs: Vec<String>,
+    #[serde(default = "default_delegation_enabled")]
+    pub(crate) enabled: bool,
+    #[serde(default = "default_inherent_delegation_methods")]
+    pub(crate) inherent_min_methods: usize,
+    #[serde(default)]
+    pub(crate) severity: DerivableSeverity,
+    #[serde(default = "default_trait_delegation_methods")]
+    pub(crate) trait_min_methods: usize,
 }
 
 fn default_delegation_enabled() -> bool {
@@ -159,6 +175,7 @@ impl Default for DerivableDelegationConfig {
             inherent_min_methods: default_inherent_delegation_methods(),
             blocking_impl_attrs: default_blocking_impl_attrs(),
             keep_manual_method_attrs: default_keep_manual_method_attrs(),
+            severity: DerivableSeverity::Warn,
         }
     }
 }

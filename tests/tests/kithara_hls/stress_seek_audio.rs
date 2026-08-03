@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 
 use kithara::{
-    assets::{AssetStoreBuilder, StorageBackend},
+    assets::{AssetStore, StorageBackend},
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
     hls::{AbrMode, Hls, HlsConfig},
@@ -53,8 +53,14 @@ enum SeekAudioFixture {
 impl SeekAudioFixture {
     fn media_info(self) -> MediaInfo {
         match self {
-            Self::WavFileLike => MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav)),
-            Self::FlacFmp4 => MediaInfo::new(Some(AudioCodec::Flac), Some(ContainerFormat::Fmp4)),
+            Self::WavFileLike => MediaInfo::builder()
+                .maybe_codec(Some(AudioCodec::Pcm))
+                .maybe_container(Some(ContainerFormat::Wav))
+                .build(),
+            Self::FlacFmp4 => MediaInfo::builder()
+                .maybe_codec(Some(AudioCodec::Flac))
+                .maybe_container(Some(ContainerFormat::Fmp4))
+                .build(),
         }
     }
 }
@@ -459,7 +465,7 @@ async fn stress_seek_audio_hls(
     };
     let cache_capacity =
         cache_capacity_override.map(|cap| NonZeroUsize::new(cap).expect("nonzero cache capacity"));
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(storage_backend)
         .maybe_cache_capacity(cache_capacity)
         .build();

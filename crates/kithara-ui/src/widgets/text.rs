@@ -9,13 +9,13 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Text<'value, 'data, 'skin> {
-    style: TextStyle,
-    value: Option<&'value ReadValue<'data>>,
-    label: Option<&'data str>,
-    color: Option<ColorRole>,
-    active_color: Option<ColorRole>,
-    active: bool,
     skin: &'skin Skin,
+    active_color: Option<ColorRole>,
+    color: Option<ColorRole>,
+    label: Option<&'data str>,
+    value: Option<&'value ReadValue<'data>>,
+    style: TextStyle,
+    active: bool,
 }
 
 impl<'a> Widget<'a> for Text<'_, '_, '_> {

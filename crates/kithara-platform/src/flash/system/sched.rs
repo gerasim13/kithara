@@ -976,21 +976,6 @@ pub(crate) struct TestHold<'a> {
 
 #[cfg(test)]
 impl FlashInner {
-    delegate::delegate! {
-        to self.core {
-            /// Test-only: number of currently RUNNING participants.
-            #[expr($.registry.active)]
-            #[call(lock)]
-            pub(in crate::flash) fn active_count(&self) -> usize;
-            /// Test-only: number of async tasks the engine currently counts as
-            /// non-quiescent (runnable or running). A task woken but not yet re-polled MUST
-            /// be counted here, or the clock can advance past it.
-            #[expr($.registry.active_async)]
-            #[call(lock)]
-            pub(in crate::flash) fn async_active_count(&self) -> usize;
-        }
-    }
-
     pub(in crate::flash) fn advance_log(&self) -> Vec<u64> {
         self.core.lock().sched.advance_log.clone()
     }
@@ -1013,6 +998,21 @@ impl FlashInner {
     /// Test-only: number of currently parked timed waiters.
     pub(in crate::flash) fn timed_count(&self) -> usize {
         self.core.lock().sched.timed.len()
+    }
+
+    delegate::delegate! {
+        to self.core {
+            /// Test-only: number of currently RUNNING participants.
+            #[expr($.registry.active)]
+            #[call(lock)]
+            pub(in crate::flash) fn active_count(&self) -> usize;
+            /// Test-only: number of async tasks the engine currently counts as
+            /// non-quiescent (runnable or running). A task woken but not yet re-polled MUST
+            /// be counted here, or the clock can advance past it.
+            #[expr($.registry.active_async)]
+            #[call(lock)]
+            pub(in crate::flash) fn async_active_count(&self) -> usize;
+        }
     }
 }
 

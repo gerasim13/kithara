@@ -29,60 +29,60 @@ pub(crate) struct ArtifactSet {
 
 #[derive(Serialize)]
 struct GraphSnapshot<'a> {
-    schema_version: u32,
-    nodes: Vec<&'a Node>,
     edges: Vec<&'a Edge>,
+    nodes: Vec<&'a Node>,
+    schema_version: u32,
 }
 
 #[derive(Serialize)]
 struct ArtifactManifest<'a> {
-    schema_version: u32,
+    filters: &'a FilterSummary<'a>,
+    runtime: &'a RuntimeSummary,
+    semantic: &'a SemanticSummary,
     revision: &'a str,
     status: &'static str,
     view: &'static str,
-    lod: u8,
-    package: Option<&'a str>,
-    module: Option<&'a str>,
-    visible_nodes: usize,
-    visible_edges: usize,
-    hidden_nodes: usize,
-    collapsed_groups: usize,
-    filters: &'a FilterSummary<'a>,
-    partition: PartitionManifest<'a>,
-    semantic: &'a SemanticSummary,
-    runtime: &'a RuntimeSummary,
     files: BTreeMap<&'static str, &'static str>,
+    module: Option<&'a str>,
+    package: Option<&'a str>,
+    partition: PartitionManifest<'a>,
+    schema_version: u32,
+    lod: u8,
+    collapsed_groups: usize,
+    hidden_nodes: usize,
+    visible_edges: usize,
+    visible_nodes: usize,
 }
 
 #[derive(Serialize)]
 struct PartitionManifest<'a> {
     state: &'static str,
-    covered_nodes: usize,
     pages: Vec<PartitionPage<'a>>,
+    covered_nodes: usize,
 }
 
 #[derive(Serialize)]
 struct PartitionPage<'a> {
-    label: &'a str,
     file: &'a str,
+    label: &'a str,
     mermaid: &'a str,
     parent: Option<&'a str>,
     visible_nodes: usize,
 }
 
 pub(crate) struct ArtifactRequest<'a> {
-    pub(crate) root: &'a Path,
-    pub(crate) revision: &'a str,
-    pub(crate) project: &'a str,
-    pub(crate) args: &'a VizArgs,
-    pub(crate) graph: &'a EvidenceGraph,
+    pub(crate) filter: &'a ArchitectureFilter,
+    pub(crate) metrics: &'a ArchitectureMetrics,
     pub(crate) model: &'a DiagramModel,
     pub(crate) diagrams: &'a DiagramSet,
-    pub(crate) metrics: &'a ArchitectureMetrics,
-    pub(crate) semantic: &'a SemanticSummary,
-    pub(crate) runtime: &'a RuntimeSummary,
-    pub(crate) filter: &'a ArchitectureFilter,
+    pub(crate) graph: &'a EvidenceGraph,
     pub(crate) filters: &'a FilterSummary<'a>,
+    pub(crate) root: &'a Path,
+    pub(crate) runtime: &'a RuntimeSummary,
+    pub(crate) semantic: &'a SemanticSummary,
+    pub(crate) args: &'a VizArgs,
+    pub(crate) project: &'a str,
+    pub(crate) revision: &'a str,
 }
 
 pub(crate) fn write(request: &ArtifactRequest<'_>) -> Result<ArtifactSet> {
@@ -145,6 +145,7 @@ pub(crate) fn write(request: &ArtifactRequest<'_>) -> Result<ArtifactSet> {
         files.insert("workspace_mermaid", "workspace.mmd");
     }
     let manifest = ArtifactManifest {
+        files,
         schema_version: SCHEMA_VERSION,
         revision: request.revision,
         status: overall_status(request.semantic, request.runtime),
@@ -175,7 +176,6 @@ pub(crate) fn write(request: &ArtifactRequest<'_>) -> Result<ArtifactSet> {
         },
         semantic: request.semantic,
         runtime: request.runtime,
-        files,
     };
     write_json(&output.join("manifest.json"), &manifest)?;
 

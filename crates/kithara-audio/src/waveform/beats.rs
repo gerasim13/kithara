@@ -6,8 +6,9 @@ use crate::{
 /// Cleaned beat grid for one track. All positions are source frames
 /// (decoder/song time, `PcmMeta.frame_offset` space) — never output/stretched
 /// time.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, fieldwork::Fieldwork)]
 #[non_exhaustive]
+#[fieldwork(get)]
 pub struct BeatGrid {
     /// Beat positions in source frames, ascending.
     beats: Vec<u64>,
@@ -33,26 +34,6 @@ impl BeatGrid {
             segments,
             bpm,
         }
-    }
-
-    #[must_use]
-    pub fn beats(&self) -> &[u64] {
-        &self.beats
-    }
-
-    #[must_use]
-    pub fn bpm(&self) -> f64 {
-        self.bpm
-    }
-
-    #[must_use]
-    pub fn downbeats(&self) -> &[u64] {
-        &self.downbeats
-    }
-
-    #[must_use]
-    pub fn segments(&self) -> &[GridSegment] {
-        &self.segments
     }
 }
 

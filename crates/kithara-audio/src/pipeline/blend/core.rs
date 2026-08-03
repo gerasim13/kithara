@@ -21,13 +21,13 @@ enum JoinState {
 
 pub(crate) struct PcmBlender {
     active: BlenderProfile,
+    join: JoinState,
     bound: Vec<f32>,
     coefficient: Vec<f32>,
     history: Vec<f32>,
-    history_frames: usize,
-    join: JoinState,
     predicted_current: Vec<f32>,
     predicted_previous: Vec<f32>,
+    history_frames: usize,
 }
 
 impl PcmBlender {
@@ -45,34 +45,34 @@ impl PcmBlender {
         }
     }
 
-    pub(crate) fn replace_active(&mut self, active: BlenderProfile) {
-        self.active = active;
-        let channels = usize::from(active.spec().channels.max(1));
-        self.bound.resize(channels, 0.0);
-        self.coefficient.resize(channels, 0.0);
-        self.history
-            .resize(channels.saturating_mul(Consts::HISTORY_FRAMES), 0.0);
-        self.history_frames = 0;
-        self.join = JoinState::Steady;
-        self.predicted_current.resize(channels, 0.0);
-        self.predicted_previous.resize(channels, 0.0);
-    }
-
-    pub(crate) fn join_active(&mut self, active: BlenderProfile) {
-        if self.active.spec() == active.spec() && self.history_frames >= 3 {
-            self.active = active;
-            self.join = JoinState::Pending;
-        } else {
-            self.replace_active(active);
+    fn apply_join(&mut self, chunk: &mut PcmChunk) {
+        let JoinState::Active { frame, frames } = &mut self.join else {
+            return;
+        };
+        let channels = usize::from(chunk.spec().channels.max(1));
+        for samples in chunk.samples.chunks_exact_mut(channels) {
+            if *frame >= *frames {
+                self.join = JoinState::Steady;
+                return;
+            }
+            let incoming_gain = f32::from(*frame) / f32::from(*frames);
+            let outgoing_gain = 1.0 - incoming_gain;
+            for (channel, sample) in samples.iter_mut().enumerate() {
+                *sample =
+                    self.predicted_current[channel].mul_add(outgoing_gain, *sample * incoming_gain);
+                let next = self.coefficient[channel].mul_add(
+                    self.predicted_current[channel],
+                    -self.predicted_previous[channel],
+                );
+                self.predicted_previous[channel] = self.predicted_current[channel];
+                self.predicted_current[channel] =
+                    next.clamp(-self.bound[channel], self.bound[channel]);
+            }
+            *frame = frame.saturating_add(1);
         }
-    }
-
-    pub(crate) fn process_active(&mut self, mut chunk: PcmChunk) -> PcmChunk {
-        debug_assert_eq!(chunk.spec(), self.active.spec());
-        self.begin_join(&chunk);
-        self.apply_join(&mut chunk);
-        self.record_tail(&chunk);
-        chunk
+        if *frame >= *frames {
+            self.join = JoinState::Steady;
+        }
     }
 
     fn begin_join(&mut self, chunk: &PcmChunk) {
@@ -119,37 +119,24 @@ impl PcmBlender {
         )
         .unwrap_or(u16::MAX)
         .max(2);
-        self.join = JoinState::Active { frame: 0, frames };
+        self.join = JoinState::Active { frames, frame: 0 };
     }
 
-    fn apply_join(&mut self, chunk: &mut PcmChunk) {
-        let JoinState::Active { frame, frames } = &mut self.join else {
-            return;
-        };
-        let channels = usize::from(chunk.spec().channels.max(1));
-        for samples in chunk.samples.chunks_exact_mut(channels) {
-            if *frame >= *frames {
-                self.join = JoinState::Steady;
-                return;
-            }
-            let incoming_gain = f32::from(*frame) / f32::from(*frames);
-            let outgoing_gain = 1.0 - incoming_gain;
-            for (channel, sample) in samples.iter_mut().enumerate() {
-                *sample =
-                    self.predicted_current[channel].mul_add(outgoing_gain, *sample * incoming_gain);
-                let next = self.coefficient[channel].mul_add(
-                    self.predicted_current[channel],
-                    -self.predicted_previous[channel],
-                );
-                self.predicted_previous[channel] = self.predicted_current[channel];
-                self.predicted_current[channel] =
-                    next.clamp(-self.bound[channel], self.bound[channel]);
-            }
-            *frame = frame.saturating_add(1);
+    pub(crate) fn join_active(&mut self, active: BlenderProfile) {
+        if self.active.spec() == active.spec() && self.history_frames >= 3 {
+            self.active = active;
+            self.join = JoinState::Pending;
+        } else {
+            self.replace_active(active);
         }
-        if *frame >= *frames {
-            self.join = JoinState::Steady;
-        }
+    }
+
+    pub(crate) fn process_active(&mut self, mut chunk: PcmChunk) -> PcmChunk {
+        debug_assert_eq!(chunk.spec(), self.active.spec());
+        self.begin_join(&chunk);
+        self.apply_join(&mut chunk);
+        self.record_tail(&chunk);
+        chunk
     }
 
     fn record_tail(&mut self, chunk: &PcmChunk) {
@@ -172,6 +159,19 @@ impl PcmBlender {
         let append_end = append_start + chunk.samples.len();
         self.history[append_start..append_end].copy_from_slice(&chunk.samples);
         self.history_frames = retained + chunk_frames;
+    }
+
+    pub(crate) fn replace_active(&mut self, active: BlenderProfile) {
+        self.active = active;
+        let channels = usize::from(active.spec().channels.max(1));
+        self.bound.resize(channels, 0.0);
+        self.coefficient.resize(channels, 0.0);
+        self.history
+            .resize(channels.saturating_mul(Consts::HISTORY_FRAMES), 0.0);
+        self.history_frames = 0;
+        self.join = JoinState::Steady;
+        self.predicted_current.resize(channels, 0.0);
+        self.predicted_previous.resize(channels, 0.0);
     }
 }
 

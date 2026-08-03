@@ -7,14 +7,20 @@
 //! ## Quick start
 //!
 //! ```ignore
-//! use kithara::{bufpool::{BytePool, PcmPool}, prelude::*};
+//! use kithara::{
+//!     assets::AssetStore,
+//!     bufpool::{BytePool, PcmPool},
+//!     prelude::*,
+//! };
 //!
 //! // Auto-detect from URL
-//! let config = ResourceConfig::new(
+//! let config: ResourceConfig = ResourceConfig::for_src(ResourceConfig::parse_src(
 //!     "https://example.com/song.mp3",
-//!     BytePool::default(),
-//!     PcmPool::default(),
-//! )?;
+//! )?)
+//! .store(AssetStore::builder().build())
+//! .byte_pool(BytePool::default())
+//! .pcm_pool(PcmPool::default())
+//! .build();
 //! let mut resource = Resource::new(config).await?;
 //!
 //! // Read interleaved PCM

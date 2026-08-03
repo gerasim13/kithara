@@ -12,9 +12,9 @@ pub(crate) enum Mode {
 struct Consts;
 
 impl Consts {
-    const ENV_MODE: &str = "KITHARA_NO_BLOCK";
-    const ENV_LOG: &str = "KITHARA_NO_BLOCK_LOG";
     const ENV_BUDGET_MS: &str = "KITHARA_NO_BLOCK_BUDGET_MS";
+    const ENV_LOG: &str = "KITHARA_NO_BLOCK_LOG";
+    const ENV_MODE: &str = "KITHARA_NO_BLOCK";
     /// Blanket budget panics on CPU spin only; wait class logs by construction, and `KITHARA_NO_BLOCK_BUDGET_MS` overrides.
     const FALLBACK_BLANKET: Duration = Duration::from_millis(3_000);
 }

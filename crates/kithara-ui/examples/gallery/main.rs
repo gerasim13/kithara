@@ -338,11 +338,11 @@ enum Message {
 }
 
 struct Gallery {
+    skin: &'static Skin,
+    window_id: window::Id,
+    reads: MockReads,
     layouts: [CompiledUi; Tab::ALL.len()],
     module_layouts: [CompiledUi; ModuleDemo::ALL.len()],
-    skin: &'static Skin,
-    reads: MockReads,
-    window_id: window::Id,
 }
 
 impl Gallery {
@@ -391,9 +391,9 @@ impl Gallery {
             Self {
                 layouts,
                 module_layouts,
+                window_id,
                 skin: builtin::skin(),
                 reads: MockReads::default(),
-                window_id,
             },
             open.discard(),
         )

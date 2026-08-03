@@ -16,9 +16,9 @@ struct BeatConfig<B>
 where
     B: ResamplerBackend,
 {
-    detector: Option<Detector>,
-    params: GridParams,
     resampler: BeatAnalysisConfig<B>,
+    params: GridParams,
+    detector: Option<Detector>,
 }
 
 pub(crate) struct Config<B>(Option<BeatConfig<B>>)
@@ -31,18 +31,24 @@ where
 {
     pub(crate) fn build(&self, spec: PcmSpec, pcm_pool: &PcmPool) -> Slot<B> {
         Slot(self.0.as_ref().map(|config| {
-            let pass = BeatPassConfig::new(
-                spec.sample_rate.get(),
-                config.params.clone(),
-                config.resampler.clone(),
-                pcm_pool.clone(),
-            );
+            let pass = BeatPassConfig::builder()
+                .source_rate(spec.sample_rate.get())
+                .params(config.params.clone())
+                .resampler(config.resampler.clone())
+                .pcm_pool(pcm_pool.clone())
+                .build();
             BeatPass::new(pass)
         }))
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_none()
+    delegate::delegate! {
+        to self.0 {
+            #[call(is_none)]
+            pub(crate) fn is_empty(&self) -> bool;
+            #[expr($.and_then(|config| config.detector.take()))]
+            #[call(as_mut)]
+            pub(crate) fn take_detector(&mut self) -> Option<Detector>;
+        }
     }
 
     pub(crate) fn set_resampler(&mut self, resampler: BeatAnalysisConfig<B>) {
@@ -53,9 +59,9 @@ where
 
     pub(crate) fn with_default(&mut self, resampler: BeatAnalysisConfig<B>) {
         self.0 = default_beat_detector().map(|detector| BeatConfig {
+            resampler,
             detector: Some(detector),
             params: GridParams::default(),
-            resampler,
         });
     }
 
@@ -67,14 +73,10 @@ where
         resampler: BeatAnalysisConfig<B>,
     ) {
         self.0 = Some(BeatConfig {
-            detector: Some(detector),
             params,
             resampler,
+            detector: Some(detector),
         });
-    }
-
-    pub(crate) fn take_detector(&mut self) -> Option<Detector> {
-        self.0.as_mut().and_then(|config| config.detector.take())
     }
 }
 

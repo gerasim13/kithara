@@ -40,9 +40,9 @@ impl<W: WriteSide, L> LeaseWriter<W, L> {
         resource_key: Option<ResourceKey>,
     ) -> Self {
         Self {
-            _lease: lease,
             byte_recorder,
             inner,
+            _lease: lease,
             cleanup: WriterCleanup::new(events, live, remove, resource_key),
         }
     }
@@ -53,8 +53,8 @@ impl<W: WriteSide, L> LeaseWriter<W, L> {
 /// `remove`) so [`reactivate`](ReadSide::reactivate) can rebuild a full writer.
 pub struct LeaseReader<R: ReadSide, L> {
     lease: L,
-    byte_recorder: Option<Arc<dyn ByteRecorder>>,
     events: LeaseEvents,
+    byte_recorder: Option<Arc<dyn ByteRecorder>>,
     live: Option<Arc<LiveResource>>,
     remove: Option<RemoveFn>,
     resource_key: Option<ResourceKey>,
@@ -73,8 +73,8 @@ impl<R: ReadSide, L> LeaseReader<R, L> {
     ) -> Self {
         Self {
             lease,
-            byte_recorder,
             events,
+            byte_recorder,
             live,
             remove,
             resource_key,
@@ -193,13 +193,6 @@ where
         self.cleanup.disarm();
     }
 
-    delegate::delegate! {
-        to self.inner {
-            fn raw_write_handle(&self) -> RawWriteHandle;
-            fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
-        }
-    }
-
     fn reader(&self) -> LeaseReader<W::Reader, L> {
         LeaseReader::new(
             self.inner.reader(),
@@ -210,6 +203,13 @@ where
             self.cleanup.remove.clone(),
             self.cleanup.resource_key.clone(),
         )
+    }
+
+    delegate::delegate! {
+        to self.inner {
+            fn raw_write_handle(&self) -> RawWriteHandle;
+            fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
+        }
     }
 }
 

@@ -36,12 +36,9 @@ pub use engine::{EngineConfig, EngineImpl, apply_mix};
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::{
-    AudioWorkerHandle, EngineLoadSnapshot, SeekOutcome, ServiceClass, StretchControls,
+    AudioWorkerHandle, EngineLoadSnapshot, EqBandConfig, SeekOutcome, ServiceClass, StretchControls,
 };
 pub use kithara_net::Headers;
 pub use player::{PlayerConfig, PlayerImpl, SelectTransition};
-pub use resource::{
-    PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType,
-    default_resource_decoder_config,
-};
+pub use resource::{PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType};
 pub use rt::PlayerNode;

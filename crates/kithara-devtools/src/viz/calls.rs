@@ -7,39 +7,12 @@ use crate::common::parse::is_pub_visibility;
 
 #[derive(Default)]
 pub(super) struct CallIndex {
+    abstractions: BTreeMap<(String, String), BTreeSet<NodeId>>,
     functions: BTreeMap<String, BTreeSet<NodeId>>,
     methods: BTreeMap<String, BTreeSet<NodeId>>,
-    abstractions: BTreeMap<(String, String), BTreeSet<NodeId>>,
 }
 
 impl CallIndex {
-    fn insert(&mut self, name: String, owner: Option<&str>, id: NodeId) {
-        if let Some(owner) = owner {
-            self.methods
-                .entry(format!("{owner}::{name}"))
-                .or_default()
-                .insert(id);
-        } else {
-            self.functions.entry(name).or_default().insert(id);
-        }
-    }
-
-    fn candidates(&self, path: &[String]) -> impl Iterator<Item = &NodeId> {
-        let candidates = match path {
-            [name] => self.functions.get(name),
-            [.., owner, name] => self.methods.get(&format!("{owner}::{name}")),
-            [] => None,
-        };
-        candidates.into_iter().flat_map(|ids| ids.iter())
-    }
-
-    fn insert_abstraction(&mut self, kind: &str, name: &str, id: NodeId) {
-        self.abstractions
-            .entry((kind.to_string(), name.to_string()))
-            .or_default()
-            .insert(id);
-    }
-
     fn abstraction(&self, kind: &str, name: &str, module: &str) -> Option<NodeId> {
         let candidates = self
             .abstractions
@@ -54,14 +27,41 @@ impl CallIndex {
             })
             .cloned()
     }
+
+    fn candidates(&self, path: &[String]) -> impl Iterator<Item = &NodeId> {
+        let candidates = match path {
+            [name] => self.functions.get(name),
+            [.., owner, name] => self.methods.get(&format!("{owner}::{name}")),
+            [] => None,
+        };
+        candidates.into_iter().flat_map(|ids| ids.iter())
+    }
+
+    fn insert(&mut self, name: String, owner: Option<&str>, id: NodeId) {
+        if let Some(owner) = owner {
+            self.methods
+                .entry(format!("{owner}::{name}"))
+                .or_default()
+                .insert(id);
+        } else {
+            self.functions.entry(name).or_default().insert(id);
+        }
+    }
+
+    fn insert_abstraction(&mut self, kind: &str, name: &str, id: NodeId) {
+        self.abstractions
+            .entry((kind.to_string(), name.to_string()))
+            .or_default()
+            .insert(id);
+    }
 }
 
 pub(super) struct SourceUnit<'a> {
-    pub(super) package: &'a str,
-    pub(super) target: &'a str,
-    pub(super) module: &'a str,
-    pub(super) relative: &'a str,
     pub(super) file: &'a syn::File,
+    pub(super) module: &'a str,
+    pub(super) package: &'a str,
+    pub(super) relative: &'a str,
+    pub(super) target: &'a str,
 }
 
 pub(super) fn is_test_only(attributes: &[syn::Attribute]) -> bool {
@@ -96,9 +96,9 @@ pub(super) fn collect_abstractions(
 ) {
     let mut visitor = AbstractionVisitor {
         unit,
-        inline_modules: Vec::new(),
         graph,
         index,
+        inline_modules: Vec::new(),
     };
     visitor.visit_file(unit.file);
 }
@@ -110,11 +110,11 @@ pub(super) fn collect_definitions(
 ) {
     let mut visitor = DefinitionVisitor {
         unit,
+        graph,
+        index,
         inline_modules: Vec::new(),
         impl_type: None,
         impl_owner: None,
-        graph,
-        index,
     };
     visitor.visit_file(unit.file);
 }
@@ -122,25 +122,51 @@ pub(super) fn collect_definitions(
 pub(super) fn collect_edges(unit: &SourceUnit<'_>, graph: &mut EvidenceGraph, index: &CallIndex) {
     let mut visitor = CallVisitor {
         unit,
+        graph,
+        index,
         inline_modules: Vec::new(),
         impl_type: None,
         caller: None,
-        graph,
-        index,
     };
     visitor.visit_file(unit.file);
 }
 
 struct AbstractionVisitor<'a, 'unit> {
+    index: &'a mut CallIndex,
+    graph: &'a mut EvidenceGraph,
     unit: &'unit SourceUnit<'unit>,
     inline_modules: Vec<String>,
-    graph: &'a mut EvidenceGraph,
-    index: &'a mut CallIndex,
 }
 
 impl AbstractionVisitor<'_, '_> {
-    fn module(&self) -> String {
-        joined_module(self.unit.module, &self.inline_modules)
+    fn add_module_functions(&mut self, ident: &syn::Ident) {
+        let module = self.module();
+        let start = ident.span().start();
+        let origin = format!("{}:{}", self.unit.relative, start.line);
+        let id = NodeId::module_functions(self.unit.package, self.unit.target, &module);
+        let label = if module == "crate" {
+            "crate functions".to_string()
+        } else {
+            format!(
+                "{} functions",
+                module.rsplit("::").next().unwrap_or(module.as_str())
+            )
+        };
+        self.graph.merge_node(
+            Node::new(
+                id.clone(),
+                NodeKind::ModuleFunctions,
+                label,
+                Evidence::static_fact(origin.clone()),
+            )
+            .at_position(self.unit.relative, start.line, start.column),
+        );
+        self.graph.merge_edge(Edge::new(
+            NodeId::module(self.unit.package, self.unit.target, &module),
+            id,
+            EdgeKind::Contains,
+            Evidence::static_fact(origin),
+        ));
     }
 
     fn add_named(&mut self, ident: &syn::Ident, kind: NodeKind, identity_kind: &str) {
@@ -173,38 +199,28 @@ impl AbstractionVisitor<'_, '_> {
             .insert_abstraction(identity_kind, &ident.to_string(), id);
     }
 
-    fn add_module_functions(&mut self, ident: &syn::Ident) {
-        let module = self.module();
-        let start = ident.span().start();
-        let origin = format!("{}:{}", self.unit.relative, start.line);
-        let id = NodeId::module_functions(self.unit.package, self.unit.target, &module);
-        let label = if module == "crate" {
-            "crate functions".to_string()
-        } else {
-            format!(
-                "{} functions",
-                module.rsplit("::").next().unwrap_or(module.as_str())
-            )
-        };
-        self.graph.merge_node(
-            Node::new(
-                id.clone(),
-                NodeKind::ModuleFunctions,
-                label,
-                Evidence::static_fact(origin.clone()),
-            )
-            .at_position(self.unit.relative, start.line, start.column),
-        );
-        self.graph.merge_edge(Edge::new(
-            NodeId::module(self.unit.package, self.unit.target, &module),
-            id,
-            EdgeKind::Contains,
-            Evidence::static_fact(origin),
-        ));
+    fn module(&self) -> String {
+        joined_module(self.unit.module, &self.inline_modules)
     }
 }
 
 impl<'ast> Visit<'ast> for AbstractionVisitor<'_, '_> {
+    fn visit_item_enum(&mut self, item: &'ast syn::ItemEnum) {
+        if is_test_only(&item.attrs) {
+            return;
+        }
+        self.add_named(&item.ident, NodeKind::ConcreteType, "type");
+        syn::visit::visit_item_enum(self, item);
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if is_test_only(&item.attrs) {
+            return;
+        }
+        self.add_module_functions(&item.sig.ident);
+        syn::visit::visit_item_fn(self, item);
+    }
+
     fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
         if item.content.is_none() || is_test_only(&item.attrs) {
             return;
@@ -240,30 +256,6 @@ impl<'ast> Visit<'ast> for AbstractionVisitor<'_, '_> {
         }
         self.add_named(&item.ident, NodeKind::ConcreteType, "type");
         syn::visit::visit_item_struct(self, item);
-    }
-
-    fn visit_item_enum(&mut self, item: &'ast syn::ItemEnum) {
-        if is_test_only(&item.attrs) {
-            return;
-        }
-        self.add_named(&item.ident, NodeKind::ConcreteType, "type");
-        syn::visit::visit_item_enum(self, item);
-    }
-
-    fn visit_item_union(&mut self, item: &'ast syn::ItemUnion) {
-        if is_test_only(&item.attrs) {
-            return;
-        }
-        self.add_named(&item.ident, NodeKind::ConcreteType, "type");
-        syn::visit::visit_item_union(self, item);
-    }
-
-    fn visit_item_type(&mut self, item: &'ast syn::ItemType) {
-        if is_test_only(&item.attrs) {
-            return;
-        }
-        self.add_named(&item.ident, NodeKind::ConcreteType, "type");
-        syn::visit::visit_item_type(self, item);
     }
 
     fn visit_item_trait(&mut self, item: &'ast syn::ItemTrait) {
@@ -306,29 +298,33 @@ impl<'ast> Visit<'ast> for AbstractionVisitor<'_, '_> {
         syn::visit::visit_item_trait(self, item);
     }
 
-    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+    fn visit_item_type(&mut self, item: &'ast syn::ItemType) {
         if is_test_only(&item.attrs) {
             return;
         }
-        self.add_module_functions(&item.sig.ident);
-        syn::visit::visit_item_fn(self, item);
+        self.add_named(&item.ident, NodeKind::ConcreteType, "type");
+        syn::visit::visit_item_type(self, item);
+    }
+
+    fn visit_item_union(&mut self, item: &'ast syn::ItemUnion) {
+        if is_test_only(&item.attrs) {
+            return;
+        }
+        self.add_named(&item.ident, NodeKind::ConcreteType, "type");
+        syn::visit::visit_item_union(self, item);
     }
 }
 
 struct DefinitionVisitor<'a, 'unit> {
-    unit: &'unit SourceUnit<'unit>,
-    inline_modules: Vec<String>,
-    impl_type: Option<String>,
-    impl_owner: Option<NodeId>,
-    graph: &'a mut EvidenceGraph,
     index: &'a mut CallIndex,
+    graph: &'a mut EvidenceGraph,
+    unit: &'unit SourceUnit<'unit>,
+    impl_owner: Option<NodeId>,
+    impl_type: Option<String>,
+    inline_modules: Vec<String>,
 }
 
 impl DefinitionVisitor<'_, '_> {
-    fn module(&self) -> String {
-        joined_module(self.unit.module, &self.inline_modules)
-    }
-
     fn add_function(&mut self, signature: &syn::Signature, visibility: &syn::Visibility) {
         let module = self.module();
         let name = signature.ident.to_string();
@@ -375,15 +371,27 @@ impl DefinitionVisitor<'_, '_> {
         ));
         self.index.insert(name, self.impl_type.as_deref(), id);
     }
+
+    fn module(&self) -> String {
+        joined_module(self.unit.module, &self.inline_modules)
+    }
 }
 
 impl<'ast> Visit<'ast> for DefinitionVisitor<'_, '_> {
-    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
-        if item.content.is_some() && !is_test_only(&item.attrs) {
-            self.inline_modules.push(item.ident.to_string());
-            syn::visit::visit_item_mod(self, item);
-            self.inline_modules.pop();
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if is_test_only(&item.attrs) {
+            return;
         }
+        self.add_function(&item.sig, &item.vis);
+        syn::visit::visit_impl_item_fn(self, item);
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if is_test_only(&item.attrs) {
+            return;
+        }
+        self.add_function(&item.sig, &item.vis);
+        syn::visit::visit_item_fn(self, item);
     }
 
     fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
@@ -421,46 +429,25 @@ impl<'ast> Visit<'ast> for DefinitionVisitor<'_, '_> {
         self.impl_owner = previous_owner;
     }
 
-    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
-        if is_test_only(&item.attrs) {
-            return;
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        if item.content.is_some() && !is_test_only(&item.attrs) {
+            self.inline_modules.push(item.ident.to_string());
+            syn::visit::visit_item_mod(self, item);
+            self.inline_modules.pop();
         }
-        self.add_function(&item.sig, &item.vis);
-        syn::visit::visit_item_fn(self, item);
-    }
-
-    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
-        if is_test_only(&item.attrs) {
-            return;
-        }
-        self.add_function(&item.sig, &item.vis);
-        syn::visit::visit_impl_item_fn(self, item);
     }
 }
 
 struct CallVisitor<'a, 'unit> {
-    unit: &'unit SourceUnit<'unit>,
-    inline_modules: Vec<String>,
-    impl_type: Option<String>,
-    caller: Option<NodeId>,
-    graph: &'a mut EvidenceGraph,
     index: &'a CallIndex,
+    graph: &'a mut EvidenceGraph,
+    unit: &'unit SourceUnit<'unit>,
+    caller: Option<NodeId>,
+    impl_type: Option<String>,
+    inline_modules: Vec<String>,
 }
 
 impl CallVisitor<'_, '_> {
-    fn module(&self) -> String {
-        joined_module(self.unit.module, &self.inline_modules)
-    }
-
-    fn function_id(&self, ident: &syn::Ident) -> NodeId {
-        let name = ident.to_string();
-        let symbol = self
-            .impl_type
-            .as_ref()
-            .map_or_else(|| name.clone(), |owner| format!("{owner}::{name}"));
-        NodeId::symbol(self.unit.package, self.unit.target, self.module(), symbol)
-    }
-
     fn add_call(&mut self, path: &[String], line: usize, column: usize) {
         let Some(caller) = self.caller.clone() else {
             return;
@@ -538,44 +525,22 @@ impl CallVisitor<'_, '_> {
             Evidence::static_fact(origin),
         ));
     }
+
+    fn function_id(&self, ident: &syn::Ident) -> NodeId {
+        let name = ident.to_string();
+        let symbol = self
+            .impl_type
+            .as_ref()
+            .map_or_else(|| name.clone(), |owner| format!("{owner}::{name}"));
+        NodeId::symbol(self.unit.package, self.unit.target, self.module(), symbol)
+    }
+
+    fn module(&self) -> String {
+        joined_module(self.unit.module, &self.inline_modules)
+    }
 }
 
 impl<'ast> Visit<'ast> for CallVisitor<'_, '_> {
-    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
-        if item.content.is_some() && !is_test_only(&item.attrs) {
-            self.inline_modules.push(item.ident.to_string());
-            syn::visit::visit_item_mod(self, item);
-            self.inline_modules.pop();
-        }
-    }
-
-    fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
-        if is_test_only(&item.attrs) {
-            return;
-        }
-        let previous = self.impl_type.replace(type_name(&item.self_ty));
-        syn::visit::visit_item_impl(self, item);
-        self.impl_type = previous;
-    }
-
-    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
-        if is_test_only(&item.attrs) {
-            return;
-        }
-        let previous = self.caller.replace(self.function_id(&item.sig.ident));
-        syn::visit::visit_block(self, &item.block);
-        self.caller = previous;
-    }
-
-    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
-        if is_test_only(&item.attrs) {
-            return;
-        }
-        let previous = self.caller.replace(self.function_id(&item.sig.ident));
-        syn::visit::visit_block(self, &item.block);
-        self.caller = previous;
-    }
-
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
         use syn::spanned::Spanned as _;
 
@@ -604,6 +569,41 @@ impl<'ast> Visit<'ast> for CallVisitor<'_, '_> {
             start.column,
         );
         syn::visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if is_test_only(&item.attrs) {
+            return;
+        }
+        let previous = self.caller.replace(self.function_id(&item.sig.ident));
+        syn::visit::visit_block(self, &item.block);
+        self.caller = previous;
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if is_test_only(&item.attrs) {
+            return;
+        }
+        let previous = self.caller.replace(self.function_id(&item.sig.ident));
+        syn::visit::visit_block(self, &item.block);
+        self.caller = previous;
+    }
+
+    fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
+        if is_test_only(&item.attrs) {
+            return;
+        }
+        let previous = self.impl_type.replace(type_name(&item.self_ty));
+        syn::visit::visit_item_impl(self, item);
+        self.impl_type = previous;
+    }
+
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        if item.content.is_some() && !is_test_only(&item.attrs) {
+            self.inline_modules.push(item.ident.to_string());
+            syn::visit::visit_item_mod(self, item);
+            self.inline_modules.pop();
+        }
     }
 }
 

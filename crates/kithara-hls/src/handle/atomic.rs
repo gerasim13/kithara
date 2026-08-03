@@ -68,14 +68,6 @@ impl<R: AtomicResource> AtomicFetch<R> {
         }
     }
 
-    /// Execute a custom fetch command through the underlying downloader.
-    ///
-    /// # Errors
-    /// Returns the underlying [`NetError`] when the fetch fails.
-    pub(crate) async fn execute(&self, cmd: FetchCmd) -> Result<FetchResponse, NetError> {
-        self.downloader.execute(cmd).await
-    }
-
     async fn download(
         &self,
         key: &ResourceKey,
@@ -90,6 +82,14 @@ impl<R: AtomicResource> AtomicFetch<R> {
             "kithara-hls: fetching from network"
         );
         download_atomic_bytes(&self.downloader, url.clone(), headers).await
+    }
+
+    /// Execute a custom fetch command through the underlying downloader.
+    ///
+    /// # Errors
+    /// Returns the underlying [`NetError`] when the fetch fails.
+    pub(crate) async fn execute(&self, cmd: FetchCmd) -> Result<FetchResponse, NetError> {
+        self.downloader.execute(cmd).await
     }
 
     fn invalidate(&self, key: &ResourceKey) -> HlsResult<()> {
@@ -284,7 +284,7 @@ async fn download_atomic_bytes(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_assets::{AssetResource, AssetSource, AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
     use kithara_platform::CancelToken;
     use kithara_test_utils::kithara;
 
@@ -293,7 +293,7 @@ mod tests {
     #[kithara::test]
     fn cache_write_failure_is_nonfatal() {
         let cancel = CancelToken::never();
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .cancel(cancel.clone())
             .build();

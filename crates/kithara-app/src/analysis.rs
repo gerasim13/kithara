@@ -410,7 +410,7 @@ fn resource_config_from_source(
 mod tests {
     use ::kithara::{
         assets::{
-            AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, AssetStoreBuilder,
+            AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, AssetStore,
             StorageBackend,
         },
         audio::{Waveform, analysis::BeatAnalysisConfig},
@@ -449,21 +449,23 @@ mod tests {
     }
 
     fn target(discriminator: &str) -> AnalysisTarget {
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .build();
-        let config = ResourceConfig::for_src("https://analysis.test.invalid/track.mp3")
-            .expect("valid test source")
-            .store(store)
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
-            .discriminator(discriminator.to_string())
-            .build();
+        let config = ResourceConfig::for_src(
+            ResourceConfig::parse_src("https://analysis.test.invalid/track.mp3")
+                .expect("valid test source"),
+        )
+        .store(store)
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
+        .discriminator(discriminator)
+        .build();
         AnalysisTarget::for_config(&config).expect("test source has an analysis target")
     }
 
     fn state_with_current(ids: &[TrackId], current: usize) -> Mutex<UiState> {
-        let queue = Queue::new(QueueConfig::new());
+        let queue = Queue::new(QueueConfig::default());
         for id in ids {
             queue.append_with_id(*id, format!("file:///tmp/track-{id}.mp3"));
         }
@@ -636,28 +638,30 @@ mod tests {
     struct InvalidLayout;
 
     impl AssetLayout for InvalidLayout {
-        fn root(&self, _source: &AssetSource) -> String {
-            "root".to_string()
-        }
-
         fn path(&self, _resource: &AssetResource) -> String {
             "../escape".to_string()
+        }
+
+        fn root(&self, _source: &AssetSource) -> String {
+            "root".to_string()
         }
     }
 
     #[kithara::test(native, tokio)]
     fn invalid_layout_for_current_track_clears_previous_analysis() {
         let layouts = AssetLayoutRegistry::default().with::<File>(Arc::new(InvalidLayout));
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .layouts(layouts)
             .build();
-        let config = ResourceConfig::for_src("https://analysis.test.invalid/invalid.mp3")
-            .expect("valid test source")
-            .store(store)
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
-            .build();
+        let config = ResourceConfig::for_src(
+            ResourceConfig::parse_src("https://analysis.test.invalid/invalid.mp3")
+                .expect("valid test source"),
+        )
+        .store(store)
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
+        .build();
         let error = AnalysisTarget::for_config(&config).expect_err("layout must be rejected");
         let current = TrackId::allocate();
         let state = state_with_current(&[current], 0);

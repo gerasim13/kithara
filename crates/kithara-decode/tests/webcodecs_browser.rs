@@ -51,11 +51,11 @@ impl HeAacV2Fixture {
 
 #[derive(Debug)]
 struct DecodeSummary {
+    spec: PcmSpec,
     eof: bool,
+    saw_ascending: bool,
     frames: usize,
     non_empty_chunks: usize,
-    saw_ascending: bool,
-    spec: PcmSpec,
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(300)))]

@@ -12,8 +12,8 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Vis<'value, 'data, 'reads> {
-    preset: Option<&'value ReadValue<'data>>,
     reads: &'reads dyn Reads,
+    preset: Option<&'value ReadValue<'data>>,
 }
 
 struct Consts;
@@ -51,8 +51,8 @@ impl<'a> Widget<'a> for Vis<'_, '_, '_> {
 
         shader::Shader::new(VisProgram {
             preset,
-            level: level.clamp(0.0, 1.0),
             time,
+            level: level.clamp(0.0, 1.0),
         })
         .width(Length::Fill)
         .height(Length::Fill)
@@ -62,14 +62,14 @@ impl<'a> Widget<'a> for Vis<'_, '_, '_> {
 
 #[derive(Clone, Copy, Debug)]
 struct VisProgram {
-    preset: u32,
     level: f32,
     time: f32,
+    preset: u32,
 }
 
 impl shader::Program<UiEvent> for VisProgram {
-    type State = ();
     type Primitive = VisPrimitive;
+    type State = ();
 
     fn draw(
         &self,

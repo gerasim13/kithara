@@ -58,58 +58,58 @@ pub(super) struct Scope {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) struct Summary {
-    pub(super) debt_units: u64,
     pub(super) debt_threshold: u64,
+    pub(super) debt_units: u64,
     pub(super) baseline_entries: usize,
-    pub(super) findings: usize,
     pub(super) evidence_gaps: usize,
+    pub(super) findings: usize,
     pub(super) signals: usize,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) struct Signal {
-    pub(super) id: String,
-    pub(super) tool: String,
-    pub(super) scope: String,
     pub(super) category: String,
-    pub(super) value: f64,
-    pub(super) unit: String,
+    pub(super) id: String,
+    pub(super) scope: String,
     pub(super) state: String,
-    pub(super) confidence: f64,
+    pub(super) tool: String,
+    pub(super) unit: String,
     pub(super) evidence_artifacts: Vec<String>,
+    pub(super) confidence: f64,
+    pub(super) value: f64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) struct Finding {
-    pub(super) id: String,
-    pub(super) tool: String,
-    pub(super) scope: String,
+    pub(super) baseline_state: String,
     pub(super) category: String,
+    pub(super) id: String,
+    pub(super) recommended_action: String,
+    pub(super) scope: String,
     pub(super) severity: String,
+    pub(super) tool: String,
+    pub(super) evidence_artifacts: Vec<String>,
+    pub(super) locations: Vec<String>,
     pub(super) confidence: f64,
     pub(super) debt_units: u64,
-    pub(super) locations: Vec<String>,
-    pub(super) evidence_artifacts: Vec<String>,
-    pub(super) baseline_state: String,
-    pub(super) recommended_action: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) struct ToolCoverage {
-    pub(super) tool: String,
     pub(super) status: CoverageStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) owner: Option<String>,
     pub(super) note: String,
+    pub(super) tool: String,
     pub(super) evidence_artifacts: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) struct BaselineComparison {
     pub(super) source: String,
+    pub(super) state: String,
     pub(super) debt_delta: i64,
     pub(super) finding_delta: i64,
-    pub(super) state: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -148,35 +148,35 @@ impl StageStatus {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct StageEvidence {
+    pub(super) exit_code: Option<i32>,
+    pub(super) status: StageStatus,
+    pub(super) log: String,
     pub(super) name: String,
+    pub(super) note: String,
     pub(super) command: Vec<String>,
+    pub(super) evidence_artifacts: Vec<String>,
     pub(super) tools: Vec<String>,
     pub(super) hard_invariant: bool,
-    pub(super) status: StageStatus,
-    pub(super) exit_code: Option<i32>,
-    pub(super) log: String,
-    pub(super) evidence_artifacts: Vec<String>,
-    pub(super) note: String,
 }
 
 #[derive(Debug, Serialize)]
 pub(super) struct Assessment {
-    pub(super) schema_version: u32,
-    pub(super) revision: String,
+    pub(super) status: AnalysisStatus,
+    pub(super) depth: AssessmentDepth,
+    pub(super) profile: AssessmentProfile,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) comparison: Option<BaselineComparison>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) content_digest: Option<String>,
-    pub(super) profile: AssessmentProfile,
-    pub(super) depth: AssessmentDepth,
+    #[serde(skip)]
+    pub(super) output_directory: PathBuf,
     pub(super) scope: Scope,
-    pub(super) status: AnalysisStatus,
-    pub(super) verdict: Verdict,
+    pub(super) revision: String,
     pub(super) summary: Summary,
     pub(super) findings: Vec<Finding>,
     pub(super) signals: Vec<Signal>,
-    pub(super) tool_coverage: Vec<ToolCoverage>,
     pub(super) stages: Vec<StageEvidence>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) comparison: Option<BaselineComparison>,
-    #[serde(skip)]
-    pub(super) output_directory: PathBuf,
+    pub(super) tool_coverage: Vec<ToolCoverage>,
+    pub(super) verdict: Verdict,
+    pub(super) schema_version: u32,
 }

@@ -46,12 +46,12 @@ pub(crate) struct Context<'a> {
 }
 
 pub(crate) trait Check {
-    fn id(&self) -> &'static str;
-    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>>;
-
     fn fix(&self, _ctx: &Context<'_>) -> Result<FixOutcome> {
         Ok(FixOutcome::default())
     }
+    fn id(&self) -> &'static str;
+
+    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>>;
 }
 
 pub(crate) fn registry() -> Vec<Box<dyn Check>> {

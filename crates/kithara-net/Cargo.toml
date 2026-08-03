@@ -25,7 +25,7 @@ client-apple = ["dep:dashmap", "dep:kithara-apple", "kithara-apple/foundation"]
 tls-rustls = ["reqwest?/rustls"]
 tls-native = ["reqwest?/native-tls"]
 probe = []
-mock = []
+mock = ["dep:unimock"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dependencies]
@@ -56,7 +56,7 @@ reqwest = { workspace = true, optional = true, features = [
 ] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-unimock = { workspace = true }
+unimock = { workspace = true, optional = true }
 url = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
@@ -91,6 +91,7 @@ kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "prob
 
 futures = { workspace = true }
 tracing-subscriber = { workspace = true }
+unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

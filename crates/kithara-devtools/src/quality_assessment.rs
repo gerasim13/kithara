@@ -48,13 +48,17 @@ impl fmt::Display for AssessmentDepth {
 
 #[derive(Debug, Args)]
 pub struct AssessArgs {
+    /// Select the standard signal set or every heavyweight analyzer.
+    #[arg(long, value_enum, default_value_t)]
+    pub depth: AssessmentDepth,
+
     /// Include production code only, or every workspace surface.
     #[arg(long, value_enum, default_value_t)]
     pub profile: AssessmentProfile,
 
-    /// Select the standard signal set or every heavyweight analyzer.
-    #[arg(long, value_enum, default_value_t)]
-    pub depth: AssessmentDepth,
+    /// Compare against an earlier assessment directory or JSON artifact.
+    #[arg(long)]
+    pub baseline: Option<PathBuf>,
 
     /// Assess one Cargo package instead of the complete workspace.
     #[arg(long = "crate", conflicts_with = "module")]
@@ -63,10 +67,6 @@ pub struct AssessArgs {
     /// Assess one canonical `package::module` subtree.
     #[arg(long, conflicts_with = "krate")]
     pub module: Option<String>,
-
-    /// Compare against an earlier assessment directory or JSON artifact.
-    #[arg(long)]
-    pub baseline: Option<PathBuf>,
 
     /// Rebuild the assessment only from existing artifacts and baselines.
     #[arg(long)]

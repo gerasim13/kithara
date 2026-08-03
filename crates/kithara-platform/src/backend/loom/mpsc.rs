@@ -25,17 +25,6 @@ impl<T> Clone for Sender<T> {
 pub struct Receiver<T>(::loom::sync::mpsc::Receiver<T>);
 
 impl<T> Receiver<T> {
-    delegate::delegate! {
-        to self {
-            #[expr(core::iter::from_fn(|| $.ok()))]
-            #[call(recv)]
-            pub fn iter(&self) -> impl Iterator<Item = T> + '_;
-            #[expr(core::iter::from_fn(|| $.ok()))]
-            #[call(try_recv)]
-            pub fn try_iter(&self) -> impl Iterator<Item = T> + '_;
-        }
-    }
-
     pub fn recv(&self) -> Result<T, RecvError> {
         crate::no_block::forbid("mpsc::recv");
         self.0.recv()
@@ -47,5 +36,16 @@ impl<T> Receiver<T> {
 
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         self.0.try_recv()
+    }
+
+    delegate::delegate! {
+        to self {
+            #[expr(core::iter::from_fn(|| $.ok()))]
+            #[call(recv)]
+            pub fn iter(&self) -> impl Iterator<Item = T> + '_;
+            #[expr(core::iter::from_fn(|| $.ok()))]
+            #[call(try_recv)]
+            pub fn try_iter(&self) -> impl Iterator<Item = T> + '_;
+        }
     }
 }

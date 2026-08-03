@@ -6,103 +6,30 @@ use super::{Direction, SimilarityConfig, Substitution, TypeRelationConfig};
 
 #[derive(Debug, Clone)]
 pub(super) struct Relation {
-    pub(super) similarity: f64,
-    pub(super) substitution: Substitution,
     pub(super) direction: Direction,
-    pub(super) caveats: Vec<String>,
     pub(super) source: String,
+    pub(super) substitution: Substitution,
+    pub(super) caveats: Vec<String>,
+    pub(super) similarity: f64,
     configured_left: String,
     configured_right: String,
 }
 
 #[derive(Debug)]
 struct Family {
-    similarity: f64,
     members: BTreeSet<String>,
     source: String,
+    similarity: f64,
 }
 
 #[derive(Debug, Default)]
 pub(super) struct TypeCatalog {
-    families: Vec<Family>,
-    relations: BTreeMap<(String, String), Relation>,
     buckets: BTreeMap<String, String>,
+    relations: BTreeMap<(String, String), Relation>,
+    families: Vec<Family>,
 }
 
 impl TypeCatalog {
-    pub(super) fn from_config(config: &SimilarityConfig) -> Result<Self> {
-        let mut catalog = Self::default();
-        catalog.add_builtin_families();
-        catalog.add_builtin_relations()?;
-        catalog.add_dependency_types(config);
-        for (name, family) in &config.types.families {
-            validate_similarity(family.default_similarity, &format!("type family `{name}`"))?;
-            if family.members.len() < 2 {
-                bail!("type family `{name}` requires at least two members");
-            }
-            catalog.families.push(Family {
-                similarity: family.default_similarity,
-                members: family
-                    .members
-                    .iter()
-                    .map(|member| short_name(member))
-                    .collect(),
-                source: format!("config:{name}"),
-            });
-        }
-        for relation in &config.types.relations {
-            catalog.insert_relation(relation, "config")?;
-        }
-        catalog.rebuild_buckets();
-        Ok(catalog)
-    }
-
-    #[must_use]
-    pub(super) fn relation(&self, left: &str, right: &str) -> Option<Relation> {
-        let left = short_name(left);
-        let right = short_name(right);
-        if left == right {
-            return Some(Relation {
-                similarity: 1.0,
-                substitution: Substitution::Safe,
-                direction: Direction::Bidirectional,
-                caveats: Vec::new(),
-                source: "identity".to_string(),
-                configured_left: left,
-                configured_right: right,
-            });
-        }
-        let key = ordered_pair(&left, &right);
-        if let Some(relation) = self.relations.get(&key) {
-            let mut relation = relation.clone();
-            if relation.configured_left != left || relation.configured_right != right {
-                relation.direction = reverse(relation.direction);
-            }
-            return Some(relation);
-        }
-        self.families
-            .iter()
-            .filter(|family| family.members.contains(&left) && family.members.contains(&right))
-            .max_by(|left, right| left.similarity.total_cmp(&right.similarity))
-            .map(|family| Relation {
-                similarity: family.similarity,
-                substitution: Substitution::Conditional,
-                direction: Direction::Bidirectional,
-                caveats: vec!["container semantics differ".to_string()],
-                source: family.source.clone(),
-                configured_left: left.clone(),
-                configured_right: right.clone(),
-            })
-    }
-
-    #[must_use]
-    pub(super) fn bucket(&self, name: &str) -> String {
-        let name = short_name(name);
-        self.buckets
-            .get(&name)
-            .map_or_else(|| format!("type:{name}"), Clone::clone)
-    }
-
     fn add_builtin_families(&mut self) {
         self.families.extend([
             Family {
@@ -175,6 +102,41 @@ impl TypeCatalog {
         if config.active_dependencies.contains("arrayvec") {
             sequence.members.insert("ArrayVec".to_string());
         }
+    }
+
+    #[must_use]
+    pub(super) fn bucket(&self, name: &str) -> String {
+        let name = short_name(name);
+        self.buckets
+            .get(&name)
+            .map_or_else(|| format!("type:{name}"), Clone::clone)
+    }
+
+    pub(super) fn from_config(config: &SimilarityConfig) -> Result<Self> {
+        let mut catalog = Self::default();
+        catalog.add_builtin_families();
+        catalog.add_builtin_relations()?;
+        catalog.add_dependency_types(config);
+        for (name, family) in &config.types.families {
+            validate_similarity(family.default_similarity, &format!("type family `{name}`"))?;
+            if family.members.len() < 2 {
+                bail!("type family `{name}` requires at least two members");
+            }
+            catalog.families.push(Family {
+                similarity: family.default_similarity,
+                members: family
+                    .members
+                    .iter()
+                    .map(|member| short_name(member))
+                    .collect(),
+                source: format!("config:{name}"),
+            });
+        }
+        for relation in &config.types.relations {
+            catalog.insert_relation(relation, "config")?;
+        }
+        catalog.rebuild_buckets();
+        Ok(catalog)
     }
 
     fn insert_relation(&mut self, relation: &TypeRelationConfig, source: &str) -> Result<()> {
@@ -250,6 +212,44 @@ impl TypeCatalog {
                 self.buckets.insert(member, bucket.clone());
             }
         }
+    }
+
+    #[must_use]
+    pub(super) fn relation(&self, left: &str, right: &str) -> Option<Relation> {
+        let left = short_name(left);
+        let right = short_name(right);
+        if left == right {
+            return Some(Relation {
+                similarity: 1.0,
+                substitution: Substitution::Safe,
+                direction: Direction::Bidirectional,
+                caveats: Vec::new(),
+                source: "identity".to_string(),
+                configured_left: left,
+                configured_right: right,
+            });
+        }
+        let key = ordered_pair(&left, &right);
+        if let Some(relation) = self.relations.get(&key) {
+            let mut relation = relation.clone();
+            if relation.configured_left != left || relation.configured_right != right {
+                relation.direction = reverse(relation.direction);
+            }
+            return Some(relation);
+        }
+        self.families
+            .iter()
+            .filter(|family| family.members.contains(&left) && family.members.contains(&right))
+            .max_by(|left, right| left.similarity.total_cmp(&right.similarity))
+            .map(|family| Relation {
+                similarity: family.similarity,
+                substitution: Substitution::Conditional,
+                direction: Direction::Bidirectional,
+                caveats: vec!["container semantics differ".to_string()],
+                source: family.source.clone(),
+                configured_left: left.clone(),
+                configured_right: right.clone(),
+            })
     }
 }
 

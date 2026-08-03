@@ -160,9 +160,9 @@ impl RawAppleNet {
 #[derive(Clone, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct AppleNet {
-    cancel: CancelToken,
     session: AppleSession,
     net: Arc<RetryNet<RawAppleNet, DefaultRetryPolicy>>,
+    cancel: CancelToken,
     connection_metrics: ConnectionMetrics,
     #[field(get)]
     options: NetOptions,
@@ -198,6 +198,40 @@ impl AppleNet {
         self.connection_metrics.connection_count()
     }
 
+    #[must_use]
+    pub fn with_observer(&self, observer: Option<Observer>) -> Self {
+        let options = NetOptions::builder()
+            .compression(self.options.compression)
+            .inactivity_timeout(self.options.inactivity_timeout)
+            .impersonate(self.options.impersonate)
+            .byte_pool(self.options.byte_pool.clone())
+            .retry_policy(self.options.retry_policy.clone())
+            .is_insecure(self.options.is_insecure)
+            .body_queue_capacity(self.options.body_queue_capacity)
+            .body_queue_resume_at(self.options.body_queue_resume_at)
+            .pool_max_idle_per_host(self.options.pool_max_idle_per_host)
+            .maybe_observer(observer)
+            .build();
+        let raw = RawAppleNet {
+            session: self.session.clone(),
+            cancel: self.cancel.clone(),
+            options: options.clone(),
+        };
+        let net = Arc::new(RetryNet::new(
+            raw,
+            DefaultRetryPolicy::new(options.retry_policy.clone()),
+            self.cancel.clone(),
+            options.observer.clone(),
+        ));
+        Self {
+            net,
+            options,
+            cancel: self.cancel.clone(),
+            session: self.session.clone(),
+            connection_metrics: self.connection_metrics.clone(),
+        }
+    }
+
     delegate::delegate! {
         to self.net {
             /// # Errors
@@ -230,40 +264,6 @@ impl AppleNet {
             ///
             /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
             pub async fn stream(&self, url: Url, headers: Option<Headers>) -> NetResult<ByteStream>;
-        }
-    }
-
-    #[must_use]
-    pub fn with_observer(&self, observer: Option<Observer>) -> Self {
-        let options = NetOptions::builder()
-            .compression(self.options.compression)
-            .inactivity_timeout(self.options.inactivity_timeout)
-            .impersonate(self.options.impersonate)
-            .byte_pool(self.options.byte_pool.clone())
-            .retry_policy(self.options.retry_policy.clone())
-            .is_insecure(self.options.is_insecure)
-            .body_queue_capacity(self.options.body_queue_capacity)
-            .body_queue_resume_at(self.options.body_queue_resume_at)
-            .pool_max_idle_per_host(self.options.pool_max_idle_per_host)
-            .maybe_observer(observer)
-            .build();
-        let raw = RawAppleNet {
-            session: self.session.clone(),
-            cancel: self.cancel.clone(),
-            options: options.clone(),
-        };
-        let net = Arc::new(RetryNet::new(
-            raw,
-            DefaultRetryPolicy::new(options.retry_policy.clone()),
-            self.cancel.clone(),
-            options.observer.clone(),
-        ));
-        Self {
-            cancel: self.cancel.clone(),
-            session: self.session.clone(),
-            net,
-            connection_metrics: self.connection_metrics.clone(),
-            options,
         }
     }
 }

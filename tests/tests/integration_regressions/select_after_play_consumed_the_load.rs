@@ -84,12 +84,14 @@ fn fixture_path(temp_dir: &TestTempDir, index: usize) -> PathBuf {
 }
 
 fn resource_config(temp_dir: &TestTempDir, index: usize) -> ResourceConfig {
-    ResourceConfig::for_src(fixture_path(temp_dir, index).to_string_lossy())
-        .expect("absolute fixture path")
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
-        .build()
+    ResourceConfig::for_src(
+        ResourceConfig::parse_src(fixture_path(temp_dir, index).to_string_lossy())
+            .expect("absolute fixture path"),
+    )
+    .byte_pool(kithara::bufpool::BytePool::default())
+    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+    .build()
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
@@ -109,7 +111,7 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
             .build(),
     ));
     let queue = Arc::new(Queue::new(
-        QueueConfig::default().with_player(Arc::clone(&player)),
+        QueueConfig::builder().player(Arc::clone(&player)).build(),
     ));
     let ticker = spawn_ticker(Arc::clone(&queue));
     let mut status_rx = queue.subscribe();

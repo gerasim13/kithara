@@ -81,17 +81,6 @@ pub(crate) struct DedicatedSlot {
 }
 
 impl DedicatedSlot {
-    /// Claim an unnamed platform thread's reservation.
-    pub(crate) fn claim_thread(self) -> Participant {
-        debug_assert!(!self.named, "claim_thread on a named slot");
-        mem::forget(self);
-        mark_dedicated();
-        Participant {
-            named: false,
-            _not_send: PhantomData,
-        }
-    }
-
     /// Claim the reservation on a `spawn_named` child: mark this thread a
     /// dedicated pacer holding the reserved slot as `Running`. The returned
     /// [`Participant`] owes the exit settle (and the named-count decrement).
@@ -120,6 +109,17 @@ impl DedicatedSlot {
         mark_dedicated();
         PoolParticipant {
             prev_dedicated: prev,
+            _not_send: PhantomData,
+        }
+    }
+
+    /// Claim an unnamed platform thread's reservation.
+    pub(crate) fn claim_thread(self) -> Participant {
+        debug_assert!(!self.named, "claim_thread on a named slot");
+        mem::forget(self);
+        mark_dedicated();
+        Participant {
+            named: false,
             _not_send: PhantomData,
         }
     }

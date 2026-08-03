@@ -48,9 +48,28 @@ impl QueryIdentityRule {
         }
     }
 
-    fn matches(&self, url: &Url) -> bool {
-        url.host_str()
-            .is_some_and(|host| self.domains.iter().any(|domain| domain.matches(host)))
+    fn filtered_url(&self, url: &Url) -> Url {
+        let pairs: Vec<_> = url.query_pairs().collect();
+        let mut filtered = url.clone();
+        filtered.set_query(None);
+        filtered.set_fragment(None);
+
+        let selected = pairs
+            .iter()
+            .any(|(name, _)| self.keys.iter().any(|key| key == name.as_ref()));
+        if !selected {
+            return filtered;
+        }
+
+        {
+            let mut output = filtered.query_pairs_mut();
+            for key in &self.keys {
+                for (_, value) in pairs.iter().filter(|(name, _)| name.as_ref() == key) {
+                    output.append_pair(key, value);
+                }
+            }
+        }
+        filtered
     }
 
     fn identity(&self, url: &Url) -> Option<String> {
@@ -78,28 +97,9 @@ impl QueryIdentityRule {
         Some(finish_hash(hasher))
     }
 
-    fn filtered_url(&self, url: &Url) -> Url {
-        let pairs: Vec<_> = url.query_pairs().collect();
-        let mut filtered = url.clone();
-        filtered.set_query(None);
-        filtered.set_fragment(None);
-
-        let selected = pairs
-            .iter()
-            .any(|(name, _)| self.keys.iter().any(|key| key == name.as_ref()));
-        if !selected {
-            return filtered;
-        }
-
-        {
-            let mut output = filtered.query_pairs_mut();
-            for key in &self.keys {
-                for (_, value) in pairs.iter().filter(|(name, _)| name.as_ref() == key) {
-                    output.append_pair(key, value);
-                }
-            }
-        }
-        filtered
+    fn matches(&self, url: &Url) -> bool {
+        url.host_str()
+            .is_some_and(|host| self.domains.iter().any(|domain| domain.matches(host)))
     }
 }
 
@@ -129,6 +129,16 @@ impl QueryIdentityLayout {
 }
 
 impl AssetLayout for QueryIdentityLayout {
+    fn path(&self, resource: &AssetResource) -> String {
+        let AssetResource::Url(url) = resource else {
+            return DefaultLayout.path(resource);
+        };
+        let Some(rule) = self.rule(url) else {
+            return DefaultLayout.path(resource);
+        };
+        DefaultLayout.path(&AssetResource::Url(rule.filtered_url(url)))
+    }
+
     fn root(&self, source: &AssetSource) -> String {
         let AssetSource::Remote { url, discriminator } = source else {
             return DefaultLayout.root(source);
@@ -144,16 +154,6 @@ impl AssetLayout for QueryIdentityLayout {
             )),
         };
         DefaultLayout.root(&source)
-    }
-
-    fn path(&self, resource: &AssetResource) -> String {
-        let AssetResource::Url(url) = resource else {
-            return DefaultLayout.path(resource);
-        };
-        let Some(rule) = self.rule(url) else {
-            return DefaultLayout.path(resource);
-        };
-        DefaultLayout.path(&AssetResource::Url(rule.filtered_url(url)))
     }
 }
 

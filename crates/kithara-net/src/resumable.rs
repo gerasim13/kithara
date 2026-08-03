@@ -55,6 +55,7 @@ struct State {
     cancel: CancelToken,
     stall: Duration,
     expected_len: Option<u64>,
+    observer: Option<Observer>,
     refetch: Refetch,
     policy: RetryPolicy,
     /// Resume re-fetches already performed, bounded by `policy.max_retries`.
@@ -63,7 +64,6 @@ struct State {
     /// Leading bytes of the current (post-resume) body to discard before
     /// yielding — the already-consumed prefix a non-range server re-sent.
     to_skip: u64,
-    observer: Option<Observer>,
 }
 
 impl State {
@@ -185,11 +185,11 @@ pub(crate) fn resumable_body(
         policy,
         cancel,
         expected_len,
+        observer,
         inner: first,
         consumed: 0,
         to_skip: 0,
         resumes: 0,
-        observer,
     };
     // `Option<State>` is the unfold's alive/finished switch: a terminal error
     // is yielded together with `None`, so the next poll ends the stream.

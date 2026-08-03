@@ -84,7 +84,7 @@ impl TrackAnalysisRunner {
             run.clone(),
             tx,
         ));
-        self.current = Some(RunHandle { cancel: run, task });
+        self.current = Some(RunHandle { task, cancel: run });
         rx
     }
 

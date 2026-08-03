@@ -30,8 +30,8 @@ pub(crate) fn detect<T: StreamType>(
         return FormatDecision::None;
     };
     FormatDecision::Recreate(RecreateState {
-        cause: RecreateCause::FormatBoundary,
         media_info,
+        cause: RecreateCause::FormatBoundary,
         next: RecreateNext::Decode,
         offset: range.start,
     })
@@ -84,7 +84,10 @@ mod tests {
         container: Option<ContainerFormat>,
         variant: Option<u32>,
     ) -> MediaInfo {
-        let mut info = MediaInfo::new(codec, container);
+        let mut info = MediaInfo::builder()
+            .maybe_codec(codec)
+            .maybe_container(container)
+            .build();
         info.variant_index = variant;
         info
     }

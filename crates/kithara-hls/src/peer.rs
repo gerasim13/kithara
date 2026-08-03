@@ -118,8 +118,8 @@ impl SessionTurns {
 /// commit/eviction events and asks the active [`HlsVariant`] for the
 /// next batch of `FetchCmd`s (thin event router per spec).
 pub(crate) struct HlsPeer {
-    abr: Arc<AbrState>,
     abr_publisher: AbrPublisher,
+    abr: Arc<AbrState>,
     /// Narrow activity handle. Used by `priority()` to check whether
     /// the track is currently playing.
     activity: Arc<dyn Activity>,
@@ -130,7 +130,6 @@ pub(crate) struct HlsPeer {
     /// of the peer, not of shared state.
     reader_advanced: Arc<DeferredWake>,
     reader_segment: Arc<AtomicUsize>,
-    session_turns: SessionTurns,
     /// Narrow seek-observe handle. Used by `poll_next`'s inner logic
     /// (via `HlsTrackState`) to read the current epoch/target without
     /// holding a wide seek/playhead aggregate.
@@ -148,6 +147,7 @@ pub(crate) struct HlsPeer {
     /// [`Self::set_abr_variants`] after the master + media playlists
     /// have been parsed; never mutated again for the peer's lifetime.
     variants: Mutex<Vec<VariantInfo>>,
+    session_turns: SessionTurns,
 }
 
 impl HlsPeer {
@@ -161,11 +161,11 @@ impl HlsPeer {
         Self {
             seek_obs,
             activity,
+            abr,
+            abr_publisher,
             state: Arc::new(Mutex::new(None)),
             pending_waker: Mutex::default(),
             wake_signal: CancelToken::never(),
-            abr,
-            abr_publisher,
             variants: Mutex::default(),
             reader_segment: Arc::new(AtomicUsize::new(0)),
             reader_advanced: Arc::new(DeferredWake::default()),
@@ -201,11 +201,11 @@ impl HlsPeer {
             .map_or(0, |(idx, _, _)| idx);
         let active = coord.active();
         let plan_ctx = PlanCtx {
-            bus: active.event_bus(),
             prefetch_budget,
             look_ahead_bytes,
             size_probe_method,
             look_ahead_segments,
+            bus: active.event_bus(),
             scope: coord.scope.clone(),
             headers: coord.headers.clone(),
             seek_epoch: self.seek_obs.epoch(),
@@ -271,6 +271,14 @@ impl HlsPeer {
         *self.variants.lock() = variants;
     }
 
+    /// Release the stashed [`HlsTrackState`] and cancel the waker task so
+    /// the peer drops its `Arc<HlsCoord>` (and the eviction receiver).
+    pub(crate) fn teardown(&self) {
+        self.wake_signal.cancel();
+        let mut guard = self.state.lock();
+        *guard = None;
+    }
+
     fn wake_poll(&self) {
         let waker = self
             .state
@@ -284,14 +292,6 @@ impl HlsPeer {
         if let Some(waker) = waker {
             waker.wake();
         }
-    }
-
-    /// Release the stashed [`HlsTrackState`] and cancel the waker task so
-    /// the peer drops its `Arc<HlsCoord>` (and the eviction receiver).
-    pub(crate) fn teardown(&self) {
-        self.wake_signal.cancel();
-        let mut guard = self.state.lock();
-        *guard = None;
     }
 }
 
@@ -390,7 +390,6 @@ impl Peer for HlsPeer {
             // The active session feeds the speaker; the incoming one is only
             // preparation. Serve the active first and reserve a single slot for
             // the incoming, so a switch can never starve the audio that is
-            // currently playing.
             let active_budget = if has_incoming && outcome.ctx.prefetch_budget > 1 {
                 outcome.ctx.prefetch_budget - 1
             } else {

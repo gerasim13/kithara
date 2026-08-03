@@ -56,7 +56,7 @@ async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(kithara::bufpool::PcmPool::default())
-            .hint("m4a".to_string())
+            .hint("m4a")
             .build(),
     )
     .expect("create probe AAC fMP4 decoder");

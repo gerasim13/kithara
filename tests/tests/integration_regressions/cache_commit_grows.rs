@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, StorageBackend},
+    assets::{AssetStore, StorageBackend},
     events::{AssetEvent, DownloaderEvent, Event},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
@@ -66,8 +66,7 @@ fn resource_config(
     name: &str,
 ) -> ResourceConfig {
     let url = handle.child_url(name);
-    ResourceConfig::for_src(url.as_str())
-        .expect("valid fixture URL")
+    ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
@@ -128,8 +127,7 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
         })
         .collect();
     let downloader = Downloader::new(
-        DownloaderConfig::builder()
-            .client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
     let player = Arc::new(PlayerImpl::new(
@@ -139,16 +137,17 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: temp_dir.path().to_path_buf(),
         })
         .event_bus(player.bus().clone())
         .build();
     let queue = Queue::new(
-        QueueConfig::default()
-            .with_player(player)
-            .with_store(store.clone()),
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build(),
     );
     let mut rx = queue.subscribe();
 

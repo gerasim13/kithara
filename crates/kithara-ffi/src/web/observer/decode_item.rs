@@ -257,26 +257,6 @@ fn decode_time_range(value: &JsValue) -> Option<FfiTimeRange> {
 struct ItemDecode;
 
 impl ItemDecode {
-    fn narrow_u16(value: f64) -> u16 {
-        num_traits::cast(value).unwrap_or(0)
-    }
-
-    fn narrow_u32(value: f64) -> u32 {
-        num_traits::cast(value).unwrap_or(0)
-    }
-
-    fn narrow_u64(value: f64) -> u64 {
-        num_traits::cast(value.max(0.0)).unwrap_or(0)
-    }
-
-    fn decode_item_status(code: f64) -> FfiItemStatus {
-        match discriminant(code) {
-            1 => FfiItemStatus::ReadyToPlay,
-            2 => FfiItemStatus::Failed,
-            _ => FfiItemStatus::Unknown,
-        }
-    }
-
     fn decode_audio_codec_kind(value: Option<String>) -> FfiAudioCodecKind {
         match value.as_deref() {
             Some("AacLc") => FfiAudioCodecKind::AacLc,
@@ -293,6 +273,16 @@ impl ItemDecode {
         }
     }
 
+    fn decode_cancel_reason(value: Option<String>) -> Option<FfiCancelReason> {
+        match value.as_deref() {
+            Some("EpochCancel") => Some(FfiCancelReason::EpochCancel),
+            Some("PeerCancel") => Some(FfiCancelReason::PeerCancel),
+            Some("DownloaderShutdown") => Some(FfiCancelReason::DownloaderShutdown),
+            Some("BeforeStart") => Some(FfiCancelReason::BeforeStart),
+            _ => None,
+        }
+    }
+
     fn decode_container_kind(value: Option<String>) -> FfiContainerKind {
         match value.as_deref() {
             Some("Mp4") => FfiContainerKind::Mp4,
@@ -306,27 +296,6 @@ impl ItemDecode {
             Some("Caf") => FfiContainerKind::Caf,
             Some("Mkv") => FfiContainerKind::Mkv,
             _ => FfiContainerKind::Unknown,
-        }
-    }
-
-    fn decode_decoder_backend(value: Option<String>) -> FfiDecoderBackend {
-        match value.as_deref() {
-            Some("Symphonia") => FfiDecoderBackend::Symphonia,
-            Some("Apple") => FfiDecoderBackend::Apple,
-            Some("Android") => FfiDecoderBackend::Android,
-            _ => FfiDecoderBackend::Unknown,
-        }
-    }
-
-    fn decode_decoder_change_cause(value: Option<String>) -> FfiDecoderChangeCause {
-        match value.as_deref() {
-            Some("Initial") => FfiDecoderChangeCause::Initial,
-            Some("VariantSwitch") => FfiDecoderChangeCause::VariantSwitch,
-            Some("FormatBoundary") => FfiDecoderChangeCause::FormatBoundary,
-            Some("SeekRecreate") => FfiDecoderChangeCause::SeekRecreate,
-            Some("Recovery") => FfiDecoderChangeCause::Recovery,
-            Some("HostRateChange") => FfiDecoderChangeCause::HostRateChange,
-            _ => FfiDecoderChangeCause::Unknown,
         }
     }
 
@@ -358,6 +327,27 @@ impl ItemDecode {
         }
     }
 
+    fn decode_decoder_backend(value: Option<String>) -> FfiDecoderBackend {
+        match value.as_deref() {
+            Some("Symphonia") => FfiDecoderBackend::Symphonia,
+            Some("Apple") => FfiDecoderBackend::Apple,
+            Some("Android") => FfiDecoderBackend::Android,
+            _ => FfiDecoderBackend::Unknown,
+        }
+    }
+
+    fn decode_decoder_change_cause(value: Option<String>) -> FfiDecoderChangeCause {
+        match value.as_deref() {
+            Some("Initial") => FfiDecoderChangeCause::Initial,
+            Some("VariantSwitch") => FfiDecoderChangeCause::VariantSwitch,
+            Some("FormatBoundary") => FfiDecoderChangeCause::FormatBoundary,
+            Some("SeekRecreate") => FfiDecoderChangeCause::SeekRecreate,
+            Some("Recovery") => FfiDecoderChangeCause::Recovery,
+            Some("HostRateChange") => FfiDecoderChangeCause::HostRateChange,
+            _ => FfiDecoderChangeCause::Unknown,
+        }
+    }
+
     fn decode_frame_domain(value: Option<String>) -> FfiFrameDomain {
         match value.as_deref() {
             Some("Source") => FfiFrameDomain::Source,
@@ -366,53 +356,11 @@ impl ItemDecode {
         }
     }
 
-    fn decode_resampler_kind(value: Option<String>) -> FfiResamplerKind {
-        match value.as_deref() {
-            Some("Rubato") => FfiResamplerKind::Rubato,
-            Some("Apple") => FfiResamplerKind::Apple,
-            Some("Glide") => FfiResamplerKind::Glide,
-            Some("None") => FfiResamplerKind::None,
-            _ => FfiResamplerKind::Unknown,
-        }
-    }
-
-    fn decode_track_failure_kind(data: &JsValue) -> Option<FfiTrackFailureKind> {
-        let value = get_str(data, "reason");
-        Some(match value.as_deref() {
-            Some("Decode") => FfiTrackFailureKind::Decode,
-            Some("RecreateFailed") => FfiTrackFailureKind::RecreateFailed {
-                offset: Self::narrow_u64(get_f64(data, "offset")?),
-            },
-            Some("SourceCancelled") => FfiTrackFailureKind::SourceCancelled,
-            Some("Unknown") | None => FfiTrackFailureKind::Unknown,
-            Some(_) => FfiTrackFailureKind::Unknown,
-        })
-    }
-
-    fn decode_playback_resampler_kind(value: Option<String>) -> FfiPlaybackResamplerKind {
-        match value.as_deref() {
-            Some("Rubato") => FfiPlaybackResamplerKind::Rubato,
-            Some("Glide") => FfiPlaybackResamplerKind::Glide,
-            Some("None") => FfiPlaybackResamplerKind::None,
-            _ => FfiPlaybackResamplerKind::Unknown,
-        }
-    }
-
-    fn decode_cancel_reason(value: Option<String>) -> Option<FfiCancelReason> {
-        match value.as_deref() {
-            Some("EpochCancel") => Some(FfiCancelReason::EpochCancel),
-            Some("PeerCancel") => Some(FfiCancelReason::PeerCancel),
-            Some("DownloaderShutdown") => Some(FfiCancelReason::DownloaderShutdown),
-            Some("BeforeStart") => Some(FfiCancelReason::BeforeStart),
-            _ => None,
-        }
-    }
-
-    fn decode_total_bytes_source(value: Option<String>) -> FfiTotalBytesSource {
-        match value.as_deref() {
-            Some("CommittedLen") => FfiTotalBytesSource::CommittedLen,
-            Some("ContentLength") => FfiTotalBytesSource::ContentLength,
-            _ => FfiTotalBytesSource::Unknown,
+    fn decode_item_status(code: f64) -> FfiItemStatus {
+        match discriminant(code) {
+            1 => FfiItemStatus::ReadyToPlay,
+            2 => FfiItemStatus::Failed,
+            _ => FfiItemStatus::Unknown,
         }
     }
 
@@ -433,5 +381,57 @@ impl ItemDecode {
             Some("MemCache") => FfiKeySource::MemCache,
             _ => FfiKeySource::Unknown,
         }
+    }
+
+    fn decode_playback_resampler_kind(value: Option<String>) -> FfiPlaybackResamplerKind {
+        match value.as_deref() {
+            Some("Rubato") => FfiPlaybackResamplerKind::Rubato,
+            Some("Glide") => FfiPlaybackResamplerKind::Glide,
+            Some("None") => FfiPlaybackResamplerKind::None,
+            _ => FfiPlaybackResamplerKind::Unknown,
+        }
+    }
+
+    fn decode_resampler_kind(value: Option<String>) -> FfiResamplerKind {
+        match value.as_deref() {
+            Some("Rubato") => FfiResamplerKind::Rubato,
+            Some("Apple") => FfiResamplerKind::Apple,
+            Some("Glide") => FfiResamplerKind::Glide,
+            Some("None") => FfiResamplerKind::None,
+            _ => FfiResamplerKind::Unknown,
+        }
+    }
+
+    fn decode_total_bytes_source(value: Option<String>) -> FfiTotalBytesSource {
+        match value.as_deref() {
+            Some("CommittedLen") => FfiTotalBytesSource::CommittedLen,
+            Some("ContentLength") => FfiTotalBytesSource::ContentLength,
+            _ => FfiTotalBytesSource::Unknown,
+        }
+    }
+
+    fn decode_track_failure_kind(data: &JsValue) -> Option<FfiTrackFailureKind> {
+        let value = get_str(data, "reason");
+        Some(match value.as_deref() {
+            Some("Decode") => FfiTrackFailureKind::Decode,
+            Some("RecreateFailed") => FfiTrackFailureKind::RecreateFailed {
+                offset: Self::narrow_u64(get_f64(data, "offset")?),
+            },
+            Some("SourceCancelled") => FfiTrackFailureKind::SourceCancelled,
+            Some("Unknown") | None => FfiTrackFailureKind::Unknown,
+            Some(_) => FfiTrackFailureKind::Unknown,
+        })
+    }
+
+    fn narrow_u16(value: f64) -> u16 {
+        num_traits::cast(value).unwrap_or(0)
+    }
+
+    fn narrow_u32(value: f64) -> u32 {
+        num_traits::cast(value).unwrap_or(0)
+    }
+
+    fn narrow_u64(value: f64) -> u64 {
+        num_traits::cast(value.max(0.0)).unwrap_or(0)
     }
 }

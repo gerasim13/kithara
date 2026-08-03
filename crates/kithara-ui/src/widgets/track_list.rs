@@ -48,10 +48,10 @@ struct TrackListRowData {
     deck: Option<String>,
     energy: Option<u8>,
     key: Option<String>,
-    selected: bool,
     time: Option<String>,
-    title: String,
     transition: Option<String>,
+    title: String,
+    selected: bool,
 }
 
 impl From<&TrackRow<'_>> for TrackListRowData {
@@ -71,16 +71,16 @@ impl From<&TrackRow<'_>> for TrackListRowData {
 }
 
 struct TrackListStyle {
-    bpm_badge_background: Color,
     bpm_badge_frame: Border,
     deck_chip_frame: Border,
+    row_frame: Border,
+    bpm_badge_background: Color,
     divider_color: Color,
     energy_bar_background: Color,
-    metrics: TrackListSkin,
-    palette: RenderPalette,
-    row_frame: Border,
     scrollbar_background: Color,
     scroller_color: Color,
+    palette: RenderPalette,
+    metrics: TrackListSkin,
 }
 
 impl TrackListStyle {
@@ -102,13 +102,13 @@ impl TrackListStyle {
 
 #[derive(bon::Builder)]
 pub(crate) struct TrackList<'path, 'columns, 'state, 'value, 'data, 'reads, 'skin> {
-    path: &'path str,
-    columns: &'columns [TrackColumn],
-    columns_state: Option<&'state str>,
-    columns_scope: &'state str,
-    value: Option<&'value ReadValue<'data>>,
-    reads: &'reads dyn Reads,
     skin: &'skin Skin,
+    columns: &'columns [TrackColumn],
+    reads: &'reads dyn Reads,
+    columns_scope: &'state str,
+    path: &'path str,
+    columns_state: Option<&'state str>,
+    value: Option<&'value ReadValue<'data>>,
 }
 
 impl<'a> Widget<'a> for TrackList<'_, '_, '_, '_, '_, '_, '_> {
@@ -244,12 +244,12 @@ fn column_resizable(columns: &[ColumnLayout], index: usize) -> bool {
 
 #[derive(bon::Builder)]
 struct TrackListRow<'path, 'columns, 'data, 'style> {
-    style: &'style TrackListStyle,
-    path: &'path str,
-    index: usize,
     track: &'data TrackListRowData,
+    style: &'style TrackListStyle,
     columns: &'columns [ColumnLayout],
+    path: &'path str,
     flexible_title: bool,
+    index: usize,
 }
 
 impl<'a> Widget<'a> for TrackListRow<'_, '_, '_, '_> {
@@ -605,8 +605,8 @@ fn energy_cell(
 
 struct ColumnDivider {
     color: Color,
-    divider_width: f32,
     drag: HorizontalPixelDrag,
+    divider_width: f32,
 }
 
 impl canvas::Program<UiEvent> for ColumnDivider {

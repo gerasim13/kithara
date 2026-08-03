@@ -12,92 +12,28 @@ use syn::{
 
 use super::{
     Check, Context,
-    derivable_support::{crate_manifest, deletion_range, item_blocks, line_start},
+    derivable_support::{
+        attrs_match_config, crate_manifest, deletion_range, item_blocks, line_start,
+    },
 };
-use crate::common::{
-    fix::{FixOutcome, SourceRewriter, block::BlockRange},
-    parse::{collect_scopes, self_ty_name},
-    violation::Violation,
-    walker::{relative_to, workspace_rs_files_scoped},
+use crate::{
+    common::{
+        fix::{FixOutcome, SourceRewriter, block::BlockRange},
+        parse::{collect_scopes, self_ty_name},
+        violation::Violation,
+        walker::{relative_to, workspace_rs_files_scoped},
+    },
+    idioms::config::DerivableSeverity,
 };
 
 pub(crate) const ID: &str = "derivable_delegation";
 const MAX_RAW_STRING_HASHES: usize = 255;
+const NON_SIMPLE_DELEGATE_TARGET: &str = "impl has a non-simple delegate! target";
+const UNSUPPORTED_DELEGATE_SYNTAX: &str = "existing delegate! block has unsupported syntax";
 
 pub(crate) struct DerivableDelegation;
 
 impl Check for DerivableDelegation {
-    fn id(&self) -> &'static str {
-        ID
-    }
-
-    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        let cfg = &ctx.config.thresholds.derivable_delegation;
-        if !cfg.enabled {
-            return Ok(Vec::new());
-        }
-        let mut violations = Vec::new();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let Ok(src) = fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(file) = syn::parse_file(&src) else {
-                continue;
-            };
-            let rel = relative_to(ctx.workspace_root, &path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            for candidate in candidates(
-                &src,
-                &file,
-                cfg.trait_min_methods,
-                cfg.inherent_min_methods,
-                &cfg.blocking_impl_attrs,
-                &cfg.keep_manual_method_attrs,
-            ) {
-                let detail = candidate.skip.map_or_else(
-                    || {
-                        if candidate.existing_blocks == 0 {
-                            format!(
-                                "{} impl for {} has {} derivable forwarders across {} field group(s); wrap the forwarding subset in a delegate::delegate! block.",
-                                candidate.kind,
-                                candidate.target,
-                                candidate.methods,
-                                candidate.fields
-                            )
-                        } else {
-                            format!(
-                                "{} impl for {} has {} existing delegate block(s) and {} derivable forwarder(s) across {} target(s); normalize them into one delegate::delegate! block.",
-                                candidate.kind,
-                                candidate.target,
-                                candidate.existing_blocks,
-                                candidate.methods,
-                                candidate.fields
-                            )
-                        }
-                    },
-                    |ref reason| {
-                        format!(
-                            "{} impl for {} has {} existing delegate block(s) and {} derivable forwarder(s) across {} target(s) but autofix will skip: {reason}",
-                            candidate.kind,
-                            candidate.target,
-                            candidate.existing_blocks,
-                            candidate.methods,
-                            candidate.fields
-                        )
-                    },
-                );
-                violations.push(Violation::warn(
-                    ID,
-                    format!("{rel}:{}:0", candidate.line),
-                    detail,
-                ));
-            }
-        }
-        violations.sort_by(|a, b| a.key.cmp(&b.key));
-        Ok(violations)
-    }
-
     fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
         let cfg = &ctx.config.thresholds.derivable_delegation;
         if !cfg.enabled {
@@ -171,22 +107,107 @@ impl Check for DerivableDelegation {
         }
         Ok(outcome)
     }
+
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
+        let cfg = &ctx.config.thresholds.derivable_delegation;
+        if !cfg.enabled {
+            return Ok(Vec::new());
+        }
+        let mut violations = Vec::new();
+        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
+            let Ok(src) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(file) = syn::parse_file(&src) else {
+                continue;
+            };
+            let rel = relative_to(ctx.workspace_root, &path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            for candidate in candidates(
+                &src,
+                &file,
+                cfg.trait_min_methods,
+                cfg.inherent_min_methods,
+                &cfg.blocking_impl_attrs,
+                &cfg.keep_manual_method_attrs,
+            )
+            .into_iter()
+            .filter(is_reportable)
+            {
+                let detail = candidate.skip.map_or_else(
+                    || {
+                        if candidate.existing_blocks == 0 {
+                            format!(
+                                "{} impl for {} has {} derivable forwarders across {} field group(s); wrap the forwarding subset in a delegate::delegate! block.",
+                                candidate.kind,
+                                candidate.target,
+                                candidate.methods,
+                                candidate.fields
+                            )
+                        } else {
+                            format!(
+                                "{} impl for {} has {} existing delegate block(s) and {} derivable forwarder(s) across {} target(s); normalize them into one delegate::delegate! block.",
+                                candidate.kind,
+                                candidate.target,
+                                candidate.existing_blocks,
+                                candidate.methods,
+                                candidate.fields
+                            )
+                        }
+                    },
+                    |ref reason| {
+                        format!(
+                            "{} impl for {} has {} existing delegate block(s) and {} derivable forwarder(s) across {} target(s) but autofix will skip: {reason}",
+                            candidate.kind,
+                            candidate.target,
+                            candidate.existing_blocks,
+                            candidate.methods,
+                            candidate.fields
+                        )
+                    },
+                );
+                violations.push(emit(
+                    cfg.severity,
+                    format!("{rel}:{}:0", candidate.line),
+                    detail,
+                ));
+            }
+        }
+        violations.sort_by(|a, b| a.key.cmp(&b.key));
+        Ok(violations)
+    }
+}
+
+fn emit(severity: DerivableSeverity, key: String, message: String) -> Violation {
+    match severity {
+        DerivableSeverity::Warn => Violation::warn(ID, key, message),
+        DerivableSeverity::Deny => Violation::deny(ID, key, message),
+    }
 }
 
 struct Candidate {
-    target: String,
     kind: &'static str,
+    skip: Option<String>,
+    target: String,
+    edits: Vec<Edit>,
     existing_blocks: usize,
     fields: usize,
-    methods: usize,
     line: usize,
-    edits: Vec<Edit>,
-    skip: Option<String>,
+    methods: usize,
 }
 
 struct Edit {
     range: Range<usize>,
     text: String,
+}
+
+fn is_reportable(candidate: &Candidate) -> bool {
+    candidate.skip.as_deref() != Some(NON_SIMPLE_DELEGATE_TARGET)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -242,15 +263,15 @@ enum ParamModifier {
 
 struct ForwardSpec {
     target: DelegateTarget,
-    call: Option<Ident>,
     modifier: Modifier,
+    call: Option<Ident>,
     param_modifiers: Vec<ParamModifier>,
 }
 
 struct ForwardMethod<'a> {
-    index: usize,
     method: &'a syn::ImplItemFn,
     spec: ForwardSpec,
+    index: usize,
 }
 
 struct TargetGroup<'a> {
@@ -259,9 +280,9 @@ struct TargetGroup<'a> {
 }
 
 struct ExistingSegment {
-    attrs: Vec<String>,
-    target: String,
     body: ExistingBody,
+    target: String,
+    attrs: Vec<String>,
 }
 
 struct ExistingBody {
@@ -270,10 +291,16 @@ struct ExistingBody {
 }
 
 struct DelegateSegment<'a> {
-    attrs: Vec<String>,
     target: String,
+    attrs: Vec<String>,
     bodies: Vec<ExistingBody>,
     methods: Vec<ForwardMethod<'a>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DelegateParseError {
+    NonSimpleTarget,
+    UnsupportedSyntax,
 }
 
 fn candidates(
@@ -355,17 +382,17 @@ fn collect_impl_items<'a>(
                     .find(|group| group.target.key == spec.target.key);
                 if let Some(group) = group {
                     group.methods.push(ForwardMethod {
-                        index,
                         method,
                         spec,
+                        index,
                     });
                 } else {
                     groups.push(TargetGroup {
                         target: spec.target.clone(),
                         methods: vec![ForwardMethod {
-                            index,
                             method,
                             spec,
+                            index,
                         }],
                     });
                 }
@@ -382,7 +409,7 @@ fn collect_impl_items<'a>(
 fn collect_existing_segments<'a>(
     src: &str,
     delegate_macros: &[(usize, &syn::ImplItemMacro)],
-) -> Result<Vec<DelegateSegment<'a>>, ()> {
+) -> Result<Vec<DelegateSegment<'a>>, DelegateParseError> {
     let mut segments = Vec::<DelegateSegment<'_>>::new();
     for (_, item) in delegate_macros {
         for parsed in parse_delegate_segments(src, item)? {
@@ -424,17 +451,24 @@ fn candidate(
     let (groups, delegate_macros) = collect_impl_items(src, impl_block, keep_manual_method_attrs);
     let target = self_ty_name(&impl_block.self_ty).unwrap_or_else(|| "impl".to_owned());
     let line = impl_block.impl_token.span.start().line;
-    let Ok(mut segments) = collect_existing_segments(src, &delegate_macros) else {
-        return Some(Candidate {
-            target,
-            kind,
-            existing_blocks: delegate_macros.len(),
-            fields: groups.len(),
-            methods: groups.iter().map(|group| group.methods.len()).sum(),
-            line,
-            edits: Vec::new(),
-            skip: Some("impl has a non-simple delegate! target".to_owned()),
-        });
+    let mut segments = match collect_existing_segments(src, &delegate_macros) {
+        Ok(segments) => segments,
+        Err(error) => {
+            let reason = match error {
+                DelegateParseError::NonSimpleTarget => NON_SIMPLE_DELEGATE_TARGET,
+                DelegateParseError::UnsupportedSyntax => UNSUPPORTED_DELEGATE_SYNTAX,
+            };
+            return Some(Candidate {
+                target,
+                kind,
+                line,
+                existing_blocks: delegate_macros.len(),
+                fields: groups.len(),
+                methods: groups.iter().map(|group| group.methods.len()).sum(),
+                edits: Vec::new(),
+                skip: Some(reason.to_owned()),
+            });
+        }
     };
 
     let mut structural_change = delegate_macros.len() >= 2;
@@ -501,10 +535,10 @@ fn candidate(
             return Some(Candidate {
                 target,
                 kind,
-                existing_blocks: delegate_macros.len(),
                 fields,
                 methods,
                 line,
+                existing_blocks: delegate_macros.len(),
                 edits: Vec::new(),
                 skip: Some(format!("impl item ranges are unsafe: {reason}")),
             });
@@ -532,11 +566,11 @@ fn candidate(
     Some(Candidate {
         target,
         kind,
-        existing_blocks: delegate_macros.len(),
         fields,
         methods,
         line,
         edits,
+        existing_blocks: delegate_macros.len(),
         skip: None,
     })
 }
@@ -617,9 +651,9 @@ fn is_delegate_macro(item: &syn::ImplItemMacro) -> bool {
 fn parse_delegate_segments(
     src: &str,
     item: &syn::ImplItemMacro,
-) -> Result<Vec<ExistingSegment>, ()> {
+) -> Result<Vec<ExistingSegment>, DelegateParseError> {
     if !item.attrs.is_empty() {
-        return Err(());
+        return Err(DelegateParseError::UnsupportedSyntax);
     }
     let tokens: Vec<_> = item.mac.tokens.clone().into_iter().collect();
     let mut segments = Vec::new();
@@ -634,20 +668,24 @@ fn parse_delegate_segments(
             }
             let start = hash.span().byte_range().start;
             let end = group.span().byte_range().end;
-            attrs.push(src.get(start..end).ok_or(())?.to_owned());
+            attrs.push(
+                src.get(start..end)
+                    .ok_or(DelegateParseError::UnsupportedSyntax)?
+                    .to_owned(),
+            );
             cursor += 2;
         }
         let Some(TokenTree::Ident(to)) = tokens.get(cursor) else {
-            return Err(());
+            return Err(DelegateParseError::UnsupportedSyntax);
         };
         if to != "to" {
-            return Err(());
+            return Err(DelegateParseError::UnsupportedSyntax);
         }
         cursor += 1;
         let target_start = cursor;
         let body = loop {
             let Some(token) = tokens.get(cursor) else {
-                return Err(());
+                return Err(DelegateParseError::UnsupportedSyntax);
             };
             if let TokenTree::Group(group) = token
                 && group.delimiter() == Delimiter::Brace
@@ -657,9 +695,21 @@ fn parse_delegate_segments(
             }
             cursor += 1;
         };
-        let target = simple_delegate_target(&tokens[target_start..cursor - 1]).ok_or(())?;
+        let target_tokens = &tokens[target_start..cursor - 1];
+        if target_tokens.is_empty() {
+            return Err(DelegateParseError::UnsupportedSyntax);
+        }
+        let target =
+            simple_delegate_target(target_tokens).ok_or(DelegateParseError::NonSimpleTarget)?;
         let range = body.span().byte_range();
-        let inner = range.start.checked_add(1).ok_or(())?..range.end.checked_sub(1).ok_or(())?;
+        let inner = range
+            .start
+            .checked_add(1)
+            .ok_or(DelegateParseError::UnsupportedSyntax)?
+            ..range
+                .end
+                .checked_sub(1)
+                .ok_or(DelegateParseError::UnsupportedSyntax)?;
         let mut attr_ranges = Vec::new();
         let body_tokens: Vec<_> = body.stream().into_iter().collect();
         for pair in body_tokens.windows(2) {
@@ -674,19 +724,22 @@ fn parse_delegate_segments(
                 .byte_range()
                 .start
                 .checked_sub(inner.start)
-                .ok_or(())?;
+                .ok_or(DelegateParseError::UnsupportedSyntax)?;
             let end = group
                 .span()
                 .byte_range()
                 .end
                 .checked_sub(inner.start)
-                .ok_or(())?;
+                .ok_or(DelegateParseError::UnsupportedSyntax)?;
             if end > inner.len() {
-                return Err(());
+                return Err(DelegateParseError::UnsupportedSyntax);
             }
             attr_ranges.push(start..end);
         }
-        let source = src.get(inner).ok_or(())?.to_owned();
+        let source = src
+            .get(inner)
+            .ok_or(DelegateParseError::UnsupportedSyntax)?
+            .to_owned();
         segments.push(ExistingSegment {
             attrs,
             target,
@@ -988,31 +1041,6 @@ fn impl_has_blocking_attr(attrs: &[syn::Attribute], blocking: &[String]) -> bool
     attrs_match_config(attrs, blocking)
 }
 
-fn attrs_match_config(attrs: &[syn::Attribute], configured: &[String]) -> bool {
-    if configured.is_empty() {
-        return false;
-    }
-    attrs.iter().any(|attr| {
-        let path = attr
-            .path()
-            .segments
-            .iter()
-            .map(|segment| segment.ident.to_string())
-            .collect::<Vec<_>>()
-            .join("::");
-        // Whitespace-stripped meta tokens catch `#[cfg_attr(cond, uniffi::export)]`.
-        let meta: String = attr
-            .meta
-            .to_token_stream()
-            .to_string()
-            .split_whitespace()
-            .collect();
-        configured.iter().any(|entry| {
-            path == *entry || path.ends_with(&format!("::{entry}")) || meta.contains(entry.as_str())
-        })
-    })
-}
-
 fn method_is_supported(
     src: &str,
     method: &syn::ImplItemFn,
@@ -1246,10 +1274,10 @@ fn call_spec_with_modifiers(
         return None;
     }
     Some(ForwardSpec {
-        target: delegate_target(src, &call.receiver)?,
-        call: (call.method != method.sig.ident).then(|| call.method.clone()),
         modifier,
         param_modifiers,
+        target: delegate_target(src, &call.receiver)?,
+        call: (call.method != method.sig.ident).then(|| call.method.clone()),
     })
 }
 
@@ -1266,8 +1294,8 @@ fn delegate_target(src: &str, receiver: &Expr) -> Option<DelegateTarget> {
     }
     let source = src.get(receiver.span().byte_range())?.to_owned();
     Some(DelegateTarget {
-        key: receiver.to_token_stream().to_string(),
         source,
+        key: receiver.to_token_stream().to_string(),
         simple: false,
     })
 }
@@ -1548,6 +1576,7 @@ fn fix_source_with_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{common::violation::Severity, idioms::config::DerivableDelegationConfig};
 
     fn count(source: &str) -> usize {
         count_with_thresholds(source, 2, 2)
@@ -1567,7 +1596,25 @@ mod tests {
             &test_blocking(),
             &[],
         )
-        .len()
+        .into_iter()
+        .filter(is_reportable)
+        .count()
+    }
+
+    fn emitted_severity(severity: DerivableSeverity) -> Severity {
+        emit(severity, String::new(), String::new()).severity
+    }
+
+    #[test]
+    fn severity_is_warn_by_default_and_deny_when_configured() -> Result<()> {
+        let default = DerivableDelegationConfig::default();
+        let omitted: DerivableDelegationConfig = toml::from_str("")?;
+        let denied: DerivableDelegationConfig = toml::from_str(r#"severity = "deny""#)?;
+
+        assert_eq!(emitted_severity(default.severity), Severity::Warn);
+        assert_eq!(emitted_severity(omitted.severity), Severity::Warn);
+        assert_eq!(emitted_severity(denied.severity), Severity::Deny);
+        Ok(())
     }
 
     #[test]
@@ -2293,9 +2340,10 @@ mod tests {
             "impl Wrapper {\n    delegate! { to match self { Self::Inner(inner) => inner } { fn a(&self); } }\n}\n",
         ];
         for source in sources {
+            assert_eq!(count(source), 0);
             let (fixed, outcome) = fix_source(source)?;
             assert_eq!(outcome.writes, 0);
-            assert_eq!(outcome.skipped, ["impl has a non-simple delegate! target"]);
+            assert_eq!(outcome.skipped, [NON_SIMPLE_DELEGATE_TARGET]);
             assert_eq!(fixed, source);
         }
         Ok(())
@@ -2304,9 +2352,10 @@ mod tests {
     #[test]
     fn unparseable_existing_block_keeps_manual_forwarders_unchanged() -> Result<()> {
         let source = "impl Wrapper {\n    delegate! { unexpected }\n    fn a(&self) { self.inner.a() }\n    fn b(&self) { self.inner.b() }\n}\n";
+        assert_eq!(count(source), 1);
         let (fixed, outcome) = fix_source(source)?;
         assert_eq!(outcome.writes, 0);
-        assert_eq!(outcome.skipped, ["impl has a non-simple delegate! target"]);
+        assert_eq!(outcome.skipped, [UNSUPPORTED_DELEGATE_SYNTAX]);
         assert_eq!(fixed, source);
         Ok(())
     }
@@ -2610,6 +2659,16 @@ mod tests {
                 "#[cfg_attr(not(target_arch = \"wasm32\"), async_trait)] #[cfg_attr(target_arch = \"wasm32\", async_trait(?Send))] impl Net for Client { async fn get(&self, r: Req) { self.net.get(r).await } async fn head(&self, r: Req) { self.net.head(r).await } }"
             ),
             0
+        );
+    }
+
+    #[test]
+    fn blocking_attribute_names_in_cfg_predicates_do_not_block_detection() {
+        assert_eq!(
+            count(
+                "#[cfg(feature = \"async_trait\")] impl Wrapper { fn a(&self) { self.inner.a() } fn b(&self) { self.inner.b() } }"
+            ),
+            1
         );
     }
 

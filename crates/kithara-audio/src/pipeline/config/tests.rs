@@ -36,7 +36,7 @@ fn create_effects_includes_custom_effects() {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
-    use kithara_assets::{AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{AssetStore, StorageBackend};
     use kithara_file::{FileConfig, FileSrc};
     use kithara_resampler::NoResamplerBackend;
 
@@ -47,17 +47,21 @@ mod native {
     fn audio_config_with_effect_adds_to_chain() {
         let effects: Vec<Box<dyn AudioEffect>> =
             vec![Box::new(PassthroughEffect), Box::new(PassthroughEffect)];
-        let config =
-            AudioConfig::<kithara_file::File, NoResamplerBackend>::for_stream(FileConfig::new(
-                FileSrc::Local(std::env::temp_dir().join("kithara-audio-config.wav")),
-                AssetStoreBuilder::default()
+        let config = AudioConfig::<kithara_file::File, NoResamplerBackend>::for_stream(
+            FileConfig::for_src(FileSrc::Local(
+                std::env::temp_dir().join("kithara-audio-config.wav"),
+            ))
+            .store(
+                AssetStore::builder()
                     .backend(StorageBackend::Memory)
                     .build(),
-            ))
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
-            .effects(effects)
-            .build();
+            )
+            .build(),
+        )
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
+        .effects(effects)
+        .build();
         assert_eq!(config.effects().len(), 2);
     }
 }

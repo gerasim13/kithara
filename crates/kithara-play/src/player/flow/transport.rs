@@ -21,17 +21,6 @@ pub struct SelectTransition {
 }
 
 impl PlayerImpl {
-    /// Ensure the audio engine is started.
-    pub fn ensure_engine_started(&self) -> Result<(), PlayError> {
-        if self.core.engine.is_running() {
-            return Ok(());
-        }
-        match self.core.engine.start() {
-            Ok(()) | Err(PlayError::EngineAlreadyRunning) => Ok(()),
-            Err(e) => Err(e),
-        }
-    }
-
     /// Apply autoplay: resume at the default rate (and move to `Playing`) or
     /// hold at rate 0 (and move to `Paused`).
     ///
@@ -53,6 +42,17 @@ impl PlayerImpl {
                 .engine
                 .bus()
                 .publish(PlayerEvent::RateChanged { rate: 0.0 });
+        }
+    }
+
+    /// Ensure the audio engine is started.
+    pub fn ensure_engine_started(&self) -> Result<(), PlayError> {
+        if self.core.engine.is_running() {
+            return Ok(());
+        }
+        match self.core.engine.start() {
+            Ok(()) | Err(PlayError::EngineAlreadyRunning) => Ok(()),
+            Err(e) => Err(e),
         }
     }
 
@@ -262,14 +262,14 @@ mod tests {
 
     #[kithara::test]
     fn seek_seconds_without_slot_returns_not_ready() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         let err = player.seek_seconds(1.0).expect_err("must error");
         assert!(matches!(err, PlayError::NotReady));
     }
 
     #[kithara::test]
     fn select_item_out_of_range_returns_typed_error() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         let err = player
             .select_item_with_crossfade(
                 5,
@@ -291,7 +291,7 @@ mod tests {
     /// `CurrentItemChanged` while the old audio keeps playing.
     #[kithara::test]
     fn select_item_on_consumed_slot_errors_without_bookkeeping() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         player.reserve_slots(2);
         let result = player.select_item_with_crossfade(
             1,

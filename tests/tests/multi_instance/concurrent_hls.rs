@@ -52,7 +52,10 @@ async fn create_hls_audio(
         .initial_abr_mode(abr)
         .build();
 
-    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let wav_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     // Park on ring underrun instead of surfacing Pending, so the blocking
     // readers never spin against the virtual clock.
     let config = AudioConfig::<Hls>::for_stream(hls_config)

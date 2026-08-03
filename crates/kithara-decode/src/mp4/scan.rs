@@ -34,6 +34,7 @@ impl Consts {
     /// from forcing huge allocations. Real edit lists in audio files
     /// are tiny.
     const ELST_MAX_ENTRIES: usize = 4096;
+
     /// Hard ceiling for the `----` payload we are willing to pull
     /// into memory while looking for an iTunSMPB tag. Freeform tags
     /// are kilobytes at most; this stops adversarial inputs from

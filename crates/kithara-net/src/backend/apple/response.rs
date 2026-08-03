@@ -48,7 +48,7 @@ pub(super) fn completion_result(
 
     let (status, headers) = match completion.response_parts() {
         Some(parts) => headers_from_response_parts(parts, accept_encoding, url)?,
-        None => (None, Headers::new()),
+        None => (None, Headers::default()),
     };
     let body = completion
         .data()
@@ -129,7 +129,7 @@ fn headers_from_response_parts(
     }
     let is_decoded =
         accept_encoding == AcceptEncodingPolicy::Configured && has_content_encoding(&pairs);
-    let mut headers = Headers::new();
+    let mut headers = Headers::default();
     for (key, value) in pairs {
         let key = key.to_ascii_lowercase();
         if is_decoded && (key == "content-encoding" || key == "content-length") {

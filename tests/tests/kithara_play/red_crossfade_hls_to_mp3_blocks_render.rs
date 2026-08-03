@@ -27,7 +27,7 @@ impl Consts {
     env(KITHARA_HANG_TIMEOUT_SECS = "10")
 )]
 async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
-    use kithara::assets::{AssetStore, AssetStoreBuilder, StorageBackend};
+    use kithara::assets::{AssetStore, StorageBackend};
     use kithara_integration_tests::{
         create_wav_exact_bytes,
         hls_server::{HlsTestServer, HlsTestServerConfig},
@@ -55,7 +55,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         ..Default::default()
     })
     .await;
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
         .cache_capacity(std::num::NonZeroUsize::new(4).expect("nonzero"))
         .max_assets(8)
@@ -71,7 +71,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         let p = local_mp3.clone();
         let store = store.clone();
         async move {
-            let file_cfg = FileConfig::new(FileSrc::Local(p), store);
+            let file_cfg = FileConfig::for_src(FileSrc::Local(p)).store(store).build();
             let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
                 .byte_pool(kithara::bufpool::BytePool::default())
                 .pcm_pool(kithara::bufpool::PcmPool::default())
@@ -88,7 +88,10 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
     let make_hls = |w: AudioWorkerHandle, s: AssetStore| {
         let u = hls_url.clone();
         async move {
-            let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+            let wav_info = MediaInfo::builder()
+                .maybe_codec(Some(AudioCodec::Pcm))
+                .maybe_container(Some(ContainerFormat::Wav))
+                .build();
             let cfg = HlsConfig::for_url(u).store(s).build();
             let audio_cfg = AudioConfig::<Hls>::for_stream(cfg)
                 .byte_pool(kithara::bufpool::BytePool::default())

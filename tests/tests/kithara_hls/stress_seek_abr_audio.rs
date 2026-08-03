@@ -35,8 +35,14 @@ enum AbrAudioFixture {
 impl AbrAudioFixture {
     fn media_info(self) -> MediaInfo {
         match self {
-            Self::WavFileLike => MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav)),
-            Self::FlacFmp4 => MediaInfo::new(Some(AudioCodec::Flac), Some(ContainerFormat::Fmp4)),
+            Self::WavFileLike => MediaInfo::builder()
+                .maybe_codec(Some(AudioCodec::Pcm))
+                .maybe_container(Some(ContainerFormat::Wav))
+                .build(),
+            Self::FlacFmp4 => MediaInfo::builder()
+                .maybe_codec(Some(AudioCodec::Flac))
+                .maybe_container(Some(ContainerFormat::Fmp4))
+                .build(),
         }
     }
 }

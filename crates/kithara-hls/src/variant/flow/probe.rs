@@ -68,15 +68,6 @@ impl HlsVariant {
     }
 
     #[cfg(test)]
-    pub(in crate::variant) fn apply_resolved_size_without_seek_completion(
-        &self,
-        demand: SizeDemand,
-        len: u64,
-    ) -> bool {
-        self.store_resolved_size(demand, len)
-    }
-
-    #[cfg(test)]
     pub(in crate::variant) fn apply_resolved_size_before_layout_publication(
         &self,
         demand: SizeDemand,
@@ -98,32 +89,13 @@ impl HlsVariant {
         changed
     }
 
-    fn store_resolved_size(&self, demand: SizeDemand, len: u64) -> bool {
-        if len == 0 {
-            return false;
-        }
-        let mut changed = false;
-        self.layout.apply_commit(&self.segments, || {
-            changed = self.store_resolved_size_atom(demand, len);
-            self.init_route_size()
-        });
-        changed
-    }
-
-    fn store_resolved_size_atom(&self, demand: SizeDemand, len: u64) -> bool {
-        match demand {
-            SizeDemand::Init => self
-                .segments
-                .init
-                .as_ref()
-                .filter(|segment| matches!(segment.content(), SegmentContent::Plain))
-                .is_some_and(|segment| segment.set_resolved_size(len)),
-            SizeDemand::Segment(idx) => self
-                .segments
-                .get(idx as usize)
-                .filter(|segment| matches!(segment.content(), SegmentContent::Plain))
-                .is_some_and(|segment| segment.set_resolved_size(len)),
-        }
+    #[cfg(test)]
+    pub(in crate::variant) fn apply_resolved_size_without_seek_completion(
+        &self,
+        demand: SizeDemand,
+        len: u64,
+    ) -> bool {
+        self.store_resolved_size(demand, len)
     }
 
     fn build_size_probe_cmd(
@@ -196,17 +168,6 @@ impl HlsVariant {
         }
     }
 
-    delegate::delegate! {
-        to self.seek.size_demand.lock() {
-            #[call(pop_dispatchable)]
-            fn dispatchable_size_demand(&self) -> Option<SizeDemand>;
-            #[call(enqueue)]
-            pub(super) fn enqueue_size_demand(&self, demand: SizeDemand);
-            #[call(finish)]
-            fn finish_size_demand(&self, demand: SizeDemand);
-        }
-    }
-
     fn finish_size_probe(
         &self,
         demand: SizeDemand,
@@ -256,6 +217,45 @@ impl HlsVariant {
         match demand {
             SizeDemand::Init => Some(self.segments.init.as_ref()?.url().clone()),
             SizeDemand::Segment(idx) => Some(self.segments.get(idx as usize)?.url().clone()),
+        }
+    }
+
+    fn store_resolved_size(&self, demand: SizeDemand, len: u64) -> bool {
+        if len == 0 {
+            return false;
+        }
+        let mut changed = false;
+        self.layout.apply_commit(&self.segments, || {
+            changed = self.store_resolved_size_atom(demand, len);
+            self.init_route_size()
+        });
+        changed
+    }
+
+    fn store_resolved_size_atom(&self, demand: SizeDemand, len: u64) -> bool {
+        match demand {
+            SizeDemand::Init => self
+                .segments
+                .init
+                .as_ref()
+                .filter(|segment| matches!(segment.content(), SegmentContent::Plain))
+                .is_some_and(|segment| segment.set_resolved_size(len)),
+            SizeDemand::Segment(idx) => self
+                .segments
+                .get(idx as usize)
+                .filter(|segment| matches!(segment.content(), SegmentContent::Plain))
+                .is_some_and(|segment| segment.set_resolved_size(len)),
+        }
+    }
+
+    delegate::delegate! {
+        to self.seek.size_demand.lock() {
+            #[call(pop_dispatchable)]
+            fn dispatchable_size_demand(&self) -> Option<SizeDemand>;
+            #[call(enqueue)]
+            pub(super) fn enqueue_size_demand(&self, demand: SizeDemand);
+            #[call(finish)]
+            fn finish_size_demand(&self, demand: SizeDemand);
         }
     }
 }

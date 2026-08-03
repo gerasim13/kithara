@@ -8,10 +8,10 @@ pub(in crate::gui) const EQ_MIN_DB: f32 = -24.0;
 pub(in crate::gui) const EQ_MAX_DB: f32 = 6.0;
 
 struct Endpoint {
-    category: EndpointCategory,
-    id: &'static str,
-    value: ValueKind,
     scopes: &'static [&'static str],
+    id: &'static str,
+    category: EndpointCategory,
+    value: ValueKind,
 }
 
 impl Endpoint {
@@ -120,6 +120,42 @@ static ENDPOINTS: &[Endpoint] = &[
         category: EndpointCategory::Parameter,
         id: "deck.eq.high",
         value: ValueKind::Scalar,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Parameter,
+        id: "deck.eq.low_mid",
+        value: ValueKind::Scalar,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Parameter,
+        id: "deck.eq.high_mid",
+        value: ValueKind::Scalar,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "deck.eq.menu_open",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "deck.eq.three_band",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "deck.eq.four_band",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "deck.eq.menu",
+        value: ValueKind::Trigger,
         scopes: Endpoint::DECK,
     },
     Endpoint {

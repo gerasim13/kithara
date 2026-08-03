@@ -50,8 +50,8 @@ fn workspace_details(
             Some(&hotspots),
         ));
         details.push(DetailDiagram {
-            label: node.label.clone(),
             path,
+            label: node.label.clone(),
             parent: None,
             package: node.id.package.clone(),
             module: None,

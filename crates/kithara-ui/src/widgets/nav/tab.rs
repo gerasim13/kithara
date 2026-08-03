@@ -15,10 +15,10 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct TabLarge<'a, 'value, 'data, 'skin> {
-    path: &'a str,
-    label: &'a str,
-    value: Option<&'value ReadValue<'data>>,
     skin: &'skin Skin,
+    label: &'a str,
+    path: &'a str,
+    value: Option<&'value ReadValue<'data>>,
 }
 
 impl<'a> Widget<'a> for TabLarge<'a, '_, '_, '_> {

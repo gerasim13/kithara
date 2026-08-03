@@ -52,8 +52,8 @@ impl<'a> Widget<'a> for Brand<'_> {
 
 #[derive(bon::Builder)]
 pub(crate) struct PresetSelector<'reads, 'skin> {
-    reads: &'reads dyn Reads,
     skin: &'skin Skin,
+    reads: &'reads dyn Reads,
 }
 
 impl<'a> Widget<'a> for PresetSelector<'_, '_> {

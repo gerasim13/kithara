@@ -197,8 +197,8 @@ struct Encoder {
 }
 
 struct EncoderParams {
-    bit_rate: u32,
     profile: AacHeProfile,
+    bit_rate: u32,
     sample_rate: u32,
 }
 

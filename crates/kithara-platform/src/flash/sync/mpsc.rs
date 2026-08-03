@@ -76,19 +76,6 @@ impl<T> Drop for Sender<T> {
 }
 
 impl<T> Receiver<T> {
-    delegate::delegate! {
-        to self {
-            /// Iterate over received values, blocking until all senders disconnect.
-            #[expr(std::iter::from_fn(move || $.ok()))]
-            #[call(recv)]
-            pub fn iter(&self) -> impl Iterator<Item = T> + '_;
-            /// Iterate over currently-available values without blocking.
-            #[expr(std::iter::from_fn(move || $.ok()))]
-            #[call(try_recv)]
-            pub fn try_iter(&self) -> impl Iterator<Item = T> + '_;
-        }
-    }
-
     /// Block until a value arrives.
     ///
     /// # Errors
@@ -141,6 +128,19 @@ impl<T> Receiver<T> {
             Some(v) => Ok(v),
             None if self.0.senders.load(Ordering::Acquire) == 0 => Err(TryRecvError::Disconnected),
             None => Err(TryRecvError::Empty),
+        }
+    }
+
+    delegate::delegate! {
+        to self {
+            /// Iterate over received values, blocking until all senders disconnect.
+            #[expr(std::iter::from_fn(move || $.ok()))]
+            #[call(recv)]
+            pub fn iter(&self) -> impl Iterator<Item = T> + '_;
+            /// Iterate over currently-available values without blocking.
+            #[expr(std::iter::from_fn(move || $.ok()))]
+            #[call(try_recv)]
+            pub fn try_iter(&self) -> impl Iterator<Item = T> + '_;
         }
     }
 }

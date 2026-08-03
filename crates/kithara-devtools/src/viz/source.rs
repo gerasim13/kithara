@@ -179,10 +179,10 @@ fn collect_target(
         super::calls::collect_abstractions(
             &super::calls::SourceUnit {
                 package,
-                target: &target.name,
                 module,
                 relative,
                 file,
+                target: &target.name,
             },
             graph,
             &mut call_index,
@@ -192,10 +192,10 @@ fn collect_target(
         super::calls::collect_definitions(
             &super::calls::SourceUnit {
                 package,
-                target: &target.name,
                 module,
                 relative,
                 file,
+                target: &target.name,
             },
             graph,
             &mut call_index,
@@ -205,10 +205,10 @@ fn collect_target(
         super::calls::collect_edges(
             &super::calls::SourceUnit {
                 package,
-                target: &target.name,
                 module,
                 relative,
                 file,
+                target: &target.name,
             },
             graph,
             &call_index,

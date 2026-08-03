@@ -6,7 +6,7 @@ use std::path::Path;
 
 use bytes::Bytes;
 use kithara::{
-    assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, StorageBackend, WriteSide},
+    assets::{AcquisitionResult, AssetScope, AssetStore, StorageBackend, WriteSide},
     platform::{CancelToken, time::Duration},
 };
 use kithara_integration_tests::{cancel_token, temp_dir};
@@ -25,7 +25,7 @@ fn asset_scope_with_root_and_limit(
     max_bytes: Option<u64>,
     cancel: CancelToken,
 ) -> AssetScope {
-    AssetStoreBuilder::default()
+    AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (temp_dir.path()).into(),
         })

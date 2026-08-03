@@ -12,7 +12,7 @@ categories = ["caching"]
 [features]
 default = ["client-reqwest", "tls-rustls"]
 probe = []
-mock = []
+mock = ["dep:unimock"]
 # HTTP backend forwarding. kithara-assets reaches the single kithara-net
 # package only through kithara-storage -> kithara-test-utils -> kithara-events
 # (downloader event types). These forwards give kithara-net a backend in
@@ -43,7 +43,7 @@ rkyv = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-unimock = { workspace = true }
+unimock = { workspace = true, optional = true }
 url = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
@@ -61,6 +61,7 @@ aes = { workspace = true }
 cbc = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
+unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [lints]

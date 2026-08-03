@@ -41,9 +41,10 @@ async fn play_issued_before_the_load_lands_still_starts_the_track() {
             .build(),
     ));
     let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-            .with_player(player)
-            .with_store(store.clone()),
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build(),
     ));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {
@@ -58,13 +59,14 @@ async fn play_issued_before_the_load_lands_still_starts_the_track() {
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
-    let cfg = ResourceConfig::for_src(url.as_str())
-        .expect("valid fixture URL")
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .downloader(downloader)
-        .store(store)
-        .build();
+    let cfg = ResourceConfig::for_src(
+        ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"),
+    )
+    .byte_pool(kithara::bufpool::BytePool::default())
+    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .downloader(downloader)
+    .store(store)
+    .build();
 
     let mut rx = queue.subscribe();
     queue.append(TrackSource::Config(Box::new(cfg)));

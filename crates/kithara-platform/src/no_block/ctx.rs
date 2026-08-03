@@ -4,8 +4,8 @@ pub(super) type TaskId = (&'static str, &'static Location<'static>);
 
 struct NbCtx {
     cur: Cell<Option<TaskId>>,
-    permit_depth: Cell<u32>,
     paused_nanos: Cell<u128>,
+    permit_depth: Cell<u32>,
 }
 
 thread_local! {
@@ -50,8 +50,8 @@ impl Drop for PollScope {
 
 #[must_use]
 pub struct Pause {
-    _not_send: PhantomData<*mut ()>,
     start: Instant,
+    _not_send: PhantomData<*mut ()>,
 }
 
 impl Drop for Pause {
@@ -70,8 +70,8 @@ pub(super) fn pause_now() -> Pause {
 
 #[must_use]
 pub struct Permit {
-    _not_send: PhantomData<*mut ()>,
     _pause: Pause,
+    _not_send: PhantomData<*mut ()>,
 }
 
 impl Permit {

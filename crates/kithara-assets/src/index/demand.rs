@@ -89,6 +89,12 @@ pub struct ProducerHandle {
 }
 
 impl ProducerHandle {
+    /// Producer cancel token (fires when the last consumer detaches).
+    #[must_use]
+    pub fn producer_cancel(&self) -> CancelToken {
+        self.slot.producer_cancel.clone()
+    }
+
     delegate::delegate! {
         to self.slot {
             /// Aggregate demand watermark across all live consumers.
@@ -99,12 +105,6 @@ impl ProducerHandle {
             #[field(&notify)]
             pub fn notify(&self) -> &Notify;
         }
-    }
-
-    /// Producer cancel token (fires when the last consumer detaches).
-    #[must_use]
-    pub fn producer_cancel(&self) -> CancelToken {
-        self.slot.producer_cancel.clone()
     }
 }
 

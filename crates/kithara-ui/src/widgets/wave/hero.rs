@@ -25,15 +25,15 @@ use crate::{
 
 #[derive(Clone, Copy)]
 pub(crate) struct HeroPalette {
-    pub(crate) base: RenderPalette,
     pub(crate) cue_badge: Color,
     pub(crate) cue_text: Color,
+    pub(crate) base: RenderPalette,
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct HeroWave<'a> {
-    pub(crate) beats: &'a [f32],
     pub(crate) buckets: &'a [WaveBucket],
+    pub(crate) beats: &'a [f32],
     pub(crate) cues: &'a [f32],
     pub(crate) downbeats: &'a [f32],
     pub(crate) loop_region: Option<[f32; 2]>,

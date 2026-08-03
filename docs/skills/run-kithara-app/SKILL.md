@@ -6,7 +6,7 @@ description: Build and run Kithara. Default target is the desktop app (kithara-a
 ## Desktop (default)
 
 ```bash
-cargo run -p kithara-app -- --mode gui
+cargo run -p kithara-app
 ```
 
 Add track paths/URLs as extra args to play specific tracks; without any, it

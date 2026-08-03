@@ -38,8 +38,8 @@ fn load_rec(
     let bytes = loaded.text.len();
     if bytes > limits.max_bytes {
         return Err(UiDocError::TooLarge {
-            origin: loaded.uri,
             bytes,
+            origin: loaded.uri,
             max: limits.max_bytes,
         });
     }
@@ -50,8 +50,8 @@ fn load_rec(
     }
     if depth >= limits.max_depth {
         return Err(UiDocError::DepthExceeded {
-            origin: loaded.uri,
             depth,
+            origin: loaded.uri,
             max: limits.max_depth,
         });
     }

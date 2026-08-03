@@ -24,10 +24,7 @@ fn create_resource() -> MemResource {
 fn with_bytes(data: &[u8], cancel: CancelToken) -> MemResource {
     MemResource::open(
         cancel,
-        MemOptions {
-            initial_data: Some(data.to_vec()),
-            ..MemOptions::default()
-        },
+        MemOptions::builder().initial_data(data.to_vec()).build(),
     )
     .expect("BUG: MemDriver::open with initial_data is infallible")
 }
@@ -42,14 +39,10 @@ fn test_create_new_resource() {
 
 #[kithara::test(timeout(Duration::from_secs(1)))]
 fn post_commit_replacement_uses_injected_pool() {
-    let region = Region::new(RegionConfig::default().max_bytes(1024));
+    let region = Region::new(RegionConfig::builder().max_bytes(1024).build());
     let pool = region.byte_pool();
-    let (driver, _) = MemDriver::open(MemOptions {
-        capacity: 32,
-        pool,
-        ..MemOptions::default()
-    })
-    .unwrap();
+    let (driver, _) =
+        MemDriver::open(MemOptions::builder().capacity(32).pool(pool).build()).unwrap();
     DriverIo::commit(&driver, Some(0)).unwrap();
     let allocated_before = region.stats().allocated_bytes;
 
@@ -249,10 +242,7 @@ fn test_sparse_write(#[case] offset: u64, #[case] payload: &[u8]) {
 fn test_growable_write_beyond_initial_capacity() {
     let res = MemResource::open(
         CancelToken::never(),
-        MemOptions {
-            capacity: 64,
-            ..Default::default()
-        },
+        MemOptions::builder().capacity(64).build(),
     )
     .unwrap();
 

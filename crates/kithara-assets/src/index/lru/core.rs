@@ -254,15 +254,6 @@ impl LruState {
             .collect()
     }
 
-    delegate::delegate! {
-        to self.by_root {
-            pub(crate) fn len(&self) -> usize;
-            /// Returns `true` if the entry was present and removed.
-            #[expr($.is_some())]
-            pub(crate) fn remove(&mut self, asset_root: &str) -> bool;
-        }
-    }
-
     /// Touch an asset in-memory.
     pub(crate) fn touch(&mut self, asset_root: &str, bytes_hint: Option<u64>) -> bool {
         self.clock = self.clock.saturating_add(1);
@@ -296,6 +287,15 @@ impl LruState {
         }
         entry.bytes = Some(bytes);
         true
+    }
+
+    delegate::delegate! {
+        to self.by_root {
+            pub(crate) fn len(&self) -> usize;
+            /// Returns `true` if the entry was present and removed.
+            #[expr($.is_some())]
+            pub(crate) fn remove(&mut self, asset_root: &str) -> bool;
+        }
     }
 }
 

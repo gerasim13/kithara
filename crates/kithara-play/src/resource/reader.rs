@@ -21,17 +21,18 @@ use super::{ResourceConfig, SourceType};
 /// # Example
 ///
 /// ```ignore
-/// use kithara_assets::AssetStoreBuilder;
+/// use kithara_assets::AssetStore;
 /// use kithara_bufpool::{BytePool, PcmPool};
 /// use kithara_play::{Resource, ResourceConfig};
 ///
 /// // Auto-detect: .m3u8 -> HLS, everything else -> progressive file
-/// let config = ResourceConfig::new(
+/// let config: ResourceConfig = ResourceConfig::for_src(ResourceConfig::parse_src(
 ///     "https://example.com/song.mp3",
-///     AssetStoreBuilder::default().build(),
-///     BytePool::default(),
-///     PcmPool::default(),
-/// )?;
+/// )?)
+/// .store(AssetStore::builder().build())
+/// .byte_pool(BytePool::default())
+/// .pcm_pool(PcmPool::default())
+/// .build();
 /// let mut resource = Resource::new(config).await?;
 ///
 /// let spec = resource.spec();
@@ -84,49 +85,6 @@ impl Drop for CancelGuard {
 }
 
 impl Resource {
-    delegate! {
-        to self.inner {
-            /// Runtime ABR handle for adaptive sources (HLS). `None` for files.
-            #[must_use]
-            pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
-            /// Cached span of the underlying reader: how much of the source is on disk.
-            #[must_use]
-            pub fn cached_span(&self) -> Duration;
-            /// Decoded-ahead frontier of the underlying reader (always `>=` position).
-            #[must_use]
-            pub fn decoded_frontier(&self) -> Duration;
-            /// Get total duration (if known).
-            #[must_use]
-            pub fn duration(&self) -> Option<Duration>;
-            /// Get track metadata.
-            #[must_use]
-            pub fn metadata(&self) -> &TrackMetadata;
-            /// Read the next decoded chunk with full metadata.
-            pub fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError>;
-            /// Get current playback position.
-            #[must_use]
-            pub fn position(&self) -> Duration;
-            /// Read interleaved PCM samples.
-            pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError>;
-            /// Read deinterleaved (planar) PCM samples.
-            pub fn read_planar<'a>(
-                &mut self,
-                output: &'a mut [&'a mut [f32]],
-            ) -> Result<ReadOutcome, DecodeError>;
-            /// Seek to position.
-            pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
-            /// Set the target sample rate of the audio host.
-            pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
-            /// Set the playback rate for the active stretch controls.
-            pub fn set_playback_rate(&self, rate: f32);
-            /// Update the scheduling priority hint for the shared worker.
-            pub fn set_service_class(&self, class: ServiceClass);
-            /// Get current PCM specification.
-            #[must_use]
-            pub fn spec(&self) -> PcmSpec;
-        }
-    }
-
     /// Create a resource from a `ResourceConfig`.
     ///
     /// Auto-detects the stream type from the URL:
@@ -230,6 +188,49 @@ impl Resource {
     #[must_use]
     pub fn subscribe(&self) -> kithara_events::EventReceiver {
         self.bus.subscribe()
+    }
+
+    delegate! {
+        to self.inner {
+            /// Runtime ABR handle for adaptive sources (HLS). `None` for files.
+            #[must_use]
+            pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
+            /// Cached span of the underlying reader: how much of the source is on disk.
+            #[must_use]
+            pub fn cached_span(&self) -> Duration;
+            /// Decoded-ahead frontier of the underlying reader (always `>=` position).
+            #[must_use]
+            pub fn decoded_frontier(&self) -> Duration;
+            /// Get total duration (if known).
+            #[must_use]
+            pub fn duration(&self) -> Option<Duration>;
+            /// Get track metadata.
+            #[must_use]
+            pub fn metadata(&self) -> &TrackMetadata;
+            /// Read the next decoded chunk with full metadata.
+            pub fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError>;
+            /// Get current playback position.
+            #[must_use]
+            pub fn position(&self) -> Duration;
+            /// Read interleaved PCM samples.
+            pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError>;
+            /// Read deinterleaved (planar) PCM samples.
+            pub fn read_planar<'a>(
+                &mut self,
+                output: &'a mut [&'a mut [f32]],
+            ) -> Result<ReadOutcome, DecodeError>;
+            /// Seek to position.
+            pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
+            /// Set the target sample rate of the audio host.
+            pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
+            /// Set the playback rate for the active stretch controls.
+            pub fn set_playback_rate(&self, rate: f32);
+            /// Update the scheduling priority hint for the shared worker.
+            pub fn set_service_class(&self, class: ServiceClass);
+            /// Get current PCM specification.
+            #[must_use]
+            pub fn spec(&self) -> PcmSpec;
+        }
     }
 }
 

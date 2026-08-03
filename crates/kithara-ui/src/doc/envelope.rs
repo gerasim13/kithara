@@ -32,17 +32,17 @@ impl DocKind {
 
 #[derive(Debug, Deserialize)]
 struct EnvelopeProbe {
+    id: DocId,
     schema: String,
     version: u32,
-    id: DocId,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct Envelope {
+    pub id: DocId,
     pub kind: DocKind,
     pub version: u32,
-    pub id: DocId,
 }
 
 /// Reads and validates a document envelope.
@@ -71,10 +71,10 @@ pub fn probe(text: &str, origin: &SourceUri) -> Result<Envelope, UiDocError> {
     };
     if raw.version == 0 || raw.version > max {
         return Err(UiDocError::UnsupportedVersion {
+            max,
             origin: origin.clone(),
             schema: raw.schema,
             version: raw.version,
-            max,
         });
     }
     Ok(Envelope {

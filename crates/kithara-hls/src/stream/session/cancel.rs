@@ -1,26 +1,26 @@
 use kithara_platform::{CancelToken, sync::RwLock};
 
 pub(super) struct SessionCancel {
-    fetch: RwLock<CancelToken>,
     pub(super) root: CancelToken,
+    fetch: RwLock<CancelToken>,
 }
 
 impl SessionCancel {
     pub(super) fn new(root: CancelToken) -> Self {
         let fetch = RwLock::new(root.child());
-        Self { fetch, root }
+        Self { root, fetch }
     }
 
-    pub(super) fn abort(&self) {
-        self.root.cancel();
+    delegate::delegate! {
+        to self.root {
+            #[call(cancel)]
+            pub(super) fn abort(&self);
+            pub(super) fn is_cancelled(&self) -> bool;
+        }
     }
 
     pub(super) fn handle(&self) -> CancelToken {
         self.fetch.read().clone()
-    }
-
-    pub(super) fn is_cancelled(&self) -> bool {
-        self.root.is_cancelled()
     }
 
     pub(super) fn rearm(&self) {

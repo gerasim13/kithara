@@ -27,12 +27,12 @@ use crate::{peer::HlsPeer, reader::HlsReaderEventSink};
 /// drop and for the ABR handle the audio FSM consumes).
 pub struct HlsSource {
     coord: Arc<HlsCoord>,
-    stream_scope: CancelScope,
     /// Deferred HLS event sink shared with the reader hooks and fence-ack path.
     /// [`HlsReaderEventSink`] in [`Source::take_reader_event_sink`] so
     /// the decoder's per-seek / per-chunk signals reach test subscribers
     /// as `HlsEvent::ReaderSeek` / `HlsEvent::ReadProgress`.
     emit: Arc<DeferredBus<HlsEvent>>,
+    stream_scope: CancelScope,
     hls_peer: Option<Arc<HlsPeer>>,
     /// Eviction-subscription guard. Dropping it deregisters this stream's
     /// eviction routing entry from the store (shared or private).
@@ -113,6 +113,27 @@ impl Source for HlsSource {
         }
     }
 
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        Some(Arc::clone(&self.coord) as Arc<dyn ByteMap>)
+    }
+
+    fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
+        self.peer_wake.clone()
+    }
+
+    fn take_reader_event_sink(&mut self) -> Option<BoxedEventSink> {
+        let sink = HlsReaderEventSink::new(
+            Arc::clone(&self.emit),
+            Arc::clone(&self.coord),
+            self.coord.seek_epoch_handle(),
+        );
+        Some(Box::new(sink))
+    }
+
+    fn variant_control(&self) -> Option<Arc<dyn kithara_stream::VariantControl>> {
+        Some(Arc::clone(&self.coord) as Arc<dyn kithara_stream::VariantControl>)
+    }
+
     delegate! {
         to self.coord {
             fn len(&self) -> Option<u64>;
@@ -135,27 +156,6 @@ impl Source for HlsSource {
             fn set_worker_wake(&self, wake: Arc<dyn kithara_stream::WorkerWake>);
         }
     }
-
-    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
-        Some(Arc::clone(&self.coord) as Arc<dyn ByteMap>)
-    }
-
-    fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
-        self.peer_wake.clone()
-    }
-
-    fn take_reader_event_sink(&mut self) -> Option<BoxedEventSink> {
-        let sink = HlsReaderEventSink::new(
-            Arc::clone(&self.emit),
-            Arc::clone(&self.coord),
-            self.coord.seek_epoch_handle(),
-        );
-        Some(Box::new(sink))
-    }
-
-    fn variant_control(&self) -> Option<Arc<dyn kithara_stream::VariantControl>> {
-        Some(Arc::clone(&self.coord) as Arc<dyn kithara_stream::VariantControl>)
-    }
 }
 
 #[cfg(test)]
@@ -163,7 +163,7 @@ mod tests {
     use std::sync::OnceLock;
 
     use kithara_abr::{Abr, AbrController, AbrSettings, AbrState};
-    use kithara_assets::{AssetResource, AssetSource, AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
     use kithara_events::{AbrMode, EventBus, VariantIndex};
     use kithara_platform::{CancelToken, sync::ThreadGate, time::Duration as PlatformDuration};
     use kithara_stream::{AudioCodec, ContainerFormat, PlayheadState, SeekState};
@@ -193,53 +193,66 @@ mod tests {
     /// One HLS track of equal-sized segments behind a real `HlsSource`, with the
     /// peer wake the source arms exposed so a test can observe it.
     struct Fixture {
-        ctx: PlanCtx,
-        source: HlsSource,
         variant: Arc<HlsVariant>,
         wake: Arc<DeferredWake>,
         cancel: CancelToken,
+        source: HlsSource,
+        ctx: PlanCtx,
     }
 
     impl Fixture {
         const SEGMENT_BYTES: u64 = 100;
         const SEGMENT_COUNT: u32 = 4;
 
-        fn with_look_ahead(look_ahead_bytes: u64) -> Self {
-            let bus = EventBus::new(8);
-            let cancel = CancelToken::never();
-            let ctx = Self::plan_ctx(&bus, look_ahead_bytes, &cancel);
-            let coord = Self::coord(&bus, &ctx, cancel.clone());
-            let variant = coord.active();
-            let mut source = HlsSource::new(
-                Arc::clone(&coord),
-                Arc::new(DeferredBus::new(bus, 8)),
-                CancelScope::new(Some(cancel.clone())),
-            );
-            let peer = Arc::new(HlsPeer::new(
-                coord.seek_observe(),
-                coord.activity(),
-                AbrMode::Auto(Some(VariantIndex::new(0))),
-            ));
-            let wake = peer.reader_wake();
-            source.set_hls_peer(peer);
-            Self {
-                ctx,
-                source,
-                variant,
-                wake,
-                cancel,
+        fn coord(bus: &EventBus, ctx: &PlanCtx, cancel: CancelToken) -> Arc<HlsCoord> {
+            let playlist = Self::playlist_state();
+            let segments: Vec<Segment> = (0..Self::SEGMENT_COUNT)
+                .map(|idx| {
+                    Segment::Media(MediaSegment {
+                        url: Self::segment_url(idx),
+                        resource_id: ctx
+                            .scope
+                            .key(&AssetResource::Url(Self::segment_url(idx)))
+                            .expect("segment key"),
+                        state: SegmentSlotState::missing(),
+                        size: SegmentSize::seed(Self::SEGMENT_BYTES),
+                        content: SegmentContent::Plain,
+                        decode_time: PlatformDuration::from_secs(u64::from(idx) * 2),
+                        duration: PlatformDuration::from_secs(2),
+                    })
+                })
+                .collect();
+            let variant = VariantParts {
+                segments,
+                init: None,
+                seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+                codec: playlist.variant_codec(0),
+                container: playlist.variant_container(0),
             }
-        }
-
-        fn segment_url(idx: u32) -> url::Url {
-            format!("https://example.com/seg{idx}.m4s")
-                .parse()
-                .expect("segment url")
+            .into_variant(0, ctx);
+            let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+            let publisher = state.publisher();
+            let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer { state });
+            let controller = AbrController::new(AbrSettings::default());
+            Arc::new(HlsCoord::new(
+                HlsCoordEnv {
+                    cancel,
+                    scope: ctx.scope.clone(),
+                    headers: None,
+                    emit: Arc::new(DeferredBus::new(bus.clone(), 8)),
+                    signal: ctx.signal.clone(),
+                },
+                Arc::new(PlayheadState::new()),
+                Arc::new(SeekState::new()),
+                controller.register(&peer),
+                publisher,
+                Arc::from(vec![variant]),
+            ))
         }
 
         fn plan_ctx(bus: &EventBus, look_ahead_bytes: u64, cancel: &CancelToken) -> PlanCtx {
             let store = Arc::new(
-                AssetStoreBuilder::default()
+                AssetStore::builder()
                     .backend(StorageBackend::Memory)
                     .cancel(cancel.clone())
                     .build(),
@@ -279,50 +292,37 @@ mod tests {
             }]))
         }
 
-        fn coord(bus: &EventBus, ctx: &PlanCtx, cancel: CancelToken) -> Arc<HlsCoord> {
-            let playlist = Self::playlist_state();
-            let segments: Vec<Segment> = (0..Self::SEGMENT_COUNT)
-                .map(|idx| {
-                    Segment::Media(MediaSegment {
-                        url: Self::segment_url(idx),
-                        resource_id: ctx
-                            .scope
-                            .key(&AssetResource::Url(Self::segment_url(idx)))
-                            .expect("segment key"),
-                        state: SegmentSlotState::missing(),
-                        size: SegmentSize::seed(Self::SEGMENT_BYTES),
-                        content: SegmentContent::Plain,
-                        decode_time: PlatformDuration::from_secs(u64::from(idx) * 2),
-                        duration: PlatformDuration::from_secs(2),
-                    })
-                })
-                .collect();
-            let variant = VariantParts {
-                init: None,
-                segments,
-                seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-                codec: playlist.variant_codec(0),
-                container: playlist.variant_container(0),
+        fn segment_url(idx: u32) -> url::Url {
+            format!("https://example.com/seg{idx}.m4s")
+                .parse()
+                .expect("segment url")
+        }
+
+        fn with_look_ahead(look_ahead_bytes: u64) -> Self {
+            let bus = EventBus::new(8);
+            let cancel = CancelToken::never();
+            let ctx = Self::plan_ctx(&bus, look_ahead_bytes, &cancel);
+            let coord = Self::coord(&bus, &ctx, cancel.clone());
+            let variant = coord.active();
+            let mut source = HlsSource::new(
+                Arc::clone(&coord),
+                Arc::new(DeferredBus::new(bus, 8)),
+                CancelScope::new(Some(cancel.clone())),
+            );
+            let peer = Arc::new(HlsPeer::new(
+                coord.seek_observe(),
+                coord.activity(),
+                AbrMode::Auto(Some(VariantIndex::new(0))),
+            ));
+            let wake = peer.reader_wake();
+            source.set_hls_peer(peer);
+            Self {
+                variant,
+                wake,
+                cancel,
+                source,
+                ctx,
             }
-            .into_variant(0, ctx);
-            let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
-            let publisher = state.publisher();
-            let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer { state });
-            let controller = AbrController::new(AbrSettings::default());
-            Arc::new(HlsCoord::new(
-                HlsCoordEnv {
-                    scope: ctx.scope.clone(),
-                    cancel,
-                    headers: None,
-                    emit: Arc::new(DeferredBus::new(bus.clone(), 8)),
-                    signal: ctx.signal.clone(),
-                },
-                Arc::new(PlayheadState::new()),
-                Arc::new(SeekState::new()),
-                controller.register(&peer),
-                publisher,
-                Arc::from(vec![variant]),
-            ))
         }
     }
 

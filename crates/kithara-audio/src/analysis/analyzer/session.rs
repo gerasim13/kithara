@@ -9,14 +9,19 @@ use crate::{
     waveform::{BeatGrid, bucket::Waveform},
 };
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct TrackAnalyzers<B>
 where
     B: ResamplerBackend,
 {
     pub(super) beat: beat::Slot<B>,
-    pub(super) source_frames: u64,
-    pub(super) source_sample_rate: NonZeroU32,
     pub(super) waveform: waveform::Slot,
+    #[field(get, vis = "pub(crate)")]
+    pub(super) source_frames: u64,
+    /// Sample-rate axis frozen from the first decoded chunk of this pass.
+    #[field(get, copy, vis = "pub(crate)")]
+    pub(super) source_sample_rate: NonZeroU32,
 }
 
 impl<B> TrackAnalyzers<B>
@@ -41,14 +46,5 @@ where
 
         waveform::push(&mut self.waveform, chunk);
         beat::Slot::push(&mut self.beat, chunk, detector);
-    }
-
-    pub(crate) fn source_frames(&self) -> u64 {
-        self.source_frames
-    }
-
-    /// Sample-rate axis frozen from the first decoded chunk of this pass.
-    pub(crate) fn source_sample_rate(&self) -> NonZeroU32 {
-        self.source_sample_rate
     }
 }

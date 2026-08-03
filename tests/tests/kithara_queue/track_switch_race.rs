@@ -125,9 +125,10 @@ fn build_queue_with_tick(
             .build(),
     ));
     let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-            .with_player(player)
-            .with_store(store.clone()),
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build(),
     ));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(run_tick_driver(queue_for_tick));
@@ -165,9 +166,10 @@ fn build_queue_no_tick(temp_dir: &TestTempDir) -> (Arc<Queue>, Downloader, Asset
             .build(),
     ));
     let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-            .with_player(player)
-            .with_store(store.clone()),
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build(),
     ));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
@@ -364,8 +366,7 @@ async fn assert_no_barge_in(queue: &Queue, slow_id: TrackId) -> Result<(), Strin
 }
 
 fn mk_cfg(url: &Url, downloader: &Downloader, store: &AssetStore) -> ResourceConfig {
-    ResourceConfig::for_src(url.as_str())
-        .expect("valid fixture URL")
+    ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())

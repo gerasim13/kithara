@@ -41,9 +41,9 @@ pub struct KeyStore {
     scope: AssetScope,
     /// Byte buffer pool for reading cached key bodies.
     byte_pool: kithara_bufpool::BytePool,
+    bus: EventBus,
     /// Cache-first + downloader pipeline for HLS-AES / DRM key bodies.
     key_peer: KeyPeer,
-    bus: EventBus,
     /// Cache-wide headers (typically equal to `HlsConfig::headers`).
     base_headers: Option<Headers>,
     key_registry: Option<KeyProcessorRegistry>,
@@ -94,6 +94,95 @@ impl KeyStore {
             }
         }
         urls
+    }
+
+    async fn fetch_processed_body(
+        &self,
+        url: &Url,
+        cmd: FetchCmd,
+    ) -> HlsResult<(Bytes, Option<u64>)> {
+        tracing::info!(url = %RedactedUrl::new(url), "drm key: fetching from network");
+        let started_at = Instant::now();
+        let resp = self.key_peer.execute(cmd).await.map_err(|e| {
+            tracing::warn!(
+                url = %RedactedUrl::new(url),
+                error = %RedactedNetError::new(&e),
+                "drm key: network fetch failed"
+            );
+            publish_key_fetch_failed(&self.bus, url, KeyFailureStage::Network, "key fetch failed");
+            publish_decryption_error(&self.bus, "key fetch failed");
+            HlsError::KeyProcessing("key fetch failed".to_string())
+        })?;
+        let latency_ms = u64::try_from(started_at.elapsed().as_millis()).ok();
+        let raw_key = resp.body.collect().await.map_err(|e| {
+            tracing::warn!(
+                url = %RedactedUrl::new(url),
+                error = %RedactedNetError::new(&e),
+                "drm key: body collect failed"
+            );
+            publish_key_fetch_failed(
+                &self.bus,
+                url,
+                KeyFailureStage::BodyCollect,
+                "key body read failed",
+            );
+            publish_decryption_error(&self.bus, "key body read failed");
+            HlsError::KeyProcessing("key body read failed".to_string())
+        })?;
+        Ok((raw_key, latency_ms))
+    }
+
+    async fn fetch_registered_key(
+        &self,
+        cache_key: &ResourceKey,
+        url: &Url,
+        registry: &KeyProcessorRegistry,
+    ) -> HlsResult<Bytes> {
+        if let Some(cached) = self.keys.get(url).map(|entry| entry.value().clone()) {
+            publish_key_acquired(&self.bus, url, KeySource::MemCache, cached.len(), None);
+            return Ok(cached);
+        }
+
+        if let Some(cached) = self.validated_key_cache(cache_key, url)? {
+            return Ok(cached);
+        }
+
+        let Some(request) = registry.prepare(url) else {
+            let headers = self.merged_headers(None);
+            let key = self
+                .key_peer
+                .fetch_validated_in_transaction(cache_key, url, headers, validated_key_bytes)
+                .await?;
+            self.keys.insert(url.clone(), key.clone());
+            return Ok(key);
+        };
+        let (cmd, processor) = self.prepared_request(request);
+        let (raw_key, latency_ms) = self.fetch_processed_body(url, cmd).await?;
+        let decrypted = self.process_key(url, &processor, raw_key)?;
+
+        tracing::info!(
+            url = %RedactedUrl::new(url),
+            bytes = decrypted.len(),
+            "drm key: fetched + decrypted, caching to asset store"
+        );
+
+        if let Err(error) = self.key_peer.write_back(cache_key, url, &decrypted) {
+            tracing::warn!(
+                url = %RedactedUrl::new(url),
+                error = %error,
+                "drm key: valid final key could not be persisted; using session memory"
+            );
+        }
+
+        self.keys.insert(url.clone(), decrypted.clone());
+        publish_key_acquired(
+            &self.bus,
+            url,
+            KeySource::Network,
+            decrypted.len(),
+            latency_ms,
+        );
+        Ok(decrypted)
     }
 
     /// Synchronous key lookup — no network I/O.
@@ -193,157 +282,6 @@ impl KeyStore {
             .await
     }
 
-    async fn fetch_registered_key(
-        &self,
-        cache_key: &ResourceKey,
-        url: &Url,
-        registry: &KeyProcessorRegistry,
-    ) -> HlsResult<Bytes> {
-        if let Some(cached) = self.keys.get(url).map(|entry| entry.value().clone()) {
-            publish_key_acquired(&self.bus, url, KeySource::MemCache, cached.len(), None);
-            return Ok(cached);
-        }
-
-        if let Some(cached) = self.validated_key_cache(cache_key, url)? {
-            return Ok(cached);
-        }
-
-        let Some(request) = registry.prepare(url) else {
-            let headers = self.merged_headers(None);
-            let key = self
-                .key_peer
-                .fetch_validated_in_transaction(cache_key, url, headers, validated_key_bytes)
-                .await?;
-            self.keys.insert(url.clone(), key.clone());
-            return Ok(key);
-        };
-        let (cmd, processor) = self.prepared_request(request);
-        let (raw_key, latency_ms) = self.fetch_processed_body(url, cmd).await?;
-        let decrypted = self.process_key(url, &processor, raw_key)?;
-
-        tracing::info!(
-            url = %RedactedUrl::new(url),
-            bytes = decrypted.len(),
-            "drm key: fetched + decrypted, caching to asset store"
-        );
-
-        if let Err(error) = self.key_peer.write_back(cache_key, url, &decrypted) {
-            tracing::warn!(
-                url = %RedactedUrl::new(url),
-                error = %error,
-                "drm key: valid final key could not be persisted; using session memory"
-            );
-        }
-
-        self.keys.insert(url.clone(), decrypted.clone());
-        publish_key_acquired(
-            &self.bus,
-            url,
-            KeySource::Network,
-            decrypted.len(),
-            latency_ms,
-        );
-        Ok(decrypted)
-    }
-
-    fn validated_key_cache(&self, cache_key: &ResourceKey, url: &Url) -> HlsResult<Option<Bytes>> {
-        let Some(bytes) = self.key_peer.try_cached(cache_key, url)? else {
-            return Ok(None);
-        };
-        if let Err(error) = validate_aes128_key(&bytes) {
-            tracing::warn!(
-                url = %RedactedUrl::new(url),
-                error = %error,
-                "drm key: cached final key is invalid; removing it before refetch"
-            );
-            self.scope.store().remove_resource(cache_key)?;
-            return Ok(None);
-        }
-        tracing::info!(
-            url = %RedactedUrl::new(url),
-            bytes = bytes.len(),
-            "drm key: served from disk cache"
-        );
-        self.keys.insert(url.clone(), bytes.clone());
-        publish_key_acquired(&self.bus, url, KeySource::DiskCache, bytes.len(), None);
-        Ok(Some(bytes))
-    }
-
-    fn prepared_request(&self, request: PreparedKeyRequest) -> (FetchCmd, KeyProcessor) {
-        let headers = self.merged_headers(Some(&request.headers));
-        let cmd = FetchCmd::get(request.url).maybe_headers(headers).build();
-        (cmd, request.processor)
-    }
-
-    async fn fetch_processed_body(
-        &self,
-        url: &Url,
-        cmd: FetchCmd,
-    ) -> HlsResult<(Bytes, Option<u64>)> {
-        tracing::info!(url = %RedactedUrl::new(url), "drm key: fetching from network");
-        let started_at = Instant::now();
-        let resp = self.key_peer.execute(cmd).await.map_err(|e| {
-            tracing::warn!(
-                url = %RedactedUrl::new(url),
-                error = %RedactedNetError::new(&e),
-                "drm key: network fetch failed"
-            );
-            publish_key_fetch_failed(&self.bus, url, KeyFailureStage::Network, "key fetch failed");
-            publish_decryption_error(&self.bus, "key fetch failed");
-            HlsError::KeyProcessing("key fetch failed".to_string())
-        })?;
-        let latency_ms = u64::try_from(started_at.elapsed().as_millis()).ok();
-        let raw_key = resp.body.collect().await.map_err(|e| {
-            tracing::warn!(
-                url = %RedactedUrl::new(url),
-                error = %RedactedNetError::new(&e),
-                "drm key: body collect failed"
-            );
-            publish_key_fetch_failed(
-                &self.bus,
-                url,
-                KeyFailureStage::BodyCollect,
-                "key body read failed",
-            );
-            publish_decryption_error(&self.bus, "key body read failed");
-            HlsError::KeyProcessing("key body read failed".to_string())
-        })?;
-        Ok((raw_key, latency_ms))
-    }
-
-    fn process_key(&self, url: &Url, processor: &KeyProcessor, raw_key: Bytes) -> HlsResult<Bytes> {
-        let decrypted = processor(raw_key).map_err(|_error| {
-            tracing::warn!(
-                url = %RedactedUrl::new(url),
-                "drm key: registry processor (decrypt) failed"
-            );
-            publish_key_fetch_failed(
-                &self.bus,
-                url,
-                KeyFailureStage::Processor,
-                "key processor failed",
-            );
-            publish_decryption_error(&self.bus, "key processor failed");
-            HlsError::KeyProcessing("key processor failed".to_string())
-        })?;
-        if let Err(error) = validate_aes128_key(&decrypted) {
-            tracing::warn!(
-                url = %RedactedUrl::new(url),
-                error = %error,
-                "drm key: processed key has invalid length"
-            );
-            publish_key_fetch_failed(
-                &self.bus,
-                url,
-                KeyFailureStage::Processor,
-                "processed key has invalid length",
-            );
-            publish_decryption_error(&self.bus, "processed key has invalid length");
-            return Err(error);
-        }
-        Ok(decrypted)
-    }
-
     /// Merge per-rule headers on top of base headers.
     /// Rule-specific entries take precedence on key conflict.
     fn merged_headers(&self, rule_headers: Option<&HashMap<String, String>>) -> Option<Headers> {
@@ -379,6 +317,68 @@ impl KeyStore {
             .map(|url| async move { self.get_raw_key(&url, None).await.map(drop) });
         futures::future::try_join_all(futs).await?;
         Ok(())
+    }
+
+    fn prepared_request(&self, request: PreparedKeyRequest) -> (FetchCmd, KeyProcessor) {
+        let headers = self.merged_headers(Some(&request.headers));
+        let cmd = FetchCmd::get(request.url).maybe_headers(headers).build();
+        (cmd, request.processor)
+    }
+
+    fn process_key(&self, url: &Url, processor: &KeyProcessor, raw_key: Bytes) -> HlsResult<Bytes> {
+        let decrypted = processor(raw_key).map_err(|_error| {
+            tracing::warn!(
+                url = %RedactedUrl::new(url),
+                "drm key: registry processor (decrypt) failed"
+            );
+            publish_key_fetch_failed(
+                &self.bus,
+                url,
+                KeyFailureStage::Processor,
+                "key processor failed",
+            );
+            publish_decryption_error(&self.bus, "key processor failed");
+            HlsError::KeyProcessing("key processor failed".to_string())
+        })?;
+        if let Err(error) = validate_aes128_key(&decrypted) {
+            tracing::warn!(
+                url = %RedactedUrl::new(url),
+                error = %error,
+                "drm key: processed key has invalid length"
+            );
+            publish_key_fetch_failed(
+                &self.bus,
+                url,
+                KeyFailureStage::Processor,
+                "processed key has invalid length",
+            );
+            publish_decryption_error(&self.bus, "processed key has invalid length");
+            return Err(error);
+        }
+        Ok(decrypted)
+    }
+
+    fn validated_key_cache(&self, cache_key: &ResourceKey, url: &Url) -> HlsResult<Option<Bytes>> {
+        let Some(bytes) = self.key_peer.try_cached(cache_key, url)? else {
+            return Ok(None);
+        };
+        if let Err(error) = validate_aes128_key(&bytes) {
+            tracing::warn!(
+                url = %RedactedUrl::new(url),
+                error = %error,
+                "drm key: cached final key is invalid; removing it before refetch"
+            );
+            self.scope.store().remove_resource(cache_key)?;
+            return Ok(None);
+        }
+        tracing::info!(
+            url = %RedactedUrl::new(url),
+            bytes = bytes.len(),
+            "drm key: served from disk cache"
+        );
+        self.keys.insert(url.clone(), bytes.clone());
+        publish_key_acquired(&self.bus, url, KeySource::DiskCache, bytes.len(), None);
+        Ok(Some(bytes))
     }
 
     /// Convenience constructor from [`crate::config::KeyOptions`].
@@ -567,17 +567,17 @@ fn publish_key_acquired(
     latency_ms: Option<u64>,
 ) {
     bus.publish(DrmEvent::KeyAcquired {
-        key_host: key_host(url),
         source,
         bytes,
         latency_ms,
+        key_host: key_host(url),
     });
 }
 
 fn publish_key_fetch_failed(bus: &EventBus, url: &Url, stage: KeyFailureStage, detail: &str) {
     bus.publish(DrmEvent::KeyFetchFailed {
-        key_host: key_host(url),
         stage,
+        key_host: key_host(url),
         detail: detail.to_string(),
     });
 }
@@ -603,8 +603,8 @@ mod tests {
     };
     use bytes::Bytes;
     use kithara_assets::{
-        AcquisitionResult, AssetResource, AssetScope, AssetSource, AssetStore, AssetStoreBuilder,
-        StorageBackend, WriteSide,
+        AcquisitionResult, AssetResource, AssetScope, AssetSource, AssetStore, StorageBackend,
+        WriteSide,
     };
     use kithara_drm::{
         DrmError, KeyProcessor, KeyProcessorRegistry, KeyRequest, KeyRequestFactory,
@@ -651,8 +651,8 @@ mod tests {
     }
 
     struct FixedRequestResolver {
-        headers: HashMap<String, String>,
         host: &'static str,
+        headers: HashMap<String, String>,
         processor: KeyProcessor,
         url: Url,
     }
@@ -825,7 +825,7 @@ mod tests {
         cancel: CancelToken,
         registry: Option<KeyProcessorRegistry>,
     ) -> KeyStore {
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .cancel(cancel.clone())
             .build();
@@ -882,7 +882,7 @@ mod tests {
     ) {
         let (url, requests, seen, release) = spawn_gated_key_server().await;
         let store_cancel = CancelToken::never();
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .cancel(store_cancel.clone())
             .build();
@@ -1013,7 +1013,7 @@ mod tests {
     async fn persisted_final_key_does_not_prepare_fresh_request() {
         let (url, requests) = spawn_key_server_with_body(Bytes::from_static(VALID_KEY)).await;
         let dir = tempdir().expect("tempdir");
-        let assets = AssetStoreBuilder::default()
+        let assets = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -1054,7 +1054,7 @@ mod tests {
                 KeyRequest::new(HashMap::new(), Arc::new(Ok::<Bytes, DrmError>))
             }),
         );
-        let reopened_assets = AssetStoreBuilder::default()
+        let reopened_assets = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -1162,7 +1162,7 @@ mod tests {
     async fn corrupt_persisted_plain_key_is_invalidated_and_refetched_once() {
         let (url, requests) = spawn_key_server_with_body(Bytes::from_static(VALID_KEY)).await;
         let dir = tempdir().expect("tempdir");
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -1173,7 +1173,7 @@ mod tests {
         drop(store);
 
         let bus = EventBus::new(8);
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -1191,7 +1191,7 @@ mod tests {
         drop(keys);
         drop(store);
 
-        let reopened = AssetStoreBuilder::default()
+        let reopened = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -1211,7 +1211,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn processed_key_repair_is_serialized_across_key_stores() {
         let (url, requests) = spawn_key_server_with_body(Bytes::from_static(VALID_KEY)).await;
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .cancel(CancelToken::never())
             .build();

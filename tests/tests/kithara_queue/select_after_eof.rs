@@ -63,8 +63,10 @@ fn make_fixture() -> (OfflinePlayerHarness, Queue) {
             .build(),
         SAMPLE_RATE,
     );
-    let mut config = QueueConfig::default().with_player(Arc::clone(harness.player()));
-    config.should_autoplay = false;
+    let config = QueueConfig::builder()
+        .player(Arc::clone(harness.player()))
+        .should_autoplay(false)
+        .build();
     let queue = Queue::new(config);
     (harness, queue)
 }

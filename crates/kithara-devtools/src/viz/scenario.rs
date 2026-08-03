@@ -41,12 +41,12 @@ impl ScenarioState {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ScenarioSummary {
-    pub(crate) name: String,
-    pub(crate) state: ScenarioState,
     pub(crate) exit_code: Option<i32>,
-    pub(crate) trace: TraceSummary,
-    pub(crate) stdout: Option<String>,
     pub(crate) stderr: Option<String>,
+    pub(crate) stdout: Option<String>,
+    pub(crate) state: ScenarioState,
+    pub(crate) name: String,
+    pub(crate) trace: TraceSummary,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -55,6 +55,10 @@ pub(crate) struct RuntimeSummary {
 }
 
 impl RuntimeSummary {
+    pub(crate) fn has_runtime(&self) -> bool {
+        !self.scenarios.is_empty()
+    }
+
     pub(crate) fn is_incomplete(&self) -> bool {
         self.scenarios.iter().any(|scenario| {
             matches!(
@@ -69,19 +73,15 @@ impl RuntimeSummary {
             .iter()
             .any(|scenario| scenario.state == ScenarioState::Truncated)
     }
-
-    pub(crate) fn has_runtime(&self) -> bool {
-        !self.scenarios.is_empty()
-    }
 }
 
 pub(crate) struct RunRequest<'a> {
     pub(crate) config: &'a ArchitectureConfig,
     pub(crate) metadata: &'a Metadata,
-    pub(crate) root: &'a Path,
     pub(crate) output: &'a Path,
-    pub(crate) selected: Option<&'a str>,
+    pub(crate) root: &'a Path,
     pub(crate) manual_trace: Option<&'a Path>,
+    pub(crate) selected: Option<&'a str>,
     pub(crate) run_configured: bool,
 }
 
@@ -214,10 +214,10 @@ fn run_scenario(
                 scenario_state(trace.state)
             };
             Ok(ScenarioSummary {
-                name: name.to_string(),
                 state,
-                exit_code: outcome.status.code(),
                 trace,
+                name: name.to_string(),
+                exit_code: outcome.status.code(),
                 stdout: Some(relative(request.output, &stdout_path)),
                 stderr: Some(relative(request.output, &stderr_path)),
             })
