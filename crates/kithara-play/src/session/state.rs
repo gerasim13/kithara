@@ -12,6 +12,7 @@ use super::{
     dispatch::{restart_stream, trace_stream_info},
     graph::ducking_gain,
     protocol::{PlayerId, SessionError, StartStreamFn},
+    transport::{SessionTransportState, TransportControl, install},
 };
 use crate::{
     api::{SessionDuckingMode, SlotId},
@@ -75,6 +76,7 @@ pub(super) fn prepare_eq_layout(mut eq_layout: Vec<EqBandConfig>) -> (Vec<EqBand
 
 pub struct SessionState<B: AudioBackend> {
     pub(super) ctx: Option<FirewheelCtx<B>>,
+    pub(super) transport_control: Option<TransportControl>,
     pub(super) session_limiter_node_id: Option<NodeID>,
     pub(super) session_output_memo: Option<Memo<VolumePanNode>>,
     pub(super) session_output_node_id: Option<NodeID>,
@@ -84,6 +86,7 @@ pub struct SessionState<B: AudioBackend> {
     pub(super) players: Vec<PlayerState>,
     pub(super) stream_needs_restart: bool,
     pub(super) sample_rate_hint: u32,
+    pub(super) transport: SessionTransportState,
 }
 
 impl<B: AudioBackend> SessionState<B> {
@@ -97,6 +100,7 @@ impl<B: AudioBackend> SessionState<B> {
         Self {
             start_stream_fn: Box::new(start_stream_fn),
             ctx: None,
+            transport_control: None,
             next_player_id: 1,
             players: Vec::new(),
             sample_rate_hint: Self::DEFAULT_SAMPLE_RATE,
@@ -105,6 +109,7 @@ impl<B: AudioBackend> SessionState<B> {
             session_output_node_id: None,
             session_limiter_node_id: None,
             stream_needs_restart: false,
+            transport: SessionTransportState::default(),
         }
     }
 
@@ -168,8 +173,10 @@ fn create_firewheel_context<B: AudioBackend>(
         ..FirewheelConfig::default()
     };
     let mut ctx = FirewheelCtx::<B>::new(config);
+    let transport_control = install(&mut ctx).map_err(|error| SessionError::Graph(error.into()))?;
     (state.start_stream_fn)(&mut ctx, sample_rate).map_err(SessionError::StreamStart)?;
     state.ctx = Some(ctx);
+    state.transport_control = Some(transport_control);
     state.sample_rate_hint = sample_rate;
     state.stream_needs_restart = false;
     trace_stream_info(state, "start-stream");

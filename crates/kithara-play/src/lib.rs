@@ -23,8 +23,9 @@ pub mod mock;
 pub use api::{
     CrossfaderBus, DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus,
     PlaybackDirection, PlayerEvent, PlayerStatus, RouteChangeReason, SessionBeat, SessionBeatError,
-    SessionDuckingMode, SessionEvent, SlotId, SyncUnavailable, TimeControlStatus, TimeRange,
-    TrackBinding, WaitingReason, crossfader_gain,
+    SessionDuckingMode, SessionEvent, SessionTransportSnapshot, SlotId, SyncUnavailable, Tempo,
+    TempoError, TimeControlStatus, TimeRange, TrackBinding, TransportRevision, WaitingReason,
+    crossfader_gain,
 };
 pub use bridge::{
     AllocatedSlot, Cmd, CmdMsg, NodeInputs, PlaybackShared, PlaybackSnapshot, PlayerId,

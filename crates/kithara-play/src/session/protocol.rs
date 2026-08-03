@@ -5,7 +5,7 @@ mod wire {
     use kithara_platform::sync::mpsc;
 
     use crate::{
-        api::{SessionDuckingMode, SlotId},
+        api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
         bridge::SlotControl,
     };
 
@@ -37,6 +37,16 @@ mod wire {
         StreamStart(String),
         #[error("graph edit failed: {0}")]
         Graph(String),
+        #[error("session transport has not been processed")]
+        TransportNotProcessed,
+        #[error("session transport commit was rejected at the render boundary")]
+        TransportCommitRejected,
+        #[error("session transport update failed: {0}")]
+        TransportSync(String),
+        #[error("session transport frame is exhausted")]
+        TransportFrameExhausted,
+        #[error("session transport revision is exhausted")]
+        TransportRevisionExhausted,
         #[error("stream stopped: {reason}; restart failed: {source}")]
         RestartFailed { reason: String, r#source: String },
     }
@@ -86,6 +96,16 @@ mod wire {
             mode: SessionDuckingMode,
         },
         SessionDucking,
+        SetSessionTempo {
+            tempo: Tempo,
+        },
+        SetSessionPlaying {
+            playing: bool,
+        },
+        SeekSession {
+            target: SessionBeat,
+        },
+        QuerySessionTransport,
         InvalidateAudioRoute {
             reason: String,
         },
@@ -119,6 +139,7 @@ mod wire {
         Ok,
         PlayerRegistered(PlayerId),
         SessionDucking(SessionDuckingMode),
+        SessionTransport(SessionTransportSnapshot),
         SlotAllocated(AllocatedSlot),
         SampleRate(u32),
         Err(SessionError),

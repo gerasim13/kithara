@@ -24,4 +24,6 @@ mod resource_regressions;
 #[cfg(not(target_arch = "wasm32"))]
 mod ring_admission;
 mod seamless_queue_advance;
+#[cfg(not(target_arch = "wasm32"))]
+mod session_transport;
 mod silvercomet_seek_hang;
