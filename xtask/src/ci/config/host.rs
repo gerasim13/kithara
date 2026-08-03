@@ -139,12 +139,6 @@ impl CiHost {
         self.gitlab_url.as_str().trim_end_matches('/').to_string()
     }
 
-    pub(crate) fn gitlab_host(&self) -> Result<&str> {
-        self.gitlab_url
-            .host_str()
-            .context("gitlab_url has no hostname")
-    }
-
     pub(crate) fn brew_tool(&self, name: &str) -> PathBuf {
         self.brew_root.join("bin").join(name)
     }
