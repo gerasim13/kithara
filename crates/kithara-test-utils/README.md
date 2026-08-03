@@ -1,7 +1,5 @@
 <div align="center">
-
-<img src="../../logo.svg" alt="kithara" width="300">
-
+  <img src="../../logo.svg" alt="kithara" width="300">
 </div>
 
 <div align="center">
@@ -19,25 +17,15 @@ Cross-crate test-runtime support: `#[kithara::test]` macro re-exports, USDT prob
 ## Modules
 
 <table>
-
 <tr><th>Module</th><th>Feature</th><th>Role</th></tr>
-
 <tr><td><code>test</code></td><td><code>cfg(any(test, feature = "probe"))</code></td><td>Re-exports <code>kithara_test_macros::test</code>; <code>init_tracing</code>, <code>setup_tracing</code>, <code>setup_tracing_with_filter</code> helpers</td></tr>
-
 <tr><td><code>hang</code></td><td><code>hang</code> (default)</td><td>Hang-watchdog primitives used by <code>#[kithara::test]</code>; <code>noop</code> fallback when the feature is off</td></tr>
-
 <tr><td><code>probe</code></td><td><code>probe</code></td><td>USDT probe runtime helpers consumed by code annotated with <code>#[kithara::probe(...)]</code>; <code>noop</code> fallback when disabled</td></tr>
-
 <tr><td><code>mock</code></td><td><code>mock</code></td><td><code>unimock</code> glue for trait-level mocks</td></tr>
-
 <tr><td><code>rtsan</code></td><td>always on</td><td>RealtimeSanitizer permit helper used by the RTSan macros</td></tr>
-
 <tr><td><code>kithara_platform</code></td><td>always on</td><td>Re-export used by macro expansions that need flash control paths</td></tr>
-
 <tr><td><code>kithara</code></td><td>always on</td><td>Re-exports macros from <code>kithara-test-macros</code> so consumers can write <code>#[kithara::test]</code>, <code>#[kithara::probe]</code>, <code>#[kithara::mock]</code>, <code>#[kithara::fixture]</code>, <code>#[kithara::flash]</code>, <code>#[kithara::hang_watchdog]</code>, <code>#[kithara::rtsan_allow_blocking]</code>, <code>#[kithara::rtsan_forbid_blocking]</code>, and the <code>Probe</code> derive</td></tr>
-
 <tr><td><code>kithara_facade</code></td><td>always on</td><td>Facade-path flash macro re-export used by the public <code>kithara</code> crate</td></tr>
-
 </table>
 
 ## Usage
@@ -72,25 +60,15 @@ requirement.
 ## Features
 
 <table>
-
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
-
 <tr><td><code>flash</code></td><td>no</td><td>Forward flash virtual-time support to <code>kithara-platform</code></td></tr>
-
 <tr><td><code>hang</code></td><td>yes</td><td>Real hang-watchdog implementation (otherwise no-op)</td></tr>
-
 <tr><td><code>mock</code></td><td>no</td><td>Pulls <code>unimock</code> into the dependency graph; enables real <code>kithara::mock</code> expansion</td></tr>
-
 <tr><td><code>probe</code></td><td>no</td><td>Pulls <code>usdt</code>; enables real USDT probe emission (otherwise no-op)</td></tr>
-
 <tr><td><code>client-reqwest</code></td><td>no</td><td>Forward the reqwest HTTP backend through <code>kithara-events</code></td></tr>
-
 <tr><td><code>client-wreq</code></td><td>no</td><td>Forward the wreq HTTP backend through <code>kithara-events</code></td></tr>
-
 <tr><td><code>tls-rustls</code></td><td>no</td><td>Forward rustls TLS selection through <code>kithara-events</code></td></tr>
-
 <tr><td><code>tls-native</code></td><td>no</td><td>Forward native TLS selection through <code>kithara-events</code></td></tr>
-
 </table>
 
 Consumer crates typically enable `mock` and `probe` in their `[dev-dependencies]` while keeping the default `hang` feature on.
