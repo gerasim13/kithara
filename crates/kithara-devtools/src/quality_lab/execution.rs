@@ -438,7 +438,9 @@ mod tests {
         let spec = fake_spec(&temp, r#"{"findings":1}"#, 1);
         let mut invocations = Vec::new();
         let started = Instant::now();
-        let budget = Duration::from_secs(1);
+        // The property under test is status mapping, not the time budget;
+        // a small budget here flakes under host load.
+        let budget = Duration::from_secs(3600);
 
         let (version_status, version_note) = check_version(
             &spec,
@@ -477,7 +479,7 @@ mod tests {
             temp.path(),
             temp.path(),
             Instant::now(),
-            Duration::from_secs(1),
+            Duration::from_secs(3600),
             &mut invocations,
         );
 
