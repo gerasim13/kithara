@@ -35,8 +35,10 @@ findings are listed (out-of-scope edits go to chat, not applied silently).
 ## Scope: what to check
 
 1. Pick the comparison base:
-  - uncommitted changes -> `git diff` (+ `git diff --cached`);
-  - otherwise branch vs main -> `git diff $(git merge-base HEAD main)..HEAD`.
+
+- uncommitted changes -> `git diff` (+ `git diff --cached`);
+- otherwise branch vs main -> `git diff $(git merge-base HEAD main)..HEAD`.
+
 1. Take **only added/changed lines** (`+` in the diff) and their nearby context.
   Do not audit whole files - that is out of scope.
 1. Ignore generated files (`Cargo.lock`, `kithara-workspace-hack`).
@@ -183,11 +185,13 @@ Flag new short, opaque names.
   rules 1/3/5/6/7/9. Judge comments (1/3/5) under the removal default.
 1. Group findings by category; for each give `file:line` and a short "why".
 1. Split into:
-  - **Mechanical** (ASCII/English rule 4, "what"/label comment rule 1, status
-    markers rule 2, ASCII-art rule 5) - propose an autofix; apply via Edit after
-    a "yes".
-  - **Judgment** (bloated doc rule 3, visibility rule 6, surface/protocol leak
-    rule 7, names rule 9) - list them for a decision, **do not edit silently**.
+
+- **Mechanical** (ASCII/English rule 4, "what"/label comment rule 1, status
+  markers rule 2, ASCII-art rule 5) - propose an autofix; apply via Edit after
+  a "yes".
+- **Judgment** (bloated doc rule 3, visibility rule 6, surface/protocol leak
+  rule 7, names rule 9) - list them for a decision, **do not edit silently**.
+
 1. After edits, check the build and lints. Do not silence or delete tests to go
   green; `#[allow(...)]`/`baseline.toml` lint suppressions are forbidden
   (`AGENTS.md`).

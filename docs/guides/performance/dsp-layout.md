@@ -270,6 +270,7 @@ variants.iter().find(|v| v.id == want)   // scan of 3-5 beats hashing + pointer 
 *tier: warm | detector: manual | present in kithara (Vec
 
 <VariantInfo>
+
 )*
 
 **`as_chunks`/`chunks_exact` expected to unroll a runtime block**

@@ -46,13 +46,17 @@ require a bounded crate or module scope first.
 1. Confirm the exact checkout and worktree before running anything.
 1. Run the mapped `just quality assess` command and retain the printed report
   path.
-  - Standard runs portable gates as separate attributable stages.
-  - Deep runs the full health pipeline and every applicable configured
-    heavyweight stage.
+
+- Standard runs portable gates as separate attributable stages.
+- Deep runs the full health pipeline and every applicable configured
+  heavyweight stage.
+
 1. Read `manifest.json` in the same directory first.
-  - `complete`: continue.
-  - `partial`: report the broken stages from `stages/*.json` and their logs;
-    do not make a complete health claim.
+
+- `complete`: continue.
+- `partial`: report the broken stages from `stages/*.json` and their logs;
+  do not make a complete health claim.
+
 1. Read `assessment.json` for exact values and `assessment.md` for the
   decision-oriented view.
 1. Verify the tool coverage matrix. Every relevant tool must be classified as
@@ -60,13 +64,14 @@ require a bounded crate or module scope first.
   Never silently omit a gap.
 1. Follow evidence links to the canonical owner instead of recomputing its
   metric:
-  - architecture: `target/architecture/<revision>/`;
-  - similarity: `target/similarity/<revision>/`;
-  - health and test structure: `target/health-report.md` and
-    `target/quality-report.md`;
-  - heavyweight analyzers and CRAP:
-    `target/quality-lab/<revision>/`;
-  - stage commands and logs: the assessment's `stages/` and `logs/`.
+
+- architecture: `target/architecture/<revision>/`;
+- similarity: `target/similarity/<revision>/`;
+- health and test structure: `target/health-report.md` and
+  `target/quality-report.md`;
+- heavyweight analyzers and CRAP:
+  `target/quality-lab/<revision>/`;
+- stage commands and logs: the assessment's `stages/` and `logs/`.
 
 The assessment revision includes a content/diff digest for a dirty worktree.
 Do not claim that a committed Cha artifact covers dirty content. Trust the

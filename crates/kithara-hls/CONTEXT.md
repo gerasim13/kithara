@@ -1,249 +1,246 @@
 # kithara-hls — Context
 
-Detailed contracts and invariants for the kithara-hls crate; the README is the overview.
+Contracts and invariants for the kithara-hls crate; the README is the overview.
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    Cfg["HlsConfig<br/>(bon builder)"]
-    Cfg --> Hls["Hls (StreamType marker)"]
-    Hls --> Coord["HlsCoord<br/>(internal orchestrator)"]
+`HlsConfig` (bon, `start_fn = for_url`) → `Hls` (`StreamType`) → `HlsCoord`, which owns
+`SessionSlots` (active + optional incoming `HlsSession` → `HlsVariant`: layout / queue / seek),
+`PlaylistCache`, and `KeyStore`. `HlsPeer` (`impl dl::Peer`) drives the coord and emits `FetchCmd`
+batches to `kithara-stream::dl::Downloader` → `AssetStore` (kithara-assets), which performs
+AES-128-CBC decryption (kithara-drm); `HlsSource` (`impl Source`) reads through the coord.
+`HlsCoord`, `HlsSession`, `HlsPeer`, and `HlsVariant` are internal, not contract; `VariantIndex` =
+`usize`.
 
-    subgraph Playlist["playlist/"]
-        PC["PlaylistCache"]
-        KM["KeyStore"]
-        PM["parse.rs"]
-    end
+## Configuration
 
-    subgraph Fetch["handle/ + segment/ + variant/flow/"]
-        AF["handle::atomic"]
-        SE["segment::size / variant::flow::size"]
-    end
+`store` is the only required non-`url` field. `look_ahead_bytes: None` resolves to
+`HlsConfig::DEFAULT_LOOK_AHEAD_BYTES` (2 MiB) at the consumer site; `Some(0)` disables the cap.
+`net_options` builds the internal HTTP client only when no `downloader` is injected; an injected
+downloader carries its own. The ephemeral media prefetch window is `capacity - non_media_reserve`,
+clamped to `[min_media_window, max(max_media_window, min_media_window)]` and capped by the store's
+capacity. `cancel` is the master token: `Hls::create` wraps it in a `CancelScope` reaching
+`HlsCoord`'s lock-free `is_cancelled()` on the produce core, downloader / net / asset paths derive
+children, and dropping `HlsSource` cancels the scope and tears the peer down.
 
-    Coord --> Peer["HlsPeer<br/>(impl dl::Peer)"]
-    Coord --> PC
-    Coord --> KM
-    Coord --> PM
-    Peer -- "FetchCmd batches" --> DL["kithara-stream::dl::Downloader"]
-    Peer --> AF
-    Peer --> SE
-    DL -- "writer / on_complete" --> AS["AssetStore<br/>(kithara-assets)"]
-    AS -- "AES-128-CBC<br/>(kithara-drm)" --> AS
+## Sessions and Variant Switching
 
-    Source["HlsSource<br/>(impl Source)"] --> Coord
-    Stream2["Stream&lt;Hls&gt;<br/>(Read + Seek)"] --> Source
-```
+One authoritative **active** session plus at most one **incoming** session for a pending ABR
+decision, published through `ArcSwap<ResidentSessions>`. `active()` resolves the published ABR
+variant index and retries when the selector moves under it, so a resolution never mixes snapshots.
+`VariantControl`, driven by the audio layer: `plan_variant_reader(landing)` → `VariantReaderPlan`
+(transition identity, target `MediaInfo`, landing time), opening **nothing** →
+`prepare_variant_reader(plan, profile)` opens the incoming session, builds an `OpenedVariantReader`,
+publishes both resident → `take_prepared_variant_reader` → `promote_variant` / `abort_variant`.
 
-The crate's public surface is `Hls`, `HlsConfig`, `HlsSource`, the playlist parser, and the cache/key helpers. `HlsCoord` and `HlsPeer` are the internal orchestration types and are not part of the contract.
+`VariantTransition` = `(abr ticket, seek epoch)` + active and incoming variant indices; every step
+re-validates all three, and any mismatch discards the incoming session. Promotion runs inside
+`commit_if_seek_epoch`, so a seek landing mid-promotion rolls the outgoing session back instead of
+half-switching; it is deferred while the reader is untaken or the ABR claim is `Locked`.
 
-## Public Items
+`HlsSession::is_ready` is a pure question under the transition lock and must not wake the peer:
+`wake_peer` takes the peer state lock, which the peer holds across `prepare_for_seek` →
+`cancel_incoming_for_seek` (takes the transition lock). Wake via `wake_peer_for_readiness` after
+dropping the lock.
 
-<table>
+**No read fence:** no generation counter, read gate, or decoder acknowledgement. A switch becomes
+visible on promotion, and its only published fact is the active variant's `MediaInfo`. Reads are
+never short-circuited — `read_at` / `wait_range` / `phase_at` go through
+`HlsCoord::variant_serving`, which prefers the active variant and otherwise falls back to any
+*shrunk* (`served_from > 0` or `served_until < num_segments`) variant still serving its pre-switch
+byte range; idle variants with default served bounds are excluded. The audio layer detects it as any
+format change — cached `MediaInfo` vs the source's current one (`kithara-audio`
+`pipeline::decode::format::detect`, `pipeline::rebuild::policy::superseded`); do not reintroduce a
+fence, it duplicates a fact `MediaInfo` already carries.
 
-<tr><th>Item</th><th>Kind</th><th>Role</th></tr>
+Fetch priority, budget, prefetch window. Owed/construction fetches are tagged
+`RequestPriority::High` and drain first, so untagged fetches queue behind every tagged one; owed =
+the segment the audible session's reader is stopped at, or every planned fetch for a not-yet-audible
+session. `HlsPeer::poll_next` serves the active session first, reserves one slot for the incoming
+session, and returns leftover budget to whichever still wants work; at `prefetch_budget == 1` they
+alternate (`SessionTurns`). `dispatch_constructing` caps an incoming session at
+`construction_segment_end`, derived from the same window `reader_is_ready` waits on so the two
+cannot disagree; the cap ends when the reader is transferred — a priming decoder must not stay
+inside a build-sized window. `dispatch_from` anchors the look-ahead on
+`max(session position, prefetch anchor)` and stops at the first segment past `look_ahead_bytes` or
+`look_ahead_segments`, with `Init` exempt from both; it publishes `prefetch_resume_at`, the cursor
+byte at which the deferred segment enters the window, so `Source::advance` (`take_prefetch_resume`)
+wakes the peer once per deferred segment rather than once per read — the window is cursor-anchored,
+so only the reader's consumption can make it stale and only that consumption may re-open it.
+Popped-but-undispatchable non-terminal entries are pushed back to the queue front, so an orphaned
+`Downloading` slot is re-claimed, never dropped.
 
-<tr><td><code>Hls</code></td><td>struct (marker)</td><td>Zero-sized type implementing <code>kithara_stream::StreamType</code> for HLS streams</td></tr>
+## Variant Init, Header Range, Probe Rebuild
 
-<tr><td><code>HlsConfig</code></td><td>struct (bon-builder)</td><td>HLS stream configuration — URL, ABR caps, key handling, downloader, asset store, cancel token, event bus</td></tr>
+`HlsVariant::build_init_entry` (`variant/io/init.rs`) records the init slot as
+`Option<Segment::Init>`, keyed on the playlist `#EXT-X-MAP` URL — a static fact — **never** on the
+init's known byte size. `None` means no `#EXT-X-MAP` or a byte-range-embedded init (inside segment
+0's byte range): `rebuild` never enqueues `PlannedFetch::Init` and every init query reads 0.
+`Some(init)` is a real `#EXT-X-MAP` init, always with a URL; its size starts non-exact
+(`INIT_PLACEHOLDER_BYTES` = 16 KiB) for containers not needing exact byte sizes and unknown
+otherwise, until the commit or a lazy size probe publishes the real length, and it is enqueued at
+the queue front so the demuxer has the container header before any media segment.
 
-<tr><td><code>KeyOptions</code></td><td>struct</td><td>DRM key-resolution options consumed by <code>HlsConfig</code></td></tr>
+While declared but unsized (`init_size() == 0`), `read_at` on the fresh-activation frame
+(`served_from() == 0`) holds reads pending until the commit sizes it — the init prefix is reserved
+for the init, not media; a terminally failed init (`init_failed`) releases the reservation so the
+read errors instead of hanging. A switched-in variant's init is orphaned in natural space
+(`init_descriptor_at` returns `None` when `served_from() != 0`), so its reads are not gated here.
 
-<tr><td><code>HlsSource</code></td><td>struct</td><td><code>Source</code> implementation backed by <code>HlsCoord</code>; what <code>Stream&lt;Hls&gt;</code> wraps</td></tr>
+`HlsVariant::header_byte_range` (alias `format_change_segment_range`) returns the range a demuxer
+reads to re-establish container state after a decoder-recreate: `served_from() != 0` →
+`Err(SourceError::FormatChangeNotApplicable)`; with an `#EXT-X-MAP` init → the virtual init range
+`0..init_size`; otherwise → segment 0's natural byte range, from which implicit-framing containers
+(ADTS, MP3, MPEG-TS) re-scan.
 
-<tr><td><code>HlsError</code> / <code>HlsResult</code></td><td>enum / alias</td><td>Crate-level error type and result alias</td></tr>
+`rebuild_with_decoder_probe` also enqueues `seg 0` when `from_seg > 0`, so the decoder factory's
+Symphonia probe has the container header, required even with a separate init. Called from
+`HlsTrackState::apply_boundary_crossing` only on the *aligned rescue* path: active variant changed
+since the last poll, reader physically resolved to a segment, `served_from() == 0`. A
+landing-anchored reader from `HlsVariant::prepare_reader` gets no seg-0 probe (it seeks straight to
+the landing anchor) and instead backs off one segment behind the landing (`forward_segment - 1`)
+unconditionally.
 
-<tr><td><code>VariantIndex</code></td><td>type</td><td>Position of a variant in the master playlist</td></tr>
+## Byte-Space Layout
 
-<tr><td><code>KeyStore</code></td><td>struct</td><td>Coordinates AES-128 key fetches and caches resolved keys</td></tr>
+`Layout` (`variant/map/offsets.rs`) is the coherent owner of the cross-variant coordinates
+`offsets`, `byte_shift`, `served_from`, `served_until`, `init_seed`, all in one immutable `Frame`
+published through `ArcSwap`, so a reader can never mix the shift of one activation with the served
+bounds of the next. Readers `load` the frame lock-free and allocation-free; writers serialize via
+`write_lock` (load → clone → mutate → store), since `ArcSwap` alone lets a concurrent
+read-modify-write lose an update. `total` and `sizes_complete` are lock-free atomics republished
+from one `FrameSnapshot` at the tail of every mutation, so byte-EOF gates never mix them across
+mutations. `publication_seq` is a seqlock (odd while publishing) and every layout read goes through
+`try_published`, which returns `None` when a writer was in flight or the publication changed —
+callers then keep their gate closed and retry next tick rather than spinning.
 
-<tr><td><code>PlaylistCache</code></td><td>struct</td><td>In-memory cache of parsed playlists keyed by URL</td></tr>
+`is_canonical_complete` (behind `layout_seek_invariant`) is true when the frame is already canonical
+single-variant full-range geometry *and* every served size is exact; `HlsCoord::prepare_for_seek`
+then skips the O(N) layout reset, while ABR invalidation and the reader wake stay unconditional.
+`HlsCoord::reset_for_seek` is layout-only (`reset_layout_to_full_range`) and does not cancel
+in-flight body fetches; `HlsVariant::reset_to_full_range` (from `prepare_reader`) also clears the
+seek alias, the exact-seek/exact-byte demands, and the segment-aware tail.
 
-<tr><td><code>ParsedMaster</code>, <code>MediaPlaylist</code>, <code>VariantStream</code>, <code>VariantId</code></td><td>types</td><td>Parsed playlist representations from <code>playlist::parse</code></td></tr>
+## EOF, Exact Sizes, Seek Aliases
 
-<tr><td><code>parse_master_playlist</code>, <code>parse_media_playlist</code></td><td>fns</td><td>Standalone playlist parsers usable without the rest of the stack</td></tr>
+Byte EOF is minted only when `total_bytes() > 0`, the offset is at or past it, and `eof_ready()`
+holds — `sizes_complete()` **or** `segment_aware_seek_tail_complete()` (every segment from the seek
+tail onward exact, for containers not needing exact byte sizes). Suppressed while a seek alias
+covers `range.start` and while the timeline is flushing. It is never inferred for an in-range
+segment whose body has not arrived, nor while a served segment's size is unknown — either yields
+`WaitBudgetExceeded` (→ `Pending`/need-data) so the reader holds. Sizes are normally learned up
+front (`#EXT-X-BYTERANGE`, or a `Content-Length` / `Content-Range` probe), but an immediate seek
+before size estimation completes can leave a served segment at size 0, where a premature `Eof` would
+latch the audio consumer into `AtEof` and skip the track. Pinned by
+`tests/tests/kithara_queue/early_seek_size_withheld_advance.rs`.
 
-<tr><td><code>PlaylistState</code>, <code>SegmentState</code>, <code>VariantState</code></td><td>types</td><td>Runtime view into playlist and segment state for the player / ABR</td></tr>
+`sizes_complete()` is MEDIA-only, so exact-seek short-circuits gate on `all_sizes_complete()` =
+`sizes_complete() && exact_init_complete()`; a media-only short-circuit would skip
+`SizeDemand::Init` and the `complete_exact_seek_if_ready` anchor correction. Raw WAV/PCM has no
+`#EXT-X-MAP`, so `exact_init_complete()` is vacuously true. Exact-size demands (`SizeDemand::Init` /
+`Segment(idx)`) are deduplicated in `SizeDemandState` (queued + inflight sets); a probe is allowed
+only for a `SegmentContent::Plain` slot with a non-exact size, since an encrypted segment's
+transport length is not its plaintext length, so encrypted demands fall back to a full body fetch
+pushed to the queue front. `set_exact_seek_demand` / `set_exact_byte_seek_demand` no-op for
+containers not needing exact byte sizes, and clear when everything is already exact.
 
-</table>
-
-Re-exports: `AbrMode` from `kithara-abr`; `KeyProcessor`,
-`KeyProcessorRegistry`, `KeyRequestResolver`, and `PreparedKeyRequest` from
-`kithara-drm`.
-
-## ABR and Variant Switching
-
-- The peer asks `AbrController` for a decision per fetch (pull-driven, no separate scheduler thread).
-- A cross-codec variant switch recreates the decoder; same-codec fMP4 switches refresh the init segment in place.
-- Throughput samples are fed to ABR after each completed segment.
-- Manual ABR (`AbrMode::Manual`) overrides automatic selection — the next fetch picks the requested variant immediately.
-
-### Variant switching has no read fence
-
-There is no generation counter, read gate, or decoder acknowledgement. A switch
-becomes visible the moment the coord promotes the incoming session, and the only
-published fact about it is the active variant's `MediaInfo`. Reads are never
-short-circuited by a switch: `read_at` / `wait_range` route through
-`variant_serving`, which keeps a shrunk `v_old` serving its pre-switch byte
-range so a reader crossing the boundary mid-buffer still hits the right payload.
-
-The audio layer therefore detects a switch the same way it detects any format
-change — by comparing the session's cached `MediaInfo` against the source's
-current one (`kithara-audio` `decode::format::detect`,
-`rebuild::policy::superseded`). Do not reintroduce a fence: an out-of-band
-"switch outstanding" flag is a second source of truth for a fact `MediaInfo`
-already carries, and the previous one shipped with no writer at all — every
-read of it was permanently false while its acknowledgement event still fired on
-unrelated seeks.
-
-### Decoder-probe rebuild
-
-On a post-ABR switch into mid-playback, `rebuild_with_decoder_probe` rebuilds the active variant's fetch queue like `rebuild` but also enqueues `seg 0` when `from_seg > 0`. The decoder factory's probe (Symphonia format reader) reads the container's first ~1 KB to construct the codec; without `seg 0` the queue would start at `target_seg`, leaving `[0..PROBE)` unfetched and the probe hanging on `wait_range budget exceeded`.
-
-`seg 0` is required even when the variant advertises a separate init (CMAF `EXT-X-MAP`): the init covers only a small header, but the probe scans further into the first media chunk. After the probe succeeds, `decoder_seek_safe(target_time)` jumps the decoder forward, so segments `1..from_seg` are never fetched — only `seg 0`. This adds at most one extra segment per switch; if `seg 0` is already cached the scheduler skips the fetch and the queue entry resolves via `committed_final_len` in `dispatch`.
-
-### Variant init
-
-`HlsVariant::build_init_entry` (`variant/io/init.rs`) records a separately
-fetched init segment as `Option<Segment::Init>`. Existence is keyed on the
-playlist `#EXT-X-MAP` URL — a static fact — **not** on the init HEAD size:
-
-- `None` — no separate init fetch: no `#EXT-X-MAP` URL, or a byte-range-embedded
-  init (the init lives inside segment 0's byte range, so there is no separate
-  init URL). `rebuild` never enqueues `PlannedFetch::Init` and every init query
-  reads as 0.
-- `Some(init)` — a real `#EXT-X-MAP` init. Always has a real URL; its size starts
-  at the HEAD estimate, which **may be 0** when the init HEAD failed or was
-  absent. It is enqueued at the front of the fetch queue so the demuxer has the
-  container header before any media segment.
-
-A failed init HEAD does **not** mean the init is absent: `#EXT-X-MAP` still
-declares it and it must be fetched (its commit sets the real size). Keying on the
-HEAD size would drop the init, seed segment 0 at offset 0, and make `read_at(0)`
-serve segment 0's container where the demuxer expects the init's `ftyp`
-(`re_mp4: ftyp not found`), or wedge the reader with no progress.
-
-While an init is declared but not yet sized (`init_size() == 0` — a failed/absent
-HEAD, or the pre-commit window), `read_at` on the fresh-activation frame
-(`served_from() == 0`) holds reads pending: the init prefix is reserved for the
-init, not for media, until the init's commit sizes it. A terminally failed init
-(`init_failed`) releases the reservation so the read surfaces an error instead
-of waiting forever. The URL-keyed existence fact stays frozen at construction;
-only the size changes when the resource commits.
-
-### Format-change header byte range
-
-`header_byte_range` returns the byte range a demuxer reads to re-establish container state after a decoder-recreate format change (cross-codec switch or unknown codec continuity). It returns `Ok(range)` only when recovery is applicable:
-
-- `served_from() == 0` and `init_size > 0` (fMP4 with `#EXT-X-MAP`): the virtual init range `[0..init_size)`. The decoder factory's Symphonia probe re-reads init from here.
-- `served_from() == 0` and `init_size == 0` (raw WAV/PCM with a leading header, or raw TS/AAC): the start of segment 0, where the demuxer re-parses the header.
-
-It returns `Err(FormatChangeNotApplicable)` when the variant has `served_from() > 0`. Containers with implicit framing (AAC ADTS, MP3, MPEG-TS) do not need this range — callers filter via `container_needs_init_range` before reading.
-
-## Encryption (AES-128-CBC)
-
-Encrypted segments parse `#EXT-X-KEY` from the media playlist; `KeyStore`
-resolves the key URL and asks `KeyProcessorRegistry` for an optional
-`PreparedKeyRequest`. The registry contains opaque resolvers and knows nothing
-about domains or providers. Domain matching and request shaping are supplied by
-the higher-level `kithara-play` policy. The asset store decrypts segment
-ciphertext during the writer's commit before a reader becomes ready. URIs in
-`#EXT-X-KEY` are resolved relative to the **segment** URL, not the
-media-playlist URL.
-
-The original key URL owns memory and persistent cache identity. A prepared URL
-is used only for the wire request. Resolver preparation happens inside the
-per-resource transaction after memory and persistent-cache rechecks, so a
-cache hit never creates fresh salt or processor state.
-
-Every final AES-128 key, whether used directly or produced by a provider
-processor, is validated as exactly 16 bytes before it enters session memory or
-the asset store. Key repair is serialized per resource: an invalid cached key is
-removed and refetched once, with cache state rechecked after the transaction is
-acquired. Session memory owns the validated key needed by synchronous segment
-construction, so a cache persistence failure does not turn a successful key
-fetch into a playback failure.
-
-## Caching
-
-Each segment is stored as its own `ResourceAcquisition` via `AssetStore` (`kithara-assets`). Encrypted segments are acquired with `acquire_resource_with_ctx(key, identity, Some(ProcessCtx))`, where `DecryptContext` is wrapped by `decrypt_processor.rs` as a `ResourceProcessor`, so decryption is part of the resource lifecycle.
-
-HLS cache naming is owned by the layout registered for the `Hls` marker in the
-shared `AssetStore`. `stream/hls.rs` binds the master URL and optional
-`config.discriminator` with `store.scope::<Hls>()`. Every master playlist,
-media playlist, init segment, media segment, and encryption key is an
-`AssetResource::Url`; playlists are resources like every other cache artifact,
-not a side channel or a special file type. Each semantic site calls
-`scope.key(&resource)` once and all subsequent cache I/O reuses the minted key.
-
-The default root hash uses the canonical master URL without query or fragment
-and folds in the explicit discriminator when present. Below that root, the
-default layout mirrors the server identity as
-`track/<encoded-authority>/<encoded-server-path>`. This retains the original
-server tree and prevents resources from different HLS authorities from
-colliding. A non-empty query becomes an ordered fingerprint on the final leaf,
-so signed or parameterized URLs remain distinct without storing raw query text;
-fragments are ignored. For example, Silvercomet's master playlist maps to
-`<hash>/track/stream.silvercomet.top/hls/master.m3u8`.
-
-Layouts are installed once through `AssetStore::builder().layouts`. A custom HLS
-layout controls every URL resource above as well as named artifacts minted in
-the HLS scope; there is no separate playlist or analysis layout.
-
-Playlist bytes are one validated cache transaction. A cached master or media
-playlist is parsed before it is accepted; a parse failure removes the resource
-through `AssetStore::remove_resource`, which also clears its availability-index
-entry, then performs one network fetch. Empty committed resources follow the
-same removal path. The store serializes this transaction per resource across
-independent playlist caches, so a late stale reader cannot delete a repaired
-entry. Network bytes are parsed before commit, so an invalid response is
-returned as an error and never becomes a persistent cache hit.
-
-A valid network playlist remains usable when cache persistence fails. The write
-failure is logged at `WARN`, and a later cache/session retries persistence rather
-than turning a cache outage into a playback outage. The current `PlaylistCache`
-keeps its parsed value in memory for the rest of that cache instance.
+The seek alias (`variant/flow/seqlock.rs`) is a lock-free base + resolved-exact anchor pair under a
+generation tag: the produce core reads it on every `find_at_offset`, off-RT resolvers publish the
+exact anchor under the base generation so a stale resolver cannot attach to a newer alias, and
+retirement is generation-checked (`retire_seek_projection`) or position-checked
+(`retire_seek_projection_if_moved` from `advance`). `HlsVariant::seek_point_at_time`
+(`variant/map/media.rs`, bisect over the segment decode-time table) is the sole `time → segment`
+mapping, so a variant switch and a plain seek to the same time cannot diverge.
 
 ## Seek and wait_range Contract
 
-- `Source::wait_range(start..end, timeout)` has two modes, selected by `timeout`:
-  - **`Some(_)` — wake-free probe** (the RT worker / `Stream::probe_read`): a single non-blocking readiness check. Returns `Ready` only when the requested bytes are readable in the current virtual layout owned by `HlsCoord`, `Interrupted` while the timeline is flushing, `Eof` past total bytes, a terminal `Err` when a covering segment failed, and otherwise `WaitBudgetExceeded` immediately. It never sleeps — the worker decode path stays off any blocking syscall, and the backoff between probes lives in the audio scheduler's `Waiting` park. `HlsVariant::wait_range` ignores the timeout value (the probe is the same regardless); pinned by `variant::tests::wait_range_probes_without_sleeping` / `_flush_short_circuits_without_sleeping`.
-  - **`None` — event-driven blocking wait** (the off-RT `Stream::read` / `prime_seek_range`): `HlsCoord` parks on a shared readiness gate (`kithara_platform::sync::CondvarGate<u64>`, the unified condvar gate) until the probe resolves (`Ready`/`Eof`/`Interrupted`), a covering segment fails, or cancel fires. **No wall-clock poll** — the prior `park_timeout` spin (a 500ms seek-prime deadline + a 10ms read backoff) accumulated under heavy load into spurious timeouts; the gate wakes the reader the instant its range fills. See "Event-driven read wait" below.
-- Exact-session readers carry the `OpenedReader` construction gate. While an
-  off-RT decoder factory has that gate armed, `HlsSessionReader` selects the
-  blocking `None` mode; after disarm it retains the existing wake-free
-  `Some(Duration::ZERO)` steady-state probe.
-- **Event-driven read wait.** Every transition that can flip the wake-free probe `signal()`s the gate so a parked `wait_range(_, None)` re-probes: each **segment byte write** (the `FetchSlot` writer wrapper) and **settle** (commit/fail/cancel) on the fetch path; the **seek reset** (`reset_for_seek`) on the coord; and **cancel** via a `CancelToken::on_cancel` waker registered for the wait's lifetime (the one transition with no producer-side signal, mirroring `kithara-storage` `wait_range_inner`). The reader snapshots the gate counter **before** probing and parks only if it is unchanged — a seqlock guard that closes the lost-wakeup window even though the probe predicate (the `kithara-assets` availability index) and the gate sit under different locks. A genuine wedge (no signal site ever fires) trips the `#[kithara::hang_watchdog]` on the wait rather than parking forever. The probe path stays wake-free; only the off-RT `None` caller blocks.
-- **Event-driven audio-worker wake.** The wake-free probe path above means the RT decoder's worker, when it underruns on a not-yet-arrived segment, parks on the audio scheduler's `Waiting` timer (`kithara-audio` `WAITING_TIMEOUT` = 10 ms) and rediscovers data only on the next poll. Under heavy load that park stretches (OS deschedule) and accumulates — across the hundreds of seeks in the live DRM/HLS stress tests — into the same spurious-timeout flake the off-RT gate fixed for raw reads (flash-masked, since virtual time collapses the park). Any off-RT readiness edge that can flip the wake-free probe also fires a `kithara_stream::WorkerWake` (installed by the audio worker via `Source::set_worker_wake`, bridged to `AudioWorkerHandle::wake`) right after `ready.signal()`: per-chunk **write** (plaintext bytes land), fetch **settle** (commit, where the DRM decrypt gate opens), and cache-hit slot adoption (`committed_final_len` fast paths). The worker re-ticks the decoder the instant bytes become observable instead of on its 10 ms poll; the timeout stays as a backstop. The coord's own seek reset does **not** fire it: it runs on the `#[rtsan_forbid_blocking]` produce core where a cross-thread unpark is illegal, and seek already wakes the worker directly. Wait-free (atomic bump + `unpark`) from off-RT readiness producers.
-- On a seek miss, the source enqueues an explicit on-demand segment fetch for the active variant and seek epoch.
-- On a mid-stream ABR switch, stale metadata offsets are discarded — the source wakes the sequential downloader rather than trusting old offsets.
-- **`is_canonical_complete` two-step read.** It loads the lock-free `sizes_complete` atomic (`Acquire`) *before* taking the frame lock for the `byte_shift` / `served` / `init_seed` / `offsets` geometry checks. The split is safe because `sizes_complete` is republished only **after** `recompute` inside `Layout::apply_commit` / `reset` (mutate frame under the write lock → materialise the `FrameSnapshot` → drop the guard → `republish`): the atomic flips back to `true` only once the offset table is already exact, so a `true` read can never observe an in-progress recompute. Gates `layout_seek_invariant` / `prepare_for_seek`'s seek-reset skip.
-- **One `time → segment` resolver.** `HlsVariant::seek_point_at_time` (`variant/map/media.rs`, bisect over the cumulative offset table) is the sole mapping. The cold `PlaylistState` linear-scan resolver was removed together with the boundary commit that used it, so a variant switch and a plain seek to the same time cannot diverge.
-- **Exact-byte seek gates fold the init in.** The exact-byte seek short-circuits (`set_exact_seek_demand` / `set_exact_byte_seek_demand` / `exact_byte_position_ready` in `variant/flow/size.rs`) gate on `all_sizes_complete()` = `sizes_complete() && exact_init_complete()`, **not** the MEDIA-only `sizes_complete()`. The exact-byte offset table seeds from the `EXT-X-MAP` init size, so for a `needs_exact_byte_sizes` fMP4 profile a seek issued before the init resolves must still register `SizeDemand::Init` and run the `complete_exact_seek_if_ready` anchor correction; a media-only short-circuit would skip both and land on stale bytes once the init commit shifts every segment offset. (Raw WAV/PCM has no `#EXT-X-MAP`, so `exact_init_complete()` is vacuously `true` and the gate reduces to `sizes_complete()` there.)
-- `Eof` is returned **only** when the requested range starts at or after the variant layout's effective total bytes (`HlsVariant::total_bytes()`) **and every served segment's byte size is known** (`HlsVariant::sizes_complete()`). It is never inferred for an in-range segment whose body has not yet arrived, **nor while any served segment's size estimate is still missing** — either case yields `WaitBudgetExceeded` (→ `Pending`/need-data) so the reader holds rather than terminating. This is the EOF contract that prevents the production "silent auto-advance" cascade: segment sizes are normally learned up-front (`#EXT-X-BYTERANGE` or HEAD `Content-Length`; see `segment/size.rs` and `variant/flow/size.rs`), but on an **immediate seek before size-estimation completes** a served segment is still size-`0` (unknown), which under-counts `total_bytes()` and makes an in-range offset look past-the-end → a premature `Eof` would latch the audio consumer into `AtEof` and the queue would skip the track. Gating the three byte-EOF mints (`phase_at` / `read_at` / `wait_range`) on `sizes_complete()` closes that window: while incomplete, `total_bytes()` is treated as a lower bound, not the stream end. `sizes_complete` is republished lock-free alongside `total_bytes` on every layout mutation (one `FrameSnapshot`, so the two never tear). Pinned by `tests/tests/kithara_queue/early_seek_size_withheld_advance.rs` (`immediate_seek_size_and_body_withheld`).
+`Source::wait_range(start..end, timeout)` has two modes selected by `timeout`:
 
-## Features
+- **`Some(_)` — wake-free probe** (RT worker / `Stream::probe_read`): one non-blocking check, never
+  sleeping — `Ready` when the bytes are readable in the current virtual layout, `Interrupted` while
+  flushing, `Eof` past total bytes, terminal `Err` when a covering segment failed, else immediate
+  `WaitBudgetExceeded`. `HlsVariant::wait_range` ignores the timeout value.
+- **`None` — event-driven blocking wait** (off-RT `Stream::read` / `prime_seek_range`):
+  `HlsCoord::wait_range_blocking` parks on the shared readiness gate until the probe resolves, a
+  covering segment fails, or cancel fires. **No wall-clock data poll.**
 
-<table>
+`HlsSessionReader` picks the blocking mode while the session's `ConstructionGate` is armed (an
+off-RT decoder factory is building against it), the wake-free `Some(Duration::ZERO)` probe
+otherwise.
 
-<tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
+`SizeSignal` (`src/signal.rs`) pairs the readiness gate with the late-bound audio-worker wake and
+the peer wakes. The gate is a lock-free `kithara_platform::sync::ThreadGate` (atomic bump +
+`unpark`), not a condvar, because RT-reachable readiness edges signal it on the produce core, which
+must not take a condvar mutex. Single-waiter — the one off-RT `wait_range(_, None)` reader. `fire()`
+signals the gate **and** re-ticks the audio worker; it is fired from every off-RT site where new
+bytes or a resolvable range appear, including each segment byte write and each terminal settle
+(`FetchSlot::settle` commit/fail/cancel — for DRM the decrypt gate opens only at commit, so settle
+is the load-bearing wake). `fire_ready_only()` signals only the gate and is used by the coord's
+RT-reachable transitions (`prepare_for_seek`), which must not unpark a worker from the produce core.
+Cancel is the one transition with no producer-side signal: the wait registers a
+`CancelToken::on_cancel` waker for its own lifetime.
 
-<tr><td><code>default</code></td><td>yes</td><td><code>client-reqwest</code> + <code>tls-rustls</code></td></tr>
+The reader snapshots the gate counter **before** probing and parks only if it is unchanged — a
+seqlock guard closing the lost-wakeup window, since the probe predicate and the gate sit under
+different locks. The park is bounded by `READER_REAIM_INTERVAL` (25 ms) and is not a data poll: the
+wait returns `WaitBudgetExceeded` so the off-RT reader can re-assert a possibly mis-aimed peer and
+re-enter. A genuine wedge trips `#[kithara::hang_watchdog]` (`WAIT_HANG_TIMEOUT` = 180 s, which must
+exceed the kithara-net per-fetch total timeout so a stalled upstream fails as a terminal `Err`
+first). The worker wake (`Source::set_worker_wake`, installed by the audio worker) is `None` until
+the worker exists; the audio scheduler's 10 ms `Waiting` park is the backstop for that window and
+for `fire_ready_only` edges.
 
-<tr><td><code>probe</code></td><td>no</td><td>USDT probe points for tracing</td></tr>
+## Encryption (AES-128-CBC)
 
-<tr><td><code>perf</code></td><td>no</td><td>Hotpath instrumentation (also enables <code>kithara-net/perf</code>)</td></tr>
+Encrypted segments parse `#EXT-X-KEY`; `KeyStore` resolves the key URL and asks
+`KeyProcessorRegistry` for an optional `PreparedKeyRequest`. The registry holds opaque resolvers and
+knows nothing about domains or providers — domain matching and request shaping belong to
+`kithara-play` policy. `#EXT-X-KEY` URIs resolve relative to the **segment** URL, not the
+media-playlist URL. The original key URL owns memory and persistent-cache identity; a prepared URL
+is used only for the wire request, and resolver preparation happens inside the per-resource
+transaction after memory and persistent-cache rechecks, so a cache hit never creates fresh salt or
+processor state. Every final AES-128 key, used directly or produced by a processor, is validated as
+exactly 16 bytes before entering session memory or the asset store. Key repair is serialized per
+resource: an invalid cached key is removed and refetched once, cache state rechecked after the
+transaction is acquired. Session memory owns the validated key needed by synchronous segment
+construction, so a cache persistence failure does not turn a successful key fetch into a playback
+failure.
 
-<tr><td><code>client-reqwest</code></td><td>yes</td><td>Forward the reqwest HTTP backend to network-reaching deps</td></tr>
+Decryption is part of the resource lifecycle, not a read-side step: `DecryptProcessor` wraps a
+`DecryptContext` as a `ResourceProcessor` (identity = `key||iv`), encrypted segments are acquired
+with `acquire_resource_with_ctx`, and the store decrypts during the writer's commit before a reader
+becomes ready. Commit must pass `Some(final_len)` — `None` silently skips decryption. PKCS7 unpad
+shrinks the committed length below the announced size, so HEAD-based estimates are upper bounds and
+the settle path adopts the committed `final_len`.
 
-<tr><td><code>client-wreq</code></td><td>no</td><td>Forward the wreq HTTP backend to network-reaching deps</td></tr>
+## Caching
 
-<tr><td><code>tls-rustls</code></td><td>yes</td><td>Forward rustls TLS selection to network-reaching deps</td></tr>
+Every playlist, init/media segment, and encryption key is an `AssetResource::Url` in the `Hls` asset
+scope — playlists are cache resources like anything else, not a side channel. `stream/hls.rs` mints
+the scope once via `store.scope::<Hls>(&AssetSource::Remote { url, discriminator })`; each semantic
+site calls `scope.key(&resource)` once and reuses the minted key. Path and root naming belong to the
+layout registered for the `Hls` marker (via `AssetStore::builder().layouts`, default kithara-assets
+`DefaultLayout`); this crate does not own it, and there is no separate playlist or analysis layout.
 
-<tr><td><code>tls-native</code></td><td>no</td><td>Forward native TLS selection to network-reaching deps</td></tr>
+Playlist and key bytes are one validated cache transaction (`AtomicFetch::fetch_validated`, run
+under `AssetStore::with_resource_transaction` so the store serializes it per resource across
+independent caches). A cached body is parsed/validated before acceptance; a validation failure or an
+empty committed resource removes the resource via `AssetStore::remove_resource` (which also clears
+its availability-index entry) and performs one network fetch. Network bytes are validated **before**
+write-back, so an invalid response is returned as an error and never becomes a persistent cache hit.
+A valid network body stays usable when persistence fails: the failure is logged at `WARN` and a
+later session retries persistence, while `PlaylistCache` keeps the parsed value in memory
+(`OnceCell` per master / per variant) for the rest of that instance.
 
-</table>
+Eviction is routed through an `EvictionSubscription` guard held by `HlsSource`:
+`HlsCoord::broadcast_eviction` marks the lost key `Missing` on every variant that owned it and
+rebuilds the active variant's queue from the reader's segment. Non-active variants stay relaxed and
+pick the `Missing` entries up on their next activation.
 
 ## Integration
 
-Depends on `kithara-stream` (Peer/Downloader, Source, `MediaInfo`), `kithara-net` (HTTP), `kithara-assets` (segment cache via `AssetStore`), `kithara-abr` (ABR algorithm), `kithara-drm` (AES-128), `kithara-events` (HLS events). Composes with `kithara-audio` as `Audio<Stream<Hls>>` inside the decode pipeline. Emits `HlsEvent` via the shared `EventBus`.
+Composes with `kithara-audio` as `Audio<Stream<Hls>>`; emits `HlsEvent` / `DrmEvent` through a
+`DeferredBus` on the shared `EventBus`. Throughput estimation and ABR decision policy live in
+`kithara-abr`; this crate only publishes claims/commits and reports `Abr::progress`. The
+`client-*` / `tls-*` features forward the HTTP backend and TLS selection to every network-reaching
+dependency.
