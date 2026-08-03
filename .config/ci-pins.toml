@@ -6,14 +6,17 @@ android_ndk_version = "27.2.12479018"
 android_platform_version = 36
 brew_casks = ["utm"]
 brew_formulae = [
+  "cmake",
   "colima",
   "docker",
   "docker-buildx",
+  "ffmpeg",
   "git-lfs",
   "gitlab-runner",
   "jq",
   "lima",
   "openjdk@17",
+  "pkg-config",
   "qemu",
   "rustup",
   "xcodegen",

@@ -95,6 +95,9 @@ printf '%s\t%s\n' "${0##*/}" "$*" >> "$FAKE_FORMAT_LOG"
             .env("KITHARA_AGENT_HOOK_ROOT", "/ignored/legacy/root")
             .env("KITHARA_AGENT_HOOK_CACHE", "/ignored/legacy/cache")
             .env("CLAUDE_PROJECT_DIR", "/ignored/claude/root")
+            // Pin the formatter's toolchain so the assertions below do not
+            // depend on whatever the surrounding environment exports.
+            .env("KITHARA_NIGHTLY_TOOLCHAIN", "nightly-fixture")
             .env("PATH", &self.path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -296,7 +299,7 @@ fn codex_apply_patch_formats_added_updated_and_moved_paths_once() -> Result<()> 
     let log = fs::read_to_string(&fixture.format_log)?;
     let lines = log.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 3, "unexpected formatter calls: {log}");
-    assert!(lines[0].starts_with("rustup\trun nightly rustfmt --edition 2024"));
+    assert!(lines[0].starts_with("rustup\trun nightly-fixture rustfmt --edition 2024"));
     assert!(lines[0].ends_with("src/added.rs"));
     assert!(lines[1].starts_with("taplo\tformat "));
     assert!(lines[1].ends_with(".config/edited.toml"));
