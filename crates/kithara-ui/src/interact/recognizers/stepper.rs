@@ -1,7 +1,7 @@
 use kithara_platform::time::Instant;
 
 use super::{
-    super::{Hit, Input, Outcome, Scroll},
+    super::{Hit, Input, Outcome, PointerInput, PointerPhase, Scroll},
     DoubleClick, wheel,
 };
 
@@ -43,7 +43,7 @@ impl Stepper {
                 }
                 Outcome::set(StepEvent::By(steps))
             }
-            Input::PointerDown => {
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Down => {
                 let Some(position) = hit.inside() else {
                     return Outcome::IGNORED;
                 };
@@ -54,7 +54,11 @@ impl Stepper {
                 self.drag = Some(position.y);
                 Outcome::IGNORED
             }
-            Input::PointerMoved { at } => {
+            Input::Pointer(PointerInput {
+                phase: PointerPhase::Move,
+                at: Some(at),
+                ..
+            }) => {
                 let Some(steps) = self.drag_steps(at.y) else {
                     return Outcome::IGNORED;
                 };
@@ -63,7 +67,7 @@ impl Stepper {
                 }
                 Outcome::set(StepEvent::By(steps))
             }
-            Input::PointerUp => {
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Up => {
                 if self.drag.take().is_some() {
                     Outcome::captured()
                 } else {
@@ -74,7 +78,7 @@ impl Stepper {
             | Input::KeyPressed { .. }
             | Input::KeyReleased { .. }
             | Input::ModifiersChanged(_)
-            | Input::PointerLeft
+            | Input::Pointer(_)
             | Input::Wheel(_) => Outcome::IGNORED,
         }
     }
@@ -123,7 +127,10 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::draw::{Pt, Rect};
+    use crate::{
+        draw::{Pt, Rect},
+        interact::mouse as mouse_input,
+    };
 
     fn surface() -> Rect {
         Rect {
@@ -143,9 +150,11 @@ mod tests {
     }
 
     fn moved(y: f32) -> Input<'static> {
-        Input::PointerMoved {
-            at: Pt { x: 40.0, y },
-        }
+        Input::Pointer(mouse_input(PointerPhase::Move, Some(Pt { x: 40.0, y })))
+    }
+
+    fn pointer(phase: PointerPhase) -> Input<'static> {
+        Input::Pointer(mouse_input(phase, None))
     }
 
     #[kithara::test]
@@ -204,12 +213,12 @@ mod tests {
         let now = Instant::now();
 
         assert_eq!(
-            stepper.on_input(Input::PointerDown, &inside(), now),
+            stepper.on_input(pointer(PointerPhase::Down), &inside(), now),
             Outcome::IGNORED,
             "a lone press arms the drag without taking the pointer"
         );
         assert_eq!(
-            stepper.on_input(Input::PointerDown, &inside(), now),
+            stepper.on_input(pointer(PointerPhase::Down), &inside(), now),
             Outcome::set(StepEvent::Activate)
         );
         assert_eq!(
@@ -218,7 +227,7 @@ mod tests {
             "the second press of a pair must not drag the value away from the reset"
         );
         assert_eq!(
-            stepper.on_input(Input::PointerDown, &inside(), now),
+            stepper.on_input(pointer(PointerPhase::Down), &inside(), now),
             Outcome::IGNORED,
             "the pair is spent, so the next press starts a new one"
         );
@@ -230,7 +239,7 @@ mod tests {
         let now = Instant::now();
 
         assert_eq!(
-            stepper.on_input(Input::PointerDown, &inside(), now),
+            stepper.on_input(pointer(PointerPhase::Down), &inside(), now),
             Outcome::IGNORED
         );
         assert_eq!(
@@ -245,7 +254,7 @@ mod tests {
         );
 
         assert_eq!(
-            stepper.on_input(Input::PointerUp, &at(27.0), now),
+            stepper.on_input(pointer(PointerPhase::Up), &at(27.0), now),
             Outcome::captured(),
             "release ends the drag"
         );
@@ -260,7 +269,7 @@ mod tests {
     fn the_surface_leaves_every_other_event_to_the_controls_it_wraps() {
         let now = Instant::now();
 
-        for input in [Input::PointerUp, moved(11.0)] {
+        for input in [pointer(PointerPhase::Up), moved(11.0)] {
             assert_eq!(
                 Stepper::default().on_input(input, &inside(), now),
                 Outcome::IGNORED

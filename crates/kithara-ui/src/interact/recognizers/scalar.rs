@@ -1,7 +1,7 @@
 use kithara_platform::time::Instant;
 
 use super::{
-    super::{CursorShape, Hit, Hover, Input, Outcome},
+    super::{CursorShape, Hit, Hover, Input, Outcome, PointerInput, PointerPhase},
     DoubleClick, wheel,
 };
 use crate::draw::{Pt, Rect};
@@ -62,6 +62,12 @@ pub(crate) struct ScalarState {
     wheel_accum: f32,
 }
 
+impl ScalarState {
+    pub(crate) fn cancel_pointer(&mut self) {
+        self.active = false;
+    }
+}
+
 impl Scalar {
     pub(crate) fn on_input(
         &self,
@@ -71,7 +77,7 @@ impl Scalar {
         now: Instant,
     ) -> Outcome {
         match input {
-            Input::PointerDown => {
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Down => {
                 let Some(position) = hit.inside() else {
                     return Outcome::IGNORED;
                 };
@@ -100,7 +106,11 @@ impl Scalar {
                     }
                 }
             }
-            Input::PointerMoved { at } if state.active => match self.track {
+            Input::Pointer(PointerInput {
+                phase: PointerPhase::Move,
+                at: Some(at),
+                ..
+            }) if state.active => match self.track {
                 Track::RelativeVertical { range, .. } => Outcome::set(
                     (state.start_value + (state.start_position - at.y) / range).clamp(0.0, 1.0),
                 ),
@@ -127,7 +137,7 @@ impl Scalar {
                     })
                 }
             },
-            Input::PointerUp if state.active => {
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Up && state.active => {
                 state.active = false;
                 Outcome::captured()
             }
@@ -146,9 +156,7 @@ impl Scalar {
             | Input::KeyPressed { .. }
             | Input::KeyReleased { .. }
             | Input::ModifiersChanged(_)
-            | Input::PointerLeft
-            | Input::PointerMoved { .. }
-            | Input::PointerUp
+            | Input::Pointer(_)
             | Input::Wheel(_) => Outcome::IGNORED,
         }
     }
@@ -174,7 +182,10 @@ fn seek_across(position: Pt, area: Rect) -> Outcome {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{super::super::Scroll, *};
+    use super::{
+        super::super::{Scroll, mouse as mouse_input},
+        *,
+    };
 
     fn knob() -> Rect {
         Rect {
@@ -192,15 +203,15 @@ mod tests {
     /// This recognizer normalizes against the area, so it reads the hit and not
     /// the event; the event carries the same point so the fixture reads true.
     fn moved(y: f32) -> Input<'static> {
-        Input::PointerMoved {
-            at: Pt { x: 17.0, y },
-        }
+        Input::Pointer(mouse_input(PointerPhase::Move, Some(Pt { x: 17.0, y })))
     }
 
     fn moved_on_meter(y: f32) -> Input<'static> {
-        Input::PointerMoved {
-            at: Pt { x: 6.0, y },
-        }
+        Input::Pointer(mouse_input(PointerPhase::Move, Some(Pt { x: 6.0, y })))
+    }
+
+    fn pointer(phase: PointerPhase) -> Input<'static> {
+        Input::Pointer(mouse_input(phase, None))
     }
 
     fn drag(value: f32) -> Scalar {
@@ -268,7 +279,7 @@ mod tests {
         for (from, to, expected) in [(33.0, 1.0, 0.75), (1.0, 33.0, 0.25)] {
             let mut state = ScalarState::default();
             assert_eq!(
-                drag.on_input(&mut state, Input::PointerDown, &hit(from), now),
+                drag.on_input(&mut state, pointer(PointerPhase::Down), &hit(from), now),
                 Outcome::captured()
             );
             assert_eq!(
@@ -283,7 +294,12 @@ mod tests {
     fn relative_vertical_press_captures_without_publishing() {
         let drag = drag(0.5);
         let mut state = ScalarState::default();
-        let outcome = drag.on_input(&mut state, Input::PointerDown, &hit(17.0), Instant::now());
+        let outcome = drag.on_input(
+            &mut state,
+            pointer(PointerPhase::Down),
+            &hit(17.0),
+            Instant::now(),
+        );
 
         assert_eq!(outcome.value(), None, "a relative press seeks nothing");
         assert!(outcome.is_captured());
@@ -296,10 +312,10 @@ mod tests {
         let mut state = ScalarState::default();
         let now = Instant::now();
 
-        drag.on_input(&mut state, Input::PointerDown, &cursor, now);
-        drag.on_input(&mut state, Input::PointerUp, &cursor, now);
+        drag.on_input(&mut state, pointer(PointerPhase::Down), &cursor, now);
+        drag.on_input(&mut state, pointer(PointerPhase::Up), &cursor, now);
         assert_eq!(
-            drag.on_input(&mut state, Input::PointerDown, &cursor, now),
+            drag.on_input(&mut state, pointer(PointerPhase::Down), &cursor, now),
             Outcome::set(0.5)
         );
         assert_eq!(
@@ -316,12 +332,12 @@ mod tests {
         let mut state = ScalarState::default();
         let now = Instant::now();
 
-        drag.on_input(&mut state, Input::PointerDown, &cursor, now);
-        drag.on_input(&mut state, Input::PointerUp, &cursor, now);
-        drag.on_input(&mut state, Input::PointerDown, &cursor, now);
+        drag.on_input(&mut state, pointer(PointerPhase::Down), &cursor, now);
+        drag.on_input(&mut state, pointer(PointerPhase::Up), &cursor, now);
+        drag.on_input(&mut state, pointer(PointerPhase::Down), &cursor, now);
 
         assert_eq!(
-            drag.on_input(&mut state, Input::PointerUp, &cursor, now),
+            drag.on_input(&mut state, pointer(PointerPhase::Up), &cursor, now),
             Outcome::IGNORED,
             "no gesture is active, so the release belongs to whoever is behind"
         );
@@ -335,15 +351,15 @@ mod tests {
         let now = Instant::now();
 
         assert_eq!(
-            drag.on_input(&mut state, Input::PointerDown, &cursor, now),
+            drag.on_input(&mut state, pointer(PointerPhase::Down), &cursor, now),
             Outcome::captured()
         );
         assert_eq!(
-            drag.on_input(&mut state, Input::PointerUp, &cursor, now),
+            drag.on_input(&mut state, pointer(PointerPhase::Up), &cursor, now),
             Outcome::captured()
         );
         assert_eq!(
-            drag.on_input(&mut state, Input::PointerDown, &cursor, now),
+            drag.on_input(&mut state, pointer(PointerPhase::Down), &cursor, now),
             Outcome::set(0.5)
         );
     }
@@ -420,7 +436,7 @@ mod tests {
         for (y, expected) in [(10.0, 1.0), (20.0, 0.75), (30.0, 0.5), (40.0, 0.25)] {
             let mut state = ScalarState::default();
             assert_eq!(
-                seeking.on_input(&mut state, Input::PointerDown, &on_meter(y), now),
+                seeking.on_input(&mut state, pointer(PointerPhase::Down), &on_meter(y), now),
                 Outcome::set(expected),
                 "at y={y}"
             );
@@ -432,7 +448,12 @@ mod tests {
         let seeking = seeking();
         let mut state = ScalarState::default();
         let now = Instant::now();
-        seeking.on_input(&mut state, Input::PointerDown, &on_meter(30.0), now);
+        seeking.on_input(
+            &mut state,
+            pointer(PointerPhase::Down),
+            &on_meter(30.0),
+            now,
+        );
 
         let flattened = Hit::new(Some(Pt { x: 6.0, y: 30.0 }), Rect { h: 0.0, ..meter() });
 
@@ -448,7 +469,12 @@ mod tests {
         let seeking = seeking();
         let mut state = ScalarState::default();
         let now = Instant::now();
-        seeking.on_input(&mut state, Input::PointerDown, &on_meter(30.0), now);
+        seeking.on_input(
+            &mut state,
+            pointer(PointerPhase::Down),
+            &on_meter(30.0),
+            now,
+        );
 
         assert_eq!(
             seeking.on_input(&mut state, moved_on_meter(200.0), &on_meter(200.0), now),
@@ -463,8 +489,8 @@ mod tests {
         let mut state = ScalarState::default();
         let now = Instant::now();
 
-        let pressed = seeking.on_input(&mut state, Input::PointerDown, &cursor, now);
-        let released = seeking.on_input(&mut state, Input::PointerUp, &cursor, now);
+        let pressed = seeking.on_input(&mut state, pointer(PointerPhase::Down), &cursor, now);
+        let released = seeking.on_input(&mut state, pointer(PointerPhase::Up), &cursor, now);
 
         assert_eq!(pressed, Outcome::set(0.5));
         assert_eq!(released, Outcome::captured());
@@ -486,9 +512,7 @@ mod tests {
     }
 
     fn across(x: f32) -> Input<'static> {
-        Input::PointerMoved {
-            at: Pt { x, y: 24.0 },
-        }
+        Input::Pointer(mouse_input(PointerPhase::Move, Some(Pt { x, y: 24.0 })))
     }
 
     fn sliding(track: Track) -> Scalar {
@@ -505,7 +529,12 @@ mod tests {
         let now = Instant::now();
 
         assert_eq!(
-            slide.on_input(&mut state, Input::PointerDown, &on_rail(120.0), now),
+            slide.on_input(
+                &mut state,
+                pointer(PointerPhase::Down),
+                &on_rail(120.0),
+                now
+            ),
             Outcome::set(0.5),
             "the press seeks, offset by the rail's own origin"
         );
@@ -523,7 +552,12 @@ mod tests {
         let slide = sliding(Track::AbsoluteHorizontal);
         let mut state = ScalarState::default();
         let now = Instant::now();
-        slide.on_input(&mut state, Input::PointerDown, &on_rail(120.0), now);
+        slide.on_input(
+            &mut state,
+            pointer(PointerPhase::Down),
+            &on_rail(120.0),
+            now,
+        );
 
         let flattened = Hit::new(Some(Pt { x: 120.0, y: 24.0 }), Rect { w: 0.0, ..rail() });
 
@@ -544,7 +578,12 @@ mod tests {
         let now = Instant::now();
 
         assert_eq!(
-            click.on_input(&mut state, Input::PointerDown, &on_rail(120.0), now),
+            click.on_input(
+                &mut state,
+                pointer(PointerPhase::Down),
+                &on_rail(120.0),
+                now
+            ),
             Outcome::set(0.5)
         );
         assert_eq!(
@@ -564,7 +603,12 @@ mod tests {
         let now = Instant::now();
 
         assert_eq!(
-            slide.on_input(&mut state, Input::PointerDown, &on_rail(120.0), now),
+            slide.on_input(
+                &mut state,
+                pointer(PointerPhase::Down),
+                &on_rail(120.0),
+                now
+            ),
             Outcome::captured(),
             "a relative press seeks nothing"
         );
@@ -579,7 +623,7 @@ mod tests {
         assert!((value - 0.35).abs() < 0.000_1, "got {value}");
 
         assert_eq!(
-            slide.on_input(&mut state, Input::PointerUp, &on_rail(170.0), now),
+            slide.on_input(&mut state, pointer(PointerPhase::Up), &on_rail(170.0), now),
             Outcome::captured()
         );
     }
@@ -604,16 +648,22 @@ mod tests {
         let now = Instant::now();
 
         assert_eq!(
-            drag.on_input(&mut state, Input::PointerDown, &on_divider(3.0), now),
+            drag.on_input(
+                &mut state,
+                pointer(PointerPhase::Down),
+                &on_divider(3.0),
+                now
+            ),
             Outcome::captured(),
             "a width drag has no value to seek on the press"
         );
         assert_eq!(
             drag.on_input(
                 &mut state,
-                Input::PointerMoved {
-                    at: Pt { x: 43.0, y: 11.0 }
-                },
+                Input::Pointer(mouse_input(
+                    PointerPhase::Move,
+                    Some(Pt { x: 43.0, y: 11.0 }),
+                )),
                 &on_divider(43.0),
                 now,
             ),
@@ -622,9 +672,10 @@ mod tests {
         assert_eq!(
             drag.on_input(
                 &mut state,
-                Input::PointerMoved {
-                    at: Pt { x: -300.0, y: 11.0 }
-                },
+                Input::Pointer(mouse_input(
+                    PointerPhase::Move,
+                    Some(Pt { x: -300.0, y: 11.0 }),
+                )),
                 &on_divider(-300.0),
                 now,
             ),
@@ -657,11 +708,11 @@ mod tests {
         let mut state = ScalarState::default();
         let now = Instant::now();
 
-        seeking.on_input(&mut state, Input::PointerDown, &cursor, now);
-        seeking.on_input(&mut state, Input::PointerUp, &cursor, now);
+        seeking.on_input(&mut state, pointer(PointerPhase::Down), &cursor, now);
+        seeking.on_input(&mut state, pointer(PointerPhase::Up), &cursor, now);
 
         assert_eq!(
-            seeking.on_input(&mut state, Input::PointerDown, &cursor, now),
+            seeking.on_input(&mut state, pointer(PointerPhase::Down), &cursor, now),
             Outcome::set(0.5),
             "the second press seeks again rather than resetting"
         );

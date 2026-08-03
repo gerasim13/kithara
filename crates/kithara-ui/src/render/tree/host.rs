@@ -18,7 +18,7 @@ use crate::{
     compile::CompiledUi,
     engine::{Descriptor, Engine, PickerSnapshot, Target},
     expand::ExpandedNode,
-    interact::{Input, ScrollAxis, iced as iced_interact},
+    interact::{Input, PointerPhase, ScrollAxis, iced as iced_interact},
     module::ChromeStyle,
     render::{
         Reads, Skin, UiEvent,
@@ -425,11 +425,12 @@ fn route_open_picker(
     cursor: mouse::Cursor,
     shell: &mut Shell<'_, UiEvent>,
 ) -> bool {
-    let Some(input @ (Input::PointerDown | Input::PointerMoved { .. })) =
-        iced_interact::input(event)
-    else {
+    let Some(input @ Input::Pointer(pointer)) = iced_interact::input(event) else {
         return false;
     };
+    if !matches!(pointer.phase, PointerPhase::Down | PointerPhase::Move) {
+        return false;
+    }
     let before = layout_tree.picker_snapshots(engine);
     if !before.iter().any(|(_, snapshot)| snapshot.open) {
         return false;
@@ -560,16 +561,7 @@ fn captures_event(
             input,
             Some(Input::InputMethod(_) | Input::KeyPressed { .. } | Input::KeyReleased { .. })
         );
-    let pointer_retained = pointer_captured
-        && matches!(
-            input,
-            Some(
-                Input::PointerDown
-                    | Input::PointerMoved { .. }
-                    | Input::PointerLeft
-                    | Input::PointerUp
-            )
-        );
+    let pointer_retained = pointer_captured && matches!(input, Some(Input::Pointer(_)));
     scroll_answered || routed_answered || control_pointer_answered || pointer_retained
 }
 
@@ -577,7 +569,8 @@ fn control_pointer_answered(engine: &Engine, input: Input<'_>, path: &str, answe
     answered
         && matches!(
             input,
-            Input::PointerDown | Input::PointerMoved { .. } | Input::PointerUp
+            Input::Pointer(pointer)
+                if matches!(pointer.phase, PointerPhase::Down | PointerPhase::Move | PointerPhase::Up)
         )
         && (engine.picker_snapshot(path).is_some() || engine.text_input_snapshot(path).is_some())
 }
@@ -779,21 +772,14 @@ impl HostedLayout {
                     child.append_pickers(pickers);
                 }
             }
-            Self::Control(Some(HostedControl::Picker {
-                path,
-                item_count,
-                item_height,
-                ..
-            }))
-            | Self::SelfMeasuredControl(Some(HostedControl::Picker {
-                path,
-                item_count,
-                item_height,
-                ..
-            })) => pickers.push((path, *item_count, *item_height)),
+            Self::Control(Some(control)) | Self::SelfMeasuredControl(Some(control)) => {
+                if let Some(picker) = control.picker() {
+                    pickers.push(picker);
+                }
+            }
             Self::Chrome { .. }
-            | Self::Control(_)
-            | Self::SelfMeasuredControl(_)
+            | Self::Control(None)
+            | Self::SelfMeasuredControl(None)
             | Self::Passive => {}
         }
     }
@@ -988,7 +974,7 @@ mod tests {
         engine::ScrollConfig,
         expand::ControlSpec,
         ids::EndpointId,
-        interact::{CursorShape, Key, Modifiers},
+        interact::{CursorShape, Key, Modifiers, mouse as mouse_input},
         module::WaveStyle,
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
         render::{
@@ -1007,6 +993,10 @@ mod tests {
 
     fn redraw_event() -> Event {
         Event::Window(window::Event::RedrawRequested(IcedInstant::now()))
+    }
+
+    fn pointer_input(phase: PointerPhase, at: Option<Pt>) -> Input<'static> {
+        Input::Pointer(mouse_input(phase, at))
     }
 
     struct OverlapWindowProgram {
@@ -1997,23 +1987,24 @@ mod tests {
     #[kithara::test]
     fn answered_control_pointer_input_is_reported_captured_to_the_host() {
         assert!(captures_event(
-            Some(Input::PointerDown),
+            Some(pointer_input(PointerPhase::Down, None)),
             true,
             false,
             true,
             false,
         ));
         assert!(captures_event(
-            Some(Input::PointerMoved {
-                at: Pt { x: 1.0, y: 1.0 },
-            }),
+            Some(pointer_input(
+                PointerPhase::Move,
+                Some(Pt { x: 1.0, y: 1.0 }),
+            )),
             true,
             false,
             true,
             false,
         ));
         assert!(captures_event(
-            Some(Input::PointerUp),
+            Some(pointer_input(PointerPhase::Up, None)),
             true,
             false,
             true,
@@ -2287,9 +2278,12 @@ mod tests {
 
         for (layout, expected) in [
             (
-                HostedLayout::Control(Some(HostedControl::Activation {
-                    path: "hosted/button".to_owned(),
-                })),
+                HostedLayout::Control(Some(HostedControl::mounted(
+                    crate::render::HostedControlPlan::Activation {
+                        path: "hosted/button".to_owned(),
+                    },
+                    builtin::skin(),
+                ))),
                 mouse::Interaction::Pointer,
             ),
             (
@@ -4375,14 +4369,17 @@ mod tests {
             .into();
         let mut element = Element::new(Host {
             child,
-            layout: HostedLayout::Control(Some(HostedControl::HeroWave {
-                path: path.to_owned(),
-                scale: 0.25,
-                progress: 0.75,
-                visible: 0.625..0.875,
-                wheel_positive: 0.3125,
-                wheel_non_positive: 0.2,
-            })),
+            layout: HostedLayout::Control(Some(HostedControl::mounted(
+                crate::render::HostedControlPlan::HeroWave {
+                    path: path.to_owned(),
+                    scale: 0.25,
+                    progress: 0.75,
+                    visible: 0.625..0.875,
+                    wheel_positive: 0.3125,
+                    wheel_non_positive: 0.2,
+                },
+                builtin::skin(),
+            ))),
         });
         let renderer = headless_renderer();
         let viewport = Size::new(100.0, 40.0);

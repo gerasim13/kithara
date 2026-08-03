@@ -10,7 +10,7 @@ use iced::{
 
 use crate::{
     draw::{Pt, Rect},
-    interact::{Input, Outcome, iced as iced_interact},
+    interact::{Input, Outcome, PointerId, PointerOwnership, PointerPhase, iced as iced_interact},
     render::{HostLayer, UiEvent, WindowCommand, draw_host_layer, window as window_event},
     text::TextResources,
 };
@@ -57,11 +57,11 @@ where
     P: WindowLayerProgram,
 {
     fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<P::State>()
+        widget::tree::Tag::of::<(P::State, Option<PointerId>)>()
     }
 
     fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(P::State::default())
+        widget::tree::State::new((P::State::default(), None::<PointerId>))
     }
 
     fn size(&self) -> Size<Length> {
@@ -98,10 +98,13 @@ where
         _viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'a, UiEvent, Theme, Renderer>> {
+        let state = tree.state.downcast_mut::<(P::State, Option<PointerId>)>();
+        let (state, pointer_owner) = state;
         Some(overlay::Element::new(Box::new(WindowLayerOverlay {
             bounds: (layout.bounds() + translation).into(),
+            pointer_owner,
             program: &self.program,
-            state: tree.state.downcast_mut::<P::State>(),
+            state,
         })))
     }
 }
@@ -111,6 +114,7 @@ where
     P: WindowLayerProgram,
 {
     bounds: Rect,
+    pointer_owner: &'a mut Option<PointerId>,
     program: &'a P,
     state: &'a mut P::State,
 }
@@ -136,9 +140,38 @@ where
         let Some(input) = iced_interact::input(event) else {
             return;
         };
+        let pointer_input = match input {
+            Input::Pointer(pointer) => Some(pointer),
+            Input::KeyPressed { .. }
+            | Input::KeyReleased { .. }
+            | Input::InputMethod(_)
+            | Input::ModifiersChanged(_)
+            | Input::Wheel(_) => None,
+        };
+        let retained = pointer_input.is_some_and(|pointer| *self.pointer_owner == Some(pointer.id));
         let pointer = pointer.position().map(Into::into);
         let layer = self.program.hit_layer(self.state, self.bounds);
         let (outcome, redraw) = self.program.update(self.state, input, &layer, pointer);
+        match (outcome.ownership(), pointer_input) {
+            (PointerOwnership::Claim, Some(pointer)) if pointer.phase == PointerPhase::Down => {
+                *self.pointer_owner = Some(pointer.id);
+            }
+            (PointerOwnership::Release, Some(pointer))
+                if *self.pointer_owner == Some(pointer.id) =>
+            {
+                *self.pointer_owner = None;
+            }
+            (
+                PointerOwnership::Unchanged | PointerOwnership::Claim | PointerOwnership::Release,
+                _,
+            ) => {}
+        }
+        if let Some(pointer) = pointer_input
+            && *self.pointer_owner == Some(pointer.id)
+            && matches!(pointer.phase, PointerPhase::Up | PointerPhase::Cancel)
+        {
+            *self.pointer_owner = None;
+        }
         if redraw {
             shell.request_redraw();
         }
@@ -154,7 +187,7 @@ where
                     shell.capture_event();
                 }
             }
-        } else if captured {
+        } else if captured || retained {
             shell.capture_event();
         }
     }
@@ -208,7 +241,7 @@ mod tests {
     use crate::{
         builtin,
         draw::DrawList,
-        interact::CursorShape,
+        interact::{CursorShape, Hit},
         render::{LayerHit, WindowCommand, fonts::SANS},
     };
 
@@ -242,6 +275,55 @@ mod tests {
 
         fn resources(&self) -> Option<&TextResources> {
             Some(&self.resources)
+        }
+    }
+
+    struct CaptureProgram;
+
+    impl WindowLayerProgram for CaptureProgram {
+        type State = ();
+
+        fn size(&self) -> Size<Length> {
+            Size::new(Length::Fixed(20.0), Length::Fixed(10.0))
+        }
+
+        fn layer(
+            &self,
+            _state: &(),
+            bounds: Rect,
+            _pointer: Option<Pt>,
+        ) -> HostLayer<WindowCommand> {
+            HostLayer::new(bounds, DrawList::default(), Vec::new())
+        }
+
+        fn update(
+            &self,
+            _state: &mut (),
+            input: Input<'_>,
+            layer: &HostLayer<WindowCommand>,
+            pointer: Option<Pt>,
+        ) -> (Outcome<WindowCommand>, bool) {
+            let Input::Pointer(input) = input else {
+                return (Outcome::IGNORED, false);
+            };
+            let outcome = match input.phase {
+                PointerPhase::Down if Hit::new(pointer, layer.bounds()).over() => {
+                    Outcome::captured().with_ownership(PointerOwnership::Claim)
+                }
+                PointerPhase::Up
+                | PointerPhase::Move
+                | PointerPhase::Leave
+                | PointerPhase::Cancel
+                | PointerPhase::DoubleClick
+                | PointerPhase::LongPress
+                | PointerPhase::MoveLongPress
+                | PointerPhase::Down => Outcome::IGNORED,
+            };
+            (outcome, false)
+        }
+
+        fn resources(&self) -> Option<&TextResources> {
+            None
         }
     }
 
@@ -306,5 +388,70 @@ mod tests {
         );
         drop(shell);
         assert_eq!(messages, [UiEvent::Window(WindowCommand::Drag)]);
+    }
+
+    #[kithara::test]
+    fn claimed_window_pointer_stays_exclusive_until_release_outside() {
+        let mut element = window_layer(CaptureProgram);
+        let renderer = FallbackRenderer::Secondary(TinySkiaRenderer::new(SANS, Pixels(14.0)));
+        let viewport = Size::new(100.0, 60.0);
+        let bounds = Rectangle::with_size(viewport);
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let mut clipboard = clipboard::Null;
+        let mut overlay = element
+            .as_widget_mut()
+            .overlay(
+                &mut tree,
+                Layout::new(&node),
+                &renderer,
+                &bounds,
+                Vector::ZERO,
+            )
+            .unwrap_or_else(|| panic!("a window layer leaf must expose an overlay"));
+        let overlay_node = overlay.as_overlay_mut().layout(&renderer, viewport);
+        let inside = Cursor::Available(Point::new(5.0, 5.0));
+        let outside = Cursor::Available(Point::new(50.0, 30.0));
+        let mut dispatch = |event: Event, pointer: Cursor| {
+            let mut messages = Vec::new();
+            let mut shell = Shell::new(&mut messages);
+            overlay.as_overlay_mut().update(
+                &event,
+                Layout::new(&overlay_node),
+                pointer,
+                &renderer,
+                &mut clipboard,
+                &mut shell,
+            );
+            let captured = shell.is_event_captured();
+            drop(shell);
+            assert!(messages.is_empty());
+            captured
+        };
+
+        assert!(dispatch(
+            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            inside,
+        ));
+        assert!(dispatch(
+            Event::Mouse(mouse::Event::CursorMoved {
+                position: Point::new(50.0, 30.0),
+            }),
+            outside,
+        ));
+        assert!(dispatch(
+            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)),
+            outside,
+        ));
+        assert!(!dispatch(
+            Event::Mouse(mouse::Event::CursorMoved {
+                position: Point::new(50.0, 30.0),
+            }),
+            outside,
+        ));
     }
 }

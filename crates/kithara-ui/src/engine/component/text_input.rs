@@ -8,7 +8,7 @@ use crate::{
     engine::model::{EngineEvent, Kind},
     interact::{
         CursorShape, Hit, Input, InputMethod, InputMethodRequest, Key, Modifiers, Outcome,
-        PreeditRef, Rect, TextInputLayout,
+        PointerPhase, PreeditRef, Rect, TextInputLayout,
     },
 };
 
@@ -275,27 +275,24 @@ impl Component for TextInputComponent {
                 self.modifiers = modifiers;
                 Outcome::IGNORED
             }
-            Input::PointerDown if hit.over() => {
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Down && hit.over() => {
                 self.cursor
                     .move_to(self.layout.index_at(*hit), self.modifiers.shift());
                 self.dragging = true;
                 Outcome::captured()
             }
-            Input::PointerMoved { .. } if self.dragging => {
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Move && self.dragging => {
                 self.cursor.move_to(self.layout.index_at(*hit), true);
                 Outcome::captured()
             }
-            Input::PointerUp if self.dragging => {
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Up && self.dragging => {
                 self.dragging = false;
                 Outcome::captured()
             }
             Input::InputMethod(_)
             | Input::KeyPressed { .. }
             | Input::KeyReleased { .. }
-            | Input::PointerDown
-            | Input::PointerLeft
-            | Input::PointerMoved { .. }
-            | Input::PointerUp
+            | Input::Pointer(_)
             | Input::Wheel(_) => Outcome::IGNORED,
         };
         (outcome, None)
@@ -311,10 +308,7 @@ impl Component for TextInputComponent {
             Input::InputMethod(event) => self.input_method_event(event),
             Input::KeyReleased { .. }
             | Input::ModifiersChanged(_)
-            | Input::PointerDown
-            | Input::PointerLeft
-            | Input::PointerMoved { .. }
-            | Input::PointerUp
+            | Input::Pointer(_)
             | Input::Wheel(_) => Outcome::IGNORED,
         };
         (outcome, None)
@@ -330,6 +324,10 @@ impl Component for TextInputComponent {
 
     fn captures_pointer(&self) -> bool {
         self.dragging
+    }
+
+    fn cancel_pointer(&mut self) {
+        self.dragging = false;
     }
 
     fn focusable(&self) -> bool {

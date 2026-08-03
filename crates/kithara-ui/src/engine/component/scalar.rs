@@ -4,7 +4,7 @@ use super::retained::Component;
 use crate::{
     engine::model::{EngineEvent, Kind},
     interact::{
-        CursorShape, Hit, Input, Outcome,
+        CursorShape, Hit, Input, Outcome, PointerPhase,
         recognizers::{Scalar, ScalarState},
     },
 };
@@ -66,8 +66,11 @@ impl Component for ScalarComponent {
         self.scalar.cursor(&self.state, hit)
     }
 
-    fn captures_pointer(&self) -> bool {
-        self.state.captures_pointer()
+    delegate::delegate! {
+        to self.state {
+            fn captures_pointer(&self) -> bool;
+            fn cancel_pointer(&mut self);
+        }
     }
 }
 
@@ -77,7 +80,9 @@ pub(crate) fn scalar_value(input: Input<'_>, value: f32, drag_step: Option<f64>)
         return value;
     }
     match (input, drag_step) {
-        (Input::PointerDown | Input::PointerMoved { .. }, Some(step)) => {
+        (Input::Pointer(pointer), Some(step))
+            if matches!(pointer.phase, PointerPhase::Down | PointerPhase::Move) =>
+        {
             ((value / step).round() * step).min(1.0)
         }
         _ => value,

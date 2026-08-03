@@ -1,6 +1,6 @@
 use std::mem;
 
-use super::super::{CursorShape, Hit, Input, Outcome};
+use super::super::{CursorShape, Hit, Input, Outcome, PointerPhase};
 use crate::draw::Pt;
 
 /// What a press-and-pull on one item of a list amounts to. Which item it was
@@ -32,14 +32,22 @@ impl ItemDrag {
 
     pub(crate) fn on_input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<DragEvent> {
         match input {
-            Input::PointerDown if hit.over() => {
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Down && hit.over() => {
                 *self = Self {
                     held: true,
                     ..Self::default()
                 };
                 Outcome::IGNORED
             }
-            Input::PointerMoved { at } if self.held && !self.active => {
+            Input::Pointer(pointer)
+                if pointer.phase == PointerPhase::Move
+                    && pointer.at.is_some()
+                    && self.held
+                    && !self.active =>
+            {
+                let Some(at) = pointer.at else {
+                    return Outcome::IGNORED;
+                };
                 let Some(origin) = self.origin else {
                     self.origin = Some(at);
                     return Outcome::IGNORED;
@@ -50,7 +58,7 @@ impl ItemDrag {
                 self.active = true;
                 Outcome::observed(DragEvent::Started)
             }
-            Input::PointerUp => {
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Up => {
                 let dragging = mem::take(self).active;
                 if dragging {
                     Outcome::observed(DragEvent::Dropped)
@@ -62,9 +70,7 @@ impl ItemDrag {
             | Input::KeyPressed { .. }
             | Input::KeyReleased { .. }
             | Input::ModifiersChanged(_)
-            | Input::PointerDown
-            | Input::PointerLeft
-            | Input::PointerMoved { .. }
+            | Input::Pointer(_)
             | Input::Wheel(_) => Outcome::IGNORED,
         }
     }
@@ -83,7 +89,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::draw::Rect;
+    use crate::{draw::Rect, interact::mouse as mouse_input};
 
     fn row() -> Rect {
         Rect {
@@ -104,9 +110,11 @@ mod tests {
     }
 
     fn moved(x: f32) -> Input<'static> {
-        Input::PointerMoved {
-            at: Pt { x, y: 13.0 },
-        }
+        Input::Pointer(mouse_input(PointerPhase::Move, Some(Pt { x, y: 13.0 })))
+    }
+
+    fn pointer(phase: PointerPhase) -> Input<'static> {
+        Input::Pointer(mouse_input(phase, None))
     }
 
     #[kithara::test]
@@ -114,7 +122,7 @@ mod tests {
         let mut drag = ItemDrag::default();
 
         assert_eq!(
-            drag.on_input(Input::PointerDown, &at(10.0)),
+            drag.on_input(pointer(PointerPhase::Down), &at(10.0)),
             Outcome::IGNORED
         );
         assert_eq!(
@@ -138,7 +146,7 @@ mod tests {
             "a drag starts once"
         );
         assert_eq!(
-            drag.on_input(Input::PointerUp, &at(80.0)),
+            drag.on_input(pointer(PointerPhase::Up), &at(80.0)),
             Outcome::observed(DragEvent::Dropped)
         );
     }
@@ -148,7 +156,7 @@ mod tests {
         let mut drag = ItemDrag::default();
 
         assert_eq!(
-            drag.on_input(Input::PointerDown, &at(8.0)),
+            drag.on_input(pointer(PointerPhase::Down), &at(8.0)),
             Outcome::IGNORED
         );
         assert_eq!(drag.on_input(moved(300.0), &gone()), Outcome::IGNORED);
@@ -158,7 +166,7 @@ mod tests {
             "the drag follows the event, not the hit, so it starts away from the item"
         );
         assert_eq!(
-            drag.on_input(Input::PointerUp, &gone()),
+            drag.on_input(pointer(PointerPhase::Up), &gone()),
             Outcome::observed(DragEvent::Dropped)
         );
     }
@@ -167,7 +175,7 @@ mod tests {
     fn a_press_restarts_the_gesture() {
         let mut drag = ItemDrag::default();
 
-        drag.on_input(Input::PointerDown, &at(10.0));
+        drag.on_input(pointer(PointerPhase::Down), &at(10.0));
         drag.on_input(moved(10.0), &at(10.0));
         assert_eq!(
             drag.on_input(moved(60.0), &at(60.0)),
@@ -175,11 +183,11 @@ mod tests {
         );
 
         assert_eq!(
-            drag.on_input(Input::PointerDown, &at(10.0)),
+            drag.on_input(pointer(PointerPhase::Down), &at(10.0)),
             Outcome::IGNORED
         );
         assert_eq!(
-            drag.on_input(Input::PointerUp, &at(10.0)),
+            drag.on_input(pointer(PointerPhase::Up), &at(10.0)),
             Outcome::IGNORED,
             "the new gesture never became a drag, so its release is a click"
         );
@@ -190,7 +198,11 @@ mod tests {
         let mut drag = ItemDrag::default();
         let away = at(600.0);
 
-        for input in [Input::PointerDown, moved(620.0), Input::PointerUp] {
+        for input in [
+            pointer(PointerPhase::Down),
+            moved(620.0),
+            pointer(PointerPhase::Up),
+        ] {
             assert_eq!(drag.on_input(input, &away), Outcome::IGNORED);
         }
     }
@@ -199,7 +211,7 @@ mod tests {
     fn the_cursor_grabs_only_while_the_drag_runs() {
         let mut drag = ItemDrag::default();
 
-        drag.on_input(Input::PointerDown, &at(10.0));
+        drag.on_input(pointer(PointerPhase::Down), &at(10.0));
         drag.on_input(moved(10.0), &at(10.0));
         assert_eq!(
             drag.cursor(),
@@ -210,7 +222,7 @@ mod tests {
         drag.on_input(moved(60.0), &at(60.0));
         assert_eq!(drag.cursor(), CursorShape::Grabbing);
 
-        drag.on_input(Input::PointerUp, &at(60.0));
+        drag.on_input(pointer(PointerPhase::Up), &at(60.0));
         assert_eq!(drag.cursor(), CursorShape::None);
     }
 }

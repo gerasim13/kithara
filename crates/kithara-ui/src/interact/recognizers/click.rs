@@ -1,4 +1,4 @@
-use super::super::{Hit, Input, Outcome};
+use super::super::{Hit, Input, Outcome, PointerPhase};
 
 /// A press that lands on the control and asks it to act. There is no state and
 /// nothing to configure: where the press landed is the whole gesture, so a
@@ -7,15 +7,14 @@ use super::super::{Hit, Input, Outcome};
 /// [`Hover`]: super::super::Hover
 pub(crate) fn on_input(input: Input<'_>, hit: &Hit) -> Outcome<()> {
     match input {
-        Input::PointerDown if hit.over() => Outcome::set(()),
+        Input::Pointer(pointer) if pointer.phase == PointerPhase::Down && hit.over() => {
+            Outcome::set(())
+        }
         Input::InputMethod(_)
         | Input::KeyPressed { .. }
         | Input::KeyReleased { .. }
         | Input::ModifiersChanged(_)
-        | Input::PointerDown
-        | Input::PointerLeft
-        | Input::PointerMoved { .. }
-        | Input::PointerUp
+        | Input::Pointer(_)
         | Input::Wheel(_) => Outcome::IGNORED,
     }
 }
@@ -24,7 +23,10 @@ pub(crate) fn on_input(input: Input<'_>, hit: &Hit) -> Outcome<()> {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{super::super::Scroll, *};
+    use super::{
+        super::super::{Scroll, mouse as mouse_input},
+        *,
+    };
     use crate::draw::{Pt, Rect};
 
     fn at(x: f32) -> Hit {
@@ -41,12 +43,24 @@ mod tests {
 
     #[kithara::test]
     fn a_press_on_the_control_acts_and_takes_the_pointer() {
-        assert_eq!(on_input(Input::PointerDown, &at(13.0)), Outcome::set(()));
+        assert_eq!(
+            on_input(
+                Input::Pointer(mouse_input(PointerPhase::Down, None)),
+                &at(13.0)
+            ),
+            Outcome::set(())
+        );
     }
 
     #[kithara::test]
     fn a_press_beside_the_control_is_left_to_whoever_is_behind() {
-        assert_eq!(on_input(Input::PointerDown, &at(40.0)), Outcome::IGNORED);
+        assert_eq!(
+            on_input(
+                Input::Pointer(mouse_input(PointerPhase::Down, None)),
+                &at(40.0)
+            ),
+            Outcome::IGNORED
+        );
     }
 
     #[kithara::test]
@@ -54,10 +68,11 @@ mod tests {
         let over = at(13.0);
 
         for input in [
-            Input::PointerMoved {
-                at: Pt { x: 13.0, y: 13.0 },
-            },
-            Input::PointerUp,
+            Input::Pointer(mouse_input(
+                PointerPhase::Move,
+                Some(Pt { x: 13.0, y: 13.0 }),
+            )),
+            Input::Pointer(mouse_input(PointerPhase::Up, None)),
             Input::Wheel(Scroll::lines(1.0)),
         ] {
             assert_eq!(

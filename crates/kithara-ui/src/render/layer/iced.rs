@@ -16,7 +16,7 @@ use super::{cursor, handle};
 use crate::{
     backends::IcedBackend,
     draw::replay,
-    interact::{Input, Outcome, iced as iced_interact},
+    interact::{Input, Outcome, PointerPhase, iced as iced_interact},
     render::{HostLayer, Skin, UiEvent, WindowCommand, window as window_event},
     text::{TextContext, TextResources},
     widgets::{drag_ghost::DragGhost, window::WindowSurface},
@@ -91,7 +91,12 @@ impl WindowOverlay<'_> {
         shell: &mut Shell<'_, UiEvent>,
     ) -> bool {
         let input = iced_interact::input(event);
-        if self.ghost.is_some() && matches!(input, Some(Input::PointerMoved { .. })) {
+        if self.ghost.is_some()
+            && matches!(
+                input,
+                Some(Input::Pointer(pointer)) if pointer.phase == PointerPhase::Move
+            )
+        {
             shell.request_redraw();
         }
         input.is_some_and(|input| {

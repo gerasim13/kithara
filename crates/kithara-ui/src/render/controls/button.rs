@@ -10,7 +10,9 @@ use crate::{
     atoms::button::{Button, VisualState},
     backends::IcedBackend,
     draw::{DrawListBuilder, Rect, replay},
-    interact::{CursorShape, Hover, Input, iced as iced_interact, recognizers::click},
+    interact::{
+        CursorShape, Hover, Input, PointerPhase, iced as iced_interact, recognizers::click,
+    },
     layout::FrameSides,
     module::ButtonStyle,
     render::{Icon, InputOwner, ReadValue, Skin, UiEvent, activate},
@@ -155,29 +157,30 @@ impl canvas::Program<UiEvent> for ButtonProgram<'_, '_> {
         let hit = iced_interact::hit(bounds, cursor);
         let action = activate(&self.path, click::on_input(input, &hit));
         let redraw = match input {
-            Input::PointerDown if hit.over() => {
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Down && hit.over() => {
                 state.hovered = true;
                 state.pressed = true;
                 false
             }
-            Input::PointerUp if state.pressed => {
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Up && state.pressed => {
                 state.hovered = hit.over();
                 state.pressed = false;
                 true
             }
-            Input::PointerMoved { .. } => {
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Move => {
                 let hovered = hit.over();
                 let changed = state.hovered != hovered;
                 state.hovered = hovered;
                 changed
             }
-            Input::PointerLeft => std::mem::take(&mut state.hovered),
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Leave => {
+                std::mem::take(&mut state.hovered)
+            }
             Input::InputMethod(_)
             | Input::KeyPressed { .. }
             | Input::KeyReleased { .. }
             | Input::ModifiersChanged(_)
-            | Input::PointerDown
-            | Input::PointerUp
+            | Input::Pointer(_)
             | Input::Wheel(_) => false,
         };
         action.or_else(|| redraw.then(Action::request_redraw))

@@ -9,7 +9,10 @@ use iced::{
 };
 use input_method::Event as InputMethodEvent;
 
-use super::{CursorShape, Hit, Input, InputMethod, InputMethodRequest, Key, Modifiers, Scroll};
+use super::{
+    CursorShape, Hit, Input, InputMethod, InputMethodRequest, Key, Modifiers, PointerPhase, Scroll,
+    mouse as mouse_input,
+};
 use crate::draw::{Pt, Rect};
 
 pub(crate) fn input(event: &Event) -> Option<Input<'_>> {
@@ -42,12 +45,19 @@ pub(crate) fn input(event: &Event) -> Option<Input<'_>> {
             InputMethodEvent::Commit(content) => InputMethod::Commit(content),
             InputMethodEvent::Closed => InputMethod::Closed,
         })),
-        Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) => Some(Input::PointerDown),
-        Event::Mouse(mouse::Event::CursorMoved { position }) => Some(Input::PointerMoved {
-            at: (*position).into(),
-        }),
-        Event::Mouse(mouse::Event::CursorLeft) => Some(Input::PointerLeft),
-        Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) => Some(Input::PointerUp),
+        Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) => {
+            Some(Input::Pointer(mouse_input(PointerPhase::Down, None)))
+        }
+        Event::Mouse(mouse::Event::CursorMoved { position }) => Some(Input::Pointer(mouse_input(
+            PointerPhase::Move,
+            Some((*position).into()),
+        ))),
+        Event::Mouse(mouse::Event::CursorLeft) => {
+            Some(Input::Pointer(mouse_input(PointerPhase::Leave, None)))
+        }
+        Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) => {
+            Some(Input::Pointer(mouse_input(PointerPhase::Up, None)))
+        }
         Event::Mouse(mouse::Event::WheelScrolled { delta }) => Some(Input::Wheel(match delta {
             ScrollDelta::Lines { x, y } => Scroll::Lines { x: *x, y: *y },
             ScrollDelta::Pixels { x, y } => Scroll::Pixels { x: *x, y: *y },
@@ -152,6 +162,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::interact::{MOUSE, PointerButton, PointerInput};
 
     #[kithara::test]
     fn key_press_and_release_preserve_key_and_all_modifiers() {
@@ -235,8 +246,41 @@ mod tests {
     fn cursor_left_decodes_without_inventing_a_position() {
         assert!(matches!(
             input(&Event::Mouse(mouse::Event::CursorLeft)),
-            Some(Input::PointerLeft)
+            Some(Input::Pointer(PointerInput {
+                id: MOUSE,
+                button: None,
+                phase: PointerPhase::Leave,
+                at: None,
+                clicks: 1,
+            }))
         ));
+    }
+
+    #[kithara::test]
+    fn mouse_events_share_stable_identity_and_one_click_count() {
+        let events = [
+            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            Event::Mouse(mouse::Event::CursorMoved {
+                position: Point::new(9.0, 14.0),
+            }),
+            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)),
+        ];
+        let expected = [
+            (PointerPhase::Down, Some(PointerButton::Primary), None),
+            (PointerPhase::Move, None, Some(Pt { x: 9.0, y: 14.0 })),
+            (PointerPhase::Up, Some(PointerButton::Primary), None),
+        ];
+
+        for (event, (phase, button, at)) in events.iter().zip(expected) {
+            let Some(Input::Pointer(pointer)) = input(event) else {
+                panic!("mouse event must decode as neutral pointer input");
+            };
+            assert_eq!(pointer.id, MOUSE);
+            assert_eq!(pointer.button, button);
+            assert_eq!(pointer.phase, phase);
+            assert_eq!(pointer.at, at);
+            assert_eq!(pointer.clicks, 1);
+        }
     }
 
     #[kithara::test]

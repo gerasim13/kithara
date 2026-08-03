@@ -119,6 +119,11 @@ impl Engine {
         }
     }
 
+    #[cfg(feature = "masonry-host")]
+    pub(crate) fn clear_focus(&mut self) {
+        self.router.clear_focus(&mut self.components);
+    }
+
     delegate::delegate! {
         to self.router {
             pub(crate) const fn captures_pointer(&self) -> bool;
@@ -137,7 +142,8 @@ mod tests {
         draw::{Pt, Rect},
         engine::ScrollConfig,
         interact::{
-            Hit, Hover, InputMethod, Key, Modifiers, Outcome, Scroll, ScrollAxis, TextInputLayout,
+            Hit, Hover, InputMethod, Key, Modifiers, Outcome, PointerOwnership, PointerPhase,
+            Scroll, ScrollAxis, TextInputLayout, mouse as mouse_input,
             recognizers::{DragEvent, WheelStep},
         },
     };
@@ -267,6 +273,10 @@ mod tests {
         }
     }
 
+    fn pointer_input(phase: PointerPhase, at: Option<Pt>) -> Input<'static> {
+        Input::Pointer(mouse_input(phase, at))
+    }
+
     fn value(emission: Option<Emission>) -> Option<f64> {
         emission.and_then(|emission| match emission.outcome.value() {
             Some(EngineEvent::Scalar(value)) => Some(value),
@@ -293,7 +303,7 @@ mod tests {
                 None,
             )]);
             value(engine.handle(
-                Input::PointerDown,
+                pointer_input(PointerPhase::Down, None),
                 &[Target::new(
                     path,
                     Hit::new(
@@ -340,7 +350,11 @@ mod tests {
         )];
 
         assert_eq!(
-            value(engine.handle(Input::PointerDown, &targets, Instant::now())),
+            value(engine.handle(
+                pointer_input(PointerPhase::Down, None),
+                &targets,
+                Instant::now()
+            )),
             Some(f64::from(29.0_f32 / 200.0_f32))
         );
         assert_eq!(
@@ -357,7 +371,7 @@ mod tests {
 
         let press = engine
             .handle(
-                Input::PointerDown,
+                pointer_input(PointerPhase::Down, None),
                 &[target(path, 50.0, 50.0)],
                 Instant::now(),
             )
@@ -370,9 +384,7 @@ mod tests {
         assert!(
             engine
                 .handle(
-                    Input::PointerMoved {
-                        at: Pt { x: 55.0, y: 50.0 },
-                    },
+                    pointer_input(PointerPhase::Move, Some(Pt { x: 55.0, y: 50.0 })),
                     &[target(path, 55.0, 50.0)],
                     Instant::now(),
                 )
@@ -381,7 +393,7 @@ mod tests {
         assert!(
             engine
                 .handle(
-                    Input::PointerUp,
+                    pointer_input(PointerPhase::Up, None),
                     &[target(path, 55.0, 50.0)],
                     Instant::now(),
                 )
@@ -398,7 +410,7 @@ mod tests {
         assert!(
             engine
                 .handle(
-                    Input::PointerDown,
+                    pointer_input(PointerPhase::Down, None),
                     &[target(path, 150.0, 50.0)],
                     Instant::now(),
                 )
@@ -414,9 +426,7 @@ mod tests {
 
         let enter = engine
             .handle(
-                Input::PointerMoved {
-                    at: Pt { x: 50.0, y: 50.0 },
-                },
+                pointer_input(PointerPhase::Move, Some(Pt { x: 50.0, y: 50.0 })),
                 &[target(path, 50.0, 50.0)],
                 Instant::now(),
             )
@@ -431,9 +441,7 @@ mod tests {
         assert!(
             engine
                 .handle(
-                    Input::PointerMoved {
-                        at: Pt { x: 55.0, y: 50.0 },
-                    },
+                    pointer_input(PointerPhase::Move, Some(Pt { x: 55.0, y: 50.0 })),
                     &[target(path, 55.0, 50.0)],
                     Instant::now(),
                 )
@@ -443,7 +451,7 @@ mod tests {
 
         let leave = engine
             .handle(
-                Input::PointerLeft,
+                pointer_input(PointerPhase::Leave, None),
                 &[target(path, 55.0, 50.0)],
                 Instant::now(),
             )
@@ -454,7 +462,7 @@ mod tests {
         assert!(
             engine
                 .handle(
-                    Input::PointerLeft,
+                    pointer_input(PointerPhase::Leave, None),
                     &[target(path, 55.0, 50.0)],
                     Instant::now(),
                 )
@@ -485,7 +493,7 @@ mod tests {
         for (x, expected) in [(10.0, 0), (34.0, 0), (35.0, 1), (109.0, 3)] {
             let emission = engine
                 .handle(
-                    Input::PointerDown,
+                    pointer_input(PointerPhase::Down, None),
                     &[Target::new(path, Hit::new(Some(Pt { x, y: 30.0 }), area))],
                     Instant::now(),
                 )
@@ -497,7 +505,7 @@ mod tests {
         assert!(
             engine
                 .handle(
-                    Input::PointerDown,
+                    pointer_input(PointerPhase::Down, None),
                     &[Target::new(
                         path,
                         Hit::new(Some(Pt { x: 110.0, y: 30.0 }), area),
@@ -519,7 +527,7 @@ mod tests {
         assert_eq!(
             engine
                 .handle(
-                    Input::PointerDown,
+                    pointer_input(PointerPhase::Down, None),
                     &[item_target(target_path, 3, 10.0, 13.0)],
                     now,
                 )
@@ -530,9 +538,7 @@ mod tests {
         assert!(
             engine
                 .handle(
-                    Input::PointerMoved {
-                        at: Pt { x: 11.0, y: 13.0 },
-                    },
+                    pointer_input(PointerPhase::Move, Some(Pt { x: 11.0, y: 13.0 })),
                     &[item_target(target_path, 3, 11.0, 13.0)],
                     now,
                 )
@@ -540,9 +546,7 @@ mod tests {
         );
         let started = engine
             .handle(
-                Input::PointerMoved {
-                    at: Pt { x: 40.0, y: 13.0 },
-                },
+                pointer_input(PointerPhase::Move, Some(Pt { x: 40.0, y: 13.0 })),
                 &[item_target(target_path, 3, 40.0, 13.0)],
                 now,
             )
@@ -559,7 +563,11 @@ mod tests {
         assert!(!engine.captures_pointer());
 
         let dropped = engine
-            .handle(Input::PointerUp, &[target(target_path, 200.0, 200.0)], now)
+            .handle(
+                pointer_input(PointerPhase::Up, None),
+                &[target(target_path, 200.0, 200.0)],
+                now,
+            )
             .unwrap_or_else(|| panic!("the row watcher must publish after its hit leaves view"));
         assert_eq!(
             dropped.outcome,
@@ -580,13 +588,13 @@ mod tests {
         engine.reconcile([Descriptor::item(target_path.to_owned(), path.to_owned(), 4)]);
 
         let _ = engine.handle(
-            Input::PointerDown,
+            pointer_input(PointerPhase::Down, None),
             &[item_target(target_path, 2, 10.0, 13.0)],
             now,
         );
         let selected = engine
             .handle(
-                Input::PointerUp,
+                pointer_input(PointerPhase::Up, None),
                 &[item_target(target_path, 2, 10.0, 13.0)],
                 now,
             )
@@ -605,7 +613,7 @@ mod tests {
         let now = Instant::now();
         engine.reconcile([Descriptor::item(target_path.to_owned(), path.to_owned(), 4)]);
         let _ = engine.handle(
-            Input::PointerDown,
+            pointer_input(PointerPhase::Down, None),
             &[item_target(target_path, 3, 10.0, 13.0)],
             now,
         );
@@ -615,9 +623,7 @@ mod tests {
         assert!(
             engine
                 .handle(
-                    Input::PointerMoved {
-                        at: Pt { x: 40.0, y: 13.0 },
-                    },
+                    pointer_input(PointerPhase::Move, Some(Pt { x: 40.0, y: 13.0 })),
                     &[Target::new(
                         target_path,
                         Hit::new(
@@ -633,6 +639,39 @@ mod tests {
                     now,
                 )
                 .is_none()
+        );
+    }
+
+    #[kithara::test]
+    fn retained_item_cancel_clears_its_held_index() {
+        let mut engine = Engine::default();
+        let path = "library/tracks";
+        let target_path = "library/tracks/rows";
+        let now = Instant::now();
+        engine.reconcile([Descriptor::item(target_path.to_owned(), path.to_owned(), 4)]);
+        let _ = engine.handle(
+            pointer_input(PointerPhase::Down, None),
+            &[item_target(target_path, 2, 10.0, 13.0)],
+            now,
+        );
+        assert_eq!(engine.pressed_item_index(path), Some(2));
+
+        let _ = engine.handle(
+            pointer_input(PointerPhase::Cancel, None),
+            &[item_target(target_path, 2, 10.0, 13.0)],
+            now,
+        );
+
+        assert_eq!(engine.pressed_item_index(path), None);
+        assert!(
+            engine
+                .handle(
+                    pointer_input(PointerPhase::Move, Some(Pt { x: 40.0, y: 13.0 })),
+                    &[item_target(target_path, 2, 40.0, 13.0)],
+                    now,
+                )
+                .is_none(),
+            "a cancelled row must not resume its former drag"
         );
     }
 
@@ -653,16 +692,14 @@ mod tests {
         assert_eq!(divider.hit.area(), hit_rect);
         assert_eq!(
             engine
-                .handle(Input::PointerDown, &[divider], now)
+                .handle(pointer_input(PointerPhase::Down, None), &[divider], now)
                 .map(|emission| emission.outcome),
-            Some(Outcome::captured()),
+            Some(Outcome::captured().with_ownership(PointerOwnership::Claim)),
             "the outer half-pixel of the seven-pixel grab area must arm the drag"
         );
         assert_eq!(
             value(engine.handle(
-                Input::PointerMoved {
-                    at: Pt { x: 140.5, y: 11.0 },
-                },
+                pointer_input(PointerPhase::Move, Some(Pt { x: 140.5, y: 11.0 })),
                 &[divider],
                 now,
             )),
@@ -682,7 +719,7 @@ mod tests {
 
         let activation = engine
             .handle(
-                Input::PointerDown,
+                pointer_input(PointerPhase::Down, None),
                 &[target(toggle, 50.0, 50.0)],
                 Instant::now(),
             )
@@ -695,7 +732,7 @@ mod tests {
 
         let scalar = engine
             .handle(
-                Input::PointerDown,
+                pointer_input(PointerPhase::Down, None),
                 &[target(meter, 50.0, 25.0)],
                 Instant::now(),
             )
@@ -715,7 +752,7 @@ mod tests {
 
         let press = engine
             .handle(
-                Input::PointerDown,
+                pointer_input(PointerPhase::Down, None),
                 &[target(wave, 25.0, 50.0)],
                 Instant::now(),
             )
@@ -734,7 +771,7 @@ mod tests {
 
         let next = engine
             .handle(
-                Input::PointerDown,
+                pointer_input(PointerPhase::Down, None),
                 &[target(meter, 50.0, 25.0)],
                 Instant::now(),
             )
@@ -769,7 +806,11 @@ mod tests {
                 .is_none()
         );
         let start = engine
-            .handle(Input::PointerDown, &[target(path, 25.0, 50.0)], now)
+            .handle(
+                pointer_input(PointerPhase::Down, None),
+                &[target(path, 25.0, 50.0)],
+                now,
+            )
             .unwrap_or_else(|| panic!("a shifted press must publish the loop start"));
         assert_eq!(start.child, Some("loop_start"));
         assert_eq!(start.outcome.value(), Some(EngineEvent::Scalar(0.375)));
@@ -777,9 +818,7 @@ mod tests {
 
         let end = engine
             .handle(
-                Input::PointerMoved {
-                    at: Pt { x: 75.0, y: 50.0 },
-                },
+                pointer_input(PointerPhase::Move, Some(Pt { x: 75.0, y: 50.0 })),
                 &[target(path, 75.0, 50.0)],
                 now,
             )
@@ -789,11 +828,56 @@ mod tests {
         assert!(engine.captures_pointer());
 
         let release = engine
-            .handle(Input::PointerUp, &[target(path, 75.0, 50.0)], now)
+            .handle(
+                pointer_input(PointerPhase::Up, None),
+                &[target(path, 75.0, 50.0)],
+                now,
+            )
             .unwrap_or_else(|| panic!("the loop release must finish the gesture"));
         assert_eq!(release.child, None);
-        assert_eq!(release.outcome, Outcome::captured());
+        assert_eq!(
+            release.outcome,
+            Outcome::captured().with_ownership(PointerOwnership::Release)
+        );
         assert!(!engine.captures_pointer());
+    }
+
+    #[kithara::test]
+    fn cancel_clears_the_router_slot_and_the_component_gesture() {
+        let mut engine = Engine::default();
+        let path = "studio/gain";
+        let now = Instant::now();
+        engine.reconcile([knob(path, 0.5)]);
+
+        let _ = engine.handle(
+            pointer_input(PointerPhase::Down, None),
+            &[target(path, 50.0, 50.0)],
+            now,
+        );
+        assert!(engine.captures_pointer());
+
+        let cancel = engine
+            .handle(
+                pointer_input(PointerPhase::Cancel, None),
+                &[target(path, 50.0, 50.0)],
+                now,
+            )
+            .unwrap_or_else(|| panic!("cancel must release the retained component"));
+        assert_eq!(
+            cancel.outcome,
+            Outcome::IGNORED.with_ownership(PointerOwnership::Release)
+        );
+        assert!(!engine.captures_pointer());
+        assert!(
+            engine
+                .handle(
+                    pointer_input(PointerPhase::Move, Some(Pt { x: 50.0, y: 0.0 })),
+                    &[target(path, 50.0, 0.0)],
+                    now,
+                )
+                .is_none(),
+            "a hit-tested move after cancel must not resume the stale drag"
+        );
     }
 
     #[kithara::test]
@@ -808,12 +892,18 @@ mod tests {
 
         let press = engine
             .handle(
-                Input::PointerDown,
+                pointer_input(PointerPhase::Down, None),
                 &[target(wave, 50.0, 50.0)],
                 Instant::now(),
             )
             .map(|emission| (emission.path, emission.outcome));
-        assert_eq!(press, Some((wave.to_owned(), Outcome::captured())));
+        assert_eq!(
+            press,
+            Some((
+                wave.to_owned(),
+                Outcome::captured().with_ownership(PointerOwnership::Claim)
+            ))
+        );
         assert!(engine.captures_pointer());
 
         engine.reconcile([
@@ -822,9 +912,7 @@ mod tests {
         ]);
         let moved = engine
             .handle(
-                Input::PointerMoved {
-                    at: Pt { x: 150.0, y: 50.0 },
-                },
+                pointer_input(PointerPhase::Move, Some(Pt { x: 150.0, y: 50.0 })),
                 &[target(wave, 150.0, 50.0), target(meter, 50.0, 25.0)],
                 Instant::now(),
             )
@@ -878,7 +966,11 @@ mod tests {
             0.625,
             0.4,
         )]);
-        engine.handle(Input::PointerDown, &[target(path, 50.0, 50.0)], now);
+        engine.handle(
+            pointer_input(PointerPhase::Down, None),
+            &[target(path, 50.0, 50.0)],
+            now,
+        );
         assert!(engine.captures_pointer());
 
         engine.reconcile([Descriptor::wave(path.to_owned())]);
@@ -887,9 +979,7 @@ mod tests {
         assert!(
             engine
                 .handle(
-                    Input::PointerMoved {
-                        at: Pt { x: 75.0, y: 50.0 },
-                    },
+                    pointer_input(PointerPhase::Move, Some(Pt { x: 75.0, y: 50.0 })),
                     &[target(path, 75.0, 50.0)],
                     now,
                 )
@@ -905,21 +995,19 @@ mod tests {
         engine.reconcile([knob("studio/gain", 0.25)]);
 
         let press = engine.handle(
-            Input::PointerDown,
+            pointer_input(PointerPhase::Down, None),
             &[target("studio/gain", 50.0, 50.0)],
             now,
         );
         assert_eq!(
             press.map(|emission| emission.outcome),
-            Some(Outcome::captured())
+            Some(Outcome::captured().with_ownership(PointerOwnership::Claim))
         );
 
         engine.reconcile([Descriptor::knob("studio/gain".to_owned(), 0.9, 200.0, 0.2)]);
         assert_eq!(
             value(engine.handle(
-                Input::PointerMoved {
-                    at: Pt { x: 50.0, y: 0.0 },
-                },
+                pointer_input(PointerPhase::Move, Some(Pt { x: 50.0, y: 0.0 })),
                 &[target("studio/gain", 50.0, 0.0)],
                 now,
             )),
@@ -939,7 +1027,11 @@ mod tests {
             Some(0.01),
             None,
         )]);
-        let _ = engine.handle(Input::PointerDown, &[target(path, 29.0, 50.0)], now);
+        let _ = engine.handle(
+            pointer_input(PointerPhase::Down, None),
+            &[target(path, 29.0, 50.0)],
+            now,
+        );
         assert!(engine.captures_pointer());
 
         engine.reconcile([Descriptor::fader(
@@ -952,9 +1044,7 @@ mod tests {
         assert!(engine.captures_pointer());
         assert_eq!(
             value(engine.handle(
-                Input::PointerMoved {
-                    at: Pt { x: 31.0, y: 50.0 },
-                },
+                pointer_input(PointerPhase::Move, Some(Pt { x: 31.0, y: 50.0 })),
                 &[target(path, 31.0, 50.0)],
                 now,
             )),
@@ -968,7 +1058,7 @@ mod tests {
         let now = Instant::now();
         engine.reconcile([knob("studio/level", 0.5)]);
         engine.handle(
-            Input::PointerDown,
+            pointer_input(PointerPhase::Down, None),
             &[target("studio/level", 50.0, 50.0)],
             now,
         );
@@ -976,7 +1066,7 @@ mod tests {
         engine.reconcile([Descriptor::vertical_vu("studio/level".to_owned())]);
         let emission = engine
             .handle(
-                Input::PointerDown,
+                pointer_input(PointerPhase::Down, None),
                 &[target("studio/level", 50.0, 25.0)],
                 now,
             )
@@ -1008,7 +1098,7 @@ mod tests {
 
         let emission = engine
             .handle(
-                Input::PointerDown,
+                pointer_input(PointerPhase::Down, None),
                 &[
                     target("studio/back", 50.0, 25.0),
                     target("studio/front", 50.0, 25.0),
@@ -1029,7 +1119,7 @@ mod tests {
             Descriptor::vertical_vu("studio/front".to_owned()),
         ]);
         engine.handle(
-            Input::PointerDown,
+            pointer_input(PointerPhase::Down, None),
             &[
                 target("studio/back", 50.0, 25.0),
                 target("studio/front", 50.0, 25.0),
@@ -1039,9 +1129,7 @@ mod tests {
 
         let moved = engine
             .handle(
-                Input::PointerMoved {
-                    at: Pt { x: 50.0, y: 125.0 },
-                },
+                pointer_input(PointerPhase::Move, Some(Pt { x: 50.0, y: 125.0 })),
                 &[
                     target("studio/front", 50.0, 125.0),
                     target("studio/back", 50.0, 50.0),
@@ -1052,14 +1140,14 @@ mod tests {
         assert_eq!(moved.as_deref(), Some("studio/front"));
 
         engine.handle(
-            Input::PointerUp,
+            pointer_input(PointerPhase::Up, None),
             &[target("studio/front", 50.0, 125.0)],
             now,
         );
         assert!(!engine.captures_pointer());
         let next = engine
             .handle(
-                Input::PointerDown,
+                pointer_input(PointerPhase::Down, None),
                 &[
                     target("studio/front", 50.0, 50.0),
                     target("studio/back", 50.0, 50.0),
@@ -1095,7 +1183,7 @@ mod tests {
 
         let next = engine
             .handle(
-                Input::PointerDown,
+                pointer_input(PointerPhase::Down, None),
                 &[
                     target("studio/front", 50.0, 50.0),
                     target("studio/back", 50.0, 50.0),
@@ -1270,7 +1358,7 @@ mod tests {
         assert!(
             engine
                 .handle(
-                    Input::PointerDown,
+                    pointer_input(PointerPhase::Down, None),
                     &[target(path, 99.0, 10.0)],
                     Instant::now(),
                 )
@@ -1333,7 +1421,7 @@ mod tests {
         assert_eq!(wheel.outcome.value(), None);
 
         let click = engine
-            .handle(Input::PointerDown, &[target], now)
+            .handle(pointer_input(PointerPhase::Down, None), &[target], now)
             .unwrap_or_else(|| panic!("the visible row must activate"));
         assert_eq!(click.outcome, Outcome::set(EngineEvent::Index(3)));
     }
@@ -1352,7 +1440,7 @@ mod tests {
             CursorShape::ResizeV
         );
         engine.handle(
-            Input::PointerDown,
+            pointer_input(PointerPhase::Down, None),
             &[target("studio/front", 50.0, 50.0)],
             now,
         );
@@ -1361,7 +1449,7 @@ mod tests {
             CursorShape::ResizeV
         );
         engine.handle(
-            Input::PointerUp,
+            pointer_input(PointerPhase::Up, None),
             &[target("studio/front", 150.0, 150.0)],
             now,
         );
@@ -1386,7 +1474,7 @@ mod tests {
         );
         assert_eq!(
             value(engine.handle(
-                Input::PointerDown,
+                pointer_input(PointerPhase::Down, None),
                 &[target(path, 25.0, 50.0)],
                 Instant::now(),
             )),
@@ -1406,7 +1494,7 @@ mod tests {
         );
         assert_eq!(
             value(engine.handle(
-                Input::PointerDown,
+                pointer_input(PointerPhase::Down, None),
                 &[target(path, 25.0, 50.0)],
                 Instant::now(),
             )),
@@ -1422,9 +1510,12 @@ mod tests {
         let at_end = text_target(path, 30.0, 0.0, 0.0);
         engine.reconcile([text_input(path, "ab")]);
         let focused = engine
-            .handle(Input::PointerDown, &[at_end], now)
+            .handle(pointer_input(PointerPhase::Down, None), &[at_end], now)
             .unwrap_or_else(|| panic!("pressing the text input must focus it"));
-        assert_eq!(focused.outcome, Outcome::captured());
+        assert_eq!(
+            focused.outcome,
+            Outcome::captured().with_ownership(PointerOwnership::Claim)
+        );
 
         let moved = engine
             .handle(key_pressed(Key::ArrowLeft), &[at_end], now)
@@ -1444,7 +1535,7 @@ mod tests {
             })
         );
 
-        let _ = engine.handle(Input::PointerDown, &[at_end], now);
+        let _ = engine.handle(pointer_input(PointerPhase::Down, None), &[at_end], now);
         let first = engine
             .handle(typed("x"), &[at_end], now)
             .unwrap_or_else(|| panic!("ordinary typing must publish the resulting query"));
@@ -1479,7 +1570,7 @@ mod tests {
             "🇧".to_owned(),
             TextInputLayout::new([(0, 4.0), (4, 20.0)], 3.0, 12.0, 12.0),
         )]);
-        let _ = engine.handle(Input::PointerDown, &[at_start], now);
+        let _ = engine.handle(pointer_input(PointerPhase::Down, None), &[at_start], now);
 
         let inserted = engine
             .handle(typed("🇦"), &[at_start], now)
@@ -1511,7 +1602,7 @@ mod tests {
         let now = Instant::now();
         let at_end = text_target(path, 30.0, 0.0, 0.0);
         engine.reconcile([text_input(path, "ab")]);
-        let _ = engine.handle(Input::PointerDown, &[at_end], now);
+        let _ = engine.handle(pointer_input(PointerPhase::Down, None), &[at_end], now);
 
         for input in [
             Input::InputMethod(InputMethod::Preedit {
@@ -1562,14 +1653,14 @@ mod tests {
         let now = Instant::now();
         let first = text_target(path, 44.0, 40.0, 20.0);
         engine.reconcile([text_input(path, "ab")]);
-        let _ = engine.handle(Input::PointerDown, &[first], now);
+        let _ = engine.handle(pointer_input(PointerPhase::Down, None), &[first], now);
         let first_caret = engine
             .input_method(&[first])
             .unwrap_or_else(|| panic!("focused input must enable the input method"))
             .caret;
 
         let last = text_target(path, 70.0, 40.0, 20.0);
-        let _ = engine.handle(Input::PointerDown, &[last], now);
+        let _ = engine.handle(pointer_input(PointerPhase::Down, None), &[last], now);
         let last_caret = engine
             .input_method(&[last])
             .unwrap_or_else(|| panic!("moving the caret must update its rectangle"))
@@ -1606,7 +1697,7 @@ mod tests {
             engine.reconcile([text_input(path, "ab")]);
             assert!(engine.handle(key_pressed(key), &[at_end], now).is_none());
 
-            let _ = engine.handle(Input::PointerDown, &[at_end], now);
+            let _ = engine.handle(pointer_input(PointerPhase::Down, None), &[at_end], now);
             let emission = engine
                 .handle(key_pressed(key), &[at_end], now)
                 .unwrap_or_else(|| panic!("focused text input must consume {key:?}"));
@@ -1627,7 +1718,7 @@ mod tests {
         engine.reconcile([Descriptor::picker(path.to_owned(), 4, Some(1))]);
 
         let opened = engine
-            .handle(Input::PointerDown, &[target], now)
+            .handle(pointer_input(PointerPhase::Down, None), &[target], now)
             .unwrap_or_else(|| panic!("pressing the picker anchor must open it"));
         assert_eq!(opened.outcome, Outcome::captured());
         let snapshot = engine
@@ -1681,7 +1772,7 @@ mod tests {
         let now = Instant::now();
         let anchor = target(path, 50.0, 50.0);
         engine.reconcile([Descriptor::picker(path.to_owned(), 2, Some(0))]);
-        let _ = engine.handle(Input::PointerDown, &[anchor], now);
+        let _ = engine.handle(pointer_input(PointerPhase::Down, None), &[anchor], now);
 
         let selected = engine
             .handle(key_pressed(Key::Enter), &[], now)
@@ -1704,8 +1795,12 @@ mod tests {
             Some(true)
         );
 
-        let _ = engine.handle(Input::PointerDown, &[target(path, 150.0, 150.0)], now);
-        let _ = engine.handle(Input::PointerDown, &[anchor], now);
+        let _ = engine.handle(
+            pointer_input(PointerPhase::Down, None),
+            &[target(path, 150.0, 150.0)],
+            now,
+        );
+        let _ = engine.handle(pointer_input(PointerPhase::Down, None), &[anchor], now);
         let selected = engine
             .handle(key_pressed(Key::Enter), &[], now)
             .unwrap_or_else(|| panic!("blur must release retained key-down state"));
@@ -1723,7 +1818,7 @@ mod tests {
             Descriptor::picker(path.to_owned(), 2, Some(0)),
         ]);
         let _ = engine.handle(
-            Input::PointerDown,
+            pointer_input(PointerPhase::Down, None),
             &[target(other, 150.0, 150.0), target(path, 50.0, 50.0)],
             now,
         );
@@ -1770,12 +1865,20 @@ mod tests {
         let path = "library/scope";
         let now = Instant::now();
         engine.reconcile([Descriptor::picker(path.to_owned(), 2, Some(0))]);
-        let _ = engine.handle(Input::PointerDown, &[target(path, 50.0, 50.0)], now);
+        let _ = engine.handle(
+            pointer_input(PointerPhase::Down, None),
+            &[target(path, 50.0, 50.0)],
+            now,
+        );
         let _ = engine.handle(key_pressed(Key::Escape), &[target(path, 50.0, 50.0)], now);
 
         assert!(
             engine
-                .handle(Input::PointerDown, &[target(path, 150.0, 150.0)], now)
+                .handle(
+                    pointer_input(PointerPhase::Down, None),
+                    &[target(path, 150.0, 150.0)],
+                    now
+                )
                 .is_none()
         );
         assert!(
@@ -1799,11 +1902,15 @@ mod tests {
             Descriptor::picker(picker.to_owned(), 2, Some(0)),
             Descriptor::knob(knob.to_owned(), 0.5, 100.0, 0.1),
         ]);
-        let _ = engine.handle(Input::PointerDown, &[target(knob, 50.0, 50.0)], now);
+        let _ = engine.handle(
+            pointer_input(PointerPhase::Down, None),
+            &[target(knob, 50.0, 50.0)],
+            now,
+        );
         assert!(engine.captures(knob));
 
         let _ = engine.handle(
-            Input::PointerDown,
+            pointer_input(PointerPhase::Down, None),
             &[target(knob, 150.0, 150.0), target(picker, 50.0, 50.0)],
             now,
         );
@@ -1818,7 +1925,11 @@ mod tests {
         assert_eq!(opened.outcome, Outcome::captured());
         assert!(engine.captures(knob));
 
-        let _ = engine.handle(Input::PointerUp, &[target(knob, 150.0, 150.0)], now);
+        let _ = engine.handle(
+            pointer_input(PointerPhase::Up, None),
+            &[target(knob, 150.0, 150.0)],
+            now,
+        );
         assert!(!engine.captures_pointer());
         let closed = engine
             .handle(key_pressed(Key::Escape), &[target(picker, 50.0, 50.0)], now)
@@ -1835,13 +1946,11 @@ mod tests {
         engine.reconcile([Descriptor::picker(path.to_owned(), 4, Some(1))]);
         let anchor = target(path, 50.0, 50.0);
         let option = item_target(path, 3, 50.0, 50.0);
-        let _ = engine.handle(Input::PointerDown, &[anchor], now);
+        let _ = engine.handle(pointer_input(PointerPhase::Down, None), &[anchor], now);
 
         let hovered = engine
             .handle(
-                Input::PointerMoved {
-                    at: Pt { x: 50.0, y: 50.0 },
-                },
+                pointer_input(PointerPhase::Move, Some(Pt { x: 50.0, y: 50.0 })),
                 &[option],
                 now,
             )
@@ -1855,12 +1964,16 @@ mod tests {
         );
 
         let selected = engine
-            .handle(Input::PointerDown, &[option], now)
+            .handle(pointer_input(PointerPhase::Down, None), &[option], now)
             .unwrap_or_else(|| panic!("pressing an open option must select it"));
         assert_eq!(selected.outcome, Outcome::set(EngineEvent::Index(3)));
-        let _ = engine.handle(Input::PointerDown, &[anchor], now);
+        let _ = engine.handle(pointer_input(PointerPhase::Down, None), &[anchor], now);
         let dismissed = engine
-            .handle(Input::PointerDown, &[target(path, 150.0, 150.0)], now)
+            .handle(
+                pointer_input(PointerPhase::Down, None),
+                &[target(path, 150.0, 150.0)],
+                now,
+            )
             .unwrap_or_else(|| panic!("an outside press must dismiss an open picker"));
         assert_eq!(dismissed.outcome, Outcome::captured());
         assert_eq!(dismissed.outcome.value(), None);
@@ -1896,7 +2009,7 @@ mod tests {
                 "an unfocused picker must not consume {key:?}"
             );
         }
-        let _ = engine.handle(Input::PointerDown, &[target], now);
+        let _ = engine.handle(pointer_input(PointerPhase::Down, None), &[target], now);
         for key in [
             Key::ArrowDown,
             Key::ArrowUp,
@@ -1948,11 +2061,13 @@ mod tests {
         let path = "library/scope";
         let now = Instant::now();
         engine.reconcile([Descriptor::picker(path.to_owned(), 4, Some(0))]);
-        let _ = engine.handle(Input::PointerDown, &[target(path, 50.0, 50.0)], now);
         let _ = engine.handle(
-            Input::PointerMoved {
-                at: Pt { x: 50.0, y: 50.0 },
-            },
+            pointer_input(PointerPhase::Down, None),
+            &[target(path, 50.0, 50.0)],
+            now,
+        );
+        let _ = engine.handle(
+            pointer_input(PointerPhase::Move, Some(Pt { x: 50.0, y: 50.0 })),
             &[item_target(path, 3, 50.0, 50.0)],
             now,
         );
@@ -1982,7 +2097,11 @@ mod tests {
                 picker_target(path, Some(1), 10.0, 40.0),
                 picker_target(path, Some(2), 10.0, 60.0),
             ];
-            let _ = engine.handle(Input::PointerDown, &anchor_targets, now);
+            let _ = engine.handle(
+                pointer_input(PointerPhase::Down, None),
+                &anchor_targets,
+                now,
+            );
             assert_eq!(
                 engine.picker_snapshot(path).map(|snapshot| snapshot.open),
                 Some(true)
@@ -1995,7 +2114,11 @@ mod tests {
                 picker_target(path, Some(2), pointer_y, 60.0),
             ];
             let selected = engine
-                .handle(Input::PointerDown, &option_targets, now)
+                .handle(
+                    pointer_input(PointerPhase::Down, None),
+                    &option_targets,
+                    now,
+                )
                 .unwrap_or_else(|| panic!("option {index} must route past later misses"));
             assert_eq!(selected.outcome, Outcome::set(EngineEvent::Index(index)));
         }
@@ -2006,9 +2129,17 @@ mod tests {
             picker_target(path, Some(1), 10.0, 40.0),
             picker_target(path, Some(2), 10.0, 60.0),
         ];
-        let _ = engine.handle(Input::PointerDown, &anchor_targets, now);
+        let _ = engine.handle(
+            pointer_input(PointerPhase::Down, None),
+            &anchor_targets,
+            now,
+        );
         let closed = engine
-            .handle(Input::PointerDown, &anchor_targets, now)
+            .handle(
+                pointer_input(PointerPhase::Down, None),
+                &anchor_targets,
+                now,
+            )
             .unwrap_or_else(|| panic!("the open anchor must route past option misses"));
         assert_eq!(closed.outcome, Outcome::captured());
         assert_eq!(

@@ -14,7 +14,8 @@ use super::{
 use crate::{
     engine::model::{Descriptor, EngineEvent, Identity, Kind},
     interact::{
-        CursorShape, Hit, Hover, Input, InputMethodRequest, Outcome, Rect,
+        CursorShape, Hit, Hover, Input, InputMethodRequest, Outcome, PointerOwnership,
+        PointerPhase, Rect,
         recognizers::{Scalar, Track, WheelStep},
     },
 };
@@ -37,6 +38,7 @@ pub(super) trait Component {
     }
     fn cursor(&self, hit: &Hit) -> CursorShape;
     fn captures_pointer(&self) -> bool;
+    fn cancel_pointer(&mut self) {}
     fn focusable(&self) -> bool {
         false
     }
@@ -118,7 +120,21 @@ impl RetainedComponent {
         index: Option<usize>,
         now: Instant,
     ) -> (Outcome<EngineEvent>, Option<&'static str>) {
-        self.component_mut().handle(input, hit, index, now)
+        let had_pointer = self.captures_pointer();
+        let (outcome, child) = self.component_mut().handle(input, hit, index, now);
+        if matches!(
+            input,
+            Input::Pointer(pointer)
+                if matches!(pointer.phase, PointerPhase::Cancel | PointerPhase::DoubleClick)
+        ) {
+            self.component_mut().cancel_pointer();
+        }
+        let ownership = match (had_pointer, self.captures_pointer()) {
+            (false, true) => PointerOwnership::Claim,
+            (true, false) => PointerOwnership::Release,
+            _ => PointerOwnership::Unchanged,
+        };
+        (outcome.with_ownership(ownership), child)
     }
 
     pub(in crate::engine) fn cursor(&self, hit: &Hit) -> CursorShape {

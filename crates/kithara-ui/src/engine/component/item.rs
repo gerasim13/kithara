@@ -3,7 +3,7 @@ use kithara_platform::time::Instant;
 use super::retained::Component;
 use crate::{
     engine::model::{EngineEvent, Kind},
-    interact::{CursorShape, Hit, Input, Outcome, recognizers::ItemDrag},
+    interact::{CursorShape, Hit, Input, Outcome, PointerPhase, recognizers::ItemDrag},
 };
 
 pub(in crate::engine) struct ItemComponent {
@@ -65,7 +65,10 @@ impl Component for ItemComponent {
         target_index: Option<usize>,
         _now: Instant,
     ) -> (Outcome<EngineEvent>, Option<&'static str>) {
-        if matches!(input, Input::PointerDown) {
+        if matches!(
+            input,
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Down
+        ) {
             self.drag = ItemDrag::default();
             self.index = if hit.over() {
                 target_index.filter(|index| *index < self.count)
@@ -78,27 +81,34 @@ impl Component for ItemComponent {
             drag.map(|event| EngineEvent::Drag { event, index })
         });
         if outcome != Outcome::IGNORED {
-            if matches!(input, Input::PointerUp) {
+            if matches!(
+                input,
+                Input::Pointer(pointer) if pointer.phase == PointerPhase::Up
+            ) {
                 self.index = None;
             }
             return (outcome, None);
         }
         let outcome = match input {
-            Input::PointerDown if self.index.is_some() => Outcome::captured(),
-            Input::PointerUp => self.index.take().map_or(Outcome::IGNORED, |index| {
-                if target_index == Some(index) && hit.over() {
-                    Outcome::set(EngineEvent::Index(index))
-                } else {
-                    Outcome::captured()
-                }
-            }),
+            Input::Pointer(pointer)
+                if pointer.phase == PointerPhase::Down && self.index.is_some() =>
+            {
+                Outcome::captured()
+            }
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Up => {
+                self.index.take().map_or(Outcome::IGNORED, |index| {
+                    if target_index == Some(index) && hit.over() {
+                        Outcome::set(EngineEvent::Index(index))
+                    } else {
+                        Outcome::captured()
+                    }
+                })
+            }
             Input::InputMethod(_)
             | Input::KeyPressed { .. }
             | Input::KeyReleased { .. }
             | Input::ModifiersChanged(_)
-            | Input::PointerDown
-            | Input::PointerLeft
-            | Input::PointerMoved { .. }
+            | Input::Pointer(_)
             | Input::Wheel(_) => Outcome::IGNORED,
         };
         (outcome, None)
@@ -115,5 +125,10 @@ impl Component for ItemComponent {
 
     fn captures_pointer(&self) -> bool {
         false
+    }
+
+    fn cancel_pointer(&mut self) {
+        self.drag = ItemDrag::default();
+        self.index = None;
     }
 }

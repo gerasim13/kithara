@@ -1,4 +1,4 @@
-use super::super::{Hit, Input, Outcome};
+use super::super::{Hit, Input, Outcome, PointerPhase};
 
 #[derive(Default)]
 pub(crate) struct Crossing {
@@ -8,14 +8,13 @@ pub(crate) struct Crossing {
 impl Crossing {
     pub(crate) fn on_input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<bool> {
         let over = match input {
-            Input::PointerMoved { .. } => hit.over(),
-            Input::PointerLeft => false,
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Move => hit.over(),
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Leave => false,
             Input::InputMethod(_)
             | Input::KeyPressed { .. }
             | Input::KeyReleased { .. }
             | Input::ModifiersChanged(_)
-            | Input::PointerDown
-            | Input::PointerUp
+            | Input::Pointer(_)
             | Input::Wheel(_) => return Outcome::IGNORED,
         };
         if self.over == over {
@@ -31,7 +30,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{
-        super::super::{Hit, Input, Modifiers, Outcome},
+        super::super::{Hit, Input, Modifiers, Outcome, PointerPhase, mouse as mouse_input},
         Crossing,
     };
     use crate::draw::{Pt, Rect};
@@ -49,9 +48,7 @@ mod tests {
     }
 
     fn moved() -> Input<'static> {
-        Input::PointerMoved {
-            at: Pt { x: 0.0, y: 0.0 },
-        }
+        Input::Pointer(mouse_input(PointerPhase::Move, Some(Pt { x: 0.0, y: 0.0 })))
     }
 
     #[kithara::test]
@@ -82,11 +79,17 @@ mod tests {
         );
 
         assert_eq!(
-            crossing.on_input(Input::PointerLeft, &hit(10.0)),
+            crossing.on_input(
+                Input::Pointer(mouse_input(PointerPhase::Leave, None)),
+                &hit(10.0)
+            ),
             Outcome::observed(false)
         );
         assert_eq!(
-            crossing.on_input(Input::PointerLeft, &hit(10.0)),
+            crossing.on_input(
+                Input::Pointer(mouse_input(PointerPhase::Leave, None)),
+                &hit(10.0)
+            ),
             Outcome::IGNORED
         );
     }

@@ -2,7 +2,7 @@ use iced::{Element, Length, Size};
 
 use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba},
-    interact::{CursorShape, Hit, Input, Outcome},
+    interact::{CursorShape, Hit, Input, Outcome, PointerPhase},
     module::WindowControlsStyle,
     render::{HostLayer, LayerHit, Skin, UiEvent, WindowCommand, WindowLayerProgram, window_layer},
     skin::{FrameSkin, WindowControlSkin},
@@ -37,7 +37,7 @@ struct ControlRegion {
     icon_size: f32,
 }
 
-struct ControlsProgram {
+pub(crate) struct ControlsProgram {
     color: Rgba,
     controls: WindowControlSkin,
     divider_color: Option<Rgba>,
@@ -48,13 +48,13 @@ struct ControlsProgram {
 }
 
 #[derive(Default)]
-struct ControlsState {
+pub(crate) struct ControlsState {
     armed: Option<WindowCommand>,
     hovered: Option<WindowCommand>,
 }
 
 impl ControlsProgram {
-    fn new(style: WindowControlsStyle, skin: &Skin) -> Self {
+    pub(crate) fn new(style: WindowControlsStyle, skin: &Skin) -> Self {
         let controls = skin.window.controls(style);
         let divider_color = match controls {
             WindowControlSkin::Close {
@@ -359,36 +359,46 @@ impl WindowLayerProgram for ControlsProgram {
     ) -> (Outcome<WindowCommand>, bool) {
         let target = layer.action_at(pointer).copied();
         let outcome = match input {
-            Input::PointerDown => {
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Down => {
                 state.armed = target;
                 if target.is_some() {
-                    Outcome::captured()
+                    Outcome::captured().with_ownership(crate::interact::PointerOwnership::Claim)
                 } else {
                     Outcome::IGNORED
                 }
             }
-            Input::PointerUp => match state.armed.take() {
-                Some(command) if target == Some(command) => Outcome::set(command),
-                Some(_) => Outcome::captured(),
-                None => Outcome::IGNORED,
-            },
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Up => {
+                match state.armed.take() {
+                    Some(command) if target == Some(command) => Outcome::set(command)
+                        .with_ownership(crate::interact::PointerOwnership::Release),
+                    Some(_) => Outcome::captured()
+                        .with_ownership(crate::interact::PointerOwnership::Release),
+                    None => Outcome::IGNORED,
+                }
+            }
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Cancel => {
+                let armed = state.armed.take().is_some();
+                if armed {
+                    Outcome::captured().with_ownership(crate::interact::PointerOwnership::Release)
+                } else {
+                    Outcome::IGNORED
+                }
+            }
             Input::InputMethod(_)
             | Input::KeyPressed { .. }
             | Input::KeyReleased { .. }
             | Input::ModifiersChanged(_)
-            | Input::PointerLeft
-            | Input::PointerMoved { .. }
+            | Input::Pointer(_)
             | Input::Wheel(_) => Outcome::IGNORED,
         };
         let hovered = match input {
-            Input::PointerMoved { .. } => target,
-            Input::PointerLeft => None,
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Move => target,
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Leave => None,
             Input::InputMethod(_)
             | Input::KeyPressed { .. }
             | Input::KeyReleased { .. }
             | Input::ModifiersChanged(_)
-            | Input::PointerDown
-            | Input::PointerUp
+            | Input::Pointer(_)
             | Input::Wheel(_) => state.hovered,
         };
         let redraw = state.hovered != hovered;
@@ -409,7 +419,12 @@ mod tests {
     use crate::{
         builtin,
         draw::{DrawCmd, Geom},
+        interact::mouse as mouse_input,
     };
+
+    fn pointer_input(phase: PointerPhase, at: Option<Pt>) -> Input<'static> {
+        Input::Pointer(mouse_input(phase, at))
+    }
 
     #[kithara::test]
     fn styles_select_their_skin_metrics() {
@@ -723,8 +738,12 @@ mod tests {
         let mut state = ControlsState::default();
         let pointer = absolute(bounds, Pt { x: 29.0, y: 16.0 });
         let layer = program.hit_layer(&state, bounds);
-        let (outcome, redraw) =
-            program.update(&mut state, Input::PointerDown, &layer, Some(pointer));
+        let (outcome, redraw) = program.update(
+            &mut state,
+            pointer_input(PointerPhase::Down, None),
+            &layer,
+            Some(pointer),
+        );
 
         assert_eq!(outcome, Outcome::IGNORED);
         assert!(!redraw);
@@ -752,16 +771,30 @@ mod tests {
         let pointer = absolute(bounds, local);
         let mut state = ControlsState::default();
         let layer = program.hit_layer(&state, bounds);
-        let (pressed, redraw) =
-            program.update(&mut state, Input::PointerDown, &layer, Some(pointer));
-        assert_eq!(pressed, Outcome::captured());
+        let (pressed, redraw) = program.update(
+            &mut state,
+            pointer_input(PointerPhase::Down, None),
+            &layer,
+            Some(pointer),
+        );
+        assert_eq!(
+            pressed,
+            Outcome::captured().with_ownership(crate::interact::PointerOwnership::Claim)
+        );
         assert!(!redraw);
         assert_eq!(state.armed, Some(command));
 
-        let (released, redraw) =
-            program.update(&mut state, Input::PointerUp, &layer, Some(pointer));
+        let (released, redraw) = program.update(
+            &mut state,
+            pointer_input(PointerPhase::Up, None),
+            &layer,
+            Some(pointer),
+        );
 
-        assert_eq!(released, Outcome::set(command));
+        assert_eq!(
+            released,
+            Outcome::set(command).with_ownership(crate::interact::PointerOwnership::Release)
+        );
         assert!(!redraw);
         assert_eq!(state.armed, None);
     }
@@ -788,14 +821,29 @@ mod tests {
         let mut state = ControlsState::default();
         let layer = program.hit_layer(&state, bounds);
         let pointer = absolute(bounds, Pt { x: 17.5, y: 16.0 });
-        let (pressed, _) = program.update(&mut state, Input::PointerDown, &layer, Some(pointer));
-        assert_eq!(pressed, Outcome::captured());
+        let (pressed, _) = program.update(
+            &mut state,
+            pointer_input(PointerPhase::Down, None),
+            &layer,
+            Some(pointer),
+        );
+        assert_eq!(
+            pressed,
+            Outcome::captured().with_ownership(crate::interact::PointerOwnership::Claim)
+        );
 
         let outside = absolute(bounds, Pt { x: 90.0, y: 16.0 });
-        let (released, redraw) =
-            program.update(&mut state, Input::PointerUp, &layer, Some(outside));
+        let (released, redraw) = program.update(
+            &mut state,
+            pointer_input(PointerPhase::Up, None),
+            &layer,
+            Some(outside),
+        );
 
-        assert_eq!(released, Outcome::captured());
+        assert_eq!(
+            released,
+            Outcome::captured().with_ownership(crate::interact::PointerOwnership::Release)
+        );
         assert!(!redraw);
         assert_eq!(state.armed, None);
     }
@@ -810,7 +858,7 @@ mod tests {
 
         let (outcome, redraw) = program.update(
             &mut state,
-            Input::PointerMoved { at: minimize },
+            pointer_input(PointerPhase::Move, Some(minimize)),
             &layer,
             Some(minimize),
         );
@@ -820,13 +868,18 @@ mod tests {
 
         let (_, redraw) = program.update(
             &mut state,
-            Input::PointerMoved { at: minimize },
+            pointer_input(PointerPhase::Move, Some(minimize)),
             &layer,
             Some(minimize),
         );
         assert!(!redraw);
 
-        let (_, redraw) = program.update(&mut state, Input::PointerLeft, &layer, None);
+        let (_, redraw) = program.update(
+            &mut state,
+            pointer_input(PointerPhase::Leave, None),
+            &layer,
+            None,
+        );
         assert!(redraw);
         assert_eq!(state.hovered, None);
     }

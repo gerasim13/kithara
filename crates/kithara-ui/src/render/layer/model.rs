@@ -1,6 +1,6 @@
 use crate::{
     draw::{DrawList, Pt, Rect},
-    interact::{CursorShape, Hit, Input, Outcome},
+    interact::{CursorShape, Hit, Input, Outcome, PointerPhase},
 };
 
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
@@ -21,7 +21,10 @@ impl<A> HostLayer<A> {
     where
         A: Copy,
     {
-        if !matches!(input, Input::PointerDown) {
+        if !matches!(
+            input,
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Down
+        ) {
             return Outcome::IGNORED;
         }
         self.hit(pointer)
@@ -96,8 +99,12 @@ mod tests {
     use super::*;
     use crate::{
         draw::{DrawList, Pt, Rect},
-        interact::{CursorShape, Input, Outcome},
+        interact::{CursorShape, Input, Outcome, mouse as mouse_input},
     };
+
+    fn pointer_input(phase: PointerPhase, at: Option<Pt>) -> Input<'static> {
+        Input::Pointer(mouse_input(phase, at))
+    }
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
         Rect { h, w, x, y }
@@ -127,7 +134,7 @@ mod tests {
         let pointer = Some(Pt { x: 3.0, y: 30.0 });
 
         assert_eq!(
-            handle(&layers, Input::PointerDown, pointer),
+            handle(&layers, pointer_input(PointerPhase::Down, None), pointer),
             Outcome::set(2)
         );
         assert_eq!(cursor(&layers, pointer), CursorShape::Pointer);
@@ -147,19 +154,25 @@ mod tests {
         let layers = [layer];
 
         assert_eq!(
-            handle(&layers, Input::PointerDown, Some(Pt { x: 3.0, y: 30.0 })),
+            handle(
+                &layers,
+                pointer_input(PointerPhase::Down, None),
+                Some(Pt { x: 3.0, y: 30.0 })
+            ),
             Outcome::set(7)
         );
         assert_eq!(
-            handle(&layers, Input::PointerDown, Some(Pt { x: 4.0, y: 30.0 })),
+            handle(
+                &layers,
+                pointer_input(PointerPhase::Down, None),
+                Some(Pt { x: 4.0, y: 30.0 })
+            ),
             Outcome::IGNORED
         );
         assert_eq!(
             handle(
                 &layers,
-                Input::PointerMoved {
-                    at: Pt { x: 3.0, y: 30.0 }
-                },
+                pointer_input(PointerPhase::Move, Some(Pt { x: 3.0, y: 30.0 })),
                 Some(Pt { x: 3.0, y: 30.0 })
             ),
             Outcome::IGNORED

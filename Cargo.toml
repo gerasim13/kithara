@@ -300,6 +300,7 @@ libfuzzer-sys = "0.4"
 loom = { version = "0.7.2", features = ["checkpoint"] }
 lru = "0.18"
 lucide-icons = { version = "1.25", default-features = false }
+masonry = "0.4"
 memory-stats = "1.2"
 mmap-io = { version = "1.0", default-features = false }
 moka = { version = "0.12", features = ["sync"] }
@@ -376,9 +377,9 @@ unimock = { version = "0.6", features = ["std"] }
 url = { version = "2.5.8", features = ["serde"] }
 usdt = { version = "0.6", default-features = false, features = ["asm"] }
 uuid = { version = "1", features = ["v5"] }
-# Held at 0.6 ahead of the masonry host: masonry 0.4 hands a widget a `Scene` from its own
-# vello 0.6, and 0.6/0.9 `Scene` are unrelated types. masonry is not a dependency yet, so this
-# pin is the only thing keeping the painter buildable against it when it arrives.
+# Held at 0.6 for the masonry host: masonry 0.4 hands a widget a `Scene` from its own
+# vello 0.6, and 0.6/0.9 `Scene` are unrelated types. This pin keeps the painter buildable
+# against the host dependency.
 # The feature is off because the painter encodes a scene and rasterises nothing; enabling it
 # would add a second wgpu major beside the 27 that iced already brings.
 vello = { version = "0.6", default-features = false }

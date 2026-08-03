@@ -6,7 +6,7 @@ use super::retained::Component;
 use crate::{
     engine::model::{EngineEvent, Kind},
     interact::{
-        CursorShape, Hit, Hover, Input, Modifiers, Outcome,
+        CursorShape, Hit, Hover, Input, Modifiers, Outcome, PointerPhase,
         recognizers::{Scalar, ScalarState, Track},
     },
 };
@@ -103,7 +103,9 @@ impl Component for HeroWaveComponent {
                 self.modifiers = modifiers;
                 (Outcome::IGNORED, None)
             }
-            Input::PointerDown if self.modifiers.shift() && hit.over() => {
+            Input::Pointer(pointer)
+                if pointer.phase == PointerPhase::Down && self.modifiers.shift() && hit.over() =>
+            {
                 let Some(position) = self.position(hit) else {
                     return (Outcome::IGNORED, None);
                 };
@@ -113,7 +115,7 @@ impl Component for HeroWaveComponent {
                     Some(Endpoint::LoopStart.name()),
                 )
             }
-            Input::PointerMoved { .. } if self.loop_active => {
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Move && self.loop_active => {
                 let Some(position) = self.position(hit) else {
                     return (Outcome::IGNORED, None);
                 };
@@ -122,7 +124,7 @@ impl Component for HeroWaveComponent {
                     Some(Endpoint::LoopEnd.name()),
                 )
             }
-            Input::PointerUp if self.loop_active => {
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Up && self.loop_active => {
                 self.loop_active = false;
                 (Outcome::captured(), None)
             }
@@ -149,6 +151,11 @@ impl Component for HeroWaveComponent {
 
     fn captures_pointer(&self) -> bool {
         self.loop_active || self.drag_state.captures_pointer()
+    }
+
+    fn cancel_pointer(&mut self) {
+        self.loop_active = false;
+        self.drag_state.cancel_pointer();
     }
 }
 

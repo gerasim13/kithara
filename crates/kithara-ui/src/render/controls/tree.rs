@@ -403,7 +403,7 @@ mod tests {
     use crate::{
         builtin,
         draw::{DrawCmd, Geom},
-        interact::Input,
+        interact::{Input, PointerPhase, mouse as mouse_input},
         render::TreeIcon,
     };
 
@@ -625,7 +625,9 @@ mod tests {
         );
 
         assert_eq!(
-            state.scroll.handle(Input::PointerUp, &hit),
+            state
+                .scroll
+                .handle(Input::Pointer(mouse_input(PointerPhase::Up, None)), &hit,),
             crate::interact::Outcome::IGNORED
         );
         assert_eq!(state.scroll.offset(), 0.0);

@@ -4,7 +4,7 @@ use super::{
     component::RetainedComponent,
     model::{Emission, EngineEvent, Identity, Target},
 };
-use crate::interact::{CursorShape, Input, Outcome};
+use crate::interact::{CursorShape, Input, Outcome, PointerOwnership, PointerPhase};
 
 #[derive(Default)]
 pub(super) struct Router {
@@ -46,6 +46,24 @@ impl Router {
         }
     }
 
+    pub(super) fn clear_focus(&mut self, components: &mut [RetainedComponent]) {
+        let focus = self.focus.take();
+        if let Some(component) = focus.as_deref().and_then(|path| {
+            components
+                .iter_mut()
+                .find(|component| component.path() == path && component.focusable())
+        }) {
+            component.blur();
+        }
+        if self
+            .capture
+            .as_ref()
+            .is_some_and(|identity| Some(identity.path.as_str()) == focus.as_deref())
+        {
+            self.capture = None;
+        }
+    }
+
     pub(super) fn handle(
         &mut self,
         components: &mut [RetainedComponent],
@@ -75,7 +93,10 @@ impl Router {
             }
             return None;
         }
-        if matches!(input, Input::PointerDown) {
+        if matches!(
+            input,
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Down
+        ) {
             let focus = targets.iter().rev().find_map(|target| {
                 if !target.hit.over() {
                     return None;
@@ -86,13 +107,7 @@ impl Router {
                     .map(|component| component.path().to_owned())
             });
             if self.focus != focus {
-                if let Some(component) = self.focus.as_deref().and_then(|path| {
-                    components
-                        .iter_mut()
-                        .find(|component| component.path() == path && component.focusable())
-                }) {
-                    component.blur();
-                }
+                self.clear_focus(components);
                 self.focus = focus;
             }
         }
@@ -104,8 +119,9 @@ impl Router {
             let component = &mut components[component_index];
             let (outcome, child) = component.handle(input, &target.hit, target.index, now);
             let path = component.event_path().to_owned();
-            if !component.captures_pointer() {
-                self.capture = None;
+            match outcome.ownership() {
+                PointerOwnership::Release => self.capture = None,
+                PointerOwnership::Claim | PointerOwnership::Unchanged => {}
             }
             return emission(path, child, outcome);
         }
@@ -121,8 +137,9 @@ impl Router {
             if outcome == Outcome::IGNORED {
                 continue;
             }
-            if component.captures_pointer() {
-                self.capture = Some(component.identity());
+            match outcome.ownership() {
+                PointerOwnership::Claim => self.capture = Some(component.identity()),
+                PointerOwnership::Release | PointerOwnership::Unchanged => {}
             }
             return emission(component.event_path().to_owned(), child, outcome);
         }

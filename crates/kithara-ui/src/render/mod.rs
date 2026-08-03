@@ -3,8 +3,11 @@ mod controls;
 pub mod document;
 pub mod event;
 pub mod fonts;
+mod hosted;
 mod icons;
 mod layer;
+#[cfg(feature = "masonry-host")]
+pub mod masonry;
 pub mod model;
 mod owner;
 mod picker;
@@ -18,18 +21,26 @@ pub mod typography;
 
 pub use address::{Node, Scope, Walk};
 pub(crate) use controls::{ChromeLeaf, chrome_leaf, fader_slider, header_chevron, tree_rows};
+#[cfg(feature = "masonry-host")]
+pub(crate) use event::engine_value;
 pub use event::{ControlAction, DragPhase, UiEvent, WindowCommand, WindowEdge};
 pub(crate) use event::{
     activate, control_event, drag, engine, index, scalar, scalar_child, step, toggle_module, window,
 };
+pub(crate) use hosted::HostedControlPlan;
+#[cfg(feature = "masonry-host")]
+pub(crate) use hosted::hosted_control_plan;
 pub use icons::Icon;
 pub(crate) use layer::{
-    HostLayer, LayerHit, WindowLayerProgram, draw_host_layer, window_layer, window_layers,
+    HostLayer, LayerHit, WindowLayerProgram, draw_host_layer, place_popover, window_layer,
+    window_layers,
 };
 pub use model::{
     ReadValue, Reads, StereoLevels, TrackRow, TreeIcon, TreeRow, WaveBucket, WaveformView,
 };
 pub use owner::InputOwner;
+#[cfg(feature = "masonry-host")]
+pub(crate) use picker::picker_width;
 pub(crate) use picker::{
     hosted_picker_overlay, picker_hits, picker_selected_index, scope_picker, sync_picker,
 };

@@ -108,10 +108,11 @@ vocabulary does not by itself authorize that separate port.
 
 `backends::iced_canvas` owns iced translation, glyph-outline filling, and canvas calls.
 `backends::vello` owns Vello translation and scene encoding; the draw list needs no GPU dependency.
-Vello is held at 0.6 ahead of the masonry host, which is not a dependency yet: masonry 0.4 hands a
-widget a `Scene` from its own Vello 0.6, and `Scene` from a different Vello version is an unrelated
-type. Vello's `wgpu` feature stays off because the backend encodes commands but rasterises nothing;
-enabling it would add a second wgpu major beside iced's 27.
+Vello is held at 0.6 because masonry 0.4 hands a widget a `Scene` from that release, and `Scene`
+from a different Vello version is an unrelated type. The direct Vello dependency keeps its `wgpu`
+feature off because the backend only encodes commands. Enabling `masonry-host` still brings Vello's
+wgpu 26 renderer through Masonry while iced brings wgpu 27. Cargo keeps the two majors distinct;
+`deny.toml` reports multiple versions as a warning, so this coexistence is intentional.
 
 `text::TextContext` is the canonical shaping owner. It owns Parley's font and layout contexts and
 registers the embedded Inter, JetBrains Mono, Space Grotesk, and Lucide faces. A context is a
@@ -206,9 +207,10 @@ and scans the system collection once, then lends those resources to contexts and
 so a widget clone does not enumerate the machine again.
 
 For an embedded segment, the Vello backend still builds a `FontData` per text call. A system segment
-already owns the exact `FontData` Parley shaped, so Vello borrows it directly. Caching the embedded
-conversion would mean an exported font-cache type whose only caller is a test, because no shipped
-host encodes a Vello scene yet — the architectural ratchet refuses that, and it is right to.
+already owns the exact `FontData` Parley shaped, so Vello borrows it directly. The Masonry host now
+encodes these lists into its scene, but it still supplies no measured reuse case for an exported
+font cache. `TextMeasurer` therefore borrows the leaf's canonical `TextContext` and owns no second
+cache or font collection.
 
 Vello 0.6 has a known scoped-clip defect tracked as vello#1198: blend layers opened beneath
 `Scene::push_clip_layer`, including those used by COLR/CPAL or bitmap color-glyph drawing, may
@@ -219,9 +221,10 @@ faces, or route color text around the clip, because each would introduce a diffe
 rendering contract or a forbidden fallback path. Instead every Vello clip whose nested command
 tree contains text with a `GlyphFace::System` segment emits one `tracing::warn!` naming
 `vello#1198` and the affected region. The paint path checks only the face discriminant and never
-parses font tables. All ten embedded faces are plain outlines, and no shipped host encodes a Vello
-scene, so the incorrect case is not production-reachable today; the warning is the contract until
-the upstream fix lands.
+parses font tables. All ten embedded faces are plain outlines; the Masonry host can now encode a
+Vello scene, but its built-in and example text uses those embedded faces, so the affected
+system-colour-font-under-clip case remains outside its shipped path. The warning is the contract
+until the upstream fix lands.
 
 `text::FontId` owns family/weight-to-face selection and the face-to-byte mapping. Its tenth value is
 the embedded Lucide face, and `render::fonts` re-exports the same catalog bytes for iced host
@@ -274,6 +277,82 @@ This boundary is shared because masonry needs the same recursive `Range` minimum
 cannot express per-child minimums through its native flex protocol. Each host therefore supplies
 only measurement and placement while `solve::resolve` and `solve::fluid::allocate` keep one layout
 answer. Neutral draw lists remain the shared paint contract for portable controls.
+
+### Document hosts
+
+A document host is the fold target of `render::document::render`. The facade owns traversal,
+conditional visibility, module expansion, document paths, ownership selection, popover selection,
+and window composition. A host receives the already-folded neutral descriptions and owns only its
+toolkit tree, measurement, placement, paint replay, and event delivery. `IcedHost` returns rebuilt
+`Element<UiEvent>` values; `MasonryHost` returns a retained `MasonryNode` containing real
+`WidgetPod`s. Neither host is allowed to re-walk the compiled document or retain a parallel virtual
+layout tree.
+
+The two hosts share the compiled facade, `solve` distribution, `DrawList` vocabulary,
+`TextContext`, skin metrics, and the single `render::event::control_event` constructor. They differ
+where their toolkits genuinely differ. iced carries compression in its `layout::Limits` and moves
+the returned layout nodes directly. Masonry's `BoxConstraints` has no compression bit, so the
+parent writes the complete neutral `Limits` into its private child through `AllowRawMut`, requests
+layout when that side channel changes, and calls `LayoutCtx::run_layout`. Masonry rejects negative
+box maxima that iced's permissive intermediate limits can represent; the adapter clamps that child
+measurement constraint to a valid non-negative box before entering Masonry. Group padding remains
+host-local because iced's outer `Container` fits padding to the available extent before placing its
+inner flex. After `solve::resolve`, Masonry reruns every child under the exact allocated size and
+calls `place_child` at the neutral offset.
+
+`place_child` then applies Masonry's documented pixel snapping: it rounds the origin and the far
+endpoint independently, and derives the stored size from those endpoints. The Masonry parity test
+therefore queries the real retained `WidgetId`s and requires each stored rectangle to equal the
+iced fixture rectangle under exactly that formula. It permits no epsilon and asserts the linear
+part of every window transform is identity, so affine compensation cannot make a wrong layout
+pass. The two builtin presets contribute 114 node comparisons across 1280x720, 960x600, and
+320x240.
+
+Masonry event delivery also stays toolkit-native. Every custom component declares one concrete
+`Action`; the host maps it to the application action and erases it only inside the private
+`HostAction` crossing required by Masonry's heterogeneous tree. `MasonryRoot<Action>` owns the
+render root's signal callback, synchronises native layer signals, recovers the declared type, and
+returns concrete values from `take_actions`. A `UiEvent` queue is not an action channel, and no
+custom action is encoded into one. Built-in control events still pass through the sole
+`render::event::control_event` constructor before the same private mapping. Full iced-only control
+painters and `Vis` remain toolkit-local; `Vis` is deliberately not substituted with a second
+visualiser here.
+
+Pointer input crosses the seam as one `PointerInput`: stable identity, optional changed button,
+host-logical point, click count, and the raw or recognised phase. `Outcome<Action>` keeps three
+independent facts: an optional typed value, whether this event propagates, and whether retained
+pointer ownership is unchanged, claimed, or released. Claim is accepted on `Down`; while claimed,
+Masonry capture and the iced retained router keep delivering moves outside the original hit area.
+`Up`, `Cancel`, terminal `DoubleClick`, or an explicit `Release` returns routing to hit testing.
+`DoubleClick`, `LongPress`, and `MoveLongPress` are neutral recognised phases; a custom component
+resets its gesture on terminal `DoubleClick`, may otherwise retain its own recogniser state, and may
+poll an injected signal during `frame`, which is also the typed egress for an action recognised
+during paint.
+
+Open popovers are native host layers in both toolkits. Content receives input first, the full
+viewport layer captures every remaining inside press, and an outside press or Escape emits the
+same typed dismiss event. Placement shares the anchor/pointer origin, one-pixel frame overhang,
+below-then-above flip, alignment, and viewport clamp. `MasonryState` carries the opening press
+across the closed-to-open document rebuild; `MasonryRoot` updates solved anchor rectangles after
+layout. Hosted Masonry subtrees reconcile one retained `Engine` over the geometry of controls whose
+`InputOwner` is `Engine`; leaf-owned controls keep their local gesture and cannot duplicate that
+route. Window drag, title, controls, resize edges, and the drag ghost use native layers above the
+layout tree in both hosts. The outer resize layer is topmost; the ghost is paint-only and pointer
+motion dirties its Masonry layer before requesting redraw.
+
+`CustomWidget` is public because the next consumer lives outside this crate. Its associated
+`Action` and `input`/`frame` methods use only the neutral interaction vocabulary above. Its `measure` method
+receives public `SizeLimits` plus a borrowed public `TextMeasurer`, so an implementor uses the same
+Parley faces, metrics, and tracking as the built-in text path rather than importing another shaper.
+The returned `Size2` is authoritative only for a `Shrink` axis. `paint` receives the document's
+resolved `Rect` and appends to the public `DrawListBuilder`; a `Fill` widget that preserves authored
+aspect ratio computes its own contained rectangle and letterboxes there. The host never stretches
+or transform-compensates it. `Repaint::{None, NextFrame, Continuous}` is a public declaration
+because frame scheduling belongs to the embedder: Masonry paints the result of every delivered
+frame, then requests another only for `Continuous`, rather than running an unconditional repaint
+loop. The headless
+`masonry_host` example exercises text measurement, internal letterboxing, Vello replay, continuous
+frame declaration, and typed root egress without depending on lsq.
 
 The root adapter sends a compiled `Split` weight to `Flex` as the document's original `f32`. A fluid
 cell uses `Length::Fill` only to declare that it participates in distribution; the solver reads the
@@ -1184,3 +1263,18 @@ documents, implements `EndpointRegistry` (`gui/studio_ui/endpoints.rs`) and `Rea
 tree (`gui/studio_reads/`), and maps `UiEvent` to app messages (`gui/studio_ui/events.rs`). Builtin
 module docs under `assets/modules/` remain the canonical presets consumed by the gallery modules
 page.
+
+## Masonry Host Exports
+
+`MasonryHost::{with_state, with_custom}` and `MasonryRoot::{take_actions,
+take_platform_signals}` are the public contract a Masonry consumer drives: install retained state,
+mount custom content at a document path, then drain typed actions and platform signals each frame.
+`examples/masonry_host.rs` is their production caller and exercises all four end to end; the M9 lsq
+migration is the second consumer.
+
+Those four are why `dead_exports` stopped classifying `TargetKind::Example` as test-like. An example
+is shipped code demonstrating a public API, `cargo --all-targets` builds it, and
+`platform_layer_hygiene` already scanned the same files as production — so counting an example's
+references as test-only made an export that only an example drives look dead. Removing `Example`
+from that classification cleared exactly these four findings and introduced none anywhere else in
+the workspace.

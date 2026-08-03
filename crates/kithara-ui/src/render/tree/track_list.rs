@@ -2,23 +2,25 @@ use iced::advanced::{layout::Layout, mouse};
 
 use crate::{
     draw::Rect,
-    engine::{Descriptor, Engine, ScrollConfig, Target},
-    interact::{Hit, ScrollAxis},
+    engine::{Engine, Target},
+    interact::Hit,
     render::Skin,
     widgets::track_list::{
-        ColumnLayout, column_resizable, minimum_table_width, track_list_body,
-        track_list_content_height, track_list_dividers, track_list_overflows, track_list_row_at,
-        track_list_visible_divider_hit, track_list_visible_row_rect,
+        ColumnLayout, column_resizable, track_list_body, track_list_dividers, track_list_overflows,
+        track_list_row_at, track_list_visible_divider_hit, track_list_visible_row_rect,
     },
 };
+#[cfg(test)]
+use crate::{
+    engine::{Descriptor, ScrollConfig},
+    interact::ScrollAxis,
+    widgets::track_list::{minimum_table_width, track_list_content_height},
+};
 
-#[derive(fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
 pub(super) struct TrackListHost {
     columns: Vec<ColumnLayout>,
     divider_paths: Vec<String>,
     horizontal_path: String,
-    #[field(get, vis = "pub(super)")]
     path: String,
     row_count: usize,
     row_target: String,
@@ -130,6 +132,7 @@ impl TrackListHost {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn append_descriptors(&self, descriptors: &mut Vec<Descriptor>) {
         descriptors.push(Descriptor::scroll(
             self.horizontal_path.clone(),
@@ -172,7 +175,16 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{builtin, draw::Pt, interact::Input, module::TrackColumn};
+    use crate::{
+        builtin,
+        draw::Pt,
+        interact::{Input, PointerPhase, mouse as mouse_input},
+        module::TrackColumn,
+    };
+
+    fn pointer_input(phase: PointerPhase, at: Option<Pt>) -> Input<'static> {
+        Input::Pointer(mouse_input(phase, at))
+    }
 
     fn divider_columns(index_width: f32) -> Vec<ColumnLayout> {
         vec![
@@ -232,12 +244,10 @@ mod tests {
             &mut targets,
         );
         let now = Instant::now();
-        let _ = engine.handle(Input::PointerDown, &targets, now);
+        let _ = engine.handle(pointer_input(PointerPhase::Down, None), &targets, now);
         assert!(engine.captures(path));
         let moved = engine.handle(
-            Input::PointerMoved {
-                at: Pt { x: 350.0, y: 11.0 },
-            },
+            pointer_input(PointerPhase::Move, Some(Pt { x: 350.0, y: 11.0 })),
             &targets,
             now,
         );
@@ -261,7 +271,7 @@ mod tests {
             .unwrap_or_else(|| panic!("an active offscreen divider must retain a release watcher"));
         assert_eq!((watcher.hit.area().w, watcher.hit.area().h), (0.0, 0.0));
 
-        let _ = engine.handle(Input::PointerUp, &release_targets, now);
+        let _ = engine.handle(pointer_input(PointerPhase::Up, None), &release_targets, now);
         assert!(!engine.captures_pointer());
     }
 }

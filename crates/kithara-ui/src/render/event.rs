@@ -102,6 +102,29 @@ pub(crate) fn engine(
     }
 }
 
+#[cfg(feature = "masonry-host")]
+pub(crate) fn engine_value(path: &str, child: Option<&str>, event: EngineEvent) -> UiEvent {
+    match event {
+        EngineEvent::Scalar(value) => {
+            let path = child.map_or_else(|| path.to_owned(), |child| format!("{path}/{child}"));
+            control_event(&path, ControlAction::SetScalar(value))
+        }
+        EngineEvent::Activate => control_event(path, ControlAction::Activate),
+        EngineEvent::Crossing(over) => {
+            control_event(path, ControlAction::Drag(DragPhase::Over(over)))
+        }
+        EngineEvent::Index(selected) => control_event(path, ControlAction::SelectIndex(selected)),
+        EngineEvent::Drag { event, index } => control_event(
+            path,
+            ControlAction::Drag(match event {
+                DragEvent::Started => DragPhase::Start(index),
+                DragEvent::Dropped => DragPhase::Drop,
+            }),
+        ),
+        EngineEvent::Text(query) => UiEvent::LibraryQuery(query),
+    }
+}
+
 fn typed_outcome<T>(value: T, captured: bool) -> Outcome<T> {
     if captured {
         Outcome::set(value)

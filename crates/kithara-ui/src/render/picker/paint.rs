@@ -22,12 +22,7 @@ pub(super) struct PickerPaint<'a> {
 
 impl<'a> PickerPaint<'a> {
     pub(super) fn new(items: Vec<&'a str>, selected: Option<usize>, skin: &'a Skin) -> Self {
-        let mut text = TextContext::from(skin.text_resources());
-        let label_width = items
-            .iter()
-            .map(|item| text.shape(item, text_role(skin), None).width())
-            .fold(0.0_f32, f32::max);
-        let width = label_width + skin.tree.scope_padding_x * 3.0 + skin.tree.scope_chevron_size;
+        let width = picker_width(items.iter().copied(), skin);
         Self {
             items,
             selected,
@@ -176,6 +171,15 @@ impl<'a> PickerPaint<'a> {
         );
         list.finish()
     }
+}
+
+pub(crate) fn picker_width<'a>(items: impl IntoIterator<Item = &'a str>, skin: &Skin) -> f32 {
+    let mut text = TextContext::from(skin.text_resources());
+    let label_width = items
+        .into_iter()
+        .map(|item| text.shape(item, text_role(skin), None).width())
+        .fold(0.0_f32, f32::max);
+    label_width + skin.tree.scope_padding_x * 3.0 + skin.tree.scope_chevron_size
 }
 
 pub(crate) fn picker_selected_index(

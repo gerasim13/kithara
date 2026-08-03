@@ -181,9 +181,13 @@ mod tests {
     use super::*;
     use crate::{
         draw::{Pt, Rect},
-        interact::{CursorShape, Input, Outcome},
+        interact::{CursorShape, Input, Outcome, PointerPhase, mouse as mouse_input},
         render::{WindowCommand, WindowEdge, window},
     };
+
+    fn pointer_down() -> Input<'static> {
+        Input::Pointer(mouse_input(PointerPhase::Down, None))
+    }
 
     #[kithara::test]
     fn every_resize_edge_has_its_exact_region_command_and_cursor() {
@@ -288,7 +292,7 @@ mod tests {
                 x: area.x + area.w / 2.0,
                 y: area.y + area.h / 2.0,
             };
-            let outcome = layer.handle(Input::PointerDown, Some(pointer));
+            let outcome = layer.handle(pointer_down(), Some(pointer));
             assert_eq!(
                 outcome,
                 Outcome::set(WindowCommand::Resize(edge)),
@@ -330,7 +334,7 @@ mod tests {
         };
         let pointer = Some(Pt { x: 90.0, y: 16.0 });
         let layer = program.layer(&(), bounds, None);
-        let (outcome, redraw) = program.update(&mut (), Input::PointerDown, &layer, pointer);
+        let (outcome, redraw) = program.update(&mut (), pointer_down(), &layer, pointer);
 
         assert_eq!(outcome, Outcome::set(WindowCommand::Drag));
         assert!(!redraw);

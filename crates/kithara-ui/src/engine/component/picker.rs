@@ -3,7 +3,7 @@ use kithara_platform::time::Instant;
 use super::retained::Component;
 use crate::{
     engine::model::{EngineEvent, Kind},
-    interact::{CursorShape, Hit, Input, Key, Modifiers, Outcome},
+    interact::{CursorShape, Hit, Input, Key, Modifiers, Outcome, PointerPhase},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -183,14 +183,17 @@ impl Component for PickerComponent {
         _now: Instant,
     ) -> (Outcome<EngineEvent>, Option<&'static str>) {
         let outcome = match input {
-            Input::PointerDown => self.pointer_down(hit, index),
-            Input::PointerMoved { .. } => self.pointer_moved(hit, index),
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Down => {
+                self.pointer_down(hit, index)
+            }
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Move => {
+                self.pointer_moved(hit, index)
+            }
             Input::InputMethod(_)
             | Input::KeyPressed { .. }
             | Input::KeyReleased { .. }
             | Input::ModifiersChanged(_)
-            | Input::PointerLeft
-            | Input::PointerUp
+            | Input::Pointer(_)
             | Input::Wheel(_) => Outcome::IGNORED,
         };
         (outcome, None)
@@ -202,10 +205,7 @@ impl Component for PickerComponent {
             Input::KeyReleased { key, modifiers } => self.key_released(key, modifiers),
             Input::InputMethod(_)
             | Input::ModifiersChanged(_)
-            | Input::PointerDown
-            | Input::PointerMoved { .. }
-            | Input::PointerLeft
-            | Input::PointerUp
+            | Input::Pointer(_)
             | Input::Wheel(_) => Outcome::IGNORED,
         };
         (outcome, None)

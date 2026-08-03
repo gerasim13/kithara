@@ -11,6 +11,7 @@ categories = ["gui", "config"]
 
 [features]
 default = []
+masonry-host = ["dep:masonry", "render", "vello-backend"]
 render = [
     "dep:iced",
     "dep:kithara-platform",
@@ -34,6 +35,7 @@ derive_more = { workspace = true }
 fieldwork = { workspace = true }
 iced = { workspace = true, optional = true }
 lucide-icons = { workspace = true, optional = true }
+masonry = { workspace = true, optional = true }
 num-traits = { workspace = true, optional = true }
 parley = { workspace = true, optional = true }
 ron = { workspace = true }
@@ -63,6 +65,11 @@ workspace = true
 [[example]]
 name = "gallery"
 required-features = ["render"]
+test = true
+
+[[example]]
+name = "masonry_host"
+required-features = ["masonry-host"]
 test = true
 
 [[bench]]

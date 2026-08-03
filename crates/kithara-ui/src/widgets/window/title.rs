@@ -23,7 +23,7 @@ impl<'a> Widget<'a> for TitleBar<'_, '_> {
     }
 }
 
-struct TitleProgram {
+pub(crate) struct TitleProgram {
     color: Rgba,
     label: String,
     padding_x: f32,
@@ -32,7 +32,7 @@ struct TitleProgram {
 }
 
 impl TitleProgram {
-    fn new(label: &str, skin: &Skin) -> Self {
+    pub(crate) fn new(label: &str, skin: &Skin) -> Self {
         let metrics = skin.window;
         Self {
             color: skin.rgba(metrics.titlebar_text.color),
@@ -64,7 +64,7 @@ impl TitleProgram {
 }
 
 #[derive(Default)]
-struct TitleState {
+pub(crate) struct TitleState {
     text: RefCell<Option<TextContext>>,
 }
 
@@ -128,8 +128,12 @@ mod tests {
     use crate::{
         builtin,
         draw::DrawCmd,
-        interact::{Input, Outcome},
+        interact::{Input, Outcome, PointerPhase, mouse as mouse_input},
     };
+
+    fn pointer_down() -> Input<'static> {
+        Input::Pointer(mouse_input(PointerPhase::Down, None))
+    }
 
     #[kithara::test]
     fn title_text_is_retained_as_a_draw_command() {
@@ -170,7 +174,7 @@ mod tests {
         let pointer = Some(Pt { x: 90.0, y: 16.0 });
         let mut state = TitleState::default();
         let layer = program.hit_layer(&state, bounds);
-        let (outcome, redraw) = program.update(&mut state, Input::PointerDown, &layer, pointer);
+        let (outcome, redraw) = program.update(&mut state, pointer_down(), &layer, pointer);
 
         assert_eq!(outcome, Outcome::set(WindowCommand::Drag));
         assert!(!redraw);

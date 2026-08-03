@@ -15,7 +15,7 @@ use super::{
 use crate::{
     draw::{Pt, Rect},
     interact::{
-        CursorShape, Hit, Hover, Input, Outcome, iced as iced_interact,
+        CursorShape, Hit, Hover, Input, Outcome, PointerPhase, iced as iced_interact,
         recognizers::{ItemDrag, Scalar, Track},
     },
     widgets::track_list::{
@@ -250,7 +250,10 @@ impl TrackListProgram<'_> {
         bounds: Rect,
         point: Option<Pt>,
     ) -> Option<Action<UiEvent>> {
-        if matches!(input, Input::PointerDown) {
+        if matches!(
+            input,
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Down
+        ) {
             state.row_drag = ItemDrag::default();
             state.drag_index = hovered_row(
                 point,
@@ -281,7 +284,10 @@ impl TrackListProgram<'_> {
         let hit = Hit::new(point, row);
         let was_pressed = state.pressed_index == Some(row_index);
         let outcome = state.row_drag.on_input(input, &hit);
-        let released = matches!(input, Input::PointerUp);
+        let released = matches!(
+            input,
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Up
+        );
         if released {
             state.drag_index = None;
             state.pressed_index = None;
@@ -290,7 +296,10 @@ impl TrackListProgram<'_> {
         if action.is_some() {
             return action;
         }
-        if matches!(input, Input::PointerDown) {
+        if matches!(
+            input,
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Down
+        ) {
             return index(&self.paint.path, Outcome::captured());
         }
         if released && was_pressed {

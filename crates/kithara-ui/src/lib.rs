@@ -14,7 +14,7 @@ pub mod error;
 pub mod expand;
 pub mod ids;
 #[cfg(feature = "render")]
-pub(crate) mod interact;
+pub mod interact;
 pub mod registry;
 #[cfg(feature = "render")]
 pub mod render;
