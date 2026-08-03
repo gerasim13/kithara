@@ -82,7 +82,7 @@ async fn hls_seek_middle_repeated_seeks_stress(
     .byte_pool(kithara::bufpool::BytePool::default())
     .pcm_pool(kithara::bufpool::PcmPool::default())
     .downloader(downloader.clone())
-    .discriminator("t0".to_string())
+    .discriminator("t0")
     .store(store)
     .decoder(
         kithara::audio::AudioDecoderConfig::builder()

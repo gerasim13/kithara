@@ -459,7 +459,7 @@ mod tests {
         .store(store)
         .byte_pool(BytePool::default())
         .pcm_pool(PcmPool::default())
-        .discriminator(discriminator.to_string())
+        .discriminator(discriminator)
         .build();
         AnalysisTarget::for_config(&config).expect("test source has an analysis target")
     }

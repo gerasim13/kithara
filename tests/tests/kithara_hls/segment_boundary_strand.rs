@@ -177,7 +177,7 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
             .backend(DecoderBackend::Symphonia)
             .byte_len_handle(Arc::new(std::sync::atomic::AtomicU64::new(byte_len)))
             .maybe_byte_map(byte_map)
-            .hint("wav".to_string())
+            .hint("wav")
             .build();
         let mut decoder = DecoderFactory::create_from_media_info(stream, &wav_info, decoder_config)
             .expect("build Symphonia WAV decoder over Stream<Hls>");

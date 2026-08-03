@@ -180,11 +180,10 @@ impl SymphoniaDemuxer {
             byte_len_handle,
             byte_map,
         } = open;
-        let config = SymphoniaConfig {
-            byte_len_handle,
-            hint,
-            ..Default::default()
-        };
+        let config = SymphoniaConfig::builder()
+            .maybe_byte_len_handle(byte_len_handle)
+            .maybe_hint(hint)
+            .build();
         let format_opts = FormatOptions::default();
         let bootstrap: ReaderBootstrap = if let Some(container) = container {
             new_direct(source, &config, container, format_opts)?

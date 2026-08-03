@@ -133,7 +133,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
         ResourceConfig::parse_src(master.as_str()).expect("valid master URL"),
     )
     .downloader(downloader.clone())
-    .discriminator("t0".to_string())
+    .discriminator("t0")
     .store(store)
     .decoder(
         kithara::audio::AudioDecoderConfig::builder()

@@ -24,7 +24,7 @@ fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>) {
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(kithara::bufpool::PcmPool::default())
-            .hint("wav".into())
+            .hint("wav")
             .build(),
     );
     assert!(decoder.is_ok(), "decoder creation should succeed");

@@ -71,7 +71,7 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
     .byte_pool(kithara::bufpool::BytePool::default())
     .pcm_pool(kithara::bufpool::PcmPool::default())
     .downloader(downloader.clone())
-    .discriminator("t0".to_string())
+    .discriminator("t0")
     .store(store)
     .build();
 

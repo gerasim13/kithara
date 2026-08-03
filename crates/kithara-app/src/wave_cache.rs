@@ -376,7 +376,7 @@ mod tests {
                 .byte_pool(BytePool::default())
                 .pcm_pool(PcmPool::default());
         match discriminator {
-            Some(discriminator) => builder.discriminator(discriminator.to_string()).build(),
+            Some(discriminator) => builder.discriminator(discriminator).build(),
             None => builder.build(),
         }
     }

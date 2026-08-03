@@ -92,7 +92,7 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
             cue_badge_background: self.skin.color(self.skin.wave.cue_badge_background),
             cue_badge_text_color: self.skin.color(self.skin.wave.cue_badge_text_color),
             drag: ScalarDrag::builder()
-                .path(self.path.to_owned())
+                .path(self.path)
                 .mode(if show_beats {
                     ScalarDragMode::RelativeHorizontal {
                         value: progress,

@@ -4390,6 +4390,7 @@ dependencies = [
 name = "kithara-bufpool"
 version = "0.0.1-alpha4"
 dependencies = [
+ "bon",
  "crossbeam-queue",
  "delegate",
  "derive_more",

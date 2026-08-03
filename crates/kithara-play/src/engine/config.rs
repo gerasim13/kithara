@@ -47,8 +47,8 @@ impl fmt::Debug for EngineConfig {
 }
 
 #[cfg(test)]
-impl Default for EngineConfig {
-    fn default() -> Self {
-        Self::builder().pcm_pool(PcmPool::default()).build()
+impl EngineConfig {
+    pub(crate) fn test_builder() -> EngineConfigBuilder<engine_config_builder::SetPcmPool> {
+        Self::builder().pcm_pool(PcmPool::default())
     }
 }

@@ -34,15 +34,8 @@ fn mock_writer(content: &[u8]) -> (BaseWriter, tempfile::TempDir) {
 
 fn mock_writer_mem(content: &[u8]) -> BaseWriter {
     let cancel = CancelToken::never();
-    let res: MemResource = Resource::open(
-        cancel,
-        MemOptions {
-            initial_data: None,
-            capacity: 0,
-            pool: test_pool(),
-        },
-    )
-    .expect("open in-memory processing test resource");
+    let res: MemResource = Resource::open(cancel, MemOptions::builder().pool(test_pool()).build())
+        .expect("open in-memory processing test resource");
     res.write_at(0, content)
         .expect("seed in-memory processing test resource");
     BaseWriter::new(StorageResource::from(res))

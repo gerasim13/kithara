@@ -110,6 +110,7 @@ impl ItemDrag {
 }
 
 #[derive(bon::Builder)]
+#[builder(on(String, into))]
 pub(crate) struct HorizontalPixelDrag {
     hover: HoverState,
     path: String,
@@ -173,6 +174,7 @@ impl HorizontalPixelDrag {
 }
 
 #[derive(bon::Builder)]
+#[builder(on(String, into))]
 pub(crate) struct ClickActivate {
     hover: HoverState,
     path: String,
@@ -226,6 +228,7 @@ pub(crate) struct WheelStep {
 }
 
 #[derive(bon::Builder)]
+#[builder(on(String, into))]
 pub(crate) struct ScalarDrag {
     hover: HoverState,
     double_click_value: Option<f32>,
@@ -590,7 +593,7 @@ mod tests {
     #[kithara::test]
     fn horizontal_drag_publishes_normalized_scalar() {
         let drag = ScalarDrag::builder()
-            .path("volume".to_owned())
+            .path("volume")
             .mode(ScalarDragMode::Horizontal)
             .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
             .build();
@@ -616,7 +619,7 @@ mod tests {
     #[kithara::test]
     fn relative_drag_double_click_resets_to_configured_value() {
         let drag = ScalarDrag::builder()
-            .path("knob".to_owned())
+            .path("knob")
             .mode(ScalarDragMode::RelativeVertical {
                 value: 0.8,
                 range: 140.0,
@@ -647,7 +650,7 @@ mod tests {
     #[kithara::test]
     fn relative_horizontal_drag_uses_start_value_without_click_seek() {
         let drag = ScalarDrag::builder()
-            .path("wave".to_owned())
+            .path("wave")
             .mode(ScalarDragMode::RelativeHorizontal {
                 value: 0.4,
                 scale: 0.2,
@@ -703,7 +706,7 @@ mod tests {
     #[kithara::test]
     fn wheel_steps_the_value_by_direction_and_clamps() {
         let drag = ScalarDrag::builder()
-            .path("knob".to_owned())
+            .path("knob")
             .mode(ScalarDragMode::RelativeVertical {
                 value: 0.5,
                 range: 140.0,
@@ -753,7 +756,7 @@ mod tests {
     #[kithara::test]
     fn trackpad_pixels_accumulate_to_whole_steps() {
         let drag = ScalarDrag::builder()
-            .path("knob".to_owned())
+            .path("knob")
             .mode(ScalarDragMode::RelativeVertical {
                 value: 0.5,
                 range: 140.0,
@@ -808,7 +811,7 @@ mod tests {
     #[kithara::test]
     fn wheel_is_inert_without_an_opt_in() {
         let drag = ScalarDrag::builder()
-            .path("wave".to_owned())
+            .path("wave")
             .mode(ScalarDragMode::HorizontalClick)
             .hover(HoverState::new(mouse::Interaction::Pointer))
             .build();
@@ -832,7 +835,7 @@ mod tests {
     #[kithara::test]
     fn horizontal_pixel_drag_uses_start_width_and_clamps_minimum() {
         let drag = HorizontalPixelDrag::builder()
-            .path("tracklist/table/width/artist".to_owned())
+            .path("tracklist/table/width/artist")
             .value(180.0)
             .minimum(28.0)
             .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))

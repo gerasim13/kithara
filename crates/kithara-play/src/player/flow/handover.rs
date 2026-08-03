@@ -230,7 +230,6 @@ impl PlayerImpl {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::{BytePool, PcmPool};
     use kithara_events::{EngineEvent, Envelope, Event, PlayerEvent};
     use kithara_test_utils::kithara;
 
@@ -239,7 +238,7 @@ mod tests {
 
     #[kithara::test]
     fn commit_next_without_arm_returns_not_ready() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         let err = player.commit_next(1).expect_err("must error");
         assert!(matches!(err, PlayError::NotReady));
     }
@@ -247,10 +246,8 @@ mod tests {
     #[kithara::test]
     fn commit_next_publishes_snapshot_before_current_item_changed() {
         let player = PlayerImpl::new(
-            PlayerConfig::builder()
+            PlayerConfig::test_builder()
                 .session(testing::test_session())
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .build(),
         );
         player

@@ -266,7 +266,7 @@ impl<'a> Widget<'a> for VolumeStrip<'_, '_> {
     fn view(self) -> Element<'a, UiEvent> {
         Canvas::new(SegmentedVolumeCanvas {
             drag: ScalarDrag::builder()
-                .path(self.path.to_owned())
+                .path(self.path)
                 .mode(ScalarDragMode::Horizontal)
                 .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
                 .wheel(WheelStep {

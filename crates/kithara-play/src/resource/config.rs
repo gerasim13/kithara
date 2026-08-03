@@ -22,7 +22,7 @@ const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 
 /// Unified configuration for opening an audio resource.
 #[derive(Clone, Builder)]
-#[builder(start_fn = for_src)]
+#[builder(on(String, into), start_fn = for_src)]
 #[non_exhaustive]
 pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     /// Audio resource source (URL or local path).
@@ -292,8 +292,8 @@ mod tests {
                 .byte_pool(BytePool::default())
                 .pcm_pool(PcmPool::default())
                 .events(EventBus::new(32))
-                .hint("mp3".to_string())
-                .discriminator("test".to_string())
+                .hint("mp3")
+                .discriminator("test")
                 .preload_chunks(NonZeroUsize::new(5).expect("BUG: 5 > 0"))
                 .build();
         assert!(config.bus.is_some());

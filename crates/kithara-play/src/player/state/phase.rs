@@ -412,7 +412,7 @@ mod tests {
 
     #[kithara::test]
     fn require_active_slot_errors_from_idle() {
-        let player = PlayerImpl::new(crate::player::PlayerConfig::default());
+        let player = PlayerImpl::new(crate::player::PlayerConfig::test_builder().build());
         assert_eq!(
             player.require_active_slot(),
             Err(TransitionError::WrongPhase)

@@ -21,7 +21,7 @@ pub enum FileSrc {
 ///
 /// Used with `Stream::<File>::new(config)`.
 #[derive(Clone, Builder)]
-#[builder(start_fn = for_src)]
+#[builder(on(String, into), start_fn = for_src)]
 #[non_exhaustive]
 pub struct FileConfig {
     /// File source (remote URL or local path).
@@ -170,7 +170,7 @@ mod tests {
     fn test_with_discriminator_sets_discriminator(#[case] name: &str) {
         let config = FileConfig::for_src(test_src())
             .store(test_store())
-            .discriminator(name.to_string())
+            .discriminator(name)
             .build();
         assert_eq!(config.discriminator.as_deref(), Some(name));
     }

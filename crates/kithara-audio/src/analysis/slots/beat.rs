@@ -31,12 +31,12 @@ where
 {
     pub(crate) fn build(&self, spec: PcmSpec, pcm_pool: &PcmPool) -> Slot<B> {
         Slot(self.0.as_ref().map(|config| {
-            let pass = BeatPassConfig::new(
-                spec.sample_rate.get(),
-                config.params.clone(),
-                config.resampler.clone(),
-                pcm_pool.clone(),
-            );
+            let pass = BeatPassConfig::builder()
+                .source_rate(spec.sample_rate.get())
+                .params(config.params.clone())
+                .resampler(config.resampler.clone())
+                .pcm_pool(pcm_pool.clone())
+                .build();
             BeatPass::new(pass)
         }))
     }

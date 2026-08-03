@@ -33,7 +33,7 @@ impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, '_> {
         };
         Canvas::new(VerticalVuCanvas {
             drag: ScalarDrag::builder()
-                .path(self.path.to_owned())
+                .path(self.path)
                 .mode(ScalarDragMode::Vertical)
                 .hover(HoverState::new(mouse::Interaction::ResizingVertically))
                 .build(),

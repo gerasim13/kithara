@@ -55,7 +55,7 @@ pub(crate) fn app_track_source(
         .decoder(decoder)
         .initial_abr_mode(abr);
     let config = match discriminator {
-        Some(discriminator) => builder.discriminator(discriminator.to_owned()).build(),
+        Some(discriminator) => builder.discriminator(discriminator).build(),
         None => builder.build(),
     };
     TrackSource::Config(Box::new(config))

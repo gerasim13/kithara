@@ -3,7 +3,7 @@ use kithara_test_utils::kithara;
 
 #[kithara::test]
 fn byte_growth_exhausts_shared_budget_for_pcm() {
-    let region = Region::new(RegionConfig::default().max_bytes(16));
+    let region = Region::new(RegionConfig::builder().max_bytes(16).build());
     let byte_pool = region.byte_pool();
     let pcm_pool = region.pcm_pool();
 
@@ -16,7 +16,7 @@ fn byte_growth_exhausts_shared_budget_for_pcm() {
 
 #[kithara::test]
 fn pcm_growth_exhausts_shared_budget_for_bytes() {
-    let region = Region::new(RegionConfig::default().max_bytes(16));
+    let region = Region::new(RegionConfig::builder().max_bytes(16).build());
     let byte_pool = region.byte_pool();
     let pcm_pool = region.pcm_pool();
 
@@ -86,7 +86,7 @@ fn rejected_recycle_releases_shared_budget() {
 
 #[kithara::test]
 fn stats_combine_budget_and_keep_pool_hits_separate() {
-    let region = Region::new(RegionConfig::default().max_bytes(64));
+    let region = Region::new(RegionConfig::builder().max_bytes(64).build());
     let byte_pool = region.byte_pool();
     let pcm_pool = region.pcm_pool();
 
@@ -112,7 +112,7 @@ fn stats_combine_budget_and_keep_pool_hits_separate() {
 
 #[kithara::test]
 fn failed_growth_preserves_buffer_and_budget() {
-    let region = Region::new(RegionConfig::default().max_bytes(4));
+    let region = Region::new(RegionConfig::builder().max_bytes(4).build());
     let byte_pool = region.byte_pool();
     let mut bytes = byte_pool.get();
 
@@ -131,7 +131,7 @@ fn failed_growth_preserves_buffer_and_budget() {
 
 #[kithara::test]
 fn successful_growth_charges_actual_capacity() {
-    let region = Region::new(RegionConfig::default().max_bytes(1024));
+    let region = Region::new(RegionConfig::builder().max_bytes(1024).build());
     let pcm_pool = region.pcm_pool();
     let mut pcm = pcm_pool.get();
 
@@ -145,7 +145,7 @@ fn successful_growth_charges_actual_capacity() {
 
 #[kithara::test]
 fn attach_round_trip_keeps_travelling_charge_balanced() {
-    let region = Region::new(RegionConfig::default().max_bytes(1024));
+    let region = Region::new(RegionConfig::builder().max_bytes(1024).build());
     let pcm_pool = region.pcm_pool();
 
     let mut pcm = pcm_pool.get();
@@ -163,7 +163,7 @@ fn attach_round_trip_keeps_travelling_charge_balanced() {
 
 #[kithara::test]
 fn smaller_ensure_len_keeps_capacity_charged() {
-    let region = Region::new(RegionConfig::default().max_bytes(1024));
+    let region = Region::new(RegionConfig::builder().max_bytes(1024).build());
     let pcm_pool = region.pcm_pool();
     let mut pcm = pcm_pool.get();
 
@@ -179,7 +179,7 @@ fn smaller_ensure_len_keeps_capacity_charged() {
 
 #[kithara::test]
 fn get_with_budget_overshoot_is_observable() {
-    let region = Region::new(RegionConfig::default().max_bytes(1));
+    let region = Region::new(RegionConfig::builder().max_bytes(1).build());
     let byte_pool = region.byte_pool();
 
     let bytes = byte_pool.get_with(|buf| buf.resize(2, 0));
@@ -192,7 +192,7 @@ fn get_with_budget_overshoot_is_observable() {
 
 #[kithara::test]
 fn growth_beyond_capacity_amortizes() {
-    let region = Region::new(RegionConfig::default().max_bytes(1024));
+    let region = Region::new(RegionConfig::builder().max_bytes(1024).build());
     let pcm_pool = region.pcm_pool();
     let mut pcm = pcm_pool.get();
 
@@ -208,7 +208,7 @@ fn growth_beyond_capacity_amortizes() {
 
 #[kithara::test]
 fn amortized_growth_falls_back_to_exact_fit_under_budget() {
-    let region = Region::new(RegionConfig::default().max_bytes(6));
+    let region = Region::new(RegionConfig::builder().max_bytes(6).build());
     let byte_pool = region.byte_pool();
     let mut bytes = byte_pool.get();
 

@@ -39,7 +39,7 @@ impl<'a> Widget<'a> for Knob<'_, '_, '_, '_> {
             value_color: self.skin.color(self.skin.knob.value_color),
             indicator_color: self.skin.color(self.skin.knob.indicator_color),
             drag: ScalarDrag::builder()
-                .path(self.path.to_owned())
+                .path(self.path)
                 .mode(ScalarDragMode::RelativeVertical {
                     value,
                     range: self.skin.knob.drag_range,

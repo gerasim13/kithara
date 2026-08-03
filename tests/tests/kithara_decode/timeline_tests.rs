@@ -153,7 +153,7 @@ mod hls_timeline {
         let decoder_config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(kithara::bufpool::PcmPool::default())
-            .hint("wav".to_string())
+            .hint("wav")
             .maybe_byte_map(stream.byte_map())
             .build();
 

@@ -112,7 +112,7 @@ fn resource_config(
 ) -> ResourceConfig {
     ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).unwrap())
         .store(store)
-        .maybe_hint(hint.map(str::to_owned))
+        .maybe_hint(hint)
         .maybe_worker(worker)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()

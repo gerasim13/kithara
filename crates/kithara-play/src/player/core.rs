@@ -273,10 +273,8 @@ mod tests {
     #[kithara::test]
     fn prepare_config_applies_player_gapless_mode() {
         let player = PlayerImpl::new(
-            PlayerConfig::builder()
+            PlayerConfig::test_builder()
                 .gapless_mode(GaplessMode::Disabled)
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .build(),
         );
         let mut config = resource_config("https://example.com/song.mp3");
@@ -293,7 +291,7 @@ mod tests {
 
     #[kithara::test]
     fn prepare_config_per_track_cancel_is_child_of_player_master() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         let mut rc = resource_config("https://example.com/song.mp3");
         rc = player.prepare_config(rc);
 
@@ -312,10 +310,8 @@ mod tests {
     fn prepare_config_preserves_caller_supplied_master() {
         let parent_master = CancelToken::never();
         let player = PlayerImpl::new(
-            PlayerConfig::builder()
+            PlayerConfig::test_builder()
                 .cancel(parent_master.clone())
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .build(),
         );
         let mut rc = resource_config("https://example.com/song.mp3");
@@ -337,7 +333,7 @@ mod tests {
     #[case(PlayerBasicScenario::EngineAccessor)]
     #[case(PlayerBasicScenario::SendToSlotWithoutSlot)]
     fn player_basic_behaviors(#[case] scenario: PlayerBasicScenario) {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         match scenario {
             PlayerBasicScenario::StartsPaused => {
                 assert!((player.rate() - 0.0).abs() < f32::EPSILON);
@@ -362,7 +358,7 @@ mod tests {
 
     #[kithara::test]
     fn player_pause_sets_rate_zero() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         player.core.params.set_rate_value(1.0);
         player.pause();
         assert!((player.rate() - 0.0).abs() < f32::EPSILON);
@@ -370,7 +366,7 @@ mod tests {
 
     #[kithara::test]
     fn player_volume_clamps() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         player.set_volume(2.0);
         assert!((player.volume() - 1.0).abs() < f32::EPSILON);
         player.set_volume(-1.0);
@@ -379,7 +375,7 @@ mod tests {
 
     #[kithara::test]
     fn player_muted() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         assert!(!player.is_muted());
         player.set_muted(true);
         assert!(player.is_muted());
@@ -387,7 +383,7 @@ mod tests {
 
     #[kithara::test]
     fn player_crossfade_duration() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         assert!((player.crossfade_duration() - 1.0).abs() < f32::EPSILON);
         player.set_crossfade_duration(3.0);
         assert!((player.crossfade_duration() - 3.0).abs() < f32::EPSILON);
@@ -395,7 +391,7 @@ mod tests {
 
     #[kithara::test]
     fn player_prefetch_duration() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         assert!((player.prefetch_duration() - 3.5).abs() < f32::EPSILON);
         player.set_prefetch_duration(8.0);
         assert!((player.prefetch_duration() - 8.0).abs() < f32::EPSILON);
@@ -405,7 +401,7 @@ mod tests {
 
     #[kithara::test]
     fn player_events_subscribe() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         let mut rx = player.subscribe();
         player.set_volume(0.5);
         let event = rx.try_recv();
@@ -414,7 +410,7 @@ mod tests {
 
     #[kithara::test]
     fn player_config_custom() {
-        let config = PlayerConfig::builder()
+        let config = PlayerConfig::test_builder()
             .crossfade_duration(2.0)
             .prefetch_duration(5.0)
             .default_rate(0.5)
@@ -423,8 +419,6 @@ mod tests {
             .max_slots(2)
             .sample_rate(44_100)
             .timestretch(StretchControls::new(1.0))
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
             .build();
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
@@ -432,14 +426,12 @@ mod tests {
 
     #[kithara::test]
     fn player_config_builder() {
-        let config = PlayerConfig::builder()
+        let config = PlayerConfig::test_builder()
             .max_slots(8)
             .default_rate(0.5)
             .crossfade_duration(2.5)
             .prefetch_duration(7.0)
             .eq_layout(generate_log_spaced_bands(5))
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
             .build();
         assert_eq!(config.max_slots, 8);
         assert!((config.default_rate - 0.5).abs() < f32::EPSILON);
@@ -450,7 +442,7 @@ mod tests {
 
     #[kithara::test]
     fn player_default_rate_getter_setter() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         assert!((player.default_rate() - 1.0).abs() < f32::EPSILON);
         player.set_default_rate(0.75);
         assert!((player.default_rate() - 0.75).abs() < f32::EPSILON);
@@ -458,7 +450,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn player_multiple_events_in_order() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         let mut rx = player.subscribe();
 
         player.set_volume(0.5);
@@ -493,21 +485,21 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn player_negative_crossfade_duration_clamped() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         player.set_crossfade_duration(-5.0);
         assert!((player.crossfade_duration() - 0.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]
     fn set_rate_updates_shared_speed() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         player.set_rate(2.0);
         assert!((player.core.timestretch.speed() - 2.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]
     fn set_rate_clamps_invalid_values() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         player.set_rate(0.0);
         assert!(player.rate() >= 0.01);
         assert!(player.core.timestretch.speed() >= 0.01);
@@ -519,10 +511,8 @@ mod tests {
     #[kithara::test]
     fn timestretch_is_address_stable_across_play_pause() {
         let player = PlayerImpl::new(
-            PlayerConfig::builder()
+            PlayerConfig::test_builder()
                 .session(testing::test_session())
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .build(),
         );
         let ptr_before = Arc::as_ptr(&player.core.timestretch);
@@ -541,7 +531,7 @@ mod tests {
     fn pause_from_idle_is_noop() {
         use super::super::state::phase::PlayerPhaseKind;
 
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         assert_eq!(player.phase_kind(), PlayerPhaseKind::Idle);
         player.pause();
         assert_eq!(
@@ -554,7 +544,7 @@ mod tests {
 
     #[kithara::test]
     fn position_seconds_idle_is_none() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         assert!(player.position_seconds().is_none());
         assert!(player.duration_seconds().is_none());
         assert!(!player.is_playing());
@@ -569,7 +559,7 @@ mod tests {
         // no worker-registered track directly. This pins that constructing,
         // arming a phase, and dropping does not panic / UAF: `phase` and
         // `core.items` must drop before `core.engine`.
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         *player.phase.lock() = PlayerPhase::Playing {
             slot: SlotId::new(0),
             abr_handle: None,
@@ -581,7 +571,7 @@ mod tests {
 
     #[kithara::test]
     fn set_rate_emits_rate_changed() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         let mut rx = player.subscribe();
         player.set_rate(2.0);
         let e = rx.try_recv();
@@ -596,14 +586,14 @@ mod tests {
 
     #[kithara::test]
     fn player_exposes_worker() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         let _w = player.worker();
         let _w2 = player.worker().clone();
     }
 
     #[kithara::test]
     fn auto_advance_enabled_default_and_toggle() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         assert!(player.auto_advance_enabled(), "default must be on");
         player.set_auto_advance_enabled(false);
         assert!(!player.auto_advance_enabled());
@@ -614,10 +604,8 @@ mod tests {
     #[kithara::test]
     fn auto_advance_disabled_via_config() {
         let player = PlayerImpl::new(
-            PlayerConfig::builder()
+            PlayerConfig::test_builder()
                 .auto_advance_enabled(false)
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .build(),
         );
         assert!(!player.auto_advance_enabled());

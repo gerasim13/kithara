@@ -229,15 +229,10 @@ impl Assets for MemAssetStore {
             return Ok(AcquisitionResult::Pending(BaseWriter::new(storage)));
         }
 
-        let mut options = MemOptions {
-            pool: self.pool.clone(),
-            ..MemOptions::default()
-        };
-        if let Some(capacity) = self.mem_resource_capacity
-            && capacity > 0
-        {
-            options.capacity = capacity;
-        }
+        let options = MemOptions::builder()
+            .pool(self.pool.clone())
+            .maybe_capacity(self.mem_resource_capacity.filter(|capacity| *capacity > 0))
+            .build();
         let mem: MemResource = Resource::open_with_observer(
             self.cancel.clone(),
             options,

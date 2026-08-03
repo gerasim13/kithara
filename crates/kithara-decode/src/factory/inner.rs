@@ -134,6 +134,7 @@ pub struct DecoderConfig<B = NoResamplerBackend> {
     /// Optional byte-map handle over the underlying source.
     pub byte_map: Option<Arc<dyn ByteMap>>,
     /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
+    #[builder(into)]
     pub hint: Option<String>,
     /// Reader-side observer hooks. Single-owner; moved into
     /// [`ComposedDecoder`] by the chosen backend path.
@@ -151,13 +152,15 @@ pub struct DecoderConfig<B = NoResamplerBackend> {
     pub epoch: u64,
 }
 
-#[cfg(test)]
-impl Default for DecoderConfig {
-    fn default() -> Self {
+#[cfg(all(test, feature = "apple", any(target_os = "macos", target_os = "ios")))]
+impl DecoderConfig {
+    pub(crate) fn test_builder() -> DecoderConfigBuilder<
+        NoResamplerBackend,
+        decoder_config_builder::SetPcmPool<decoder_config_builder::SetBytePool>,
+    > {
         Self::builder()
             .byte_pool(BytePool::default())
             .pcm_pool(PcmPool::default())
-            .build()
     }
 }
 
@@ -761,10 +764,7 @@ where
     if probed_gapless.is_some() {
         demuxer.set_gapless(probed_gapless);
     }
-    let symphonia_config = SymphoniaConfig {
-        gapless: config.gapless,
-        ..Default::default()
-    };
+    let symphonia_config = SymphoniaConfig::builder().gapless(config.gapless).build();
     let codec_impl = if SymphoniaCodec::supports(codec) {
         SymphoniaCodec::open_with_config(demuxer.track_info(), &symphonia_config)?
     } else {
@@ -823,10 +823,7 @@ where
     );
     match codec {
         AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 | AudioCodec::Flac => {
-            let symphonia_config = SymphoniaConfig {
-                gapless: config.gapless,
-                ..Default::default()
-            };
+            let symphonia_config = SymphoniaConfig::builder().gapless(config.gapless).build();
             build_fmp4_segment_decoder(source, layout, config, |track| {
                 SymphoniaCodec::open_with_config(track, &symphonia_config)
             })
@@ -1074,11 +1071,11 @@ mod apple_factory_tests {
             .maybe_codec(Some(AudioCodec::AacLc))
             .maybe_container(None)
             .build();
-        let config: DecoderConfig<kithara_resampler::NoResamplerBackend> = DecoderConfig {
-            backend: DecoderBackend::Apple,
-            byte_map: Some(byte_map),
-            ..DecoderConfig::default()
-        };
+        let config: DecoderConfig<kithara_resampler::NoResamplerBackend> =
+            DecoderConfig::test_builder()
+                .backend(DecoderBackend::Apple)
+                .byte_map(byte_map)
+                .build();
 
         let result = DecoderFactory::create_from_media_info(source, &media_info, config);
 

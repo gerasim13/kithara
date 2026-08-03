@@ -11,10 +11,7 @@ use kithara::{
 pub fn mem_resource_with_bytes(data: &[u8], cancel: CancelToken) -> MemResource {
     MemResource::open(
         cancel,
-        MemOptions {
-            initial_data: Some(data.to_vec()),
-            ..MemOptions::default()
-        },
+        MemOptions::builder().initial_data(data.to_vec()).build(),
     )
     .expect("BUG: MemDriver::open with initial_data is infallible")
 }

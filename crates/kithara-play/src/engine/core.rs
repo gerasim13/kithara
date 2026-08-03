@@ -337,13 +337,13 @@ mod tests {
 
     #[kithara::test]
     fn engine_creates_worker() {
-        let engine = EngineImpl::new(EngineConfig::default(), EventBus::default());
+        let engine = EngineImpl::new(EngineConfig::test_builder().build(), EventBus::default());
         let _w = engine.worker();
     }
 
     #[kithara::test]
     fn engine_worker_is_clonable() {
-        let engine = EngineImpl::new(EngineConfig::default(), EventBus::default());
+        let engine = EngineImpl::new(EngineConfig::test_builder().build(), EventBus::default());
         let w1 = engine.worker().clone();
         let w2 = engine.worker().clone();
         w1.wake();
@@ -352,7 +352,7 @@ mod tests {
 
     #[kithara::test]
     fn engine_drop_shuts_down_worker() {
-        let engine = EngineImpl::new(EngineConfig::default(), EventBus::default());
+        let engine = EngineImpl::new(EngineConfig::test_builder().build(), EventBus::default());
         let worker_clone = engine.worker().clone();
         drop(engine);
         worker_clone.wake();

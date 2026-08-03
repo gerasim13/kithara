@@ -22,10 +22,15 @@ The public surface centres on one trait — `Decoder`. Concrete backends (Sympho
 
 ```rust
 use std::io::Cursor;
+use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{DecoderBackend, DecoderConfig, DecoderFactory};
 
 let reader = Cursor::new(wav_bytes);
-let config = DecoderConfig { backend: DecoderBackend::Symphonia, ..Default::default() };
+let config = DecoderConfig::builder()
+    .backend(DecoderBackend::Symphonia)
+    .byte_pool(BytePool::default())
+    .pcm_pool(PcmPool::default())
+    .build();
 let mut decoder = DecoderFactory::create_with_probe(reader, Some("wav"), config)?;
 
 let spec = decoder.spec(); // sample_rate, channels

@@ -75,11 +75,12 @@ impl fmt::Debug for PlayerConfig {
 }
 
 #[cfg(test)]
-impl Default for PlayerConfig {
-    fn default() -> Self {
+impl PlayerConfig {
+    pub(crate) fn test_builder()
+    -> PlayerConfigBuilder<player_config_builder::SetPcmPool<player_config_builder::SetBytePool>>
+    {
         Self::builder()
             .byte_pool(BytePool::default())
             .pcm_pool(PcmPool::default())
-            .build()
     }
 }

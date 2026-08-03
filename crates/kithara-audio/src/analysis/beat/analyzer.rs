@@ -1,5 +1,6 @@
 use std::num::NonZeroU32;
 
+use bon::Builder;
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_resampler::{MonoStream, MonoStreamConfig, ResamplerBackend, ResamplerOptions};
 use num_traits::cast::ToPrimitive;
@@ -11,33 +12,16 @@ use super::{
 };
 use crate::{analysis::analyzer::BeatAnalysisConfig, waveform::BeatGrid};
 
+#[derive(Builder)]
 pub(crate) struct BeatPassConfig<B>
 where
     B: ResamplerBackend,
 {
     resampler: BeatAnalysisConfig<B>,
+    #[builder(default)]
     params: GridParams,
     pcm_pool: PcmPool,
     source_rate: u32,
-}
-
-impl<B> BeatPassConfig<B>
-where
-    B: ResamplerBackend,
-{
-    pub(crate) fn new(
-        source_rate: u32,
-        params: GridParams,
-        resampler: BeatAnalysisConfig<B>,
-        pcm_pool: PcmPool,
-    ) -> Self {
-        Self {
-            resampler,
-            params,
-            pcm_pool,
-            source_rate,
-        }
-    }
 }
 
 /// Streaming front-end for beat detection: downmixes interleaved PCM to
@@ -374,10 +358,7 @@ mod tests {
         super::detector::{BeatDetectError, BeatDetector, BeatDetectorMock, RawBeats},
         BeatAnalyzer,
     };
-    use crate::analysis::{
-        BeatAnalysisConfig,
-        beat::{BeatPassConfig, GridParams},
-    };
+    use crate::analysis::{BeatAnalysisConfig, beat::BeatPassConfig};
 
     struct Consts;
 
@@ -401,12 +382,13 @@ mod tests {
         source_rate: u32,
         config: BeatAnalysisConfig<RubatoBackend>,
     ) -> BeatAnalyzer<RubatoBackend> {
-        BeatAnalyzer::new(BeatPassConfig::new(
-            source_rate,
-            GridParams::default(),
-            config,
-            pcm_pool(),
-        ))
+        BeatAnalyzer::new(
+            BeatPassConfig::builder()
+                .source_rate(source_rate)
+                .resampler(config)
+                .pcm_pool(pcm_pool())
+                .build(),
+        )
     }
 
     /// Mocked detector, called exactly once: `check` asserts on the mono

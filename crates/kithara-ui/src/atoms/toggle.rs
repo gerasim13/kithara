@@ -78,7 +78,7 @@ impl<'a> Widget<'a> for BinaryControl<'_, '_, '_, '_> {
         Canvas::new(BinaryControlCanvas {
             active: *active,
             click: ClickActivate::builder()
-                .path(self.path.to_owned())
+                .path(self.path)
                 .hover(HoverState::new(mouse::Interaction::Pointer))
                 .build(),
             palette: self.skin.palette,

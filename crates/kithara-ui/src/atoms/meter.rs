@@ -31,7 +31,7 @@ impl<'a> Widget<'a> for StereoMeter<'_, '_, '_, '_> {
         };
         Canvas::new(StereoMeterCanvas {
             drag: ScalarDrag::builder()
-                .path(self.path.to_owned())
+                .path(self.path)
                 .mode(ScalarDragMode::Horizontal)
                 .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
                 .build(),

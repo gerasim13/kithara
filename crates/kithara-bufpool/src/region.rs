@@ -1,3 +1,4 @@
+use bon::Builder;
 use kithara_platform::sync::Arc;
 
 use crate::{
@@ -12,25 +13,15 @@ const DEFAULT_MAX_BYTES: usize = 256 * 1024 * 1024;
 ///
 /// Pool sizing policies follow the workspace defaults in `global`; the one
 /// product knob is the total byte budget shared by both pools.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Builder, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RegionConfig {
+    #[builder(default = DEFAULT_MAX_BYTES)]
     max_bytes: usize,
-}
-
-impl RegionConfig {
-    /// Set the total byte budget shared by byte and PCM pools.
-    #[must_use]
-    pub fn max_bytes(mut self, max_bytes: usize) -> Self {
-        self.max_bytes = max_bytes;
-        self
-    }
 }
 
 impl Default for RegionConfig {
     fn default() -> Self {
-        Self {
-            max_bytes: DEFAULT_MAX_BYTES,
-        }
+        Self::builder().build()
     }
 }
 
