@@ -7,7 +7,6 @@ pub mod catalog;
 pub mod config;
 pub mod crossfade;
 pub mod deck;
-pub mod frontend;
 pub mod mix;
 pub mod sources;
 pub mod state;

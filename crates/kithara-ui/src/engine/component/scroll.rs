@@ -10,9 +10,11 @@ use crate::{
 
 const LINE_STEP_PX: f32 = 60.0;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct ScrollState {
     config: ScrollConfig,
+    #[field(get, vis = "pub(crate)")]
     offset: f32,
     viewport_extent: f32,
 }
@@ -35,10 +37,6 @@ impl ScrollState {
     pub(crate) fn reconcile(&mut self, config: ScrollConfig) {
         self.config = config;
         self.clamp_offset();
-    }
-
-    pub(crate) const fn offset(&self) -> f32 {
-        self.offset
     }
 
     pub(crate) fn sync_offset(&mut self, offset: f32) {
@@ -135,7 +133,7 @@ impl ScrollComponent {
         self
     }
 
-    pub(super) const fn offset(&self) -> f32 {
+    pub(super) fn offset(&self) -> f32 {
         self.state.offset()
     }
 

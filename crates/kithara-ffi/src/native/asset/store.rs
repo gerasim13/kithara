@@ -1,7 +1,7 @@
 use std::{fmt, num::NonZeroUsize, path::PathBuf};
 
 use kithara::bufpool::Region;
-use kithara_assets::{AssetLayoutRegistry, AssetStore, AssetStoreBuilder, StorageBackend};
+use kithara_assets::{AssetLayoutRegistry, AssetStore, StorageBackend};
 use kithara_platform::{CancelScope, sync::Arc};
 
 use super::FfiAssetLayoutRegistry;
@@ -14,10 +14,14 @@ impl Consts {
 
 /// Shareable Rust-owned asset store used by one or more players.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct FfiAssetStore {
+    #[field(get = handle, vis = "pub(crate)")]
     inner: AssetStore,
-    region: Region,
     shutdown: CancelScope,
+    #[field(get, vis = "pub(crate)")]
+    region: Region,
 }
 
 impl FfiAssetStore {
@@ -31,7 +35,7 @@ impl FfiAssetStore {
     fn build_with_backend(backend: StorageBackend, layouts: AssetLayoutRegistry) -> Self {
         let region = Region::default();
         let shutdown = CancelScope::new(None);
-        let inner = AssetStoreBuilder::default()
+        let inner = AssetStore::builder()
             .backend(backend)
             .cache_capacity(Consts::ASSET_CACHE_CAPACITY)
             .cancel(shutdown.token())
@@ -40,17 +44,9 @@ impl FfiAssetStore {
             .build();
         Self {
             inner,
-            region,
             shutdown,
+            region,
         }
-    }
-
-    pub(crate) fn handle(&self) -> &AssetStore {
-        &self.inner
-    }
-
-    pub(crate) fn region(&self) -> &Region {
-        &self.region
     }
 
     #[cfg(test)]
@@ -111,12 +107,12 @@ mod tests {
     }
 
     impl FfiAssetLayout for FixedLayout {
-        fn root(&self, _source: FfiAssetSource) -> String {
-            format!("{}-root", self.tag)
-        }
-
         fn path(&self, _resource: FfiAssetResource) -> String {
             format!("{}/resource.bin", self.tag)
+        }
+
+        fn root(&self, _source: FfiAssetSource) -> String {
+            format!("{}-root", self.tag)
         }
     }
 

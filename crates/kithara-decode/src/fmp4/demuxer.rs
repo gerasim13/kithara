@@ -148,17 +148,6 @@ enum EnsureCursor {
 }
 
 impl Demuxer for Fmp4SegmentDemuxer {
-    delegate::delegate! {
-        to self.cursor {
-            #[expr($.map(|c| c.segment_index))]
-            #[call(as_ref)]
-            fn current_segment_index(&self) -> Option<u32>;
-            #[expr($.map(|c| c.variant_index))]
-            #[call(as_ref)]
-            fn current_variant_index(&self) -> Option<usize>;
-        }
-    }
-
     fn duration(&self) -> Option<Duration> {
         self.duration
     }
@@ -267,6 +256,17 @@ impl Demuxer for Fmp4SegmentDemuxer {
 
     fn track_info(&self) -> &TrackInfo {
         &self.track_info
+    }
+
+    delegate::delegate! {
+        to self.cursor {
+            #[expr($.map(|c| c.segment_index))]
+            #[call(as_ref)]
+            fn current_segment_index(&self) -> Option<u32>;
+            #[expr($.map(|c| c.variant_index))]
+            #[call(as_ref)]
+            fn current_variant_index(&self) -> Option<usize>;
+        }
     }
 }
 

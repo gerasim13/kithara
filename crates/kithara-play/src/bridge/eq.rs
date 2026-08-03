@@ -33,12 +33,13 @@ impl SharedEq {
         }
     }
 
-    pub(crate) fn gain(&self, band: usize) -> Option<f32> {
-        self.gains.load().get(band).map(load_gain)
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.gains.load().len()
+    delegate::delegate! {
+        to self.gains.load() {
+            #[expr($.map(load_gain))]
+            #[call(get)]
+            pub(crate) fn gain(&self, band: usize) -> Option<f32>;
+            pub(crate) fn len(&self) -> usize;
+        }
     }
 
     pub(crate) fn reset(&self) {

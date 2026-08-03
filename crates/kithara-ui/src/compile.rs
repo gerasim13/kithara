@@ -24,24 +24,16 @@ use crate::{
 #[non_exhaustive]
 pub struct CompiledUi {
     pub root: CompiledNode,
+    /// Names the item the pointer is carrying; drawn at the pointer.
+    pub dragged: Option<Binding>,
     pub size: SizeSpec,
     /// The layout asked to be framed by its own resize edges.
     pub resize_edges: bool,
-    /// Names the item the pointer is carrying; drawn at the pointer.
-    pub dragged: Option<Binding>,
-    includes: Vec<IncludedModule>,
     arena: StrArena,
+    includes: Vec<IncludedModule>,
 }
 
 impl CompiledUi {
-    delegate::delegate! {
-        to self.arena {
-            /// Resolves a string interned by this compiled UI.
-            #[must_use]
-            pub fn resolve(&self, id: InternId) -> &str;
-        }
-    }
-
     #[cfg(feature = "render")]
     pub(crate) fn includes_module(&self, owner: InternId, address: &[usize], module: &str) -> bool {
         self.includes
@@ -49,13 +41,21 @@ impl CompiledUi {
             .filter(|include| include.owner == owner && include.address.as_ref() == address)
             .any(|include| self.resolve(include.module) == module)
     }
+
+    delegate::delegate! {
+        to self.arena {
+            /// Resolves a string interned by this compiled UI.
+            #[must_use]
+            pub fn resolve(&self, id: InternId) -> &str;
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 struct IncludedModule {
-    owner: InternId,
     address: Box<[usize]>,
     module: InternId,
+    owner: InternId,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -122,8 +122,8 @@ pub fn compile(
     let bytes = loaded.text.len();
     if bytes > config.limits.max_bytes {
         return Err(UiDocError::TooLarge {
-            origin: loaded.uri,
             bytes,
+            origin: loaded.uri,
             max: config.limits.max_bytes,
         });
     }
@@ -153,21 +153,21 @@ pub fn compile(
     Ok(CompiledUi {
         root,
         size,
-        resize_edges: document.resize_edges,
         dragged,
         includes,
         arena,
+        resize_edges: document.resize_edges,
     })
 }
 
 struct Compiler<'a> {
-    resolver: &'a dyn SourceResolver,
-    endpoints: &'a dyn EndpointRegistry,
-    skin: &'a SkinDoc,
-    config: &'a UiConfig,
     budget: &'a mut Budget,
     interner: &'a mut Interner,
+    skin: &'a SkinDoc,
+    config: &'a UiConfig,
     includes: &'a mut Vec<IncludedModule>,
+    endpoints: &'a dyn EndpointRegistry,
+    resolver: &'a dyn SourceResolver,
 }
 
 impl Compiler<'_> {
@@ -190,10 +190,10 @@ impl Compiler<'_> {
                 };
                 let blocks = children.iter().any(|(_, child)| child.blocks());
                 Ok(CompiledNode::Split {
-                    axis: *axis,
                     children,
                     size,
                     blocks,
+                    axis: *axis,
                 })
             }
             LayoutNode::Optional { id, hidden, node } => {
@@ -255,6 +255,8 @@ impl Compiler<'_> {
                 );
                 Ok(CompiledNode::Module {
                     instance,
+                    size,
+                    blocks,
                     module: expanded.module,
                     title: expanded.title,
                     chip: expanded.chip,
@@ -266,8 +268,6 @@ impl Compiler<'_> {
                     drop: expanded.drop,
                     collapsed: expanded.collapsed,
                     root: Box::new(expanded.root),
-                    size,
-                    blocks,
                 })
             }
         }

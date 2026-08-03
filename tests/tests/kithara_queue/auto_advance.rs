@@ -78,7 +78,9 @@ async fn repeat_one_natural_advance_keeps_current_track() {
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        QueueConfig::builder()
+            .player(Arc::clone(harness.player()))
+            .build(),
         false,
     ));
     let id = queue.insert_loaded_for_test(make_resource("one", 1.0, 0.3));
@@ -110,7 +112,9 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first() {
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        QueueConfig::builder()
+            .player(Arc::clone(harness.player()))
+            .build(),
         false,
     ));
     let first = queue.insert_loaded_for_test(make_resource("first", 1.0, 0.2));
@@ -150,7 +154,9 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        QueueConfig::builder()
+            .player(Arc::clone(harness.player()))
+            .build(),
         false,
     ));
 
@@ -216,7 +222,9 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        QueueConfig::builder()
+            .player(Arc::clone(harness.player()))
+            .build(),
         false,
     ));
 
@@ -287,7 +295,9 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        QueueConfig::builder()
+            .player(Arc::clone(harness.player()))
+            .build(),
         false,
     ));
     let mut rx = queue.subscribe();
@@ -358,7 +368,9 @@ async fn autoplay_first_registered_track_plays_first_even_when_loaded_last() {
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        QueueConfig::builder()
+            .player(Arc::clone(harness.player()))
+            .build(),
         true,
     ));
 
@@ -422,7 +434,9 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        QueueConfig::builder()
+            .player(Arc::clone(harness.player()))
+            .build(),
         false,
     ));
 
@@ -491,7 +505,9 @@ async fn queue_pauses_player_when_last_track_ends() {
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        QueueConfig::builder()
+            .player(Arc::clone(harness.player()))
+            .build(),
         false,
     ));
     let mut rx = queue.subscribe();
@@ -549,7 +565,9 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        QueueConfig::builder()
+            .player(Arc::clone(harness.player()))
+            .build(),
         true,
     ));
 

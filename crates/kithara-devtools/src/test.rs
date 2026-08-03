@@ -19,10 +19,10 @@ pub struct TestArgs {
 #[derive(Debug)]
 struct TestRequest {
     flash: Option<bool>,
-    no_block: Option<bool>,
     lane: Option<String>,
     loom: Option<bool>,
     net_backend: Option<String>,
+    no_block: Option<bool>,
     passthrough: Vec<String>,
 }
 

@@ -9,22 +9,22 @@ use super::{QueuedResource, playlist::Playlist};
 use crate::{api::PlayerEvent, resource::Resource, rt::track::PlayerResource};
 
 pub(crate) struct TakenItem {
+    pub(crate) abr_handle: Option<kithara_abr::AbrHandle>,
     pub(crate) item_id: Option<Arc<str>>,
     pub(crate) player_resource: PlayerResource,
-    pub(crate) abr_handle: Option<kithara_abr::AbrHandle>,
     pub(crate) duration_seconds: f64,
 }
 
 pub(crate) struct ItemQueue {
-    playlist: Mutex<Playlist>,
     bus: EventBus,
+    playlist: Mutex<Playlist>,
 }
 
 impl ItemQueue {
     pub(crate) fn new(bus: EventBus) -> Self {
         Self {
-            playlist: Mutex::default(),
             bus,
+            playlist: Mutex::default(),
         }
     }
 
@@ -43,6 +43,20 @@ impl ItemQueue {
     pub(crate) fn announce_current_item(&self, index: usize) {
         if self.playlist.lock().mark_announced(index) {
             self.bus.publish(PlayerEvent::CurrentItemChanged);
+        }
+    }
+
+    delegate::delegate! {
+        to self.playlist.lock() {
+            #[call(clear)]
+            pub(crate) fn clear_all(&self);
+            #[call(current)]
+            pub(crate) fn current_index(&self) -> usize;
+            pub(crate) fn has_resource(&self, index: usize) -> bool;
+            pub(crate) fn is_announced(&self, index: usize) -> bool;
+            #[call(len)]
+            pub(crate) fn item_count(&self) -> usize;
+            pub(crate) fn set_current(&self, index: usize);
         }
     }
 
@@ -124,35 +138,11 @@ impl ItemQueue {
         drop(playlist);
 
         Some(TakenItem {
+            abr_handle,
             item_id,
             player_resource,
-            abr_handle,
             duration_seconds,
         })
-    }
-
-    pub(crate) fn clear_all(&self) {
-        self.playlist.lock().clear();
-    }
-
-    pub(crate) fn current_index(&self) -> usize {
-        self.playlist.lock().current()
-    }
-
-    pub(crate) fn has_resource(&self, index: usize) -> bool {
-        self.playlist.lock().has_resource(index)
-    }
-
-    pub(crate) fn is_announced(&self, index: usize) -> bool {
-        self.playlist.lock().is_announced(index)
-    }
-
-    pub(crate) fn item_count(&self) -> usize {
-        self.playlist.lock().len()
-    }
-
-    pub(crate) fn set_current(&self, index: usize) {
-        self.playlist.lock().set_current(index);
     }
 }
 

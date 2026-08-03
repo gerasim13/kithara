@@ -13,8 +13,8 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct TitleBar<'label, 'skin> {
-    label: &'label str,
     skin: &'skin Skin,
+    label: &'label str,
 }
 
 impl<'a> Widget<'a> for TitleBar<'_, '_> {

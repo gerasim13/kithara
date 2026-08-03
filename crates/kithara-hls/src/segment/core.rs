@@ -71,21 +71,6 @@ impl Segment {
         }
     }
 
-    delegate::delegate! {
-        to self {
-            /// Route byte length: `size().get()`. The route length is stable virtual
-            /// geometry; the completeness gate is `size().is_exact()`.
-            #[expr($.get())]
-            #[call(size)]
-            pub(crate) fn len(&self) -> u64;
-            /// Read byte length: exact committed/probed length when known, otherwise
-            /// the route length so descriptors remain addressable before commit.
-            #[expr($.read_len())]
-            #[call(size)]
-            pub(crate) fn read_len(&self) -> u64;
-        }
-    }
-
     /// Open the slot's resource and copy `range` into `dst`. Routes through the
     /// slot's [`ResourceHandle`] — `Ok(None)` means the bytes are not on disk
     /// yet.
@@ -139,6 +124,21 @@ impl Segment {
         match self {
             Self::Init(s) => &s.url,
             Self::Media(s) => &s.url,
+        }
+    }
+
+    delegate::delegate! {
+        to self {
+            /// Route byte length: `size().get()`. The route length is stable virtual
+            /// geometry; the completeness gate is `size().is_exact()`.
+            #[expr($.get())]
+            #[call(size)]
+            pub(crate) fn len(&self) -> u64;
+            /// Read byte length: exact committed/probed length when known, otherwise
+            /// the route length so descriptors remain addressable before commit.
+            #[expr($.read_len())]
+            #[call(size)]
+            pub(crate) fn read_len(&self) -> u64;
         }
     }
 }

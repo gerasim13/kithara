@@ -1,7 +1,7 @@
 use std::{cell::RefCell, collections::HashMap, num::NonZeroUsize, rc::Rc};
 
 use kithara_abr::AbrMode;
-use kithara_assets::{AssetStore, AssetStoreBuilder, StorageBackend};
+use kithara_assets::{AssetStore, StorageBackend};
 use kithara_bufpool::Region;
 use kithara_drm::{KeyRequest, KeyRequestFactory};
 use kithara_hls::KeyOptions;
@@ -39,26 +39,26 @@ impl Consts {
 /// `RefCell` shared across the worker's command loop: setters mutate it,
 /// and each track build snapshots it into a [`ResourceConfig`].
 struct BuildState {
+    store: AssetStore,
     headers: HashMap<String, String>,
     keys: KeyOptions,
     region: Region,
-    store: AssetStore,
 }
 
 impl Default for BuildState {
     fn default() -> Self {
         let region = Region::default();
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .cache_capacity(Consts::ASSET_CACHE_CAPACITY)
             .max_bytes(Consts::ASSET_CACHE_MAX_BYTES)
             .pool(region.byte_pool())
             .build();
         Self {
-            headers: HashMap::new(),
-            keys: KeyOptions::default(),
             region,
             store,
+            headers: HashMap::new(),
+            keys: KeyOptions::default(),
         }
     }
 }
@@ -319,10 +319,10 @@ fn build_source(state: &BuildState, url: String) -> TrackSource {
     if state.keys.key_registry.is_none() && state.headers.is_empty() {
         return TrackSource::Uri(url);
     }
-    match ResourceConfig::for_src(&url) {
-        Ok(builder) => {
+    match ResourceConfig::parse_src(&url) {
+        Ok(src) => {
             let headers = (!state.headers.is_empty()).then(|| state.headers.clone());
-            let config = builder
+            let config = ResourceConfig::for_src(src)
                 .keys(state.keys.clone())
                 .maybe_headers(headers.map(Into::into))
                 .byte_pool(state.region.byte_pool())

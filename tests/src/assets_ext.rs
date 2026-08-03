@@ -1,19 +1,17 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
-use kithara::assets::{
-    AssetResourceState, AssetStore, AssetStoreBuilder, ResourceKey, StorageBackend,
-};
+use kithara::assets::{AssetResourceState, AssetStore, ResourceKey, StorageBackend};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn disk_asset_store(root: impl Into<PathBuf>) -> AssetStore {
-    AssetStoreBuilder::default()
+    AssetStore::builder()
         .backend(StorageBackend::Disk { root: root.into() })
         .build()
 }
 
 pub fn memory_asset_store() -> AssetStore {
-    AssetStoreBuilder::default()
+    AssetStore::builder()
         .backend(StorageBackend::Memory)
         .build()
 }

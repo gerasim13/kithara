@@ -20,32 +20,17 @@ use crate::{
 
 /// Options for opening a [`MmapResource`].
 #[derive(Debug, Clone, Builder)]
-#[builder(state_mod(vis = "pub"))]
+#[builder(start_fn = for_path)]
 #[non_exhaustive]
 pub struct MmapOptions {
+    /// Path to the backing file.
+    #[builder(start_fn)]
+    pub path: PathBuf,
     /// Open mode controlling read/write behavior for existing files.
     #[builder(default)]
     pub mode: OpenMode,
     /// Initial file size for new files. Ignored for existing files.
     pub initial_len: Option<u64>,
-    /// Path to the backing file.
-    pub path: PathBuf,
-}
-
-impl MmapOptions {
-    /// Options for the given backing-file path with all other fields at
-    /// their builder defaults. For chains use [`MmapOptions::for_path`].
-    #[must_use]
-    pub fn new(path: PathBuf) -> Self {
-        Self::for_path(path).build()
-    }
-
-    /// Chainable counterpart to [`MmapOptions::new`]: returns a builder
-    /// with `path` set so callers can attach `.mode(...)` /
-    /// `.initial_len(...)` then `.build()`.
-    pub fn for_path(path: PathBuf) -> MmapOptionsBuilder<mmap_options_builder::SetPath> {
-        Self::builder().path(path)
-    }
 }
 
 /// Mmap state machine.

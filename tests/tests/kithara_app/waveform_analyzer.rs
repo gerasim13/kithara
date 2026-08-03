@@ -56,13 +56,13 @@ async fn run_analysis(
 async fn runner_silent_wav_yields_all_zero_envelope() {
     let server = TestServerHelper::new().await;
     let url = server.silence(&silence_wav_spec()).await;
-    let config = ResourceConfig::new(
-        url.as_str(),
-        memory_asset_store(),
-        BytePool::default(),
-        PcmPool::default(),
+    let config = ResourceConfig::for_src(
+        ResourceConfig::parse_src(url.as_str()).expect("silence URL must build a ResourceConfig"),
     )
-    .expect("silence URL must build a ResourceConfig");
+    .store(memory_asset_store())
+    .byte_pool(BytePool::default())
+    .pcm_pool(PcmPool::default())
+    .build();
 
     // A silent 1s WAV must decode end to end and finalise to a native-resolution
     // envelope capped by the requested maximum. No frames are loud, so nothing
@@ -95,13 +95,13 @@ async fn runner_silent_wav_yields_all_zero_envelope() {
 async fn runner_returns_nothing_when_cancelled_upfront() {
     let server = TestServerHelper::new().await;
     let url = server.silence(&silence_wav_spec()).await;
-    let config = ResourceConfig::new(
-        url.as_str(),
-        memory_asset_store(),
-        BytePool::default(),
-        PcmPool::default(),
+    let config = ResourceConfig::for_src(
+        ResourceConfig::parse_src(url.as_str()).expect("silence URL must build a ResourceConfig"),
     )
-    .expect("silence URL must build a ResourceConfig");
+    .store(memory_asset_store())
+    .byte_pool(BytePool::default())
+    .pcm_pool(PcmPool::default())
+    .build();
 
     let master = CancelToken::never();
     master.cancel();

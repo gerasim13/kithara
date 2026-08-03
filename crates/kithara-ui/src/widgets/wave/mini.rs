@@ -35,13 +35,13 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct MiniWave<'path, 'value, 'data, 'scope, 'reads, 'skin> {
+    skin: &'skin Skin,
+    reads: &'reads dyn Reads,
     path: &'path str,
-    style: WaveStyle,
+    scope: &'scope str,
     badge: Option<&'path str>,
     value: Option<&'value ReadValue<'data>>,
-    scope: &'scope str,
-    reads: &'reads dyn Reads,
-    skin: &'skin Skin,
+    style: WaveStyle,
     zoom: f32,
 }
 
@@ -65,7 +65,7 @@ impl<'a, 'skin: 'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, 'skin> {
                 CursorShape::Pointer
             }))
             .build();
-        Canvas::new(MiniWaveCanvas { path, drag, paint })
+        Canvas::new(MiniWaveCanvas { path, paint, drag })
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
@@ -138,34 +138,34 @@ impl<'skin> MiniWave<'_, '_, '_, '_, '_, 'skin> {
 
 struct MiniWaveCanvas<'skin> {
     path: String,
-    drag: Scalar,
     paint: MiniWavePaint<'skin>,
+    drag: Scalar,
 }
 
 struct MiniWavePaint<'skin> {
     overlay: Option<OverlayData>,
+    wave_revision: Option<u64>,
+    waveform: Option<WaveformData>,
     overlay_palette: OverlayPalette,
-    progress: f32,
     skin: &'skin Skin,
     style: WaveStyle,
-    waveform: Option<WaveformData>,
-    wave_revision: Option<u64>,
+    progress: f32,
     zoom: f32,
 }
 
 #[derive(Default)]
 struct MiniWaveState {
-    drag: ScalarState,
-    loop_start: Option<f32>,
     modifiers: Modifiers,
+    loop_start: Option<f32>,
+    drag: ScalarState,
     paint: MiniWavePaintState,
 }
 
 #[derive(Default)]
 struct MiniWavePaintState {
-    text: RefCell<Option<TextContext>>,
     wave: canvas::Cache,
     wave_revision: Cell<Option<u64>>,
+    text: RefCell<Option<TextContext>>,
 }
 
 impl canvas::Program<UiEvent> for MiniWaveCanvas<'_> {
@@ -326,14 +326,14 @@ impl MiniWavePaint<'_> {
         layers
     }
 
-    const fn hero(&self) -> bool {
-        matches!(self.style, WaveStyle::Hero)
-    }
-
     fn has_waveform(&self) -> bool {
         self.waveform
             .as_ref()
             .is_some_and(|waveform| !waveform.buckets.is_empty())
+    }
+
+    const fn hero(&self) -> bool {
+        matches!(self.style, WaveStyle::Hero)
     }
 
     fn program(&self) -> WavePaint<'_> {

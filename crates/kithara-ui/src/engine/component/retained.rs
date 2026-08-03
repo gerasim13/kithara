@@ -91,16 +91,24 @@ impl RetainedComponent {
         self.kind() == identity.kind && self.path() == identity.path
     }
 
-    pub(in crate::engine) fn path(&self) -> &str {
-        self.component().path()
-    }
-
-    pub(in crate::engine) fn kind(&self) -> Kind {
-        self.component().kind()
-    }
-
-    pub(in crate::engine) fn event_path(&self) -> &str {
-        self.component().event_path()
+    delegate::delegate! {
+        to self {
+            #[expr($.path())]
+            #[call(component)]
+            pub(in crate::engine) fn path(&self) -> &str;
+            #[expr($.kind())]
+            #[call(component)]
+            pub(in crate::engine) fn kind(&self) -> Kind;
+            #[expr($.event_path())]
+            #[call(component)]
+            pub(in crate::engine) fn event_path(&self) -> &str;
+            #[expr($.captures_pointer())]
+            #[call(component)]
+            pub(in crate::engine) fn captures_pointer(&self) -> bool;
+            #[expr($.focusable())]
+            #[call(component)]
+            pub(in crate::engine) fn focusable(&self) -> bool;
+        }
     }
 
     pub(in crate::engine) fn handle(
@@ -122,14 +130,6 @@ impl RetainedComponent {
         input: Input<'_>,
     ) -> (Outcome<EngineEvent>, Option<&'static str>) {
         self.component_mut().handle_key(input)
-    }
-
-    pub(in crate::engine) fn captures_pointer(&self) -> bool {
-        self.component().captures_pointer()
-    }
-
-    pub(in crate::engine) fn focusable(&self) -> bool {
-        self.component().focusable()
     }
 
     pub(in crate::engine) fn blur(&mut self) {

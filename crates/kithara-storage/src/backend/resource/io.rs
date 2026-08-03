@@ -171,22 +171,15 @@ mod tests {
 
     /// Open a fresh, uncommitted in-memory resource for the concurrency tests.
     fn open_mem() -> ResourceCore<MemDriver> {
-        ResourceCore::open(
-            CancelToken::never(),
-            MemOptions {
-                initial_data: None,
-                capacity: 0,
-                ..MemOptions::default()
-            },
-        )
-        .expect("open mem must succeed")
+        ResourceCore::open(CancelToken::never(), MemOptions::builder().build())
+            .expect("open mem must succeed")
     }
 
     /// Open a fresh, uncommitted mmap-backed resource at `path` (mode/len at
     /// builder defaults). The caller keeps the backing `TempDir` alive for the
     /// duration of the test.
     fn open_mmap(path: std::path::PathBuf) -> ResourceCore<MmapDriver> {
-        ResourceCore::open(CancelToken::never(), MmapOptions::new(path))
+        ResourceCore::open(CancelToken::never(), MmapOptions::for_path(path).build())
             .expect("open mmap must succeed")
     }
 
@@ -208,11 +201,9 @@ mod tests {
     fn committed_read_does_not_take_state_mutex() {
         let core: ResourceCore<MemDriver> = ResourceCore::open(
             CancelToken::never(),
-            MemOptions {
-                initial_data: Some(b"hello world".to_vec()),
-                capacity: 0,
-                ..MemOptions::default()
-            },
+            MemOptions::builder()
+                .initial_data(b"hello world".to_vec())
+                .build(),
         )
         .expect("BUG: MemDriver::open with initial_data is infallible");
 
@@ -248,11 +239,9 @@ mod tests {
     fn committed_len_and_contains_do_not_take_state_mutex() {
         let core: ResourceCore<MemDriver> = ResourceCore::open(
             CancelToken::never(),
-            MemOptions {
-                initial_data: Some(b"hello world".to_vec()),
-                capacity: 0,
-                ..MemOptions::default()
-            },
+            MemOptions::builder()
+                .initial_data(b"hello world".to_vec())
+                .build(),
         )
         .expect("BUG: MemDriver::open with initial_data is infallible");
 

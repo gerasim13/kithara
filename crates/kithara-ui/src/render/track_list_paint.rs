@@ -712,12 +712,13 @@ impl TrackListState {
 impl RetainedCanvasState for TrackListState {
     type Config = TrackListConfig;
 
-    fn reconcile_canvas(&mut self, path: &str, config: &Self::Config) {
-        self.reconcile(path, config);
-    }
-
-    fn set_canvas_viewport(&mut self, size: iced::Size, config: &Self::Config) {
-        self.set_viewport(size, config);
+    delegate::delegate! {
+        to self {
+            #[call(reconcile)]
+            fn reconcile_canvas(&mut self, path: &str, config: &Self::Config);
+            #[call(set_viewport)]
+            fn set_canvas_viewport(&mut self, size: iced::Size, config: &Self::Config);
+        }
     }
 }
 

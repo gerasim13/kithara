@@ -137,9 +137,9 @@ pub(crate) fn resolve<T: StreamType>(
         media_info.variant_index = Some(variant);
     }
     AnchorPlan::Recreate(RecreateState {
-        cause: RecreateCause::VariantSwitch,
         media_info,
-        next: RecreateNext::Seek(request),
         offset,
+        cause: RecreateCause::VariantSwitch,
+        next: RecreateNext::Seek(request),
     })
 }

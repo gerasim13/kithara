@@ -52,25 +52,6 @@ impl AbrHandle {
         state.claim_pending_decision(state.current_variant_index())
     }
 
-    /// Observe whether the exact pending intent is absent, locked, or ready.
-    #[must_use]
-    pub fn pending_claim(&self) -> PendingAbrClaim {
-        let Some(state) = self.inner.state.as_ref() else {
-            return PendingAbrClaim::Absent;
-        };
-        state.pending_claim(state.current_variant_index())
-    }
-
-    /// Variant selected for a seek replacement, including a locked pending
-    /// intent. Stateless handles return `None`.
-    #[must_use]
-    pub fn selected_variant_for_seek(&self) -> Option<usize> {
-        self.inner
-            .state
-            .as_ref()
-            .map(|state| state.selected_variant_for_seek().get())
-    }
-
     /// Clear the escape condition — see [`AbrState::clear_escape`]. No-op for
     /// stateless handles.
     pub fn clear_escape(&self) {
@@ -110,26 +91,6 @@ impl AbrHandle {
         }
     }
 
-    delegate::delegate! {
-        to self.inner.state {
-            /// `true` while the active variant is flagged non-delivering — see
-            /// [`AbrState::is_escaping`].
-            #[must_use]
-            #[expr($.is_some_and(|s| s.is_escaping()))]
-            #[call(as_ref)]
-            pub fn is_escaping(&self) -> bool;
-            #[must_use]
-            #[expr($.is_some_and(|s| s.is_locked()))]
-            #[call(as_ref)]
-            pub fn is_locked(&self) -> bool;
-            /// Current ABR mode (Auto / Manual). `None` for peers without state.
-            #[must_use]
-            #[expr($.map(|s| s.mode()))]
-            #[call(as_ref)]
-            pub fn mode(&self) -> Option<AbrMode>;
-        }
-    }
-
     /// Lock ABR (used during seek).
     pub fn lock(&self) {
         if let Some(state) = self.inner.state.as_ref() {
@@ -150,16 +111,57 @@ impl AbrHandle {
         }
     }
 
-    /// Side-effects after an exact transition promoted its incoming
-    /// generation: emits `VariantApplied` via bus and nothing else.
-    ///
-    /// The caller is the audio worker, which is not a runtime thread, so this
-    /// path must not schedule async work. The stuck-reader watchdog is a
-    /// boundary-switch diagnostic and does not apply here: exact promotion
-    /// already proved the incoming reader produced staged PCM.
-    #[kithara::probe(current_before)]
-    pub fn notify_exact_commit(&self, decision: AbrDecision, current_before: usize) {
-        self.publish_variant_applied(decision, current_before);
+    delegate::delegate! {
+        to self.inner.state {
+            /// `true` while the active variant is flagged non-delivering — see
+            /// [`AbrState::is_escaping`].
+            #[must_use]
+            #[expr($.is_some_and(|s| s.is_escaping()))]
+            #[call(as_ref)]
+            pub fn is_escaping(&self) -> bool;
+            #[must_use]
+            #[expr($.is_some_and(|s| s.is_locked()))]
+            #[call(as_ref)]
+            pub fn is_locked(&self) -> bool;
+            /// Current ABR mode (Auto / Manual). `None` for peers without state.
+            #[must_use]
+            #[expr($.map(|s| s.mode()))]
+            #[call(as_ref)]
+            pub fn mode(&self) -> Option<AbrMode>;
+        }
+        to self {
+            /// Side-effects after an exact transition promoted its incoming
+            /// generation: emits `VariantApplied` via bus and nothing else.
+            ///
+            /// The caller is the audio worker, which is not a runtime thread, so this
+            /// path must not schedule async work. The stuck-reader watchdog is a
+            /// boundary-switch diagnostic and does not apply here: exact promotion
+            /// already proved the incoming reader produced staged PCM.
+            #[kithara::probe(current_before)]
+            #[call(publish_variant_applied)]
+            pub fn notify_exact_commit(&self, decision: AbrDecision, current_before: usize);
+            /// Read-only: peek at the pending boundary commit. Mirrors
+            /// [`AbrState::peek_pending_decision`].
+            #[must_use]
+            #[kithara::probe]
+            #[expr($.map(PendingAbrDecision::decision))]
+            #[call(claim_pending_decision)]
+            pub fn peek_pending_decision(&self) -> Option<AbrDecision>;
+        }
+    }
+
+    #[must_use]
+    pub fn peer_id(&self) -> AbrPeerId {
+        self.inner.peer_id
+    }
+
+    /// Observe whether the exact pending intent is absent, locked, or ready.
+    #[must_use]
+    pub fn pending_claim(&self) -> PendingAbrClaim {
+        let Some(state) = self.inner.state.as_ref() else {
+            return PendingAbrClaim::Absent;
+        };
+        state.pending_claim(state.current_variant_index())
     }
 
     fn publish_variant_applied(&self, decision: AbrDecision, current_before: usize) {
@@ -173,20 +175,6 @@ impl AbrHandle {
         }
     }
 
-    /// Read-only: peek at the pending boundary commit. Mirrors
-    /// [`AbrState::peek_pending_decision`].
-    #[must_use]
-    #[kithara::probe]
-    pub fn peek_pending_decision(&self) -> Option<AbrDecision> {
-        self.claim_pending_decision()
-            .map(PendingAbrDecision::decision)
-    }
-
-    #[must_use]
-    pub fn peer_id(&self) -> AbrPeerId {
-        self.inner.peer_id
-    }
-
     /// Trigger an out-of-band ABR re-evaluation. Used by the HLS layer after
     /// [`Self::mark_escape`]: the flag is set under the HLS state lock, but the
     /// tick reads `peer.progress()` (which re-locks that state), so the tick
@@ -195,6 +183,16 @@ impl AbrHandle {
         self.inner
             .controller
             .tick(self.inner.peer_id, Instant::now());
+    }
+
+    /// Variant selected for a seek replacement, including a locked pending
+    /// intent. Stateless handles return `None`.
+    #[must_use]
+    pub fn selected_variant_for_seek(&self) -> Option<usize> {
+        self.inner
+            .state
+            .as_ref()
+            .map(|state| state.selected_variant_for_seek().get())
     }
 
     pub fn set_max_bandwidth_bps(&self, cap: Option<u64>) {

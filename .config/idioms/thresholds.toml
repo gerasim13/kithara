@@ -29,6 +29,7 @@ warn_streak = 4
 
 [derivable_delegation]
 enabled = true
+severity = "deny"
 trait_min_methods = 2
 inherent_min_methods = 2
 blocking_impl_attrs = ["async_trait", "uniffi::export", "wasm_bindgen"]
@@ -45,6 +46,8 @@ enabled = true
 
 [derivable_getter]
 enabled = true
+severity = "deny"
+blocking_impl_attrs = ["async_trait", "uniffi::export", "wasm_bindgen"]
 qualified_deref_remaps = [{ field_type = "PathBuf", scoped_name = "Path" }]
 
 [retry_fallback]

@@ -10,9 +10,9 @@ use crate::common::project::ArchitectureFilterConfig;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ArchitectureFilter {
+    crate_patterns: Vec<Pattern>,
     exclude_crates: Vec<String>,
     exclude_modules: Vec<String>,
-    crate_patterns: Vec<Pattern>,
     module_patterns: Vec<Pattern>,
 }
 
@@ -20,8 +20,8 @@ pub(crate) struct ArchitectureFilter {
 pub(crate) struct FilterSummary<'a> {
     pub(crate) exclude_crates: &'a [String],
     pub(crate) exclude_modules: &'a [String],
-    pub(crate) excluded_nodes: usize,
     pub(crate) excluded_edges: usize,
+    pub(crate) excluded_nodes: usize,
 }
 
 impl ArchitectureFilter {
@@ -44,49 +44,15 @@ impl ArchitectureFilter {
         let crate_patterns = compile_patterns(&exclude_crates, "crate")?;
         let module_patterns = compile_patterns(&exclude_modules, "module")?;
         Ok(Self {
+            crate_patterns,
             exclude_crates,
             exclude_modules,
-            crate_patterns,
             module_patterns,
         })
     }
 
     pub(crate) fn excludes(&self, id: &NodeId) -> bool {
         self.excludes_package(&id.package) || self.excludes_module(&id.package, &id.module)
-    }
-
-    pub(crate) fn excludes_package(&self, package: &str) -> bool {
-        self.crate_patterns
-            .iter()
-            .any(|pattern| pattern.matches(package))
-    }
-
-    pub(crate) fn summary(&self, graph: &EvidenceGraph) -> FilterSummary<'_> {
-        FilterSummary {
-            exclude_crates: &self.exclude_crates,
-            exclude_modules: &self.exclude_modules,
-            excluded_nodes: graph.nodes().filter(|node| self.excludes(&node.id)).count(),
-            excluded_edges: graph
-                .edges()
-                .filter(|edge| self.excludes(&edge.source) || self.excludes(&edge.target))
-                .count(),
-        }
-    }
-
-    pub(crate) fn scope_is_fully_excluded(
-        &self,
-        graph: &EvidenceGraph,
-        package: Option<&str>,
-        module: &str,
-    ) -> bool {
-        let mut scoped = graph.nodes().filter(|node| {
-            package.is_none_or(|package| node.id.package == package)
-                && module_matches(&node.id.module, module)
-        });
-        let Some(first) = scoped.next() else {
-            return false;
-        };
-        self.excludes(&first.id) && scoped.all(|node| self.excludes(&node.id))
     }
 
     fn excludes_module(&self, package: &str, module: &str) -> bool {
@@ -109,6 +75,40 @@ impl ArchitectureFilter {
                 return false;
             }
             canonical.truncate(separator);
+        }
+    }
+
+    pub(crate) fn excludes_package(&self, package: &str) -> bool {
+        self.crate_patterns
+            .iter()
+            .any(|pattern| pattern.matches(package))
+    }
+
+    pub(crate) fn scope_is_fully_excluded(
+        &self,
+        graph: &EvidenceGraph,
+        package: Option<&str>,
+        module: &str,
+    ) -> bool {
+        let mut scoped = graph.nodes().filter(|node| {
+            package.is_none_or(|package| node.id.package == package)
+                && module_matches(&node.id.module, module)
+        });
+        let Some(first) = scoped.next() else {
+            return false;
+        };
+        self.excludes(&first.id) && scoped.all(|node| self.excludes(&node.id))
+    }
+
+    pub(crate) fn summary(&self, graph: &EvidenceGraph) -> FilterSummary<'_> {
+        FilterSummary {
+            exclude_crates: &self.exclude_crates,
+            exclude_modules: &self.exclude_modules,
+            excluded_nodes: graph.nodes().filter(|node| self.excludes(&node.id)).count(),
+            excluded_edges: graph
+                .edges()
+                .filter(|edge| self.excludes(&edge.source) || self.excludes(&edge.target))
+                .count(),
         }
     }
 }

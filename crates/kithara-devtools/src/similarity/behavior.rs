@@ -16,80 +16,30 @@ struct Node {
 
 #[derive(Debug, Clone)]
 struct Edge {
+    label: &'static str,
     from: usize,
     to: usize,
-    label: &'static str,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(super) struct BehaviorGraph {
-    nodes: Vec<Node>,
-    edges: Vec<Edge>,
-    signature: String,
-    label_counts: BTreeMap<String, usize>,
     edge_counts: BTreeMap<String, usize>,
+    label_counts: BTreeMap<String, usize>,
     wl_fingerprint: BTreeMap<String, usize>,
+    #[field(get = bucket_key, vis = "pub(super)")]
+    signature: String,
+    edges: Vec<Edge>,
+    nodes: Vec<Node>,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct BehaviorComparison {
-    pub(super) score: f64,
     pub(super) shared_labels: Vec<String>,
+    pub(super) score: f64,
 }
 
 impl BehaviorGraph {
-    pub(super) fn from_function(signature: &Signature, block: &Block) -> Self {
-        Self::from_function_with_generics(signature, block, BTreeMap::new())
-    }
-
-    pub(super) fn from_method(
-        signature: &Signature,
-        block: &Block,
-        owner_generics: BTreeMap<String, usize>,
-    ) -> Self {
-        Self::from_function_with_generics(signature, block, owner_generics)
-    }
-
-    fn from_function_with_generics(
-        signature: &Signature,
-        block: &Block,
-        mut generics: BTreeMap<String, usize>,
-    ) -> Self {
-        let next_index = generics.len();
-        generics.extend(
-            signature
-                .generics
-                .params
-                .iter()
-                .filter_map(|parameter| match parameter {
-                    GenericParam::Type(parameter) => Some(parameter.ident.to_string()),
-                    GenericParam::Lifetime(_) | GenericParam::Const(_) => None,
-                })
-                .enumerate()
-                .map(|(index, name)| (name, next_index + index)),
-        );
-        let signature = signature_label(signature, &generics);
-        let mut builder = GraphBuilder {
-            graph: Self {
-                nodes: vec![Node {
-                    label: signature.clone(),
-                }],
-                edges: Vec::new(),
-                signature,
-                label_counts: BTreeMap::new(),
-                edge_counts: BTreeMap::new(),
-                wl_fingerprint: BTreeMap::new(),
-            },
-            parents: vec![0],
-        };
-        builder.visit_block(block);
-        let mut graph = builder.graph;
-        graph.label_counts = label_counts(graph.nodes.iter().map(|node| node.label.as_str()));
-        graph.edge_counts = label_counts(graph.edges.iter().map(|edge| edge.label));
-        graph.wl_fingerprint = graph.compute_wl_fingerprint();
-        graph
-    }
-
     pub(super) fn compare(&self, other: &Self) -> BehaviorComparison {
         let label_score = multiset_dice(&self.label_counts, &other.label_counts);
         let edge_score = multiset_dice(&self.edge_counts, &other.edge_counts);
@@ -102,26 +52,9 @@ impl BehaviorGraph {
             .cloned()
             .collect();
         BehaviorComparison {
-            score: 0.25 * label_score + 0.15 * edge_score + 0.60 * wl_score,
             shared_labels,
+            score: 0.25 * label_score + 0.15 * edge_score + 0.60 * wl_score,
         }
-    }
-
-    pub(super) fn may_match(&self, other: &Self) -> bool {
-        if self.signature != other.signature {
-            return false;
-        }
-        let smallest = self.nodes.len().min(other.nodes.len());
-        let largest = self.nodes.len().max(other.nodes.len());
-        smallest * 2 >= largest && multiset_dice(&self.label_counts, &other.label_counts) >= 0.50
-    }
-
-    pub(super) fn bucket_key(&self) -> &str {
-        &self.signature
-    }
-
-    pub(super) fn is_substantive(&self) -> bool {
-        self.nodes.len() >= 6
     }
 
     fn compute_wl_fingerprint(&self) -> BTreeMap<String, usize> {
@@ -157,6 +90,72 @@ impl BehaviorGraph {
         }
         fingerprint
     }
+
+    pub(super) fn from_function(signature: &Signature, block: &Block) -> Self {
+        Self::from_function_with_generics(signature, block, BTreeMap::new())
+    }
+
+    fn from_function_with_generics(
+        signature: &Signature,
+        block: &Block,
+        mut generics: BTreeMap<String, usize>,
+    ) -> Self {
+        let next_index = generics.len();
+        generics.extend(
+            signature
+                .generics
+                .params
+                .iter()
+                .filter_map(|parameter| match parameter {
+                    GenericParam::Type(parameter) => Some(parameter.ident.to_string()),
+                    GenericParam::Lifetime(_) | GenericParam::Const(_) => None,
+                })
+                .enumerate()
+                .map(|(index, name)| (name, next_index + index)),
+        );
+        let signature = signature_label(signature, &generics);
+        let root = Node {
+            label: signature.clone(),
+        };
+        let mut builder = GraphBuilder {
+            graph: Self {
+                signature,
+                nodes: vec![root],
+                edges: Vec::new(),
+                label_counts: BTreeMap::new(),
+                edge_counts: BTreeMap::new(),
+                wl_fingerprint: BTreeMap::new(),
+            },
+            parents: vec![0],
+        };
+        builder.visit_block(block);
+        let mut graph = builder.graph;
+        graph.label_counts = label_counts(graph.nodes.iter().map(|node| node.label.as_str()));
+        graph.edge_counts = label_counts(graph.edges.iter().map(|edge| edge.label));
+        graph.wl_fingerprint = graph.compute_wl_fingerprint();
+        graph
+    }
+
+    pub(super) fn from_method(
+        signature: &Signature,
+        block: &Block,
+        owner_generics: BTreeMap<String, usize>,
+    ) -> Self {
+        Self::from_function_with_generics(signature, block, owner_generics)
+    }
+
+    pub(super) fn is_substantive(&self) -> bool {
+        self.nodes.len() >= 6
+    }
+
+    pub(super) fn may_match(&self, other: &Self) -> bool {
+        if self.signature != other.signature {
+            return false;
+        }
+        let smallest = self.nodes.len().min(other.nodes.len());
+        let largest = self.nodes.len().max(other.nodes.len());
+        smallest * 2 >= largest && multiset_dice(&self.label_counts, &other.label_counts) >= 0.50
+    }
 }
 
 struct GraphBuilder {
@@ -183,6 +182,16 @@ impl GraphBuilder {
 }
 
 impl<'ast> Visit<'ast> for GraphBuilder {
+    fn visit_expr(&mut self, expression: &'ast Expr) {
+        if let Some(label) = expression_label(expression) {
+            self.enter(label, expression_edge(expression));
+            visit::visit_expr(self, expression);
+            self.leave();
+        } else {
+            visit::visit_expr(self, expression);
+        }
+    }
+
     fn visit_stmt(&mut self, statement: &'ast Stmt) {
         let label = match statement {
             Stmt::Local(_) => Some("statement:let"),
@@ -197,16 +206,6 @@ impl<'ast> Visit<'ast> for GraphBuilder {
             self.leave();
         } else {
             visit::visit_stmt(self, statement);
-        }
-    }
-
-    fn visit_expr(&mut self, expression: &'ast Expr) {
-        if let Some(label) = expression_label(expression) {
-            self.enter(label, expression_edge(expression));
-            visit::visit_expr(self, expression);
-            self.leave();
-        } else {
-            visit::visit_expr(self, expression);
         }
     }
 }

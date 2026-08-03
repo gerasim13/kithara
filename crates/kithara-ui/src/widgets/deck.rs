@@ -25,11 +25,11 @@ const fn seconds_per_minute() -> u64 {
 
 #[derive(bon::Builder)]
 pub(crate) struct DeckSummary<'value, 'data, 'scope, 'reads, 'skin> {
+    skin: &'skin Skin,
+    reads: &'reads dyn Reads,
+    scope: &'scope str,
     style: DeckSummaryStyle,
     value: Option<&'value ReadValue<'data>>,
-    scope: &'scope str,
-    reads: &'reads dyn Reads,
-    skin: &'skin Skin,
 }
 
 impl<'a> Widget<'a> for DeckSummary<'_, '_, '_, '_, '_> {
@@ -92,11 +92,11 @@ impl<'a> Widget<'a> for DeckSummary<'_, '_, '_, '_, '_> {
 
 #[derive(bon::Builder)]
 pub(crate) struct Bpm<'placeholder, 'value, 'data, 'scope, 'reads, 'skin> {
+    skin: &'skin Skin,
+    reads: &'reads dyn Reads,
+    scope: &'scope str,
     placeholder: Option<&'placeholder str>,
     value: Option<&'value ReadValue<'data>>,
-    scope: &'scope str,
-    reads: &'reads dyn Reads,
-    skin: &'skin Skin,
 }
 
 impl<'a> Widget<'a> for Bpm<'_, '_, '_, '_, '_, '_> {
@@ -146,10 +146,10 @@ impl<'a> Widget<'a> for Bpm<'_, '_, '_, '_, '_, '_> {
 
 #[derive(bon::Builder)]
 pub(crate) struct Time<'value, 'data, 'scope, 'reads, 'skin> {
-    value: Option<&'value ReadValue<'data>>,
-    scope: &'scope str,
-    reads: &'reads dyn Reads,
     skin: &'skin Skin,
+    reads: &'reads dyn Reads,
+    scope: &'scope str,
+    value: Option<&'value ReadValue<'data>>,
 }
 
 impl<'a> Widget<'a> for Time<'_, '_, '_, '_, '_> {

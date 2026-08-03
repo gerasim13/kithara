@@ -17,17 +17,19 @@ HLS (HTTP Live Streaming) VOD orchestration: playlist parsing, segment fetching,
 ## Usage
 
 ```rust
-use kithara_assets::AssetStoreBuilder;
+use kithara_assets::AssetStore;
 use kithara_stream::Stream;
 use kithara_hls::{Hls, HlsConfig};
 
-let store = AssetStoreBuilder::default().build();
-let config = HlsConfig::new(master_playlist_url, store);
+let store = AssetStore::builder().build();
+let config = HlsConfig::for_url(master_playlist_url)
+    .store(store)
+    .build();
 let stream = Stream::<Hls>::new(config).await?;
 // `stream` implements Read + Seek; pass it into kithara-decode / kithara-audio.
 ```
 
-`HlsConfig` is a [`bon`](https://crates.io/crates/bon) builder. `HlsConfig::new(url, store)` requires the shared asset store; use `HlsConfig::for_url(url)` to start a chained builder for non-default settings (`look_ahead_bytes`, key options, downloader, cache discriminator, asset store, cancel token, event bus).
+`HlsConfig` is a [`bon`](https://crates.io/crates/bon) builder. Start with `HlsConfig::for_url(url)`, set the required shared asset store with `.store(store)`, and call `.build()`. The same chain accepts non-default settings such as `look_ahead_bytes`, key options, downloader, cache discriminator, cancel token, and event bus.
 
 ## Key Public Items
 

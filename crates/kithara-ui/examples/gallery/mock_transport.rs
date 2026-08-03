@@ -1,14 +1,22 @@
 use num_traits::cast::AsPrimitive;
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(super) struct DeckTransport {
-    bpm: f64,
-    cues: Vec<f32>,
-    duration_secs: f64,
-    loop_anchor: f32,
+    #[field(get, vis = "pub(super)", copy)]
     loop_region: Option<[f32; 2]>,
+    #[field(get, vis = "pub(super)")]
+    cues: Vec<f32>,
+    #[field(get, vis = "pub(super)")]
     playing: bool,
-    position_secs: f64,
+    #[field(get, vis = "pub(super)")]
     reverse: bool,
+    loop_anchor: f32,
+    bpm: f64,
+    duration_secs: f64,
+    #[field(get, vis = "pub(super)")]
+    position_secs: f64,
+    #[field(get, vis = "pub(super)")]
     zoom: f64,
 }
 
@@ -30,15 +38,15 @@ impl DeckTransport {
         zoom: f64,
     ) -> Self {
         Self {
+            duration_secs,
+            position_secs,
+            zoom,
             bpm: f64::from(bpm),
             cues: cues.to_vec(),
-            duration_secs,
             loop_anchor: loop_region[0],
             loop_region: Some(loop_region),
             playing: true,
-            position_secs,
             reverse: false,
-            zoom,
         }
     }
 
@@ -60,36 +68,26 @@ impl DeckTransport {
         true
     }
 
-    pub(super) fn cues(&self) -> &[f32] {
-        &self.cues
-    }
-
-    pub(super) const fn loop_region(&self) -> Option<[f32; 2]> {
-        self.loop_region
-    }
-
-    pub(super) const fn playing(&self) -> bool {
-        self.playing
-    }
-
-    pub(super) const fn position_secs(&self) -> f64 {
-        self.position_secs
+    fn jump_bars(&mut self, bars: f64) {
+        let delta = bars * Self::BEATS_PER_BAR * Self::SECS_PER_MINUTE / self.bpm;
+        self.position_secs = (self.position_secs + delta).clamp(0.0, self.duration_secs);
     }
 
     pub(super) fn position_normalized(&self) -> f64 {
         self.position_secs / self.duration_secs
     }
 
-    pub(super) const fn reverse(&self) -> bool {
-        self.reverse
-    }
-
     pub(super) fn seek_normalized(&mut self, position: f64) {
         self.position_secs = position.clamp(0.0, 1.0) * self.duration_secs;
     }
 
-    pub(super) fn set_zoom(&mut self, zoom: f64) {
-        self.zoom = zoom.clamp(Self::MIN_ZOOM, Self::MAX_ZOOM);
+    fn set_cue(&mut self) {
+        let cue = self.position_normalized().as_();
+        if let Err(index) = self.cues.binary_search_by(|probe| probe.total_cmp(&cue))
+            && self.cues.len() < Self::MAX_CUES
+        {
+            self.cues.insert(index, cue);
+        }
     }
 
     pub(super) fn set_loop_end(&mut self, end: f64) {
@@ -101,26 +99,8 @@ impl DeckTransport {
         self.loop_region = None;
     }
 
-    pub(super) fn toggle_play(&mut self) {
-        self.playing = !self.playing;
-    }
-
-    pub(super) const fn zoom(&self) -> f64 {
-        self.zoom
-    }
-
-    fn jump_bars(&mut self, bars: f64) {
-        let delta = bars * Self::BEATS_PER_BAR * Self::SECS_PER_MINUTE / self.bpm;
-        self.position_secs = (self.position_secs + delta).clamp(0.0, self.duration_secs);
-    }
-
-    fn set_cue(&mut self) {
-        let cue = self.position_normalized().as_();
-        if let Err(index) = self.cues.binary_search_by(|probe| probe.total_cmp(&cue))
-            && self.cues.len() < Self::MAX_CUES
-        {
-            self.cues.insert(index, cue);
-        }
+    pub(super) fn set_zoom(&mut self, zoom: f64) {
+        self.zoom = zoom.clamp(Self::MIN_ZOOM, Self::MAX_ZOOM);
     }
 
     fn toggle_loop(&mut self) {
@@ -133,6 +113,10 @@ impl DeckTransport {
         let end = ((self.position_secs + loop_secs) / self.duration_secs).min(1.0);
         self.loop_anchor = start.as_();
         self.loop_region = Some([start.as_(), end.as_()]);
+    }
+
+    pub(super) fn toggle_play(&mut self) {
+        self.playing = !self.playing;
     }
 }
 

@@ -17,6 +17,8 @@ use crate::{
 
 /// Everything needed to register a track with the shared worker.
 pub(crate) struct TrackRegistration {
+    pub(crate) emit: Arc<DeferredBus<Event>>,
+    pub(crate) playhead: Arc<dyn PlayheadRead>,
     pub(crate) preload_gate: Arc<PreloadGate>,
     /// Shared priority hint. The real-time consumer writes it wait-free
     /// (`Audio::set_service_class`); the worker scheduler reads it each pass.
@@ -27,8 +29,6 @@ pub(crate) struct TrackRegistration {
     /// pooled buffer is freed/recycled on the worker thread rather than on
     /// the audio thread. See `crates/kithara-audio/CONTEXT.md`.
     pub(crate) trash_inlet: Inlet<PcmChunk>,
-    pub(crate) playhead: Arc<dyn PlayheadRead>,
-    pub(crate) emit: Arc<DeferredBus<Event>>,
     pub(crate) engine_load: Option<Arc<EngineLoad>>,
     pub(crate) outlet: Outlet<Fetch<PcmChunk>>,
     pub(crate) preload_chunks: usize,
@@ -41,12 +41,12 @@ pub(crate) struct TrackRegistration {
 #[derive(Default)]
 #[non_exhaustive]
 pub(crate) struct DecoderRuntime {
+    pub(crate) last_buffer_health_emit: Option<Instant>,
+    pub(crate) last_engine_load_emit: Option<Instant>,
     pub(crate) eof_sent: bool,
     pub(crate) preloaded: bool,
     pub(crate) seek_epoch: u64,
     pub(crate) chunks_sent: usize,
-    pub(crate) last_buffer_health_emit: Option<Instant>,
-    pub(crate) last_engine_load_emit: Option<Instant>,
 }
 
 /// A node that decodes audio chunks.
@@ -57,6 +57,8 @@ pub(crate) struct DecoderRuntime {
 /// to drain that slot before producing more, so the decoder itself is
 /// stateless with respect to parked chunks.
 pub(crate) struct DecoderNode {
+    emit: Arc<DeferredBus<Event>>,
+    playhead: Arc<dyn PlayheadRead>,
     preload_gate: Arc<PreloadGate>,
     /// Held seek-observe handle — avoids an Arc clone on every hot
     /// `sync_seek_epoch` tick.
@@ -71,8 +73,6 @@ pub(crate) struct DecoderNode {
     /// before the produce core, so the pooled buffers are freed/recycled on
     /// this worker thread, never on the audio thread.
     trash_inlet: Inlet<PcmChunk>,
-    playhead: Arc<dyn PlayheadRead>,
-    emit: Arc<DeferredBus<Event>>,
     /// Live engine cost meter. When present, each produced chunk records the
     /// tick's decode+effects wall time against the audio it yielded.
     engine_load: Option<Arc<EngineLoad>>,
@@ -99,14 +99,6 @@ impl DecoderNode {
         self.runtime.chunks_sent += 1;
         if self.runtime.chunks_sent >= self.preload_chunks && !self.outlet.has_pending() {
             self.complete_preload();
-        }
-    }
-
-    /// Record one produced chunk's decode+effects cost into the shared engine
-    /// meter.
-    fn record_load(&self, busy: Duration, fetch: &Fetch<PcmChunk>) {
-        if let (Some(load), Fetch::Data { data, .. }) = (self.engine_load.as_ref(), fetch) {
-            load.record(busy, data.frames(), data.spec().sample_rate.get());
         }
     }
 
@@ -163,6 +155,14 @@ impl DecoderNode {
     fn maybe_emit_worker_telemetry(&mut self, now: Instant) {
         self.maybe_emit_buffer_health(now);
         self.maybe_emit_engine_load(now);
+    }
+
+    /// Record one produced chunk's decode+effects cost into the shared engine
+    /// meter.
+    fn record_load(&self, busy: Duration, fetch: &Fetch<PcmChunk>) {
+        if let (Some(load), Fetch::Data { data, .. }) = (self.engine_load.as_ref(), fetch) {
+            load.record(busy, data.frames(), data.spec().sample_rate.get());
+        }
     }
 
     /// Reset preload state when a new seek epoch arrives.
@@ -454,9 +454,9 @@ mod tests {
         meter.record(Duration::from_millis(5), 4_410, 44_100);
 
         let mut node = DecoderNode {
-            seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
             source,
             outlet,
+            seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
             trash_inlet: connect::<PcmChunk>(4, None).1,
             preload_gate: gate,
             playhead: Arc::clone(&playhead) as Arc<dyn PlayheadRead>,

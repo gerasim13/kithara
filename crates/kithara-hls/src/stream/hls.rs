@@ -29,7 +29,7 @@ use crate::{
         load_variant_playlists, resolve_init_decrypt_ctx, resolve_variant_decrypt_contexts,
     },
     signal::SizeSignal,
-    variant::{HlsVariant, PlanCtx, VariantParams},
+    variant::{HlsVariant, PlanCtx},
 };
 
 /// Marker type for HLS streaming.
@@ -140,9 +140,9 @@ impl StreamType for Hls {
         let emit = Arc::new(DeferredBus::new(bus.clone(), 256));
 
         let plan_ctx = PlanCtx {
-            bus: bus.clone(),
             look_ahead_bytes,
             look_ahead_segments,
+            bus: bus.clone(),
             scope: stream_peer.scope(),
             headers: config.headers.clone(),
             prefetch_budget: config.download_batch_size.max(1),
@@ -157,16 +157,13 @@ impl StreamType for Hls {
             .map(|(idx, mp)| {
                 let init_decrypt_ctx = resolve_init_decrypt_ctx(&key_store, mp);
                 let decrypt_contexts = resolve_variant_decrypt_contexts(&key_store, mp);
-                HlsVariant::try_build(
-                    &playlist_state,
-                    VariantParams {
-                        init_decrypt_ctx,
-                        variant_idx: idx,
-                        seek_obs: Arc::clone(&seek_obs),
-                        decrypt_contexts: &decrypt_contexts,
-                        ctx: &plan_ctx,
-                    },
-                )
+                HlsVariant::try_build(&playlist_state)
+                    .ctx(&plan_ctx)
+                    .decrypt_contexts(&decrypt_contexts)
+                    .seek_obs(Arc::clone(&seek_obs))
+                    .init_decrypt_ctx(init_decrypt_ctx)
+                    .variant_idx(idx)
+                    .call()
             })
             .collect::<crate::HlsResult<Vec<_>>>()?;
         let variants: Arc<[Arc<HlsVariant>]> = variants.into();
@@ -278,7 +275,7 @@ fn default_downloader(config: &HlsConfig, cancel: &CancelToken) -> Downloader {
 mod tests {
     use std::num::NonZeroUsize;
 
-    use kithara_assets::{AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{AssetStore, StorageBackend};
     use kithara_test_utils::kithara;
     use url::Url;
 
@@ -286,12 +283,12 @@ mod tests {
 
     fn config_with_capacity(capacity: usize) -> HlsConfig {
         let capacity = NonZeroUsize::new(capacity).expect("test capacity must be non-zero");
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .cache_capacity(capacity)
             .build();
         let url = Url::parse("https://example.com/master.m3u8").expect("valid test URL");
-        HlsConfig::new(url, store)
+        HlsConfig::for_url(url).store(store).build()
     }
 
     #[kithara::test]

@@ -2,7 +2,7 @@ include!(concat!(env!("OUT_DIR"), "/app_config_baked.rs"));
 
 #[cfg(test)]
 mod tests {
-    use kithara::assets::{AssetSource, AssetStoreBuilder, StorageBackend};
+    use kithara::assets::{AssetSource, AssetStore, StorageBackend};
     use url::Url;
 
     use super::build_baked_asset_layouts;
@@ -19,7 +19,7 @@ mod tests {
 
     #[test]
     fn baked_query_identity_separates_tracks_without_splitting_renewed_urls() {
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .layouts(build_baked_asset_layouts())
             .build();

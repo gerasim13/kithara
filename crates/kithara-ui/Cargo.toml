@@ -31,6 +31,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 bon = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }
+fieldwork = { workspace = true }
 iced = { workspace = true, optional = true }
 lucide-icons = { workspace = true, optional = true }
 num-traits = { workspace = true, optional = true }

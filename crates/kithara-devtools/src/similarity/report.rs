@@ -20,41 +20,41 @@ pub(super) struct ArtifactSet {
 
 #[derive(Serialize)]
 struct Graph<'a> {
-    schema_version: u32,
-    nodes: Vec<GraphNode<'a>>,
     edges: Vec<GraphEdge>,
+    nodes: Vec<GraphNode<'a>>,
+    schema_version: u32,
 }
 
 #[derive(Serialize)]
 struct GraphNode<'a> {
-    id: String,
     abstraction: &'a AbstractionRef,
+    id: String,
 }
 
 #[derive(Serialize)]
 struct GraphEdge {
+    behavior_similarity: Option<f64>,
+    recommendation: Recommendation,
     source: String,
     target: String,
-    state_similarity: f64,
-    behavior_similarity: Option<f64>,
     overall_similarity: f64,
-    recommendation: Recommendation,
+    state_similarity: f64,
 }
 
 #[derive(Serialize)]
 struct Manifest<'a> {
-    schema_version: u32,
-    revision: &'a str,
-    profile: Profile,
     roots: &'a [String],
-    include_default_excluded: bool,
+    revision: &'a str,
     status: &'static str,
-    scanned_files: usize,
+    files: BTreeMap<&'static str, &'static str>,
+    profile: Profile,
+    include_default_excluded: bool,
+    schema_version: u32,
     abstractions: usize,
+    cached_comparisons: usize,
     candidates: usize,
     interned_shapes: usize,
-    cached_comparisons: usize,
-    files: BTreeMap<&'static str, &'static str>,
+    scanned_files: usize,
 }
 
 pub(super) fn write(
@@ -72,11 +72,11 @@ pub(super) fn write(
     write_json(
         &output.join("manifest.json"),
         &Manifest {
-            schema_version: SCHEMA_VERSION,
             revision,
             profile,
             roots,
             include_default_excluded,
+            schema_version: SCHEMA_VERSION,
             status: if report.candidates.is_empty() {
                 "clean"
             } else {
@@ -113,7 +113,7 @@ fn graph(report: &AnalysisReport) -> Graph<'_> {
         schema_version: SCHEMA_VERSION,
         nodes: nodes
             .into_iter()
-            .map(|(id, abstraction)| GraphNode { id, abstraction })
+            .map(|(id, abstraction)| GraphNode { abstraction, id })
             .collect(),
         edges: report
             .candidates
@@ -190,8 +190,8 @@ fn markdown(revision: &str, profile: Profile, report: &AnalysisReport) -> String
 }
 
 struct CrateAggregate {
-    count: usize,
     maximum: f64,
+    count: usize,
 }
 
 fn crate_aggregates(report: &AnalysisReport) -> BTreeMap<(String, String), CrateAggregate> {

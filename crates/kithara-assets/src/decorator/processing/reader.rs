@@ -43,6 +43,18 @@ impl<R> ProcessedReader<R>
 where
     R: ReadSide,
 {
+    fn inner_terminal(&self) -> bool {
+        self.readiness.is_failed()
+            || matches!(
+                self.inner.status(),
+                ResourceStatus::Failed(_) | ResourceStatus::Cancelled
+            )
+    }
+
+    fn is_readable(&self) -> bool {
+        self.processor.is_none() || self.readiness.is_ready()
+    }
+
     pub(super) fn with_readiness(
         inner: R,
         readiness: Arc<ReadinessGate>,
@@ -67,18 +79,6 @@ where
             readiness: Arc::new(ReadinessGate::new(ready)),
         }
     }
-
-    fn inner_terminal(&self) -> bool {
-        self.readiness.is_failed()
-            || matches!(
-                self.inner.status(),
-                ResourceStatus::Failed(_) | ResourceStatus::Cancelled
-            )
-    }
-
-    fn is_readable(&self) -> bool {
-        self.processor.is_none() || self.readiness.is_ready()
-    }
 }
 
 impl<R> ReadSide for ProcessedReader<R>
@@ -89,16 +89,6 @@ where
 
     fn contains_range(&self, range: Range<u64>) -> bool {
         self.is_readable() && self.inner.contains_range(range)
-    }
-
-    delegate::delegate! {
-        to self.inner {
-            fn len(&self) -> Option<u64>;
-            fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
-            fn path(&self) -> Option<&Path>;
-            fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
-            fn status(&self) -> ResourceStatus;
-        }
     }
 
     fn reactivate(self) -> StorageResult<ProcessedWriter<R::Writer>> {
@@ -122,6 +112,16 @@ where
             Ok(WaitOutcome::Ready)
         } else {
             Ok(WaitOutcome::Interrupted)
+        }
+    }
+
+    delegate::delegate! {
+        to self.inner {
+            fn len(&self) -> Option<u64>;
+            fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
+            fn path(&self) -> Option<&Path>;
+            fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+            fn status(&self) -> ResourceStatus;
         }
     }
 }

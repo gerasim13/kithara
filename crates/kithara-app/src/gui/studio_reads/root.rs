@@ -9,12 +9,12 @@ use super::{
 use crate::gui::app::Kithara;
 
 pub(in crate::gui) struct StudioRoot<'a> {
-    library: LibraryNode<'a>,
-    decks: Vec<DeckNode<'a>>,
     engine: EngineNode,
+    library: LibraryNode<'a>,
     mix: MixNode<'a>,
     mixer: StripsNode<'a>,
     ui: UiNode<'a>,
+    decks: Vec<DeckNode<'a>>,
 }
 
 impl<'a> StudioRoot<'a> {

@@ -482,7 +482,10 @@ async fn vod_manual_switch_affects_future_segments() {
         .initial_abr_mode(auto(0))
         .build();
 
-    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let wav_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
@@ -657,7 +660,10 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
         .initial_abr_mode(auto(0))
         .build();
 
-    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let wav_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
@@ -750,7 +756,10 @@ async fn multi_track_shared_abr_with_cache() {
     let url2 = server2.url("/master.m3u8");
 
     let temp_dir = TestTempDir::new();
-    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let wav_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
 
     info!("=== Step 1: Track 1 Auto ===");
     let bus1 = EventBus::new(8192);
@@ -931,7 +940,10 @@ async fn abr_switch_must_not_redownload_covered_segments() {
         .initial_abr_mode(auto(0))
         .build();
 
-    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let wav_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
@@ -1023,7 +1035,10 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
         .initial_abr_mode(auto(0))
         .build();
 
-    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let wav_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
@@ -1226,7 +1241,10 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
         .download_batch_size(segment_count * 2)
         .build();
 
-    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let wav_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     // Offline pull: park on ring underrun instead of spinning on Pending,
     // so the warmup loop needs no wall-clock deadline.
     let config = AudioConfig::<Hls>::for_stream(hls_config)
@@ -1352,7 +1370,10 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
         .download_batch_size(segment_count * 2)
         .build();
 
-    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let wav_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     // Subscribe before the bus is moved into the config so the post-seek
     // `ReaderSeek` event is retained in the broadcast buffer for the
     // seek-settled wait below.
@@ -1519,7 +1540,10 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
         .initial_abr_mode(auto(0))
         .build();
 
-    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let wav_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())

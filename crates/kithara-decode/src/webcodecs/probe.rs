@@ -19,28 +19,28 @@ fn support() -> &'static OnceLock<Support> {
 
 #[derive(Clone, Copy, Default)]
 struct Support {
-    aac_lc: bool,
     aac_he: bool,
     aac_he_v2: bool,
-    mp3: bool,
+    aac_lc: bool,
     flac: bool,
+    mp3: bool,
 }
 
 impl Support {
-    /// Minimal 44.1 kHz, stereo, 16-bit FLAC STREAMINFO for capability probing.
-    const FLAC_PROBE_STREAMINFO: [u8; 34] = [
-        0x10, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        // sample rate (20b) | channels - 1 (3b) | bits per sample - 1 (5b) | samples (36b)
-        0x0A, 0xC4, 0x42, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    ];
-
     const CODECS: [AudioCodec; 5] = [
         AudioCodec::AacLc,
         AudioCodec::AacHe,
         AudioCodec::AacHeV2,
         AudioCodec::Mp3,
         AudioCodec::Flac,
+    ];
+
+    /// Minimal 44.1 kHz, stereo, 16-bit FLAC STREAMINFO for capability probing.
+    const FLAC_PROBE_STREAMINFO: [u8; 34] = [
+        0x10, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        // sample rate (20b) | channels - 1 (3b) | bits per sample - 1 (5b) | samples (36b)
+        0x0A, 0xC4, 0x42, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     ];
 
     fn set(&mut self, codec: AudioCodec, supported: bool) {

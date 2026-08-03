@@ -131,9 +131,10 @@ fn build_queue_with_tick_cf(
             .build(),
     ));
     let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-            .with_player(player)
-            .with_store(store.clone()),
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build(),
     ));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {
@@ -216,8 +217,7 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
     let mk_cfg = |url: &Url| {
-        ResourceConfig::for_src(url.as_str())
-            .expect("valid fixture URL")
+        ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
             .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())
@@ -324,8 +324,7 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
         build_queue_with_tick_cf(&temp, crossfade_seconds);
 
     let mk_cfg = |url: &Url| {
-        ResourceConfig::for_src(url.as_str())
-            .expect("valid fixture URL")
+        ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
             .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())

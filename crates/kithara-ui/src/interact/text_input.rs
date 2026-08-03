@@ -9,11 +9,13 @@ struct CaretStop {
     x: f32,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct TextInputLayout {
     carets: Vec<CaretStop>,
     line_height: f32,
     line_y: f32,
+    #[field(get, vis = "pub(crate)")]
     text_size: f32,
 }
 
@@ -74,10 +76,6 @@ impl TextInputLayout {
             x: area.x + self.x(index).floor(),
             y: area.y + self.line_y,
         }
-    }
-
-    pub(crate) const fn text_size(&self) -> f32 {
-        self.text_size
     }
 }
 

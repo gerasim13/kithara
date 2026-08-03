@@ -17,14 +17,14 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct ControlButton<'a, 'value, 'data, 'skin> {
-    path: &'a str,
-    label: &'a str,
-    icon: Option<Icon>,
-    active_label: Option<&'a str>,
-    style: ButtonStyle,
-    frame: Option<FrameSides>,
-    value: Option<&'value ReadValue<'data>>,
     skin: &'skin Skin,
+    label: &'a str,
+    path: &'a str,
+    style: ButtonStyle,
+    active_label: Option<&'a str>,
+    frame: Option<FrameSides>,
+    icon: Option<Icon>,
+    value: Option<&'value ReadValue<'data>>,
 }
 
 impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {

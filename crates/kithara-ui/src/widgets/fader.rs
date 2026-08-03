@@ -30,11 +30,11 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Fader<'path, 'value, 'data, 'skin> {
+    skin: &'skin Skin,
     path: &'path str,
     style: FaderStyle,
     label: Option<&'path str>,
     value: Option<&'value ReadValue<'data>>,
-    skin: &'skin Skin,
     owner: InputOwner,
 }
 
@@ -148,8 +148,8 @@ impl<'a> Widget<'a> for SegmentedFader<'_, '_> {
 }
 
 struct FaderTicks {
-    metrics: FaderSkin,
     color: Color,
+    metrics: FaderSkin,
 }
 
 impl canvas::Program<UiEvent> for FaderTicks {
@@ -185,8 +185,8 @@ struct SegmentedVolumeCanvas {
 }
 
 struct SegmentedVolumePaint {
-    metrics: FaderSkin,
     border_color: Color,
+    metrics: FaderSkin,
     palette: RenderPalette,
     volume: f32,
 }

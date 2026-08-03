@@ -60,8 +60,41 @@ where
     P: Program<UiEvent, Theme, Renderer>,
     P::State: RetainedCanvasState,
 {
-    fn tag(&self) -> iced::advanced::widget::tree::Tag {
-        self.canvas.tag()
+    delegate::delegate! {
+        to self.canvas {
+            fn tag(&self) -> iced::advanced::widget::tree::Tag;
+            fn size(&self) -> Size<Length>;
+            fn size_hint(&self) -> Size<Length>;
+            fn update(
+                &mut self,
+                tree: &mut Tree,
+                event: &Event,
+                layout: Layout<'_>,
+                cursor: mouse::Cursor,
+                renderer: &Renderer,
+                clipboard: &mut dyn Clipboard,
+                shell: &mut Shell<'_, UiEvent>,
+                viewport: &Rectangle,
+            );
+            fn mouse_interaction(
+                &self,
+                tree: &Tree,
+                layout: Layout<'_>,
+                cursor: mouse::Cursor,
+                viewport: &Rectangle,
+                renderer: &Renderer,
+            ) -> mouse::Interaction;
+            fn draw(
+                &self,
+                tree: &Tree,
+                renderer: &mut Renderer,
+                theme: &Theme,
+                style: &renderer::Style,
+                layout: Layout<'_>,
+                cursor: mouse::Cursor,
+                viewport: &Rectangle,
+            );
+        }
     }
 
     fn state(&self) -> iced::advanced::widget::tree::State {
@@ -77,14 +110,6 @@ where
             .reconcile_canvas(&self.path, &self.config);
     }
 
-    fn size(&self) -> Size<Length> {
-        self.canvas.size()
-    }
-
-    fn size_hint(&self) -> Size<Length> {
-        self.canvas.size_hint()
-    }
-
     fn layout(
         &mut self,
         tree: &mut Tree,
@@ -96,48 +121,6 @@ where
             .downcast_mut::<P::State>()
             .set_canvas_viewport(node.size(), &self.config);
         node
-    }
-
-    fn update(
-        &mut self,
-        tree: &mut Tree,
-        event: &Event,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, UiEvent>,
-        viewport: &Rectangle,
-    ) {
-        self.canvas.update(
-            tree, event, layout, cursor, renderer, clipboard, shell, viewport,
-        );
-    }
-
-    fn mouse_interaction(
-        &self,
-        tree: &Tree,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-        renderer: &Renderer,
-    ) -> mouse::Interaction {
-        self.canvas
-            .mouse_interaction(tree, layout, cursor, viewport, renderer)
-    }
-
-    fn draw(
-        &self,
-        tree: &Tree,
-        renderer: &mut Renderer,
-        theme: &Theme,
-        style: &renderer::Style,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-    ) {
-        self.canvas
-            .draw(tree, renderer, theme, style, layout, cursor, viewport);
     }
 
     fn operate(

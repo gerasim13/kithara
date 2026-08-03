@@ -64,6 +64,8 @@ type FactoryFn<D> =
 /// `canonical`, and the inner is reopened on the canonical path —
 /// guaranteeing that any external observer of the canonical path
 /// either sees no file or sees the fully durable committed bytes.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get, deref = false)]
 pub struct AtomicChunked<D: DriverIo> {
     /// The current writer. Swapped (not cloned) on the commit-rename.
     /// Read/wait paths mint a cheap `ResourceReader` from the current snapshot.
@@ -75,6 +77,10 @@ pub struct AtomicChunked<D: DriverIo> {
     /// Factory to reopen the inner on the canonical path post-rename.
     /// `None` when the wrapper was constructed in passthrough mode.
     factory: Option<FactoryFn<D>>,
+    #[field(get(
+        deref = Path,
+        doc = "Path the resource will land at on a successful commit."
+    ))]
     canonical_path: PathBuf,
 }
 
@@ -90,11 +96,6 @@ impl<D: DriverIo> std::fmt::Debug for AtomicChunked<D> {
 }
 
 impl<D: DriverIo> AtomicChunked<D> {
-    /// Path the resource will land at on a successful commit.
-    pub fn canonical_path(&self) -> &Path {
-        &self.canonical_path
-    }
-
     /// Commit the accumulated chunks: durably flush + atomically rename the
     /// temp file to the canonical path + reopen the inner on the canonical
     /// path. Rewrites in place (the writer commits without being consumed).
@@ -139,42 +140,6 @@ impl<D: DriverIo> AtomicChunked<D> {
         let tmp = self.tmp_path.lock().take();
         if let Some(tmp) = tmp {
             let _ = fs::remove_file(&tmp);
-        }
-    }
-
-    delegate::delegate! {
-        to self {
-            /// Returns `true` if the resource has been committed with zero length.
-            #[must_use]
-            #[expr($ == Some(0))]
-            #[call(len)]
-            pub fn is_empty(&self) -> bool;
-            /// Committed length, if known.
-            #[must_use]
-            #[expr($.len())]
-            #[call(read_view)]
-            pub fn len(&self) -> Option<u64>;
-            /// Current runtime status.
-            #[expr($.status())]
-            #[call(read_view)]
-            pub fn status(&self) -> ResourceStatus;
-        }
-        to self.inner.load() {
-            /// Reactivate the inner for continued writing.
-            ///
-            /// # Errors
-            /// Returns error if the resource is cancelled or the backend cannot reopen.
-            #[call(reactivate_in_place)]
-            pub fn reactivate(&self) -> StorageResult<()>;
-            /// Mint a cheap read-only view without holding the inner lock during
-            /// subsequent (possibly blocking) reads.
-            #[call(reader)]
-            fn read_view(&self) -> ResourceReader<D>;
-            /// Write data at the given offset.
-            ///
-            /// # Errors
-            /// Returns error if the resource is cancelled, failed, or the write fails.
-            pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
         }
     }
 
@@ -289,6 +254,42 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// resource has failed.
     pub fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         self.read_view().wait_range(range)
+    }
+
+    delegate::delegate! {
+        to self {
+            /// Returns `true` if the resource has been committed with zero length.
+            #[must_use]
+            #[expr($ == Some(0))]
+            #[call(len)]
+            pub fn is_empty(&self) -> bool;
+            /// Committed length, if known.
+            #[must_use]
+            #[expr($.len())]
+            #[call(read_view)]
+            pub fn len(&self) -> Option<u64>;
+            /// Current runtime status.
+            #[expr($.status())]
+            #[call(read_view)]
+            pub fn status(&self) -> ResourceStatus;
+        }
+        to self.inner.load() {
+            /// Reactivate the inner for continued writing.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled or the backend cannot reopen.
+            #[call(reactivate_in_place)]
+            pub fn reactivate(&self) -> StorageResult<()>;
+            /// Mint a cheap read-only view without holding the inner lock during
+            /// subsequent (possibly blocking) reads.
+            #[call(reader)]
+            fn read_view(&self) -> ResourceReader<D>;
+            /// Write data at the given offset.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled, failed, or the write fails.
+            pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
+        }
     }
 }
 

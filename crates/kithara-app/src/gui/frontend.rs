@@ -1,3 +1,5 @@
+use std::error::Error;
+
 use iced::{Size, window::Settings};
 use kithara_platform::{
     sync::{Arc, Mutex},
@@ -14,10 +16,12 @@ use crate::{
     catalog::Catalog,
     config::AppConfig,
     deck::{DeckId, DeckSet},
-    frontend::{Frontend, FrontendError},
     state::StateController,
     theme::gui,
 };
+
+/// Error returned by the GUI frontend.
+pub type FrontendError = Box<dyn Error + Send + Sync>;
 
 mod consts {
     /// DJ Studio window size in logical pixels. The minimum keeps both deck
@@ -43,10 +47,10 @@ pub(crate) fn window_settings() -> Settings {
 }
 
 struct Boot {
+    config: AppConfig,
+    catalog: Catalog,
     session: DeckSet,
     decks: Decks,
-    catalog: Catalog,
-    config: AppConfig,
     studio: StudioUi,
 }
 
@@ -56,21 +60,32 @@ pub struct GuiFrontend {
     palette: gui::GuiPalette,
 }
 
-impl Frontend for GuiFrontend {
-    fn new(config: &AppConfig) -> Result<Self, FrontendError> {
+impl GuiFrontend {
+    /// Creates the GUI frontend from application configuration.
+    ///
+    /// # Errors
+    /// Returns an error if GUI initialization fails.
+    pub fn new(config: &AppConfig) -> Result<Self, FrontendError> {
         Ok(Self {
             palette: config.palette.into(),
             config: config.clone(),
         })
     }
 
-    fn run_loop(&mut self, session: DeckSet) -> Result<(), FrontendError> {
+    /// Runs the GUI event loop until the application exits.
+    ///
+    /// # Errors
+    /// Returns an error if the event loop fails.
+    ///
+    /// # Panics
+    /// Panics if iced boots the application more than once; the boot
+    /// state is handed over exactly once by construction.
+    pub fn run_loop(&mut self, session: DeckSet) -> Result<(), FrontendError> {
         let palette = self.palette;
         let config = self.config.clone();
         let studio = StudioUi::new()?;
 
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(Box::<dyn std::error::Error + Send + Sync>::from)?;
+        let rt = tokio::runtime::Runtime::new().map_err(FrontendError::from)?;
         let _guard = rt.enter();
 
         // The CLI tracks start on the first deck; every deck gets its own
@@ -96,10 +111,10 @@ impl Frontend for GuiFrontend {
 
         let boot = Mutex::new(Some(Boot {
             session,
+            studio,
             decks: Decks::new(controllers).ok_or("no decks to render")?,
             catalog: Catalog::new(config.tracks.clone()),
             config: config.clone(),
-            studio,
         }));
 
         let daemon = iced::daemon(
@@ -135,11 +150,19 @@ impl Frontend for GuiFrontend {
         Ok(())
     }
 
-    fn shutdown(&mut self) -> Result<(), FrontendError> {
+    /// Completes GUI shutdown.
+    ///
+    /// # Errors
+    /// Returns an error if shutdown fails.
+    pub fn shutdown(&mut self) -> Result<(), FrontendError> {
         Ok(())
     }
 
-    fn start(&mut self, _decks: &DeckSet) -> Result<(), FrontendError> {
+    /// Prepares the GUI frontend for the deck session.
+    ///
+    /// # Errors
+    /// Returns an error if startup fails.
+    pub fn start(&mut self, _decks: &DeckSet) -> Result<(), FrontendError> {
         Ok(())
     }
 }

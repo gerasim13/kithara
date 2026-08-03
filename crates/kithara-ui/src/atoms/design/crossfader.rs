@@ -26,10 +26,10 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Crossfader<'path, 'value, 'data, 'skin> {
-    path: &'path str,
-    ticks: bool,
-    value: Option<&'value ReadValue<'data>>,
     skin: &'skin Skin,
+    path: &'path str,
+    value: Option<&'value ReadValue<'data>>,
+    ticks: bool,
 }
 
 impl<'a> Widget<'a> for Crossfader<'_, '_, '_, 'a> {
@@ -97,6 +97,7 @@ impl<'a> Crossfader<'_, '_, '_, 'a> {
             .then(|| TickRail::new(TickAxis::Horizontal, metrics.ticks, self.skin));
         let slider_height = ticks.as_ref().map_or(0.0, TickRail::reserved) + metrics.thumb_height;
         let paint = CrossfaderPaint {
+            ticks,
             rail_background: self.skin.color(metrics.rail_background),
             rail_color: self.skin.color(metrics.rail_frame.border),
             rail_frame: metrics.rail_frame,
@@ -107,18 +108,17 @@ impl<'a> Crossfader<'_, '_, '_, 'a> {
             thumb_notch_color: self.skin.color(metrics.thumb_notch_color),
             thumb_notch_height: metrics.thumb_notch_height,
             thumb_notch_width: metrics.thumb_notch_width,
-            ticks,
             text_resources: self.skin.text_resources(),
             value: value.clamp(0.0, 1.0).as_(),
         };
         let slider: Element<'a, UiEvent> = if interactive {
             Canvas::new(CrossfaderCanvas {
+                paint,
                 drag: Scalar::builder()
                     .track(Track::AbsoluteHorizontal)
                     .hover(Hover::new(CursorShape::ResizeH))
                     .build(),
                 path: self.path.to_owned(),
-                paint,
             })
             .width(Length::Fill)
             .height(Length::Fixed(slider_height))
@@ -152,24 +152,24 @@ impl<'a> Crossfader<'_, '_, '_, 'a> {
 }
 
 struct CrossfaderCanvas<'skin> {
+    paint: CrossfaderPaint<'skin>,
     drag: Scalar,
     path: String,
-    paint: CrossfaderPaint<'skin>,
 }
 
 struct CrossfaderPaint<'skin> {
+    text_resources: &'skin TextResources,
     rail_background: Color,
     rail_color: Color,
-    rail_frame: FrameSkin,
-    rail_height: f32,
     thumb_color: Color,
-    thumb_height: f32,
-    thumb_width: f32,
     thumb_notch_color: Color,
+    rail_frame: FrameSkin,
+    ticks: Option<TickRail>,
+    rail_height: f32,
+    thumb_height: f32,
     thumb_notch_height: f32,
     thumb_notch_width: f32,
-    ticks: Option<TickRail>,
-    text_resources: &'skin TextResources,
+    thumb_width: f32,
     value: f32,
 }
 
@@ -180,10 +180,10 @@ pub(crate) enum TickAxis {
 }
 
 pub(crate) struct TickRail {
+    center_color: Color,
+    color: Color,
     axis: TickAxis,
     metrics: TickSkin,
-    color: Color,
-    center_color: Color,
 }
 
 impl TickRail {
@@ -196,17 +196,12 @@ impl TickRail {
         }
     }
 
-    fn last(&self) -> Option<usize> {
-        self.metrics.count.checked_sub(1).filter(|last| *last > 0)
-    }
-
     pub(crate) fn extent(&self) -> f32 {
         self.metrics.center_length.max(self.metrics.length)
     }
 
-    pub(crate) fn reserved(&self) -> f32 {
-        self.last()
-            .map_or(0.0, |_| self.extent() + self.metrics.gap)
+    fn last(&self) -> Option<usize> {
+        self.metrics.count.checked_sub(1).filter(|last| *last > 0)
     }
 
     pub(crate) fn paint(&self, builder: &mut DrawListBuilder, rail: Rect) {
@@ -252,6 +247,11 @@ impl TickRail {
             };
             builder.fill_rect(tick, color.into());
         }
+    }
+
+    pub(crate) fn reserved(&self) -> f32 {
+        self.last()
+            .map_or(0.0, |_| self.extent() + self.metrics.gap)
     }
 }
 

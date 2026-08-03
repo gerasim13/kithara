@@ -3,10 +3,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use portable_atomic::{AtomicF64, AtomicU32};
 
 /// Coherent snapshot of the live playback scalars.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, fieldwork::Fieldwork)]
 #[non_exhaustive]
+#[fieldwork(get)]
 pub struct PlaybackSnapshot {
     /// Whether playback is active.
+    #[field(get = is_playing)]
     pub(crate) playing: bool,
     /// Cached span in seconds: how much of the source is on disk. Independent
     /// of `frontier` — bytes land ahead of the decoder, and the decoder can run
@@ -28,59 +30,20 @@ pub struct PlaybackSnapshot {
 pub struct PlaybackShared {
     /// Whether playback is active.
     pub playing: AtomicBool,
-    /// Playback position in seconds.
-    pub position: AtomicF64,
-    /// Decoded-ahead frontier in seconds.
-    pub frontier: AtomicF64,
     /// Cached span in seconds: how much of the source is on disk.
     pub cached: AtomicF64,
     /// Total media duration in seconds; `0.0` when unknown.
     pub duration: AtomicF64,
+    /// Decoded-ahead frontier in seconds.
+    pub frontier: AtomicF64,
+    /// Playback position in seconds.
+    pub position: AtomicF64,
     /// Current output sample rate.
     pub sample_rate: AtomicU32,
     /// Number of audio-thread process calls.
     pub process_count: AtomicU64,
     /// Current seek epoch used to invalidate stale seek requests.
     pub seek_epoch: AtomicU64,
-}
-
-impl PlaybackSnapshot {
-    /// Whether playback is active.
-    #[must_use]
-    pub fn is_playing(&self) -> bool {
-        self.playing
-    }
-
-    /// Total media duration in seconds; `0.0` when unknown.
-    #[must_use]
-    pub fn duration(&self) -> f64 {
-        self.duration
-    }
-
-    /// Decoded-ahead frontier in seconds. Always `>= position`.
-    #[must_use]
-    pub fn frontier(&self) -> f64 {
-        self.frontier
-    }
-
-    /// Cached span in seconds: how much of the source is on disk and needs no
-    /// further network.
-    #[must_use]
-    pub fn cached(&self) -> f64 {
-        self.cached
-    }
-
-    /// Playback position in seconds.
-    #[must_use]
-    pub fn position(&self) -> f64 {
-        self.position
-    }
-
-    /// Current output sample rate.
-    #[must_use]
-    pub fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
 }
 
 impl PlaybackShared {

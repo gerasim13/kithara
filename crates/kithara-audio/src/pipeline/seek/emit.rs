@@ -118,8 +118,8 @@ pub(crate) fn emit(
         bus.enqueue(
             AudioEvent::SeekLifecycle {
                 stage,
-                seek_epoch: epoch,
                 location,
+                seek_epoch: epoch,
             }
             .into(),
         );
@@ -136,8 +136,8 @@ pub(crate) fn land_eof(
         num_traits::cast::ToPrimitive::to_u64(&(duration.as_secs_f64() * f64::from(sample_rate)))
             .unwrap_or(u64::MAX);
     playhead.land(&kithara_stream::ChunkPosition {
-        end_position_ns: u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX),
         frame_offset,
+        end_position_ns: u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX),
         frames: 0,
         source_bytes: 0,
         source_byte_offset: None,

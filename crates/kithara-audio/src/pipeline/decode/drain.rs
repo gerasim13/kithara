@@ -5,11 +5,11 @@ use kithara_stream::PlayheadWrite;
 use crate::traits::AudioEffect;
 
 pub(crate) struct EofDrain {
+    spec: Option<PcmSpec>,
     exhausted: Vec<bool>,
     active: bool,
     chunks: u64,
     samples: u64,
-    spec: Option<PcmSpec>,
 }
 
 impl EofDrain {
@@ -23,10 +23,6 @@ impl EofDrain {
         }
     }
 
-    pub(crate) fn reset(&mut self) {
-        self.active = false;
-    }
-
     pub(crate) fn next(&mut self, effects: &mut [Box<dyn AudioEffect>]) -> Option<PcmChunk> {
         if effects.is_empty() {
             return None;
@@ -37,6 +33,14 @@ impl EofDrain {
         }
         let last = effects.len() - 1;
         pull(effects, &mut self.exhausted, last)
+    }
+
+    pub(crate) fn reset(&mut self) {
+        self.active = false;
+    }
+
+    pub(crate) fn stats(&self) -> (u64, u64) {
+        (self.chunks, self.samples)
     }
 
     pub(crate) fn track(
@@ -79,10 +83,6 @@ impl EofDrain {
             }
             self.spec = Some(chunk.spec());
         }
-    }
-
-    pub(crate) fn stats(&self) -> (u64, u64) {
-        (self.chunks, self.samples)
     }
 }
 

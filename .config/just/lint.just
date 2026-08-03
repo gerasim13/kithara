@@ -26,6 +26,7 @@ fast:
     just lint ast-grep
     just lint typos
     just lint arch
+    just lint idioms --check derivable_getter --check derivable_delegation
 
 # Full CI chain: fast checks, xtask tests, quality scans, style, and idioms.
 full:

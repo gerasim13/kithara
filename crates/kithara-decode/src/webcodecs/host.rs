@@ -24,16 +24,16 @@ use crate::{DecodeError, DecodeResult};
 
 struct DecoderHost {
     decoder: AudioDecoder,
-    pending: Rc<RefCell<VecDeque<(u64, u64)>>>,
     _error_callback: Closure<dyn FnMut(JsValue)>,
     _output_callback: Closure<dyn FnMut(AudioData)>,
+    pending: Rc<RefCell<VecDeque<(u64, u64)>>>,
 }
 
 struct DecoderState {
     host: DecoderHost,
-    out_tx: mpsc::Sender<HostOut>,
-    generation: Rc<Cell<u64>>,
     announced_generation: Rc<Cell<Option<u64>>>,
+    generation: Rc<Cell<u64>>,
+    out_tx: mpsc::Sender<HostOut>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -304,9 +304,9 @@ impl DecoderHost {
                         } = &output
                     {
                         let _ = out_tx.send(HostOut::Configured {
+                            generation,
                             sample_rate: *sample_rate,
                             channels: *channels,
-                            generation,
                         });
                         announced_generation.set(Some(generation));
                     }
@@ -487,8 +487,8 @@ fn js_detail(value: &JsValue) -> String {
 
 fn send_error(out_tx: &mpsc::Sender<HostOut>, err: &DecodeError, generation: u64) {
     let _ = out_tx.send(HostOut::Error {
-        detail: err.to_string(),
         generation,
+        detail: err.to_string(),
     });
 }
 

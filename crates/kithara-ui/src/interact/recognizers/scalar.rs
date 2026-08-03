@@ -51,19 +51,15 @@ pub(crate) struct WheelStep {
     pub(crate) step: f32,
 }
 
-#[derive(Default)]
+#[derive(Default, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct ScalarState {
+    #[field(get = captures_pointer, vis = "pub(crate)")]
     active: bool,
     start_position: f32,
     start_value: f32,
     double_click: DoubleClick,
     wheel_accum: f32,
-}
-
-impl ScalarState {
-    pub(crate) const fn captures_pointer(&self) -> bool {
-        self.active
-    }
 }
 
 impl Scalar {

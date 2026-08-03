@@ -50,9 +50,9 @@ pub(crate) fn resolve_param<T: Clone + DeserializeOwned>(
         })?;
     let value = substitute(args, origin, reference, path)?;
     ron::from_str::<T>(&value).map_err(|_| UiDocError::BadParamVariant {
+        value,
         origin: origin.clone(),
         name: name.to_owned(),
-        value,
         path: path.to_owned(),
     })
 }
@@ -139,9 +139,9 @@ pub fn scoped_key(id: &str, with: &BTreeMap<String, String>) -> String {
 }
 
 struct BindingParts {
+    with: BTreeMap<InternId, InternId>,
     id: InternId,
     key: InternId,
-    with: BTreeMap<InternId, InternId>,
 }
 
 fn intern_binding_parts(
@@ -157,8 +157,8 @@ fn intern_binding_parts(
         interner.intern(&scoped_key(id, with), origin)?
     };
     Ok(BindingParts {
-        id: id_intern,
         key,
+        id: id_intern,
         with: intern_map(interner, with, origin)?,
     })
 }
@@ -176,10 +176,10 @@ pub(crate) fn intern_binding(
     };
     let BindingParts { id, key, with } = intern_binding_parts(interner, &id.0, with, origin)?;
     Ok(Binding {
+        with,
         kind,
         id,
         key,
-        with,
     })
 }
 

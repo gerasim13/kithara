@@ -30,7 +30,7 @@ fn open_test_resource(temp_dir: &TestTempDir, name: &str, cancel: CancelToken) -
 
 #[cfg(not(target_arch = "wasm32"))]
 fn open_mmap_at(path: std::path::PathBuf, cancel: CancelToken) -> MmapResource {
-    Resource::open(cancel, MmapOptions::new(path)).expect("open should succeed")
+    Resource::open(cancel, MmapOptions::for_path(path).build()).expect("open should succeed")
 }
 
 #[kithara::test(

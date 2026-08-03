@@ -29,10 +29,10 @@ pub(crate) struct TrackListRowData {
     pub(crate) deck: Option<String>,
     pub(crate) energy: Option<u8>,
     pub(crate) key: Option<String>,
-    pub(crate) selected: bool,
     pub(crate) time: Option<String>,
-    pub(crate) title: String,
     pub(crate) transition: Option<String>,
+    pub(crate) title: String,
+    pub(crate) selected: bool,
 }
 
 impl From<&TrackRow<'_>> for TrackListRowData {
@@ -53,14 +53,14 @@ impl From<&TrackRow<'_>> for TrackListRowData {
 
 #[derive(bon::Builder)]
 pub(crate) struct TrackList<'path, 'columns, 'state, 'value, 'data, 'reads, 'skin> {
-    path: &'path str,
-    columns: &'columns [TrackColumn],
-    columns_state: Option<&'state str>,
-    columns_scope: &'state str,
-    value: Option<&'value ReadValue<'data>>,
-    reads: &'reads dyn Reads,
-    owner: InputOwner,
     skin: &'skin Skin,
+    columns: &'columns [TrackColumn],
+    reads: &'reads dyn Reads,
+    columns_scope: &'state str,
+    path: &'path str,
+    columns_state: Option<&'state str>,
+    value: Option<&'value ReadValue<'data>>,
+    owner: InputOwner,
 }
 
 impl<'a, 'skin: 'a> Widget<'a> for TrackList<'_, '_, '_, '_, '_, '_, 'skin> {

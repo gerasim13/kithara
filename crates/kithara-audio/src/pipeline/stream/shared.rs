@@ -18,6 +18,7 @@ use super::offset::OffsetReader;
 /// - Decoder to read via Read + Seek
 /// - `StreamAudioSource` to check `media_info()` for format changes
 pub(crate) struct SharedStream<T: StreamType> {
+    inner: Arc<Mutex<Stream<T>>>,
     /// Construction-phase read mode, shared across clones. When set, `Read`
     /// routes through the blocking off-RT [`Stream::read`] adapter (waits for
     /// the seeked range to download, cancel-bounded by its own timeout)
@@ -26,7 +27,6 @@ pub(crate) struct SharedStream<T: StreamType> {
     /// steady-state decoding resumes. See the crate `CONTEXT.md`
     /// "Construction reads".
     blocking: ConstructionGate,
-    inner: Arc<Mutex<Stream<T>>>,
 }
 
 impl<T: StreamType> SharedStream<T> {

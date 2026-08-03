@@ -906,15 +906,15 @@ mod tests {
         check_controls(
             ControlSite {
                 path,
-                control: &document.root,
-                read: None,
                 write,
-                columns: &[],
-                columns_state: None,
-                query: None,
                 scope,
                 zoom,
                 active,
+                control: &document.root,
+                read: None,
+                columns: &[],
+                columns_state: None,
+                query: None,
             },
             &origin(),
             &registry(),
@@ -1089,8 +1089,8 @@ mod tests {
         let mut with = with_deck();
         with.insert("sidechain".to_owned(), "1".to_owned());
         let binding = BindingRef::Command {
-            id: EndpointId("deck.transport.toggle_play".into()),
             with,
+            id: EndpointId("deck.transport.toggle_play".into()),
         };
         let error = check_control(
             r#"Button(id: "play", label: "PLAY")"#,

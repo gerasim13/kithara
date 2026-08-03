@@ -10,11 +10,11 @@ use crate::{layout::ResourceKey, resource::AssetResourceState};
 /// has no `Drop` impl, allowing its terminal operations to move the inner
 /// handle. A committed live resource is never removed by this hook.
 pub(super) struct WriterCleanup {
-    drop_token: Option<Arc<()>>,
     pub(super) events: LeaseEvents,
     pub(super) live: Option<Arc<LiveResource>>,
     pub(super) remove: Option<RemoveFn>,
     pub(super) resource_key: Option<ResourceKey>,
+    drop_token: Option<Arc<()>>,
     armed: bool,
 }
 
@@ -26,11 +26,11 @@ impl WriterCleanup {
         resource_key: Option<ResourceKey>,
     ) -> Self {
         Self {
-            drop_token: Some(Arc::new(())),
             events,
             live,
             remove,
             resource_key,
+            drop_token: Some(Arc::new(())),
             armed: true,
         }
     }

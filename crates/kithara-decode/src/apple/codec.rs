@@ -39,6 +39,9 @@ pub(crate) struct AppleCodec {
     /// reports priming only after consuming one input packet).
     last_prime_info: Option<kithara_apple::audio_toolbox::AudioConverterPrimeInfo>,
     spec: PcmSpec,
+    /// True once a source-rate-changing converter has reported no more
+    /// SRC tail frames after true EOF.
+    eof_drained: bool,
     /// Whether gapless capture was requested in
     /// [`AppleCodec::open_with_config`].
     gapless_enabled: bool,
@@ -46,9 +49,7 @@ pub(crate) struct AppleCodec {
     /// did not yet yield priming numbers; cleared after the first
     /// post-decode refresh.
     prime_info_refresh_pending: bool,
-    /// Source-domain sample rate from `TrackInfo`; `spec.sample_rate`
-    /// is the actual output/device-domain rate.
-    source_sample_rate: u32,
+    tail_compensation_enabled: bool,
     /// `AudioConverter`'s expected output packets-per-callback. Used to
     /// pre-grow the caller's `out` buffer before invoking the FFI so the
     /// converter writes directly into pool memory — no internal scratch
@@ -60,15 +61,78 @@ pub(crate) struct AppleCodec {
     /// match the actual input packet count when the demuxer batched
     /// multiple packets into one `Frame`.
     input_bytes_per_packet: u32,
-    /// True once a source-rate-changing converter has reported no more
-    /// SRC tail frames after true EOF.
-    eof_drained: bool,
-    tail_compensation_enabled: bool,
+    /// Source-domain sample rate from `TrackInfo`; `spec.sample_rate`
+    /// is the actual output/device-domain rate.
+    source_sample_rate: u32,
     source_frames_seen: u64,
 }
 
 impl AppleCodec {
     const SRC_OUTPUT_MARGIN_FRAMES: u32 = 1;
+
+    fn drain_eof(&mut self, out: &mut PcmBuf) -> DecodeResult<u32> {
+        if !self.needs_src_eof_drain() || self.eof_drained {
+            out.clear();
+            return Ok(0);
+        }
+
+        self.input_state.finish();
+        let frames = self.fill_converter(out, self.eof_flush_frame_capacity()?)?;
+        if frames == 0 {
+            self.eof_drained = true;
+            self.input_state.clear();
+        }
+        Ok(frames)
+    }
+
+    fn eof_flush_frame_capacity(&self) -> DecodeResult<u32> {
+        output_frame_capacity(
+            self.frames_per_packet.max(Consts::AAC_FRAMES_PER_PACKET),
+            self.source_sample_rate,
+            self.spec.sample_rate.get(),
+        )
+    }
+
+    fn fill_converter(&mut self, out: &mut PcmBuf, target_frames: u32) -> DecodeResult<u32> {
+        if target_frames == 0 {
+            out.clear();
+            return Ok(0);
+        }
+
+        let channels = usize::from(self.spec.channels);
+        let needed_samples = output_sample_capacity(target_frames, channels)?;
+        out.ensure_len(needed_samples)?;
+
+        let mut output_packets = target_frames;
+        let mut buffer_list =
+            SingleAudioBufferList::interleaved_f32(u32::from(self.spec.channels), out)
+                .map_err(DecodeError::backend)?;
+        let status = self.converter.fill_complex_buffer(
+            self.input_state.as_mut(),
+            1,
+            &mut output_packets,
+            &mut buffer_list,
+        );
+
+        if status != Consts::NO_ERR
+            && status != Consts::CONVERTER_ERR_NO_DATA_NOW
+            && output_packets == 0
+        {
+            return Err(DecodeError::BackendStatus {
+                code: status,
+                op: "AudioConverterFillComplexBuffer",
+            });
+        }
+
+        let frames = output_packets;
+        let samples_len = output_sample_capacity(frames, channels)?;
+        out.truncate(samples_len);
+        Ok(frames)
+    }
+
+    fn needs_src_eof_drain(&self) -> bool {
+        self.spec.sample_rate.get() != self.source_sample_rate
+    }
 
     /// Inherent constructor used by [`Self::open_with_config`] (and only
     /// there). Builds a base [`AppleCodec`] from `TrackInfo` without
@@ -181,10 +245,6 @@ impl AppleCodec {
         }
     }
 
-    fn needs_src_eof_drain(&self) -> bool {
-        self.spec.sample_rate.get() != self.source_sample_rate
-    }
-
     fn refresh_tail_compensation(&mut self) {
         if !self.tail_compensation_enabled {
             return;
@@ -194,66 +254,6 @@ impl AppleCodec {
             self.source_sample_rate,
             self.spec.sample_rate.get(),
         );
-    }
-
-    fn eof_flush_frame_capacity(&self) -> DecodeResult<u32> {
-        output_frame_capacity(
-            self.frames_per_packet.max(Consts::AAC_FRAMES_PER_PACKET),
-            self.source_sample_rate,
-            self.spec.sample_rate.get(),
-        )
-    }
-
-    fn drain_eof(&mut self, out: &mut PcmBuf) -> DecodeResult<u32> {
-        if !self.needs_src_eof_drain() || self.eof_drained {
-            out.clear();
-            return Ok(0);
-        }
-
-        self.input_state.finish();
-        let frames = self.fill_converter(out, self.eof_flush_frame_capacity()?)?;
-        if frames == 0 {
-            self.eof_drained = true;
-            self.input_state.clear();
-        }
-        Ok(frames)
-    }
-
-    fn fill_converter(&mut self, out: &mut PcmBuf, target_frames: u32) -> DecodeResult<u32> {
-        if target_frames == 0 {
-            out.clear();
-            return Ok(0);
-        }
-
-        let channels = usize::from(self.spec.channels);
-        let needed_samples = output_sample_capacity(target_frames, channels)?;
-        out.ensure_len(needed_samples)?;
-
-        let mut output_packets = target_frames;
-        let mut buffer_list =
-            SingleAudioBufferList::interleaved_f32(u32::from(self.spec.channels), out)
-                .map_err(DecodeError::backend)?;
-        let status = self.converter.fill_complex_buffer(
-            self.input_state.as_mut(),
-            1,
-            &mut output_packets,
-            &mut buffer_list,
-        );
-
-        if status != Consts::NO_ERR
-            && status != Consts::CONVERTER_ERR_NO_DATA_NOW
-            && output_packets == 0
-        {
-            return Err(DecodeError::BackendStatus {
-                code: status,
-                op: "AudioConverterFillComplexBuffer",
-            });
-        }
-
-        let frames = output_packets;
-        let samples_len = output_sample_capacity(frames, channels)?;
-        out.truncate(samples_len);
-        Ok(frames)
     }
 
     /// Whether the Apple `AudioConverter` accepts this codec at the
@@ -982,8 +982,8 @@ mod aac_lc_decode_tests {
     impl Consts {
         const COMMON_TARGET_RATE: u32 = 48_000;
         const HIGH_TARGET_RATE: u32 = 96_000;
-        const MAX_SRC_DELAY_FRAMES: u32 = 1024;
         const MAX_EOF_DRAIN_CALLS: usize = 8;
+        const MAX_SRC_DELAY_FRAMES: u32 = 1024;
         const OUTPUT_LENGTH_TOLERANCE_FRAMES: u64 = 1;
         const RESAMPLED_TEST_PACKETS: usize = 16;
     }

@@ -15,9 +15,9 @@ pub(crate) struct Tensor {
 /// ONNX model loaded from bytes, run via the pure-Rust rten runtime.
 pub(crate) struct RtenModel {
     input_map: HashMap<String, NodeId>,
+    output_names: HashMap<NodeId, String>,
     model: RtenGraph,
     output_ids: Vec<NodeId>,
-    output_names: HashMap<NodeId, String>,
 }
 
 /// Load a model from ONNX bytes; `name` tags load errors.
@@ -54,9 +54,9 @@ impl TryFrom<(&'static str, &[u8])> for RtenModel {
 
         Ok(Self {
             input_map,
+            output_names,
             model,
             output_ids,
-            output_names,
         })
     }
 }

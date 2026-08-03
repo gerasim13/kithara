@@ -57,10 +57,12 @@ impl FaceBlobs {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct TextResources {
     collection: Collection,
     fonts: [FontId; 10],
+    #[field(get, vis = "pub(super)", copy)]
     faces: FaceBlobs,
     policy: FontPolicy,
     #[cfg(feature = "render")]
@@ -97,10 +99,6 @@ impl TextResources {
 
     pub(super) fn collection(&self) -> Collection {
         self.collection.clone()
-    }
-
-    pub(super) const fn faces(&self) -> FaceBlobs {
-        self.faces
     }
 
     #[cfg(feature = "render")]

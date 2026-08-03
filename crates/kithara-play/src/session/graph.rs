@@ -239,8 +239,8 @@ pub(super) mod slots {
             "[KITHARA-ROUTE] player slot allocated"
         );
         let reply = Reply::SlotAllocated(AllocatedSlot {
-            slot: slot_id,
             control,
+            slot: slot_id,
         });
         Ok(reply)
     }
@@ -513,8 +513,8 @@ mod tests {
     #[derive(Default)]
     struct AudioDevice {
         processor: Option<FirewheelProcessor<TestBackend>>,
-        owner: u64,
         next_stream: u64,
+        owner: u64,
     }
 
     thread_local! {

@@ -10,7 +10,7 @@ use proc_macro2::Span;
 use quote::ToTokens;
 use syn::{
     Attribute, Expr, Fields, FnArg, GenericParam, ImplItem, Item, ItemImpl, ItemStruct, Lit,
-    Member, Pat, Path, Stmt, Type, spanned::Spanned,
+    Member, Meta, Pat, Path, Stmt, Token, Type, punctuated::Punctuated, spanned::Spanned,
 };
 
 use super::Context;
@@ -29,15 +29,48 @@ pub(super) enum Kind {
     Display,
 }
 
-impl Kind {
-    pub(super) const fn id(self) -> &'static str {
-        match self {
-            Self::From => "derivable_from",
-            Self::Deref => "derivable_deref",
-            Self::Display => "derivable_display",
-        }
+pub(super) fn attrs_match_config(attrs: &[Attribute], configured: &[String]) -> bool {
+    if configured.is_empty() {
+        return false;
     }
+    attrs.iter().any(|attr| {
+        path_matches_config(attr.path(), configured)
+            || (attr.path().is_ident("cfg_attr") && cfg_attr_matches_config(&attr.meta, configured))
+    })
+}
 
+fn cfg_attr_matches_config(meta: &Meta, configured: &[String]) -> bool {
+    let Meta::List(list) = meta else {
+        return false;
+    };
+    let Ok(arguments) = list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+    else {
+        return false;
+    };
+    arguments
+        .iter()
+        .skip(1)
+        .any(|nested| meta_matches_config(nested, configured))
+}
+
+fn meta_matches_config(meta: &Meta, configured: &[String]) -> bool {
+    path_matches_config(meta.path(), configured)
+        || (meta.path().is_ident("cfg_attr") && cfg_attr_matches_config(meta, configured))
+}
+
+fn path_matches_config(path: &Path, configured: &[String]) -> bool {
+    let path = path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>()
+        .join("::");
+    configured
+        .iter()
+        .any(|entry| path == *entry || path.ends_with(&format!("::{entry}")))
+}
+
+impl Kind {
     const fn derive(self) -> &'static str {
         match self {
             Self::From => "derive_more::From",
@@ -45,22 +78,30 @@ impl Kind {
             Self::Display => "derive_more::Display",
         }
     }
+
+    pub(super) const fn id(self) -> &'static str {
+        match self {
+            Self::From => "derivable_from",
+            Self::Deref => "derivable_deref",
+            Self::Display => "derivable_display",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 struct Candidate {
-    type_name: String,
-    impl_ranges: Vec<Range<usize>>,
-    line: usize,
-    additions: Vec<Insertion>,
-    replacements: Vec<Replacement>,
     skip: Option<&'static str>,
+    type_name: String,
+    additions: Vec<Insertion>,
+    impl_ranges: Vec<Range<usize>>,
+    replacements: Vec<Replacement>,
+    line: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 struct Insertion {
-    at: usize,
     text: String,
+    at: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

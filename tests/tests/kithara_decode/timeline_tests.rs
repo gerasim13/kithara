@@ -146,11 +146,14 @@ mod hls_timeline {
 
         let stream = Stream::<Hls>::new(hls_config).await.unwrap();
 
-        let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+        let wav_info = MediaInfo::builder()
+            .maybe_codec(Some(AudioCodec::Pcm))
+            .maybe_container(Some(ContainerFormat::Wav))
+            .build();
         let decoder_config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(kithara::bufpool::PcmPool::default())
-            .hint("wav".to_string())
+            .hint("wav")
             .maybe_byte_map(stream.byte_map())
             .build();
 

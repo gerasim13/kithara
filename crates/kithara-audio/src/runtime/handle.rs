@@ -16,8 +16,8 @@ pub(crate) enum SchedulerCmd<N> {
 
 pub(crate) struct Slot<N> {
     pub(crate) node: N,
-    pub(crate) service_class: ServiceClass,
     pub(crate) rt_policy: RtPolicy,
+    pub(crate) service_class: ServiceClass,
     pub(crate) id: SlotId,
     pub(crate) is_terminal: bool,
 }

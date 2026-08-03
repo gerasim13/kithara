@@ -125,8 +125,8 @@ mod wire {
 
     #[non_exhaustive]
     pub struct AllocatedSlot {
-        pub slot: SlotId,
         pub control: SlotControl,
+        pub slot: SlotId,
     }
 }
 
@@ -158,11 +158,6 @@ mod handle {
             Self(dispatcher)
         }
 
-        #[must_use]
-        pub fn dispatcher(&self) -> Arc<dyn SessionDispatcher> {
-            Arc::clone(&self.0)
-        }
-
         pub fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
             match self.exec_ok(Cmd::AllocateSlot { player_id })? {
                 Reply::SlotAllocated(allocated) => Ok(allocated),
@@ -172,12 +167,16 @@ mod handle {
             }
         }
 
-        pub fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-            self.0.exec(cmd)
+        #[must_use]
+        pub fn dispatcher(&self) -> Arc<dyn SessionDispatcher> {
+            Arc::clone(&self.0)
         }
 
-        pub fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-            self.0.exec_ok(cmd)
+        delegate::delegate! {
+            to self.0 {
+                pub fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
+                pub fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError>;
+            }
         }
 
         pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {

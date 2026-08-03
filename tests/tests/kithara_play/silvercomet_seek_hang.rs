@@ -106,9 +106,7 @@ fn blocks_for_seconds(secs: f64) -> u32 {
 fn fresh_downloader() -> Downloader {
     let net = NetOptions::builder().is_insecure(true).build();
     Downloader::new(
-        DownloaderConfig::builder()
-            .client(HttpClient::new(net, CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     )
 }
 
@@ -120,20 +118,22 @@ async fn build_resource(
     backend: DecoderBackend,
     abr: AbrMode,
 ) -> Resource {
-    let cfg = ResourceConfig::for_src(url)
-        .unwrap_or_else(|e| panic!("ResourceConfig::for_src({url}): {e}"))
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .downloader(downloader.clone())
-        .discriminator(format!("{iter_label}|{url}"))
-        .store(store)
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(backend)
-                .build(),
-        )
-        .initial_abr_mode(abr)
-        .build();
+    let cfg: ResourceConfig = ResourceConfig::for_src(
+        ResourceConfig::parse_src(url)
+            .unwrap_or_else(|e| panic!("ResourceConfig::parse_src({url}): {e}")),
+    )
+    .byte_pool(kithara::bufpool::BytePool::default())
+    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .downloader(downloader.clone())
+    .discriminator(format!("{iter_label}|{url}"))
+    .store(store)
+    .decoder(
+        kithara::audio::AudioDecoderConfig::builder()
+            .backend(backend)
+            .build(),
+    )
+    .initial_abr_mode(abr)
+    .build();
     let mut resource = Resource::new(cfg)
         .await
         .unwrap_or_else(|e| panic!("Resource::new({url}): {e:?}"));

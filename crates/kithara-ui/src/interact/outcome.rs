@@ -1,6 +1,8 @@
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct Outcome<T = f32> {
     value: Option<T>,
+    #[field(get = is_captured, vis = "pub(crate)")]
     capture: bool,
 }
 
@@ -44,9 +46,5 @@ impl<T> Outcome<T> {
             value: self.value.map(map),
             capture: self.capture,
         }
-    }
-
-    pub(crate) const fn is_captured(&self) -> bool {
-        self.capture
     }
 }

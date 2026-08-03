@@ -36,6 +36,12 @@ impl GaplessTailCompensation {
     }
 
     #[must_use]
+    pub fn deficit_frames(self, actual_pre_trim_frames: u64) -> u64 {
+        self.ideal_pre_trim_frames
+            .saturating_sub(actual_pre_trim_frames)
+    }
+
+    #[must_use]
     pub fn for_source_frames(
         source_frames: u64,
         source_rate: u32,
@@ -55,12 +61,6 @@ impl GaplessTailCompensation {
     #[must_use]
     pub const fn ideal_pre_trim_frames(self) -> u64 {
         self.ideal_pre_trim_frames
-    }
-
-    #[must_use]
-    pub fn deficit_frames(self, actual_pre_trim_frames: u64) -> u64 {
-        self.ideal_pre_trim_frames
-            .saturating_sub(actual_pre_trim_frames)
     }
 }
 

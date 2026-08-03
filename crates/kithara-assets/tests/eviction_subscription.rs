@@ -9,8 +9,7 @@ mod support;
 use std::num::NonZeroUsize;
 
 use kithara_assets::{
-    AcquisitionResult, AssetScope, AssetStore, AssetStoreBuilder, ResourceKey, StorageBackend,
-    WriteSide,
+    AcquisitionResult, AssetScope, AssetStore, ResourceKey, StorageBackend, WriteSide,
 };
 use kithara_platform::{sync::Arc, time::Duration, tokio::sync::mpsc};
 use kithara_test_utils::kithara;
@@ -20,7 +19,7 @@ const ROOT_A: &str = "asset_root_a";
 const ROOT_B: &str = "asset_root_b";
 
 fn ephemeral_store(cap: usize) -> AssetStore {
-    AssetStoreBuilder::default()
+    AssetStore::builder()
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(cap).expect("test cache capacity must be non-zero"))
         .build()

@@ -49,12 +49,12 @@ impl Consts {
 
 /// Frame codec backed by a symphonia codec registry decoder.
 pub(crate) struct SymphoniaCodec {
-    codec: Option<AudioCodec>,
     decoder: Box<dyn AudioDecoder>,
     /// Decoder-owned playback contract. Populated from container-level
     /// gapless metadata captured by the demuxer before the codec is
     /// opened; left empty otherwise.
     track_info: DecoderTrackInfo,
+    codec: Option<AudioCodec>,
     spec: PcmSpec,
     /// One-shot guard for first-frame diagnostic log — compares the
     /// declared [`PcmSpec`] (from container `TrackInfo`) against the
@@ -91,9 +91,9 @@ impl SymphoniaCodec {
             .map_or(2, |c| u16::try_from(c.count()).unwrap_or(2));
         let spec = PcmSpec::checked(channels, raw_rate, "symphonia.codec.native")?;
         Ok(Self {
-            codec: None,
             decoder,
             spec,
+            codec: None,
             track_info: DecoderTrackInfo::default(),
             logged_first_frame: false,
         })
@@ -149,9 +149,9 @@ impl SymphoniaCodec {
 
         let spec = PcmSpec::checked(track.channels, track.sample_rate, "symphonia.codec.track")?;
         Ok(Self {
-            codec: Some(track.codec),
             decoder,
             spec,
+            codec: Some(track.codec),
             track_info: DecoderTrackInfo {
                 gapless: track_gapless,
                 ..DecoderTrackInfo::default()
@@ -250,14 +250,6 @@ impl FrameCodec for SymphoniaCodec {
         symphonia_decoder_algo_delay(codec)
     }
 
-    fn timestamp_bias_frames(&self) -> u64 {
-        if cfg!(feature = "fdk-aac") {
-            self.codec.map_or(0, access_unit_frames).into()
-        } else {
-            0
-        }
-    }
-
     fn flush(&mut self) -> DecodeResult<()> {
         self.decoder.reset();
         Ok(())
@@ -276,6 +268,14 @@ impl FrameCodec for SymphoniaCodec {
 
     fn spec(&self) -> PcmSpec {
         self.spec
+    }
+
+    fn timestamp_bias_frames(&self) -> u64 {
+        if cfg!(feature = "fdk-aac") {
+            self.codec.map_or(0, access_unit_frames).into()
+        } else {
+            0
+        }
     }
 
     fn track_info(&self) -> DecoderTrackInfo {

@@ -17,16 +17,16 @@ impl Consts {
 }
 
 pub(super) struct StressState {
-    fader: f64,
-    frame_ms: VecDeque<f64>,
-    frame_ms_avg: String,
-    frame_ms_ordered: Vec<f64>,
-    frame_ms_p99: String,
-    fps: String,
     last_tick: Option<Instant>,
+    fps: String,
+    frame_ms_avg: String,
+    frame_ms_p99: String,
+    frame_ms_ordered: Vec<f64>,
+    frame_ms: VecDeque<f64>,
     levels: [StereoLevels; 8],
-    phase: f32,
     waveforms: [Vec<WaveBucket>; 4],
+    phase: f32,
+    fader: f64,
 }
 
 impl Default for StressState {
@@ -70,26 +70,6 @@ impl StressState {
         Some(value)
     }
 
-    pub(super) fn reset_clock(&mut self) {
-        self.last_tick = None;
-    }
-
-    pub(super) fn set_scalar(&mut self, path: &str, value: f64) -> bool {
-        if path != "stress/master" {
-            return false;
-        }
-        self.fader = value.clamp(0.0, 1.0);
-        true
-    }
-
-    pub(super) fn tick(&mut self) {
-        let now = Instant::now();
-        if let Some(previous) = self.last_tick.replace(now) {
-            self.record_frame(now.duration_since(previous).as_secs_f64() * 1_000.0);
-        }
-        self.push_data();
-    }
-
     fn push_data(&mut self) {
         self.phase += 0.037;
         for (index, waveform) in self.waveforms.iter_mut().enumerate() {
@@ -131,6 +111,26 @@ impl StressState {
         self.fps = format!("{:.1}", 1_000.0 / average);
         self.frame_ms_avg = format!("{average:.2}");
         self.frame_ms_p99 = format!("{p99:.2}");
+    }
+
+    pub(super) fn reset_clock(&mut self) {
+        self.last_tick = None;
+    }
+
+    pub(super) fn set_scalar(&mut self, path: &str, value: f64) -> bool {
+        if path != "stress/master" {
+            return false;
+        }
+        self.fader = value.clamp(0.0, 1.0);
+        true
+    }
+
+    pub(super) fn tick(&mut self) {
+        let now = Instant::now();
+        if let Some(previous) = self.last_tick.replace(now) {
+            self.record_frame(now.duration_since(previous).as_secs_f64() * 1_000.0);
+        }
+        self.push_data();
     }
 }
 

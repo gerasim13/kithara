@@ -17,13 +17,13 @@ use crate::{
 #[non_exhaustive]
 pub struct MonoStreamConfig<B> {
     pub backend: B,
-    #[builder(default)]
-    pub options: ResamplerOptions,
-    pub pcm_pool: PcmPool,
-    #[builder(default)]
-    pub quality: ResamplerQuality,
     pub source_sample_rate: NonZeroU32,
     pub target_sample_rate: NonZeroU32,
+    pub pcm_pool: PcmPool,
+    #[builder(default)]
+    pub options: ResamplerOptions,
+    #[builder(default)]
+    pub quality: ResamplerQuality,
 }
 
 impl<B> fmt::Debug for MonoStreamConfig<B>
@@ -46,15 +46,15 @@ pub struct MonoStream<B>
 where
     B: ResamplerBackend,
 {
-    emitted: usize,
     input_block: PcmBuf,
     output_block: PcmBuf,
     pending: PcmBuf,
-    ratio: f64,
     ready: PcmBuf,
     resampler: B::Resampler,
-    skip: usize,
+    ratio: f64,
     total_in: u64,
+    emitted: usize,
+    skip: usize,
 }
 
 impl<B> MonoStream<B>

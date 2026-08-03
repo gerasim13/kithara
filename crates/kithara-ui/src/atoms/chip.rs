@@ -7,10 +7,10 @@ use crate::{
 };
 
 pub(crate) struct Chip<'data, 'skin> {
-    active: bool,
+    skin: &'skin Skin,
     label: &'data str,
     style: ChipStyle,
-    skin: &'skin Skin,
+    active: bool,
 }
 
 impl<'data, 'skin> Chip<'data, 'skin> {
@@ -21,10 +21,25 @@ impl<'data, 'skin> Chip<'data, 'skin> {
         skin: &'skin Skin,
     ) -> Self {
         Self {
-            active,
+            skin,
             label,
             style,
-            skin,
+            active,
+        }
+    }
+
+    fn font(&self) -> FontSkin {
+        match self.style {
+            ChipStyle::Deck => self.skin.chip.deck_text,
+            ChipStyle::Routing => self.skin.chip.routing_text,
+        }
+    }
+
+    fn frame(&self) -> FrameSkin {
+        if self.active {
+            self.skin.chip.active_frame
+        } else {
+            self.skin.chip.inactive_frame
         }
     }
 
@@ -69,21 +84,6 @@ impl<'data, 'skin> Chip<'data, 'skin> {
             }),
             color.into(),
         );
-    }
-
-    fn font(&self) -> FontSkin {
-        match self.style {
-            ChipStyle::Deck => self.skin.chip.deck_text,
-            ChipStyle::Routing => self.skin.chip.routing_text,
-        }
-    }
-
-    fn frame(&self) -> FrameSkin {
-        if self.active {
-            self.skin.chip.active_frame
-        } else {
-            self.skin.chip.inactive_frame
-        }
     }
 
     fn paint_frame(&self, list: &mut DrawListBuilder, bounds: Rect, frame: FrameSkin) {

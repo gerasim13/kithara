@@ -37,9 +37,9 @@ pub struct AudioFile<C>
 where
     C: AudioFileCallbacks,
 {
-    raw: NonNull<c_void>,
     #[field(get)]
     callbacks: Box<C>,
+    raw: NonNull<c_void>,
 }
 
 // SAFETY: AudioFileID is an opaque Apple handle and callback owner is Send.
@@ -156,7 +156,7 @@ where
             return Err(status);
         }
         let raw = NonNull::new(handle).ok_or(PARAM_ERR)?;
-        Ok(Self { raw, callbacks })
+        Ok(Self { callbacks, raw })
     }
 
     /// Reads compressed packet data from `AudioToolbox`.

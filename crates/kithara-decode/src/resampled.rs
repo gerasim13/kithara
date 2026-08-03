@@ -38,23 +38,23 @@ where
 {
     backend: B,
     decoder: Box<dyn Decoder>,
-    emitted_frames: u64,
-    eof_flushed: bool,
-    input: SmallVec<[PcmBuf; 8]>,
+    target_sample_rate: NonZeroU32,
     last_input_meta: Option<PcmMeta>,
-    options: kithara_resampler::ResamplerOptions,
-    output: SmallVec<[PcmBuf; 8]>,
-    output_frame_offset: u64,
-    output_skip_frames: usize,
     pending_meta: Option<PcmMeta>,
     pool: PcmPool,
-    quality: kithara_resampler::ResamplerQuality,
-    resampler: B::Resampler,
-    scratch: SmallVec<[PcmBuf; 8]>,
-    source_frames_seen: u64,
     source_spec: PcmSpec,
-    target_sample_rate: NonZeroU32,
     target_spec: PcmSpec,
+    resampler: B::Resampler,
+    options: kithara_resampler::ResamplerOptions,
+    quality: kithara_resampler::ResamplerQuality,
+    input: SmallVec<[PcmBuf; 8]>,
+    output: SmallVec<[PcmBuf; 8]>,
+    scratch: SmallVec<[PcmBuf; 8]>,
+    eof_flushed: bool,
+    emitted_frames: u64,
+    output_frame_offset: u64,
+    source_frames_seen: u64,
+    output_skip_frames: usize,
 }
 
 impl<B> ResampledDecoder<B>
@@ -171,6 +171,15 @@ where
         }
     }
 
+    fn expected_output_frames(&self) -> u64 {
+        let source_rate = self.source_spec.sample_rate.get();
+        let expected = u128::from(self.source_frames_seen)
+            .saturating_mul(u128::from(self.target_sample_rate.get()))
+            .saturating_add(u128::from(source_rate / 2))
+            / u128::from(source_rate);
+        u64::try_from(expected).unwrap_or(u64::MAX)
+    }
+
     fn finish_output(&mut self) -> DecodeResult<Option<PcmChunk>> {
         if self.output[0].is_empty() {
             return Ok(None);
@@ -238,20 +247,6 @@ where
         Ok(samples)
     }
 
-    fn expected_output_frames(&self) -> u64 {
-        let source_rate = self.source_spec.sample_rate.get();
-        let expected = u128::from(self.source_frames_seen)
-            .saturating_mul(u128::from(self.target_sample_rate.get()))
-            .saturating_add(u128::from(source_rate / 2))
-            / u128::from(source_rate);
-        u64::try_from(expected).unwrap_or(u64::MAX)
-    }
-
-    fn ready_output_frames(&self) -> u64 {
-        self.emitted_frames
-            .saturating_add(u64::try_from(self.output[0].len()).unwrap_or(u64::MAX))
-    }
-
     fn process_block(&mut self, input_frames: usize) -> DecodeResult<ResamplerProcess> {
         let channels = self.channels();
         let output_frames = self.resampler.output_frames_next();
@@ -293,6 +288,11 @@ where
             dst.copy_from_slice(src);
         }
         Ok(process)
+    }
+
+    fn ready_output_frames(&self) -> u64 {
+        self.emitted_frames
+            .saturating_add(u64::try_from(self.output[0].len()).unwrap_or(u64::MAX))
     }
 
     fn rebuild_for_source_spec(&mut self, source_spec: PcmSpec) -> DecodeResult<()> {
@@ -344,6 +344,10 @@ impl<B> Decoder for ResampledDecoder<B>
 where
     B: ResamplerBackend,
 {
+    fn blender_profile(&self) -> BlenderProfile {
+        BlenderProfile::new(self.target_spec)
+    }
+
     fn default_priming_frames(&self, codec: AudioCodec) -> u64 {
         let source = self.decoder.default_priming_frames(codec);
         round_scaled_frames_lossy(
@@ -351,27 +355,6 @@ where
             self.source_spec.sample_rate.get(),
             self.target_sample_rate.get(),
         )
-    }
-
-    fn timeline_gap_frames(&self) -> u64 {
-        round_scaled_frames_lossy(
-            self.decoder.timeline_gap_frames(),
-            self.source_spec.sample_rate.get(),
-            self.target_sample_rate.get(),
-        )
-    }
-
-    fn blender_profile(&self) -> BlenderProfile {
-        BlenderProfile::new(self.target_spec)
-    }
-
-    delegate::delegate! {
-        to self.decoder {
-            fn duration(&self) -> Option<kithara_platform::time::Duration>;
-            fn flush_reader_signals(&mut self);
-            fn metadata(&self) -> TrackMetadata;
-            fn update_byte_len(&self, len: u64);
-        }
     }
 
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
@@ -431,6 +414,14 @@ where
         self.target_spec
     }
 
+    fn timeline_gap_frames(&self) -> u64 {
+        round_scaled_frames_lossy(
+            self.decoder.timeline_gap_frames(),
+            self.source_spec.sample_rate.get(),
+            self.target_sample_rate.get(),
+        )
+    }
+
     fn track_info(&self) -> DecoderTrackInfo {
         let info = self.decoder.track_info();
         DecoderTrackInfo {
@@ -446,6 +437,15 @@ where
                     self.target_sample_rate.get(),
                 )
             }),
+        }
+    }
+
+    delegate::delegate! {
+        to self.decoder {
+            fn duration(&self) -> Option<kithara_platform::time::Duration>;
+            fn flush_reader_signals(&mut self);
+            fn metadata(&self) -> TrackMetadata;
+            fn update_byte_len(&self, len: u64);
         }
     }
 }

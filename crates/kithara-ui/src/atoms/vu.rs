@@ -25,10 +25,10 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct VerticalVu<'path, 'value, 'data, 'skin> {
-    path: &'path str,
-    ticks: bool,
-    value: Option<&'value ReadValue<'data>>,
     skin: &'skin Skin,
+    path: &'path str,
+    value: Option<&'value ReadValue<'data>>,
+    ticks: bool,
 }
 
 impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, 'a> {
@@ -37,12 +37,12 @@ impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, 'a> {
             return Space::new().into();
         };
         Canvas::new(VerticalVuCanvas {
+            paint,
             drag: Scalar::builder()
                 .track(Track::AbsoluteVertical)
                 .hover(Hover::new(CursorShape::ResizeV))
                 .build(),
             path: self.path.to_owned(),
-            paint,
         })
         .width(Length::Fill)
         .height(Length::Fill)
@@ -51,16 +51,6 @@ impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, 'a> {
 }
 
 impl<'a> VerticalVu<'_, '_, '_, 'a> {
-    pub(crate) fn painted(self) -> Element<'a, UiEvent> {
-        let Some(paint) = self.paint() else {
-            return Space::new().into();
-        };
-        Canvas::new(paint)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-    }
-
     fn paint(&self) -> Option<VerticalVuPaint<'a>> {
         let Some(ReadValue::Stereo(levels)) = self.value else {
             return None;
@@ -77,6 +67,16 @@ impl<'a> VerticalVu<'_, '_, '_, 'a> {
             text_resources: self.skin.text_resources(),
         })
     }
+
+    pub(crate) fn painted(self) -> Element<'a, UiEvent> {
+        let Some(paint) = self.paint() else {
+            return Space::new().into();
+        };
+        Canvas::new(paint)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
 }
 
 struct VerticalVuCanvas<'skin> {
@@ -86,13 +86,13 @@ struct VerticalVuCanvas<'skin> {
 }
 
 struct VerticalVuPaint<'skin> {
-    metrics: VuVerticalSkin,
-    ticks: Option<TickRail>,
-    levels: StereoLevels,
-    palette: RenderPalette,
+    text_resources: &'skin TextResources,
     thumb_color: Color,
     thumb_notch_color: Color,
-    text_resources: &'skin TextResources,
+    ticks: Option<TickRail>,
+    palette: RenderPalette,
+    levels: StereoLevels,
+    metrics: VuVerticalSkin,
 }
 
 impl canvas::Program<UiEvent> for VerticalVuCanvas<'_> {

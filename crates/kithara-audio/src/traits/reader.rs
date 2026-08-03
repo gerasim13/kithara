@@ -14,6 +14,44 @@ mod kithara {
 /// PCM data-plane operations.
 #[kithara::mock(api = PcmReadMock)]
 pub trait PcmRead {
+    /// Cached span: the timestamp up to which the source's bytes are on disk
+    /// and need no further network. Unrelated to [`Self::position`] — bytes
+    /// land ahead of the decoder. Readers with no download side report `0`.
+    fn cached_span(&self) -> Duration {
+        Duration::from_secs(0)
+    }
+
+    /// Decoded-ahead frontier: the timestamp up to which PCM has been
+    /// decoded and is ready to play. Always `>=` [`Self::position`].
+    /// Authoritative source for the buffered/playable window; non-adaptive
+    /// or chunk-less readers may report `0`.
+    fn decoded_frontier(&self) -> Duration {
+        Duration::from_secs(0)
+    }
+
+    /// Read the next decoded chunk with full metadata.
+    ///
+    /// Returns [`ChunkOutcome::Chunk`] or [`ChunkOutcome::Eof`].
+    /// Decoder / channel failures surface as `Err(DecodeError)`.
+    /// Discards any partially-consumed chunk from previous
+    /// [`PcmRead::read`] calls.
+    ///
+    /// Default implementation reports immediate natural EOF — readers
+    /// without chunk-level support shouldn't be polled this way.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(DecodeError)` for terminal producer failures, same
+    /// semantics as [`Self::read`].
+    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+        Ok(ChunkOutcome::Eof {
+            position: self.position(),
+        })
+    }
+
+    /// Get current playback position.
+    fn position(&self) -> Duration;
+
     /// Read interleaved PCM samples.
     ///
     /// After `preload()`, returns immediately from buffered data
@@ -45,60 +83,13 @@ pub trait PcmRead {
         output: &'a mut [&'a mut [f32]],
     ) -> Result<ReadOutcome, DecodeError>;
 
-    /// Read the next decoded chunk with full metadata.
-    ///
-    /// Returns [`ChunkOutcome::Chunk`] or [`ChunkOutcome::Eof`].
-    /// Decoder / channel failures surface as `Err(DecodeError)`.
-    /// Discards any partially-consumed chunk from previous
-    /// [`PcmRead::read`] calls.
-    ///
-    /// Default implementation reports immediate natural EOF — readers
-    /// without chunk-level support shouldn't be polled this way.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(DecodeError)` for terminal producer failures, same
-    /// semantics as [`Self::read`].
-    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
-        Ok(ChunkOutcome::Eof {
-            position: self.position(),
-        })
-    }
-
     /// Get the current PCM specification.
     fn spec(&self) -> PcmSpec;
-
-    /// Get current playback position.
-    fn position(&self) -> Duration;
-
-    /// Decoded-ahead frontier: the timestamp up to which PCM has been
-    /// decoded and is ready to play. Always `>=` [`Self::position`].
-    /// Authoritative source for the buffered/playable window; non-adaptive
-    /// or chunk-less readers may report `0`.
-    fn decoded_frontier(&self) -> Duration {
-        Duration::from_secs(0)
-    }
-
-    /// Cached span: the timestamp up to which the source's bytes are on disk
-    /// and need no further network. Unrelated to [`Self::position`] — bytes
-    /// land ahead of the decoder. Readers with no download side report `0`.
-    fn cached_span(&self) -> Duration {
-        Duration::from_secs(0)
-    }
 }
 
 /// PCM track and session introspection.
 #[kithara::mock(api = PcmSessionMock)]
 pub trait PcmSession {
-    /// Get track metadata.
-    fn metadata(&self) -> &TrackMetadata;
-
-    /// Get total duration (if known).
-    fn duration(&self) -> Option<Duration>;
-
-    /// Access the unified event bus for subscribing to all pipeline events.
-    fn event_bus(&self) -> &EventBus;
-
     /// Runtime ABR handle for the underlying stream.
     ///
     /// Adaptive readers (HLS) return `Some(handle)` so the queue/FFI can
@@ -108,13 +99,14 @@ pub trait PcmSession {
         None
     }
 
-    /// Startup gate signalled once preload completes (first chunk
-    /// available). The async consumer awaits [`PreloadGate::wait`]; the
-    /// worker opens it with a lock-free store. `None` for readers without
-    /// a worker-backed preload (file, test fixtures).
-    fn preload_gate(&self) -> Option<Arc<PreloadGate>> {
-        None
-    }
+    /// Get total duration (if known).
+    fn duration(&self) -> Option<Duration>;
+
+    /// Access the unified event bus for subscribing to all pipeline events.
+    fn event_bus(&self) -> &EventBus;
+
+    /// Get track metadata.
+    fn metadata(&self) -> &TrackMetadata;
 
     /// Decoder epoch whose preload gate should be observed by async callers.
     ///
@@ -125,24 +117,19 @@ pub trait PcmSession {
     fn preload_epoch(&self) -> u64 {
         0
     }
+
+    /// Startup gate signalled once preload completes (first chunk
+    /// available). The async consumer awaits [`PreloadGate::wait`]; the
+    /// worker opens it with a lock-free store. `None` for readers without
+    /// a worker-backed preload (file, test fixtures).
+    fn preload_gate(&self) -> Option<Arc<PreloadGate>> {
+        None
+    }
 }
 
 /// PCM control operations and runtime knobs.
 #[kithara::mock(api = PcmControlMock)]
 pub trait PcmControl {
-    /// Seek to the given position.
-    ///
-    /// Returns [`SeekOutcome::Landed`] when the reader is now parked
-    /// at the requested position, [`SeekOutcome::PastEof`] when the
-    /// target was beyond `duration()`. Seek failures (stream I/O,
-    /// decoder recreate) surface as `Err(DecodeError)`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(DecodeError)` when seek cannot complete: stream I/O
-    /// failure, decoder recreate failure, or terminal producer error.
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
-
     /// Preload initial chunks into internal buffers.
     ///
     /// After calling this, subsequent `read()` / `read_planar()` /
@@ -160,6 +147,19 @@ pub trait PcmControl {
     fn preload(&mut self) -> Result<(), DecodeError> {
         Ok(())
     }
+
+    /// Seek to the given position.
+    ///
+    /// Returns [`SeekOutcome::Landed`] when the reader is now parked
+    /// at the requested position, [`SeekOutcome::PastEof`] when the
+    /// target was beyond `duration()`. Seek failures (stream I/O,
+    /// decoder recreate) surface as `Err(DecodeError)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(DecodeError)` when seek cannot complete: stream I/O
+    /// failure, decoder recreate failure, or terminal producer error.
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
 
     /// Set the target sample rate of the audio host.
     ///

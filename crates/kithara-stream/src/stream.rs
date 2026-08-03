@@ -185,6 +185,46 @@ impl<T: StreamType> Stream<T> {
         Ok(Self { source })
     }
 
+    /// Header byte range for decoder recreate after a format change.
+    ///
+    /// # Errors
+    ///
+    /// `Err(SourceError::FormatChangeNotApplicable)` for non-HLS sources
+    /// or HLS variants activated with `served_from > 0` (init prefix
+    /// unreachable via Stream reads).
+    pub fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
+        self.source.variant_control().map_or(
+            Err(StreamError::Source(SourceError::FormatChangeNotApplicable)),
+            |vc| vc.format_change_segment_range(),
+        )
+    }
+
+    pub fn is_empty(&self) -> Option<bool> {
+        self.len().map(|len| len == 0)
+    }
+
+    /// Resolve a deterministic time-based seek anchor.
+    ///
+    /// Returns `None` for sources without segmented time mapping.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the source failed to resolve the anchor.
+    pub fn seek_time_anchor(
+        &mut self,
+        position: Duration,
+    ) -> Result<Option<SourceSeekAnchor>, io::Error> {
+        self.source
+            .byte_map()
+            .map_or(Ok(None), |m| m.anchor_at_time(position))
+            .map_err(|e| IoError::other(e.to_string()))
+    }
+
+    /// Get shared reference to inner source.
+    pub fn source(&self) -> &T::Source {
+        &self.source
+    }
+
     delegate::delegate! {
         to self.source {
             /// Overall source readiness at current position.
@@ -229,46 +269,6 @@ impl<T: StreamType> Stream<T> {
             #[must_use]
             pub fn variant_control(&self) -> Option<Arc<dyn VariantControl>>;
         }
-    }
-
-    /// Header byte range for decoder recreate after a format change.
-    ///
-    /// # Errors
-    ///
-    /// `Err(SourceError::FormatChangeNotApplicable)` for non-HLS sources
-    /// or HLS variants activated with `served_from > 0` (init prefix
-    /// unreachable via Stream reads).
-    pub fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
-        self.source.variant_control().map_or(
-            Err(StreamError::Source(SourceError::FormatChangeNotApplicable)),
-            |vc| vc.format_change_segment_range(),
-        )
-    }
-
-    pub fn is_empty(&self) -> Option<bool> {
-        self.len().map(|len| len == 0)
-    }
-
-    /// Resolve a deterministic time-based seek anchor.
-    ///
-    /// Returns `None` for sources without segmented time mapping.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the source failed to resolve the anchor.
-    pub fn seek_time_anchor(
-        &mut self,
-        position: Duration,
-    ) -> Result<Option<SourceSeekAnchor>, io::Error> {
-        self.source
-            .byte_map()
-            .map_or(Ok(None), |m| m.anchor_at_time(position))
-            .map_err(|e| IoError::other(e.to_string()))
-    }
-
-    /// Get shared reference to inner source.
-    pub fn source(&self) -> &T::Source {
-        &self.source
     }
 }
 

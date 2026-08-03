@@ -11,7 +11,7 @@ use cbc::{
     cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
 };
 use kithara_assets::{
-    AcquisitionResult, AssetStoreBuilder, ChunkSink, ProcessCtx, ReadSide, ResourceProcessor,
+    AcquisitionResult, AssetStore, ChunkSink, ProcessCtx, ReadSide, ResourceProcessor,
     StorageBackend, WriteSide,
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
@@ -132,7 +132,7 @@ fn encrypt_aes128_cbc(plaintext: &[u8], key: &[u8; 16], iv: &[u8; 16]) -> Vec<u8
 fn reopened_committed_resource_after_cache_eviction_is_not_processed_again() {
     let dir = tempdir().unwrap();
     let call_count = Arc::new(AtomicUsize::new(0));
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -193,7 +193,7 @@ fn reopened_committed_resource_after_cache_eviction_is_not_processed_again() {
 fn reopened_committed_processed_resource_without_ctx_reads_committed_bytes() {
     let dir = tempdir().unwrap();
     let call_count = Arc::new(AtomicUsize::new(0));
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -240,7 +240,7 @@ fn reopened_committed_processed_resource_without_ctx_reads_committed_bytes() {
 fn reopened_large_committed_processed_resource_without_ctx_reads_committed_bytes() {
     let dir = tempdir().unwrap();
     let call_count = Arc::new(AtomicUsize::new(0));
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -286,7 +286,7 @@ fn reopened_large_committed_processed_resource_without_ctx_reads_committed_bytes
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn reopened_large_committed_drm_processed_resource_without_ctx_reads_committed_bytes() {
     let dir = tempdir().unwrap();
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })

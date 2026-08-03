@@ -8,31 +8,41 @@ use crate::{
 
 #[derive(Clone, Copy)]
 pub(super) struct ControlFields<'a> {
-    pub(super) id: &'a NodeId,
-    pub(super) size: Option<SizeSpec>,
-    pub(super) read: Option<&'a BindingRef>,
-    pub(super) write: Option<&'a BindingRef>,
     pub(super) adaptive: &'a AdaptivePolicy,
+    pub(super) id: &'a NodeId,
+    pub(super) read: Option<&'a BindingRef>,
+    pub(super) size: Option<SizeSpec>,
+    pub(super) write: Option<&'a BindingRef>,
 }
 
 pub(super) struct ExtraBindings {
+    pub(super) active: Option<BindingRef>,
     pub(super) columns_state: Option<BindingRef>,
     pub(super) query: Option<BindingRef>,
     pub(super) scope: Option<BindingRef>,
     pub(super) zoom: Option<BindingRef>,
-    pub(super) active: Option<BindingRef>,
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct ExtraBindingRefs<'a> {
+    pub(super) active: Option<&'a BindingRef>,
     pub(super) columns_state: Option<&'a BindingRef>,
     pub(super) query: Option<&'a BindingRef>,
     pub(super) scope: Option<&'a BindingRef>,
     pub(super) zoom: Option<&'a BindingRef>,
-    pub(super) active: Option<&'a BindingRef>,
 }
 
 impl ExtraBindings {
+    pub(super) fn as_refs(&self) -> ExtraBindingRefs<'_> {
+        ExtraBindingRefs {
+            columns_state: self.columns_state.as_ref(),
+            query: self.query.as_ref(),
+            scope: self.scope.as_ref(),
+            zoom: self.zoom.as_ref(),
+            active: self.active.as_ref(),
+        }
+    }
+
     pub(super) fn substitute(
         context: &Context<'_>,
         control: &ControlNode,
@@ -63,22 +73,12 @@ impl ExtraBindings {
             _ => None,
         };
         Ok(Self {
+            active,
             columns_state,
             query,
             scope,
             zoom,
-            active,
         })
-    }
-
-    pub(super) fn as_refs(&self) -> ExtraBindingRefs<'_> {
-        ExtraBindingRefs {
-            columns_state: self.columns_state.as_ref(),
-            query: self.query.as_ref(),
-            scope: self.scope.as_ref(),
-            zoom: self.zoom.as_ref(),
-            active: self.active.as_ref(),
-        }
     }
 }
 
@@ -91,11 +91,11 @@ impl<'a> ControlFields<'a> {
         adaptive: &'a AdaptivePolicy,
     ) -> Self {
         Self {
-            id,
-            size,
-            read,
-            write,
             adaptive,
+            id,
+            read,
+            size,
+            write,
         }
     }
 }

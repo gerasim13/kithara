@@ -12,8 +12,8 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct WindowControls<'skin> {
-    style: WindowControlsStyle,
     skin: &'skin Skin,
+    style: WindowControlsStyle,
 }
 
 impl<'a> Widget<'a> for WindowControls<'_> {

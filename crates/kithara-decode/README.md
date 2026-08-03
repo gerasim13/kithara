@@ -20,10 +20,15 @@ The public surface centres on one trait — `Decoder`. Concrete backends (Sympho
 
 ```rust
 use std::io::Cursor;
+use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{DecoderBackend, DecoderConfig, DecoderFactory};
 
 let reader = Cursor::new(wav_bytes);
-let config = DecoderConfig { backend: DecoderBackend::Symphonia, ..Default::default() };
+let config = DecoderConfig::builder()
+    .backend(DecoderBackend::Symphonia)
+    .byte_pool(BytePool::default())
+    .pcm_pool(PcmPool::default())
+    .build();
 let mut decoder = DecoderFactory::create_with_probe(reader, Some("wav"), config)?;
 
 let spec = decoder.spec(); // sample_rate, channels
@@ -41,10 +46,15 @@ For HLS / cross-codec recreate paths, prefer `DecoderFactory::create_from_media_
 ## Backends
 
 <table>
+
 <tr><th>Backend</th><th>Implementation</th><th>Platform</th></tr>
+
 <tr><td>Symphonia</td><td>Software decoding; all formats</td><td>Cross-platform</td></tr>
+
 <tr><td>Apple AudioToolbox</td><td>Hardware-accelerated; fMP4, ADTS, MP3, FLAC, CAF</td><td>macOS / iOS</td></tr>
+
 <tr><td>Android MediaCodec</td><td>Hardware path for fMP4 AAC-LC/FLAC plus standalone WAV, MP3, and ALAC through <code>AMediaExtractor</code>; no runtime Symphonia fallback</td><td>Android</td></tr>
+
 </table>
 
 ## Integration

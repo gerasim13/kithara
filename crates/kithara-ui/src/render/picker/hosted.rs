@@ -66,8 +66,25 @@ impl<F> overlay::Overlay<UiEvent, Theme, Renderer> for HostedPickerLayer<'_, '_,
 where
     F: for<'a> FnMut(&Event, mouse::Cursor, &mut Shell<'a, UiEvent>) -> bool,
 {
-    fn layout(&mut self, renderer: &Renderer, bounds: Size) -> layout::Node {
-        self.child.borrow_mut().layout(renderer, bounds)
+    delegate::delegate! {
+        to self.child.borrow_mut() {
+            fn layout(&mut self, renderer: &Renderer, bounds: Size) -> layout::Node;
+            fn mouse_interaction(
+                &self,
+                layout: Layout<'_>,
+                cursor: mouse::Cursor,
+                renderer: &Renderer,
+            ) -> mouse::Interaction;
+            fn draw(
+                &self,
+                renderer: &mut Renderer,
+                theme: &Theme,
+                style: &renderer::Style,
+                layout: Layout<'_>,
+                cursor: mouse::Cursor,
+            );
+            fn operate(&mut self, layout: Layout<'_>, renderer: &Renderer, operation: &mut dyn Operation);
+        }
     }
 
     fn update(
@@ -85,33 +102,5 @@ where
         self.child
             .borrow_mut()
             .update(event, layout, cursor, renderer, clipboard, shell);
-    }
-
-    fn mouse_interaction(
-        &self,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        renderer: &Renderer,
-    ) -> mouse::Interaction {
-        self.child
-            .borrow_mut()
-            .mouse_interaction(layout, cursor, renderer)
-    }
-
-    fn draw(
-        &self,
-        renderer: &mut Renderer,
-        theme: &Theme,
-        style: &renderer::Style,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-    ) {
-        self.child
-            .borrow_mut()
-            .draw(renderer, theme, style, layout, cursor);
-    }
-
-    fn operate(&mut self, layout: Layout<'_>, renderer: &Renderer, operation: &mut dyn Operation) {
-        self.child.borrow_mut().operate(layout, renderer, operation);
     }
 }

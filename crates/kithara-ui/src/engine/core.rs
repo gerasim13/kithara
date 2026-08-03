@@ -119,16 +119,12 @@ impl Engine {
         }
     }
 
-    pub(crate) const fn captures_pointer(&self) -> bool {
-        self.router.captures_pointer()
-    }
-
-    pub(crate) fn captures(&self, path: &str) -> bool {
-        self.router.captures(path)
-    }
-
-    pub(crate) fn focused_path(&self) -> Option<&str> {
-        self.router.focused_path()
+    delegate::delegate! {
+        to self.router {
+            pub(crate) const fn captures_pointer(&self) -> bool;
+            pub(crate) fn captures(&self, path: &str) -> bool;
+            pub(crate) fn focused_path(&self) -> Option<&str>;
+        }
     }
 }
 

@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 
 use kithara::{
     abr::AbrMode,
-    assets::{AssetStoreBuilder, StorageBackend},
+    assets::{AssetStore, StorageBackend},
     audio::{Audio, AudioConfig},
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
@@ -157,7 +157,7 @@ async fn run_case_paced(
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let store = if ephemeral {
-        AssetStoreBuilder::default()
+        AssetStore::builder()
             .backend(StorageBackend::Memory)
             .cache_capacity(NonZeroUsize::new(SEGMENTS_PER_VARIANT + 10).expect("nonzero"))
             .build()

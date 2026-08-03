@@ -1019,7 +1019,9 @@ async fn setup_queue_with_sample_rate(
         render_sample_rate,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        QueueConfig::builder()
+            .player(Arc::clone(harness.player()))
+            .build(),
         false,
     ));
 
@@ -1060,7 +1062,9 @@ async fn setup_multivariant_flac_queue(
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        QueueConfig::builder()
+            .player(Arc::clone(harness.player()))
+            .build(),
         false,
     ));
 
@@ -1137,7 +1141,9 @@ async fn setup_flac_queue_with_player_config_autoplay_geometry(
 ) -> QueueSetup {
     let harness = OfflinePlayerHarness::with_sample_rate(player_config, render_sample_rate);
     let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        QueueConfig::builder()
+            .player(Arc::clone(harness.player()))
+            .build(),
         should_autoplay,
     ));
 
@@ -1186,7 +1192,9 @@ async fn setup_sine_aac_queue(server: &TestServerHelper, temp_dir: &TestTempDir)
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        QueueConfig::builder()
+            .player(Arc::clone(harness.player()))
+            .build(),
         false,
     ));
 
@@ -1267,12 +1275,13 @@ async fn hls_resource_with_segments_and_duration(
         .await
         .expect("create advance-boundary HLS fixture");
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::for_src(created.master_url().as_str())
-        .expect("valid HLS master URL")
-        .store(store)
-        .byte_pool(player.byte_pool().clone())
-        .pcm_pool(player.pcm_pool().clone())
-        .build();
+    let mut config = ResourceConfig::for_src(
+        ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
+    )
+    .store(store)
+    .byte_pool(player.byte_pool().clone())
+    .pcm_pool(player.pcm_pool().clone())
+    .build();
     config = player.prepare_config(config);
     let mut resource = Resource::new(config)
         .await
@@ -1302,12 +1311,13 @@ async fn hls_multivariant_flac_resource(
         .await
         .expect("create advance-boundary multivariant FLAC HLS fixture");
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::for_src(created.master_url().as_str())
-        .expect("valid HLS master URL")
-        .store(store)
-        .byte_pool(player.byte_pool().clone())
-        .pcm_pool(player.pcm_pool().clone())
-        .build();
+    let mut config = ResourceConfig::for_src(
+        ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
+    )
+    .store(store)
+    .byte_pool(player.byte_pool().clone())
+    .pcm_pool(player.pcm_pool().clone())
+    .build();
     config = player.prepare_config(config);
     let mut resource = Resource::new(config)
         .await
@@ -1333,12 +1343,13 @@ async fn hls_sine_aac_resource(
         .await
         .expect("create advance-boundary sine AAC HLS fixture");
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::for_src(created.master_url().as_str())
-        .expect("valid HLS master URL")
-        .store(store)
-        .byte_pool(player.byte_pool().clone())
-        .pcm_pool(player.pcm_pool().clone())
-        .build();
+    let mut config = ResourceConfig::for_src(
+        ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
+    )
+    .store(store)
+    .byte_pool(player.byte_pool().clone())
+    .pcm_pool(player.pcm_pool().clone())
+    .build();
     config = player.prepare_config(config);
     let mut resource = Resource::new(config)
         .await

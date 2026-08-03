@@ -21,16 +21,16 @@ impl ScopeLabel {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct EventMeta {
+    pub deck: Option<SlotId>,
+    pub track: Option<TrackId>,
     pub origin: u64,
     pub seq: u64,
     pub ts_micros: u64,
-    pub deck: Option<SlotId>,
-    pub track: Option<TrackId>,
 }
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Envelope {
-    pub meta: EventMeta,
     pub event: Event,
+    pub meta: EventMeta,
 }

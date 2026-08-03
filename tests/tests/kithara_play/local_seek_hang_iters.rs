@@ -223,20 +223,22 @@ async fn build_resource(
     backend: DecoderBackend,
     abr: AbrMode,
 ) -> Resource {
-    let cfg = ResourceConfig::for_src(url.as_str())
-        .unwrap_or_else(|e| panic!("ResourceConfig::for_src({url}): {e}"))
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .downloader(downloader.clone())
-        .discriminator(format!("{iter_label}|{url}"))
-        .store(store)
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(backend)
-                .build(),
-        )
-        .initial_abr_mode(abr)
-        .build();
+    let cfg: ResourceConfig = ResourceConfig::for_src(
+        ResourceConfig::parse_src(url.as_str())
+            .unwrap_or_else(|e| panic!("ResourceConfig::parse_src({url}): {e}")),
+    )
+    .byte_pool(kithara::bufpool::BytePool::default())
+    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .downloader(downloader.clone())
+    .discriminator(format!("{iter_label}|{url}"))
+    .store(store)
+    .decoder(
+        kithara::audio::AudioDecoderConfig::builder()
+            .backend(backend)
+            .build(),
+    )
+    .initial_abr_mode(abr)
+    .build();
     let mut resource = Resource::new(cfg)
         .await
         .unwrap_or_else(|e| panic!("Resource::new({url}): {e:?}"));

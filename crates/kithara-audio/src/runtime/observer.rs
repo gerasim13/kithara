@@ -36,18 +36,18 @@ pub(crate) enum PassOutcome {
 /// Allocation-free summary of one scheduler pass.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct PassReport {
+    pub(crate) first_backpressured_slot: Option<SlotId>,
+    pub(crate) first_progress_slot: Option<SlotId>,
+    pub(crate) first_upstream_pending_slot: Option<SlotId>,
+    pub(crate) first_waiting_service_class: Option<ServiceClass>,
+    pub(crate) first_waiting_slot: Option<SlotId>,
     pub(crate) outcome: PassOutcome,
     pub(crate) active_slots: usize,
-    pub(crate) progress_slots: usize,
-    pub(crate) waiting_slots: usize,
-    pub(crate) upstream_pending_slots: usize,
     pub(crate) backpressured_slots: usize,
     pub(crate) done_slots: usize,
-    pub(crate) first_progress_slot: Option<SlotId>,
-    pub(crate) first_waiting_slot: Option<SlotId>,
-    pub(crate) first_upstream_pending_slot: Option<SlotId>,
-    pub(crate) first_backpressured_slot: Option<SlotId>,
-    pub(crate) first_waiting_service_class: Option<ServiceClass>,
+    pub(crate) progress_slots: usize,
+    pub(crate) upstream_pending_slots: usize,
+    pub(crate) waiting_slots: usize,
 }
 
 impl PassReport {

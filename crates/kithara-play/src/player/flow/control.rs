@@ -83,13 +83,18 @@ impl PlayerImpl {
         self.core.engine.set_master_eq_gain(band, clamped)
     }
 
-    /// Replaces the master EQ layout and gains without releasing the running slot.
-    ///
-    /// # Errors
-    /// Returns a session graph error when a running player's EQ node cannot be
-    /// replaced.
-    pub fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), PlayError> {
-        self.core.engine.set_master_eq_layout(layout)
+    delegate::delegate! {
+        to self.core.engine {
+            /// Replaces the master EQ layout and gains without releasing the running slot.
+            ///
+            /// # Errors
+            /// Returns a session graph error when a running player's EQ node cannot be
+            /// replaced.
+            #[call(set_master_eq_layout)]
+            pub fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), PlayError>;
+            /// Pump audio backend/runtime state.
+            pub fn tick(&self) -> Result<(), PlayError>;
+        }
     }
 
     /// Set muted state.
@@ -113,11 +118,6 @@ impl PlayerImpl {
         self.core
             .params
             .set_prefetch_duration(seconds, |cmd| self.send_to_slot(cmd));
-    }
-
-    /// Pump audio backend/runtime state.
-    pub fn tick(&self) -> Result<(), PlayError> {
-        self.core.engine.tick()
     }
 
     /// Set playback rate.

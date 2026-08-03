@@ -42,20 +42,28 @@ use crate::{
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, with)]
 pub(crate) struct StreamAudioSource<T: StreamType> {
-    /// Explicit FSM state — single source of truth for track phase.
-    pub(crate) state: CurrentFsm,
+    pub(crate) playback_resampler_backend: &'static str,
     pub(crate) decode: ActiveDecode,
-    pub(crate) decoder_backend: kithara_decode::DecoderBackend,
     /// Narrow activity handle — set/query the `PLAYING` flag.
     pub(crate) activity: Arc<dyn Activity>,
-    pub(crate) seek_engine: SeekEngine,
     /// Narrow mutating playhead handle — committed position and total duration.
     pub(crate) playhead: Arc<dyn PlayheadWrite>,
-    pub(crate) playback_resampler_backend: &'static str,
     /// Narrow seek-control handle — begin / complete / clear-pending.
     pub(crate) seek: Arc<dyn SeekControl>,
     /// Narrow seek-observe handle — read seek state without mutation.
     pub(crate) seek_obs: Arc<dyn SeekObserve>,
+    /// Explicit FSM state — single source of truth for track phase.
+    pub(crate) state: CurrentFsm,
+    pub(crate) decoder_backend: kithara_decode::DecoderBackend,
+    /// Deferred sink for FSM lifecycle events ([`AudioEvent`]). The FSM runs on
+    /// the produce core, so `emit_event` enqueues lock-free; the scheduler shell
+    /// flushes via [`flush_deferred`](AudioWorkerSource::flush_deferred) and on
+    /// `Drop`, keeping the cross-thread `broadcast::send` (a `kevent`) off the
+    /// forbid path. `None` for sources built without an event bus.
+    #[field(with, option_set_some, vis = "pub(crate)")]
+    pub(crate) emit: Option<Arc<DeferredBus<Event>>>,
+    pub(crate) variant_control: Option<Arc<dyn VariantControl>>,
+    pub(crate) readiness: ReadinessGate,
     pub(crate) rebuild: RebuildPort<T>,
     /// Absolute content frame offset just past the most recently emitted chunk
     /// (the producer's decode head), tagged with its epoch. A mid-playback
@@ -70,14 +78,6 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// frame, so the rebuilt decoder relabels its first chunk at this point. See
     /// `execute_recreation`.
     pub(crate) resume: ResumeCursor,
-    /// Deferred sink for FSM lifecycle events ([`AudioEvent`]). The FSM runs on
-    /// the produce core, so `emit_event` enqueues lock-free; the scheduler shell
-    /// flushes via [`flush_deferred`](AudioWorkerSource::flush_deferred) and on
-    /// `Drop`, keeping the cross-thread `broadcast::send` (a `kevent`) off the
-    /// forbid path. `None` for sources built without an event bus.
-    #[field(with, option_set_some, vis = "pub(crate)")]
-    pub(crate) emit: Option<Arc<DeferredBus<Event>>>,
-    pub(crate) readiness: ReadinessGate,
     /// `(seek_epoch, target)` of the most recent applied seek.
     /// `committed_position` lags `target` until the seek's first
     /// (trim-aligned) chunk is consumed: the decoder lands at the
@@ -92,8 +92,8 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// Decode generations displaced on the produce core. They are dropped
     /// from `flush_deferred`, outside the forbid-blocking region.
     pub(crate) retired: RetiredGenerations,
+    pub(crate) seek_engine: SeekEngine,
     pub(crate) shared_stream: SharedStream<T>,
-    pub(crate) variant_control: Option<Arc<dyn VariantControl>>,
 }
 
 // Construction, lifecycle, and state access
@@ -130,10 +130,10 @@ impl<T: StreamType> StreamAudioSource<T> {
             activity,
             readiness,
             resume,
+            variant_control,
             state: Track::<Decoding>::new(()).erase(),
             emit: None,
             retired: RetiredGenerations::new(Self::GENERATION_RETIRE_CAPACITY),
-            variant_control,
         }
     }
 
@@ -185,51 +185,77 @@ impl<T: StreamType> Drop for StreamAudioSource<T> {
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
-    fn route_build_completions(&mut self) {
-        while let Some(complete) = self
-            .rebuild
-            .pop_replacement_completion()
-            .or_else(|| self.rebuild.pop_incoming_completion())
-        {
-            match complete.purpose {
-                DecoderBuildPurpose::Replacement => {
-                    let expected = match &self.state {
-                        CurrentFsm::RebuildingDecoder(handle) => Some(handle.data().build),
-                        _ => None,
-                    };
-                    if expected == Some(complete.build) {
-                        if let Some(displaced) = self.rebuild.cache_replacement(complete) {
-                            retire_completion(&self.retired, displaced);
-                        }
-                    } else {
-                        retire_completion(&self.retired, complete);
-                    }
+    fn abort_local_incoming(
+        &mut self,
+        control: &dyn VariantControl,
+        transition: VariantTransition,
+    ) {
+        self.discard_local_incoming();
+        let _ = control.abort_variant(transition);
+    }
+
+    fn discard_local_incoming(&mut self) {
+        if let Some(generation) = self.decode.discard_incoming() {
+            self.retired.retire_generation(generation);
+        }
+    }
+
+    fn prepare_incoming_transition(
+        &mut self,
+        control: &dyn VariantControl,
+        outgoing_frontier: OutgoingFrontier,
+    ) -> Option<VariantTransition> {
+        let plan = match control.plan_variant_reader(self.decode.landing_for(outgoing_frontier)) {
+            Ok(plan) => plan,
+            Err(error) => {
+                warn!(?error, "failed to plan exact incoming variant reader");
+                if let Some(transition) = self.decode.incoming_transition() {
+                    self.abort_local_incoming(control, transition);
                 }
-                DecoderBuildPurpose::Incoming(transition) => match complete.result {
-                    Ok(generation) => {
-                        if let Some(generation) =
-                            self.decode
-                                .install_incoming(transition, complete.build, generation)
-                        {
-                            self.retired.retire_generation(generation);
-                        }
-                    }
-                    Err(outcome) => {
-                        warn!(
-                            ?transition,
-                            ?outcome,
-                            "incoming decoder build failed; aborting variant transition"
-                        );
-                        if self.decode.incoming_transition() == Some(transition) {
-                            if let Some(generation) = self.decode.discard_incoming() {
-                                self.retired.retire_generation(generation);
-                            }
-                            if let Some(ref control) = self.variant_control {
-                                let _ = control.abort_variant(transition);
-                            }
-                        }
-                    }
-                },
+                return None;
+            }
+        };
+        let Some(plan) = plan else {
+            self.discard_local_incoming();
+            return None;
+        };
+        let transition = plan.transition();
+        if self.decode.incoming_transition() != Some(transition)
+            && let Some(generation) = self.decode.begin_incoming(transition)
+        {
+            self.retired.retire_generation(generation);
+        }
+        if !self.decode.incoming_is_preparing(transition) || !self.rebuild.can_prepare() {
+            return None;
+        }
+
+        let byte_map = self.shared_stream.byte_map();
+        let profile = self
+            .rebuild
+            .reader_profile(plan.media_info(), byte_map.as_deref());
+        match control.prepare_variant_reader(plan, profile) {
+            Ok(Some(prepared)) if prepared == transition => Some(transition),
+            Ok(Some(prepared)) => {
+                warn!(
+                    ?transition,
+                    ?prepared,
+                    "source prepared a different exact variant transition"
+                );
+                self.abort_local_incoming(control, transition);
+                None
+            }
+            Ok(None) => {
+                self.discard_local_incoming();
+                None
+            }
+            Err(error) => {
+                warn!(
+                    ?error,
+                    ?transition,
+                    "failed to prepare exact incoming reader"
+                );
+                self.abort_local_incoming(control, transition);
+                None
             }
         }
     }
@@ -301,13 +327,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.take_prepared_incoming(control.as_ref(), transition);
     }
 
-    fn retire_failed_incoming(&mut self, control: &dyn VariantControl) {
-        if let Some((transition, generation)) = self.decode.take_failed_incoming() {
-            self.retired.retire_generation(generation);
-            let _ = control.abort_variant(transition);
-        }
-    }
-
     fn promote_ready_incoming(
         &mut self,
         control: &dyn VariantControl,
@@ -357,62 +376,86 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
-    fn prepare_incoming_transition(
+    fn retire_failed_incoming(&mut self, control: &dyn VariantControl) {
+        if let Some((transition, generation)) = self.decode.take_failed_incoming() {
+            self.retired.retire_generation(generation);
+            let _ = control.abort_variant(transition);
+        }
+    }
+
+    fn route_build_completions(&mut self) {
+        while let Some(complete) = self
+            .rebuild
+            .pop_replacement_completion()
+            .or_else(|| self.rebuild.pop_incoming_completion())
+        {
+            match complete.purpose {
+                DecoderBuildPurpose::Replacement => {
+                    let expected = match &self.state {
+                        CurrentFsm::RebuildingDecoder(handle) => Some(handle.data().build),
+                        _ => None,
+                    };
+                    if expected == Some(complete.build) {
+                        if let Some(displaced) = self.rebuild.cache_replacement(complete) {
+                            retire_completion(&self.retired, displaced);
+                        }
+                    } else {
+                        retire_completion(&self.retired, complete);
+                    }
+                }
+                DecoderBuildPurpose::Incoming(transition) => match complete.result {
+                    Ok(generation) => {
+                        if let Some(generation) =
+                            self.decode
+                                .install_incoming(transition, complete.build, generation)
+                        {
+                            self.retired.retire_generation(generation);
+                        }
+                    }
+                    Err(outcome) => {
+                        warn!(
+                            ?transition,
+                            ?outcome,
+                            "incoming decoder build failed; aborting variant transition"
+                        );
+                        if self.decode.incoming_transition() == Some(transition) {
+                            if let Some(generation) = self.decode.discard_incoming() {
+                                self.retired.retire_generation(generation);
+                            }
+                            if let Some(ref control) = self.variant_control {
+                                let _ = control.abort_variant(transition);
+                            }
+                        }
+                    }
+                },
+            }
+        }
+    }
+
+    fn start_incoming_build(
         &mut self,
         control: &dyn VariantControl,
-        outgoing_frontier: OutgoingFrontier,
-    ) -> Option<VariantTransition> {
-        let plan = match control.plan_variant_reader(self.decode.landing_for(outgoing_frontier)) {
-            Ok(plan) => plan,
-            Err(error) => {
-                warn!(?error, "failed to plan exact incoming variant reader");
-                if let Some(transition) = self.decode.incoming_transition() {
-                    self.abort_local_incoming(control, transition);
-                }
-                return None;
-            }
-        };
-        let Some(plan) = plan else {
-            self.discard_local_incoming();
-            return None;
-        };
-        let transition = plan.transition();
-        if self.decode.incoming_transition() != Some(transition)
-            && let Some(generation) = self.decode.begin_incoming(transition)
-        {
-            self.retired.retire_generation(generation);
-        }
-        if !self.decode.incoming_is_preparing(transition) || !self.rebuild.can_prepare() {
-            return None;
-        }
-
-        let byte_map = self.shared_stream.byte_map();
-        let profile = self
-            .rebuild
-            .reader_profile(plan.media_info(), byte_map.as_deref());
-        match control.prepare_variant_reader(plan, profile) {
-            Ok(Some(prepared)) if prepared == transition => Some(transition),
-            Ok(Some(prepared)) => {
+        transition: VariantTransition,
+        reader: OpenedVariantReader,
+    ) {
+        match self.rebuild.prepare_incoming(reader) {
+            Some((prepared, build))
+                if prepared == transition
+                    && self.decode.mark_incoming_building(transition, build) => {}
+            Some((prepared, _)) => {
                 warn!(
                     ?transition,
                     ?prepared,
-                    "source prepared a different exact variant transition"
+                    "incoming decoder build lost its exact transition owner"
                 );
                 self.abort_local_incoming(control, transition);
-                None
             }
-            Ok(None) => {
-                self.discard_local_incoming();
-                None
-            }
-            Err(error) => {
+            None => {
                 warn!(
-                    ?error,
                     ?transition,
-                    "failed to prepare exact incoming reader"
+                    "incoming decoder build port was not available after reader transfer"
                 );
                 self.abort_local_incoming(control, transition);
-                None
             }
         }
     }
@@ -446,49 +489,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 );
                 self.abort_local_incoming(control, transition);
             }
-        }
-    }
-
-    fn start_incoming_build(
-        &mut self,
-        control: &dyn VariantControl,
-        transition: VariantTransition,
-        reader: OpenedVariantReader,
-    ) {
-        match self.rebuild.prepare_incoming(reader) {
-            Some((prepared, build))
-                if prepared == transition
-                    && self.decode.mark_incoming_building(transition, build) => {}
-            Some((prepared, _)) => {
-                warn!(
-                    ?transition,
-                    ?prepared,
-                    "incoming decoder build lost its exact transition owner"
-                );
-                self.abort_local_incoming(control, transition);
-            }
-            None => {
-                warn!(
-                    ?transition,
-                    "incoming decoder build port was not available after reader transfer"
-                );
-                self.abort_local_incoming(control, transition);
-            }
-        }
-    }
-
-    fn abort_local_incoming(
-        &mut self,
-        control: &dyn VariantControl,
-        transition: VariantTransition,
-    ) {
-        self.discard_local_incoming();
-        let _ = control.abort_variant(transition);
-    }
-
-    fn discard_local_incoming(&mut self) {
-        if let Some(generation) = self.decode.discard_incoming() {
-            self.retired.retire_generation(generation);
         }
     }
 }
@@ -595,7 +595,10 @@ mod resolve_format_change_target_tests {
         container: Option<ContainerFormat>,
         variant: Option<u32>,
     ) -> MediaInfo {
-        let mut info = MediaInfo::new(codec, container);
+        let mut info = MediaInfo::builder()
+            .maybe_codec(codec)
+            .maybe_container(container)
+            .build();
         info.variant_index = variant;
         info
     }

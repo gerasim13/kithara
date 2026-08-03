@@ -24,19 +24,22 @@ use crate::pipeline::{
     track::{WaitContext, WaitingReason},
 };
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct SeekEngine {
     epoch: Arc<AtomicU64>,
+    #[field(get, vis = "pub(crate)", copy)]
     resume_target: Option<(u64, Duration)>,
 }
 
 pub(crate) struct SeekApplyCtx<'a, T: StreamType> {
     pub(crate) decode: &'a mut ActiveDecode,
-    pub(crate) emit: Option<&'a DeferredBus<Event>>,
-    pub(crate) playhead: &'a dyn PlayheadWrite,
     pub(crate) readiness: &'a ReadinessGate,
-    pub(crate) seek: &'a dyn SeekControl,
-    pub(crate) observe: &'a dyn SeekObserve,
     pub(crate) stream: &'a SharedStream<T>,
+    pub(crate) observe: &'a dyn SeekObserve,
+    pub(crate) playhead: &'a dyn PlayheadWrite,
+    pub(crate) seek: &'a dyn SeekControl,
+    pub(crate) emit: Option<&'a DeferredBus<Event>>,
 }
 
 pub(crate) enum SeekTransition {
@@ -83,70 +86,29 @@ impl SeekEngine {
         }
     }
 
-    pub(crate) fn epoch(&self) -> u64 {
-        self.epoch.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn commit_decode_epoch(&self, epoch: u64, reason: &'static str) {
-        trace!(epoch, reason, "committing producer decode epoch");
-        self.epoch.store(epoch, Ordering::Release);
-    }
-
-    pub(crate) fn record_resume_target(&mut self, epoch: u64, target: Duration) {
-        self.resume_target = Some((epoch, target));
-    }
-
-    pub(crate) fn resume_target(&self) -> Option<(u64, Duration)> {
-        self.resume_target
-    }
-
-    pub(crate) fn apply_from_timeline<T: StreamType>(
+    fn applied<T: StreamType>(
         &mut self,
-        mut request: SeekRequest,
-        ctx: &SeekApplyCtx<'_, T>,
+        request: SeekRequest,
+        anchor: Option<SourceSeekAnchor>,
+        ctx: &mut SeekApplyCtx<'_, T>,
     ) -> SeekTransition {
-        let epoch = request.seek.epoch;
-        let position = request.seek.target;
-        if ctx.observe.target().is_none() || epoch <= self.epoch() {
-            ctx.seek.complete(epoch);
-            return SeekTransition::Ack { epoch };
-        }
-        if let Some(duration) = ctx.playhead.duration()
-            && position >= duration
-        {
-            land_eof(ctx.decode.active(), ctx.playhead, duration);
-            ctx.seek.complete(epoch);
-            return SeekTransition::AtEof { epoch };
-        }
-        if request.emit_request {
-            emit(
-                ctx.emit,
-                SeekLifecycleStage::SeekRequest,
-                epoch,
-                location(ctx.stream),
-            );
-            request.emit_request = false;
-        }
-        let anchor = ctx.stream.seek_time_anchor(position);
-        ctx.seek.complete(epoch);
-        ctx.readiness.arm_peer_wake();
-        let mode = match anchor {
-            Ok(Some(anchor)) => SeekMode::Anchor(anchor),
-            Ok(None) => SeekMode::Direct {
-                target_byte: estimate_target_byte(ctx.decode.active(), ctx.stream, position),
+        ctx.decode.reset();
+        self.record_resume_target(request.seek.epoch, request.seek.target);
+        emit(
+            ctx.emit,
+            SeekLifecycleStage::SeekApplied,
+            request.seek.epoch,
+            location(ctx.stream),
+        );
+        SeekTransition::Applied {
+            epoch: request.seek.epoch,
+            resume: ResumeState {
+                anchor_offset: anchor.map(|value| value.byte_offset),
+                anchor_variant_index: anchor.and_then(|value| value.variant_index),
+                seek: request.seek,
+                ..Default::default()
             },
-            Err(error) => {
-                warn!(?error, "seek anchor resolution failed");
-                return SeekTransition::Failed {
-                    request,
-                    error: DecodeError::SeekFailed {
-                        detail: Consts::ANCHOR_RESOLUTION,
-                    },
-                    context: "seek anchor resolution failed",
-                };
-            }
-        };
-        SeekTransition::Apply(ApplySeekState { mode, request })
+        }
     }
 
     pub(crate) fn apply<T: StreamType>(
@@ -245,28 +207,65 @@ impl SeekEngine {
         }
     }
 
-    fn applied<T: StreamType>(
+    pub(crate) fn apply_from_timeline<T: StreamType>(
         &mut self,
-        request: SeekRequest,
-        anchor: Option<SourceSeekAnchor>,
-        ctx: &mut SeekApplyCtx<'_, T>,
+        mut request: SeekRequest,
+        ctx: &SeekApplyCtx<'_, T>,
     ) -> SeekTransition {
-        ctx.decode.reset();
-        self.record_resume_target(request.seek.epoch, request.seek.target);
-        emit(
-            ctx.emit,
-            SeekLifecycleStage::SeekApplied,
-            request.seek.epoch,
-            location(ctx.stream),
-        );
-        SeekTransition::Applied {
-            epoch: request.seek.epoch,
-            resume: ResumeState {
-                anchor_offset: anchor.map(|value| value.byte_offset),
-                anchor_variant_index: anchor.and_then(|value| value.variant_index),
-                seek: request.seek,
-                ..Default::default()
-            },
+        let epoch = request.seek.epoch;
+        let position = request.seek.target;
+        if ctx.observe.target().is_none() || epoch <= self.epoch() {
+            ctx.seek.complete(epoch);
+            return SeekTransition::Ack { epoch };
         }
+        if let Some(duration) = ctx.playhead.duration()
+            && position >= duration
+        {
+            land_eof(ctx.decode.active(), ctx.playhead, duration);
+            ctx.seek.complete(epoch);
+            return SeekTransition::AtEof { epoch };
+        }
+        if request.emit_request {
+            emit(
+                ctx.emit,
+                SeekLifecycleStage::SeekRequest,
+                epoch,
+                location(ctx.stream),
+            );
+            request.emit_request = false;
+        }
+        let anchor = ctx.stream.seek_time_anchor(position);
+        ctx.seek.complete(epoch);
+        ctx.readiness.arm_peer_wake();
+        let mode = match anchor {
+            Ok(Some(anchor)) => SeekMode::Anchor(anchor),
+            Ok(None) => SeekMode::Direct {
+                target_byte: estimate_target_byte(ctx.decode.active(), ctx.stream, position),
+            },
+            Err(error) => {
+                warn!(?error, "seek anchor resolution failed");
+                return SeekTransition::Failed {
+                    request,
+                    error: DecodeError::SeekFailed {
+                        detail: Consts::ANCHOR_RESOLUTION,
+                    },
+                    context: "seek anchor resolution failed",
+                };
+            }
+        };
+        SeekTransition::Apply(ApplySeekState { mode, request })
+    }
+
+    pub(crate) fn commit_decode_epoch(&self, epoch: u64, reason: &'static str) {
+        trace!(epoch, reason, "committing producer decode epoch");
+        self.epoch.store(epoch, Ordering::Release);
+    }
+
+    pub(crate) fn epoch(&self) -> u64 {
+        self.epoch.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn record_resume_target(&mut self, epoch: u64, target: Duration) {
+        self.resume_target = Some((epoch, target));
     }
 }

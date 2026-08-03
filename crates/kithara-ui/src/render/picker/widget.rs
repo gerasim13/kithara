@@ -102,12 +102,29 @@ impl IcedWidget<UiEvent, Theme, Renderer> for PickerWidget<'_> {
         );
     }
 
-    fn size(&self) -> Size<Length> {
-        self.anchor.as_widget().size()
-    }
-
-    fn size_hint(&self) -> Size<Length> {
-        self.anchor.as_widget().size_hint()
+    delegate::delegate! {
+        to self.anchor.as_widget() {
+            fn size(&self) -> Size<Length>;
+            fn size_hint(&self) -> Size<Length>;
+            fn mouse_interaction(
+                &self,
+                tree: &Tree,
+                layout: Layout<'_>,
+                cursor: mouse::Cursor,
+                viewport: &Rectangle,
+                renderer: &Renderer,
+            ) -> mouse::Interaction;
+            fn draw(
+                &self,
+                tree: &Tree,
+                renderer: &mut Renderer,
+                theme: &Theme,
+                style: &renderer::Style,
+                layout: Layout<'_>,
+                cursor: mouse::Cursor,
+                viewport: &Rectangle,
+            );
+        }
     }
 
     fn layout(
@@ -139,34 +156,6 @@ impl IcedWidget<UiEvent, Theme, Renderer> for PickerWidget<'_> {
             shell.request_redraw();
             shell.invalidate_layout();
         }
-    }
-
-    fn mouse_interaction(
-        &self,
-        tree: &Tree,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-        renderer: &Renderer,
-    ) -> mouse::Interaction {
-        self.anchor
-            .as_widget()
-            .mouse_interaction(tree, layout, cursor, viewport, renderer)
-    }
-
-    fn draw(
-        &self,
-        tree: &Tree,
-        renderer: &mut Renderer,
-        theme: &Theme,
-        style: &renderer::Style,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-    ) {
-        self.anchor
-            .as_widget()
-            .draw(tree, renderer, theme, style, layout, cursor, viewport);
     }
 
     fn operate(
@@ -204,10 +193,14 @@ impl IcedWidget<UiEvent, Theme, Renderer> for PickerWidget<'_> {
     }
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(super) struct PickerState {
     engine: Option<Engine>,
     path: String,
+    #[field(get, vis = "pub(super)", copy)]
     snapshot: PickerSnapshot,
+    #[field(get, vis = "pub(super)")]
     text: RefCell<Option<TextContext>>,
 }
 
@@ -278,18 +271,10 @@ impl PickerState {
         }
     }
 
-    pub(super) const fn snapshot(&self) -> PickerSnapshot {
-        self.snapshot
-    }
-
     fn sync(&mut self, path: &str, snapshot: PickerSnapshot) {
         if self.path == path {
             self.snapshot = snapshot;
         }
-    }
-
-    pub(super) const fn text(&self) -> &RefCell<Option<TextContext>> {
-        &self.text
     }
 }
 

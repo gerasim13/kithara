@@ -16,8 +16,10 @@ pub(crate) enum DragEvent {
 /// capturing it, so the item keeps its own click behaviour and every other
 /// control still sees the same events. There is nothing to configure, so the
 /// gesture and its state are one value.
-#[derive(Default)]
+#[derive(Default, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct ItemDrag {
+    #[field(get = is_held, vis = "pub(crate)")]
     held: bool,
     origin: Option<Pt>,
     active: bool,
@@ -73,10 +75,6 @@ impl ItemDrag {
         } else {
             CursorShape::None
         }
-    }
-
-    pub(crate) const fn is_held(&self) -> bool {
-        self.held
     }
 }
 

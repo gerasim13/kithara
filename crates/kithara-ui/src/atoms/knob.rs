@@ -6,14 +6,14 @@ use crate::{
 };
 
 pub(crate) struct Knob<'data, 'skin> {
+    skin: &'skin Skin,
     label: Option<&'data str>,
     value: f32,
-    skin: &'skin Skin,
 }
 
 impl<'data, 'skin> Knob<'data, 'skin> {
     pub(crate) fn new(label: Option<&'data str>, value: f32, skin: &'skin Skin) -> Self {
-        Self { label, value, skin }
+        Self { skin, label, value }
     }
 
     fn color(&self, role: ColorRole) -> Rgba {

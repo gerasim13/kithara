@@ -24,18 +24,18 @@ use crate::{
 
 pub(super) struct Context<'a> {
     pub(super) set: &'a ModuleSet,
-    pub(super) origin: SourceUri,
     pub(super) args: BTreeMap<String, String>,
+    pub(super) origin: SourceUri,
     pub(super) prefix: String,
 }
 
 impl Context<'_> {
-    pub(super) fn substitute(
+    fn optional_param<T: Clone + DeserializeOwned>(
         &self,
-        binding: &BindingRef,
+        param: Option<&Param<T>>,
         path: &str,
-    ) -> Result<BindingRef, UiDocError> {
-        substitute_binding(&self.args, &self.origin, binding, path)
+    ) -> Result<Option<T>, UiDocError> {
+        resolve_optional_param(&self.args, &self.origin, param, path)
     }
 
     fn param<T: Clone + DeserializeOwned>(
@@ -46,25 +46,25 @@ impl Context<'_> {
         resolve_param(&self.args, &self.origin, param, path)
     }
 
-    fn optional_param<T: Clone + DeserializeOwned>(
+    pub(super) fn substitute(
         &self,
-        param: Option<&Param<T>>,
+        binding: &BindingRef,
         path: &str,
-    ) -> Result<Option<T>, UiDocError> {
-        resolve_optional_param(&self.args, &self.origin, param, path)
+    ) -> Result<BindingRef, UiDocError> {
+        substitute_binding(&self.args, &self.origin, binding, path)
     }
 }
 
 /// Cross-cutting expansion state threaded through recursion, including the
 /// structural address used to preserve expanded include roots.
 pub(crate) struct Expander<'m, 'v> {
-    max_depth: usize,
-    budget: &'m mut Budget,
     pub(super) interner: &'m mut Interner,
-    visitor: &'m mut ControlVisitor<'v>,
-    in_popover: bool,
     pub(super) address: Vec<usize>,
     pub(super) includes: Vec<ExpandedInclude>,
+    budget: &'m mut Budget,
+    visitor: &'m mut ControlVisitor<'v>,
+    in_popover: bool,
+    max_depth: usize,
 }
 
 impl<'m, 'v> Expander<'m, 'v> {
@@ -157,11 +157,11 @@ impl<'m, 'v> Expander<'m, 'v> {
             title,
             chip,
             assign,
-            chrome: doc.chrome,
             footer,
             drop,
             collapsed,
             root,
+            chrome: doc.chrome,
             includes: std::mem::take(&mut self.includes),
         })
     }
@@ -177,8 +177,8 @@ pub(super) fn expand_at(
 ) -> Result<ExpandedNode, UiDocError> {
     if depth > machine.max_depth {
         return Err(UiDocError::DepthExceeded {
-            origin: uri.clone(),
             depth,
+            origin: uri.clone(),
             max: machine.max_depth,
         });
     }
@@ -197,9 +197,9 @@ pub(super) fn expand_at(
     }
     let context = Context {
         set,
-        origin: uri.clone(),
         args,
         prefix,
+        origin: uri.clone(),
     };
     walk(&context, &doc.root, depth, machine)
 }
@@ -270,9 +270,9 @@ fn finish_control(
         ControlSite {
             path,
             control,
+            columns,
             read: read.as_ref(),
             write: write.as_ref(),
-            columns,
             columns_state: extra.columns_state,
             query: extra.query,
             scope: extra.scope,
@@ -282,9 +282,9 @@ fn finish_control(
         &context.origin,
     )?;
     Ok(ExpandedNode::Control {
+        spec,
         path: machine.interner.intern(path, &context.origin)?,
         id: machine.interner.intern(&fields.id.0, &context.origin)?,
-        spec,
         size: fields.size,
         read: read
             .as_ref()
@@ -606,10 +606,10 @@ fn expand_popover(
     let content = walk_child(context, content, 1, depth, machine);
     machine.in_popover = false;
     Ok(ExpandedNode::Popover {
-        path: machine.interner.intern(&path, &context.origin)?,
-        open: intern_binding(machine.interner, &open, &context.origin)?,
         at,
         align,
+        path: machine.interner.intern(&path, &context.origin)?,
+        open: intern_binding(machine.interner, &open, &context.origin)?,
         anchor: Box::new(anchor),
         content: Box::new(content?),
     })
@@ -659,8 +659,8 @@ fn expand_slot(
 ) -> Result<ExpandedNode, UiDocError> {
     machine.budget.charge(&context.origin)?;
     Ok(ExpandedNode::Slot {
-        id: machine.interner.intern(&id.0, &context.origin)?,
         size,
+        id: machine.interner.intern(&id.0, &context.origin)?,
         children: walk_children(context, default, depth, machine)?,
     })
 }
@@ -750,6 +750,8 @@ pub(super) fn walk(
             let declared = (id.as_ref(), write.as_ref(), active.as_ref());
             let (surface, active) = container_bindings(context, node, declared, machine)?;
             Ok(ExpandedNode::Row {
+                active,
+                surface,
                 id: intern_node_id(id.as_ref(), context, machine)?,
                 size: *size,
                 gap: *gap,
@@ -759,11 +761,9 @@ pub(super) fn walk(
                 frame: *frame,
                 background: *background,
                 background_alpha: *background_alpha,
-                active,
                 active_background: *active_background,
                 frame_color: *frame_color,
                 active_frame_color: *active_frame_color,
-                surface,
                 children: walk_children(context, children, depth, machine)?,
             })
         }
@@ -785,6 +785,7 @@ pub(super) fn walk(
             let declared = (id.as_ref(), write.as_ref(), None);
             let (surface, _) = container_bindings(context, node, declared, machine)?;
             Ok(ExpandedNode::Column {
+                surface,
                 id: intern_node_id(id.as_ref(), context, machine)?,
                 size: *size,
                 gap: *gap,
@@ -795,7 +796,6 @@ pub(super) fn walk(
                 frame: *frame,
                 background: *background,
                 background_alpha: *background_alpha,
-                surface,
                 children: walk_children(context, children, depth, machine)?,
             })
         }

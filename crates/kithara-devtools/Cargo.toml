@@ -18,6 +18,7 @@ viz = []
 anyhow = { workspace = true }
 cargo_metadata = { workspace = true }
 clap = { workspace = true }
+delegate = { workspace = true }
 fieldwork = { workspace = true }
 glob = { workspace = true }
 proc-macro2 = { workspace = true, features = ["span-locations"] }

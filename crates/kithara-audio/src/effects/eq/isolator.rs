@@ -36,6 +36,17 @@ impl IsolatorEq {
             #[must_use]
             #[call(target)]
             pub fn target_gain(&self, band: usize) -> Option<f32>;
+            #[cfg(test)]
+            pub(crate) fn bypass_active(&self) -> bool;
+            #[cfg(test)]
+            #[call(force_current)]
+            pub(crate) fn force_current_gain(&mut self, band: usize, linear: f32);
+            #[cfg(test)]
+            pub(crate) fn is_smoothing(&self) -> bool;
+            #[call(set)]
+            pub fn set_gain(&mut self, band: usize, gain_db: f32);
+            #[cfg(test)]
+            pub(crate) fn silence_active(&self) -> bool;
         }
     }
 
@@ -69,30 +80,9 @@ impl IsolatorEq {
         self.was_in_fastpath = false;
     }
 
-    pub fn set_gain(&mut self, band: usize, gain_db: f32) {
-        self.gains.set(band, gain_db);
-    }
-
     pub fn update_sample_rate(&mut self, sample_rate: u32) {
         let sample_rate = sample_rate.as_();
         self.gains.update_sample_rate(sample_rate);
         self.filters.update_sample_rate(sample_rate);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_smoothing(&self) -> bool {
-        self.gains.is_smoothing()
-    }
-    #[cfg(test)]
-    pub(crate) fn bypass_active(&self) -> bool {
-        self.gains.bypass_active()
-    }
-    #[cfg(test)]
-    pub(crate) fn silence_active(&self) -> bool {
-        self.gains.silence_active()
-    }
-    #[cfg(test)]
-    pub(crate) fn force_current_gain(&mut self, band: usize, linear: f32) {
-        self.gains.force_current(band, linear);
     }
 }

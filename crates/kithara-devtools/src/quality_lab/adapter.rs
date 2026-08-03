@@ -12,23 +12,23 @@ const CHA_PLUGINS: &str = "data_clumps,feature_envy,inappropriate_intimacy,shotg
 const CRAP_THRESHOLD: f64 = 30.0;
 
 pub(super) struct AdapterOptions<'a> {
-    pub(super) lcov: Option<&'a Path>,
     pub(super) baseline: Option<&'a Path>,
+    pub(super) lcov: Option<&'a Path>,
 }
 
 pub(super) struct ToolSpec {
-    pub(super) program: String,
     pub(super) version_args: &'static [&'static str],
+    pub(super) program: String,
     pub(super) invocations: Vec<InvocationSpec>,
     pub(super) requires_clean_clone: bool,
 }
 
 pub(super) struct InvocationSpec {
-    pub(super) name: &'static str,
-    pub(super) args: Vec<String>,
-    pub(super) artifact: &'static str,
     pub(super) finding_exit_codes: &'static [i32],
+    pub(super) artifact: &'static str,
+    pub(super) name: &'static str,
     pub(super) report: ReportKind,
+    pub(super) args: Vec<String>,
 }
 
 #[derive(Clone, Copy)]

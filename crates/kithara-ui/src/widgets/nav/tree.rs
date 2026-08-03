@@ -14,11 +14,11 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Tree<'path, 'query, 'value, 'data, 'skin> {
+    skin: &'skin Skin,
     path: &'path str,
     query: &'query str,
     value: Option<&'value ReadValue<'data>>,
     owner: InputOwner,
-    skin: &'skin Skin,
 }
 
 impl<'a, 'skin: 'a> Widget<'a> for Tree<'_, '_, '_, '_, 'skin> {
@@ -53,12 +53,12 @@ impl<'a, 'skin: 'a> Widget<'a> for Tree<'_, '_, '_, '_, 'skin> {
 
 #[derive(bon::Builder)]
 pub(crate) struct ContextBar<'a, 'scope_value, 'value, 'data, 'skin> {
+    skin: &'skin Skin,
     path: &'a str,
-    scope_items: Vec<&'a str>,
     scope_value: Option<&'scope_value ReadValue<'data>>,
     value: Option<&'value ReadValue<'data>>,
+    scope_items: Vec<&'a str>,
     owner: InputOwner,
-    skin: &'skin Skin,
 }
 
 impl<'a, 'skin: 'a> Widget<'a> for ContextBar<'a, '_, '_, '_, 'skin> {

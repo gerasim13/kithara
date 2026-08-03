@@ -3,7 +3,7 @@ use kithara::assets::StorageBackend;
 use kithara::{
     assets::{
         AssetLayout, AssetLayoutRegistry, AssetResource, AssetScope, AssetSource, AssetStore,
-        AssetStoreBuilder, DefaultLayout,
+        DefaultLayout,
     },
     hls::{Hls, KeyStore, PlaylistCache},
     net::{HttpClient, NetOptions},
@@ -78,7 +78,7 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
     let temp_dir = TestTempDir::new();
     let temp_dir = Arc::new(temp_dir);
 
-    let assets = AssetStoreBuilder::default()
+    let assets = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: temp_dir.path().to_path_buf(),
         })
@@ -96,7 +96,7 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
 /// Create test assets with custom asset root (WASM: ephemeral in-memory store)
 #[cfg(target_arch = "wasm32")]
 pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
-    let assets = AssetStoreBuilder::default()
+    let assets = AssetStore::builder()
         .cancel(CancelToken::never())
         .layouts(test_layouts())
         .build();

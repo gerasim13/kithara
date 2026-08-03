@@ -3,6 +3,7 @@
 use std::fmt;
 
 use arc_swap::ArcSwapOption;
+use bon::Builder;
 use kithara_bufpool::{BytePool, PooledOwned};
 use kithara_platform::{
     CancelToken,
@@ -19,26 +20,29 @@ use crate::{
 };
 
 /// Options for creating a [`MemResource`].
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Builder)]
+#[non_exhaustive]
 pub struct MemOptions {
+    /// Shared byte pool that owns this resource's working buffers.
+    #[builder(default)]
+    pub pool: BytePool,
     /// Pre-fill the resource with this data (committed on creation).
     pub initial_data: Option<Vec<u8>>,
     /// Initial capacity hint in bytes.
     /// The buffer starts with this capacity but grows as needed on writes.
     /// Defaults to 0 (start empty, grow on demand).
+    #[builder(default)]
     pub capacity: usize,
-    /// Shared byte pool that owns this resource's working buffers.
-    pub pool: BytePool,
 }
 
 /// Internal state of the growable memory driver.
 pub(super) struct MemState {
+    /// Canonical owner used for every working-buffer checkout.
+    pub(super) pool: BytePool,
     /// Pool-managed byte buffer. Grows via `ensure_len()`.
     pub(super) buf: PooledOwned<32, Vec<u8>>,
     /// Logical length: highest write extent across all writes.
     pub(super) len: u64,
-    /// Canonical owner used for every working-buffer checkout.
-    pub(super) pool: BytePool,
 }
 
 /// In-memory storage driver backed by a growable byte pool buffer.
@@ -118,7 +122,7 @@ impl Driver for MemDriver {
 
         let driver = Self {
             committed,
-            state: Mutex::new(MemState { buf, len, pool }),
+            state: Mutex::new(MemState { pool, buf, len }),
         };
 
         Ok((driver, init_state))
@@ -139,13 +143,7 @@ impl MemResource {
     /// Panics if `MemDriver::open` fails (should never happen with default options).
     #[must_use]
     pub fn new(cancel: CancelToken, pool: BytePool) -> Self {
-        Self::open(
-            cancel,
-            MemOptions {
-                pool,
-                ..MemOptions::default()
-            },
-        )
-        .expect("BUG: MemDriver::open with default options is infallible")
+        Self::open(cancel, MemOptions::builder().pool(pool).build())
+            .expect("BUG: MemDriver::open with default options is infallible")
     }
 }

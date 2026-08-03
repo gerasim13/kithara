@@ -24,9 +24,9 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct StereoMeter<'path, 'value, 'data, 'skin> {
+    skin: &'skin Skin,
     path: &'path str,
     value: Option<&'value ReadValue<'data>>,
-    skin: &'skin Skin,
 }
 
 impl<'a> Widget<'a> for StereoMeter<'_, '_, '_, 'a> {
@@ -35,12 +35,12 @@ impl<'a> Widget<'a> for StereoMeter<'_, '_, '_, 'a> {
             return Space::new().into();
         };
         Canvas::new(StereoMeterCanvas {
+            paint,
             drag: Scalar::builder()
                 .track(Track::AbsoluteHorizontal)
                 .hover(Hover::new(CursorShape::ResizeH))
                 .build(),
             path: self.path.to_owned(),
-            paint,
         })
         .width(Length::Fill)
         .height(Length::Fill)
@@ -49,16 +49,6 @@ impl<'a> Widget<'a> for StereoMeter<'_, '_, '_, 'a> {
 }
 
 impl<'a> StereoMeter<'_, '_, '_, 'a> {
-    pub(crate) fn painted(self) -> Element<'a, UiEvent> {
-        let Some(paint) = self.paint() else {
-            return Space::new().into();
-        };
-        Canvas::new(paint)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-    }
-
     fn paint(&self) -> Option<StereoMeterPaint<'a>> {
         let Some(ReadValue::Stereo(levels)) = self.value else {
             return None;
@@ -70,19 +60,29 @@ impl<'a> StereoMeter<'_, '_, '_, 'a> {
             text_resources: self.skin.text_resources(),
         })
     }
+
+    pub(crate) fn painted(self) -> Element<'a, UiEvent> {
+        let Some(paint) = self.paint() else {
+            return Space::new().into();
+        };
+        Canvas::new(paint)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
 }
 
 struct StereoMeterCanvas<'skin> {
     drag: Scalar,
-    path: String,
     paint: StereoMeterPaint<'skin>,
+    path: String,
 }
 
 struct StereoMeterPaint<'skin> {
-    metrics: VuStereoSkin,
-    levels: StereoLevels,
-    palette: RenderPalette,
     text_resources: &'skin TextResources,
+    palette: RenderPalette,
+    levels: StereoLevels,
+    metrics: VuStereoSkin,
 }
 
 impl canvas::Program<UiEvent> for StereoMeterCanvas<'_> {

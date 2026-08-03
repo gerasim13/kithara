@@ -52,8 +52,8 @@ impl VariantTransitionId {
 #[non_exhaustive]
 pub struct VariantTransition {
     active_variant: VariantIndex,
-    id: VariantTransitionId,
     incoming_variant: VariantIndex,
+    id: VariantTransitionId,
 }
 
 impl VariantTransition {
@@ -66,8 +66,8 @@ impl VariantTransition {
     ) -> Self {
         Self {
             active_variant,
-            id,
             incoming_variant,
+            id,
         }
     }
 

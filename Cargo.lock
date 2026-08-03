@@ -4219,6 +4219,7 @@ dependencies = [
  "bytes",
  "clap",
  "crabtime",
+ "delegate",
  "derive_more",
  "fieldwork",
  "futures",
@@ -4363,6 +4364,7 @@ dependencies = [
 name = "kithara-bufpool"
 version = "0.0.1-alpha4"
 dependencies = [
+ "bon",
  "crossbeam-queue",
  "delegate",
  "derive_more",
@@ -4421,6 +4423,7 @@ dependencies = [
  "anyhow",
  "cargo_metadata 0.23.1",
  "clap",
+ "delegate",
  "fieldwork",
  "glob",
  "proc-macro2",
@@ -4456,7 +4459,6 @@ dependencies = [
 name = "kithara-encode"
 version = "0.0.1-alpha4"
 dependencies = [
- "bon",
  "fdk-aac",
  "fdk-aac-sys",
  "ffmpeg-next",
@@ -4498,6 +4500,7 @@ dependencies = [
  "cpal 0.18.1",
  "dashmap",
  "delegate",
+ "fieldwork",
  "futures",
  "jni 0.22.4",
  "js-sys",
@@ -4817,6 +4820,7 @@ dependencies = [
  "bon",
  "criterion",
  "delegate",
+ "derive_more",
  "fieldwork",
  "kithara-apple",
  "kithara-bufpool",
@@ -4836,6 +4840,7 @@ dependencies = [
  "bon",
  "crossbeam-queue",
  "delegate",
+ "fieldwork",
  "hotpath",
  "kithara-bufpool",
  "kithara-platform",
@@ -4863,6 +4868,7 @@ dependencies = [
  "dashmap",
  "delegate",
  "derive_more",
+ "fieldwork",
  "futures",
  "hotpath",
  "kithara-abr",
@@ -4941,6 +4947,7 @@ dependencies = [
  "criterion",
  "delegate",
  "derive_more",
+ "fieldwork",
  "iced",
  "iced_renderer",
  "iced_tiny_skia",

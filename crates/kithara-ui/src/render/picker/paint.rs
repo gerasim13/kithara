@@ -8,10 +8,15 @@ use crate::{
     text::TextContext,
 };
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(super) struct PickerPaint<'a> {
     items: Vec<&'a str>,
+    #[field(get, vis = "pub(super)")]
     selected: Option<usize>,
+    #[field(get, vis = "pub(super)", copy)]
     skin: &'a Skin,
+    #[field(get, vis = "pub(super)")]
     width: f32,
 }
 
@@ -37,18 +42,6 @@ impl<'a> PickerPaint<'a> {
 
     pub(super) const fn item_height(&self) -> f32 {
         self.skin.tree.scope_item_height
-    }
-
-    pub(super) const fn selected(&self) -> Option<usize> {
-        self.selected
-    }
-
-    pub(super) const fn skin(&self) -> &Skin {
-        self.skin
-    }
-
-    pub(super) const fn width(&self) -> f32 {
-        self.width
     }
 
     pub(super) fn base_commands(&self, text: &mut TextContext, bounds: Rect) -> DrawList {

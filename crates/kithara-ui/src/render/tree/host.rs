@@ -106,12 +106,11 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
         tree.diff_children(std::slice::from_ref(&self.child));
     }
 
-    fn size(&self) -> Size<Length> {
-        self.child.as_widget().size()
-    }
-
-    fn size_hint(&self) -> Size<Length> {
-        self.child.as_widget().size_hint()
+    delegate::delegate! {
+        to self.child.as_widget() {
+            fn size(&self) -> Size<Length>;
+            fn size_hint(&self) -> Size<Length>;
+        }
     }
 
     fn layout(

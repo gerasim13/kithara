@@ -154,18 +154,6 @@ impl Registry {
         self.slots.iter().any(|s| !s.is_empty())
     }
 
-    fn requeue_pending(&mut self, pending: Vec<SlotEntry>) {
-        for entry in pending.into_iter().rev() {
-            let peer_priority = entry
-                .cmd
-                .peer
-                .and_then(|peer| self.peers.get(peer))
-                .map_or(RequestPriority::Low, |peer| peer.peer.priority());
-            let slot = slot_index(peer_priority, entry.cmd.priority);
-            self.slots[slot].push_front(entry);
-        }
-    }
-
     /// Poll all peers: drain `cmd_rx` channels and call `poll_next`.
     /// Route each command to the correct slot. Returns per-peer counters
     /// so [`tick`](Self::tick) can classify forward motion.
@@ -263,6 +251,18 @@ impl Registry {
         }
 
         stats
+    }
+
+    fn requeue_pending(&mut self, pending: Vec<SlotEntry>) {
+        for entry in pending.into_iter().rev() {
+            let peer_priority = entry
+                .cmd
+                .peer
+                .and_then(|peer| self.peers.get(peer))
+                .map_or(RequestPriority::Low, |peer| peer.peer.priority());
+            let slot = slot_index(peer_priority, entry.cmd.priority);
+            self.slots[slot].push_front(entry);
+        }
     }
 
     /// Check `peer.priority()` for each command in slots,

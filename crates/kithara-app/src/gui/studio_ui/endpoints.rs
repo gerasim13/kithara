@@ -8,10 +8,10 @@ pub(in crate::gui) const EQ_MIN_DB: f32 = -24.0;
 pub(in crate::gui) const EQ_MAX_DB: f32 = 6.0;
 
 struct Endpoint {
-    category: EndpointCategory,
-    id: &'static str,
-    value: ValueKind,
     scopes: &'static [&'static str],
+    id: &'static str,
+    category: EndpointCategory,
+    value: ValueKind,
 }
 
 impl Endpoint {

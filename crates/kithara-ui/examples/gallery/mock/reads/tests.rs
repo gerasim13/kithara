@@ -311,35 +311,35 @@ fn default_menu_state_is_the_frozen_design_snapshot() {
     assert_eq!(reads.get("ui.menu.open"), Some(ReadValue::Bool(true)));
     assert_eq!(
         reads.get("ui.window.count"),
-        Some(ReadValue::Text("2 ОКНА"))
+        Some(ReadValue::Text("2 WINDOWS"))
     );
     assert_eq!(
         reads.get("ui.window.title@window=1"),
-        Some(ReadValue::Text("ОКНО 1 · КЛУБ · 2 ДЕКИ"))
+        Some(ReadValue::Text("WINDOW 1 · CLUB · 2 DECKS"))
     );
     assert_eq!(
         reads.get("ui.window.caption@window=1"),
-        Some(ReadValue::Text("MACBOOK PRO 16\" · 8 МОД."))
+        Some(ReadValue::Text("MACBOOK PRO 16\" · 8 MOD."))
     );
     assert_eq!(
         reads.get("ui.window.title@window=2"),
-        Some(ReadValue::Text("ОКНО 2 · ВИЗУАЛ + ТАЙМЛАЙН"))
+        Some(ReadValue::Text("WINDOW 2 · VISUALS + TIMELINE"))
     );
     assert_eq!(
         reads.get("ui.window.caption@window=2"),
-        Some(ReadValue::Text("DELL U2720Q · 2 МОД."))
+        Some(ReadValue::Text("DELL U2720Q · 2 MOD."))
     );
     assert_eq!(
         reads.get("ui.modules.title"),
-        Some(ReadValue::Text("Модули · ОКНО 1"))
+        Some(ReadValue::Text("Modules · WINDOW 1"))
     );
     assert_eq!(
         reads.get("ui.modules.count"),
-        Some(ReadValue::Text("8 ИЗ 11"))
+        Some(ReadValue::Text("8 OF 11"))
     );
     assert_eq!(
         reads.get("ui.layouts.active"),
-        Some(ReadValue::Text("КЛУБ · 2 ДЕКИ"))
+        Some(ReadValue::Text("CLUB · 2 DECKS"))
     );
     assert_eq!(
         reads.get("ui.prefs.wave_follow"),
@@ -391,7 +391,7 @@ fn the_window_list_refuses_a_fourth_window_and_never_closes_the_first() {
     reads.apply("app-menu/new-window", &ControlAction::Activate);
     assert_eq!(
         reads.get("ui.window.count"),
-        Some(ReadValue::Text("3 ОКНА"))
+        Some(ReadValue::Text("3 WINDOWS"))
     );
     assert_eq!(
         reads.get("ui.window.can_open"),
@@ -405,20 +405,20 @@ fn the_window_list_refuses_a_fourth_window_and_never_closes_the_first() {
     reads.apply("app-menu/new-window", &ControlAction::Activate);
     assert_eq!(
         reads.get("ui.window.count"),
-        Some(ReadValue::Text("3 ОКНА"))
+        Some(ReadValue::Text("3 WINDOWS"))
     );
 
     reads.apply("app-menu/window-1/close", &ControlAction::Activate);
     assert_eq!(
         reads.get("ui.window.count"),
-        Some(ReadValue::Text("3 ОКНА"))
+        Some(ReadValue::Text("3 WINDOWS"))
     );
 
     reads.apply("app-menu/window-3/close", &ControlAction::Activate);
     reads.apply("app-menu/window-2/close", &ControlAction::Activate);
     assert_eq!(
         reads.get("ui.window.count"),
-        Some(ReadValue::Text("1 ОКНО"))
+        Some(ReadValue::Text("1 WINDOW"))
     );
     assert_eq!(
         reads.get("ui.window.close_hidden@window=2"),
@@ -438,15 +438,15 @@ fn focusing_a_window_moves_the_module_grid_and_the_layout_hint() {
     );
     assert_eq!(
         reads.get("ui.modules.title"),
-        Some(ReadValue::Text("Модули · ОКНО 2"))
+        Some(ReadValue::Text("Modules · WINDOW 2"))
     );
     assert_eq!(
         reads.get("ui.modules.count"),
-        Some(ReadValue::Text("2 ИЗ 11"))
+        Some(ReadValue::Text("2 OF 11"))
     );
     assert_eq!(
         reads.get("ui.layouts.active"),
-        Some(ReadValue::Text("ВИЗУАЛ + ТАЙМЛАЙН"))
+        Some(ReadValue::Text("VISUALS + TIMELINE"))
     );
     assert_eq!(
         reads.get("ui.module.on@module=vis"),
@@ -464,7 +464,7 @@ fn focusing_a_window_moves_the_module_grid_and_the_layout_hint() {
     );
     assert_eq!(
         reads.get("ui.window.caption@window=2"),
-        Some(ReadValue::Text("DELL U2720Q · 3 МОД."))
+        Some(ReadValue::Text("DELL U2720Q · 3 MOD."))
     );
 }
 
@@ -523,11 +523,11 @@ fn applying_a_layout_renames_the_active_window() {
     );
     assert_eq!(
         reads.get("ui.window.title@window=1"),
-        Some(ReadValue::Text("ОКНО 1 · СТУДИЯ · 4 ДЕКИ + VST"))
+        Some(ReadValue::Text("WINDOW 1 · STUDIO · 4 DECKS + VST"))
     );
     assert_eq!(
         reads.get("ui.layouts.active"),
-        Some(ReadValue::Text("СТУДИЯ · 4 ДЕКИ + VST"))
+        Some(ReadValue::Text("STUDIO · 4 DECKS + VST"))
     );
 }
 
@@ -538,7 +538,7 @@ fn the_record_and_cast_hints_follow_their_own_flags() {
     assert_eq!(reads.get("ui.set.record_hint"), Some(ReadValue::Text("⌘R")));
     assert_eq!(
         reads.get("ui.set.cast_hint"),
-        Some(ReadValue::Text("ЗВУК LIVE"))
+        Some(ReadValue::Text("AUDIO LIVE"))
     );
 
     reads.apply("app-menu/record/toggle", &ControlAction::Activate);
@@ -546,9 +546,9 @@ fn the_record_and_cast_hints_follow_their_own_flags() {
 
     assert_eq!(
         reads.get("ui.set.record_hint"),
-        Some(ReadValue::Text("ИДЁТ ЗАПИСЬ"))
+        Some(ReadValue::Text("RECORDING"))
     );
-    assert_eq!(reads.get("ui.set.cast_hint"), Some(ReadValue::Text("ВЫКЛ")));
+    assert_eq!(reads.get("ui.set.cast_hint"), Some(ReadValue::Text("OFF")));
 }
 
 #[kithara::test]
@@ -615,14 +615,14 @@ fn a_track_menu_action_closes_the_menu_and_reports_itself() {
     );
     assert_eq!(
         reads.get("gallery.menu.action"),
-        Some(ReadValue::Text("ДЕКА B · 2"))
+        Some(ReadValue::Text("DECK B · 2"))
     );
 
     reads.apply("ctx/track-4/row", &ControlAction::SecondaryActivate);
     reads.apply("ctx/track-4/queue", &ControlAction::Activate);
     assert_eq!(
         reads.get("gallery.menu.action"),
-        Some(ReadValue::Text("В ОЧЕРЕДЬ · 4"))
+        Some(ReadValue::Text("TO QUEUE · 4"))
     );
 }
 

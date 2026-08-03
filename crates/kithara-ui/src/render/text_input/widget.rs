@@ -140,21 +140,35 @@ where
         );
     }
 
-    fn size(&self) -> Size<Length> {
-        self.canvas.size()
-    }
-
-    fn size_hint(&self) -> Size<Length> {
-        self.canvas.size_hint()
-    }
-
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        self.canvas.layout(tree, renderer, limits)
+    delegate::delegate! {
+        to self.canvas {
+            fn size(&self) -> Size<Length>;
+            fn size_hint(&self) -> Size<Length>;
+            fn layout(
+                &mut self,
+                tree: &mut Tree,
+                renderer: &Renderer,
+                limits: &layout::Limits,
+            ) -> layout::Node;
+            fn mouse_interaction(
+                &self,
+                tree: &Tree,
+                layout: Layout<'_>,
+                cursor: mouse::Cursor,
+                viewport: &Rectangle,
+                renderer: &Renderer,
+            ) -> mouse::Interaction;
+            fn draw(
+                &self,
+                tree: &Tree,
+                renderer: &mut Renderer,
+                theme: &Theme,
+                style: &renderer::Style,
+                layout: Layout<'_>,
+                cursor: mouse::Cursor,
+                viewport: &Rectangle,
+            );
+        }
     }
 
     fn update(
@@ -180,32 +194,6 @@ where
         }
     }
 
-    fn mouse_interaction(
-        &self,
-        tree: &Tree,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-        renderer: &Renderer,
-    ) -> mouse::Interaction {
-        self.canvas
-            .mouse_interaction(tree, layout, cursor, viewport, renderer)
-    }
-
-    fn draw(
-        &self,
-        tree: &Tree,
-        renderer: &mut Renderer,
-        theme: &Theme,
-        style: &renderer::Style,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-    ) {
-        self.canvas
-            .draw(tree, renderer, theme, style, layout, cursor, viewport);
-    }
-
     fn operate(
         &mut self,
         tree: &mut Tree,
@@ -221,11 +209,13 @@ where
     }
 }
 
-#[derive(Default)]
+#[derive(Default, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(super) struct TextInputState {
     engine: Option<Engine>,
     input_layout: TextInputLayout,
     path: String,
+    #[field(get, vis = "pub(super)")]
     snapshot: TextInputSnapshot,
 }
 
@@ -267,12 +257,13 @@ impl TextInputState {
         }
     }
 
-    pub(super) const fn engine(&self) -> Option<&Engine> {
-        self.engine.as_ref()
-    }
-
-    pub(super) fn engine_mut(&mut self) -> Option<&mut Engine> {
-        self.engine.as_mut()
+    delegate::delegate! {
+        to self.engine {
+            #[call(as_ref)]
+            pub(super) const fn engine(&self) -> Option<&Engine>;
+            #[call(as_mut)]
+            pub(super) fn engine_mut(&mut self) -> Option<&mut Engine>;
+        }
     }
 
     pub(super) fn refresh(&mut self) {
@@ -283,10 +274,6 @@ impl TextInputState {
         {
             self.snapshot = snapshot;
         }
-    }
-
-    pub(super) const fn snapshot(&self) -> &TextInputSnapshot {
-        &self.snapshot
     }
 
     fn input_method(&self, bounds: Rectangle) -> Option<InputMethodRequest<'_>> {

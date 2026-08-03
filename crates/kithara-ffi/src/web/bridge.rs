@@ -10,8 +10,8 @@ use wasm_bindgen::JsValue;
 use crate::web::commands::WorkerCmd;
 
 struct SessionChannel {
-    tx: mpsc::Sender<CmdMsg>,
     rx: mpsc::Receiver<CmdMsg>,
+    tx: mpsc::Sender<CmdMsg>,
 }
 
 fn current_track_id_cell() -> &'static AtomicI64 {
@@ -32,7 +32,7 @@ fn ensure_session_channel() -> mpsc::Sender<CmdMsg> {
 
     wasm::ensure_main_session();
     let (tx, rx) = wasm::worker_session_channel();
-    *guard = Some(SessionChannel { tx: tx.clone(), rx });
+    *guard = Some(SessionChannel { rx, tx: tx.clone() });
     tx
 }
 

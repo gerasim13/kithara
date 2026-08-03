@@ -21,8 +21,8 @@ static NEXT_DECODER_ID: AtomicU64 = AtomicU64::new(1);
 
 impl Consts {
     const DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
-    const OUTPUT_TIMEOUT: Duration = Duration::from_millis(10);
     const FLAC_STREAMINFO_LEN: u8 = 34;
+    const OUTPUT_TIMEOUT: Duration = Duration::from_millis(10);
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -48,33 +48,104 @@ enum WebCodecsError {
 struct CodecConfig {
     codec_string: &'static str,
     description: Option<Vec<u8>>,
-    sample_rate: u32,
     channels: u16,
+    sample_rate: u32,
 }
 
 struct PcmOut<'a> {
     interleaved: &'a [f32],
+    channels: u16,
     frames: u32,
     sample_rate: u32,
-    channels: u16,
-    pts_us: u64,
     generation: u64,
+    pts_us: u64,
 }
 
 pub(crate) struct WebCodecsCodec {
-    decoder_id: u64,
-    cmd: mpsc::Sender<HostCmd>,
-    out: mpsc::Receiver<HostOut>,
-    generation: u64,
-    spec: PcmSpec,
-    track_info: DecoderTrackInfo,
     config: CodecConfig,
+    track_info: DecoderTrackInfo,
     decoded_pts: Duration,
+    spec: PcmSpec,
+    out: mpsc::Receiver<HostOut>,
+    cmd: mpsc::Sender<HostCmd>,
     eof_draining: bool,
     eof_flushed: bool,
+    decoder_id: u64,
+    generation: u64,
 }
 
 impl WebCodecsCodec {
+    fn drain_output(&mut self, out: &mut PcmBuf) -> DecodeResult<u32> {
+        let deadline = Instant::now() + Consts::DRAIN_TIMEOUT;
+        loop {
+            let output = match self.out.recv_timeout(deadline) {
+                Ok(output) => output,
+                Err(RecvTimeoutError::Timeout) => {
+                    tracing::warn!(
+                        codec = self.config.codec_string,
+                        decoder_id = self.decoder_id,
+                        generation = self.generation,
+                        "timed out draining WebCodecs flush"
+                    );
+                    return Err(DecodeError::backend(WebCodecsError::FlushTimeout {
+                        generation: self.generation,
+                    }));
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(channel_disconnected("output"));
+                }
+                Err(_) => return Err(channel_disconnected("output")),
+            };
+
+            match output {
+                HostOut::Pcm {
+                    interleaved,
+                    frames,
+                    sample_rate,
+                    channels,
+                    pts_us,
+                    generation,
+                } if generation == self.generation => {
+                    let pcm = PcmOut {
+                        frames,
+                        sample_rate,
+                        channels,
+                        pts_us,
+                        generation,
+                        interleaved: &interleaved,
+                    };
+                    return self.write_pcm(out, &pcm);
+                }
+                HostOut::Flushed { generation } if generation == self.generation => {
+                    self.eof_flushed = true;
+                    out.clear();
+                    return Ok(0);
+                }
+                HostOut::Error { detail, generation } if generation == self.generation => {
+                    return Err(DecodeError::backend(WebCodecsError::Backend { detail }));
+                }
+                HostOut::Configured {
+                    sample_rate,
+                    channels,
+                    generation,
+                } if generation == self.generation => {
+                    self.spec =
+                        PcmSpec::checked(channels, sample_rate, "webcodecs.output.sample_rate")?;
+                }
+                HostOut::Pcm { generation, .. }
+                | HostOut::Configured { generation, .. }
+                | HostOut::Flushed { generation }
+                | HostOut::Error { generation, .. } => {
+                    tracing::debug!(
+                        output_generation = generation,
+                        generation = self.generation,
+                        "dropping stale WebCodecs output"
+                    );
+                }
+            }
+        }
+    }
+
     pub(crate) fn open(track: &TrackInfo, gapless_enabled: bool) -> DecodeResult<Self> {
         let config = codec_config(track)?;
         let spec = PcmSpec::checked(
@@ -87,21 +158,21 @@ impl WebCodecsCodec {
         let decoder_id = NEXT_DECODER_ID.fetch_add(1, Ordering::Relaxed);
         let (reply_tx, out) = mpsc::channel();
         cmd.send(HostCmd::Open {
-            id: decoder_id,
             reply_tx,
+            id: decoder_id,
         })
         .map_err(|_| channel_disconnected("command"))?;
         let codec = Self {
             decoder_id,
             cmd,
             out,
-            generation: 0,
             spec,
+            config,
+            generation: 0,
             track_info: DecoderTrackInfo {
                 gapless: if gapless_enabled { track.gapless } else { None },
                 ..DecoderTrackInfo::default()
             },
-            config,
             decoded_pts: Duration::ZERO,
             eof_draining: false,
             eof_flushed: false,
@@ -114,11 +185,6 @@ impl WebCodecsCodec {
             "configured WebCodecs codec"
         );
         Ok(codec)
-    }
-
-    #[must_use]
-    pub(crate) fn supports(codec: AudioCodec) -> bool {
-        codec_string(codec).is_some() && super::probe::supported(codec)
     }
 
     fn poll_output(&mut self, out: &mut PcmBuf) -> DecodeResult<u32> {
@@ -164,12 +230,12 @@ impl WebCodecsCodec {
                     generation,
                 } if generation == self.generation => {
                     let pcm = PcmOut {
-                        interleaved: &interleaved,
                         frames,
                         sample_rate,
                         channels,
                         pts_us,
                         generation,
+                        interleaved: &interleaved,
                     };
                     return self.write_pcm(out, &pcm);
                 }
@@ -206,75 +272,9 @@ impl WebCodecsCodec {
         }
     }
 
-    fn drain_output(&mut self, out: &mut PcmBuf) -> DecodeResult<u32> {
-        let deadline = Instant::now() + Consts::DRAIN_TIMEOUT;
-        loop {
-            let output = match self.out.recv_timeout(deadline) {
-                Ok(output) => output,
-                Err(RecvTimeoutError::Timeout) => {
-                    tracing::warn!(
-                        codec = self.config.codec_string,
-                        decoder_id = self.decoder_id,
-                        generation = self.generation,
-                        "timed out draining WebCodecs flush"
-                    );
-                    return Err(DecodeError::backend(WebCodecsError::FlushTimeout {
-                        generation: self.generation,
-                    }));
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err(channel_disconnected("output"));
-                }
-                Err(_) => return Err(channel_disconnected("output")),
-            };
-
-            match output {
-                HostOut::Pcm {
-                    interleaved,
-                    frames,
-                    sample_rate,
-                    channels,
-                    pts_us,
-                    generation,
-                } if generation == self.generation => {
-                    let pcm = PcmOut {
-                        interleaved: &interleaved,
-                        frames,
-                        sample_rate,
-                        channels,
-                        pts_us,
-                        generation,
-                    };
-                    return self.write_pcm(out, &pcm);
-                }
-                HostOut::Flushed { generation } if generation == self.generation => {
-                    self.eof_flushed = true;
-                    out.clear();
-                    return Ok(0);
-                }
-                HostOut::Error { detail, generation } if generation == self.generation => {
-                    return Err(DecodeError::backend(WebCodecsError::Backend { detail }));
-                }
-                HostOut::Configured {
-                    sample_rate,
-                    channels,
-                    generation,
-                } if generation == self.generation => {
-                    self.spec =
-                        PcmSpec::checked(channels, sample_rate, "webcodecs.output.sample_rate")?;
-                }
-                HostOut::Pcm { generation, .. }
-                | HostOut::Configured { generation, .. }
-                | HostOut::Flushed { generation }
-                | HostOut::Error { generation, .. } => {
-                    tracing::debug!(
-                        output_generation = generation,
-                        generation = self.generation,
-                        "dropping stale WebCodecs output"
-                    );
-                }
-            }
-        }
+    #[must_use]
+    pub(crate) fn supports(codec: AudioCodec) -> bool {
+        codec_string(codec).is_some() && super::probe::supported(codec)
     }
 
     fn write_pcm(&mut self, out: &mut PcmBuf, pcm: &PcmOut<'_>) -> DecodeResult<u32> {
@@ -331,9 +331,9 @@ impl FrameCodec for WebCodecsCodec {
         self.eof_flushed = false;
         let pts_us = u64::try_from(pts.as_micros()).unwrap_or(u64::MAX);
         self.send(HostCmd::Decode {
+            pts_us,
             decoder_id: self.decoder_id,
             data: frame_data.to_vec(),
-            pts_us,
             key: true,
             generation: self.generation,
         })?;
@@ -413,9 +413,9 @@ fn codec_config(track: &TrackInfo) -> DecodeResult<CodecConfig> {
         codec => return Err(DecodeError::UnsupportedCodec { codec }),
     };
     Ok(CodecConfig {
+        description,
         codec_string: codec_string(track.codec)
             .ok_or(DecodeError::UnsupportedCodec { codec: track.codec })?,
-        description,
         sample_rate: track.sample_rate,
         channels: track.channels,
     })

@@ -4,15 +4,23 @@ use std::io::Cursor;
 
 use hotpath::HotpathGuardBuilder;
 use kithara::{
+    bufpool::{BytePool, PcmPool},
     decode::{Decoder, DecoderConfig, DecoderFactory, PcmChunk},
     platform::time::Instant,
 };
 use kithara_integration_tests::create_test_wav;
 
+fn decoder_config() -> DecoderConfig {
+    DecoderConfig::builder()
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
+        .build()
+}
+
 fn create_wav_decoder(frames: usize) -> Box<dyn Decoder> {
     let wav_data = create_test_wav(frames, 44100, 2);
     let cursor = Cursor::new(wav_data);
-    DecoderFactory::create_with_probe(cursor, Some("wav"), DecoderConfig::default()).unwrap()
+    DecoderFactory::create_with_probe(cursor, Some("wav"), decoder_config()).unwrap()
 }
 
 #[hotpath::measure]
@@ -28,7 +36,7 @@ fn decoder_next_chunk_measured(decoder: &mut Box<dyn Decoder>) -> Option<()> {
 fn decoder_probe_single(wav_data: &[u8]) {
     let cursor = Cursor::new(wav_data.to_vec());
     let _decoder =
-        DecoderFactory::create_with_probe(cursor, Some("wav"), DecoderConfig::default()).unwrap();
+        DecoderFactory::create_with_probe(cursor, Some("wav"), decoder_config()).unwrap();
 }
 
 #[hotpath::measure]

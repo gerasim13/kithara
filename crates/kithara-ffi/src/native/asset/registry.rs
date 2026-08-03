@@ -78,27 +78,27 @@ mod tests {
     struct FixedLayout;
 
     impl FfiAssetLayout for FixedLayout {
-        fn root(&self, _source: FfiAssetSource) -> String {
-            "root".to_string()
-        }
-
         fn path(&self, _resource: FfiAssetResource) -> String {
             "resource".to_string()
+        }
+
+        fn root(&self, _source: FfiAssetSource) -> String {
+            "root".to_string()
         }
     }
 
     struct ReentrantLayout {
-        registry: Weak<FfiAssetLayoutRegistry>,
         dropped: Arc<AtomicBool>,
+        registry: Weak<FfiAssetLayoutRegistry>,
     }
 
     impl FfiAssetLayout for ReentrantLayout {
-        fn root(&self, _source: FfiAssetSource) -> String {
-            "root".to_string()
-        }
-
         fn path(&self, _resource: FfiAssetResource) -> String {
             "resource".to_string()
+        }
+
+        fn root(&self, _source: FfiAssetSource) -> String {
+            "root".to_string()
         }
     }
 

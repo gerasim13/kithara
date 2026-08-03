@@ -1,8 +1,8 @@
 use std::num::NonZeroUsize;
 
 use kithara_assets::{
-    AcquisitionResult, AssetReader, AssetResource, AssetSource, AssetStore, AssetStoreBuilder,
-    ResourceKey, StorageBackend, WriteSide,
+    AcquisitionResult, AssetReader, AssetResource, AssetSource, AssetStore, ResourceKey,
+    StorageBackend, WriteSide,
 };
 use kithara_events::{
     AudioCodecKind, ContainerKind, Envelope, Event, EventBus, FileEvent, TotalBytesSource,
@@ -44,9 +44,7 @@ fn make_coord() -> Arc<FileCoord> {
 }
 
 fn make_source(reader: AssetReader, coord: Arc<FileCoord>, bus: EventBus) -> FileSource {
-    let backend = AssetStoreBuilder::default()
-        .cancel(CancelToken::never())
-        .build();
+    let backend = AssetStore::builder().cancel(CancelToken::never()).build();
     let key = test_key(&backend, "test-source");
     FileSource::local(
         reader,
@@ -129,7 +127,7 @@ fn file_coord_total_bytes_roundtrip() {
 }
 
 fn create_committed_resource(data: &[u8]) -> AssetReader {
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())
         .build();
@@ -143,7 +141,7 @@ fn create_committed_resource(data: &[u8]) -> AssetReader {
 }
 
 fn create_active_resource(data: &[u8]) -> (AssetReader, kithara_assets::AssetWriter) {
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())
         .build();

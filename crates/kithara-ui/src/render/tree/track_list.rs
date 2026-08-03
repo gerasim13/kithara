@@ -12,10 +12,13 @@ use crate::{
     },
 };
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(super) struct TrackListHost {
     columns: Vec<ColumnLayout>,
     divider_paths: Vec<String>,
     horizontal_path: String,
+    #[field(get, vis = "pub(super)")]
     path: String,
     row_count: usize,
     row_target: String,
@@ -44,10 +47,6 @@ impl TrackListHost {
             row_target: format!("{path}/rows"),
             skin: skin.clone(),
         }
-    }
-
-    pub(super) fn path(&self) -> &str {
-        &self.path
     }
 
     pub(super) fn append_targets<'a>(

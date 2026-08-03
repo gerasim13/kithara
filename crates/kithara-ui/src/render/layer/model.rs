@@ -3,8 +3,10 @@ use crate::{
     interact::{CursorShape, Hit, Input, Outcome},
 };
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get, vis = "pub(crate)")]
 pub(crate) struct HostLayer<A> {
+    #[field(get(copy))]
     bounds: Rect,
     draw: DrawList,
     hits: Vec<LayerHit<A>>,
@@ -13,18 +15,6 @@ pub(crate) struct HostLayer<A> {
 impl<A> HostLayer<A> {
     pub(crate) const fn new(bounds: Rect, draw: DrawList, hits: Vec<LayerHit<A>>) -> Self {
         Self { bounds, draw, hits }
-    }
-
-    pub(crate) const fn bounds(&self) -> Rect {
-        self.bounds
-    }
-
-    pub(crate) const fn draw(&self) -> &DrawList {
-        &self.draw
-    }
-
-    pub(crate) fn hits(&self) -> &[LayerHit<A>] {
-        &self.hits
     }
 
     pub(crate) fn handle(&self, input: Input<'_>, pointer: Option<Pt>) -> Outcome<A>
@@ -38,13 +28,15 @@ impl<A> HostLayer<A> {
             .map_or(Outcome::IGNORED, |hit| Outcome::set(*hit.action()))
     }
 
-    pub(crate) fn cursor_at(&self, pointer: Option<Pt>) -> CursorShape {
-        self.hit(pointer)
-            .map_or(CursorShape::None, LayerHit::cursor)
-    }
-
-    pub(crate) fn action_at(&self, pointer: Option<Pt>) -> Option<&A> {
-        self.hit(pointer).map(LayerHit::action)
+    delegate::delegate! {
+        to self {
+            #[expr($.map_or(CursorShape::None, LayerHit::cursor))]
+            #[call(hit)]
+            pub(crate) fn cursor_at(&self, pointer: Option<Pt>) -> CursorShape;
+            #[expr($.map(LayerHit::action))]
+            #[call(hit)]
+            pub(crate) fn action_at(&self, pointer: Option<Pt>) -> Option<&A>;
+        }
     }
 
     fn hit(&self, pointer: Option<Pt>) -> Option<&LayerHit<A>> {
@@ -55,9 +47,12 @@ impl<A> HostLayer<A> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get, vis = "pub(crate)")]
 pub(crate) struct LayerHit<A> {
+    #[field(get(copy))]
     area: Rect,
+    #[field(get(copy))]
     cursor: CursorShape,
     action: A,
 }
@@ -69,18 +64,6 @@ impl<A> LayerHit<A> {
             cursor,
             action,
         }
-    }
-
-    pub(crate) const fn area(&self) -> Rect {
-        self.area
-    }
-
-    pub(crate) const fn cursor(&self) -> CursorShape {
-        self.cursor
-    }
-
-    pub(crate) const fn action(&self) -> &A {
-        &self.action
     }
 }
 

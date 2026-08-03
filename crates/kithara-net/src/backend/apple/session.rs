@@ -62,8 +62,8 @@ struct SharedSessionKey {
 
 #[derive(Clone)]
 struct SharedSession {
-    _delegate: Retained<UrlSessionDelegate>,
     events: Arc<AppleSessionEvents>,
+    _delegate: Retained<UrlSessionDelegate>,
     session: Retained<NSURLSession>,
     key: SharedSessionKey,
 }
@@ -113,9 +113,9 @@ impl AppleSession {
         let url = request.url().clone();
         let completion: Arc<dyn urlsession::DataTaskCompletion> = Arc::new(DataCompletionSink {
             accept_encoding,
+            url,
             byte_pool: self.byte_pool.clone(),
             sender: Arc::clone(&sender),
-            url,
         });
 
         let request = request.into_ns_request(&self.accept_encoding)?;
@@ -150,9 +150,9 @@ impl AppleSession {
             task_id,
             StreamState {
                 accept_encoding,
+                url,
                 body_queue: Some(Arc::clone(&body_queue)),
                 head_sender: Some(head_sender),
-                url,
             },
         );
         task.resume();

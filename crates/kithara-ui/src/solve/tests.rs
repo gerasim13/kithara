@@ -3,11 +3,14 @@ use kithara_test_utils::kithara;
 use super::*;
 use crate::layout::Axis;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, with)]
 struct TestItem {
     declared: Size<Length>,
     intrinsic: Size,
+    #[field(with, option_set_some, vis = "")]
     main_minimum: Option<f32>,
+    #[field(with, option_set_some, vis = "")]
     main_weight: Option<f32>,
 }
 
@@ -42,16 +45,6 @@ impl TestItem {
             Size::new(Length::Fixed(5.0), Length::FillPortion(weight)),
             Size::new(5.0, 0.0),
         )
-    }
-
-    const fn with_main_minimum(mut self, main_minimum: f32) -> Self {
-        self.main_minimum = Some(main_minimum);
-        self
-    }
-
-    const fn with_main_weight(mut self, main_weight: f32) -> Self {
-        self.main_weight = Some(main_weight);
-        self
     }
 }
 

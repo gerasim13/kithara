@@ -210,9 +210,9 @@ mod node {
         let (jobs, receiver) = mpsc::channel();
         let (tx, _results) = watch::channel(None);
         jobs.send(Job {
+            tx,
             reader: Box::new(FakeReader::chunked_with_pending(&sine(1024), 1)),
             cancel: CancelToken::root(),
-            tx,
         })
         .expect("analysis node accepts the test job");
         let mut node = AnalysisNode::new(waveform_only(), receiver);
@@ -228,9 +228,9 @@ mod node {
         let (tx, results) = watch::channel(None);
         let cancel = CancelToken::root();
         jobs.send(Job {
+            tx,
             reader: Box::new(FakeReader::chunked(&sine(1024), 1)),
             cancel: cancel.clone(),
-            tx,
         })
         .expect("analysis node accepts the test job");
         let mut node = AnalysisNode::new(waveform_only(), receiver);
@@ -255,8 +255,8 @@ mod node {
         let (tx, mut results) = watch::channel(None);
         jobs.send(Job {
             reader,
-            cancel: cancel.clone(),
             tx,
+            cancel: cancel.clone(),
         })
         .expect("analysis node accepts the test job");
         let mut node = AnalysisNode::new(builder, receiver);

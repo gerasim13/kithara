@@ -225,11 +225,11 @@ mod tests {
 
     #[kithara::test]
     fn committed_snapshot_from_initial_data() {
-        let (driver, _state) = MemDriver::open(MemOptions {
-            initial_data: Some(b"hello world".to_vec()),
-            capacity: 0,
-            ..MemOptions::default()
-        })
+        let (driver, _state) = MemDriver::open(
+            MemOptions::builder()
+                .initial_data(b"hello world".to_vec())
+                .build(),
+        )
         .expect("open with initial data must succeed");
 
         assert_eq!(driver.committed_len(), Some(11));
@@ -258,12 +258,8 @@ mod tests {
     /// (index out of range) on a reader thread.
     #[kithara::test(timeout(Duration::from_secs(30)))]
     fn concurrent_commit_reactivate_and_reads_never_panic() {
-        let (driver, _state) = MemDriver::open(MemOptions {
-            initial_data: None,
-            capacity: 0,
-            ..MemOptions::default()
-        })
-        .expect("open must succeed");
+        let (driver, _state) =
+            MemDriver::open(MemOptions::builder().build()).expect("open must succeed");
         driver
             .write_at(0, b"hello world", false)
             .expect("active write must succeed");
@@ -304,12 +300,8 @@ mod tests {
 
     #[kithara::test]
     fn read_committed_without_snapshot_returns_none() {
-        let (driver, _state) = MemDriver::open(MemOptions {
-            initial_data: None,
-            capacity: 0,
-            ..MemOptions::default()
-        })
-        .expect("open empty must succeed");
+        let (driver, _state) =
+            MemDriver::open(MemOptions::builder().build()).expect("open empty must succeed");
 
         assert_eq!(driver.committed_len(), None);
 
@@ -325,12 +317,8 @@ mod tests {
 
     #[kithara::test]
     fn commit_frees_working_buffer_and_reactivate_restores_it() {
-        let (driver, _state) = MemDriver::open(MemOptions {
-            initial_data: None,
-            capacity: 0,
-            ..MemOptions::default()
-        })
-        .expect("open empty must succeed");
+        let (driver, _state) =
+            MemDriver::open(MemOptions::builder().build()).expect("open empty must succeed");
 
         driver
             .write_at(0, b"hello world", false)
@@ -389,21 +377,14 @@ mod tests {
     #[kithara::test]
     fn zero_length_committed_publishes_no_snapshot() {
         // Empty initial data: committed but length 0 → no snapshot (matches mmap `Empty`).
-        let (driver, _state) = MemDriver::open(MemOptions {
-            initial_data: Some(Vec::new()),
-            capacity: 0,
-            ..MemOptions::default()
-        })
-        .expect("open with empty initial data must succeed");
+        let (driver, _state) =
+            MemDriver::open(MemOptions::builder().initial_data(Vec::new()).build())
+                .expect("open with empty initial data must succeed");
         assert_eq!(driver.committed_len(), None);
 
         // commit(Some(0)) on an empty buffer likewise publishes no snapshot.
-        let (driver, _state) = MemDriver::open(MemOptions {
-            initial_data: None,
-            capacity: 0,
-            ..MemOptions::default()
-        })
-        .expect("open empty must succeed");
+        let (driver, _state) =
+            MemDriver::open(MemOptions::builder().build()).expect("open empty must succeed");
         driver.commit(Some(0)).expect("commit(0) must succeed");
         assert_eq!(driver.committed_len(), None);
     }

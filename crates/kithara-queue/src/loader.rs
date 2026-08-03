@@ -24,15 +24,15 @@ use crate::{
 /// Async track loader: `ResourceConfig` -> `Resource`, run in two
 /// isolated permit lanes with one abortable attempt per track.
 pub(crate) struct Loader {
-    player: Arc<PlayerImpl>,
-    store: AssetStore,
-    /// Background prefetch lane (`max_concurrent_loads` permits).
-    prefetch_lane: Arc<Semaphore>,
     /// User-selection lane: one dedicated permit, isolated from prefetch.
     interactive_lane: Arc<Semaphore>,
+    player: Arc<PlayerImpl>,
+    /// Background prefetch lane (`max_concurrent_loads` permits).
+    prefetch_lane: Arc<Semaphore>,
     /// Same `Arc<Tracks>` as `Queue::tracks`: owns per-track status and the live attempt,
     /// so both change under one lock.
     tracks: Arc<Tracks>,
+    store: AssetStore,
 }
 
 impl Loader {
@@ -49,6 +49,20 @@ impl Loader {
             prefetch_lane: Arc::new(Semaphore::new(max_concurrent_loads.get())),
             interactive_lane: Arc::new(Semaphore::new(1)),
         }
+    }
+
+    fn attempt_config(
+        &self,
+        id: TrackId,
+        source: TrackSource,
+    ) -> Result<(ResourceConfig, CancelToken), QueueError> {
+        let config = self.build_config(id, source)?;
+        let Some(cancel) = config.cancel().cloned() else {
+            return Err(QueueError::Resource(format!(
+                "track {id:?}: resource config missing per-track cancel"
+            )));
+        };
+        Ok((config, cancel))
     }
 
     /// Build a [`ResourceConfig`] for the given [`TrackSource`].
@@ -68,13 +82,15 @@ impl Loader {
         source: TrackSource,
     ) -> Result<ResourceConfig, QueueError> {
         let mut config = match source {
-            TrackSource::Uri(url) => ResourceConfig::new(
-                &url,
-                self.store.clone(),
-                self.player.byte_pool().clone(),
-                self.player.pcm_pool().clone(),
-            )
-            .map_err(|e| QueueError::InvalidUrl(format!("{url}: {e}")))?,
+            TrackSource::Uri(url) => {
+                let src = ResourceConfig::parse_src(&url)
+                    .map_err(|e| QueueError::InvalidUrl(format!("{url}: {e}")))?;
+                ResourceConfig::for_src(src)
+                    .store(self.store.clone())
+                    .byte_pool(self.player.byte_pool().clone())
+                    .pcm_pool(self.player.pcm_pool().clone())
+                    .build()
+            }
             TrackSource::Config(boxed) => *boxed,
         };
         if config.bus().is_none() {
@@ -104,22 +120,6 @@ impl Loader {
         }
     }
 
-    /// Spawn a fresh async load in the given lane. `None` when a live
-    /// attempt already exists - one track never occupies two permits.
-    pub(crate) fn spawn_load(
-        self: &Arc<Self>,
-        id: TrackId,
-        source: TrackSource,
-        class: LoadClass,
-    ) -> Option<JoinHandle<Result<Resource, QueueError>>> {
-        let (config, cancel) = match self.attempt_config(id, source) {
-            Ok(pair) => pair,
-            Err(err) => return Some(self.spawn_config_failure(id, err)),
-        };
-        let ticket = self.tracks.begin_attempt(id, cancel.clone())?;
-        Some(self.spawn_attempt(ticket, config, cancel, class))
-    }
-
     /// Move a track's pending load into the interactive lane.
     pub(crate) fn promote_load(
         self: &Arc<Self>,
@@ -132,20 +132,6 @@ impl Loader {
         };
         let ticket = self.tracks.promote_attempt(id, cancel.clone())?;
         Some(self.spawn_attempt(ticket, config, cancel, LoadClass::Interactive))
-    }
-
-    fn attempt_config(
-        &self,
-        id: TrackId,
-        source: TrackSource,
-    ) -> Result<(ResourceConfig, CancelToken), QueueError> {
-        let config = self.build_config(id, source)?;
-        let Some(cancel) = config.cancel().cloned() else {
-            return Err(QueueError::Resource(format!(
-                "track {id:?}: resource config missing per-track cancel"
-            )));
-        };
-        Ok((config, cancel))
     }
 
     fn spawn_attempt(
@@ -206,6 +192,22 @@ impl Loader {
         })
     }
 
+    /// Spawn a fresh async load in the given lane. `None` when a live
+    /// attempt already exists - one track never occupies two permits.
+    pub(crate) fn spawn_load(
+        self: &Arc<Self>,
+        id: TrackId,
+        source: TrackSource,
+        class: LoadClass,
+    ) -> Option<JoinHandle<Result<Resource, QueueError>>> {
+        let (config, cancel) = match self.attempt_config(id, source) {
+            Ok(pair) => pair,
+            Err(err) => return Some(self.spawn_config_failure(id, err)),
+        };
+        let ticket = self.tracks.begin_attempt(id, cancel.clone())?;
+        Some(self.spawn_attempt(ticket, config, cancel, class))
+    }
+
     /// Watches the [`EventBus`] for the first
     /// [`DownloaderEvent::LoadSlow`] and flips the track status to
     /// [`TrackStatus::Slow`]. Returns a never-completing future:
@@ -235,7 +237,7 @@ impl Loader {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use kithara_assets::{AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{AssetStore, StorageBackend};
     use kithara_bufpool::{BytePool, PcmPool, Region};
     use kithara_events::{EventBus, QueueEvent};
     use kithara_platform::time::Duration;
@@ -291,7 +293,7 @@ mod tests {
             let tracks = Arc::new(Tracks::new(bus.clone()));
             let loader = Arc::new(Loader::new(
                 player,
-                AssetStoreBuilder::default().build(),
+                AssetStore::builder().build(),
                 self.cap,
                 Arc::clone(&tracks),
             ));
@@ -306,13 +308,13 @@ mod tests {
     #[kithara::test(tokio)]
     async fn build_config_preserves_caller_supplied_config() {
         let loader = LoaderFixtureSpec::default().build().loader;
-        let supplied_store = AssetStoreBuilder::default()
+        let supplied_store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .build();
-        let Ok(builder) = ResourceConfig::for_src("https://example.com/a.mp3") else {
+        let Ok(src) = ResourceConfig::parse_src("https://example.com/a.mp3") else {
             panic!("valid url");
         };
-        let given = builder
+        let given = ResourceConfig::for_src(src)
             .store(supplied_store.clone())
             .byte_pool(BytePool::default())
             .pcm_pool(PcmPool::default())

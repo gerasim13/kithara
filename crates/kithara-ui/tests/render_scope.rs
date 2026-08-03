@@ -62,15 +62,15 @@ fn rendering_two_decks_reads_scoped_endpoints_for_both() {
 }
 
 struct FlagReads {
-    seen: RefCell<BTreeSet<String>>,
     truthy: BTreeSet<String>,
+    seen: RefCell<BTreeSet<String>>,
 }
 
 impl FlagReads {
     fn new(truthy: BTreeSet<String>) -> Self {
         Self {
-            seen: RefCell::default(),
             truthy,
+            seen: RefCell::default(),
         }
     }
 }

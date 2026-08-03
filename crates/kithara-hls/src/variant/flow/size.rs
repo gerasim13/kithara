@@ -55,18 +55,6 @@ impl HlsVariant {
         self.resolve_seek_alias(demand, exact_anchor);
     }
 
-    fn exact_seek_projection_ready(&self, demand: ExactSeekDemand) -> bool {
-        self.layout
-            .try_published(|| {
-                let exact_anchor = self
-                    .exact_prefix_complete_now(demand.segment)
-                    .then(|| self.segment_byte_offset(demand.segment))
-                    .flatten()?;
-                Some(self.resolved_seek_anchor(demand.anchor) == Some(exact_anchor))
-            })
-            .unwrap_or(false)
-    }
-
     fn enqueue_body_fetch_for_size(&self, demand: SizeDemand) {
         let planned = match demand {
             SizeDemand::Init => PlannedFetch::Init,
@@ -142,6 +130,18 @@ impl HlsVariant {
         }
         self.request_exact_prefix_through(demand.segment);
         Some(SourcePhase::WaitingDemand)
+    }
+
+    fn exact_seek_projection_ready(&self, demand: ExactSeekDemand) -> bool {
+        self.layout
+            .try_published(|| {
+                let exact_anchor = self
+                    .exact_prefix_complete_now(demand.segment)
+                    .then(|| self.segment_byte_offset(demand.segment))
+                    .flatten()?;
+                Some(self.resolved_seek_anchor(demand.anchor) == Some(exact_anchor))
+            })
+            .unwrap_or(false)
     }
 
     fn request_exact_prefix_for_byte(&self, byte: u64) {

@@ -11,10 +11,10 @@ use crate::{
 };
 
 pub(crate) struct WindowSurface {
-    command: WindowCommand,
-    width: Length,
     height: Length,
+    width: Length,
     cursor: CursorShape,
+    command: WindowCommand,
 }
 
 impl WindowSurface {
@@ -29,9 +29,9 @@ impl WindowSurface {
 
     pub(crate) const fn resize(edge: WindowEdge, width: Length, height: Length) -> Self {
         Self {
-            command: WindowCommand::Resize(edge),
             width,
             height,
+            command: WindowCommand::Resize(edge),
             cursor: resize_cursor(edge),
         }
     }

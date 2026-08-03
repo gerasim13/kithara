@@ -114,7 +114,10 @@ impl canvas::Program<UiEvent> for NavItemProgram<'_, '_> {
     }
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 struct NavItemPaint<'data, 'skin> {
+    #[field(get, vis = "")]
     height: f32,
     item: NavItem<'data, 'skin>,
     text_resources: &'skin TextResources,
@@ -143,10 +146,6 @@ impl<'data, 'skin> NavItemPaint<'data, 'skin> {
             .width(Length::Fill)
             .height(Length::Fixed(height))
             .into()
-    }
-
-    const fn height(&self) -> f32 {
-        self.height
     }
 
     fn draw_with(

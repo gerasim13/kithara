@@ -191,9 +191,12 @@ pub(crate) struct ButtonState {
     pressed: bool,
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct ButtonPaint<'data, 'skin> {
     button: Button<'data, 'skin>,
     text_resources: &'skin TextResources,
+    #[field(get, vis = "", copy)]
     width: Length,
 }
 
@@ -238,10 +241,6 @@ impl<'data, 'skin> ButtonPaint<'data, 'skin> {
     {
         let width = self.width();
         Canvas::new(self).width(width).height(Length::Fill).into()
-    }
-
-    fn width(&self) -> Length {
-        self.width
     }
 
     fn draw_with(

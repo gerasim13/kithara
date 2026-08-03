@@ -7,28 +7,28 @@ use crate::module::WindowControlsStyle;
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct FontSkin {
-    pub size: f32,
     pub weight: FontWeight,
+    pub size: f32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct TextRoleSkin {
+    pub color: ColorRole,
     pub font: FontFamily,
     pub weight: FontWeight,
     pub size: f32,
     pub spacing: f32,
-    pub color: ColorRole,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct FrameSkin {
-    pub radius: f32,
-    pub border_width: f32,
     pub border: ColorRole,
+    pub border_width: f32,
+    pub radius: f32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -37,9 +37,9 @@ pub struct FrameSkin {
 pub struct ShadowSkin {
     pub color: ColorRole,
     pub alpha: f32,
+    pub blur: f32,
     pub offset_x: f32,
     pub offset_y: f32,
-    pub blur: f32,
 }
 
 /// Scale beside a fader: hairlines with a longer, brighter one at centre.
@@ -48,14 +48,14 @@ pub struct ShadowSkin {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct TickSkin {
-    pub count: usize,
-    pub thickness: f32,
-    pub length: f32,
+    pub center_color: ColorRole,
+    pub color: ColorRole,
     pub center_length: f32,
     pub gap: f32,
     pub inset: f32,
-    pub color: ColorRole,
-    pub center_color: ColorRole,
+    pub length: f32,
+    pub thickness: f32,
+    pub count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -70,71 +70,71 @@ pub struct LayoutSkin {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct ChromeSkin {
-    pub frame: FrameSkin,
-    pub secondary_frame: FrameSkin,
-    pub header_frame: FrameSkin,
-    pub chip_frame: FrameSkin,
-    pub title_frame: FrameSkin,
+    pub chevron_color: ColorRole,
+    pub chip_background: ColorRole,
+    pub chip_text: ColorRole,
+    pub corner_color: ColorRole,
+    pub footer_background: ColorRole,
+    pub footer_text: ColorRole,
+    pub header_background: ColorRole,
+    pub inner_line: ColorRole,
+    pub panel_background: ColorRole,
+    pub title_background: ColorRole,
+    pub title_text: ColorRole,
     pub chevron_frame: FrameSkin,
+    pub chip_frame: FrameSkin,
     pub footer_frame: FrameSkin,
-    pub header_height: f32,
+    pub frame: FrameSkin,
+    pub header_frame: FrameSkin,
+    pub secondary_frame: FrameSkin,
+    pub title_frame: FrameSkin,
+    pub chevron_icon_size: f32,
+    pub chevron_size: f32,
+    pub chevron_stroke_width: f32,
     pub chip_pad: f32,
     pub chip_text_size: f32,
-    pub title_text_size: f32,
-    pub chevron_size: f32,
-    pub chevron_icon_size: f32,
-    pub chevron_stroke_width: f32,
+    pub corner_offset: f32,
+    pub corner_size: f32,
+    pub corner_width: f32,
     pub footer_height: f32,
     pub footer_pad: f32,
     pub footer_text_size: f32,
+    pub header_height: f32,
     pub inner_line_width: f32,
-    pub panel_background: ColorRole,
-    pub header_background: ColorRole,
-    pub title_background: ColorRole,
-    pub chip_background: ColorRole,
-    pub chip_text: ColorRole,
-    pub title_text: ColorRole,
-    pub chevron_color: ColorRole,
-    pub footer_background: ColorRole,
-    pub footer_text: ColorRole,
-    pub inner_line: ColorRole,
-    pub corner_size: f32,
-    pub corner_width: f32,
-    pub corner_offset: f32,
-    pub corner_color: ColorRole,
+    pub title_text_size: f32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct WindowSkin {
-    pub titlebar_height: f32,
-    /// Thickness of the drag zones framing a window that draws its own chrome.
-    pub resize_edge: f32,
-    pub titlebar_padding_x: f32,
-    pub titlebar_text: TextRoleSkin,
+    pub close_wide_divider_color: ColorRole,
     pub icon_color: ColorRole,
     pub icon_hover_color: ColorRole,
-    pub icon_stroke_width: f32,
-    pub standard_minus_icon_size: f32,
-    pub standard_maximize_icon_size: f32,
-    pub standard_close_icon_size: f32,
-    pub standard_gap: f32,
-    pub standard_padding: f32,
-    pub compact_minus_icon_size: f32,
-    pub compact_maximize_icon_size: f32,
-    pub compact_close_icon_size: f32,
-    pub compact_gap: f32,
-    pub compact_padding: f32,
-    pub close_wide_cell_size: f32,
-    pub close_wide_icon_size: f32,
-    pub close_wide_divider_width: f32,
-    pub close_wide_divider_color: ColorRole,
-    pub close_micro_cell_size: f32,
-    pub close_micro_icon_size: f32,
+    pub close_framed_frame: FrameSkin,
+    pub titlebar_text: TextRoleSkin,
     pub close_framed_cell_size: f32,
     pub close_framed_icon_size: f32,
-    pub close_framed_frame: FrameSkin,
+    pub close_micro_cell_size: f32,
+    pub close_micro_icon_size: f32,
+    pub close_wide_cell_size: f32,
+    pub close_wide_divider_width: f32,
+    pub close_wide_icon_size: f32,
+    pub compact_close_icon_size: f32,
+    pub compact_gap: f32,
+    pub compact_maximize_icon_size: f32,
+    pub compact_minus_icon_size: f32,
+    pub compact_padding: f32,
+    pub icon_stroke_width: f32,
+    /// Thickness of the drag zones framing a window that draws its own chrome.
+    pub resize_edge: f32,
+    pub standard_close_icon_size: f32,
+    pub standard_gap: f32,
+    pub standard_maximize_icon_size: f32,
+    pub standard_minus_icon_size: f32,
+    pub standard_padding: f32,
+    pub titlebar_height: f32,
+    pub titlebar_padding_x: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

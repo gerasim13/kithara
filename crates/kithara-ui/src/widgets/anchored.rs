@@ -23,17 +23,17 @@ const FRAME_OVERHANG: f32 = 1.0;
 /// geometry its own edge lines up with.
 #[derive(Clone, Copy)]
 pub(crate) struct Placement {
-    pub(crate) at: PopoverAt,
     pub(crate) align: PopoverAlign,
+    pub(crate) at: PopoverAt,
 }
 
 pub(crate) struct Anchored<'a, Message> {
     anchor: Element<'a, Message>,
     content: Element<'a, Message>,
-    open: bool,
-    placement: Placement,
     on_dismiss: Message,
+    placement: Placement,
     chrome: PopChrome,
+    open: bool,
 }
 
 impl<'a, Message> Anchored<'a, Message> {
@@ -58,11 +58,11 @@ impl<'a, Message> Anchored<'a, Message> {
 
 #[derive(Clone, Copy)]
 struct PopChrome {
-    background: Color,
     border: Border,
-    cap_height: f32,
+    background: Color,
     cap_color: Color,
     shadow: Shadow,
+    cap_height: f32,
 }
 
 impl PopChrome {
@@ -76,9 +76,9 @@ impl PopChrome {
             ..
         } = skin.pop;
         Self {
+            cap_height,
             background: skin.color(background),
             border: skin.border(frame),
-            cap_height,
             cap_color: skin.color(cap_color),
             shadow: Shadow {
                 color: Color {
@@ -91,8 +91,13 @@ impl PopChrome {
         }
     }
 
-    fn offset(self) -> Vector {
-        Vector::new(self.border.width, self.border.width + self.cap_height)
+    fn cap(self, surface: Rectangle) -> Rectangle {
+        Rectangle {
+            x: surface.x + self.border.width,
+            y: surface.y + self.border.width,
+            width: (surface.width - self.border.width * 2.0).max(0.0),
+            height: self.cap_height,
+        }
     }
 
     fn expand(self, content: Size) -> Size {
@@ -102,13 +107,8 @@ impl PopChrome {
         )
     }
 
-    fn cap(self, surface: Rectangle) -> Rectangle {
-        Rectangle {
-            x: surface.x + self.border.width,
-            y: surface.y + self.border.width,
-            width: (surface.width - self.border.width * 2.0).max(0.0),
-            height: self.cap_height,
-        }
+    fn offset(self) -> Vector {
+        Vector::new(self.border.width, self.border.width + self.cap_height)
     }
 }
 
@@ -169,9 +169,9 @@ fn dismisses(event: &Event, popover: Rectangle, cursor: Cursor) -> bool {
 
 #[derive(Default)]
 struct State {
-    open: bool,
-    press: Option<Point>,
     pointer: Option<Point>,
+    press: Option<Point>,
+    open: bool,
 }
 
 fn press(state: &mut State, event: &Event, cursor: Cursor) {
@@ -193,79 +193,12 @@ impl<Message> Widget<Message, Theme, Renderer> for Anchored<'_, Message>
 where
     Message: Clone,
 {
-    fn tag(&self) -> tree::Tag {
-        tree::Tag::of::<State>()
-    }
-
-    fn state(&self) -> tree::State {
-        tree::State::new(State::default())
-    }
-
     fn children(&self) -> Vec<Tree> {
         vec![Tree::new(&self.anchor), Tree::new(&self.content)]
     }
 
     fn diff(&self, tree: &mut Tree) {
         tree.diff_children(&[self.anchor.as_widget(), self.content.as_widget()]);
-    }
-
-    fn size(&self) -> Size<Length> {
-        self.anchor.as_widget().size()
-    }
-
-    fn size_hint(&self) -> Size<Length> {
-        self.anchor.as_widget().size_hint()
-    }
-
-    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &Limits) -> layout::Node {
-        self.anchor
-            .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, limits)
-    }
-
-    fn update(
-        &mut self,
-        tree: &mut Tree,
-        event: &Event,
-        layout: Layout<'_>,
-        cursor: Cursor,
-        renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, Message>,
-        viewport: &Rectangle,
-    ) {
-        let state = tree.state.downcast_mut::<State>();
-        press(state, event, cursor);
-        if latch(state, self.open) {
-            shell.invalidate_layout();
-        }
-        self.anchor.as_widget_mut().update(
-            &mut tree.children[0],
-            event,
-            layout,
-            cursor,
-            renderer,
-            clipboard,
-            shell,
-            viewport,
-        );
-    }
-
-    fn mouse_interaction(
-        &self,
-        tree: &Tree,
-        layout: Layout<'_>,
-        cursor: Cursor,
-        viewport: &Rectangle,
-        renderer: &Renderer,
-    ) -> mouse::Interaction {
-        self.anchor.as_widget().mouse_interaction(
-            &tree.children[0],
-            layout,
-            cursor,
-            viewport,
-            renderer,
-        )
     }
 
     fn draw(
@@ -287,6 +220,29 @@ where
             cursor,
             viewport,
         );
+    }
+
+    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &Limits) -> layout::Node {
+        self.anchor
+            .as_widget_mut()
+            .layout(&mut tree.children[0], renderer, limits)
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: Cursor,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        self.anchor.as_widget().mouse_interaction(
+            &tree.children[0],
+            layout,
+            cursor,
+            viewport,
+            renderer,
+        )
     }
 
     fn operate(
@@ -329,10 +285,10 @@ where
         );
         let popover = if self.open {
             Some(overlay::Element::new(Box::new(Popover {
+                pointer,
                 content: &mut self.content,
                 tree: content_tree,
                 anchor: layout.bounds() + translation,
-                pointer,
                 align: self.placement.align,
                 on_dismiss: self.on_dismiss.clone(),
                 chrome: self.chrome,
@@ -343,6 +299,49 @@ where
         (anchor.is_some() || popover.is_some()).then(|| {
             overlay::Group::with_children(anchor.into_iter().chain(popover).collect()).overlay()
         })
+    }
+
+    delegate::delegate! {
+        to self.anchor.as_widget() {
+            fn size(&self) -> Size<Length>;
+            fn size_hint(&self) -> Size<Length>;
+        }
+    }
+
+    fn state(&self) -> tree::State {
+        tree::State::new(State::default())
+    }
+
+    fn tag(&self) -> tree::Tag {
+        tree::Tag::of::<State>()
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+        viewport: &Rectangle,
+    ) {
+        let state = tree.state.downcast_mut::<State>();
+        press(state, event, cursor);
+        if latch(state, self.open) {
+            shell.invalidate_layout();
+        }
+        self.anchor.as_widget_mut().update(
+            &mut tree.children[0],
+            event,
+            layout,
+            cursor,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
     }
 }
 
@@ -358,76 +357,17 @@ where
 struct Popover<'a, 'b, Message> {
     content: &'b mut Element<'a, Message>,
     tree: &'b mut Tree,
-    anchor: Rectangle,
-    pointer: Option<Point>,
-    align: PopoverAlign,
     on_dismiss: Message,
+    pointer: Option<Point>,
     chrome: PopChrome,
+    align: PopoverAlign,
+    anchor: Rectangle,
 }
 
 impl<Message> overlay::Overlay<Message, Theme, Renderer> for Popover<'_, '_, Message>
 where
     Message: Clone,
 {
-    fn layout(&mut self, renderer: &Renderer, bounds: Size) -> layout::Node {
-        let chrome = self.chrome;
-        let content = self.content.as_widget_mut().layout(
-            self.tree,
-            renderer,
-            &Limits::new(Size::ZERO, bounds).shrink(chrome.expand(Size::ZERO)),
-        );
-        let surface = place(
-            self.anchor,
-            self.pointer,
-            chrome.expand(content.size()),
-            bounds,
-            self.align,
-        );
-        layout::Node::with_children(surface.size(), vec![content.translate(chrome.offset())])
-            .move_to(surface.position())
-    }
-
-    fn update(
-        &mut self,
-        event: &Event,
-        layout: Layout<'_>,
-        cursor: Cursor,
-        renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, Message>,
-    ) {
-        let surface = layout.bounds();
-        if let Some(content) = layout.children().next() {
-            self.content.as_widget_mut().update(
-                self.tree, event, content, cursor, renderer, clipboard, shell, &surface,
-            );
-        }
-        if shell.is_event_captured() || !dismisses(event, surface, cursor) {
-            return;
-        }
-        shell.publish(self.on_dismiss.clone());
-        shell.capture_event();
-        shell.invalidate_layout();
-    }
-
-    fn mouse_interaction(
-        &self,
-        layout: Layout<'_>,
-        cursor: Cursor,
-        renderer: &Renderer,
-    ) -> mouse::Interaction {
-        let surface = layout.bounds();
-        let content = layout
-            .children()
-            .next()
-            .map_or(mouse::Interaction::None, |content| {
-                self.content
-                    .as_widget()
-                    .mouse_interaction(self.tree, content, cursor, &surface, renderer)
-            });
-        claims(content, surface, cursor)
-    }
-
     fn draw(
         &self,
         renderer: &mut Renderer,
@@ -460,6 +400,65 @@ where
                 .draw(self.tree, renderer, theme, style, content, cursor, &surface);
         }
     }
+
+    fn layout(&mut self, renderer: &Renderer, bounds: Size) -> layout::Node {
+        let chrome = self.chrome;
+        let content = self.content.as_widget_mut().layout(
+            self.tree,
+            renderer,
+            &Limits::new(Size::ZERO, bounds).shrink(chrome.expand(Size::ZERO)),
+        );
+        let surface = place(
+            self.anchor,
+            self.pointer,
+            chrome.expand(content.size()),
+            bounds,
+            self.align,
+        );
+        layout::Node::with_children(surface.size(), vec![content.translate(chrome.offset())])
+            .move_to(surface.position())
+    }
+
+    fn mouse_interaction(
+        &self,
+        layout: Layout<'_>,
+        cursor: Cursor,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        let surface = layout.bounds();
+        let content = layout
+            .children()
+            .next()
+            .map_or(mouse::Interaction::None, |content| {
+                self.content
+                    .as_widget()
+                    .mouse_interaction(self.tree, content, cursor, &surface, renderer)
+            });
+        claims(content, surface, cursor)
+    }
+
+    fn update(
+        &mut self,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+    ) {
+        let surface = layout.bounds();
+        if let Some(content) = layout.children().next() {
+            self.content.as_widget_mut().update(
+                self.tree, event, content, cursor, renderer, clipboard, shell, &surface,
+            );
+        }
+        if shell.is_event_captured() || !dismisses(event, surface, cursor) {
+            return;
+        }
+        shell.publish(self.on_dismiss.clone());
+        shell.capture_event();
+        shell.invalidate_layout();
+    }
 }
 
 #[cfg(test)]
@@ -480,19 +479,19 @@ mod tests {
     struct Consts;
 
     impl Consts {
-        const VIEWPORT: Size = Size {
-            width: 1280.0,
-            height: 800.0,
-        };
-        const SURFACE: Size = Size {
-            width: 300.0,
-            height: 404.0,
-        };
         const POPOVER: Rectangle = Rectangle {
             x: 35.0,
             y: 36.0,
             width: 300.0,
             height: 404.0,
+        };
+        const SURFACE: Size = Size {
+            width: 300.0,
+            height: 404.0,
+        };
+        const VIEWPORT: Size = Size {
+            width: 1280.0,
+            height: 800.0,
         };
     }
 

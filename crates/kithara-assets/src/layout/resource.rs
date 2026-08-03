@@ -32,9 +32,10 @@ pub enum AssetResource {
 ///
 /// Relative keys can only be minted by [`crate::AssetScope`]. Absolute keys
 /// are the explicit local-file read-in-place capability.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, fieldwork::Fieldwork)]
 #[non_exhaustive]
-pub struct ResourceKey(ResourceKeyKind);
+#[fieldwork(get, vis = "pub(crate)")]
+pub struct ResourceKey(#[field(get = kind)] ResourceKeyKind);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ResourceKeyKind {
@@ -96,10 +97,6 @@ impl ResourceKey {
             asset_root: asset_root.into(),
             rel_path: rel_path.into(),
         })
-    }
-
-    pub(crate) fn kind(&self) -> &ResourceKeyKind {
-        &self.0
     }
 }
 

@@ -7,15 +7,6 @@ use crate::common::time::Instant;
 pub(crate) struct Condvar(ParkingLotCondvar);
 
 impl Condvar {
-    delegate::delegate! {
-        to self.0 {
-            #[inline]
-            pub(crate) fn notify_all(&self);
-            #[inline]
-            pub(crate) fn notify_one(&self);
-        }
-    }
-
     #[inline]
     #[track_caller]
     pub(crate) fn wait<'a, T>(&self, mut guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
@@ -35,5 +26,14 @@ impl Condvar {
     pub(crate) fn wait_timeout_ref<T>(&self, guard: &mut MutexGuard<'_, T>, deadline: Instant) {
         crate::no_block::forbid("Condvar::wait_timeout");
         let _ = self.0.wait_until(&mut guard.0, deadline);
+    }
+
+    delegate::delegate! {
+        to self.0 {
+            #[inline]
+            pub(crate) fn notify_all(&self);
+            #[inline]
+            pub(crate) fn notify_one(&self);
+        }
     }
 }

@@ -16,9 +16,9 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Toggle<'path, 'value, 'data, 'skin> {
+    skin: &'skin Skin,
     path: &'path str,
     value: Option<&'value ReadValue<'data>>,
-    skin: &'skin Skin,
 }
 
 impl<'a> Widget<'a> for Toggle<'_, '_, '_, '_> {
@@ -28,10 +28,6 @@ impl<'a> Widget<'a> for Toggle<'_, '_, '_, '_> {
 }
 
 impl<'path, 'value, 'data, 'skin> Toggle<'path, 'value, 'data, 'skin> {
-    pub(crate) fn painted<'a>(self) -> Element<'a, UiEvent> {
-        self.control().painted()
-    }
-
     fn control(self) -> BinaryControl<'path, 'value, 'data, 'skin> {
         BinaryControl::builder()
             .path(self.path)
@@ -44,13 +40,17 @@ impl<'path, 'value, 'data, 'skin> Toggle<'path, 'value, 'data, 'skin> {
             })
             .build()
     }
+
+    pub(crate) fn painted<'a>(self) -> Element<'a, UiEvent> {
+        self.control().painted()
+    }
 }
 
 #[derive(bon::Builder)]
 pub(crate) struct Checkbox<'path, 'value, 'data, 'skin> {
+    skin: &'skin Skin,
     path: &'path str,
     value: Option<&'value ReadValue<'data>>,
-    skin: &'skin Skin,
 }
 
 impl<'a> Widget<'a> for Checkbox<'_, '_, '_, '_> {
@@ -60,10 +60,6 @@ impl<'a> Widget<'a> for Checkbox<'_, '_, '_, '_> {
 }
 
 impl<'path, 'value, 'data, 'skin> Checkbox<'path, 'value, 'data, 'skin> {
-    pub(crate) fn painted<'a>(self) -> Element<'a, UiEvent> {
-        self.control().painted()
-    }
-
     fn control(self) -> BinaryControl<'path, 'value, 'data, 'skin> {
         BinaryControl::builder()
             .path(self.path)
@@ -76,13 +72,17 @@ impl<'path, 'value, 'data, 'skin> Checkbox<'path, 'value, 'data, 'skin> {
             })
             .build()
     }
+
+    pub(crate) fn painted<'a>(self) -> Element<'a, UiEvent> {
+        self.control().painted()
+    }
 }
 
 #[derive(bon::Builder)]
 struct BinaryControl<'path, 'value, 'data, 'skin> {
+    skin: &'skin Skin,
     path: &'path str,
     value: Option<&'value ReadValue<'data>>,
-    skin: &'skin Skin,
     shape: Shape,
 }
 
@@ -92,8 +92,8 @@ impl<'a> Widget<'a> for BinaryControl<'_, '_, '_, '_> {
             return Space::new().into();
         };
         Canvas::new(BinaryControlCanvas {
-            path: self.path.to_owned(),
             paint,
+            path: self.path.to_owned(),
         })
         .width(Length::Fill)
         .height(Length::Fill)
@@ -102,16 +102,6 @@ impl<'a> Widget<'a> for BinaryControl<'_, '_, '_, '_> {
 }
 
 impl<'a> BinaryControl<'_, '_, '_, '_> {
-    fn painted(self) -> Element<'a, UiEvent> {
-        let Some(paint) = self.paint() else {
-            return Space::new().into();
-        };
-        Canvas::new(paint)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-    }
-
     fn paint(&self) -> Option<BinaryControlPaint> {
         let Some(ReadValue::Bool(active)) = self.value else {
             return None;
@@ -121,6 +111,16 @@ impl<'a> BinaryControl<'_, '_, '_, '_> {
             palette: self.skin.palette,
             shape: self.shape,
         })
+    }
+
+    fn painted(self) -> Element<'a, UiEvent> {
+        let Some(paint) = self.paint() else {
+            return Space::new().into();
+        };
+        Canvas::new(paint)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 }
 
@@ -139,14 +139,14 @@ enum Shape {
 }
 
 struct BinaryControlCanvas {
-    path: String,
     paint: BinaryControlPaint,
+    path: String,
 }
 
 struct BinaryControlPaint {
-    active: bool,
     palette: RenderPalette,
     shape: Shape,
+    active: bool,
 }
 
 impl canvas::Program<UiEvent> for BinaryControlCanvas {

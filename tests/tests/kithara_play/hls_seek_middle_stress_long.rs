@@ -129,20 +129,21 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
             .build(),
     );
 
-    let cfg = ResourceConfig::for_src(master.as_str())
-        .expect("valid master URL")
-        .downloader(downloader.clone())
-        .discriminator("t0".to_string())
-        .store(store)
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(backend)
-                .build(),
-        )
-        .initial_abr_mode(AbrMode::manual(Consts::GATED_VARIANT))
-        .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
-        .build();
+    let cfg: ResourceConfig = ResourceConfig::for_src(
+        ResourceConfig::parse_src(master.as_str()).expect("valid master URL"),
+    )
+    .downloader(downloader.clone())
+    .discriminator("t0")
+    .store(store)
+    .decoder(
+        kithara::audio::AudioDecoderConfig::builder()
+            .backend(backend)
+            .build(),
+    )
+    .initial_abr_mode(AbrMode::manual(Consts::GATED_VARIANT))
+    .byte_pool(BytePool::default())
+    .pcm_pool(PcmPool::default())
+    .build();
 
     let resource = Resource::new(cfg)
         .await

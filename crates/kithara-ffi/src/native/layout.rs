@@ -22,6 +22,23 @@ impl fmt::Debug for ForeignLayout {
 }
 
 impl AssetLayout for ForeignLayout {
+    fn path(&self, resource: &AssetResource) -> String {
+        let resource = match resource {
+            AssetResource::Source { extension } => FfiAssetResource::Source {
+                extension: extension.clone(),
+            },
+            AssetResource::Url(url) => FfiAssetResource::Url {
+                url: url.as_str().to_string(),
+            },
+            AssetResource::Named { namespace, name } => FfiAssetResource::Named {
+                namespace: namespace.clone(),
+                name: name.clone(),
+            },
+            _ => return String::new(),
+        };
+        self.0.path(resource)
+    }
+
     fn root(&self, source: &AssetSource) -> String {
         let source = match source {
             AssetSource::Remote { url, discriminator } => FfiAssetSource::Remote {
@@ -40,23 +57,6 @@ impl AssetLayout for ForeignLayout {
         };
         self.0.root(source)
     }
-
-    fn path(&self, resource: &AssetResource) -> String {
-        let resource = match resource {
-            AssetResource::Source { extension } => FfiAssetResource::Source {
-                extension: extension.clone(),
-            },
-            AssetResource::Url(url) => FfiAssetResource::Url {
-                url: url.as_str().to_string(),
-            },
-            AssetResource::Named { namespace, name } => FfiAssetResource::Named {
-                namespace: namespace.clone(),
-                name: name.clone(),
-            },
-            _ => return String::new(),
-        };
-        self.0.path(resource)
-    }
 }
 
 /// Adapts a Rust-owned core layout to the foreign-capable FFI contract.
@@ -69,6 +69,20 @@ impl NativeLayout {
 }
 
 impl FfiAssetLayout for NativeLayout {
+    fn path(&self, resource: FfiAssetResource) -> String {
+        let resource = match resource {
+            FfiAssetResource::Source { extension } => AssetResource::Source { extension },
+            FfiAssetResource::Url { url } => {
+                let Ok(url) = Url::parse(&url) else {
+                    return String::new();
+                };
+                AssetResource::Url(url)
+            }
+            FfiAssetResource::Named { namespace, name } => AssetResource::Named { namespace, name },
+        };
+        self.0.path(&resource)
+    }
+
     fn root(&self, source: FfiAssetSource) -> String {
         let source = match source {
             FfiAssetSource::Remote { url, discriminator } => {
@@ -83,20 +97,6 @@ impl FfiAssetLayout for NativeLayout {
         };
         self.0.root(&source)
     }
-
-    fn path(&self, resource: FfiAssetResource) -> String {
-        let resource = match resource {
-            FfiAssetResource::Source { extension } => AssetResource::Source { extension },
-            FfiAssetResource::Url { url } => {
-                let Ok(url) = Url::parse(&url) else {
-                    return String::new();
-                };
-                AssetResource::Url(url)
-            }
-            FfiAssetResource::Named { namespace, name } => AssetResource::Named { namespace, name },
-        };
-        self.0.path(&resource)
-    }
 }
 
 #[cfg(test)]
@@ -109,7 +109,7 @@ mod tests {
     };
 
     use kithara_assets::{
-        AcquisitionResult, AssetLayoutRegistry, AssetStoreBuilder, AssetsError, ReadSide,
+        AcquisitionResult, AssetLayoutRegistry, AssetStore, AssetsError, ReadSide,
         ResourceAcquisition, StorageBackend, WriteSide,
     };
     use tempfile::tempdir;
@@ -128,6 +128,16 @@ mod tests {
     struct EchoLayout;
 
     impl FfiAssetLayout for EchoLayout {
+        fn path(&self, resource: FfiAssetResource) -> String {
+            match resource {
+                FfiAssetResource::Source { extension } => format!("source:{extension}"),
+                FfiAssetResource::Url { url } => format!("url:{url}"),
+                FfiAssetResource::Named { namespace, name } => {
+                    format!("named:{namespace}:{name}")
+                }
+            }
+        }
+
         fn root(&self, source: FfiAssetSource) -> String {
             match source {
                 FfiAssetSource::Remote { url, discriminator } => {
@@ -137,16 +147,6 @@ mod tests {
                     )
                 }
                 FfiAssetSource::Local { path } => format!("local:{path}"),
-            }
-        }
-
-        fn path(&self, resource: FfiAssetResource) -> String {
-            match resource {
-                FfiAssetResource::Source { extension } => format!("source:{extension}"),
-                FfiAssetResource::Url { url } => format!("url:{url}"),
-                FfiAssetResource::Named { namespace, name } => {
-                    format!("named:{namespace}:{name}")
-                }
             }
         }
     }
@@ -227,7 +227,7 @@ mod tests {
 
         let root_calls = Arc::new(AtomicUsize::new(0));
         let path_calls = Arc::new(AtomicUsize::new(0));
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .layouts(AssetLayoutRegistry::new(layout(CountingLayout {
                 root_calls: Arc::clone(&root_calls),
@@ -316,7 +316,7 @@ mod tests {
         }
 
         let dir = tempdir().expect("tempdir");
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -359,7 +359,7 @@ mod tests {
         }
 
         let layout = layout(HostileForeign(hostile));
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .layouts(AssetLayoutRegistry::new(layout))
             .build();
@@ -394,7 +394,7 @@ mod tests {
             }
         }
 
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .layouts(AssetLayoutRegistry::new(layout(HostileRoot(hostile))))
             .build();
@@ -425,7 +425,7 @@ mod tests {
 
         let path = PathBuf::from(OsString::from_vec(vec![b'/', 0xff]));
         let source = AssetSource::Local { path };
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .layouts(AssetLayoutRegistry::new(layout(RejectNonUtf8)))
             .build();

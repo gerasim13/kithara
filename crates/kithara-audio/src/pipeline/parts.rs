@@ -17,18 +17,18 @@ use crate::pipeline::{
 };
 
 pub(crate) struct SourceParts<T: StreamType> {
-    pub(crate) activity: Arc<dyn Activity>,
-    pub(crate) decode: ActiveDecode,
-    pub(crate) decoder_backend: kithara_decode::DecoderBackend,
-    pub(crate) playhead: Arc<dyn PlayheadWrite>,
     pub(crate) playback_resampler_backend: &'static str,
+    pub(crate) decode: ActiveDecode,
+    pub(crate) activity: Arc<dyn Activity>,
+    pub(crate) playhead: Arc<dyn PlayheadWrite>,
+    pub(crate) seek: Arc<dyn SeekControl>,
+    pub(crate) seek_obs: Arc<dyn SeekObserve>,
+    pub(crate) decoder_backend: kithara_decode::DecoderBackend,
+    pub(crate) variant_control: Option<Arc<dyn VariantControl>>,
     pub(crate) readiness: ReadinessGate,
     pub(crate) rebuild: RebuildPort<T>,
     pub(crate) resume: ResumeCursor,
-    pub(crate) seek: Arc<dyn SeekControl>,
     pub(crate) seek_engine: SeekEngine,
-    pub(crate) seek_obs: Arc<dyn SeekObserve>,
-    pub(crate) variant_control: Option<Arc<dyn VariantControl>>,
 }
 
 impl<T: StreamType> SourceParts<T> {
@@ -50,11 +50,12 @@ impl<T: StreamType> SourceParts<T> {
         } = decode;
         let gapless_mode = active.gapless_mode();
         Self {
+            decoder_backend,
+            playback_resampler_backend,
+            variant_control,
             activity: stream.activity(),
             decode: active,
-            decoder_backend,
             playhead: stream.playhead_write(),
-            playback_resampler_backend,
             readiness: ReadinessGate::new(stream.peer_wake()),
             rebuild: RebuildPort::new(factory, gapless_mode, rebuild),
             resume: ResumeCursor::new(
@@ -65,7 +66,6 @@ impl<T: StreamType> SourceParts<T> {
             seek: stream.seek_control(),
             seek_engine: SeekEngine::new(epoch),
             seek_obs: stream.seek_observe(),
-            variant_control,
         }
     }
 }

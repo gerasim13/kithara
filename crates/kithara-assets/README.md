@@ -21,7 +21,7 @@ Sits between `kithara-storage` (low-level I/O) and protocol crates (`kithara-fil
 ## Key types & entry points
 
 - `AssetStore` — the unified shared handle over `Disk` or `Memory` storage.
-- `AssetStoreBuilder` — constructs the store and its immutable layout registry.
+- `AssetStore::builder()` — configures the store and its immutable layout registry.
 - `AssetLayout` / `AssetLayoutRegistry` — own cache-root and resource-path policy, with optional overrides selected by protocol marker type.
 - `AssetSource` / `AssetResource` — semantic input to the selected layout.
 - `AssetScope` / `ResourceKey` — validated output used by cache operations.
@@ -32,12 +32,12 @@ Sits between `kithara-storage` (low-level I/O) and protocol crates (`kithara-fil
 
 ```rust
 use kithara_assets::{
-    AssetResource, AssetSource, AssetStoreBuilder, StorageBackend,
+    AssetResource, AssetSource, AssetStore, StorageBackend,
 };
 
 struct Protocol;
 
-let store = AssetStoreBuilder::default()
+let store = AssetStore::builder()
     .backend(StorageBackend::Disk { root: cache_dir })
     .cancel(cancel.clone())
     .build();
@@ -60,6 +60,6 @@ let resource = store.acquire_resource(&key, None)?;
 
 ## Public contract
 
-The public storage contract is `AssetStore` plus the source/resource/layout/key types used to mint validated keys. Decorator and backend implementation types are not configuration alternatives. Construct one store with `AssetStoreBuilder` and pass cheap clones of that handle to consumers.
+The public storage contract is `AssetStore` plus the source/resource/layout/key types used to mint validated keys. Decorator and backend implementation types are not configuration alternatives. Construct one store with `AssetStore::builder()` and pass cheap clones of that handle to consumers.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use axum::{Router, body::Body, extract::State, http::header, response::Response, routing::get};
 use bytes::Bytes;
 use kithara::{
-    assets::{AssetStoreBuilder, StorageBackend},
+    assets::{AssetStore, StorageBackend},
     audio::{Audio, AudioConfig, ChunkOutcome, PcmRead, analysis::BeatAnalysisConfig},
     bufpool::{BytePool, PcmPool},
     file::{File, FileConfig, FileSrc},
@@ -77,17 +77,17 @@ async fn waveform_and_player_share_one_get() {
     let server = TestHttpServer::new(app).await;
     let url = server.url("/audio.wav");
 
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
         .build();
 
     // Waveform analysis consumer (whole-file) of the shared store.
-    let waveform_cfg = ResourceConfig::for_src(url.as_str())
-        .expect("waveform url")
-        .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
-        .store(store.clone())
-        .build();
+    let waveform_cfg =
+        ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("waveform url"))
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
+            .store(store.clone())
+            .build();
 
     // Player consumer of the same URL through the same shared store. Built
     // with `block_on_underrun(true)` so the drain parks on the virtual clock

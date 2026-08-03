@@ -16,8 +16,13 @@ pub(crate) enum EqMode {
 }
 
 impl EqMode {
-    const THREE_BANDS: [&str; 3] = ["low", "mid", "high"];
     const FOUR_BANDS: [&str; 4] = ["low", "low_mid", "high_mid", "high"];
+    const THREE_BANDS: [&str; 3] = ["low", "mid", "high"];
+
+    #[must_use]
+    pub(crate) fn band(self, name: &str) -> Option<usize> {
+        self.bands().iter().position(|band| *band == name)
+    }
 
     #[must_use]
     pub(crate) const fn bands(self) -> &'static [&'static str] {
@@ -28,8 +33,12 @@ impl EqMode {
     }
 
     #[must_use]
-    pub(crate) fn band(self, name: &str) -> Option<usize> {
-        self.bands().iter().position(|band| *band == name)
+    pub(crate) fn layout(self, gains: &[f32]) -> Vec<EqBandConfig> {
+        let mut layout = generate_log_spaced_bands(self.bands().len());
+        for (band, gain) in layout.iter_mut().zip(gains) {
+            band.set_gain_db(*gain);
+        }
+        layout
     }
 
     #[must_use]
@@ -44,15 +53,6 @@ impl EqMode {
             _ => None,
         }
     }
-
-    #[must_use]
-    pub(crate) fn layout(self, gains: &[f32]) -> Vec<EqBandConfig> {
-        let mut layout = generate_log_spaced_bands(self.bands().len());
-        for (band, gain) in layout.iter_mut().zip(gains) {
-            band.set_gain_db(*gain);
-        }
-        layout
-    }
 }
 
 /// App-local deck identity; never crosses into a shared playback crate.
@@ -64,10 +64,10 @@ pub struct DeckId(pub usize);
 
 /// One app deck: its own player, queue and tempo controls.
 pub struct Deck {
-    pub id: DeckId,
     pub player: Arc<PlayerImpl>,
     pub queue: Arc<Queue>,
     pub timestretch: Arc<StretchControls>,
+    pub id: DeckId,
 }
 
 impl Deck {
@@ -89,17 +89,18 @@ impl Deck {
                 .build(),
         ));
         let queue = Arc::new(Queue::new(
-            QueueConfig::default()
-                .with_player(Arc::clone(&player))
-                .with_store(config.store.clone())
-                .with_cancel(config.shutdown.child()),
+            QueueConfig::builder()
+                .player(Arc::clone(&player))
+                .store(config.store.clone())
+                .cancel(config.shutdown.child())
+                .build(),
         ));
 
         Self {
-            id,
             player,
             queue,
             timestretch,
+            id,
         }
     }
 }
@@ -111,8 +112,8 @@ impl Deck {
 /// length, same order — by this type alone; every lookup goes through
 /// [`DeckSet::position`], never through a raw [`DeckId`] value.
 pub struct DeckSet {
-    decks: Vec<Deck>,
     mix: MixState,
+    decks: Vec<Deck>,
     next_id: usize,
 }
 
@@ -122,17 +123,10 @@ impl DeckSet {
         let next_id = decks.iter().map(|deck| deck.id.0 + 1).max().unwrap_or(0);
         let mix = MixState::new(decks.len());
         Self {
-            decks,
             mix,
+            decks,
             next_id,
         }
-    }
-
-    /// Id for the next deck; never reuses one that has been handed out.
-    pub fn next_id(&mut self) -> DeckId {
-        let id = DeckId(self.next_id);
-        self.next_id += 1;
-        id
     }
 
     /// Add a deck and re-derive the crossfader buses around it, keeping the
@@ -149,6 +143,51 @@ impl DeckSet {
             return Err(e);
         }
         Ok(())
+    }
+
+    /// Actuate `next` in one session batch, storing it only on success.
+    ///
+    /// # Errors
+    /// Returns [`PlayError`] when the mix is invalid or the session rejects it.
+    pub fn commit(&mut self, next: MixState) -> Result<(), PlayError> {
+        let levels = next.levels()?;
+        let inputs: Vec<(&PlayerImpl, f32)> = self
+            .decks
+            .iter()
+            .zip(&levels)
+            .map(|(deck, &level)| (deck.player.as_ref(), level))
+            .collect();
+        apply_mix(inputs)?;
+        self.mix = next;
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn deck(&self, id: DeckId) -> Option<&Deck> {
+        self.decks.iter().find(|deck| deck.id == id)
+    }
+
+    #[must_use]
+    pub fn decks(&self) -> &[Deck] {
+        &self.decks
+    }
+
+    #[must_use]
+    pub fn mix(&self) -> &MixState {
+        &self.mix
+    }
+
+    /// Id for the next deck; never reuses one that has been handed out.
+    pub fn next_id(&mut self) -> DeckId {
+        let id = DeckId(self.next_id);
+        self.next_id += 1;
+        id
+    }
+
+    /// Where `id` currently sits in the deck list (and so in the mix).
+    #[must_use]
+    pub fn position(&self, id: DeckId) -> Option<usize> {
+        self.decks.iter().position(|deck| deck.id == id)
     }
 
     /// Remove a deck, silencing it before it goes: its player leaves the
@@ -171,44 +210,6 @@ impl DeckSet {
         Ok(())
     }
 
-    #[must_use]
-    pub fn decks(&self) -> &[Deck] {
-        &self.decks
-    }
-
-    #[must_use]
-    pub fn deck(&self, id: DeckId) -> Option<&Deck> {
-        self.decks.iter().find(|deck| deck.id == id)
-    }
-
-    /// Where `id` currently sits in the deck list (and so in the mix).
-    #[must_use]
-    pub fn position(&self, id: DeckId) -> Option<usize> {
-        self.decks.iter().position(|deck| deck.id == id)
-    }
-
-    #[must_use]
-    pub fn mix(&self) -> &MixState {
-        &self.mix
-    }
-
-    /// Actuate `next` in one session batch, storing it only on success.
-    ///
-    /// # Errors
-    /// Returns [`PlayError`] when the mix is invalid or the session rejects it.
-    pub fn commit(&mut self, next: MixState) -> Result<(), PlayError> {
-        let levels = next.levels()?;
-        let inputs: Vec<(&PlayerImpl, f32)> = self
-            .decks
-            .iter()
-            .zip(&levels)
-            .map(|(deck, &level)| (deck.player.as_ref(), level))
-            .collect();
-        apply_mix(inputs)?;
-        self.mix = next;
-        Ok(())
-    }
-
     /// Move the DJ crossfader.
     ///
     /// # Errors
@@ -216,18 +217,6 @@ impl DeckSet {
     pub fn set_crossfader(&mut self, position: f32) -> Result<(), PlayError> {
         let mut next = self.mix.clone();
         next.position = position;
-        self.commit(next)
-    }
-
-    /// The deck's output fader: session-input gain, never content volume.
-    ///
-    /// # Errors
-    /// See [`DeckSet::commit`].
-    pub fn set_trim(&mut self, id: DeckId, trim: f32) -> Result<(), PlayError> {
-        let mut next = self.mix.clone();
-        if let Some(strip) = self.position(id).and_then(|at| next.strips.get_mut(at)) {
-            strip.trim = trim;
-        }
         self.commit(next)
     }
 
@@ -239,6 +228,18 @@ impl DeckSet {
         let mut next = self.mix.clone();
         if let Some(strip) = self.position(id).and_then(|at| next.strips.get_mut(at)) {
             strip.muted = muted;
+        }
+        self.commit(next)
+    }
+
+    /// The deck's output fader: session-input gain, never content volume.
+    ///
+    /// # Errors
+    /// See [`DeckSet::commit`].
+    pub fn set_trim(&mut self, id: DeckId, trim: f32) -> Result<(), PlayError> {
+        let mut next = self.mix.clone();
+        if let Some(strip) = self.position(id).and_then(|at| next.strips.get_mut(at)) {
+            strip.trim = trim;
         }
         self.commit(next)
     }
@@ -265,13 +266,13 @@ mod tests {
                 .build(),
         ));
         let queue = Arc::new(Queue::new(
-            QueueConfig::default().with_player(Arc::clone(&player)),
+            QueueConfig::builder().player(Arc::clone(&player)).build(),
         ));
         Deck {
-            id,
             player,
             queue,
             timestretch,
+            id,
         }
     }
 

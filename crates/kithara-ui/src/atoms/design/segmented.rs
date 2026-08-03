@@ -18,10 +18,10 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Segmented<'a, 'value, 'data, 'skin> {
-    path: &'a str,
-    items: Vec<&'a str>,
-    value: Option<&'value ReadValue<'data>>,
     skin: &'skin Skin,
+    path: &'a str,
+    value: Option<&'value ReadValue<'data>>,
+    items: Vec<&'a str>,
 }
 
 impl<'a> Widget<'a> for Segmented<'a, '_, '_, '_> {
@@ -30,7 +30,7 @@ impl<'a> Widget<'a> for Segmented<'a, '_, '_, '_> {
         let Some(paint) = self.paint() else {
             return Space::new().into();
         };
-        Canvas::new(SegmentedCanvas { path, paint })
+        Canvas::new(SegmentedCanvas { paint, path })
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
@@ -38,16 +38,6 @@ impl<'a> Widget<'a> for Segmented<'a, '_, '_, '_> {
 }
 
 impl<'a, 'value, 'data, 'skin> Segmented<'a, 'value, 'data, 'skin> {
-    pub(crate) fn painted(self) -> Element<'a, UiEvent> {
-        let Some(paint) = self.paint() else {
-            return Space::new().into();
-        };
-        Canvas::new(paint)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-    }
-
     fn paint(self) -> Option<SegmentedPaint<'a>> {
         let Some(ReadValue::Scalar(value)) = self.value else {
             return None;
@@ -57,8 +47,8 @@ impl<'a, 'value, 'data, 'skin> Segmented<'a, 'value, 'data, 'skin> {
             .to_usize()
             .filter(|index| *index < self.items.len());
         Some(SegmentedPaint {
-            items: self.items,
             active,
+            items: self.items,
             metrics: self.skin.segmented,
             colors: SegmentedColors {
                 background: self.skin.color(self.skin.segmented.background),
@@ -69,27 +59,37 @@ impl<'a, 'value, 'data, 'skin> Segmented<'a, 'value, 'data, 'skin> {
             },
         })
     }
+
+    pub(crate) fn painted(self) -> Element<'a, UiEvent> {
+        let Some(paint) = self.paint() else {
+            return Space::new().into();
+        };
+        Canvas::new(paint)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
 }
 
 struct SegmentedCanvas<'a> {
-    path: String,
     paint: SegmentedPaint<'a>,
+    path: String,
 }
 
 struct SegmentedPaint<'a> {
-    items: Vec<&'a str>,
     active: Option<usize>,
-    metrics: SegmentedSkin,
     colors: SegmentedColors,
+    metrics: SegmentedSkin,
+    items: Vec<&'a str>,
 }
 
 #[derive(Clone, Copy)]
 struct SegmentedColors {
-    background: Color,
     active_background: Color,
     active_text: Color,
-    inactive_text: Color,
+    background: Color,
     frame: Color,
+    inactive_text: Color,
 }
 
 impl canvas::Program<UiEvent> for SegmentedCanvas<'_> {
@@ -106,19 +106,6 @@ impl canvas::Program<UiEvent> for SegmentedCanvas<'_> {
         self.paint.draw(&(), renderer, theme, bounds, cursor)
     }
 
-    fn update(
-        &self,
-        _state: &mut (),
-        event: &Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
-        let input = iced_interact::input(event)?;
-        let hit = iced_interact::hit(bounds, cursor);
-        let selected = hit.uniform_horizontal_index(self.paint.items.len())?;
-        index(&self.path, click::on_input(input, &hit).map(|()| selected))
-    }
-
     fn mouse_interaction(
         &self,
         _state: &(),
@@ -130,6 +117,19 @@ impl canvas::Program<UiEvent> for SegmentedCanvas<'_> {
         } else {
             mouse::Interaction::Pointer
         }
+    }
+
+    fn update(
+        &self,
+        _state: &mut (),
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<UiEvent>> {
+        let input = iced_interact::input(event)?;
+        let hit = iced_interact::hit(bounds, cursor);
+        let selected = hit.uniform_horizontal_index(self.paint.items.len())?;
+        index(&self.path, click::on_input(input, &hit).map(|()| selected))
     }
 }
 

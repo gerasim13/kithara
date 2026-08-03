@@ -30,24 +30,24 @@ enum Shape {
 
 #[derive(Debug, Default)]
 pub(super) struct ShapeArena {
-    shapes: Vec<Shape>,
     interned: BTreeMap<Shape, ShapeId>,
+    shapes: Vec<Shape>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct TypeSubstitution {
+    pub(super) direction: Direction,
     pub(super) left: String,
     pub(super) right: String,
-    pub(super) substitution: Substitution,
-    pub(super) direction: Direction,
-    pub(super) caveats: Vec<String>,
     pub(super) source: String,
+    pub(super) substitution: Substitution,
+    pub(super) caveats: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct ShapeComparison {
-    pub(super) score: f64,
     pub(super) substitutions: Vec<TypeSubstitution>,
+    pub(super) score: f64,
 }
 
 #[derive(Debug, Default)]
@@ -56,8 +56,180 @@ pub(super) struct ComparisonCache {
 }
 
 impl ShapeArena {
-    pub(super) fn len(&self) -> usize {
-        self.shapes.len()
+    pub(super) fn bucket_key(&self, shape: ShapeId, catalog: &TypeCatalog) -> String {
+        match &self.shapes[shape.0] {
+            Shape::Array(element) => format!("array<{}>", self.bucket_key(*element, catalog)),
+            Shape::Generic(index) => format!("generic:{index}"),
+            Shape::Never => "never".to_string(),
+            Shape::Path { name, arguments } => {
+                let arguments = self
+                    .container_arguments(name, arguments)
+                    .iter()
+                    .map(|argument| self.bucket_key(*argument, catalog))
+                    .collect::<Vec<_>>();
+                if arguments.is_empty() {
+                    catalog.bucket(name)
+                } else {
+                    format!("{}<{}>", catalog.bucket(name), arguments.join(","))
+                }
+            }
+            Shape::Pointer(element) => format!("pointer<{}>", self.bucket_key(*element, catalog)),
+            Shape::Reference(element) => {
+                format!("reference<{}>", self.bucket_key(*element, catalog))
+            }
+            Shape::Slice(element) => format!("slice<{}>", self.bucket_key(*element, catalog)),
+            Shape::Trait(bounds) => format!("trait:{}", bounds.join("+")),
+            Shape::Tuple(elements) => format!(
+                "tuple<{}>",
+                elements
+                    .iter()
+                    .map(|element| self.bucket_key(*element, catalog))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+            Shape::Unknown(kind) => format!("unknown:{kind}"),
+        }
+    }
+
+    pub(super) fn compare(
+        &self,
+        left: ShapeId,
+        right: ShapeId,
+        catalog: &TypeCatalog,
+        cache: &mut ComparisonCache,
+    ) -> ShapeComparison {
+        if let Some(comparison) = cache.comparisons.get(&(left, right)) {
+            return comparison.clone();
+        }
+        let comparison = if left == right {
+            ShapeComparison {
+                score: 1.0,
+                substitutions: Vec::new(),
+            }
+        } else {
+            self.compare_uncached(left, right, catalog, cache)
+        };
+        cache.comparisons.insert((left, right), comparison.clone());
+        comparison
+    }
+
+    fn compare_children(
+        &self,
+        left: &[ShapeId],
+        right: &[ShapeId],
+        catalog: &TypeCatalog,
+        cache: &mut ComparisonCache,
+    ) -> ShapeComparison {
+        if left.is_empty() {
+            return ShapeComparison {
+                score: 1.0,
+                substitutions: Vec::new(),
+            };
+        }
+        let mut score = 0.0;
+        let mut substitutions = Vec::new();
+        for (left, right) in left.iter().zip(right) {
+            let comparison = self.compare(*left, *right, catalog, cache);
+            score += comparison.score;
+            substitutions.extend(comparison.substitutions);
+        }
+        ShapeComparison {
+            substitutions,
+            score: score / count_f64(left.len()),
+        }
+    }
+
+    fn compare_paths(
+        &self,
+        left_name: &str,
+        left_arguments: &[ShapeId],
+        right_name: &str,
+        right_arguments: &[ShapeId],
+        catalog: &TypeCatalog,
+        cache: &mut ComparisonCache,
+    ) -> ShapeComparison {
+        let Some(relation) = catalog.relation(left_name, right_name) else {
+            return ShapeComparison {
+                score: 0.0,
+                substitutions: Vec::new(),
+            };
+        };
+        let left_arguments = self.container_arguments(left_name, left_arguments);
+        let right_arguments = self.container_arguments(right_name, right_arguments);
+        let arguments = if left_arguments.len() == right_arguments.len() {
+            self.compare_children(&left_arguments, &right_arguments, catalog, cache)
+        } else {
+            ShapeComparison {
+                score: 0.0,
+                substitutions: Vec::new(),
+            }
+        };
+        let argument_factor = if left_arguments.is_empty() && right_arguments.is_empty() {
+            1.0
+        } else {
+            0.45 + 0.55 * arguments.score
+        };
+        let mut substitutions = substitution(left_name, right_name, &relation);
+        substitutions.extend(arguments.substitutions);
+        ShapeComparison {
+            substitutions,
+            score: relation.similarity * argument_factor,
+        }
+    }
+
+    fn compare_uncached(
+        &self,
+        left: ShapeId,
+        right: ShapeId,
+        catalog: &TypeCatalog,
+        cache: &mut ComparisonCache,
+    ) -> ShapeComparison {
+        match (&self.shapes[left.0], &self.shapes[right.0]) {
+            (
+                Shape::Path {
+                    name: left_name,
+                    arguments: left_arguments,
+                },
+                Shape::Path {
+                    name: right_name,
+                    arguments: right_arguments,
+                },
+            ) => self.compare_paths(
+                left_name,
+                left_arguments,
+                right_name,
+                right_arguments,
+                catalog,
+                cache,
+            ),
+            (Shape::Array(left), Shape::Array(right))
+            | (Shape::Pointer(left), Shape::Pointer(right))
+            | (Shape::Reference(left), Shape::Reference(right))
+            | (Shape::Slice(left), Shape::Slice(right)) => {
+                self.compare(*left, *right, catalog, cache)
+            }
+            (Shape::Tuple(left), Shape::Tuple(right)) if left.len() == right.len() => {
+                self.compare_children(left, right, catalog, cache)
+            }
+            (Shape::Trait(left), Shape::Trait(right)) => ShapeComparison {
+                score: set_similarity(left, right),
+                substitutions: Vec::new(),
+            },
+            _ => ShapeComparison {
+                score: 0.0,
+                substitutions: Vec::new(),
+            },
+        }
+    }
+
+    fn container_arguments(&self, name: &str, arguments: &[ShapeId]) -> Vec<ShapeId> {
+        if matches!(name, "SmallVec" | "ArrayVec")
+            && let [argument] = arguments
+            && let Shape::Array(element) = &self.shapes[argument.0]
+        {
+            return vec![*element];
+        }
+        arguments.to_vec()
     }
 
     pub(super) fn intern(
@@ -121,35 +293,14 @@ impl ShapeArena {
         self.intern_shape(shape)
     }
 
-    #[must_use]
-    pub(super) fn is_primitive(&self, shape: ShapeId) -> bool {
-        match &self.shapes[shape.0] {
-            Shape::Never => true,
-            Shape::Path { name, arguments } => {
-                arguments.is_empty()
-                    && matches!(
-                        name.as_str(),
-                        "bool"
-                            | "char"
-                            | "f32"
-                            | "f64"
-                            | "i8"
-                            | "i16"
-                            | "i32"
-                            | "i64"
-                            | "i128"
-                            | "isize"
-                            | "str"
-                            | "u8"
-                            | "u16"
-                            | "u32"
-                            | "u64"
-                            | "u128"
-                            | "usize"
-                    )
-            }
-            _ => false,
+    fn intern_shape(&mut self, shape: Shape) -> ShapeId {
+        if let Some(id) = self.interned.get(&shape) {
+            return *id;
         }
+        let id = ShapeId(self.shapes.len());
+        self.shapes.push(shape.clone());
+        self.interned.insert(shape, id);
+        id
     }
 
     #[must_use]
@@ -186,190 +337,39 @@ impl ShapeArena {
         }
     }
 
-    pub(super) fn bucket_key(&self, shape: ShapeId, catalog: &TypeCatalog) -> String {
+    #[must_use]
+    pub(super) fn is_primitive(&self, shape: ShapeId) -> bool {
         match &self.shapes[shape.0] {
-            Shape::Array(element) => format!("array<{}>", self.bucket_key(*element, catalog)),
-            Shape::Generic(index) => format!("generic:{index}"),
-            Shape::Never => "never".to_string(),
+            Shape::Never => true,
             Shape::Path { name, arguments } => {
-                let arguments = self
-                    .container_arguments(name, arguments)
-                    .iter()
-                    .map(|argument| self.bucket_key(*argument, catalog))
-                    .collect::<Vec<_>>();
-                if arguments.is_empty() {
-                    catalog.bucket(name)
-                } else {
-                    format!("{}<{}>", catalog.bucket(name), arguments.join(","))
-                }
+                arguments.is_empty()
+                    && matches!(
+                        name.as_str(),
+                        "bool"
+                            | "char"
+                            | "f32"
+                            | "f64"
+                            | "i8"
+                            | "i16"
+                            | "i32"
+                            | "i64"
+                            | "i128"
+                            | "isize"
+                            | "str"
+                            | "u8"
+                            | "u16"
+                            | "u32"
+                            | "u64"
+                            | "u128"
+                            | "usize"
+                    )
             }
-            Shape::Pointer(element) => format!("pointer<{}>", self.bucket_key(*element, catalog)),
-            Shape::Reference(element) => {
-                format!("reference<{}>", self.bucket_key(*element, catalog))
-            }
-            Shape::Slice(element) => format!("slice<{}>", self.bucket_key(*element, catalog)),
-            Shape::Trait(bounds) => format!("trait:{}", bounds.join("+")),
-            Shape::Tuple(elements) => format!(
-                "tuple<{}>",
-                elements
-                    .iter()
-                    .map(|element| self.bucket_key(*element, catalog))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            ),
-            Shape::Unknown(kind) => format!("unknown:{kind}"),
+            _ => false,
         }
     }
 
-    pub(super) fn compare(
-        &self,
-        left: ShapeId,
-        right: ShapeId,
-        catalog: &TypeCatalog,
-        cache: &mut ComparisonCache,
-    ) -> ShapeComparison {
-        if let Some(comparison) = cache.comparisons.get(&(left, right)) {
-            return comparison.clone();
-        }
-        let comparison = if left == right {
-            ShapeComparison {
-                score: 1.0,
-                substitutions: Vec::new(),
-            }
-        } else {
-            self.compare_uncached(left, right, catalog, cache)
-        };
-        cache.comparisons.insert((left, right), comparison.clone());
-        comparison
-    }
-
-    fn compare_uncached(
-        &self,
-        left: ShapeId,
-        right: ShapeId,
-        catalog: &TypeCatalog,
-        cache: &mut ComparisonCache,
-    ) -> ShapeComparison {
-        match (&self.shapes[left.0], &self.shapes[right.0]) {
-            (
-                Shape::Path {
-                    name: left_name,
-                    arguments: left_arguments,
-                },
-                Shape::Path {
-                    name: right_name,
-                    arguments: right_arguments,
-                },
-            ) => self.compare_paths(
-                left_name,
-                left_arguments,
-                right_name,
-                right_arguments,
-                catalog,
-                cache,
-            ),
-            (Shape::Array(left), Shape::Array(right))
-            | (Shape::Pointer(left), Shape::Pointer(right))
-            | (Shape::Reference(left), Shape::Reference(right))
-            | (Shape::Slice(left), Shape::Slice(right)) => {
-                self.compare(*left, *right, catalog, cache)
-            }
-            (Shape::Tuple(left), Shape::Tuple(right)) if left.len() == right.len() => {
-                self.compare_children(left, right, catalog, cache)
-            }
-            (Shape::Trait(left), Shape::Trait(right)) => ShapeComparison {
-                score: set_similarity(left, right),
-                substitutions: Vec::new(),
-            },
-            _ => ShapeComparison {
-                score: 0.0,
-                substitutions: Vec::new(),
-            },
-        }
-    }
-
-    fn compare_paths(
-        &self,
-        left_name: &str,
-        left_arguments: &[ShapeId],
-        right_name: &str,
-        right_arguments: &[ShapeId],
-        catalog: &TypeCatalog,
-        cache: &mut ComparisonCache,
-    ) -> ShapeComparison {
-        let Some(relation) = catalog.relation(left_name, right_name) else {
-            return ShapeComparison {
-                score: 0.0,
-                substitutions: Vec::new(),
-            };
-        };
-        let left_arguments = self.container_arguments(left_name, left_arguments);
-        let right_arguments = self.container_arguments(right_name, right_arguments);
-        let arguments = if left_arguments.len() == right_arguments.len() {
-            self.compare_children(&left_arguments, &right_arguments, catalog, cache)
-        } else {
-            ShapeComparison {
-                score: 0.0,
-                substitutions: Vec::new(),
-            }
-        };
-        let argument_factor = if left_arguments.is_empty() && right_arguments.is_empty() {
-            1.0
-        } else {
-            0.45 + 0.55 * arguments.score
-        };
-        let mut substitutions = substitution(left_name, right_name, &relation);
-        substitutions.extend(arguments.substitutions);
-        ShapeComparison {
-            score: relation.similarity * argument_factor,
-            substitutions,
-        }
-    }
-
-    fn container_arguments(&self, name: &str, arguments: &[ShapeId]) -> Vec<ShapeId> {
-        if matches!(name, "SmallVec" | "ArrayVec")
-            && let [argument] = arguments
-            && let Shape::Array(element) = &self.shapes[argument.0]
-        {
-            return vec![*element];
-        }
-        arguments.to_vec()
-    }
-
-    fn compare_children(
-        &self,
-        left: &[ShapeId],
-        right: &[ShapeId],
-        catalog: &TypeCatalog,
-        cache: &mut ComparisonCache,
-    ) -> ShapeComparison {
-        if left.is_empty() {
-            return ShapeComparison {
-                score: 1.0,
-                substitutions: Vec::new(),
-            };
-        }
-        let mut score = 0.0;
-        let mut substitutions = Vec::new();
-        for (left, right) in left.iter().zip(right) {
-            let comparison = self.compare(*left, *right, catalog, cache);
-            score += comparison.score;
-            substitutions.extend(comparison.substitutions);
-        }
-        ShapeComparison {
-            score: score / count_f64(left.len()),
-            substitutions,
-        }
-    }
-
-    fn intern_shape(&mut self, shape: Shape) -> ShapeId {
-        if let Some(id) = self.interned.get(&shape) {
-            return *id;
-        }
-        let id = ShapeId(self.shapes.len());
-        self.shapes.push(shape.clone());
-        self.interned.insert(shape, id);
-        id
+    pub(super) fn len(&self) -> usize {
+        self.shapes.len()
     }
 }
 

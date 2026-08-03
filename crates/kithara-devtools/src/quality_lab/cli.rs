@@ -20,14 +20,14 @@ pub enum LabCommand {
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
-    #[arg(value_enum)]
-    pub(super) target: RunTarget,
-    /// LCOV input for the cargo-crap coverage profile.
-    #[arg(long)]
-    pub(super) lcov: Option<PathBuf>,
     /// Absolute cargo-crap JSON report from a successful production run.
     #[arg(long, requires = "lcov")]
     pub(super) baseline: Option<PathBuf>,
+    /// LCOV input for the cargo-crap coverage profile.
+    #[arg(long)]
+    pub(super) lcov: Option<PathBuf>,
+    #[arg(value_enum)]
+    pub(super) target: RunTarget,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]

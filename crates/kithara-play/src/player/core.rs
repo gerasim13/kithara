@@ -31,19 +31,19 @@ pub(crate) struct PlayerCore {
     /// Constructed once and kept address-stable for the player's lifetime.
     pub(crate) engine_load: Arc<EngineLoad>,
 
-    pub(crate) params: PlayerParams,
     pub(crate) timestretch: Arc<StretchControls>,
-    pub(crate) gapless_mode: GaplessMode,
     pub(crate) byte_pool: BytePool,
     /// Engine drops last — worker shutdown happens after all tracks
     /// unregister and after `items` releases their resources.
     pub(crate) engine: EngineImpl,
+    pub(crate) gapless_mode: GaplessMode,
     /// Items drop before engine — Audio tracks unregister from worker
     /// while it is still alive.
     pub(crate) items: ItemQueue,
     /// Status kept explicit (not derived from phase): `set_status` emits
     /// `StatusChanged` only on change and its values are not 1:1 with phase.
     pub(crate) status: Mutex<PlayerStatus>,
+    pub(crate) params: PlayerParams,
 }
 
 /// Concrete Player implementation managing items queue.
@@ -96,6 +96,7 @@ impl PlayerImpl {
         // Seed the single speed source with the configured default rate.
         config.timestretch.set_speed(config.default_rate);
         let core = PlayerCore {
+            engine,
             engine_load: Arc::new(EngineLoad::default()),
             params: PlayerParams::from(&config),
             timestretch: config.timestretch,
@@ -103,7 +104,6 @@ impl PlayerImpl {
             byte_pool: config.byte_pool,
             status: Mutex::default(),
             items: ItemQueue::new(bus),
-            engine,
         };
         Self {
             core,
@@ -111,53 +111,45 @@ impl PlayerImpl {
         }
     }
 
+    delegate! {
+        to self.core.items {
+            /// Advance to the next item in the queue.
+            ///
+            /// Does nothing if the current item is already the last one.
+            pub fn advance_to_next_item(&self);
+            /// Sole publisher of `CurrentItemChanged`: emits only when `index` differs
+            /// from the last announced item, so a `play()` resume of the same item
+            /// stays quiet.
+            pub(crate) fn announce_current_item(&self, index: usize);
+            /// Drop the resource at `index` so the auto-advance prefetch path
+            /// (`arm_next`) cannot plant it into the audio thread.
+            ///
+            /// Used by the queue when a previously-loaded track is cancelled by
+            /// a later `select` — without this, a slow track whose loader
+            /// raced ahead of the override stays in `items` and the next
+            /// `TrackRequested` notification near EOF would arm it for
+            /// handover, surfacing as a barge-in.
+            pub fn clear_item(&self, index: usize);
+            /// Insert a resource with optional queue-item identity metadata at a
+            /// specific position, or append to the end.
+            pub fn insert(
+                &self,
+                resource: Resource,
+                item_id: Option<Arc<str>>,
+                at_position: Option<usize>,
+            );
+            /// Replace a consumed (or existing) resource at the given index with item
+            /// identity metadata.
+            pub fn replace_item_tagged(&self, index: usize, resource: Resource, item_id: Option<Arc<str>>);
+            /// Pre-allocate empty slots so `replace_item` can fill them by index.
+            pub fn reserve_slots(&self, count: usize);
+        }
+    }
+
     /// Byte pool used for resources created by this player.
     #[must_use]
     pub fn byte_pool(&self) -> &BytePool {
         &self.core.byte_pool
-    }
-
-    /// PCM pool used by this player's audio engine.
-    #[must_use]
-    pub fn pcm_pool(&self) -> &PcmPool {
-        self.core.engine.pcm_pool()
-    }
-
-    /// Advance to the next item in the queue.
-    ///
-    /// Does nothing if the current item is already the last one.
-    pub fn advance_to_next_item(&self) {
-        self.core.items.advance_to_next_item();
-    }
-
-    /// Sole publisher of `CurrentItemChanged`: emits only when `index` differs
-    /// from the last announced item, so a `play()` resume of the same item
-    /// stays quiet.
-    pub(crate) fn announce_current_item(&self, index: usize) {
-        self.core.items.announce_current_item(index);
-    }
-
-    /// Drop the resource at `index` so the auto-advance prefetch path
-    /// (`arm_next`) cannot plant it into the audio thread.
-    ///
-    /// Used by the queue when a previously-loaded track is cancelled by
-    /// a later `select` — without this, a slow track whose loader
-    /// raced ahead of the override stays in `items` and the next
-    /// `TrackRequested` notification near EOF would arm it for
-    /// handover, surfacing as a barge-in.
-    pub fn clear_item(&self, index: usize) {
-        self.core.items.clear_item(index);
-    }
-
-    /// Insert a resource with optional queue-item identity metadata at a
-    /// specific position, or append to the end.
-    pub fn insert(
-        &self,
-        resource: Resource,
-        item_id: Option<Arc<str>>,
-        at_position: Option<usize>,
-    ) {
-        self.core.items.insert(resource, item_id, at_position);
     }
 
     pub(crate) fn enqueue_to_processor(&self, index: usize) -> Option<(Arc<str>, f64)> {
@@ -176,15 +168,10 @@ impl PlayerImpl {
         Some((src, item.duration_seconds))
     }
 
-    /// Remove item at index. Returns the removed resource, or `None` if out of
-    /// bounds or already consumed.
-    pub fn remove_at(&self, index: usize) -> Option<Resource> {
-        self.unarm_next();
-
-        self.core
-            .items
-            .remove_at(index)
-            .map(|queued| queued.resource)
+    /// PCM pool used by this player's audio engine.
+    #[must_use]
+    pub fn pcm_pool(&self) -> &PcmPool {
+        self.core.engine.pcm_pool()
     }
 
     /// Remove all items from the queue.
@@ -197,25 +184,23 @@ impl PlayerImpl {
         debug!("all items removed");
     }
 
+    /// Remove item at index. Returns the removed resource, or `None` if out of
+    /// bounds or already consumed.
+    pub fn remove_at(&self, index: usize) -> Option<Resource> {
+        self.unarm_next();
+
+        self.core
+            .items
+            .remove_at(index)
+            .map(|queued| queued.resource)
+    }
+
     /// Replace a consumed (or existing) resource at the given index.
     ///
     /// Use this to re-load a track that was previously played and consumed
     /// by `load_current_item`. Does nothing if `index` is out of bounds.
     pub fn replace_item(&self, index: usize, resource: Resource) {
         self.replace_item_tagged(index, resource, None);
-    }
-
-    /// Replace a consumed (or existing) resource at the given index with item
-    /// identity metadata.
-    pub fn replace_item_tagged(&self, index: usize, resource: Resource, item_id: Option<Arc<str>>) {
-        self.core
-            .items
-            .replace_item_tagged(index, resource, item_id);
-    }
-
-    /// Pre-allocate empty slots so `replace_item` can fill them by index.
-    pub fn reserve_slots(&self, count: usize) {
-        self.core.items.reserve_slots(count);
     }
 
     /// Internal: set status and emit event if changed.
@@ -255,7 +240,7 @@ impl crate::api::Equalizer for PlayerImpl {
 
 #[cfg(test)]
 mod tests {
-    use kithara_assets::AssetStoreBuilder;
+    use kithara_assets::AssetStore;
     use kithara_audio::{StretchControls, generate_log_spaced_bands};
     use kithara_bufpool::{BytePool, PcmPool};
     use kithara_decode::GaplessMode;
@@ -275,22 +260,24 @@ mod tests {
         StartsPaused,
     }
 
+    fn resource_config(input: &str) -> crate::resource::ResourceConfig {
+        let src = crate::resource::ResourceConfig::parse_src(input)
+            .expect("BUG: valid resource config source");
+        crate::resource::ResourceConfig::for_src(src)
+            .store(AssetStore::builder().build())
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
+            .build()
+    }
+
     #[kithara::test]
     fn prepare_config_applies_player_gapless_mode() {
         let player = PlayerImpl::new(
-            PlayerConfig::builder()
+            PlayerConfig::test_builder()
                 .gapless_mode(GaplessMode::Disabled)
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .build(),
         );
-        let mut config = crate::resource::ResourceConfig::new(
-            "https://example.com/song.mp3",
-            AssetStoreBuilder::default().build(),
-            BytePool::default(),
-            PcmPool::default(),
-        )
-        .expect("BUG: valid resource config");
+        let mut config = resource_config("https://example.com/song.mp3");
 
         config = player.prepare_config(config);
 
@@ -304,14 +291,8 @@ mod tests {
 
     #[kithara::test]
     fn prepare_config_per_track_cancel_is_child_of_player_master() {
-        let player = PlayerImpl::new(PlayerConfig::default());
-        let mut rc = crate::resource::ResourceConfig::new(
-            "https://example.com/song.mp3",
-            AssetStoreBuilder::default().build(),
-            BytePool::default(),
-            PcmPool::default(),
-        )
-        .expect("BUG: valid resource config");
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
+        let mut rc = resource_config("https://example.com/song.mp3");
         rc = player.prepare_config(rc);
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
@@ -329,19 +310,11 @@ mod tests {
     fn prepare_config_preserves_caller_supplied_master() {
         let parent_master = CancelToken::never();
         let player = PlayerImpl::new(
-            PlayerConfig::builder()
+            PlayerConfig::test_builder()
                 .cancel(parent_master.clone())
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .build(),
         );
-        let mut rc = crate::resource::ResourceConfig::new(
-            "https://example.com/song.mp3",
-            AssetStoreBuilder::default().build(),
-            BytePool::default(),
-            PcmPool::default(),
-        )
-        .expect("BUG: valid resource config");
+        let mut rc = resource_config("https://example.com/song.mp3");
         rc = player.prepare_config(rc);
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
@@ -360,7 +333,7 @@ mod tests {
     #[case(PlayerBasicScenario::EngineAccessor)]
     #[case(PlayerBasicScenario::SendToSlotWithoutSlot)]
     fn player_basic_behaviors(#[case] scenario: PlayerBasicScenario) {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         match scenario {
             PlayerBasicScenario::StartsPaused => {
                 assert!((player.rate() - 0.0).abs() < f32::EPSILON);
@@ -385,7 +358,7 @@ mod tests {
 
     #[kithara::test]
     fn player_pause_sets_rate_zero() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         player.core.params.set_rate_value(1.0);
         player.pause();
         assert!((player.rate() - 0.0).abs() < f32::EPSILON);
@@ -393,7 +366,7 @@ mod tests {
 
     #[kithara::test]
     fn player_volume_clamps() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         player.set_volume(2.0);
         assert!((player.volume() - 1.0).abs() < f32::EPSILON);
         player.set_volume(-1.0);
@@ -402,7 +375,7 @@ mod tests {
 
     #[kithara::test]
     fn player_muted() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         assert!(!player.is_muted());
         player.set_muted(true);
         assert!(player.is_muted());
@@ -410,7 +383,7 @@ mod tests {
 
     #[kithara::test]
     fn player_crossfade_duration() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         assert!((player.crossfade_duration() - 1.0).abs() < f32::EPSILON);
         player.set_crossfade_duration(3.0);
         assert!((player.crossfade_duration() - 3.0).abs() < f32::EPSILON);
@@ -418,7 +391,7 @@ mod tests {
 
     #[kithara::test]
     fn player_prefetch_duration() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         assert!((player.prefetch_duration() - 3.5).abs() < f32::EPSILON);
         player.set_prefetch_duration(8.0);
         assert!((player.prefetch_duration() - 8.0).abs() < f32::EPSILON);
@@ -428,7 +401,7 @@ mod tests {
 
     #[kithara::test]
     fn player_events_subscribe() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         let mut rx = player.subscribe();
         player.set_volume(0.5);
         let event = rx.try_recv();
@@ -437,7 +410,7 @@ mod tests {
 
     #[kithara::test]
     fn player_config_custom() {
-        let config = PlayerConfig::builder()
+        let config = PlayerConfig::test_builder()
             .crossfade_duration(2.0)
             .prefetch_duration(5.0)
             .default_rate(0.5)
@@ -446,8 +419,6 @@ mod tests {
             .max_slots(2)
             .sample_rate(44_100)
             .timestretch(StretchControls::new(1.0))
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
             .build();
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
@@ -470,14 +441,12 @@ mod tests {
 
     #[kithara::test]
     fn player_config_builder() {
-        let config = PlayerConfig::builder()
+        let config = PlayerConfig::test_builder()
             .max_slots(8)
             .default_rate(0.5)
             .crossfade_duration(2.5)
             .prefetch_duration(7.0)
             .eq_layout(generate_log_spaced_bands(5))
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
             .build();
         assert_eq!(config.max_slots, 8);
         assert!((config.default_rate - 0.5).abs() < f32::EPSILON);
@@ -488,7 +457,7 @@ mod tests {
 
     #[kithara::test]
     fn player_default_rate_getter_setter() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         assert!((player.default_rate() - 1.0).abs() < f32::EPSILON);
         player.set_default_rate(0.75);
         assert!((player.default_rate() - 0.75).abs() < f32::EPSILON);
@@ -496,7 +465,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn player_multiple_events_in_order() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         let mut rx = player.subscribe();
 
         player.set_volume(0.5);
@@ -531,21 +500,21 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn player_negative_crossfade_duration_clamped() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         player.set_crossfade_duration(-5.0);
         assert!((player.crossfade_duration() - 0.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]
     fn set_rate_updates_shared_speed() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         player.set_rate(2.0);
         assert!((player.core.timestretch.speed() - 2.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]
     fn set_rate_clamps_invalid_values() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         player.set_rate(0.0);
         assert!(player.rate() >= 0.01);
         assert!(player.core.timestretch.speed() >= 0.01);
@@ -557,10 +526,8 @@ mod tests {
     #[kithara::test]
     fn timestretch_is_address_stable_across_play_pause() {
         let player = PlayerImpl::new(
-            PlayerConfig::builder()
+            PlayerConfig::test_builder()
                 .session(testing::test_session())
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .build(),
         );
         let ptr_before = Arc::as_ptr(&player.core.timestretch);
@@ -579,7 +546,7 @@ mod tests {
     fn pause_from_idle_is_noop() {
         use super::super::state::phase::PlayerPhaseKind;
 
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         assert_eq!(player.phase_kind(), PlayerPhaseKind::Idle);
         player.pause();
         assert_eq!(
@@ -592,7 +559,7 @@ mod tests {
 
     #[kithara::test]
     fn position_seconds_idle_is_none() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         assert!(player.position_seconds().is_none());
         assert!(player.duration_seconds().is_none());
         assert!(!player.is_playing());
@@ -607,7 +574,7 @@ mod tests {
         // no worker-registered track directly. This pins that constructing,
         // arming a phase, and dropping does not panic / UAF: `phase` and
         // `core.items` must drop before `core.engine`.
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         *player.phase.lock() = PlayerPhase::Playing {
             slot: SlotId::new(0),
             abr_handle: None,
@@ -619,7 +586,7 @@ mod tests {
 
     #[kithara::test]
     fn set_rate_emits_rate_changed() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         let mut rx = player.subscribe();
         player.set_rate(2.0);
         let e = rx.try_recv();
@@ -634,14 +601,14 @@ mod tests {
 
     #[kithara::test]
     fn player_exposes_worker() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         let _w = player.worker();
         let _w2 = player.worker().clone();
     }
 
     #[kithara::test]
     fn auto_advance_enabled_default_and_toggle() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         assert!(player.auto_advance_enabled(), "default must be on");
         player.set_auto_advance_enabled(false);
         assert!(!player.auto_advance_enabled());
@@ -652,10 +619,8 @@ mod tests {
     #[kithara::test]
     fn auto_advance_disabled_via_config() {
         let player = PlayerImpl::new(
-            PlayerConfig::builder()
+            PlayerConfig::test_builder()
                 .auto_advance_enabled(false)
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .build(),
         );
         assert!(!player.auto_advance_enabled());

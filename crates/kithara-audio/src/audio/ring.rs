@@ -27,28 +27,28 @@ pub(super) enum RecvOutcome {
 
 #[derive(Clone, Copy)]
 pub(super) struct RecvCtx<'a> {
+    pub(super) abr: Option<&'a AbrHandle>,
     pub(super) cancel: Option<&'a CancelToken>,
     pub(super) worker: Option<&'a AudioWorkerHandle>,
-    pub(super) abr: Option<&'a AbrHandle>,
 }
 
 pub(super) struct RingConsumer {
-    pcm_rx: Inlet<Fetch<PcmChunk>>,
-    pub(super) validator: EpochValidator,
     pub(super) phase: ConsumerPhase,
+    pub(super) validator: EpochValidator,
     pub(super) current_chunk: Option<PcmChunk>,
-    trash_tx: Outlet<PcmChunk>,
-    reader_wake: Arc<ThreadWake>,
-    _epoch: Arc<AtomicU64>,
     pub(super) preloaded: bool,
+    _epoch: Arc<AtomicU64>,
+    reader_wake: Arc<ThreadWake>,
+    pcm_rx: Inlet<Fetch<PcmChunk>>,
+    trash_tx: Outlet<PcmChunk>,
     block_on_underrun: bool,
 }
 
 pub(super) struct RingParts {
+    pub(super) epoch: Arc<AtomicU64>,
+    pub(super) reader_wake: Arc<ThreadWake>,
     pub(super) pcm_rx: Inlet<Fetch<PcmChunk>>,
     pub(super) trash_tx: Outlet<PcmChunk>,
-    pub(super) reader_wake: Arc<ThreadWake>,
-    pub(super) epoch: Arc<AtomicU64>,
     pub(super) block_on_underrun: bool,
 }
 
@@ -67,6 +67,51 @@ impl RingConsumer {
         }
     }
 
+    #[kithara::hang_watchdog]
+    pub(super) fn begin_seek_epoch(&mut self, epoch: u64, cursor: &mut ChunkCursor) {
+        self.validator.epoch = epoch;
+        self.recycle_current();
+        cursor.clear();
+        self.phase = ConsumerPhase::SeekPending { epoch };
+
+        while let Some(fetch) = self.pcm_rx.try_pop() {
+            if fetch.epoch() < epoch {
+                if let Fetch::Data { data, .. } = fetch {
+                    self.discard(data);
+                }
+                hang_tick!();
+                continue;
+            }
+            self.stage_post_seek_fetch(fetch, epoch, cursor);
+            break;
+        }
+    }
+
+    fn consumer_hang_ctx(&self, ctx: RecvCtx<'_>) -> ConsumerHangCtx {
+        ConsumerHangCtx {
+            phase: format!("{:?}", self.phase),
+            variant: ctx.abr.and_then(AbrHandle::current_variant_index),
+            abr_escaping: ctx.abr.map(AbrHandle::is_escaping),
+            abr_locked: ctx.abr.map(AbrHandle::is_locked),
+            abr_pending: ctx
+                .abr
+                .and_then(AbrHandle::peek_pending_decision)
+                .map(|decision| format!("{decision:?}")),
+            epoch: self.validator.epoch,
+            preloaded: self.preloaded,
+            block_on_underrun: self.block_on_underrun,
+        }
+    }
+
+    pub(super) fn discard(&mut self, chunk: PcmChunk) {
+        if let Err(_overflow) = self.trash_tx.try_push(chunk) {
+            debug_assert!(
+                false,
+                "PCM trash ring overflow - spent buffer freed on the audio thread"
+            );
+        }
+    }
+
     pub(super) fn fill(&mut self, cursor: &mut ChunkCursor, ctx: RecvCtx<'_>) -> bool {
         let Some(chunk) = self.recv_valid_chunk(ctx) else {
             return false;
@@ -77,30 +122,33 @@ impl RingConsumer {
         true
     }
 
-    #[kithara::hang_watchdog]
-    pub(super) fn recv_valid_chunk(&mut self, ctx: RecvCtx<'_>) -> Option<PcmChunk> {
-        if self.phase.is_terminal() {
-            return None;
+    fn process_fetch(&mut self, fetch: Fetch<PcmChunk>) -> FetchOutcome {
+        if !self.validator.is_valid(&fetch) {
+            if let Fetch::Data { data, .. } = fetch {
+                self.discard(data);
+            }
+            return FetchOutcome::Continue;
         }
 
-        loop {
-            match self.recv_outcome(ctx) {
-                RecvOutcome::Item(fetch) => match self.process_fetch(fetch) {
-                    FetchOutcome::Continue => {
-                        hang_tick!();
-                    }
-                    FetchOutcome::Return(chunk) => {
-                        hang_reset!();
-                        return chunk;
-                    }
-                },
-                RecvOutcome::Empty => return None,
-                RecvOutcome::Closed => {
-                    hang_reset!();
-                    self.phase = ConsumerPhase::Failed;
-                    return None;
-                }
+        match fetch {
+            Fetch::NaturalEof { .. } => {
+                self.phase = ConsumerPhase::AtEof;
+                FetchOutcome::Return(None)
             }
+            Fetch::Failure { .. } => {
+                self.phase = ConsumerPhase::Failed;
+                FetchOutcome::Return(None)
+            }
+            Fetch::Data { data, .. } => FetchOutcome::Return(Some(data)),
+        }
+    }
+
+    pub(super) fn promote_playing(&mut self) {
+        if matches!(
+            self.phase,
+            ConsumerPhase::Buffering | ConsumerPhase::SeekPending { .. }
+        ) {
+            self.phase = ConsumerPhase::Playing;
         }
     }
 
@@ -143,59 +191,36 @@ impl RingConsumer {
         }
     }
 
+    #[kithara::hang_watchdog]
+    pub(super) fn recv_valid_chunk(&mut self, ctx: RecvCtx<'_>) -> Option<PcmChunk> {
+        if self.phase.is_terminal() {
+            return None;
+        }
+
+        loop {
+            match self.recv_outcome(ctx) {
+                RecvOutcome::Item(fetch) => match self.process_fetch(fetch) {
+                    FetchOutcome::Continue => {
+                        hang_tick!();
+                    }
+                    FetchOutcome::Return(chunk) => {
+                        hang_reset!();
+                        return chunk;
+                    }
+                },
+                RecvOutcome::Empty => return None,
+                RecvOutcome::Closed => {
+                    hang_reset!();
+                    self.phase = ConsumerPhase::Failed;
+                    return None;
+                }
+            }
+        }
+    }
+
     pub(super) fn recycle_current(&mut self) {
         if let Some(chunk) = self.current_chunk.take() {
             self.discard(chunk);
-        }
-    }
-
-    pub(super) fn discard(&mut self, chunk: PcmChunk) {
-        if let Err(_overflow) = self.trash_tx.try_push(chunk) {
-            debug_assert!(
-                false,
-                "PCM trash ring overflow - spent buffer freed on the audio thread"
-            );
-        }
-    }
-
-    #[kithara::hang_watchdog]
-    pub(super) fn begin_seek_epoch(&mut self, epoch: u64, cursor: &mut ChunkCursor) {
-        self.validator.epoch = epoch;
-        self.recycle_current();
-        cursor.clear();
-        self.phase = ConsumerPhase::SeekPending { epoch };
-
-        while let Some(fetch) = self.pcm_rx.try_pop() {
-            if fetch.epoch() < epoch {
-                if let Fetch::Data { data, .. } = fetch {
-                    self.discard(data);
-                }
-                hang_tick!();
-                continue;
-            }
-            self.stage_post_seek_fetch(fetch, epoch, cursor);
-            break;
-        }
-    }
-
-    fn process_fetch(&mut self, fetch: Fetch<PcmChunk>) -> FetchOutcome {
-        if !self.validator.is_valid(&fetch) {
-            if let Fetch::Data { data, .. } = fetch {
-                self.discard(data);
-            }
-            return FetchOutcome::Continue;
-        }
-
-        match fetch {
-            Fetch::NaturalEof { .. } => {
-                self.phase = ConsumerPhase::AtEof;
-                FetchOutcome::Return(None)
-            }
-            Fetch::Failure { .. } => {
-                self.phase = ConsumerPhase::Failed;
-                FetchOutcome::Return(None)
-            }
-            Fetch::Data { data, .. } => FetchOutcome::Return(Some(data)),
         }
     }
 
@@ -224,31 +249,6 @@ impl RingConsumer {
             }
         }
     }
-
-    pub(super) fn promote_playing(&mut self) {
-        if matches!(
-            self.phase,
-            ConsumerPhase::Buffering | ConsumerPhase::SeekPending { .. }
-        ) {
-            self.phase = ConsumerPhase::Playing;
-        }
-    }
-
-    fn consumer_hang_ctx(&self, ctx: RecvCtx<'_>) -> ConsumerHangCtx {
-        ConsumerHangCtx {
-            phase: format!("{:?}", self.phase),
-            variant: ctx.abr.and_then(AbrHandle::current_variant_index),
-            abr_escaping: ctx.abr.map(AbrHandle::is_escaping),
-            abr_locked: ctx.abr.map(AbrHandle::is_locked),
-            abr_pending: ctx
-                .abr
-                .and_then(AbrHandle::peek_pending_decision)
-                .map(|decision| format!("{decision:?}")),
-            epoch: self.validator.epoch,
-            preloaded: self.preloaded,
-            block_on_underrun: self.block_on_underrun,
-        }
-    }
 }
 
 pub(super) fn create_channels(
@@ -268,14 +268,14 @@ pub(super) fn create_trash_channel(
 
 #[derive(serde::Serialize)]
 struct ConsumerHangCtx {
-    phase: String,
-    variant: Option<usize>,
     abr_escaping: Option<bool>,
     abr_locked: Option<bool>,
     abr_pending: Option<String>,
-    epoch: u64,
-    preloaded: bool,
+    variant: Option<usize>,
+    phase: String,
     block_on_underrun: bool,
+    preloaded: bool,
+    epoch: u64,
 }
 
 fn wake_worker(worker: Option<&AudioWorkerHandle>) {
@@ -298,12 +298,12 @@ mod tests {
     use crate::audio::ReadOutcome;
 
     struct RingFixture {
-        ring: RingConsumer,
-        cursor: ChunkCursor,
-        events: crate::audio::event::AudioEvents,
-        data_tx: Outlet<Fetch<PcmChunk>>,
         playhead: Arc<PlayheadState>,
+        events: crate::audio::event::AudioEvents,
+        cursor: ChunkCursor,
         _trash_rx: Inlet<PcmChunk>,
+        data_tx: Outlet<Fetch<PcmChunk>>,
+        ring: RingConsumer,
     }
 
     impl RingFixture {
@@ -321,9 +321,9 @@ mod tests {
             ring.preloaded = preloaded;
             Self {
                 ring,
+                data_tx,
                 cursor: ChunkCursor::new(&pool, PcmMeta::default().spec),
                 events: crate::audio::event::AudioEvents::test(),
-                data_tx,
                 playhead: Arc::new(PlayheadState::new()),
                 _trash_rx: trash_rx,
             }

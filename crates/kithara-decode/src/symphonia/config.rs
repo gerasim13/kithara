@@ -1,15 +1,17 @@
 use std::sync::atomic::AtomicU64;
 
+use bon::Builder;
 use kithara_platform::sync::Arc;
 
 /// Minimal configuration carried into the probe / direct-reader path.
-#[derive(Default)]
+#[derive(Default, Builder)]
 pub(crate) struct SymphoniaConfig {
     /// Handle for dynamic byte length updates (HLS).
     pub(crate) byte_len_handle: Option<Arc<AtomicU64>>,
     /// File extension hint for Symphonia probe (e.g., `"mp3"`, `"aac"`).
     ///
     /// Used by the probe path when no container is known up-front.
+    #[builder(into)]
     pub(crate) hint: Option<String>,
     /// Enable gapless trim wiring through the Symphonia decoder.
     ///
@@ -18,6 +20,7 @@ pub(crate) struct SymphoniaConfig {
     /// internally trim (FLAC/Opus/Vorbis) honour it. MP3 priming is
     /// applied separately via
     /// [`crate::codec::FrameCodec::decoder_algo_delay`].
+    #[builder(default)]
     pub(crate) gapless: bool,
 }
 
@@ -37,19 +40,13 @@ mod tests {
 
     #[kithara::test]
     fn test_symphonia_config_with_hint() {
-        let config = SymphoniaConfig {
-            hint: Some("mp3".into()),
-            ..Default::default()
-        };
+        let config = SymphoniaConfig::builder().hint("mp3").build();
         assert_eq!(config.hint, Some("mp3".into()));
     }
 
     #[kithara::test]
     fn test_symphonia_config_with_gapless() {
-        let config = SymphoniaConfig {
-            gapless: true,
-            ..Default::default()
-        };
+        let config = SymphoniaConfig::builder().gapless(true).build();
         assert!(config.gapless);
     }
 }

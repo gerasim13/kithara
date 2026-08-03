@@ -38,8 +38,8 @@ impl Track<SeekRequested> {
             if let Some(reason) = src.readiness.source_park(&src.shared_stream, phase) {
                 src.update_state(
                     Track::<WaitingForSource>::new(WaitState {
-                        context: WaitContext::Seek(request),
                         reason,
+                        context: WaitContext::Seek(request),
                     })
                     .erase(),
                 );
@@ -110,8 +110,8 @@ impl Track<ApplyingSeek> {
             if let Some(reason) = src.readiness.source_park(&src.shared_stream, phase) {
                 src.update_state(
                     Track::<WaitingForSource>::new(WaitState {
-                        context: WaitContext::ApplySeek(applying),
                         reason,
+                        context: WaitContext::ApplySeek(applying),
                     })
                     .erase(),
                 );
@@ -171,8 +171,8 @@ impl Track<AwaitingResume> {
             if let Some(reason) = src.readiness.source_park(&src.shared_stream, phase) {
                 src.update_state(
                     Track::<WaitingForSource>::new(WaitState {
-                        context: WaitContext::PostSeek(resume),
                         reason,
+                        context: WaitContext::PostSeek(resume),
                     })
                     .erase(),
                 );

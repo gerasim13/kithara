@@ -6,7 +6,7 @@ use axum::{Router, routing::get};
 use bytes::Bytes;
 use kithara_assets::{
     AcquisitionResult, AssetResource, AssetResourceState, AssetScope, AssetSource, AssetStore,
-    AssetStoreBuilder, StorageBackend, WriteSide,
+    StorageBackend, WriteSide,
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
@@ -117,7 +117,7 @@ fn commit(scope: &AssetScope, key: &ResourceKey, bytes: &[u8]) {
 async fn corrupt_persisted_playlist_is_invalidated_and_refetched_once() {
     let (url, requests) = playlist_server(Bytes::from_static(VALID_MASTER)).await;
     let dir = tempdir().expect("tempdir");
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -134,7 +134,7 @@ async fn corrupt_persisted_playlist_is_invalidated_and_refetched_once() {
     drop(scope);
     drop(store);
 
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -154,7 +154,7 @@ async fn corrupt_persisted_playlist_is_invalidated_and_refetched_once() {
     drop(scope);
     drop(store);
 
-    let reopened = AssetStoreBuilder::default()
+    let reopened = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -172,7 +172,7 @@ async fn corrupt_persisted_playlist_is_invalidated_and_refetched_once() {
 async fn empty_persisted_playlist_is_invalidated_and_refetched_once() {
     let (url, requests) = playlist_server(Bytes::from_static(VALID_MASTER)).await;
     let dir = tempdir().expect("tempdir");
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -187,7 +187,7 @@ async fn empty_persisted_playlist_is_invalidated_and_refetched_once() {
     drop(scope);
     drop(store);
 
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -205,7 +205,7 @@ async fn empty_persisted_playlist_is_invalidated_and_refetched_once() {
     drop(scope);
     drop(store);
 
-    let reopened = AssetStoreBuilder::default()
+    let reopened = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -222,7 +222,7 @@ async fn empty_persisted_playlist_is_invalidated_and_refetched_once() {
 async fn concurrent_caches_share_one_playlist_repair() {
     let (url, requests, first_seen, release) =
         gated_playlist_server(Bytes::from_static(VALID_MASTER)).await;
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())
         .build();
@@ -262,7 +262,7 @@ async fn failed_refetch_does_not_resurrect_poisoned_index() {
     let invalid = Bytes::from_static(b"\x1b\xbf\x01\x00network brotli bytes");
     let (url, requests) = playlist_server(invalid).await;
     let dir = tempdir().expect("tempdir");
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -278,7 +278,7 @@ async fn failed_refetch_does_not_resurrect_poisoned_index() {
     drop(scope);
     drop(store);
 
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -300,7 +300,7 @@ async fn failed_refetch_does_not_resurrect_poisoned_index() {
     drop(scope);
     drop(store);
 
-    let reopened = AssetStoreBuilder::default()
+    let reopened = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -317,7 +317,7 @@ async fn failed_refetch_does_not_resurrect_poisoned_index() {
 async fn invalid_network_playlist_is_not_cached() {
     let invalid = Bytes::from_static(b"\x1b\xbf\x01\x00brotli bytes");
     let (url, requests) = playlist_server(invalid).await;
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())
         .build();

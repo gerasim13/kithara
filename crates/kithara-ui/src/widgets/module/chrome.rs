@@ -20,23 +20,23 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct ModuleChrome<'a, Content> {
-    content: Content,
-    module: &'a str,
-    title: Option<&'a str>,
-    chip: Option<&'a str>,
-    assign: Vec<&'a str>,
+    skin: &'a Skin,
     #[builder(default)]
     style: ChromeStyle,
+    content: Content,
     #[builder(default)]
     frame: FrameSides,
-    #[builder(default)]
-    corners: bool,
-    footer: Option<String>,
-    input_owner: InputOwner,
+    chip: Option<&'a str>,
     drop: Option<DropZone>,
+    footer: Option<String>,
+    module: &'a str,
+    input_owner: InputOwner,
+    title: Option<&'a str>,
+    assign: Vec<&'a str>,
     #[builder(default)]
     collapsed: bool,
-    skin: &'a Skin,
+    #[builder(default)]
+    corners: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -310,18 +310,18 @@ where
 }
 
 struct FrameChrome {
-    sides: FrameSides,
     frame_color: Color,
-    frame_width: f32,
+    sides: FrameSides,
     corners: Option<CornerTicks>,
+    frame_width: f32,
 }
 
 #[derive(Clone, Copy)]
 struct CornerTicks {
     color: Color,
+    offset: f32,
     size: f32,
     width: f32,
-    offset: f32,
 }
 
 impl From<&Skin> for CornerTicks {

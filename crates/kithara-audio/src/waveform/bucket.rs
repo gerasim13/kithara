@@ -13,8 +13,9 @@ const BUCKET_BYTES: usize = 12;
 /// `[0, 1]` on a shared scale after per-band perceptual gain. The deck paints
 /// them as concentric mirrored bars (low behind, high in front), so all three
 /// bands are visible at once. All-zero is silence and renders as nothing.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, fieldwork::Fieldwork)]
 #[non_exhaustive]
+#[fieldwork(get)]
 pub struct Bucket {
     high: f32,
     low: f32,
@@ -25,21 +26,6 @@ impl Bucket {
     #[must_use]
     pub fn new(low: f32, mid: f32, high: f32) -> Self {
         Self { high, low, mid }
-    }
-
-    #[must_use]
-    pub fn high(&self) -> f32 {
-        self.high
-    }
-
-    #[must_use]
-    pub fn low(&self) -> f32 {
-        self.low
-    }
-
-    #[must_use]
-    pub fn mid(&self) -> f32 {
-        self.mid
     }
 }
 

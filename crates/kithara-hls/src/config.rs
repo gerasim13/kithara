@@ -26,14 +26,6 @@ pub struct KeyOptions {
     pub key_registry: Option<KeyProcessorRegistry>,
 }
 
-impl KeyOptions {
-    #[must_use]
-    // ast-grep-ignore: style.prefer-default-derive
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
 /// Method used for lazy exact-size probes when a file-like decoder path needs
 /// byte-accurate segment offsets and `#EXT-X-BYTERANGE` is absent.
 ///
@@ -60,12 +52,20 @@ pub enum SizeProbeMethod {
 ///
 /// Used with `Stream::<Hls>::new(config)`.
 #[derive(Clone, Builder)]
-#[builder(state_mod(vis = "pub"))]
+#[builder(start_fn = for_url)]
 #[non_exhaustive]
 pub struct HlsConfig {
+    /// Master playlist URL.
+    #[builder(start_fn)]
+    pub url: Url,
     /// Initial ABR mode.
     #[builder(default)]
     pub initial_abr_mode: AbrMode,
+    /// Shared asset store.
+    pub store: AssetStore,
+    /// Buffer pool shared across all components.
+    #[builder(default = BytePool::default())]
+    pub pool: BytePool,
     /// Encryption key handling configuration.
     #[builder(default)]
     pub keys: KeyOptions,
@@ -91,6 +91,8 @@ pub struct HlsConfig {
     /// downloader / net / asset paths derive children from its inner
     /// [`CancelToken`](kithara_platform::CancelToken).
     pub cancel: Option<CancelToken>,
+    /// Optional cache discriminator.
+    pub discriminator: Option<String>,
     /// Shared downloader (created lazily if not provided).
     pub downloader: Option<Downloader>,
     /// Additional HTTP headers to include in all requests.
@@ -100,32 +102,23 @@ pub struct HlsConfig {
     /// at the consumer site — production HLS streams need a downloader
     /// backpressure cap. Pass `Some(0)` to disable the cap explicitly.
     pub look_ahead_bytes: Option<u64>,
-    /// Optional cache discriminator.
-    pub discriminator: Option<String>,
-    /// Buffer pool shared across all components.
-    #[builder(default = BytePool::default())]
-    pub pool: BytePool,
     /// Method used by on-demand exact-size probes. Segment-aware fMP4 decode
     /// never issues these probes; file-like paths use them after a seek needs
     /// exact prefix offsets.
     #[builder(default)]
     pub size_probe_method: SizeProbeMethod,
-    /// Shared asset store.
-    pub store: AssetStore,
-    /// Master playlist URL.
-    pub url: Url,
     /// Max segments to download per step.
     #[builder(default = 3)]
     pub download_batch_size: usize,
-    /// Minimum media-segment prefetch window for ephemeral HLS stores after
-    /// applying [`Self::ephemeral_cache_non_media_reserve`].
-    #[builder(default = HlsConfig::DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW)]
-    pub ephemeral_cache_min_media_window: usize,
     /// Maximum media-segment prefetch window for ephemeral HLS stores.
     /// The effective maximum is never lower than
     /// [`Self::ephemeral_cache_min_media_window`].
     #[builder(default = HlsConfig::DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW)]
     pub ephemeral_cache_max_media_window: usize,
+    /// Minimum media-segment prefetch window for ephemeral HLS stores after
+    /// applying [`Self::ephemeral_cache_non_media_reserve`].
+    #[builder(default = HlsConfig::DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW)]
+    pub ephemeral_cache_min_media_window: usize,
     /// Number of non-media HLS cache entries reserved when deriving the
     /// ephemeral media prefetch window from the store cache capacity.
     #[builder(default = HlsConfig::DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE)]
@@ -170,24 +163,13 @@ impl fmt::Debug for HlsConfig {
 }
 
 impl HlsConfig {
-    pub const DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW: usize = 3;
     /// Per-stream media window for a shared 128-entry cache. Two concurrent
     /// streams each retain 60 media and four non-media entries.
     pub const DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW: usize = 60;
+    pub const DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW: usize = 3;
     pub const DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE: usize = 4;
     /// Default `look_ahead_bytes` cap (~2 `MiB`). Production HLS streams
     /// need a downloader backpressure cap so an idle reader does not
     /// drain the whole playlist into cache.
     pub const DEFAULT_LOOK_AHEAD_BYTES: u64 = 2 * 1024 * 1024;
-
-    /// Create new HLS config with URL.
-    #[must_use]
-    pub fn new(url: Url, store: AssetStore) -> Self {
-        Self::for_url(url).store(store).build()
-    }
-
-    /// Chainable counterpart to [`HlsConfig::new`].
-    pub fn for_url(url: Url) -> HlsConfigBuilder<hls_config_builder::SetUrl> {
-        Self::builder().url(url)
-    }
 }

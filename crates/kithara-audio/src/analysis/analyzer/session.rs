@@ -7,14 +7,16 @@ use crate::{
     waveform::{BeatGrid, bucket::Waveform},
 };
 
-#[derive(Default)]
+#[derive(Default, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct TrackAnalyzers<B>
 where
     B: ResamplerBackend,
 {
     pub(super) beat: beat::Slot<B>,
-    pub(super) source_frames: u64,
     pub(super) waveform: waveform::Slot,
+    #[field(get, vis = "pub(crate)")]
+    pub(super) source_frames: u64,
 }
 
 impl<B> TrackAnalyzers<B>
@@ -39,9 +41,5 @@ where
 
         waveform::push(&mut self.waveform, chunk);
         beat::Slot::push(&mut self.beat, chunk, detector);
-    }
-
-    pub(crate) fn source_frames(&self) -> u64 {
-        self.source_frames
     }
 }

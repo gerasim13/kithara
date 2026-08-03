@@ -33,8 +33,8 @@ fn action<T>(outcome: Outcome<T>, event: impl FnOnce(T) -> UiEvent) -> Option<Ac
 /// of fifteen literals to keep in step.
 pub(crate) fn control_event(path: &str, action: ControlAction) -> UiEvent {
     UiEvent::Control {
-        path: path.to_owned(),
         action,
+        path: path.to_owned(),
     }
 }
 

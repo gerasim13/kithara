@@ -39,9 +39,9 @@ impl<'a> Node<'a> for DecksNode<'a> {
 
 #[derive(Clone, Copy)]
 pub(super) struct DeckNode<'a> {
+    cache: &'a DeckCache,
     ui: &'a UiState,
     view: DeckView,
-    cache: &'a DeckCache,
     eq_mode: EqMode,
     focused: bool,
 }
@@ -55,9 +55,9 @@ impl<'a> DeckNode<'a> {
         focused: bool,
     ) -> Self {
         Self {
+            cache,
             ui,
             view,
-            cache,
             eq_mode,
             focused,
         }
@@ -97,8 +97,8 @@ impl<'a> Node<'a> for DeckNode<'a> {
 
 #[derive(Clone, Copy)]
 struct PlaybackNode<'a> {
-    ui: &'a UiState,
     cache: &'a DeckCache,
+    ui: &'a UiState,
 }
 
 impl PlaybackNode<'_> {
@@ -138,8 +138,8 @@ impl<'a> Node<'a> for PlaybackNode<'a> {
 
 #[derive(Clone, Copy)]
 struct TrackNode<'a> {
-    ui: &'a UiState,
     cache: &'a DeckCache,
+    ui: &'a UiState,
 }
 
 impl<'a> Node<'a> for TrackNode<'a> {
@@ -173,16 +173,12 @@ impl<'a> Node<'a> for TempoNode {
 
 #[derive(Clone, Copy)]
 struct StreamNode<'a> {
-    ui: &'a UiState,
     cache: &'a DeckCache,
+    ui: &'a UiState,
 }
 
 impl<'a> StreamNode<'a> {
     const AUTO_SLOT: &'static str = "auto";
-
-    fn rung(self, slot: &str) -> Option<&'a AbrVariant> {
-        self.ui.abr_variants.get(slot.parse::<usize>().ok()?)
-    }
 
     fn active(self, slot: &str) -> bool {
         if slot == Self::AUTO_SLOT {
@@ -193,6 +189,10 @@ impl<'a> StreamNode<'a> {
             && self
                 .rung(slot)
                 .is_some_and(|rung| picked == Some(rung.index))
+    }
+
+    fn rung(self, slot: &str) -> Option<&'a AbrVariant> {
+        self.ui.abr_variants.get(slot.parse::<usize>().ok()?)
     }
 }
 

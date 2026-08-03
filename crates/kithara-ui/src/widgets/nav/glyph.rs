@@ -7,9 +7,9 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Glyph {
+    color: Color,
     icon: Icon,
     size: f32,
-    color: Color,
 }
 
 impl<'a> Widget<'a> for Glyph {

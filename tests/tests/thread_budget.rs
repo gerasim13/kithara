@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    assets::{AssetStoreBuilder, FlushHub, FlushPolicy, StorageBackend},
+    assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     audio::{Audio, AudioConfig, AudioWorkerHandle},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
@@ -127,7 +127,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     // Baseline gate: include the eager shared audio worker, but measure before
     // the store registers with the flush hub and starts its worker.
     let before = wait_thread_count_quiesced(QUIESCE_WATCHDOG).await;
-    let shared_store = AssetStoreBuilder::default()
+    let shared_store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: temp_dir.path().into(),
         })
@@ -184,7 +184,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         audios.push(Box::new(a));
     }
     // Spawn side: the flush-hub worker starts on the first store registration
-    // during `AssetStoreBuilder::build()`, and its named-thread increment is
+    // during `AssetStore::builder().build()`, and its named-thread increment is
     // eager/synchronous at the spawn call site. No settle is needed.
     let after = active_named_thread_count();
     let delta = after.saturating_sub(before);

@@ -6,7 +6,7 @@ use std::{
 
 use kithara_abr::AbrState;
 use kithara_assets::{
-    AcquisitionResult, AssetResource, AssetScope, AssetSource, AssetStoreBuilder, StorageBackend,
+    AcquisitionResult, AssetResource, AssetScope, AssetSource, AssetStore, StorageBackend,
     WriteSide,
 };
 use kithara_drm::DecryptContext;
@@ -40,14 +40,14 @@ use crate::{
 fn test_ctx(prefetch_budget: usize) -> PlanCtx {
     let cancel = CancelToken::never();
     let backend = Arc::new(
-        AssetStoreBuilder::default()
+        AssetStore::builder()
             .backend(StorageBackend::Memory)
             .cancel(cancel.clone())
             .build(),
     );
     PlanCtx {
-        bus: EventBus::new(8),
         prefetch_budget,
+        bus: EventBus::new(8),
         scope: backend
             .scope::<crate::Hls>(&AssetSource::Remote {
                 url: Url::parse("https://example.com/master.m3u8").expect("master url"),

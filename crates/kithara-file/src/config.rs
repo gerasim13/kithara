@@ -21,30 +21,31 @@ pub enum FileSrc {
 ///
 /// Used with `Stream::<File>::new(config)`.
 #[derive(Clone, Builder)]
-#[builder(state_mod(vis = "pub"))]
+#[builder(on(String, into), start_fn = for_src)]
 #[non_exhaustive]
 pub struct FileConfig {
     /// File source (remote URL or local path).
+    #[builder(start_fn)]
     pub src: FileSrc,
+    /// Shared asset store used by local and remote sources.
+    pub store: AssetStore,
     /// Event bus (optional - if not provided, one is created internally).
     #[builder(name = events)]
     pub bus: Option<EventBus>,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancelToken>,
+    /// Optional cache discriminator.
+    pub discriminator: Option<String>,
     /// Shared downloader (created lazily if not provided).
     pub downloader: Option<Downloader>,
+    /// Explicit source-extension hint used before the URL-path extension.
+    pub extension: Option<String>,
     /// Additional HTTP headers to include in all requests.
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     pub look_ahead_bytes: Option<u64>,
-    /// Explicit source-extension hint used before the URL-path extension.
-    pub extension: Option<String>,
-    /// Optional cache discriminator.
-    pub discriminator: Option<String>,
     /// Shared byte pool for cache and fallback network buffers.
     pub pool: Option<BytePool>,
-    /// Shared asset store used by local and remote sources.
-    pub store: AssetStore,
     /// Event bus channel capacity (used when `bus` is not provided).
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,
@@ -67,24 +68,11 @@ impl fmt::Debug for FileConfig {
     }
 }
 
-impl FileConfig {
-    /// Create new file config with source.
-    #[must_use]
-    pub fn new(src: FileSrc, store: AssetStore) -> Self {
-        Self::for_src(src).store(store).build()
-    }
-
-    /// Chainable counterpart to [`FileConfig::new`].
-    pub fn for_src(src: FileSrc) -> FileConfigBuilder<file_config_builder::SetSrc> {
-        Self::builder().src(src)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use kithara_assets::{AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{AssetStore, StorageBackend};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -94,7 +82,7 @@ mod tests {
     }
 
     fn test_store() -> AssetStore {
-        AssetStoreBuilder::default()
+        AssetStore::builder()
             .backend(StorageBackend::Memory)
             .build()
     }
@@ -102,8 +90,8 @@ mod tests {
     #[kithara::test]
     #[case(test_src())]
     #[case(FileSrc::Local(PathBuf::from("/tmp/song.mp3")))]
-    fn test_file_config_new_preserves_source(#[case] src: FileSrc) {
-        let config = FileConfig::new(src.clone(), test_store());
+    fn test_file_config_for_src_preserves_source(#[case] src: FileSrc) {
+        let config = FileConfig::for_src(src.clone()).store(test_store()).build();
 
         assert_eq!(config.src, src);
         assert!(config.bus.is_none());
@@ -131,7 +119,7 @@ mod tests {
     }
 
     fn apply_headers(mut config: FileConfig) -> FileConfig {
-        let mut headers = Headers::new();
+        let mut headers = Headers::default();
         headers.insert("Authorization", "Bearer token123");
         config.headers = Some(headers);
         config
@@ -157,7 +145,7 @@ mod tests {
         #[case] apply: fn(FileConfig) -> FileConfig,
         #[case] check: fn(&FileConfig) -> bool,
     ) {
-        let config = apply(FileConfig::new(test_src(), test_store()));
+        let config = apply(FileConfig::for_src(test_src()).store(test_store()).build());
         assert!(check(&config));
     }
 
@@ -182,14 +170,14 @@ mod tests {
     fn test_with_discriminator_sets_discriminator(#[case] name: &str) {
         let config = FileConfig::for_src(test_src())
             .store(test_store())
-            .discriminator(name.to_string())
+            .discriminator(name)
             .build();
         assert_eq!(config.discriminator.as_deref(), Some(name));
     }
 
     #[kithara::test]
     fn test_debug_impl() {
-        let config = FileConfig::new(test_src(), test_store());
+        let config = FileConfig::for_src(test_src()).store(test_store()).build();
         let debug_str = format!("{:?}", config);
 
         assert!(debug_str.contains("FileConfig"));

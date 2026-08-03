@@ -48,8 +48,8 @@ impl Track<Decoding> {
             if let Some(reason) = src.readiness.source_park(&src.shared_stream, phase) {
                 src.update_state(
                     Track::<WaitingForSource>::new(WaitState {
-                        context: WaitContext::Playback,
                         reason,
+                        context: WaitContext::Playback,
                     })
                     .erase(),
                 );
@@ -78,8 +78,8 @@ impl Track<Decoding> {
             DecodeStep::NotReady(reason) => {
                 src.update_state(
                     Track::<WaitingForSource>::new(WaitState {
-                        context: WaitContext::Playback,
                         reason,
+                        context: WaitContext::Playback,
                     })
                     .erase(),
                 );
@@ -109,9 +109,9 @@ pub(super) fn decode_step<T: StreamType>(src: &mut StreamAudioSource<T>) -> Deco
         step::tick(
             &mut src.decode,
             DecodeCtx {
+                resume,
                 emit: src.emit.as_deref(),
                 playhead: src.playhead.as_ref(),
-                resume,
                 cursor: &mut src.resume,
                 seek: &src.seek_engine,
                 seek_observe: src.seek_obs.as_ref(),

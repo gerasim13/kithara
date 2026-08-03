@@ -158,9 +158,9 @@ pub(super) struct AtomicSeekAlias {
 #[derive(Clone, Copy)]
 pub(super) struct AliasSnapshot {
     pub(super) exact_anchor: Option<u64>,
-    pub(super) generation: u64,
     pub(super) segment: u32,
     pub(super) anchor: u64,
+    pub(super) generation: u64,
 }
 
 impl AliasSnapshot {

@@ -217,23 +217,23 @@ pub enum BindingKind {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Binding {
+    pub with: BTreeMap<InternId, InternId>,
     pub kind: BindingKind,
     pub id: InternId,
     pub key: InternId,
-    pub with: BTreeMap<InternId, InternId>,
 }
 
 #[derive(Debug)]
 pub(crate) struct ExpandedModule {
-    pub(crate) module: InternId,
-    pub(crate) title: Option<InternId>,
-    pub(crate) chip: Option<InternId>,
-    pub(crate) assign: Vec<InternId>,
     pub(crate) chrome: ChromeStyle,
-    pub(crate) footer: Option<Binding>,
-    pub(crate) drop: Option<DropSpec>,
-    pub(crate) collapsed: InternId,
     pub(crate) root: ExpandedNode,
+    pub(crate) collapsed: InternId,
+    pub(crate) module: InternId,
+    pub(crate) chip: Option<InternId>,
+    pub(crate) drop: Option<DropSpec>,
+    pub(crate) footer: Option<Binding>,
+    pub(crate) title: Option<InternId>,
+    pub(crate) assign: Vec<InternId>,
     pub(crate) includes: Vec<ExpandedInclude>,
 }
 
@@ -248,8 +248,8 @@ pub(crate) struct ExpandedInclude {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct BlockSpec {
-    pub path: InternId,
     pub hidden: Binding,
+    pub path: InternId,
 }
 
 impl BlockNode for ExpandedNode {
@@ -265,8 +265,8 @@ impl BlockNode for ExpandedNode {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct SurfaceSpec {
-    pub path: InternId,
     pub write: Binding,
+    pub path: InternId,
 }
 
 /// Compiled drop target of a module: the command the host runs when a drag is
@@ -274,36 +274,36 @@ pub struct SurfaceSpec {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct DropSpec {
-    pub write: Binding,
     pub read: Binding,
+    pub write: Binding,
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct ControlSite<'a> {
-    pub(crate) path: &'a str,
     pub(crate) control: &'a ControlNode,
-    pub(crate) read: Option<&'a BindingRef>,
-    pub(crate) write: Option<&'a BindingRef>,
     /// Already resolved, so a parameterised list is validated like a literal one.
     pub(crate) columns: &'a [TrackColumn],
+    pub(crate) path: &'a str,
+    pub(crate) active: Option<&'a BindingRef>,
     pub(crate) columns_state: Option<&'a BindingRef>,
     pub(crate) query: Option<&'a BindingRef>,
+    pub(crate) read: Option<&'a BindingRef>,
     pub(crate) scope: Option<&'a BindingRef>,
+    pub(crate) write: Option<&'a BindingRef>,
     pub(crate) zoom: Option<&'a BindingRef>,
-    pub(crate) active: Option<&'a BindingRef>,
 }
 
 pub(crate) type ControlVisitor<'v> =
     dyn for<'a> FnMut(ControlSite<'a>, &SourceUri) -> Result<(), UiDocError> + 'v;
 
 pub(crate) struct Budget {
-    nodes: usize,
     max: usize,
+    nodes: usize,
 }
 
 impl Budget {
     pub(crate) fn new(max: usize) -> Self {
-        Self { nodes: 0, max }
+        Self { max, nodes: 0 }
     }
 
     pub(crate) fn charge(&mut self, origin: &SourceUri) -> Result<(), UiDocError> {

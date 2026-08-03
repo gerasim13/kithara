@@ -9,8 +9,8 @@ use crate::{
 };
 
 pub(crate) struct Job {
-    pub(crate) cancel: CancelToken,
     pub(crate) reader: Box<dyn PcmReader>,
+    pub(crate) cancel: CancelToken,
     pub(crate) tx: watch::Sender<Option<TrackAnalysis>>,
 }
 
@@ -26,12 +26,12 @@ pub(crate) struct AnalysisTask<B>
 where
     B: ResamplerBackend,
 {
-    analyzers: Option<TrackAnalyzers<B>>,
-    cancel: CancelToken,
-    phase: TaskPhase,
     reader: Box<dyn PcmReader>,
-    tx: watch::Sender<Option<TrackAnalysis>>,
+    cancel: CancelToken,
+    analyzers: Option<TrackAnalyzers<B>>,
     waveform: Option<Waveform>,
+    tx: watch::Sender<Option<TrackAnalysis>>,
+    phase: TaskPhase,
 }
 
 impl<B> AnalysisTask<B>
@@ -46,29 +46,6 @@ where
             reader: job.reader,
             tx: job.tx,
             waveform: None,
-        }
-    }
-
-    pub(crate) fn is_done(&self) -> bool {
-        self.phase == TaskPhase::Done
-    }
-
-    pub(crate) fn tick(
-        &mut self,
-        builder: &AnalyzerBuilder<B>,
-        detector: Option<&mut Detector>,
-    ) -> TickResult {
-        if self.cancel.is_cancelled() {
-            debug!("analysis cancelled");
-            self.phase = TaskPhase::Done;
-            return TickResult::Progress;
-        }
-
-        match self.phase {
-            TaskPhase::Decode => self.decode(builder, detector),
-            TaskPhase::EmitWaveform => self.emit_waveform(),
-            TaskPhase::DetectBeat => self.detect_beat(detector),
-            TaskPhase::Done => TickResult::Done,
         }
     }
 
@@ -101,6 +78,22 @@ where
         }
     }
 
+    fn detect_beat(&mut self, detector: Option<&mut Detector>) -> TickResult {
+        let Some(analyzers) = self.analyzers.take() else {
+            self.phase = TaskPhase::Done;
+            return TickResult::Progress;
+        };
+        let source_frames = analyzers.source_frames();
+        let beat = analyzers.finish_beat(detector);
+        let _ = self.tx.send(Some(TrackAnalysis::new(
+            beat,
+            self.waveform.take(),
+            source_frames,
+        )));
+        self.phase = TaskPhase::Done;
+        TickResult::Progress
+    }
+
     fn emit_waveform(&mut self) -> TickResult {
         let Some(analyzers) = &mut self.analyzers else {
             self.phase = TaskPhase::Done;
@@ -121,19 +114,26 @@ where
         TickResult::Progress
     }
 
-    fn detect_beat(&mut self, detector: Option<&mut Detector>) -> TickResult {
-        let Some(analyzers) = self.analyzers.take() else {
+    pub(crate) fn is_done(&self) -> bool {
+        self.phase == TaskPhase::Done
+    }
+
+    pub(crate) fn tick(
+        &mut self,
+        builder: &AnalyzerBuilder<B>,
+        detector: Option<&mut Detector>,
+    ) -> TickResult {
+        if self.cancel.is_cancelled() {
+            debug!("analysis cancelled");
             self.phase = TaskPhase::Done;
             return TickResult::Progress;
-        };
-        let source_frames = analyzers.source_frames();
-        let beat = analyzers.finish_beat(detector);
-        let _ = self.tx.send(Some(TrackAnalysis::new(
-            beat,
-            self.waveform.take(),
-            source_frames,
-        )));
-        self.phase = TaskPhase::Done;
-        TickResult::Progress
+        }
+
+        match self.phase {
+            TaskPhase::Decode => self.decode(builder, detector),
+            TaskPhase::EmitWaveform => self.emit_waveform(),
+            TaskPhase::DetectBeat => self.detect_beat(detector),
+            TaskPhase::Done => TickResult::Done,
+        }
     }
 }

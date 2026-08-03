@@ -15,8 +15,8 @@ pub(super) type EnforceCapacity = Arc<dyn Fn() + Send + Sync>;
 
 /// Writer (Pending) wrapper returned by [`super::CachedAssets`].
 pub struct CachedWriter<W> {
-    enforce_capacity: Option<EnforceCapacity>,
     pinned: Arc<DashSet<ResourceKey>>,
+    enforce_capacity: Option<EnforceCapacity>,
     key: ResourceKey,
     inner: W,
 }
@@ -24,8 +24,8 @@ pub struct CachedWriter<W> {
 /// Reader (Ready) wrapper returned by [`super::CachedAssets`]. Cheap to clone.
 #[derive(Clone)]
 pub struct CachedReader<R> {
-    enforce_capacity: Option<EnforceCapacity>,
     pinned: Arc<DashSet<ResourceKey>>,
+    enforce_capacity: Option<EnforceCapacity>,
     inner: R,
     key: ResourceKey,
 }
@@ -50,8 +50,8 @@ impl<W> CachedWriter<W> {
         enforce_capacity: Option<EnforceCapacity>,
     ) -> Self {
         Self {
-            enforce_capacity,
             pinned,
+            enforce_capacity,
             key,
             inner,
         }
@@ -78,8 +78,8 @@ impl<R> CachedReader<R> {
         enforce_capacity: Option<EnforceCapacity>,
     ) -> Self {
         Self {
-            enforce_capacity,
             pinned,
+            enforce_capacity,
             inner,
             key,
         }
@@ -129,14 +129,6 @@ impl<W: WriteSide> WriteSide for CachedWriter<W> {
         Ok(reader)
     }
 
-    delegate::delegate! {
-        to self.inner {
-            fn fail(self, reason: String);
-            fn raw_write_handle(&self) -> RawWriteHandle;
-            fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
-        }
-    }
-
     fn reader(&self) -> CachedReader<W::Reader> {
         CachedReader::new(
             Arc::clone(&self.pinned),
@@ -144,6 +136,14 @@ impl<W: WriteSide> WriteSide for CachedWriter<W> {
             self.inner.reader(),
             self.enforce_capacity.clone(),
         )
+    }
+
+    delegate::delegate! {
+        to self.inner {
+            fn fail(self, reason: String);
+            fn raw_write_handle(&self) -> RawWriteHandle;
+            fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
+        }
     }
 }
 

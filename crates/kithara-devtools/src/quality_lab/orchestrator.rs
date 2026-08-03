@@ -33,11 +33,11 @@ pub(super) fn run(args: &RunArgs, config: &QualityLabConfig, ctx: &Ctx) -> Resul
         baseline: args.baseline.as_deref(),
     };
     let run_context = ToolRunContext {
+        profile,
+        config,
         workspace_root: &ctx.root,
         revision_dir: &revision_dir,
         revision: &revision,
-        profile,
-        config,
         options: &options,
     };
     let mut manifests = Vec::with_capacity(tools.len());

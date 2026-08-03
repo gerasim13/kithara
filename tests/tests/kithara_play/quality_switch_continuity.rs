@@ -275,19 +275,20 @@ async fn prepare_player(
     let temp = TestTempDir::new();
     let bus = EventBus::new(1_024);
     let mut events = bus.subscribe();
-    let config = ResourceConfig::for_src(master_url.as_str())
-        .expect("fixture master URL must be valid")
-        .store(kithara_integration_tests::disk_asset_store(temp.path()))
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(backend)
-                .build(),
-        )
-        .initial_abr_mode(AbrMode::manual(initial_variant))
-        .events(bus)
-        .build();
+    let config: ResourceConfig = ResourceConfig::for_src(
+        ResourceConfig::parse_src(master_url.as_str()).expect("fixture master URL must be valid"),
+    )
+    .store(kithara_integration_tests::disk_asset_store(temp.path()))
+    .byte_pool(kithara::bufpool::BytePool::default())
+    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .decoder(
+        kithara::audio::AudioDecoderConfig::builder()
+            .backend(backend)
+            .build(),
+    )
+    .initial_abr_mode(AbrMode::manual(initial_variant))
+    .events(bus)
+    .build();
     let resource = Resource::new(config)
         .await
         .unwrap_or_else(|error| panic!("open {label} resource: {error:?}"));

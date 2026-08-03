@@ -36,10 +36,10 @@ impl Consts {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct SimilarityConfig {
-    excluded_crates: Vec<String>,
-    types: TypeConfig,
     #[serde(skip)]
     active_dependencies: BTreeSet<String>,
+    types: TypeConfig,
+    excluded_crates: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -52,19 +52,19 @@ pub(super) struct TypeConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct TypeFamilyConfig {
-    default_similarity: f64,
     members: Vec<String>,
+    default_similarity: f64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct TypeRelationConfig {
+    direction: Direction,
     left: String,
     right: String,
-    similarity: f64,
     substitution: Substitution,
-    direction: Direction,
     caveats: Vec<String>,
+    similarity: f64,
 }
 
 impl Default for TypeRelationConfig {
@@ -146,12 +146,12 @@ impl Profile {
 pub struct SimilarityArgs {
     #[arg(long, value_enum, default_value_t = Profile::Advisory)]
     pub profile: Profile,
-    /// Ignore project-default crate exclusions for a complete or explicit scan.
-    #[arg(long)]
-    pub include_default_excluded: bool,
     /// Optional roots to scan. Empty = all production crate `src/` dirs
     /// (excluding test-utils and proc-macro crates).
     pub paths: Vec<String>,
+    /// Ignore project-default crate exclusions for a complete or explicit scan.
+    #[arg(long)]
+    pub include_default_excluded: bool,
 }
 
 pub(crate) fn run(args: &SimilarityArgs, ctx: &Ctx) -> Result<()> {

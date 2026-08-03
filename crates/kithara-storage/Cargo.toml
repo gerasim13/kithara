@@ -36,6 +36,7 @@ arc-swap = { workspace = true }
 bon = { workspace = true }
 crossbeam-queue = { workspace = true }
 delegate = { workspace = true }
+fieldwork = { workspace = true }
 
 rangemap = { workspace = true }
 thiserror = { workspace = true }

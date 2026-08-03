@@ -17,17 +17,21 @@ use crate::{
 };
 
 /// Studio state the host owns, re-derived from the deck snapshots once a frame.
-#[derive(Default)]
+#[derive(Default, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct StudioCache {
-    decks: Vec<DeckCache>,
-    layout: DeckLayout,
-    hover_deck: Option<usize>,
-    focus_deck: usize,
-
     pub(in crate::gui) deck_marks: CatalogRowMarks,
-    pub(in crate::gui) drag: Option<usize>,
-
     pub(in crate::gui) collapsed: CollapsedModules,
+    pub(in crate::gui) drag: Option<usize>,
+    #[field(get, vis = "pub(in crate::gui)", copy)]
+    layout: DeckLayout,
+
+    hover_deck: Option<usize>,
+    #[field(get, vis = "pub(in crate::gui)")]
+    decks: Vec<DeckCache>,
+
+    #[field(get, vis = "pub(crate)")]
+    focus_deck: usize,
 }
 
 /// Deck bodies the studio lays out; the session keeps every deck either way.
@@ -46,13 +50,6 @@ impl DeckLayout {
         }
     }
 
-    pub(in crate::gui) const fn index(self) -> usize {
-        match self {
-            Self::Single => 0,
-            Self::Dual => 1,
-        }
-    }
-
     pub(in crate::gui) const fn from_index(index: usize) -> Option<Self> {
         match index {
             0 => Some(Self::Single),
@@ -60,24 +57,31 @@ impl DeckLayout {
             _ => None,
         }
     }
+
+    pub(in crate::gui) const fn index(self) -> usize {
+        match self {
+            Self::Single => 0,
+            Self::Dual => 1,
+        }
+    }
 }
 
 #[derive(Default)]
 pub(in crate::gui) struct DeckCache {
-    pub(in crate::gui) wave: Vec<WaveBucket>,
-    wave_src: Option<usize>,
-    pub(in crate::gui) quality: String,
-    pub(in crate::gui) tempo: String,
+    pub(in crate::gui) view: DeckViewState,
     pub(in crate::gui) bpm: String,
+    pub(in crate::gui) quality: String,
     pub(in crate::gui) remain: String,
     pub(in crate::gui) subtitle: String,
-    pub(in crate::gui) view: DeckViewState,
+    pub(in crate::gui) tempo: String,
+    pub(in crate::gui) wave: Vec<WaveBucket>,
+    wave_src: Option<usize>,
 }
 
 #[derive(Default)]
 pub(in crate::gui) struct DeckViewState {
-    pub(in crate::gui) quality_menu: bool,
     pub(in crate::gui) zoom: Option<f64>,
+    pub(in crate::gui) quality_menu: bool,
     pub(in crate::gui) eq_menu_open: bool,
 }
 
@@ -88,23 +92,16 @@ pub(in crate::gui) struct CatalogRowMarks(Vec<String>);
 pub(in crate::gui) struct CollapsedModules(BTreeSet<String>);
 
 impl StudioCache {
-    #[cfg(test)]
-    pub(in crate::gui) fn with_decks(decks: usize) -> Self {
-        let mut cache = Self::default();
-        cache.decks.resize_with(decks, DeckCache::default);
-        cache
-    }
-
-    pub(in crate::gui) fn toggle_module(&mut self, module: String) {
-        self.collapsed.toggle(module);
-    }
-
-    pub(in crate::gui) fn decks(&self) -> &[DeckCache] {
-        &self.decks
-    }
-
     pub(in crate::gui) fn deck_mut(&mut self, index: usize) -> Option<&mut DeckCache> {
         self.decks.get_mut(index)
+    }
+
+    pub(in crate::gui) const fn drag_target(&self) -> Option<usize> {
+        if self.drag.is_some() {
+            self.hover_deck
+        } else {
+            None
+        }
     }
 
     pub(in crate::gui) fn set_eq_menu_open(&mut self, index: usize, open: bool) -> Option<()> {
@@ -118,16 +115,25 @@ impl StudioCache {
         }
     }
 
-    pub(in crate::gui) const fn layout(&self) -> DeckLayout {
-        self.layout
-    }
-
     pub(crate) const fn laid_out_decks(&self) -> usize {
         self.layout.decks()
     }
 
-    pub(crate) const fn focus_deck(&self) -> usize {
-        self.focus_deck
+    pub(crate) fn refresh(&mut self, decks: &Decks, catalog: &Catalog) {
+        self.decks
+            .resize_with(decks.iter().count(), Default::default);
+        for (cache, deck) in self.decks.iter_mut().zip(decks.iter()) {
+            cache.refresh(deck);
+        }
+        self.deck_marks.refresh(decks, catalog);
+    }
+
+    pub(in crate::gui) fn set_hover_deck(&mut self, deck: usize, over: bool) {
+        if over {
+            self.hover_deck = Some(deck);
+        } else if self.hover_deck == Some(deck) {
+            self.hover_deck = None;
+        }
     }
 
     pub(in crate::gui) fn set_layout(&mut self, layout: DeckLayout) {
@@ -140,22 +146,6 @@ impl StudioCache {
         }
     }
 
-    pub(in crate::gui) fn set_hover_deck(&mut self, deck: usize, over: bool) {
-        if over {
-            self.hover_deck = Some(deck);
-        } else if self.hover_deck == Some(deck) {
-            self.hover_deck = None;
-        }
-    }
-
-    pub(in crate::gui) const fn drag_target(&self) -> Option<usize> {
-        if self.drag.is_some() {
-            self.hover_deck
-        } else {
-            None
-        }
-    }
-
     pub(in crate::gui) fn take_drop(&mut self) -> Option<(usize, usize)> {
         let row = self.drag.take()?;
         let deck = self.hover_deck?;
@@ -163,13 +153,15 @@ impl StudioCache {
         Some((row, deck))
     }
 
-    pub(crate) fn refresh(&mut self, decks: &Decks, catalog: &Catalog) {
-        self.decks
-            .resize_with(decks.iter().count(), Default::default);
-        for (cache, deck) in self.decks.iter_mut().zip(decks.iter()) {
-            cache.refresh(deck);
-        }
-        self.deck_marks.refresh(decks, catalog);
+    pub(in crate::gui) fn toggle_module(&mut self, module: String) {
+        self.collapsed.toggle(module);
+    }
+
+    #[cfg(test)]
+    pub(in crate::gui) fn with_decks(decks: usize) -> Self {
+        let mut cache = Self::default();
+        cache.decks.resize_with(decks, DeckCache::default);
+        cache
     }
 }
 
