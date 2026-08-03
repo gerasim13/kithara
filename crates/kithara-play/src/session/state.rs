@@ -79,9 +79,12 @@ impl<B: AudioBackend> SessionState<B> {
     pub const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 
     #[must_use]
-    pub fn new(start_stream_fn: StartStreamFn<B>) -> Self {
+    pub fn new<F>(start_stream_fn: F) -> Self
+    where
+        F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
+    {
         Self {
-            start_stream_fn,
+            start_stream_fn: Box::new(start_stream_fn),
             ctx: None,
             next_player_id: 1,
             players: Vec::new(),

@@ -11,7 +11,8 @@ mod wire {
 
     pub type PlayerId = u64;
 
-    pub type StartStreamFn<B> = fn(&mut FirewheelCtx<B>, u32) -> Result<(), String>;
+    pub type StartStreamFn<B> =
+        Box<dyn FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send>;
 
     #[derive(Debug, Clone, thiserror::Error)]
     #[non_exhaustive]

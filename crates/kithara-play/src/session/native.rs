@@ -8,7 +8,7 @@ use tracing::{debug, warn};
 
 use super::{
     dispatch::run_cmd,
-    protocol::{Cmd, CmdMsg, Reply, SessionDispatcher, SessionHandle, StartStreamFn},
+    protocol::{Cmd, CmdMsg, Reply, SessionDispatcher, SessionHandle},
     state::SessionState,
 };
 use crate::error::PlayError;
@@ -41,7 +41,7 @@ impl SessionDispatcher for SessionClient {
 
 fn engine_thread<B: AudioBackend>(
     cmd_rx: &mpsc::Receiver<CmdMsg>,
-    start_stream_fn: StartStreamFn<B>,
+    start_stream_fn: impl FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
 ) {
     let mut state = SessionState::<B>::new(start_stream_fn);
     debug!("[KITHARA-ROUTE] native session worker started");
@@ -56,7 +56,7 @@ fn engine_thread<B: AudioBackend>(
 
 fn spawn_session_client<B: AudioBackend + Send + 'static>(
     thread_name: &'static str,
-    start_stream_fn: StartStreamFn<B>,
+    start_stream_fn: impl FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
 ) -> Arc<SessionClient> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<CmdMsg>();
     spawn_named(thread_name, move || {
