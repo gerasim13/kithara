@@ -285,19 +285,18 @@ crate-owned.
 
 `render::document` owns the recursive compiled-document walk, conditional visibility, retained-host
 selection, and root composition. Its public `Host` contract names no toolkit; `render::tree::render`
-is the iced adapter and delegates the whole walk to that facade. `solve` still owns main-axis
-distribution, cross extent, and child offsets for expanded `Row`, `Column`, and `Slot` nodes and
-compiled `Split` nodes. `render::tree::flex` remains its iced host: it supplies declared lengths and
-limits, measures each mounted child through iced, places the returned layout nodes, and forwards the
-complete widget lifecycle. Module chrome, native `Vis`, and intrinsic control measurement remain
-host-local.
+is the iced adapter and delegates the whole walk to that facade. `solve` owns the neutral `Length`,
+`Limits`, `Padding`, `Alignment`, `Point`, and `Size` vocabulary along with main-axis distribution,
+cross extent, and child offsets for expanded `Row`, `Column`, and `Slot` nodes and compiled `Split`
+nodes. `render::tree::flex` translates iced constraints into that vocabulary, measures each mounted
+child through iced, and translates the returned placement back into iced layout nodes. Module chrome,
+native `Vis`, exact intrinsic control measurement, and the complete widget lifecycle remain
+host-local through `solve::Measure`.
 
-The facade boundary deliberately sits above the solver. Exact intrinsic measurement still belongs
-to the mounted host, and moving iced's `Length`, `Limits`, `Padding`, `Point`, and `Size` into parallel
-owned types before the masonry adapter has concrete constraints would create a translation contract
-with only one implementation. A second host instead implements `render::document::Host`, receives
-the same resolved node order and state decisions, and maps those local layout operations into its own
-solver vocabulary. Neutral draw lists remain the shared paint contract for portable controls.
+This boundary is shared because masonry needs the same recursive `Range` minimum distribution but
+cannot express per-child minimums through its native flex protocol. Each host therefore supplies
+only measurement and placement while `solve::resolve` and `solve::fluid::allocate` keep one layout
+answer. Neutral draw lists remain the shared paint contract for portable controls.
 
 The root adapter sends a compiled `Split` weight to `Flex` as the document's original `f32`. A fluid
 cell uses `Length::Fill` only to declare that it participates in distribution; the solver reads the

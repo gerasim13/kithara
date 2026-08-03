@@ -171,6 +171,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
             Axis::Horizontal => *limits,
             Axis::Vertical => limits.max_width(f32::INFINITY),
         };
+        let solver_limits = limits.into();
         let items = self
             .children
             .iter()
@@ -178,8 +179,8 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
             .map(|(child, layout)| {
                 let declared = layout.declared.unwrap_or_else(|| child.as_widget().size());
                 layout.main_weight.map_or_else(
-                    || solve::Item::new(declared, layout.main_minimum),
-                    |weight| solve::Item::weighted(declared, weight),
+                    || solve::Item::new(declared.into(), layout.main_minimum),
+                    |weight| solve::Item::weighted(declared.into(), weight),
                 )
             })
             .collect::<Vec<_>>();
@@ -196,12 +197,12 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
         } = solve::resolve(
             Input {
                 axis: self.axis,
-                limits: &limits,
-                width: self.width,
-                height: self.height,
-                padding: self.padding,
+                limits: &solver_limits,
+                width: self.width.into(),
+                height: self.height.into(),
+                padding: self.padding.into(),
                 spacing: self.spacing,
-                align_items: self.align,
+                align_items: self.align.into(),
                 items,
             },
             &mut measure,
@@ -212,7 +213,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
             node.move_to_mut(placement.offset);
         }
 
-        layout::Node::with_children(size, nodes)
+        layout::Node::with_children(size.into(), nodes)
     }
 
     fn draw(
@@ -346,6 +347,82 @@ impl<'a> From<Flex<'a>> for Element<'a, UiEvent> {
     }
 }
 
+impl From<Alignment> for solve::Alignment {
+    fn from(alignment: Alignment) -> Self {
+        match alignment {
+            Alignment::Start => Self::Start,
+            Alignment::Center => Self::Center,
+            Alignment::End => Self::End,
+        }
+    }
+}
+
+impl From<Length> for solve::Length {
+    fn from(length: Length) -> Self {
+        match length {
+            Length::Fill => Self::Fill,
+            Length::FillPortion(factor) => Self::FillPortion(factor),
+            Length::Shrink => Self::Shrink,
+            Length::Fixed(amount) => Self::Fixed(amount),
+        }
+    }
+}
+
+impl From<Padding> for solve::Padding {
+    fn from(padding: Padding) -> Self {
+        Self {
+            top: padding.top,
+            right: padding.right,
+            bottom: padding.bottom,
+            left: padding.left,
+        }
+    }
+}
+
+impl From<solve::Point> for iced::Point {
+    fn from(point: solve::Point) -> Self {
+        Self::new(point.x, point.y)
+    }
+}
+
+impl<T, U> From<Size<T>> for solve::Size<U>
+where
+    U: From<T>,
+{
+    fn from(size: Size<T>) -> Self {
+        Self::new(U::from(size.width), U::from(size.height))
+    }
+}
+
+impl<T, U> From<solve::Size<T>> for Size<U>
+where
+    U: From<T>,
+{
+    fn from(size: solve::Size<T>) -> Self {
+        Self::new(U::from(size.width), U::from(size.height))
+    }
+}
+
+impl From<layout::Limits> for solve::Limits {
+    fn from(limits: layout::Limits) -> Self {
+        Self::with_compression(
+            limits.min().into(),
+            limits.max().into(),
+            limits.compression().into(),
+        )
+    }
+}
+
+impl From<solve::Limits> for layout::Limits {
+    fn from(limits: solve::Limits) -> Self {
+        Self::with_compression(
+            limits.min().into(),
+            limits.max().into(),
+            limits.compression().into(),
+        )
+    }
+}
+
 struct IcedMeasure<'a, 'element> {
     children: &'a mut [Element<'element, UiEvent>],
     child_layouts: &'a [ChildLayout],
@@ -355,22 +432,25 @@ struct IcedMeasure<'a, 'element> {
 }
 
 impl Measure for IcedMeasure<'_, '_> {
-    fn measure(&mut self, index: usize, limits: &layout::Limits) -> Size {
-        let declared = self.child_layouts[index].declared;
+    fn measure(&mut self, index: usize, limits: &solve::Limits) -> solve::Size {
+        let declared: Option<solve::Size<solve::Length>> =
+            self.child_layouts[index].declared.map(Into::into);
         let child_limits =
             declared.map(|declared| limits.width(declared.width).height(declared.height).loose());
+        let child_limits = child_limits.unwrap_or(*limits).into();
         let node = self.children[index].as_widget_mut().layout(
             &mut self.trees[index],
             self.renderer,
-            child_limits.as_ref().unwrap_or(limits),
+            &child_limits,
         );
+        let intrinsic = node.size().into();
         let size = declared.map_or_else(
-            || node.size(),
+            || intrinsic,
             |declared| {
                 limits
                     .width(declared.width)
                     .height(declared.height)
-                    .resolve(declared.width, declared.height, node.size())
+                    .resolve(declared.width, declared.height, intrinsic)
             },
         );
         self.nodes[index] = node;

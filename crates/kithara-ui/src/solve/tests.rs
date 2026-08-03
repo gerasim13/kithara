@@ -1,4 +1,3 @@
-use iced::{Alignment, Length, Padding, Point, Size, advanced::layout::Limits};
 use kithara_test_utils::kithara;
 
 use super::*;
@@ -87,7 +86,7 @@ impl Case {
             max,
             width,
             height,
-            padding: Padding::ZERO,
+            padding: Padding::default(),
             spacing: 0.0,
             align_items: Alignment::Start,
             items,
@@ -100,7 +99,7 @@ impl Case {
             max,
             width,
             height,
-            padding: Padding::ZERO,
+            padding: Padding::default(),
             spacing: 0.0,
             align_items: Alignment::Start,
             items,
@@ -150,6 +149,82 @@ fn placements(distribution: &Distribution) -> Vec<(Point, Size)> {
 
 const fn item(offset: Point, size: Size) -> (Point, Size) {
     (offset, size)
+}
+
+#[kithara::test]
+fn loosening_limits_drops_only_the_minimum() {
+    let limits = Limits::with_compression(
+        Size::new(10.0, 20.0),
+        Size::new(30.0, 40.0),
+        Size::new(true, false),
+    )
+    .loose();
+
+    assert_eq!(limits.min(), Size::ZERO);
+    assert_eq!(limits.max(), Size::new(30.0, 40.0));
+    assert_eq!(limits.compression(), Size::new(true, false));
+}
+
+#[kithara::test]
+fn shrinking_limits_uses_both_padding_sides_and_preserves_compression() {
+    let limits = Limits::with_compression(
+        Size::new(10.0, 5.0),
+        Size::new(50.0, 20.0),
+        Size::new(true, false),
+    )
+    .shrink(Padding {
+        top: 1.0,
+        right: 7.0,
+        bottom: 2.0,
+        left: 5.0,
+    });
+
+    assert_eq!(limits.min(), Size::new(0.0, 2.0));
+    assert_eq!(limits.max(), Size::new(38.0, 17.0));
+    assert_eq!(limits.compression(), Size::new(true, false));
+}
+
+#[kithara::test]
+fn resolving_limits_distinguishes_fill_fixed_and_compressed_fill() {
+    let limits = Limits::with_compression(
+        Size::new(10.0, 20.0),
+        Size::new(100.0, 200.0),
+        Size::new(false, true),
+    );
+
+    assert_eq!(
+        limits.resolve(Length::Fill, Length::FillPortion(3), Size::new(30.0, 40.0)),
+        Size::new(100.0, 40.0)
+    );
+    assert_eq!(
+        limits.resolve(
+            Length::Fixed(5.0),
+            Length::Fixed(250.0),
+            Size::new(30.0, 40.0),
+        ),
+        Size::new(10.0, 200.0)
+    );
+    assert_eq!(
+        limits.resolve(Length::Shrink, Length::Shrink, Size::new(150.0, 5.0)),
+        Size::new(100.0, 20.0)
+    );
+}
+
+#[kithara::test]
+fn length_constraints_set_and_clear_compression_when_pinning_an_axis() {
+    let limits = Limits::new(Size::new(10.0, 20.0), Size::new(100.0, 200.0))
+        .width(Length::Shrink)
+        .height(Length::Shrink);
+
+    assert_eq!(limits.compression(), Size::new(true, true));
+
+    let limits = limits
+        .width(Length::Fixed(150.0))
+        .height(Length::Fixed(5.0));
+
+    assert_eq!(limits.min(), Size::new(100.0, 20.0));
+    assert_eq!(limits.max(), Size::new(100.0, 20.0));
+    assert_eq!(limits.compression(), Size::new(false, false));
 }
 
 #[kithara::test]
