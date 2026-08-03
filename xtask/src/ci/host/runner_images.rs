@@ -360,8 +360,10 @@ impl RunnerManager<'_> {
         [
             ("Xcode.app", xcode, true),
             ("kithara-tools", root.join("toolchains/shared-bin"), true),
+            // virtiofs cannot serve rustup's downloads, so the guest must find
+            // every toolchain already installed here.
             ("kithara-rustup", home.join(".rustup"), true),
-            // Cargo writes its registry and git checkouts, and `concurrent = 1`
+            // Cargo writes its registry and git checkouts; `concurrent = 1`
             // keeps one job from racing another over the same cache.
             ("kithara-cargo", home.join(".cargo"), false),
             ("kithara-cache", root.join("cache"), false),
