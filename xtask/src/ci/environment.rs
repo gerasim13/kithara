@@ -194,7 +194,7 @@ fn shared_root(config: &CiConfig, lane: Lane) -> PathBuf {
         return PathBuf::from(root);
     }
     match lane {
-        Lane::Apple | Lane::Deep | Lane::ReleaseApple => config.host.cache_root_cilicon.clone(),
+        Lane::Apple | Lane::Deep | Lane::ReleaseApple => config.host.cache_root_macos.clone(),
         Lane::Linux | Lane::Web | Lane::Weekly => config.host.cache_root_linux.clone(),
         Lane::Windows => config.host.cache_root_windows.clone(),
         Lane::Android | Lane::ReleaseAndroid | Lane::ReleasePublish => {

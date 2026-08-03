@@ -74,11 +74,11 @@ Create four project runner authentication tokens in corporate GitLab:
 | `runner-release.token` | `kithara-release` | protected macOS shell |
 
 Each token file must contain one `glrt-...` token and have mode `0600`. Also
-create `~/.config/kithara-ci/cilicon-ssh.password` with the SSH password of the
+create `~/.config/kithara-ci/macos-guest.password` with the SSH password of the
 macOS guest account and mode `0600`.
 
 The macOS lane runs each job in a throwaway VM. `xtask ci host run-macos-runner`
-clones the base image named by `cilicon_vm_bundle`, boots the clone headless
+clones the base image named by `macos_vm_bundle`, boots the clone headless
 with Xcode and the Rust toolchain mounted from the host, lets GitLab hand it a
 single build through `gitlab-runner run-single --max-builds 1`, and destroys the
 clone afterwards. Build that base image once, from the Apple restore image
@@ -89,7 +89,7 @@ tart create --from-ipsw <UniversalMac_<version>_<build>_Restore.ipsw> kithara-ma
 tart run kithara-macos-base
 ```
 
-Complete Setup Assistant in the guest, create the `cilicon_ssh_user` account
+Complete Setup Assistant in the guest, create the `macos_guest_user` account
 with the password above, enable Remote Login, authorise the CI account's SSH
 key, grant that account passwordless `sudo`, and accept the Xcode licence once
 with the host Xcode mounted. The image carries no Xcode of its own, so it stays

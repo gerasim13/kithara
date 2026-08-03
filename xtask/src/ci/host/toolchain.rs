@@ -81,7 +81,6 @@ impl<'a> ToolchainInstaller<'a> {
         self.install_rust()?;
         self.install_cargo_tools()?;
         self.install_android()?;
-        self.install_cilicon()?;
         self.install_docker_config()?;
         info!("CI user toolchain installed");
         Ok(())
@@ -337,67 +336,6 @@ impl<'a> ToolchainInstaller<'a> {
             }
         }
         Ok(())
-    }
-
-    fn install_cilicon(&self) -> Result<()> {
-        let home = self.ci_home();
-        let applications = home.join("Applications");
-        let app = applications.join("Cilicon.app");
-        fs::create_dir_all(&applications)?;
-        if app.is_dir() {
-            let version = self.process.capture(
-                "/usr/bin/defaults",
-                &[
-                    "read",
-                    path_text(&app.join("Contents/Info"))?,
-                    "CFBundleShortVersionString",
-                ],
-                "installed Cilicon version",
-            )?;
-            if version != self.config.pins.cilicon_version {
-                bail!(
-                    "Cilicon {version} is installed; {} is required",
-                    self.config.pins.cilicon_version
-                );
-            }
-            return Ok(());
-        }
-        let temporary = self
-            .config
-            .host
-            .host_root
-            .join(format!("toolchains/cilicon-install.{}", std::process::id()));
-        fs::create_dir(&temporary)?;
-        let result = (|| {
-            let archive = temporary.join("Cilicon.zip");
-            download(
-                &format!(
-                    "https://github.com/traderepublic/Cilicon/releases/download/v{0}/Cilicon_{0}_25_adhoc.zip",
-                    self.config.pins.cilicon_version
-                ),
-                &archive,
-            )?;
-            verify_sha256(&archive, &self.config.pins.cilicon_sha256)?;
-            let unpacked = temporary.join("unpacked");
-            self.process.run(
-                "/usr/bin/ditto",
-                &["-x", "-k", path_text(&archive)?, path_text(&unpacked)?],
-                "extract Cilicon",
-            )?;
-            self.process.run(
-                "/usr/bin/ditto",
-                &[path_text(&unpacked.join("Cilicon.app"))?, path_text(&app)?],
-                "install Cilicon",
-            )?;
-            self.process.run(
-                "/usr/bin/codesign",
-                &["--verify", "--deep", "--strict", path_text(&app)?],
-                "verify Cilicon signature",
-            )
-        })();
-        let cleanup = fs::remove_dir_all(&temporary)
-            .with_context(|| format!("removing {}", temporary.display()));
-        result.and(cleanup)
     }
 
     fn install_docker_config(&self) -> Result<()> {

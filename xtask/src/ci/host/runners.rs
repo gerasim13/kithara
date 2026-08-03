@@ -4,7 +4,6 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
 use tracing::info;
 
 use super::services::launchd;
@@ -30,20 +29,17 @@ impl<'a> RunnerManager<'a> {
         let config_root = home.join(".config/kithara-ci");
         let runner_root = home.join(".gitlab-runner");
         let image_digest_path = config_root.join("linux-image.digest");
-        let cilicon_password_path = config_root.join("cilicon-ssh.password");
         let expected_linux = read_trimmed(&image_digest_path)?;
         let actual_linux = self.linux_image_digest(&home)?;
         if expected_linux != actual_linux {
             bail!("Linux CI image digest changed: expected {expected_linux}, found {actual_linux}");
         }
         let tokens = Tokens::load(&config_root)?;
-        let cilicon_password = read_secret(&cilicon_password_path)?;
         for path in [
             &config_root,
             &runner_root,
             &self.config.host.host_root.join("cache/gitlab-runner"),
             &self.config.host.host_root.join("toolchains/shared-bin"),
-            &self.config.host.host_root.join("vm/cilicon-clone"),
             &self.config.host.host_root.join("workspaces/gitlab"),
             &self.agent_root(),
         ] {
@@ -60,7 +56,7 @@ impl<'a> RunnerManager<'a> {
                 .host_root
                 .join("toolchains/shared-bin/kithara-ci"),
         )
-        .context("installing CI executable for Cilicon guests")?;
+        .context("installing CI executable for macOS guests")?;
         for name in ["host.toml", "pins.toml"] {
             replace_file(
                 &self.config.host.host_root.join("services").join(name),
@@ -71,16 +67,12 @@ impl<'a> RunnerManager<'a> {
                     .join("toolchains/shared-bin")
                     .join(name),
             )
-            .with_context(|| format!("installing Cilicon guest {name}"))?;
+            .with_context(|| format!("installing macOS guest {name}"))?;
         }
 
         write_secure(
             &runner_root.join("config.toml"),
             &self.runner_config(&home, &tokens),
-        )?;
-        write_secure(
-            &home.join("cilicon.yml"),
-            &self.cilicon_config(&home, &tokens, &cilicon_password)?,
         )?;
         self.install_runner_agents(&home)?;
         self.process.run(
@@ -113,7 +105,13 @@ impl<'a> RunnerManager<'a> {
                 self.config.host.ci_user
             );
         }
-        for name in ["cleanup", "health", "colima", "gitlab-runner", "cilicon"] {
+        for name in [
+            "cleanup",
+            "health",
+            "colima",
+            "gitlab-runner",
+            "macos-runner",
+        ] {
             let label = format!("com.zvuk.kithara-ci.{name}");
             let plist = self.agent_root().join(format!("{label}.plist"));
             if !plist.is_file() {
@@ -161,82 +159,6 @@ impl<'a> RunnerManager<'a> {
             tokens.android,
             tokens.release,
         )
-    }
-
-    fn cilicon_config(&self, home: &Path, tokens: &Tokens, ssh_password: &str) -> Result<String> {
-        let root = &self.config.host.host_root;
-        let shared = self.config.host.cilicon_guest_shared_root.display();
-        let pre_run = format!(
-            "\"{shared}/kithara-tools/kithara-ci\" ci host --config \
-             \"{shared}/kithara-tools/host.toml\" --pins \
-             \"{shared}/kithara-tools/pins.toml\" guest-prepare"
-        );
-        let config = CiliconConfig {
-            source: &format!("file://{}", self.config.host.cilicon_vm_bundle.display()),
-            runner_name: "kithara-mac-mini-macos",
-            vm_clone_path: root.join("vm/cilicon-clone"),
-            retry_delay: 30,
-            ssh_connect_max_retries: 30,
-            console_devices: ["tart-version-2"],
-            ssh_credentials: SshCredentials {
-                username: &self.config.host.cilicon_ssh_user,
-                password: ssh_password,
-            },
-            hardware: Hardware {
-                cpu_cores: 8,
-                ram_gigabytes: 12,
-                connects_to_audio_device: false,
-                display: Display {
-                    width: 1_440,
-                    height: 900,
-                    pixels_per_inch: 80,
-                },
-            },
-            directory_mounts: [
-                DirectoryMount {
-                    host_path: root.join("cache"),
-                    guest_folder: "kithara-cache",
-                    read_only: false,
-                },
-                DirectoryMount {
-                    host_path: home.join(".cargo"),
-                    guest_folder: "kithara-cargo",
-                    read_only: true,
-                },
-                DirectoryMount {
-                    host_path: home.join(".rustup"),
-                    guest_folder: "kithara-rustup",
-                    read_only: true,
-                },
-                DirectoryMount {
-                    host_path: root.join("toolchains/shared-bin"),
-                    guest_folder: "kithara-tools",
-                    read_only: true,
-                },
-                DirectoryMount {
-                    host_path: self.config.host.host_xcode_app()?.to_path_buf(),
-                    guest_folder: "Xcode.app",
-                    read_only: true,
-                },
-            ],
-            pre_run: &pre_run,
-            provisioner: Provisioner {
-                kind: "gitlab",
-                config: GitlabProvisioner {
-                    gitlab_url: self.config.host.gitlab_origin(),
-                    runner_token: &tokens.macos,
-                    executor: "shell",
-                    max_number_of_builds: 1,
-                    download_latest: true,
-                    download_url: format!(
-                        "https://gitlab-runner-downloads.s3.amazonaws.com/v{}/binaries/\
-                         gitlab-runner-darwin-arm64",
-                        self.config.pins.gitlab_runner_version
-                    ),
-                },
-            },
-        };
-        serde_yml::to_string(&config).context("serializing Cilicon configuration")
     }
 
     fn install_runner_agents(&self, home: &Path) -> Result<()> {
@@ -304,9 +226,9 @@ impl<'a> RunnerManager<'a> {
                 ),
             ),
             (
-                "cilicon",
+                "macos-runner",
                 launchd(
-                    "com.zvuk.kithara-ci.cilicon",
+                    "com.zvuk.kithara-ci.macos-runner",
                     &[
                         &self
                             .config
@@ -335,7 +257,7 @@ impl<'a> RunnerManager<'a> {
                             .to_string(),
                         "run-macos-runner",
                     ],
-                    &logs.join("cilicon.log"),
+                    &logs.join("macos-runner.log"),
                     &agent_path,
                     "<key>KeepAlive</key><true/><key>ProcessType</key><string>Interactive</string>",
                 ),
@@ -398,82 +320,15 @@ pub(super) fn docker_host(home: &Path) -> String {
     )
 }
 
-struct Tokens {
-    macos: String,
+pub(super) struct Tokens {
+    pub(super) macos: String,
     linux: String,
     android: String,
     release: String,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CiliconConfig<'a> {
-    source: &'a str,
-    runner_name: &'a str,
-    vm_clone_path: PathBuf,
-    retry_delay: u64,
-    ssh_connect_max_retries: u64,
-    console_devices: [&'a str; 1],
-    ssh_credentials: SshCredentials<'a>,
-    hardware: Hardware,
-    directory_mounts: [DirectoryMount<'a>; 5],
-    pre_run: &'a str,
-    provisioner: Provisioner<'a>,
-}
-
-#[derive(Serialize)]
-struct SshCredentials<'a> {
-    username: &'a str,
-    password: &'a str,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Hardware {
-    cpu_cores: u8,
-    ram_gigabytes: u8,
-    connects_to_audio_device: bool,
-    display: Display,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Display {
-    width: u16,
-    height: u16,
-    pixels_per_inch: u8,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DirectoryMount<'a> {
-    host_path: PathBuf,
-    guest_folder: &'a str,
-    read_only: bool,
-}
-
-#[derive(Serialize)]
-struct Provisioner<'a> {
-    #[serde(rename = "type")]
-    kind: &'a str,
-    config: GitlabProvisioner<'a>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GitlabProvisioner<'a> {
-    #[serde(rename = "gitlabURL")]
-    gitlab_url: String,
-    runner_token: &'a str,
-    executor: &'a str,
-    max_number_of_builds: u8,
-    download_latest: bool,
-    #[serde(rename = "downloadURL")]
-    download_url: String,
-}
-
 impl Tokens {
-    fn load(root: &Path) -> Result<Self> {
+    pub(super) fn load(root: &Path) -> Result<Self> {
         Ok(Self {
             macos: read_token(root, "macos")?,
             linux: read_token(root, "linux")?,
@@ -582,14 +437,6 @@ mod tests {
         };
 
         toml::from_str::<toml::Value>(&manager.runner_config(&home, &tokens)).unwrap();
-        let cilicon = manager
-            .cilicon_config(&home, &tokens, "fixture-password")
-            .unwrap();
-        serde_yml::from_str::<serde_yml::Value>(&cilicon).unwrap();
-        assert!(cilicon.contains("gitlabURL:"));
-        assert!(cilicon.contains("downloadURL:"));
-        assert!(cilicon.contains("preRun:"));
-        assert!(!cilicon.contains("password: admin"));
     }
 
     #[test]
@@ -614,10 +461,7 @@ mod tests {
         };
 
         let runner = manager.runner_config(&home, &tokens);
-        let cilicon = manager
-            .cilicon_config(&home, &tokens, "fixture-password")
-            .unwrap();
-        for rendered in [&runner, &cilicon] {
+        for rendered in [&runner] {
             for forbidden in [
                 "tls-ca-file",
                 "tls_ca_file",

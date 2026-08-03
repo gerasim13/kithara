@@ -32,7 +32,7 @@ enum HostCommand {
     Finish,
     /// Install host packages through the existing Homebrew installation.
     InstallHostTools,
-    /// Install pinned Rust, Android, and Cilicon tools for the CI account.
+    /// Install pinned Rust and Android tools for the CI account.
     InstallUserTools,
     /// Install the current Rust executable and launchd service definitions.
     InstallServices,
@@ -42,7 +42,7 @@ enum HostCommand {
     ConfigureRunners,
     /// Load or reload the CI user's launchd services.
     Activate,
-    /// Prepare a disposable Cilicon guest before `GitLab` Runner starts.
+    /// Prepare a throwaway macOS guest before `GitLab` Runner starts.
     GuestPrepare,
     /// Build and pin the Linux runner image.
     BuildLinuxImage {

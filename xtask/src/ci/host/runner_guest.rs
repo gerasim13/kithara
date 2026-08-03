@@ -14,7 +14,7 @@ impl RunnerManager<'_> {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .context("guest HOME is not set")?;
-        let shared = &self.config.host.cilicon_guest_shared_root;
+        let shared = &self.config.host.macos_guest_shared_root;
         for (name, source) in [
             (".cargo", shared.join("kithara-cargo")),
             (".rustup", shared.join("kithara-rustup")),
@@ -27,7 +27,7 @@ impl RunnerManager<'_> {
             &[
                 "xcode-select",
                 "-s",
-                path_text(&self.config.host.cilicon_xcode_developer_dir)?,
+                path_text(&self.config.host.macos_guest_xcode_developer_dir)?,
             ],
             "select guest Xcode",
         )?;
@@ -105,7 +105,7 @@ fn create_guest_symlink(source: &Path, target: &Path) -> Result<()> {
 
 #[cfg(not(unix))]
 fn create_guest_symlink(_source: &Path, _target: &Path) -> Result<()> {
-    bail!("Cilicon guest preparation requires Unix symlinks")
+    bail!("macOS guest preparation requires Unix symlinks")
 }
 
 fn sudo(args: &[&str], label: &str) -> Result<()> {

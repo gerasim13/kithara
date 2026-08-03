@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use tracing::info;
 
 use super::runners::{
-    RunnerManager, docker_host, path_text, read_secret, read_trimmed, require_macos, write_secure,
+    RunnerManager, Tokens, docker_host, path_text, read_trimmed, require_macos, write_secure,
 };
 
 /// The throwaway VM the macOS lane clones for every job.
@@ -302,7 +302,7 @@ impl RunnerManager<'_> {
     }
 
     fn verify_macos_base(&self) -> Result<()> {
-        let bundle = &self.config.host.cilicon_vm_bundle;
+        let bundle = &self.config.host.macos_vm_bundle;
         for part in ["config.json", "disk.img", "nvram.bin"] {
             let path = bundle.join(part);
             if !path.is_file() {
@@ -320,10 +320,10 @@ impl RunnerManager<'_> {
     fn base_vm_name(&self) -> Result<&str> {
         self.config
             .host
-            .cilicon_vm_bundle
+            .macos_vm_bundle
             .file_name()
             .and_then(|name| name.to_str())
-            .context("cilicon_vm_bundle has no VM name")
+            .context("macos_vm_bundle has no VM name")
     }
 
     fn boot_job_vm(&self, tart: &str) -> Result<String> {
@@ -375,8 +375,8 @@ impl RunnerManager<'_> {
     }
 
     fn serve_one_job(&self, address: &str) -> Result<()> {
-        let shared = self.config.host.cilicon_guest_shared_root.display();
-        let token = read_secret(&self.ci_home().join(".config/kithara-ci/runner-macos.token"))?;
+        let shared = self.config.host.macos_guest_shared_root.display();
+        let tokens = Tokens::load(&self.ci_home().join(".config/kithara-ci"))?;
         self.guest_shell(
             address,
             &format!(
@@ -397,12 +397,12 @@ impl RunnerManager<'_> {
                  exec \"{shared}/kithara-tools/gitlab-runner\" run-single --url {} \
                  --token \"$RUNNER_TOKEN\" --executor shell --shell bash --max-builds 1 \
                  --wait-timeout {}",
-                self.config.host.cilicon_xcode_developer_dir.display(),
+                self.config.host.macos_guest_xcode_developer_dir.display(),
                 self.config.host.gitlab_origin(),
                 JobVm::WAIT_SECONDS,
             ),
             "serve one GitLab job",
-            Some(&token),
+            Some(&tokens.macos),
         )
     }
 
@@ -424,7 +424,7 @@ impl RunnerManager<'_> {
                 "StrictHostKeyChecking=no",
                 "-o",
                 "UserKnownHostsFile=/dev/null",
-                &format!("{}@{address}", self.config.host.cilicon_ssh_user),
+                &format!("{}@{address}", self.config.host.macos_guest_user),
                 script,
             ])
             .stdin(if stdin.is_some() {

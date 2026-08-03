@@ -19,8 +19,6 @@ pub(crate) struct CiPins {
     pub(crate) android_platform_version: u32,
     pub(crate) brew_casks: Vec<String>,
     pub(crate) brew_formulae: Vec<String>,
-    pub(crate) cilicon_sha256: String,
-    pub(crate) cilicon_version: String,
     pub(crate) expected_xcode_version: String,
     pub(crate) geckodriver_linux_arm64_sha256: String,
     pub(crate) geckodriver_version: String,
@@ -66,7 +64,6 @@ impl CiPins {
                 self.android_commandline_tools_version.as_str(),
             ),
             ("android_ndk_version", self.android_ndk_version.as_str()),
-            ("cilicon_version", self.cilicon_version.as_str()),
             (
                 "expected_xcode_version",
                 self.expected_xcode_version.as_str(),
@@ -107,7 +104,6 @@ impl CiPins {
                 "android_commandline_tools_sha256",
                 self.android_commandline_tools_sha256.as_str(),
             ),
-            ("cilicon_sha256", self.cilicon_sha256.as_str()),
             (
                 "geckodriver_linux_arm64_sha256",
                 self.geckodriver_linux_arm64_sha256.as_str(),

@@ -18,8 +18,6 @@ brew_formulae = [
   "rustup",
   "xcodegen",
 ]
-cilicon_sha256 = "b4886bc74d6c4a802b24ef3bc40afa894d8cc13e9c25a912fdc6940a1a79a17c"
-cilicon_version = "2.4.2"
 expected_xcode_version = "26.6"
 geckodriver_linux_arm64_sha256 = "b5fd13fc8f05ca99292700896d43fa986747a01b5fdc77f7bfc88a3707dc4241"
 geckodriver_version = "0.36.0"

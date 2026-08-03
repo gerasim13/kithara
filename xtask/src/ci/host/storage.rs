@@ -114,7 +114,7 @@ impl<'a> HostStorage<'a> {
                 self.prune_old_trees("cache/bootstrap/review", Duration::ZERO)?;
                 self.prune_old_trees("cache/trusted", 7 * Self::DAY)?;
                 self.prune_old_trees("cache/bootstrap/trusted", 7 * Self::DAY)?;
-                self.prune_old_trees("vm/cilicon/images", 7 * Self::DAY)?;
+                self.prune_old_trees("vm/tart/cache", 7 * Self::DAY)?;
                 self.prune_docker_cache("168h");
             }
             Pressure::Normal => {}
@@ -427,7 +427,7 @@ mod tests {
     fn config(root: &Path) -> CiConfig {
         let mut config = fixture();
         config.host.host_root = root.to_path_buf();
-        config.host.cache_root_cilicon = root.join("cache");
+        config.host.cache_root_macos = root.join("cache");
         config.host.cache_root_linux = root.join("cache");
         config.host.cache_root_windows = root.join("cache");
         config.host.quota_bytes = 300;
