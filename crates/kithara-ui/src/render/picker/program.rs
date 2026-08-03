@@ -7,7 +7,7 @@ use iced::{
 };
 use kithara_platform::time::Instant;
 
-use super::{paint::PickerPaint, widget::PickerState};
+use super::{paint::PickerPaint, picker_hits, widget::PickerState};
 use crate::{
     backends::IcedBackend,
     draw::{Rect, replay},
@@ -143,8 +143,8 @@ pub(super) fn targets<'a>(
     if !open {
         return targets;
     }
-    for index in 0..item_count {
-        let bounds = super::paint::picker_option_bounds(anchor.into(), item_height, index);
+    for region in picker_hits(anchor.into(), item_height, item_count) {
+        let bounds = region.area();
         targets.push(Target::item(
             path,
             iced_interact::hit(
@@ -156,7 +156,7 @@ pub(super) fn targets<'a>(
                 },
                 cursor,
             ),
-            index,
+            *region.action(),
         ));
     }
     targets

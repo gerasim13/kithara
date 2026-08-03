@@ -12,7 +12,7 @@ use iced::{
 };
 
 use super::{
-    overlay::PickerOverlay,
+    overlay::PickerPortal,
     paint::{PickerPaint, picker_selected_index},
     program::{InputProgram, PaintProgram},
 };
@@ -193,14 +193,13 @@ impl IcedWidget<UiEvent, Theme, Renderer> for PickerWidget<'_> {
     ) -> Option<overlay::Element<'a, UiEvent, Theme, Renderer>> {
         let state = tree.state.downcast_mut::<PickerState>();
         state.snapshot().open.then(|| {
-            let popup = overlay::Element::new(Box::new(PickerOverlay {
+            overlay::Element::new(Box::new(PickerPortal {
                 anchor: layout.bounds() + translation,
                 owner: self.owner,
                 paint: &self.paint,
                 path: &self.path,
                 state,
-            }));
-            overlay::Group::with_children(vec![popup]).overlay()
+            }))
         })
     }
 }
@@ -291,5 +290,141 @@ impl PickerState {
 
     pub(super) const fn text(&self) -> &RefCell<Option<TextContext>> {
         &self.text
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iced::{
+        Element, Event, Length, Pixels, Point, Rectangle, Renderer, Size, Vector,
+        advanced::{
+            Shell, clipboard,
+            layout::{Layout, Limits},
+            mouse, overlay,
+            widget::Tree,
+        },
+        widget::Column,
+    };
+    use iced_renderer::fallback::Renderer as FallbackRenderer;
+    use iced_tiny_skia::Renderer as TinySkiaRenderer;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        builtin,
+        render::{ControlAction, WindowCommand, fonts::SANS},
+        widgets::{Widget, window::WindowSurface},
+    };
+
+    fn dispatch(
+        element: &mut Element<'_, UiEvent>,
+        tree: &mut Tree,
+        node: &layout::Node,
+        renderer: &Renderer,
+        viewport: Size,
+        pointer: Point,
+    ) -> (Vec<UiEvent>, bool) {
+        let event = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+        let cursor = mouse::Cursor::Available(pointer);
+        let bounds = Rectangle::with_size(viewport);
+        let layout = Layout::new(node);
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        let mut base_cursor = cursor;
+        {
+            let overlay =
+                element
+                    .as_widget_mut()
+                    .overlay(tree, layout, renderer, &bounds, Vector::ZERO);
+            if let Some(overlay) = overlay {
+                let mut nested = overlay::Nested::new(overlay);
+                let overlay_node = nested.layout(renderer, viewport);
+                nested.update(
+                    &event,
+                    Layout::new(&overlay_node),
+                    cursor,
+                    renderer,
+                    &mut clipboard,
+                    &mut shell,
+                );
+                if !shell.is_event_captured()
+                    && nested.mouse_interaction(Layout::new(&overlay_node), cursor, renderer)
+                        != mouse::Interaction::None
+                {
+                    base_cursor = mouse::Cursor::Unavailable;
+                }
+            }
+        }
+        if !shell.is_event_captured() {
+            element.as_widget_mut().update(
+                tree,
+                &event,
+                layout,
+                base_cursor,
+                renderer,
+                &mut clipboard,
+                &mut shell,
+                &bounds,
+            );
+        }
+        let captured = shell.is_event_captured();
+        drop(shell);
+        (messages, captured)
+    }
+
+    #[kithara::test]
+    fn an_open_popup_captures_before_an_overlapping_window_layer() {
+        let skin = builtin::skin();
+        let item_height = skin.tree.scope_item_height;
+        let picker = scope_picker(
+            "library/context",
+            vec!["ZVUK", "LOCAL"],
+            None,
+            skin,
+            InputOwner::Leaf,
+        );
+        let chrome = WindowSurface::drag().view();
+        let mut element: Element<'_, UiEvent> = Column::with_children(vec![picker, chrome])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+        let renderer = FallbackRenderer::Secondary(TinySkiaRenderer::new(SANS, Pixels(14.0)));
+        let viewport = Size::new(160.0, item_height * 3.0);
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+
+        let (opened, captured) = dispatch(
+            &mut element,
+            &mut tree,
+            &node,
+            &renderer,
+            viewport,
+            Point::new(4.0, item_height / 2.0),
+        );
+        assert!(opened.is_empty());
+        assert!(captured);
+
+        let (selected, captured) = dispatch(
+            &mut element,
+            &mut tree,
+            &node,
+            &renderer,
+            viewport,
+            Point::new(4.0, item_height + item_height / 2.0),
+        );
+        assert_eq!(
+            selected,
+            [UiEvent::Control {
+                path: "library/context".to_owned(),
+                action: ControlAction::SelectIndex(0),
+            }]
+        );
+        assert!(captured);
+        assert!(!selected.contains(&UiEvent::Window(WindowCommand::Drag)));
     }
 }

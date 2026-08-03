@@ -6,6 +6,8 @@ pub(crate) enum CursorShape {
     Grab,
     Grabbing,
     Pointer,
+    ResizeDiagonalDown,
+    ResizeDiagonalUp,
     ResizeH,
     ResizeV,
     Text,

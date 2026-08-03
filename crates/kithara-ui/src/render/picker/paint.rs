@@ -2,7 +2,8 @@ use num_traits::{ToPrimitive, cast::AsPrimitive};
 
 use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Transform},
-    render::{ReadValue, Skin},
+    interact::CursorShape,
+    render::{HostLayer, LayerHit, ReadValue, Skin},
     skin::{FontFamily, TextRoleSkin},
     text::TextContext,
 };
@@ -109,7 +110,26 @@ impl<'a> PickerPaint<'a> {
         list.finish()
     }
 
-    pub(super) fn popup_commands(
+    pub(super) fn popup_layer(
+        &self,
+        text: &mut TextContext,
+        anchor: Rect,
+        highlighted: Option<usize>,
+    ) -> HostLayer<usize> {
+        let bounds = Rect {
+            h: self.item_height() * AsPrimitive::<f32>::as_(self.items.len()),
+            w: anchor.w,
+            x: anchor.x,
+            y: anchor.y + anchor.h,
+        };
+        HostLayer::new(
+            bounds,
+            self.popup_commands(text, bounds.w, highlighted),
+            picker_hits(anchor, self.item_height(), self.items.len()),
+        )
+    }
+
+    fn popup_commands(
         &self,
         text: &mut TextContext,
         width: f32,
@@ -176,13 +196,29 @@ pub(crate) fn picker_selected_index(
     value.round().to_usize().map(|index| index.min(last))
 }
 
-pub(crate) fn picker_option_bounds(anchor: Rect, item_height: f32, index: usize) -> Rect {
+fn picker_option_bounds(anchor: Rect, item_height: f32, index: usize) -> Rect {
     Rect {
         h: item_height,
         w: anchor.w,
         x: anchor.x,
         y: anchor.y + anchor.h + AsPrimitive::<f32>::as_(index) * item_height,
     }
+}
+
+pub(crate) fn picker_hits(
+    anchor: Rect,
+    item_height: f32,
+    item_count: usize,
+) -> Vec<LayerHit<usize>> {
+    (0..item_count)
+        .map(|index| {
+            LayerHit::new(
+                picker_option_bounds(anchor, item_height, index),
+                CursorShape::Pointer,
+                index,
+            )
+        })
+        .collect()
 }
 
 fn text_role(skin: &Skin) -> TextRoleSkin {
@@ -239,7 +275,7 @@ mod tests {
             y: 0.0,
         };
         let base = paint.base_commands(&mut text, bounds);
-        let popup = paint.popup_commands(&mut text, bounds.w, Some(1));
+        let popup = paint.popup_layer(&mut text, bounds, Some(1));
 
         assert!(
             base.commands()
@@ -249,6 +285,7 @@ mod tests {
         );
         assert!(
             popup
+                .draw()
                 .commands()
                 .iter()
                 .all(|command| !matches!(command, DrawCmd::Clip { .. })),
@@ -257,11 +294,11 @@ mod tests {
         assert!(base.commands().iter().all(|command| {
             !matches!(command, DrawCmd::Text { content, .. } if content == "LOCAL")
         }));
-        assert!(popup.commands().iter().any(|command| {
+        assert!(popup.draw().commands().iter().any(|command| {
             matches!(command, DrawCmd::Text { content, .. } if content == "LOCAL")
         }));
         assert!(matches!(
-            popup.commands(),
+            popup.draw().commands(),
             [
                 DrawCmd::Fill { .. },
                 DrawCmd::Text { .. },
@@ -270,6 +307,7 @@ mod tests {
                 DrawCmd::Stroke { .. },
             ]
         ));
+        assert_eq!(popup.hits(), picker_hits(bounds, paint.item_height(), 2));
     }
 
     #[kithara::test]

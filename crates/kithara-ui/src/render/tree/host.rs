@@ -23,7 +23,7 @@ use crate::{
     render::{
         Reads, Skin, UiEvent,
         controls::sync_tree_scroll,
-        engine as engine_event, picker_option_bounds, sync_picker, sync_text_input,
+        engine as engine_event, hosted_picker_overlay, picker_hits, sync_picker, sync_text_input,
         sync_track_list_scroll, toggle_module,
         tree::control::{HostedControl, append_control_descriptors, append_control_targets},
     },
@@ -396,14 +396,65 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
         viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'a, UiEvent, Theme, Renderer>> {
-        self.child.as_widget_mut().overlay(
+        let layout_tree = &self.layout;
+        let state = tree.state.downcast_mut::<State>();
+        let open = layout_tree
+            .picker_snapshots(&state.engine)
+            .iter()
+            .any(|(_, snapshot)| snapshot.open);
+        let child = self.child.as_widget_mut().overlay(
             &mut tree.children[0],
             layout,
             renderer,
             viewport,
             translation,
-        )
+        )?;
+        if !open {
+            return Some(child);
+        }
+        Some(hosted_picker_overlay(child, move |event, cursor, shell| {
+            route_open_picker(layout_tree, &mut state.engine, layout, event, cursor, shell)
+        }))
     }
+}
+
+fn route_open_picker(
+    layout_tree: &HostedLayout,
+    engine: &mut Engine,
+    layout: Layout<'_>,
+    event: &Event,
+    cursor: mouse::Cursor,
+    shell: &mut Shell<'_, UiEvent>,
+) -> bool {
+    let Some(input @ (Input::PointerDown | Input::PointerMoved { .. })) =
+        iced_interact::input(event)
+    else {
+        return false;
+    };
+    let before = layout_tree.picker_snapshots(engine);
+    if !before.iter().any(|(_, snapshot)| snapshot.open) {
+        return false;
+    }
+    let targets = layout_tree.targets_with_engine(layout, cursor, Some(engine));
+    let Some(emission) = engine.handle(input, &targets, Instant::now()) else {
+        return false;
+    };
+    let captured = emission.outcome.is_captured();
+    if let Some(action) = engine_event(&emission.path, emission.child, emission.outcome) {
+        let (message, redraw, _) = action.into_inner();
+        shell.request_redraw_at(redraw);
+        if let Some(message) = message {
+            shell.publish(message);
+        }
+    }
+    if before != layout_tree.picker_snapshots(engine) {
+        shell.request_redraw();
+        shell.invalidate_layout();
+    }
+    if captured {
+        shell.capture_event();
+    }
+    captured
 }
 
 fn sync_scrolls(
@@ -697,8 +748,8 @@ impl HostedLayout {
             let anchor = targets.remove(position);
             let area = anchor.hit.area();
             targets.push(anchor);
-            for index in 0..item_count {
-                let bounds = picker_option_bounds(area, item_height, index);
+            for region in picker_hits(area, item_height, item_count) {
+                let bounds = region.area();
                 targets.push(Target::item(
                     path,
                     iced_interact::hit(
@@ -710,7 +761,7 @@ impl HostedLayout {
                         },
                         cursor,
                     ),
-                    index,
+                    *region.action(),
                 ));
             }
         }
@@ -904,7 +955,7 @@ pub(super) fn first_child(layout: Layout<'_>) -> Option<Layout<'_>> {
 
 #[cfg(test)]
 mod tests {
-    use std::borrow::Cow;
+    use std::{borrow::Cow, cell::Cell, rc::Rc};
 
     use iced::{
         Pixels, Point, Rectangle, Size,
@@ -913,6 +964,7 @@ mod tests {
             graphics::text::font_system,
             input_method,
             layout::{Layout, Limits},
+            overlay,
             widget::{Tree, tree::Tag},
         },
         keyboard::{
@@ -920,7 +972,8 @@ mod tests {
             key::{Code, Named, Physical},
         },
         mouse::{self, Button, Cursor},
-        widget::{Space, container, mouse_area},
+        time::Instant as IcedInstant,
+        widget::{Space, Stack, container, mouse_area},
         window,
     };
     use iced_renderer::fallback::Renderer as FallbackRenderer;
@@ -932,26 +985,119 @@ mod tests {
     use crate::{
         builtin,
         compile::{CompiledNode, compile},
-        draw::Pt,
+        draw::{DrawList, Pt, Rect},
         engine::ScrollConfig,
         expand::ControlSpec,
         ids::EndpointId,
-        interact::{Key, Modifiers},
+        interact::{CursorShape, Key, Modifiers},
         module::WaveStyle,
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
         render::{
-            ControlAction, DragPhase, InputOwner, ReadValue, StereoLevels, TrackRow, TreeIcon,
-            TreeRow, WaveBucket, WaveformView,
+            ControlAction, DragPhase, HostLayer, InputOwner, LayerHit, ReadValue, StereoLevels,
+            TrackRow, TreeIcon, TreeRow, WaveBucket, WaveformView, WindowCommand,
+            WindowLayerProgram,
             controls::{nav_item_supports_engine_input, supports_engine_input},
             fonts::{FONT_BYTES, SANS},
             icons::document_icon,
+            window_layer,
         },
         source::{MemResolver, UiConfig},
+        text::TextResources,
         widgets::{DropZone, ModuleChrome, Widget, wheel::WheelSurface},
     };
 
     fn redraw_event() -> Event {
-        Event::Window(window::Event::RedrawRequested(iced::time::Instant::now()))
+        Event::Window(window::Event::RedrawRequested(IcedInstant::now()))
+    }
+
+    struct OverlapWindowProgram {
+        area: Rc<Cell<Rect>>,
+    }
+
+    impl WindowLayerProgram for OverlapWindowProgram {
+        type State = ();
+
+        fn size(&self) -> Size<Length> {
+            Size::new(Length::Fill, Length::Fill)
+        }
+
+        fn layer(
+            &self,
+            _state: &(),
+            bounds: Rect,
+            _pointer: Option<Pt>,
+        ) -> HostLayer<WindowCommand> {
+            HostLayer::new(
+                bounds,
+                DrawList::default(),
+                vec![LayerHit::new(
+                    self.area.get(),
+                    CursorShape::None,
+                    WindowCommand::Drag,
+                )],
+            )
+        }
+
+        fn resources(&self) -> Option<&TextResources> {
+            None
+        }
+    }
+
+    fn dispatch_press(
+        element: &mut Element<'_, UiEvent>,
+        tree: &mut Tree,
+        node: &layout::Node,
+        renderer: &Renderer,
+        viewport: Size,
+        point: Point,
+    ) -> (Vec<UiEvent>, bool) {
+        let event = Event::Mouse(mouse::Event::ButtonPressed(Button::Left));
+        let cursor = Cursor::Available(point);
+        let bounds = Rectangle::with_size(viewport);
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        let mut base_cursor = cursor;
+        {
+            let root_layout = Layout::new(node);
+            if let Some(overlay) =
+                element
+                    .as_widget_mut()
+                    .overlay(tree, root_layout, renderer, &bounds, Vector::ZERO)
+            {
+                let mut nested = overlay::Nested::new(overlay);
+                let overlay_node = nested.layout(renderer, viewport);
+                nested.update(
+                    &event,
+                    Layout::new(&overlay_node),
+                    cursor,
+                    renderer,
+                    &mut clipboard,
+                    &mut shell,
+                );
+                if !shell.is_event_captured()
+                    && nested.mouse_interaction(Layout::new(&overlay_node), cursor, renderer)
+                        != mouse::Interaction::None
+                {
+                    base_cursor = Cursor::Unavailable;
+                }
+            }
+        }
+        if !shell.is_event_captured() {
+            element.as_widget_mut().update(
+                tree,
+                &event,
+                Layout::new(node),
+                base_cursor,
+                renderer,
+                &mut clipboard,
+                &mut shell,
+                &bounds,
+            );
+        }
+        let captured = shell.is_event_captured();
+        drop(shell);
+        (messages, captured)
     }
 
     struct Fixtures {
@@ -3475,6 +3621,121 @@ mod tests {
                 "a key with engine focus elsewhere must reach the app as Ignored"
             );
         }
+    }
+
+    #[kithara::test]
+    fn an_engine_picker_popup_captures_before_an_overlapping_window_layer() {
+        let ui = compiled_gallery_library();
+        let reads = FixtureReads::default();
+        let CompiledNode::Module { instance, root, .. } = &ui.root else {
+            panic!("gallery library fixture root must be a module");
+        };
+        let renderer = headless_renderer();
+        let viewport = Size::new(900.0, 600.0);
+        let hosted_layout = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let child = super::super::node::render_engine_node(
+            root,
+            &[],
+            *instance,
+            &ui,
+            &reads,
+            builtin::skin(),
+        );
+        let hosted = host(child, root, &ui, &reads, builtin::skin());
+        let area = Rc::new(Cell::new(Rect {
+            h: 0.0,
+            w: 0.0,
+            x: 0.0,
+            y: 0.0,
+        }));
+        let chrome = window_layer(OverlapWindowProgram {
+            area: Rc::clone(&area),
+        });
+        let mut element: Element<'_, UiEvent> = Stack::with_children(vec![hosted, chrome])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+        let mut tree = Tree::new(element.as_widget());
+        let mut node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+
+        let picker_area = hosted_layout
+            .targets(
+                Layout::new(&node)
+                    .children()
+                    .next()
+                    .unwrap_or_else(|| panic!("the stack must retain the hosted document")),
+                Cursor::Unavailable,
+            )
+            .into_iter()
+            .find(|target| target.path == "library2/context")
+            .map_or_else(
+                || panic!("the hosted picker target must exist"),
+                |target| target.hit.area(),
+            );
+        let popup = Rect {
+            h: picker_area.h,
+            w: picker_area.w,
+            x: picker_area.x,
+            y: picker_area.y + picker_area.h,
+        };
+        area.set(popup);
+
+        let (opened, captured) = dispatch_press(
+            &mut element,
+            &mut tree,
+            &node,
+            &renderer,
+            viewport,
+            Point::new(
+                picker_area.x + picker_area.w / 2.0,
+                picker_area.y + picker_area.h / 2.0,
+            ),
+        );
+        assert!(opened.is_empty());
+        assert!(captured);
+        assert!(
+            tree.children[0]
+                .state
+                .downcast_ref::<State>()
+                .engine
+                .picker_snapshot("library2/context")
+                .is_some_and(|snapshot| snapshot.open)
+        );
+
+        node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let (selected, captured) = dispatch_press(
+            &mut element,
+            &mut tree,
+            &node,
+            &renderer,
+            viewport,
+            Point::new(popup.x + popup.w / 2.0, popup.y + popup.h / 2.0),
+        );
+        assert_eq!(
+            selected,
+            [UiEvent::Control {
+                path: "library2/context".to_owned(),
+                action: ControlAction::SelectIndex(0),
+            }]
+        );
+        assert!(captured);
+        assert!(!selected.contains(&UiEvent::Window(WindowCommand::Drag)));
+        assert!(
+            tree.children[0]
+                .state
+                .downcast_ref::<State>()
+                .engine
+                .picker_snapshot("library2/context")
+                .is_some_and(|snapshot| !snapshot.open)
+        );
     }
 
     #[kithara::test]

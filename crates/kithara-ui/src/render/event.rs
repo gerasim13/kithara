@@ -66,6 +66,10 @@ pub(crate) fn toggle_module(module: &str, outcome: Outcome<()>) -> Option<Action
     action(outcome, |()| UiEvent::ToggleModule(module.to_owned()))
 }
 
+pub(crate) fn window(command: WindowCommand, outcome: Outcome<()>) -> Option<Action<UiEvent>> {
+    action(outcome, |()| UiEvent::Window(command))
+}
+
 pub(crate) fn index(path: &str, outcome: Outcome<usize>) -> Option<Action<UiEvent>> {
     action(outcome, |index| {
         control_event(path, ControlAction::SelectIndex(index))

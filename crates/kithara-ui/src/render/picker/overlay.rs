@@ -1,31 +1,65 @@
 use iced::{
-    Event, Point, Rectangle, Renderer, Size, Theme, Vector,
+    Event, Point, Rectangle, Renderer, Size, Theme,
     advanced::{
-        Clipboard, Renderer as _, Shell,
-        graphics::geometry::Renderer as _,
+        Clipboard, Shell,
         layout::{self, Layout},
         mouse, overlay, renderer,
     },
     event,
-    widget::canvas::Frame,
 };
 use kithara_platform::time::Instant;
 use num_traits::cast::AsPrimitive;
 
 use super::{paint::PickerPaint, program::targets, widget::PickerState};
 use crate::{
-    backends::IcedBackend,
-    draw::replay,
     interact::iced as iced_interact,
-    render::{InputOwner, UiEvent, engine as engine_event},
+    render::{InputOwner, UiEvent, draw_host_layer, engine as engine_event},
 };
 
-pub(super) struct PickerOverlay<'a, 'b> {
+pub(super) struct PickerPortal<'a, 'b> {
     pub(super) anchor: Rectangle,
     pub(super) owner: InputOwner,
     pub(super) paint: &'a PickerPaint<'a>,
     pub(super) path: &'a str,
     pub(super) state: &'b mut PickerState,
+}
+
+impl overlay::Overlay<UiEvent, Theme, Renderer> for PickerPortal<'_, '_> {
+    fn layout(&mut self, _renderer: &Renderer, _bounds: Size) -> layout::Node {
+        layout::Node::new(Size::ZERO)
+    }
+
+    fn draw(
+        &self,
+        _renderer: &mut Renderer,
+        _theme: &Theme,
+        _style: &renderer::Style,
+        _layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+    ) {
+    }
+
+    fn overlay<'a>(
+        &'a mut self,
+        _layout: Layout<'a>,
+        _renderer: &Renderer,
+    ) -> Option<overlay::Element<'a, UiEvent, Theme, Renderer>> {
+        Some(overlay::Element::new(Box::new(PickerOverlay {
+            anchor: self.anchor,
+            owner: self.owner,
+            paint: self.paint,
+            path: self.path,
+            state: self.state,
+        })))
+    }
+}
+
+struct PickerOverlay<'a, 'b> {
+    anchor: Rectangle,
+    owner: InputOwner,
+    paint: &'a PickerPaint<'a>,
+    path: &'a str,
+    state: &'b mut PickerState,
 }
 
 impl overlay::Overlay<UiEvent, Theme, Renderer> for PickerOverlay<'_, '_> {
@@ -93,9 +127,10 @@ impl overlay::Overlay<UiEvent, Theme, Renderer> for PickerOverlay<'_, '_> {
         cursor: mouse::Cursor,
         _renderer: &Renderer,
     ) -> mouse::Interaction {
-        match self.owner {
-            InputOwner::Leaf if cursor.is_over(layout.bounds()) => mouse::Interaction::Pointer,
-            InputOwner::Leaf | InputOwner::Engine => mouse::Interaction::None,
+        if cursor.is_over(layout.bounds()) {
+            mouse::Interaction::Pointer
+        } else {
+            mouse::Interaction::None
         }
     }
 
@@ -104,25 +139,14 @@ impl overlay::Overlay<UiEvent, Theme, Renderer> for PickerOverlay<'_, '_> {
         renderer: &mut Renderer,
         _theme: &Theme,
         _style: &renderer::Style,
-        layout: Layout<'_>,
+        _layout: Layout<'_>,
         _cursor: mouse::Cursor,
     ) {
-        let bounds = layout.bounds();
-        if bounds.width < 1.0 || bounds.height < 1.0 {
-            return;
-        }
-        renderer.with_translation(Vector::new(bounds.x, bounds.y), |renderer| {
-            let mut frame = Frame::new(renderer, bounds.size());
-            let mut text = self.state.text().borrow_mut();
-            let text = text.get_or_insert_with(|| self.paint.skin().text_resources().into());
-            let commands =
-                self.paint
-                    .popup_commands(text, bounds.width, self.state.snapshot().highlighted);
-            replay(
-                &commands,
-                &mut IcedBackend::new(&mut frame, self.paint.skin().text_resources()),
-            );
-            renderer.draw_geometry(frame.into_geometry());
-        });
+        let mut text = self.state.text().borrow_mut();
+        let text = text.get_or_insert_with(|| self.paint.skin().text_resources().into());
+        let layer =
+            self.paint
+                .popup_layer(text, self.anchor.into(), self.state.snapshot().highlighted);
+        draw_host_layer(renderer, &layer, self.paint.skin().text_resources());
     }
 }

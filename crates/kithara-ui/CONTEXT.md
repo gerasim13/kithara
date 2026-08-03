@@ -140,6 +140,39 @@ enabling it would add a second wgpu major beside iced's 27.
 registers the embedded Inter, JetBrains Mono, Space Grotesk, and Lucide faces. A context is a
 caller-owned value injected where shaping occurs; there is no process-global font context.
 
+### Host layers
+
+A `HostLayer<A>` is a host-owned output above the document: one window-space bound, one retained
+local `DrawList`, and an ordered set of window-space `LayerHit<A>` regions that pair a rectangle
+and cursor with a typed action. It is not a document node. It has no document path, never enters
+`CompiledNode`, and is neither described nor reconciled by the document engine. The host rebuilds
+it from current window state and replays its retained painting after the document. Window resize
+edges and the drag ghost use the root route. Title bars, window controls, and window-drag surfaces
+remain layout-bearing document leaves only so the solver can place them; their base leaves neither
+paint nor handle input. After layout, each exposes a pathless `HostLayer<WindowCommand>` from its
+solved window-space bounds through the same overlay adapter. Window-control gesture state belongs
+to that leaf host rather than the layer: a press arms and captures, release over the same button
+emits, and release elsewhere cancels.
+
+This is the M6a popup route generalised, not a second overlay mechanism. A picker still owns its
+document path and reconciled open/highlighted state, but its popup output is a `HostLayer<usize>`.
+Popup, document-leaf chrome, and the root window host replay layers through the same adapter, and
+picker targets are derived from the same `LayerHit` values that describe the popup. The path
+belongs to the picker that consumes the typed action; it is not smuggled into the layer.
+
+The outer host flattens and draws the document's complete nested overlay chain first, including an
+open picker, then paints the root resize and drag layers. Input takes the reverse priority: the root
+resize layer answers first, and only an ignored input reaches the popup or document underneath. A
+picker portal exposes its popup in the next nested overlay tier, so the popup paints above
+document-leaf chrome and gets the first opportunity to capture an overlapping input. A hosted
+picker routes that opportunity through the canonical `Host` engine; a leaf-owned picker consumes
+it locally. Neither route mirrors picker state. Within one host, layer ordering is paint order and
+arbitration walks layers and hit regions in reverse. The resize layer partitions the outer strip
+into four square corners and four non-overlapping sides. `Rect::contains` is half-open, so for a 4
+px west edge `x < 4` resizes while a press one logical pixel inside that boundary reaches the
+document control beneath it. The drag ghost owns no hit region, cursor, or event; pointer motion
+only requests the repaint that moves its retained drawing.
+
 `TextContext::shape` takes a whole `TextRoleSkin` rather than a face, a weight and a size, and that
 signature is the contract. `TextRoleSkin::spacing` is letter tracking, and a signature that took
 the pieces loose let a caller shape text and drop it: `render::typography::styled_text` did exactly

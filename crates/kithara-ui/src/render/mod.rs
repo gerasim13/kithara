@@ -3,6 +3,7 @@ mod controls;
 pub mod event;
 pub mod fonts;
 mod icons;
+mod layer;
 pub mod model;
 mod owner;
 mod picker;
@@ -18,14 +19,19 @@ pub use address::{Node, Scope, Walk};
 pub(crate) use controls::{ChromeLeaf, chrome_leaf, fader_slider, header_chevron, tree_rows};
 pub use event::{ControlAction, DragPhase, UiEvent, WindowCommand, WindowEdge};
 pub(crate) use event::{
-    activate, control_event, drag, engine, index, scalar, scalar_child, step, toggle_module,
+    activate, control_event, drag, engine, index, scalar, scalar_child, step, toggle_module, window,
 };
 pub use icons::Icon;
+pub(crate) use layer::{
+    HostLayer, LayerHit, WindowLayerProgram, draw_host_layer, window_layer, window_layers,
+};
 pub use model::{
     ReadValue, Reads, StereoLevels, TrackRow, TreeIcon, TreeRow, WaveBucket, WaveformView,
 };
 pub(crate) use owner::InputOwner;
-pub(crate) use picker::{picker_option_bounds, picker_selected_index, scope_picker, sync_picker};
+pub(crate) use picker::{
+    hosted_picker_overlay, picker_hits, picker_selected_index, scope_picker, sync_picker,
+};
 pub use skin::Skin;
 pub(crate) use text_input::{search_input, sync_text_input, text_input_layout};
 pub(crate) use track_list::{sync_track_list_scroll, track_list};

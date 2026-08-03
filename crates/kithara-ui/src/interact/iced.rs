@@ -134,6 +134,8 @@ impl From<CursorShape> for mouse::Interaction {
             CursorShape::Grab => Self::Grab,
             CursorShape::Grabbing => Self::Grabbing,
             CursorShape::Pointer => Self::Pointer,
+            CursorShape::ResizeDiagonalDown => Self::ResizingDiagonallyDown,
+            CursorShape::ResizeDiagonalUp => Self::ResizingDiagonallyUp,
             CursorShape::ResizeH => Self::ResizingHorizontally,
             CursorShape::ResizeV => Self::ResizingVertically,
             CursorShape::Text => Self::Text,
@@ -234,6 +236,18 @@ mod tests {
         assert!(matches!(
             input(&Event::Mouse(mouse::Event::CursorLeft)),
             Some(Input::PointerLeft)
+        ));
+    }
+
+    #[kithara::test]
+    fn diagonal_cursor_shapes_map_to_their_iced_orientations() {
+        assert!(matches!(
+            mouse::Interaction::from(CursorShape::ResizeDiagonalDown),
+            mouse::Interaction::ResizingDiagonallyDown
+        ));
+        assert!(matches!(
+            mouse::Interaction::from(CursorShape::ResizeDiagonalUp),
+            mouse::Interaction::ResizingDiagonallyUp
         ));
     }
 

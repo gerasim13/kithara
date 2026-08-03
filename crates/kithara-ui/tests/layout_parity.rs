@@ -566,19 +566,12 @@ fn write_layout(output: &mut String, ui: &CompiledUi, reads: &dyn Reads, layout:
         reads,
         attribution: Attribution::default(),
     };
-    let mut content = layout;
-    if ui.dragged.is_some() {
+    let content = if ui.resize_edges || ui.dragged.is_some() {
         walker.wrapper();
-        let children = exact_children(content, 2, &root_path, "drag ghost Stack");
-        content = children[0];
-        walker.furniture(children[1]);
-    }
-    if ui.resize_edges {
-        walker.wrapper();
-        let children = exact_children(content, 2, &root_path, "resize edge Stack");
-        content = children[0];
-        walker.furniture(children[1]);
-    }
+        exact_children(layout, 1, &root_path, "window host layer")[0]
+    } else {
+        layout
+    };
     walker.compiled(&ui.root, content, "", 0, 0);
     assert_eq!(
         walker.attribution.document_nodes,
