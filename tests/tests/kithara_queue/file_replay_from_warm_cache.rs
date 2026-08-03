@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, FlushHub, FlushPolicy, StorageBackend},
+    assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
     events::AbrMode,
     net::{HttpClient, NetOptions},
@@ -39,7 +39,7 @@ fn build_session(cache_path: &Path) -> Session {
     // checkpoint (`flush_now`) instead of guessing at the background
     // worker's debounce with a timer.
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: cache_path.to_path_buf(),
         })

@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 
 use clap::Parser;
 use kithara::{
-    assets::{AssetStoreBuilder, FlushHub, FlushPolicy, StorageBackend},
+    assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     bufpool::Region,
     net::{HttpClient, NetOptions},
     play::SessionHandle,
@@ -76,7 +76,7 @@ fn main() -> AppResult {
         DownloaderConfig::for_client(HttpClient::new(net, shutdown.child())).build(),
     );
     let flush_hub = FlushHub::new(shutdown.child(), FlushPolicy::default());
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
         .pool(byte_pool.clone())

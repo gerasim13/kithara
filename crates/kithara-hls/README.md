@@ -19,11 +19,11 @@ HLS (HTTP Live Streaming) VOD orchestration: playlist parsing, segment fetching,
 ## Usage
 
 ```rust
-use kithara_assets::AssetStoreBuilder;
+use kithara_assets::AssetStore;
 use kithara_stream::Stream;
 use kithara_hls::{Hls, HlsConfig};
 
-let store = AssetStoreBuilder::default().build();
+let store = AssetStore::builder().build();
 let config = HlsConfig::for_url(master_playlist_url)
     .store(store)
     .build();

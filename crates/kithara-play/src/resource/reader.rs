@@ -21,7 +21,7 @@ use super::{ResourceConfig, SourceType};
 /// # Example
 ///
 /// ```ignore
-/// use kithara_assets::AssetStoreBuilder;
+/// use kithara_assets::AssetStore;
 /// use kithara_bufpool::{BytePool, PcmPool};
 /// use kithara_play::{Resource, ResourceConfig};
 ///
@@ -29,7 +29,7 @@ use super::{ResourceConfig, SourceType};
 /// let config: ResourceConfig = ResourceConfig::for_src(ResourceConfig::parse_src(
 ///     "https://example.com/song.mp3",
 /// )?)
-/// .store(AssetStoreBuilder::default().build())
+/// .store(AssetStore::builder().build())
 /// .byte_pool(BytePool::default())
 /// .pcm_pool(PcmPool::default())
 /// .build();

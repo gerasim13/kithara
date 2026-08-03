@@ -3,8 +3,8 @@ use std::{collections::HashSet, fmt, num::NonZeroUsize, path::Path};
 use kithara::{
     self,
     assets::{
-        AcquisitionResult, AssetResourceState, AssetStoreBuilder, BytePool, ChunkSink,
-        DiskAssetStore, ProcessCtx, ReadSide, ResourceProcessor, StorageBackend, WriteSide,
+        AcquisitionResult, AssetResourceState, AssetStore, BytePool, ChunkSink, DiskAssetStore,
+        ProcessCtx, ReadSide, ResourceProcessor, StorageBackend, WriteSide,
     },
     platform::{CancelToken, sync::Arc, time::Duration},
 };
@@ -77,7 +77,7 @@ fn load_pins(root_dir: &Path) -> HashSet<String> {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_resource_state_is_side_effect_free_and_tracks_multiple_files() {
     let dir = tempdir().unwrap();
-    let scope = AssetStoreBuilder::default()
+    let scope = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -130,7 +130,7 @@ fn disk_resource_state_is_side_effect_free_and_tracks_multiple_files() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_resource_state_keeps_active_status_after_handle_cache_eviction() {
     let dir = tempdir().unwrap();
-    let scope = AssetStoreBuilder::default()
+    let scope = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -163,7 +163,7 @@ fn disk_resource_state_keeps_active_status_after_handle_cache_eviction() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_drop_of_uncommitted_write_handle_does_not_leave_ghost_resource() {
     let dir = tempdir().unwrap();
-    let scope = AssetStoreBuilder::default()
+    let scope = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -193,7 +193,7 @@ fn disk_drop_of_uncommitted_write_handle_does_not_leave_ghost_resource() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_open_resource_on_missing_key_does_not_create_ghost_file() {
     let dir = tempdir().unwrap();
-    let scope = AssetStoreBuilder::default()
+    let scope = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -235,7 +235,7 @@ fn disk_open_resource_on_missing_key_does_not_create_ghost_file() {
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn ephemeral_resource_state_tracks_fail_remove_and_lru_eviction() {
-    let scope = AssetStoreBuilder::default()
+    let scope = AssetStore::builder()
         .cache_capacity(NonZeroUsize::new(3).unwrap())
         .backend(StorageBackend::Memory)
         .layouts(literal_layouts())
@@ -308,7 +308,7 @@ fn ephemeral_resource_state_tracks_fail_remove_and_lru_eviction() {
 fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     let dir = tempdir().unwrap();
 
-    let scope_a = AssetStoreBuilder::default()
+    let scope_a = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -355,7 +355,7 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     reopened.read_into(&mut processed).unwrap();
     assert_eq!(processed, vec![0x45, 0x75, 0x65]);
 
-    let scope_b = AssetStoreBuilder::default()
+    let scope_b = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -387,7 +387,7 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
         "dropping the last user handle must eagerly unpin even while the store stays alive"
     );
 
-    let scope_c = AssetStoreBuilder::default()
+    let scope_c = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -407,7 +407,7 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     let res_c = res_c.commit(Some(3)).unwrap();
     drop(res_c);
 
-    let scope_a_probe = AssetStoreBuilder::default()
+    let scope_a_probe = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })

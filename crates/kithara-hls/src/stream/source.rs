@@ -163,7 +163,7 @@ mod tests {
     use std::sync::OnceLock;
 
     use kithara_abr::{Abr, AbrController, AbrSettings, AbrState};
-    use kithara_assets::{AssetResource, AssetSource, AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
     use kithara_events::{AbrMode, EventBus, VariantIndex};
     use kithara_platform::{CancelToken, sync::ThreadGate, time::Duration as PlatformDuration};
     use kithara_stream::{AudioCodec, ContainerFormat, PlayheadState, SeekState};
@@ -252,7 +252,7 @@ mod tests {
 
         fn plan_ctx(bus: &EventBus, look_ahead_bytes: u64, cancel: &CancelToken) -> PlanCtx {
             let store = Arc::new(
-                AssetStoreBuilder::default()
+                AssetStore::builder()
                     .backend(StorageBackend::Memory)
                     .cancel(cancel.clone())
                     .build(),

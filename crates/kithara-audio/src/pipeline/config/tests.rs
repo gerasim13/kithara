@@ -36,7 +36,7 @@ fn create_effects_includes_custom_effects() {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
-    use kithara_assets::{AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{AssetStore, StorageBackend};
     use kithara_file::{FileConfig, FileSrc};
     use kithara_resampler::NoResamplerBackend;
 
@@ -52,7 +52,7 @@ mod native {
                 std::env::temp_dir().join("kithara-audio-config.wav"),
             ))
             .store(
-                AssetStoreBuilder::default()
+                AssetStore::builder()
                     .backend(StorageBackend::Memory)
                     .build(),
             )

@@ -6,7 +6,7 @@ use kithara::{self, platform::CancelToken};
 ///
 /// On native: wraps `tempfile::TempDir` (real filesystem).
 /// On WASM: provides a dummy path — callers that need real FS should
-/// use `AssetStoreBuilder::ephemeral(true)` instead.
+/// use `AssetStore::builder().backend(StorageBackend::Memory)` instead.
 pub struct TestTempDir {
     #[cfg(not(target_arch = "wasm32"))]
     inner: tempfile::TempDir,

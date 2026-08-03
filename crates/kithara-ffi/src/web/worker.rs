@@ -1,7 +1,7 @@
 use std::{cell::RefCell, collections::HashMap, num::NonZeroUsize, rc::Rc};
 
 use kithara_abr::AbrMode;
-use kithara_assets::{AssetStore, AssetStoreBuilder, StorageBackend};
+use kithara_assets::{AssetStore, StorageBackend};
 use kithara_bufpool::Region;
 use kithara_drm::{KeyRequest, KeyRequestFactory};
 use kithara_hls::KeyOptions;
@@ -48,7 +48,7 @@ struct BuildState {
 impl Default for BuildState {
     fn default() -> Self {
         let region = Region::default();
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .cache_capacity(Consts::ASSET_CACHE_CAPACITY)
             .max_bytes(Consts::ASSET_CACHE_MAX_BYTES)

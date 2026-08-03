@@ -410,7 +410,7 @@ fn resource_config_from_source(
 mod tests {
     use ::kithara::{
         assets::{
-            AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, AssetStoreBuilder,
+            AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, AssetStore,
             StorageBackend,
         },
         audio::{Waveform, analysis::BeatAnalysisConfig},
@@ -449,7 +449,7 @@ mod tests {
     }
 
     fn target(discriminator: &str) -> AnalysisTarget {
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .build();
         let config = ResourceConfig::for_src(
@@ -650,7 +650,7 @@ mod tests {
     #[kithara::test(native, tokio)]
     fn invalid_layout_for_current_track_clears_previous_analysis() {
         let layouts = AssetLayoutRegistry::default().with::<File>(Arc::new(InvalidLayout));
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .layouts(layouts)
             .build();

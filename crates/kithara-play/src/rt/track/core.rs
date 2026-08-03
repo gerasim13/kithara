@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use bon::Builder;
+use bon::bon;
 use firewheel::dsp::fade::FadeCurve;
 use kithara_audio::ServiceClass;
 use kithara_platform::sync::Arc;
@@ -8,25 +8,6 @@ use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{PlayerResource, fade::TrackFade, triggers::TrackTriggers};
 use crate::bridge::TrackState;
-
-/// Parameters used to create a track around an owned resource.
-#[derive(Builder)]
-pub struct TrackParams {
-    src: Arc<str>,
-    #[builder(default = FadeCurve::SquareRoot)]
-    fade_curve: FadeCurve,
-    sample_rate: NonZeroU32,
-    item_id: Option<Arc<str>>,
-    #[builder(default)]
-    fade_duration: f32,
-    /// Media seconds consumed per output second. Seeds the track's media
-    /// clock so a track loaded while the player already runs off-unity
-    /// reports media time, not output time.
-    #[builder(default = 1.0)]
-    playback_rate: f32,
-    #[builder(default)]
-    prefetch_duration: f32,
-}
 
 /// Per-track state in the processor arena.
 ///
@@ -78,22 +59,23 @@ pub struct PlayerTrack {
     pub(super) sample_rate: u32,
 }
 
+#[bon]
 impl PlayerTrack {
     /// Create a new track in the `Preloading` state.
     ///
     /// The `MixDSP` starts at `FULLY_WET` (silent) so that an explicit
     /// `fade_in()` or `play()` is required to produce audio.
+    #[builder]
     #[must_use]
-    pub fn new(resource: Box<PlayerResource>, params: TrackParams) -> Self {
-        let TrackParams {
-            item_id,
-            src: _src,
-            fade_duration,
-            prefetch_duration,
-            sample_rate,
-            fade_curve,
-            playback_rate,
-        } = params;
+    pub fn new(
+        #[builder(finish_fn)] resource: Box<PlayerResource>,
+        sample_rate: NonZeroU32,
+        item_id: Option<Arc<str>>,
+        #[builder(default)] fade_duration: f32,
+        #[builder(default = FadeCurve::SquareRoot)] fade_curve: FadeCurve,
+        #[builder(default = 1.0)] playback_rate: f32,
+        #[builder(default)] prefetch_duration: f32,
+    ) -> Self {
         let observed_duration = resource.duration();
         let track = Self {
             resource,

@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, StorageBackend},
+    assets::{AssetStore, StorageBackend},
     events::{AssetEvent, DownloaderEvent, Event},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
@@ -137,7 +137,7 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: temp_dir.path().to_path_buf(),
         })

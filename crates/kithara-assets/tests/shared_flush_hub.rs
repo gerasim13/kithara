@@ -3,7 +3,7 @@
 mod support;
 
 use kithara_assets::{
-    AcquisitionResult, AssetStoreBuilder, FlushHub, FlushPolicy, StorageBackend, WriteSide,
+    AcquisitionResult, AssetStore, FlushHub, FlushPolicy, StorageBackend, WriteSide,
 };
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_test_utils::kithara;
@@ -24,13 +24,13 @@ fn shared_hub_flush_now_persists_every_store() {
     let dir = tempdir().unwrap();
     let hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
 
-    let store_a = AssetStoreBuilder::default()
+    let store_a = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: dir.path().join("a"),
         })
         .flush_hub(hub.clone())
         .build();
-    let store_b = AssetStoreBuilder::default()
+    let store_b = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: dir.path().join("b"),
         })

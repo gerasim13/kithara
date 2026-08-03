@@ -237,7 +237,7 @@ impl Loader {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use kithara_assets::{AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{AssetStore, StorageBackend};
     use kithara_bufpool::{BytePool, PcmPool, Region};
     use kithara_events::{EventBus, QueueEvent};
     use kithara_platform::time::Duration;
@@ -293,7 +293,7 @@ mod tests {
             let tracks = Arc::new(Tracks::new(bus.clone()));
             let loader = Arc::new(Loader::new(
                 player,
-                AssetStoreBuilder::default().build(),
+                AssetStore::builder().build(),
                 self.cap,
                 Arc::clone(&tracks),
             ));
@@ -308,7 +308,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn build_config_preserves_caller_supplied_config() {
         let loader = LoaderFixtureSpec::default().build().loader;
-        let supplied_store = AssetStoreBuilder::default()
+        let supplied_store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .build();
         let Ok(src) = ResourceConfig::parse_src("https://example.com/a.mp3") else {

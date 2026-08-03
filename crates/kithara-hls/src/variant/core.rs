@@ -3,6 +3,7 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
 };
 
+use bon::bon;
 use kithara_assets::AssetResource;
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
@@ -249,26 +250,17 @@ pub(super) fn segment_placeholder_size(duration: Duration, bandwidth_bps: Option
         .clamp(MIN_BYTES, MAX_PRECOMMIT_BYTES)
 }
 
-pub(crate) struct VariantParams<'a> {
-    pub(crate) ctx: &'a PlanCtx,
-    pub(crate) decrypt_contexts: &'a [Option<DecryptContext>],
-    pub(crate) seek_obs: Arc<dyn SeekObserve>,
-    pub(crate) init_decrypt_ctx: Option<DecryptContext>,
-    pub(crate) variant_idx: usize,
-}
-
+#[bon]
 impl HlsVariant {
-    pub(crate) fn try_build(
-        playlist_state: &Arc<PlaylistState>,
-        params: VariantParams<'_>,
+    #[builder]
+    pub(crate) fn try_build<'a>(
+        #[builder(start_fn)] playlist_state: &Arc<PlaylistState>,
+        ctx: &'a PlanCtx,
+        decrypt_contexts: &'a [Option<DecryptContext>],
+        seek_obs: Arc<dyn SeekObserve>,
+        #[builder(required)] init_decrypt_ctx: Option<DecryptContext>,
+        variant_idx: usize,
     ) -> HlsResult<Arc<Self>> {
-        let VariantParams {
-            variant_idx,
-            seek_obs,
-            init_decrypt_ctx,
-            decrypt_contexts,
-            ctx,
-        } = params;
         let init =
             Self::build_init_entry(playlist_state.as_ref(), variant_idx, init_decrypt_ctx, ctx)?;
         let segments = Self::build_segment_entries(

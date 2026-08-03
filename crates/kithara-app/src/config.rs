@@ -2,7 +2,7 @@ use std::fmt;
 
 use bon::Builder;
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, BytePool, FlushHub, StorageBackend},
+    assets::{AssetStore, BytePool},
     audio::analysis::BeatAnalysisConfig,
     bufpool::PcmPool,
     hls::SizeProbeMethod,
@@ -123,32 +123,5 @@ impl fmt::Debug for AppConfig {
             .field("beat_analysis", &self.beat_analysis)
             .field("size_probe_method", &self.size_probe_method)
             .finish_non_exhaustive()
-    }
-}
-
-impl AppConfig {
-    /// Create a default config around the injected app-wide owners.
-    #[must_use]
-    pub fn new(
-        downloader: Downloader,
-        flush_hub: Arc<FlushHub>,
-        cancel: CancelToken,
-        byte_pool: BytePool,
-        pcm_pool: PcmPool,
-    ) -> Self {
-        let store = AssetStoreBuilder::default()
-            .cancel(cancel.child())
-            .backend(StorageBackend::default())
-            .pool(byte_pool.clone())
-            .flush_hub(flush_hub)
-            .layouts(baked::build_baked_asset_layouts())
-            .build();
-        Self::builder()
-            .downloader(downloader)
-            .shutdown(cancel)
-            .byte_pool(byte_pool)
-            .pcm_pool(pcm_pool)
-            .store(store)
-            .build()
     }
 }

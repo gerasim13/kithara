@@ -186,7 +186,7 @@ so signed or parameterized URLs remain distinct without storing raw query text;
 fragments are ignored. For example, Silvercomet's master playlist maps to
 `<hash>/track/stream.silvercomet.top/hls/master.m3u8`.
 
-Layouts are installed once through `AssetStoreBuilder::layouts`. A custom HLS
+Layouts are installed once through `AssetStore::builder().layouts`. A custom HLS
 layout controls every URL resource above as well as named artifacts minted in
 the HLS scope; there is no separate playlist or analysis layout.
 

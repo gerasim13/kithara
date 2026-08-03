@@ -1,7 +1,7 @@
 use std::{fs, num::NonZeroUsize, path::Path, sync::Mutex};
 
 use kithara::{
-    assets::{AssetStoreBuilder, StorageBackend},
+    assets::{AssetStore, StorageBackend},
     audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
     decode::PcmChunk,
     events::{DownloaderEvent, Event, FileEvent},
@@ -114,7 +114,7 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
     let server = TestServerHelper::new().await;
     let url = server.asset("track.mp3");
     let store = if ephemeral {
-        AssetStoreBuilder::default()
+        AssetStore::builder()
             .backend(StorageBackend::Memory)
             .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
             .max_assets(10)

@@ -282,8 +282,8 @@ impl FileInner {
 #[cfg(test)]
 mod tests {
     use kithara_assets::{
-        AcquisitionResult, AssetResource, AssetResourceState, AssetSource, AssetStore,
-        AssetStoreBuilder, ResourceKey, StorageBackend,
+        AcquisitionResult, AssetResource, AssetResourceState, AssetSource, AssetStore, ResourceKey,
+        StorageBackend,
     };
     use kithara_events::{Envelope, Event, EventBus};
     use kithara_platform::{CancelToken, sync::Arc};
@@ -308,7 +308,7 @@ mod tests {
     }
 
     fn make_inner() -> Arc<FileInner> {
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .cancel(CancelToken::never())
             .build();

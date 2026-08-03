@@ -101,7 +101,7 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
 mod tests {
     use std::path::Path;
 
-    use kithara_assets::AssetStoreBuilder;
+    use kithara_assets::AssetStore;
     use kithara_audio::{DecoderResamplerSettings, ResamplerBackend, ResamplerOptions};
     use kithara_decode::DecodeError;
     use kithara_test_utils::kithara;
@@ -110,7 +110,7 @@ mod tests {
     use crate::resource::source::parse_src;
 
     fn store() -> AssetStore {
-        AssetStoreBuilder::default().build()
+        AssetStore::builder().build()
     }
 
     fn valid_src(input: &str) -> ResourceSrc {

@@ -22,7 +22,7 @@ cache file. Cached resources derived from a local source still use
 ### Layout
 
 The `AssetStore` owns an immutable `AssetLayoutRegistry`, configured through
-`AssetStoreBuilder::layouts`. A registration is keyed by the exact protocol
+`AssetStore::builder().layouts`. A registration is keyed by the exact protocol
 marker type; an absent marker uses the registry default, and registering the
 same marker again replaces its previous layout. The selected layout is a
 snapshot of store construction. Changing a registry later has no effect and
@@ -222,7 +222,7 @@ The store is **not** generic over a processing context. Processing travels per a
 
 - `ResourceProcessor` (defined here, implemented by consumers, e.g. the HLS `DecryptProcessor`): `identity() -> &[u8]` is the **immutable** cache identity (e.g. `key||iv`); `begin() -> Box<dyn ChunkSink>` mints **fresh per-commit** chaining state.
 - `ChunkSink::process(&mut self, …)` carries the evolving state (e.g. the CBC IV advancing between 64KB chunks). `commit` (and `reactivate`-then-`commit`) calls `begin()` each time, so every commit restarts chaining from the seed.
-- There is **no** build-time `process_fn`; `AssetStoreBuilder` takes no processing callback. Consumers never see the AES primitive in `kithara-assets` — only the trait.
+- There is **no** build-time `process_fn`; the asset-store builder takes no processing callback. Consumers never see the AES primitive in `kithara-assets` — only the trait.
 
 ### Cache identity is exact bytes
 
@@ -230,7 +230,7 @@ The in-memory cache key is `(ResourceKey, Option<RequestIdentity>, Option<CtxIde
 
 ### Memory byte bound
 
-`AssetStoreBuilder::max_bytes` has backend-specific ownership semantics. On
+The `AssetStore::builder().max_bytes` setting has backend-specific ownership semantics. On
 disk, `EvictAssets` applies it to persisted asset roots. On memory,
 `CachedAssets` applies it to the aggregate bytes of committed, unretained
 resource entries held by the cache. The memory bound is checked after cache
@@ -243,7 +243,7 @@ never runs from `read_at` or the decoder read loop.
 
 ## Conversions and builder inputs
 
-- `AssetStoreBuilder::{max_assets, max_bytes}` configure eviction directly;
+- `AssetStore::builder()` setters `max_assets` and `max_bytes` configure eviction directly;
   `EvictConfig` is an internal value assembled by the builder.
 - `ResourceStatus` → `AssetResourceState` (`From`) — map storage status to asset state
 - `&LruState` ↔ `LruIndexFile` (`From` both ways) — LRU index persistence round-trip
@@ -271,7 +271,7 @@ Known v1 limitation: the producer observes `producer_cancel` only at its throttl
 
 ## Resource Transactions
 
-`AssetStore::with_resource_transaction` serializes one read/validate/mutate operation per `ResourceKey` across clones from the same `AssetStore::build`. The closure re-reads state after entering the transaction. Cancellation releases or forwards the transaction to the next waiter. The transaction is process-local, ephemeral, and non-reentrant for the same store and key: it coordinates cache mutation but provides neither rollback nor cross-process locking.
+`AssetStore::with_resource_transaction` serializes one read/validate/mutate operation per `ResourceKey` across clones from the same builder invocation. The closure re-reads state after entering the transaction. Cancellation releases or forwards the transaction to the next waiter. The transaction is process-local, ephemeral, and non-reentrant for the same store and key: it coordinates cache mutation but provides neither rollback nor cross-process locking.
 
 ## Eviction Subscription
 

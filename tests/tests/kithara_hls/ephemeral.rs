@@ -7,7 +7,7 @@ use kithara::platform::sync::Arc;
 use kithara::platform::tokio::task::spawn_blocking;
 use kithara::{
     assets::{
-        AcquisitionResult, AssetResource, AssetSource, AssetStoreBuilder, ReadSide, StorageBackend,
+        AcquisitionResult, AssetResource, AssetSource, AssetStore, ReadSide, StorageBackend,
         WriteSide,
     },
     platform::{CancelToken, time::Duration},
@@ -50,7 +50,7 @@ fn resource_path_follows_storage_backend(#[case] ephemeral: bool, #[case] expect
             root: temp.path().into(),
         }
     };
-    let scope = AssetStoreBuilder::default()
+    let scope = AssetStore::builder()
         .backend(backend)
         .build()
         .scope::<StorageProbe>(&AssetSource::Remote {
@@ -142,7 +142,7 @@ async fn ephemeral_pipeline_no_disk_writes() {
 
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStoreBuilder::default()
+            AssetStore::builder()
                 .backend(StorageBackend::Memory)
                 .build(),
         )

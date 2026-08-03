@@ -597,7 +597,7 @@ mod tests {
     };
 
     use kithara_abr::{Abr, AbrController, AbrSettings, AbrState, PendingAbrClaim};
-    use kithara_assets::{AssetResource, AssetSource, AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
     use kithara_events::{AbrMode, AbrReason, EventBus, RequestPriority, VariantIndex};
     use kithara_platform::{
         sync::{Arc, ThreadGate},
@@ -634,7 +634,7 @@ mod tests {
         let bus = EventBus::new(8);
         let cancel = CancelToken::never();
         let store = Arc::new(
-            AssetStoreBuilder::default()
+            AssetStore::builder()
                 .backend(StorageBackend::Memory)
                 .cancel(cancel.clone())
                 .build(),

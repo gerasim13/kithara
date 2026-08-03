@@ -10,6 +10,8 @@ use super::DiskStore;
 use super::{AssetReader, MemStore, ResourceAcquisition};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::backend::DiskAssetStore;
+#[cfg(test)]
+use crate::decorator::Capabilities;
 use crate::{
     decorator::{Assets, EvictionRouter, EvictionSubscription, ProcessCtx},
     error::{AssetsError, AssetsResult},
@@ -63,6 +65,11 @@ pub(super) enum StoreBackendInner {
 }
 
 impl AssetStore {
+    #[cfg(test)]
+    pub(super) fn capabilities(&self) -> Capabilities {
+        delegate_to_store!(self, capabilities)
+    }
+
     /// Acquire a resource explicitly for mutation.
     ///
     /// # Errors
@@ -336,15 +343,15 @@ impl AssetStore {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use crate::{AssetStoreBuilder, StorageBackend};
+    use crate::{AssetStore, StorageBackend};
 
     #[kithara::test]
     fn clone_shares_one_inner_identity() {
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .build();
         let clone = store.clone();
-        let other = AssetStoreBuilder::default()
+        let other = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .build();
 

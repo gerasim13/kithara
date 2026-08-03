@@ -315,7 +315,7 @@ mod tests {
     use ::kithara::{
         assets::{
             AssetLayout, AssetLayoutRegistry, AssetResource, AssetResourceState, AssetSource,
-            AssetStore, AssetStoreBuilder, StorageBackend,
+            AssetStore, StorageBackend,
         },
         audio::{BeatGrid, GridSegment, Waveform},
         bufpool::{BytePool, PcmPool},
@@ -358,13 +358,13 @@ mod tests {
     }
 
     fn store_in(dir: &Path) -> AssetStore {
-        AssetStoreBuilder::default()
+        AssetStore::builder()
             .backend(StorageBackend::Disk { root: dir.into() })
             .build()
     }
 
     fn memory_store() -> AssetStore {
-        AssetStoreBuilder::default()
+        AssetStore::builder()
             .backend(StorageBackend::Memory)
             .build()
     }
@@ -503,7 +503,7 @@ mod tests {
     #[kithara::test]
     fn invalid_layout_is_not_treated_as_an_uncacheable_source() {
         let layouts = AssetLayoutRegistry::default().with::<File>(Arc::new(InvalidLayout));
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .layouts(layouts)
             .build();

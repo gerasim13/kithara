@@ -284,7 +284,7 @@ async fn download_atomic_bytes(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_assets::{AssetResource, AssetSource, AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
     use kithara_platform::CancelToken;
     use kithara_test_utils::kithara;
 
@@ -293,7 +293,7 @@ mod tests {
     #[kithara::test]
     fn cache_write_failure_is_nonfatal() {
         let cancel = CancelToken::never();
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .cancel(cancel.clone())
             .build();

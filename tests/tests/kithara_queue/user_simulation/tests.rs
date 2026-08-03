@@ -4,7 +4,7 @@
 use std::fmt::Write;
 
 use kithara::{
-    assets::{FlushHub, FlushPolicy},
+    assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::AbrMode,
@@ -22,7 +22,7 @@ use kithara::{
         dl::{Downloader, DownloaderConfig},
     },
 };
-use kithara_app::config::AppConfig;
+use kithara_app::{baked, config::AppConfig};
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::EncryptionRequest, kithara,
     offline::OfflineSession, temp_dir,
@@ -681,13 +681,22 @@ fn build_prod_ctx() -> ProdCtx {
         DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-    let config = AppConfig::new(
-        downloader,
-        flush_hub,
-        CancelToken::never(),
-        BytePool::default(),
-        PcmPool::default(),
-    );
+    let shutdown = CancelToken::never();
+    let byte_pool = BytePool::default();
+    let store = AssetStore::builder()
+        .cancel(shutdown.child())
+        .backend(StorageBackend::default())
+        .pool(byte_pool.clone())
+        .flush_hub(flush_hub)
+        .layouts(baked::build_baked_asset_layouts())
+        .build();
+    let config = AppConfig::builder()
+        .downloader(downloader)
+        .shutdown(shutdown)
+        .byte_pool(byte_pool)
+        .pcm_pool(PcmPool::default())
+        .store(store)
+        .build();
     ProdCtx {
         config,
         cache: TestTempDir::new(),

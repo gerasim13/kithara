@@ -8,7 +8,7 @@
 //!
 //! ```ignore
 //! use kithara::{
-//!     assets::AssetStoreBuilder,
+//!     assets::AssetStore,
 //!     bufpool::{BytePool, PcmPool},
 //!     prelude::*,
 //! };
@@ -17,7 +17,7 @@
 //! let config: ResourceConfig = ResourceConfig::for_src(ResourceConfig::parse_src(
 //!     "https://example.com/song.mp3",
 //! )?)
-//! .store(AssetStoreBuilder::default().build())
+//! .store(AssetStore::builder().build())
 //! .byte_pool(BytePool::default())
 //! .pcm_pool(PcmPool::default())
 //! .build();

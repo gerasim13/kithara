@@ -4,7 +4,7 @@
 use std::{io::Read, num::NonZeroUsize};
 
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, StorageBackend},
+    assets::{AssetStore, StorageBackend},
     audio::{Audio, AudioConfig, AudioWorkerHandle, ReadOutcome},
     decode::DecoderBackend,
     file::{File as FileSource, FileConfig, FileSrc},
@@ -90,7 +90,7 @@ async fn mp3_endpoints() -> (url::Url, url::Url) {
 
 fn asset_store(temp_dir: &TestTempDir, ephemeral: bool) -> AssetStore {
     if ephemeral {
-        AssetStoreBuilder::default()
+        AssetStore::builder()
             .backend(StorageBackend::Memory)
             .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
             .max_assets(8)

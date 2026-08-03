@@ -27,7 +27,7 @@ impl Consts {
     env(KITHARA_HANG_TIMEOUT_SECS = "10")
 )]
 async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
-    use kithara::assets::{AssetStore, AssetStoreBuilder, StorageBackend};
+    use kithara::assets::{AssetStore, StorageBackend};
     use kithara_integration_tests::{
         create_wav_exact_bytes,
         hls_server::{HlsTestServer, HlsTestServerConfig},
@@ -55,7 +55,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         ..Default::default()
     })
     .await;
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
         .cache_capacity(std::num::NonZeroUsize::new(4).expect("nonzero"))
         .max_assets(8)

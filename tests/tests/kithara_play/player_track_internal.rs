@@ -20,7 +20,7 @@ use kithara::{
     platform::{sync::Arc, time::Duration},
     play::{
         PlayerNotification, Resource, TrackPlaybackStopReason, TrackState,
-        rt::track::{PlayerResource, PlayerTrack, TrackParams, TrackReadOutcome},
+        rt::track::{PlayerResource, PlayerTrack, TrackReadOutcome},
     },
 };
 use kithara_integration_tests::audio_mock::{
@@ -55,16 +55,14 @@ fn make_track_from_resource(
     src: Arc<str>,
     item_id: Option<Arc<str>>,
 ) -> PlayerTrack {
-    let player_resource = PlayerResource::new(resource, Arc::clone(&src), &PcmPool::default());
+    let player_resource = PlayerResource::new(resource, src, &PcmPool::default());
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
-    let params = TrackParams::builder()
-        .src(src)
+    PlayerTrack::builder()
         .sample_rate(sample_rate)
         .maybe_item_id(item_id)
         .fade_duration(1.0)
         .fade_curve(FadeCurve::SquareRoot)
-        .build();
-    PlayerTrack::new(Box::new(player_resource), params)
+        .build(Box::new(player_resource))
 }
 
 fn make_track() -> PlayerTrack {

@@ -240,7 +240,7 @@ impl crate::api::Equalizer for PlayerImpl {
 
 #[cfg(test)]
 mod tests {
-    use kithara_assets::AssetStoreBuilder;
+    use kithara_assets::AssetStore;
     use kithara_audio::{StretchControls, generate_log_spaced_bands};
     use kithara_bufpool::{BytePool, PcmPool};
     use kithara_decode::GaplessMode;
@@ -264,7 +264,7 @@ mod tests {
         let src = crate::resource::ResourceConfig::parse_src(input)
             .expect("BUG: valid resource config source");
         crate::resource::ResourceConfig::for_src(src)
-            .store(AssetStoreBuilder::default().build())
+            .store(AssetStore::builder().build())
             .byte_pool(BytePool::default())
             .pcm_pool(PcmPool::default())
             .build()

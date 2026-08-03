@@ -18,7 +18,7 @@ use axum::{
 use bytes::Bytes;
 use criterion::{BatchSize, Criterion, SamplingMode, criterion_group, criterion_main};
 use kithara::{
-    assets::{AssetStoreBuilder, StorageBackend},
+    assets::{AssetStore, StorageBackend},
     audio::{Audio, AudioConfig},
     bufpool::{BytePool, PcmPool},
     file::{File, FileConfig},
@@ -375,7 +375,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                         DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never()))
                             .build(),
                     );
-                    let store = AssetStoreBuilder::default()
+                    let store = AssetStore::builder()
                         .backend(StorageBackend::Memory)
                         .max_bytes(200_000)
                         .build();

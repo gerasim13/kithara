@@ -6,7 +6,7 @@ use smallvec::SmallVec;
 
 use super::{
     processor::PlayerNodeProcessor,
-    track::{PlayerResource, PlayerTrack, TrackParams},
+    track::{PlayerResource, PlayerTrack},
 };
 use crate::bridge::{PlayerCmd, PlayerNotification, TrackState, TrackTransition};
 
@@ -187,16 +187,14 @@ impl PlayerNodeProcessor {
         resource.set_host_sample_rate(self.sample_rate);
 
         let loaded_src = src.clone();
-        let params = TrackParams::builder()
-            .src(src.clone())
+        let track = PlayerTrack::builder()
             .sample_rate(self.sample_rate)
             .maybe_item_id(item_id)
             .fade_duration(self.crossfade.duration)
             .prefetch_duration(self.prefetch_duration)
             .fade_curve(self.crossfade.fade_curve())
             .playback_rate(self.playback_rate)
-            .build();
-        let track = PlayerTrack::new(resource, params);
+            .build(resource);
         self.tracks.insert(src, track);
 
         self.notif_tx

@@ -66,5 +66,5 @@ direct files. A higher layer may register any `AssetLayout` for `File`;
 for selecting stable identity parameters while ignoring rotating signatures
 and expiry values. Callers can still set `config.discriminator` for an explicit
 per-source identity. Layouts are registered once through
-`AssetStoreBuilder::layouts`; every `FileConfig` holds a cheap clone of that
+`AssetStore::builder().layouts`; every `FileConfig` holds a cheap clone of that
 same store handle.

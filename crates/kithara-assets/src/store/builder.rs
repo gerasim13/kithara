@@ -10,10 +10,8 @@ use kithara_bufpool::BytePool;
 use kithara_events::EventBus;
 use kithara_platform::{CancelScope, CancelToken, sync::Arc};
 
-#[cfg(not(target_arch = "wasm32"))]
-use super::DiskStore;
 use super::{
-    MemStore, OnInvalidatedFn,
+    OnInvalidatedFn,
     handle::{AssetStore, AssetStoreInner, StoreBackendInner},
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -68,35 +66,16 @@ impl Default for StorageBackend {
     }
 }
 
-/// Constructor for the ready-to-use [`AssetStore`].
-///
-/// One store services every asset under `root_dir`. A scope binds the
-/// `asset_root` and mints self-contained keys; per-resource ops live on
-/// the store.
-struct AssetStoreBuildArgs {
-    pool: BytePool,
-    backend: Option<StorageBackend>,
-    cache_capacity: Option<NonZeroUsize>,
-    cancel: Option<CancelToken>,
-    event_bus: Option<EventBus>,
-    flush_hub: Option<Arc<FlushHub>>,
-    layouts: Option<AssetLayoutRegistry>,
-    max_assets: Option<usize>,
-    max_bytes: Option<u64>,
-    mem_resource_capacity: Option<usize>,
-}
-
-struct AssetStoreBuilderFactory;
-
 #[bon]
-impl AssetStoreBuilderFactory {
+impl AssetStore {
+    /// Open a ready-to-use asset store.
     #[builder(
-        start_fn(name = builder, vis = "pub(crate)"),
+        start_fn = builder,
         builder_type(name = AssetStoreBuilder, vis = "pub"),
-        state_mod(name = asset_store_builder, vis = "pub"),
-        finish_fn(name = into_args, vis = "pub(crate)")
+        finish_fn = build
     )]
-    fn args(
+    #[must_use]
+    pub fn open(
         backend: Option<StorageBackend>,
         cache_capacity: Option<NonZeroUsize>,
         cancel: Option<CancelToken>,
@@ -107,232 +86,110 @@ impl AssetStoreBuilderFactory {
         max_bytes: Option<u64>,
         mem_resource_capacity: Option<usize>,
         #[builder(default = BytePool::default())] pool: BytePool,
-    ) -> AssetStoreBuildArgs {
-        AssetStoreBuildArgs {
-            pool,
-            backend,
-            cache_capacity,
-            cancel,
-            event_bus,
-            flush_hub,
-            layouts,
-            max_assets,
-            max_bytes,
-            mem_resource_capacity,
-        }
-    }
-}
-
-impl Default for AssetStoreBuilder<asset_store_builder::Empty> {
-    fn default() -> Self {
-        AssetStoreBuilderFactory::builder()
-    }
-}
-
-impl<State> AssetStoreBuilder<State>
-where
-    State: asset_store_builder::IsComplete,
-{
-    delegate::delegate! {
-        to self {
-            #[must_use]
-            #[expr($.build())]
-            #[call(into_args)]
-            pub fn build(self) -> AssetStore;
-            /// Build a disk-backed `AssetStore` chain with a fresh availability index.
-            #[cfg(all(test, not(target_arch = "wasm32")))]
-            #[must_use]
-            #[expr($.build_disk())]
-            #[call(into_args)]
-            fn build_disk(self) -> DiskStore;
-            /// Build the in-memory asset store with its own
-            /// unshared [`AvailabilityIndex`].
-            #[cfg(test)]
-            #[expr($.build_mem())]
-            #[call(into_args)]
-            fn build_mem(self) -> MemStore;
-        }
-    }
-}
-
-impl AssetStoreBuildArgs {
-    /// Build the storage backend.
-    ///
-    /// Selects the disk or memory backend per [`StorageBackend`];
-    /// on wasm the store is always memory-backed. Creates a
-    /// single [`AvailabilityIndex`] per build call and threads it
-    /// through both the base store (observer target) and the enum
-    /// variant (query target) so writes observed by any resource
-    /// become visible through `AssetStore::contains_range`.
-    #[must_use]
-    fn build(mut self) -> AssetStore {
+    ) -> Self {
         let availability = AvailabilityIndex::new();
         // The demand index is a consumer-driven sibling of `availability`:
         // no observer / decorator threading, just a shared field. Each
         // slot's `producer_cancel` is a child of this store cancel.
-        let demand = DemandIndex::new(CancelScope::new(self.cancel.clone()).token());
+        let demand = DemandIndex::new(CancelScope::new(cancel.clone()).token());
         let transactions = ResourceTransactionIndex::default();
         // The eviction router is the third consumer-driven sibling: the
         // memory cache's `on_invalidated` hook routes evicted keys into
         // it; the store hands subscribers per `asset_root`.
         let eviction = EvictionRouter::default();
-        let layouts = self.layouts.take().unwrap_or_default();
+        let layouts = layouts.unwrap_or_default();
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let disk_root = match backend.unwrap_or_else(|| StorageBackend::Disk {
+            root: fresh_temp_root(),
+        }) {
+            StorageBackend::Memory => None,
+            StorageBackend::Disk { root } => Some(root),
+        };
+
         #[cfg(target_arch = "wasm32")]
-        {
-            let _ = self.backend.take();
-            let store = self.build_mem_with_availability(&availability, &eviction);
-            AssetStore::new_handle(AssetStoreInner {
+        let _ = backend;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(root_dir) = disk_root {
+            let evict_cfg = EvictConfig {
+                max_assets,
+                max_bytes,
+            };
+            let cancel = CancelScope::new(cancel).token();
+            let hub =
+                flush_hub.unwrap_or_else(|| FlushHub::new(cancel.child(), FlushPolicy::default()));
+
+            let pins = open_disk_pins_index(&root_dir, &cancel, &pool);
+            let lru = open_disk_lru_index(&root_dir, &cancel, &pool);
+            pins.attach_to(&hub);
+            lru.attach_to(&hub);
+
+            let disk_availability = availability.clone();
+            let deleter: Arc<dyn AssetDeleter> = Arc::new(DiskAssetDeleter::new(
+                root_dir.clone(),
+                disk_availability.clone(),
+                pins.clone(),
+                lru.clone(),
+            ));
+
+            if let Some(path) = lazy_index_path(&root_dir, "availability.bin") {
+                disk_availability.enable_persistence(path, cancel.clone());
+            }
+            disk_availability.attach_to(&hub);
+
+            let disk = Arc::new(DiskAssetStore::with_availability_and_deleter(
+                root_dir,
+                cancel.clone(),
+                disk_availability,
+                Arc::clone(&deleter),
+            ));
+            let base = Arc::clone(&disk);
+            let evict = Arc::new(EvictAssets::new(
+                disk,
+                EvictDeps {
+                    lru,
+                    deleter,
+                    cfg: evict_cfg,
+                    cancel: cancel.clone(),
+                    events: EvictionEvents::new(event_bus.clone()),
+                    pins: pins.clone(),
+                },
+            ));
+            let processing = Arc::new(ProcessingAssets::new(Arc::clone(&evict), pool));
+            let capacity = cache_capacity.unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
+            // Disk bytes survive LRU displacement, so it needs no invalidation hook.
+            let cached = Arc::new(CachedAssets::new(processing, capacity, None, false));
+            let byte_recorder: Option<Arc<dyn ByteRecorder>> =
+                Some(Arc::clone(&evict) as Arc<dyn ByteRecorder>);
+            let store = LeaseAssets::with_byte_recorder(
+                cached,
+                cancel,
+                byte_recorder,
+                LeaseEvents::new(event_bus),
+                pins,
+            );
+
+            return Self::new_handle(AssetStoreInner {
                 availability,
                 demand,
                 transactions,
                 eviction,
                 layouts,
-                backend: StoreBackendInner::Memory { store },
-            })
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let backend = self.backend.take().unwrap_or_else(|| StorageBackend::Disk {
-                root: fresh_temp_root(),
+                backend: StoreBackendInner::Disk {
+                    store,
+                    base: Some(base),
+                },
             });
-            match backend {
-                StorageBackend::Memory => {
-                    let store = self.build_mem_with_availability(&availability, &eviction);
-                    AssetStore::new_handle(AssetStoreInner {
-                        availability,
-                        demand,
-                        transactions,
-                        eviction,
-                        layouts,
-                        backend: StoreBackendInner::Memory { store },
-                    })
-                }
-                StorageBackend::Disk { root } => {
-                    let (store, base) =
-                        self.build_disk_with_availability(root, availability.clone());
-                    AssetStore::new_handle(AssetStoreInner {
-                        availability,
-                        demand,
-                        transactions,
-                        eviction,
-                        layouts,
-                        backend: StoreBackendInner::Disk {
-                            store,
-                            base: Some(base),
-                        },
-                    })
-                }
-            }
         }
-    }
 
-    /// Build a disk-backed `AssetStore` chain with a fresh availability index.
-    #[cfg(all(test, not(target_arch = "wasm32")))]
-    #[must_use]
-    fn build_disk(mut self) -> DiskStore {
-        let root = match self.backend.take() {
-            Some(StorageBackend::Disk { root }) => root,
-            _ => fresh_temp_root(),
-        };
-        let (chain, _base) = self.build_disk_with_availability(root, AvailabilityIndex::new());
-        chain
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn build_disk_with_availability(
-        self,
-        root_dir: PathBuf,
-        availability: AvailabilityIndex,
-    ) -> (DiskStore, Arc<DiskAssetStore>) {
+        let cancel = CancelScope::new(cancel).token();
         let evict_cfg = EvictConfig {
-            max_assets: self.max_assets,
-            max_bytes: self.max_bytes,
+            max_assets,
+            max_bytes,
         };
-        let cancel = CancelScope::new(self.cancel).token();
-
-        let pool = self.pool;
-
-        let hub = self
-            .flush_hub
-            .clone()
-            .unwrap_or_else(|| FlushHub::new(cancel.child(), FlushPolicy::default()));
-
-        let pins = open_disk_pins_index(&root_dir, &cancel, &pool);
-        let lru = open_disk_lru_index(&root_dir, &cancel, &pool);
-        pins.attach_to(&hub);
-        lru.attach_to(&hub);
-
-        let deleter: Arc<dyn AssetDeleter> = Arc::new(DiskAssetDeleter::new(
-            root_dir.clone(),
-            availability.clone(),
-            pins.clone(),
-            lru.clone(),
-        ));
-
-        if let Some(path) = lazy_index_path(&root_dir, "availability.bin") {
-            availability.enable_persistence(path, cancel.clone());
-        }
-        availability.attach_to(&hub);
-
-        let disk = Arc::new(DiskAssetStore::with_availability_and_deleter(
-            root_dir,
-            cancel.clone(),
-            availability,
-            Arc::clone(&deleter),
-        ));
-        let base = Arc::clone(&disk);
-        let evict = Arc::new(EvictAssets::new(
-            disk,
-            EvictDeps {
-                lru,
-                deleter,
-                cfg: evict_cfg,
-                cancel: cancel.clone(),
-                events: EvictionEvents::new(self.event_bus.clone()),
-                pins: pins.clone(),
-            },
-        ));
-        let processing = Arc::new(ProcessingAssets::new(Arc::clone(&evict), pool));
-        let capacity = self
-            .cache_capacity
-            .unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
-        // Disk bytes survive LRU displacement, so it needs no invalidation hook.
-        let cached = Arc::new(CachedAssets::new(processing, capacity, None, false));
-        let byte_recorder: Option<Arc<dyn ByteRecorder>> =
-            Some(Arc::clone(&evict) as Arc<dyn ByteRecorder>);
-        let chain = LeaseAssets::with_byte_recorder(
-            cached,
-            cancel,
-            byte_recorder,
-            LeaseEvents::new(self.event_bus.clone()),
-            pins,
-        );
-        (chain, base)
-    }
-
-    /// Build the in-memory asset store with its own
-    /// unshared [`AvailabilityIndex`].
-    #[cfg(test)]
-    fn build_mem(self) -> MemStore {
-        self.build_mem_with_availability(&AvailabilityIndex::new(), &EvictionRouter::default())
-    }
-
-    fn build_mem_with_availability(
-        self,
-        availability: &AvailabilityIndex,
-        eviction: &EvictionRouter,
-    ) -> MemStore {
-        let cancel = CancelScope::new(self.cancel).token();
-        let evict_cfg = EvictConfig {
-            max_assets: self.max_assets,
-            max_bytes: self.max_bytes,
-        };
-        let pool = self.pool;
-
-        let hub = self
-            .flush_hub
-            .clone()
-            .unwrap_or_else(|| FlushHub::new(cancel.child(), FlushPolicy::default()));
+        let hub =
+            flush_hub.unwrap_or_else(|| FlushHub::new(cancel.child(), FlushPolicy::default()));
         let pins = crate::index::PinsIndex::ephemeral();
         let lru = crate::index::LruIndex::ephemeral();
         pins.attach_to(&hub);
@@ -348,7 +205,7 @@ impl AssetStoreBuildArgs {
             MemStoreSetup {
                 active_resources,
                 cancel: cancel.clone(),
-                mem_resource_capacity: self.mem_resource_capacity,
+                mem_resource_capacity,
                 availability: availability.clone(),
                 deleter: Arc::clone(&deleter),
                 pool: pool.clone(),
@@ -361,13 +218,11 @@ impl AssetStoreBuildArgs {
                 deleter,
                 cfg: evict_cfg,
                 cancel: cancel.clone(),
-                events: EvictionEvents::new(self.event_bus.clone()),
+                events: EvictionEvents::new(event_bus.clone()),
                 pins: pins.clone(),
             },
         ));
-        let capacity = self
-            .cache_capacity
-            .unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
+        let capacity = cache_capacity.unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
         let processing = Arc::new(ProcessingAssets::new(Arc::clone(&evict), pool));
         // Memory bytes do not survive displacement, so indexes must be invalidated.
         let availability_for_hook = availability.clone();
@@ -381,15 +236,24 @@ impl AssetStoreBuildArgs {
             capacity,
             Some(on_invalidated),
             true,
-            self.max_bytes,
+            max_bytes,
         ));
-        LeaseAssets::with_byte_recorder(
+        let store = LeaseAssets::with_byte_recorder(
             cached,
             cancel,
             None,
-            LeaseEvents::new(self.event_bus.clone()),
+            LeaseEvents::new(event_bus),
             pins,
-        )
+        );
+
+        Self::new_handle(AssetStoreInner {
+            availability,
+            demand,
+            transactions,
+            eviction,
+            layouts,
+            backend: StoreBackendInner::Memory { store },
+        })
     }
 }
 
@@ -489,7 +353,7 @@ mod tests {
     fn commit_publishes_asset_committed() {
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .event_bus(bus.clone())
             .build();
@@ -512,7 +376,7 @@ mod tests {
     fn fail_publishes_asset_failed() {
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .event_bus(bus.clone())
             .build();
@@ -538,7 +402,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -568,7 +432,7 @@ mod tests {
         let file_path = dir.path().join("test.bin");
         fs::write(&file_path, b"data").unwrap();
 
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -593,7 +457,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("test.bin");
         fs::write(&file_path, b"data").unwrap();
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .build();
 
@@ -630,7 +494,7 @@ mod tests {
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
     fn builder_defaults_all_enabled() {
         let dir = tempdir().unwrap();
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -653,7 +517,7 @@ mod tests {
         let file_path = dir.path().join("song.mp3");
         fs::write(&file_path, b"test data").unwrap();
 
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -669,7 +533,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn memory_backend_serves_reads_without_a_disk_root() {
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .build();
 
@@ -688,7 +552,7 @@ mod tests {
         let key = ResourceKey::relative(ROOT, "seg.m4s");
 
         {
-            let store = AssetStoreBuilder::default()
+            let store = AssetStore::builder()
                 .backend(StorageBackend::Disk {
                     root: dir.path().into(),
                 })
@@ -696,7 +560,7 @@ mod tests {
             write_commit(store.acquire_resource(&key, None).unwrap(), b"data");
         }
 
-        let reopened = AssetStoreBuilder::default()
+        let reopened = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -712,7 +576,9 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn memory_capabilities_lack_evict_and_lease() {
-        let store = AssetStoreBuilder::default().build_mem();
+        let store = AssetStore::builder()
+            .backend(StorageBackend::Memory)
+            .build();
         let caps = store.capabilities();
         assert!(caps.contains(Capabilities::CACHE));
         assert!(caps.contains(Capabilities::PROCESSING));
@@ -724,17 +590,17 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn disk_defaults_all_capabilities() {
         let dir = tempdir().unwrap();
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
-            .build_disk();
+            .build();
         assert_eq!(store.capabilities(), Capabilities::all());
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn memory_retains_data_within_cache_capacity() {
-        let backend = AssetStoreBuilder::default()
+        let backend = AssetStore::builder()
             .cache_capacity(NonZeroUsize::new(5).unwrap())
             .backend(StorageBackend::Memory)
             .build();
@@ -757,7 +623,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn memory_evicts_data_beyond_cache_capacity() {
-        let backend = AssetStoreBuilder::default()
+        let backend = AssetStore::builder()
             .cache_capacity(NonZeroUsize::new(3).unwrap())
             .backend(StorageBackend::Memory)
             .build();
@@ -778,7 +644,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn memory_max_bytes_bounds_large_handle_cache() {
-        let backend = AssetStoreBuilder::default()
+        let backend = AssetStore::builder()
             .cache_capacity(NonZeroUsize::new(128).unwrap())
             .max_bytes(8)
             .backend(StorageBackend::Memory)
@@ -801,7 +667,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn memory_max_bytes_does_not_retain_oversized_resource() {
-        let backend = AssetStoreBuilder::default()
+        let backend = AssetStore::builder()
             .cache_capacity(NonZeroUsize::new(128).unwrap())
             .max_bytes(4)
             .backend(StorageBackend::Memory)
@@ -822,7 +688,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn red_test_lease_resource_drop_strands_availability_index() {
         let dir = tempdir().unwrap();
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -873,7 +739,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn red_test_delete_asset_strands_availability_index() {
         let dir = tempdir().unwrap();
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })

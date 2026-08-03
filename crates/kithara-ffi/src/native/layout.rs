@@ -109,7 +109,7 @@ mod tests {
     };
 
     use kithara_assets::{
-        AcquisitionResult, AssetLayoutRegistry, AssetStoreBuilder, AssetsError, ReadSide,
+        AcquisitionResult, AssetLayoutRegistry, AssetStore, AssetsError, ReadSide,
         ResourceAcquisition, StorageBackend, WriteSide,
     };
     use tempfile::tempdir;
@@ -227,7 +227,7 @@ mod tests {
 
         let root_calls = Arc::new(AtomicUsize::new(0));
         let path_calls = Arc::new(AtomicUsize::new(0));
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .layouts(AssetLayoutRegistry::new(layout(CountingLayout {
                 root_calls: Arc::clone(&root_calls),
@@ -316,7 +316,7 @@ mod tests {
         }
 
         let dir = tempdir().expect("tempdir");
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -359,7 +359,7 @@ mod tests {
         }
 
         let layout = layout(HostileForeign(hostile));
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .layouts(AssetLayoutRegistry::new(layout))
             .build();
@@ -394,7 +394,7 @@ mod tests {
             }
         }
 
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .layouts(AssetLayoutRegistry::new(layout(HostileRoot(hostile))))
             .build();
@@ -425,7 +425,7 @@ mod tests {
 
         let path = PathBuf::from(OsString::from_vec(vec![b'/', 0xff]));
         let source = AssetSource::Local { path };
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .layouts(AssetLayoutRegistry::new(layout(RejectNonUtf8)))
             .build();

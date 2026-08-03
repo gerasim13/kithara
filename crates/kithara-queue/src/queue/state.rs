@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 
-use kithara_assets::{AssetStoreBuilder, StorageBackend};
+use kithara_assets::{AssetStore, StorageBackend};
 use kithara_bufpool::Region;
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::{CancelScope, CancelToken, sync::Arc};
@@ -145,7 +145,7 @@ impl Queue {
             Arc::new(PlayerImpl::new(config))
         });
         let store = store.unwrap_or_else(|| {
-            AssetStoreBuilder::default()
+            AssetStore::builder()
                 .backend(StorageBackend::default())
                 .cancel(cancel.child())
                 .pool(player.byte_pool().clone())

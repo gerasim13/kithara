@@ -4,14 +4,14 @@ use std::{path::PathBuf, sync::LazyLock};
 
 use arbitrary::{Arbitrary, Unstructured};
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, StorageBackend},
+    assets::{AssetStore, StorageBackend},
     file::{FileConfig, FileSrc},
 };
 use libfuzzer_sys::fuzz_target;
 use url::Url;
 
 static STORE: LazyLock<AssetStore> = LazyLock::new(|| {
-    AssetStoreBuilder::default()
+    AssetStore::builder()
         .backend(StorageBackend::Memory)
         .build()
 });

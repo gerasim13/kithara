@@ -72,7 +72,7 @@ impl fmt::Debug for FileConfig {
 mod tests {
     use std::path::Path;
 
-    use kithara_assets::{AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{AssetStore, StorageBackend};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -82,7 +82,7 @@ mod tests {
     }
 
     fn test_store() -> AssetStore {
-        AssetStoreBuilder::default()
+        AssetStore::builder()
             .backend(StorageBackend::Memory)
             .build()
     }

@@ -109,7 +109,7 @@ impl AssetDeleter for DiskAssetDeleter {
 impl DiskAssetStore {
     /// Create a store rooted at `root_dir` with its own unshared
     /// [`AvailabilityIndex`]. Convenient for tests; production
-    /// construction (via `AssetStoreBuilder::build`) uses
+    /// construction (via `AssetStore::builder().build()`) uses
     /// [`DiskAssetStore::with_availability_and_deleter`].
     pub fn new<P: Into<PathBuf>>(
         root_dir: P,

@@ -1,7 +1,7 @@
 use std::{fmt, num::NonZeroUsize, path::PathBuf};
 
 use kithara::bufpool::Region;
-use kithara_assets::{AssetLayoutRegistry, AssetStore, AssetStoreBuilder, StorageBackend};
+use kithara_assets::{AssetLayoutRegistry, AssetStore, StorageBackend};
 use kithara_platform::{CancelScope, sync::Arc};
 
 use super::FfiAssetLayoutRegistry;
@@ -35,7 +35,7 @@ impl FfiAssetStore {
     fn build_with_backend(backend: StorageBackend, layouts: AssetLayoutRegistry) -> Self {
         let region = Region::default();
         let shutdown = CancelScope::new(None);
-        let inner = AssetStoreBuilder::default()
+        let inner = AssetStore::builder()
             .backend(backend)
             .cache_capacity(Consts::ASSET_CACHE_CAPACITY)
             .cancel(shutdown.token())

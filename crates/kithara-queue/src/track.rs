@@ -275,7 +275,7 @@ fn install(record: &mut TrackRecord, generations: &AtomicU64, cancel: CancelToke
 
 #[cfg(test)]
 mod tests {
-    use kithara_assets::AssetStoreBuilder;
+    use kithara_assets::AssetStore;
     use kithara_bufpool::{BytePool, PcmPool};
     use kithara_test_utils::kithara;
 
@@ -297,7 +297,7 @@ mod tests {
         let src = ResourceConfig::parse_src("https://example.com/a.mp3")
             .expect("BUG: hard-coded URL is valid");
         let cfg = ResourceConfig::for_src(src)
-            .store(AssetStoreBuilder::default().build())
+            .store(AssetStore::builder().build())
             .byte_pool(BytePool::default())
             .pcm_pool(PcmPool::default())
             .build();

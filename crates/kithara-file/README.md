@@ -19,11 +19,11 @@ Single-file media streaming (MP3, AAC, FLAC, ALAC, WAV …). Implements `kithara
 ## Usage
 
 ```rust
-use kithara_assets::AssetStoreBuilder;
+use kithara_assets::AssetStore;
 use kithara_stream::Stream;
 use kithara_file::{File, FileConfig, FileSrc};
 
-let store = AssetStoreBuilder::default().build();
+let store = AssetStore::builder().build();
 
 // Remote HTTP source
 let config = FileConfig::for_src(FileSrc::Remote(url))

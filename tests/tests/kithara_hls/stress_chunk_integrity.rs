@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 
 use kithara::{
-    assets::{AssetStoreBuilder, StorageBackend},
+    assets::{AssetStore, StorageBackend},
     audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
     decode::{PcmChunk, PcmMeta},
     hls::{Hls, HlsConfig},
@@ -176,7 +176,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     let cancel = CancelToken::never();
 
     let store = if ephemeral {
-        AssetStoreBuilder::default()
+        AssetStore::builder()
             .backend(StorageBackend::Memory)
             .cache_capacity(NonZeroUsize::new(Consts::SEGMENT_COUNT * 2 + 10).expect("nonzero"))
             .build()

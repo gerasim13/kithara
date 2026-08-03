@@ -4,14 +4,14 @@ use std::sync::LazyLock;
 
 use arbitrary::Arbitrary;
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, StorageBackend},
+    assets::{AssetStore, StorageBackend},
     bufpool::{BytePool, PcmPool},
     play::{PlaybackResamplerBackend, ResourceConfig},
 };
 use libfuzzer_sys::fuzz_target;
 
 static STORE: LazyLock<AssetStore> = LazyLock::new(|| {
-    AssetStoreBuilder::default()
+    AssetStore::builder()
         .backend(StorageBackend::Memory)
         .build()
 });

@@ -237,7 +237,7 @@ mod tests {
     use std::sync::{OnceLock, atomic::AtomicU64};
 
     use kithara_abr::{Abr, AbrController, AbrSettings, AbrState};
-    use kithara_assets::{AssetResource, AssetSource, AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
     use kithara_events::{Event, EventBus};
     use kithara_platform::{
         CancelToken,
@@ -269,7 +269,7 @@ mod tests {
     fn test_ctx(bus: &EventBus) -> PlanCtx {
         let cancel = CancelToken::never();
         let store = Arc::new(
-            AssetStoreBuilder::default()
+            AssetStore::builder()
                 .backend(StorageBackend::Memory)
                 .cancel(cancel.clone())
                 .build(),

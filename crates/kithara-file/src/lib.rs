@@ -5,12 +5,12 @@
 //! # Example
 //!
 //! ```ignore
-//! use kithara_assets::AssetStoreBuilder;
+//! use kithara_assets::AssetStore;
 //! use kithara_file::{File, FileConfig, FileSrc};
 //! use kithara_stream::{Stream, StreamType};
 //!
 //! // Using StreamType API
-//! let store = AssetStoreBuilder::default().build();
+//! let store = AssetStore::builder().build();
 //! let config = FileConfig::for_src(FileSrc::Remote(url))
 //!     .store(store)
 //!     .build();

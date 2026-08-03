@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 
 use kithara::{
-    assets::{AssetStoreBuilder, StorageBackend},
+    assets::{AssetStore, StorageBackend},
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
     hls::{AbrMode, Hls, HlsConfig},
@@ -465,7 +465,7 @@ async fn stress_seek_audio_hls(
     };
     let cache_capacity =
         cache_capacity_override.map(|cap| NonZeroUsize::new(cap).expect("nonzero cache capacity"));
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(storage_backend)
         .maybe_cache_capacity(cache_capacity)
         .build();

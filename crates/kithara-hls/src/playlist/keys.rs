@@ -603,8 +603,8 @@ mod tests {
     };
     use bytes::Bytes;
     use kithara_assets::{
-        AcquisitionResult, AssetResource, AssetScope, AssetSource, AssetStore, AssetStoreBuilder,
-        StorageBackend, WriteSide,
+        AcquisitionResult, AssetResource, AssetScope, AssetSource, AssetStore, StorageBackend,
+        WriteSide,
     };
     use kithara_drm::{
         DrmError, KeyProcessor, KeyProcessorRegistry, KeyRequest, KeyRequestFactory,
@@ -825,7 +825,7 @@ mod tests {
         cancel: CancelToken,
         registry: Option<KeyProcessorRegistry>,
     ) -> KeyStore {
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .cancel(cancel.clone())
             .build();
@@ -882,7 +882,7 @@ mod tests {
     ) {
         let (url, requests, seen, release) = spawn_gated_key_server().await;
         let store_cancel = CancelToken::never();
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .cancel(store_cancel.clone())
             .build();
@@ -1013,7 +1013,7 @@ mod tests {
     async fn persisted_final_key_does_not_prepare_fresh_request() {
         let (url, requests) = spawn_key_server_with_body(Bytes::from_static(VALID_KEY)).await;
         let dir = tempdir().expect("tempdir");
-        let assets = AssetStoreBuilder::default()
+        let assets = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -1054,7 +1054,7 @@ mod tests {
                 KeyRequest::new(HashMap::new(), Arc::new(Ok::<Bytes, DrmError>))
             }),
         );
-        let reopened_assets = AssetStoreBuilder::default()
+        let reopened_assets = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -1162,7 +1162,7 @@ mod tests {
     async fn corrupt_persisted_plain_key_is_invalidated_and_refetched_once() {
         let (url, requests) = spawn_key_server_with_body(Bytes::from_static(VALID_KEY)).await;
         let dir = tempdir().expect("tempdir");
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -1173,7 +1173,7 @@ mod tests {
         drop(store);
 
         let bus = EventBus::new(8);
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -1191,7 +1191,7 @@ mod tests {
         drop(keys);
         drop(store);
 
-        let reopened = AssetStoreBuilder::default()
+        let reopened = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -1211,7 +1211,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn processed_key_repair_is_serialized_across_key_stores() {
         let (url, requests) = spawn_key_server_with_body(Bytes::from_static(VALID_KEY)).await;
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .cancel(CancelToken::never())
             .build();
