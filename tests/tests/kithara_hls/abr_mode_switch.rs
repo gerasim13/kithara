@@ -1850,10 +1850,21 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
         "repro result"
     );
 
+    // `audio_trace` says nothing about the transition: its filter admits four
+    // audio events, none of which the variant-transition path publishes. The
+    // two that discriminate are the variant tags on segment reads — an entry
+    // for the target variant means the incoming session was created and read,
+    // so the transition started and failed to commit, while only source-variant
+    // entries mean the incoming reader never opened — and the raw event tail,
+    // which shows whether the intent reached the ABR state at all and whether a
+    // decision was skipped while the seek held the lock.
+    let reader_segments = collector.reader_segments();
+    let event_tail = collector.event_tail();
     assert!(
         targets.contains(&0),
         "Manual(0) (slq AAC) must publish VariantApplied, saw: {targets:?}, \
-         phase4={phase4:?}, audio_trace={audio_trace:?}"
+         phase4={phase4:?}, reader_segments={reader_segments:?}, \
+         event_tail={event_tail:?}, audio_trace={audio_trace:?}"
     );
 
     // Bug surfaces as samples_phase4 ≪ expected. 10 s @ 44.1 kHz
