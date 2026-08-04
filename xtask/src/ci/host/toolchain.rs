@@ -92,6 +92,13 @@ impl<'a> ToolchainInstaller<'a> {
         let rustup_home = home.join(".rustup");
         let cargo_bin = cargo_home.join("bin");
         fs::create_dir_all(&cargo_bin)?;
+        // The macOS guest reaches these over a share and traverses them as its
+        // own account, so they have to stay readable to everyone. A directory
+        // left at 0750 is not an error here and is a missing `cargo` there:
+        // every job on that executor died reporting no such file.
+        for directory in [&home, &cargo_home, &cargo_bin, &rustup_home] {
+            make_traversable(directory)?;
+        }
         let rustup_source = self
             .config
             .host
@@ -477,6 +484,32 @@ fn require_macos() -> Result<()> {
     if std::env::consts::OS != "macos" {
         bail!("toolchain installation supports macOS only");
     }
+    Ok(())
+}
+
+/// Directories shared into the macOS guest have to stay traversable by an
+/// account that is not the one that created them. The guest mounts them and
+/// reads them as its own user, and a directory that lost its group and other
+/// bits reports every tool inside it as missing rather than as forbidden.
+#[cfg(unix)]
+fn make_traversable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path)
+        .with_context(|| format!("reading permissions of {}", path.display()))?
+        .permissions();
+    let mode = permissions.mode();
+    let wanted = mode | 0o055;
+    if mode == wanted {
+        return Ok(());
+    }
+    permissions.set_mode(wanted);
+    fs::set_permissions(path, permissions)
+        .with_context(|| format!("making {} traversable by the guest", path.display()))
+}
+
+#[cfg(not(unix))]
+fn make_traversable(_path: &Path) -> Result<()> {
     Ok(())
 }
 
