@@ -90,10 +90,16 @@ impl CiEnvironment {
         let project_root =
             env::var_os("CI_PROJECT_DIR").map_or_else(|| ctx.root.clone(), PathBuf::from);
         let target = project_root.join("target");
-        // Keep scratch space out of the checkout: tools that walk the working
-        // tree (the architecture reporter, for one) otherwise trip over the
-        // temporary copies they just created.
-        let temp = cache_root.join("tmp");
+        // Scratch space has two constraints. It must sit outside the checkout,
+        // or tools that walk the working tree (the architecture reporter, for
+        // one) trip over the temporary copies they just created. And it must
+        // stay short: macOS caps Unix socket paths at SUN_LEN, which a path
+        // under the cache root already exceeds.
+        let temp = config
+            .host
+            .host_root
+            .join("workspaces/tmp")
+            .join(trust.as_str());
 
         for directory in [
             &cache_root,
