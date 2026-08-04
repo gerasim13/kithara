@@ -7,6 +7,10 @@ useDefault = true
 description = "Ignored compiler output is not repository content."
 paths = ['''^target(?:/|$)''']
 
+# The scan reads history, so a rule has to describe every commit rather than
+# the working tree. Lines arrive from a patch and carry its leading `+`, and a
+# path is whatever it was in the commit being read — both of which these rules
+# once assumed away, and both of which reported the fixtures as leaks.
 [[allowlists]]
 description = "Packaged HLS fixtures contain public AES IVs, not service credentials."
 targetRules = ["generic-api-key"]
@@ -14,13 +18,15 @@ condition = "AND"
 paths = ['''^assets/drm/index-(shq|slossless|slq|smq)-a1\.m3u8$''']
 regexTarget = "line"
 regexes = [
-  '''^#EXT-X-KEY:METHOD=AES-128,URI=[a-z0-9-]+\.key,IV=0x[0-9A-F]{32}$''',
+  '''^\+?#EXT-X-KEY:METHOD=AES-128,URI=[a-z0-9-]+\.key,IV=0x[0-9A-Fa-f]{32}$''',
 ]
 
 [[allowlists]]
 description = "The generated HLS unit test uses a fixed public AES fixture key."
 targetRules = ["generic-api-key"]
 condition = "AND"
-paths = ['''^tests/src/native/hls_stream\.rs$''']
+paths = [
+  '''^(?:tests/src/native|crates/kithara-test-utils/src)/hls_stream\.rs$''',
+]
 regexTarget = "line"
 regexes = ['''key_hex: "[0-9a-f]{32}"''']

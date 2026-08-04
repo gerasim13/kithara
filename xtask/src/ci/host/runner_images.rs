@@ -93,6 +93,11 @@ impl RunnerManager<'_> {
                 "NIGHTLY_TOOLCHAIN",
                 self.config.pins.nightly_toolchain.as_str(),
             ),
+            ("CMAKE_VERSION", self.config.pins.cmake_version.as_str()),
+            (
+                "CMAKE_SHA256",
+                self.config.pins.cmake_linux_arm64_sha256.as_str(),
+            ),
             (
                 "GECKODRIVER_VERSION",
                 self.config.pins.geckodriver_version.as_str(),

@@ -12,6 +12,8 @@ ARG CARGO_NEXTEST_VERSION
 ARG CARGO_SEMVER_CHECKS_VERSION
 ARG CARGO_SHEAR_VERSION
 ARG CARGO_SORT_VERSION
+ARG CMAKE_SHA256
+ARG CMAKE_VERSION
 ARG GECKODRIVER_SHA256
 ARG GECKODRIVER_VERSION
 ARG GITLEAKS_SHA256
@@ -34,11 +36,23 @@ ENV WASM_SLIM_TOOLCHAIN=${NIGHTLY_TOOLCHAIN}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates chromium chromium-driver curl firefox-esr git \
-    clang cmake libclang-dev lld pkg-config \
+    clang libclang-dev lld pkg-config \
     libasound2-dev libdbus-1-dev libssl-dev \
     libavcodec-dev libavformat-dev libavfilter-dev libavdevice-dev \
     libavutil-dev libswresample-dev libswscale-dev libpostproc-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Debian ships CMake 3.25, and a vendored native dependency requires 3.30 or
+# newer, so `cargo check` could not build the workspace here at all. The 3.31
+# series is deliberate: CMake 4 refuses any project that asks for a minimum
+# below 3.5, which several vendored trees still do.
+RUN curl -fsSL \
+      -o /tmp/cmake.tar.gz \
+      "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-aarch64.tar.gz" \
+ && echo "${CMAKE_SHA256}  /tmp/cmake.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/cmake.tar.gz -C /usr/local --strip-components=1 \
+ && rm /tmp/cmake.tar.gz \
+ && cmake --version
 
 RUN curl -fsSL \
       -o /tmp/geckodriver.tar.gz \
