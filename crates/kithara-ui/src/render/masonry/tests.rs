@@ -36,8 +36,8 @@ use crate::{
     interact::{Hit, Input, Key as NeutralKey, Outcome, PointerOwnership, PointerPhase, Scroll},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
-        ControlAction, ReadValue, Reads, Skin, UiEvent, WindowCommand, WindowEdge, document,
-        picker_hits, picker_width,
+        ControlAction, ReadValue, Reads, Skin, StereoLevels, UiEvent, WindowCommand, WindowEdge,
+        document, picker_hits, picker_width,
     },
     source::{MemResolver, UiConfig},
     text::FontPolicy,
@@ -60,6 +60,11 @@ impl Reads for FixtureReads {
             "deck.view.zoom" => Some(ReadValue::Scalar(0.25)),
             "library.breadcrumb" => Some(ReadValue::Text("All Tracks")),
             "library.scope" => Some(ReadValue::Scalar(0.0)),
+            "player.output.levels" => Some(ReadValue::Stereo(StereoLevels {
+                l: 0.6,
+                r: 0.4,
+                volume: 0.8,
+            })),
             "player.output.volume" => Some(ReadValue::Scalar(0.8)),
             _ => None,
         }
@@ -1478,6 +1483,179 @@ fn assert_scalar_value(actions: &[TestAction], path: &str, expected: f32) {
     };
     assert_eq!(actual, path);
     assert_eq!(*value, f64::from(expected));
+}
+
+/// Whether this host has a painter for a control, or still mounts it as a
+/// correctly-sized empty box.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Paints {
+    Yes,
+    NotYet,
+}
+
+/// Every control the shared base draws, and whether Masonry draws it today.
+///
+/// The `NotYet` rows are the remaining work, stated once and checked rather
+/// than described. A control that starts drawing fails this test until its row
+/// moves to `Yes`; a control that stops drawing fails it immediately.
+const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
+    (
+        "Text",
+        Paints::Yes,
+        r#"Text(id: "control", label: Some("HELLO"))"#,
+    ),
+    (
+        "Knob",
+        Paints::Yes,
+        r#"Knob(id: "control", read: Parameter(id: "player.output.volume"), write: Parameter(id: "player.output.volume"))"#,
+    ),
+    (
+        "Chip",
+        Paints::Yes,
+        r#"Chip(id: "control", label: "A", read: Model(id: "ui.menu.open"))"#,
+    ),
+    (
+        "NavItem",
+        Paints::Yes,
+        r#"NavItem(id: "control", label: "LIBRARY", icon: Playlist, read: Model(id: "ui.menu.open"))"#,
+    ),
+    (
+        "Button",
+        Paints::Yes,
+        r#"Button(id: "control", label: "PLAY", read: Model(id: "ui.menu.open"))"#,
+    ),
+    (
+        "Glyph",
+        Paints::NotYet,
+        r#"Glyph(id: "control", icon: Playlist)"#,
+    ),
+    (
+        "TabLarge",
+        Paints::NotYet,
+        r#"TabLarge(id: "control", label: "MIXER", read: Model(id: "ui.menu.open"))"#,
+    ),
+    (
+        "Toggle",
+        Paints::NotYet,
+        r#"Toggle(id: "control", read: Model(id: "ui.menu.open"))"#,
+    ),
+    (
+        "Checkbox",
+        Paints::NotYet,
+        r#"Checkbox(id: "control", read: Model(id: "ui.menu.open"))"#,
+    ),
+    (
+        "Segmented",
+        Paints::NotYet,
+        r#"Segmented(id: "control", items: ["A", "B"], read: Model(id: "library.scope"))"#,
+    ),
+    (
+        "Select",
+        Paints::NotYet,
+        r#"Select(id: "control", label: "QUALITY")"#,
+    ),
+    (
+        "StatusDot",
+        Paints::NotYet,
+        r#"StatusDot(id: "control", label: "LIVE")"#,
+    ),
+    (
+        "Swatch",
+        Paints::NotYet,
+        r#"Swatch(id: "control", role: Accent, label: "ACCENT")"#,
+    ),
+    (
+        "Cell",
+        Paints::NotYet,
+        r#"Cell(id: "control", label: Some("A1"))"#,
+    ),
+    (
+        "Readout",
+        Paints::NotYet,
+        r#"Readout(id: "control", label: Some("BPM"), read: Model(id: "library.breadcrumb"))"#,
+    ),
+    (
+        "Meter",
+        Paints::NotYet,
+        r#"Meter(id: "control", read: Model(id: "deck.view.zoom"))"#,
+    ),
+    (
+        "VuVertical",
+        Paints::NotYet,
+        r#"VuVertical(id: "control", read: Telemetry(id: "player.output.levels"))"#,
+    ),
+    (
+        "Fader",
+        Paints::NotYet,
+        r#"Fader(id: "control", read: Parameter(id: "player.output.volume"), write: Parameter(id: "player.output.volume"))"#,
+    ),
+    (
+        "Crossfader",
+        Paints::NotYet,
+        r#"Crossfader(id: "control", read: Parameter(id: "player.output.volume"), write: Parameter(id: "player.output.volume"))"#,
+    ),
+];
+
+/// Mounts one control on its own and asks Masonry to draw it. A document that
+/// holds nothing else has nothing else to contribute, so an empty scene means
+/// that control drew nothing.
+#[kithara::test]
+fn masonry_draws_every_control_the_census_claims_it_draws() {
+    let mut registry = fixture_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.menu.open",
+        EndpointDesc::new(ValueKind::Bool),
+    );
+    let reads = FixtureReads;
+    let skin = Skin::resolve_with_font_policy(
+        builtin::skin_doc().clone(),
+        &SourceUri("fixture:masonry-control-census".to_owned()),
+        FontPolicy::Embedded,
+    )
+    .unwrap_or_else(|error| panic!("the census skin must resolve: {error}"));
+    let observed = CONTROL_CENSUS
+        .iter()
+        .map(|(name, _, control)| {
+            let ui = fixture_ui(
+                "census",
+                &format!(
+                    r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [{control}])"#
+                ),
+                &registry,
+            );
+            let output = document::render(
+                &ui.root,
+                &ui,
+                &reads,
+                builtin::skin_doc(),
+                MasonryHost::new(&ui, &reads, &skin),
+            );
+            let mut root = masonry_root(output, 240, 120);
+            let (scene, _) = root.redraw().unwrap_or_else(|error| {
+                panic!("`{name}` must reach a Masonry paint pass: {error}")
+            });
+            let encoding = scene.encoding();
+            (
+                *name,
+                if encoding.is_empty() && encoding.resources.glyphs.is_empty() {
+                    Paints::NotYet
+                } else {
+                    Paints::Yes
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    let expected = CONTROL_CENSUS
+        .iter()
+        .map(|(name, paints, _)| (*name, *paints))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        observed, expected,
+        "the census is stale — move a row when its painter lands, and never leave the census \
+         describing a host it no longer matches"
+    );
 }
 
 fn fixture_ui(module_id: &str, root: &str, registry: &dyn EndpointRegistry) -> CompiledUi {

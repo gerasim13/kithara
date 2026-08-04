@@ -189,7 +189,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{builtin, ids::SourceUri};
+    use crate::{builtin, ids::SourceUri, render::masonry::MasonryControl};
 
     #[kithara::test]
     fn iced_and_masonry_record_the_same_labelled_knob() {
@@ -206,6 +206,6 @@ mod tests {
         let mut masonry =
             crate::render::masonry::MasonryKnob::new(Some("GAIN".to_owned()), 0.25, &skin);
 
-        assert_eq!(iced, masonry.draw_list(bounds));
+        assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
     }
 }

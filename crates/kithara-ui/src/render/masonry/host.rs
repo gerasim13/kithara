@@ -5,7 +5,7 @@ use std::{
 };
 
 use super::{
-    CustomWidget, MasonryKnob, MasonryNode,
+    Click, CustomWidget, MasonryControl, MasonryKnob, MasonryNode,
     custom::{HostAction, MappedCustom, MountedCustom},
     flex::{ChildLayout, Flex},
     layout::NodeLayout,
@@ -15,6 +15,11 @@ use super::{
     root::WindowLayer,
 };
 use crate::{
+    atoms::{
+        button::{Button, ButtonConfig, ButtonLabel},
+        chip::Chip,
+        nav_item::NavItem,
+    },
     compile::CompiledUi,
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
@@ -23,8 +28,12 @@ use crate::{
     module::{ButtonStyle, ChromeStyle, TextAlign, TextStyle},
     render::{
         ControlAction, HostedControlPlan, InputOwner, ReadValue, Reads, Skin, UiEvent,
+        controls::{
+            EffectiveIcon, effective_icon, nav_item_supports_engine_input, supports_engine_input,
+        },
         document::{Group, Host, Module, Popover, read::resolve},
         hosted_control_plan,
+        icons::document_icon,
     },
     size::{Dim, SizeSpec, control_size},
     skin::{ColorRole, TextRoleSkin},
@@ -183,15 +192,169 @@ where
         )
     }
 
-    fn knob_leaf(knob: MasonryKnob, declared: solve::Size<solve::Length>) -> MasonryNode<Action> {
+    fn control_leaf(
+        control: impl MasonryControl + 'static,
+        declared: solve::Size<solve::Length>,
+    ) -> MasonryNode<Action> {
         MasonryNode::document(
-            NodeLayout::Leaf(Leaf::Knob(Box::new(knob))),
+            NodeLayout::Leaf(Leaf::Control(Box::new(control))),
             declared,
             Vec::new(),
             false,
             None,
             None,
         )
+    }
+
+    /// Builds the leaf that paints one built-in control, or an empty box where
+    /// this host cannot paint it yet.
+    fn painted_leaf(
+        &self,
+        spec: &ControlSpec,
+        read: Option<&Binding>,
+        owner: InputOwner,
+        path: &str,
+        declared: solve::Size<solve::Length>,
+        plan: Option<&HostedControlPlan>,
+    ) -> MasonryNode<Action> {
+        match spec {
+            ControlSpec::Text {
+                style,
+                label,
+                color,
+                active_color,
+                active,
+                ..
+            } => {
+                let content = read
+                    .and_then(|binding| resolve(self.reads, binding, self.ui))
+                    .and_then(|value| match value {
+                        ReadValue::Text(value) => Some(value.to_owned()),
+                        _ => None,
+                    })
+                    .or_else(|| label.map(|label| self.ui.resolve(label).to_owned()))
+                    .unwrap_or_default();
+                self.text_leaf(
+                    content,
+                    *style,
+                    *color,
+                    *active_color,
+                    self.reads_true(active.as_ref()),
+                    declared,
+                )
+            }
+            ControlSpec::Knob { label } => match plan {
+                Some(HostedControlPlan::Knob {
+                    current,
+                    drag_range,
+                    wheel_step,
+                    ..
+                }) => {
+                    let knob = MasonryKnob::new(
+                        label.map(|label| self.ui.resolve(label).to_owned()),
+                        *current,
+                        self.skin,
+                    );
+                    let knob = match owner {
+                        InputOwner::Leaf => knob.interactive(
+                            path.to_owned(),
+                            Track::RelativeVertical {
+                                range: *drag_range,
+                                value: *current,
+                            },
+                            WheelStep {
+                                value: *current,
+                                step: *wheel_step,
+                            },
+                            Rc::clone(&self.map_event),
+                        ),
+                        InputOwner::Engine => knob,
+                    };
+                    Self::control_leaf(knob, declared)
+                }
+                _ => Self::empty(declared),
+            },
+            ControlSpec::Chip { style, label } => {
+                let chip = Click::new(
+                    Chip::new(*style, self.reads_true(read), self.skin),
+                    self.ui.resolve(*label).to_owned(),
+                    self.skin,
+                );
+                Self::control_leaf(self.owned(chip, owner, path, Click::interactive), declared)
+            }
+            ControlSpec::NavItem { icon, label } => {
+                let value = read.and_then(|binding| resolve(self.reads, binding, self.ui));
+                match (document_icon(*icon).lucide_glyph(), value) {
+                    (Some(glyph), Some(ReadValue::Bool(active))) => {
+                        let item = Click::new(
+                            NavItem::new(glyph, active, self.skin),
+                            self.ui.resolve(*label).to_owned(),
+                            self.skin,
+                        );
+                        Self::control_leaf(
+                            self.owned(item, owner, path, Click::interactive),
+                            declared,
+                        )
+                    }
+                    _ => Self::empty(declared),
+                }
+            }
+            ControlSpec::Button {
+                active_label,
+                frame,
+                icon,
+                label,
+                style,
+            } => {
+                let active = self.reads_true(read);
+                let glyph = match effective_icon(*style, icon.map(document_icon), active) {
+                    EffectiveIcon::Glyph(glyph) => Some(glyph),
+                    EffectiveIcon::None => None,
+                    EffectiveIcon::Svg(_) => return Self::empty(declared),
+                };
+                let button = Click::new(
+                    Button::new(
+                        ButtonConfig::builder()
+                            .active(active)
+                            .maybe_frame(*frame)
+                            .maybe_glyph(glyph)
+                            .style(*style)
+                            .build(),
+                        self.skin,
+                    ),
+                    ButtonLabel {
+                        active: active_label.map(|label| self.ui.resolve(label).to_owned()),
+                        label: self.ui.resolve(*label).to_owned(),
+                    },
+                    self.skin,
+                );
+                Self::control_leaf(
+                    self.owned(button, owner, path, Click::interactive),
+                    declared,
+                )
+            }
+            _ => Self::empty(declared),
+        }
+    }
+
+    fn reads_true(&self, read: Option<&Binding>) -> bool {
+        read.and_then(|binding| resolve(self.reads, binding, self.ui))
+            .is_some_and(|value| matches!(value, ReadValue::Bool(true)))
+    }
+
+    /// Gives a control its own click gesture only where the document says the
+    /// leaf owns input; an engine-owned control is painted and left alone.
+    fn owned<Control>(
+        &self,
+        control: Control,
+        owner: InputOwner,
+        path: &str,
+        interactive: impl FnOnce(Control, String, Rc<dyn Fn(UiEvent) -> HostAction>) -> Control,
+    ) -> Control {
+        match owner {
+            InputOwner::Leaf => interactive(control, path.to_owned(), Rc::clone(&self.map_event)),
+            InputOwner::Engine => control,
+        }
     }
 
     fn event(&self, event: impl Fn() -> UiEvent + 'static) -> Box<dyn Fn() -> HostAction> {
@@ -480,69 +643,17 @@ where
         let declared = control_declared(spec, size, self.skin);
         let plan = hosted_control_plan(path, spec, read, self.ui, self.reads, self.skin);
         let path = self.ui.resolve(path);
-        let leaf_owns_knob = owner == InputOwner::Leaf && matches!(spec, ControlSpec::Knob { .. });
+        let leaf_owns_control = owner == InputOwner::Leaf && leaf_paints(spec);
         let custom = self.custom.remove(path);
         let custom_installed = custom.is_some();
         let mut output = custom.map_or_else(
-            || match spec {
-                ControlSpec::Text {
-                    style,
-                    label,
-                    color,
-                    active_color,
-                    active,
-                    ..
-                } => {
-                    let content = read
-                        .and_then(|binding| resolve(self.reads, binding, self.ui))
-                        .and_then(|value| match value {
-                            ReadValue::Text(value) => Some(value.to_owned()),
-                            _ => None,
-                        })
-                        .or_else(|| label.map(|label| self.ui.resolve(label).to_owned()))
-                        .unwrap_or_default();
-                    let active = active
-                        .as_ref()
-                        .and_then(|binding| resolve(self.reads, binding, self.ui))
-                        .is_some_and(|value| matches!(value, ReadValue::Bool(true)));
-                    self.text_leaf(content, *style, *color, *active_color, active, declared)
-                }
-                ControlSpec::Knob { label } => match plan.as_ref() {
-                    Some(HostedControlPlan::Knob {
-                        current,
-                        drag_range,
-                        wheel_step,
-                        ..
-                    }) => {
-                        let label = label.map(|label| self.ui.resolve(label).to_owned());
-                        let knob = match owner {
-                            InputOwner::Leaf => MasonryKnob::new(label, *current, self.skin)
-                                .interactive(
-                                    path.to_owned(),
-                                    Track::RelativeVertical {
-                                        range: *drag_range,
-                                        value: *current,
-                                    },
-                                    WheelStep {
-                                        value: *current,
-                                        step: *wheel_step,
-                                    },
-                                    Rc::clone(&self.map_event),
-                                ),
-                            InputOwner::Engine => MasonryKnob::new(label, *current, self.skin),
-                        };
-                        Self::knob_leaf(knob, declared)
-                    }
-                    _ => Self::empty(declared),
-                },
-                _ => Self::empty(declared),
-            },
+            || self.painted_leaf(spec, read, owner, path, declared, plan.as_ref()),
             |widget| self.custom_leaf(widget, declared),
         );
         if custom_installed {
             return output;
         }
-        if leaf_owns_knob {
+        if leaf_owns_control {
             return output;
         }
         match spec {
@@ -716,6 +827,19 @@ fn text_role(
             .or(color)
             .unwrap_or(role.color),
         ..role
+    }
+}
+
+/// Whether this control reaches Vello as a painted leaf that can own the
+/// pointer itself, rather than as an empty box the engine drives.
+fn leaf_paints(spec: &ControlSpec) -> bool {
+    match spec {
+        ControlSpec::Button { icon, style, .. } => {
+            supports_engine_input(*style, icon.map(document_icon))
+        }
+        ControlSpec::NavItem { icon, .. } => nav_item_supports_engine_input(document_icon(*icon)),
+        ControlSpec::Chip { .. } | ControlSpec::Knob { .. } => true,
+        _ => false,
     }
 }
 

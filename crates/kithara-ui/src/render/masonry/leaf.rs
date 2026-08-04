@@ -15,7 +15,7 @@ use num_traits::cast::AsPrimitive;
 use tracing::{Span, trace_span};
 
 use super::{
-    MasonryKnob, Repaint, Size2, SizeLimits, TextMeasurer,
+    MasonryControl, Repaint, Size2, SizeLimits, TextMeasurer,
     custom::{HostAction, MountedCustom},
     node::pointer_button,
 };
@@ -32,7 +32,7 @@ use crate::{
 
 pub(crate) enum Leaf {
     Empty,
-    Knob(Box<MasonryKnob>),
+    Control(Box<dyn MasonryControl>),
     Text {
         content: String,
         role: TextRoleSkin,
@@ -49,7 +49,7 @@ pub(crate) enum Leaf {
 impl Leaf {
     pub(crate) fn measure(&mut self, limits: crate::solve::Limits) -> crate::solve::Size {
         match self {
-            Self::Empty | Self::Knob(_) => crate::solve::Size::ZERO,
+            Self::Empty | Self::Control(_) => crate::solve::Size::ZERO,
             Self::Text {
                 content,
                 role,
@@ -75,13 +75,13 @@ impl Leaf {
     }
 
     pub(crate) fn paint(&mut self, bounds: Rect, scene: &mut Scene) {
-        if let Self::Knob(knob) = self {
-            replay(&knob.draw_list(bounds), &mut VelloBackend::new(scene));
+        if let Self::Control(control) = self {
+            replay(&control.draw_list(bounds), &mut VelloBackend::new(scene));
             return;
         }
         let mut list = DrawListBuilder::default();
         match self {
-            Self::Empty | Self::Knob(_) => {}
+            Self::Empty | Self::Control(_) => {}
             Self::Text {
                 content,
                 role,
@@ -126,7 +126,7 @@ impl Leaf {
 
     pub(crate) fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<HostAction> {
         match self {
-            Self::Knob(knob) => knob.input(input, &hit),
+            Self::Control(control) => control.input(input, &hit),
             Self::Custom { widget, .. } => widget.input(input, hit),
             Self::Empty | Self::Text { .. } => Outcome::IGNORED,
         }
@@ -135,23 +135,32 @@ impl Leaf {
     pub(crate) fn frame(&mut self, elapsed: Duration) -> Option<HostAction> {
         match self {
             Self::Custom { widget, .. } => widget.frame(elapsed),
-            Self::Empty | Self::Knob(_) | Self::Text { .. } => None,
+            Self::Empty | Self::Control(_) | Self::Text { .. } => None,
         }
     }
 
     pub(crate) fn repaint(&self) -> Repaint {
+        if let Self::Control(control) = self {
+            return control.repaint();
+        }
         let Self::Custom { widget, .. } = self else {
             return Repaint::default();
         };
         widget.repaint()
     }
 
-    pub(crate) const fn accepts_input(&self) -> bool {
+    pub(crate) fn hover(&mut self, hovered: bool) -> bool {
         match self {
-            Self::Knob(knob) => knob.accepts_input(),
-            Self::Custom { .. } => true,
-            Self::Empty | Self::Text { .. } => false,
+            Self::Control(control) => control.hover(hovered),
+            Self::Custom { .. } | Self::Empty | Self::Text { .. } => false,
         }
+    }
+
+    pub(crate) fn accepts_input(&self) -> bool {
+        if let Self::Control(control) = self {
+            return control.accepts_input();
+        }
+        matches!(self, Self::Custom { .. })
     }
 
     pub(crate) fn accepts_text_input(&self) -> bool {
@@ -160,7 +169,7 @@ impl Leaf {
 
     pub(crate) fn cursor(&self, hit: &Hit) -> CursorShape {
         match self {
-            Self::Knob(knob) => knob.cursor(hit),
+            Self::Control(control) => control.cursor(hit),
             Self::Empty | Self::Text { .. } | Self::Custom { .. } => CursorShape::None,
         }
     }

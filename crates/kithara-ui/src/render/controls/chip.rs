@@ -12,7 +12,7 @@ use iced::{
 use crate::{
     atoms::chip::Chip,
     backends::IcedBackend,
-    draw::{DrawListBuilder, Rect, replay},
+    draw::{DrawList, DrawListBuilder, Rect, replay},
     interact::{CursorShape, Hover, iced as iced_interact, recognizers::click},
     module::ChipStyle,
     render::{InputOwner, ReadValue, Skin, UiEvent, activate},
@@ -100,14 +100,16 @@ impl canvas::Program<UiEvent> for ChipProgram<'_, '_> {
 }
 
 struct ChipPaint<'data, 'skin> {
-    chip: Chip<'data, 'skin>,
+    chip: Chip,
+    label: &'data str,
     text_resources: &'skin TextResources,
 }
 
 impl<'data, 'skin> ChipPaint<'data, 'skin> {
     fn new(label: &'data str, style: ChipStyle, active: bool, skin: &'skin Skin) -> Self {
         Self {
-            chip: Chip::new(label, style, active, skin),
+            chip: Chip::new(style, active, skin),
+            label,
             text_resources: skin.text_resources(),
         }
     }
@@ -130,12 +132,8 @@ impl<'data, 'skin> ChipPaint<'data, 'skin> {
         bounds: Rectangle,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        let mut text = state.text.borrow_mut();
-        let text = text.get_or_insert_with(|| self.text_resources.into());
-        let mut builder = DrawListBuilder::default();
-        self.chip.paint(
-            &mut builder,
-            text,
+        let list = self.draw_list(
+            state,
             Rect {
                 h: bounds.height,
                 w: bounds.width,
@@ -144,10 +142,18 @@ impl<'data, 'skin> ChipPaint<'data, 'skin> {
             },
         );
         replay(
-            &builder.finish(),
+            &list,
             &mut IcedBackend::new(&mut frame, self.text_resources),
         );
         vec![frame.into_geometry()]
+    }
+
+    fn draw_list(&self, state: &ChipPaintState, bounds: Rect) -> DrawList {
+        let mut text = state.text.borrow_mut();
+        let text = text.get_or_insert_with(|| self.text_resources.into());
+        let mut builder = DrawListBuilder::default();
+        self.chip.paint(&mut builder, text, self.label, bounds);
+        builder.finish()
     }
 }
 
@@ -177,7 +183,31 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    #[cfg(feature = "masonry-host")]
+    use crate::render::masonry::{Click, MasonryControl};
     use crate::{builtin, render::ControlAction};
+
+    #[cfg(feature = "masonry-host")]
+    #[kithara::test]
+    fn iced_and_masonry_record_the_same_chip() {
+        let skin = builtin::skin();
+        let bounds = Rect {
+            h: 16.0,
+            w: 28.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        for (label, style, active) in [
+            ("A", ChipStyle::Deck, true),
+            ("FX1", ChipStyle::Routing, false),
+        ] {
+            let iced = ChipPaint::new(label, style, active, skin)
+                .draw_list(&ChipPaintState::default(), bounds);
+            let mut masonry = Click::new(Chip::new(style, active, skin), label.to_owned(), skin);
+
+            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+        }
+    }
 
     #[kithara::test]
     fn the_leaf_chip_uses_the_shared_activation_gesture() {

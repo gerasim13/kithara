@@ -522,6 +522,12 @@ impl Widget for Node {
         {
             leaf.added(ctx);
         }
+        if let Update::HoveredChanged(hovered) = event
+            && let Some(leaf) = self.layout.leaf()
+            && leaf.hover(*hovered)
+        {
+            ctx.request_paint_only();
+        }
         if matches!(event, Update::FocusChanged(false))
             && let Some(engine) = &self.engine
         {

@@ -7,15 +7,33 @@ use crate::{
     text::{GlyphRun, TextContext},
 };
 
-#[derive(bon::Builder)]
-pub(crate) struct Button<'data, 'skin> {
+/// What a document asks a button to be, before a skin resolves it.
+#[derive(bon::Builder, Clone, Copy)]
+pub(crate) struct ButtonConfig {
     active: bool,
-    active_label: Option<&'data str>,
     frame: Option<FrameSides>,
     glyph: Option<char>,
-    label: &'data str,
     style: ButtonStyle,
-    skin: &'skin Skin,
+}
+
+/// The word a button shows, and the word it swaps in while it is active. A
+/// host that draws straight through borrows them; one that retains the control
+/// owns them.
+#[derive(Clone, Copy)]
+pub(crate) struct ButtonLabel<Words> {
+    pub(crate) active: Option<Words>,
+    pub(crate) label: Words,
+}
+
+pub(crate) struct Button {
+    active: bool,
+    content: Rgba,
+    fill: Fill,
+    frame: Frame,
+    gap: f32,
+    glyph: Option<Glyph>,
+    padding_x: f32,
+    role: TextRoleSkin,
 }
 
 #[derive(Clone, Copy)]
@@ -25,150 +43,294 @@ pub(crate) enum VisualState {
     Pressed,
 }
 
-impl Button<'_, '_> {
-    pub(crate) fn paint(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        bounds: Rect,
-        state: VisualState,
-    ) {
-        let (fill, content) = self.colors(state);
-        let radius = self.frame_skin().map_or(0.0, |frame| frame.radius);
-        list.fill_rounded_rect(bounds, radius, fill);
-        if self.is_transport() {
-            self.paint_transport_frame(list, bounds);
-        } else if let Some(frame) = self.frame_skin() {
-            self.paint_border(list, bounds, frame);
-        }
-        self.paint_content(list, text, bounds, content);
-    }
+#[derive(Clone, Copy)]
+struct Fill {
+    hovered: Rgba,
+    idle: Rgba,
+    pressed: Rgba,
+}
 
-    pub(crate) fn intrinsic_width(&self, text: &mut TextContext) -> f32 {
-        let label = self.label();
-        let content = match self.glyph {
-            Some(glyph) => {
-                let glyph = glyph.to_string();
-                let icon = text.shape_lucide(&glyph, self.icon_size());
-                let label_width = self.shape_label(text, label).width();
-                let icon_only = self.style == ButtonStyle::MicroPrimary
-                    || self.is_transport() && label.is_empty();
-                icon.width()
-                    + if icon_only {
-                        0.0
-                    } else {
-                        self.skin.button.icon_gap + label_width
-                    }
-            }
-            None if label.is_empty() => 0.0,
-            None => self.shape_label(text, label).width(),
-        };
-        let padding = if self.style == ButtonStyle::VisNav {
-            self.skin.vis.nav_padding_x
-        } else {
-            self.skin.button.padding_x
-        };
-        content + padding * 2.0
-    }
+enum Frame {
+    Border {
+        color: Rgba,
+        radius: f32,
+        width: f32,
+    },
+    Seams {
+        color: Rgba,
+        sides: FrameSides,
+        width: f32,
+    },
+}
 
-    fn colors(&self, state: VisualState) -> (Rgba, Rgba) {
-        let highlighted = self.highlighted();
-        let palette = self.skin.palette;
-        let fill: Rgba = if self.style == ButtonStyle::VisNav {
-            match state {
-                VisualState::Hovered => palette.bg_select.into(),
-                VisualState::Pressed => palette.accent_soft.into(),
-                VisualState::Idle => self.skin.rgba(self.skin.vis.nav_background),
-            }
-        } else if highlighted {
-            match state {
-                VisualState::Hovered => palette.accent_strong.into(),
-                VisualState::Pressed => palette.accent_soft.into(),
-                VisualState::Idle => palette.accent.into(),
-            }
-        } else if self.is_transport() {
-            match state {
-                VisualState::Hovered => palette.bg_panel_2.into(),
-                VisualState::Pressed => palette.accent_soft.into(),
-                VisualState::Idle => Rgba {
-                    a: 0.0,
-                    b: 0.0,
-                    g: 0.0,
-                    r: 0.0,
-                },
-            }
-        } else {
-            match state {
-                VisualState::Hovered => palette.bg_panel_2.into(),
-                VisualState::Pressed => palette.accent_soft.into(),
-                VisualState::Idle => palette.bg_panel.into(),
-            }
-        };
-        let content: Rgba = if self.style == ButtonStyle::VisNav {
-            self.skin.rgba(self.skin.vis.nav_text_color)
+struct Glyph {
+    ch: char,
+    placement: Placement,
+    size: f32,
+    solo_color: Rgba,
+}
+
+#[derive(Clone, Copy)]
+enum Placement {
+    Alone,
+    AloneIfUnlabelled,
+    Beside,
+}
+
+impl Button {
+    pub(crate) fn new(config: ButtonConfig, skin: &Skin) -> Self {
+        let ButtonConfig {
+            active,
+            frame,
+            glyph,
+            style,
+        } = config;
+        let palette = skin.palette;
+        let transport = matches!(
+            style,
+            ButtonStyle::Transport | ButtonStyle::TransportPrimary
+        );
+        let highlighted = active || style == ButtonStyle::MicroPrimary;
+        let content: Rgba = if style == ButtonStyle::VisNav {
+            skin.rgba(skin.vis.nav_text_color)
         } else if highlighted {
             palette.bg.into()
         } else {
             palette.text.into()
         };
-        (fill, content)
-    }
-
-    fn frame_skin(&self) -> Option<FrameSkin> {
-        if self.is_transport() {
-            None
-        } else if self.style == ButtonStyle::VisNav {
-            Some(self.skin.vis.nav_frame)
-        } else if self.is_primary() {
-            Some(self.skin.button.primary_frame)
+        let font: FontSkin = if primary(style) || active {
+            skin.button.primary_text
+        } else if style == ButtonStyle::VisNav {
+            skin.vis.nav_text
         } else {
-            Some(self.skin.button.frame)
+            skin.button.text
+        };
+        Self {
+            active,
+            content,
+            fill: fill(style, highlighted, transport, skin),
+            frame: if transport {
+                Frame::Seams {
+                    color: skin.rgba(skin.divider.color),
+                    sides: frame.unwrap_or(skin.button.transport_sides),
+                    width: skin.divider.width,
+                }
+            } else {
+                border(style, skin)
+            },
+            gap: skin.button.icon_gap,
+            glyph: glyph.map(|ch| Glyph {
+                ch,
+                placement: placement(style, transport),
+                size: icon_size(style, transport, skin),
+                solo_color: if transport && !highlighted {
+                    palette.text_dim.into()
+                } else {
+                    content
+                },
+            }),
+            padding_x: if style == ButtonStyle::VisNav {
+                skin.vis.nav_padding_x
+            } else {
+                skin.button.padding_x
+            },
+            role: TextRoleSkin {
+                color: ColorRole::Text,
+                font: FontFamily::Mono,
+                size: font.size,
+                spacing: 0.0,
+                weight: font.weight,
+            },
         }
     }
 
-    fn is_primary(&self) -> bool {
-        matches!(
-            self.style,
-            ButtonStyle::TransportPrimary | ButtonStyle::MicroPrimary
-        )
+    pub(crate) fn paint<Words>(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        label: &ButtonLabel<Words>,
+        bounds: Rect,
+        state: VisualState,
+    ) where
+        Words: AsRef<str>,
+    {
+        list.fill_rounded_rect(bounds, self.frame.radius(), self.fill.pick(state));
+        self.frame.paint(list, bounds);
+        self.paint_content(list, text, self.label(label), bounds);
     }
 
-    fn is_transport(&self) -> bool {
-        matches!(
-            self.style,
-            ButtonStyle::Transport | ButtonStyle::TransportPrimary
-        )
+    pub(crate) fn intrinsic_width<Words>(
+        &self,
+        text: &mut TextContext,
+        label: &ButtonLabel<Words>,
+    ) -> f32
+    where
+        Words: AsRef<str>,
+    {
+        let label = self.label(label);
+        let content = match &self.glyph {
+            Some(glyph) => {
+                let icon = text.shape_lucide(&glyph.ch.to_string(), glyph.size);
+                if glyph.placement.alone(label) {
+                    icon.width()
+                } else {
+                    icon.width() + self.gap + self.shape(text, label).width()
+                }
+            }
+            None if label.is_empty() => 0.0,
+            None => self.shape(text, label).width(),
+        };
+        content + self.padding_x * 2.0
     }
 
-    fn highlighted(&self) -> bool {
-        self.active || self.style == ButtonStyle::MicroPrimary
-    }
-
-    fn paint_border(&self, list: &mut DrawListBuilder, bounds: Rect, frame: FrameSkin) {
-        if frame.border_width <= 0.0 {
+    fn paint_content(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        label: &str,
+        bounds: Rect,
+    ) {
+        let Some(glyph) = &self.glyph else {
+            if !label.is_empty() {
+                let run = self.shape(text, label);
+                Self::paint_run(list, &run, label, bounds, self.content);
+            }
+            return;
+        };
+        let ch = glyph.ch.to_string();
+        let icon = text.shape_lucide(&ch, glyph.size);
+        if glyph.placement.alone(label) {
+            Self::paint_run(list, &icon, &ch, bounds, glyph.solo_color);
             return;
         }
-        let inset = frame.border_width / 2.0;
-        list.stroke_rounded_rect(
-            Rect {
-                h: (bounds.h - frame.border_width).max(0.0),
-                w: (bounds.w - frame.border_width).max(0.0),
-                x: bounds.x + inset,
-                y: bounds.y + inset,
-            },
-            frame.radius,
-            self.skin.rgba(frame.border),
-            frame.border_width,
+
+        let run = self.shape(text, label);
+        let width = icon.width() + self.gap + run.width();
+        let x = bounds.x + (bounds.w - width) / 2.0;
+        list.text(
+            &icon,
+            &ch,
+            Transform::translate(Pt {
+                x,
+                y: bounds.y + (bounds.h - icon.height()) / 2.0,
+            }),
+            self.content,
+        );
+        if !label.is_empty() {
+            list.text(
+                &run,
+                label,
+                Transform::translate(Pt {
+                    x: x + icon.width() + self.gap,
+                    y: bounds.y + (bounds.h - run.height()) / 2.0,
+                }),
+                self.content,
+            );
+        }
+    }
+
+    fn paint_run(
+        list: &mut DrawListBuilder,
+        run: &GlyphRun,
+        content: &str,
+        bounds: Rect,
+        color: Rgba,
+    ) {
+        list.text(
+            run,
+            content,
+            Transform::translate(Pt {
+                x: bounds.x + (bounds.w - run.width()) / 2.0,
+                y: bounds.y + (bounds.h - run.height()) / 2.0,
+            }),
+            color,
         );
     }
 
-    fn paint_transport_frame(&self, list: &mut DrawListBuilder, bounds: Rect) {
-        let sides = self.frame.unwrap_or(self.skin.button.transport_sides);
-        let width = self.skin.divider.width.min(bounds.w).min(bounds.h);
+    fn shape(&self, text: &mut TextContext, label: &str) -> GlyphRun {
+        text.shape(label, self.role, None)
+    }
+
+    fn label<'a, Words>(&self, label: &'a ButtonLabel<Words>) -> &'a str
+    where
+        Words: AsRef<str>,
+    {
+        if self.active {
+            label
+                .active
+                .as_ref()
+                .map_or_else(|| label.label.as_ref(), AsRef::as_ref)
+        } else {
+            label.label.as_ref()
+        }
+    }
+}
+
+impl Fill {
+    const fn pick(self, state: VisualState) -> Rgba {
+        match state {
+            VisualState::Hovered => self.hovered,
+            VisualState::Idle => self.idle,
+            VisualState::Pressed => self.pressed,
+        }
+    }
+}
+
+impl Frame {
+    const fn radius(&self) -> f32 {
+        match self {
+            Self::Border { radius, .. } => *radius,
+            Self::Seams { .. } => 0.0,
+        }
+    }
+
+    fn paint(&self, list: &mut DrawListBuilder, bounds: Rect) {
+        match self {
+            Self::Border {
+                color,
+                radius,
+                width,
+            } => {
+                if *width <= 0.0 {
+                    return;
+                }
+                let inset = width / 2.0;
+                list.stroke_rounded_rect(
+                    Rect {
+                        h: (bounds.h - width).max(0.0),
+                        w: (bounds.w - width).max(0.0),
+                        x: bounds.x + inset,
+                        y: bounds.y + inset,
+                    },
+                    *radius,
+                    *color,
+                    *width,
+                );
+            }
+            Self::Seams {
+                color,
+                sides,
+                width,
+            } => Self::paint_seams(
+                list,
+                bounds,
+                *sides,
+                width.min(bounds.w).min(bounds.h),
+                *color,
+            ),
+        }
+    }
+
+    fn paint_seams(
+        list: &mut DrawListBuilder,
+        bounds: Rect,
+        sides: FrameSides,
+        width: f32,
+        color: Rgba,
+    ) {
         if width <= 0.0 {
             return;
         }
-        let color = self.skin.rgba(self.skin.divider.color);
         if sides.top {
             list.fill_rect(Rect { h: width, ..bounds }, color);
         }
@@ -206,132 +368,90 @@ impl Button<'_, '_> {
             );
         }
     }
+}
 
-    fn paint_content(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        bounds: Rect,
-        color: Rgba,
-    ) {
-        let label = self.label();
-        let Some(glyph) = self.glyph else {
-            self.paint_label(list, text, label, bounds, color);
-            return;
+impl Placement {
+    const fn alone(self, label: &str) -> bool {
+        match self {
+            Self::Alone => true,
+            Self::AloneIfUnlabelled => label.is_empty(),
+            Self::Beside => false,
+        }
+    }
+}
+
+fn fill(style: ButtonStyle, highlighted: bool, transport: bool, skin: &Skin) -> Fill {
+    let palette = skin.palette;
+    if style == ButtonStyle::VisNav {
+        return Fill {
+            hovered: palette.bg_select.into(),
+            idle: skin.rgba(skin.vis.nav_background),
+            pressed: palette.accent_soft.into(),
         };
-        let icon_size = self.icon_size();
-        let glyph = glyph.to_string();
-        let icon = text.shape_lucide(&glyph, icon_size);
-        if self.style == ButtonStyle::MicroPrimary || self.is_transport() && label.is_empty() {
-            let icon_color = if self.is_transport() && !self.highlighted() {
-                self.skin.palette.text_dim.into()
-            } else {
-                color
-            };
-            Self::paint_run(list, &icon, &glyph, bounds, icon_color);
-            return;
-        }
-
-        let label_run = self.shape_label(text, label);
-        let width = icon.width() + self.skin.button.icon_gap + label_run.width();
-        let x = bounds.x + (bounds.w - width) / 2.0;
-        list.text(
-            &icon,
-            &glyph,
-            Transform::translate(Pt {
-                x,
-                y: bounds.y + (bounds.h - icon.height()) / 2.0,
-            }),
-            color,
-        );
-        if !label.is_empty() {
-            list.text(
-                &label_run,
-                label,
-                Transform::translate(Pt {
-                    x: x + icon.width() + self.skin.button.icon_gap,
-                    y: bounds.y + (bounds.h - label_run.height()) / 2.0,
-                }),
-                color,
-            );
-        }
     }
-
-    fn paint_label(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        label: &str,
-        bounds: Rect,
-        color: Rgba,
-    ) {
-        if label.is_empty() {
-            return;
-        }
-        let run = self.shape_label(text, label);
-        Self::paint_run(list, &run, label, bounds, color);
+    if highlighted {
+        return Fill {
+            hovered: palette.accent_strong.into(),
+            idle: palette.accent.into(),
+            pressed: palette.accent_soft.into(),
+        };
     }
-
-    fn paint_run(
-        list: &mut DrawListBuilder,
-        run: &GlyphRun,
-        content: &str,
-        bounds: Rect,
-        color: Rgba,
-    ) {
-        list.text(
-            run,
-            content,
-            Transform::translate(Pt {
-                x: bounds.x + (bounds.w - run.width()) / 2.0,
-                y: bounds.y + (bounds.h - run.height()) / 2.0,
-            }),
-            color,
-        );
-    }
-
-    fn shape_label(&self, text: &mut TextContext, label: &str) -> GlyphRun {
-        let font = self.font();
-        text.shape(
-            label,
-            TextRoleSkin {
-                color: ColorRole::Text,
-                font: FontFamily::Mono,
-                size: font.size,
-                spacing: 0.0,
-                weight: font.weight,
-            },
-            None,
-        )
-    }
-
-    fn label(&self) -> &str {
-        if self.active {
-            self.active_label.unwrap_or(self.label)
+    Fill {
+        hovered: palette.bg_panel_2.into(),
+        idle: if transport {
+            Rgba {
+                a: 0.0,
+                b: 0.0,
+                g: 0.0,
+                r: 0.0,
+            }
         } else {
-            self.label
-        }
+            palette.bg_panel.into()
+        },
+        pressed: palette.accent_soft.into(),
     }
+}
 
-    fn font(&self) -> FontSkin {
-        if self.is_primary() || self.active {
-            self.skin.button.primary_text
-        } else if self.style == ButtonStyle::VisNav {
-            self.skin.vis.nav_text
-        } else {
-            self.skin.button.text
-        }
+fn border(style: ButtonStyle, skin: &Skin) -> Frame {
+    let frame: FrameSkin = if style == ButtonStyle::VisNav {
+        skin.vis.nav_frame
+    } else if primary(style) {
+        skin.button.primary_frame
+    } else {
+        skin.button.frame
+    };
+    Frame::Border {
+        color: skin.rgba(frame.border),
+        radius: frame.radius,
+        width: frame.border_width,
     }
+}
 
-    fn icon_size(&self) -> f32 {
-        if self.style == ButtonStyle::MicroPrimary {
-            self.skin.button.micro_icon_size
-        } else if self.is_transport() {
-            self.skin.button.transport_icon_size
-        } else {
-            self.skin.button.icon_size
-        }
+const fn placement(style: ButtonStyle, transport: bool) -> Placement {
+    if matches!(style, ButtonStyle::MicroPrimary) {
+        Placement::Alone
+    } else if transport {
+        Placement::AloneIfUnlabelled
+    } else {
+        Placement::Beside
     }
+}
+
+fn icon_size(style: ButtonStyle, transport: bool, skin: &Skin) -> f32 {
+    if style == ButtonStyle::MicroPrimary {
+        skin.button.micro_icon_size
+    } else if transport {
+        skin.button.transport_icon_size
+    } else {
+        skin.button.icon_size
+    }
+}
+
+const fn primary(style: ButtonStyle) -> bool {
+    matches!(
+        style,
+        ButtonStyle::TransportPrimary | ButtonStyle::MicroPrimary
+    )
 }
 
 #[cfg(test)]
@@ -346,6 +466,13 @@ mod tests {
         text::{FontId, GlyphFace, GlyphSegment, TextContext},
     };
 
+    fn plain(label: &str) -> ButtonLabel<&str> {
+        ButtonLabel {
+            active: None,
+            label,
+        }
+    }
+
     #[kithara::test]
     fn a_default_button_draws_fill_border_and_label_in_order() {
         let skin = builtin::skin();
@@ -357,13 +484,20 @@ mod tests {
         };
         let mut text = TextContext::from(skin.text_resources());
         let mut builder = DrawListBuilder::default();
-        Button::builder()
-            .active(false)
-            .label("DEFAULT")
-            .style(ButtonStyle::Default)
-            .skin(skin)
-            .build()
-            .paint(&mut builder, &mut text, bounds, VisualState::Idle);
+        Button::new(
+            ButtonConfig::builder()
+                .active(false)
+                .style(ButtonStyle::Default)
+                .build(),
+            skin,
+        )
+        .paint(
+            &mut builder,
+            &mut text,
+            &plain("DEFAULT"),
+            bounds,
+            VisualState::Idle,
+        );
         let list = builder.finish();
 
         assert_eq!(list.commands().len(), 3);
@@ -397,24 +531,26 @@ mod tests {
         let glyph = char::from(lucide_icons::Icon::Play);
         let mut text = TextContext::from(skin.text_resources());
         let mut builder = DrawListBuilder::default();
-        Button::builder()
-            .active(false)
-            .glyph(glyph)
-            .label("PLAY")
-            .style(ButtonStyle::MicroPrimary)
-            .skin(skin)
-            .build()
-            .paint(
-                &mut builder,
-                &mut text,
-                Rect {
-                    h: 34.0,
-                    w: 34.0,
-                    x: 0.0,
-                    y: 0.0,
-                },
-                VisualState::Idle,
-            );
+        Button::new(
+            ButtonConfig::builder()
+                .active(false)
+                .glyph(glyph)
+                .style(ButtonStyle::MicroPrimary)
+                .build(),
+            skin,
+        )
+        .paint(
+            &mut builder,
+            &mut text,
+            &plain("PLAY"),
+            Rect {
+                h: 34.0,
+                w: 34.0,
+                x: 0.0,
+                y: 0.0,
+            },
+            VisualState::Idle,
+        );
         let list = builder.finish();
 
         assert!(matches!(
@@ -437,19 +573,26 @@ mod tests {
         };
         let mut text = TextContext::from(skin.text_resources());
         let mut builder = DrawListBuilder::default();
-        Button::builder()
-            .active(false)
-            .frame(FrameSides {
-                top: true,
-                right: false,
-                bottom: true,
-                left: false,
-            })
-            .label("PLAY")
-            .style(ButtonStyle::TransportPrimary)
-            .skin(skin)
-            .build()
-            .paint(&mut builder, &mut text, bounds, VisualState::Idle);
+        Button::new(
+            ButtonConfig::builder()
+                .active(false)
+                .frame(FrameSides {
+                    top: true,
+                    right: false,
+                    bottom: true,
+                    left: false,
+                })
+                .style(ButtonStyle::TransportPrimary)
+                .build(),
+            skin,
+        )
+        .paint(
+            &mut builder,
+            &mut text,
+            &plain("PLAY"),
+            bounds,
+            VisualState::Idle,
+        );
         let list = builder.finish();
 
         assert!(matches!(
@@ -491,24 +634,28 @@ mod tests {
         let skin = builtin::skin();
         let mut text = TextContext::from(skin.text_resources());
         let mut builder = DrawListBuilder::default();
-        Button::builder()
-            .active(true)
-            .active_label("PAUSE")
-            .label("PLAY")
-            .style(ButtonStyle::TransportPrimary)
-            .skin(skin)
-            .build()
-            .paint(
-                &mut builder,
-                &mut text,
-                Rect {
-                    h: 28.0,
-                    w: 48.0,
-                    x: 0.0,
-                    y: 0.0,
-                },
-                VisualState::Idle,
-            );
+        Button::new(
+            ButtonConfig::builder()
+                .active(true)
+                .style(ButtonStyle::TransportPrimary)
+                .build(),
+            skin,
+        )
+        .paint(
+            &mut builder,
+            &mut text,
+            &ButtonLabel {
+                active: Some("PAUSE"),
+                label: "PLAY",
+            },
+            Rect {
+                h: 28.0,
+                w: 48.0,
+                x: 0.0,
+                y: 0.0,
+            },
+            VisualState::Idle,
+        );
         let list = builder.finish();
 
         assert!(matches!(

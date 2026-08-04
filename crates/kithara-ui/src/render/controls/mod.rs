@@ -10,6 +10,8 @@ mod tree;
 mod tree_row;
 
 pub(crate) use button::{ButtonView, supports_engine_input, view as button};
+#[cfg(feature = "masonry-host")]
+pub(crate) use button::{EffectiveIcon, effective_icon};
 pub(crate) use chip::chip;
 pub(crate) use chrome::{ChromeLeaf, chrome_leaf, header_chevron};
 pub(crate) use fader::fader_slider;

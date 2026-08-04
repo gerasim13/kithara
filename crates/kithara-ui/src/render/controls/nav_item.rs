@@ -12,7 +12,7 @@ use iced::{
 use crate::{
     atoms::nav_item::NavItem,
     backends::IcedBackend,
-    draw::{DrawListBuilder, Rect, replay},
+    draw::{DrawList, DrawListBuilder, Rect, replay},
     interact::{CursorShape, Hover, iced as iced_interact, recognizers::click},
     render::{Icon, InputOwner, ReadValue, Skin, UiEvent, activate},
     text::{TextContext, TextResources},
@@ -119,7 +119,8 @@ impl canvas::Program<UiEvent> for NavItemProgram<'_, '_> {
 struct NavItemPaint<'data, 'skin> {
     #[field(get, vis = "")]
     height: f32,
-    item: NavItem<'data, 'skin>,
+    item: NavItem,
+    label: &'data str,
     text_resources: &'skin TextResources,
 }
 
@@ -127,12 +128,8 @@ impl<'data, 'skin> NavItemPaint<'data, 'skin> {
     fn new(label: &'data str, glyph: char, active: bool, skin: &'skin Skin) -> Self {
         Self {
             height: skin.nav.item_height,
-            item: NavItem::builder()
-                .active(active)
-                .glyph(glyph)
-                .label(label)
-                .skin(skin)
-                .build(),
+            item: NavItem::new(glyph, active, skin),
+            label,
             text_resources: skin.text_resources(),
         }
     }
@@ -156,12 +153,8 @@ impl<'data, 'skin> NavItemPaint<'data, 'skin> {
         bounds: Rectangle,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        let mut text = state.text.borrow_mut();
-        let text = text.get_or_insert_with(|| self.text_resources.into());
-        let mut builder = DrawListBuilder::default();
-        self.item.paint(
-            &mut builder,
-            text,
+        let list = self.draw_list(
+            state,
             Rect {
                 h: bounds.height,
                 w: bounds.width,
@@ -170,10 +163,18 @@ impl<'data, 'skin> NavItemPaint<'data, 'skin> {
             },
         );
         replay(
-            &builder.finish(),
+            &list,
             &mut IcedBackend::new(&mut frame, self.text_resources),
         );
         vec![frame.into_geometry()]
+    }
+
+    fn draw_list(&self, state: &NavItemPaintState, bounds: Rect) -> DrawList {
+        let mut text = state.text.borrow_mut();
+        let text = text.get_or_insert_with(|| self.text_resources.into());
+        let mut builder = DrawListBuilder::default();
+        self.item.paint(&mut builder, text, self.label, bounds);
+        builder.finish()
     }
 }
 
@@ -203,7 +204,35 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    #[cfg(feature = "masonry-host")]
+    use crate::render::masonry::{Click, MasonryControl};
     use crate::{builtin, render::ControlAction};
+
+    #[cfg(feature = "masonry-host")]
+    #[kithara::test]
+    fn iced_and_masonry_record_the_same_nav_item() {
+        let skin = builtin::skin();
+        let glyph = Icon::Play
+            .lucide_glyph()
+            .unwrap_or_else(|| panic!("the play icon must be a Lucide glyph"));
+        let bounds = Rect {
+            h: 30.0,
+            w: 198.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        for active in [false, true] {
+            let iced = NavItemPaint::new("BUTTONS", glyph, active, skin)
+                .draw_list(&NavItemPaintState::default(), bounds);
+            let mut masonry = Click::new(
+                NavItem::new(glyph, active, skin),
+                "BUTTONS".to_owned(),
+                skin,
+            );
+
+            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+        }
+    }
 
     #[kithara::test]
     fn the_leaf_nav_item_uses_the_shared_activation_gesture() {

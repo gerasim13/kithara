@@ -6,101 +6,95 @@ use crate::{
     text::TextContext,
 };
 
-pub(crate) struct Chip<'data, 'skin> {
-    skin: &'skin Skin,
-    label: &'data str,
-    style: ChipStyle,
-    active: bool,
+pub(crate) struct Chip {
+    border: Rgba,
+    fill: Rgba,
+    frame: FrameSkin,
+    padding: Pt,
+    role: TextRoleSkin,
+    text_color: Rgba,
 }
 
-impl<'data, 'skin> Chip<'data, 'skin> {
-    pub(crate) const fn new(
-        label: &'data str,
-        style: ChipStyle,
-        active: bool,
-        skin: &'skin Skin,
-    ) -> Self {
-        Self {
-            skin,
-            label,
-            style,
-            active,
-        }
-    }
-
-    fn font(&self) -> FontSkin {
-        match self.style {
-            ChipStyle::Deck => self.skin.chip.deck_text,
-            ChipStyle::Routing => self.skin.chip.routing_text,
-        }
-    }
-
-    fn frame(&self) -> FrameSkin {
-        if self.active {
-            self.skin.chip.active_frame
+impl Chip {
+    pub(crate) fn new(style: ChipStyle, active: bool, skin: &Skin) -> Self {
+        let frame = if active {
+            skin.chip.active_frame
         } else {
-            self.skin.chip.inactive_frame
-        }
-    }
-
-    pub(crate) fn paint(&self, list: &mut DrawListBuilder, text: &mut TextContext, bounds: Rect) {
-        let frame = self.frame();
-        let fill = if self.active {
-            self.skin.palette.accent.into()
-        } else {
-            Rgba {
-                a: 0.0,
-                b: 0.0,
-                g: 0.0,
-                r: 0.0,
-            }
+            skin.chip.inactive_frame
         };
-        list.fill_rounded_rect(bounds, frame.radius, fill);
-        self.paint_frame(list, bounds, frame);
-
-        let font = self.font();
-        let run = text.shape(
-            self.label,
-            TextRoleSkin {
+        let font: FontSkin = match style {
+            ChipStyle::Deck => skin.chip.deck_text,
+            ChipStyle::Routing => skin.chip.routing_text,
+        };
+        let text_color = if active {
+            skin.palette.bg_deep
+        } else {
+            skin.palette.text_dim
+        };
+        Self {
+            border: skin.rgba(frame.border),
+            fill: if active {
+                skin.palette.accent.into()
+            } else {
+                Rgba {
+                    a: 0.0,
+                    b: 0.0,
+                    g: 0.0,
+                    r: 0.0,
+                }
+            },
+            frame,
+            padding: Pt {
+                x: skin.chip.padding_x,
+                y: skin.chip.padding_y,
+            },
+            role: TextRoleSkin {
                 color: ColorRole::Text,
                 font: FontFamily::Mono,
                 size: font.size,
                 spacing: 0.0,
                 weight: font.weight,
             },
-            None,
-        );
-        let color = if self.active {
-            self.skin.palette.bg_deep
-        } else {
-            self.skin.palette.text_dim
-        };
+            text_color: text_color.into(),
+        }
+    }
+
+    pub(crate) fn paint(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        label: &str,
+        bounds: Rect,
+    ) {
+        list.fill_rounded_rect(bounds, self.frame.radius, self.fill);
+        self.paint_frame(list, bounds);
+        let run = text.shape(label, self.role, None);
         list.text(
             &run,
-            self.label,
+            label,
             Transform::translate(Pt {
-                x: bounds.x + self.skin.chip.padding_x,
-                y: bounds.y + self.skin.chip.padding_y,
+                x: bounds.x + self.padding.x,
+                y: bounds.y + self.padding.y,
             }),
-            color.into(),
+            self.text_color,
         );
     }
 
-    fn paint_frame(&self, list: &mut DrawListBuilder, bounds: Rect, frame: FrameSkin) {
-        if frame.border_width <= 0.0 {
+    fn paint_frame(&self, list: &mut DrawListBuilder, bounds: Rect) {
+        if self.frame.border_width <= 0.0 {
             return;
         }
-        let inset = frame.border_width / 2.0;
+        let inset = self.frame.border_width / 2.0;
         list.stroke_rounded_rect(
             Rect {
-                h: (bounds.h - frame.border_width).max(0.0),
-                w: (bounds.w - frame.border_width).max(0.0),
+                h: (bounds.h - self.frame.border_width).max(0.0),
+                w: (bounds.w - self.frame.border_width).max(0.0),
                 x: bounds.x + inset,
                 y: bounds.y + inset,
             },
-            frame.radius,
-            self.skin.rgba(frame.border),
-            frame.border_width,
+            self.frame.radius,
+            self.border,
+            self.frame.border_width,
         );
     }
 }
@@ -128,7 +122,7 @@ mod tests {
         let draw = |label, style, active| {
             let mut text = TextContext::from(skin.text_resources());
             let mut builder = DrawListBuilder::default();
-            Chip::new(label, style, active, skin).paint(&mut builder, &mut text, bounds);
+            Chip::new(style, active, skin).paint(&mut builder, &mut text, label, bounds);
             builder.finish()
         };
 

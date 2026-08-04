@@ -7,9 +7,9 @@ use iced::{
 };
 
 use crate::{
-    atoms::button::{Button, VisualState},
+    atoms::button::{Button, ButtonConfig, ButtonLabel, VisualState},
     backends::IcedBackend,
-    draw::{DrawListBuilder, Rect, replay},
+    draw::{DrawList, DrawListBuilder, Rect, replay},
     interact::{
         CursorShape, Hover, Input, PointerPhase, iced as iced_interact, recognizers::click,
     },
@@ -32,8 +32,10 @@ pub(crate) struct ButtonView<'a, 'value, 'data> {
     pub(crate) value: Option<&'value ReadValue<'data>>,
 }
 
+/// What a button actually draws once its style has had its say about the
+/// document's icon.
 #[derive(Clone, Copy)]
-enum EffectiveIcon {
+pub(crate) enum EffectiveIcon {
     None,
     Glyph(char),
     Svg(Icon),
@@ -73,7 +75,11 @@ pub(crate) fn view<'a>(args: &ButtonView<'a, '_, '_>) -> Element<'a, UiEvent> {
     }
 }
 
-fn effective_icon(style: ButtonStyle, icon: Option<Icon>, active: bool) -> EffectiveIcon {
+pub(crate) fn effective_icon(
+    style: ButtonStyle,
+    icon: Option<Icon>,
+    active: bool,
+) -> EffectiveIcon {
     if style == ButtonStyle::MicroPrimary {
         let icon = if active { Icon::Pause } else { Icon::Play };
         return icon
@@ -197,7 +203,8 @@ pub(crate) struct ButtonState {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct ButtonPaint<'data, 'skin> {
-    button: Button<'data, 'skin>,
+    button: Button,
+    label: ButtonLabel<&'data str>,
     text_resources: &'skin TextResources,
     #[field(get, vis = "", copy)]
     width: Length,
@@ -213,26 +220,31 @@ impl<'data, 'skin> ButtonPaint<'data, 'skin> {
         frame: Option<FrameSides>,
         skin: &'skin Skin,
     ) -> Self {
-        let button = Button::builder()
-            .active(active)
-            .maybe_active_label(active_label)
-            .maybe_frame(frame)
-            .maybe_glyph(glyph)
-            .label(label)
-            .style(style)
-            .skin(skin)
-            .build();
+        let button = Button::new(
+            ButtonConfig::builder()
+                .active(active)
+                .maybe_frame(frame)
+                .maybe_glyph(glyph)
+                .style(style)
+                .build(),
+            skin,
+        );
+        let label = ButtonLabel {
+            active: active_label,
+            label,
+        };
         let width = match style {
             ButtonStyle::Transport => Length::FillPortion(skin.button.transport_fill),
             ButtonStyle::TransportPrimary => Length::FillPortion(skin.button.primary_fill),
             ButtonStyle::MicroPrimary => Length::Fixed(skin.button.micro_size),
             ButtonStyle::VisNav => Length::Fixed(skin.vis.nav_cell_size),
-            ButtonStyle::Default => {
-                Length::Fixed(button.intrinsic_width(&mut TextContext::from(skin.text_resources())))
-            }
+            ButtonStyle::Default => Length::Fixed(
+                button.intrinsic_width(&mut TextContext::from(skin.text_resources()), &label),
+            ),
         };
         Self {
             button,
+            label,
             text_resources: skin.text_resources(),
             width,
         }
@@ -255,12 +267,8 @@ impl<'data, 'skin> ButtonPaint<'data, 'skin> {
         visual: VisualState,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        let mut text = state.text.borrow_mut();
-        let text = text.get_or_insert_with(|| self.text_resources.into());
-        let mut builder = DrawListBuilder::default();
-        self.button.paint(
-            &mut builder,
-            text,
+        let list = self.draw_list(
+            state,
             Rect {
                 h: bounds.height,
                 w: bounds.width,
@@ -270,10 +278,24 @@ impl<'data, 'skin> ButtonPaint<'data, 'skin> {
             visual,
         );
         replay(
-            &builder.finish(),
+            &list,
             &mut IcedBackend::new(&mut frame, self.text_resources),
         );
         vec![frame.into_geometry()]
+    }
+
+    pub(crate) fn draw_list(
+        &self,
+        state: &ButtonPaintState,
+        bounds: Rect,
+        visual: VisualState,
+    ) -> DrawList {
+        let mut text = state.text.borrow_mut();
+        let text = text.get_or_insert_with(|| self.text_resources.into());
+        let mut builder = DrawListBuilder::default();
+        self.button
+            .paint(&mut builder, text, &self.label, bounds, visual);
+        builder.finish()
     }
 }
 
@@ -308,6 +330,8 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    #[cfg(feature = "masonry-host")]
+    use crate::render::masonry::{Click, MasonryControl};
     use crate::{builtin, render::ControlAction};
 
     #[kithara::test]
@@ -353,6 +377,54 @@ mod tests {
             .unwrap_or_else(|| panic!("releasing a pressed button must repaint it"));
         assert!(!state.pressed);
         assert_eq!(action.into_inner().0, None);
+    }
+
+    #[cfg(feature = "masonry-host")]
+    #[kithara::test]
+    fn iced_and_masonry_record_the_same_button() {
+        let skin = builtin::skin();
+        let bounds = Rect {
+            h: 30.0,
+            w: 72.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        for (style, icon, active) in [
+            (ButtonStyle::Default, None, false),
+            (ButtonStyle::Default, Some(Icon::Play), false),
+            (ButtonStyle::Transport, None, false),
+            (ButtonStyle::TransportPrimary, None, true),
+            (ButtonStyle::MicroPrimary, Some(Icon::Play), false),
+            (ButtonStyle::VisNav, None, false),
+        ] {
+            let glyph = match effective_icon(style, icon, active) {
+                EffectiveIcon::Glyph(glyph) => Some(glyph),
+                EffectiveIcon::None | EffectiveIcon::Svg(_) => None,
+            };
+            let iced = ButtonPaint::new("PLAY", Some("PAUSE"), glyph, active, style, None, skin)
+                .draw_list(&ButtonPaintState::default(), bounds, VisualState::Idle);
+            let mut masonry = Click::new(
+                Button::new(
+                    ButtonConfig::builder()
+                        .active(active)
+                        .maybe_glyph(glyph)
+                        .style(style)
+                        .build(),
+                    skin,
+                ),
+                ButtonLabel {
+                    active: Some("PAUSE".to_owned()),
+                    label: "PLAY".to_owned(),
+                },
+                skin,
+            );
+
+            assert_eq!(
+                iced,
+                MasonryControl::draw_list(&mut masonry, bounds),
+                "the two hosts must record the same button"
+            );
+        }
     }
 
     #[kithara::test]

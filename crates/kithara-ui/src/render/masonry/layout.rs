@@ -45,7 +45,7 @@ impl NodeLayout {
         }
     }
 
-    pub(crate) const fn accepts_input(&self) -> bool {
+    pub(crate) fn accepts_input(&self) -> bool {
         matches!(self, Self::Leaf(leaf) if leaf.accepts_input())
     }
 

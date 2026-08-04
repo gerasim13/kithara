@@ -1,54 +1,74 @@
 use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
-    skin::{ColorRole, FontFamily, FontWeight, TextRoleSkin},
+    skin::{ColorRole, FontFamily, FontWeight, NavSkin, TextRoleSkin},
     text::TextContext,
 };
 
-#[derive(bon::Builder)]
-pub(crate) struct NavItem<'data, 'skin> {
-    active: bool,
+pub(crate) struct NavItem {
+    background: Rgba,
+    content: Rgba,
     glyph: char,
-    label: &'data str,
-    skin: &'skin Skin,
+    marker_color: Rgba,
+    metrics: NavSkin,
+    role: TextRoleSkin,
 }
 
-impl NavItem<'_, '_> {
-    pub(crate) fn paint(&self, list: &mut DrawListBuilder, text: &mut TextContext, bounds: Rect) {
+impl NavItem {
+    pub(crate) fn new(glyph: char, active: bool, skin: &Skin) -> Self {
         let transparent = Rgba {
             a: 0.0,
             b: 0.0,
             g: 0.0,
             r: 0.0,
         };
-        let background = if self.active {
-            self.skin.palette.bg_select.into()
-        } else {
-            transparent
-        };
-        let marker_color = if self.active {
-            self.skin.palette.accent.into()
-        } else {
-            transparent
-        };
-        let content_color = if self.active {
-            self.skin.palette.text.into()
-        } else {
-            self.skin.palette.text_dim.into()
-        };
-        let marker = self.marker(bounds);
+        Self {
+            background: if active {
+                skin.palette.bg_select.into()
+            } else {
+                transparent
+            },
+            content: if active {
+                skin.palette.text.into()
+            } else {
+                skin.palette.text_dim.into()
+            },
+            glyph,
+            marker_color: if active {
+                skin.palette.accent.into()
+            } else {
+                transparent
+            },
+            metrics: skin.nav,
+            role: TextRoleSkin {
+                color: ColorRole::Text,
+                font: FontFamily::Mono,
+                size: skin.nav.text_size,
+                spacing: 0.0,
+                weight: FontWeight::Normal,
+            },
+        }
+    }
 
-        list.fill_rect(bounds, background);
-        list.fill_rect(marker, marker_color);
-        self.paint_content(list, text, bounds, marker, content_color);
+    pub(crate) fn paint(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        label: &str,
+        bounds: Rect,
+    ) {
+        let marker = self.marker(bounds);
+        list.fill_rect(bounds, self.background);
+        list.fill_rect(marker, self.marker_color);
+        self.paint_content(list, text, label, bounds, marker);
     }
 
     fn marker(&self, bounds: Rect) -> Rect {
-        let padding = self.skin.nav.pad_y;
+        let padding = self.metrics.pad_y;
         let inner_width = (bounds.w - padding * 2.0).max(0.0);
         Rect {
             h: (bounds.h - padding * 2.0).max(0.0),
-            w: self.skin.nav.marker_width.max(0.0).min(inner_width),
+            w: self.metrics.marker_width.max(0.0).min(inner_width),
             x: bounds.x + padding,
             y: bounds.y + padding,
         }
@@ -58,13 +78,13 @@ impl NavItem<'_, '_> {
         &self,
         list: &mut DrawListBuilder,
         text: &mut TextContext,
+        label: &str,
         bounds: Rect,
         marker: Rect,
-        color: Rgba,
     ) {
         let glyph = self.glyph.to_string();
-        let icon = text.shape_lucide(&glyph, self.skin.nav.icon_size);
-        let x = marker.x + marker.w + self.skin.nav.text_pad_x;
+        let icon = text.shape_lucide(&glyph, self.metrics.icon_size);
+        let x = marker.x + marker.w + self.metrics.text_pad_x;
         list.text(
             &icon,
             &glyph,
@@ -72,31 +92,21 @@ impl NavItem<'_, '_> {
                 x,
                 y: bounds.y + (bounds.h - icon.height()) / 2.0,
             }),
-            color,
+            self.content,
         );
 
-        if self.label.is_empty() {
+        if label.is_empty() {
             return;
         }
-        let label = text.shape(
-            self.label,
-            TextRoleSkin {
-                color: ColorRole::Text,
-                font: FontFamily::Mono,
-                size: self.skin.nav.text_size,
-                spacing: 0.0,
-                weight: FontWeight::Normal,
-            },
-            None,
-        );
+        let run = text.shape(label, self.role, None);
         list.text(
-            &label,
-            self.label,
+            &run,
+            label,
             Transform::translate(Pt {
-                x: x + icon.width() + self.skin.nav.icon_gap,
-                y: bounds.y + (bounds.h - label.height()) / 2.0,
+                x: x + icon.width() + self.metrics.icon_gap,
+                y: bounds.y + (bounds.h - run.height()) / 2.0,
             }),
-            color,
+            self.content,
         );
     }
 }
@@ -124,13 +134,7 @@ mod tests {
         let glyph = char::from(lucide_icons::Icon::Disc);
         let mut text = TextContext::from(skin.text_resources());
         let mut builder = DrawListBuilder::default();
-        NavItem::builder()
-            .active(true)
-            .glyph(glyph)
-            .label("PRIMITIVES")
-            .skin(skin)
-            .build()
-            .paint(&mut builder, &mut text, bounds);
+        NavItem::new(glyph, true, skin).paint(&mut builder, &mut text, "PRIMITIVES", bounds);
         let list = builder.finish();
 
         let [background, marker, icon, label] = list.commands() else {
@@ -206,22 +210,17 @@ mod tests {
         let skin = builtin::skin();
         let mut text = TextContext::from(skin.text_resources());
         let mut builder = DrawListBuilder::default();
-        NavItem::builder()
-            .active(false)
-            .glyph(char::from(lucide_icons::Icon::Disc))
-            .label("PRIMITIVES")
-            .skin(skin)
-            .build()
-            .paint(
-                &mut builder,
-                &mut text,
-                Rect {
-                    h: 30.0,
-                    w: 198.0,
-                    x: 0.0,
-                    y: 0.0,
-                },
-            );
+        NavItem::new(char::from(lucide_icons::Icon::Disc), false, skin).paint(
+            &mut builder,
+            &mut text,
+            "PRIMITIVES",
+            Rect {
+                h: 30.0,
+                w: 198.0,
+                x: 0.0,
+                y: 0.0,
+            },
+        );
         let list = builder.finish();
         let [
             DrawCmd::Fill {
