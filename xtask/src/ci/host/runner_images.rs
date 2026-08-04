@@ -114,6 +114,10 @@ impl RunnerManager<'_> {
                 "GITLEAKS_SHA256",
                 self.config.pins.gitleaks_linux_arm64_sha256.as_str(),
             ),
+            (
+                "SANDBOX_RUNTIME_VERSION",
+                self.config.pins.sandbox_runtime_version.as_str(),
+            ),
         ];
         for (name, tool) in [
             ("AST_GREP_VERSION", "ast-grep"),
@@ -123,6 +127,7 @@ impl RunnerManager<'_> {
             ("CARGO_MACHETE_VERSION", "cargo-machete"),
             ("CARGO_MUTANTS_VERSION", "cargo-mutants"),
             ("CARGO_NEXTEST_VERSION", "cargo-nextest"),
+            ("CARGO_REAPI_VERSION", "cargo-reapi"),
             ("CARGO_SEMVER_CHECKS_VERSION", "cargo-semver-checks"),
             ("CARGO_SHEAR_VERSION", "cargo-shear"),
             ("CARGO_SORT_VERSION", "cargo-sort"),

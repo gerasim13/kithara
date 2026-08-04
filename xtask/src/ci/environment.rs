@@ -89,12 +89,18 @@ impl CiEnvironment {
         let fixture_cache = cache_root.join("fixtures");
         let npm_cache = cache_root.join("npm");
         let sccache_dir = cache_root.join("sccache");
-        let reapi_cache = cache_root.join("reapi");
         let swiftpm_cache = cache_root.join("swiftpm");
         let project_root =
             env::var_os("CI_PROJECT_DIR").map_or_else(|| ctx.root.clone(), PathBuf::from);
         let target = project_root.join("target");
         let temp = scratch_root().join(trust.as_str());
+        // On the executor's own disk rather than in the shared cache: the tool
+        // commits blobs with a durable write, and the macOS guest reaches the
+        // shared cache over a virtiofs share that answers that request with
+        // "Inappropriate ioctl for device" — every compilation in the job then
+        // fails. Reuse still spans whatever an executor keeps between jobs, and
+        // the trust scoping is the same as everywhere else here.
+        let reapi_cache = temp.join("reapi");
 
         for directory in [
             &cache_root,
@@ -136,9 +142,7 @@ impl CiEnvironment {
             &config.pins.nightly_toolchain,
         );
         insert(&mut vars, "npm_config_cache", npm_cache);
-        // Shared build reuse across worktrees. The cache is scoped by
-        // trust and platform like every other store here, so an untrusted
-        // pipeline cannot publish into one a trusted pipeline reads.
+        // Build reuse across the jobs an executor serves.
         insert(&mut vars, "CARGO_REAPI_BACKEND", "cache");
         insert(&mut vars, "CARGO_REAPI_CACHE_DIR", &reapi_cache);
         // The tool refuses to start when the memory it is told to plan for
