@@ -90,7 +90,10 @@ impl CiEnvironment {
         let project_root =
             env::var_os("CI_PROJECT_DIR").map_or_else(|| ctx.root.clone(), PathBuf::from);
         let target = project_root.join("target");
-        let temp = project_root.join(".ci-tmp");
+        // Keep scratch space out of the checkout: tools that walk the working
+        // tree (the architecture reporter, for one) otherwise trip over the
+        // temporary copies they just created.
+        let temp = cache_root.join("tmp");
 
         for directory in [
             &cache_root,
