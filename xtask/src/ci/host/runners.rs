@@ -456,7 +456,13 @@ pub(super) fn path_text(path: &Path) -> Result<&str> {
 /// rename over it: renaming needs no write permission on the file itself, and
 /// it never leaves the destination missing — clearing it first destroyed the
 /// only copy whenever a command installed the executable it was running from.
-fn replace_file(source: &Path, destination: &Path) -> Result<()> {
+///
+/// Renaming is also what keeps a signed executable runnable. macOS validates a
+/// signature once per inode and caches the verdict; rewriting the bytes in
+/// place leaves that verdict attached to content it no longer describes, and
+/// the kernel answers the next exec with SIGKILL. A rename installs a new
+/// inode, so the next exec is validated afresh.
+pub(super) fn replace_file(source: &Path, destination: &Path) -> Result<()> {
     let name = destination
         .file_name()
         .with_context(|| format!("no file name in destination {}", destination.display()))?;

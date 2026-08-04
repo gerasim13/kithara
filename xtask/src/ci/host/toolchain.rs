@@ -100,7 +100,11 @@ impl<'a> ToolchainInstaller<'a> {
         if !rustup_source.is_file() {
             bail!("missing Homebrew rustup proxy: {}", rustup_source.display());
         }
-        fs::copy(&rustup_source, cargo_bin.join("rustup")).context("installing rustup proxy")?;
+        // Copying over the previous proxy left it unrunnable: the bytes change
+        // but the inode does not, and macOS answers the next exec with SIGKILL
+        // because the cached signature verdict describes the old content.
+        super::runners::replace_file(&rustup_source, &cargo_bin.join("rustup"))
+            .context("installing rustup proxy")?;
         for proxy in [
             "cargo",
             "cargo-clippy",
