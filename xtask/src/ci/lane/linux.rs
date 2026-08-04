@@ -55,6 +55,13 @@ pub(crate) fn coverage(process: &Process) -> Result<()> {
     command
         .env("COVERAGE_OUTPUT_DIR", "coverage")
         .env("COVERAGE_MIN", "80")
+        // Instrumented test binaries are large and the workspace has twenty of
+        // them, so Cargo reaches the link step with several `ld` processes at
+        // once. In a five-gigabyte VM the kernel picks one and kills it, and
+        // the only trace it leaves is `ld terminated with signal 9`. Two units
+        // at a time keeps the peak inside the VM; the lane runs nightly and can
+        // afford the wall-clock.
+        .env("CARGO_BUILD_JOBS", "2")
         .args(["test", "coverage"]);
     process.run_command(&mut command, "Linux coverage")
 }

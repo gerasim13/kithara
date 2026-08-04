@@ -208,8 +208,13 @@ impl<'a> RunnerManager<'a> {
             "--foreground",
             "--cpus",
             "5",
+            // Linking is this workspace's memory peak, not compiling it. At
+            // five gigabytes the kernel killed `ld` outright in both the test
+            // and the coverage lane, leaving only "terminated with signal 9"
+            // behind. The macOS guest keeps twelve of the host's twenty-four
+            // and the two rarely peak together.
             "--memory",
-            "5",
+            "8",
             "--disk",
             "100",
             "--vm-type",
