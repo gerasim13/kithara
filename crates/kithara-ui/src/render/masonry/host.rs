@@ -5,7 +5,7 @@ use std::{
 };
 
 use super::{
-    CustomWidget, MasonryNode,
+    CustomWidget, MasonryKnob, MasonryNode,
     custom::{HostAction, MappedCustom, MountedCustom},
     flex::{ChildLayout, Flex},
     layout::NodeLayout,
@@ -18,10 +18,11 @@ use crate::{
     compile::CompiledUi,
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
+    interact::recognizers::{Track, WheelStep},
     layout::Axis,
     module::{ButtonStyle, ChromeStyle, TextAlign, TextStyle},
     render::{
-        ControlAction, InputOwner, ReadValue, Reads, Skin, UiEvent,
+        ControlAction, HostedControlPlan, InputOwner, ReadValue, Reads, Skin, UiEvent,
         document::{Group, Host, Module, Popover, read::resolve},
         hosted_control_plan,
     },
@@ -174,6 +175,17 @@ where
                 widget,
                 text: Box::new(TextContext::from(self.skin.text_resources())),
             }),
+            declared,
+            Vec::new(),
+            false,
+            None,
+            None,
+        )
+    }
+
+    fn knob_leaf(knob: MasonryKnob, declared: solve::Size<solve::Length>) -> MasonryNode<Action> {
+        MasonryNode::document(
+            NodeLayout::Leaf(Leaf::Knob(Box::new(knob))),
             declared,
             Vec::new(),
             false,
@@ -468,6 +480,7 @@ where
         let declared = control_declared(spec, size, self.skin);
         let plan = hosted_control_plan(path, spec, read, self.ui, self.reads, self.skin);
         let path = self.ui.resolve(path);
+        let leaf_owns_knob = owner == InputOwner::Leaf && matches!(spec, ControlSpec::Knob { .. });
         let custom = self.custom.remove(path);
         let custom_installed = custom.is_some();
         let mut output = custom.map_or_else(
@@ -494,11 +507,42 @@ where
                         .is_some_and(|value| matches!(value, ReadValue::Bool(true)));
                     self.text_leaf(content, *style, *color, *active_color, active, declared)
                 }
+                ControlSpec::Knob { label } => match plan.as_ref() {
+                    Some(HostedControlPlan::Knob {
+                        current,
+                        drag_range,
+                        wheel_step,
+                        ..
+                    }) => {
+                        let label = label.map(|label| self.ui.resolve(label).to_owned());
+                        let knob = match owner {
+                            InputOwner::Leaf => MasonryKnob::new(label, *current, self.skin)
+                                .interactive(
+                                    path.to_owned(),
+                                    Track::RelativeVertical {
+                                        range: *drag_range,
+                                        value: *current,
+                                    },
+                                    WheelStep {
+                                        value: *current,
+                                        step: *wheel_step,
+                                    },
+                                    Rc::clone(&self.map_event),
+                                ),
+                            InputOwner::Engine => MasonryKnob::new(label, *current, self.skin),
+                        };
+                        Self::knob_leaf(knob, declared)
+                    }
+                    _ => Self::empty(declared),
+                },
                 _ => Self::empty(declared),
             },
             |widget| self.custom_leaf(widget, declared),
         );
         if custom_installed {
+            return output;
+        }
+        if leaf_owns_knob {
             return output;
         }
         match spec {

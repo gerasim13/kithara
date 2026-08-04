@@ -13,7 +13,7 @@ use super::{custom::HostAction, node::pointer_button};
 use crate::{
     draw::{Pt, Rect},
     engine::{Engine, Target},
-    interact::{Input, MOUSE, Outcome, PointerInput, PointerPhase},
+    interact::{CursorShape, Input, MOUSE, Outcome, PointerInput, PointerPhase},
     render::{HostedControlPlan, UiEvent, engine_value},
 };
 
@@ -80,6 +80,12 @@ impl HostedEngine {
         let engine = self.engine.borrow();
         let targets = self.targets(&engine, None);
         engine.input_method(&targets).map(|request| request.caret)
+    }
+
+    pub(super) fn cursor(&self, point: Pt) -> CursorShape {
+        let engine = self.engine.borrow();
+        let targets = self.targets(&engine, Some(point));
+        engine.cursor(&targets)
     }
 
     pub(super) fn has_open_picker(&self) -> bool {

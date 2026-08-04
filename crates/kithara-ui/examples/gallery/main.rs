@@ -1,3 +1,6 @@
+mod capture;
+#[cfg(feature = "masonry-host")]
+mod masonry_shots;
 mod mock;
 mod mock_data;
 mod mock_mixer;
@@ -15,6 +18,7 @@ use kithara_ui::{
 };
 
 use self::{
+    capture::{Capture, Shot},
     mock::MockReads,
     sections::{ModuleDemo, Tab},
 };
@@ -335,6 +339,12 @@ enum Message {
     Close(window::Id),
     Tick,
     Ui(UiEvent),
+    /// Move to the next page to photograph, or finish and exit.
+    CaptureNext,
+    /// The page is on screen; ask the window for its pixels.
+    CaptureShoot(Shot),
+    /// Write one page to disk.
+    CaptureSave(Shot, window::Screenshot),
 }
 
 struct Gallery {
@@ -343,6 +353,7 @@ struct Gallery {
     reads: MockReads,
     layouts: [CompiledUi; Tab::ALL.len()],
     module_layouts: [CompiledUi; ModuleDemo::ALL.len()],
+    capture: Option<Capture>,
 }
 
 impl Gallery {
@@ -387,6 +398,12 @@ impl Gallery {
             ..Settings::default()
         };
         let (window_id, open) = window::open(settings);
+        let capture = Capture::requested();
+        let start = if capture.is_some() {
+            Task::done(Message::CaptureNext)
+        } else {
+            Task::none()
+        };
         (
             Self {
                 layouts,
@@ -394,8 +411,9 @@ impl Gallery {
                 window_id,
                 skin: builtin::skin(),
                 reads: MockReads::default(),
+                capture,
             },
-            open.discard(),
+            open.discard().chain(start),
         )
     }
 
@@ -410,9 +428,40 @@ impl Gallery {
     fn select_tab(&mut self, tab: Tab) {
         self.reads.select_tab(tab);
     }
+
+    /// Selects the next page and lets one frame render before the shot.
+    fn capture_next(&mut self) -> Task<Message> {
+        let Some(capture) = self.capture.as_mut() else {
+            return Task::none();
+        };
+        let Some(shot) = capture.next() else {
+            capture.report();
+            return iced::exit();
+        };
+        self.reads.select_tab(shot.tab);
+        if let Some(module) = shot.module {
+            self.reads.select_module(module);
+        }
+        Task::done(Message::CaptureShoot(shot))
+    }
+
+    fn capture_save(&mut self, shot: Shot, image: &window::Screenshot) -> Task<Message> {
+        let Some(capture) = self.capture.as_mut() else {
+            return Task::none();
+        };
+        match capture.save(shot, image) {
+            Ok(path) => println!("captured {} ({} left)", path.display(), capture.remaining()),
+            Err(error) => eprintln!("capture failed: {error}"),
+        }
+        Task::done(Message::CaptureNext)
+    }
 }
 
 fn main() -> iced::Result {
+    #[cfg(feature = "masonry-host")]
+    if masonry_shots::run() {
+        return Ok(());
+    }
     let daemon = iced::daemon(Gallery::new, update, view)
         .title(|_state: &Gallery, _window| "Kithara UI Gallery".to_owned())
         .theme(|state: &Gallery, _window| theme(state.skin))
@@ -456,6 +505,11 @@ fn update(state: &mut Gallery, message: Message) -> Task<Message> {
             _ => Task::none(),
         },
         Message::Ui(_) => Task::none(),
+        Message::CaptureNext => state.capture_next(),
+        Message::CaptureShoot(shot) => {
+            window::screenshot(state.window_id).map(move |image| Message::CaptureSave(shot, image))
+        }
+        Message::CaptureSave(shot, image) => state.capture_save(shot, &image),
     }
 }
 

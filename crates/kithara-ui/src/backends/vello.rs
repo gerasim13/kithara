@@ -395,25 +395,19 @@ mod tests {
     #[cfg(feature = "render")]
     #[kithara::test]
     fn replaying_a_knob_list_encodes_one_path_per_geometry_command() {
-        const DIAL: Rect = Rect {
-            h: 22.0,
-            w: 22.0,
-            x: 3.0,
-            y: 3.0,
-        };
-        const CAPTION: Rect = Rect {
-            h: 9.0,
+        const BOUNDS: Rect = Rect {
+            h: 39.0,
             w: 28.0,
             x: 0.0,
-            y: 30.0,
+            y: 0.0,
         };
 
         let mut builder = DrawListBuilder::default();
-        crate::atoms::knob::Knob::new(Some("GAIN"), 0.25, crate::builtin::skin()).paint(
+        crate::atoms::knob::Knob::new(0.25, crate::builtin::skin()).paint(
             &mut builder,
             &mut TextContext::new().unwrap(),
-            DIAL,
-            CAPTION,
+            Some("GAIN"),
+            BOUNDS,
         );
         let list = builder.finish();
         let geometry = list

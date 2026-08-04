@@ -9,7 +9,7 @@ use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use masonry::{
     app::{RenderRootOptions, RenderRootSignal, WindowSizePolicy},
-    core::{Handled, PointerEvent, TextEvent, WindowEvent},
+    core::{CursorIcon, Handled, PointerEvent, TextEvent, WindowEvent},
     dpi::{PhysicalPosition, PhysicalSize},
     kurbo::{Point, Size as MasonrySize},
     theme::default_property_set,
@@ -997,6 +997,18 @@ fn hosted_module_retains_its_engine_owned_knob_outside_the_control() {
     let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
     let mut root = masonry_root(output, 200, 120);
 
+    root.take_platform_signals();
+    assert_eq!(
+        root.handle_pointer_event(pointer_hover(10.0, 50.0))
+            .unwrap_or_else(|error| panic!("engine-owned hover must remain typed: {error}")),
+        Handled::No,
+    );
+    assert!(
+        root.take_platform_signals()
+            .iter()
+            .any(|signal| matches!(signal, RenderRootSignal::SetCursor(CursorIcon::NsResize))),
+        "the engine-owned knob must expose the shared vertical-resize cursor"
+    );
     assert_eq!(
         root.handle_pointer_event(pointer_down(10.0, 50.0))
             .unwrap_or_else(|error| panic!("engine-owned input must remain typed: {error}")),
@@ -1007,18 +1019,18 @@ fn hosted_module_retains_its_engine_owned_knob_outside_the_control() {
         "arming a relative knob must not flatten it into activation"
     );
     assert_eq!(
-        root.handle_pointer_event(pointer_move(150.0, 0.0))
+        root.handle_pointer_event(pointer_move(150.0, 43.0))
             .unwrap_or_else(|error| panic!("captured engine move must remain typed: {error}")),
         Handled::Yes,
     );
-    assert_scalar_action(&root.take_actions(), "demo/volume", 0.8);
+    assert_scalar_value(&root.take_actions(), "demo/volume", 0.85);
     assert_eq!(
-        root.handle_pointer_event(pointer_up(150.0, 0.0))
+        root.handle_pointer_event(pointer_up(150.0, 43.0))
             .unwrap_or_else(|error| panic!("engine release must remain typed: {error}")),
         Handled::Yes,
     );
     assert_eq!(
-        root.handle_pointer_event(pointer_move(150.0, 0.0))
+        root.handle_pointer_event(pointer_move(150.0, 43.0))
             .unwrap_or_else(|error| panic!("released engine move must remain typed: {error}")),
         Handled::No,
     );
@@ -1026,7 +1038,7 @@ fn hosted_module_retains_its_engine_owned_knob_outside_the_control() {
 }
 
 #[kithara::test]
-fn non_hosted_module_retains_its_leaf_owned_knob_outside_the_control() {
+fn leaf_owned_knob_uses_scalar_drag_wheel_reset_and_cursor() {
     let registry = fixture_registry();
     let ui = fixture_ui(
         "leaf-fixture",
@@ -1045,6 +1057,57 @@ fn non_hosted_module_retains_its_leaf_owned_knob_outside_the_control() {
     let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
     let mut root = masonry_root(output, 200, 120);
 
+    root.take_platform_signals();
+    assert_eq!(
+        root.handle_pointer_event(pointer_hover(10.0, 50.0))
+            .unwrap_or_else(|error| panic!("leaf-owned hover must remain typed: {error}")),
+        Handled::No,
+    );
+    assert!(
+        root.take_platform_signals()
+            .iter()
+            .any(|signal| matches!(signal, RenderRootSignal::SetCursor(CursorIcon::NsResize))),
+        "the leaf-owned knob must expose the shared vertical-resize cursor"
+    );
+    assert_eq!(
+        root.handle_pointer_event(pointer_scroll(
+            10.0,
+            50.0,
+            ScrollDelta::LineDelta(0.0, -1.0),
+        ))
+        .unwrap_or_else(|error| panic!("leaf-owned wheel must remain typed: {error}")),
+        Handled::Yes,
+    );
+    assert_scalar_value(
+        &root.take_actions(),
+        "demo/volume",
+        builtin::skin().knob.wheel_step.mul_add(1.0, 0.8),
+    );
+
+    assert_eq!(
+        root.handle_pointer_event(pointer_down(10.0, 50.0))
+            .unwrap_or_else(|error| panic!("first reset press must remain typed: {error}")),
+        Handled::Yes,
+    );
+    assert_eq!(
+        root.handle_pointer_event(pointer_up(10.0, 50.0))
+            .unwrap_or_else(|error| panic!("first reset release must remain typed: {error}")),
+        Handled::Yes,
+    );
+    assert!(root.take_actions().is_empty());
+    assert_eq!(
+        root.handle_pointer_event(pointer_down_with_count(10.0, 50.0, 2))
+            .unwrap_or_else(|error| panic!("second reset press must remain typed: {error}")),
+        Handled::Yes,
+    );
+    assert_scalar_value(&root.take_actions(), "demo/volume", 0.5);
+    assert_eq!(
+        root.handle_pointer_event(pointer_up_with_count(10.0, 50.0, 2))
+            .unwrap_or_else(|error| panic!("double-click release must remain typed: {error}")),
+        Handled::No,
+    );
+    assert!(root.take_actions().is_empty());
+
     assert_eq!(
         root.handle_pointer_event(pointer_down(10.0, 50.0))
             .unwrap_or_else(|error| panic!("leaf-owned press must remain typed: {error}")),
@@ -1055,18 +1118,18 @@ fn non_hosted_module_retains_its_leaf_owned_knob_outside_the_control() {
         "the leaf-owned relative knob must arm without publishing"
     );
     assert_eq!(
-        root.handle_pointer_event(pointer_move(150.0, 0.0))
+        root.handle_pointer_event(pointer_move(150.0, 43.0))
             .unwrap_or_else(|error| panic!("captured leaf move must remain typed: {error}")),
         Handled::Yes,
     );
-    assert_scalar_action(&root.take_actions(), "demo/volume", 0.8);
+    assert_scalar_value(&root.take_actions(), "demo/volume", 0.85);
     assert_eq!(
-        root.handle_pointer_event(pointer_up(150.0, 0.0))
+        root.handle_pointer_event(pointer_up(150.0, 43.0))
             .unwrap_or_else(|error| panic!("leaf-owned release must remain typed: {error}")),
         Handled::Yes,
     );
     assert_eq!(
-        root.handle_pointer_event(pointer_move(150.0, 0.0))
+        root.handle_pointer_event(pointer_move(150.0, 43.0))
             .unwrap_or_else(|error| panic!("released leaf move must remain typed: {error}")),
         Handled::No,
     );
@@ -1403,7 +1466,7 @@ fn wheel_actions() -> Vec<WheelAction> {
     ]
 }
 
-fn assert_scalar_action(actions: &[TestAction], path: &str, minimum: f64) {
+fn assert_scalar_value(actions: &[TestAction], path: &str, expected: f32) {
     let [
         TestAction::Document(UiEvent::Control {
             path: actual,
@@ -1411,13 +1474,10 @@ fn assert_scalar_action(actions: &[TestAction], path: &str, minimum: f64) {
         }),
     ] = actions
     else {
-        panic!("a retained knob move must emit exactly one typed scalar action: {actions:?}");
+        panic!("a retained knob gesture must emit exactly one typed scalar action: {actions:?}");
     };
     assert_eq!(actual, path);
-    assert!(
-        *value > minimum,
-        "upward travel must increase the retained knob value"
-    );
+    assert_eq!(*value, f64::from(expected));
 }
 
 fn fixture_ui(module_id: &str, root: &str, registry: &dyn EndpointRegistry) -> CompiledUi {
@@ -1547,6 +1607,15 @@ fn pointer_move(x: f64, y: f64) -> PointerEvent {
     PointerEvent::Move(PointerUpdate {
         pointer: pointer_info(),
         current: pointer_state(x, y, true),
+        coalesced: Vec::new(),
+        predicted: Vec::new(),
+    })
+}
+
+fn pointer_hover(x: f64, y: f64) -> PointerEvent {
+    PointerEvent::Move(PointerUpdate {
+        pointer: pointer_info(),
+        current: pointer_state(x, y, false),
         coalesced: Vec::new(),
         predicted: Vec::new(),
     })

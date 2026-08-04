@@ -87,16 +87,17 @@ impl Scalar {
                     state.active = false;
                     return Outcome::set(value);
                 }
+                let travel_position = pointer.at.unwrap_or(position);
                 state.active = self.track.arms();
                 match self.track {
                     Track::RelativeVertical { value, .. } => {
-                        state.start_position = position.y;
+                        state.start_position = travel_position.y;
                         state.start_value = value;
                         Outcome::captured()
                     }
                     Track::RelativeHorizontal { value, .. }
                     | Track::HorizontalPixels { value, .. } => {
-                        state.start_position = position.x;
+                        state.start_position = travel_position.x;
                         state.start_value = value;
                         Outcome::captured()
                     }
@@ -288,6 +289,26 @@ mod tests {
                 "{from} -> {to}"
             );
         }
+    }
+
+    #[kithara::test]
+    fn relative_drag_measures_travel_in_the_pointer_space() {
+        let drag = drag(0.5);
+        let mut state = ScalarState::default();
+        let now = Instant::now();
+        let down = Input::Pointer(mouse_input(
+            PointerPhase::Down,
+            Some(Pt { x: 17.0, y: 50.0 }),
+        ));
+
+        assert_eq!(
+            drag.on_input(&mut state, down, &hit(10.0), now),
+            Outcome::captured()
+        );
+        assert_eq!(
+            drag.on_input(&mut state, moved(18.0), &hit(-22.0), now),
+            Outcome::set(0.75)
+        );
     }
 
     #[kithara::test]

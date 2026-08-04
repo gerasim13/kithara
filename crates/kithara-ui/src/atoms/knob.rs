@@ -1,33 +1,45 @@
 use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
-    skin::ColorRole,
+    skin::KnobSkin,
     text::TextContext,
 };
 
-pub(crate) struct Knob<'data, 'skin> {
-    skin: &'skin Skin,
-    label: Option<&'data str>,
+pub(crate) struct Knob {
+    body_border: Rgba,
+    body_fill: Rgba,
+    indicator: Rgba,
+    label: Rgba,
+    metrics: KnobSkin,
+    track: Rgba,
     value: f32,
+    value_color: Rgba,
 }
 
-impl<'data, 'skin> Knob<'data, 'skin> {
-    pub(crate) fn new(label: Option<&'data str>, value: f32, skin: &'skin Skin) -> Self {
-        Self { skin, label, value }
-    }
-
-    fn color(&self, role: ColorRole) -> Rgba {
-        self.skin.rgba(role)
+impl Knob {
+    pub(crate) fn new(value: f32, skin: &Skin) -> Self {
+        let metrics = skin.knob;
+        Self {
+            body_border: skin.rgba(metrics.body_border),
+            body_fill: skin.rgba(metrics.body_fill),
+            indicator: skin.rgba(metrics.indicator_color),
+            label: skin.rgba(metrics.label_text.color),
+            metrics,
+            track: skin.rgba(metrics.track_color),
+            value,
+            value_color: skin.rgba(metrics.value_color),
+        }
     }
 
     pub(crate) fn paint(
         &self,
         list: &mut DrawListBuilder,
         text: &mut TextContext,
-        dial: Rect,
-        caption: Rect,
+        label: Option<&str>,
+        bounds: Rect,
     ) {
-        let metrics = self.skin.knob;
+        let metrics = self.metrics;
+        let (dial, caption) = self.rects(bounds);
         let side = dial.w.min(dial.h);
         let radius = side / 2.0;
         let center = Pt {
@@ -37,7 +49,6 @@ impl<'data, 'skin> Knob<'data, 'skin> {
         let angle = metrics.start_angle + metrics.sweep_angle * self.value;
 
         if radius > 0.0 {
-            let track = self.color(metrics.track_color);
             list.stroke_arc(
                 center,
                 radius,
@@ -45,7 +56,7 @@ impl<'data, 'skin> Knob<'data, 'skin> {
                 metrics.start_angle + metrics.sweep_angle,
                 Rgba {
                     a: metrics.track_alpha,
-                    ..track
+                    ..self.track
                 },
                 metrics.track_width,
             );
@@ -54,16 +65,16 @@ impl<'data, 'skin> Knob<'data, 'skin> {
                 radius,
                 metrics.neutral_angle,
                 angle,
-                self.color(metrics.value_color),
+                self.value_color,
                 metrics.track_width,
             );
 
             let body_radius = metrics.body_ratio * radius;
-            list.fill_circle(center, body_radius, self.color(metrics.body_fill));
+            list.fill_circle(center, body_radius, self.body_fill);
             list.stroke_circle(
                 center,
                 body_radius,
-                self.color(metrics.body_border),
+                self.body_border,
                 metrics.body_border_width,
             );
             list.stroke_line(
@@ -72,12 +83,12 @@ impl<'data, 'skin> Knob<'data, 'skin> {
                     x: center.x + angle.cos() * body_radius,
                     y: center.y + angle.sin() * body_radius,
                 },
-                self.color(metrics.indicator_color),
+                self.indicator,
                 metrics.indicator_width,
             );
         }
 
-        if let Some(label) = self.label {
+        if let Some(label) = label {
             let role = metrics.label_text;
             let run = text.shape(label, role, Some(caption.w));
             list.text(
@@ -87,9 +98,37 @@ impl<'data, 'skin> Knob<'data, 'skin> {
                     x: caption.x + (caption.w - run.width()) / 2.0,
                     y: caption.y,
                 }),
-                self.color(role.color),
+                self.label,
             );
         }
+    }
+
+    fn rects(&self, bounds: Rect) -> (Rect, Rect) {
+        const DIAMETER_SCALE: f32 = 2.0;
+
+        let metrics = self.metrics;
+        let caption_height = metrics.label_height.min(bounds.h);
+        let available = (bounds.h - caption_height).max(0.0);
+        let gap = metrics.label_gap.min(available);
+        let dial_height = available - gap;
+        let inset = metrics
+            .outer_inset
+            .min(bounds.w / DIAMETER_SCALE)
+            .min(dial_height / DIAMETER_SCALE);
+        (
+            Rect {
+                h: dial_height - inset * DIAMETER_SCALE,
+                w: bounds.w - inset * DIAMETER_SCALE,
+                x: bounds.x + inset,
+                y: bounds.y + inset,
+            },
+            Rect {
+                h: caption_height,
+                w: bounds.w,
+                x: bounds.x,
+                y: bounds.y + dial_height + gap,
+            },
+        )
     }
 }
 
@@ -153,23 +192,39 @@ mod tests {
         ));
     }
 
-    fn record(label: Option<&str>, skin: &Skin) -> DrawList {
-        const DIAL: Rect = Rect {
-            h: 22.0,
-            w: 22.0,
-            x: 3.0,
-            y: 3.0,
-        };
-        const CAPTION: Rect = Rect {
-            h: 9.0,
+    #[kithara::test]
+    fn caption_row_and_outer_inset_are_carved_from_the_bounds() {
+        let origin = SourceUri("knob.kskin.ron".to_owned());
+        let skin = Skin::resolve(builtin::skin_doc().clone(), &origin).unwrap();
+        let bounds = Rect {
+            h: 39.0,
             w: 28.0,
             x: 0.0,
-            y: 30.0,
+            y: 0.0,
+        };
+        let metrics = skin.knob;
+        let knob = Knob::new(0.5, &skin);
+        let (dial, caption) = knob.rects(bounds);
+
+        assert_eq!(
+            dial.h + metrics.outer_inset * 2.0 + metrics.label_gap + caption.h,
+            bounds.h
+        );
+        assert_eq!(caption.h, metrics.label_height);
+        assert!(caption.y >= dial.y + dial.h);
+    }
+
+    fn record(label: Option<&str>, skin: &Skin) -> DrawList {
+        const BOUNDS: Rect = Rect {
+            h: 39.0,
+            w: 28.0,
+            x: 0.0,
+            y: 0.0,
         };
 
-        let knob = Knob::new(label, 0.25, skin);
+        let knob = Knob::new(0.25, skin);
         let mut list = DrawListBuilder::default();
-        knob.paint(&mut list, &mut TextContext::new().unwrap(), DIAL, CAPTION);
+        knob.paint(&mut list, &mut TextContext::new().unwrap(), label, BOUNDS);
         list.finish()
     }
 

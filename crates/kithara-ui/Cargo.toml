@@ -55,8 +55,10 @@ kithara-test-utils = { path = "../kithara-test-utils", features = [
 ] }
 
 criterion = { workspace = true }
+futures-lite = { workspace = true }
 iced_renderer = { workspace = true }
 iced_tiny_skia = { workspace = true }
+png = { workspace = true }
 ron = { workspace = true }
 
 [lints]

@@ -3,11 +3,12 @@ use std::{cell::Cell, marker::PhantomData, rc::Rc};
 use masonry::{
     accesskit::{Node as AccessNode, Role},
     core::{
-        AccessCtx, AllowRawMut, BoxConstraints, ChildrenIds, ComposeCtx, EventCtx, Ime, LayoutCtx,
-        NewWidget, PaintCtx, PointerButton as MasonryPointerButton, PointerEvent, PropertiesMut,
-        PropertiesRef, RegisterCtx, TextEvent, Update, UpdateCtx, Widget, WidgetId, WidgetPod,
+        AccessCtx, AllowRawMut, BoxConstraints, ChildrenIds, ComposeCtx, CursorIcon, EventCtx, Ime,
+        LayoutCtx, NewWidget, PaintCtx, PointerButton as MasonryPointerButton, PointerEvent,
+        PropertiesMut, PropertiesRef, QueryCtx, RegisterCtx, TextEvent, Update, UpdateCtx, Widget,
+        WidgetId, WidgetPod,
     },
-    kurbo::{Affine, Rect as MasonryRect, Size as MasonrySize},
+    kurbo::{Affine, Point, Rect as MasonryRect, Size as MasonrySize},
     vello::Scene,
 };
 use num_traits::cast::AsPrimitive;
@@ -17,6 +18,7 @@ use super::{
     Repaint,
     custom::HostAction,
     layout::NodeLayout,
+    leaf::cursor_icon,
     picker::{EngineTarget, HostedEngine},
     popover::PopoverState,
 };
@@ -24,7 +26,7 @@ use crate::{
     backends::VelloBackend,
     draw::{DrawListBuilder, Pt, Rect, Rgba, replay},
     interact::{
-        Hit, Input, InputMethod, Key, MOUSE, Modifiers, PointerButton, PointerInput,
+        CursorShape, Hit, Input, InputMethod, Key, MOUSE, Modifiers, PointerButton, PointerInput,
         PointerOwnership, PointerPhase,
     },
     layout::FrameSides,
@@ -53,7 +55,7 @@ pub(super) type RootParts = (
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum NodePointerOwner {
-    Custom,
+    Leaf,
     Engine,
 }
 
@@ -142,7 +144,7 @@ impl Node {
         }
     }
 
-    fn custom_input(
+    fn leaf_input(
         &mut self,
         ctx: &mut EventCtx<'_>,
         event: &PointerEvent,
@@ -152,7 +154,7 @@ impl Node {
         let Some(leaf) = self.layout.leaf() else {
             return false;
         };
-        let retained = self.pointer_owner == Some(NodePointerOwner::Custom);
+        let retained = self.pointer_owner == Some(NodePointerOwner::Leaf);
         let outcome = leaf.input(input, hit);
         if !matches!(leaf.repaint(), Repaint::None) {
             ctx.request_anim_frame();
@@ -165,7 +167,7 @@ impl Node {
         match outcome.ownership() {
             PointerOwnership::Claim if matches!(event, PointerEvent::Down(_)) => {
                 ctx.capture_pointer();
-                self.pointer_owner = Some(NodePointerOwner::Custom);
+                self.pointer_owner = Some(NodePointerOwner::Leaf);
             }
             PointerOwnership::Release if retained => {
                 ctx.release_pointer();
@@ -239,7 +241,7 @@ impl Node {
         exclusive
     }
 
-    fn custom_text_input(&mut self, ctx: &mut EventCtx<'_>, input: Input<'_>) -> bool {
+    fn leaf_text_input(&mut self, ctx: &mut EventCtx<'_>, input: Input<'_>) -> bool {
         let Some(leaf) = self.layout.leaf() else {
             return false;
         };
@@ -288,7 +290,7 @@ impl Node {
     }
 
     fn route_text_input(&mut self, ctx: &mut EventCtx<'_>, input: Input<'_>) {
-        if self.custom_text_input(ctx, input) {
+        if self.leaf_text_input(ctx, input) {
             return;
         }
         self.engine_text_input(ctx, input);
@@ -466,8 +468,8 @@ impl Widget for Node {
             return;
         };
         match self.pointer_owner {
-            Some(NodePointerOwner::Custom) => {
-                self.custom_input(ctx, event, input, hit);
+            Some(NodePointerOwner::Leaf) => {
+                self.leaf_input(ctx, event, input, hit);
                 return;
             }
             Some(NodePointerOwner::Engine) => {
@@ -476,7 +478,7 @@ impl Widget for Node {
             }
             None => {}
         }
-        if self.custom_input(ctx, event, input, hit) {
+        if self.leaf_input(ctx, event, input, hit) {
             return;
         }
         if self.pointer_owner.is_some() {
@@ -629,6 +631,39 @@ impl Widget for Node {
                 .engine
                 .as_ref()
                 .is_some_and(|engine| engine.accepts_text_input())
+    }
+
+    fn get_cursor(&self, ctx: &QueryCtx<'_>, pos: Point) -> CursorIcon {
+        let local = ctx.window_transform().inverse() * pos;
+        let size = ctx.size();
+        let hit = Hit::new(
+            Some(Pt {
+                x: local.x.as_(),
+                y: local.y.as_(),
+            }),
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: size.width.as_(),
+                h: size.height.as_(),
+            },
+        );
+        let leaf = match &self.layout {
+            NodeLayout::Leaf(leaf) => leaf.cursor(&hit),
+            NodeLayout::Flex(_) | NodeLayout::Stack => CursorShape::None,
+        };
+        let engine = self.engine.as_ref().map_or(CursorShape::None, |engine| {
+            engine.cursor(Pt {
+                x: pos.x.as_(),
+                y: pos.y.as_(),
+            })
+        });
+        let shape = match self.pointer_owner {
+            Some(NodePointerOwner::Leaf) => leaf,
+            None if leaf != CursorShape::None => leaf,
+            Some(NodePointerOwner::Engine) | None => engine,
+        };
+        cursor_icon(shape)
     }
 
     fn make_trace_span(&self, id: WidgetId) -> Span {

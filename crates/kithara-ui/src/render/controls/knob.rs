@@ -10,13 +10,12 @@ use kithara_platform::time::Instant;
 use crate::{
     atoms::knob::Knob,
     backends::IcedBackend,
-    draw::{DrawListBuilder, Rect, replay},
+    draw::{DrawList, DrawListBuilder, Rect, replay},
     interact::{
         CursorShape, Hover, iced as iced_interact,
         recognizers::{Scalar, ScalarState, Track, WheelStep},
     },
     render::{Skin, UiEvent, scalar},
-    skin::KnobSkin,
     text::{TextContext, TextResources},
 };
 
@@ -116,16 +115,16 @@ pub(crate) struct KnobState {
 }
 
 pub(crate) struct KnobPaint<'data, 'skin> {
-    knob: Knob<'data, 'skin>,
-    metrics: KnobSkin,
+    knob: Knob,
+    label: Option<&'data str>,
     text_resources: &'skin TextResources,
 }
 
 impl<'data, 'skin> KnobPaint<'data, 'skin> {
     pub(crate) fn new(label: Option<&'data str>, value: f32, skin: &'skin Skin) -> Self {
         Self {
-            knob: Knob::new(label, value, skin),
-            metrics: skin.knob,
+            knob: Knob::new(value, skin),
+            label,
             text_resources: skin.text_resources(),
         }
     }
@@ -153,13 +152,17 @@ impl canvas::Program<UiEvent> for KnobPaint<'_, '_> {
         _cursor: Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        let (dial, caption) = self.rects(bounds);
-        let mut text = state.text.borrow_mut();
-        let text = text.get_or_insert_with(|| self.text_resources.into());
-        let mut builder = DrawListBuilder::default();
-        self.knob.paint(&mut builder, text, dial, caption);
+        let list = self.draw_list(
+            state,
+            Rect {
+                h: bounds.height,
+                w: bounds.width,
+                x: 0.0,
+                y: 0.0,
+            },
+        );
         replay(
-            &builder.finish(),
+            &list,
             &mut IcedBackend::new(&mut frame, self.text_resources),
         );
         vec![frame.into_geometry()]
@@ -172,36 +175,16 @@ pub(crate) struct KnobPaintState {
 }
 
 impl KnobPaint<'_, '_> {
-    fn rects(&self, bounds: Rectangle) -> (Rect, Rect) {
-        const DIAMETER_SCALE: f32 = 2.0;
-
-        let metrics = self.metrics;
-        let caption_height = metrics.label_height.min(bounds.height);
-        let available = (bounds.height - caption_height).max(0.0);
-        let gap = metrics.label_gap.min(available);
-        let dial_height = available - gap;
-        let inset = metrics
-            .outer_inset
-            .min(bounds.width / DIAMETER_SCALE)
-            .min(dial_height / DIAMETER_SCALE);
-        (
-            Rect {
-                h: dial_height - inset * DIAMETER_SCALE,
-                w: bounds.width - inset * DIAMETER_SCALE,
-                x: inset,
-                y: inset,
-            },
-            Rect {
-                h: caption_height,
-                w: bounds.width,
-                x: 0.0,
-                y: dial_height + gap,
-            },
-        )
+    pub(crate) fn draw_list(&self, state: &KnobPaintState, bounds: Rect) -> DrawList {
+        let mut text = state.text.borrow_mut();
+        let text = text.get_or_insert_with(|| self.text_resources.into());
+        let mut builder = DrawListBuilder::default();
+        self.knob.paint(&mut builder, text, self.label, bounds);
+        builder.finish()
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "masonry-host"))]
 mod tests {
     use kithara_test_utils::kithara;
 
@@ -209,27 +192,20 @@ mod tests {
     use crate::{builtin, ids::SourceUri};
 
     #[kithara::test]
-    fn caption_row_and_outer_inset_are_carved_from_the_bounds() {
+    fn iced_and_masonry_record_the_same_labelled_knob() {
         let origin = SourceUri("knob.kskin.ron".to_owned());
         let skin = Skin::resolve(builtin::skin_doc().clone(), &origin).unwrap();
-        let bounds = Rectangle {
-            height: 39.0,
-            width: 28.0,
+        let bounds = Rect {
+            h: 39.0,
+            w: 28.0,
             x: 0.0,
             y: 0.0,
         };
-        let metrics = skin.knob;
+        let iced =
+            KnobPaint::new(Some("GAIN"), 0.25, &skin).draw_list(&KnobPaintState::default(), bounds);
+        let mut masonry =
+            crate::render::masonry::MasonryKnob::new(Some("GAIN".to_owned()), 0.25, &skin);
 
-        let program = KnobProgram::new("mixer/gain", Some("GAIN"), 0.5, &skin);
-        let (dial, caption) = program.paint.rects(bounds);
-        let unlabelled = KnobProgram::new("mixer/gain", None, 0.5, &skin);
-
-        assert_eq!(
-            dial.h + metrics.outer_inset * 2.0 + metrics.label_gap + caption.h,
-            bounds.height
-        );
-        assert_eq!(caption.h, metrics.label_height);
-        assert!(caption.y >= dial.y + dial.h);
-        assert_eq!(program.paint.rects(bounds), unlabelled.paint.rects(bounds));
+        assert_eq!(iced, masonry.draw_list(bounds));
     }
 }

@@ -15,7 +15,7 @@ use num_traits::cast::AsPrimitive;
 use tracing::{Span, trace_span};
 
 use super::{
-    Repaint, Size2, SizeLimits, TextMeasurer,
+    MasonryKnob, Repaint, Size2, SizeLimits, TextMeasurer,
     custom::{HostAction, MountedCustom},
     node::pointer_button,
 };
@@ -32,6 +32,7 @@ use crate::{
 
 pub(crate) enum Leaf {
     Empty,
+    Knob(Box<MasonryKnob>),
     Text {
         content: String,
         role: TextRoleSkin,
@@ -48,7 +49,7 @@ pub(crate) enum Leaf {
 impl Leaf {
     pub(crate) fn measure(&mut self, limits: crate::solve::Limits) -> crate::solve::Size {
         match self {
-            Self::Empty => crate::solve::Size::ZERO,
+            Self::Empty | Self::Knob(_) => crate::solve::Size::ZERO,
             Self::Text {
                 content,
                 role,
@@ -74,9 +75,13 @@ impl Leaf {
     }
 
     pub(crate) fn paint(&mut self, bounds: Rect, scene: &mut Scene) {
+        if let Self::Knob(knob) = self {
+            replay(&knob.draw_list(bounds), &mut VelloBackend::new(scene));
+            return;
+        }
         let mut list = DrawListBuilder::default();
         match self {
-            Self::Empty => {}
+            Self::Empty | Self::Knob(_) => {}
             Self::Text {
                 content,
                 role,
@@ -121,6 +126,7 @@ impl Leaf {
 
     pub(crate) fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<HostAction> {
         match self {
+            Self::Knob(knob) => knob.input(input, &hit),
             Self::Custom { widget, .. } => widget.input(input, hit),
             Self::Empty | Self::Text { .. } => Outcome::IGNORED,
         }
@@ -129,7 +135,7 @@ impl Leaf {
     pub(crate) fn frame(&mut self, elapsed: Duration) -> Option<HostAction> {
         match self {
             Self::Custom { widget, .. } => widget.frame(elapsed),
-            Self::Empty | Self::Text { .. } => None,
+            Self::Empty | Self::Knob(_) | Self::Text { .. } => None,
         }
     }
 
@@ -141,11 +147,22 @@ impl Leaf {
     }
 
     pub(crate) const fn accepts_input(&self) -> bool {
-        matches!(self, Self::Custom { .. })
+        match self {
+            Self::Knob(knob) => knob.accepts_input(),
+            Self::Custom { .. } => true,
+            Self::Empty | Self::Text { .. } => false,
+        }
     }
 
     pub(crate) fn accepts_text_input(&self) -> bool {
         matches!(self, Self::Custom { widget, .. } if widget.accepts_text_input())
+    }
+
+    pub(crate) fn cursor(&self, hit: &Hit) -> CursorShape {
+        match self {
+            Self::Knob(knob) => knob.cursor(hit),
+            Self::Empty | Self::Text { .. } | Self::Custom { .. } => CursorShape::None,
+        }
     }
 }
 
@@ -363,7 +380,7 @@ impl WindowLayerProgram for DragProgram {
     }
 }
 
-const fn cursor_icon(shape: CursorShape) -> CursorIcon {
+pub(super) const fn cursor_icon(shape: CursorShape) -> CursorIcon {
     match shape {
         CursorShape::None => CursorIcon::Default,
         CursorShape::Grab => CursorIcon::Grab,
