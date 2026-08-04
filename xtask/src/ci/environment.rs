@@ -145,15 +145,18 @@ impl CiEnvironment {
         // Build reuse across the jobs an executor serves.
         insert(&mut vars, "CARGO_REAPI_BACKEND", "cache");
         insert(&mut vars, "CARGO_REAPI_CACHE_DIR", &reapi_cache);
-        // The tool refuses to start when the memory it is told to plan for
-        // exceeds the machine's own, and the executors differ: the macOS guest
-        // has twelve gigabytes, the container eight, the host twenty-four. Say
-        // what this machine has, less the room the rest of the job needs.
+        // The ledger the tool admits work against. It refuses to start when
+        // told to plan for more memory than the machine has, and the executors
+        // differ — twelve gigabytes in the macOS guest, eight in the container,
+        // twenty-four on the host — so each states its own. It is an admission
+        // cap rather than a reservation, and holding some back only narrowed
+        // the window: a link the tool sizes at seven gigabytes then had nothing
+        // to overlap with, and the heaviest lane stalled waiting for a lease.
         if let Some(gib) = physical_memory_gib() {
             insert(
                 &mut vars,
                 "CARGO_REAPI_RESOURCE_MEMORY_GIB_CAPACITY",
-                gib.saturating_sub(2).max(2).to_string(),
+                gib.to_string(),
             );
         }
         insert(&mut vars, "RUSTC_WRAPPER", "sccache");
