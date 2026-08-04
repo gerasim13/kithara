@@ -2,6 +2,7 @@
   extends:
     - .macos-job
     - .rules-nightly
+    - .measured
   stage: deep
   needs: []
 

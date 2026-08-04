@@ -7,12 +7,16 @@
   needs: []
 
 web:chromium:
-  extends: .web-job
+  extends:
+    - .web-job
+    - .measured
   script:
     - just ci run web-chromium
 
 web:firefox:
-  extends: .web-job
+  extends:
+    - .web-job
+    - .measured
   script:
     - just ci run web-firefox
 

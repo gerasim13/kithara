@@ -12,6 +12,7 @@ android:test:
   extends:
     - .android-job
     - .rules-integration
+    - .measured
   stage: android
   timeout: 90 minutes
   needs:

@@ -57,3 +57,10 @@
   interruptible: false
   rules:
     - if: $KITHARA_PIPELINE_KIND == "release"
+
+# Dropping the serial chain let two runners work at once, which is the point —
+# but a full suite, a browser run, and every perf measurement report on how
+# loaded the host was, not only on the commit. Those take this group, so one of
+# them holds the machine at a time while lint, checks, and scans run alongside.
+.measured:
+  resource_group: kithara-suite

@@ -25,7 +25,9 @@ apple:msrv:
     - just ci run apple-msrv
 
 apple:test:
-  extends: .apple-job
+  extends:
+    - .apple-job
+    - .measured
   needs:
     - apple:lint
   script:
@@ -42,6 +44,7 @@ apple:test-flash-off:
   extends:
     - .macos-job
     - .rules-integration
+    - .measured
   stage: apple
   timeout: 60 minutes
   needs:

@@ -26,6 +26,7 @@ linux:test:
   extends:
     - .linux-job
     - .rules-integration
+    - .measured
   stage: linux
   timeout: 60 minutes
   needs:
@@ -44,6 +45,7 @@ linux:coverage:
   extends:
     - .linux-job
     - .rules-nightly
+    - .measured
   stage: linux
   timeout: 90 minutes
   needs:
