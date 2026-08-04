@@ -74,12 +74,10 @@ impl CiEnvironment {
         fs::create_dir_all(&shared_root)
             .with_context(|| format!("creating CI cache root {}", shared_root.display()))?;
 
-        let used_bytes = used_bytes(&shared_root)?;
-        if is_ci() && used_bytes >= config.host.reject_bytes {
-            bail!(
-                "CI volume uses {used_bytes} bytes; new jobs are blocked at {} bytes",
-                config.host.reject_bytes
-            );
+        let free_bytes = free_bytes(&shared_root)?;
+        let required_free = config.host.free_bytes_for_a_job();
+        if is_ci() && free_bytes < required_free {
+            bail!("the CI cache has {free_bytes} bytes free; a job needs {required_free} bytes");
         }
 
         let trust = CacheTrust::from_environment()?;
@@ -245,12 +243,17 @@ fn is_ci() -> bool {
     env::var_os("CI").is_some_and(|value| !value.is_empty())
 }
 
-fn used_bytes(path: &Path) -> Result<u64> {
-    let total = fs4::total_space(path)
-        .with_context(|| format!("reading total space for {}", path.display()))?;
-    let available = fs4::available_space(path)
-        .with_context(|| format!("reading available space for {}", path.display()))?;
-    Ok(total.saturating_sub(available))
+/// How much room the cache still has. A job reads this through whatever the
+/// executor mounted the cache with — a virtiofs share into an ephemeral macOS
+/// guest, a bind mount into a container — and those report the filesystem
+/// backing the share, which is the host's whole disk rather than the CI volume.
+/// Free space survives that translation and still answers the question a job
+/// asks; occupancy does not, and comparing the host's disk against a threshold
+/// sized for the CI volume rejected every macOS job while the volume was barely
+/// half full.
+fn free_bytes(path: &Path) -> Result<u64> {
+    fs4::available_space(path)
+        .with_context(|| format!("reading available space for {}", path.display()))
 }
 
 /// Route every Cargo invocation through `cargo reapi` by putting a shim ahead

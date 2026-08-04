@@ -143,6 +143,13 @@ impl CiHost {
         self.gitlab_url.as_str().trim_end_matches('/').to_string()
     }
 
+    /// The headroom a job insists on before it starts. The host stops handing
+    /// out work once the CI volume passes `reject_bytes`, so the room left at
+    /// that point is what the policy already considers too little to start on.
+    pub(crate) fn free_bytes_for_a_job(&self) -> u64 {
+        self.quota_bytes.saturating_sub(self.reject_bytes)
+    }
+
     /// `tart` resolves VM names under `TART_HOME`, and the configured bundle
     /// is `<TART_HOME>/vms/<name>`. A launch agent inherits none of the
     /// shell's environment, so without this it looks in `~/.tart` and cannot
@@ -201,5 +208,21 @@ mod tests {
         assert!(safe_account("kithara-ci"));
         assert!(!safe_account("../root"));
         assert!(!safe_account("ci user"));
+    }
+
+    /// A job cannot see the CI volume the way the host does, so it asks for
+    /// room instead of occupancy. The room it asks for is the same policy read
+    /// from the other end, and the ordering `validate` enforces keeps it above
+    /// zero.
+    #[test]
+    fn a_job_asks_for_the_room_the_host_policy_reserves() {
+        let mut host = super::super::fixture().host;
+        host.soft_cleanup_bytes = 240;
+        host.aggressive_cleanup_bytes = 270;
+        host.reject_bytes = 285;
+        host.quota_bytes = 300;
+        assert_eq!(host.free_bytes_for_a_job(), 15);
+        assert!(host.validate().is_ok());
+        assert!(host.free_bytes_for_a_job() > 0);
     }
 }
