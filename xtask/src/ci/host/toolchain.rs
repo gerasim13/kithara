@@ -176,6 +176,16 @@ impl<'a> ToolchainInstaller<'a> {
             "install the nightly channel third-party tools resolve",
         )?;
         run(
+            &[
+                "target",
+                "add",
+                "wasm32-unknown-unknown",
+                "--toolchain",
+                "nightly",
+            ],
+            "install the WASM target on the nightly channel",
+        )?;
+        run(
             &["default", &self.config.pins.stable_toolchain],
             "select stable Rust",
         )?;
