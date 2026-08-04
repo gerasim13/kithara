@@ -3,8 +3,11 @@ use std::{fs, path::Path, process::Stdio, thread, time::Duration};
 use anyhow::{Context, Result, bail};
 use tracing::info;
 
-use super::runners::{
-    RunnerManager, Tokens, docker_host, path_text, read_trimmed, require_macos, write_secure,
+use super::{
+    runner_guest::{GUEST_SHARE, guest_developer_dir},
+    runners::{
+        RunnerManager, Tokens, docker_host, path_text, read_trimmed, require_macos, write_secure,
+    },
 };
 
 /// The throwaway VM the macOS lane clones for every job.
@@ -286,6 +289,10 @@ impl RunnerManager<'_> {
         self.require_ci_user()?;
         self.verify_macos_base()?;
         let tart = path_text(&self.config.host.brew_tool("tart"))?.to_string();
+        // One guest serves every job it is offered. Recreating it per job left
+        // the queue waiting for a runner that did not exist yet, and the guest
+        // is thrown away and rebuilt from the base image whenever it does stop,
+        // so a job never inherits a half-finished predecessor.
         loop {
             self.destroy_job_vm(&tart);
             self.process.run(
@@ -295,7 +302,7 @@ impl RunnerManager<'_> {
             )?;
             let outcome = self
                 .boot_job_vm(&tart)
-                .and_then(|address| self.serve_one_job(&address));
+                .and_then(|address| self.serve_jobs(&address));
             self.destroy_job_vm(&tart);
             outcome?;
         }
@@ -359,6 +366,11 @@ impl RunnerManager<'_> {
             .unwrap_or_default();
         [
             ("Xcode.app", xcode, true),
+            // `kithara-encode` links ffmpeg, and several `*-sys` crates shell
+            // out to cmake and pkg-config. A stock macOS image carries none of
+            // them, so share the host prefix; the guest links it back to the
+            // canonical path, which the install names in these dylibs need.
+            ("kithara-brew", self.config.host.brew_root.clone(), true),
             ("kithara-tools", root.join("toolchains/shared-bin"), true),
             // virtiofs cannot serve rustup's downloads, so the guest must find
             // every toolchain already installed here.
@@ -376,34 +388,58 @@ impl RunnerManager<'_> {
         .collect()
     }
 
-    fn serve_one_job(&self, address: &str) -> Result<()> {
-        let shared = self.config.host.macos_guest_shared_root.display();
+    fn serve_jobs(&self, address: &str) -> Result<()> {
+        let shared = GUEST_SHARE;
+        let brew = self.config.host.brew_root.join("bin");
+        let brew = brew.display();
+        let path = format!("$HOME/.cargo/bin:{brew}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
         let tokens = Tokens::load(&self.ci_home().join(".config/kithara-ci"))?;
+        // Move the share off the auto-mounted path before anything reads it:
+        // its name contains spaces, which GNU make cannot express. Nothing may
+        // be running from the mount at this point, so this is the only moment
+        // the unmount can succeed.
         self.guest_shell(
             address,
             &format!(
-                "export PATH=$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; \
-                 \"{shared}/kithara-tools/kithara-ci\" ci host --config \
-                 \"{shared}/kithara-tools/host.toml\" --pins \
-                 \"{shared}/kithara-tools/pins.toml\" guest-prepare"
+                "set -e; \
+                 if [ ! -d {shared}/Xcode.app ]; then \
+                 sudo -n diskutil unmount force '{}' >/dev/null; \
+                 sudo -n install -d -m 0755 {shared}; \
+                 sudo -n mount_virtiofs com.apple.virtio-fs.automount {shared}; \
+                 fi",
+                self.config.host.macos_guest_shared_root.display(),
             ),
-            "prepare CI macOS guest",
+            "remount guest share without spaces",
             None,
         )?;
         self.guest_shell(
             address,
             &format!(
+                "export PATH={path}; \
+                 {shared}/kithara-tools/kithara-ci ci host --config \
+                 {shared}/kithara-tools/host.toml --pins \
+                 {shared}/kithara-tools/pins.toml guest-prepare"
+            ),
+            "prepare CI macOS guest",
+            None,
+        )?;
+        // No `--max-builds`: the guest keeps taking jobs until it idles out,
+        // so the second job of a pipeline does not wait for a new one to boot.
+        self.guest_shell(
+            address,
+            &format!(
                 "read -r RUNNER_TOKEN; \
-                 export PATH=$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; \
-                 export DEVELOPER_DIR=\"{}\"; \
-                 exec \"{shared}/kithara-tools/gitlab-runner\" run-single --url {} \
-                 --token \"$RUNNER_TOKEN\" --executor shell --shell bash --max-builds 1 \
+                 export PATH={path}; \
+                 export DEVELOPER_DIR={}; \
+                 export KITHARA_CI_CACHE_ROOT={shared}/kithara-cache; \
+                 exec {shared}/kithara-tools/gitlab-runner run-single --url {} \
+                 --token \"$RUNNER_TOKEN\" --executor shell --shell bash \
                  --wait-timeout {}",
-                self.config.host.macos_guest_xcode_developer_dir.display(),
+                guest_developer_dir(),
                 self.config.host.gitlab_origin(),
                 JobVm::WAIT_SECONDS,
             ),
-            "serve one GitLab job",
+            "serve GitLab jobs",
             Some(&tokens.macos),
         )
     }

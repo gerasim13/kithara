@@ -258,11 +258,16 @@ impl<'a> RunnerManager<'a> {
                 launchd(
                     "com.zvuk.kithara-ci.macos-runner",
                     &[
+                        // The copy `configure-runners` installs, not the
+                        // root-owned one. This agent's own plist already lives
+                        // in the CI user's home, so requiring root to replace
+                        // the binary it names protects nothing and blocks every
+                        // routine update of the runner loop.
                         &self
                             .config
                             .host
                             .host_root
-                            .join("services/bin/kithara-ci")
+                            .join("toolchains/shared-bin/kithara-ci")
                             .display()
                             .to_string(),
                         "ci",

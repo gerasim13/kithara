@@ -8,13 +8,27 @@ use anyhow::{Context, Result, bail};
 use super::runners::{RunnerManager, path_text, require_macos};
 use crate::ci::config::{LANE_CONFIG_DIR, LANE_CONFIG_PATH};
 
+/// Where the guest reaches the shared directories.
+///
+/// virtiofs auto-mounts them under `/Volumes/My Shared Files`, and GNU make
+/// cannot represent a path containing spaces at all — space is its separator
+/// between targets, with no escape. `xcrun` resolves symlinks before handing
+/// the toolchain path to cmake, cmake writes it into the generated Makefile,
+/// and make then reports `/Volumes/My: No such file or directory`. Only a real
+/// mount elsewhere fixes it, so the guest moves the share here on startup.
+pub(super) const GUEST_SHARE: &str = "/opt/kithara";
+
+pub(super) fn guest_developer_dir() -> String {
+    format!("{GUEST_SHARE}/Xcode.app/Contents/Developer")
+}
+
 impl RunnerManager<'_> {
     pub(super) fn prepare_guest(&self) -> Result<()> {
         require_macos()?;
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .context("guest HOME is not set")?;
-        let shared = &self.config.host.macos_guest_shared_root;
+        let shared = Path::new(GUEST_SHARE);
         for (name, source) in [
             (".cargo", shared.join("kithara-cargo")),
             (".rustup", shared.join("kithara-rustup")),
@@ -23,12 +37,27 @@ impl RunnerManager<'_> {
             remove_guest_path(&target)?;
             create_guest_symlink(&source, &target)?;
         }
+        // Homebrew bakes its prefix into every dylib install name, so the
+        // shared copy only resolves when the guest reaches it at that path.
+        let brew = &self.config.host.brew_root;
+        let brew_parent = brew
+            .parent()
+            .context("brew_root has no parent directory to create in the guest")?;
+        sudo(
+            &["install", "-d", "-m", "0755", path_text(brew_parent)?],
+            "create guest Homebrew parent directory",
+        )?;
         sudo(
             &[
-                "xcode-select",
-                "-s",
-                path_text(&self.config.host.macos_guest_xcode_developer_dir)?,
+                "ln",
+                "-sfn",
+                &format!("{GUEST_SHARE}/kithara-brew"),
+                path_text(brew)?,
             ],
+            "link guest Homebrew prefix",
+        )?;
+        sudo(
+            &["xcode-select", "-s", &guest_developer_dir()],
             "select guest Xcode",
         )?;
         // A freshly installed macOS has no /usr/local/bin, so `install` into it
@@ -72,6 +101,16 @@ impl RunnerManager<'_> {
                 "guest Xcode does not match {}",
                 self.config.pins.expected_xcode_version
             );
+        }
+        // GNU make cannot express a path containing a space, and cmake feeds
+        // it whatever `xcrun` resolves the toolchain to. Assert the property
+        // the build depends on, so a regression fails here and says why,
+        // instead of surfacing two minutes later inside a compiler probe.
+        let make =
+            self.process
+                .capture("/usr/bin/xcrun", &["--find", "make"], "guest make path")?;
+        if make.contains(char::is_whitespace) {
+            bail!("guest toolchain path contains whitespace, which make cannot use: {make}");
         }
         self.process.require_tools(&[
             "cargo",
