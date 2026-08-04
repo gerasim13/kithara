@@ -18,6 +18,13 @@ impl JobVm {
     const BOOT_ATTEMPTS: u32 = 40;
     const BOOT_POLL: Duration = Duration::from_secs(5);
     const WAIT_SECONDS: u32 = 7200;
+    /// How many jobs a guest serves before it is thrown away. Each one leaves
+    /// a build directory behind on the guest's own disk, and a guest that
+    /// never stops never gives that space back: one grew from the base image's
+    /// 27 gibibytes to 85 of its 90 and then failed a lint job on "No space
+    /// left on device". A nightly is eleven macOS jobs, so this recycles about
+    /// once per two full runs and costs one boot to do it.
+    const MAX_BUILDS: u32 = 24;
 }
 
 impl RunnerManager<'_> {
@@ -429,8 +436,10 @@ impl RunnerManager<'_> {
             "prepare CI macOS guest",
             None,
         )?;
-        // No `--max-builds`: the guest keeps taking jobs until it idles out,
-        // so the second job of a pipeline does not wait for a new one to boot.
+        // One guest serves a run of jobs rather than one, so the second job of
+        // a pipeline does not wait for a new one to boot — but it serves a
+        // bounded run, because the space each job leaves behind comes back
+        // only when the guest is destroyed.
         self.guest_shell(
             address,
             &format!(
@@ -440,9 +449,10 @@ impl RunnerManager<'_> {
                  export KITHARA_CI_CACHE_ROOT={shared}/kithara-cache; \
                  exec {shared}/kithara-tools/gitlab-runner run-single --url {} \
                  --token \"$RUNNER_TOKEN\" --executor shell --shell bash \
-                 --wait-timeout {}",
+                 --max-builds {} --wait-timeout {}",
                 guest_developer_dir(),
                 self.config.host.gitlab_origin(),
+                JobVm::MAX_BUILDS,
                 JobVm::WAIT_SECONDS,
             ),
             "serve GitLab jobs",
