@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{collections::BTreeMap, ffi::OsString, path::PathBuf};
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
@@ -67,7 +67,12 @@ pub(crate) fn run(args: &HostArgs) -> Result<()> {
     let config = CiConfig::load(&args.config, &args.pins)?;
     config.validate_macos_layout()?;
     let root = std::env::current_dir()?;
-    let process = Process::new(&root, BTreeMap::new());
+    let mut vars = BTreeMap::new();
+    vars.insert(
+        OsString::from("TART_HOME"),
+        config.host.tart_home()?.as_os_str().to_os_string(),
+    );
+    let process = Process::new(&root, vars);
     match &args.command {
         HostCommand::Bootstrap => SystemSetup::new(&config, &process).bootstrap(),
         HostCommand::Finish => {

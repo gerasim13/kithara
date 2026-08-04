@@ -1,6 +1,9 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::Stdio,
+    thread,
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
@@ -93,13 +96,7 @@ impl<'a> RunnerManager<'a> {
         self.require_ci_user()?;
         let uid = self.process.capture("/usr/bin/id", &["-u"], "CI user id")?;
         let domain = format!("gui/{uid}");
-        let status = self
-            .process
-            .command("/bin/launchctl")
-            .args(["print", &domain])
-            .status()
-            .context("checking CI GUI session")?;
-        if !status.success() {
+        if !self.launchctl_knows(&domain) {
             bail!(
                 "the {} GUI session is not active; log in locally first",
                 self.config.host.ci_user
@@ -117,11 +114,13 @@ impl<'a> RunnerManager<'a> {
             if !plist.is_file() {
                 continue;
             }
+            let service = format!("{domain}/{label}");
             let _ = self
                 .process
                 .command("/bin/launchctl")
-                .args(["bootout", &format!("{domain}/{label}")])
+                .args(["bootout", &service])
                 .status();
+            self.await_unload(&service)?;
             self.process.run(
                 "/bin/launchctl",
                 &["bootstrap", &domain, path_text(&plist)?],
@@ -140,6 +139,33 @@ impl<'a> RunnerManager<'a> {
         }
         info!("CI user services activated");
         Ok(())
+    }
+
+    /// `launchctl print` answers for a domain or a loaded service and fails
+    /// otherwise. Its output is enormous, so keep it off the console.
+    fn launchctl_knows(&self, target: &str) -> bool {
+        self.process
+            .command("/bin/launchctl")
+            .args(["print", target])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
+    /// launchd tears a service down asynchronously, and bootstrapping one
+    /// that is still on its way out fails with `EIO` — which would leave the
+    /// service unloaded and its process stopped.
+    fn await_unload(&self, service: &str) -> Result<()> {
+        const ATTEMPTS: u32 = 120;
+        const POLL: Duration = Duration::from_millis(500);
+        for _ in 0..ATTEMPTS {
+            if !self.launchctl_knows(service) {
+                return Ok(());
+            }
+            thread::sleep(POLL);
+        }
+        bail!("{service} is still loaded after being booted out")
     }
 
     fn runner_config(&self, home: &Path, tokens: &Tokens) -> String {
@@ -392,15 +418,30 @@ pub(super) fn path_text(path: &Path) -> Result<&str> {
 }
 
 /// Provisioning reruns, and some sources are mode `0555` (Homebrew binaries),
-/// so the destination cannot be reopened for writing. Replace, never overwrite.
+/// so the destination cannot be reopened for writing. Stage beside it and
+/// rename over it: renaming needs no write permission on the file itself, and
+/// it never leaves the destination missing — clearing it first destroyed the
+/// only copy whenever a command installed the executable it was running from.
 fn replace_file(source: &Path, destination: &Path) -> Result<()> {
-    if destination.exists() {
-        fs::remove_file(destination)
-            .with_context(|| format!("removing stale {}", destination.display()))?;
-    }
-    fs::copy(source, destination)
-        .with_context(|| format!("copying into {}", destination.display()))?;
-    Ok(())
+    let name = destination
+        .file_name()
+        .with_context(|| format!("no file name in destination {}", destination.display()))?;
+    let mut staged = name.to_os_string();
+    staged.push(format!(".incoming.{}", std::process::id()));
+    let staged = destination.with_file_name(staged);
+
+    fs::copy(source, &staged).with_context(|| {
+        format!(
+            "staging {} beside {}",
+            source.display(),
+            destination.display()
+        )
+    })?;
+    fs::rename(&staged, destination)
+        .inspect_err(|_| {
+            let _ = fs::remove_file(&staged);
+        })
+        .with_context(|| format!("installing {}", destination.display()))
 }
 
 pub(super) fn require_macos() -> Result<()> {
@@ -412,10 +453,39 @@ pub(super) fn require_macos() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, os::unix::fs::PermissionsExt};
 
     use super::*;
     use crate::ci::config::fixture;
+
+    #[test]
+    fn installing_an_executable_over_itself_keeps_it() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("kithara-ci");
+        fs::write(&path, b"payload").expect("seed the destination");
+
+        replace_file(&path, &path).expect("install in place");
+
+        assert_eq!(fs::read(&path).expect("read the destination"), b"payload");
+    }
+
+    #[test]
+    fn installing_over_a_read_only_destination_replaces_it() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("source");
+        let destination = directory.path().join("destination");
+        fs::write(&source, b"new").expect("seed the source");
+        fs::write(&destination, b"old").expect("seed the destination");
+        fs::set_permissions(&destination, PermissionsExt::from_mode(0o555))
+            .expect("make the destination read-only");
+
+        replace_file(&source, &destination).expect("install over a read-only file");
+
+        assert_eq!(
+            fs::read(&destination).expect("read the destination"),
+            b"new"
+        );
+    }
 
     #[test]
     fn rendered_runner_configs_are_valid_toml_and_yaml() {

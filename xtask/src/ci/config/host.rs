@@ -143,6 +143,17 @@ impl CiHost {
         self.gitlab_url.as_str().trim_end_matches('/').to_string()
     }
 
+    /// `tart` resolves VM names under `TART_HOME`, and the configured bundle
+    /// is `<TART_HOME>/vms/<name>`. A launch agent inherits none of the
+    /// shell's environment, so without this it looks in `~/.tart` and cannot
+    /// see the base image at all.
+    pub(crate) fn tart_home(&self) -> Result<&Path> {
+        self.macos_vm_bundle
+            .parent()
+            .and_then(Path::parent)
+            .context("macos_vm_bundle must be <TART_HOME>/vms/<name>")
+    }
+
     /// The guest mounts this bundle instead of carrying its own Xcode, so the
     /// pinned version is whatever the host has, and the image stays small.
     pub(crate) fn host_xcode_app(&self) -> Result<&Path> {
