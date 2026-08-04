@@ -8,7 +8,6 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use kithara_devtools::Ctx;
-use nix::sys::resource::{Resource, getrlimit, setrlimit};
 
 use super::{
     config::CiConfig,
@@ -252,7 +251,10 @@ fn scratch_root() -> PathBuf {
 /// The lane raises its own ceiling so every executor gets the same budget.
 const OPEN_FILES: u64 = 65536;
 
+#[cfg(unix)]
 fn raise_open_file_limit() -> Result<()> {
+    use nix::sys::resource::{Resource, getrlimit, setrlimit};
+
     let (soft, hard) =
         getrlimit(Resource::RLIMIT_NOFILE).context("reading the file descriptor limit")?;
     let target = hard.min(OPEN_FILES);
@@ -261,6 +263,14 @@ fn raise_open_file_limit() -> Result<()> {
     }
     setrlimit(Resource::RLIMIT_NOFILE, target, hard)
         .context("raising the file descriptor limit")?;
+    Ok(())
+}
+
+/// Windows hands out handles from a pool and has no per-process ceiling to
+/// lift, so the suite already gets the budget the Unix executors have to ask
+/// for.
+#[cfg(not(unix))]
+fn raise_open_file_limit() -> Result<()> {
     Ok(())
 }
 

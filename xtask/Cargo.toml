@@ -16,7 +16,6 @@ clap = { workspace = true }
 fs4 = { workspace = true }
 glob = { workspace = true }
 hex = { workspace = true }
-nix = { workspace = true }
 plist = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "form", "json", "rustls"] }
@@ -33,6 +32,11 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+# The descriptor ceiling this raises is a Unix concept; Windows hands out
+# handles from a pool with no per-process limit to lift.
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true }
 
 [lints]
 workspace = true
