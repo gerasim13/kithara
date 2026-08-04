@@ -159,6 +159,13 @@ impl CiEnvironment {
                 gib.to_string(),
             );
         }
+        if let Ok(cores) = std::thread::available_parallelism() {
+            insert(
+                &mut vars,
+                "CARGO_REAPI_RESOURCE_CPU_CAPACITY",
+                cores.get().to_string(),
+            );
+        }
         insert(&mut vars, "RUSTC_WRAPPER", "sccache");
         insert(
             &mut vars,
