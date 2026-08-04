@@ -23,25 +23,6 @@ impl RunnerManager<'_> {
             remove_guest_path(&target)?;
             create_guest_symlink(&source, &target)?;
         }
-        // Homebrew bakes its prefix into every dylib install name, so the
-        // shared copy only works when the guest reaches it at the same path.
-        let brew = &self.config.host.brew_root;
-        let brew_parent = brew
-            .parent()
-            .context("brew_root has no parent directory to create in the guest")?;
-        sudo(
-            &["install", "-d", "-m", "0755", path_text(brew_parent)?],
-            "create guest Homebrew parent directory",
-        )?;
-        sudo(
-            &[
-                "ln",
-                "-sfn",
-                path_text(&shared.join("kithara-brew"))?,
-                path_text(brew)?,
-            ],
-            "link guest Homebrew prefix",
-        )?;
         sudo(
             &[
                 "xcode-select",

@@ -8,6 +8,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use kithara_devtools::Ctx;
+use nix::sys::resource::{Resource, getrlimit, setrlimit};
 
 use super::{config::CiConfig, run::Lane};
 
@@ -51,6 +52,7 @@ pub(crate) struct CiEnvironment {
 impl CiEnvironment {
     pub(crate) fn prepare(ctx: &Ctx, config: &CiConfig, lane: Lane) -> Result<Self> {
         config.validate()?;
+        raise_open_file_limit()?;
         let home = env::var_os("HOME")
             .or_else(|| env::var_os("USERPROFILE"))
             .map(PathBuf::from)
@@ -79,8 +81,7 @@ impl CiEnvironment {
 
         let trust = CacheTrust::from_environment()?;
         let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
-        let trust_root = shared_root.join(trust.as_str());
-        let cache_root = trust_root.join(platform);
+        let cache_root = shared_root.join(trust.as_str()).join(platform);
         let active_marker = cache_root.join(".kithara-ci-active");
         let cargo_home = cache_root.join("cargo");
         let gradle_home = cache_root.join("gradle");
@@ -91,17 +92,7 @@ impl CiEnvironment {
         let project_root =
             env::var_os("CI_PROJECT_DIR").map_or_else(|| ctx.root.clone(), PathBuf::from);
         let target = project_root.join("target");
-        // Scratch space has three constraints. It must sit outside the
-        // checkout, or tools that walk the working tree (the architecture
-        // reporter, for one) trip over the temporary copies they just
-        // created. It must stay short, because macOS caps Unix socket paths
-        // at SUN_LEN and the per-platform cache directory already eats into
-        // that budget. And it must resolve on the executor that runs the
-        // lane: the macOS jobs run inside a guest VM that sees the shared
-        // root over virtiofs and has no host volume at all. Sitting beside
-        // the platform cache puts it under the trust directory the host
-        // cleanup already prunes.
-        let temp = trust_root.join("tmp");
+        let temp = scratch_root().join(trust.as_str());
 
         for directory in [
             &cache_root,
@@ -198,6 +189,33 @@ impl Drop for CiEnvironment {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.active_marker);
     }
+}
+
+/// Scratch space answers to three constraints at once. It sits outside the
+/// checkout, or tools that walk the working tree — the architecture reporter,
+/// for one — trip over the temporary copies they just created. It stays short,
+/// because macOS caps Unix socket paths at `SUN_LEN` and the suite binds
+/// sockets here. And it lives on local storage: the macOS guest reaches the
+/// shared cache over virtiofs, which cannot bind a socket at all.
+fn scratch_root() -> PathBuf {
+    PathBuf::from("/tmp/kithara-ci")
+}
+
+/// The integration suite opens far more files across its cache and segment
+/// fixtures than the 256 descriptor soft limit a macOS session starts with.
+/// The lane raises its own ceiling so every executor gets the same budget.
+const OPEN_FILES: u64 = 65536;
+
+fn raise_open_file_limit() -> Result<()> {
+    let (soft, hard) =
+        getrlimit(Resource::RLIMIT_NOFILE).context("reading the file descriptor limit")?;
+    let target = hard.min(OPEN_FILES);
+    if soft >= target {
+        return Ok(());
+    }
+    setrlimit(Resource::RLIMIT_NOFILE, target, hard)
+        .context("raising the file descriptor limit")?;
+    Ok(())
 }
 
 fn shared_root(config: &CiConfig, lane: Lane) -> PathBuf {
