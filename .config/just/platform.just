@@ -41,19 +41,7 @@ wasm MODE="check" *ARGS:
         just _xtask wasm build "$@"
         ;;
       size-check)
-        toolchain="${WASM_SLIM_TOOLCHAIN:-nightly}"
-        if command -v wasm-slim >/dev/null 2>&1; then
-          slim_cmd="wasm-slim"
-        elif command -v cargo-wasm-slim >/dev/null 2>&1; then
-          slim_cmd="cargo wasm-slim"
-        else
-          echo "wasm-slim is not installed"; exit 2
-        fi
-        mkdir -p target
-        ln -sfn ../../target crates/kithara-ffi/target
-        cd crates/kithara-ffi
-        RUSTUP_TOOLCHAIN="$toolchain" $slim_cmd build --check --no-emoji --json > ../../target/wasm-slim-result.json
-        echo "wasm-slim report: target/wasm-slim-result.json"
+        just _xtask wasm size-check "$@"
         ;;
       *)
         echo "unknown wasm mode: $mode (use check|test|build|size-check)"

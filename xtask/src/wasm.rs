@@ -15,6 +15,12 @@ pub(crate) enum WasmCommand {
         #[arg(long, default_value_t = crate::BuildProfile::Release)]
         profile: crate::BuildProfile,
     },
+    /// Build the bundle and weigh it against the budget it declares.
+    SizeCheck {
+        /// Build profile.
+        #[arg(long, default_value_t = crate::BuildProfile::Release)]
+        profile: crate::BuildProfile,
+    },
     /// Trunk post-build hook: patch generated files for COEP compatibility.
     Postbuild {
         /// Trunk staging directory (defaults to `TRUNK_STAGING_DIR` env).
@@ -27,6 +33,7 @@ pub(crate) fn run(cmd: WasmCommand, ctx: &Ctx) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
     match cmd {
         WasmCommand::Build { profile } => run_build(profile),
+        WasmCommand::SizeCheck { profile } => run_size_check(profile),
         WasmCommand::Postbuild { staging_dir } => run_postbuild(&staging_dir, &ext.wasm),
     }
 }
@@ -92,6 +99,88 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
 
     println!("==> Done! Output in {}/dist/", wasm_dir.display());
     Ok(())
+}
+
+/// The budget in `.wasm-slim.toml`, which the file itself describes in terms of
+/// the `dist` bundle.
+#[derive(Debug, serde::Deserialize)]
+struct SizeBudget {
+    #[serde(rename = "target-size-kb")]
+    target_kb: u64,
+    #[serde(rename = "warn-threshold-kb")]
+    warn_kb: u64,
+    #[serde(rename = "max-size-kb")]
+    max_kb: u64,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SlimConfig {
+    #[serde(rename = "size-budget")]
+    size_budget: SizeBudget,
+}
+
+/// Measure the bundle the browser downloads. `wasm-slim build --check` used to
+/// do this, but it drives Cargo with the package's default features, and on
+/// wasm this package must drop them — `uniffi` does not build for the target
+/// and the crate declares it for every other one. Trunk already carries the
+/// right selection in `index.html`, so the check builds what ships and weighs
+/// that.
+fn run_size_check(profile: crate::BuildProfile) -> Result<()> {
+    run_build(profile)?;
+
+    let metadata = MetadataCommand::new().exec().context("cargo metadata")?;
+    let root = metadata.workspace_root.as_std_path();
+    let wasm_dir = root.join("crates/kithara-ffi");
+    let config_path = wasm_dir.join(".wasm-slim.toml");
+    let text = fs::read_to_string(&config_path)
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    let config: SlimConfig =
+        toml::from_str(&text).with_context(|| format!("parsing {}", config_path.display()))?;
+
+    let dist = wasm_dir.join("dist");
+    let bytes = directory_bytes(&dist)?;
+    let kilobytes = bytes / 1024;
+
+    let report = root.join("target/wasm-slim-result.json");
+    if let Some(parent) = report.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let json = format!(
+        "{{\"bundle_kb\":{kilobytes},\"target_kb\":{},\"warn_kb\":{},\"max_kb\":{}}}\n",
+        config.size_budget.target_kb, config.size_budget.warn_kb, config.size_budget.max_kb
+    );
+    fs::write(&report, json).with_context(|| format!("writing {}", report.display()))?;
+
+    println!(
+        "==> Bundle {kilobytes} KiB (target {}, warn {}, max {})",
+        config.size_budget.target_kb, config.size_budget.warn_kb, config.size_budget.max_kb
+    );
+    if kilobytes > config.size_budget.max_kb {
+        bail!(
+            "wasm bundle is {kilobytes} KiB, over the {} KiB ceiling",
+            config.size_budget.max_kb
+        );
+    }
+    if kilobytes > config.size_budget.warn_kb {
+        println!("==> Warning: past the warning threshold");
+    }
+    Ok(())
+}
+
+fn directory_bytes(path: &Path) -> Result<u64> {
+    let mut total = 0;
+    for entry in fs::read_dir(path).with_context(|| format!("reading {}", path.display()))? {
+        let entry = entry.with_context(|| format!("reading {}", path.display()))?;
+        let kind = entry
+            .file_type()
+            .context("reading a directory entry type")?;
+        total += if kind.is_dir() {
+            directory_bytes(&entry.path())?
+        } else {
+            entry.metadata().context("reading file size")?.len()
+        };
+    }
+    Ok(total)
 }
 
 struct Consts;

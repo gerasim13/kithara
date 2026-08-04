@@ -30,4 +30,3 @@ web:size:
     expire_in: 30 days
     paths:
       - target/wasm-slim-result.json
-      - crates/kithara-wasm/.wasm-slim/history.json
