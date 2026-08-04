@@ -18,12 +18,21 @@ stages:
   - release-build
   - release-publish
 
+# `just` builds xtask before `xtask ci run` gets to configure anything, so that
+# build ran with no compiler cache at all: on an executor with a fresh
+# container it recompiled the tool from nothing every job, minutes at a time.
+# Naming the cache here covers the bootstrap too. The value is deliberately
+# built from the executor's own cache root and the pipeline's trust level, so
+# each executor keeps its own store and an untrusted pipeline never writes into
+# a trusted one.
 variables:
   CARGO_INCREMENTAL: "0"
   GIT_DEPTH: "0"
   KITHARA_CI_HOST_CONFIG: /etc/kithara-ci/host.toml
   RUST_BACKTRACE: "1"
+  RUSTC_WRAPPER: sccache
   SCCACHE_CACHE_SIZE: 50G
+  SCCACHE_DIR: $KITHARA_CI_CACHE_ROOT/$KITHARA_CACHE_TRUST/bootstrap-sccache
 
 default:
   cache: []
