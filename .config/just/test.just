@@ -107,13 +107,17 @@ loom-debug FILE *ARGS:
     shift
     LOOM_LOG=trace LOOM_LOCATION=1 LOOM_CHECKPOINT_INTERVAL=1 LOOM_CHECKPOINT_FILE="$file" exec just test run --loom=on --no-capture "$@"
 
+# The sanitizer needs `-Zbuild-std`, which needs the `rust-src` component. The
+# repository pins a nightly and installs the component into that one; plain
+# `nightly` is whatever the host last downloaded and usually has no `rust-src`.
 _rtsan SUITE FILTER:
     #!/usr/bin/env bash
     set -euo pipefail
     target="$(rustc -vV | sed -n 's/^host: //p')"
+    toolchain="${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
     RUSTFLAGS="-Zsanitizer=realtime --cfg rtsan" \
     RUSTDOCFLAGS="-Zsanitizer=realtime --cfg rtsan" \
-        cargo +nightly test -p kithara-integration-tests --test {{ SUITE }} \
+        cargo "+$toolchain" test -p kithara-integration-tests --test {{ SUITE }} \
         --features apple-fused-src \
         --target "$target" -- --nocapture {{ FILTER }}
 
@@ -121,10 +125,11 @@ rtsan-async FILTER="no_block":
     #!/usr/bin/env bash
     set -euo pipefail
     target="$(rustc -vV | sed -n 's/^host: //p')"
+    toolchain="${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
     RTSAN_OPTIONS="suppressions=$(pwd)/.config/rtsan/async-suppressions.txt" \
     RUSTFLAGS="-Zsanitizer=realtime --cfg rtsan" \
     RUSTDOCFLAGS="-Zsanitizer=realtime --cfg rtsan" \
-        cargo +nightly test -p kithara-integration-tests --test suite_light \
+        cargo "+$toolchain" test -p kithara-integration-tests --test suite_light \
         --features kithara/no-block,kithara-test-utils/no-block --target "$target" -- --nocapture {{ FILTER }}
 
 rtsan FILTER="offline_harness": (_rtsan "suite_light" FILTER)

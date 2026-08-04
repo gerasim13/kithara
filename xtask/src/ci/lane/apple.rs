@@ -124,7 +124,7 @@ pub(crate) fn safari(process: &Process) -> Result<()> {
     process.require_tools(&["wasm-pack"])?;
     process.run(
         "wasm-pack",
-        &["test", "tests", "--headless", "--safari"],
+        &["test", "--headless", "--safari", "tests"],
         "Safari WASM tests",
     )
 }
