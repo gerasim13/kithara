@@ -104,6 +104,16 @@ pub(crate) fn wasm(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()>
 
 pub(crate) fn build_android(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
     require_os("macos", "Android release")?;
+    // The Kotlin sources import generated bindings, and the archive task
+    // expects to find them rather than producing them. They are written
+    // outside the build directory the executor keeps between jobs, so a job
+    // that did not generate them reads a tree without them and stops on an
+    // unresolved import.
+    process.run(
+        "just",
+        &["platform", "android", "build"],
+        "Android native build",
+    )?;
     process.run(
         "just",
         &["platform", "android", "aar"],
