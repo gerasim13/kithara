@@ -187,9 +187,55 @@ impl<'a> RunnerManager<'a> {
         )
     }
 
+    /// A bind mount is resolved by the Docker daemon, which lives inside
+    /// colima's virtual machine — not on the Mac. colima mounts the CI home
+    /// and nothing else, so every other source the runner binds was missing
+    /// there, and Docker substitutes an empty directory for a source it cannot
+    /// find rather than refusing. That is how the Linux lane ran with no host
+    /// profile and no shared cache, reporting only that the profile it was
+    /// handed had somehow become a directory.
+    ///
+    /// The mounts name siblings of the CI home rather than the volume root:
+    /// colima already mounts the home, and lima rejects one mount nested
+    /// inside another.
+    fn colima_args(&self, colima: &str) -> Vec<String> {
+        let root = &self.config.host.host_root;
+        let mut args: Vec<String> = [
+            colima,
+            "start",
+            "--profile",
+            "kithara",
+            "--foreground",
+            "--cpus",
+            "5",
+            "--memory",
+            "5",
+            "--disk",
+            "100",
+            "--vm-type",
+            "vz",
+            "--vz-rosetta",
+            "--mount-type",
+            "virtiofs",
+        ]
+        .iter()
+        .map(|value| (*value).to_string())
+        .collect();
+        for mount in [
+            format!("{}:w", root.join("cache").display()),
+            format!("{}:w", root.join("services").display()),
+        ] {
+            args.push("--mount".to_string());
+            args.push(mount);
+        }
+        args
+    }
+
     fn install_runner_agents(&self, home: &Path) -> Result<()> {
         let logs = self.config.host.host_root.join("logs");
         let colima = self.config.host.brew_tool("colima").display().to_string();
+        let colima_args = self.colima_args(&colima);
+        let colima_args: Vec<&str> = colima_args.iter().map(String::as_str).collect();
         let gitlab_runner = self
             .config
             .host
@@ -202,24 +248,7 @@ impl<'a> RunnerManager<'a> {
                 "colima",
                 launchd(
                     "com.zvuk.kithara-ci.colima",
-                    &[
-                        &colima,
-                        "start",
-                        "--profile",
-                        "kithara",
-                        "--foreground",
-                        "--cpus",
-                        "5",
-                        "--memory",
-                        "5",
-                        "--disk",
-                        "100",
-                        "--vm-type",
-                        "vz",
-                        "--vz-rosetta",
-                        "--mount-type",
-                        "virtiofs",
-                    ],
+                    &colima_args,
                     &logs.join("colima.log"),
                     &agent_path,
                     "<key>KeepAlive</key><true/><key>ProcessType</key><string>Background</string>",
@@ -514,6 +543,61 @@ mod tests {
         };
 
         toml::from_str::<toml::Value>(&manager.runner_config(&home, &tokens)).unwrap();
+    }
+
+    /// The runner config and the colima agent are written by two different
+    /// functions and read by two different programs; nothing but this test
+    /// says they have to agree. When they stopped agreeing, Docker filled the
+    /// gap with empty directories and the lane failed several steps later,
+    /// describing a file as a directory.
+    #[test]
+    fn colima_mounts_every_source_the_docker_runner_binds() {
+        let config = fixture();
+        let process = Process::new(Path::new("/"), BTreeMap::new());
+        let manager = RunnerManager::new(&config, &process);
+        let home = config
+            .host
+            .host_root
+            .join("home")
+            .join(&config.host.ci_user);
+        let tokens = Tokens {
+            macos: "glrt-macos".into(),
+            linux: "glrt-linux".into(),
+            android: "glrt-android".into(),
+            release: "glrt-release".into(),
+        };
+        let rendered: toml::Value =
+            toml::from_str(&manager.runner_config(&home, &tokens)).expect("runner config is TOML");
+
+        let volumes = rendered["runners"]
+            .as_array()
+            .expect("runners is an array")
+            .iter()
+            .filter_map(|runner| runner.get("docker")?.get("volumes")?.as_array())
+            .flatten()
+            .filter_map(toml::Value::as_str);
+
+        let args = manager.colima_args("colima");
+        let mounts: Vec<&str> = args
+            .windows(2)
+            .filter(|pair| pair[0] == "--mount")
+            .map(|pair| pair[1].trim_end_matches(":w"))
+            .collect();
+        assert!(!mounts.is_empty(), "the agent declares no mounts");
+
+        let mut checked = 0;
+        for volume in volumes {
+            let source = volume.split(':').next().expect("a volume has a source");
+            if !source.starts_with('/') || source.starts_with(home.to_str().expect("UTF-8 home")) {
+                continue;
+            }
+            assert!(
+                mounts.iter().any(|mount| source.starts_with(mount)),
+                "{source} is bound into containers but colima does not mount it"
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "no host-side bind sources were checked");
     }
 
     #[test]
