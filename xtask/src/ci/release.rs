@@ -69,6 +69,15 @@ pub(crate) fn xcframework(
 
 pub(crate) fn docs(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
     require_os("macos", "Apple documentation release")?;
+    // The documentation is generated against the local Swift package, and the
+    // package resolves its binary target from the debug build tree. Without
+    // it the manifest itself refuses to load, long before anything is
+    // documented, so this job builds the framework it reads.
+    process.run(
+        "just",
+        &["platform", "apple", "xcframework", "--profile", "debug"],
+        "Apple XCFramework",
+    )?;
     process.run("just", &["platform", "apple", "doc"], "Apple documentation")?;
     zip_directory(
         process,

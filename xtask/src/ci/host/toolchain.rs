@@ -126,25 +126,43 @@ impl<'a> ToolchainInstaller<'a> {
             &["set", "profile", "minimal"],
             "set Rust installation profile",
         )?;
+        // `rust-src` is not optional here. Anything reaching for `-Zbuild-std`
+        // needs it, and third-party tools reach for it through the channel
+        // names rather than the pinned toolchain: `cargo swift` and the
+        // sanitizer both asked for plain `nightly`, and the documentation
+        // build asked for stable. Installing the component only on the pinned
+        // nightly left each of them failing on a missing standard library.
+        for toolchain in [
+            &self.config.pins.stable_toolchain,
+            &self.config.pins.msrv_toolchain,
+            &self.config.pins.nightly_toolchain,
+        ] {
+            run(
+                &["toolchain", "install", toolchain, "--component", "rust-src"],
+                "install pinned Rust toolchain",
+            )?;
+        }
         run(
-            &["toolchain", "install", &self.config.pins.stable_toolchain],
-            "install stable Rust",
-        )?;
-        run(
-            &["toolchain", "install", &self.config.pins.msrv_toolchain],
-            "install project MSRV",
+            &[
+                "component",
+                "add",
+                "rustfmt",
+                "--toolchain",
+                &self.config.pins.nightly_toolchain,
+            ],
+            "install nightly formatter",
         )?;
         run(
             &[
                 "toolchain",
                 "install",
-                &self.config.pins.nightly_toolchain,
+                "nightly",
                 "--component",
                 "rust-src",
-                "--component",
-                "rustfmt",
+                "--profile",
+                "minimal",
             ],
-            "install pinned nightly Rust",
+            "install the nightly channel third-party tools resolve",
         )?;
         run(
             &["default", &self.config.pins.stable_toolchain],
