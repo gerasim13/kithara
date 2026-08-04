@@ -28,6 +28,11 @@ stages:
 variables:
   CARGO_INCREMENTAL: "0"
   GIT_DEPTH: "0"
+  # Cleaning the tree between jobs deleted the build directory with it, so
+  # every job relinked the whole workspace and the compiler cache could only
+  # hide part of it. Keep the two build directories; everything else is still
+  # removed, so a job never sees a file the commit does not carry.
+  GIT_CLEAN_FLAGS: -ffdx -e target -e target-flash-off
   KITHARA_CI_HOST_CONFIG: /etc/kithara-ci/host.toml
   RUST_BACKTRACE: "1"
   RUSTC_WRAPPER: sccache
