@@ -143,6 +143,14 @@ pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let swiftpm_cache = environment.swiftpm_cache.clone();
     let temp = environment.temp.clone();
     let process = Process::new(&ctx.root, environment.vars());
+    // sccache is a daemon, and a running one keeps the cache directory it was
+    // started with — a client inherits the server's configuration, not its
+    // own. An executor that outlives a job therefore carries the previous
+    // job's cache location into this one, and a stale location that no longer
+    // exists fails every compilation while reporting only that a C compiler
+    // exited 254. Retire the server so it restarts with what this job asked
+    // for; the cache on disk is untouched.
+    process.best_effort("sccache", &["--stop-server"], "retire the compiler cache");
 
     let result = match args.lane {
         Lane::AppleLint => lane::apple::lint(&process, &ci_config),
