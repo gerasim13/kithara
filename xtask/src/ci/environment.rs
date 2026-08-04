@@ -177,6 +177,11 @@ impl CiEnvironment {
             "RUSTUP_HOME",
             env::var_os("RUSTUP_HOME").unwrap_or_else(|| home.join(".rustup").into_os_string()),
         );
+        insert(
+            &mut vars,
+            "KITHARA_REAPI_DECLARED_INPUTS",
+            declared_inputs(config, &home),
+        );
         insert(&mut vars, "SCCACHE_BASEDIRS", &project_root);
         insert(&mut vars, "SCCACHE_CACHE_SIZE", &config.host.sccache_size);
         insert(&mut vars, "SCCACHE_DIR", sccache_dir);
@@ -353,15 +358,53 @@ fn physical_memory_gib() -> Option<u64> {
     None
 }
 
+/// Roots outside the checkout that a build legitimately reads: the platform
+/// SDKs, the toolchains, and the package manager whose headers the vendored C
+/// dependencies include. The reuse tool hides everything it was not told about.
+fn declared_inputs(config: &CiConfig, home: &Path) -> OsString {
+    let mut roots: Vec<PathBuf> = vec![
+        home.join(".cargo"),
+        home.join(".rustup"),
+        config.host.host_root.join("toolchains"),
+    ];
+    if cfg!(target_os = "macos") {
+        roots.extend([
+            config.host.android_home.clone(),
+            config.host.brew_root.clone(),
+            config.host.macos_guest_xcode_developer_dir.clone(),
+            config.host.host_xcode_developer_dir.clone(),
+            PathBuf::from("/Library/Developer/CommandLineTools"),
+        ]);
+    }
+    roots.retain(|root| root.is_dir());
+    roots.dedup();
+    let joined: Vec<String> = roots
+        .iter()
+        .map(|root| root.display().to_string())
+        .collect();
+    OsString::from(joined.join(":"))
+}
+
 fn install_cargo_shim(bin: &Path, cargo: &Path) -> Result<PathBuf> {
     fs::create_dir_all(bin)
         .with_context(|| format!("creating the Cargo shim directory {}", bin.display()))?;
+    // The declared inputs come through the environment as a colon-separated
+    // list: build scripts read headers and SDKs that live outside the
+    // workspace — the Android NDK first among them — and the sandbox hides
+    // anything it was not told about. `zstd-sys` reported it as a missing
+    // `string.h`, which says nothing about a sandbox at all.
     let script = format!(
         "#!/bin/sh\n\
          if [ -n \"${{KITHARA_REAPI_ACTIVE:-}}\" ]; then exec {cargo} \"$@\"; fi\n\
          KITHARA_REAPI_ACTIVE=1 export KITHARA_REAPI_ACTIVE\n\
          unset RUSTC_WRAPPER\n\
-         exec {cargo} reapi --snapshot-policy off \"$@\"\n",
+         declared=\"\"\n\
+         IFS=:\n\
+         for root in ${{KITHARA_REAPI_DECLARED_INPUTS:-}}; do\n\
+         \x20 [ -n \"$root\" ] && declared=\"$declared --declared-input $root\"\n\
+         done\n\
+         unset IFS\n\
+         exec {cargo} reapi --snapshot-policy off $declared \"$@\"\n",
         cargo = cargo.display()
     );
     let shim = bin.join("cargo");
