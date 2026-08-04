@@ -63,6 +63,14 @@ pub(crate) fn run(cmd: AndroidCommand, ctx: &Ctx) -> Result<()> {
     }
 }
 
+fn has_kotlin_source(path: &Path) -> Result<bool> {
+    let mut entries = fs::read_dir(path).with_context(|| format!("read_dir {}", path.display()))?;
+    entries.try_fold(false, |found, entry| {
+        let entry = entry.with_context(|| format!("read_dir {}", path.display()))?;
+        Ok(found || entry.path().extension().is_some_and(|kind| kind == "kt"))
+    })
+}
+
 fn recreate_dir(path: &Path) -> Result<()> {
     if path.exists() {
         fs::remove_dir_all(path).with_context(|| format!("remove {}", path.display()))?;
@@ -131,7 +139,18 @@ pub(crate) fn run_build(profile: BuildProfile, android: &AndroidConfig) -> Resul
         ]);
 
     if matches!(profile, BuildProfile::Release) {
-        cmd.arg("--release");
+        // `uniffi-bindgen --library` reads the interface out of the static
+        // symbol table, and the release profile strips it. The dynamic table
+        // survives, so the library still loads and still exports every entry
+        // point — the generator simply finds no components, writes no Kotlin,
+        // and exits successfully, leaving the Gradle compile to fail on every
+        // import of the bindings. Keep the names through this build; Gradle
+        // strips the library again on its way into the AAR.
+        cmd.args([
+            "--release",
+            "--config",
+            "profile.release.strip=\"debuginfo\"",
+        ]);
     }
 
     cmd.current_dir(root);
@@ -180,6 +199,16 @@ pub(crate) fn run_build(profile: BuildProfile, android: &AndroidConfig) -> Resul
     let status = cmd.status().context("failed to run uniffi-bindgen")?;
     if !status.success() {
         bail!("uniffi-bindgen failed");
+    }
+    // A library the generator cannot read is not an error to it: it finds no
+    // components and exits successfully, and the miss only surfaces later as
+    // an unresolved import in Kotlin.
+    if !has_kotlin_source(&kotlin_dir)? {
+        bail!(
+            "uniffi-bindgen wrote no Kotlin into {}; {} carries no readable interface metadata",
+            kotlin_dir.display(),
+            lib_path.display()
+        );
     }
 
     println!("==> Done!");

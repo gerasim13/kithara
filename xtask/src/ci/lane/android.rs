@@ -31,11 +31,14 @@ pub(crate) fn test(process: &Process, config: &CiConfig) -> Result<()> {
         "Android emulator launch",
     )?;
 
-    let mut gradle = process.command(if cfg!(windows) {
-        "android/gradlew.bat"
-    } else {
-        "android/gradlew"
-    });
+    let mut gradle = process.command_in(
+        if cfg!(windows) {
+            "android/gradlew.bat"
+        } else {
+            "android/gradlew"
+        },
+        "android",
+    );
     gradle.args([
         ":lib:connectedDebugAndroidTest",
         "-x",

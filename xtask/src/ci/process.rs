@@ -23,8 +23,18 @@ impl Process {
     }
 
     pub(crate) fn command(&self, program: impl AsRef<OsStr>) -> Command {
+        self.command_in(program, "")
+    }
+
+    /// A command that runs inside a subdirectory of the checkout. Build tools
+    /// that locate their project by walking up from the working directory —
+    /// Gradle looks for the settings file — need the directory that owns them,
+    /// not the workspace root.
+    pub(crate) fn command_in(&self, program: impl AsRef<OsStr>, relative: &str) -> Command {
         let mut command = Command::new(program);
-        command.current_dir(&self.root).envs(&self.vars);
+        command
+            .current_dir(self.root.join(relative))
+            .envs(&self.vars);
         command
     }
 
