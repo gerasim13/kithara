@@ -91,6 +91,7 @@ impl CiEnvironment {
         let fixture_cache = cache_root.join("fixtures");
         let npm_cache = cache_root.join("npm");
         let sccache_dir = cache_root.join("sccache");
+        let reapi_cache = cache_root.join("reapi");
         let swiftpm_cache = cache_root.join("swiftpm");
         let project_root =
             env::var_os("CI_PROJECT_DIR").map_or_else(|| ctx.root.clone(), PathBuf::from);
@@ -104,6 +105,7 @@ impl CiEnvironment {
             &fixture_cache,
             &npm_cache,
             &sccache_dir,
+            &reapi_cache,
             &swiftpm_cache,
             &temp,
         ] {
@@ -121,7 +123,8 @@ impl CiEnvironment {
         .with_context(|| format!("creating CI cache lease {}", active_marker.display()))?;
 
         let mut vars = BTreeMap::new();
-        set_path(&mut vars, &home, config)?;
+        let cargo_shim = install_cargo_shim(&cache_root, &home.join(".cargo/bin/cargo"))?;
+        set_path(&mut vars, &home, config, &cargo_shim)?;
         insert(&mut vars, "CARGO_HOME", cargo_home);
         insert(&mut vars, "CARGO_INCREMENTAL", "0");
         insert(&mut vars, "CARGO_TARGET_DIR", target);
@@ -133,6 +136,11 @@ impl CiEnvironment {
             &config.pins.nightly_toolchain,
         );
         insert(&mut vars, "npm_config_cache", npm_cache);
+        // Shared build reuse across worktrees. The cache is scoped by
+        // trust and platform like every other store here, so an untrusted
+        // pipeline cannot publish into one a trusted pipeline reads.
+        insert(&mut vars, "CARGO_REAPI_BACKEND", "cache");
+        insert(&mut vars, "CARGO_REAPI_CACHE_DIR", &reapi_cache);
         insert(&mut vars, "RUSTC_WRAPPER", "sccache");
         insert(
             &mut vars,
@@ -245,8 +253,54 @@ fn used_bytes(path: &Path) -> Result<u64> {
     Ok(total.saturating_sub(available))
 }
 
-fn set_path(vars: &mut BTreeMap<OsString, OsString>, home: &Path, config: &CiConfig) -> Result<()> {
-    let mut paths = vec![home.join(".cargo/bin")];
+/// Route every Cargo invocation through `cargo reapi` by putting a shim ahead
+/// of the real one. The tool wraps a Cargo command rather than installing a
+/// compiler wrapper, and the lanes drive `just` recipes that each call Cargo
+/// several times; naming the wrapper at every call site would mean editing
+/// every recipe and would miss the next one written. The shim re-enters itself
+/// when `cargo reapi` runs Cargo, so it hands over to the real binary whenever
+/// the marker is already set.
+///
+/// Whole-gate snapshots stay off. They are the layer worth having — a hit
+/// restores the build directory and skips Cargo entirely — but the strict
+/// sandbox refuses to start Cargo when the cache backend drives it here, while
+/// the same sandbox under the capture backend builds the workspace without
+/// complaint. Until that is settled the per-action layer is what runs, and it
+/// caches linked outputs, which the compiler cache underneath it cannot.
+///
+/// That compiler cache is dropped for the wrapped call: two caches claiming
+/// `RUSTC_WRAPPER` cannot both have it.
+fn install_cargo_shim(directory: &Path, cargo: &Path) -> Result<PathBuf> {
+    let bin = directory.join("shim");
+    fs::create_dir_all(&bin)
+        .with_context(|| format!("creating the Cargo shim directory {}", bin.display()))?;
+    let script = format!(
+        "#!/bin/sh\n\
+         if [ -n \"${{KITHARA_REAPI_ACTIVE:-}}\" ]; then exec {cargo} \"$@\"; fi\n\
+         KITHARA_REAPI_ACTIVE=1 export KITHARA_REAPI_ACTIVE\n\
+         unset RUSTC_WRAPPER\n\
+         exec {cargo} reapi --snapshot-policy off \"$@\"\n",
+        cargo = cargo.display()
+    );
+    let shim = bin.join("cargo");
+    fs::write(&shim, script)
+        .with_context(|| format!("writing the Cargo shim {}", shim.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&shim, PermissionsExt::from_mode(0o755))
+            .with_context(|| format!("making the Cargo shim executable {}", shim.display()))?;
+    }
+    Ok(bin)
+}
+
+fn set_path(
+    vars: &mut BTreeMap<OsString, OsString>,
+    home: &Path,
+    config: &CiConfig,
+    shim: &Path,
+) -> Result<()> {
+    let mut paths = vec![shim.to_path_buf(), home.join(".cargo/bin")];
     if cfg!(target_os = "macos") {
         paths.extend([
             config.host.android_home.join("cmdline-tools/latest/bin"),

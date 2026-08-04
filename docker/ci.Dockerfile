@@ -37,6 +37,7 @@ ENV WASM_SLIM_TOOLCHAIN=${NIGHTLY_TOOLCHAIN}
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates chromium chromium-driver curl firefox-esr git \
     clang libclang-dev lld pkg-config \
+    bubblewrap socat ripgrep nodejs npm \
     libasound2-dev libdbus-1-dev libssl-dev \
     libavcodec-dev libavformat-dev libavfilter-dev libavdevice-dev \
     libavutil-dev libswresample-dev libswscale-dev libpostproc-dev \
