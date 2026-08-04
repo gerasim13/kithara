@@ -121,7 +121,9 @@ impl CiEnvironment {
         .with_context(|| format!("creating CI cache lease {}", active_marker.display()))?;
 
         let mut vars = BTreeMap::new();
-        let cargo_shim = install_cargo_shim(&cache_root, &home.join(".cargo/bin/cargo"))?;
+        let shim_directory = cache_root.join("shim");
+        let cargo_shim =
+            install_cargo_shim(&shim_directory, &resolve_cargo(&home, &shim_directory)?)?;
         set_path(&mut vars, &home, config, &cargo_shim)?;
         insert(&mut vars, "CARGO_HOME", cargo_home);
         insert(&mut vars, "CARGO_INCREMENTAL", "0");
@@ -139,6 +141,17 @@ impl CiEnvironment {
         // pipeline cannot publish into one a trusted pipeline reads.
         insert(&mut vars, "CARGO_REAPI_BACKEND", "cache");
         insert(&mut vars, "CARGO_REAPI_CACHE_DIR", &reapi_cache);
+        // The tool refuses to start when the memory it is told to plan for
+        // exceeds the machine's own, and the executors differ: the macOS guest
+        // has twelve gigabytes, the container eight, the host twenty-four. Say
+        // what this machine has, less the room the rest of the job needs.
+        if let Some(gib) = physical_memory_gib() {
+            insert(
+                &mut vars,
+                "CARGO_REAPI_RESOURCE_MEMORY_GIB_CAPACITY",
+                gib.saturating_sub(2).max(2).to_string(),
+            );
+        }
         insert(&mut vars, "RUSTC_WRAPPER", "sccache");
         insert(
             &mut vars,
@@ -273,9 +286,56 @@ fn free_bytes(path: &Path) -> Result<u64> {
 ///
 /// That compiler cache is dropped for the wrapped call: two caches claiming
 /// `RUSTC_WRAPPER` cannot both have it.
-fn install_cargo_shim(directory: &Path, cargo: &Path) -> Result<PathBuf> {
-    let bin = directory.join("shim");
-    fs::create_dir_all(&bin)
+/// Where the real Cargo lives on this executor. The macOS guest keeps it under
+/// the CI account's home; the Linux image installs it system-wide with
+/// `CARGO_HOME=/usr/local/cargo`, and a shim pointed at a home that has no
+/// `.cargo` fails every job with `exec: cargo: not found`.
+fn resolve_cargo(home: &Path, shim: &Path) -> Result<PathBuf> {
+    let in_home = home.join(".cargo/bin/cargo");
+    if in_home.is_file() {
+        return Ok(in_home);
+    }
+    env::var_os("PATH")
+        .map(|path| env::split_paths(&path).collect::<Vec<_>>())
+        .unwrap_or_default()
+        .into_iter()
+        // A job that already ran here left the shim on PATH; picking it would
+        // make the shim call itself.
+        .filter(|directory| directory != shim)
+        .map(|directory| directory.join("cargo"))
+        .find(|candidate| candidate.is_file())
+        .context("no cargo on PATH and none under the CI account's home")
+}
+
+/// This machine's memory, in whole gigabytes. Every executor reports it
+/// somewhere different, and a machine that reports nowhere simply goes
+/// unanswered — the caller then leaves the tool to its own default.
+fn physical_memory_gib() -> Option<u64> {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    if cfg!(target_os = "linux") {
+        let text = fs::read_to_string("/proc/meminfo").ok()?;
+        let kilobytes: u64 = text
+            .lines()
+            .find_map(|line| line.strip_prefix("MemTotal:"))?
+            .split_whitespace()
+            .next()?
+            .parse()
+            .ok()?;
+        return Some(kilobytes * 1024 / GIB);
+    }
+    if cfg!(target_os = "macos") {
+        let output = std::process::Command::new("sysctl")
+            .args(["-n", "hw.memsize"])
+            .output()
+            .ok()?;
+        let bytes: u64 = String::from_utf8(output.stdout).ok()?.trim().parse().ok()?;
+        return Some(bytes / GIB);
+    }
+    None
+}
+
+fn install_cargo_shim(bin: &Path, cargo: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(bin)
         .with_context(|| format!("creating the Cargo shim directory {}", bin.display()))?;
     let script = format!(
         "#!/bin/sh\n\
@@ -294,7 +354,7 @@ fn install_cargo_shim(directory: &Path, cargo: &Path) -> Result<PathBuf> {
         fs::set_permissions(&shim, PermissionsExt::from_mode(0o755))
             .with_context(|| format!("making the Cargo shim executable {}", shim.display()))?;
     }
-    Ok(bin)
+    Ok(bin.to_path_buf())
 }
 
 fn set_path(

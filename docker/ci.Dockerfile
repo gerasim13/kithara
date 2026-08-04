@@ -70,7 +70,11 @@ RUN curl -fsSL \
  && tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks \
  && rm /tmp/gitleaks.tar.gz
 
-RUN rustup component add clippy llvm-tools-preview rustfmt \
+# `rust-src` on the default toolchain too: the workspace builds the standard
+# library from source for some targets, and `cargo-semver-checks` inherits that
+# when it runs rustdoc — without the sources every crate it documents fails
+# before it can compare a single signature.
+RUN rustup component add clippy llvm-tools-preview rust-src rustfmt \
  && rustup toolchain install "${NIGHTLY_TOOLCHAIN}" \
       --profile minimal \
       --component rust-src \
