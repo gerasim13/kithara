@@ -244,56 +244,8 @@ impl super::core::ActiveDecode {
             });
             return None;
         }
-        let tail = self.outgoing_tail();
-        self.blender.join_active(generation.blender_profile(), tail);
+        self.blender.join_active(generation.blender_profile());
         Some(std::mem::replace(&mut self.active, generation))
-    }
-
-    /// Stage the outgoing generation's real frames at the cut for the join to
-    /// fade out.
-    ///
-    /// The frames wait in the outgoing generation's own staged queue, so a
-    /// transition abandoned afterwards still plays them through `next()` —
-    /// pulling them forward never costs audio. Alignment is free: the
-    /// incoming's staged head was trimmed to start at the cut, and these frames
-    /// start at the outgoing frontier, which is that same frame.
-    ///
-    /// A tail shorter than the ramp is reported: the fade is only as honest as
-    /// the material behind it, and a fade cut short by whichever bytes happened
-    /// to have arrived is the load-dependent behaviour this join exists to
-    /// remove. The splice cannot wait for it here — `promote_variant` has
-    /// already committed the variant by the time this runs.
-    fn outgoing_tail(&mut self) -> Vec<f32> {
-        let want = u64::try_from(self.blender.join_frames()).unwrap_or(u64::MAX);
-        for _ in 0..Consts::PRIME_STEPS_PER_PASS {
-            if staged_frames(&self.active) >= want {
-                break;
-            }
-            match self.active.next_chunk() {
-                Ok(DecoderChunkOutcome::Chunk(chunk)) => self.active.stage(chunk),
-                Ok(DecoderChunkOutcome::Pending(_) | DecoderChunkOutcome::Eof) | Err(_) => break,
-            }
-        }
-        let staged = staged_frames(&self.active);
-        if staged < want {
-            debug!(staged, want, "join tail shorter than the ramp");
-        }
-        let mut tail = self.blender.take_tail_buffer();
-        let mut remaining = want;
-        while remaining != 0 {
-            let Some(chunk) = self.active.pop_staged() else {
-                break;
-            };
-            let channels = usize::from(chunk.spec().channels.max(1));
-            let frames = u64::from(chunk.meta.frames).min(remaining);
-            let take = usize::try_from(frames)
-                .unwrap_or(usize::MAX)
-                .saturating_mul(channels)
-                .min(chunk.samples.len());
-            tail.extend_from_slice(&chunk.samples[..take]);
-            remaining = remaining.saturating_sub(frames);
-        }
-        tail
     }
 
     pub(crate) fn discard_incoming(&mut self) -> Option<DecoderGeneration> {
@@ -558,12 +510,6 @@ fn staged_ahead(
             ) > duration_for_frames(rate, frame.saturating_sub(outgoing_origin))
         }
     }
-}
-
-fn staged_frames(generation: &DecoderGeneration) -> u64 {
-    generation
-        .staged_span()
-        .map_or(0, |(first, end, _)| end.saturating_sub(first))
 }
 
 fn trim_staged_head(generation: &mut DecoderGeneration, overlap: OverlapSpan) -> bool {

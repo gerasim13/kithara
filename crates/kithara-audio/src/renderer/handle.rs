@@ -111,6 +111,7 @@ mod tests {
     use kithara_events::{DeferredBus, Event, EventBus};
     use kithara_platform::{
         sync::Arc,
+        thread,
         thread::sleep as thread_sleep,
         time::{Duration, Instant, timeout as platform_timeout},
     };

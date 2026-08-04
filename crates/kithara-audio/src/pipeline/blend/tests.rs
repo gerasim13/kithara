@@ -62,75 +62,19 @@ fn single_input_blender_is_bit_exact() {
 }
 
 #[kithara::test]
-fn joining_against_an_identical_tail_is_transparent() {
-    let spec = spec(2, 44_100);
-    let samples = vec![-0.75, 0.5, -0.25, 0.125, 0.9, -0.4];
-    let mut blender = PcmBlender::new(BlenderProfile::new(spec));
-
-    blender.join_active(BlenderProfile::new(spec), samples.clone());
-    let joined = blender.process_active(chunk(spec, samples.clone()));
-
-    for (got, want) in joined.samples.iter().zip(samples.iter()) {
-        assert!((got - want).abs() < 1.0e-6, "join shifted {want} to {got}");
-    }
-}
-
-#[kithara::test]
-fn the_join_opens_on_the_outgoing_tail() {
-    let spec = spec(1, 44_100);
-    let tail = vec![1.0, 1.0];
-    let mut blender = PcmBlender::new(BlenderProfile::new(spec));
-
-    blender.join_active(BlenderProfile::new(spec), tail);
-    let joined = blender.process_active(chunk(spec, vec![-1.0, -1.0]));
-
-    assert!((joined.samples[0] - 1.0).abs() < 1.0e-6);
-    assert!(joined.samples[1].abs() < 1.0e-6);
-}
-
-#[kithara::test]
-fn an_empty_tail_degenerates_to_a_hard_replace() {
-    let spec = spec(2, 44_100);
-    let samples = vec![0.25, -0.25, 0.5, -0.5];
-    let want = samples
-        .iter()
-        .copied()
-        .map(f32::to_bits)
-        .collect::<Vec<_>>();
-    let mut blender = PcmBlender::new(BlenderProfile::new(spec));
-
-    blender.join_active(BlenderProfile::new(spec), Vec::new());
-    let output = blender.process_active(chunk(spec, samples));
-
-    assert_eq!(
-        output
-            .samples
-            .iter()
-            .map(|sample| sample.to_bits())
-            .collect::<Vec<_>>(),
-        want
-    );
-}
-
-#[kithara::test]
 fn replacing_active_profile_accepts_the_new_spec() {
     let initial = spec(2, 44_100);
     let replacement = spec(1, 48_000);
     let mut blender = PcmBlender::new(BlenderProfile::new(initial));
-    blender.join_active(BlenderProfile::new(initial), vec![-1.0, 1.0, 0.0, 0.5]);
-    let joined = blender.process_active(chunk(initial, vec![0.5, -0.5, 1.0, 0.5]));
-    let expected = [-1.0, 1.0, 0.5, 0.5];
-    for (got, want) in joined.samples.iter().zip(expected) {
-        assert!((got - want).abs() < 1.0e-6, "join shifted {want} to {got}");
-    }
+    let _ = blender.process_active(chunk(initial, vec![-0.1, 0.0, 0.1, 0.2, 0.3, 0.4]));
+    blender.join_active(BlenderProfile::new(initial));
+    let joined = blender.process_active(chunk(initial, vec![0.5, 0.6, 0.7, 0.8]));
+    assert!((joined.samples[0] - 0.5).abs() < 1.0e-4);
+    assert!((joined.samples[2] - joined.samples[0] - 0.2).abs() < 1.0e-3);
 
-    blender.join_active(BlenderProfile::new(replacement), vec![0.75, -0.75]);
+    blender.replace_active(BlenderProfile::new(replacement));
 
     let output = blender.process_active(chunk(replacement, vec![0.25, -0.25]));
 
     assert_eq!(output.spec(), replacement);
-    assert_eq!(
-        output.samples.iter().copied().collect::<Vec<_>>(),
-        [0.25, -0.25]
-    );
 }
