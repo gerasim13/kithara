@@ -149,6 +149,15 @@ impl CiEnvironment {
         // Build reuse across the jobs an executor serves.
         insert(&mut vars, "CARGO_REAPI_BACKEND", "cache");
         insert(&mut vars, "CARGO_REAPI_CACHE_DIR", &reapi_cache);
+        // The action log defaults into `target/`, which is inside the tree the
+        // tool's own sandbox governs: writing it back failed with "Operation
+        // not permitted" for every standard-library build script, and on the
+        // guest with a plain I/O error. It belongs beside the cache.
+        insert(
+            &mut vars,
+            "CARGO_REAPI_ACTION_LOG",
+            reapi_cache.join("actions.jsonl"),
+        );
         // The ledger the tool admits work against. It refuses to start when
         // told to plan for more memory than the machine has, and the executors
         // differ — twelve gigabytes in the macOS guest, eight in the container,
