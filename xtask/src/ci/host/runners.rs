@@ -222,7 +222,9 @@ impl<'a> RunnerManager<'a> {
                     ],
                     &logs.join("gitlab-runner.log"),
                     &agent_path,
-                    "<key>KeepAlive</key><true/><key>ProcessType</key><string>Background</string>",
+                    "<key>KeepAlive</key><true/><key>ProcessType</key><string>Background</string>\
+                     <key>SoftResourceLimits</key><dict>\
+                     <key>NumberOfFiles</key><integer>65536</integer></dict>",
                 ),
             ),
             (

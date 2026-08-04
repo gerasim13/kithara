@@ -15,6 +15,9 @@ impl JobVm {
     const BOOT_ATTEMPTS: u32 = 40;
     const BOOT_POLL: Duration = Duration::from_secs(5);
     const WAIT_SECONDS: u32 = 7200;
+    /// macOS ships a 256 descriptor soft limit; the integration suite opens
+    /// far more than that across its cache and segment files.
+    const OPEN_FILES: u32 = 65536;
 }
 
 impl RunnerManager<'_> {
@@ -394,11 +397,13 @@ impl RunnerManager<'_> {
             address,
             &format!(
                 "read -r RUNNER_TOKEN; \
+                 ulimit -n {}; \
                  export PATH=$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; \
                  export DEVELOPER_DIR=\"{}\"; \
                  exec \"{shared}/kithara-tools/gitlab-runner\" run-single --url {} \
                  --token \"$RUNNER_TOKEN\" --executor shell --shell bash --max-builds 1 \
                  --wait-timeout {}",
+                JobVm::OPEN_FILES,
                 self.config.host.macos_guest_xcode_developer_dir.display(),
                 self.config.host.gitlab_origin(),
                 JobVm::WAIT_SECONDS,
