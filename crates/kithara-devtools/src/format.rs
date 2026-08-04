@@ -472,8 +472,8 @@ mod tests {
     use anyhow::Result;
 
     use super::{
-        FileKind, PathFormatTarget, format_path, matches_file_kind, path_format_command,
-        should_skip_dir,
+        FileKind, PathFormatTarget, format_path, matches_file_kind, nightly_toolchain,
+        path_format_command, should_skip_dir,
     };
 
     #[test]
@@ -511,7 +511,13 @@ mod tests {
         let rust_command = path_format_command(PathFormatTarget::Rust, root, rust);
         assert_eq!(rust_command.program, "rustup");
         assert_eq!(rust_command.args.first(), Some(&OsString::from("run")));
-        assert!(rust_command.args.iter().any(|arg| arg == "nightly"));
+        assert!(
+            rust_command
+                .args
+                .iter()
+                .any(|arg| arg == nightly_toolchain().as_str()),
+            "rustfmt must run under the toolchain the repository pins"
+        );
         assert!(rust_command.args.iter().any(|arg| arg == "--edition"));
         assert!(rust_command.args.iter().any(|arg| arg == "2024"));
         assert!(
