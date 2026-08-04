@@ -127,7 +127,12 @@ impl CiEnvironment {
         .with_context(|| format!("creating CI cache lease {}", active_marker.display()))?;
 
         let mut vars = BTreeMap::new();
-        let shim_directory = cache_root.join("shim");
+        // Beside the reuse cache on the executor's own disk, for the same
+        // reason and one more: the shim names the Cargo of the machine that
+        // wrote it, and the host runner and the throwaway guest share one
+        // `trusted/macos-aarch64` cache. Whichever wrote last decided for both,
+        // so a guest job would exec a path that only exists on the host.
+        let shim_directory = temp.join("shim");
         let cargo_shim =
             install_cargo_shim(&shim_directory, &resolve_cargo(&home, &shim_directory)?)?;
         set_path(&mut vars, &home, config, &cargo_shim)?;
