@@ -362,6 +362,11 @@ impl RunnerManager<'_> {
             .unwrap_or_default();
         [
             ("Xcode.app", xcode, true),
+            // `kithara-encode` links ffmpeg and several `*-sys` crates shell
+            // out to cmake and pkg-config, none of which a stock macOS image
+            // carries. The guest links this back to the canonical prefix so
+            // the dylib install names baked into these formulae resolve.
+            ("kithara-brew", self.config.host.brew_root.clone(), true),
             ("kithara-tools", root.join("toolchains/shared-bin"), true),
             // virtiofs cannot serve rustup's downloads, so the guest must find
             // every toolchain already installed here.
@@ -381,11 +386,13 @@ impl RunnerManager<'_> {
 
     fn serve_one_job(&self, address: &str) -> Result<()> {
         let shared = self.config.host.macos_guest_shared_root.display();
+        let brew = self.config.host.brew_root.join("bin");
+        let brew = brew.display();
         let tokens = Tokens::load(&self.ci_home().join(".config/kithara-ci"))?;
         self.guest_shell(
             address,
             &format!(
-                "export PATH=$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; \
+                "export PATH=$HOME/.cargo/bin:{brew}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; \
                  \"{shared}/kithara-tools/kithara-ci\" ci host --config \
                  \"{shared}/kithara-tools/host.toml\" --pins \
                  \"{shared}/kithara-tools/pins.toml\" guest-prepare"
@@ -398,7 +405,7 @@ impl RunnerManager<'_> {
             &format!(
                 "read -r RUNNER_TOKEN; \
                  ulimit -n {}; \
-                 export PATH=$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; \
+                 export PATH=$HOME/.cargo/bin:{brew}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; \
                  export DEVELOPER_DIR=\"{}\"; \
                  exec \"{shared}/kithara-tools/gitlab-runner\" run-single --url {} \
                  --token \"$RUNNER_TOKEN\" --executor shell --shell bash --max-builds 1 \

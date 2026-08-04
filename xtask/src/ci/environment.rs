@@ -79,7 +79,8 @@ impl CiEnvironment {
 
         let trust = CacheTrust::from_environment()?;
         let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
-        let cache_root = shared_root.join(trust.as_str()).join(platform);
+        let trust_root = shared_root.join(trust.as_str());
+        let cache_root = trust_root.join(platform);
         let active_marker = cache_root.join(".kithara-ci-active");
         let cargo_home = cache_root.join("cargo");
         let gradle_home = cache_root.join("gradle");
@@ -90,16 +91,17 @@ impl CiEnvironment {
         let project_root =
             env::var_os("CI_PROJECT_DIR").map_or_else(|| ctx.root.clone(), PathBuf::from);
         let target = project_root.join("target");
-        // Scratch space has two constraints. It must sit outside the checkout,
-        // or tools that walk the working tree (the architecture reporter, for
-        // one) trip over the temporary copies they just created. And it must
-        // stay short: macOS caps Unix socket paths at SUN_LEN, which a path
-        // under the cache root already exceeds.
-        let temp = config
-            .host
-            .host_root
-            .join("workspaces/tmp")
-            .join(trust.as_str());
+        // Scratch space has three constraints. It must sit outside the
+        // checkout, or tools that walk the working tree (the architecture
+        // reporter, for one) trip over the temporary copies they just
+        // created. It must stay short, because macOS caps Unix socket paths
+        // at SUN_LEN and the per-platform cache directory already eats into
+        // that budget. And it must resolve on the executor that runs the
+        // lane: the macOS jobs run inside a guest VM that sees the shared
+        // root over virtiofs and has no host volume at all. Sitting beside
+        // the platform cache puts it under the trust directory the host
+        // cleanup already prunes.
+        let temp = trust_root.join("tmp");
 
         for directory in [
             &cache_root,
