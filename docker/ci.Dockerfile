@@ -28,6 +28,7 @@ ARG SCCACHE_VERSION
 ARG SIMILARITY_RS_VERSION
 ARG TAPLO_CLI_VERSION
 ARG TIDY_JSON_VERSION
+ARG TRUNK_VERSION
 ARG TYPOS_CLI_VERSION
 ARG WASM_BINDGEN_CLI_VERSION
 ARG WASM_PACK_VERSION
@@ -110,6 +111,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cargo install --locked --version "${SIMILARITY_RS_VERSION}" similarity-rs \
  && cargo install --locked --version "${TAPLO_CLI_VERSION}" taplo-cli \
  && cargo install --locked --version "${TIDY_JSON_VERSION}" tidy-json \
+ && cargo install --locked --version "${TRUNK_VERSION}" trunk \
  && cargo install --locked --version "${TYPOS_CLI_VERSION}" typos-cli \
  && cargo install --locked --version "${WASM_BINDGEN_CLI_VERSION}" wasm-bindgen-cli \
  && cargo install --locked --version "${WASM_PACK_VERSION}" wasm-pack \

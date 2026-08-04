@@ -137,6 +137,7 @@ impl RunnerManager<'_> {
             ("SIMILARITY_RS_VERSION", "similarity-rs"),
             ("TAPLO_CLI_VERSION", "taplo-cli"),
             ("TIDY_JSON_VERSION", "tidy-json"),
+            ("TRUNK_VERSION", "trunk"),
             ("TYPOS_CLI_VERSION", "typos-cli"),
             ("WASM_BINDGEN_CLI_VERSION", "wasm-bindgen-cli"),
             ("WASM_PACK_VERSION", "wasm-pack"),

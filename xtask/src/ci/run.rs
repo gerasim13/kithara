@@ -100,6 +100,19 @@ impl Lane {
     }
 }
 
+impl CacheGroup {
+    /// Whether this executor can keep its build-reuse store in the shared
+    /// cache. Every other executor writes to storage it owns — the host's own
+    /// volume, the container's bind mount, the Windows guest's disk — and the
+    /// store survives from one job to the next there. The throwaway macOS
+    /// guest reaches its cache over a virtiofs share, and the tool commits
+    /// blobs with a durable write that the share answers with "Inappropriate
+    /// ioctl for device", so its store lives on the guest and lasts one job.
+    pub(crate) fn keeps_reuse_store_in_shared_cache(self) -> bool {
+        !matches!(self, Self::Macos)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub(crate) enum PipelineKind {
     MergeRequest,
@@ -239,6 +252,16 @@ mod tests {
         assert_eq!(Lane::WebFirefox.cache_group(), CacheGroup::Linux);
         assert_eq!(Lane::ReleaseAndroid.cache_group(), CacheGroup::Host);
         assert_eq!(Lane::WindowsX64.cache_group(), CacheGroup::Windows);
+    }
+
+    /// The reuse store names blobs the tool must commit durably. Only the
+    /// throwaway guest reaches its cache across a share that cannot do that.
+    #[test]
+    fn only_the_guest_keeps_its_reuse_store_off_the_shared_cache() {
+        assert!(!CacheGroup::Macos.keeps_reuse_store_in_shared_cache());
+        for group in [CacheGroup::Host, CacheGroup::Linux, CacheGroup::Windows] {
+            assert!(group.keeps_reuse_store_in_shared_cache());
+        }
     }
 
     #[test]

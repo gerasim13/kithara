@@ -93,13 +93,15 @@ impl CiEnvironment {
             env::var_os("CI_PROJECT_DIR").map_or_else(|| ctx.root.clone(), PathBuf::from);
         let target = project_root.join("target");
         let temp = scratch_root().join(trust.as_str());
-        // On the executor's own disk rather than in the shared cache: the tool
-        // commits blobs with a durable write, and the macOS guest reaches the
-        // shared cache over a virtiofs share that answers that request with
-        // "Inappropriate ioctl for device" — every compilation in the job then
-        // fails. Reuse still spans whatever an executor keeps between jobs, and
-        // the trust scoping is the same as everywhere else here.
-        let reapi_cache = temp.join("reapi");
+        // Where reuse accumulates. Executors that own their storage keep it in
+        // the shared cache, so it spans jobs and sits on the CI volume rather
+        // than the system disk; the throwaway guest keeps it locally because
+        // its share cannot commit a blob.
+        let reapi_cache = if lane.cache_group().keeps_reuse_store_in_shared_cache() {
+            cache_root.join("reapi")
+        } else {
+            temp.join("reapi")
+        };
 
         for directory in [
             &cache_root,
@@ -146,39 +148,7 @@ impl CiEnvironment {
             &config.pins.nightly_toolchain,
         );
         insert(&mut vars, "npm_config_cache", npm_cache);
-        // Build reuse across the jobs an executor serves.
-        insert(&mut vars, "CARGO_REAPI_BACKEND", "cache");
-        insert(&mut vars, "CARGO_REAPI_CACHE_DIR", &reapi_cache);
-        // The action log defaults into `target/`, which is inside the tree the
-        // tool's own sandbox governs: writing it back failed with "Operation
-        // not permitted" for every standard-library build script, and on the
-        // guest with a plain I/O error. It belongs beside the cache.
-        insert(
-            &mut vars,
-            "CARGO_REAPI_ACTION_LOG",
-            reapi_cache.join("actions.jsonl"),
-        );
-        // The ledger the tool admits work against. It refuses to start when
-        // told to plan for more memory than the machine has, and the executors
-        // differ — twelve gigabytes in the macOS guest, eight in the container,
-        // twenty-four on the host — so each states its own. It is an admission
-        // cap rather than a reservation, and holding some back only narrowed
-        // the window: a link the tool sizes at seven gigabytes then had nothing
-        // to overlap with, and the heaviest lane stalled waiting for a lease.
-        if let Some(gib) = physical_memory_gib() {
-            insert(
-                &mut vars,
-                "CARGO_REAPI_RESOURCE_MEMORY_GIB_CAPACITY",
-                gib.to_string(),
-            );
-        }
-        if let Ok(cores) = std::thread::available_parallelism() {
-            insert(
-                &mut vars,
-                "CARGO_REAPI_RESOURCE_CPU_CAPACITY",
-                cores.get().to_string(),
-            );
-        }
+        set_reuse_vars(&mut vars, &reapi_cache);
         insert(&mut vars, "RUSTC_WRAPPER", "sccache");
         insert(
             &mut vars,
@@ -375,6 +345,44 @@ fn physical_memory_gib() -> Option<u64> {
         return Some(bytes / GIB);
     }
     None
+}
+
+/// How the build-reuse tool is pointed at this executor: which store it
+/// writes to, where its own log goes, and the ledger it admits work against.
+fn set_reuse_vars(vars: &mut BTreeMap<OsString, OsString>, reapi_cache: &Path) {
+    // Build reuse across the jobs an executor serves.
+    insert(vars, "CARGO_REAPI_BACKEND", "cache");
+    insert(vars, "CARGO_REAPI_CACHE_DIR", reapi_cache);
+    // The action log defaults into `target/`, which is inside the tree the
+    // tool's own sandbox governs: writing it back failed with "Operation
+    // not permitted" for every standard-library build script, and on the
+    // guest with a plain I/O error. It belongs beside the cache.
+    insert(
+        vars,
+        "CARGO_REAPI_ACTION_LOG",
+        reapi_cache.join("actions.jsonl"),
+    );
+    // The ledger the tool admits work against. It refuses to start when
+    // told to plan for more memory than the machine has, and the executors
+    // differ — twelve gigabytes in the macOS guest, eight in the container,
+    // twenty-four on the host — so each states its own. It is an admission
+    // cap rather than a reservation, and holding some back only narrowed
+    // the window: a link the tool sizes at seven gigabytes then had nothing
+    // to overlap with, and the heaviest lane stalled waiting for a lease.
+    if let Some(gib) = physical_memory_gib() {
+        insert(
+            vars,
+            "CARGO_REAPI_RESOURCE_MEMORY_GIB_CAPACITY",
+            gib.to_string(),
+        );
+    }
+    if let Ok(cores) = std::thread::available_parallelism() {
+        insert(
+            vars,
+            "CARGO_REAPI_RESOURCE_CPU_CAPACITY",
+            cores.get().to_string(),
+        );
+    }
 }
 
 /// Roots outside the checkout that a build legitimately reads: the platform
