@@ -34,7 +34,6 @@ pub(crate) struct CiPins {
     pub(crate) macos_guest_build: String,
     pub(crate) msrv_toolchain: String,
     pub(crate) nightly_toolchain: String,
-    pub(crate) sandbox_runtime_version: String,
     pub(crate) stable_toolchain: String,
     /// Serialised last: TOML requires tables after plain values.
     pub(crate) cargo_tools: BTreeMap<String, String>,
@@ -79,10 +78,6 @@ impl CiPins {
             ("macos_guest_build", self.macos_guest_build.as_str()),
             ("msrv_toolchain", self.msrv_toolchain.as_str()),
             ("nightly_toolchain", self.nightly_toolchain.as_str()),
-            (
-                "sandbox_runtime_version",
-                self.sandbox_runtime_version.as_str(),
-            ),
             ("stable_toolchain", self.stable_toolchain.as_str()),
         ] {
             if value.trim().is_empty() {

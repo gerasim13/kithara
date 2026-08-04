@@ -80,7 +80,6 @@ impl<'a> ToolchainInstaller<'a> {
         self.require_user(&self.config.host.ci_user)?;
         self.install_rust()?;
         self.install_cargo_tools()?;
-        self.install_sandbox_provider()?;
         self.install_android()?;
         self.install_docker_config()?;
         info!("CI user toolchain installed");
@@ -229,27 +228,6 @@ impl<'a> ToolchainInstaller<'a> {
             ],
             "install nightly WASM target",
         )
-    }
-
-    /// The build-reuse tool refuses any sandbox provider but the exact release
-    /// it was audited against, so the version is pinned and installed here
-    /// rather than left to whatever npm resolves on the day.
-    fn install_sandbox_provider(&self) -> Result<()> {
-        let npm = self.config.host.brew_tool("npm");
-        if !npm.is_file() {
-            bail!("missing Homebrew npm: {}", npm.display());
-        }
-        let mut command = self.process.command(&npm);
-        command.args([
-            "install",
-            "--global",
-            &format!(
-                "@anthropic-ai/sandbox-runtime@{}",
-                self.config.pins.sandbox_runtime_version
-            ),
-        ]);
-        self.process
-            .run_command(&mut command, "install the pinned sandbox provider")
     }
 
     fn install_cargo_tools(&self) -> Result<()> {

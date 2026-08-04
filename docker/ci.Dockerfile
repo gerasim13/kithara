@@ -9,7 +9,6 @@ ARG CARGO_LLVM_COV_VERSION
 ARG CARGO_MACHETE_VERSION
 ARG CARGO_MUTANTS_VERSION
 ARG CARGO_NEXTEST_VERSION
-ARG CARGO_REAPI_VERSION
 ARG CARGO_SEMVER_CHECKS_VERSION
 ARG CARGO_SHEAR_VERSION
 ARG CARGO_SORT_VERSION
@@ -23,7 +22,6 @@ ARG JUST_VERSION
 ARG MD_FORMATTER_VERSION
 ARG MSRV_TOOLCHAIN
 ARG NIGHTLY_TOOLCHAIN
-ARG SANDBOX_RUNTIME_VERSION
 ARG SCCACHE_VERSION
 ARG SIMILARITY_RS_VERSION
 ARG TAPLO_CLI_VERSION
@@ -77,10 +75,6 @@ RUN curl -fsSL \
 # library from source for some targets, and `cargo-semver-checks` inherits that
 # when it runs rustdoc — without the sources every crate it documents fails
 # before it can compare a single signature.
-# The reuse cache runs each build action under Anthropic's sandbox runtime,
-# and refuses any version but the one it was built against.
-RUN npm install --global "@anthropic-ai/sandbox-runtime@${SANDBOX_RUNTIME_VERSION}"
-
 RUN rustup component add clippy llvm-tools-preview rust-src rustfmt \
  && rustup toolchain install "${NIGHTLY_TOOLCHAIN}" \
       --profile minimal \
@@ -101,7 +95,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cargo install --locked --version "${CARGO_MACHETE_VERSION}" cargo-machete \
  && cargo install --locked --version "${CARGO_MUTANTS_VERSION}" cargo-mutants \
  && cargo install --locked --version "${CARGO_NEXTEST_VERSION}" cargo-nextest \
- && cargo install --locked --version "${CARGO_REAPI_VERSION}" cargo-reapi \
  && cargo install --locked --version "${CARGO_SEMVER_CHECKS_VERSION}" cargo-semver-checks \
  && cargo install --locked --version "${CARGO_SHEAR_VERSION}" cargo-shear \
  && cargo install --locked --version "${CARGO_SORT_VERSION}" cargo-sort \

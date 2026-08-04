@@ -93,15 +93,6 @@ impl CiEnvironment {
             env::var_os("CI_PROJECT_DIR").map_or_else(|| ctx.root.clone(), PathBuf::from);
         let target = project_root.join("target");
         let temp = scratch_root().join(trust.as_str());
-        // Where reuse accumulates. Executors that own their storage keep it in
-        // the shared cache, so it spans jobs and sits on the CI volume rather
-        // than the system disk; the throwaway guest keeps it locally because
-        // its share cannot commit a blob.
-        let reapi_cache = if lane.cache_group().keeps_reuse_store_in_shared_cache() {
-            cache_root.join("reapi")
-        } else {
-            temp.join("reapi")
-        };
 
         for directory in [
             &cache_root,
@@ -110,7 +101,6 @@ impl CiEnvironment {
             &fixture_cache,
             &npm_cache,
             &sccache_dir,
-            &reapi_cache,
             &swiftpm_cache,
             &temp,
         ] {
@@ -128,15 +118,7 @@ impl CiEnvironment {
         .with_context(|| format!("creating CI cache lease {}", active_marker.display()))?;
 
         let mut vars = BTreeMap::new();
-        // Beside the reuse cache on the executor's own disk, for the same
-        // reason and one more: the shim names the Cargo of the machine that
-        // wrote it, and the host runner and the throwaway guest share one
-        // `trusted/macos-aarch64` cache. Whichever wrote last decided for both,
-        // so a guest job would exec a path that only exists on the host.
-        let shim_directory = temp.join("shim");
-        let cargo_shim =
-            install_cargo_shim(&shim_directory, &resolve_cargo(&home, &shim_directory)?)?;
-        set_path(&mut vars, &home, config, &cargo_shim)?;
+        set_path(&mut vars, &home, config)?;
         insert(&mut vars, "CARGO_HOME", cargo_home);
         insert(&mut vars, "CARGO_INCREMENTAL", "0");
         insert(&mut vars, "CARGO_TARGET_DIR", target);
@@ -148,17 +130,11 @@ impl CiEnvironment {
             &config.pins.nightly_toolchain,
         );
         insert(&mut vars, "npm_config_cache", npm_cache);
-        set_reuse_vars(&mut vars, &reapi_cache);
         insert(&mut vars, "RUSTC_WRAPPER", "sccache");
         insert(
             &mut vars,
             "RUSTUP_HOME",
             env::var_os("RUSTUP_HOME").unwrap_or_else(|| home.join(".rustup").into_os_string()),
-        );
-        insert(
-            &mut vars,
-            "KITHARA_REAPI_DECLARED_INPUTS",
-            declared_inputs(config, &home),
         );
         insert(&mut vars, "SCCACHE_BASEDIRS", &project_root);
         insert(&mut vars, "SCCACHE_CACHE_SIZE", &config.host.sccache_size);
@@ -282,177 +258,8 @@ fn free_bytes(path: &Path) -> Result<u64> {
         .with_context(|| format!("reading available space for {}", path.display()))
 }
 
-/// Route every Cargo invocation through `cargo reapi` by putting a shim ahead
-/// of the real one. The tool wraps a Cargo command rather than installing a
-/// compiler wrapper, and the lanes drive `just` recipes that each call Cargo
-/// several times; naming the wrapper at every call site would mean editing
-/// every recipe and would miss the next one written. The shim re-enters itself
-/// when `cargo reapi` runs Cargo, so it hands over to the real binary whenever
-/// the marker is already set.
-///
-/// Whole-gate snapshots stay off. They are the layer worth having — a hit
-/// restores the build directory and skips Cargo entirely — but the strict
-/// sandbox refuses to start Cargo when the cache backend drives it here, while
-/// the same sandbox under the capture backend builds the workspace without
-/// complaint. Until that is settled the per-action layer is what runs, and it
-/// caches linked outputs, which the compiler cache underneath it cannot.
-///
-/// That compiler cache is dropped for the wrapped call: two caches claiming
-/// `RUSTC_WRAPPER` cannot both have it.
-/// Where the real Cargo lives on this executor. The macOS guest keeps it under
-/// the CI account's home; the Linux image installs it system-wide with
-/// `CARGO_HOME=/usr/local/cargo`, and a shim pointed at a home that has no
-/// `.cargo` fails every job with `exec: cargo: not found`.
-fn resolve_cargo(home: &Path, shim: &Path) -> Result<PathBuf> {
-    let in_home = home.join(".cargo/bin/cargo");
-    if in_home.is_file() {
-        return Ok(in_home);
-    }
-    env::var_os("PATH")
-        .map(|path| env::split_paths(&path).collect::<Vec<_>>())
-        .unwrap_or_default()
-        .into_iter()
-        // A job that already ran here left the shim on PATH; picking it would
-        // make the shim call itself.
-        .filter(|directory| directory != shim)
-        .map(|directory| directory.join("cargo"))
-        .find(|candidate| candidate.is_file())
-        .context("no cargo on PATH and none under the CI account's home")
-}
-
-/// This machine's memory, in whole gigabytes. Every executor reports it
-/// somewhere different, and a machine that reports nowhere simply goes
-/// unanswered — the caller then leaves the tool to its own default.
-fn physical_memory_gib() -> Option<u64> {
-    const GIB: u64 = 1024 * 1024 * 1024;
-    if cfg!(target_os = "linux") {
-        let text = fs::read_to_string("/proc/meminfo").ok()?;
-        let kilobytes: u64 = text
-            .lines()
-            .find_map(|line| line.strip_prefix("MemTotal:"))?
-            .split_whitespace()
-            .next()?
-            .parse()
-            .ok()?;
-        return Some(kilobytes * 1024 / GIB);
-    }
-    if cfg!(target_os = "macos") {
-        let output = std::process::Command::new("sysctl")
-            .args(["-n", "hw.memsize"])
-            .output()
-            .ok()?;
-        let bytes: u64 = String::from_utf8(output.stdout).ok()?.trim().parse().ok()?;
-        return Some(bytes / GIB);
-    }
-    None
-}
-
-/// How the build-reuse tool is pointed at this executor: which store it
-/// writes to, where its own log goes, and the ledger it admits work against.
-fn set_reuse_vars(vars: &mut BTreeMap<OsString, OsString>, reapi_cache: &Path) {
-    // Build reuse across the jobs an executor serves.
-    insert(vars, "CARGO_REAPI_BACKEND", "cache");
-    insert(vars, "CARGO_REAPI_CACHE_DIR", reapi_cache);
-    // The action log defaults into `target/`, which is inside the tree the
-    // tool's own sandbox governs: writing it back failed with "Operation
-    // not permitted" for every standard-library build script, and on the
-    // guest with a plain I/O error. It belongs beside the cache.
-    insert(
-        vars,
-        "CARGO_REAPI_ACTION_LOG",
-        reapi_cache.join("actions.jsonl"),
-    );
-    // The ledger the tool admits work against. It refuses to start when
-    // told to plan for more memory than the machine has, and the executors
-    // differ — twelve gigabytes in the macOS guest, eight in the container,
-    // twenty-four on the host — so each states its own. It is an admission
-    // cap rather than a reservation, and holding some back only narrowed
-    // the window: a link the tool sizes at seven gigabytes then had nothing
-    // to overlap with, and the heaviest lane stalled waiting for a lease.
-    if let Some(gib) = physical_memory_gib() {
-        insert(
-            vars,
-            "CARGO_REAPI_RESOURCE_MEMORY_GIB_CAPACITY",
-            gib.to_string(),
-        );
-    }
-    if let Ok(cores) = std::thread::available_parallelism() {
-        insert(
-            vars,
-            "CARGO_REAPI_RESOURCE_CPU_CAPACITY",
-            cores.get().to_string(),
-        );
-    }
-}
-
-/// Roots outside the checkout that a build legitimately reads: the platform
-/// SDKs, the toolchains, and the package manager whose headers the vendored C
-/// dependencies include. The reuse tool hides everything it was not told about.
-fn declared_inputs(config: &CiConfig, home: &Path) -> OsString {
-    let mut roots: Vec<PathBuf> = vec![
-        home.join(".cargo"),
-        home.join(".rustup"),
-        config.host.host_root.join("toolchains"),
-    ];
-    if cfg!(target_os = "macos") {
-        roots.extend([
-            config.host.android_home.clone(),
-            config.host.brew_root.clone(),
-            config.host.macos_guest_xcode_developer_dir.clone(),
-            config.host.host_xcode_developer_dir.clone(),
-            PathBuf::from("/Library/Developer/CommandLineTools"),
-        ]);
-    }
-    roots.retain(|root| root.is_dir());
-    roots.dedup();
-    let joined: Vec<String> = roots
-        .iter()
-        .map(|root| root.display().to_string())
-        .collect();
-    OsString::from(joined.join(":"))
-}
-
-fn install_cargo_shim(bin: &Path, cargo: &Path) -> Result<PathBuf> {
-    fs::create_dir_all(bin)
-        .with_context(|| format!("creating the Cargo shim directory {}", bin.display()))?;
-    // The declared inputs come through the environment as a colon-separated
-    // list: build scripts read headers and SDKs that live outside the
-    // workspace — the Android NDK first among them — and the sandbox hides
-    // anything it was not told about. `zstd-sys` reported it as a missing
-    // `string.h`, which says nothing about a sandbox at all.
-    let script = format!(
-        "#!/bin/sh\n\
-         if [ -n \"${{KITHARA_REAPI_ACTIVE:-}}\" ]; then exec {cargo} \"$@\"; fi\n\
-         KITHARA_REAPI_ACTIVE=1 export KITHARA_REAPI_ACTIVE\n\
-         unset RUSTC_WRAPPER\n\
-         declared=\"\"\n\
-         IFS=:\n\
-         for root in ${{KITHARA_REAPI_DECLARED_INPUTS:-}}; do\n\
-         \x20 [ -n \"$root\" ] && declared=\"$declared --declared-input $root\"\n\
-         done\n\
-         unset IFS\n\
-         exec {cargo} reapi --snapshot-policy off $declared \"$@\"\n",
-        cargo = cargo.display()
-    );
-    let shim = bin.join("cargo");
-    fs::write(&shim, script)
-        .with_context(|| format!("writing the Cargo shim {}", shim.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&shim, PermissionsExt::from_mode(0o755))
-            .with_context(|| format!("making the Cargo shim executable {}", shim.display()))?;
-    }
-    Ok(bin.to_path_buf())
-}
-
-fn set_path(
-    vars: &mut BTreeMap<OsString, OsString>,
-    home: &Path,
-    config: &CiConfig,
-    shim: &Path,
-) -> Result<()> {
-    let mut paths = vec![shim.to_path_buf(), home.join(".cargo/bin")];
+fn set_path(vars: &mut BTreeMap<OsString, OsString>, home: &Path, config: &CiConfig) -> Result<()> {
+    let mut paths = vec![home.join(".cargo/bin")];
     if cfg!(target_os = "macos") {
         paths.extend([
             config.host.android_home.join("cmdline-tools/latest/bin"),
