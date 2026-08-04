@@ -1,18 +1,55 @@
-linux:portability:
-  extends: .linux-job
+.linux-lane:
+  extends:
+    - .linux-job
+    - .rules-verify
+  stage: linux
+  timeout: 60 minutes
+  needs: []
+
+linux:secrets:
+  extends: .linux-lane
+  timeout: 15 minutes
+  script:
+    - just ci run linux-secrets
+
+linux:check:
+  extends: .linux-lane
+  script:
+    - just ci run linux-check
+
+linux:wasm:
+  extends: .linux-lane
+  script:
+    - just ci run linux-wasm
+
+linux:test:
+  extends:
+    - .linux-job
+    - .rules-integration
   stage: linux
   timeout: 60 minutes
   needs:
-    - apple:required
+    - linux:check
   script:
-    - just ci run linux
-  rules:
-    - if: $KITHARA_PIPELINE_KIND == "merge-request"
-    - if: $KITHARA_PIPELINE_KIND == "quarantine"
-    - if: $KITHARA_PIPELINE_KIND == "main"
-      interruptible: false
-    - if: $KITHARA_PIPELINE_KIND == "nightly"
-      interruptible: false
+    - just ci run linux-test
+  artifacts:
+    when: always
+    expire_in: 30 days
+    reports:
+      junit: target/nextest/ci/junit.xml
+    paths:
+      - target/nextest/ci/junit.xml
+
+linux:coverage:
+  extends:
+    - .linux-job
+    - .rules-nightly
+  stage: linux
+  timeout: 90 minutes
+  needs:
+    - linux:check
+  script:
+    - just ci run linux-coverage
   artifacts:
     when: always
     expire_in: 30 days
@@ -20,7 +57,5 @@ linux:portability:
       coverage_report:
         coverage_format: cobertura
         path: coverage/cobertura.xml
-      junit: target/nextest/ci/junit.xml
     paths:
       - coverage/
-      - target/nextest/ci/junit.xml

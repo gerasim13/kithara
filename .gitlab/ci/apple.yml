@@ -1,19 +1,35 @@
-apple:required:
-  extends: .macos-job
+.apple-job:
+  extends:
+    - .macos-job
+    - .rules-verify
   stage: apple
   timeout: 60 minutes
-  interruptible: true
+
+apple:lint:
+  extends: .apple-job
+  needs: []
   script:
-    - just ci run apple
-  rules:
-    - if: $KITHARA_PIPELINE_KIND == "merge-request"
-    - if: $KITHARA_PIPELINE_KIND == "quarantine"
-    - if: $KITHARA_PIPELINE_KIND == "main"
-      interruptible: false
-    - if: $KITHARA_PIPELINE_KIND == "nightly"
-      interruptible: false
-    - if: $KITHARA_PIPELINE_KIND == "release"
-      interruptible: false
+    - just ci run apple-lint
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - target/quality-report.md
+      - target/trait-mock-audit.md
+      - target/rstest-audit.md
+
+apple:msrv:
+  extends: .apple-job
+  needs: []
+  script:
+    - just ci run apple-msrv
+
+apple:test:
+  extends: .apple-job
+  needs:
+    - apple:lint
+  script:
+    - just ci run apple-test
   artifacts:
     when: always
     expire_in: 30 days
@@ -21,6 +37,53 @@ apple:required:
       junit: target/nextest/ci/junit.xml
     paths:
       - target/nextest/ci/junit.xml
-      - target/quality-report.md
-      - target/trait-mock-audit.md
-      - target/rstest-audit.md
+
+apple:test-flash-off:
+  extends:
+    - .macos-job
+    - .rules-integration
+  stage: apple
+  timeout: 60 minutes
+  needs:
+    - apple:lint
+  script:
+    - just ci run apple-test-flash-off
+  artifacts:
+    when: always
+    expire_in: 30 days
+    reports:
+      junit: target/nextest/ci/junit.xml
+    paths:
+      - target/nextest/ci/junit.xml
+
+apple:xcframework:
+  extends: .apple-job
+  needs:
+    - apple:lint
+  script:
+    - just ci run apple-xcframework
+
+apple:swift-test:
+  extends: .apple-job
+  needs:
+    - apple:xcframework
+  script:
+    - just ci run apple-swift-test
+
+apple:ios:
+  extends: .apple-job
+  needs:
+    - apple:xcframework
+  script:
+    - just ci run apple-ios
+
+apple:safari:
+  extends:
+    - .macos-job
+    - .rules-nightly
+  stage: apple
+  timeout: 60 minutes
+  needs:
+    - apple:lint
+  script:
+    - just ci run apple-safari

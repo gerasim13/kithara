@@ -60,6 +60,14 @@ impl RunnerManager<'_> {
             &["xcode-select", "-s", &guest_developer_dir()],
             "select guest Xcode",
         )?;
+        // Only `Xcode.app` is shared; the system content it installs on first
+        // launch lives outside the bundle and a fresh guest has none of it.
+        // Without it `xcodebuild` cannot load `IDESimulatorFoundation`, which
+        // it needs for the simulator slices of the XCFramework.
+        sudo(
+            &["xcodebuild", "-runFirstLaunch"],
+            "install guest Xcode system content",
+        )?;
         // A freshly installed macOS has no /usr/local/bin, so `install` into it
         // fails until the directory exists.
         sudo(

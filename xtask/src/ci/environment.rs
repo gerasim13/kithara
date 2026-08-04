@@ -10,7 +10,10 @@ use anyhow::{Context, Result, bail};
 use kithara_devtools::Ctx;
 use nix::sys::resource::{Resource, getrlimit, setrlimit};
 
-use super::{config::CiConfig, run::Lane};
+use super::{
+    config::CiConfig,
+    run::{CacheGroup, Lane},
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CacheTrust {
@@ -222,13 +225,11 @@ fn shared_root(config: &CiConfig, lane: Lane) -> PathBuf {
     if let Some(root) = env::var_os("KITHARA_CI_CACHE_ROOT") {
         return PathBuf::from(root);
     }
-    match lane {
-        Lane::Apple | Lane::Deep | Lane::ReleaseApple => config.host.cache_root_macos.clone(),
-        Lane::Linux | Lane::Web | Lane::Weekly => config.host.cache_root_linux.clone(),
-        Lane::Windows => config.host.cache_root_windows.clone(),
-        Lane::Android | Lane::ReleaseAndroid | Lane::ReleasePublish => {
-            config.host.host_root.join("cache")
-        }
+    match lane.cache_group() {
+        CacheGroup::Macos => config.host.cache_root_macos.clone(),
+        CacheGroup::Linux => config.host.cache_root_linux.clone(),
+        CacheGroup::Windows => config.host.cache_root_windows.clone(),
+        CacheGroup::Host => config.host.host_root.join("cache"),
     }
 }
 

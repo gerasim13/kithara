@@ -7,13 +7,17 @@ use anyhow::{Context, Result, bail};
 use kithara_devtools::Ctx;
 use sha2::{Digest, Sha256};
 
-use super::process::Process;
+use super::process::{Process, require_os};
 use crate::{
     config::{KitharaExt, ReleaseConfig},
     publish, release,
 };
 
-pub(crate) fn build_apple(
+/// The retained framework, the documentation archive, and the WASM bundle are
+/// built by three jobs. They share nothing but the checkout, so a failure in
+/// one is retried without rebuilding the other two, and the release pipeline
+/// shows which artifact is missing by name.
+pub(crate) fn xcframework(
     process: &Process,
     ctx: &Ctx,
     ext: &KitharaExt,
@@ -55,13 +59,27 @@ pub(crate) fn build_apple(
         );
     }
 
+    for name in [&ext.release.asset, &ext.release.single_asset] {
+        if !name.is_empty() {
+            write_checksum(&ctx.root.join(name))?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn docs(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
+    require_os("macos", "Apple documentation release")?;
     process.run("just", &["platform", "apple", "doc"], "Apple documentation")?;
     zip_directory(
         process,
         &ctx.root.join(&ext.release.docs_archive),
         &ctx.root.join(&ext.release.docs_asset),
     )?;
+    write_checksum(&ctx.root.join(&ext.release.docs_asset))
+}
 
+pub(crate) fn wasm(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
+    require_os("macos", "WASM release")?;
     process.run(
         "just",
         &["platform", "wasm", "build", "--profile", "release"],
@@ -72,18 +90,7 @@ pub(crate) fn build_apple(
         &ctx.root.join(&ext.release.wasm_dist),
         &ctx.root.join(&ext.release.wasm_asset),
     )?;
-
-    for name in [
-        &ext.release.asset,
-        &ext.release.single_asset,
-        &ext.release.docs_asset,
-        &ext.release.wasm_asset,
-    ] {
-        if !name.is_empty() {
-            write_checksum(&ctx.root.join(name))?;
-        }
-    }
-    Ok(())
+    write_checksum(&ctx.root.join(&ext.release.wasm_asset))
 }
 
 pub(crate) fn build_android(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
@@ -281,16 +288,6 @@ fn required_env(name: &str) -> Result<String> {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .with_context(|| format!("{name} is required"))
-}
-
-fn require_os(expected: &str, label: &str) -> Result<()> {
-    if env::consts::OS != expected {
-        bail!(
-            "{label} requires {expected}, current platform is {}",
-            env::consts::OS
-        );
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -1,14 +1,26 @@
-web:browsers:
-  extends: .linux-job
+.web-job:
+  extends:
+    - .linux-job
+    - .rules-integration
   stage: web
   timeout: 60 minutes
-  needs:
-    - android:main
+  needs: []
+
+web:chromium:
+  extends: .web-job
   script:
-    - just ci run web
-  rules:
-    - if: $KITHARA_PIPELINE_KIND == "main"
-    - if: $KITHARA_PIPELINE_KIND == "nightly"
+    - just ci run web-chromium
+
+web:firefox:
+  extends: .web-job
+  script:
+    - just ci run web-firefox
+
+web:size:
+  extends: .web-job
+  timeout: 30 minutes
+  script:
+    - just ci run web-size
   artifacts:
     when: always
     expire_in: 30 days

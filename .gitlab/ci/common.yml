@@ -20,3 +20,40 @@
 .release-job:
   tags:
     - kithara-release
+
+# Jobs declare only the dependencies they really have. Ordering on the shared
+# host belongs to the runners — each takes a single build at a time — so a lane
+# no longer queues behind an unrelated lane, and a lane whose runner is not
+# registered cannot hold the rest of the pipeline hostage.
+.rules-verify:
+  interruptible: true
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "merge-request"
+    - if: $KITHARA_PIPELINE_KIND == "quarantine"
+    - if: $KITHARA_PIPELINE_KIND == "main"
+      interruptible: false
+    - if: $KITHARA_PIPELINE_KIND == "nightly"
+      interruptible: false
+    - if: $KITHARA_PIPELINE_KIND == "release"
+      interruptible: false
+
+.rules-integration:
+  interruptible: false
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "main"
+    - if: $KITHARA_PIPELINE_KIND == "nightly"
+
+.rules-nightly:
+  interruptible: false
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "nightly"
+
+.rules-weekly:
+  interruptible: false
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "weekly"
+
+.rules-release:
+  interruptible: false
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "release"

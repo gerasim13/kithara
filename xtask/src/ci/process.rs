@@ -93,6 +93,16 @@ impl Process {
     }
 }
 
+pub(crate) fn require_os(expected: &str, label: &str) -> Result<()> {
+    if env::consts::OS != expected {
+        bail!(
+            "{label} lane requires {expected}, current platform is {}",
+            env::consts::OS
+        );
+    }
+    Ok(())
+}
+
 fn executable_extensions(vars: &BTreeMap<OsString, OsString>) -> Vec<String> {
     if cfg!(windows) {
         vars.get(OsStr::new("PATHEXT"))
