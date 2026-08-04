@@ -16,11 +16,11 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct NavItem<'a, 'value, 'data, 'skin> {
-    path: &'a str,
+    skin: &'skin Skin,
     label: &'a str,
+    path: &'a str,
     icon: Icon,
     value: Option<&'value ReadValue<'data>>,
-    skin: &'skin Skin,
 }
 
 impl<'a> Widget<'a> for NavItem<'a, '_, '_, '_> {

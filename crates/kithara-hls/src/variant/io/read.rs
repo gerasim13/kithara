@@ -25,6 +25,25 @@ impl HlsVariant {
         self.phase_at_with(range, || {})
     }
 
+    delegate::delegate! {
+        to self {
+            #[cfg(test)]
+            #[call(phase_at_with)]
+            pub(crate) fn phase_at_after_eof(
+                &self,
+                range: Range<u64>,
+                after_eof: impl FnOnce(),
+            ) -> SourcePhase;
+            #[cfg(test)]
+            #[call(range_ready_with)]
+            pub(crate) fn range_ready_after_total(
+                &self,
+                range: &Range<u64>,
+                after_total: impl FnOnce(),
+            ) -> bool;
+        }
+    }
+
     fn phase_at_with(&self, range: Range<u64>, after_eof: impl FnOnce()) -> SourcePhase {
         match self.range_gate_with(&range, after_eof) {
             Some(RangeGate::Eof) => SourcePhase::Eof,
@@ -45,15 +64,6 @@ impl HlsVariant {
                 }
             }
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn phase_at_after_eof(
-        &self,
-        range: Range<u64>,
-        after_eof: impl FnOnce(),
-    ) -> SourcePhase {
-        self.phase_at_with(range, after_eof)
     }
 
     pub(super) fn range_gate(&self, range: &Range<u64>) -> Option<RangeGate> {
@@ -124,6 +134,11 @@ impl HlsVariant {
         false
     }
 
+    #[cfg(test)]
+    pub(crate) fn range_ready(&self, range: &Range<u64>) -> bool {
+        self.range_ready_with(range, || {})
+    }
+
     fn range_ready_published_with(&self, range: &Range<u64>, after_total: impl FnOnce()) -> bool {
         let total = self.total_bytes();
         after_total();
@@ -189,20 +204,6 @@ impl HlsVariant {
         self.layout
             .try_published(|| Some(self.range_ready_published_with(range, after_total)))
             .unwrap_or(false)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn range_ready(&self, range: &Range<u64>) -> bool {
-        self.range_ready_with(range, || {})
-    }
-
-    #[cfg(test)]
-    pub(crate) fn range_ready_after_total(
-        &self,
-        range: &Range<u64>,
-        after_total: impl FnOnce(),
-    ) -> bool {
-        self.range_ready_with(range, after_total)
     }
 
     fn range_wait_phase(&self, range: &Range<u64>) -> SourcePhase {

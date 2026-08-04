@@ -113,9 +113,9 @@ impl Check for RetryFallback {
 }
 
 struct IdentVisitor<'a> {
-    allowed_idents: &'a [String],
     suppress: &'a Suppressions,
     out: &'a mut Vec<Violation>,
+    allowed_idents: &'a [String],
     rel: &'a str,
     /// `true` while traversing inside a `#[cfg(test)]` module — test code
     /// can legitimately use names like `flags_max_retries_const` that

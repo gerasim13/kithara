@@ -1,8 +1,8 @@
 //! Hostile custom layout output must be rejected at the scope/key boundary.
 
 use kithara_assets::{
-    AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, AssetStore, AssetStoreBuilder,
-    AssetsError, StorageBackend,
+    AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, AssetStore, AssetsError,
+    StorageBackend,
 };
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_test_utils::kithara;
@@ -11,17 +11,17 @@ use url::Url;
 
 #[derive(Debug)]
 struct HostileLayout {
-    root: &'static str,
     path: &'static str,
+    root: &'static str,
 }
 
 impl AssetLayout for HostileLayout {
-    fn root(&self, _source: &AssetSource) -> String {
-        self.root.to_owned()
-    }
-
     fn path(&self, _resource: &AssetResource) -> String {
         self.path.to_owned()
+    }
+
+    fn root(&self, _source: &AssetSource) -> String {
+        self.root.to_owned()
     }
 }
 
@@ -37,7 +37,7 @@ fn source() -> AssetSource {
 fn store(layout: HostileLayout) -> (tempfile::TempDir, AssetStore) {
     let dir = tempdir().expect("test cache directory");
     let layouts = AssetLayoutRegistry::default().with::<HostileProtocol>(Arc::new(layout));
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })

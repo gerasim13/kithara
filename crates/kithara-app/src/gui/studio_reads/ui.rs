@@ -9,9 +9,9 @@ use crate::gui::studio_ui::{
 
 #[derive(Clone, Copy)]
 pub(super) struct UiNode<'a> {
-    drag: DragNode<'a>,
-    layout: DeckLayout,
     collapsed: &'a CollapsedModules,
+    layout: DeckLayout,
+    drag: DragNode<'a>,
 }
 
 impl<'a> UiNode<'a> {
@@ -21,9 +21,9 @@ impl<'a> UiNode<'a> {
         collapsed: &'a CollapsedModules,
     ) -> Self {
         Self {
-            drag,
-            layout,
             collapsed,
+            layout,
+            drag,
         }
     }
 }
@@ -46,14 +46,14 @@ impl<'a> Node<'a> for UiNode<'a> {
 
 #[derive(Clone, Copy)]
 pub(super) struct DragNode<'a> {
-    track: Option<&'a str>,
     over: Option<usize>,
+    track: Option<&'a str>,
     decks: usize,
 }
 
 impl<'a> DragNode<'a> {
     pub(super) const fn new(track: Option<&'a str>, over: Option<usize>, decks: usize) -> Self {
-        Self { track, over, decks }
+        Self { over, track, decks }
     }
 }
 

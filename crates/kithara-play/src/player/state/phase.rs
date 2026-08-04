@@ -101,18 +101,15 @@ impl From<&PlayerPhase> for PlayerPhaseKind {
 }
 
 impl PlayerPhase {
-    delegate::delegate! {
-        to self {
-            /// The ABR handle of the resource currently in the processor, if any.
-            #[expr($.cloned())]
-            #[call(abr_handle_ref)]
-            pub(crate) fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
-            #[call(into)]
-            pub(crate) fn kind(&self) -> PlayerPhaseKind;
-            /// The active slot, if any phase currently holds one.
-            #[expr($.copied())]
-            #[call(slot_ref)]
-            pub(crate) fn slot(&self) -> Option<SlotId>;
+    /// Borrow of the active ABR handle slot. Returning a reference makes this
+    /// a true accessor (not a `self -> Other` conversion).
+    fn abr_handle_ref(&self) -> Option<&kithara_abr::AbrHandle> {
+        match self {
+            Self::Idle => None,
+            Self::Loading { abr_handle, .. }
+            | Self::Playing { abr_handle, .. }
+            | Self::Paused { abr_handle, .. }
+            | Self::Stopped { abr_handle, .. } => abr_handle.as_ref(),
         }
     }
 
@@ -226,18 +223,6 @@ impl PlayerPhase {
         *self = Self::Stopped { slot, abr_handle };
     }
 
-    /// Borrow of the active ABR handle slot. Returning a reference makes this
-    /// a true accessor (not a `self -> Other` conversion).
-    fn abr_handle_ref(&self) -> Option<&kithara_abr::AbrHandle> {
-        match self {
-            Self::Idle => None,
-            Self::Loading { abr_handle, .. }
-            | Self::Playing { abr_handle, .. }
-            | Self::Paused { abr_handle, .. }
-            | Self::Stopped { abr_handle, .. } => abr_handle.as_ref(),
-        }
-    }
-
     /// Shared read access to the armed-next slot, if any.
     pub(crate) fn pending(&self) -> Option<&PendingNext> {
         match self {
@@ -280,33 +265,24 @@ impl PlayerPhase {
             Self::Stopped { slot, .. } => slot.as_ref(),
         }
     }
+
+    delegate::delegate! {
+        to self {
+            /// The ABR handle of the resource currently in the processor, if any.
+            #[expr($.cloned())]
+            #[call(abr_handle_ref)]
+            pub(crate) fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
+            #[call(into)]
+            pub(crate) fn kind(&self) -> PlayerPhaseKind;
+            /// The active slot, if any phase currently holds one.
+            #[expr($.copied())]
+            #[call(slot_ref)]
+            pub(crate) fn slot(&self) -> Option<SlotId>;
+        }
+    }
 }
 
 impl PlayerImpl {
-    fn publish_time_control_status(
-        &self,
-        status: TimeControlStatus,
-        reason: Option<WaitingReason>,
-    ) {
-        self.core
-            .engine
-            .bus()
-            .publish(PlayerEvent::TimeControlStatusChanged { status, reason });
-    }
-
-    delegate::delegate! {
-        to self.phase.lock() {
-            /// Discriminant of the current phase under a short lock.
-            #[call(kind)]
-            pub(crate) fn phase_kind(&self) -> PlayerPhaseKind;
-            /// Phase gate: the active slot, or [`TransitionError::WrongPhase`] when
-            /// the player holds no slot (phases `Idle` / `Stopped`-without-slot).
-            #[expr($.ok_or(TransitionError::WrongPhase))]
-            #[call(slot)]
-            pub(crate) fn require_active_slot(&self) -> Result<SlotId, TransitionError>;
-        }
-    }
-
     /// Promote the phase to `Loading` carrying `slot`, preserving any armed
     /// next / ABR handle the previous active phase held. A no-op transition
     /// when the phase already holds a slot keeps the existing payload.
@@ -333,6 +309,17 @@ impl PlayerImpl {
         self.publish_time_control_status(TimeControlStatus::Paused, None);
     }
 
+    fn publish_time_control_status(
+        &self,
+        status: TimeControlStatus,
+        reason: Option<WaitingReason>,
+    ) {
+        self.core
+            .engine
+            .bus()
+            .publish(PlayerEvent::TimeControlStatusChanged { status, reason });
+    }
+
     /// Send a command to the current slot's processor.
     pub(crate) fn send_to_slot(&self, cmd: PlayerCmd) -> Result<(), PlayError> {
         let slot_id = self
@@ -344,6 +331,19 @@ impl PlayerImpl {
     /// Snapshot of the active slot under a short phase lock.
     pub(crate) fn slot(&self) -> Option<SlotId> {
         self.require_active_slot().ok()
+    }
+
+    delegate::delegate! {
+        to self.phase.lock() {
+            /// Discriminant of the current phase under a short lock.
+            #[call(kind)]
+            pub(crate) fn phase_kind(&self) -> PlayerPhaseKind;
+            /// Phase gate: the active slot, or [`TransitionError::WrongPhase`] when
+            /// the player holds no slot (phases `Idle` / `Stopped`-without-slot).
+            #[expr($.ok_or(TransitionError::WrongPhase))]
+            #[call(slot)]
+            pub(crate) fn require_active_slot(&self) -> Result<SlotId, TransitionError>;
+        }
     }
 }
 
@@ -412,7 +412,7 @@ mod tests {
 
     #[kithara::test]
     fn require_active_slot_errors_from_idle() {
-        let player = PlayerImpl::new(crate::player::PlayerConfig::default());
+        let player = PlayerImpl::new(crate::player::PlayerConfig::test_builder().build());
         assert_eq!(
             player.require_active_slot(),
             Err(TransitionError::WrongPhase)

@@ -4,7 +4,7 @@
 use std::{io::Read, num::NonZeroUsize};
 
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, StorageBackend},
+    assets::{AssetStore, StorageBackend},
     audio::{Audio, AudioConfig, AudioWorkerHandle, ReadOutcome},
     decode::DecoderBackend,
     file::{File as FileSource, FileConfig, FileSrc},
@@ -90,7 +90,7 @@ async fn mp3_endpoints() -> (url::Url, url::Url) {
 
 fn asset_store(temp_dir: &TestTempDir, ephemeral: bool) -> AssetStore {
     if ephemeral {
-        AssetStoreBuilder::default()
+        AssetStore::builder()
             .backend(StorageBackend::Memory)
             .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
             .max_assets(8)
@@ -110,10 +110,9 @@ fn resource_config(
     hint: Option<&str>,
     worker: Option<AudioWorkerHandle>,
 ) -> ResourceConfig {
-    ResourceConfig::for_src(url.as_str())
-        .unwrap()
+    ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).unwrap())
         .store(store)
-        .maybe_hint(hint.map(str::to_owned))
+        .maybe_hint(hint)
         .maybe_worker(worker)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
@@ -178,7 +177,10 @@ async fn warm_hls_worker(
     worker: AudioWorkerHandle,
     backend: DecoderBackend,
 ) -> f64 {
-    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let wav_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     let hls_config = HlsConfig::for_url(url.clone()).store(store).build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .byte_pool(kithara::bufpool::BytePool::default())
@@ -237,7 +239,10 @@ async fn warm_hls_worker_without_seek(
     worker: AudioWorkerHandle,
     backend: DecoderBackend,
 ) -> f64 {
-    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let wav_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     let hls_config = HlsConfig::for_url(url.clone()).store(store).build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .byte_pool(kithara::bufpool::BytePool::default())
@@ -1059,7 +1064,7 @@ async fn stress_offline_crossfade_no_gaps() {
     let make_mp3 = |w: AudioWorkerHandle, s: AssetStore| {
         let p = local_mp3.clone();
         async move {
-            let file_cfg = FileConfig::new(FileSrc::Local(p), s);
+            let file_cfg = FileConfig::for_src(FileSrc::Local(p)).store(s).build();
             let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
                 .byte_pool(kithara::bufpool::BytePool::default())
                 .pcm_pool(kithara::bufpool::PcmPool::default())
@@ -1076,7 +1081,10 @@ async fn stress_offline_crossfade_no_gaps() {
     let make_hls = |w: AudioWorkerHandle, s: AssetStore| {
         let u = hls_url.clone();
         async move {
-            let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+            let wav_info = MediaInfo::builder()
+                .maybe_codec(Some(AudioCodec::Pcm))
+                .maybe_container(Some(ContainerFormat::Wav))
+                .build();
             let cfg = HlsConfig::for_url(u).store(s).build();
             let audio_config = AudioConfig::<Hls>::for_stream(cfg)
                 .byte_pool(kithara::bufpool::BytePool::default())
@@ -1431,22 +1439,20 @@ async fn live_remote_resource_decodes_with_duration(
         .inactivity_timeout(Duration::from_secs(25))
         .build();
     let downloader = Downloader::new(
-        DownloaderConfig::builder()
-            .client(HttpClient::new(net, CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
-    let config = ResourceConfig::for_src(url)
-        .expect("valid URL")
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .store(store)
-        .downloader(downloader)
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(backend)
-                .build(),
-        )
-        .build();
+    let config: ResourceConfig =
+        ResourceConfig::for_src(ResourceConfig::parse_src(url).expect("valid URL"))
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .store(store)
+            .downloader(downloader)
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
+            .build();
 
     let mut resource = Resource::new(config)
         .await
@@ -1564,8 +1570,7 @@ async fn player_mp3_duration_matches_app_flow(
     );
     player.reserve_slots(1);
 
-    let mut config = ResourceConfig::for_src(url)
-        .unwrap()
+    let mut config = ResourceConfig::for_src(ResourceConfig::parse_src(url).unwrap())
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
         .store(store)
@@ -1659,17 +1664,17 @@ async fn local_resource_decodes_with_duration(
         }
     };
     let store = asset_store(&temp_dir, true);
-    let config = ResourceConfig::for_src(url.as_str())
-        .expect("valid URL")
-        .store(store)
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(backend)
-                .build(),
-        )
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .build();
+    let config: ResourceConfig =
+        ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid URL"))
+            .store(store)
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build();
 
     let mut resource = Resource::new(config)
         .await

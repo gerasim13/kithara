@@ -21,22 +21,22 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct ModuleChrome<'a, 'skin, Content, Message> {
-    content: Content,
-    title: Option<&'a str>,
-    chip: Option<&'a str>,
-    assign: Vec<&'a str>,
+    skin: &'skin Skin,
     #[builder(default)]
     style: ChromeStyle,
+    content: Content,
     #[builder(default)]
     frame: FrameSides,
-    #[builder(default)]
-    corners: bool,
+    chip: Option<&'a str>,
+    drop: Option<DropZone<Message>>,
     footer: Option<String>,
     on_toggle: Option<Message>,
-    drop: Option<DropZone<Message>>,
+    title: Option<&'a str>,
+    assign: Vec<&'a str>,
     #[builder(default)]
     collapsed: bool,
-    skin: &'skin Skin,
+    #[builder(default)]
+    corners: bool,
 }
 
 pub(crate) struct DropZone<Message> {
@@ -354,12 +354,12 @@ where
 }
 
 struct Chevron {
-    collapsed: bool,
     color: Color,
     line_color: Color,
+    collapsed: bool,
     icon_size: f32,
-    stroke_width: f32,
     line_width: f32,
+    stroke_width: f32,
 }
 
 impl<Message> canvas::Program<Message> for Chevron {
@@ -435,18 +435,18 @@ where
 }
 
 struct FrameChrome {
-    sides: FrameSides,
     frame_color: Color,
-    frame_width: f32,
+    sides: FrameSides,
     corners: Option<CornerTicks>,
+    frame_width: f32,
 }
 
 #[derive(Clone, Copy)]
 struct CornerTicks {
     color: Color,
+    offset: f32,
     size: f32,
     width: f32,
-    offset: f32,
 }
 
 impl From<&Skin> for CornerTicks {

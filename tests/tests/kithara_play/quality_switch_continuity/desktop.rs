@@ -1,7 +1,13 @@
 #![cfg(target_os = "macos")]
 
 use cochlea_features::{Audio as ProbeAudio, SegmentOpts, segment_timeline};
-use kithara::{StretchKind, audio::StretchControls, events::ResamplerKind, platform::sync::Arc};
+use kithara::{
+    StretchKind,
+    audio::{DecoderResamplerSettings, StretchControls},
+    events::ResamplerKind,
+    platform::sync::Arc,
+    play::PlaybackResamplerBackend,
+};
 use kithara_integration_tests::{TestServerHelper, fixture_protocol::DelayRule};
 
 use super::*;
@@ -165,21 +171,28 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
     let temp = TestTempDir::new();
     let bus = EventBus::new(4_096);
     let mut events = bus.subscribe();
-    let decoder_defaults = kithara::play::default_resource_decoder_config();
+    let decoder_defaults = kithara::audio::AudioDecoderConfig::builder()
+        .resampler(
+            DecoderResamplerSettings::builder()
+                .backend(PlaybackResamplerBackend::default())
+                .build(),
+        )
+        .build();
     let decoder = kithara::audio::AudioDecoderConfig::builder()
         .backend(DecoderBackend::Apple)
         .gapless_mode(decoder_defaults.gapless_mode())
         .maybe_resampler(decoder_defaults.resampler().cloned())
         .build();
-    let config = ResourceConfig::for_src(master_url.as_str())
-        .expect("fixture master URL must be valid")
-        .store(kithara_integration_tests::disk_asset_store(temp.path()))
-        .byte_pool(harness.player().byte_pool().clone())
-        .pcm_pool(harness.player().pcm_pool().clone())
-        .decoder(decoder)
-        .initial_abr_mode(AbrMode::manual(AAC_HIGH))
-        .events(bus)
-        .build();
+    let config = ResourceConfig::for_src(
+        ResourceConfig::parse_src(master_url.as_str()).expect("fixture master URL must be valid"),
+    )
+    .store(kithara_integration_tests::disk_asset_store(temp.path()))
+    .byte_pool(harness.player().byte_pool().clone())
+    .pcm_pool(harness.player().pcm_pool().clone())
+    .decoder(decoder)
+    .initial_abr_mode(AbrMode::manual(AAC_HIGH))
+    .events(bus)
+    .build();
     let config = harness.player().prepare_config(config);
     let resource = Resource::new(config)
         .await

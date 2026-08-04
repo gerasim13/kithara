@@ -118,7 +118,7 @@ fn reject_undecoded_content_encoding(resp: &Response, url: &Url) -> Result<(), N
 
 /// Extract response headers into our [`Headers`] type.
 fn extract_headers(resp: &Response) -> Headers {
-    let mut headers = Headers::new();
+    let mut headers = Headers::default();
     let str_pairs = resp
         .headers()
         .iter()
@@ -321,9 +321,9 @@ impl RawHttp {
 #[derive(Clone, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct HttpClient {
+    net: Arc<RetryNet<RawHttp, DefaultRetryPolicy>>,
     cancel: CancelToken,
     inner: Client,
-    net: Arc<RetryNet<RawHttp, DefaultRetryPolicy>>,
     connection_metrics: ConnectionMetrics,
     #[field(get)]
     options: NetOptions,
@@ -358,9 +358,9 @@ impl HttpClient {
             options.observer.clone(),
         ));
         Self {
+            net,
             cancel,
             inner,
-            net,
             connection_metrics,
             options,
         }
@@ -369,6 +369,40 @@ impl HttpClient {
     #[must_use]
     pub fn connection_count(&self) -> usize {
         self.connection_metrics.connection_count()
+    }
+
+    #[must_use]
+    pub fn with_observer(&self, observer: Option<Observer>) -> Self {
+        let options = NetOptions::builder()
+            .compression(self.options.compression)
+            .inactivity_timeout(self.options.inactivity_timeout)
+            .impersonate(self.options.impersonate)
+            .byte_pool(self.options.byte_pool.clone())
+            .retry_policy(self.options.retry_policy.clone())
+            .is_insecure(self.options.is_insecure)
+            .body_queue_capacity(self.options.body_queue_capacity)
+            .body_queue_resume_at(self.options.body_queue_resume_at)
+            .pool_max_idle_per_host(self.options.pool_max_idle_per_host)
+            .maybe_observer(observer)
+            .build();
+        let raw = RawHttp {
+            inner: self.inner.clone(),
+            options: options.clone(),
+            cancel: self.cancel.clone(),
+        };
+        let net = Arc::new(RetryNet::new(
+            raw,
+            DefaultRetryPolicy::new(options.retry_policy.clone()),
+            self.cancel.clone(),
+            options.observer.clone(),
+        ));
+        Self {
+            net,
+            options,
+            cancel: self.cancel.clone(),
+            inner: self.inner.clone(),
+            connection_metrics: self.connection_metrics.clone(),
+        }
     }
 
     delegate::delegate! {
@@ -403,40 +437,6 @@ impl HttpClient {
             ///
             /// Returns [`NetError`] on HTTP failure or network error.
             pub async fn stream(&self, url: Url, headers: Option<Headers>) -> NetResult<crate::ByteStream>;
-        }
-    }
-
-    #[must_use]
-    pub fn with_observer(&self, observer: Option<Observer>) -> Self {
-        let options = NetOptions::builder()
-            .compression(self.options.compression)
-            .inactivity_timeout(self.options.inactivity_timeout)
-            .impersonate(self.options.impersonate)
-            .byte_pool(self.options.byte_pool.clone())
-            .retry_policy(self.options.retry_policy.clone())
-            .is_insecure(self.options.is_insecure)
-            .body_queue_capacity(self.options.body_queue_capacity)
-            .body_queue_resume_at(self.options.body_queue_resume_at)
-            .pool_max_idle_per_host(self.options.pool_max_idle_per_host)
-            .maybe_observer(observer)
-            .build();
-        let raw = RawHttp {
-            inner: self.inner.clone(),
-            options: options.clone(),
-            cancel: self.cancel.clone(),
-        };
-        let net = Arc::new(RetryNet::new(
-            raw,
-            DefaultRetryPolicy::new(options.retry_policy.clone()),
-            self.cancel.clone(),
-            options.observer.clone(),
-        ));
-        Self {
-            cancel: self.cancel.clone(),
-            inner: self.inner.clone(),
-            net,
-            connection_metrics: self.connection_metrics.clone(),
-            options,
         }
     }
 }
@@ -528,7 +528,7 @@ impl Net for RawHttp {
         #[cfg(not(target_arch = "wasm32"))]
         reject_undecoded_content_encoding(&resp, &url)?;
 
-        let mut out = Headers::new();
+        let mut out = Headers::default();
         let str_pairs = resp
             .headers()
             .iter()
@@ -812,7 +812,7 @@ mod tests {
             .build();
         let client = HttpClient::new(options, CancelToken::never());
 
-        let mut caller_headers = Headers::new();
+        let mut caller_headers = Headers::default();
         caller_headers.insert("AcCePt-EnCoDiNg", "br");
         let bytes = client
             .get_bytes(url.clone(), Some(caller_headers))

@@ -28,14 +28,14 @@ const SCHEMA_VERSION: u32 = 1;
 const WORKSPACE_DEBT_THRESHOLD: u64 = 100;
 
 pub(super) struct Revision {
-    pub(super) directory: String,
     pub(super) digest: Option<String>,
+    pub(super) directory: String,
 }
 
 struct ScopeSelection {
     kind: &'static str,
-    name: String,
     package_root: Option<PathBuf>,
+    name: String,
     module_paths: Vec<PathBuf>,
 }
 
@@ -104,10 +104,10 @@ pub(super) fn collect(
         profile: args.profile,
         depth: args.depth,
         scope: Scope {
-            kind: selection.kind.to_owned(),
-            name: selection.name,
             loc,
             workspace_loc,
+            kind: selection.kind.to_owned(),
+            name: selection.name,
         },
         status: if stages
             .iter()
@@ -122,8 +122,8 @@ pub(super) fn collect(
             debt_units,
             debt_threshold,
             baseline_entries,
-            findings: findings.len(),
             evidence_gaps,
+            findings: findings.len(),
             signals: adapted.signals.len(),
         },
         findings,
@@ -764,11 +764,11 @@ fn tool(
     evidence_artifacts: Vec<String>,
 ) -> ToolCoverage {
     ToolCoverage {
-        tool: name.to_owned(),
         status,
+        evidence_artifacts,
+        tool: name.to_owned(),
         owner: owner.map(str::to_owned),
         note: note.to_owned(),
-        evidence_artifacts,
     }
 }
 

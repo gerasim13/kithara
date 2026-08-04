@@ -45,7 +45,10 @@ impl Backend {
     fn make_mp3(self) -> Box<dyn Decoder> {
         const TEST_MP3_BYTES: &[u8] =
             include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../assets/test.mp3"));
-        let info = MediaInfo::new(Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio));
+        let info = MediaInfo::builder()
+            .maybe_codec(Some(AudioCodec::Mp3))
+            .maybe_container(Some(ContainerFormat::MpegAudio))
+            .build();
         self.make_decoder(TEST_MP3_BYTES.to_vec(), &info)
     }
 
@@ -55,7 +58,10 @@ impl Backend {
             Consts::WAV_SAMPLE_RATE,
             Consts::WAV_CHANNELS,
         );
-        let info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+        let info = MediaInfo::builder()
+            .maybe_codec(Some(AudioCodec::Pcm))
+            .maybe_container(Some(ContainerFormat::Wav))
+            .build();
         self.make_decoder(bytes, &info)
     }
 
@@ -285,12 +291,18 @@ impl StandaloneCase {
                 let bytes = std::fs::read(&path).expect("read ALAC fixture");
                 (
                     bytes,
-                    MediaInfo::new(Some(AudioCodec::Alac), Some(ContainerFormat::Mp4)),
+                    MediaInfo::builder()
+                        .maybe_codec(Some(AudioCodec::Alac))
+                        .maybe_container(Some(ContainerFormat::Mp4))
+                        .build(),
                 )
             }
             Self::NativeFlac => (
                 synth_native_flac_1s(),
-                MediaInfo::new(Some(AudioCodec::Flac), Some(ContainerFormat::Flac)),
+                MediaInfo::builder()
+                    .maybe_codec(Some(AudioCodec::Flac))
+                    .maybe_container(Some(ContainerFormat::Flac))
+                    .build(),
             ),
         }
     }

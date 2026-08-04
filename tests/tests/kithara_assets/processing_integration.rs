@@ -7,7 +7,7 @@ use std::{
 
 use kithara::{
     assets::{
-        AcquisitionResult, AssetScope, AssetStoreBuilder, ChunkSink, ProcessCtx, ReadSide,
+        AcquisitionResult, AssetScope, AssetStore, ChunkSink, ProcessCtx, ReadSide,
         ResourceProcessor, StorageBackend, WriteSide,
     },
     platform::{sync::Arc, time::Duration},
@@ -80,7 +80,7 @@ fn build_test_processing_scope(
     temp_dir: &kithara_integration_tests::TestTempDir,
     asset_root: &str,
 ) -> AssetScope {
-    let builder = AssetStoreBuilder::default();
+    let builder = AssetStore::builder();
     #[cfg(not(target_arch = "wasm32"))]
     {
         builder
@@ -110,7 +110,7 @@ fn build_test_scope_no_processing(
 ) -> AssetScope {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        AssetStoreBuilder::default()
+        AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: (temp_dir.path()).into(),
             })
@@ -122,7 +122,7 @@ fn build_test_scope_no_processing(
     #[cfg(target_arch = "wasm32")]
     {
         let _ = temp_dir;
-        AssetStoreBuilder::default()
+        AssetStore::builder()
             .backend(StorageBackend::Memory)
             .layouts(literal_layouts())
             .build()

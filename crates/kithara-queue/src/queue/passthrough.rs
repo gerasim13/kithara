@@ -1,6 +1,6 @@
 use delegate::delegate;
 use kithara_events::EventBus;
-use kithara_play::{EngineLoadSnapshot, PlayError, PlayerStatus};
+use kithara_play::{EngineLoadSnapshot, EqBandConfig, PlayError, PlayerStatus};
 
 use super::Queue;
 
@@ -59,6 +59,11 @@ impl Queue {
             /// # Errors
             /// Forwards `PlayError` from the underlying player.
             pub fn set_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError>;
+            /// Replace the live player's EQ band layout.
+            ///
+            /// # Errors
+            /// Forwards `PlayError` from the underlying player.
+            pub fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), PlayError>;
             /// Reset all EQ bands to 0 dB.
             ///
             /// # Errors
@@ -67,7 +72,7 @@ impl Queue {
             /// Current track duration in seconds.
             #[must_use]
             pub fn duration_seconds(&self) -> Option<f64>;
-            /// Underlying [`EventBus`]. FFI/TUI bridges use `.scoped()` /
+            /// Underlying [`EventBus`]. FFI bridges use `.scoped()` /
             /// `.clone()` to wire their own subscriptions; typical callers
             /// should prefer [`Self::subscribe`].
             #[must_use]

@@ -11,9 +11,9 @@ where
     B: ResamplerBackend,
 {
     beat: beat::Config<B>,
+    waveform: waveform::Config,
     beat_config: Option<BeatAnalysisConfig<B>>,
     pcm_pool: PcmPool,
-    waveform: waveform::Config,
 }
 
 impl<B> AnalyzerBuilder<B>
@@ -28,13 +28,13 @@ where
         }
     }
 
-    pub(crate) fn take_detector(&mut self) -> Option<beat::Detector> {
-        beat::Config::take_detector(&mut self.beat)
-    }
-
     #[must_use]
     pub fn is_empty(&self) -> bool {
         waveform::config_is_empty(&self.waveform) && beat::Config::is_empty(&self.beat)
+    }
+
+    pub(crate) fn take_detector(&mut self) -> Option<beat::Detector> {
+        beat::Config::take_detector(&mut self.beat)
     }
 
     #[must_use]

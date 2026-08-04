@@ -10,8 +10,19 @@ pub(super) struct SlotTable {
 }
 
 impl SlotTable {
-    pub(super) fn clear(&mut self) {
-        self.slots.clear();
+    delegate::delegate! {
+        to self.slots {
+            pub(super) fn clear(&mut self);
+            pub(super) fn len(&self) -> usize;
+        }
+        to self {
+            #[expr($.map(|control| Arc::clone(&control.playback)))]
+            #[call(get)]
+            pub(super) fn playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>>;
+            #[expr($.map(|control| control.eq.clone()))]
+            #[call(get)]
+            pub(super) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq>;
+        }
     }
 
     pub(super) fn contains(&self, slot: SlotId) -> bool {
@@ -42,21 +53,9 @@ impl SlotTable {
         self.slots.push((slot, control));
     }
 
-    pub(super) fn len(&self) -> usize {
-        self.slots.len()
-    }
-
-    pub(super) fn playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>> {
-        self.get(slot).map(|control| Arc::clone(&control.playback))
-    }
-
     pub(super) fn remove(&mut self, slot: SlotId) -> Option<SlotControl> {
         let idx = self.slots.iter().position(|(id, _)| *id == slot)?;
         Some(self.slots.remove(idx).1)
-    }
-
-    pub(super) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq> {
-        self.get(slot).map(|control| control.eq.clone())
     }
 
     pub(super) fn with_capacity(capacity: usize) -> Self {

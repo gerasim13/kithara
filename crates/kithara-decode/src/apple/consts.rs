@@ -14,14 +14,6 @@ impl Consts {
     pub(crate) const AAC_FRAMES_PER_PACKET: u32 = 1024;
     pub(crate) const BITS_PER_F32_SAMPLE: u32 = 32;
     pub(crate) const BYTES_PER_F32_SAMPLE: u32 = 4;
-    /// Bytes prepended to STREAMINFO in the Apple FLAC magic cookie:
-    /// 4 bytes `"fLaC"` marker + 4 bytes `METADATA_BLOCK_HEADER`.
-    pub(crate) const FLAC_COOKIE_PREFIX_LEN: usize = 8;
-    /// Size of the FLAC STREAMINFO metadata block body (fixed by spec).
-    pub(crate) const FLAC_STREAMINFO_LEN: usize = 34;
-    /// Same as [`Self::FLAC_STREAMINFO_LEN`] typed for the
-    /// `METADATA_BLOCK_LENGTH` u8 byte in the Apple FLAC magic cookie.
-    pub(crate) const FLAC_STREAMINFO_LEN_U8: u8 = 34;
     pub(crate) const CONVERTER_ERR_NO_DATA_NOW: OSStatus = AUDIO_CONVERTER_ERR_NO_DATA_NOW;
     /// `'adts'` — raw AAC ADTS-framed bitstream file-type hint.
     pub(crate) const FILE_AAC_ADTS_TYPE: u32 = AUDIO_FILE_AAC_ADTS_TYPE;
@@ -36,6 +28,14 @@ impl Consts {
     pub(crate) const FILE_MP3_TYPE: u32 = AUDIO_FILE_MP3_TYPE;
     /// `'WAVE'` — RIFF WAV file-type hint for `audio_file_open_with_callbacks`.
     pub(crate) const FILE_WAVE_TYPE: u32 = AUDIO_FILE_WAVE_TYPE;
+    /// Bytes prepended to STREAMINFO in the Apple FLAC magic cookie:
+    /// 4 bytes `"fLaC"` marker + 4 bytes `METADATA_BLOCK_HEADER`.
+    pub(crate) const FLAC_COOKIE_PREFIX_LEN: usize = 8;
+    /// Size of the FLAC STREAMINFO metadata block body (fixed by spec).
+    pub(crate) const FLAC_STREAMINFO_LEN: usize = 34;
+    /// Same as [`Self::FLAC_STREAMINFO_LEN`] typed for the
+    /// `METADATA_BLOCK_LENGTH` u8 byte in the Apple FLAC magic cookie.
+    pub(crate) const FLAC_STREAMINFO_LEN_U8: u8 = 34;
     /// `'alac'` — Apple Lossless Audio Codec input format ID.
     pub(crate) const FORMAT_APPLE_LOSSLESS: AudioFormatID = AUDIO_FORMAT_APPLE_LOSSLESS;
     pub(crate) const FORMAT_FLAC: AudioFormatID = AUDIO_FORMAT_FLAC;

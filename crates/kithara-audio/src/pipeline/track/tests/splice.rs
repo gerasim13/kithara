@@ -46,35 +46,35 @@ fn produced_data(fetch: Fetch<PcmChunk>) -> PcmChunk {
 struct Consts;
 
 impl Consts {
+    const CAPTURE_END_SEGMENT: u64 = 6;
     const CHANNELS: usize = 2;
     const SAMPLE_RATE: u32 = 44_100;
     const SEGMENT_DURATION_SECS: u64 = 6;
-    const SPLICE_SEGMENT: u32 = 3;
-    const TOTAL_SEGMENTS: usize = 7;
-    const CAPTURE_END_SEGMENT: u64 = 6;
     const SLQ_VARIANT: usize = 0;
     const SMQ_VARIANT: usize = 1;
+    const SPLICE_SEGMENT: u32 = 3;
+    const TOTAL_SEGMENTS: usize = 7;
 }
 
 struct VariantLayout {
-    blob: Vec<u8>,
     init_range: Range<u64>,
+    blob: Vec<u8>,
     segments: Vec<SegmentDescriptor>,
 }
 
 struct SpliceState {
     active: AtomicUsize,
     media_info: Mutex<Option<MediaInfo>>,
-    variants: Vec<VariantLayout>,
     warmup_landing: Mutex<Option<SegmentDescriptor>>,
+    variants: Vec<VariantLayout>,
 }
 
 impl SpliceState {
     fn new(variants: Vec<VariantLayout>) -> Self {
         Self {
+            variants,
             active: AtomicUsize::new(Consts::SLQ_VARIANT),
             media_info: Mutex::new(Some(media_info(Consts::SLQ_VARIANT))),
-            variants,
             warmup_landing: Mutex::new(None),
         }
     }
@@ -100,6 +100,19 @@ impl SpliceState {
 }
 
 impl VariantControl for SpliceState {
+    fn abort_variant(&self, _transition: VariantTransition) -> bool {
+        false
+    }
+
+    fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
+        let range = self.active_layout().init_range.clone();
+        if range.is_empty() {
+            Err(StreamError::Source(SourceError::FormatChangeNotApplicable))
+        } else {
+            Ok(range)
+        }
+    }
+
     fn plan_variant_reader(
         &self,
         _landing: Option<Duration>,
@@ -115,32 +128,19 @@ impl VariantControl for SpliceState {
         Ok(None)
     }
 
-    fn take_prepared_variant_reader(
-        &self,
-        _transition: VariantTransition,
-    ) -> StreamResult<VariantReaderTake> {
-        Ok(VariantReaderTake::Stale)
-    }
-
     fn promote_variant(&self, _transition: VariantTransition) -> VariantPromotion {
         VariantPromotion::Stale
-    }
-
-    fn abort_variant(&self, _transition: VariantTransition) -> bool {
-        false
     }
 
     fn selected_variant_for_seek(&self) -> usize {
         0
     }
 
-    fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
-        let range = self.active_layout().init_range.clone();
-        if range.is_empty() {
-            Err(StreamError::Source(SourceError::FormatChangeNotApplicable))
-        } else {
-            Ok(range)
-        }
+    fn take_prepared_variant_reader(
+        &self,
+        _transition: VariantTransition,
+    ) -> StreamResult<VariantReaderTake> {
+        Ok(VariantReaderTake::Stale)
     }
 }
 
@@ -155,20 +155,6 @@ impl ByteMap for SpliceState {
                 .byte_offset(segment.byte_range.start)
                 .build()
         }))
-    }
-
-    delegate::delegate! {
-        to self {
-            #[expr($.init_range.clone())]
-            #[call(active_layout)]
-            fn init_segment_range(&self) -> Range<u64>;
-            #[expr(Some(u64::try_from($.blob.len()).expect("blob length fits u64")))]
-            #[call(active_layout)]
-            fn len(&self) -> Option<u64>;
-            #[expr(u32::try_from($.segments.len()).ok())]
-            #[call(active_layout)]
-            fn segment_count(&self) -> Option<u32>;
-        }
     }
 
     fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
@@ -210,6 +196,20 @@ impl ByteMap for SpliceState {
         }
         found
     }
+
+    delegate::delegate! {
+        to self {
+            #[expr($.init_range.clone())]
+            #[call(active_layout)]
+            fn init_segment_range(&self) -> Range<u64>;
+            #[expr(Some(u64::try_from($.blob.len()).expect("blob length fits u64")))]
+            #[call(active_layout)]
+            fn len(&self) -> Option<u64>;
+            #[expr(u32::try_from($.segments.len()).ok())]
+            #[call(active_layout)]
+            fn segment_count(&self) -> Option<u32>;
+        }
+    }
 }
 
 struct SpliceSource {
@@ -222,10 +222,10 @@ struct SpliceSource {
 impl SpliceSource {
     fn new(state: Arc<SpliceState>) -> Self {
         Self {
+            state,
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             seek: Arc::new(SeekState::new()),
-            state,
         }
     }
 }
@@ -368,13 +368,16 @@ fn build_variant_layout(label: &str, variant_index: usize) -> VariantLayout {
     }
     VariantLayout {
         blob,
-        init_range: 0..init_len,
         segments,
+        init_range: 0..init_len,
     }
 }
 
 fn media_info(variant: usize) -> MediaInfo {
-    let mut info = MediaInfo::new(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4));
+    let mut info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::AacLc))
+        .maybe_container(Some(ContainerFormat::Fmp4))
+        .build();
     info.variant_index = Some(u32::try_from(variant).expect("variant fits u32"));
     info
 }
@@ -407,8 +410,8 @@ fn decoder_config<T: StreamType>(
 }
 
 struct SpliceFixture {
-    source: StreamAudioSource<SpliceStream>,
     state: Arc<SpliceState>,
+    source: StreamAudioSource<SpliceStream>,
 }
 
 async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
@@ -455,11 +458,11 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
         None,
     );
     let decode = DecodeInit {
-        decoder: initial_decoder,
         decoder_factory,
+        host_sample_rate,
+        decoder: initial_decoder,
         decoder_backend: backend,
         gapless_mode: GaplessMode::Disabled,
-        host_sample_rate,
         media_info: Some(media_info(Consts::SLQ_VARIANT)),
         playback_resampler_backend: "none",
         recreate_on_host_rate_change: false,
@@ -476,8 +479,8 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
         Some(state.clone() as Arc<dyn VariantControl>),
     );
     SpliceFixture {
-        source: StreamAudioSource::new(shared_stream, parts),
         state,
+        source: StreamAudioSource::new(shared_stream, parts),
     }
 }
 

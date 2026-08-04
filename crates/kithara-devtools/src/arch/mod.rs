@@ -36,10 +36,10 @@ pub(crate) fn redundant_accessor_keys(
 ) -> Result<BTreeSet<String>> {
     let config = ArchConfig::load(&workspace_root.join(".config/arch"))?;
     let ctx = Context {
-        config: &config,
         metadata,
         workspace_root,
         scope,
+        config: &config,
     };
     let violations = checks::Check::run(&checks::redundant_accessors::RedundantAccessors, &ctx)?;
     Ok(violations

@@ -19,23 +19,29 @@ use crate::{
 ///
 /// Generic over `StreamType` to include stream-specific configuration.
 /// Combines stream config and audio pipeline settings into a single builder.
-#[derive(Builder)]
-#[builder(state_mod(vis = "pub"))]
+#[derive(Builder, fieldwork::Fieldwork)]
+#[builder(start_fn = for_stream)]
 #[non_exhaustive]
+#[fieldwork(opt_in, get)]
 pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
+    #[builder(start_fn)]
+    #[field(get)]
     pub(crate) stream: T::Config,
     /// Decoder construction settings, including decoder-side resampling.
     #[builder(default)]
+    #[field(get)]
     pub(crate) decoder: AudioDecoderConfig<B>,
+    /// Shared byte pool for temporary buffers (probe, etc.).
+    #[field(get)]
+    pub(crate) byte_pool: BytePool,
     /// Number of chunks to buffer before signaling preload readiness.
     #[builder(default = NonZeroUsize::new(3).expect("3 is non-zero"))]
+    #[field(get, copy)]
     pub(crate) preload_chunks: NonZeroUsize,
     /// Unified event bus (optional — if not provided, one is created internally).
     #[builder(name = events)]
     pub(crate) bus: Option<EventBus>,
-    /// Shared byte pool for temporary buffers (probe, etc.).
-    pub(crate) byte_pool: BytePool,
     /// Master cancel token for the audio pipeline.
     pub(crate) cancel: Option<CancelToken>,
     /// Live audio-engine cost meter (decode + effects). When set, the worker
@@ -44,11 +50,10 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// Optional format hint (file extension like "mp3", "wav")
     pub(crate) hint: Option<String>,
     /// Target sample rate of the audio host (for resampling).
+    #[field(get, copy)]
     pub(crate) host_sample_rate: Option<NonZeroU32>,
     /// Media info hint for format detection
     pub(crate) media_info: Option<MediaInfo>,
-    /// Shared PCM pool for temporary buffers.
-    pub(crate) pcm_pool: PcmPool,
     /// Legacy shared playback-rate state for direct `Audio` callers. The
     /// effect chain no longer consumes this value: speed lives in
     /// [`StretchControls`] when a stretch backend is compiled in.
@@ -61,8 +66,12 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     pub(crate) stretch: Option<Arc<StretchControls>>,
     /// Optional shared audio worker handle.
     pub(crate) worker: Option<AudioWorkerHandle>,
+    /// Shared PCM pool for temporary buffers.
+    #[field(get)]
+    pub(crate) pcm_pool: PcmPool,
     /// Additional effects to append after decoder-domain processing.
     #[builder(default)]
+    #[field(get)]
     pub(crate) effects: Vec<Box<dyn AudioEffect>>,
     /// Make a producer-ring underrun block (engine-aware park) instead of
     /// surfacing an empty outcome. Offline (faster-than-real-time) consumers
@@ -71,10 +80,12 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// Real-time hosts must keep the default (`false`): the audio callback
     /// can never block.
     #[builder(default)]
+    #[field(get)]
     pub(crate) block_on_underrun: bool,
     /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s).
     /// Default: 10 on native, 32 on wasm32.
     #[builder(default = default_pcm_buffer_chunks())]
+    #[field(get)]
     pub(crate) pcm_buffer_chunks: usize,
 }
 
@@ -93,34 +104,10 @@ where
     T: StreamType,
     B: ResamplerBackend,
 {
-    /// Return the stream-specific configuration.
-    #[must_use]
-    pub fn stream(&self) -> &T::Config {
-        &self.stream
-    }
-
-    /// Return the decoder configuration.
-    #[must_use]
-    pub fn decoder(&self) -> &AudioDecoderConfig<B> {
-        &self.decoder
-    }
-
-    /// Return the preload threshold in chunks.
-    #[must_use]
-    pub fn preload_chunks(&self) -> NonZeroUsize {
-        self.preload_chunks
-    }
-
     /// Return the configured event bus.
     #[must_use]
     pub fn bus(&self) -> Option<&EventBus> {
         self.bus.as_ref()
-    }
-
-    /// Return the configured byte pool.
-    #[must_use]
-    pub fn byte_pool(&self) -> &BytePool {
-        &self.byte_pool
     }
 
     /// Return the configured cancellation token.
@@ -141,22 +128,10 @@ where
         self.hint.as_deref()
     }
 
-    /// Return the target audio-host sample rate.
-    #[must_use]
-    pub fn host_sample_rate(&self) -> Option<NonZeroU32> {
-        self.host_sample_rate
-    }
-
     /// Return the media information hint.
     #[must_use]
     pub fn media_info(&self) -> Option<&MediaInfo> {
         self.media_info.as_ref()
-    }
-
-    /// Return the configured PCM pool.
-    #[must_use]
-    pub fn pcm_pool(&self) -> &PcmPool {
-        &self.pcm_pool
     }
 
     /// Return the legacy playback-rate state.
@@ -175,39 +150,5 @@ where
     #[must_use]
     pub fn worker(&self) -> Option<&AudioWorkerHandle> {
         self.worker.as_ref()
-    }
-
-    /// Return the custom effect chain.
-    #[must_use]
-    pub fn effects(&self) -> &[Box<dyn AudioEffect>] {
-        &self.effects
-    }
-
-    /// Return whether underruns block the consumer.
-    #[must_use]
-    pub fn block_on_underrun(&self) -> bool {
-        self.block_on_underrun
-    }
-
-    /// Return the PCM ring capacity in chunks.
-    #[must_use]
-    pub fn pcm_buffer_chunks(&self) -> usize {
-        self.pcm_buffer_chunks
-    }
-
-    /// Create config with stream config and default audio settings.
-    pub fn new(stream: T::Config, byte_pool: BytePool, pcm_pool: PcmPool) -> Self {
-        Self::for_stream(stream)
-            .byte_pool(byte_pool)
-            .pcm_pool(pcm_pool)
-            .build()
-    }
-
-    /// Chainable counterpart to [`AudioConfig::new`]: returns a builder
-    /// with `stream` set so callers can attach further setters.
-    pub fn for_stream(
-        stream: T::Config,
-    ) -> AudioConfigBuilder<T, B, audio_config_builder::SetStream> {
-        Self::builder().stream(stream)
     }
 }

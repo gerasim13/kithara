@@ -136,9 +136,10 @@ fn build_queue_with_tick(
             .build(),
     ));
     let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-            .with_player(player)
-            .with_store(store.clone()),
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build(),
     ));
     let tick_handle = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
     let downloader = Downloader::new(
@@ -162,17 +163,18 @@ async fn run_one_attempt(
     let temp = temp_dir();
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
-    let builder = match ResourceConfig::for_src(url.as_str()) {
-        Ok(b) => b,
+    let src = match ResourceConfig::parse_src(url.as_str()) {
+        Ok(src) => src,
         Err(e) => {
             tick_handle.abort();
             return IterOutcome::Errored {
                 iter,
                 target: f64::NAN,
-                error: format!("ResourceConfig::for_src failed: {e}"),
+                error: format!("ResourceConfig::parse_src failed: {e}"),
             };
         }
     };
+    let builder = ResourceConfig::for_src(src);
     let cfg = builder
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())

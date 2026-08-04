@@ -42,16 +42,19 @@ impl DetailLevel {
 
 #[derive(Debug)]
 pub(crate) struct ViewRequest {
-    pub(crate) kind: ViewKind,
-    pub(crate) package: Option<String>,
-    pub(crate) module: Option<String>,
-    pub(crate) scenario: Option<String>,
-    pub(crate) lod: DetailLevel,
     pub(crate) filter: ArchitectureFilter,
+    pub(crate) lod: DetailLevel,
+    pub(crate) module: Option<String>,
+    pub(crate) package: Option<String>,
+    pub(crate) scenario: Option<String>,
+    pub(crate) kind: ViewKind,
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct Projector<'a> {
     graph: &'a EvidenceGraph,
+    #[field(get, vis = "pub(crate)")]
     contours: ContourIndex,
 }
 
@@ -65,10 +68,6 @@ impl<'a> Projector<'a> {
 
     pub(crate) fn project(&self, request: &ViewRequest) -> DiagramModel {
         project_with_contours(self.graph, request, &self.contours)
-    }
-
-    pub(crate) fn contours(&self) -> &ContourIndex {
-        &self.contours
     }
 }
 
@@ -86,23 +85,23 @@ pub(crate) enum EvidenceStyle {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct DiagramNode {
+    pub(crate) style: EvidenceStyle,
     pub(crate) id: NodeId,
     pub(crate) kind: NodeKind,
-    pub(crate) label: String,
     pub(crate) location: Option<SourceLocation>,
-    pub(crate) style: EvidenceStyle,
     pub(crate) parent: Option<NodeId>,
+    pub(crate) label: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct DiagramEdge {
-    pub(crate) source: NodeId,
-    pub(crate) target: NodeId,
     pub(crate) kind: EdgeKind,
     pub(crate) style: EvidenceStyle,
-    pub(crate) count: usize,
+    pub(crate) source: NodeId,
+    pub(crate) target: NodeId,
     pub(crate) details: Vec<String>,
     pub(crate) origins: Vec<String>,
+    pub(crate) count: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -113,11 +112,11 @@ pub(crate) struct DiagramGroup {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct DiagramModel {
-    pub(crate) kind: ViewKind,
     pub(crate) lod: DetailLevel,
-    pub(crate) nodes: Vec<DiagramNode>,
     pub(crate) edges: Vec<DiagramEdge>,
     pub(crate) groups: Vec<DiagramGroup>,
+    pub(crate) nodes: Vec<DiagramNode>,
+    pub(crate) kind: ViewKind,
     pub(crate) hidden_nodes: usize,
 }
 
@@ -193,10 +192,10 @@ fn project_with_contours(
     let edges = lifted_edges(graph, request, &visible, parents);
 
     let mut model = DiagramModel {
-        kind: request.kind,
-        lod: request.lod,
         nodes,
         edges,
+        kind: request.kind,
+        lod: request.lod,
         groups: Vec::new(),
         hidden_nodes: 0,
     };
@@ -287,11 +286,11 @@ fn lifted_edges(
             .or_insert_with(|| DiagramEdge {
                 source,
                 target,
-                kind: edge.kind,
                 style,
                 count,
-                details: vec![detail],
                 origins,
+                kind: edge.kind,
+                details: vec![detail],
             });
     }
     lifted.into_values().collect()
@@ -692,6 +691,7 @@ fn include_connected_resources(
 
 fn diagram_node(node: &Node, parent: Option<NodeId>) -> DiagramNode {
     DiagramNode {
+        parent,
         id: node.id.clone(),
         kind: node.kind,
         label: node.label.clone(),
@@ -700,7 +700,6 @@ fn diagram_node(node: &Node, parent: Option<NodeId>) -> DiagramNode {
             node.certainty(),
             node.evidence.iter().map(|evidence| evidence.class),
         ),
-        parent,
     }
 }
 

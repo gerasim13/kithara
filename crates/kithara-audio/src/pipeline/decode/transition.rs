@@ -89,8 +89,90 @@ pub(crate) enum IncomingPrime {
 }
 
 impl super::core::ActiveDecode {
-    pub(crate) fn incoming_transition(&self) -> Option<VariantTransition> {
-        self.incoming.as_ref().map(IncomingDecode::transition)
+    pub(crate) fn begin_incoming(
+        &mut self,
+        transition: VariantTransition,
+    ) -> Option<DecoderGeneration> {
+        if self.incoming_transition() == Some(transition) {
+            return None;
+        }
+        self.incoming
+            .replace(IncomingDecode::Preparing { transition })
+            .and_then(Into::into)
+    }
+
+    delegate::delegate! {
+        to self.incoming {
+            #[expr($.and_then(Into::into))]
+            #[call(take)]
+            pub(crate) fn discard_incoming(&mut self) -> Option<DecoderGeneration>;
+            #[expr($.map(IncomingDecode::transition))]
+            #[call(as_ref)]
+            pub(crate) fn incoming_transition(&self) -> Option<VariantTransition>;
+        }
+    }
+
+    pub(crate) fn flush_incoming_reader_signals(&mut self) {
+        match self.incoming.as_mut() {
+            Some(IncomingDecode::Priming { generation, .. })
+            | Some(IncomingDecode::Failed { generation, .. }) => {
+                generation.decoder_mut().flush_reader_signals();
+            }
+            Some(IncomingDecode::Preparing { .. } | IncomingDecode::Building { .. }) | None => {}
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn incoming_is_building(&self, transition: VariantTransition) -> bool {
+        matches!(
+            self.incoming,
+            Some(IncomingDecode::Building {
+                transition: current,
+                ..
+            }) if current == transition
+        )
+    }
+
+    pub(crate) fn incoming_is_preparing(&self, transition: VariantTransition) -> bool {
+        matches!(
+            self.incoming,
+            Some(IncomingDecode::Preparing {
+                transition: current
+            }) if current == transition
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn incoming_is_priming(&self, transition: VariantTransition) -> bool {
+        matches!(
+            self.incoming,
+            Some(IncomingDecode::Priming {
+                transition: current,
+                ..
+            }) if current == transition
+        )
+    }
+
+    pub(crate) fn install_incoming(
+        &mut self,
+        transition: VariantTransition,
+        build: BuildId,
+        generation: DecoderGeneration,
+    ) -> Option<DecoderGeneration> {
+        if !matches!(
+            self.incoming,
+            Some(IncomingDecode::Building {
+                transition: current,
+                build: current_build,
+            }) if current == transition && current_build == build
+        ) {
+            return Some(generation);
+        }
+        self.incoming = Some(IncomingDecode::Priming {
+            transition,
+            generation,
+        });
+        None
     }
 
     /// Content time an incoming variant must be landed at to be spliceable.
@@ -119,49 +201,6 @@ impl super::core::ActiveDecode {
         Some(duration_for_frames(rate, frame.saturating_sub(origin)))
     }
 
-    pub(crate) fn begin_incoming(
-        &mut self,
-        transition: VariantTransition,
-    ) -> Option<DecoderGeneration> {
-        if self.incoming_transition() == Some(transition) {
-            return None;
-        }
-        self.incoming
-            .replace(IncomingDecode::Preparing { transition })
-            .and_then(Into::into)
-    }
-
-    pub(crate) fn incoming_is_preparing(&self, transition: VariantTransition) -> bool {
-        matches!(
-            self.incoming,
-            Some(IncomingDecode::Preparing {
-                transition: current
-            }) if current == transition
-        )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn incoming_is_building(&self, transition: VariantTransition) -> bool {
-        matches!(
-            self.incoming,
-            Some(IncomingDecode::Building {
-                transition: current,
-                ..
-            }) if current == transition
-        )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn incoming_is_priming(&self, transition: VariantTransition) -> bool {
-        matches!(
-            self.incoming,
-            Some(IncomingDecode::Priming {
-                transition: current,
-                ..
-            }) if current == transition
-        )
-    }
-
     pub(crate) fn mark_incoming_building(
         &mut self,
         transition: VariantTransition,
@@ -172,100 +211,6 @@ impl super::core::ActiveDecode {
         }
         self.incoming = Some(IncomingDecode::Building { transition, build });
         true
-    }
-
-    pub(crate) fn install_incoming(
-        &mut self,
-        transition: VariantTransition,
-        build: BuildId,
-        generation: DecoderGeneration,
-    ) -> Option<DecoderGeneration> {
-        if !matches!(
-            self.incoming,
-            Some(IncomingDecode::Building {
-                transition: current,
-                build: current_build,
-            }) if current == transition && current_build == build
-        ) {
-            return Some(generation);
-        }
-        self.incoming = Some(IncomingDecode::Priming {
-            transition,
-            generation,
-        });
-        None
-    }
-
-    pub(crate) fn ready_to_promote(
-        &self,
-        outgoing_frontier: OutgoingFrontier,
-    ) -> Option<ReadyToPromote> {
-        let IncomingDecode::Priming {
-            transition,
-            generation,
-        } = self.incoming.as_ref()?
-        else {
-            return None;
-        };
-        let gapless_mode = self.gapless_mode();
-        let outgoing_origin = self.active.timeline_origin(gapless_mode);
-        let incoming_origin = incoming_origin(&self.active, generation, gapless_mode);
-        let outgoing_end = outgoing_staged_end(&self.active, outgoing_origin);
-        let overlap = overlap_span(
-            generation,
-            outgoing_frontier,
-            outgoing_origin,
-            incoming_origin,
-            outgoing_end,
-        )?;
-        Some(ReadyToPromote {
-            overlap,
-            transition: *transition,
-        })
-    }
-
-    pub(crate) fn promote_incoming(&mut self, proof: ReadyToPromote) -> Option<DecoderGeneration> {
-        let incoming = self.incoming.take()?;
-        let IncomingDecode::Priming {
-            transition,
-            mut generation,
-        } = incoming
-        else {
-            self.incoming = Some(incoming);
-            return None;
-        };
-        if transition != proof.transition
-            || !trim_staged_head(&mut generation, proof.overlap)
-            || !generation.has_output()
-        {
-            self.incoming = Some(IncomingDecode::Priming {
-                transition,
-                generation,
-            });
-            return None;
-        }
-        self.blender.join_active(generation.blender_profile());
-        Some(std::mem::replace(&mut self.active, generation))
-    }
-
-    pub(crate) fn discard_incoming(&mut self) -> Option<DecoderGeneration> {
-        self.incoming.take().and_then(Into::into)
-    }
-
-    pub(crate) fn take_failed_incoming(
-        &mut self,
-    ) -> Option<(VariantTransition, DecoderGeneration)> {
-        let incoming = self.incoming.take()?;
-        match incoming {
-            IncomingDecode::Failed {
-                transition,
-                generation,
-            } => Some((transition, generation)),
-            incoming => {
-                self.incoming = Some(incoming);
-                None
-            }
-        }
     }
 
     pub(crate) fn prime_incoming(&mut self, outgoing_frontier: OutgoingFrontier) -> IncomingPrime {
@@ -364,13 +309,71 @@ impl super::core::ActiveDecode {
         outcome
     }
 
-    pub(crate) fn flush_incoming_reader_signals(&mut self) {
-        match self.incoming.as_mut() {
-            Some(IncomingDecode::Priming { generation, .. })
-            | Some(IncomingDecode::Failed { generation, .. }) => {
-                generation.decoder_mut().flush_reader_signals();
+    pub(crate) fn promote_incoming(&mut self, proof: ReadyToPromote) -> Option<DecoderGeneration> {
+        let incoming = self.incoming.take()?;
+        let IncomingDecode::Priming {
+            transition,
+            mut generation,
+        } = incoming
+        else {
+            self.incoming = Some(incoming);
+            return None;
+        };
+        if transition != proof.transition
+            || !trim_staged_head(&mut generation, proof.overlap)
+            || !generation.has_output()
+        {
+            self.incoming = Some(IncomingDecode::Priming {
+                transition,
+                generation,
+            });
+            return None;
+        }
+        self.blender.join_active(generation.blender_profile());
+        Some(std::mem::replace(&mut self.active, generation))
+    }
+
+    pub(crate) fn ready_to_promote(
+        &self,
+        outgoing_frontier: OutgoingFrontier,
+    ) -> Option<ReadyToPromote> {
+        let IncomingDecode::Priming {
+            transition,
+            generation,
+        } = self.incoming.as_ref()?
+        else {
+            return None;
+        };
+        let gapless_mode = self.gapless_mode();
+        let outgoing_origin = self.active.timeline_origin(gapless_mode);
+        let incoming_origin = incoming_origin(&self.active, generation, gapless_mode);
+        let outgoing_end = outgoing_staged_end(&self.active, outgoing_origin);
+        let overlap = overlap_span(
+            generation,
+            outgoing_frontier,
+            outgoing_origin,
+            incoming_origin,
+            outgoing_end,
+        )?;
+        Some(ReadyToPromote {
+            overlap,
+            transition: *transition,
+        })
+    }
+
+    pub(crate) fn take_failed_incoming(
+        &mut self,
+    ) -> Option<(VariantTransition, DecoderGeneration)> {
+        let incoming = self.incoming.take()?;
+        match incoming {
+            IncomingDecode::Failed {
+                transition,
+                generation,
+            } => Some((transition, generation)),
+            incoming => {
+                self.incoming = Some(incoming);
+                None
             }
-            Some(IncomingDecode::Preparing { .. } | IncomingDecode::Building { .. }) | None => {}
         }
     }
 }
@@ -432,7 +435,6 @@ fn overlap_span(
         // incoming that landed *after* the frame the outgoing is about to emit
         // can never cover it, and the transition waits for the outgoing to
         // catch up instead. Log the three quantities so the difference is
-        // visible without a debugger.
         trace!(
             ?incoming_first_time,
             ?incoming_end_time,
@@ -548,10 +550,10 @@ fn incoming_origin_from(
     mode: kithara_decode::GaplessMode,
 ) -> u64 {
     let incoming_profile = incoming.gapless_profile();
-    let same_fallback_profile = active_profile.gapless().is_none()
+    let same_default_profile = active_profile.gapless().is_none()
         && incoming_profile.gapless().is_none()
-        && active_profile.fallback_priming_frames() == incoming_profile.fallback_priming_frames();
-    let gap = if same_fallback_profile {
+        && active_profile.default_priming_frames() == incoming_profile.default_priming_frames();
+    let gap = if same_default_profile {
         active_gap.max(incoming.timeline_gap())
     } else {
         incoming.timeline_gap()

@@ -10,4 +10,4 @@ mod theme;
 mod update;
 mod view;
 
-pub use frontend::GuiFrontend;
+pub use frontend::{FrontendError, GuiFrontend};

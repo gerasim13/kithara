@@ -21,13 +21,6 @@ impl RetiredGenerations {
         }
     }
 
-    pub(crate) fn retire_generation(&self, generation: DecoderGeneration) {
-        if let Err(generation) = self.generations.push(generation) {
-            self.overflowed.store(true, Ordering::Release);
-            mem::forget(generation);
-        }
-    }
-
     pub(crate) fn drain(&self) {
         while self.generations.pop().is_some() {}
         if self.overflowed.swap(false, Ordering::AcqRel) {
@@ -38,5 +31,12 @@ impl RetiredGenerations {
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.generations.len()
+    }
+
+    pub(crate) fn retire_generation(&self, generation: DecoderGeneration) {
+        if let Err(generation) = self.generations.push(generation) {
+            self.overflowed.store(true, Ordering::Release);
+            mem::forget(generation);
+        }
     }
 }

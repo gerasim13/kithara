@@ -191,9 +191,10 @@ fn build_queue_with_tick(
             .build(),
     ));
     let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-            .with_player(player)
-            .with_store(store.clone()),
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build(),
     ));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {
@@ -275,19 +276,20 @@ async fn local_track_plays_end_to_end(
     let temp = temp_dir();
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
-    let cfg = ResourceConfig::for_src(url.as_str())
-        .expect("valid fixture URL")
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .downloader(downloader.clone())
-        .store(store)
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(backend)
-                .build(),
-        )
-        .initial_abr_mode(abr)
-        .build();
+    let cfg = ResourceConfig::for_src(
+        ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"),
+    )
+    .byte_pool(kithara::bufpool::BytePool::default())
+    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .downloader(downloader.clone())
+    .store(store)
+    .decoder(
+        kithara::audio::AudioDecoderConfig::builder()
+            .backend(backend)
+            .build(),
+    )
+    .initial_abr_mode(abr)
+    .build();
     let source = TrackSource::Config(Box::new(cfg));
 
     // Subscribe before the actions that drive loading / playback so no
@@ -487,19 +489,20 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
     let ids: Vec<TrackId> = urls
         .iter()
         .map(|u| {
-            let cfg = ResourceConfig::for_src(u.as_str())
-                .expect("valid fixture URL")
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
-                .downloader(downloader.clone())
-                .store(store.clone())
-                .decoder(
-                    kithara::audio::AudioDecoderConfig::builder()
-                        .backend(backend)
-                        .build(),
-                )
-                .initial_abr_mode(AbrMode::Auto(None))
-                .build();
+            let cfg = ResourceConfig::for_src(
+                ResourceConfig::parse_src(u.as_str()).expect("valid fixture URL"),
+            )
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .downloader(downloader.clone())
+            .store(store.clone())
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
+            .initial_abr_mode(AbrMode::Auto(None))
+            .build();
             queue.append(TrackSource::Config(Box::new(cfg)))
         })
         .collect();

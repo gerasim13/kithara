@@ -16,15 +16,14 @@ impl AbrPublisher {
         Self { state }
     }
 
-    /// Drop the pending request only when `ticket` still identifies it.
-    #[must_use]
-    pub fn abort_pending(&self, ticket: AbrTicket) -> bool {
-        self.state.abort_pending(ticket)
-    }
-
-    /// Publish only the exact pending request represented by `claim`.
-    #[must_use]
-    pub fn commit_pending(&self, claim: PendingAbrDecision, now: Instant) -> bool {
-        self.state.commit_pending(claim, now)
+    delegate::delegate! {
+        to self.state {
+            /// Drop the pending request only when `ticket` still identifies it.
+            #[must_use]
+            pub fn abort_pending(&self, ticket: AbrTicket) -> bool;
+            /// Publish only the exact pending request represented by `claim`.
+            #[must_use]
+            pub fn commit_pending(&self, claim: PendingAbrDecision, now: Instant) -> bool;
+        }
     }
 }

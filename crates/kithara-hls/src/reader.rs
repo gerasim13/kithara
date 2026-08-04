@@ -14,17 +14,6 @@ enum HlsReaderRoute {
 }
 
 impl HlsReaderRoute {
-    fn map<T>(
-        &self,
-        on_active: impl FnOnce(&HlsCoord) -> T,
-        on_session: impl FnOnce(&HlsSession) -> T,
-    ) -> T {
-        match self {
-            Self::Active(coord) => on_active(coord),
-            Self::Session(session) => on_session(session),
-        }
-    }
-
     fn find_at_offset(&self, cursor: u64) -> Option<(u32, u64, u64)> {
         self.map(
             |coord| coord.find_at_offset(cursor),
@@ -34,6 +23,17 @@ impl HlsReaderRoute {
 
     fn len(&self) -> Option<u64> {
         self.map(HlsCoord::len, HlsSession::len)
+    }
+
+    fn map<T>(
+        &self,
+        on_active: impl FnOnce(&HlsCoord) -> T,
+        on_session: impl FnOnce(&HlsSession) -> T,
+    ) -> T {
+        match self {
+            Self::Active(coord) => on_active(coord),
+            Self::Session(session) => on_session(session),
+        }
     }
 
     fn position(&self) -> u64 {
@@ -51,9 +51,9 @@ impl HlsReaderRoute {
 /// Mirrors `kithara-file`'s `FileReaderEventSink` but resolves the landed byte
 /// against the active or fixed incoming session captured at construction.
 pub(crate) struct HlsReaderEventSink {
-    route: HlsReaderRoute,
-    seek_epoch_handle: Arc<AtomicU64>,
     bus: Arc<DeferredBus<HlsEvent>>,
+    seek_epoch_handle: Arc<AtomicU64>,
+    route: HlsReaderRoute,
     /// `(variant_index, segment_index)` of the last segment the
     /// reader was observed in. A change between `on_chunk` calls
     /// drives [`HlsEvent::SegmentReadStart`]; the same pair held
@@ -68,8 +68,8 @@ pub(crate) struct HlsReaderEventSink {
     /// non-default `seek_epoch` even if `on_seek` never landed.
     initial_cursor: u64,
     last_cursor: u64,
-    last_segment_start_cursor: u64,
     last_progress_cursor: u64,
+    last_segment_start_cursor: u64,
 }
 
 impl HlsReaderEventSink {
@@ -89,23 +89,23 @@ impl HlsReaderEventSink {
         Self::with_route(bus, HlsReaderRoute::Session(session), seek_epoch_handle)
     }
 
-    fn with_route(
-        bus: Arc<DeferredBus<HlsEvent>>,
-        route: HlsReaderRoute,
-        seek_epoch_handle: Arc<AtomicU64>,
-    ) -> Self {
-        let last_cursor = route.position();
-        Self {
-            bus,
-            route,
-            last_cursor,
-            last_segment_start_cursor: last_cursor,
-            seek_epoch_handle,
-            initial_cursor: last_cursor,
-            last_progress_cursor: last_cursor,
-            initial_seek_published: false,
-            last_segment: None,
+    fn maybe_publish_end_of_stream(&mut self) {
+        if self.last_segment.take().is_none() {
+            return;
         }
+        self.bus.enqueue(HlsEvent::EndOfStream);
+    }
+
+    fn maybe_publish_read_progress(&mut self, cursor: u64) {
+        const READ_PROGRESS_MIN_DELTA: u64 = 256 * 1024;
+        if cursor.abs_diff(self.last_progress_cursor) < READ_PROGRESS_MIN_DELTA {
+            return;
+        }
+        self.last_progress_cursor = cursor;
+        self.bus.enqueue(HlsEvent::ReadProgress {
+            position: cursor,
+            total: self.route.len(),
+        });
     }
 
     /// Announce a [`HlsEvent::SegmentReadStart`] when the reader's
@@ -138,25 +138,6 @@ impl HlsReaderEventSink {
         });
     }
 
-    fn maybe_publish_read_progress(&mut self, cursor: u64) {
-        const READ_PROGRESS_MIN_DELTA: u64 = 256 * 1024;
-        if cursor.abs_diff(self.last_progress_cursor) < READ_PROGRESS_MIN_DELTA {
-            return;
-        }
-        self.last_progress_cursor = cursor;
-        self.bus.enqueue(HlsEvent::ReadProgress {
-            position: cursor,
-            total: self.route.len(),
-        });
-    }
-
-    fn maybe_publish_end_of_stream(&mut self) {
-        if self.last_segment.take().is_none() {
-            return;
-        }
-        self.bus.enqueue(HlsEvent::EndOfStream);
-    }
-
     fn publish_initial_seek(&mut self, cursor: u64) {
         if self.initial_seek_published {
             return;
@@ -187,6 +168,25 @@ impl HlsReaderEventSink {
             from_offset: from,
             to_offset: to,
         });
+    }
+
+    fn with_route(
+        bus: Arc<DeferredBus<HlsEvent>>,
+        route: HlsReaderRoute,
+        seek_epoch_handle: Arc<AtomicU64>,
+    ) -> Self {
+        let last_cursor = route.position();
+        Self {
+            bus,
+            route,
+            last_cursor,
+            last_segment_start_cursor: last_cursor,
+            seek_epoch_handle,
+            initial_cursor: last_cursor,
+            last_progress_cursor: last_cursor,
+            initial_seek_published: false,
+            last_segment: None,
+        }
     }
 }
 
@@ -237,7 +237,7 @@ mod tests {
     use std::sync::{OnceLock, atomic::AtomicU64};
 
     use kithara_abr::{Abr, AbrController, AbrSettings, AbrState};
-    use kithara_assets::{AssetResource, AssetSource, AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
     use kithara_events::{Event, EventBus};
     use kithara_platform::{
         CancelToken,
@@ -269,7 +269,7 @@ mod tests {
     fn test_ctx(bus: &EventBus) -> PlanCtx {
         let cancel = CancelToken::never();
         let store = Arc::new(
-            AssetStoreBuilder::default()
+            AssetStore::builder()
                 .backend(StorageBackend::Memory)
                 .cancel(cancel.clone())
                 .build(),
@@ -348,8 +348,8 @@ mod tests {
             }),
         ];
         let variant = VariantParts {
-            init: None,
             segments,
+            init: None,
             seek_obs: Arc::new(SeekState::new()) as Arc<dyn kithara_stream::SeekObserve>,
             codec: playlist.variant_codec(0),
             container: playlist.variant_container(0),

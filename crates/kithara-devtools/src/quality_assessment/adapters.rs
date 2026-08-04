@@ -10,16 +10,16 @@ use crate::Ctx;
 
 #[derive(Default)]
 pub(super) struct AdapterOutput {
+    pub(super) coverage: Vec<CoverageEvidence>,
     pub(super) findings: Vec<Finding>,
     pub(super) signals: Vec<Signal>,
-    pub(super) coverage: Vec<CoverageEvidence>,
 }
 
 pub(super) struct CoverageEvidence {
-    pub(super) tool: String,
     pub(super) status: CoverageStatus,
-    pub(super) owner: String,
     pub(super) note: String,
+    pub(super) owner: String,
+    pub(super) tool: String,
     pub(super) artifacts: Vec<String>,
 }
 
@@ -499,8 +499,8 @@ fn health_coverage(root: &Path, path: &Path) -> Result<Vec<CoverageEvidence>> {
         };
         for tool in health_stage_tools(stage) {
             coverage.push(CoverageEvidence {
-                tool: (*tool).to_owned(),
                 status,
+                tool: (*tool).to_owned(),
                 owner: format!("health:{stage}"),
                 note: format!("health stage `{stage}` reported {health_status}"),
                 artifacts: vec![artifact.clone()],
@@ -581,8 +581,8 @@ fn quality_lab(
                 CoverageStatus::EvidenceGap
             };
             output.coverage.push(CoverageEvidence {
-                tool: name.to_owned(),
                 status,
+                tool: name.to_owned(),
                 owner: format!("quality-lab-{profile}"),
                 note: format!("Quality Lab status: {state}"),
                 artifacts: vec![artifact.clone()],

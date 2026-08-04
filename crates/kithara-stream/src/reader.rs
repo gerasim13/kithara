@@ -39,12 +39,15 @@ impl<T> SessionReader for T where T: Read + Seek + Send + Sync + 'static {}
 
 /// Reader capability and byte-stream facts captured when opening a decoder.
 #[non_exhaustive]
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct OpenedReader {
+    input: Box<dyn SessionReader>,
+    #[field(get)]
     byte_len: Option<u64>,
     byte_map: Option<Arc<dyn ByteMap>>,
     construction_gate: Option<ConstructionGate>,
     event_sink: Option<BoxedEventSink>,
-    input: Box<dyn SessionReader>,
 }
 
 impl OpenedReader {
@@ -66,12 +69,6 @@ impl OpenedReader {
         }
     }
 
-    /// Bytes addressable by the captured reader view.
-    #[must_use]
-    pub const fn byte_len(&self) -> Option<u64> {
-        self.byte_len
-    }
-
     /// Segment map captured by the byte-stream owner.
     #[must_use]
     pub fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
@@ -84,25 +81,28 @@ impl OpenedReader {
         self.construction_gate.clone()
     }
 
-    /// Transfer reader-side observation to the decoder.
-    pub fn take_event_sink(&mut self) -> Option<BoxedEventSink> {
-        self.event_sink.take()
-    }
-
     /// Transfer byte input to the decoder.
     #[must_use]
     pub fn into_inner(self) -> Box<dyn SessionReader> {
         self.input
     }
+
+    /// Transfer reader-side observation to the decoder.
+    pub fn take_event_sink(&mut self) -> Option<BoxedEventSink> {
+        self.event_sink.take()
+    }
 }
 
 /// Target facts needed to choose a decoder and its reader requirements before
 /// an incoming session is opened.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
 #[non_exhaustive]
+#[fieldwork(get)]
 pub struct VariantReaderPlan {
+    #[field(get(copy))]
     landing_time: Duration,
     media_info: MediaInfo,
+    #[field(get(copy))]
     transition: VariantTransition,
 }
 
@@ -120,62 +120,40 @@ impl VariantReaderPlan {
             transition,
         }
     }
-
-    /// Exact transition that owns the planned reader.
-    #[must_use]
-    pub const fn transition(&self) -> VariantTransition {
-        self.transition
-    }
-
-    /// Media facts used to select the decoder and reader profile.
-    #[must_use]
-    pub const fn media_info(&self) -> &MediaInfo {
-        &self.media_info
-    }
-
-    /// Content time where the incoming decoder must land.
-    #[must_use]
-    pub const fn landing_time(&self) -> Duration {
-        self.landing_time
-    }
 }
 
 /// Move-only incoming reader bound to one exact variant reader plan.
 #[non_exhaustive]
 pub struct OpenedVariantReader {
-    plan: VariantReaderPlan,
     reader: OpenedReader,
+    plan: VariantReaderPlan,
 }
 
 impl OpenedVariantReader {
     /// Bind byte capabilities to the exact facts used to prepare the session.
     #[must_use]
     pub fn new(plan: VariantReaderPlan, reader: OpenedReader) -> Self {
-        Self { plan, reader }
+        Self { reader, plan }
+    }
+
+    delegate::delegate! {
+        to self.plan {
+            /// Content time where the incoming decoder must land.
+            #[must_use]
+            pub fn landing_time(&self) -> Duration;
+            /// Target media facts captured with the reader.
+            #[must_use]
+            pub fn media_info(&self) -> &MediaInfo;
+            /// Exact transition that owns this reader.
+            #[must_use]
+            pub fn transition(&self) -> VariantTransition;
+        }
     }
 
     /// Exact pre-open plan used to construct this reader.
     #[must_use]
     pub const fn plan(&self) -> &VariantReaderPlan {
         &self.plan
-    }
-
-    /// Target media facts captured with the reader.
-    #[must_use]
-    pub const fn media_info(&self) -> &MediaInfo {
-        self.plan.media_info()
-    }
-
-    /// Exact transition that owns this reader.
-    #[must_use]
-    pub const fn transition(&self) -> VariantTransition {
-        self.plan.transition()
-    }
-
-    /// Content time where the incoming decoder must land.
-    #[must_use]
-    pub const fn landing_time(&self) -> Duration {
-        self.plan.landing_time()
     }
 
     /// Split the move-only bundle for decoder construction.

@@ -77,6 +77,10 @@ mod wire {
             gain_db: f32,
             player_id: PlayerId,
         },
+        SetPlayerEqLayout {
+            eq_layout: Vec<EqBandConfig>,
+            player_id: PlayerId,
+        },
         SetSessionDucking {
             mode: SessionDuckingMode,
         },
@@ -121,8 +125,8 @@ mod wire {
 
     #[non_exhaustive]
     pub struct AllocatedSlot {
-        pub slot: SlotId,
         pub control: SlotControl,
+        pub slot: SlotId,
     }
 }
 
@@ -154,11 +158,6 @@ mod handle {
             Self(dispatcher)
         }
 
-        #[must_use]
-        pub fn dispatcher(&self) -> Arc<dyn SessionDispatcher> {
-            Arc::clone(&self.0)
-        }
-
         pub fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
             match self.exec_ok(Cmd::AllocateSlot { player_id })? {
                 Reply::SlotAllocated(allocated) => Ok(allocated),
@@ -168,12 +167,16 @@ mod handle {
             }
         }
 
-        pub fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-            self.0.exec(cmd)
+        #[must_use]
+        pub fn dispatcher(&self) -> Arc<dyn SessionDispatcher> {
+            Arc::clone(&self.0)
         }
 
-        pub fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-            self.0.exec_ok(cmd)
+        delegate::delegate! {
+            to self.0 {
+                pub fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
+                pub fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError>;
+            }
         }
 
         pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
@@ -232,6 +235,18 @@ mod handle {
             }
             self.exec_ok(Cmd::SetPlayerMasterVolumes { levels })
                 .map(|_| ())
+        }
+
+        pub fn set_player_eq_layout(
+            &self,
+            player_id: PlayerId,
+            eq_layout: Vec<EqBandConfig>,
+        ) -> Result<(), PlayError> {
+            self.exec_ok(Cmd::SetPlayerEqLayout {
+                eq_layout,
+                player_id,
+            })
+            .map(|_| ())
         }
 
         pub fn set_player_slot_volume(

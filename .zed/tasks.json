@@ -1,22 +1,12 @@
 [
   {
-    "label": "run: tui (debug)",
-    "command": "cargo run -p kithara-app --bin kithara -- --mode tui",
+    "label": "run: kithara (debug)",
+    "command": "cargo run -p kithara-app --bin kithara",
     "use_new_terminal": true,
   },
   {
-    "label": "run: gui (debug)",
-    "command": "cargo run -p kithara-app --bin kithara -- --mode gui",
-    "use_new_terminal": true,
-  },
-  {
-    "label": "run: tui (release)",
-    "command": "cargo run -p kithara-app --bin kithara --release -- --mode tui",
-    "use_new_terminal": true,
-  },
-  {
-    "label": "run: gui (release)",
-    "command": "cargo run -p kithara-app --bin kithara --release -- --mode gui",
+    "label": "run: kithara (release)",
+    "command": "cargo run -p kithara-app --bin kithara --release",
     "use_new_terminal": true,
   },
   {

@@ -15,33 +15,33 @@ const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Default, Serialize)]
 pub(super) struct AnalysisReport {
-    pub(super) schema_version: u32,
-    pub(super) scanned_files: usize,
-    pub(super) abstractions: usize,
-    pub(super) interned_shapes: usize,
-    pub(super) cached_comparisons: usize,
     pub(super) candidates: Vec<Candidate>,
+    pub(super) schema_version: u32,
+    pub(super) abstractions: usize,
+    pub(super) cached_comparisons: usize,
+    pub(super) interned_shapes: usize,
+    pub(super) scanned_files: usize,
 }
 
 #[derive(Debug, Serialize)]
 pub(super) struct Candidate {
     pub(super) left: AbstractionRef,
     pub(super) right: AbstractionRef,
-    pub(super) state_similarity: f64,
     pub(super) behavior_similarity: Option<f64>,
-    pub(super) overall_similarity: f64,
-    pub(super) substitutions: Vec<TypeSubstitution>,
-    pub(super) shared_behavior: Vec<String>,
-    pub(super) field_matches: Vec<FieldMatch>,
     pub(super) recommendation: Recommendation,
+    pub(super) field_matches: Vec<FieldMatch>,
+    pub(super) shared_behavior: Vec<String>,
+    pub(super) substitutions: Vec<TypeSubstitution>,
+    pub(super) overall_similarity: f64,
+    pub(super) state_similarity: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct AbstractionRef {
+    pub(super) kind: AbstractionKind,
+    pub(super) name: String,
     pub(super) path: String,
     pub(super) line: usize,
-    pub(super) name: String,
-    pub(super) kind: AbstractionKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -66,9 +66,9 @@ pub(super) enum AbstractionKind {
 pub(super) struct FieldMatch {
     pub(super) left: String,
     pub(super) right: String,
+    pub(super) match_similarity: f64,
     pub(super) name_similarity: f64,
     pub(super) type_similarity: f64,
-    pub(super) match_similarity: f64,
 }
 
 #[cfg(test)]
@@ -230,12 +230,12 @@ fn analyze_sources(
             .then_with(|| left.right.line.cmp(&right.right.line))
     });
     Ok(AnalysisReport {
+        candidates,
         schema_version: SCHEMA_VERSION,
         scanned_files: sources.len(),
         abstractions: abstractions.len(),
         interned_shapes: arena.len(),
         cached_comparisons: cache.len(),
-        candidates,
     })
 }
 
@@ -305,32 +305,32 @@ fn candidate_pairs(
 
 #[derive(Debug)]
 struct Abstraction {
-    path: String,
-    line: usize,
-    name: String,
-    qualified_name: String,
     kind: AbstractionKind,
-    fields: Vec<Field>,
+    name: String,
+    path: String,
+    qualified_name: String,
     behaviors: Vec<Behavior>,
+    fields: Vec<Field>,
+    line: usize,
 }
 
 #[derive(Debug)]
 struct Field {
-    name: String,
     shape: ShapeId,
+    name: String,
 }
 
 #[derive(Debug)]
 struct Behavior {
-    name: String,
     graph: BehaviorGraph,
+    name: String,
 }
 
 #[derive(Debug)]
 struct PendingImpl {
+    module: String,
     owner: String,
     path: String,
-    module: String,
     behaviors: Vec<Behavior>,
 }
 
@@ -383,12 +383,12 @@ fn collect_module(
                     Fields::Unit => Vec::new(),
                 };
                 abstractions.push(Abstraction {
+                    fields,
                     path: path.to_string(),
                     line: item.ident.span().start().line,
                     name: item.ident.to_string(),
                     qualified_name: qualify_source(path, module, &item.ident.to_string()),
                     kind: AbstractionKind::Struct,
-                    fields,
                     behaviors: Vec::new(),
                 });
             }
@@ -457,9 +457,9 @@ fn collect_module(
         }
         pending_impls.push(PendingImpl {
             owner,
+            behaviors,
             path: path.to_string(),
             module: module.to_string(),
-            behaviors,
         });
     }
 }
@@ -602,8 +602,8 @@ fn semantically_aligned(matching: &FieldMatching, behavior_similarity: Option<f6
 }
 
 struct BehaviorMatching {
-    score: f64,
     shared_labels: Vec<String>,
+    score: f64,
 }
 
 fn compare_behaviors(left: &[Behavior], right: &[Behavior]) -> Option<BehaviorMatching> {
@@ -667,8 +667,8 @@ fn compare_behaviors(left: &[Behavior], right: &[Behavior]) -> Option<BehaviorMa
     let average = matched.iter().sum::<f64>() / count_f64(matched.len());
     let coverage = count_f64(matched.len()) / count_f64(left.len().max(right.len()));
     Some(BehaviorMatching {
-        score: average * (0.5 + 0.5 * coverage),
         shared_labels,
+        score: average * (0.5 + 0.5 * coverage),
     })
 }
 
@@ -679,10 +679,10 @@ struct FieldMatching {
 struct FieldPair {
     left_name: String,
     right_name: String,
+    substitutions: Vec<TypeSubstitution>,
+    match_similarity: f64,
     name_similarity: f64,
     type_similarity: f64,
-    match_similarity: f64,
-    substitutions: Vec<TypeSubstitution>,
 }
 
 fn matched_fields(
@@ -714,9 +714,9 @@ fn matched_fields(
                     right: right_index,
                     score,
                     pair: FieldPair {
+                        name_similarity,
                         left_name: left_field.name.clone(),
                         right_name: right_field.name.clone(),
-                        name_similarity,
                         type_similarity: comparison.score,
                         match_similarity: score,
                         substitutions: comparison.substitutions,

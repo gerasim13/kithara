@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use kithara::{
-    assets::{AssetStoreBuilder, StorageBackend},
+    assets::{AssetStore, StorageBackend},
     events::VariantIndex,
     hls::{AbrMode, Hls, HlsConfig},
     platform::CancelToken,
@@ -97,7 +97,7 @@ impl HlsStreamBuilder {
             None => temp_path.to_path_buf(),
         };
 
-        let store_opts = AssetStoreBuilder::default()
+        let store_opts = AssetStore::builder()
             .backend(StorageBackend::Disk { root: store_path })
             .maybe_max_assets(self.max_assets)
             .maybe_max_bytes(self.max_bytes)

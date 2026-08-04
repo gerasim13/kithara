@@ -37,6 +37,43 @@ impl Queue {
         if idx < self.len() { Some(idx) } else { None }
     }
 
+    /// Set repeat mode.
+    pub fn set_repeat(&self, mode: RepeatMode) {
+        self.lock_navigation_mut().set_repeat(mode);
+        self.bus.publish(QueueEvent::RepeatModeChanged {
+            mode: map_repeat_mode(mode),
+        });
+    }
+
+    /// Enable or disable shuffle.
+    pub fn set_shuffle(&self, on: bool) {
+        self.lock_navigation_mut().set_shuffle(on);
+    }
+
+    /// Subscribe to the unified event stream:
+    /// [`QueueEvent`](kithara_events::QueueEvent) + underlying player /
+    /// audio / hls / file events.
+    #[must_use]
+    pub fn subscribe(&self) -> EventReceiver {
+        self.bus.subscribe()
+    }
+
+    /// Lookup a track entry by id.
+    #[must_use]
+    pub fn track(&self, id: TrackId) -> Option<TrackEntry> {
+        self.lock_tracks()
+            .iter()
+            .find(|r| r.id == id)
+            .map(TrackRecord::entry)
+    }
+
+    /// The original [`TrackSource`] for `id`, if still queued. Lets callers
+    /// rebuild a resource by track identity rather than by queue position.
+    #[must_use]
+    pub fn track_source(&self, id: TrackId) -> Option<TrackSource> {
+        self.tracks.source(id)
+    }
+
     delegate::delegate! {
         to self {
             /// Live variant metadata of the currently playing adaptive item.
@@ -73,43 +110,6 @@ impl Queue {
             #[call(lock_tracks)]
             pub fn tracks(&self) -> Vec<TrackEntry>;
         }
-    }
-
-    /// Set repeat mode.
-    pub fn set_repeat(&self, mode: RepeatMode) {
-        self.lock_navigation_mut().set_repeat(mode);
-        self.bus.publish(QueueEvent::RepeatModeChanged {
-            mode: map_repeat_mode(mode),
-        });
-    }
-
-    /// Enable or disable shuffle.
-    pub fn set_shuffle(&self, on: bool) {
-        self.lock_navigation_mut().set_shuffle(on);
-    }
-
-    /// Subscribe to the unified event stream:
-    /// [`QueueEvent`](kithara_events::QueueEvent) + underlying player /
-    /// audio / hls / file events.
-    #[must_use]
-    pub fn subscribe(&self) -> EventReceiver {
-        self.bus.subscribe()
-    }
-
-    /// Lookup a track entry by id.
-    #[must_use]
-    pub fn track(&self, id: TrackId) -> Option<TrackEntry> {
-        self.lock_tracks()
-            .iter()
-            .find(|r| r.id == id)
-            .map(TrackRecord::entry)
-    }
-
-    /// The original [`TrackSource`] for `id`, if still queued. Lets callers
-    /// rebuild a resource by track identity rather than by queue position.
-    #[must_use]
-    pub fn track_source(&self, id: TrackId) -> Option<TrackSource> {
-        self.tracks.source(id)
     }
 }
 

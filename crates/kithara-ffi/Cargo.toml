@@ -56,7 +56,7 @@ stretch-bungee = ["kithara/stretch-bungee"]
 # client-reqwest/tls-rustls forwarding below.
 wasm = ["client-reqwest", "tls-rustls"]
 probe = []
-mock = []
+mock = ["dep:unimock"]
 # HTTP backend forwarding to every kithara-net-reaching dep. `kithara`
 # (native) and the wasm-only `kithara-hls`/`kithara-abr` are target-gated;
 # their edges are inert on the other target. The framework `apple` feature
@@ -116,6 +116,7 @@ kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 
 delegate = { workspace = true }
+fieldwork = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -142,7 +143,7 @@ cpal = { workspace = true, optional = true }
 dashmap = { workspace = true }
 rand = { workspace = true }
 uniffi = { workspace = true, optional = true, default-features = false }
-unimock = { workspace = true }
+unimock = { workspace = true, optional = true }
 url = { workspace = true }
 uuid = { workspace = true }
 
@@ -189,6 +190,7 @@ kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 
 futures = { workspace = true }
 tempfile = { workspace = true }
+unimock = { workspace = true }
 
 [lints]
 workspace = true

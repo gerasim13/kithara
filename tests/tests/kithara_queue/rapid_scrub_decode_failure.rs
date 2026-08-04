@@ -246,7 +246,7 @@ impl Harness {
                 .session(OfflineSession::arc_auto())
                 .build(),
         ));
-        let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+        let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
         let queue_for_tick = Arc::clone(&queue);
         let tick = tokio::task::spawn(async move {
@@ -258,14 +258,14 @@ impl Harness {
             }
         });
 
-        let cfg = ResourceConfig::for_src(master.as_str())
-            .expect("valid URL")
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .downloader(downloader)
-            .store(store)
-            .initial_abr_mode(AbrMode::Auto(None))
-            .build();
+        let cfg =
+            ResourceConfig::for_src(ResourceConfig::parse_src(master.as_str()).expect("valid URL"))
+                .byte_pool(kithara::bufpool::BytePool::default())
+                .pcm_pool(kithara::bufpool::PcmPool::default())
+                .downloader(downloader)
+                .store(store)
+                .initial_abr_mode(AbrMode::Auto(None))
+                .build();
         let mut rx = queue.subscribe();
         let id = queue.append(TrackSource::Config(Box::new(cfg)));
 

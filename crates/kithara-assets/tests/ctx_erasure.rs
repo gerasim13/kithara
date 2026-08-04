@@ -10,8 +10,8 @@ use std::{
 };
 
 use kithara_assets::{
-    AcquisitionResult, AssetStore, AssetStoreBuilder, ChunkSink, ProcessCtx, ReadSide,
-    ResourceProcessor, StorageBackend, WriteSide,
+    AcquisitionResult, AssetStore, ChunkSink, ProcessCtx, ReadSide, ResourceProcessor,
+    StorageBackend, WriteSide,
 };
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_test_utils::kithara;
@@ -130,7 +130,7 @@ fn index_dirs(root: &Path) -> Vec<PathBuf> {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn one_store_serves_both_none_and_processing_scopes() {
     let dir = tempdir().unwrap();
-    let store: AssetStore = AssetStoreBuilder::default()
+    let store: AssetStore = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -183,7 +183,7 @@ fn one_store_serves_both_none_and_processing_scopes() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn multi_chunk_chaining_matches_reference() {
     let dir = tempdir().unwrap();
-    let store: AssetStore = AssetStoreBuilder::default()
+    let store: AssetStore = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -239,7 +239,7 @@ fn multi_chunk_chaining_matches_reference() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn per_acquire_processor_applies_to_its_own_resource() {
     let dir = tempdir().unwrap();
-    let store: AssetStore = AssetStoreBuilder::default()
+    let store: AssetStore = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })

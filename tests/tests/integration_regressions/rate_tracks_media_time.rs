@@ -29,12 +29,14 @@ const DRAIN_SHARE_NUM: usize = 3;
 const DRAIN_SHARE_DEN: usize = 4;
 
 async fn file_resource(player: &PlayerImpl, path: &Path, store_dir: &Path) -> Resource {
-    let config = ResourceConfig::for_src(path.to_str().expect("utf-8 fixture path"))
-        .expect("local media path is a valid resource src")
-        .store(disk_asset_store(store_dir))
-        .byte_pool(player.byte_pool().clone())
-        .pcm_pool(player.pcm_pool().clone())
-        .build();
+    let config = ResourceConfig::for_src(
+        ResourceConfig::parse_src(path.to_str().expect("utf-8 fixture path"))
+            .expect("local media path is a valid resource src"),
+    )
+    .store(disk_asset_store(store_dir))
+    .byte_pool(player.byte_pool().clone())
+    .pcm_pool(player.pcm_pool().clone())
+    .build();
     Resource::new(player.prepare_config(config))
         .await
         .expect("open local resource")

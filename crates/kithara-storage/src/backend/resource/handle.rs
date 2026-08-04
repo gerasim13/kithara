@@ -148,6 +148,26 @@ impl<D: DriverIo> Resource<Active, D> {
         })
     }
 
+    /// Mint a cloneable read-only view over the in-flight resource (readers may
+    /// observe the committed prefix while the writer keeps appending).
+    #[must_use]
+    pub fn reader(&self) -> Resource<Reader, D> {
+        Resource {
+            data: ReadCore {
+                core: self.data.core.clone(),
+            },
+        }
+    }
+
+    /// Write entire contents and commit atomically, consuming the writer.
+    ///
+    /// # Errors
+    /// Returns error if the write or commit fails.
+    pub fn write_all(self, data: &[u8]) -> StorageResult<Resource<Committed, D>> {
+        self.data.core.write_at_inner(0, data)?;
+        self.commit(Some(data.len() as u64))
+    }
+
     delegate::delegate! {
         to self.data.core {
             /// Commit without consuming, for a decorator that rewrites in place.
@@ -176,26 +196,6 @@ impl<D: DriverIo> Resource<Active, D> {
             #[call(write_at_inner)]
             pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
         }
-    }
-
-    /// Mint a cloneable read-only view over the in-flight resource (readers may
-    /// observe the committed prefix while the writer keeps appending).
-    #[must_use]
-    pub fn reader(&self) -> Resource<Reader, D> {
-        Resource {
-            data: ReadCore {
-                core: self.data.core.clone(),
-            },
-        }
-    }
-
-    /// Write entire contents and commit atomically, consuming the writer.
-    ///
-    /// # Errors
-    /// Returns error if the write or commit fails.
-    pub fn write_all(self, data: &[u8]) -> StorageResult<Resource<Committed, D>> {
-        self.data.core.write_at_inner(0, data)?;
-        self.commit(Some(data.len() as u64))
     }
 }
 

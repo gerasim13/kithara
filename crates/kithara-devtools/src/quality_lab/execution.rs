@@ -17,12 +17,12 @@ use crate::common::process::{ProcessError, ProcessRequest, run_process};
 const MANIFEST_SCHEMA_VERSION: u32 = 1;
 
 pub(super) struct ToolRunContext<'a> {
-    pub(super) workspace_root: &'a Path,
+    pub(super) options: &'a AdapterOptions<'a>,
     pub(super) revision_dir: &'a Path,
+    pub(super) workspace_root: &'a Path,
+    pub(super) config: &'a QualityLabConfig,
     pub(super) revision: &'a str,
     pub(super) profile: Profile,
-    pub(super) config: &'a QualityLabConfig,
-    pub(super) options: &'a AdapterOptions<'a>,
 }
 
 pub(super) fn run_tool(
@@ -41,10 +41,10 @@ pub(super) fn run_tool(
             return finish_manifest(
                 &tool_dir,
                 ToolManifest {
+                    tool,
                     schema_version: MANIFEST_SCHEMA_VERSION,
                     revision: context.revision.to_owned(),
                     profile: context.profile,
-                    tool,
                     tool_version: tool_config.version.clone(),
                     status: Status::ToolError,
                     duration_ms: duration_ms(started.elapsed()),
@@ -74,14 +74,14 @@ pub(super) fn run_tool(
         return finish_manifest(
             &tool_dir,
             ToolManifest {
+                tool,
+                invocations,
                 schema_version: MANIFEST_SCHEMA_VERSION,
                 revision: context.revision.to_owned(),
                 profile: context.profile,
-                tool,
                 tool_version: tool_config.version.clone(),
                 status: Status::ToolError,
                 duration_ms: duration_ms(started.elapsed()),
-                invocations,
                 note: Some(note),
             },
         );
@@ -106,15 +106,15 @@ pub(super) fn run_tool(
         return finish_manifest(
             &tool_dir,
             ToolManifest {
+                tool,
+                status,
+                invocations,
+                note,
                 schema_version: MANIFEST_SCHEMA_VERSION,
                 revision: context.revision.to_owned(),
                 profile: context.profile,
-                tool,
                 tool_version: tool_config.version.clone(),
-                status,
                 duration_ms: duration_ms(started.elapsed()),
-                invocations,
-                note,
             },
         );
     }
@@ -131,15 +131,15 @@ pub(super) fn run_tool(
     finish_manifest(
         &tool_dir,
         ToolManifest {
+            tool,
+            status,
+            invocations,
+            note,
             schema_version: MANIFEST_SCHEMA_VERSION,
             revision: context.revision.to_owned(),
             profile: context.profile,
-            tool,
             tool_version: tool_config.version.clone(),
-            status,
             duration_ms: duration_ms(started.elapsed()),
-            invocations,
-            note,
         },
     )
 }
@@ -390,10 +390,10 @@ pub(super) fn error_manifest(
     note: &str,
 ) -> ToolManifest {
     ToolManifest {
-        schema_version: MANIFEST_SCHEMA_VERSION,
-        revision: revision.to_owned(),
         profile,
         tool,
+        schema_version: MANIFEST_SCHEMA_VERSION,
+        revision: revision.to_owned(),
         tool_version: version.to_owned(),
         status: Status::ToolError,
         duration_ms: 0,

@@ -324,8 +324,8 @@ pub(super) fn wait_for_source_on_recreate<T: StreamType>(
     if let Some(reason) = src.readiness.source_park(&src.shared_stream, phase) {
         src.update_state(
             Track::<WaitingForSource>::new(WaitState {
-                context: WaitContext::Recreation(recreate),
                 reason,
+                context: WaitContext::Recreation(recreate),
             })
             .erase(),
         );

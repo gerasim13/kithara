@@ -99,8 +99,7 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
     let body_len = EmbeddedAudio::TEST_MP3_BYTES.len() as u64;
 
     let downloader = Downloader::new(
-        DownloaderConfig::builder()
-            .client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
     let player = Arc::new(PlayerImpl::new(
@@ -110,15 +109,16 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
-    let cfg = ResourceConfig::for_src(url.as_str())
-        .expect("valid fixture URL")
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .downloader(downloader)
-        .look_ahead_bytes(LOOK_AHEAD_BYTES)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
-        .build();
+    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
+    let cfg = ResourceConfig::for_src(
+        ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"),
+    )
+    .byte_pool(kithara::bufpool::BytePool::default())
+    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .downloader(downloader)
+    .look_ahead_bytes(LOOK_AHEAD_BYTES)
+    .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+    .build();
 
     let ticker = spawn_ticker(Arc::clone(&queue));
     let mut rx = queue.subscribe();

@@ -11,9 +11,9 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Swatch<'a, 'skin> {
-    role: ColorRole,
-    label: &'a str,
     skin: &'skin Skin,
+    label: &'a str,
+    role: ColorRole,
 }
 
 impl<'a> Widget<'a> for Swatch<'a, '_> {

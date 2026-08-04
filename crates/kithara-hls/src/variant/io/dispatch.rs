@@ -133,7 +133,6 @@ impl HlsVariant {
                         continue;
                     };
                     // A decoder cannot start without its init, so it is never
-                    // look-ahead.
                     cmd.priority = Some(RequestPriority::High);
                     out.push(cmd);
                 }
@@ -223,18 +222,18 @@ impl HlsVariant {
         )
     }
 
+    fn prefetch_segment_cap(&self, ctx: &PlanCtx, prefetch_base: u64) -> Option<u32> {
+        let window = look_ahead_segments(ctx)?;
+        let base = self.descriptor_after_byte(prefetch_base)?.segment_index;
+        Some(base.saturating_add(window.saturating_sub(1)))
+    }
+
     /// First byte of the segment the cursor must reach for `seg_idx` to fall
     /// inside a `look_ahead_segments` window — the segment-count counterpart of
     /// `seg_off - look_ahead_bytes`.
     fn segment_window_entry_byte(&self, ctx: &PlanCtx, seg_idx: u32) -> Option<u64> {
         let window = look_ahead_segments(ctx)?;
         self.segment_byte_offset(seg_idx.saturating_sub(window.saturating_sub(1)))
-    }
-
-    fn prefetch_segment_cap(&self, ctx: &PlanCtx, prefetch_base: u64) -> Option<u32> {
-        let window = look_ahead_segments(ctx)?;
-        let base = self.descriptor_after_byte(prefetch_base)?.segment_index;
-        Some(base.saturating_add(window.saturating_sub(1)))
     }
 }
 

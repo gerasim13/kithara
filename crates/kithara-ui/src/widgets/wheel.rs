@@ -35,14 +35,14 @@ struct WheelCanvas {
 
 #[derive(Default)]
 struct WheelState {
-    last_step: Option<Instant>,
     double_click: DoubleClickState,
     drag: Option<f32>,
+    last_step: Option<Instant>,
 }
 
 impl WheelState {
-    const STEP_INTERVAL_MS: u128 = 200;
     const DRAG_STEPS_PER_PIXEL: f32 = 0.25;
+    const STEP_INTERVAL_MS: u128 = 200;
 
     fn drag_steps(&mut self, y: f32) -> Option<f32> {
         let from = self.drag?;
@@ -80,8 +80,8 @@ impl WheelCanvas {
 
     fn publish(&self, action: ControlAction) -> Action<UiEvent> {
         Action::publish(UiEvent::Control {
-            path: self.path.clone(),
             action,
+            path: self.path.clone(),
         })
         .and_capture()
     }

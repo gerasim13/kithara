@@ -54,27 +54,6 @@ impl SegmentSlotState {
         SlotFlags::from_bits_truncate(self.0.load(Ordering::Acquire))
     }
 
-    delegate::delegate! {
-        to self {
-            #[expr($.contains(SlotFlags::DOWNLOADING))]
-            #[call(flags)]
-            pub(crate) fn is_downloading(&self) -> bool;
-            /// Terminal-failure probe. A `Failed` slot will never load (the
-            /// downloader gave up); readers surface a terminal error on it.
-            #[expr($.contains(SlotFlags::FAILED))]
-            #[call(flags)]
-            pub(crate) fn is_failed(&self) -> bool;
-            #[expr($.contains(SlotFlags::LOADED))]
-            #[call(flags)]
-            pub(crate) fn is_loaded(&self) -> bool;
-            /// True while the current in-flight fetch has crossed `soft_timeout`
-            /// without settling. Meaningful only together with [`Self::is_downloading`].
-            #[expr($.contains(SlotFlags::SLOW))]
-            #[call(flags)]
-            pub(crate) fn is_slow(&self) -> bool;
-        }
-    }
-
     pub(crate) fn mark_failed(&self) {
         self.0.store(SlotFlags::FAILED.bits(), Ordering::Release);
     }
@@ -114,6 +93,27 @@ impl SegmentSlotState {
             )
             .ok()
             .map(|_| FetchClaim::claim(planned, variant, Arc::clone(self)))
+    }
+
+    delegate::delegate! {
+        to self {
+            #[expr($.contains(SlotFlags::DOWNLOADING))]
+            #[call(flags)]
+            pub(crate) fn is_downloading(&self) -> bool;
+            /// Terminal-failure probe. A `Failed` slot will never load (the
+            /// downloader gave up); readers surface a terminal error on it.
+            #[expr($.contains(SlotFlags::FAILED))]
+            #[call(flags)]
+            pub(crate) fn is_failed(&self) -> bool;
+            #[expr($.contains(SlotFlags::LOADED))]
+            #[call(flags)]
+            pub(crate) fn is_loaded(&self) -> bool;
+            /// True while the current in-flight fetch has crossed `soft_timeout`
+            /// without settling. Meaningful only together with [`Self::is_downloading`].
+            #[expr($.contains(SlotFlags::SLOW))]
+            #[call(flags)]
+            pub(crate) fn is_slow(&self) -> bool;
+        }
     }
 }
 

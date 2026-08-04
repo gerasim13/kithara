@@ -131,19 +131,6 @@ impl WasmInner {
             .map(|(_, item)| Arc::clone(item))
     }
 
-    delegate::delegate! {
-        to self.bridge {
-            #[call(position_secs)]
-            pub(crate) fn current_time(&self) -> f64;
-            /// Forward a command to the worker, mapping a channel failure to a
-            /// typed [`FfiError`]. Used by the fallible facade methods that should
-            /// surface a real error when the worker link is down.
-            #[expr($.map_err(|err| into_internal(&err)))]
-            #[call(send)]
-            fn try_send(&self, cmd: WorkerCmd) -> Result<(), FfiError>;
-        }
-    }
-
     pub(crate) fn eq_band_count(&self) -> u32 {
         let n = self.eq_gains.len();
         u32::try_from(n).unwrap_or_else(|_| {
@@ -464,6 +451,19 @@ impl WasmInner {
 
     pub(crate) fn volume(&self) -> f32 {
         load_f32(&self.volume)
+    }
+
+    delegate::delegate! {
+        to self.bridge {
+            #[call(position_secs)]
+            pub(crate) fn current_time(&self) -> f64;
+            /// Forward a command to the worker, mapping a channel failure to a
+            /// typed [`FfiError`]. Used by the fallible facade methods that should
+            /// surface a real error when the worker link is down.
+            #[expr($.map_err(|err| into_internal(&err)))]
+            #[call(send)]
+            fn try_send(&self, cmd: WorkerCmd) -> Result<(), FfiError>;
+        }
     }
 }
 

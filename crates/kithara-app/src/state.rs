@@ -29,9 +29,9 @@ pub struct UiState {
     /// Source analysis of the current track; `None` until analysed.
     pub analysis: Option<TrackAnalysis>,
     pub current_track_index: Option<usize>,
-    pub selected_variant: Option<usize>,
     /// Rung the stream is on right now, whichever mode chose it.
     pub current_variant: Option<usize>,
+    pub selected_variant: Option<usize>,
     pub track_name: String,
     pub abr_variants: Vec<AbrVariant>,
     pub eq_bands: Vec<f32>,
@@ -185,11 +185,11 @@ impl StateController {
         );
 
         Self {
-            beat_clock: Arc::new(Mutex::new(BeatClockState::default())),
             queue,
             state,
             timestretch,
             cancel,
+            beat_clock: Arc::new(Mutex::new(BeatClockState::default())),
         }
     }
 
@@ -418,9 +418,9 @@ pub(crate) fn apply_event(event: &Event, queue: &Queue, state: &Mutex<UiState>) 
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct AbrVariant {
-    pub index: usize,
-    pub label: String,
     pub detail: String,
+    pub label: String,
+    pub index: usize,
 }
 
 impl From<&VariantInfo> for AbrVariant {

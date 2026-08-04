@@ -13,7 +13,7 @@ use super::{
 use crate::{
     catalog::Catalog,
     config::AppConfig,
-    deck::{DeckId, DeckSet},
+    deck::{DeckId, DeckSet, EqMode},
     state::StateController,
     theme::gui,
 };
@@ -25,20 +25,22 @@ use crate::{
 /// what belongs to no single deck: the highlighted catalog row and the studio
 /// window.
 pub(crate) struct Kithara {
-    pub(crate) session: DeckSet,
-    pub(crate) decks: Decks,
-    /// The app's track list; decks load from it.
-    pub(crate) catalog: Catalog,
     /// Needed to build a track source when the catalog loads onto a deck.
     pub(crate) config: AppConfig,
-    /// The compiled studio UI and its host-owned view state.
-    pub(crate) studio: StudioUi,
-
+    /// The app's track list; decks load from it.
+    pub(crate) catalog: Catalog,
+    pub(crate) session: DeckSet,
+    pub(crate) decks: Decks,
+    /// One EQ topology shared by every deck in the studio.
+    pub(crate) eq_mode: EqMode,
     pub(crate) palette: gui::GuiPalette,
-    /// Highlighted catalog row, shared by every deck's load buttons.
-    pub(crate) selected_track: Option<usize>,
+
     /// The studio window; window-chrome commands execute against it.
     pub(crate) window_id: window::Id,
+    /// Highlighted catalog row, shared by every deck's load buttons.
+    pub(crate) selected_track: Option<usize>,
+    /// The compiled studio UI and its host-owned view state.
+    pub(crate) studio: StudioUi,
 }
 
 /// A non-empty set of deck view-models, addressed by id.
@@ -65,12 +67,11 @@ impl Decks {
         self.items.iter_mut().find(|deck| deck.id == id)
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &DeckUi> {
-        self.items.iter()
-    }
-
-    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut DeckUi> {
-        self.items.iter_mut()
+    delegate::delegate! {
+        to self.items {
+            pub(crate) fn iter(&self) -> impl Iterator<Item = &DeckUi>;
+            pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut DeckUi>;
+        }
     }
 }
 
@@ -92,9 +93,10 @@ impl Kithara {
             catalog,
             config,
             studio,
+            eq_mode: EqMode::default(),
             palette,
-            selected_track: None,
             window_id,
+            selected_track: None,
         };
 
         (state, open.discard())
@@ -114,7 +116,6 @@ impl Kithara {
         if cfg.is_keyboard_enabled {
             subs.push(event::listen_with(|e, status, _window| match e {
                 // Only act on Delete/Backspace the focused widget left
-                // unhandled.
                 IcedEvent::Keyboard(KeyboardEvent::KeyPressed {
                     key: Key::Named(Named::Delete | Named::Backspace),
                     ..

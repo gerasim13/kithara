@@ -15,49 +15,90 @@ use crate::{
 };
 
 /// Resolved skin consumed by iced renderers.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
 #[non_exhaustive]
+#[fieldwork(opt_in, get)]
 pub struct Skin {
-    document: SkinDoc,
-    pub palette: RenderPalette,
-    pub layout: LayoutSkin,
-    pub chrome: ChromeSkin,
-    pub window: WindowSkin,
-    pub text_input: TextInputSkin,
-    pub knob: KnobSkin,
-    pub crossfader: CrossfaderSkin,
-    pub vu_stereo: VuStereoSkin,
-    pub vu_vertical: VuVerticalSkin,
-    pub vis: VisSkin,
-    pub toggle: ToggleSkin,
-    pub checkbox: CheckboxSkin,
-    pub readout: ReadoutSkin,
-    pub chip: ChipSkin,
     pub button: ButtonSkin,
-    pub nav: NavSkin,
-    pub tab_large: TabLargeSkin,
-    pub text: TextSkin,
+    pub cell: CellSkin,
+    pub checkbox: CheckboxSkin,
+    pub chip: ChipSkin,
+    pub chrome: ChromeSkin,
+    pub crossfader: CrossfaderSkin,
+    pub deck: DeckSkin,
+    pub divider: DividerSkin,
+    pub drag: DragSkin,
+    pub fader: FaderSkin,
+    pub global_bar: GlobalBarSkin,
+    pub knob: KnobSkin,
+    pub layout_preview: LayoutPreviewSkin,
+    pub layout: LayoutSkin,
     pub menu: MenuSkin,
+    pub meter: MeterSkin,
+    pub nav: NavSkin,
     pub pop: PopSkin,
+    pub readout: ReadoutSkin,
+    pub palette: RenderPalette,
     pub segmented: SegmentedSkin,
     pub select: SelectSkin,
     pub status_dot: StatusDotSkin,
     pub swatch: SwatchSkin,
-    pub cell: CellSkin,
-    pub fader: FaderSkin,
-    pub wave: WaveSkin,
-    pub deck: DeckSkin,
-    pub global_bar: GlobalBarSkin,
-    pub divider: DividerSkin,
-    pub drag: DragSkin,
-    pub meter: MeterSkin,
+    pub tab_large: TabLargeSkin,
     pub telemetry: TelemetrySkin,
-    pub tree: TreeSkin,
+    pub text_input: TextInputSkin,
+    pub text: TextSkin,
+    pub toggle: ToggleSkin,
     pub track_list: TrackListSkin,
-    pub layout_preview: LayoutPreviewSkin,
+    pub tree: TreeSkin,
+    pub vis: VisSkin,
+    pub vu_stereo: VuStereoSkin,
+    pub vu_vertical: VuVerticalSkin,
+    pub wave: WaveSkin,
+    pub window: WindowSkin,
+    #[field(get, vis = "pub(crate)")]
+    document: SkinDoc,
 }
 
 impl Skin {
+    pub(crate) fn border(&self, frame: FrameSkin) -> Border {
+        Border {
+            color: self.color(frame.border),
+            width: frame.border_width,
+            radius: frame.radius.into(),
+        }
+    }
+
+    pub(crate) fn color(&self, role: ColorRole) -> Color {
+        match role {
+            ColorRole::Bg => self.palette.bg,
+            ColorRole::BgDeep => self.palette.bg_deep,
+            ColorRole::BgInset => self.palette.bg_inset,
+            ColorRole::BgPanel => self.palette.bg_panel,
+            ColorRole::BgFooter => self.palette.bg_footer,
+            ColorRole::BgPanel2 => self.palette.bg_panel_2,
+            ColorRole::BgSelect => self.palette.bg_select,
+            ColorRole::Line => self.palette.line,
+            ColorRole::LineDim => self.palette.line_dim,
+            ColorRole::LineInner => self.palette.line_inner,
+            ColorRole::LineSoft => self.palette.line_soft,
+            ColorRole::LineHi => self.palette.line_hi,
+            ColorRole::LinePop => self.palette.line_pop,
+            ColorRole::Text => self.palette.text,
+            ColorRole::TextDim => self.palette.text_dim,
+            ColorRole::Muted => self.palette.muted,
+            ColorRole::Accent => self.palette.accent,
+            ColorRole::AccentStrong => self.palette.accent_strong,
+            ColorRole::AccentSoft => self.palette.accent_soft,
+            ColorRole::Danger => self.palette.danger,
+            ColorRole::Success => self.palette.success,
+            ColorRole::Warning => self.palette.warning,
+            ColorRole::WaveLow => self.palette.wave_low,
+            ColorRole::WaveMid => self.palette.wave_mid,
+            ColorRole::WaveHigh => self.palette.wave_high,
+            ColorRole::Shadow => self.palette.shadow,
+        }
+    }
+
     /// Resolves a parsed document into iced colors and render metrics.
     ///
     /// # Errors
@@ -129,49 +170,6 @@ impl Skin {
             layout_preview: document.layout_preview,
             document,
         })
-    }
-
-    pub(crate) fn document(&self) -> &SkinDoc {
-        &self.document
-    }
-
-    pub(crate) fn color(&self, role: ColorRole) -> Color {
-        match role {
-            ColorRole::Bg => self.palette.bg,
-            ColorRole::BgDeep => self.palette.bg_deep,
-            ColorRole::BgInset => self.palette.bg_inset,
-            ColorRole::BgPanel => self.palette.bg_panel,
-            ColorRole::BgFooter => self.palette.bg_footer,
-            ColorRole::BgPanel2 => self.palette.bg_panel_2,
-            ColorRole::BgSelect => self.palette.bg_select,
-            ColorRole::Line => self.palette.line,
-            ColorRole::LineDim => self.palette.line_dim,
-            ColorRole::LineInner => self.palette.line_inner,
-            ColorRole::LineSoft => self.palette.line_soft,
-            ColorRole::LineHi => self.palette.line_hi,
-            ColorRole::LinePop => self.palette.line_pop,
-            ColorRole::Text => self.palette.text,
-            ColorRole::TextDim => self.palette.text_dim,
-            ColorRole::Muted => self.palette.muted,
-            ColorRole::Accent => self.palette.accent,
-            ColorRole::AccentStrong => self.palette.accent_strong,
-            ColorRole::AccentSoft => self.palette.accent_soft,
-            ColorRole::Danger => self.palette.danger,
-            ColorRole::Success => self.palette.success,
-            ColorRole::Warning => self.palette.warning,
-            ColorRole::WaveLow => self.palette.wave_low,
-            ColorRole::WaveMid => self.palette.wave_mid,
-            ColorRole::WaveHigh => self.palette.wave_high,
-            ColorRole::Shadow => self.palette.shadow,
-        }
-    }
-
-    pub(crate) fn border(&self, frame: FrameSkin) -> Border {
-        Border {
-            color: self.color(frame.border),
-            width: frame.border_width,
-            radius: frame.radius.into(),
-        }
     }
 }
 

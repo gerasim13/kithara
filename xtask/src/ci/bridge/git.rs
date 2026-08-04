@@ -50,7 +50,6 @@ impl GitRepo {
                 ),
             ],
             Some(github.git_header()?),
-            None,
         )?;
 
         let gitlab_url = format!(
@@ -70,7 +69,6 @@ impl GitRepo {
                 ),
             ],
             Some(gitlab.git_header()),
-            Some(&self.config.gitlab_ca_file),
         )?;
         Ok(())
     }
@@ -118,7 +116,6 @@ impl GitRepo {
         self.run(
             &["push", &url, &format!("{sha}:refs/heads/{destination}")],
             Some(gitlab.git_header()),
-            Some(&self.config.gitlab_ca_file),
         )?;
         Ok(())
     }
@@ -132,17 +129,11 @@ impl GitRepo {
                 &format!("{sha}:refs/heads/{}", self.config.branch),
             ],
             Some(github.git_header()?),
-            None,
         )?;
         Ok(())
     }
 
-    fn run(
-        &self,
-        args: &[&str],
-        header: Option<String>,
-        ca_file: Option<&Path>,
-    ) -> Result<Vec<u8>> {
+    fn run(&self, args: &[&str], header: Option<String>) -> Result<Vec<u8>> {
         let mut command = Command::new("git");
         command.current_dir(&self.root).args(args);
         if let Some(header) = header {
@@ -150,9 +141,6 @@ impl GitRepo {
                 .env("GIT_CONFIG_COUNT", "1")
                 .env("GIT_CONFIG_KEY_0", "http.extraHeader")
                 .env("GIT_CONFIG_VALUE_0", header);
-        }
-        if let Some(ca_file) = ca_file {
-            command.env("GIT_SSL_CAINFO", ca_file);
         }
         let output = command
             .output()

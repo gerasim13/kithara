@@ -24,11 +24,11 @@ where
 
     pub(crate) fn set_resampler(_config: &mut Self, _resampler: BeatAnalysisConfig<B>) {}
 
-    pub(crate) fn with_default(_config: &mut Self, _resampler: BeatAnalysisConfig<B>) {}
-
     pub(crate) fn take_detector(_config: &mut Self) -> Option<Detector> {
         None
     }
+
+    pub(crate) fn with_default(_config: &mut Self, _resampler: BeatAnalysisConfig<B>) {}
 }
 
 impl<B> Default for Config<B> {

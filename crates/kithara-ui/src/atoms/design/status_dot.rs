@@ -11,9 +11,9 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct StatusDot<'a, 'skin> {
+    skin: &'skin Skin,
     label: &'a str,
     tone: Tone,
-    skin: &'skin Skin,
 }
 
 impl<'a> Widget<'a> for StatusDot<'a, '_> {

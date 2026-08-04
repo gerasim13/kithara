@@ -23,8 +23,8 @@ pub type TaskId = super::ns::NSUInteger;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResponseParts {
-    headers: Vec<(String, String)>,
     status: Option<u16>,
+    headers: Vec<(String, String)>,
 }
 
 impl From<ResponseParts> for (Option<u16>, Vec<(String, String)>) {

@@ -3,11 +3,11 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     cache::{DeckLayout, StudioCache},
-    endpoints::{EQ_MAX_DB, EQ_MIN_DB},
-    scope::deck_index,
+    endpoints::db_from_knob,
+    scope::{deck_index, eq_band},
 };
 use crate::{
-    deck::{DeckId, EQ_BANDS},
+    deck::{DeckId, EqMode},
     gui::{
         app::Kithara,
         deck::{DeckMsg, TEMPO_STEP},
@@ -18,7 +18,7 @@ use crate::{
 
 /// Translate a compiled-UI event into an app message, applying host-owned
 /// view state (zoom, module collapse, deck layout) in place. Control paths
-/// come from the studio documents: `<instance>/<control-id>`.
+/// come from the studio documents and may contain nested include segments.
 pub(crate) fn translate(state: &mut Kithara, event: UiEvent) -> Option<Message> {
     match event {
         UiEvent::Control { path, action } => control(state, &path, &action),
@@ -148,7 +148,7 @@ fn bar_control(cache: &mut StudioCache, control: &str, action: &ControlAction) -
     Some(Message::PauseHiddenDecks)
 }
 
-fn mixer_control(state: &Kithara, control: &str, action: &ControlAction) -> Option<Message> {
+fn mixer_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
     match (control, action) {
         ("xfade", ControlAction::SetScalar(position)) => Some(Message::Mix(MixMsg::Crossfader(
             position.clamp(0.0, 1.0).as_(),
@@ -159,18 +159,37 @@ fn mixer_control(state: &Kithara, control: &str, action: &ControlAction) -> Opti
 
 /// The channel strip owns both mix-side controls and the deck's tone, so its
 /// instance letter addresses the deck.
-fn strip_control(state: &Kithara, control: &str, action: &ControlAction) -> Option<Message> {
-    let (letter, name) = control.split_once('/')?;
+fn strip_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
+    let (letter, control) = control.split_once('/')?;
+    let name = control.rsplit('/').next()?;
     let index = deck_index(letter)?;
-    let id = deck_id(state, index)?;
-    let msg = match (name, action) {
-        ("volume", ControlAction::SetScalar(trim)) => {
-            Message::Mix(MixMsg::Trim(id, trim.clamp(0.0, 1.0).as_()))
+    match (name, action) {
+        ("eq-menu-anchor", ControlAction::SecondaryActivate) => {
+            state.studio.cache.set_eq_menu_open(index, true)?;
+            None
         }
-        (_, ControlAction::SetScalar(value)) => Message::Deck(id, eq_msg(eq_band(name)?, *value)),
-        _ => return None,
-    };
-    Some(msg)
+        ("eq-menu", ControlAction::Activate) => {
+            state.studio.cache.set_eq_menu_open(index, false)?;
+            None
+        }
+        ("eq-3", ControlAction::Activate) => {
+            state.studio.cache.close_eq_menus();
+            Some(Message::SetEqMode(EqMode::ThreeBand))
+        }
+        ("eq-4", ControlAction::Activate) => {
+            state.studio.cache.close_eq_menus();
+            Some(Message::SetEqMode(EqMode::FourBand))
+        }
+        ("volume", ControlAction::SetScalar(trim)) => Some(Message::Mix(MixMsg::Trim(
+            deck_id(state, index)?,
+            trim.clamp(0.0, 1.0).as_(),
+        ))),
+        (_, ControlAction::SetScalar(value)) => Some(Message::Deck(
+            deck_id(state, index)?,
+            eq_msg(eq_band(state.eq_mode, name)?, *value),
+        )),
+        _ => None,
+    }
 }
 
 /// The library hands a row to whichever deck the pointer released it over.
@@ -195,13 +214,8 @@ fn deck_id(state: &Kithara, index: usize) -> Option<DeckId> {
     state.session.decks().get(index).map(|deck| deck.id)
 }
 
-fn eq_band(knob: &str) -> Option<usize> {
-    EQ_BANDS.iter().position(|name| *name == knob)
-}
-
-fn eq_msg(band: usize, normalized: f64) -> DeckMsg {
-    let normalized: f32 = normalized.clamp(0.0, 1.0).as_();
-    DeckMsg::EqBandChanged(band, normalized.mul_add(EQ_MAX_DB - EQ_MIN_DB, EQ_MIN_DB))
+fn eq_msg(band: usize, knob: f64) -> DeckMsg {
+    DeckMsg::EqBandChanged(band, db_from_knob(knob.as_()))
 }
 
 #[cfg(test)]

@@ -45,13 +45,12 @@ fn new_queue() -> Arc<Queue> {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    Arc::new(Queue::new(QueueConfig::default().with_player(player)))
+    Arc::new(Queue::new(QueueConfig::builder().player(player).build()))
 }
 
 fn new_downloader() -> Downloader {
     Downloader::new(
-        DownloaderConfig::builder()
-            .client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     )
 }
@@ -62,8 +61,7 @@ fn append_track(
     downloader: &Downloader,
     temp_dir: &TestTempDir,
 ) -> TrackId {
-    let cfg = ResourceConfig::for_src(url)
-        .expect("valid URL")
+    let cfg = ResourceConfig::for_src(ResourceConfig::parse_src(url).expect("valid URL"))
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())

@@ -51,8 +51,20 @@ const DOCS: &[(&str, &str)] = &[
         include_str!("../../../assets/ui/modules/studio-mixer-single.kmodule.ron"),
     ),
     (
+        "modules/studio-select-row.kmodule.ron",
+        include_str!("../../../assets/ui/modules/studio-select-row.kmodule.ron"),
+    ),
+    (
         "modules/studio-strip.kmodule.ron",
         include_str!("../../../assets/ui/modules/studio-strip.kmodule.ron"),
+    ),
+    (
+        "modules/studio-strip/eq-3-band.kmodule.ron",
+        include_str!("../../../assets/ui/modules/studio-strip/eq-3-band.kmodule.ron"),
+    ),
+    (
+        "modules/studio-strip/eq-4-band.kmodule.ron",
+        include_str!("../../../assets/ui/modules/studio-strip/eq-4-band.kmodule.ron"),
     ),
     (
         "modules/studio-library.kmodule.ron",
@@ -63,9 +75,9 @@ const DOCS: &[(&str, &str)] = &[
 /// The compiled studio UI plus the host-owned view state it reads back. Both
 /// deck layouts are compiled once; the top bar picks which one renders.
 pub(crate) struct StudioUi {
-    single: CompiledUi,
-    dual: CompiledUi,
     pub(crate) cache: StudioCache,
+    dual: CompiledUi,
+    single: CompiledUi,
 }
 
 impl StudioUi {

@@ -3,12 +3,12 @@ use num_traits::cast::AsPrimitive;
 
 use super::value::Value;
 use crate::{
-    deck::EQ_BANDS,
+    deck::EqMode,
     gui::{
         deck::{DeckView, TEMPO_RANGE, TimestretchState},
         studio_ui::{
             cache::{DeckCache, analysis_bpm},
-            endpoints::{EQ_MAX_DB, EQ_MIN_DB},
+            endpoints::knob_from_db,
             scope::deck_index,
         },
         view::playhead,
@@ -39,9 +39,10 @@ impl<'a> Node<'a> for DecksNode<'a> {
 
 #[derive(Clone, Copy)]
 pub(super) struct DeckNode<'a> {
+    cache: &'a DeckCache,
     ui: &'a UiState,
     view: DeckView,
-    cache: &'a DeckCache,
+    eq_mode: EqMode,
     focused: bool,
 }
 
@@ -50,12 +51,14 @@ impl<'a> DeckNode<'a> {
         ui: &'a UiState,
         view: DeckView,
         cache: &'a DeckCache,
+        eq_mode: EqMode,
         focused: bool,
     ) -> Self {
         Self {
+            cache,
             ui,
             view,
-            cache,
+            eq_mode,
             focused,
         }
     }
@@ -75,7 +78,11 @@ impl<'a> Node<'a> for DeckNode<'a> {
             "tempo" => Box::new(TempoNode {
                 timestretch: self.view.timestretch,
             }),
-            "eq" => Box::new(EqNode { ui: self.ui }),
+            "eq" => Box::new(EqNode {
+                ui: self.ui,
+                cache: self.cache,
+                mode: self.eq_mode,
+            }),
             "stream" => Box::new(StreamNode {
                 ui: self.ui,
                 cache: self.cache,
@@ -90,8 +97,8 @@ impl<'a> Node<'a> for DeckNode<'a> {
 
 #[derive(Clone, Copy)]
 struct PlaybackNode<'a> {
-    ui: &'a UiState,
     cache: &'a DeckCache,
+    ui: &'a UiState,
 }
 
 impl PlaybackNode<'_> {
@@ -131,8 +138,8 @@ impl<'a> Node<'a> for PlaybackNode<'a> {
 
 #[derive(Clone, Copy)]
 struct TrackNode<'a> {
-    ui: &'a UiState,
     cache: &'a DeckCache,
+    ui: &'a UiState,
 }
 
 impl<'a> Node<'a> for TrackNode<'a> {
@@ -166,16 +173,12 @@ impl<'a> Node<'a> for TempoNode {
 
 #[derive(Clone, Copy)]
 struct StreamNode<'a> {
-    ui: &'a UiState,
     cache: &'a DeckCache,
+    ui: &'a UiState,
 }
 
 impl<'a> StreamNode<'a> {
     const AUTO_SLOT: &'static str = "auto";
-
-    fn rung(self, slot: &str) -> Option<&'a AbrVariant> {
-        self.ui.abr_variants.get(slot.parse::<usize>().ok()?)
-    }
 
     fn active(self, slot: &str) -> bool {
         if slot == Self::AUTO_SLOT {
@@ -186,6 +189,10 @@ impl<'a> StreamNode<'a> {
             && self
                 .rung(slot)
                 .is_some_and(|rung| picked == Some(rung.index))
+    }
+
+    fn rung(self, slot: &str) -> Option<&'a AbrVariant> {
+        self.ui.abr_variants.get(slot.parse::<usize>().ok()?)
     }
 }
 
@@ -209,12 +216,18 @@ impl<'a> Node<'a> for StreamNode<'a> {
 #[derive(Clone, Copy)]
 struct EqNode<'a> {
     ui: &'a UiState,
+    cache: &'a DeckCache,
+    mode: EqMode,
 }
 
 impl<'a> Node<'a> for EqNode<'a> {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
-        let band = EQ_BANDS.iter().position(|knob| *knob == segment)?;
-        let value = eq_value(self.ui.eq_bands.get(band))?;
+        let value = match segment {
+            "menu_open" => ReadValue::Bool(self.cache.view.eq_menu_open),
+            "three_band" => ReadValue::Bool(self.mode == EqMode::ThreeBand),
+            "four_band" => ReadValue::Bool(self.mode == EqMode::FourBand),
+            band => eq_value(self.ui.eq_bands.get(self.mode.band(band)?))?,
+        };
         Some(Box::new(Value(value)))
     }
 }
@@ -264,7 +277,5 @@ fn title(ui: &UiState) -> Option<&str> {
 }
 
 fn eq_value(db: Option<&f32>) -> Option<ReadValue<'static>> {
-    let db = *db?;
-    let normalized = (db - EQ_MIN_DB) / (EQ_MAX_DB - EQ_MIN_DB);
-    Some(ReadValue::Scalar(f64::from(normalized.clamp(0.0, 1.0))))
+    Some(ReadValue::Scalar(f64::from(knob_from_db(*db?))))
 }

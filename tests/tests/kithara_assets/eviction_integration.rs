@@ -5,7 +5,7 @@ use std::{fs, path::Path};
 
 use kithara::{
     assets::{
-        AcquisitionResult, AssetScope, AssetStoreBuilder, StorageBackend, WriteSide,
+        AcquisitionResult, AssetScope, AssetStore, StorageBackend, WriteSide,
         index::schema::{ArchivedPinsIndexFile, PinsIndexFile},
     },
     platform::{thread, time::Duration},
@@ -33,7 +33,7 @@ fn asset_scope_with_root(
     asset_root: &str,
     max_assets: Option<usize>,
 ) -> AssetScope {
-    AssetStoreBuilder::default()
+    AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (temp_dir.path()).into(),
         })

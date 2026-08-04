@@ -10,19 +10,19 @@ use crate::{
 /// RT-owned channel halves and playback atomics for one player node.
 #[non_exhaustive]
 pub struct NodeInputs {
+    pub(crate) playback: Arc<PlaybackShared>,
     pub(crate) cmd_rx: HeapCons<PlayerCmd>,
     pub(crate) notif_tx: HeapProd<PlayerNotification>,
     pub(crate) trash_tx: HeapProd<PlayerTrack>,
-    pub(crate) playback: Arc<PlaybackShared>,
 }
 
 /// Control-owned channel halves and shared controls for one allocated slot.
 #[non_exhaustive]
 pub struct SlotControl {
-    pub cmd_tx: HeapProd<PlayerCmd>,
+    pub playback: Arc<PlaybackShared>,
     pub notif_rx: HeapCons<PlayerNotification>,
     pub trash_rx: HeapCons<PlayerTrack>,
-    pub playback: Arc<PlaybackShared>,
+    pub cmd_tx: HeapProd<PlayerCmd>,
     pub eq: SharedEq,
 }
 
@@ -44,10 +44,10 @@ pub fn slot_channels(eq: SharedEq) -> (NodeInputs, SlotControl) {
         playback: Arc::clone(&playback),
     };
     let control = SlotControl {
-        cmd_tx,
+        playback,
         notif_rx,
         trash_rx,
-        playback,
+        cmd_tx,
         eq,
     };
     (inputs, control)

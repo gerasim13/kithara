@@ -39,11 +39,13 @@ impl From<u8> for FilterKind {
 }
 
 /// Configuration for a single EQ band.
-#[derive(Debug, Clone, Copy, PartialEq, Builder)]
+#[derive(Debug, Clone, Copy, PartialEq, Builder, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
+#[fieldwork(get)]
 pub struct EqBandConfig {
     #[builder(default)]
+    #[field(get(copy))]
     kind: FilterKind,
     #[builder(default = 1000.0)]
     frequency: f32,
@@ -54,26 +56,6 @@ pub struct EqBandConfig {
 }
 
 impl EqBandConfig {
-    #[must_use]
-    pub fn kind(&self) -> FilterKind {
-        self.kind
-    }
-
-    #[must_use]
-    pub fn frequency(&self) -> f32 {
-        self.frequency
-    }
-
-    #[must_use]
-    pub fn gain_db(&self) -> f32 {
-        self.gain_db
-    }
-
-    #[must_use]
-    pub fn q_factor(&self) -> f32 {
-        self.q_factor
-    }
-
     pub fn set_gain_db(&mut self, gain_db: f32) {
         self.gain_db = gain_db.clamp(MIN_GAIN_DB, MAX_GAIN_DB);
     }

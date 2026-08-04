@@ -8,18 +8,10 @@ pub enum RubatoAlgorithm {
     Fft,
 }
 
-#[derive(Clone, Copy, Debug, Builder, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Builder, Eq, PartialEq)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct RubatoConfig {
     #[builder(default)]
     pub algorithm: RubatoAlgorithm,
-}
-
-impl Default for RubatoConfig {
-    fn default() -> Self {
-        Self {
-            algorithm: RubatoAlgorithm::Async,
-        }
-    }
 }

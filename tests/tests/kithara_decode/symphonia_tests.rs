@@ -14,14 +14,17 @@ use kithara_integration_tests::{create_test_wav, decode_ext::DecoderChunkOutcome
 fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>) {
     let wav_data = create_test_wav(100, 44100, 2);
     let cursor = Cursor::new(wav_data);
-    let media_info = MediaInfo::new(Some(AudioCodec::Pcm), container);
+    let media_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(container)
+        .build();
     let decoder = DecoderFactory::create_from_media_info(
         cursor,
         &media_info,
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(kithara::bufpool::PcmPool::default())
-            .hint("wav".into())
+            .hint("wav")
             .build(),
     );
     assert!(decoder.is_ok(), "decoder creation should succeed");
@@ -35,7 +38,10 @@ fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>) {
 fn test_next_chunk_returns_data() {
     let wav_data = create_test_wav(100, 44100, 2);
     let cursor = Cursor::new(wav_data);
-    let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let media_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     let mut decoder = DecoderFactory::create_from_media_info(
         cursor,
         &media_info,
@@ -59,7 +65,10 @@ fn test_next_chunk_returns_data() {
 fn test_next_chunk_eof() {
     let wav_data = create_test_wav(10, 44100, 2);
     let cursor = Cursor::new(wav_data);
-    let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let media_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     let mut decoder = DecoderFactory::create_from_media_info(
         cursor,
         &media_info,
@@ -80,7 +89,10 @@ fn test_next_chunk_eof() {
 fn test_seek_to_beginning() {
     let wav_data = create_test_wav(10000, 44100, 2);
     let cursor = Cursor::new(wav_data);
-    let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let media_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     let mut decoder = DecoderFactory::create_from_media_info(
         cursor,
         &media_info,
@@ -104,7 +116,10 @@ fn test_seek_to_beginning() {
 fn test_duration_available() {
     let wav_data = create_test_wav(44100, 44100, 2);
     let cursor = Cursor::new(wav_data);
-    let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let media_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     let decoder = DecoderFactory::create_from_media_info(
         cursor,
         &media_info,
@@ -127,7 +142,10 @@ fn test_duration_available() {
 #[case([0xDE, 0xAD, 0xBE, 0xEF].repeat(100))]
 fn test_invalid_input_fails(#[case] data: Vec<u8>) {
     let cursor = Cursor::new(data);
-    let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let media_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
     let result = DecoderFactory::create_from_media_info(
         cursor,
         &media_info,
@@ -143,7 +161,10 @@ fn test_invalid_input_fails(#[case] data: Vec<u8>) {
 fn test_unsupported_container_returns_error() {
     let data = vec![0u8; 100];
     let cursor = Cursor::new(data);
-    let media_info = MediaInfo::new(Some(AudioCodec::AacLc), Some(ContainerFormat::MpegTs));
+    let media_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::AacLc))
+        .maybe_container(Some(ContainerFormat::MpegTs))
+        .build();
     let result = DecoderFactory::create_from_media_info(
         cursor,
         &media_info,

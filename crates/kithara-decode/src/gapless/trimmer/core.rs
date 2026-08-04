@@ -43,7 +43,10 @@ impl Consts {
 #[fieldwork(opt_in, with)]
 pub struct GaplessTrimmer {
     mode: GaplessMode,
+    #[field(with)]
+    tail_compensation: Option<GaplessTailCompensation>,
     tail_buffer: TailBuffer,
+    input_frames_seen: u64,
     tail_buffered_frames: u64,
     /// Tail hold-back size. Reused for two purposes:
     ///   - in `Fixed` mode it is the metadata-driven trailing trim,
@@ -55,9 +58,6 @@ pub struct GaplessTrimmer {
     /// helpers below: `trailing_frames` does not always mean "frames
     /// to drop", sometimes it just means "minimum buffered tail".
     trailing_frames: u64,
-    #[field(with)]
-    tail_compensation: Option<GaplessTailCompensation>,
-    input_frames_seen: u64,
 }
 
 #[derive(Debug, Default)]
@@ -195,13 +195,31 @@ impl GaplessTrimmer {
         }
     }
 
+    fn compensated_trailing_frames(&self) -> u64 {
+        let Some(compensation) = self.tail_compensation else {
+            return self.trailing_frames;
+        };
+        let deficit = compensation.deficit_frames(self.input_frames_seen);
+        if deficit > 1 {
+            debug_assert!(
+                deficit <= 1,
+                "gapless tail deficit exceeded one frame: deficit={deficit}, ideal={}, actual={}",
+                compensation.ideal_pre_trim_frames(),
+                self.input_frames_seen
+            );
+            tracing::warn!(
+                deficit,
+                ideal = compensation.ideal_pre_trim_frames(),
+                actual = self.input_frames_seen,
+                "gapless tail deficit exceeded one frame; bounding trailing trim compensation"
+            );
+        }
+        self.trailing_frames.saturating_sub(deficit.min(1))
+    }
+
     #[must_use]
     pub fn disabled() -> Self {
         Self::default()
-    }
-
-    pub fn set_tail_compensation(&mut self, compensation: Option<GaplessTailCompensation>) {
-        self.tail_compensation = compensation;
     }
 
     #[must_use]
@@ -287,6 +305,10 @@ impl GaplessTrimmer {
         }
     }
 
+    pub fn set_tail_compensation(&mut self, compensation: Option<GaplessTailCompensation>) {
+        self.tail_compensation = compensation;
+    }
+
     /// Build a silence-scan trimmer. Trim boundaries are inferred by
     /// scanning samples; a fade-in is applied after the boundary is
     /// found to mask the level jump.
@@ -300,28 +322,6 @@ impl GaplessTrimmer {
             tail_compensation: None,
             input_frames_seen: 0,
         }
-    }
-
-    fn compensated_trailing_frames(&self) -> u64 {
-        let Some(compensation) = self.tail_compensation else {
-            return self.trailing_frames;
-        };
-        let deficit = compensation.deficit_frames(self.input_frames_seen);
-        if deficit > 1 {
-            debug_assert!(
-                deficit <= 1,
-                "gapless tail deficit exceeded one frame: deficit={deficit}, ideal={}, actual={}",
-                compensation.ideal_pre_trim_frames(),
-                self.input_frames_seen
-            );
-            tracing::warn!(
-                deficit,
-                ideal = compensation.ideal_pre_trim_frames(),
-                actual = self.input_frames_seen,
-                "gapless tail deficit exceeded one frame; bounding trailing trim compensation"
-            );
-        }
-        self.trailing_frames.saturating_sub(deficit.min(1))
     }
 }
 

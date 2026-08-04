@@ -3,11 +3,11 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use super::{NodeId, Relation, ratio_or_zero};
 
 pub(super) struct Topology {
-    pub(super) propagation_cost: f64,
-    pub(super) cyclic_scc_count: usize,
-    pub(super) cyclic_nodes: usize,
-    pub(super) largest_cycle: usize,
     pub(super) normalized_depth: f64,
+    pub(super) propagation_cost: f64,
+    pub(super) cyclic_nodes: usize,
+    pub(super) cyclic_scc_count: usize,
+    pub(super) largest_cycle: usize,
 }
 
 pub(super) fn analyze(subjects: &BTreeSet<NodeId>, relations: &BTreeSet<Relation>) -> Topology {

@@ -11,10 +11,10 @@ use super::{
 };
 
 pub(crate) struct DiagramSet {
+    pub(crate) state: DiagramSetState,
     pub(crate) index: String,
     pub(crate) pages: Vec<DiagramPage>,
     pub(crate) covered_nodes: usize,
-    pub(crate) state: DiagramSetState,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,23 +35,23 @@ impl DiagramSetState {
 }
 
 pub(crate) struct DetailDiagram {
-    pub(crate) label: String,
-    pub(crate) path: String,
-    pub(crate) parent: Option<String>,
-    pub(crate) package: String,
-    pub(crate) module: Option<String>,
     pub(crate) model: DiagramModel,
+    pub(crate) module: Option<String>,
+    pub(crate) parent: Option<String>,
+    pub(crate) label: String,
+    pub(crate) package: String,
+    pub(crate) path: String,
 }
 
 pub(crate) struct DiagramPage {
-    pub(crate) label: String,
-    pub(crate) path: String,
+    pub(crate) model: DiagramModel,
     pub(crate) parent: Option<String>,
     pub(crate) document_file: String,
-    pub(crate) mermaid_file: String,
+    pub(crate) label: String,
     pub(crate) mermaid: String,
+    pub(crate) mermaid_file: String,
+    pub(crate) path: String,
     pub(crate) visible_nodes: usize,
-    pub(crate) model: DiagramModel,
 }
 
 pub(crate) fn render_set(model: &DiagramModel, details: Vec<DetailDiagram>) -> Result<DiagramSet> {
@@ -66,12 +66,12 @@ pub(crate) fn render_set(model: &DiagramModel, details: Vec<DetailDiagram>) -> R
             covered.extend(detail.model.nodes.iter().map(|node| node.id.clone()));
             let mermaid = render(&detail.model)?;
             pages.push(DiagramPage {
+                mermaid,
                 label: detail.label,
                 document_file: format!("{}.md", detail.path),
                 mermaid_file: format!("{}.mmd", detail.path),
                 path: detail.path,
                 parent: detail.parent,
-                mermaid,
                 visible_nodes: detail.model.nodes.len(),
                 model: detail.model,
             });
@@ -424,10 +424,10 @@ fn render_nodes(
     roots.sort();
 
     let mut context = RenderContext {
-        lod: model.lod,
         nodes,
         children,
         node_ids,
+        lod: model.lod,
         rendered: BTreeSet::new(),
         subgraphs: BTreeSet::new(),
     };
@@ -444,12 +444,12 @@ fn render_nodes(
 }
 
 struct RenderContext<'a> {
-    lod: DetailLevel,
-    nodes: BTreeMap<NodeId, &'a DiagramNode>,
-    children: BTreeMap<NodeId, Vec<NodeId>>,
     node_ids: &'a BTreeMap<NodeId, String>,
+    children: BTreeMap<NodeId, Vec<NodeId>>,
+    nodes: BTreeMap<NodeId, &'a DiagramNode>,
     rendered: BTreeSet<NodeId>,
     subgraphs: BTreeSet<NodeId>,
+    lod: DetailLevel,
 }
 
 fn render_node(

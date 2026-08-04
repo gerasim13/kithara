@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, FlushHub, FlushPolicy, StorageBackend},
+    assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
     events::AbrMode,
     net::{HttpClient, NetOptions},
@@ -39,7 +39,7 @@ fn build_session(cache_path: &Path) -> Session {
     // checkpoint (`flush_now`) instead of guessing at the background
     // worker's debounce with a timer.
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: cache_path.to_path_buf(),
         })
@@ -53,9 +53,10 @@ fn build_session(cache_path: &Path) -> Session {
             .build(),
     ));
     let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-            .with_player(player)
-            .with_store(store.clone()),
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build(),
     ));
     let queue_for_tick = Arc::clone(&queue);
     let tick = tokio::task::spawn(async move {
@@ -80,19 +81,20 @@ fn build_session(cache_path: &Path) -> Session {
 }
 
 fn track_source(url: &Url, session: &Session) -> TrackSource {
-    let cfg = ResourceConfig::for_src(url.as_str())
-        .expect("valid fixture URL")
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .downloader(session.downloader.clone())
-        .store(session.store.clone())
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(DecoderBackend::Symphonia)
-                .build(),
-        )
-        .initial_abr_mode(AbrMode::Auto(None))
-        .build();
+    let cfg = ResourceConfig::for_src(
+        ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"),
+    )
+    .byte_pool(kithara::bufpool::BytePool::default())
+    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .downloader(session.downloader.clone())
+    .store(session.store.clone())
+    .decoder(
+        kithara::audio::AudioDecoderConfig::builder()
+            .backend(DecoderBackend::Symphonia)
+            .build(),
+    )
+    .initial_abr_mode(AbrMode::Auto(None))
+    .build();
     TrackSource::Config(Box::new(cfg))
 }
 

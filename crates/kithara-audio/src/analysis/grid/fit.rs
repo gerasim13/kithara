@@ -4,10 +4,10 @@ use super::core::GridParams;
 use crate::waveform::GridSegment;
 
 pub(super) struct GridFitCtx<'a> {
-    db: &'a [f64],
-    outliers: &'a [bool],
-    sample_rate: f64,
     params: &'a GridParams,
+    outliers: &'a [bool],
+    db: &'a [f64],
+    sample_rate: f64,
 }
 
 impl<'a> GridFitCtx<'a> {
@@ -18,23 +18,23 @@ impl<'a> GridFitCtx<'a> {
         params: &'a GridParams,
     ) -> Self {
         Self {
-            db,
-            outliers,
-            sample_rate,
             params,
+            outliers,
+            db,
+            sample_rate,
         }
     }
 }
 
 #[derive(Clone, Copy)]
 struct Segment {
-    start: usize,
     end: usize,
+    start: usize,
 }
 
 impl Segment {
     fn new(start: usize, end: usize) -> Self {
-        Self { start, end }
+        Self { end, start }
     }
 }
 

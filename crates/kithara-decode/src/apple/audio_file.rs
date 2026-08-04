@@ -48,10 +48,10 @@ struct CallbackCtx {
 /// Safe wrapper around an Apple `AudioFile` handle backed by an
 /// arbitrary `Read + Seek` source via `audio_file_open_with_callbacks`.
 pub(crate) struct AppleAudioFile {
-    handle: AudioFile<CallbackCtx>,
     pub(super) data_format: AudioStreamBasicDescription,
     pub(super) packet_count: Option<u64>,
     pub(super) max_packet_size: u32,
+    handle: AudioFile<CallbackCtx>,
 }
 
 impl AppleAudioFile {
@@ -118,10 +118,10 @@ impl AppleAudioFile {
         };
 
         Ok(Self {
-            handle,
             data_format,
             packet_count,
             max_packet_size,
+            handle,
         })
     }
 

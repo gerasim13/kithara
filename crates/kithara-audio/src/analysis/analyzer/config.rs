@@ -14,27 +14,29 @@ impl Consts {
 }
 
 /// Beat-analysis tunables used by [`super::AnalyzerBuilder`].
-#[derive(Clone, Builder)]
+#[derive(Clone, Builder, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
+#[fieldwork(get)]
 pub struct BeatAnalysisConfig<B> {
-    /// Mono resampler input block size in frames.
-    #[builder(default = Consts::DEFAULT_BEAT_BLOCK_FRAMES)]
-    block_frames: usize,
-    /// Detector input sample rate in Hz.
-    #[builder(default = Consts::DEFAULT_BEAT_TARGET_RATE)]
-    target_rate: u32,
-    /// Quality used by the configured beat-resampler backend.
-    #[builder(default = Consts::DEFAULT_BEAT_RESAMPLER_QUALITY)]
-    resampler_quality: ResamplerQuality,
     /// Standalone mono resampler backend used before detector windows.
     resampler_backend: B,
-    /// Maximum NN detector window length in seconds.
-    #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS)]
-    detector_window_seconds: u32,
+    /// Quality used by the configured beat-resampler backend.
+    #[builder(default = Consts::DEFAULT_BEAT_RESAMPLER_QUALITY)]
+    #[field(get(copy))]
+    resampler_quality: ResamplerQuality,
     /// Seconds carried from the end of one detector window into the next.
     #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS)]
     detector_overlap_seconds: u32,
+    /// Maximum NN detector window length in seconds.
+    #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS)]
+    detector_window_seconds: u32,
+    /// Detector input sample rate in Hz.
+    #[builder(default = Consts::DEFAULT_BEAT_TARGET_RATE)]
+    target_rate: u32,
+    /// Mono resampler input block size in frames.
+    #[builder(default = Consts::DEFAULT_BEAT_BLOCK_FRAMES)]
+    block_frames: usize,
 }
 
 impl<B> BeatAnalysisConfig<B>
@@ -42,38 +44,8 @@ where
     B: ResamplerBackend,
 {
     #[must_use]
-    pub fn block_frames(&self) -> usize {
-        self.block_frames
-    }
-
-    #[must_use]
     pub fn cache_tag(&self) -> Option<String> {
         super::nn::tag(self)
-    }
-
-    #[must_use]
-    pub fn detector_overlap_seconds(&self) -> u32 {
-        self.detector_overlap_seconds
-    }
-
-    #[must_use]
-    pub fn detector_window_seconds(&self) -> u32 {
-        self.detector_window_seconds
-    }
-
-    #[must_use]
-    pub fn resampler_backend(&self) -> &B {
-        &self.resampler_backend
-    }
-
-    #[must_use]
-    pub fn resampler_quality(&self) -> ResamplerQuality {
-        self.resampler_quality
-    }
-
-    #[must_use]
-    pub fn target_rate(&self) -> u32 {
-        self.target_rate
     }
 
     fn resampler_backend_name(&self) -> &'static str {
@@ -102,14 +74,7 @@ where
     B: ResamplerBackend + Default,
 {
     fn default() -> Self {
-        Self {
-            block_frames: Consts::DEFAULT_BEAT_BLOCK_FRAMES,
-            target_rate: Consts::DEFAULT_BEAT_TARGET_RATE,
-            resampler_quality: Consts::DEFAULT_BEAT_RESAMPLER_QUALITY,
-            resampler_backend: B::default(),
-            detector_window_seconds: Consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS,
-            detector_overlap_seconds: Consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS,
-        }
+        Self::builder().resampler_backend(B::default()).build()
     }
 }
 

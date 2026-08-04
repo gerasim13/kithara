@@ -36,13 +36,13 @@ impl Lr4 {
 pub(crate) struct CrossoverFilters {
     allpass: Vec<DirectForm1<f32>>,
     allpass_offsets: Vec<usize>,
-    history: Vec<f32>,
-    history_pos: usize,
     crossover_freqs: Vec<f32>,
     highpass: Vec<Lr4>,
+    history: Vec<f32>,
     lowpass: Vec<Lr4>,
     lowpass_scratch: Vec<f32>,
     sample_rate: f32,
+    history_pos: usize,
 }
 
 impl CrossoverFilters {
@@ -68,16 +68,17 @@ impl CrossoverFilters {
             }
         }
         allpass_offsets.push(allpass.len());
+        let lowpass_scratch = vec![0.0; crossover_freqs.len()];
         Self {
             allpass,
             allpass_offsets,
-            history: vec![0.0; Self::HISTORY_LEN],
-            history_pos: 0,
-            lowpass_scratch: vec![0.0; crossover_freqs.len()],
             crossover_freqs,
             highpass,
             lowpass,
+            lowpass_scratch,
             sample_rate,
+            history: vec![0.0; Self::HISTORY_LEN],
+            history_pos: 0,
         }
     }
 
@@ -98,6 +99,21 @@ impl CrossoverFilters {
             output += band * gains(index);
         }
         output + high * gains(self.lowpass.len())
+    }
+
+    fn rebuild(&mut self) {
+        for (index, &freq) in self.crossover_freqs.iter().enumerate() {
+            self.lowpass[index] = Lr4::new(biquad_coeffs(Type::LowPass, freq, self.sample_rate));
+            self.highpass[index] = Lr4::new(biquad_coeffs(Type::HighPass, freq, self.sample_rate));
+        }
+        for band in 0..self.lowpass.len() + 1 {
+            let start = self.allpass_offsets[band];
+            let end = self.allpass_offsets[band + 1];
+            for (offset, filter) in self.allpass[start..end].iter_mut().enumerate() {
+                let freq = self.crossover_freqs[band + 1 + offset];
+                *filter = DirectForm1::new(biquad_coeffs(Type::AllPass, freq, self.sample_rate));
+            }
+        }
     }
 
     pub(crate) fn record(&mut self, input: f32) {
@@ -136,21 +152,6 @@ impl CrossoverFilters {
     pub(crate) fn update_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
         self.rebuild();
-    }
-
-    fn rebuild(&mut self) {
-        for (index, &freq) in self.crossover_freqs.iter().enumerate() {
-            self.lowpass[index] = Lr4::new(biquad_coeffs(Type::LowPass, freq, self.sample_rate));
-            self.highpass[index] = Lr4::new(biquad_coeffs(Type::HighPass, freq, self.sample_rate));
-        }
-        for band in 0..self.lowpass.len() + 1 {
-            let start = self.allpass_offsets[band];
-            let end = self.allpass_offsets[band + 1];
-            for (offset, filter) in self.allpass[start..end].iter_mut().enumerate() {
-                let freq = self.crossover_freqs[band + 1 + offset];
-                *filter = DirectForm1::new(biquad_coeffs(Type::AllPass, freq, self.sample_rate));
-            }
-        }
     }
 }
 

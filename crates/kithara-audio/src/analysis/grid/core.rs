@@ -1,3 +1,4 @@
+use bon::Builder;
 use num_traits::cast::ToPrimitive;
 
 use super::{
@@ -7,48 +8,47 @@ use super::{
 use crate::{analysis::beat::detector::RawBeats, waveform::BeatGrid};
 
 /// Grid-cleanup tuning.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Builder, Debug, Clone, PartialEq)]
 pub(crate) struct GridParams {
+    #[builder(default = 2.0)]
     pub(crate) max_bar_ratio: f64,
     /// Stable window median must lie within this fraction of nominal.
+    #[builder(default = 0.10)]
     pub(crate) median_trust_ratio: f64,
     /// Merge adjacent leaves whose ratio corrections agree within this
     /// epsilon — collinear halves around the anchor collapse to one segment.
+    #[builder(default = 1e-3)]
     pub(crate) merge_ratio_eps: f64,
     /// Hard sanity bounds on a bar length, as fractions of the nominal bar.
+    #[builder(default = 0.5)]
     pub(crate) min_bar_ratio: f64,
     /// Drop a downbeat closer than this fraction of a nominal bar to its
     /// predecessor (double-detection filter).
+    #[builder(default = 0.7)]
     pub(crate) min_gap_ratio: f64,
     /// Outlier threshold vs the neighbour-window median bar factor.
+    #[builder(default = 0.04)]
     pub(crate) outlier_ratio: f64,
     /// Bisection leaf fit tolerance: worst bar residual, milliseconds.
+    #[builder(default = 18.0)]
     pub(crate) residual_ms: f64,
     /// Snap bisection split points to multiples of this many bars.
+    #[builder(default = 4)]
     pub(crate) align_bars: usize,
     /// Minimum segment length in bars.
+    #[builder(default = 8)]
     pub(crate) min_leaf_bars: usize,
     /// Neighbour median window (bars each side) for outlier classification.
+    #[builder(default = 4)]
     pub(crate) outlier_window: usize,
     /// Sliding window length (bars) for the stable-tempo anchor search.
+    #[builder(default = 16)]
     pub(crate) stable_window_bars: usize,
 }
 
 impl Default for GridParams {
     fn default() -> Self {
-        Self {
-            min_gap_ratio: 0.7,
-            min_bar_ratio: 0.5,
-            max_bar_ratio: 2.0,
-            outlier_window: 4,
-            outlier_ratio: 0.04,
-            stable_window_bars: 16,
-            median_trust_ratio: 0.10,
-            residual_ms: 18.0,
-            min_leaf_bars: 8,
-            align_bars: 4,
-            merge_ratio_eps: 1e-3,
-        }
+        Self::builder().build()
     }
 }
 

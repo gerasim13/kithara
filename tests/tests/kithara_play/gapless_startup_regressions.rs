@@ -127,12 +127,13 @@ async fn create_delayed_gapless_hls_resource(
         .expect("create delayed gapless HLS fixture");
 
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::for_src(created.master_url().as_str())
-        .expect("valid HLS master URL")
-        .store(store)
-        .byte_pool(player.byte_pool().clone())
-        .pcm_pool(player.pcm_pool().clone())
-        .build();
+    let mut config = ResourceConfig::for_src(
+        ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
+    )
+    .store(store)
+    .byte_pool(player.byte_pool().clone())
+    .pcm_pool(player.pcm_pool().clone())
+    .build();
     config = player.prepare_config(config);
 
     Resource::new(config)

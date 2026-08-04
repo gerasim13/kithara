@@ -19,9 +19,9 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct StereoMeter<'path, 'value, 'data, 'skin> {
+    skin: &'skin Skin,
     path: &'path str,
     value: Option<&'value ReadValue<'data>>,
-    skin: &'skin Skin,
 }
 
 impl<'a> Widget<'a> for StereoMeter<'_, '_, '_, '_> {
@@ -31,7 +31,7 @@ impl<'a> Widget<'a> for StereoMeter<'_, '_, '_, '_> {
         };
         Canvas::new(StereoMeterCanvas {
             drag: ScalarDrag::builder()
-                .path(self.path.to_owned())
+                .path(self.path)
                 .mode(ScalarDragMode::Horizontal)
                 .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
                 .build(),
@@ -46,10 +46,10 @@ impl<'a> Widget<'a> for StereoMeter<'_, '_, '_, '_> {
 }
 
 struct StereoMeterCanvas {
-    drag: ScalarDrag,
-    metrics: VuStereoSkin,
-    levels: StereoLevels,
     palette: RenderPalette,
+    drag: ScalarDrag,
+    levels: StereoLevels,
+    metrics: VuStereoSkin,
 }
 
 impl canvas::Program<UiEvent> for StereoMeterCanvas {

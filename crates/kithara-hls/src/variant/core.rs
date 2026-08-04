@@ -3,6 +3,7 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
 };
 
+use bon::bon;
 use kithara_assets::AssetResource;
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
@@ -31,8 +32,8 @@ use crate::{
 pub(super) const INIT_PLACEHOLDER_BYTES: u64 = 16 * 1024;
 
 pub(crate) struct PlanCtx {
-    pub(crate) bus: EventBus,
     pub(crate) scope: kithara_assets::AssetScope,
+    pub(crate) bus: EventBus,
     /// Per-resource HTTP headers applied to every init/segment fetch.
     /// Mirrors `HlsConfig::headers`; threaded through so DRM-style auth
     /// tokens carried by the playlist load also reach segment GETs.
@@ -74,6 +75,7 @@ pub(crate) struct PlanCtx {
 }
 
 pub(crate) struct HlsVariant {
+    pub(super) cache_complete_emitted: AtomicBool,
     /// Coherent owner of the cross-variant byte-address-space coordinates
     /// (`byte_shift`, `served_from`, `served_until`, `init_seed`, the media
     /// offset table). A single lock guards all five so a reader never mixes
@@ -84,10 +86,10 @@ pub(crate) struct HlsVariant {
     pub(super) seek: VariantSeek,
     pub(super) segments: VariantSegments,
     pub(super) variant: usize,
-    pub(super) cache_complete_emitted: AtomicBool,
 }
 
 pub(super) struct VariantProfile {
+    pub(super) bus: EventBus,
     /// Cached audio codec — pulled from `playlist_state` at construction
     /// time. The reader's hot path (`media_info`) reads this without
     /// taking the playlist's per-variant `RwLock`.
@@ -99,7 +101,6 @@ pub(super) struct VariantProfile {
     /// resource-wide auth (e.g. zvuk `X-Auth-Token`) so segment GETs
     /// reach the same authenticated endpoint as the playlist load.
     pub(super) headers: Option<Headers>,
-    pub(super) bus: EventBus,
 }
 
 pub(super) struct VariantFlow {
@@ -249,26 +250,17 @@ pub(super) fn segment_placeholder_size(duration: Duration, bandwidth_bps: Option
         .clamp(MIN_BYTES, MAX_PRECOMMIT_BYTES)
 }
 
-pub(crate) struct VariantParams<'a> {
-    pub(crate) ctx: &'a PlanCtx,
-    pub(crate) decrypt_contexts: &'a [Option<DecryptContext>],
-    pub(crate) seek_obs: Arc<dyn SeekObserve>,
-    pub(crate) init_decrypt_ctx: Option<DecryptContext>,
-    pub(crate) variant_idx: usize,
-}
-
+#[bon]
 impl HlsVariant {
-    pub(crate) fn try_build(
-        playlist_state: &Arc<PlaylistState>,
-        params: VariantParams<'_>,
+    #[builder]
+    pub(crate) fn try_build<'a>(
+        #[builder(start_fn)] playlist_state: &Arc<PlaylistState>,
+        ctx: &'a PlanCtx,
+        decrypt_contexts: &'a [Option<DecryptContext>],
+        seek_obs: Arc<dyn SeekObserve>,
+        #[builder(required)] init_decrypt_ctx: Option<DecryptContext>,
+        variant_idx: usize,
     ) -> HlsResult<Arc<Self>> {
-        let VariantParams {
-            variant_idx,
-            seek_obs,
-            init_decrypt_ctx,
-            decrypt_contexts,
-            ctx,
-        } = params;
         let init =
             Self::build_init_entry(playlist_state.as_ref(), variant_idx, init_decrypt_ctx, ctx)?;
         let segments = Self::build_segment_entries(
@@ -323,34 +315,6 @@ impl VariantParts {
 impl HlsVariant {
     pub(super) const NO_SEEK_TAIL: u32 = u32::MAX;
 
-    pub(crate) fn event_bus(&self) -> EventBus {
-        self.profile.bus.clone()
-    }
-
-    pub(crate) fn is_encrypted_segment(&self, segment_index: u32) -> bool {
-        self.segments
-            .get(segment_index as usize)
-            .is_some_and(|segment| matches!(segment.content(), SegmentContent::Encrypted(_)))
-    }
-
-    pub(crate) fn maybe_publish_cache_complete(&self) {
-        if !self.fetch_plan_satisfied(0) {
-            return;
-        }
-        if self.cache_complete_emitted.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        self.profile
-            .bus
-            .publish(kithara_events::HlsEvent::CacheComplete {
-                total_bytes: self.authoritative_len(),
-            });
-    }
-
-    pub(crate) fn variant_index_u32(&self) -> Option<u32> {
-        u32::try_from(self.variant).ok()
-    }
-
     /// Builds per-segment metadata. `#EXT-X-BYTERANGE` supplies an exact
     /// media-segment length when present; all other playlists get a non-exact
     /// routeable placeholder until body commit or lazy probe publishes the
@@ -394,5 +358,33 @@ impl HlsVariant {
             decode_time = decode_time.saturating_add(duration);
         }
         Ok(entries)
+    }
+
+    pub(crate) fn event_bus(&self) -> EventBus {
+        self.profile.bus.clone()
+    }
+
+    pub(crate) fn is_encrypted_segment(&self, segment_index: u32) -> bool {
+        self.segments
+            .get(segment_index as usize)
+            .is_some_and(|segment| matches!(segment.content(), SegmentContent::Encrypted(_)))
+    }
+
+    pub(crate) fn maybe_publish_cache_complete(&self) {
+        if !self.fetch_plan_satisfied(0) {
+            return;
+        }
+        if self.cache_complete_emitted.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.profile
+            .bus
+            .publish(kithara_events::HlsEvent::CacheComplete {
+                total_bytes: self.authoritative_len(),
+            });
+    }
+
+    pub(crate) fn variant_index_u32(&self) -> Option<u32> {
+        u32::try_from(self.variant).ok()
     }
 }

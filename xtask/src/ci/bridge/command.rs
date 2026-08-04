@@ -48,7 +48,6 @@ pub(super) struct BridgeConfig {
     pub(super) gitlab_project_path: String,
     pub(super) gitlab_username: String,
     pub(super) gitlab_token_file: PathBuf,
-    pub(super) gitlab_ca_file: PathBuf,
     pub(super) branch: String,
     pub(super) state_dir: PathBuf,
     #[serde(default = "default_pipeline_timeout_seconds")]
@@ -83,7 +82,6 @@ impl BridgeConfig {
         for (label, path) in [
             ("GitHub App private key", &self.github_private_key),
             ("GitLab token", &self.gitlab_token_file),
-            ("GitLab CA", &self.gitlab_ca_file),
         ] {
             if !regular_file(path) {
                 bail!("{label} not found: {}", path.display());
@@ -161,7 +159,26 @@ fn default_pipeline_poll_seconds() -> u64 {
 mod tests {
     use clap::Parser;
 
+    use super::BridgeConfig;
     use crate::Cli;
+
+    fn example() -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("ci/bridge/config.example.toml");
+        std::fs::read_to_string(path).unwrap()
+    }
+
+    #[test]
+    fn bridge_config_trusts_the_platform_store_only() {
+        toml::from_str::<BridgeConfig>(&example()).unwrap();
+        let with_ca = format!("{}gitlab_ca_file = \"/path/to/ca.crt\"\n", example());
+        assert!(
+            toml::from_str::<BridgeConfig>(&with_ca).is_err(),
+            "bridge config must reject a private CA instead of silently ignoring it"
+        );
+    }
 
     #[test]
     fn bridge_requires_an_explicit_operation() {

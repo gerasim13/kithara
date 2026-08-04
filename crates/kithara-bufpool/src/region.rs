@@ -1,3 +1,4 @@
+use bon::Builder;
 use kithara_platform::sync::Arc;
 
 use crate::{
@@ -12,25 +13,15 @@ const DEFAULT_MAX_BYTES: usize = 256 * 1024 * 1024;
 ///
 /// Pool sizing policies follow the workspace defaults in `global`; the one
 /// product knob is the total byte budget shared by both pools.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Builder, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RegionConfig {
+    #[builder(default = DEFAULT_MAX_BYTES)]
     max_bytes: usize,
-}
-
-impl RegionConfig {
-    /// Set the total byte budget shared by byte and PCM pools.
-    #[must_use]
-    pub fn max_bytes(mut self, max_bytes: usize) -> Self {
-        self.max_bytes = max_bytes;
-        self
-    }
 }
 
 impl Default for RegionConfig {
     fn default() -> Self {
-        Self {
-            max_bytes: DEFAULT_MAX_BYTES,
-        }
+        Self::builder().build()
     }
 }
 
@@ -38,20 +29,20 @@ impl Default for RegionConfig {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct RegionStats {
-    /// Current bytes tracked across both pools.
-    pub allocated_bytes: usize,
     /// Post-initialization growth events that exceeded the shared budget.
     pub budget_overshoots: u64,
     /// Total home and steal hits for the byte pool.
     pub byte_pool_hits: u64,
     /// Fresh allocations by the byte pool.
     pub byte_pool_misses: u64,
-    /// Maximum bytes available to both pools.
-    pub max_bytes: usize,
     /// Total home and steal hits for the PCM pool.
     pub pcm_pool_hits: u64,
     /// Fresh allocations by the PCM pool.
     pub pcm_pool_misses: u64,
+    /// Current bytes tracked across both pools.
+    pub allocated_bytes: usize,
+    /// Maximum bytes available to both pools.
+    pub max_bytes: usize,
 }
 
 /// Canonical owner of byte and PCM pools sharing one byte budget.
@@ -61,9 +52,9 @@ pub struct Region {
 }
 
 struct RegionInner {
-    budget: RegionBudget,
     byte_pool: BytePool,
     pcm_pool: PcmPool,
+    budget: RegionBudget,
 }
 
 impl Region {
@@ -77,9 +68,9 @@ impl Region {
             PcmPool::with_region_budget(PCM_MAX_BUFFERS, PCM_TRIM_CAPACITY, budget.clone());
         Self {
             inner: Arc::new(RegionInner {
-                budget,
                 byte_pool,
                 pcm_pool,
+                budget,
             }),
         }
     }

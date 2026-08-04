@@ -7,12 +7,12 @@ use num_traits::cast::AsPrimitive;
 use crate::mock::MockRegistry;
 
 pub(super) struct MixerState {
-    crossfader: f64,
-    cue: [bool; 2],
-    faders: [f64; 2],
     fx: [[bool; 2]; 2],
     standard: [[f64; 4]; 2],
     xone: [[f64; 4]; 2],
+    cue: [bool; 2],
+    faders: [f64; 2],
+    crossfader: f64,
 }
 
 impl Default for MixerState {
@@ -92,6 +92,19 @@ impl MixerState {
         Some(value)
     }
 
+    fn levels(&self, channel: usize) -> StereoLevels {
+        let (l, r) = if channel == Self::A {
+            (0.82, 0.71)
+        } else {
+            (0.63, 0.74)
+        };
+        StereoLevels {
+            l,
+            r,
+            volume: self.faders[channel].as_(),
+        }
+    }
+
     pub(super) fn set_scalar(&mut self, path: &str, value: f64) -> bool {
         let value = value.clamp(0.0, 1.0);
         let target = match path {
@@ -121,19 +134,6 @@ impl MixerState {
         };
         *target = value;
         true
-    }
-
-    fn levels(&self, channel: usize) -> StereoLevels {
-        let (l, r) = if channel == Self::A {
-            (0.82, 0.71)
-        } else {
-            (0.63, 0.74)
-        };
-        StereoLevels {
-            l,
-            r,
-            volume: self.faders[channel].as_(),
-        }
     }
 }
 

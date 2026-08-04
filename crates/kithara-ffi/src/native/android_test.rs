@@ -17,7 +17,7 @@ use kithara::{
     file::{File as FileSource, FileConfig, FileSrc},
     stream::Stream,
 };
-use kithara_assets::{AssetStoreBuilder, StorageBackend};
+use kithara_assets::{AssetStore, StorageBackend};
 use kithara_platform::{
     CancelToken,
     time::{Duration, Instant, sleep},
@@ -122,7 +122,7 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
         "offline capture: start"
     );
 
-    let store = AssetStoreBuilder::default()
+    let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
         .build();
     let file_cfg = FileConfig::for_src(FileSrc::Local(input))

@@ -63,9 +63,9 @@ impl AudioConverterFactory for AudioToolboxConverterFactory {
 pub struct AppleResampler {
     converter: AudioConverter,
     input_state: Box<AppleResamplerInputState>,
+    channels: NonZeroUsize,
     output_list: OwnedAudioBufferList,
     mode: ResamplerMode,
-    channels: NonZeroUsize,
     chunk_size: usize,
 }
 
@@ -361,10 +361,10 @@ mod tests {
     }
 
     struct Rendered {
+        output: Vec<Vec<f32>>,
         contract_frames: usize,
         drain_calls: usize,
         frames: usize,
-        output: Vec<Vec<f32>>,
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -498,10 +498,10 @@ mod tests {
 
         let frames = frame_count(&output);
         Rendered {
+            output,
             contract_frames,
             drain_calls,
             frames,
-            output,
         }
     }
 
@@ -513,8 +513,8 @@ mod tests {
     ) -> super::AppleResampler {
         let settings = test_settings(source_rate, target_rate, channels, frames);
         let config = ResamplerConfig::builder()
-            .backend(AppleAudioConverterBackend::new(
-                AudioToolboxConverterFactory::new(),
+            .backend(AppleAudioConverterBackend::with_config(
+                AudioToolboxConverterFactory::new().into(),
             ))
             .settings(settings)
             .build();

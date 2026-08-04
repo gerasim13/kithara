@@ -4,7 +4,7 @@
 use std::fmt::Write;
 
 use kithara::{
-    assets::{FlushHub, FlushPolicy},
+    assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::AbrMode,
@@ -22,7 +22,7 @@ use kithara::{
         dl::{Downloader, DownloaderConfig},
     },
 };
-use kithara_app::config::AppConfig;
+use kithara_app::{baked, config::AppConfig};
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::EncryptionRequest, kithara,
     offline::OfflineSession, temp_dir,
@@ -409,19 +409,20 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
             .build(),
     );
     let store = kithara_integration_tests::disk_asset_store(temp.path());
-    let cfg = kithara::play::ResourceConfig::for_src(spec.url.as_str())
-        .expect("valid track URL")
-        .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
-        .downloader(downloader.clone())
-        .store(store)
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(DecoderBackend::Symphonia)
-                .build(),
-        )
-        .initial_abr_mode(AbrMode::Auto(None))
-        .build();
+    let cfg = kithara::play::ResourceConfig::for_src(
+        kithara::play::ResourceConfig::parse_src(spec.url.as_str()).expect("valid track URL"),
+    )
+    .byte_pool(BytePool::default())
+    .pcm_pool(PcmPool::default())
+    .downloader(downloader.clone())
+    .store(store)
+    .decoder(
+        kithara::audio::AudioDecoderConfig::builder()
+            .backend(DecoderBackend::Symphonia)
+            .build(),
+    )
+    .initial_abr_mode(AbrMode::Auto(None))
+    .build();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
             .byte_pool(BytePool::default())
@@ -429,7 +430,7 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
     let q_for_tick = Arc::clone(&queue);
     // Platform spawn chokepoint, NOT raw `tokio::spawn`: under flash
     // this makes the tick driver a quiescence participant with a
@@ -680,13 +681,22 @@ fn build_prod_ctx() -> ProdCtx {
         DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-    let config = AppConfig::new(
-        downloader,
-        flush_hub,
-        CancelToken::never(),
-        BytePool::default(),
-        PcmPool::default(),
-    );
+    let shutdown = CancelToken::never();
+    let byte_pool = BytePool::default();
+    let store = AssetStore::builder()
+        .cancel(shutdown.child())
+        .backend(StorageBackend::default())
+        .pool(byte_pool.clone())
+        .flush_hub(flush_hub)
+        .layouts(baked::build_baked_asset_layouts())
+        .build();
+    let config = AppConfig::builder()
+        .downloader(downloader)
+        .shutdown(shutdown)
+        .byte_pool(byte_pool)
+        .pcm_pool(PcmPool::default())
+        .store(store)
+        .build();
     ProdCtx {
         config,
         cache: TestTempDir::new(),
@@ -702,7 +712,7 @@ async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
     let q_for_tick = Arc::clone(&queue);
     let tick = tokio::task::spawn(async move {
         loop {
@@ -976,7 +986,7 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
     let q_for_tick = Arc::clone(&queue);
     let tick = tokio::task::spawn(async move {
         loop {
@@ -1040,7 +1050,7 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
     let q_for_tick = Arc::clone(&queue);
     let tick = tokio::task::spawn(async move {
         loop {
@@ -1290,7 +1300,7 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
             .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
     let mut track_ids = Vec::with_capacity(urls.len());
     for url in urls {

@@ -28,11 +28,11 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Tree<'path, 'query, 'value, 'data, 'skin> {
+    skin: &'skin Skin,
     path: &'path str,
     query: &'query str,
     value: Option<&'value ReadValue<'data>>,
     icon: fn(TreeIcon) -> Icon,
-    skin: &'skin Skin,
 }
 
 impl<'a> Widget<'a> for Tree<'_, '_, '_, '_, '_> {
@@ -93,11 +93,11 @@ impl<'a> Widget<'a> for Tree<'_, '_, '_, '_, '_> {
 
 #[derive(bon::Builder)]
 pub(crate) struct ContextBar<'a, 'scope_value, 'value, 'data, 'skin> {
+    skin: &'skin Skin,
     path: &'a str,
-    scope_items: Vec<&'a str>,
     scope_value: Option<&'scope_value ReadValue<'data>>,
     value: Option<&'value ReadValue<'data>>,
-    skin: &'skin Skin,
+    scope_items: Vec<&'a str>,
 }
 
 impl<'a> Widget<'a> for ContextBar<'a, '_, '_, '_, '_> {
@@ -161,8 +161,8 @@ impl<'a> Widget<'a> for ContextBar<'a, '_, '_, '_, '_> {
 
 #[derive(Clone, Copy, PartialEq)]
 struct ScopeOption<'a> {
-    index: usize,
     label: &'a str,
+    index: usize,
 }
 
 impl fmt::Display for ScopeOption<'_> {
@@ -180,7 +180,7 @@ fn scope_picker<'a>(
     let options: Vec<_> = items
         .into_iter()
         .enumerate()
-        .map(|(index, label)| ScopeOption { index, label })
+        .map(|(index, label)| ScopeOption { label, index })
         .collect();
     let last = options.len().saturating_sub(1);
     let selected = match value {
@@ -213,11 +213,11 @@ fn scope_picker<'a>(
         let chevron = skin.color(skin.tree.scope_chevron_color);
         let border = skin.border(skin.tree.scope_frame);
         move |_theme: &Theme, _status| pick_list::Style {
+            border,
             text_color: text,
             placeholder_color: text,
             handle_color: chevron,
             background: Background::Color(background),
-            border,
         }
     })
     .menu_style({
@@ -227,8 +227,8 @@ fn scope_picker<'a>(
         let selected_text = skin.color(skin.tree.scope_selected_text);
         let border = skin.border(skin.tree.scope_menu_frame);
         move |_theme: &Theme| menu::Style {
-            background: Background::Color(background),
             border,
+            background: Background::Color(background),
             text_color: text,
             selected_text_color: selected_text,
             selected_background: Background::Color(selected_background),

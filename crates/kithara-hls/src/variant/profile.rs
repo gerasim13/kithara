@@ -10,22 +10,49 @@ use tracing::{debug, trace};
 use super::HlsVariant;
 use crate::HlsError;
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct VariantReaderPreparation {
+    input: ReaderInput,
+    #[field(get, vis = "pub(crate)", copy)]
     anchor: SourceSeekAnchor,
     first_segment: u32,
     landing_segment: u32,
     read_ahead: u64,
     warmup: u64,
-    input: ReaderInput,
-}
-
-impl VariantReaderPreparation {
-    pub(crate) const fn anchor(&self) -> SourceSeekAnchor {
-        self.anchor
-    }
 }
 
 impl HlsVariant {
+    /// Last segment an inactive session may fetch while it is being built.
+    ///
+    /// Derived from the same window [`reader_is_ready`](Self::reader_is_ready)
+    /// waits on, so the two cannot disagree: a ceiling short of the segment
+    /// readiness waits for deadlocks the transition.
+    pub(crate) fn construction_segment_end(&self, preparation: &VariantReaderPreparation) -> u32 {
+        self.demand_segment_at_offset(self.forward_window(preparation).end.saturating_sub(1))
+            .unwrap_or(preparation.first_segment)
+            .max(preparation.first_segment)
+    }
+
+    /// Byte window a session must be able to read before its decoder is built.
+    ///
+    /// Named by *segment*, resolved to bytes on every call. Segment lengths
+    /// start as placeholders and are replaced by the committed ones, which moves
+    /// every byte-to-segment boundary — most visibly when the init segment
+    /// lands, since its real length re-keys everything after it. A window frozen
+    /// in placeholder bytes at plan time stops describing the segments it was
+    /// built from: readiness then waits on bytes that now belong elsewhere and
+    /// never becomes true, so the reader is never handed over.
+    fn forward_window(&self, preparation: &VariantReaderPreparation) -> Range<u64> {
+        let landing = self
+            .segment_byte_offset(preparation.landing_segment)
+            .unwrap_or_default();
+        let start = landing.saturating_sub(preparation.warmup);
+        let end = landing.saturating_add(preparation.read_ahead);
+        let end = self.stream_len().map_or(end, |len| end.min(len));
+        start..end.max(start)
+    }
+
     pub(crate) fn prepare_reader(
         &self,
         profile: ReaderProfile,
@@ -66,7 +93,6 @@ impl HlsVariant {
         // cannot be conditional on them: without it the decoder is handed a
         // reader that cannot reach its own first packet, produces one chunk, and
         // stalls with the transition still pending.
-        //
         // What the plan must not carry is a segment-0 decoder probe. That probe
         // belongs to a reader opened at the head of the stream, which scans
         // forward from byte zero; this one opens on the landing anchor and seeks
@@ -75,7 +101,6 @@ impl HlsVariant {
         // the downloader served, ahead of the segment readiness *is* waiting
         // for: measured on a same-codec downswitch it took 9.8 ms of an 18.4 ms
         // switch and the landing segment never arrived at all.
-        //
         // The backoff still leads the landing. Ordering the landing first buys
         // nothing — readiness is reached on the same fetch either way — while
         // the decoder build that follows reads backwards from the landing, so a
@@ -104,42 +129,12 @@ impl HlsVariant {
         );
         Ok(VariantReaderPreparation {
             anchor,
-            first_segment: forward_segment,
             landing_segment,
+            first_segment: forward_segment,
             read_ahead: profile.read_ahead_bytes().get(),
             warmup: profile.warmup().max_bytes().map_or(0, NonZeroU64::get),
             input: profile.input(),
         })
-    }
-
-    /// Byte window a session must be able to read before its decoder is built.
-    ///
-    /// Named by *segment*, resolved to bytes on every call. Segment lengths
-    /// start as placeholders and are replaced by the committed ones, which moves
-    /// every byte-to-segment boundary — most visibly when the init segment
-    /// lands, since its real length re-keys everything after it. A window frozen
-    /// in placeholder bytes at plan time stops describing the segments it was
-    /// built from: readiness then waits on bytes that now belong elsewhere and
-    /// never becomes true, so the reader is never handed over.
-    fn forward_window(&self, preparation: &VariantReaderPreparation) -> Range<u64> {
-        let landing = self
-            .segment_byte_offset(preparation.landing_segment)
-            .unwrap_or_default();
-        let start = landing.saturating_sub(preparation.warmup);
-        let end = landing.saturating_add(preparation.read_ahead);
-        let end = self.stream_len().map_or(end, |len| end.min(len));
-        start..end.max(start)
-    }
-
-    /// Last segment an inactive session may fetch while it is being built.
-    ///
-    /// Derived from the same window [`reader_is_ready`](Self::reader_is_ready)
-    /// waits on, so the two cannot disagree: a ceiling short of the segment
-    /// readiness waits for deadlocks the transition.
-    pub(crate) fn construction_segment_end(&self, preparation: &VariantReaderPreparation) -> u32 {
-        self.demand_segment_at_offset(self.forward_window(preparation).end.saturating_sub(1))
-            .unwrap_or(preparation.first_segment)
-            .max(preparation.first_segment)
     }
 
     pub(crate) fn reader_is_ready(
@@ -157,7 +152,6 @@ impl HlsVariant {
         // Polled every transition pass, so `trace!`: the pair of flags plus the
         // window they are asked about is the difference between "the header
         // never arrived" and "the window is not covered yet", which no other
-        // signal distinguishes.
         trace!(
             variant = self.variant,
             header_ready,

@@ -86,24 +86,24 @@ impl fmt::Display for Status {
 
 #[derive(Debug, Serialize)]
 pub(super) struct InvocationManifest {
+    pub(super) exit_code: Option<i32>,
     pub(super) artifact: String,
     pub(super) command: Vec<String>,
     pub(super) duration_ms: u64,
-    pub(super) exit_code: Option<i32>,
 }
 
 #[derive(Debug, Serialize)]
 pub(super) struct ToolManifest {
-    pub(super) schema_version: u32,
-    pub(super) revision: String,
-    pub(super) profile: Profile,
-    pub(super) tool: Tool,
-    pub(super) tool_version: String,
-    pub(super) status: Status,
-    pub(super) duration_ms: u64,
-    pub(super) invocations: Vec<InvocationManifest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) note: Option<String>,
+    pub(super) profile: Profile,
+    pub(super) status: Status,
+    pub(super) revision: String,
+    pub(super) tool_version: String,
+    pub(super) tool: Tool,
+    pub(super) invocations: Vec<InvocationManifest>,
+    pub(super) schema_version: u32,
+    pub(super) duration_ms: u64,
 }
 
 impl ToolManifest {

@@ -29,8 +29,8 @@ pub struct InternId(u32);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Span {
-    start: u32,
     len: u32,
+    start: u32,
 }
 
 /// Interned-string storage owned by a compiled UI. Plain `String` buffer and
@@ -70,9 +70,13 @@ pub(crate) struct Interner {
 impl Interner {
     pub(crate) fn new(max_bytes: usize) -> Self {
         Self {
-            arena: StrArena::default(),
             max_bytes,
+            arena: StrArena::default(),
         }
+    }
+
+    pub(crate) fn finish(self) -> StrArena {
+        self.arena
     }
 
     pub(crate) fn intern(
@@ -129,16 +133,12 @@ impl Interner {
                 max: self.max_bytes,
             })?;
         self.arena.bytes.push_str(value);
-        self.arena.spans.push(Span { start, len });
+        self.arena.spans.push(Span { len, start });
         Ok(id)
     }
 
     pub(crate) fn resolve(&self, id: InternId) -> &str {
         self.arena.resolve(id)
-    }
-
-    pub(crate) fn finish(self) -> StrArena {
-        self.arena
     }
 }
 

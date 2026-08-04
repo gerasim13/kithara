@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    assets::{FlushHub, FlushPolicy},
+    assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::{AbrMode, AdvanceReason, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
@@ -69,18 +69,25 @@ async fn shared_test_ctx() -> &'static TestCtx {
         .get_or_init(|| async {
             let net = NetOptions::builder().is_insecure(true).build();
             let downloader = Downloader::new(
-                DownloaderConfig::builder()
-                    .client(HttpClient::new(net, CancelToken::never()))
-                    .build(),
+                DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
             );
             let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-            let config = AppConfig::new(
-                downloader,
-                flush_hub,
-                CancelToken::never(),
-                BytePool::default(),
-                PcmPool::default(),
-            );
+            let shutdown = CancelToken::never();
+            let byte_pool = BytePool::default();
+            let store = AssetStore::builder()
+                .cancel(shutdown.child())
+                .backend(StorageBackend::default())
+                .pool(byte_pool.clone())
+                .flush_hub(flush_hub)
+                .layouts(baked::build_baked_asset_layouts())
+                .build();
+            let config = AppConfig::builder()
+                .downloader(downloader)
+                .shutdown(shutdown)
+                .byte_pool(byte_pool)
+                .pcm_pool(PcmPool::default())
+                .store(store)
+                .build();
             let player = Arc::new(PlayerImpl::new(
                 PlayerConfig::builder()
                     .byte_pool(BytePool::default())
@@ -88,7 +95,7 @@ async fn shared_test_ctx() -> &'static TestCtx {
                     .session(OfflineSession::arc_auto())
                     .build(),
             ));
-            let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+            let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
             let queue_for_tick = Arc::clone(&queue);
             tokio::task::spawn(async move {

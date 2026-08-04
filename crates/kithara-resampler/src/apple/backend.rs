@@ -1,5 +1,3 @@
-use bon::Builder;
-
 use crate::{
     Resampler, ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerSettings,
 };
@@ -21,34 +19,20 @@ pub trait AudioConverterFactory: Send + Sync + 'static {
     ) -> Result<Self::Resampler, ResamplerBuildError>;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, fieldwork::Fieldwork)]
 #[non_exhaustive]
+#[fieldwork(get)]
 pub struct AppleAudioConverterBackend<F> {
     config: AppleAudioConverterConfig<F>,
 }
 
-#[derive(Clone, Debug, Builder)]
-#[builder(state_mod(vis = "pub"))]
+#[derive(Clone, Debug, derive_more::From)]
 #[non_exhaustive]
 pub struct AppleAudioConverterConfig<F> {
     pub factory: F,
 }
 
 impl<F> AppleAudioConverterBackend<F> {
-    #[must_use]
-    pub fn new(factory: F) -> Self {
-        Self::with_config(
-            AppleAudioConverterConfig::builder()
-                .factory(factory)
-                .build(),
-        )
-    }
-
-    #[must_use]
-    pub const fn config(&self) -> &AppleAudioConverterConfig<F> {
-        &self.config
-    }
-
     #[must_use]
     pub const fn with_config(config: AppleAudioConverterConfig<F>) -> Self {
         Self { config }

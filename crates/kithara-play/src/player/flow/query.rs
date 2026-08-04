@@ -7,6 +7,16 @@ use super::super::core::PlayerImpl;
 use crate::{api::PlayerStatus, bridge::PlaybackSnapshot, engine::EngineImpl};
 
 impl PlayerImpl {
+    /// ABR handle of the currently loaded item, if any.
+    ///
+    /// Reads the stash populated by `enqueue_to_processor` — stays valid for
+    /// the whole life of the track, including after `items[idx]` has been
+    /// emptied by the load handoff.
+    #[must_use]
+    pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        self.phase.lock().abr_handle()
+    }
+
     delegate! {
         to self.core {
             /// Get a reference to the underlying engine.
@@ -53,39 +63,22 @@ impl PlayerImpl {
             #[call(playback_snapshot)]
             pub fn position_seconds(&self) -> Option<f64>;
         }
-    }
-
-    /// Current item index in the queue.
-    pub fn current_index(&self) -> usize {
-        self.core.items.current_index()
-    }
-
-    /// Whether the queue slot at `index` still holds a resource.
-    ///
-    /// Loading an item into the processor empties its slot, so this is the
-    /// owning answer to "has this item been consumed" — the same fact
-    /// [`select_item`](Self::select_item) refuses to guess at. Callers that
-    /// mirror item state read it here instead of inferring the consumption
-    /// from their own bookkeeping.
-    #[must_use]
-    pub fn item_has_resource(&self, index: usize) -> bool {
-        self.core.items.has_resource(index)
-    }
-
-    /// ABR handle of the currently loaded item, if any.
-    ///
-    /// Reads the stash populated by `enqueue_to_processor` — stays valid for
-    /// the whole life of the track, including after `items[idx]` has been
-    /// emptied by the load handoff.
-    #[must_use]
-    pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
-        self.phase.lock().abr_handle()
-    }
-
-    /// Live cost snapshot of the audio engine (decode + effects).
-    #[must_use]
-    pub fn engine_load(&self) -> EngineLoadSnapshot {
-        self.core.engine_load.snapshot()
+        to self.core.items {
+            /// Current item index in the queue.
+            pub fn current_index(&self) -> usize;
+            /// Get the number of items in the queue (including consumed items).
+            pub fn item_count(&self) -> usize;
+            /// Whether the queue slot at `index` still holds a resource.
+            ///
+            /// Loading an item into the processor empties its slot, so this is the
+            /// owning answer to "has this item been consumed" — the same fact
+            /// [`select_item`](Self::select_item) refuses to guess at. Callers that
+            /// mirror item state read it here instead of inferring the consumption
+            /// from their own bookkeeping.
+            #[must_use]
+            #[call(has_resource)]
+            pub fn item_has_resource(&self, index: usize) -> bool;
+        }
     }
 
     /// Current media duration in seconds.
@@ -101,6 +94,12 @@ impl PlayerImpl {
         (dur > 0.0).then_some(dur)
     }
 
+    /// Live cost snapshot of the audio engine (decode + effects).
+    #[must_use]
+    pub fn engine_load(&self) -> EngineLoadSnapshot {
+        self.core.engine_load.snapshot()
+    }
+
     /// Get EQ gain for a band in dB.
     pub fn eq_gain(&self, band: usize) -> Option<f32> {
         let slot_id = self.slot()?;
@@ -108,11 +107,6 @@ impl PlayerImpl {
             .engine
             .slot_eq(slot_id)
             .and_then(|eq| eq.gain(band))
-    }
-
-    /// Get the number of items in the queue (including consumed items).
-    pub fn item_count(&self) -> usize {
-        self.core.items.item_count()
     }
 
     /// Single coherent read of the active slot's live playback scalars.

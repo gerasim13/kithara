@@ -29,6 +29,15 @@ struct ResidentSessions {
 }
 
 impl ResidentSessions {
+    fn find(&self, variant_index: usize) -> Option<&Arc<HlsSession>> {
+        if self.first.variant_index() == variant_index {
+            return Some(&self.first);
+        }
+        self.second
+            .as_ref()
+            .filter(|session| session.variant_index() == variant_index)
+    }
+
     fn one(session: Arc<HlsSession>) -> Self {
         Self {
             first: session,
@@ -41,15 +50,6 @@ impl ResidentSessions {
             first,
             second: Some(second),
         }
-    }
-
-    fn find(&self, variant_index: usize) -> Option<&Arc<HlsSession>> {
-        if self.first.variant_index() == variant_index {
-            return Some(&self.first);
-        }
-        self.second
-            .as_ref()
-            .filter(|session| session.variant_index() == variant_index)
     }
 }
 
@@ -102,15 +102,42 @@ struct TransitionState {
 }
 
 struct IncomingSlot {
-    claim: PendingAbrDecision,
-    landing_time: Duration,
-    profile: ReaderProfile,
-    reader: Option<OpenedVariantReader>,
     session: Arc<HlsSession>,
+    landing_time: Duration,
+    reader: Option<OpenedVariantReader>,
+    claim: PendingAbrDecision,
+    profile: ReaderProfile,
     transition: VariantTransition,
 }
 
 impl HlsCoord {
+    pub(super) fn abort_variant(&self, transition: VariantTransition) -> bool {
+        let mut state = self.sessions.transition.lock();
+        if state
+            .incoming
+            .as_ref()
+            .is_none_or(|slot| slot.transition != transition)
+        {
+            return false;
+        }
+        self.discard_incoming(&mut state, true);
+        drop(state);
+        true
+    }
+
+    pub(crate) fn active_session(&self) -> Arc<HlsSession> {
+        self.sessions.active(|| {
+            self.abr
+                .current_variant_index()
+                .unwrap_or_else(|| panic!("HLS coordinator lost its stateful ABR selector"))
+        })
+    }
+
+    pub(super) fn cancel_incoming_for_seek(&self) {
+        let mut state = self.sessions.transition.lock();
+        self.discard_incoming(&mut state, false);
+    }
+
     fn discard_incoming(&self, state: &mut TransitionState, abort_intent: bool) {
         let Some(slot) = state.incoming.take() else {
             return;
@@ -121,6 +148,53 @@ impl HlsCoord {
         if abort_intent {
             let _ = self.abr_publisher.abort_pending(slot.claim.ticket());
         }
+    }
+
+    /// Fetches for the variant that is audible right now.
+    pub(crate) fn dispatch_active(
+        &self,
+        ctx: &crate::variant::PlanCtx,
+        budget: usize,
+    ) -> Vec<kithara_stream::dl::FetchCmd> {
+        self.active_session().dispatch(ctx, budget)
+    }
+
+    /// Fetches for the variant a switch is preparing.
+    ///
+    /// Construction fetches are tagged `High`. The peer's budget decides how
+    /// many a poll may emit; it cannot decide when the downloader runs them, and
+    /// that queue is first-in-first-out within a priority slot. The audible
+    /// variant appends to it every poll, so an untagged construction pack is
+    /// never reached — measured on a cross-codec switch, the incoming variant
+    /// started only its playlist and its init all test while both media segments
+    /// sat queued until teardown.
+    ///
+    /// The slot owning the reader is what says whether the session is still
+    /// under construction: while `reader` is held the session has no reader
+    /// position to plan against and stays capped at its construction window;
+    /// once the reader is transferred its decoder is priming and the session
+    /// must serve that decoder's reads.
+    pub(crate) fn dispatch_incoming(
+        &self,
+        ctx: &crate::variant::PlanCtx,
+        budget: usize,
+    ) -> Vec<kithara_stream::dl::FetchCmd> {
+        let incoming = self
+            .sessions
+            .transition
+            .lock()
+            .incoming
+            .as_ref()
+            .map(|slot| (Arc::clone(&slot.session), slot.reader.is_some()));
+        match incoming {
+            None => Vec::new(),
+            Some((session, true)) => session.dispatch_constructing(ctx, budget),
+            Some((session, false)) => session.dispatch(ctx, budget),
+        }
+    }
+
+    pub(crate) fn has_incoming(&self) -> bool {
+        self.sessions.transition.lock().incoming.is_some()
     }
 
     pub(super) fn plan_variant_reader(
@@ -215,68 +289,6 @@ impl HlsCoord {
         )))
     }
 
-    pub(super) fn take_prepared_variant_reader(
-        &self,
-        transition: VariantTransition,
-    ) -> StreamResult<VariantReaderTake> {
-        let mut wake_when_unlocked: Option<Arc<HlsSession>> = None;
-        let mut state = self.sessions.transition.lock();
-        let result = if let Some(slot) = state.incoming.as_mut() {
-            if slot.transition != transition {
-                Ok(VariantReaderTake::Stale)
-            } else if self.seek_observe().epoch() != transition.id().seek_epoch() {
-                self.discard_incoming(&mut state, false);
-                Ok(VariantReaderTake::Stale)
-            } else {
-                match self.abr.pending_claim() {
-                    PendingAbrClaim::Locked(claim)
-                        if claim == slot.claim
-                            && self.variant_index() == transition.active_variant().get() =>
-                    {
-                        Ok(VariantReaderTake::Preparing)
-                    }
-                    PendingAbrClaim::Locked(_) | PendingAbrClaim::Absent => {
-                        self.discard_incoming(&mut state, true);
-                        Ok(VariantReaderTake::Stale)
-                    }
-                    PendingAbrClaim::Ready(claim)
-                        if claim != slot.claim
-                            || self.variant_index() != transition.active_variant().get() =>
-                    {
-                        self.discard_incoming(&mut state, true);
-                        Ok(VariantReaderTake::Stale)
-                    }
-                    PendingAbrClaim::Ready(_) => match slot.session.is_ready() {
-                        Ok(false) => {
-                            // Owed a wake, but not from here: `wake_peer` takes
-                            // the peer's state lock, and the peer holds that
-                            // across `prepare_for_seek`, which takes the
-                            // transition lock this arm is standing on.
-                            wake_when_unlocked = Some(Arc::clone(&slot.session));
-                            Ok(VariantReaderTake::Preparing)
-                        }
-                        Ok(true) => Ok(slot
-                            .reader
-                            .take()
-                            .map_or(VariantReaderTake::Taken, VariantReaderTake::Ready)),
-                        Err(error) => {
-                            self.discard_incoming(&mut state, true);
-                            Err(error)
-                        }
-                    },
-                    _ => Err(unsupported_pending_claim()),
-                }
-            }
-        } else {
-            Ok(VariantReaderTake::Stale)
-        };
-        drop(state);
-        if let Some(session) = wake_when_unlocked {
-            session.wake_peer_for_readiness();
-        }
-        result
-    }
-
     pub(super) fn promote_planned_variant(
         &self,
         transition: VariantTransition,
@@ -359,72 +371,6 @@ impl HlsCoord {
         VariantPromotion::Promoted
     }
 
-    pub(super) fn abort_variant(&self, transition: VariantTransition) -> bool {
-        let mut state = self.sessions.transition.lock();
-        if state
-            .incoming
-            .as_ref()
-            .is_none_or(|slot| slot.transition != transition)
-        {
-            return false;
-        }
-        self.discard_incoming(&mut state, true);
-        drop(state);
-        true
-    }
-
-    pub(super) fn cancel_incoming_for_seek(&self) {
-        let mut state = self.sessions.transition.lock();
-        self.discard_incoming(&mut state, false);
-    }
-
-    /// Fetches for the variant that is audible right now.
-    pub(crate) fn dispatch_active(
-        &self,
-        ctx: &crate::variant::PlanCtx,
-        budget: usize,
-    ) -> Vec<kithara_stream::dl::FetchCmd> {
-        self.active_session().dispatch(ctx, budget)
-    }
-
-    /// Fetches for the variant a switch is preparing.
-    ///
-    /// Construction fetches are tagged `High`. The peer's budget decides how
-    /// many a poll may emit; it cannot decide when the downloader runs them, and
-    /// that queue is first-in-first-out within a priority slot. The audible
-    /// variant appends to it every poll, so an untagged construction pack is
-    /// never reached — measured on a cross-codec switch, the incoming variant
-    /// started only its playlist and its init all test while both media segments
-    /// sat queued until teardown.
-    ///
-    /// The slot owning the reader is what says whether the session is still
-    /// under construction: while `reader` is held the session has no reader
-    /// position to plan against and stays capped at its construction window;
-    /// once the reader is transferred its decoder is priming and the session
-    /// must serve that decoder's reads.
-    pub(crate) fn dispatch_incoming(
-        &self,
-        ctx: &crate::variant::PlanCtx,
-        budget: usize,
-    ) -> Vec<kithara_stream::dl::FetchCmd> {
-        let incoming = self
-            .sessions
-            .transition
-            .lock()
-            .incoming
-            .as_ref()
-            .map(|slot| (Arc::clone(&slot.session), slot.reader.is_some()));
-        match incoming {
-            None => Vec::new(),
-            Some((session, true)) => session.dispatch_constructing(ctx, budget),
-            Some((session, false)) => session.dispatch(ctx, budget),
-        }
-    }
-
-    pub(crate) fn has_incoming(&self) -> bool {
-        self.sessions.transition.lock().incoming.is_some()
-    }
-
     /// The reader's own consumption re-opening a deferred prefetch decision.
     /// Answered by the session, which owns the byte cursor; the variant only
     /// owns the threshold.
@@ -432,12 +378,66 @@ impl HlsCoord {
         self.active_session().take_prefetch_resume()
     }
 
-    pub(crate) fn active_session(&self) -> Arc<HlsSession> {
-        self.sessions.active(|| {
-            self.abr
-                .current_variant_index()
-                .unwrap_or_else(|| panic!("HLS coordinator lost its stateful ABR selector"))
-        })
+    pub(super) fn take_prepared_variant_reader(
+        &self,
+        transition: VariantTransition,
+    ) -> StreamResult<VariantReaderTake> {
+        let mut wake_when_unlocked: Option<Arc<HlsSession>> = None;
+        let mut state = self.sessions.transition.lock();
+        let result = if let Some(slot) = state.incoming.as_mut() {
+            if slot.transition != transition {
+                Ok(VariantReaderTake::Stale)
+            } else if self.seek_observe().epoch() != transition.id().seek_epoch() {
+                self.discard_incoming(&mut state, false);
+                Ok(VariantReaderTake::Stale)
+            } else {
+                match self.abr.pending_claim() {
+                    PendingAbrClaim::Locked(claim)
+                        if claim == slot.claim
+                            && self.variant_index() == transition.active_variant().get() =>
+                    {
+                        Ok(VariantReaderTake::Preparing)
+                    }
+                    PendingAbrClaim::Locked(_) | PendingAbrClaim::Absent => {
+                        self.discard_incoming(&mut state, true);
+                        Ok(VariantReaderTake::Stale)
+                    }
+                    PendingAbrClaim::Ready(claim)
+                        if claim != slot.claim
+                            || self.variant_index() != transition.active_variant().get() =>
+                    {
+                        self.discard_incoming(&mut state, true);
+                        Ok(VariantReaderTake::Stale)
+                    }
+                    PendingAbrClaim::Ready(_) => match slot.session.is_ready() {
+                        Ok(false) => {
+                            // Owed a wake, but not from here: `wake_peer` takes
+                            // the peer's state lock, and the peer holds that
+                            // across `prepare_for_seek`, which takes the
+                            // transition lock this arm is standing on.
+                            wake_when_unlocked = Some(Arc::clone(&slot.session));
+                            Ok(VariantReaderTake::Preparing)
+                        }
+                        Ok(true) => Ok(slot
+                            .reader
+                            .take()
+                            .map_or(VariantReaderTake::Taken, VariantReaderTake::Ready)),
+                        Err(error) => {
+                            self.discard_incoming(&mut state, true);
+                            Err(error)
+                        }
+                    },
+                    _ => Err(unsupported_pending_claim()),
+                }
+            }
+        } else {
+            Ok(VariantReaderTake::Stale)
+        };
+        drop(state);
+        if let Some(session) = wake_when_unlocked {
+            session.wake_peer_for_readiness();
+        }
+        result
     }
 }
 

@@ -10,8 +10,8 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Select<'a, 'skin> {
-    label: &'a str,
     skin: &'skin Skin,
+    label: &'a str,
 }
 
 impl<'a> Widget<'a> for Select<'a, '_> {

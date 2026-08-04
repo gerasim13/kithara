@@ -17,14 +17,16 @@ pub(crate) trait Analyzer: Send {
 }
 
 /// The output of one analysis pass.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, fieldwork::Fieldwork)]
 #[non_exhaustive]
+#[fieldwork(opt_in, get)]
 pub struct TrackAnalysis {
     /// Cleaned beat grid (source frames).
     beat: Option<BeatGrid>,
     /// Track waveform.
     waveform: Option<Waveform>,
     /// Total decoded source frames: the denominator for `BeatGrid` frame to fraction.
+    #[field(get)]
     source_frames: u64,
 }
 
@@ -41,11 +43,6 @@ impl TrackAnalysis {
     #[must_use]
     pub fn beat(&self) -> Option<&BeatGrid> {
         self.beat.as_ref()
-    }
-
-    #[must_use]
-    pub fn source_frames(&self) -> u64 {
-        self.source_frames
     }
 
     #[must_use]

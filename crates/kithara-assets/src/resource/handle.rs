@@ -77,6 +77,11 @@ impl WriteSide for BaseWriter {
         Ok(BaseReader::new(self.0))
     }
 
+    fn raw_write_handle(&self) -> RawWriteHandle {
+        let storage = self.0.clone();
+        RawWriteHandle::new(move |offset, data| storage.write_at(offset, data))
+    }
+
     delegate::delegate! {
         to self.0 {
             fn fail(self, reason: String);
@@ -86,15 +91,22 @@ impl WriteSide for BaseWriter {
             fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
         }
     }
-
-    fn raw_write_handle(&self) -> RawWriteHandle {
-        let storage = self.0.clone();
-        RawWriteHandle::new(move |offset, data| storage.write_at(offset, data))
-    }
 }
 
 impl ReadSide for BaseReader {
     type Writer = BaseWriter;
+
+    fn reactivate(self) -> StorageResult<BaseWriter> {
+        if self.read_only {
+            return Err(IoError::new(
+                ErrorKind::PermissionDenied,
+                "read-only resource cannot be reactivated",
+            )
+            .into());
+        }
+        self.inner.reactivate()?;
+        Ok(BaseWriter(self.inner))
+    }
 
     delegate::delegate! {
         to self.inner {
@@ -107,17 +119,5 @@ impl ReadSide for BaseReader {
             fn status(&self) -> ResourceStatus;
             fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
         }
-    }
-
-    fn reactivate(self) -> StorageResult<BaseWriter> {
-        if self.read_only {
-            return Err(IoError::new(
-                ErrorKind::PermissionDenied,
-                "read-only resource cannot be reactivated",
-            )
-            .into());
-        }
-        self.inner.reactivate()?;
-        Ok(BaseWriter(self.inner))
     }
 }

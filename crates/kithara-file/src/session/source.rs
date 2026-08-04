@@ -159,21 +159,6 @@ impl FileSource {
 }
 
 impl kithara_stream::Source for FileSource {
-    delegate::delegate! {
-        to self.coord {
-            #[call(activity_handle)]
-            fn activity(&self) -> Arc<dyn Activity>;
-            #[call(advance_position)]
-            fn advance(&self, n: u64);
-            fn playhead_read(&self) -> Arc<dyn PlayheadRead>;
-            fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
-            fn position(&self) -> u64;
-            fn seek_control(&self) -> Arc<dyn SeekControl>;
-            fn seek_observe(&self) -> Arc<dyn SeekObserve>;
-            fn set_position(&self, pos: u64);
-        }
-    }
-
     fn byte_map(&self) -> Option<Arc<dyn kithara_stream::ByteMap>> {
         self.inner.segment_index.get()?;
         Some(Arc::new(FileByteMap {
@@ -274,6 +259,21 @@ impl kithara_stream::Source for FileSource {
             .wait_range(range)
             .map_err(|e| StreamError::Source(FileSourceError::Storage(e).into()))
     }
+
+    delegate::delegate! {
+        to self.coord {
+            #[call(activity_handle)]
+            fn activity(&self) -> Arc<dyn Activity>;
+            #[call(advance_position)]
+            fn advance(&self, n: u64);
+            fn playhead_read(&self) -> Arc<dyn PlayheadRead>;
+            fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
+            fn position(&self) -> u64;
+            fn seek_control(&self) -> Arc<dyn SeekControl>;
+            fn seek_observe(&self) -> Arc<dyn SeekObserve>;
+            fn set_position(&self, pos: u64);
+        }
+    }
 }
 
 /// Byte-map handle for a fully cached fragmented-mp4 file.
@@ -292,9 +292,15 @@ impl FileByteMap {
 }
 
 impl kithara_stream::ByteMap for FileByteMap {
-    fn init_segment_range(&self) -> Range<u64> {
-        self.segment_index()
-            .map_or(0..0, FileSegmentIndex::init_range)
+    delegate::delegate! {
+        to self {
+            #[expr($.map_or(0..0, FileSegmentIndex::init_range))]
+            #[call(segment_index)]
+            fn init_segment_range(&self) -> Range<u64>;
+            #[expr(Some($?.segment_count()))]
+            #[call(segment_index)]
+            fn segment_count(&self) -> Option<u32>;
+        }
     }
 
     fn len(&self) -> Option<u64> {
@@ -307,9 +313,5 @@ impl kithara_stream::ByteMap for FileByteMap {
 
     fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
         self.segment_index()?.segment_at_time(t)
-    }
-
-    fn segment_count(&self) -> Option<u32> {
-        Some(self.segment_index()?.segment_count())
     }
 }

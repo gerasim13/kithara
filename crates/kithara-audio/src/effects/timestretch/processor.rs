@@ -47,10 +47,10 @@ pub struct TimeStretchProcessor {
     /// Whether previous input ran through the backend. Drives a clean backend
     /// reset when the processor returns to unity passthrough.
     active: bool,
-    /// Last stretch factor pushed to the backend; avoids redundant updates.
-    applied_stretch: f64,
     /// Last pitch factor pushed to the backend; avoids redundant updates.
     applied_pitch: f64,
+    /// Last stretch factor pushed to the backend; avoids redundant updates.
+    applied_stretch: f64,
 }
 
 impl TimeStretchProcessor {
@@ -82,6 +82,17 @@ impl TimeStretchProcessor {
         }
     }
 
+    /// Push `pitch` to the backend when it moved beyond `RATIO_EPS`.
+    fn apply_pitch(&mut self, pitch: f64) {
+        if !self.applied_pitch.is_nan() && (pitch - self.applied_pitch).abs() <= Self::RATIO_EPS {
+            return;
+        }
+        match self.backend.set_pitch(pitch) {
+            Ok(()) => self.applied_pitch = pitch,
+            Err(e) => warn!(error = %e, "time-stretch set_pitch failed"),
+        }
+    }
+
     /// Push `stretch` to the backend when it moved beyond `RATIO_EPS`. At a
     /// region `boundary` the old region's tail is drained (`flush`, into
     /// `scratch`) and the backend restarted so the new ratio starts clean;
@@ -102,17 +113,6 @@ impl TimeStretchProcessor {
         match self.backend.set_ratio(stretch) {
             Ok(()) => self.applied_stretch = stretch,
             Err(e) => warn!(error = %e, "time-stretch set_ratio failed"),
-        }
-    }
-
-    /// Push `pitch` to the backend when it moved beyond `RATIO_EPS`.
-    fn apply_pitch(&mut self, pitch: f64) {
-        if !self.applied_pitch.is_nan() && (pitch - self.applied_pitch).abs() <= Self::RATIO_EPS {
-            return;
-        }
-        match self.backend.set_pitch(pitch) {
-            Ok(()) => self.applied_pitch = pitch,
-            Err(e) => warn!(error = %e, "time-stretch set_pitch failed"),
         }
     }
 
@@ -177,6 +177,16 @@ impl TimeStretchProcessor {
         (next, crossed)
     }
 
+    fn reset_for_passthrough(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.backend.reset();
+        self.applied_stretch = f64::NAN;
+        self.applied_pitch = f64::NAN;
+        self.active = false;
+    }
+
     /// Pull the live region plan handle; on a swap drop the region cursor.
     fn sync_plan(&mut self) {
         let want = self.controls.region_plan();
@@ -193,16 +203,6 @@ impl TimeStretchProcessor {
 
     fn unity_passthrough(&self, speed: f32) -> bool {
         self.plan.is_none() && (speed - 1.0).abs() <= f32::EPSILON
-    }
-
-    fn reset_for_passthrough(&mut self) {
-        if !self.active {
-            return;
-        }
-        self.backend.reset();
-        self.applied_stretch = f64::NAN;
-        self.applied_pitch = f64::NAN;
-        self.active = false;
     }
 }
 

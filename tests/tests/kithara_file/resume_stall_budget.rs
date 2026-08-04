@@ -113,11 +113,13 @@ async fn zero_progress_resume_loop_fails_terminally() {
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::builder()
                 .inactivity_timeout(Consts::INACTIVITY)
-                .retry_policy(RetryPolicy::new(
-                    1,
-                    Duration::from_millis(50),
-                    Duration::from_millis(100),
-                ))
+                .retry_policy(
+                    RetryPolicy::builder()
+                        .max_retries(1)
+                        .base_delay(Duration::from_millis(50))
+                        .max_delay(Duration::from_millis(100))
+                        .build(),
+                )
                 .build(),
             CancelToken::never(),
         ))

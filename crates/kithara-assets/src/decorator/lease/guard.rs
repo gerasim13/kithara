@@ -15,16 +15,16 @@ pub struct LeaseGuard {
 }
 
 impl LeaseGuard {
-    pub(super) fn inactive() -> Self {
-        Self { inner: None }
-    }
-
     pub(super) fn new(on_drop: impl Fn() + Send + Sync + 'static) -> Self {
         Self {
             inner: Some(Arc::new(LeaseGuardInner {
                 on_drop: Box::new(on_drop),
             })),
         }
+    }
+
+    pub(super) fn inactive() -> Self {
+        Self { inner: None }
     }
 
     /// `true` while at least one clone of this guard still pins the lease.

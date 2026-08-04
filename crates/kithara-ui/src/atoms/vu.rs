@@ -20,10 +20,10 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct VerticalVu<'path, 'value, 'data, 'skin> {
-    path: &'path str,
-    ticks: bool,
-    value: Option<&'value ReadValue<'data>>,
     skin: &'skin Skin,
+    path: &'path str,
+    value: Option<&'value ReadValue<'data>>,
+    ticks: bool,
 }
 
 impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, '_> {
@@ -33,7 +33,7 @@ impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, '_> {
         };
         Canvas::new(VerticalVuCanvas {
             drag: ScalarDrag::builder()
-                .path(self.path.to_owned())
+                .path(self.path)
                 .mode(ScalarDragMode::Vertical)
                 .hover(HoverState::new(mouse::Interaction::ResizingVertically))
                 .build(),
@@ -53,13 +53,13 @@ impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, '_> {
 }
 
 struct VerticalVuCanvas {
-    drag: ScalarDrag,
-    metrics: VuVerticalSkin,
-    ticks: Option<TickRail>,
-    levels: StereoLevels,
-    palette: RenderPalette,
     thumb_color: Color,
     thumb_notch_color: Color,
+    ticks: Option<TickRail>,
+    palette: RenderPalette,
+    drag: ScalarDrag,
+    levels: StereoLevels,
+    metrics: VuVerticalSkin,
 }
 
 impl canvas::Program<UiEvent> for VerticalVuCanvas {

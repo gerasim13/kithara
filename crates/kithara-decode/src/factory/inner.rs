@@ -95,57 +95,14 @@ pub enum DecoderBackend {
 /// This describes conversion that is part of decoder construction, not the
 /// playback graph's effects chain. Backend choice is encoded by `B`.
 #[derive(Clone, Builder)]
-#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct DecoderResamplerConfig<B = NoResamplerBackend> {
     pub backend: B,
+    pub target_sample_rate: NonZeroU32,
     #[builder(default)]
     pub options: ResamplerOptions,
     #[builder(default)]
     pub quality: ResamplerQuality,
-    pub target_sample_rate: NonZeroU32,
-}
-
-impl<B> DecoderResamplerConfig<B>
-where
-    B: ResamplerBackend,
-{
-    #[must_use]
-    pub fn new(
-        target_sample_rate: NonZeroU32,
-        backend: B,
-        quality: ResamplerQuality,
-        options: ResamplerOptions,
-    ) -> Self {
-        Self {
-            backend,
-            options,
-            quality,
-            target_sample_rate,
-        }
-    }
-
-    /// Build the decoder resampler config selected by the audio decoder config.
-    ///
-    /// # Errors
-    ///
-    /// Currently this constructor is infallible; it returns a `Result` so the
-    /// typed Apple codec-integrated plan can add pair validation without
-    /// widening call sites again.
-    pub fn for_decoder_backend(
-        _decoder_backend: DecoderBackend,
-        target_sample_rate: NonZeroU32,
-        backend: B,
-        quality: ResamplerQuality,
-        options: ResamplerOptions,
-    ) -> DecodeResult<Option<Self>> {
-        Ok(Some(Self::new(
-            target_sample_rate,
-            backend,
-            quality,
-            options,
-        )))
-    }
 }
 
 impl<B> std::fmt::Debug for DecoderResamplerConfig<B>
@@ -167,6 +124,8 @@ where
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct DecoderConfig<B = NoResamplerBackend> {
+    /// Raw byte buffer pool, propagated from the host.
+    pub byte_pool: BytePool,
     /// Which decoder backend to use. See [`DecoderBackend`].
     #[builder(default)]
     pub backend: DecoderBackend,
@@ -174,18 +133,17 @@ pub struct DecoderConfig<B = NoResamplerBackend> {
     pub byte_len_handle: Option<Arc<AtomicU64>>,
     /// Optional byte-map handle over the underlying source.
     pub byte_map: Option<Arc<dyn ByteMap>>,
-    /// Raw byte buffer pool, propagated from the host.
-    pub byte_pool: BytePool,
     /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
+    #[builder(into)]
     pub hint: Option<String>,
     /// Reader-side observer hooks. Single-owner; moved into
     /// [`ComposedDecoder`] by the chosen backend path.
     pub hooks: Option<BoxedEventSink>,
-    /// PCM buffer pool, propagated from the host.
-    pub pcm_pool: PcmPool,
     /// Optional decoder-side resampler plan. `None` means the decoder emits
     /// at the source rate.
     pub resampler: Option<DecoderResamplerConfig<B>>,
+    /// PCM buffer pool, propagated from the host.
+    pub pcm_pool: PcmPool,
     /// Enable gapless trim wiring through the per-backend codec.
     #[builder(default = true)]
     pub gapless: bool,
@@ -194,13 +152,15 @@ pub struct DecoderConfig<B = NoResamplerBackend> {
     pub epoch: u64,
 }
 
-#[cfg(test)]
-impl Default for DecoderConfig {
-    fn default() -> Self {
+#[cfg(all(test, feature = "apple", any(target_os = "macos", target_os = "ios")))]
+impl DecoderConfig {
+    pub(crate) fn test_builder() -> DecoderConfigBuilder<
+        NoResamplerBackend,
+        decoder_config_builder::SetPcmPool<decoder_config_builder::SetBytePool>,
+    > {
         Self::builder()
             .byte_pool(BytePool::default())
             .pcm_pool(PcmPool::default())
-            .build()
     }
 }
 
@@ -804,10 +764,7 @@ where
     if probed_gapless.is_some() {
         demuxer.set_gapless(probed_gapless);
     }
-    let symphonia_config = SymphoniaConfig {
-        gapless: config.gapless,
-        ..Default::default()
-    };
+    let symphonia_config = SymphoniaConfig::builder().gapless(config.gapless).build();
     let codec_impl = if SymphoniaCodec::supports(codec) {
         SymphoniaCodec::open_with_config(demuxer.track_info(), &symphonia_config)?
     } else {
@@ -866,10 +823,7 @@ where
     );
     match codec {
         AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 | AudioCodec::Flac => {
-            let symphonia_config = SymphoniaConfig {
-                gapless: config.gapless,
-                ..Default::default()
-            };
+            let symphonia_config = SymphoniaConfig::builder().gapless(config.gapless).build();
             build_fmp4_segment_decoder(source, layout, config, |track| {
                 SymphoniaCodec::open_with_config(track, &symphonia_config)
             })
@@ -922,7 +876,10 @@ mod tests {
 
     #[test]
     fn wav_reader_profile_requires_gated_input() {
-        let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+        let media_info = MediaInfo::builder()
+            .maybe_codec(Some(AudioCodec::Pcm))
+            .maybe_container(Some(ContainerFormat::Wav))
+            .build();
 
         let profile = DecoderFactory::reader_profile(&media_info, None);
 
@@ -931,7 +888,10 @@ mod tests {
 
     #[test]
     fn self_framing_reader_profile_remains_incremental() {
-        let media_info = MediaInfo::new(Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio));
+        let media_info = MediaInfo::builder()
+            .maybe_codec(Some(AudioCodec::Mp3))
+            .maybe_container(Some(ContainerFormat::MpegAudio))
+            .build();
 
         let profile = DecoderFactory::reader_profile(&media_info, None);
 
@@ -985,10 +945,10 @@ mod apple_factory_tests {
     struct PacketDemuxer {
         track: TrackInfo,
         held: Vec<u8>,
-        next_index: u64,
-        packet_count: u64,
         packet_frames: u32,
         source_rate: u32,
+        next_index: u64,
+        packet_count: u64,
     }
 
     impl Demuxer for PacketDemuxer {
@@ -1037,9 +997,9 @@ mod apple_factory_tests {
     }
 
     struct OutputDomainCodec {
+        track_info: DecoderTrackInfo,
         spec: PcmSpec,
         frames_per_call: u32,
-        track_info: DecoderTrackInfo,
     }
 
     impl FrameCodec for OutputDomainCodec {
@@ -1086,12 +1046,12 @@ mod apple_factory_tests {
 
     fn aac_track(sample_rate: u32, gapless: Option<GaplessInfo>) -> TrackInfo {
         TrackInfo {
-            codec: AudioCodec::AacLc,
             sample_rate,
+            gapless,
+            codec: AudioCodec::AacLc,
             channels: 2,
             extra_data: Vec::new(),
             duration: None,
-            gapless,
         }
     }
 
@@ -1107,12 +1067,15 @@ mod apple_factory_tests {
         let (blob, segmented) = build_test_layout(TestLayoutCodec::Aac, 1);
         let source = Cursor::new(blob);
         let byte_map: Arc<dyn ByteMap> = Arc::new(segmented);
-        let media_info = MediaInfo::new(Some(AudioCodec::AacLc), None);
-        let config: DecoderConfig<kithara_resampler::NoResamplerBackend> = DecoderConfig {
-            backend: DecoderBackend::Apple,
-            byte_map: Some(byte_map),
-            ..DecoderConfig::default()
-        };
+        let media_info = MediaInfo::builder()
+            .maybe_codec(Some(AudioCodec::AacLc))
+            .maybe_container(None)
+            .build();
+        let config: DecoderConfig<kithara_resampler::NoResamplerBackend> =
+            DecoderConfig::test_builder()
+                .backend(DecoderBackend::Apple)
+                .byte_map(byte_map)
+                .build();
 
         let result = DecoderFactory::create_from_media_info(source, &media_info, config);
 
@@ -1194,8 +1157,8 @@ mod apple_factory_tests {
             source_rate: SOURCE_RATE,
         };
         let codec = OutputDomainCodec {
-            spec: PcmSpec::new(2, NonZeroU32::new(OUTPUT_RATE).expect("test rate")),
             frames_per_call,
+            spec: PcmSpec::new(2, NonZeroU32::new(OUTPUT_RATE).expect("test rate")),
             track_info: DecoderTrackInfo {
                 gapless: Some(output_gapless),
                 ..DecoderTrackInfo::default()

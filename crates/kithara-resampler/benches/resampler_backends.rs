@@ -87,7 +87,7 @@ fn bench_compiled_backends<M>(
     bench_backend(
         group,
         "apple-audio-converter",
-        AppleAudioConverterBackend::new(AudioToolboxConverterFactory::new()),
+        AppleAudioConverterBackend::with_config(AudioToolboxConverterFactory::new().into()),
         source_rate,
         target_rate,
         channels,

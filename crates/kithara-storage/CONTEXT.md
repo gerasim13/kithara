@@ -4,72 +4,58 @@ Detailed contracts and invariants for the kithara-storage crate; the README is t
 
 ## Blocking coordination
 
-```mermaid
-sequenceDiagram
-    participant DL as Downloader (async)
-    participant W as Writer
-    participant SR as StorageResource
-    participant RS as RangeSet
-    participant G as CondvarGate
-    participant R as Reader (sync)
+An async writer and one or more sync readers share a resource: the downloader writes through `write_at`, readers park in `wait_range` until the requested byte range lands.
 
-    Note over DL,R: Async downloader and sync reader share StorageResource
+- `wait_range` blocks the calling thread on `kithara_platform::sync::CondvarGate`, which unifies the guarded readiness state and its condvar behind one lock. The wait is event-driven — there is no polling interval and no timer.
+- Readiness transitions that notify the gate: bytes written, `commit`, `fail`, `reactivate`. Cancellation is the one transition with no notify of its own, so the wait registers a cancel waker that notifies under the *same* state mutex the wait is about to release. That closes the lost-wakeup window; without it a cancel could only be learned by re-polling.
+- Outcomes: `Ready` once the range is covered (also when a committed resource exposes no `valid_window`), `Eof` when the resource is committed and the range starts at or beyond `final_len`, and typed errors otherwise — `Failed`, `Cancelled`, `InvalidRange` for `start > end`.
+- `WaitOutcome::Interrupted` exists for wrappers but is never produced by this crate. Upstream layers synthesize it (`kithara-assets` processing gate, `kithara-hls`, `kithara-file`) when a seek or an uncommitted processing pipeline must abort the read.
+- The 180 s `WAIT_HANG_TIMEOUT` watchdog is a deadlock detector, not a timeout. It is sized well above the `kithara-net` inactivity timeout plus retry backoff so a stalled upstream is failed by the network layer first, and it resets whenever the available prefix of the waited range advances — a slow but progressing fetch never trips it.
 
-    DL->>W: poll next chunk from network
-    W->>SR: write_at(offset, bytes)
-    SR->>RS: insert(offset..offset+len)
-    SR->>G: notify_all()
+## Lifecycle invariants
 
-    R->>SR: wait_range(pos..pos+len)
-    SR->>RS: check coverage
-    alt Range not ready
-        SR->>G: wait()
-        Note over SR,G: Park until bytes, commit, fail, reactivate, or cancel notify
-        G-->>SR: woken by notify_all
-        SR->>RS: re-check coverage
-    end
-    SR-->>R: WaitOutcome::Ready
-
-    R->>SR: read_at(pos, buf)
-    SR-->>R: bytes read
-```
-
-`wait_range` blocks the calling thread through `kithara_platform::sync::CondvarGate` until the requested byte range is fully written, or the resource reaches EOF/error/cancellation. The wait is event-driven; the 180s watchdog is a deadlock detector, not a polling interval.
+- `len()` reports `Some` only while the *lifecycle* is committed. A reactivated (being-rewritten) resource has no known total even though its committed snapshot stays published, so readers keep serving consistent bytes during the rewrite.
+- Dropping an uncommitted writer marks the core failed, except when the resource is already committed, already failed, or cancelled — cancellation is routine shutdown, not a writer error.
+- `ResourceStatus` priority: `Failed` and `Committed` outrank `Cancelled`, which outranks `Active`. A resource that produced committed bytes before its token fired still reports `Committed` so observers can read those bytes.
+- `AvailabilityObserver` hooks (`on_write`, `on_commit`) fire after the state lock is released, so implementations may take their own locks without deadlocking against `wait_range` waiters. `commit(None)` is silent.
 
 ## Mmap vs Mem
 
-<table>
-<tr><th>Aspect</th><th>MmapDriver</th><th>MemDriver</th></tr>
-<tr><td>Backing</td><td><code>mmap-io::MemoryMappedFile</code></td><td><code>PooledOwned&lt;32, Vec&lt;u8&gt;&gt;</code> plus <code>ArcSwapOption&lt;Vec&lt;u8&gt;&gt;</code> committed snapshots</td></tr>
-<tr><td>Lock-free fast path</td><td>Yes (<code>SegQueue</code> for write notifications)</td><td>No</td></tr>
-<tr><td>Auto-resize</td><td>2x growth on overflow</td><td>Extend on write</td></tr>
-<tr><td><code>path()</code></td><td><code>Some</code></td><td><code>None</code></td></tr>
-</table>
+| Aspect | `MmapDriver` | `MemDriver` |
+| --- | --- | --- |
+| Backing | `mmap-io::MemoryMappedFile` | `PooledOwned<32, Vec<u8>>` plus an `ArcSwapOption<Vec<u8>>` committed snapshot |
+| Lock-free fast path | Yes — `SegQueue` of ready ranges consumed by `try_fast_check` | No |
+| Growth | 2× on overflow (`MMAP_GROWTH_FACTOR`) | Extend on write, charged against the injected `BytePool` budget |
+| `path()` | `Some` | `None` |
+
+Neither driver evicts: `valid_window()` is `None`, so a published committed snapshot implies gap-free coverage of `[0, committed_len)` and `contains_range` takes a lock-free fast path.
+
+Both option types are `#[non_exhaustive]` `bon` builders: `MmapOptions::for_path(path)` (then `mode` / `initial_len`) and `MemOptions::builder()` (`pool`, `initial_data`, `capacity`).
 
 ## Chunked atomic claim
 
-`AtomicChunked::open(canonical_path, factory)` opens a fresh chunked-atomic resource. The `factory` opens the inner resource at a given filesystem path; it is called once with the temp path during the constructor and once more with the canonical path after commit via `OpenIntent::Reopen`.
+`AtomicChunked::open(canonical_path, factory)` opens a fresh chunked-atomic resource. `factory` opens the inner resource at a given filesystem path and is called twice: once with `<canonical>.tmp` and `OpenIntent::Fresh` during the constructor, and once with the canonical path and `OpenIntent::Reopen` after the commit rename. The factory MUST honour the intent and return a `Committed`-status resource for `Reopen`, otherwise the wrapping lease layer mistakes the just-renamed file for an abandoned writer and deletes it.
 
-`open` atomically claims `<canonical>.tmp` via `OpenOptions::create_new`, so the filesystem rejects a second concurrent open of the same tmp path. It returns `StorageError::TmpClaimed` when another `AssetStore` instance (or process) is already writing the same canonical path; the caller should poll until the holder releases (commit or drop) and either retry or take a passthrough view once committed.
+`open` claims `<canonical>.tmp` via `OpenOptions::create_new`, so the filesystem itself rejects a second concurrent open of the same tmp path — no in-process registry is involved. It returns `StorageError::TmpClaimed` when another `AssetStore` instance (or another process) is already writing the same canonical path; the caller polls until the holder releases (commit or drop) and then retries, or takes a passthrough view once committed. `kithara-file` implements that poll loop for remote file sources.
 
-Stale temp left from a prior crashed run is not auto-wiped: liveness is signalled by tmp existence alone, so a leftover from `kill -9` blocks subsequent opens until cleaned up explicitly. The maintenance task is the caller's responsibility (a future enhancement may add PID-aware cleanup).
+Stale temp from a crashed run is not auto-wiped: liveness is signalled by tmp existence alone, so a leftover from `kill -9` (which skips `Drop`) blocks subsequent opens until cleaned up explicitly. Cleanup is the caller's responsibility.
 
-## Synchronization
+`commit` flushes durably (`sync_data`), renames tmp → canonical, then swaps the inner via the factory, so an external observer of the canonical path sees either no file or the fully durable committed bytes.
 
-Range tracking uses `RangeSet<u64>` (from `rangemap`) to record which byte ranges have been written. `wait_range` parks on the shared `CondvarGate` until a readiness transition notifies it, returns `Eof` when the resource is committed and the range starts beyond the final length, and returns typed storage errors for failure or cancellation. The `Interrupted` wait outcome is defined here for wrappers, but current production attribution lives in `kithara-assets` processing gates that convert cancellation/failure wakes into an interrupted read.
+## Uniform decorator wrapping
+
+Every `StorageResource` variant wraps its inner in an `AtomicChunked`: fresh segment writes use it in atomic mode, while re-opens of already-committed files and memory-backed inners use `AtomicChunked::passthrough` (no atomicity, no cost beyond the `Arc`). Uniform wrapping means no code path can accidentally bypass the atomic-on-commit guarantee.
 
 ## In-place decorator lifecycle
 
-The public `Resource<Active>` lifecycle is consume-self: `commit`, `reactivate`, and failure transitions move the writer handle so a second commit or write after commit is a compile error for external callers.
+The public `Resource<Active>` lifecycle is consume-self: `commit`, `reactivate`, and the failure transition move the writer handle, so a second commit or a write after commit is a compile error for external callers.
 
-`commit_in_place`, `reactivate_in_place`, and `fail_in_place` are `pub(crate)` hooks only for the single-owner storage decorators (`Atomic` and `AtomicChunked`) that must rewrite a file in place: `OpenMode::ReadWrite` index files and the chunked-segment tmp/commit cycle. Those decorators own their writer exclusively and do not clone it, so the in-place transition does not create a second mutable owner or weaken the external consume-self contract.
+`commit_in_place`, `reactivate_in_place`, and `fail_in_place` are `pub(crate)` hooks for the single-owner storage decorators (`Atomic`, `AtomicChunked`) that must rewrite a file in place: `OpenMode::ReadWrite` index files and the chunked tmp/commit cycle. Those decorators own their writer exclusively and never clone it, so the in-place transition creates no second mutable owner and does not weaken the external consume-self contract.
 
 ## Notes on the `redundant_reexport` audit warning
 
-`just ci audit kithara-storage` flags two `redundant_reexport` warnings — `MemOptions` and `MmapOptions` are surfaced *both* via `pub use` from `lib.rs` *and* via the `<Driver>::Options` associated type. The duplication is intentional and documented here per `AGENTS.md` ("if you must suppress, document why in the owning crate `CONTEXT.md`"):
+`just ci audit kithara-storage` flags `MemOptions` and `MmapOptions` as surfaced twice — via `pub use` from `lib.rs` and via the `<Driver>::Options` associated type. The duplication is intentional and documented here per `AGENTS.md`:
 
-- `MmapOptions` / `MemOptions` are the canonical user-facing constructor types — every caller writes `MmapOptions { path, initial_len, mode }` reachable via `kithara_storage::MmapOptions`.
-- The `Driver::Options` associated type is the binding that lets the generic `Resource::<D>::open(token, opts: D::Options)` constructor pick the right driver from the option struct's type alone (via type inference at the call site). Removing `Options` would force every caller to pre-qualify with the driver type alias (`MmapResource::open` / `MemResource::open`) — a wider API ripple than the duplicated path is worth.
-- Dropping the `pub use` (the audit's literal suggested fix) would break ~15 external callers that rely on `kithara_storage::{MmapOptions, MemOptions}`.
-
-The two warnings are stable across releases; no other audit warnings should appear.
+- `MmapOptions` / `MemOptions` are the canonical user-facing constructor types, reached as `kithara_storage::{MmapOptions, MemOptions}` by callers across the workspace.
+- `Driver::Options` is the binding that lets the generic `Resource::<D>::open(cancel, opts)` pick the driver from the option type alone via call-site inference. Removing it would force every caller to pre-qualify with a driver alias (`MmapResource::open` / `MemResource::open`) — a wider API ripple than the duplicated path is worth.
+- Dropping the `pub use` (the audit's literal suggested fix) would break every external caller.

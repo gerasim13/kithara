@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use kithara_assets::{
-    AssetLayoutRegistry, AssetResource, AssetSource, AssetStoreBuilder, StorageBackend,
-};
+use kithara_assets::{AssetLayoutRegistry, AssetResource, AssetSource, AssetStore, StorageBackend};
 use kithara_file::File;
 use kithara_hls::Hls;
 use kithara_play::policy::{QueryIdentityLayout, QueryIdentityRule};
@@ -22,7 +20,7 @@ fn source(value: &str, discriminator: Option<&str>) -> AssetSource {
 
 fn store_with_layout<T: 'static>(layout: QueryIdentityLayout) -> kithara_assets::AssetStore {
     let layouts = AssetLayoutRegistry::default().with::<T>(Arc::new(layout));
-    AssetStoreBuilder::default()
+    AssetStore::builder()
         .backend(StorageBackend::Memory)
         .layouts(layouts)
         .build()

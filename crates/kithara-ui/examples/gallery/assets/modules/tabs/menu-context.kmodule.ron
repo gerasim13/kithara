@@ -35,7 +35,7 @@
                         id: "status-label",
                         size: (w: Fill, h: Fill),
                         style: MicroLabel,
-                        label: "ПОСЛЕДНЕЕ ДЕЙСТВИЕ",
+                        label: "LAST ACTION",
                     ),
                     Text(id: "status-value", style: MicroLabel, color: Accent, read: Model(id: "gallery.menu.action")),
                 ],

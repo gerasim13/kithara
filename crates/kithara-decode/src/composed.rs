@@ -27,11 +27,15 @@ use crate::{
 /// is measured against 2048, not against a core-rate constant.
 #[derive(Clone, Copy, Debug, Default)]
 struct HeadStrip {
-    frames: u64,
     settled: bool,
+    frames: u64,
 }
 
 impl HeadStrip {
+    const fn frames(self) -> u64 {
+        self.frames
+    }
+
     /// Stops once a packet comes back whole: from there on the decoder is
     /// through its delay, and a short packet is the stream's own tail
     /// rather than more strip.
@@ -45,10 +49,6 @@ impl HeadStrip {
         }
         self.frames = self.frames.saturating_add(supplied - emitted);
     }
-
-    const fn frames(self) -> u64 {
-        self.frames
-    }
 }
 
 const ZERO_FRAME_BUDGET: u32 = 32;
@@ -59,6 +59,7 @@ const ZERO_FRAME_BUDGET: u32 = 32;
 pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
     codec: C,
     demuxer: D,
+    head_strip: HeadStrip,
     byte_len_handle: Option<Arc<AtomicU64>>,
     duration: Option<Duration>,
     /// Reader-side event sink. Single-owner `Box<dyn ReaderEventSink>` —
@@ -76,8 +77,7 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
     spec: PcmSpec,
     /// Set on every seek; the next emitted chunk may re-anchor the PCM cursor.
     resync_frame_offset_to_pts: bool,
-    timeline_gap_frames: u64,
-    head_strip: HeadStrip,
+    zero_frame_count: u32,
     epoch: u64,
     /// Cumulative frame counter. Anchored to `landed_at` on seek (so the
     /// next chunk's `frame_offset / sample_rate ≈ timestamp`) and
@@ -86,7 +86,7 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
     /// chunk recomputes `floor(pts * sample_rate)` from a `Duration`
     /// nanosecond value.
     frame_offset: u64,
-    zero_frame_count: u32,
+    timeline_gap_frames: u64,
 }
 
 /// Runtime wiring for a [`ComposedDecoder`], separated from the
@@ -176,6 +176,24 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             epoch: self.epoch,
         };
         PcmChunk::new(meta, buf)
+    }
+
+    fn drain_codec_eof(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        if !self
+            .codec
+            .needs_eof_drain(self.demuxer.track_info().sample_rate)
+        {
+            return Ok(DecoderChunkOutcome::Eof);
+        }
+
+        let mut buf = self.pool.get();
+        let timestamp = duration_for_frames(self.spec.sample_rate.get(), self.frame_offset);
+        let frames = self.codec.decode_frame(&[], timestamp, &[], &mut buf)?;
+        if frames == 0 {
+            return Ok(DecoderChunkOutcome::Eof);
+        }
+        let chunk = self.build_chunk(buf, frames, timestamp, 0);
+        Ok(DecoderChunkOutcome::Chunk(chunk))
     }
 
     fn emit_chunk_signal(&mut self, outcome: &DecoderChunkOutcome) {
@@ -310,24 +328,6 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         }
     }
 
-    fn drain_codec_eof(&mut self) -> DecodeResult<DecoderChunkOutcome> {
-        if !self
-            .codec
-            .needs_eof_drain(self.demuxer.track_info().sample_rate)
-        {
-            return Ok(DecoderChunkOutcome::Eof);
-        }
-
-        let mut buf = self.pool.get();
-        let timestamp = duration_for_frames(self.spec.sample_rate.get(), self.frame_offset);
-        let frames = self.codec.decode_frame(&[], timestamp, &[], &mut buf)?;
-        if frames == 0 {
-            return Ok(DecoderChunkOutcome::Eof);
-        }
-        let chunk = self.build_chunk(buf, frames, timestamp, 0);
-        Ok(DecoderChunkOutcome::Chunk(chunk))
-    }
-
     fn seek_inner(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
         let priming = self.codec.priming(self.demuxer.track_info().codec);
         match self.demuxer.seek(pos, priming)? {
@@ -359,41 +359,12 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
 }
 
 impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
-    delegate::delegate! {
-        to self.codec {
-            #[expr(AudioCodec::encoder_priming_frames(codec).saturating_add($))]
-            #[call(decoder_algo_delay)]
-            fn default_priming_frames(&self, codec: AudioCodec) -> u64;
-            fn track_info(&self) -> crate::DecoderTrackInfo;
-        }
+    fn blender_profile(&self) -> BlenderProfile {
+        BlenderProfile::new(self.spec)
     }
 
     fn duration(&self) -> Option<Duration> {
         self.duration
-    }
-
-    /// The frames between a packet's timestamp and the PCM the decoder has
-    /// actually produced for it.
-    ///
-    /// Two ways of learning the same figure, and the larger one is the whole of
-    /// it. A decode that started at the head sees the decoder's strip split in
-    /// two: `timestamp_bias_frames` models part of it, and the remainder
-    /// surfaces as a timestamp jump this decoder records in
-    /// `timeline_gap_frames`. A decode that started mid-stream records no jump —
-    /// `seek` resyncs the frame offset onto the packet timestamp instead — so
-    /// for it only the strip directly observed by this decoder is complete.
-    /// Taking the maximum leaves both with the same number, which is what a
-    /// splice between them cuts on.
-    fn timeline_gap_frames(&self) -> u64 {
-        let modelled = self
-            .codec
-            .timestamp_bias_frames()
-            .saturating_add(self.timeline_gap_frames);
-        self.head_strip.frames().max(modelled)
-    }
-
-    fn blender_profile(&self) -> BlenderProfile {
-        BlenderProfile::new(self.spec)
     }
 
     fn flush_reader_signals(&mut self) {
@@ -422,9 +393,38 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
         self.spec
     }
 
+    /// The frames between a packet's timestamp and the PCM the decoder has
+    /// actually produced for it.
+    ///
+    /// Two ways of learning the same figure, and the larger one is the whole of
+    /// it. A decode that started at the head sees the decoder's strip split in
+    /// two: `timestamp_bias_frames` models part of it, and the remainder
+    /// surfaces as a timestamp jump this decoder records in
+    /// `timeline_gap_frames`. A decode that started mid-stream records no jump —
+    /// `seek` resyncs the frame offset onto the packet timestamp instead — so
+    /// for it only the strip directly observed by this decoder is complete.
+    /// Taking the maximum leaves both with the same number, which is what a
+    /// splice between them cuts on.
+    fn timeline_gap_frames(&self) -> u64 {
+        let modelled = self
+            .codec
+            .timestamp_bias_frames()
+            .saturating_add(self.timeline_gap_frames);
+        self.head_strip.frames().max(modelled)
+    }
+
     fn update_byte_len(&self, len: u64) {
         if let Some(handle) = &self.byte_len_handle {
             handle.store(len, Ordering::Release);
+        }
+    }
+
+    delegate::delegate! {
+        to self.codec {
+            #[expr(AudioCodec::encoder_priming_frames(codec).saturating_add($))]
+            #[call(decoder_algo_delay)]
+            fn default_priming_frames(&self, codec: AudioCodec) -> u64;
+            fn track_info(&self) -> crate::DecoderTrackInfo;
         }
     }
 }
@@ -717,10 +717,10 @@ mod test_stub_codec {
     }
 
     pub(super) struct LaggedQueueCodec {
+        decoded_pts: Duration,
+        pending_pts: Option<Duration>,
         spec: PcmSpec,
         frames_per_call: u32,
-        pending_pts: Option<Duration>,
-        decoded_pts: Duration,
     }
 
     impl ConstFrameCodec {
@@ -809,10 +809,10 @@ mod test_counting_codec {
 
     pub(super) struct CountingCodec {
         pub(super) decode_calls: Arc<AtomicU32>,
-        frames: VecDeque<u32>,
         pub(super) flush_calls: Arc<AtomicU32>,
         pub(super) spec: PcmSpec,
         pub(super) frames_per_call: u32,
+        frames: VecDeque<u32>,
     }
 
     impl CountingCodec {
@@ -869,9 +869,9 @@ mod test_eof_drain_codec {
     pub(super) struct EofDrainCodec {
         pub(super) empty_decode_calls: Arc<AtomicU32>,
         spec: PcmSpec,
+        tail_pending: bool,
         frames_per_call: u32,
         tail_frames: u32,
-        tail_pending: bool,
     }
 
     impl EofDrainCodec {
@@ -920,16 +920,16 @@ mod test_eof_drain_codec {
     pub(super) struct QueueCodec {
         pub(super) empty_decode_calls: Arc<AtomicU32>,
         spec: PcmSpec,
-        tail_frames: u32,
         tail_pending: bool,
+        tail_frames: u32,
     }
 
     impl QueueCodec {
         pub(super) fn new(spec: PcmSpec, tail_frames: u32) -> Self {
             Self {
-                empty_decode_calls: Arc::new(AtomicU32::new(0)),
                 spec,
                 tail_frames,
+                empty_decode_calls: Arc::new(AtomicU32::new(0)),
                 tail_pending: false,
             }
         }
@@ -1007,14 +1007,14 @@ mod seek_trim_tests {
 
     #[derive(Clone, Copy)]
     struct BoundaryFrame {
-        pts: Duration,
         duration: Duration,
+        pts: Duration,
     }
 
     struct BoundaryFrameDemuxer {
         track: TrackInfo,
-        held: Vec<u8>,
         frames: Vec<BoundaryFrame>,
+        held: Vec<u8>,
         idx: usize,
     }
 
@@ -1104,8 +1104,8 @@ mod seek_trim_tests {
 
     fn track_with_rate(sample_rate: u32) -> TrackInfo {
         TrackInfo {
-            codec: AudioCodec::AacLc,
             sample_rate,
+            codec: AudioCodec::AacLc,
             channels: 2,
             extra_data: Vec::new(),
             duration: None,

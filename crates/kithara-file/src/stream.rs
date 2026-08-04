@@ -126,8 +126,8 @@ fn remote_key(
     extension: Option<&str>,
 ) -> Result<ResourceKey, SourceError> {
     let source = AssetSource::Remote {
-        url: url.clone(),
         discriminator,
+        url: url.clone(),
     };
     let scope = store.scope::<File>(&source)?;
     let resource = AssetResource::Source {
@@ -354,7 +354,7 @@ fn sniff_codec(reader: &AssetReader) -> Option<AudioCodec> {
 
 #[cfg(test)]
 mod tests {
-    use kithara_assets::{AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{AssetStore, StorageBackend};
 
     use super::*;
 
@@ -383,7 +383,7 @@ mod tests {
 
     #[kithara::test]
     fn remote_key_uses_file_source_layout() {
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .build();
         let key = remote_key(
@@ -399,7 +399,7 @@ mod tests {
 
     #[kithara::test]
     fn remote_key_uses_only_explicit_discriminator() {
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .build();
         let first = remote_key(

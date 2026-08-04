@@ -36,8 +36,8 @@ impl LayoutPreview<'_> {
 }
 
 struct Preview {
-    geometry: PreviewGeometry,
     metrics: LayoutPreviewSkin,
+    geometry: PreviewGeometry,
     palette: RenderPalette,
 }
 
@@ -98,8 +98,8 @@ impl PreviewGeometry {
 
 #[derive(Clone, Copy)]
 struct PreviewArea {
-    bounds: UnitRect,
     kind: AreaKind,
+    bounds: UnitRect,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -110,10 +110,10 @@ enum AreaKind {
 
 #[derive(Clone, Copy)]
 struct UnitRect {
+    height: f32,
+    width: f32,
     x: f32,
     y: f32,
-    width: f32,
-    height: f32,
 }
 
 impl UnitRect {
@@ -188,11 +188,11 @@ mod tests {
     struct Registry {
         bool_value: EndpointDesc,
         scalar: EndpointDesc,
-        stereo: EndpointDesc,
         scoped_scalar: EndpointDesc,
         scoped_text: EndpointDesc,
         scoped_trigger: EndpointDesc,
         scoped_waveform: EndpointDesc,
+        stereo: EndpointDesc,
         track_list: EndpointDesc,
         variant_bool: EndpointDesc,
         variant_text: EndpointDesc,

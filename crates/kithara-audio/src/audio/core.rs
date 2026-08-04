@@ -24,24 +24,24 @@ use super::{
 
 /// Pull-based PCM facade backed by a shared renderer worker.
 pub struct Audio<S> {
-    lease: WorkerLease,
-    ring: RingConsumer,
-    cursor: ChunkCursor,
     events: AudioEvents,
-    session: Session,
+    cursor: ChunkCursor,
     controls: Controls,
     _marker: PhantomData<S>,
+    ring: RingConsumer,
+    session: Session,
+    lease: WorkerLease,
 }
 
 pub(super) struct AudioParts<S> {
-    pub(super) lease: WorkerLease,
-    pub(super) ring: RingConsumer,
-    pub(super) session: Session,
+    pub(super) emit: Arc<kithara_events::DeferredBus<kithara_events::Event>>,
     pub(super) controls: Controls,
     pub(super) pcm_pool: PcmPool,
     pub(super) spec: PcmSpec,
-    pub(super) emit: Arc<kithara_events::DeferredBus<kithara_events::Event>>,
     pub(super) marker: PhantomData<S>,
+    pub(super) ring: RingConsumer,
+    pub(super) session: Session,
+    pub(super) lease: WorkerLease,
 }
 
 pub(super) struct Session {
@@ -49,16 +49,16 @@ pub(super) struct Session {
     pub(super) preload_gate: Arc<PreloadGate>,
     pub(super) seek: Arc<dyn SeekControl>,
     pub(super) seek_obs: Arc<dyn SeekObserve>,
-    pub(super) metadata: TrackMetadata,
     pub(super) abr_handle: Option<kithara_abr::AbrHandle>,
     pub(super) peer_wake: Option<Arc<DeferredWake>>,
+    pub(super) metadata: TrackMetadata,
 }
 
 pub(super) struct Controls {
     pub(super) host_sample_rate: Arc<AtomicU32>,
     pub(super) playback_rate: Arc<AtomicF32>,
-    pub(super) stretch: Option<Arc<StretchControls>>,
     pub(super) service_class: Arc<AtomicServiceClass>,
+    pub(super) stretch: Option<Arc<StretchControls>>,
 }
 
 pub(super) struct WorkerLease {
@@ -109,10 +109,29 @@ impl<S> Audio<S> {
         self.session.abr_handle.as_ref()?.current_variant()
     }
 
-    #[must_use]
-    /// Returns the known stream duration.
-    pub fn duration(&self) -> Option<Duration> {
-        self.session.playhead.duration()
+    delegate::delegate! {
+        to self.session.playhead {
+            #[must_use]
+            /// Returns the known stream duration.
+            pub fn duration(&self) -> Option<Duration>;
+            #[must_use]
+            /// Returns the committed playback position.
+            pub fn position(&self) -> Duration;
+        }
+    }
+
+    pub(crate) fn fill_buffer(&mut self) -> bool {
+        let recv = recv_ctx(&self.session, &self.lease);
+        let was_playing = self.ring.phase == super::ConsumerPhase::Playing;
+        let filled = self.ring.fill(&mut self.cursor, recv);
+        self.events.fill_result(
+            filled,
+            was_playing,
+            self.ring.phase.is_terminal(),
+            self.session.playhead.position(),
+            self.ring.validator.epoch,
+        );
+        filled
     }
 
     #[must_use]
@@ -125,12 +144,6 @@ impl<S> Audio<S> {
     /// Returns track metadata.
     pub fn metadata(&self) -> &TrackMetadata {
         &self.session.metadata
-    }
-
-    #[must_use]
-    /// Returns the committed playback position.
-    pub fn position(&self) -> Duration {
-        self.session.playhead.position()
     }
 
     /// Enables non-blocking reads and primes the first PCM chunk.
@@ -149,20 +162,6 @@ impl<S> Audio<S> {
             }
         }
         Ok(())
-    }
-
-    pub(crate) fn fill_buffer(&mut self) -> bool {
-        let recv = recv_ctx(&self.session, &self.lease);
-        let was_playing = self.ring.phase == super::ConsumerPhase::Playing;
-        let filled = self.ring.fill(&mut self.cursor, recv);
-        self.events.fill_result(
-            filled,
-            was_playing,
-            self.ring.phase.is_terminal(),
-            self.session.playhead.position(),
-            self.ring.validator.epoch,
-        );
-        filled
     }
 
     /// Reads interleaved PCM samples into `buf`.
@@ -237,6 +236,14 @@ impl<S> Audio<S> {
 }
 
 impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
+    delegate::delegate! {
+        to self.session.playhead {
+            #[call(cached)]
+            fn cached_span(&self) -> Duration;
+            fn decoded_frontier(&self) -> Duration;
+        }
+    }
+
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
         self.ring.preloaded = true;
         let chunk = if let Some(chunk) = self.ring.current_chunk.take() {
@@ -266,6 +273,10 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
         Ok(ChunkOutcome::Chunk(chunk))
     }
 
+    fn position(&self) -> Duration {
+        self.position()
+    }
+
     fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         Self::read(self, buf)
     }
@@ -290,31 +301,19 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
     fn spec(&self) -> PcmSpec {
         Self::spec(self)
     }
-
-    fn position(&self) -> Duration {
-        self.position()
-    }
-
-    fn decoded_frontier(&self) -> Duration {
-        self.session.playhead.decoded_frontier()
-    }
-
-    fn cached_span(&self) -> Duration {
-        self.session.playhead.cached()
-    }
 }
 
 impl<S: kithara_platform::maybe_send::MaybeSend> PcmSession for Audio<S> {
-    fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
-        self.abr_handle()
+    delegate::delegate! {
+        to self {
+            fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
+            fn duration(&self) -> Option<Duration>;
+            fn metadata(&self) -> &TrackMetadata;
+        }
     }
 
     fn event_bus(&self) -> &EventBus {
         self.events.bus()
-    }
-
-    fn metadata(&self) -> &TrackMetadata {
-        self.metadata()
     }
 
     fn preload_epoch(&self) -> u64 {
@@ -324,19 +323,15 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmSession for Audio<S> {
     fn preload_gate(&self) -> Option<Arc<PreloadGate>> {
         Some(self.session.preload_gate.clone())
     }
-
-    fn duration(&self) -> Option<Duration> {
-        self.duration()
-    }
 }
 
 impl<S: kithara_platform::maybe_send::MaybeSend> PcmControl for Audio<S> {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        Self::seek(self, position)
-    }
-
     fn preload(&mut self) -> Result<(), DecodeError> {
         Self::preload(self)
+    }
+
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+        Self::seek(self, position)
     }
 
     fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
@@ -426,10 +421,10 @@ mod tests {
             let (trash_tx, _trash_rx) = connect::<PcmChunk>(8, None);
             let epoch = Arc::new(AtomicU64::new(0));
             let ring = RingConsumer::new(RingParts {
-                pcm_rx: data_rx,
                 trash_tx,
-                reader_wake: Arc::new(ThreadWake::default()),
                 epoch,
+                pcm_rx: data_rx,
+                reader_wake: Arc::new(ThreadWake::default()),
                 block_on_underrun: false,
             });
             let seek_state = Arc::new(SeekState::new());
@@ -441,18 +436,20 @@ mod tests {
             let emit = AudioEvents::deferred(&bus);
             Self {
                 audio: Audio::from(AudioParts {
+                    ring,
+                    pcm_pool,
+                    emit,
                     lease: WorkerLease {
                         cancel: None,
                         track_id: None,
                         worker: None,
                         is_standalone: false,
                     },
-                    ring,
                     session: Session {
                         playhead,
-                        preload_gate: Arc::new(PreloadGate::default()),
                         seek,
                         seek_obs,
+                        preload_gate: Arc::new(PreloadGate::default()),
                         metadata: TrackMetadata::default(),
                         abr_handle: None,
                         peer_wake: None,
@@ -463,9 +460,7 @@ mod tests {
                         stretch: None,
                         service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
                     },
-                    pcm_pool,
                     spec: PcmMeta::default().spec,
-                    emit,
                     marker: PhantomData,
                 }),
             }

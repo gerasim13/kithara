@@ -71,16 +71,16 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
 
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_millis(500))
-        .retry_policy(RetryPolicy::new(
-            3,
-            Duration::from_millis(10),
-            Duration::from_millis(200),
-        ))
+        .retry_policy(
+            RetryPolicy::builder()
+                .max_retries(3)
+                .base_delay(Duration::from_millis(10))
+                .max_delay(Duration::from_millis(200))
+                .build(),
+        )
         .build();
     let downloader = Downloader::new(
-        DownloaderConfig::builder()
-            .client(HttpClient::new(net, CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
@@ -89,29 +89,31 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
     let target = queue.append(TrackSource::Config(Box::new(
-        ResourceConfig::for_src(target_url.as_str())
-            .expect("valid HLS URL")
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .downloader(downloader.clone())
-            .initial_abr_mode(AbrMode::manual(0))
-            .look_ahead_bytes(LOOK_AHEAD_BYTES)
-            .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
-            .build(),
+        ResourceConfig::for_src(
+            ResourceConfig::parse_src(target_url.as_str()).expect("valid HLS URL"),
+        )
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .downloader(downloader.clone())
+        .initial_abr_mode(AbrMode::manual(0))
+        .look_ahead_bytes(LOOK_AHEAD_BYTES)
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .build(),
     )));
     // A next track is what an auto-skip would move to. Without it the queue
     // has nowhere to go and the regression could not show itself.
     let fallback = queue.append(TrackSource::Config(Box::new(
-        ResourceConfig::for_src(fallback_url.as_str())
-            .expect("valid fallback URL")
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .downloader(downloader)
-            .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
-            .build(),
+        ResourceConfig::for_src(
+            ResourceConfig::parse_src(fallback_url.as_str()).expect("valid fallback URL"),
+        )
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .downloader(downloader)
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .build(),
     )));
 
     let ticker = spawn_ticker(Arc::clone(&queue));

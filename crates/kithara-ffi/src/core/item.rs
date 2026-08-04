@@ -90,6 +90,8 @@ impl ItemView {
 ///   [`FfiItemConfig::uuid_i64`] is absent it falls back to the
 ///   legacy UUIDv5-derived handle.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct AudioPlayerItem {
     pub(crate) state: Arc<Mutex<ItemView>>,
     /// Scoped event bus — set by `AudioPlayer::insert` so per-resource
@@ -112,6 +114,12 @@ pub struct AudioPlayerItem {
     /// Process-wide monotonic id allocated at construction and consumed
     /// by the core queue. Not exposed by the high-level Swift API: it is
     /// only the routing key that lets repeated business tracks coexist.
+    #[field(get(
+        name = track_id,
+        copy,
+        vis = "pub(crate)",
+        doc = "Returns the strongly typed queue routing id."
+    ))]
     queue_id: TrackId,
     /// Caller-facing content id returned by [`Self::audio_id`].
     audio_id: TrackId,
@@ -329,13 +337,6 @@ impl AudioPlayerItem {
         if duration > 0.0 {
             observer.on_event(crate::types::FfiItemEvent::DurationChanged { seconds: duration });
         }
-    }
-
-    /// Strongly-typed view of [`Self::audio_id`] for queue calls that
-    /// take a [`TrackId`]. The value is identical — just the wrapper
-    /// type — so there is no conversion loss across the boundary.
-    pub(crate) fn track_id(&self) -> TrackId {
-        self.queue_id
     }
 }
 

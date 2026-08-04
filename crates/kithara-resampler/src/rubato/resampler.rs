@@ -72,17 +72,6 @@ impl Resampler for RubatoResampler {
         self.channels
     }
 
-    delegate::delegate! {
-        to self.inner {
-            fn input_frames_max(&self) -> usize;
-            fn input_frames_next(&self) -> usize;
-            fn output_delay(&self) -> usize;
-            fn output_frames_max(&self) -> usize;
-            fn output_frames_next(&self) -> usize;
-            fn reset(&mut self);
-        }
-    }
-
     fn mode(&self) -> ResamplerMode {
         self.mode
     }
@@ -110,6 +99,17 @@ impl Resampler for RubatoResampler {
                 detail: err.to_string(),
                 op: "rubato process",
             })
+    }
+
+    delegate::delegate! {
+        to self.inner {
+            fn input_frames_max(&self) -> usize;
+            fn input_frames_next(&self) -> usize;
+            fn output_delay(&self) -> usize;
+            fn output_frames_max(&self) -> usize;
+            fn output_frames_next(&self) -> usize;
+            fn reset(&mut self);
+        }
     }
 }
 

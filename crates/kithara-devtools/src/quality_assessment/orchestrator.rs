@@ -22,8 +22,8 @@ use crate::{
 struct StagePlan {
     name: String,
     command: Vec<String>,
-    tools: Vec<String>,
     expected_artifacts: Vec<PathBuf>,
+    tools: Vec<String>,
     hard_invariant: bool,
 }
 
@@ -285,8 +285,8 @@ fn shared_plan(name: &str, stage: SharedStage, tools: &[&str]) -> StagePlan {
     let StageCommand { program, args } = stage.health_command();
     let command = std::iter::once(program.to_owned()).chain(args).collect();
     StagePlan {
-        name: name.to_owned(),
         command,
+        name: name.to_owned(),
         tools: tools.iter().map(|tool| (*tool).to_owned()).collect(),
         expected_artifacts: Vec::new(),
         hard_invariant: true,
@@ -301,11 +301,11 @@ fn direct_plan(
     hard_invariant: bool,
 ) -> StagePlan {
     StagePlan {
+        hard_invariant,
         name: name.to_owned(),
         command: command.iter().map(|part| (*part).to_owned()).collect(),
         tools: tools.iter().map(|tool| (*tool).to_owned()).collect(),
         expected_artifacts: expected_artifacts.to_vec(),
-        hard_invariant,
     }
 }
 
@@ -338,8 +338,8 @@ fn architecture_plan(args: &AssessArgs, ctx: &Ctx, revision: &str) -> Result<Sta
         ]);
     }
     Ok(StagePlan {
-        name: "architecture".to_owned(),
         command,
+        name: "architecture".to_owned(),
         tools: vec!["architecture".to_owned(), "cargo-metadata".to_owned()],
         expected_artifacts: vec![
             ctx.root
@@ -370,8 +370,8 @@ fn similarity_plan(args: &AssessArgs, ctx: &Ctx, revision: &str) -> Result<Stage
     }
     command.extend(similarity_roots(args, ctx)?);
     Ok(StagePlan {
-        name: "similarity".to_owned(),
         command,
+        name: "similarity".to_owned(),
         tools: vec!["similarity-native".to_owned(), "similarity-rs".to_owned()],
         expected_artifacts: vec![
             ctx.root
@@ -565,15 +565,15 @@ fn execute(plan: &StagePlan, root: &Path, logs: &Path) -> Result<StageEvidence> 
         ),
     };
     Ok(StageEvidence {
+        exit_code,
+        evidence_artifacts,
+        note,
         name: plan.name.clone(),
         command: plan.command.clone(),
         tools: plan.tools.clone(),
         hard_invariant: plan.hard_invariant,
         status: stage_status,
-        exit_code,
         log: relative(root, &log_path),
-        evidence_artifacts,
-        note,
     })
 }
 

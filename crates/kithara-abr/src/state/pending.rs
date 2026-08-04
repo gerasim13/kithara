@@ -26,13 +26,13 @@ pub enum PendingAbrClaim {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct PendingAbrDecision {
-    ticket: AbrTicket,
     decision: AbrDecision,
+    ticket: AbrTicket,
 }
 
 impl PendingAbrDecision {
     pub(super) fn new(ticket: AbrTicket, decision: AbrDecision) -> Self {
-        Self { ticket, decision }
+        Self { decision, ticket }
     }
 
     /// Return the decision captured by this claim.

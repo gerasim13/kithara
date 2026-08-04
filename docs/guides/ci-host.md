@@ -76,8 +76,15 @@ Create four project runner authentication tokens in corporate GitLab:
 Each token file must contain one `glrt-...` token and have mode `0600`. Also
 create `~/.config/kithara-ci/cilicon-ssh.password` with the SSH password of the
 pinned Cilicon image and mode `0600`; this value is written only to the local
-`cilicon.yml`. Install the corporate CA as
-`~/.config/kithara-ci/gitlab-ca.crt`, then run:
+`cilicon.yml`.
+
+GitLab is reached over its public certificate chain, so runners, Cilicon
+guests, and the bridge all validate `gitlab_url` against the platform trust
+store. No private CA is installed or configured anywhere. A host that cannot
+build that chain is a network fault to fix upstream, never a certificate to
+add here and never a reason to relax TLS verification.
+
+Then run:
 
 ```text
 /Volumes/KitharaCI/services/bin/kithara-ci ci host configure-runners
@@ -112,7 +119,7 @@ Android, and web checks.
 Copy `ci/bridge/config.example.toml` to
 `/Volumes/KitharaCI/services/bridge/config.toml`. The config, GitHub App key,
 and GitLab token must belong to UID 504 (`kithara-sync`) and have mode `0600`.
-The GitLab CA may be read-only. Validate without network mutation:
+Validate without network mutation:
 
 ```text
 /Volumes/KitharaCI/services/bin/kithara-ci ci bridge validate --config /Volumes/KitharaCI/services/bridge/config.toml

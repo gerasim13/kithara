@@ -175,35 +175,12 @@ pub(crate) type BoxedSource = Box<dyn DecoderInput>;
 /// decoder type is determined at runtime (e.g., based on media info).
 #[kithara::mock(api = DecoderMock)]
 pub trait Decoder: Send + 'static {
-    /// Snapshot the existing decoder facts needed to configure gapless trim.
-    ///
-    /// The default is deliberately an adapter over the established
-    /// `spec`/`track_info`/`default_priming_frames` contract, so adding the
-    /// profile does not change playback behaviour.
-    fn gapless_profile(&self, codec: Option<AudioCodec>) -> GaplessProfile {
-        let track_info = self.track_info();
-        GaplessProfile::new(
-            self.spec(),
-            track_info.gapless,
-            track_info.gapless_tail,
-            codec.map_or(0, |codec| self.default_priming_frames(codec)),
-        )
-    }
-
     /// Construction-time PCM specification used to configure PCM blending.
     ///
     /// The default exposes the same output specification already returned by
     /// [`Self::spec`].
     fn blender_profile(&self) -> BlenderProfile {
         BlenderProfile::new(self.spec())
-    }
-
-    /// Frames between a packet's timestamp and the PCM this decoder has
-    /// actually produced for it. Live: it settles as the decoder works
-    /// through its head strip, so a caller that cached it at construction
-    /// would hold the pre-strip value forever.
-    fn timeline_gap_frames(&self) -> u64 {
-        0
     }
 
     /// Default leading-silence frame count for `codec` when no
@@ -235,6 +212,21 @@ pub trait Decoder: Send + 'static {
     /// shell, once per pass, by calling this. Default no-op for decoders
     /// that carry no reader hooks.
     fn flush_reader_signals(&mut self) {}
+
+    /// Snapshot the existing decoder facts needed to configure gapless trim.
+    ///
+    /// The default is deliberately an adapter over the established
+    /// `spec`/`track_info`/`default_priming_frames` contract, so adding the
+    /// profile does not change playback behaviour.
+    fn gapless_profile(&self, codec: Option<AudioCodec>) -> GaplessProfile {
+        let track_info = self.track_info();
+        GaplessProfile::new(
+            self.spec(),
+            track_info.gapless,
+            track_info.gapless_tail,
+            codec.map_or(0, |codec| self.default_priming_frames(codec)),
+        )
+    }
 
     /// Get track metadata (title, artist, album, artwork).
     ///
@@ -273,6 +265,14 @@ pub trait Decoder: Send + 'static {
 
     /// Get the PCM output specification.
     fn spec(&self) -> PcmSpec;
+
+    /// Frames between a packet's timestamp and the PCM this decoder has
+    /// actually produced for it. Live: it settles as the decoder works
+    /// through its head strip, so a caller that cached it at construction
+    /// would hold the pre-strip value forever.
+    fn timeline_gap_frames(&self) -> u64 {
+        0
+    }
 
     /// Decoder-owned playback contract — currently the captured
     /// [`crate::GaplessInfo`] (encoder priming + trailing padding in

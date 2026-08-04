@@ -225,6 +225,15 @@ impl<T> Receiver<T> {
         Ref { guard }
     }
 
+    /// Await the next value change.
+    ///
+    /// # Errors
+    /// [`RecvError`] once every sender has dropped, so no further change can
+    /// arrive.
+    pub fn changed(&mut self) -> Changed<'_, T> {
+        Changed { rx: self }
+    }
+
     /// Report whether a newer value is waiting without awaiting one, matching
     /// [`tokio::sync::watch::Receiver::has_changed`].
     ///
@@ -237,15 +246,6 @@ impl<T> Receiver<T> {
             return Err(RecvError);
         }
         Ok(guard.version > self.seen)
-    }
-
-    /// Await the next value change.
-    ///
-    /// # Errors
-    /// [`RecvError`] once every sender has dropped, so no further change can
-    /// arrive.
-    pub fn changed(&mut self) -> Changed<'_, T> {
-        Changed { rx: self }
     }
 
     /// Await until the latest watched value satisfies `predicate`.

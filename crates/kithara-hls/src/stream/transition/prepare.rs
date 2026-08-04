@@ -156,9 +156,9 @@ impl HlsCoord {
             claim,
             landing_time,
             profile,
-            reader: Some(reader),
             session,
             transition,
+            reader: Some(reader),
         });
         drop(state);
         self.signal().wake_peer();

@@ -531,7 +531,7 @@ async fn test_headers_variants(#[future] test_server: TestServer, http_client: H
     let test_server = test_server.await;
     let url = test_server.url("/headers");
 
-    let mut headers = Headers::new();
+    let mut headers = Headers::default();
     headers.insert("X-Custom-Header", "test-value");
     headers.insert("User-Agent", "test-agent");
 
@@ -585,7 +585,11 @@ async fn test_retry_variants(#[future] test_server: TestServer, http_client: Htt
     let test_server = test_server.await;
     let url = test_server.url("/retry-test");
 
-    let retry_policy = RetryPolicy::new(2, Duration::from_millis(10), Duration::from_secs(5));
+    let retry_policy = RetryPolicy::builder()
+        .max_retries(2)
+        .base_delay(Duration::from_millis(10))
+        .max_delay(Duration::from_secs(5))
+        .build();
     let client = http_client.with_retry(retry_policy, CancelToken::never());
 
     let result = client.get_bytes(url, None).await;
@@ -752,7 +756,11 @@ async fn test_timeout_behavior() {
 
 #[kithara::test(tokio)]
 async fn test_retry_policy_exponential_backoff() {
-    let policy = RetryPolicy::new(3, Duration::from_millis(10), Duration::from_millis(100));
+    let policy = RetryPolicy::builder()
+        .max_retries(3)
+        .base_delay(Duration::from_millis(10))
+        .max_delay(Duration::from_millis(100))
+        .build();
 
     assert_eq!(policy.delay_for_attempt(0), Duration::from_millis(0));
     assert_eq!(policy.delay_for_attempt(1), Duration::from_millis(10));
@@ -778,11 +786,13 @@ async fn test_net_builder_creates_functional_client() {
 async fn test_net_builder_with_custom_options() {
     let opts = NetOptions::builder()
         .inactivity_timeout(Duration::from_millis(100))
-        .retry_policy(RetryPolicy::new(
-            2,
-            Duration::from_millis(50),
-            Duration::from_millis(200),
-        ))
+        .retry_policy(
+            RetryPolicy::builder()
+                .max_retries(2)
+                .base_delay(Duration::from_millis(50))
+                .max_delay(Duration::from_millis(200))
+                .build(),
+        )
         .build();
 
     let client = HttpClient::new(opts, CancelToken::never());

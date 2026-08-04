@@ -68,10 +68,8 @@ pub struct Headers {
 }
 
 impl Headers {
-    #[must_use]
-    // ast-grep-ignore: style.prefer-default-derive
-    pub fn new() -> Self {
-        Self::default()
+    pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
+        self.inner.insert(key.into(), value.into());
     }
 
     delegate::delegate! {
@@ -83,10 +81,6 @@ impl Headers {
             #[expr($.map(|(k, v)| (k.as_str(), v.as_str())))]
             pub fn iter(&self) -> impl Iterator<Item = (&str, &str)>;
         }
-    }
-
-    pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
-        self.inner.insert(key.into(), value.into());
     }
 }
 
@@ -131,15 +125,6 @@ impl Default for RetryPolicy {
 
 impl RetryPolicy {
     #[must_use]
-    pub fn new(max_retries: u32, base_delay: Duration, max_delay: Duration) -> Self {
-        Self {
-            base_delay,
-            max_delay,
-            max_retries,
-        }
-    }
-
-    #[must_use]
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
         const BACKOFF_BASE: u32 = 2;
 
@@ -154,6 +139,10 @@ impl RetryPolicy {
 #[derive(Clone, Debug, Builder)]
 #[non_exhaustive]
 pub struct NetOptions {
+    /// Shared byte buffer pool used by backends that must copy platform-owned
+    /// response buffers before handing bytes to Rust consumers.
+    #[builder(default = BytePool::default())]
+    pub byte_pool: BytePool,
     /// Codings advertised and decoded for whole-body native requests.
     /// Defaults to all four; byte-addressed requests always use `identity`.
     #[builder(default = Compression::all())]
@@ -181,10 +170,7 @@ pub struct NetOptions {
     /// backend and on wasm32 (no emulation there).
     #[builder(default)]
     pub impersonate: ImpersonatePreset,
-    /// Shared byte buffer pool used by backends that must copy platform-owned
-    /// response buffers before handing bytes to Rust consumers.
-    #[builder(default = BytePool::default())]
-    pub byte_pool: BytePool,
+    pub observer: Option<Observer>,
     #[builder(default)]
     pub retry_policy: RetryPolicy,
     /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
@@ -206,7 +192,6 @@ pub struct NetOptions {
     /// Set to 0 to disable pooling.
     #[builder(default = 8)]
     pub pool_max_idle_per_host: usize,
-    pub observer: Option<Observer>,
 }
 
 impl Default for NetOptions {
@@ -217,18 +202,10 @@ impl Default for NetOptions {
 
 impl FromWithParams<Self, BytePool> for NetOptions {
     fn build(options: Self, byte_pool: BytePool) -> Self {
-        Self::builder()
-            .compression(options.compression)
-            .inactivity_timeout(options.inactivity_timeout)
-            .retry_policy(options.retry_policy)
-            .is_insecure(options.is_insecure)
-            .pool_max_idle_per_host(options.pool_max_idle_per_host)
-            .body_queue_capacity(options.body_queue_capacity)
-            .body_queue_resume_at(options.body_queue_resume_at)
-            .byte_pool(byte_pool)
-            .impersonate(options.impersonate)
-            .maybe_observer(options.observer)
-            .build()
+        Self {
+            byte_pool,
+            ..options
+        }
     }
 }
 
@@ -241,9 +218,9 @@ mod tests {
     use super::*;
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    #[case::empty_headers(Headers::new(), true)]
+    #[case::empty_headers(Headers::default(), true)]
     #[case::headers_with_values({
-        let mut h = Headers::new();
+        let mut h = Headers::default();
         h.insert("key1", "value1");
         h.insert("key2", "value2");
         h
@@ -257,7 +234,7 @@ mod tests {
     #[case::content_type("Content-Type", "application/json")]
     #[case::custom_header("X-Custom-Header", "custom-value")]
     async fn test_headers_insert_and_get(#[case] key: &str, #[case] value: &str) {
-        let mut headers = Headers::new();
+        let mut headers = Headers::default();
         headers.insert(key, value);
 
         assert_eq!(headers.get(key), Some(value));
@@ -266,7 +243,7 @@ mod tests {
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn test_headers_iter() {
-        let mut headers = Headers::new();
+        let mut headers = Headers::default();
         headers.insert("key1", "value1");
         headers.insert("key2", "value2");
         headers.insert("key3", "value3");
@@ -361,12 +338,16 @@ mod tests {
     #[case(1, Duration::from_millis(50), Duration::from_secs(1))]
     #[case(5, Duration::from_millis(100), Duration::from_secs(2))]
     #[case(10, Duration::from_millis(200), Duration::from_secs(10))]
-    async fn test_retry_policy_new(
+    async fn test_retry_policy_builder(
         #[case] max_retries: u32,
         #[case] base_delay: Duration,
         #[case] max_delay: Duration,
     ) {
-        let policy = RetryPolicy::new(max_retries, base_delay, max_delay);
+        let policy = RetryPolicy::builder()
+            .max_retries(max_retries)
+            .base_delay(base_delay)
+            .max_delay(max_delay)
+            .build();
 
         assert_eq!(policy.max_retries, max_retries);
         assert_eq!(policy.base_delay, base_delay);
@@ -435,7 +416,11 @@ mod tests {
         #[case] attempt: u32,
         #[case] expected_delay: Duration,
     ) {
-        let policy = RetryPolicy::new(max_retries, base_delay, max_delay);
+        let policy = RetryPolicy::builder()
+            .max_retries(max_retries)
+            .base_delay(base_delay)
+            .max_delay(max_delay)
+            .build();
         let delay = policy.delay_for_attempt(attempt);
 
         assert_eq!(delay, expected_delay);
@@ -454,7 +439,11 @@ mod tests {
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn test_retry_policy_clone() {
-        let policy1 = RetryPolicy::new(5, Duration::from_millis(100), Duration::from_secs(2));
+        let policy1 = RetryPolicy::builder()
+            .max_retries(5)
+            .base_delay(Duration::from_millis(100))
+            .max_delay(Duration::from_secs(2))
+            .build();
         let policy2 = policy1.clone();
 
         assert_eq!(policy1.max_retries, policy2.max_retries);
@@ -485,7 +474,11 @@ mod tests {
         #[case] base_delay: Duration,
         #[case] max_delay: Duration,
     ) {
-        let policy = RetryPolicy::new(max_retries, base_delay, max_delay);
+        let policy = RetryPolicy::builder()
+            .max_retries(max_retries)
+            .base_delay(base_delay)
+            .max_delay(max_delay)
+            .build();
 
         for attempt in 0..=5 {
             let delay = policy.delay_for_attempt(attempt);
@@ -518,7 +511,7 @@ mod tests {
     #[case::with_special_chars("X-Special", "a\tb\nc")]
     #[case::empty_value("X-Empty", "")]
     async fn test_headers_special_characters(#[case] key: &str, #[case] value: &str) {
-        let mut headers = Headers::new();
+        let mut headers = Headers::default();
         headers.insert(key, value);
 
         assert_eq!(headers.get(key), Some(value));
@@ -526,7 +519,7 @@ mod tests {
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn test_headers_case_sensitive() {
-        let mut headers = Headers::new();
+        let mut headers = Headers::default();
         headers.insert("Content-Type", "application/json");
         headers.insert("content-type", "text/plain");
 

@@ -4,8 +4,8 @@ use kithara::play::{CrossfaderBus, PlayError, crossfader_gain};
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MixStrip {
     pub bus: CrossfaderBus,
-    pub trim: f32,
     pub muted: bool,
+    pub trim: f32,
 }
 
 impl MixStrip {
@@ -22,9 +22,9 @@ impl MixStrip {
 /// The app's desired mix. A plain value; `DeckSet` is its single owner.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MixState {
-    pub position: f32,
-    pub group_master: f32,
     pub strips: Vec<MixStrip>,
+    pub group_master: f32,
+    pub position: f32,
 }
 
 impl MixState {
@@ -35,10 +35,26 @@ impl MixState {
             .map(|i| MixStrip::new(bus_for(i, count)))
             .collect();
         Self {
+            strips,
             position: 0.5,
             group_master: 1.0,
-            strips,
         }
+    }
+
+    /// `trim * mute * crossfader_gain(bus, position) * group_master` per deck.
+    ///
+    /// # Errors
+    /// Returns [`PlayError::MixPosition`] when the crossfader position is not a
+    /// finite value in `0.0..=1.0`.
+    pub fn levels(&self) -> Result<Vec<f32>, PlayError> {
+        self.strips
+            .iter()
+            .map(|strip| {
+                let gain = crossfader_gain(strip.bus, self.position)?;
+                let mute = if strip.muted { 0.0 } else { 1.0 };
+                Ok((strip.trim * mute * gain * self.group_master).clamp(0.0, 1.0))
+            })
+            .collect()
     }
 
     /// The same mix for `count` decks: existing strips keep their trim and
@@ -58,22 +74,6 @@ impl MixState {
             strips,
             ..self.clone()
         }
-    }
-
-    /// `trim * mute * crossfader_gain(bus, position) * group_master` per deck.
-    ///
-    /// # Errors
-    /// Returns [`PlayError::MixPosition`] when the crossfader position is not a
-    /// finite value in `0.0..=1.0`.
-    pub fn levels(&self) -> Result<Vec<f32>, PlayError> {
-        self.strips
-            .iter()
-            .map(|strip| {
-                let gain = crossfader_gain(strip.bus, self.position)?;
-                let mute = if strip.muted { 0.0 } else { 1.0 };
-                Ok((strip.trim * mute * gain * self.group_master).clamp(0.0, 1.0))
-            })
-            .collect()
     }
 }
 

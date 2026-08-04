@@ -59,9 +59,6 @@ pub trait Activity: Send + Sync {
 /// Implements `SeekObserve`, `SeekControl`, and `Activity`. Coords hold an
 /// `Arc<SeekState>` and vend the narrow trait handles to readers/writers.
 pub struct SeekState {
-    /// Serializes seek-epoch publication with off-RT commits that must belong
-    /// to one exact epoch. Observers remain lock-free.
-    epoch_commit: Mutex<()>,
     /// Kept as `Arc<AtomicU64>` so callers can hand out a cheap `Arc`
     /// clone of the shared seek epoch atomic.
     seek_epoch: Arc<AtomicU64>,
@@ -77,6 +74,9 @@ pub struct SeekState {
     seek_target_ns: AtomicU64,
     /// Consolidated boolean state: `FLUSHING`, `SEEK_PENDING`, `PLAYING`.
     flags: AtomicU8,
+    /// Serializes seek-epoch publication with off-RT commits that must belong
+    /// to one exact epoch. Observers remain lock-free.
+    epoch_commit: Mutex<()>,
 }
 
 impl fmt::Debug for SeekState {
@@ -107,6 +107,17 @@ impl SeekState {
         }
     }
 
+    /// Run an off-RT commit only while `epoch` is still current. A concurrent
+    /// seek begins strictly before or after the closure.
+    #[must_use]
+    pub fn commit_if_epoch<T, F>(&self, epoch: u64, commit: F) -> Option<T>
+    where
+        F: FnOnce() -> T,
+    {
+        let _guard = self.epoch_commit.lock();
+        (self.seek_epoch.load(Ordering::Acquire) == epoch).then(commit)
+    }
+
     /// Raw flags load with caller-specified ordering — used by the
     /// flag-snapshot tests below.
     #[cfg(test)]
@@ -125,17 +136,6 @@ impl SeekState {
     /// the atomic directly (e.g. a shared seek-epoch handle).
     pub fn seek_epoch_arc(&self) -> Arc<AtomicU64> {
         Arc::clone(&self.seek_epoch)
-    }
-
-    /// Run an off-RT commit only while `epoch` is still current. A concurrent
-    /// seek begins strictly before or after the closure.
-    #[must_use]
-    pub fn commit_if_epoch<T, F>(&self, epoch: u64, commit: F) -> Option<T>
-    where
-        F: FnOnce() -> T,
-    {
-        let _guard = self.epoch_commit.lock();
-        (self.seek_epoch.load(Ordering::Acquire) == epoch).then(commit)
     }
 }
 

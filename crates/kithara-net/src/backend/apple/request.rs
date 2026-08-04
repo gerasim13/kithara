@@ -27,12 +27,16 @@ impl Method {
     }
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(super) struct AppleRequest {
+    #[field(get, vis = "pub(super)", copy)]
     accept_encoding: AcceptEncodingPolicy,
     method: Method,
     body: Option<Bytes>,
     headers: Option<Headers>,
     range: Option<RangeSpec>,
+    #[field(get, vis = "pub(super)")]
     url: Url,
 }
 
@@ -54,14 +58,6 @@ impl AppleRequest {
             range,
             url: url.clone(),
         })
-    }
-
-    pub(super) fn accept_encoding(&self) -> AcceptEncodingPolicy {
-        self.accept_encoding
-    }
-
-    pub(super) fn url(&self) -> &Url {
-        &self.url
     }
 
     pub(super) fn into_ns_request(

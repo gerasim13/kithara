@@ -14,11 +14,11 @@ use crate::{
 
 #[derive(bon::Builder)]
 pub(crate) struct Chip<'a, 'value, 'data, 'skin> {
-    path: &'a str,
+    skin: &'skin Skin,
     label: &'a str,
+    path: &'a str,
     style: ChipStyle,
     value: Option<&'value ReadValue<'data>>,
-    skin: &'skin Skin,
 }
 
 impl<'a> Widget<'a> for Chip<'a, '_, '_, '_> {

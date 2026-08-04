@@ -10,6 +10,8 @@ use super::DiskStore;
 use super::{AssetReader, MemStore, ResourceAcquisition};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::backend::DiskAssetStore;
+#[cfg(test)]
+use crate::decorator::Capabilities;
 use crate::{
     decorator::{Assets, EvictionRouter, EvictionSubscription, ProcessCtx},
     error::{AssetsError, AssetsResult},
@@ -42,12 +44,12 @@ pub struct AssetStore {
 
 #[derive(Debug)]
 pub(super) struct AssetStoreInner {
-    pub(super) backend: StoreBackendInner,
+    pub(super) layouts: AssetLayoutRegistry,
     pub(super) availability: AvailabilityIndex,
     pub(super) demand: DemandIndex,
-    pub(super) transactions: ResourceTransactionIndex,
     pub(super) eviction: EvictionRouter,
-    pub(super) layouts: AssetLayoutRegistry,
+    pub(super) transactions: ResourceTransactionIndex,
+    pub(super) backend: StoreBackendInner,
 }
 
 #[derive(Debug)]
@@ -63,16 +65,9 @@ pub(super) enum StoreBackendInner {
 }
 
 impl AssetStore {
-    pub(super) fn new_handle(inner: AssetStoreInner) -> Self {
-        Self {
-            inner: Arc::new(inner),
-        }
-    }
-
-    /// Return whether both handles refer to the same store instance.
-    #[must_use]
-    pub fn is_same(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
+    #[cfg(test)]
+    pub(super) fn capabilities(&self) -> Capabilities {
+        delegate_to_store!(self, capabilities)
     }
 
     /// Acquire a resource explicitly for mutation.
@@ -119,9 +114,22 @@ impl AssetStore {
         self.demand().attach_demand(key, entry)
     }
 
-    /// Return the crate-private aggregate availability handle.
-    pub(crate) fn availability(&self) -> &AvailabilityIndex {
-        &self.inner.availability
+    delegate::delegate! {
+        to self.inner {
+            /// Return the crate-private aggregate availability handle.
+            #[field(&availability)]
+            pub(crate) fn availability(&self) -> &AvailabilityIndex;
+            /// Return the crate-private aggregate demand handle.
+            #[field(&demand)]
+            fn demand(&self) -> &DemandIndex;
+            /// Return the crate-private eviction-router handle.
+            #[field(&eviction)]
+            fn eviction(&self) -> &EvictionRouter;
+            #[field(&layouts)]
+            fn layouts(&self) -> &AssetLayoutRegistry;
+            #[field(&transactions)]
+            fn transactions(&self) -> &ResourceTransactionIndex;
+        }
     }
 
     /// Return a snapshot of byte ranges known to be available for the
@@ -202,18 +210,16 @@ impl AssetStore {
         delegate_to_store!(self, delete_asset, asset_root)
     }
 
-    /// Return the crate-private aggregate demand handle.
-    fn demand(&self) -> &DemandIndex {
-        &self.inner.demand
-    }
-
-    fn transactions(&self) -> &ResourceTransactionIndex {
-        &self.inner.transactions
-    }
-
-    /// Return the crate-private eviction-router handle.
-    fn eviction(&self) -> &EvictionRouter {
-        &self.inner.eviction
+    /// Return the fixed handle-cache capacity for an ephemeral memory store.
+    /// Durable stores return `None` because handle displacement does not remove
+    /// their committed bytes.
+    #[must_use]
+    pub fn ephemeral_cache_capacity(&self) -> Option<NonZeroUsize> {
+        match &self.inner.backend {
+            #[cfg(not(target_arch = "wasm32"))]
+            StoreBackendInner::Disk { .. } => None,
+            StoreBackendInner::Memory { store } => Some(store.cache_capacity()),
+        }
     }
 
     /// Return the committed final length of the resource, if known.
@@ -231,8 +237,16 @@ impl AssetStore {
         None
     }
 
-    fn layouts(&self) -> &AssetLayoutRegistry {
-        &self.inner.layouts
+    /// Return whether both handles refer to the same store instance.
+    #[must_use]
+    pub fn is_same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    pub(super) fn new_handle(inner: AssetStoreInner) -> Self {
+        Self {
+            inner: Arc::new(inner),
+        }
     }
 
     /// Open a resource by key (no processing context).
@@ -273,18 +287,6 @@ impl AssetStore {
             return Err(AssetsError::InvalidKey);
         }
         delegate_to_store!(self, remove_resource, key)
-    }
-
-    /// Return the fixed handle-cache capacity for an ephemeral memory store.
-    /// Durable stores return `None` because handle displacement does not remove
-    /// their committed bytes.
-    #[must_use]
-    pub fn ephemeral_cache_capacity(&self) -> Option<NonZeroUsize> {
-        match &self.inner.backend {
-            #[cfg(not(target_arch = "wasm32"))]
-            StoreBackendInner::Disk { .. } => None,
-            StoreBackendInner::Memory { store } => Some(store.cache_capacity()),
-        }
     }
 
     /// Inspect the current resource state.
@@ -341,15 +343,15 @@ impl AssetStore {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use crate::{AssetStoreBuilder, StorageBackend};
+    use crate::{AssetStore, StorageBackend};
 
     #[kithara::test]
     fn clone_shares_one_inner_identity() {
-        let store = AssetStoreBuilder::default()
+        let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .build();
         let clone = store.clone();
-        let other = AssetStoreBuilder::default()
+        let other = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .build();
 

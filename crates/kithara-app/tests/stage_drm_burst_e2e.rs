@@ -5,7 +5,7 @@ use url::Url;
 
 fn drm_headers(auth: &str) -> Headers {
     const STAGE_UA: &str = "OpenPlay - com.zvooq.openplay/4.30.0 (iPhone; iOS 17.5; Scale/3.00)";
-    let mut h = Headers::new();
+    let mut h = Headers::default();
     h.insert("User-Agent", STAGE_UA);
     h.insert("X-Auth-Token", auth);
     h
