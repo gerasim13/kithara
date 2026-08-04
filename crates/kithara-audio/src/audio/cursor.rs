@@ -7,7 +7,7 @@ use kithara_stream::{ChunkPosition, PlayheadWrite};
 use kithara_test_utils::kithara;
 
 use super::{
-    ConsumerPhase, DecodeError, PendingReason, ReadOutcome,
+    ConsumerPhase, DecodeError, FailureSource, PendingReason, ReadOutcome,
     event::AudioEvents,
     ring::{RecvCtx, RingConsumer},
 };
@@ -112,7 +112,7 @@ impl ChunkCursor {
             ConsumerPhase::AtEof if ring.current_chunk.is_none() => {
                 return Ok(eof(playhead));
             }
-            ConsumerPhase::Failed => return Err(channel_failed()),
+            ConsumerPhase::Failed { source } => return Err(channel_failed(source)),
             _ => {}
         }
 
@@ -168,7 +168,7 @@ impl ChunkCursor {
 
         Ok(match ring.phase {
             ConsumerPhase::AtEof => eof(playhead),
-            ConsumerPhase::Failed => return Err(channel_failed()),
+            ConsumerPhase::Failed { source } => return Err(channel_failed(source)),
             ConsumerPhase::SeekPending { .. } => pending(playhead, PendingReason::SeekInProgress),
             _ => pending(playhead, PendingReason::Buffering),
         })
@@ -245,9 +245,9 @@ fn interpolated_position(meta: PcmMeta, consumed_frames: u64) -> kithara_platfor
     kithara_platform::time::Duration::from_nanos(nanos)
 }
 
-fn channel_failed() -> DecodeError {
+fn channel_failed(failure: FailureSource) -> DecodeError {
     DecodeError::Io {
-        source: IoError::other("pcm channel closed / producer failed"),
+        source: IoError::other(failure.label()),
     }
 }
 

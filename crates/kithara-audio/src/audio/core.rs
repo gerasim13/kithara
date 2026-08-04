@@ -157,8 +157,8 @@ impl<S> Audio<S> {
         }
         if self.ring.current_chunk.is_none() && self.ring.phase != super::ConsumerPhase::AtEof {
             self.fill_buffer();
-            if self.ring.phase == super::ConsumerPhase::Failed {
-                return Err(channel_closed_during_preload());
+            if let super::ConsumerPhase::Failed { source } = self.ring.phase {
+                return Err(channel_closed_during_preload(source));
             }
         }
         Ok(())
@@ -378,8 +378,8 @@ fn chunk_outcome(
 ) -> Result<ChunkOutcome, DecodeError> {
     match phase {
         super::ConsumerPhase::AtEof => Ok(ChunkOutcome::Eof { position }),
-        super::ConsumerPhase::Failed => Err(DecodeError::Io {
-            source: IoError::other("pcm channel closed / producer failed"),
+        super::ConsumerPhase::Failed { source: failure } => Err(DecodeError::Io {
+            source: IoError::other(failure.label()),
         }),
         super::ConsumerPhase::SeekPending { .. } => Ok(ChunkOutcome::Pending {
             position,
@@ -392,9 +392,9 @@ fn chunk_outcome(
     }
 }
 
-fn channel_closed_during_preload() -> DecodeError {
+fn channel_closed_during_preload(failure: super::FailureSource) -> DecodeError {
     DecodeError::Io {
-        source: IoError::other("pcm channel closed during preload"),
+        source: IoError::other(format!("{} during preload", failure.label())),
     }
 }
 

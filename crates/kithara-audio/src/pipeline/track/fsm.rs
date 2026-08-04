@@ -222,7 +222,7 @@ mod tests {
 
     use super::*;
     use crate::pipeline::{
-        consumer::ConsumerPhase,
+        consumer::{ConsumerPhase, FailureSource},
         rebuild::{RebuildState, RecreateCause, RecreateNext, RecreateState, state::BuildId},
         seek::{ApplySeekState, ResumeState, SeekContext, SeekMode, SeekRequest},
         track::{Track, TrackFailure, WaitContext, WaitState},
@@ -322,7 +322,12 @@ mod tests {
         assert!(!ConsumerPhase::Playing.is_terminal());
         assert!(!ConsumerPhase::SeekPending { epoch: 1 }.is_terminal());
         assert!(ConsumerPhase::AtEof.is_terminal());
-        assert!(ConsumerPhase::Failed.is_terminal());
+        assert!(
+            ConsumerPhase::Failed {
+                source: FailureSource::Producer
+            }
+            .is_terminal()
+        );
     }
 
     #[kithara::test]
