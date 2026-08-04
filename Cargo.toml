@@ -155,7 +155,7 @@ autolink-frameworks = ["AudioToolbox", "CoreAudio", "AVFoundation", "Security", 
 [workspace.package]
 version = "0.0.1-alpha4"
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.92"
 authors = ["kithara contributors"]
 license = "MIT OR Apache-2.0"
 description = "Networking + decoding building blocks for audio playback (not a full player)"
