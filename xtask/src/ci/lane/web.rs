@@ -5,26 +5,26 @@ use crate::ci::process::{Process, require_os};
 /// One browser per job. The two engines fail for unrelated reasons, and a
 /// Firefox regression should not hide whether Chromium still passes.
 ///
-/// Every option precedes the crate path. `wasm-pack test` takes
-/// `[OPTIONS] [PATH_AND_EXTRA_OPTIONS]...`, and hands everything after the
-/// path to `cargo test` — a browser flag written last never reaches wasm-pack,
-/// which then refuses to run for want of a browser.
+/// Both go through the repository's own wasm recipe rather than driving
+/// `wasm-pack` directly. The target rebuilds std for shared memory, which
+/// needs the pinned nightly; `wasm-pack` drives Cargo with the default
+/// toolchain, so std keeps its stock features and the linker rejects it.
 pub(crate) fn chromium(process: &Process) -> Result<()> {
     require_os("linux", "Web browser")?;
-    process.require_tools(&["chromium", "chromedriver", "wasm-pack"])?;
+    process.require_tools(&["chromium", "chromedriver", "just"])?;
     process.run(
-        "wasm-pack",
-        &["test", "--headless", "--chrome", "tests"],
+        "just",
+        &["platform", "wasm", "test", "chrome"],
         "Chromium WASM tests",
     )
 }
 
 pub(crate) fn firefox(process: &Process) -> Result<()> {
     require_os("linux", "Web browser")?;
-    process.require_tools(&["firefox", "geckodriver", "wasm-pack"])?;
+    process.require_tools(&["firefox", "geckodriver", "just"])?;
     process.run(
-        "wasm-pack",
-        &["test", "--headless", "--firefox", "tests"],
+        "just",
+        &["platform", "wasm", "test", "firefox"],
         "Firefox WASM tests",
     )
 }

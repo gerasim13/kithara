@@ -119,12 +119,15 @@ pub(crate) fn ios(process: &Process, config: &CiConfig) -> Result<()> {
     process.run_command(&mut command, "iOS Simulator build")
 }
 
+/// Safari goes through the repository's wasm recipe for the same reason the
+/// other browsers do: the target rebuilds std for shared memory, and only the
+/// pinned nightly honours that.
 pub(crate) fn safari(process: &Process) -> Result<()> {
     require_os("macos", "Safari WASM")?;
-    process.require_tools(&["wasm-pack"])?;
+    process.require_tools(&["cargo", "just"])?;
     process.run(
-        "wasm-pack",
-        &["test", "--headless", "--safari", "tests"],
+        "just",
+        &["platform", "wasm", "test", "safari"],
         "Safari WASM tests",
     )
 }

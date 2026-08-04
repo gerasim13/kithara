@@ -17,10 +17,25 @@ wasm MODE="check" *ARGS:
         cargo check -p kithara-ffi --target wasm32-unknown-unknown --features wasm --no-default-features
         ;;
       test)
-        CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" \
+        # The wasm target rebuilds std for shared memory, which only a nightly
+        # honours, and the repository pins one. `wasm-pack` cannot be used
+        # here: it drives Cargo with the default toolchain, so `[unstable]` is
+        # ignored, std keeps its stock features, and the linker rejects
+        # `--shared-memory` against it.
+        browser="${1:-chrome}"
+        toolchain="${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
+        case "$browser" in
+          chrome)  export CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" ;;
+          firefox) export GECKODRIVER="${GECKODRIVER:-geckodriver}" ;;
+          safari)  export SAFARIDRIVER="${SAFARIDRIVER:-safaridriver}" ;;
+          *)
+            echo "unknown wasm test browser: $browser (use chrome|firefox|safari)"
+            exit 2
+            ;;
+        esac
         WASM_BINDGEN_TEST_TIMEOUT=300 \
         WASM_BINDGEN_USE_BROWSER=1 \
-        cargo +nightly test --target wasm32-unknown-unknown -p kithara-integration-tests
+        cargo "+$toolchain" test --target wasm32-unknown-unknown -p kithara-integration-tests
         ;;
       build)
         just _xtask wasm build "$@"
