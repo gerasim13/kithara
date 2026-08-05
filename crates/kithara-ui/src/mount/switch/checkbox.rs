@@ -8,3 +8,35 @@ impl Control for Checkbox {
         skin.checkbox.size
     }
 }
+
+#[cfg(feature = "render")]
+mod host {
+    use super::Checkbox;
+    use crate::{
+        atoms::toggle::Binary,
+        compile::CompiledUi,
+        render::{
+            ReadValue, Skin,
+            controls::{Draws, Grip},
+        },
+    };
+
+    impl Draws for Checkbox {
+        type Painter = Binary;
+
+        fn painter(&self, skin: &Skin) -> Binary {
+            Binary::checkbox(skin)
+        }
+
+        fn data(&self, value: Option<&ReadValue<'_>>, _ui: &CompiledUi) -> Option<bool> {
+            match value {
+                Some(ReadValue::Bool(active)) => Some(*active),
+                _ => None,
+            }
+        }
+
+        fn grip(&self) -> Grip {
+            Grip::Press
+        }
+    }
+}

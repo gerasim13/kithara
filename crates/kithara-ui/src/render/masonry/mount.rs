@@ -8,6 +8,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     MasonryHost, MasonryKnob, MasonryNode, Painted,
+    controls::Retained,
     flex::{box_constraints, normalized},
     leaf::{DragProgram, Leaf},
     node::Node,
@@ -16,16 +17,10 @@ use crate::{
     atoms::{
         button::{Button, ButtonConfig, ButtonLabel},
         chip::Chip,
-        design::{
-            cell::Cell as CellFace, crossfader::Crossfader, fader::Fader, meter::Meter,
-            status_dot::StatusDot, swatch::Swatch,
-        },
-        meter::StereoMeter,
+        design::{crossfader::Crossfader, fader::Fader},
         nav_item::NavItem,
-        painter::{ButtonData, CellData, FaderData, Labelled},
+        painter::{ButtonData, FaderData, Labelled},
         tab::TabLarge,
-        toggle::Binary,
-        vu::VerticalVu,
     },
     expand::{Binding, ControlSpec},
     interact::recognizers::{Track, WheelStep},
@@ -33,7 +28,9 @@ use crate::{
     mount,
     render::{
         HostedControlPlan, InputOwner, ReadValue, Skin, UiEvent,
-        controls::{button_glyphs, nav_item_supports_engine_input, supports_engine_input},
+        controls::{
+            Draws, Grip, button_glyphs, nav_item_supports_engine_input, supports_engine_input,
+        },
         document::read::resolve,
         icons::document_icon,
     },
@@ -245,17 +242,7 @@ impl NodeControl for mount::Meter {
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        let level = match cx
-            .read
-            .and_then(|binding| resolve(host.reads, binding, host.ui))
-        {
-            Some(ReadValue::Scalar(level)) => level.clamp(0.0, 1.0).as_(),
-            _ => 0.0,
-        };
-        host.control_leaf(
-            Painted::new(Meter::new(host.skin), level, host.skin),
-            cx.declared,
-        )
+        painted(self, host, cx)
     }
 }
 
@@ -264,17 +251,7 @@ impl NodeControl for mount::Cell {
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        host.control_leaf(
-            Painted::new(
-                CellFace::new(host.skin),
-                CellData {
-                    highlighted: self.highlighted,
-                    label: self.label.map(|label| host.ui.resolve(label).to_owned()),
-                },
-                host.skin,
-            ),
-            cx.declared,
-        )
+        painted(self, host, cx)
     }
 }
 
@@ -283,14 +260,7 @@ impl NodeControl for mount::Swatch {
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        host.control_leaf(
-            Painted::new(
-                Swatch::new(self.role, host.skin),
-                host.ui.resolve(self.label).to_owned(),
-                host.skin,
-            ),
-            cx.declared,
-        )
+        painted(self, host, cx)
     }
 }
 
@@ -299,14 +269,7 @@ impl NodeControl for mount::StatusDot {
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        host.control_leaf(
-            Painted::new(
-                StatusDot::new(self.tone, host.skin),
-                host.ui.resolve(self.label).to_owned(),
-                host.skin,
-            ),
-            cx.declared,
-        )
+        painted(self, host, cx)
     }
 }
 
@@ -315,7 +278,7 @@ impl NodeControl for mount::Toggle {
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        switch(host, Binary::toggle(host.skin), cx)
+        painted(self, host, cx)
     }
 }
 
@@ -324,7 +287,7 @@ impl NodeControl for mount::Checkbox {
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        switch(host, Binary::checkbox(host.skin), cx)
+        painted(self, host, cx)
     }
 }
 
@@ -333,7 +296,7 @@ impl NodeControl for mount::VuVertical {
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        host.meter_leaf(VerticalVu::new(self.ticks, host.skin), cx.read, cx.declared)
+        painted(self, host, cx)
     }
 }
 
@@ -342,7 +305,7 @@ impl NodeControl for mount::VuStereo {
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        host.meter_leaf(StereoMeter::new(host.skin), cx.read, cx.declared)
+        painted(self, host, cx)
     }
 }
 
@@ -442,29 +405,6 @@ impl NodeControl for mount::Button {
             cx.declared,
         )
     }
-}
-
-/// A switch draws nothing until its endpoint says which way it is set, so an
-/// unbound one is an empty box rather than an idle switch.
-fn switch<A>(host: &MasonryHost<'_, A>, painter: Binary, cx: &Cx<'_>) -> MasonryNode<A>
-where
-    A: std::fmt::Debug + Send + 'static,
-{
-    let Some(ReadValue::Bool(active)) = cx
-        .read
-        .and_then(|binding| resolve(host.reads, binding, host.ui))
-    else {
-        return host.empty(cx.declared);
-    };
-    host.control_leaf(
-        host.owned(
-            Painted::new(painter, active, host.skin),
-            cx.owner,
-            cx.path,
-            Painted::interactive,
-        ),
-        cx.declared,
-    )
 }
 
 pub(crate) enum NodeLayout {
@@ -669,4 +609,28 @@ pub(crate) const fn activates(spec: &ControlSpec) -> bool {
             | ControlSpec::Checkbox
             | ControlSpec::Chip { .. }
     )
+}
+
+/// Mounts a control that draws itself, adding nothing to the picture.
+fn painted<Control, A>(control: &Control, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+where
+    Control: Draws,
+    Control::Painter: Retained + 'static,
+    A: std::fmt::Debug + Send + 'static,
+{
+    let value = cx
+        .read
+        .and_then(|binding| resolve(host.reads, binding, host.ui));
+    let Some(data) = control.data(value.as_ref(), host.ui) else {
+        return host.empty(cx.declared);
+    };
+    let leaf = Painted::new(control.painter(host.skin), data, host.skin);
+    let leaf = match control.grip() {
+        Grip::Press => host.owned(leaf, cx.owner, cx.path, Painted::interactive),
+        // A scalar drag is a gesture only the immediate host recognises; here
+        // the engine plan drives it, which is what this host has always done.
+        // The two are reconciled by the gesture census, not by this arm.
+        Grip::Drag { .. } | Grip::None => leaf,
+    };
+    host.control_leaf(leaf, cx.declared)
 }

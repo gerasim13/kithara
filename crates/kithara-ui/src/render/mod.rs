@@ -1,5 +1,5 @@
 pub mod address;
-mod controls;
+pub(crate) mod controls;
 pub mod document;
 pub mod event;
 pub mod fonts;

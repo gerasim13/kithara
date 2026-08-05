@@ -8,3 +8,39 @@ impl Control for VuStereo {
         skin.vu_stereo.size
     }
 }
+
+#[cfg(feature = "render")]
+mod host {
+    use super::VuStereo;
+    use crate::{
+        atoms::meter::StereoMeter,
+        compile::CompiledUi,
+        interact::{CursorShape, recognizers::Track},
+        render::{
+            ReadValue, Skin, StereoLevels,
+            controls::{Draws, Grip},
+        },
+    };
+
+    impl Draws for VuStereo {
+        type Painter = StereoMeter;
+
+        fn painter(&self, skin: &Skin) -> StereoMeter {
+            StereoMeter::new(skin)
+        }
+
+        fn data(&self, value: Option<&ReadValue<'_>>, _ui: &CompiledUi) -> Option<StereoLevels> {
+            match value {
+                Some(ReadValue::Stereo(levels)) => Some(*levels),
+                _ => None,
+            }
+        }
+
+        fn grip(&self) -> Grip {
+            Grip::Drag {
+                cursor: CursorShape::ResizeH,
+                track: Track::AbsoluteHorizontal,
+            }
+        }
+    }
+}

@@ -3,60 +3,59 @@ use std::cell::RefCell;
 use iced::{
     Element, Event, Length, Rectangle, Renderer, Theme,
     mouse::{self, Cursor},
-    widget::{
-        Space,
-        canvas::{self, Action, Canvas, Geometry},
-    },
+    widget::canvas::{self, Action, Canvas, Geometry},
 };
 use kithara_platform::time::Instant;
 
 use crate::{
-    atoms::{button::VisualState, meter::StereoMeter, painter::ControlPainter, vu::VerticalVu},
+    atoms::{button::VisualState, painter::ControlPainter},
     backends::replay_ordered,
+    compile::CompiledUi,
     draw::{DrawList, DrawListBuilder, Rect},
     interact::{
         CursorShape, Hover, iced as iced_interact,
         recognizers::{Scalar, ScalarState, Track, click},
     },
-    render::{InputOwner, ReadValue, Skin, UiEvent, activate, scalar},
+    render::{ReadValue, Skin, UiEvent, activate, scalar},
     text::{TextContext, TextResources},
 };
 
-pub(crate) fn vu_vertical<'a>(
-    path: &str,
-    ticks: bool,
-    value: Option<&ReadValue<'_>>,
-    skin: &'a Skin,
-    owner: InputOwner,
-) -> Element<'a, UiEvent> {
-    let Some(ReadValue::Stereo(levels)) = value else {
-        return Space::new().into();
-    };
-    let paint = Paint::new(VerticalVu::new(ticks, skin), *levels, skin);
-    match owner {
-        InputOwner::Leaf => {
-            Gesture::drag(path, paint, Track::AbsoluteVertical, CursorShape::ResizeV).view()
-        }
-        InputOwner::Engine => paint.view(),
+/// A control that draws itself: one painter, and the value it paints.
+///
+/// Declared once, in the control's own file, so what a control looks like
+/// cannot differ between the two hosts by construction. Each host mounts it
+/// through its own adapter and adds nothing to the picture.
+pub(crate) trait Draws {
+    type Painter: ControlPainter;
+
+    /// The painter, with the skin already resolved into it.
+    fn painter(&self, skin: &Skin) -> Self::Painter;
+
+    /// What it draws this frame, or nothing at all when its endpoint has not
+    /// said yet — an unbound switch is an empty box, not an idle switch.
+    fn data(
+        &self,
+        value: Option<&ReadValue<'_>>,
+        ui: &CompiledUi,
+    ) -> Option<<Self::Painter as ControlPainter>::Data>;
+
+    /// What the pointer means to it where the document says the leaf owns
+    /// input.
+    fn grip(&self) -> Grip {
+        Grip::None
     }
 }
 
-pub(crate) fn vu_stereo<'a>(
-    path: &str,
-    value: Option<&ReadValue<'_>>,
-    skin: &'a Skin,
-    owner: InputOwner,
-) -> Element<'a, UiEvent> {
-    let Some(ReadValue::Stereo(levels)) = value else {
-        return Space::new().into();
-    };
-    let paint = Paint::new(StereoMeter::new(skin), *levels, skin);
-    match owner {
-        InputOwner::Leaf => {
-            Gesture::drag(path, paint, Track::AbsoluteHorizontal, CursorShape::ResizeH).view()
-        }
-        InputOwner::Engine => paint.view(),
-    }
+/// What the pointer means to a control.
+#[derive(Clone, Copy)]
+pub(crate) enum Grip {
+    /// Nothing the control itself recognises: either it is not interactive, or
+    /// the engine plan drives it.
+    None,
+    /// A press that activates it.
+    Press,
+    /// A drag along one axis that sets a scalar.
+    Drag { cursor: CursorShape, track: Track },
 }
 
 /// One neutral painter drawn straight into an iced canvas.
@@ -216,7 +215,12 @@ where
         }
     }
 
-    fn drag(path: &str, paint: Paint<'skin, Painter>, track: Track, cursor: CursorShape) -> Self {
+    pub(crate) fn drag(
+        path: &str,
+        paint: Paint<'skin, Painter>,
+        track: Track,
+        cursor: CursorShape,
+    ) -> Self {
         Self {
             paint,
             path: path.to_owned(),
@@ -295,11 +299,13 @@ mod tests {
     use crate::{
         atoms::{
             design::{cell::Cell, meter::Meter, status_dot::StatusDot, swatch::Swatch},
+            meter::StereoMeter,
             painter::CellData,
             toggle::Binary,
+            vu::VerticalVu,
         },
         builtin,
-        module::{ButtonStyle, ChipStyle, Tone},
+        module::Tone,
         render::{
             StereoLevels,
             masonry::{MasonryControl, Painted},

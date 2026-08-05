@@ -28,7 +28,7 @@ use crate::{
     module::{ChromeStyle, TextStyle},
     mount,
     render::{
-        ControlAction, InputOwner, ReadValue, Reads, Skin, StereoLevels, UiEvent,
+        ControlAction, InputOwner, ReadValue, Reads, Skin, UiEvent,
         document::{Group, Host, Module, Popover, read::resolve},
         hosted_control_plan,
     },
@@ -233,25 +233,6 @@ where
                 Painted::new(painter, value.clamp(0.0, 1.0).as_(), self.skin),
                 declared,
             ),
-            _ => self.empty(declared),
-        }
-    }
-
-    /// Mounts a meter, which paints the levels it reads and leaves its drag to
-    /// the engine plan.
-    pub(super) fn meter_leaf<Painter>(
-        &self,
-        painter: Painter,
-        read: Option<&Binding>,
-        declared: solve::Size<solve::Length>,
-    ) -> MasonryNode<Action>
-    where
-        Painter: Retained<Data = StereoLevels> + 'static,
-    {
-        match read.and_then(|binding| resolve(self.reads, binding, self.ui)) {
-            Some(ReadValue::Stereo(levels)) => {
-                self.control_leaf(Painted::new(painter, levels, self.skin), declared)
-            }
             _ => self.empty(declared),
         }
     }

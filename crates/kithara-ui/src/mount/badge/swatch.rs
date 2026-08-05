@@ -19,3 +19,25 @@ impl Control for Swatch {
         skin.swatch.size
     }
 }
+
+#[cfg(feature = "render")]
+mod host {
+    use super::Swatch;
+    use crate::{
+        atoms::design::swatch::Swatch as Face,
+        compile::CompiledUi,
+        render::{ReadValue, Skin, controls::Draws},
+    };
+
+    impl Draws for Swatch {
+        type Painter = Face;
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(self.role, skin)
+        }
+
+        fn data(&self, _value: Option<&ReadValue<'_>>, ui: &CompiledUi) -> Option<String> {
+            Some(ui.resolve(self.label).to_owned())
+        }
+    }
+}

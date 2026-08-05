@@ -13,3 +13,39 @@ impl Control for VuVertical {
         skin.vu_vertical.size
     }
 }
+
+#[cfg(feature = "render")]
+mod host {
+    use super::VuVertical;
+    use crate::{
+        atoms::vu::VerticalVu,
+        compile::CompiledUi,
+        interact::{CursorShape, recognizers::Track},
+        render::{
+            ReadValue, Skin, StereoLevels,
+            controls::{Draws, Grip},
+        },
+    };
+
+    impl Draws for VuVertical {
+        type Painter = VerticalVu;
+
+        fn painter(&self, skin: &Skin) -> VerticalVu {
+            VerticalVu::new(self.ticks, skin)
+        }
+
+        fn data(&self, value: Option<&ReadValue<'_>>, _ui: &CompiledUi) -> Option<StereoLevels> {
+            match value {
+                Some(ReadValue::Stereo(levels)) => Some(*levels),
+                _ => None,
+            }
+        }
+
+        fn grip(&self) -> Grip {
+            Grip::Drag {
+                cursor: CursorShape::ResizeV,
+                track: Track::AbsoluteVertical,
+            }
+        }
+    }
+}

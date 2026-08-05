@@ -1,10 +1,7 @@
-use iced::alignment::Horizontal;
+use iced::{alignment::Horizontal, widget::Space};
 
 use super::{
-    atom::{
-        cell, checkbox, chip, crossfader, fader, glyph, knob, meter, nav_item, readout, segmented,
-        select, status_dot, swatch, tab_large, toggle, vu_stereo, vu_vertical,
-    },
+    atom::{chip, crossfader, fader, glyph, knob, nav_item, readout, segmented, select, tab_large},
     geometry::Rendered,
     panel::{context_bar, deck_summary, time, track_list, tree, vis},
     read_flag, wave_zoom,
@@ -16,7 +13,7 @@ use crate::{
     mount,
     render::{
         InputOwner, ReadValue, Reads, Skin,
-        controls::{ButtonView, button},
+        controls::{ButtonView, Draws, Gesture, Grip, Paint, button},
         icons::document_icon,
     },
     widgets::{
@@ -298,13 +295,13 @@ impl ViewControl for mount::ContextBar<'_> {
 
 impl ViewControl for mount::Toggle {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(toggle(cx.path, cx.value, cx.skin, cx.owner))
+        painted(self, cx)
     }
 }
 
 impl ViewControl for mount::Checkbox {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(checkbox(cx.path, cx.value, cx.skin, cx.owner))
+        painted(self, cx)
     }
 }
 
@@ -324,19 +321,19 @@ impl ViewControl for mount::Select {
 
 impl ViewControl for mount::StatusDot {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(status_dot(self.label, self.tone, cx.ui, cx.skin))
+        painted(self, cx)
     }
 }
 
 impl ViewControl for mount::Swatch {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(swatch(self.role, self.label, cx.ui, cx.skin))
+        painted(self, cx)
     }
 }
 
 impl ViewControl for mount::Cell {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(cell(self.label, self.highlighted, cx.ui, cx.skin))
+        painted(self, cx)
     }
 }
 
@@ -380,22 +377,39 @@ impl ViewControl for mount::Knob {
 
 impl ViewControl for mount::Meter {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(meter(cx.value, cx.skin))
+        painted(self, cx)
     }
 }
 
 impl ViewControl for mount::VuStereo {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(vu_stereo(cx.path, cx.value, cx.skin, cx.owner))
+        painted(self, cx)
     }
 }
 
 impl ViewControl for mount::VuVertical {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(vu_vertical(
-            cx.path, self.ticks, cx.value, cx.skin, cx.owner,
-        ))
+        painted(self, cx)
     }
+}
+
+/// Mounts a control that draws itself, adding nothing to the picture.
+fn painted<'a, Control>(control: &Control, cx: &Cx<'a, '_, '_>) -> Rendered<'a>
+where
+    Control: Draws,
+    Control::Painter: 'static,
+{
+    let Some(data) = control.data(cx.value, cx.ui) else {
+        return Rendered::leading(Space::new().into());
+    };
+    let paint = Paint::new(control.painter(cx.skin), data, cx.skin);
+    Rendered::leading(match (cx.owner, control.grip()) {
+        (InputOwner::Leaf, Grip::Press) => Gesture::press(cx.path, paint).view(),
+        (InputOwner::Leaf, Grip::Drag { cursor, track }) => {
+            Gesture::drag(cx.path, paint, track, cursor).view()
+        }
+        (InputOwner::Engine, _) | (_, Grip::None) => paint.view(),
+    })
 }
 
 fn horizontal(align: TextAlign) -> Horizontal {

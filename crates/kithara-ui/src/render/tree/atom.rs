@@ -4,20 +4,15 @@ use num_traits::cast::AsPrimitive;
 use super::geometry::active_tone;
 use crate::{
     atoms::{
-        design::{
-            cell::Cell, meter::Meter, segmented::Segmented, select::Select, status_dot::StatusDot,
-            swatch::Swatch,
-        },
-        painter::CellData,
+        design::{segmented::Segmented, select::Select},
         readout::Readout,
-        toggle::Binary,
     },
     compile::CompiledUi,
     ids::InternId,
     module::{ChipStyle, FaderStyle, GlyphStyle, IconName, Tone},
     render::{
         IcedSkin, InputOwner, ReadValue, Skin, UiEvent,
-        controls::{Gesture, KnobPaint, KnobProgram, Paint},
+        controls::{KnobPaint, KnobProgram},
         icons::document_icon,
     },
     skin::ColorRole,
@@ -63,69 +58,6 @@ pub(super) fn chip<'a>(
     owner: InputOwner,
 ) -> Element<'a, UiEvent> {
     crate::render::controls::chip(path, label, style, value, skin, owner)
-}
-
-pub(super) fn toggle<'a>(
-    path: &'a str,
-    value: Option<&ReadValue<'_>>,
-    skin: &'a Skin,
-    owner: InputOwner,
-) -> Element<'a, UiEvent> {
-    binary(Binary::toggle(skin), path, value, skin, owner)
-}
-
-pub(super) fn checkbox<'a>(
-    path: &'a str,
-    value: Option<&ReadValue<'_>>,
-    skin: &'a Skin,
-    owner: InputOwner,
-) -> Element<'a, UiEvent> {
-    binary(Binary::checkbox(skin), path, value, skin, owner)
-}
-
-/// A switch draws nothing at all until its endpoint says which way it is set.
-fn binary<'a>(
-    painter: Binary,
-    path: &'a str,
-    value: Option<&ReadValue<'_>>,
-    skin: &'a Skin,
-    owner: InputOwner,
-) -> Element<'a, UiEvent> {
-    let Some(ReadValue::Bool(active)) = value else {
-        return Space::new().into();
-    };
-    let paint = Paint::new(painter, *active, skin);
-    match owner {
-        InputOwner::Leaf => Gesture::press(path, paint).view(),
-        InputOwner::Engine => paint.view(),
-    }
-}
-
-pub(super) fn vu_stereo<'a>(
-    path: &'a str,
-    value: Option<&ReadValue<'_>>,
-    skin: &'a Skin,
-    owner: InputOwner,
-) -> Element<'a, UiEvent> {
-    crate::render::controls::vu_stereo(path, value, skin, owner)
-}
-
-pub(super) fn vu_vertical<'a>(
-    path: &'a str,
-    ticks: bool,
-    value: Option<&ReadValue<'_>>,
-    skin: &'a Skin,
-    owner: InputOwner,
-) -> Element<'a, UiEvent> {
-    crate::render::controls::vu_vertical(path, ticks, value, skin, owner)
-}
-
-pub(super) fn meter<'a>(value: Option<&ReadValue<'_>>, skin: &'a Skin) -> Element<'a, UiEvent> {
-    let level = match value {
-        Some(ReadValue::Scalar(level)) => level.clamp(0.0, 1.0).as_(),
-        _ => 0.0,
-    };
-    Paint::new(Meter::new(skin), level, skin).view()
 }
 
 pub(super) fn knob<'a>(
@@ -189,46 +121,6 @@ pub(super) fn select<'a>(label: InternId, ui: &'a CompiledUi, skin: &Skin) -> El
         .skin(skin)
         .build()
         .view()
-}
-
-pub(super) fn swatch<'a>(
-    role: ColorRole,
-    label: InternId,
-    ui: &'a CompiledUi,
-    skin: &'a Skin,
-) -> Element<'a, UiEvent> {
-    Paint::new(Swatch::new(role, skin), ui.resolve(label).to_owned(), skin).view()
-}
-
-pub(super) fn status_dot<'a>(
-    label: InternId,
-    tone: Tone,
-    ui: &'a CompiledUi,
-    skin: &'a Skin,
-) -> Element<'a, UiEvent> {
-    Paint::new(
-        StatusDot::new(tone, skin),
-        ui.resolve(label).to_owned(),
-        skin,
-    )
-    .view()
-}
-
-pub(super) fn cell<'a>(
-    label: Option<InternId>,
-    highlighted: bool,
-    ui: &'a CompiledUi,
-    skin: &'a Skin,
-) -> Element<'a, UiEvent> {
-    Paint::new(
-        Cell::new(skin),
-        CellData {
-            highlighted,
-            label: label.map(|id| ui.resolve(id).to_owned()),
-        },
-        skin,
-    )
-    .view()
 }
 
 pub(super) fn glyph(

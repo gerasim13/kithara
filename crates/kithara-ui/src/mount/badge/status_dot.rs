@@ -14,3 +14,25 @@ impl Control for StatusDot {
         skin.status_dot.size
     }
 }
+
+#[cfg(feature = "render")]
+mod host {
+    use super::StatusDot;
+    use crate::{
+        atoms::design::status_dot::StatusDot as Face,
+        compile::CompiledUi,
+        render::{ReadValue, Skin, controls::Draws},
+    };
+
+    impl Draws for StatusDot {
+        type Painter = Face;
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(self.tone, skin)
+        }
+
+        fn data(&self, _value: Option<&ReadValue<'_>>, ui: &CompiledUi) -> Option<String> {
+            Some(ui.resolve(self.label).to_owned())
+        }
+    }
+}
