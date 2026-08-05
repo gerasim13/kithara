@@ -14,9 +14,8 @@ use crate::{
     backends::replay_ordered,
     draw::{DrawList, DrawListBuilder, Rect},
     interact::{CursorShape, Hover, iced as iced_interact, recognizers::click},
-    render::{Icon, InputOwner, ReadValue, Skin, UiEvent, activate},
+    render::{Icon, InputOwner, Mark, ReadValue, Skin, UiEvent, activate},
     text::{TextContext, TextResources},
-    widgets::{Widget, nav::NavItem as IcedNavItem},
 };
 
 pub(crate) fn nav_item<'a>(
@@ -27,28 +26,14 @@ pub(crate) fn nav_item<'a>(
     skin: &'a Skin,
     owner: InputOwner,
 ) -> Element<'a, UiEvent> {
-    let Some(ReadValue::Bool(active)) = value else {
+    let (Some(ReadValue::Bool(active)), Some(mark)) = (value, icon.mark()) else {
         return Space::new().into();
     };
-    let Some(glyph) = icon.lucide_glyph() else {
-        return IcedNavItem::builder()
-            .path(path)
-            .label(label)
-            .icon(icon)
-            .maybe_value(value)
-            .skin(skin)
-            .build()
-            .view();
-    };
-    let paint = NavItemPaint::new(label, glyph, *active, skin);
+    let paint = NavItemPaint::new(label, mark, *active, skin);
     match owner {
         InputOwner::Leaf => NavItemProgram::new(path, paint).view(),
         InputOwner::Engine => paint.view(),
     }
-}
-
-pub(crate) fn nav_item_supports_engine_input(icon: Icon) -> bool {
-    icon.lucide_glyph().is_some()
 }
 
 struct NavItemProgram<'data, 'skin> {
@@ -126,11 +111,11 @@ struct NavItemPaint<'data, 'skin> {
 }
 
 impl<'data, 'skin> NavItemPaint<'data, 'skin> {
-    fn new(label: &'data str, glyph: char, active: bool, skin: &'skin Skin) -> Self {
+    fn new(label: &'data str, mark: Mark, active: bool, skin: &'skin Skin) -> Self {
         Self {
             active,
             height: skin.nav.item_height,
-            item: NavItem::new(glyph, skin),
+            item: NavItem::new(mark, skin),
             label,
             text_resources: skin.text_resources(),
         }
@@ -211,41 +196,50 @@ mod tests {
     };
     use crate::{builtin, render::ControlAction};
 
+    /// Both kinds of icon, on both hosts. The authored one is here because it
+    /// used to leave the draw list for an iced widget, which left the retained
+    /// host with nothing to paint at all.
     #[cfg(feature = "masonry-host")]
     #[kithara::test]
     fn iced_and_masonry_record_the_same_nav_item() {
         let skin = builtin::skin();
-        let glyph = Icon::Play
-            .lucide_glyph()
-            .unwrap_or_else(|| panic!("the play icon must be a Lucide glyph"));
         let bounds = Rect {
             h: 30.0,
             w: 198.0,
             x: 0.0,
             y: 0.0,
         };
-        for active in [false, true] {
-            let iced = NavItemPaint::new("BUTTONS", glyph, active, skin)
-                .draw_list(&NavItemPaintState::default(), bounds);
-            let mut masonry = Painted::new(
-                NavItem::new(glyph, skin),
-                Labelled {
-                    active,
-                    label: "BUTTONS".to_owned(),
-                },
-                skin,
-            );
+        for icon in [Icon::Play, Icon::Zvuk] {
+            let mark = icon
+                .mark()
+                .unwrap_or_else(|| panic!("{icon:?} must have a mark"));
+            for active in [false, true] {
+                let iced = NavItemPaint::new("BUTTONS", mark, active, skin)
+                    .draw_list(&NavItemPaintState::default(), bounds);
+                let mut masonry = Painted::new(
+                    NavItem::new(mark, skin),
+                    Labelled {
+                        active,
+                        label: "BUTTONS".to_owned(),
+                    },
+                    skin,
+                );
 
-            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+                assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+                assert!(
+                    iced.commands().len() >= 4,
+                    "{icon:?} must draw its icon alongside the rest"
+                );
+            }
         }
     }
 
     #[kithara::test]
     fn the_leaf_nav_item_uses_the_shared_activation_gesture() {
-        let glyph = Icon::Play
-            .lucide_glyph()
-            .unwrap_or_else(|| panic!("the play icon must be a Lucide glyph"));
-        let paint = NavItemPaint::new("BUTTONS", glyph, false, builtin::skin());
+        let mark = Icon::Play
+            .mark()
+            .unwrap_or_else(|| panic!("the play icon must have a mark"));
+        let paint = NavItemPaint::new("BUTTONS", mark, false, builtin::skin());
         let program = NavItemProgram::new("gallery/buttons/item", paint);
         let bounds = Rectangle {
             height: 30.0,
@@ -273,9 +267,11 @@ mod tests {
         );
     }
 
+    /// Both kinds of icon reach the draw list, so a nav item never has to be
+    /// handed to a toolkit widget to be seen.
     #[kithara::test]
-    fn only_lucide_nav_items_offer_engine_input() {
-        assert!(nav_item_supports_engine_input(Icon::Play));
-        assert!(!nav_item_supports_engine_input(Icon::PlayReverse));
+    fn a_nav_item_draws_a_glyph_and_an_outline_alike() {
+        assert!(matches!(Icon::Play.mark(), Some(Mark::Glyph(_))));
+        assert!(matches!(Icon::Zvuk.mark(), Some(Mark::Outline(_))));
     }
 }

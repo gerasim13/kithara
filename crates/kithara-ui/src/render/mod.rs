@@ -31,6 +31,7 @@ pub(crate) use hosted::HostedControlPlan;
 #[cfg(feature = "masonry-host")]
 pub(crate) use hosted::hosted_control_plan;
 pub use icons::Icon;
+pub(crate) use icons::Mark;
 pub(crate) use layer::{
     HostLayer, LayerHit, WindowLayerProgram, draw_host_layer, place_popover, window_layer,
     window_layers,

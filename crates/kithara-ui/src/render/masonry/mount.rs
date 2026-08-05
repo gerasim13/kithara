@@ -27,9 +27,7 @@ use crate::{
     mount,
     render::{
         HostedControlPlan, InputOwner, ReadValue, Skin, UiEvent,
-        controls::{
-            Draws, Grip, button_glyphs, nav_item_supports_engine_input, supports_engine_input,
-        },
+        controls::{Draws, Grip, button_marks},
         document::read::resolve,
         icons::document_icon,
     },
@@ -339,13 +337,12 @@ impl NodeControl for mount::NavItem {
         let value = cx
             .read
             .and_then(|binding| resolve(host.reads, binding, host.ui));
-        let (Some(glyph), Some(ReadValue::Bool(active))) =
-            (document_icon(self.icon).lucide_glyph(), value)
+        let (Some(mark), Some(ReadValue::Bool(active))) = (document_icon(self.icon).mark(), value)
         else {
             return host.empty(cx.declared);
         };
         let item = Painted::new(
-            NavItem::new(glyph, host.skin),
+            NavItem::new(mark, host.skin),
             Labelled {
                 active,
                 label: host.ui.resolve(self.label).to_owned(),
@@ -364,17 +361,15 @@ impl NodeControl for mount::Button {
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        let Ok(glyphs) = button_glyphs(self.style, self.icon.map(document_icon)) else {
-            return host.empty(cx.declared);
-        };
+        let marks = button_marks(self.style, self.icon.map(document_icon));
         let button = Painted::new(
             Button::new(
                 ButtonConfig::builder()
                     .maybe_frame(self.frame)
-                    .maybe_glyph(glyphs.idle)
+                    .maybe_mark(marks.idle)
                     .style(self.style)
                     .build(),
-                glyphs.active,
+                marks.active,
                 host.skin,
             ),
             ButtonData {
@@ -578,11 +573,11 @@ pub(crate) fn text_role(
 /// pointer itself, rather than as an empty box the engine drives.
 pub(crate) fn leaf_paints(spec: &ControlSpec) -> bool {
     match spec {
-        ControlSpec::Button { icon, style, .. } => {
-            supports_engine_input(*style, icon.map(document_icon))
-        }
-        ControlSpec::NavItem { icon, .. } => nav_item_supports_engine_input(document_icon(*icon)),
-        ControlSpec::Chip { .. } | ControlSpec::Knob { .. } | ControlSpec::TabLarge { .. } => true,
+        ControlSpec::Button { .. }
+        | ControlSpec::Chip { .. }
+        | ControlSpec::Knob { .. }
+        | ControlSpec::NavItem { .. }
+        | ControlSpec::TabLarge { .. } => true,
         _ => false,
     }
 }

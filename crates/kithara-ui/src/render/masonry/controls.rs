@@ -210,7 +210,7 @@ mod flags {
         builtin,
         draw::Rect,
         module::{ButtonStyle, ChipStyle},
-        render::{ReadValue, Skin},
+        render::{Mark, ReadValue, Skin},
     };
 
     /// Every control whose picture is decided by a flag. A control that reads a
@@ -228,7 +228,7 @@ mod flags {
             x: 0.0,
             y: 0.0,
         };
-        let glyph = char::from(lucide_icons::Icon::Disc);
+        let mark = Mark::Glyph(char::from(lucide_icons::Icon::Disc));
         let labelled = || Labelled {
             active: false,
             label: "MIXER".to_owned(),
@@ -244,7 +244,7 @@ mod flags {
             ),
             (
                 "NavItem",
-                Box::new(Painted::new(NavItem::new(glyph, skin), labelled(), skin)),
+                Box::new(Painted::new(NavItem::new(mark, skin), labelled(), skin)),
             ),
             (
                 "TabLarge",

@@ -15,9 +15,8 @@ use crate::{
     },
     layout::FrameSides,
     module::ButtonStyle,
-    render::{Icon, InputOwner, ReadValue, Skin, UiEvent, activate},
+    render::{Icon, InputOwner, Mark, ReadValue, Skin, UiEvent, activate},
     text::{TextContext, TextResources},
-    widgets::{Widget, button::ControlButton},
 };
 
 pub(crate) struct ButtonView<'a, 'value, 'data> {
@@ -32,57 +31,29 @@ pub(crate) struct ButtonView<'a, 'value, 'data> {
     pub(crate) value: Option<&'value ReadValue<'data>>,
 }
 
-/// What a button actually draws once its style has had its say about the
-/// document's icon.
-#[derive(Clone, Copy)]
-pub(crate) enum EffectiveIcon {
-    None,
-    Glyph(char),
-    Svg(Icon),
-}
-
 /// The icon a button shows at rest, and the one it swaps in while active. Some
 /// styles change the icon along with the word, so both are resolved together
 /// and a control that flips can repaint instead of being rebuilt.
 #[derive(Clone, Copy)]
-pub(crate) struct ButtonGlyphs {
-    pub(crate) active: Option<char>,
-    pub(crate) idle: Option<char>,
+pub(crate) struct ButtonMarks {
+    pub(crate) active: Option<Mark>,
+    pub(crate) idle: Option<Mark>,
 }
 
-/// Resolves both of a button's icons, or names the SVG icon that neither this
-/// painter nor its retained twin can draw.
-pub(crate) fn button_glyphs(style: ButtonStyle, icon: Option<Icon>) -> Result<ButtonGlyphs, Icon> {
-    let glyph = |active| match effective_icon(style, icon, active) {
-        EffectiveIcon::Glyph(glyph) => Ok(Some(glyph)),
-        EffectiveIcon::None => Ok(None),
-        EffectiveIcon::Svg(icon) => Err(icon),
-    };
-    Ok(ButtonGlyphs {
-        active: glyph(true)?,
-        idle: glyph(false)?,
-    })
+/// Resolves both of a button's icons.
+pub(crate) fn button_marks(style: ButtonStyle, icon: Option<Icon>) -> ButtonMarks {
+    ButtonMarks {
+        active: effective_icon(style, icon, true),
+        idle: effective_icon(style, icon, false),
+    }
 }
 
 pub(crate) fn view<'a>(args: &ButtonView<'a, '_, '_>) -> Element<'a, UiEvent> {
     let active = matches!(args.value, Some(ReadValue::Bool(true)));
-    let Ok(glyphs) = button_glyphs(args.style, args.icon) else {
-        return ControlButton::builder()
-            .path(args.path)
-            .label(args.label)
-            .maybe_icon(args.icon)
-            .maybe_active_label(args.active_label)
-            .style(args.style)
-            .maybe_frame(args.frame)
-            .maybe_value(args.value)
-            .skin(args.skin)
-            .build()
-            .view();
-    };
     let paint = ButtonPaint::new(
         args.label,
         args.active_label,
-        glyphs,
+        button_marks(args.style, args.icon),
         active,
         args.style,
         args.frame,
@@ -94,25 +65,14 @@ pub(crate) fn view<'a>(args: &ButtonView<'a, '_, '_>) -> Element<'a, UiEvent> {
     }
 }
 
-pub(crate) fn effective_icon(
-    style: ButtonStyle,
-    icon: Option<Icon>,
-    active: bool,
-) -> EffectiveIcon {
+/// What a button draws once its style has had its say about the document's
+/// icon. A style that swaps its icon with the state answers differently for
+/// each; the rest answer the same either way.
+pub(crate) fn effective_icon(style: ButtonStyle, icon: Option<Icon>, active: bool) -> Option<Mark> {
     if style == ButtonStyle::MicroPrimary {
-        let icon = if active { Icon::Pause } else { Icon::Play };
-        return icon
-            .lucide_glyph()
-            .map_or(EffectiveIcon::None, EffectiveIcon::Glyph);
+        return if active { Icon::Pause } else { Icon::Play }.mark();
     }
-    icon.map_or(EffectiveIcon::None, |icon| {
-        icon.lucide_glyph()
-            .map_or(EffectiveIcon::Svg(icon), EffectiveIcon::Glyph)
-    })
-}
-
-pub(crate) fn supports_engine_input(style: ButtonStyle, icon: Option<Icon>) -> bool {
-    !matches!(effective_icon(style, icon, false), EffectiveIcon::Svg(_))
+    icon.and_then(Icon::mark)
 }
 
 pub(crate) struct ButtonProgram<'data, 'skin> {
@@ -234,7 +194,7 @@ impl<'data, 'skin> ButtonPaint<'data, 'skin> {
     pub(crate) fn new(
         label: &'data str,
         active_label: Option<&'data str>,
-        glyphs: ButtonGlyphs,
+        marks: ButtonMarks,
         active: bool,
         style: ButtonStyle,
         frame: Option<FrameSides>,
@@ -243,10 +203,10 @@ impl<'data, 'skin> ButtonPaint<'data, 'skin> {
         let button = Button::new(
             ButtonConfig::builder()
                 .maybe_frame(frame)
-                .maybe_glyph(glyphs.idle)
+                .maybe_mark(marks.idle)
                 .style(style)
                 .build(),
-            glyphs.active,
+            marks.active,
             skin,
         );
         let label = ButtonLabel {
@@ -362,7 +322,7 @@ mod tests {
         let paint = ButtonPaint::new(
             "PLAY",
             Some("PAUSE"),
-            ButtonGlyphs {
+            ButtonMarks {
                 active: None,
                 idle: None,
             },
@@ -423,19 +383,16 @@ mod tests {
             (ButtonStyle::MicroPrimary, Some(Icon::Play), false),
             (ButtonStyle::VisNav, None, false),
         ] {
-            let glyphs = button_glyphs(style, icon).unwrap_or(ButtonGlyphs {
-                active: None,
-                idle: None,
-            });
-            let iced = ButtonPaint::new("PLAY", Some("PAUSE"), glyphs, active, style, None, skin)
+            let marks = button_marks(style, icon);
+            let iced = ButtonPaint::new("PLAY", Some("PAUSE"), marks, active, style, None, skin)
                 .draw_list(&ButtonPaintState::default(), bounds, VisualState::Idle);
             let mut masonry = Painted::new(
                 Button::new(
                     ButtonConfig::builder()
-                        .maybe_glyph(glyphs.idle)
+                        .maybe_mark(marks.idle)
                         .style(style)
                         .build(),
-                    glyphs.active,
+                    marks.active,
                     skin,
                 ),
                 ButtonData {
@@ -456,27 +413,17 @@ mod tests {
         }
     }
 
+    /// The one style that names its own icon keeps naming it, and every other
+    /// style now draws the authored art rather than handing it to a toolkit.
     #[kithara::test]
-    fn micro_primary_keeps_its_forced_lucide_icon_before_capability_routing() {
+    fn micro_primary_keeps_its_forced_lucide_icon_and_authored_art_is_an_outline() {
         assert!(matches!(
-            effective_icon(
-                ButtonStyle::MicroPrimary,
-                Some(Icon::PlayReverse),
-                false,
-            ),
-            EffectiveIcon::Glyph(glyph) if Some(glyph) == Icon::Play.lucide_glyph()
+            effective_icon(ButtonStyle::MicroPrimary, Some(Icon::PlayReverse), false),
+            Some(Mark::Glyph(glyph)) if Some(glyph) == Icon::Play.lucide_glyph()
         ));
         assert!(matches!(
             effective_icon(ButtonStyle::Default, Some(Icon::PlayReverse), false),
-            EffectiveIcon::Svg(Icon::PlayReverse)
-        ));
-        assert!(supports_engine_input(
-            ButtonStyle::MicroPrimary,
-            Some(Icon::PlayReverse)
-        ));
-        assert!(!supports_engine_input(
-            ButtonStyle::Default,
-            Some(Icon::PlayReverse)
+            Some(Mark::Outline(_))
         ));
     }
 }

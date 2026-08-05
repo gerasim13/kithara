@@ -1,14 +1,14 @@
 use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
-    render::Skin,
+    render::{Mark, Skin},
     skin::{ColorRole, FontFamily, FontWeight, NavSkin, TextRoleSkin},
     text::TextContext,
 };
 
 pub(crate) struct NavItem {
     active: Face,
-    glyph: char,
     idle: Face,
+    mark: Mark,
     metrics: NavSkin,
     role: TextRoleSkin,
 }
@@ -23,7 +23,7 @@ struct Face {
 }
 
 impl NavItem {
-    pub(crate) fn new(glyph: char, skin: &Skin) -> Self {
+    pub(crate) fn new(mark: Mark, skin: &Skin) -> Self {
         let transparent = Rgba {
             a: 0.0,
             b: 0.0,
@@ -36,12 +36,12 @@ impl NavItem {
                 content: skin.palette.text,
                 marker: skin.palette.accent,
             },
-            glyph,
             idle: Face {
                 background: transparent,
                 content: skin.palette.text_dim,
                 marker: transparent,
             },
+            mark,
             metrics: skin.nav,
             role: TextRoleSkin {
                 color: ColorRole::Text,
@@ -88,18 +88,36 @@ impl NavItem {
         bounds: Rect,
         marker: Rect,
     ) {
-        let glyph = self.glyph.to_string();
-        let icon = text.shape_lucide(&glyph, self.metrics.icon_size);
         let x = marker.x + marker.w + self.metrics.text_pad_x;
-        list.text(
-            &icon,
-            &glyph,
-            Transform::translate(Pt {
-                x,
-                y: bounds.y + (bounds.h - icon.height()) / 2.0,
-            }),
-            content,
-        );
+        let size = self.metrics.icon_size;
+        let width = match self.mark {
+            Mark::Glyph(ch) => {
+                let glyph = ch.to_string();
+                let icon = text.shape_lucide(&glyph, size);
+                list.text(
+                    &icon,
+                    &glyph,
+                    Transform::translate(Pt {
+                        x,
+                        y: bounds.y + (bounds.h - icon.height()) / 2.0,
+                    }),
+                    content,
+                );
+                icon.width()
+            }
+            Mark::Outline(outline) => {
+                list.fill_path(
+                    outline.placed(Rect {
+                        h: size,
+                        w: size,
+                        x,
+                        y: bounds.y + (bounds.h - size) / 2.0,
+                    }),
+                    content,
+                );
+                size
+            }
+        };
 
         if label.is_empty() {
             return;
@@ -109,7 +127,7 @@ impl NavItem {
             &run,
             label,
             Transform::translate(Pt {
-                x: x + icon.width() + self.metrics.icon_gap,
+                x: x + width + self.metrics.icon_gap,
                 y: bounds.y + (bounds.h - run.height()) / 2.0,
             }),
             content,
@@ -137,10 +155,10 @@ mod tests {
             x: 3.0,
             y: 5.0,
         };
-        let glyph = char::from(lucide_icons::Icon::Disc);
+        let mark = Mark::Glyph(char::from(lucide_icons::Icon::Disc));
         let mut text = TextContext::from(skin.text_resources());
         let mut builder = DrawListBuilder::default();
-        NavItem::new(glyph, skin).paint(&mut builder, &mut text, "PRIMITIVES", true, bounds);
+        NavItem::new(mark, skin).paint(&mut builder, &mut text, "PRIMITIVES", true, bounds);
         let list = builder.finish();
 
         let [background, marker, icon, label] = list.commands() else {
@@ -178,6 +196,9 @@ mod tests {
             icon_run.segments().first().map(GlyphSegment::face),
             Some(&GlyphFace::Embedded(FontId::Lucide))
         );
+        let Mark::Glyph(glyph) = mark else {
+            panic!("the fixture mark is a glyph");
+        };
         assert_eq!(icon_content, &glyph.to_string());
         assert_eq!(icon_transform.dx, 19.0);
         assert_eq!(
@@ -216,7 +237,7 @@ mod tests {
         let skin = builtin::skin();
         let mut text = TextContext::from(skin.text_resources());
         let mut builder = DrawListBuilder::default();
-        NavItem::new(char::from(lucide_icons::Icon::Disc), skin).paint(
+        NavItem::new(Mark::Glyph(char::from(lucide_icons::Icon::Disc)), skin).paint(
             &mut builder,
             &mut text,
             "PRIMITIVES",
@@ -266,7 +287,7 @@ mod tests {
             x: 0.0,
             y: 0.0,
         };
-        let item = NavItem::new(char::from(lucide_icons::Icon::Disc), skin);
+        let item = NavItem::new(Mark::Glyph(char::from(lucide_icons::Icon::Disc)), skin);
         let mut text = TextContext::from(skin.text_resources());
         let mut draw = |active| {
             let mut builder = DrawListBuilder::default();

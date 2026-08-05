@@ -978,9 +978,7 @@ mod tests {
             ControlAction, DragPhase, HostLayer, InputOwner, LayerHit, ReadValue, StereoLevels,
             TrackRow, TreeIcon, TreeRow, WaveBucket, WaveformView, WindowCommand,
             WindowLayerProgram,
-            controls::{nav_item_supports_engine_input, supports_engine_input},
             fonts::{FONT_BYTES, SANS},
-            icons::document_icon,
             window_layer,
         },
         source::{MemResolver, UiConfig},
@@ -1643,17 +1641,9 @@ mod tests {
             }
             ExpandedNode::Optional { child, .. } => claimed_components(child, components),
             ExpandedNode::Control { spec, .. } => match spec {
-                ControlSpec::Button { style, icon, .. }
-                    if supports_engine_input(*style, icon.map(document_icon)) =>
-                {
-                    components.push("activation");
-                }
-                ControlSpec::NavItem { icon, .. }
-                    if nav_item_supports_engine_input(document_icon(*icon)) =>
-                {
-                    components.push("activation");
-                }
-                ControlSpec::TabLarge { .. }
+                ControlSpec::Button { .. }
+                | ControlSpec::NavItem { .. }
+                | ControlSpec::TabLarge { .. }
                 | ControlSpec::Toggle
                 | ControlSpec::Checkbox
                 | ControlSpec::Chip { .. } => {

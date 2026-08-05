@@ -299,6 +299,10 @@ iced_tiny_skia = "0.14.0"
 # FFI
 jni = "0.22"
 js-sys = "0.3"
+# Curve geometry and the SVG path grammar (kithara-ui reads authored icons
+# through it). Pinned to the version peniko already resolves so the graph keeps
+# one kurbo.
+kurbo = "0.12"
 libfuzzer-sys = "0.4"
 loom = { version = "0.7.2", features = ["checkpoint"] }
 lru = "0.18"

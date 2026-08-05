@@ -13,9 +13,7 @@ use crate::{
     module::{FaderStyle, WaveStyle},
     render::{
         ReadValue, Reads, Skin,
-        controls::{nav_item_supports_engine_input, supports_engine_input},
         document::read::{read_scope, resolve, wave_zoom},
-        icons::document_icon,
         model::derived,
         picker_selected_index, text_input_layout,
     },
@@ -115,25 +113,13 @@ impl HostedControlPlan {
         skin: &Skin,
     ) -> Option<Self> {
         match (spec, value) {
-            (ControlSpec::Button { style, icon, .. }, _)
-                if supports_engine_input(*style, icon.map(document_icon)) =>
-            {
-                Some(Self::Activation {
-                    path: path.to_owned(),
-                })
-            }
-            (ControlSpec::NavItem { icon, .. }, Some(ReadValue::Bool(_)))
-                if nav_item_supports_engine_input(document_icon(*icon)) =>
-            {
-                Some(Self::Activation {
-                    path: path.to_owned(),
-                })
-            }
-            (
-                ControlSpec::TabLarge { .. }
-                | ControlSpec::Toggle
-                | ControlSpec::Checkbox
-                | ControlSpec::Chip { .. },
+            (ControlSpec::Button { .. }, _)
+            | (
+                ControlSpec::Checkbox
+                | ControlSpec::Chip { .. }
+                | ControlSpec::NavItem { .. }
+                | ControlSpec::TabLarge { .. }
+                | ControlSpec::Toggle,
                 Some(ReadValue::Bool(_)),
             ) => Some(Self::Activation {
                 path: path.to_owned(),

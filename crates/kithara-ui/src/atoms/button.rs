@@ -2,7 +2,7 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     layout::FrameSides,
     module::ButtonStyle,
-    render::Skin,
+    render::{Mark, Skin},
     skin::{ColorRole, FontFamily, FontSkin, FrameSkin, TextRoleSkin},
     text::{GlyphRun, TextContext},
 };
@@ -11,7 +11,7 @@ use crate::{
 #[derive(bon::Builder, Clone, Copy)]
 pub(crate) struct ButtonConfig {
     frame: Option<FrameSides>,
-    glyph: Option<char>,
+    mark: Option<Mark>,
     style: ButtonStyle,
 }
 
@@ -34,11 +34,11 @@ pub(crate) struct Button {
 /// repaint rather than a reason to rebuild the control.
 struct Face {
     active: bool,
+    art: Option<Art>,
     content: Rgba,
     fill: Fill,
     frame: Frame,
     gap: f32,
-    glyph: Option<Glyph>,
     padding_x: f32,
     role: TextRoleSkin,
 }
@@ -70,8 +70,9 @@ enum Frame {
     },
 }
 
-struct Glyph {
-    ch: char,
+/// The icon a button shows: what it is made of, how big, and where it sits.
+struct Art {
+    mark: Mark,
     placement: Placement,
     size: f32,
     solo_color: Rgba,
@@ -84,14 +85,60 @@ enum Placement {
     Beside,
 }
 
+impl Art {
+    /// How much room the icon takes across. A glyph is as wide as it was shaped;
+    /// an outline is drawn in a square, so it is as wide as it is tall.
+    fn width(&self, text: &mut TextContext) -> f32 {
+        match self.mark {
+            Mark::Glyph(ch) => text.shape_lucide(&ch.to_string(), self.size).width(),
+            Mark::Outline(_) => self.size,
+        }
+    }
+
+    /// Draws the icon with its left edge at `x`, centred down the box.
+    fn paint(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        x: f32,
+        bounds: Rect,
+        color: Rgba,
+    ) {
+        match self.mark {
+            Mark::Glyph(ch) => {
+                let content = ch.to_string();
+                let run = text.shape_lucide(&content, self.size);
+                list.text(
+                    &run,
+                    &content,
+                    Transform::translate(Pt {
+                        x,
+                        y: bounds.y + (bounds.h - run.height()) / 2.0,
+                    }),
+                    color,
+                );
+            }
+            Mark::Outline(outline) => list.fill_path(
+                outline.placed(Rect {
+                    h: self.size,
+                    w: self.size,
+                    x,
+                    y: bounds.y + (bounds.h - self.size) / 2.0,
+                }),
+                color,
+            ),
+        }
+    }
+}
+
 impl Button {
-    /// `config` describes the button at rest. `active_glyph` is the icon it
+    /// `config` describes the button at rest. `active_mark` is the icon it
     /// swaps in while active, for the styles whose icon changes with the state.
-    pub(crate) fn new(config: ButtonConfig, active_glyph: Option<char>, skin: &Skin) -> Self {
+    pub(crate) fn new(config: ButtonConfig, active_mark: Option<Mark>, skin: &Skin) -> Self {
         Self {
             active: Face::new(
                 ButtonConfig {
-                    glyph: active_glyph,
+                    mark: active_mark,
                     ..config
                 },
                 true,
@@ -134,11 +181,7 @@ impl Button {
 
 impl Face {
     fn new(config: ButtonConfig, active: bool, skin: &Skin) -> Self {
-        let ButtonConfig {
-            frame,
-            glyph,
-            style,
-        } = config;
+        let ButtonConfig { frame, mark, style } = config;
         let palette = skin.palette;
         let transport = matches!(
             style,
@@ -173,8 +216,8 @@ impl Face {
                 border(style, skin)
             },
             gap: skin.button.icon_gap,
-            glyph: glyph.map(|ch| Glyph {
-                ch,
+            art: mark.map(|mark| Art {
+                mark,
                 placement: placement(style, transport),
                 size: icon_size(style, transport, skin),
                 solo_color: if transport && !highlighted {
@@ -218,13 +261,13 @@ impl Face {
         Words: AsRef<str>,
     {
         let label = self.label(label);
-        let content = match &self.glyph {
-            Some(glyph) => {
-                let icon = text.shape_lucide(&glyph.ch.to_string(), glyph.size);
-                if glyph.placement.alone(label) {
-                    icon.width()
+        let content = match &self.art {
+            Some(art) => {
+                let icon = art.width(text);
+                if art.placement.alone(label) {
+                    icon
                 } else {
-                    icon.width() + self.gap + self.shape(text, label).width()
+                    icon + self.gap + self.shape(text, label).width()
                 }
             }
             None if label.is_empty() => 0.0,
@@ -240,38 +283,35 @@ impl Face {
         label: &str,
         bounds: Rect,
     ) {
-        let Some(glyph) = &self.glyph else {
+        let Some(art) = &self.art else {
             if !label.is_empty() {
                 let run = self.shape(text, label);
                 Self::paint_run(list, &run, label, bounds, self.content);
             }
             return;
         };
-        let ch = glyph.ch.to_string();
-        let icon = text.shape_lucide(&ch, glyph.size);
-        if glyph.placement.alone(label) {
-            Self::paint_run(list, &icon, &ch, bounds, glyph.solo_color);
+        let icon = art.width(text);
+        if art.placement.alone(label) {
+            art.paint(
+                list,
+                text,
+                bounds.x + (bounds.w - icon) / 2.0,
+                bounds,
+                art.solo_color,
+            );
             return;
         }
 
         let run = self.shape(text, label);
-        let width = icon.width() + self.gap + run.width();
+        let width = icon + self.gap + run.width();
         let x = bounds.x + (bounds.w - width) / 2.0;
-        list.text(
-            &icon,
-            &ch,
-            Transform::translate(Pt {
-                x,
-                y: bounds.y + (bounds.h - icon.height()) / 2.0,
-            }),
-            self.content,
-        );
+        art.paint(list, text, x, bounds, self.content);
         if !label.is_empty() {
             list.text(
                 &run,
                 label,
                 Transform::translate(Pt {
-                    x: x + icon.width() + self.gap,
+                    x: x + icon + self.gap,
                     y: bounds.y + (bounds.h - run.height()) / 2.0,
                 }),
                 self.content,
@@ -582,10 +622,10 @@ mod tests {
         let mut builder = DrawListBuilder::default();
         Button::new(
             ButtonConfig::builder()
-                .glyph(glyph)
+                .mark(Mark::Glyph(glyph))
                 .style(ButtonStyle::MicroPrimary)
                 .build(),
-            Some(glyph),
+            Some(Mark::Glyph(glyph)),
             skin,
         )
         .paint(
