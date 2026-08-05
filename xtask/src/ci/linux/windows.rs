@@ -115,8 +115,12 @@ pub(super) fn install(
         &format!("{},device=cdrom", path_text(&answers)?),
         "--network",
         &format!("network={}", guest.network),
+        // Windows Setup draws its progress on a screen and does nothing
+        // without one, so the guest gets a display. It listens on the loopback
+        // address only: the machine's own operator can watch an install, and
+        // nobody else can reach it.
         "--graphics",
-        "none",
+        "vnc,listen=127.0.0.1",
         "--noautoconsole",
         "--wait",
         "-1",
