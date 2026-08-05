@@ -181,11 +181,13 @@ pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         Lane::DepsFeatures => lane::deps::features(&process),
         Lane::DepsSemver => lane::deps::semver(&process),
         Lane::Mutants => lane::deps::mutants(&process),
-        Lane::ReleaseXcframework => super::release::xcframework(&process, ctx, &ext, &temp),
+        Lane::ReleaseXcframework => {
+            super::release::xcframework(&process, ctx, &ext, &temp, args.kind)
+        }
         Lane::ReleaseDocs => super::release::docs(&process, ctx, &ext),
         Lane::ReleaseWasm => super::release::wasm(&process, ctx, &ext),
         Lane::ReleaseAndroid => super::release::build_android(&process, ctx, &ext),
-        Lane::ReleasePublish => super::release::publish(&process, ctx, &ext),
+        Lane::ReleasePublish => super::release::publish(&process, ctx, &ext, args.kind),
     };
     process.best_effort("sccache", &["--show-stats"], "sccache statistics");
     result

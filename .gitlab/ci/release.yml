@@ -79,6 +79,10 @@ release:publish:
   script:
     - just ci run release-publish
   rules:
+    # A release is a decision, so someone presses the button. A nightly is not:
+    # it replaces one rolling tag with what the branch builds into today, and
+    # waiting for a person would leave that tag stale exactly when it matters.
     - if: $KITHARA_PIPELINE_KIND == "release"
       when: manual
+    - if: $KITHARA_PIPELINE_KIND == "nightly"
   allow_failure: false

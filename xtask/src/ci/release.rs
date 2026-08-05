@@ -7,7 +7,10 @@ use anyhow::{Context, Result, bail};
 use kithara_devtools::Ctx;
 use sha2::{Digest, Sha256};
 
-use super::process::{Process, require_os};
+use super::{
+    process::{Process, require_os},
+    run::PipelineKind,
+};
 use crate::{
     config::{KitharaExt, ReleaseConfig},
     publish, release,
@@ -22,19 +25,28 @@ pub(crate) fn xcframework(
     ctx: &Ctx,
     ext: &KitharaExt,
     temp: &Path,
+    kind: PipelineKind,
 ) -> Result<()> {
     require_os("macos", "Apple release")?;
-    let version = required_env("KITHARA_RELEASE_VERSION")?;
-    let manifest = fs::read_to_string(ctx.root.join(&ext.release.manifest))
-        .with_context(|| format!("reading {}", ext.release.manifest))?;
-    let manifest_version = manifest_field(&manifest, "version")?;
-    let manifest_checksum = manifest_field(&manifest, "checksum")?;
-    if manifest_version != version {
-        bail!(
-            "{} version is {manifest_version}, requested {version}",
-            ext.release.manifest
-        );
-    }
+    // The manifest pins the checksum of the framework a released version
+    // resolves to, so the two have to agree before that version is published.
+    // A nightly answers a different question — what the branch builds into
+    // today — and the framework it produces is not the one the manifest names.
+    let expected = if kind == PipelineKind::Nightly {
+        None
+    } else {
+        let version = required_env("KITHARA_RELEASE_VERSION")?;
+        let manifest = fs::read_to_string(ctx.root.join(&ext.release.manifest))
+            .with_context(|| format!("reading {}", ext.release.manifest))?;
+        let manifest_version = manifest_field(&manifest, "version")?;
+        if manifest_version != version {
+            bail!(
+                "{} version is {manifest_version}, requested {version}",
+                ext.release.manifest
+            );
+        }
+        Some(manifest_field(&manifest, "checksum")?)
+    };
 
     process.run(
         "just",
@@ -49,14 +61,16 @@ pub(crate) fn xcframework(
         copy_required(&source, &ctx.root.join(name))?;
     }
 
-    let primary = ctx.root.join(&ext.release.asset);
-    let actual_checksum = swift_checksum(process, &primary)?;
-    if actual_checksum != manifest_checksum {
-        bail!(
-            "{} checksum does not match the retained XCFramework: expected \
-             {manifest_checksum}, found {actual_checksum}",
-            ext.release.manifest
-        );
+    if let Some(manifest_checksum) = expected {
+        let primary = ctx.root.join(&ext.release.asset);
+        let actual_checksum = swift_checksum(process, &primary)?;
+        if actual_checksum != manifest_checksum {
+            bail!(
+                "{} checksum does not match the retained XCFramework: expected \
+                 {manifest_checksum}, found {actual_checksum}",
+                ext.release.manifest
+            );
+        }
     }
 
     for name in [&ext.release.asset, &ext.release.single_asset] {
@@ -128,11 +142,19 @@ pub(crate) fn build_android(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> R
     Ok(())
 }
 
-pub(crate) fn publish(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
+pub(crate) fn publish(
+    process: &Process,
+    ctx: &Ctx,
+    ext: &KitharaExt,
+    kind: PipelineKind,
+) -> Result<()> {
     // The jobs this one waits for take hours, and these tools are reached deep
     // inside the publish steps. Ask for them first, so a host that lacks one
     // says so before a release is built rather than after.
     process.require_tools(&["cargo", "gh", "git", "unzip"])?;
+    if kind == PipelineKind::Nightly {
+        return publish_nightly(ctx, ext);
+    }
     for variable in ["CARGO_REGISTRY_TOKEN", "GH_TOKEN", "GITLAB_TOKEN"] {
         required_env(variable)?;
     }
@@ -151,6 +173,24 @@ pub(crate) fn publish(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<
     release::publish_retained(ctx, &source_sha, &ctx.root)?;
     release::publish_pages_retained(ctx, &source_sha, &ctx.root)?;
     publish::publish_release(ctx)
+}
+
+/// The rolling channel publishes the same artifacts to one replaceable tag. It
+/// reaches no crate registry — a nightly carries no version to publish under —
+/// and leaves the pages branch to releases, which is what a documentation site
+/// should follow.
+fn publish_nightly(ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
+    for variable in ["GH_TOKEN", "GITLAB_TOKEN"] {
+        required_env(variable)?;
+    }
+    let source_sha = required_env("CI_COMMIT_SHA")?;
+    for name in retained_assets(&ext.release) {
+        let path = ctx.root.join(name);
+        if path.is_file() {
+            verify_checksum(&path)?;
+        }
+    }
+    release::publish_nightly_retained(ctx, &source_sha, &ctx.root)
 }
 
 fn retained_assets(config: &ReleaseConfig) -> impl Iterator<Item = &str> {

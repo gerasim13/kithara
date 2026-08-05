@@ -79,11 +79,18 @@
   interruptible: false
   rules:
     - if: $KITHARA_PIPELINE_KIND == "release"
+    # The same artifacts feed the rolling nightly channel, so the build lanes
+    # run there too. What differs is the checksum gate a version carries and
+    # the tag the publish job writes, and the lanes read the kind for both.
+    - if: $KITHARA_PIPELINE_KIND == "nightly"
     # The build lanes only produce artifacts, so whether they still work is a
     # question worth answering before a release rather than during one. Any
-    # pipeline may ask by setting this. `release:publish` carries its own rule
-    # and stays out of reach: it is the only job that leaves this machine.
-    - if: $KITHARA_VERIFY_RELEASE_LANES == "1"
+    # pipeline may ask by setting this — on a protected ref, because two of
+    # these lanes are tagged for protected runners and a job no runner may take
+    # holds the pipeline's resource group until it times out. `release:publish`
+    # carries its own rule and stays out of reach: it is the only job that
+    # leaves this machine.
+    - if: $KITHARA_VERIFY_RELEASE_LANES == "1" && $CI_COMMIT_REF_PROTECTED == "true"
 
 # Dropping the serial chain let two runners work at once, which is the point —
 # but a full suite, a browser run, and every perf measurement report on how
