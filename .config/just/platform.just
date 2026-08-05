@@ -35,6 +35,12 @@ wasm MODE="check" *ARGS:
         esac
         WASM_BINDGEN_TEST_TIMEOUT=300 \
         WASM_BINDGEN_USE_BROWSER=1 \
+        # The browser talks to a fixture server that runs on this machine, and
+        # the runner looks for it beside itself. Nothing in a wasm build
+        # produces a host binary, so the lane used to depend on some earlier
+        # native job having left one behind, and failed with "failed to start
+        # test_server ... No such file or directory" whenever it ran first.
+        cargo build -p kithara-integration-tests --bin test_server
         # Only `suite_heavy` carries browser tests. Building the whole crate
         # for wasm compiles every native suite too, and those reach for
         # threads, the filesystem, and a local test server that the browser
@@ -112,8 +118,13 @@ apple MODE="xcframework" *ARGS:
         destination="${2:-generic/platform=iOS Simulator}"
         just platform apple xcframework --profile debug
         just platform _xcodegen-local
+        # The debug framework carries one simulator slice, arm64 — the fat
+        # slice is built for release. A generic simulator destination asks for
+        # every simulator architecture, so the link failed with `symbol(s) not
+        # found for architecture x86_64` against a framework that never
+        # claimed to have them.
         KITHARA_LOCAL_DEV=1 xcodebuild -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
-            -scheme "$scheme" -destination "$destination" build
+            -scheme "$scheme" -destination "$destination" ARCHS=arm64 build
         ;;
       test)
         destination=$(ios_destination) || exit 1
