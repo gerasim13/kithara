@@ -270,7 +270,8 @@ mod tests {
     use super::*;
     use crate::{
         atoms::{
-            design::{meter::Meter, status_dot::StatusDot},
+            design::{cell::Cell, meter::Meter, status_dot::StatusDot, swatch::Swatch},
+            painter::CellData,
             toggle::Binary,
         },
         builtin,
@@ -279,6 +280,7 @@ mod tests {
             StereoLevels,
             masonry::{MasonryControl, Painted},
         },
+        skin::ColorRole,
     };
 
     const LEVELS: StereoLevels = StereoLevels {
@@ -362,6 +364,48 @@ mod tests {
             let iced =
                 Paint::new(Meter::new(skin), level, skin).draw_list(&PaintState::default(), bounds);
             let mut masonry = Painted::new(Meter::new(skin), level, skin);
+
+            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+        }
+    }
+
+    #[kithara::test]
+    fn iced_and_masonry_record_the_same_cell() {
+        let skin = builtin::skin();
+        let bounds = Rect {
+            h: 36.0,
+            w: 40.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        for label in [None, Some("A1".to_owned())] {
+            for highlighted in [false, true] {
+                let data = || CellData {
+                    highlighted,
+                    label: label.clone(),
+                };
+                let iced = Paint::new(Cell::new(skin), data(), skin)
+                    .draw_list(&PaintState::default(), bounds);
+                let mut masonry = Painted::new(Cell::new(skin), data(), skin);
+
+                assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn iced_and_masonry_record_the_same_swatch() {
+        let skin = builtin::skin();
+        let bounds = Rect {
+            h: 78.0,
+            w: 120.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        for role in [ColorRole::Accent, ColorRole::BgInset] {
+            let iced = Paint::new(Swatch::new(role, skin), "ACCENT".to_owned(), skin)
+                .draw_list(&PaintState::default(), bounds);
+            let mut masonry = Painted::new(Swatch::new(role, skin), "ACCENT".to_owned(), skin);
 
             assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
         }

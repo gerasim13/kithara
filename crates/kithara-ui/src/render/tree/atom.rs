@@ -8,6 +8,7 @@ use crate::{
             cell::Cell, meter::Meter, segmented::Segmented, select::Select, status_dot::StatusDot,
             swatch::Swatch,
         },
+        painter::CellData,
         readout::Readout,
         toggle::Binary,
     },
@@ -194,14 +195,9 @@ pub(super) fn swatch<'a>(
     role: ColorRole,
     label: InternId,
     ui: &'a CompiledUi,
-    skin: &Skin,
+    skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
-    Swatch::builder()
-        .role(role)
-        .label(ui.resolve(label))
-        .skin(skin)
-        .build()
-        .view()
+    Paint::new(Swatch::new(role, skin), ui.resolve(label).to_owned(), skin).view()
 }
 
 pub(super) fn status_dot<'a>(
@@ -222,14 +218,17 @@ pub(super) fn cell<'a>(
     label: Option<InternId>,
     highlighted: bool,
     ui: &'a CompiledUi,
-    skin: &Skin,
+    skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
-    Cell::builder()
-        .maybe_label(label.map(|id| ui.resolve(id)))
-        .highlighted(highlighted)
-        .skin(skin)
-        .build()
-        .view()
+    Paint::new(
+        Cell::new(skin),
+        CellData {
+            highlighted,
+            label: label.map(|id| ui.resolve(id).to_owned()),
+        },
+        skin,
+    )
+    .view()
 }
 
 pub(super) fn glyph(

@@ -24,10 +24,13 @@ use crate::{
     atoms::{
         button::{Button, ButtonConfig, ButtonLabel},
         chip::Chip,
-        design::{crossfader::Crossfader, fader::Fader, meter::Meter, status_dot::StatusDot},
+        design::{
+            cell::Cell as CellFace, crossfader::Crossfader, fader::Fader, meter::Meter,
+            status_dot::StatusDot, swatch::Swatch,
+        },
         meter::StereoMeter,
         nav_item::NavItem,
-        painter::{ButtonData, FaderData, Labelled},
+        painter::{ButtonData, CellData, FaderData, Labelled},
         tab::TabLarge,
         toggle::Binary,
         vu::VerticalVu,
@@ -222,7 +225,17 @@ where
             None,
         )
     }
+}
 
+/// Choosing the painter for one built-in control.
+///
+/// Its own block: the match grows by an arm per control the retained host
+/// learns to draw, and it should not drag the rest of the host over the
+/// size gate with it.
+impl<Action> MasonryHost<'_, Action>
+where
+    Action: std::fmt::Debug + Send + 'static,
+{
     /// Builds the leaf that paints one built-in control, or an empty box where
     /// this host cannot paint it yet.
     fn painted_leaf(
@@ -327,6 +340,25 @@ where
                         Some(ReadValue::Scalar(level)) => level.clamp(0.0, 1.0).as_(),
                         _ => 0.0,
                     },
+                    self.skin,
+                ),
+                declared,
+            ),
+            ControlSpec::Cell { label, highlighted } => Self::control_leaf(
+                Painted::new(
+                    CellFace::new(self.skin),
+                    CellData {
+                        highlighted: *highlighted,
+                        label: label.map(|label| self.ui.resolve(label).to_owned()),
+                    },
+                    self.skin,
+                ),
+                declared,
+            ),
+            ControlSpec::Swatch { role, label } => Self::control_leaf(
+                Painted::new(
+                    Swatch::new(*role, self.skin),
+                    self.ui.resolve(*label).to_owned(),
                     self.skin,
                 ),
                 declared,

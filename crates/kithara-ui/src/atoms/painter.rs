@@ -2,7 +2,10 @@ use crate::{
     atoms::{
         button::{Button, ButtonLabel, VisualState},
         chip::Chip,
-        design::{crossfader::Crossfader, fader::Fader, meter::Meter, status_dot::StatusDot},
+        design::{
+            cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter, status_dot::StatusDot,
+            swatch::Swatch,
+        },
         meter::StereoMeter,
         nav_item::NavItem,
         tab::TabLarge,
@@ -205,6 +208,43 @@ impl ControlPainter for Meter {
 }
 
 impl ControlPainter for StatusDot {
+    type Data = String;
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        data: &Self::Data,
+        bounds: Rect,
+        _state: VisualState,
+    ) {
+        self.paint(list, text, data, bounds);
+    }
+}
+
+/// What a cell is handed each frame: its caption, and whether it is the one
+/// picked out.
+pub(crate) struct CellData {
+    pub(crate) highlighted: bool,
+    pub(crate) label: Option<String>,
+}
+
+impl ControlPainter for Cell {
+    type Data = CellData;
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        data: &Self::Data,
+        bounds: Rect,
+        _state: VisualState,
+    ) {
+        self.paint(list, text, data.label.as_deref(), data.highlighted, bounds);
+    }
+}
+
+impl ControlPainter for Swatch {
     type Data = String;
 
     fn draw(

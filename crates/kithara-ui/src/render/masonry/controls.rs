@@ -8,7 +8,10 @@ use crate::{
     atoms::{
         button::{Button, VisualState},
         chip::Chip,
-        design::{crossfader::Crossfader, fader::Fader, meter::Meter, status_dot::StatusDot},
+        design::{
+            cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter, status_dot::StatusDot,
+            swatch::Swatch,
+        },
         knob::Knob,
         meter::StereoMeter,
         nav_item::NavItem,
@@ -388,8 +391,13 @@ impl Retained for Meter {
     }
 }
 
-/// A status dot shows what the document said; no endpoint moves it.
+/// A status dot and a cell show what the document said; no endpoint moves
+/// either of them.
 impl Retained for StatusDot {}
+
+impl Retained for Cell {}
+
+impl Retained for Swatch {}
 
 impl Retained for Binary {
     fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {

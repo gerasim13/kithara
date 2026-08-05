@@ -1618,12 +1618,12 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     ),
     (
         "Swatch",
-        Paints::NotYet,
+        Paints::Yes,
         r#"Swatch(id: "control", role: Accent, label: "ACCENT")"#,
     ),
     (
         "Cell",
-        Paints::NotYet,
+        Paints::Yes,
         r#"Cell(id: "control", label: Some("A1"))"#,
     ),
     (
