@@ -6,10 +6,12 @@ use std::sync::{
 use gloo_timers::future::TimeoutFuture;
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig},
+    audio::{Audio, AudioConfig, ReadOutcome},
     events::{AudioEvent, Event, EventBus, SeekLifecycleStage},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
-    platform::time::{Duration, Instant},
+    hls::{Hls, HlsConfig},
+    // `Instant` is not imported: the test macro virtualises the clock inside
+    // every test body, and naming it here shadows nothing but a warning.
+    platform::time::Duration,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -19,9 +21,6 @@ use kithara_integration_tests::{
 };
 use tracing::{info, warn};
 use url::Url;
-mod kithara {
-    pub(crate) use ::kithara::test;
-}
 
 mod test_statics {
     use super::*;
@@ -127,10 +126,7 @@ async fn create_pipeline_with_url(url: Url) -> Audio<Stream<Hls>> {
                 .backend(StorageBackend::Memory)
                 .build(),
         )
-        .with_abr_options(AbrOptions {
-            mode: auto(0),
-            ..Default::default()
-        })
+        .initial_abr_mode(auto(0))
         .build();
 
     let wav_info = MediaInfo::builder()
@@ -150,12 +146,12 @@ async fn create_pipeline_with_url(url: Url) -> Audio<Stream<Hls>> {
 async fn run_seek_pcm_window_check(mut audio: Audio<Stream<Hls>>) {
     let spec = audio.spec();
     let channels = spec.channels as usize;
-    let sample_rate = spec.sample_rate as usize;
+    let sample_rate = spec.sample_rate.get() as usize;
     let mut buf = vec![0.0f32; 4096];
 
     let mut warmup = 0usize;
     for _ in 0..20 {
-        let n = read_with_yield(&mut audio, &mut buf).await;
+        let n = read_with_yield(&mut audio, &mut buf).await.unwrap_or(0);
         if n == 0 {
             break;
         }
@@ -175,11 +171,10 @@ async fn run_seek_pcm_window_check(mut audio: Audio<Stream<Hls>>) {
     let mut played_frames = 0usize;
     let target_frames = sample_rate * 5;
     for _ in 0..600 {
-        let n = read_with_yield_limit(&mut audio, &mut buf, 50).await;
+        let Some(n) = read_with_yield_limit(&mut audio, &mut buf, 50).await else {
+            break;
+        };
         if n == 0 {
-            if audio.is_eof() {
-                break;
-            }
             continue;
         }
         played_frames += n / channels;
@@ -205,11 +200,10 @@ async fn run_seek_pcm_window_check(mut audio: Audio<Stream<Hls>>) {
     let mut prev_phase: Option<usize> = None;
 
     for _ in 0..400 {
-        let n = read_with_yield_limit(&mut audio, &mut buf, 100).await;
+        let Some(n) = read_with_yield_limit(&mut audio, &mut buf, 100).await else {
+            break;
+        };
         if n == 0 {
-            if audio.is_eof() {
-                break;
-            }
             continue;
         }
 
@@ -259,29 +253,32 @@ async fn run_seek_pcm_window_check(mut audio: Audio<Stream<Hls>>) {
 /// On wasm32 main thread, `Atomics.wait` is forbidden. The audio pipeline
 /// uses `preload()` mode where `read()` returns 0 when data isn't ready yet.
 /// We yield via `gloo_timers` to let async downloads and Web Workers proceed.
-async fn read_with_yield(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> usize {
+async fn read_with_yield(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> Option<usize> {
     read_with_yield_limit(audio, buf, 500).await
 }
 
-/// Read with configurable retry limit.
+/// Read with configurable retry limit. `None` is the end of the stream;
+/// `Some(0)` is a reader that stayed pending for the whole budget.
 async fn read_with_yield_limit(
     audio: &mut Audio<Stream<Hls>>,
     buf: &mut [f32],
     max_yields: usize,
-) -> usize {
+) -> Option<usize> {
     const YIELD_MS: u32 = 10;
 
     for _ in 0..max_yields {
-        let n = audio.read(buf);
-        if n > 0 {
-            return n;
-        }
-        if audio.is_eof() {
-            return 0;
+        match audio.read(buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => return Some(count.get()),
+            Ok(ReadOutcome::Eof { .. }) => return None,
+            Ok(ReadOutcome::Pending { .. }) => {}
+            Err(error) => {
+                warn!(%error, "read failed");
+                return None;
+            }
         }
         TimeoutFuture::new(YIELD_MS).await;
     }
-    0
+    Some(0)
 }
 
 /// Yield to event loop so async I/O and Web Workers can progress.
@@ -320,7 +317,7 @@ async fn stress_read_samples_integrity() {
     let mut prev_last_phase: Option<usize> = None;
 
     for _ in 0..target_chunks {
-        let n = read_with_yield(&mut audio, &mut buf).await;
+        let n = read_with_yield(&mut audio, &mut buf).await.unwrap_or(0);
         if n == 0 {
             break;
         }
@@ -426,7 +423,7 @@ async fn stress_seek_and_read() {
     let mut buf = vec![0.0f32; 4096];
     let mut warmup = 0;
     for _ in 0..20 {
-        let n = read_with_yield(&mut audio, &mut buf).await;
+        let n = read_with_yield(&mut audio, &mut buf).await.unwrap_or(0);
         if n == 0 {
             break;
         }
@@ -458,7 +455,7 @@ async fn stress_seek_and_read() {
         let mut post_seek_samples = 0;
         let mut position_checked = false;
         for _ in 0..10 {
-            let n = read_with_yield(&mut audio, &mut buf).await;
+            let n = read_with_yield(&mut audio, &mut buf).await.unwrap_or(0);
             if n == 0 {
                 break;
             }
@@ -565,7 +562,7 @@ async fn stress_rapid_seeks_must_not_stall() {
 
     let mut warmup_samples = 0usize;
     for _ in 0..20 {
-        let n = read_with_yield(&mut audio, &mut buf).await;
+        let n = read_with_yield(&mut audio, &mut buf).await.unwrap_or(0);
         if n == 0 {
             break;
         }
@@ -580,7 +577,7 @@ async fn stress_rapid_seeks_must_not_stall() {
     info!(duration_secs, max_seek, "Duration known");
 
     const SEEK_COUNT: usize = 1000;
-    let sample_rate = audio.spec().sample_rate;
+    let sample_rate = audio.spec().sample_rate.get();
     let channels = audio.spec().channels as usize;
     let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);
     let mut dead_seeks = 0u64;
@@ -608,16 +605,12 @@ async fn stress_rapid_seeks_must_not_stall() {
             continue;
         }
 
-        let n = read_with_yield_limit(&mut audio, &mut buf, 200).await;
-        if n == 0 && !audio.is_eof() {
+        let read = read_with_yield_limit(&mut audio, &mut buf, 200).await;
+        let n = read.unwrap_or(0);
+        if n == 0 && read.is_some() {
             dead_seeks += 1;
             if dead_seeks <= 5 {
-                warn!(
-                    iteration = i,
-                    pos_secs,
-                    is_eof = audio.is_eof(),
-                    "STALL: read returned 0 after seek"
-                );
+                warn!(iteration = i, pos_secs, "STALL: read returned 0 after seek");
             }
             continue;
         }
@@ -715,7 +708,7 @@ async fn stress_seek_to_zero_after_pressure() {
 
     let mut warmup = 0usize;
     for _ in 0..20 {
-        let n = read_with_yield(&mut audio, &mut buf).await;
+        let n = read_with_yield(&mut audio, &mut buf).await.unwrap_or(0);
         if n == 0 {
             break;
         }
@@ -732,7 +725,9 @@ async fn stress_seek_to_zero_after_pressure() {
     for i in 0..500 {
         let pos = rng.range_f64(0.001, max_seek);
         let _ = audio.seek(Duration::from_secs_f64(pos));
-        let _ = read_with_yield_limit(&mut audio, &mut buf, 50).await;
+        let _ = read_with_yield_limit(&mut audio, &mut buf, 50)
+            .await
+            .unwrap_or(0);
 
         if i % 100 == 99 {
             yield_ms(1).await;
@@ -761,12 +756,11 @@ async fn stress_seek_to_zero_after_pressure() {
     let mut stall_deadline = Instant::now() + Duration::from_secs(25);
 
     for attempt in 0..target_chunks * 20 {
-        let n = read_with_yield_limit(&mut audio, &mut buf, 100).await;
+        let Some(n) = read_with_yield_limit(&mut audio, &mut buf, 100).await else {
+            info!(chunks_from_zero, total_from_zero, "EOF reached");
+            break;
+        };
         if n == 0 {
-            if audio.is_eof() {
-                info!(chunks_from_zero, total_from_zero, "EOF reached");
-                break;
-            }
             if Instant::now() >= stall_deadline {
                 panic!(
                     "STUCK after seek-to-0: read returned 0 for {attempt} attempts before deadline, \
@@ -868,12 +862,12 @@ async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segmen
     let mut audio = create_pipeline().await;
     let spec = audio.spec();
     let channels = spec.channels as usize;
-    let sample_rate = spec.sample_rate as usize;
+    let sample_rate = spec.sample_rate.get() as usize;
     let mut buf = vec![0.0f32; 4096];
 
     let mut warmup = 0usize;
     for _ in 0..20 {
-        let n = read_with_yield(&mut audio, &mut buf).await;
+        let n = read_with_yield(&mut audio, &mut buf).await.unwrap_or(0);
         if n == 0 {
             break;
         }
@@ -892,11 +886,10 @@ async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segmen
     let mut played_frames = 0usize;
     let target_frames = sample_rate * 5;
     for _ in 0..600 {
-        let n = read_with_yield_limit(&mut audio, &mut buf, 50).await;
+        let Some(n) = read_with_yield_limit(&mut audio, &mut buf, 50).await else {
+            break;
+        };
         if n == 0 {
-            if audio.is_eof() {
-                break;
-            }
             continue;
         }
         played_frames += n / channels;
@@ -922,7 +915,9 @@ async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segmen
 
     let mut checked = false;
     for _ in 0..200 {
-        let n = read_with_yield_limit(&mut audio, &mut buf, 100).await;
+        let n = read_with_yield_limit(&mut audio, &mut buf, 100)
+            .await
+            .unwrap_or(0);
         if n == 0 {
             continue;
         }
@@ -987,7 +982,7 @@ async fn stress_seek_events_single_reset_and_monotonic_progress() {
 
     let mut warmup = 0usize;
     for _ in 0..20 {
-        let n = read_with_yield(&mut audio, &mut buf).await;
+        let n = read_with_yield(&mut audio, &mut buf).await.unwrap_or(0);
         if n == 0 {
             break;
         }
@@ -1007,13 +1002,12 @@ async fn stress_seek_events_single_reset_and_monotonic_progress() {
         .expect("seek to middle must succeed");
 
     let mut played_frames = 0usize;
-    let target_frames = spec.sample_rate as usize * 5;
+    let target_frames = spec.sample_rate.get() as usize * 5;
     for _ in 0..600 {
-        let n = read_with_yield_limit(&mut audio, &mut buf, 50).await;
+        let Some(n) = read_with_yield_limit(&mut audio, &mut buf, 50).await else {
+            break;
+        };
         if n == 0 {
-            if audio.is_eof() {
-                break;
-            }
             continue;
         }
         played_frames += n / channels;
@@ -1022,7 +1016,7 @@ async fn stress_seek_events_single_reset_and_monotonic_progress() {
         }
     }
     assert!(
-        played_frames >= spec.sample_rate as usize * 3,
+        played_frames >= spec.sample_rate.get() as usize * 3,
         "expected at least ~3s playback before test seek"
     );
 
@@ -1040,7 +1034,9 @@ async fn stress_seek_events_single_reset_and_monotonic_progress() {
     let mut playback_positions = Vec::with_capacity(64);
 
     for _ in 0..300 {
-        let _ = read_with_yield_limit(&mut audio, &mut buf, 50).await;
+        let _ = read_with_yield_limit(&mut audio, &mut buf, 50)
+            .await
+            .unwrap_or(0);
 
         loop {
             match events_rx.try_recv().map(|env| env.event) {

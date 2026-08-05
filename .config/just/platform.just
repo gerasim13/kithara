@@ -35,7 +35,12 @@ wasm MODE="check" *ARGS:
         esac
         WASM_BINDGEN_TEST_TIMEOUT=300 \
         WASM_BINDGEN_USE_BROWSER=1 \
-        cargo "+$toolchain" test --target wasm32-unknown-unknown -p kithara-integration-tests
+        # Only `suite_heavy` carries browser tests. Building the whole crate
+        # for wasm compiles every native suite too, and those reach for
+        # threads, the filesystem, and a local test server that the browser
+        # has no way to offer.
+        cargo "+$toolchain" test --target wasm32-unknown-unknown \
+          -p kithara-integration-tests --test suite_heavy
         ;;
       build)
         just _xtask wasm build "$@"

@@ -63,12 +63,25 @@ pub(crate) fn run(cmd: AndroidCommand, ctx: &Ctx) -> Result<()> {
     }
 }
 
+/// Whether the generator left any Kotlin under this root. It writes into the
+/// package path rather than the output directory itself — `kotlin/com/kithara/
+/// ffi/kithara_ffi.kt` — so a check that reads only the top level calls a
+/// successful run empty.
 fn has_kotlin_source(path: &Path) -> Result<bool> {
-    let mut entries = fs::read_dir(path).with_context(|| format!("read_dir {}", path.display()))?;
-    entries.try_fold(false, |found, entry| {
+    let entries = fs::read_dir(path).with_context(|| format!("read_dir {}", path.display()))?;
+    for entry in entries {
         let entry = entry.with_context(|| format!("read_dir {}", path.display()))?;
-        Ok(found || entry.path().extension().is_some_and(|kind| kind == "kt"))
-    })
+        let candidate = entry.path();
+        let found = if candidate.is_dir() {
+            has_kotlin_source(&candidate)?
+        } else {
+            candidate.extension().is_some_and(|kind| kind == "kt")
+        };
+        if found {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn recreate_dir(path: &Path) -> Result<()> {
