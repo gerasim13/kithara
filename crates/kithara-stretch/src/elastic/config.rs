@@ -1,32 +1,19 @@
 use super::ElasticError;
 
 /// Numeric continuity policy for exact-span planning.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get)]
 #[non_exhaustive]
 pub struct ElasticSpanConfig {
-    continuity_tolerance: f64,
-    max_correction_per_block: f64,
-    max_phase_error: f64,
-}
-
-impl ElasticSpanConfig {
     /// Source-frame tolerance used when comparing adjacent continuous spans.
-    #[must_use]
-    pub const fn continuity_tolerance(self) -> f64 {
-        self.continuity_tolerance
-    }
-
+    #[field(get, copy)]
+    continuity_tolerance: f64,
     /// Maximum source-frame correction applied over one render block.
-    #[must_use]
-    pub const fn max_correction_per_block(self) -> f64 {
-        self.max_correction_per_block
-    }
-
+    #[field(get, copy)]
+    max_correction_per_block: f64,
     /// Maximum source-frame phase error accepted at a block boundary.
-    #[must_use]
-    pub const fn max_phase_error(self) -> f64 {
-        self.max_phase_error
-    }
+    #[field(get, copy)]
+    max_phase_error: f64,
 }
 
 impl TryFrom<(f64, f64, f64)> for ElasticSpanConfig {
@@ -54,12 +41,21 @@ impl TryFrom<(f64, f64, f64)> for ElasticSpanConfig {
 }
 
 /// Immutable engine preparation shape.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get)]
 #[non_exhaustive]
 pub struct ElasticConfig {
+    /// Source sample rate in Hz.
+    #[field(get, copy)]
     sample_rate: u32,
+    /// Interleaved channel count.
+    #[field(get, copy)]
     channels: usize,
+    /// Largest accepted output block in frames.
+    #[field(get, copy)]
     max_output_frames: usize,
+    /// Largest accepted source block in frames.
+    #[field(get, copy)]
     max_source_frames: usize,
 }
 
@@ -72,24 +68,21 @@ impl TryFrom<(u32, usize, usize, usize)> for ElasticConfig {
         if sample_rate == 0 {
             return Err(ElasticError::InvalidSampleRate);
         }
-        if channels == 0 {
-            return Err(ElasticError::InvalidChannelCount);
-        }
-        if i32::try_from(channels).is_err() {
-            return Err(ElasticError::ChannelCountOutOfRange(channels));
-        }
-        if max_source_frames == 0 {
-            return Err(ElasticError::InvalidSourceFrameLimit);
-        }
-        if max_output_frames == 0 {
-            return Err(ElasticError::InvalidOutputFrameLimit);
-        }
-        if i32::try_from(max_source_frames).is_err() {
-            return Err(ElasticError::SourceFrameLimitOutOfRange(max_source_frames));
-        }
-        if i32::try_from(max_output_frames).is_err() {
-            return Err(ElasticError::OutputFrameLimitOutOfRange(max_output_frames));
-        }
+        let channels = frame_count(
+            channels,
+            ElasticError::InvalidChannelCount,
+            ElasticError::ChannelCountOutOfRange,
+        )?;
+        let max_source_frames = frame_count(
+            max_source_frames,
+            ElasticError::InvalidSourceFrameLimit,
+            ElasticError::SourceFrameLimitOutOfRange,
+        )?;
+        let max_output_frames = frame_count(
+            max_output_frames,
+            ElasticError::InvalidOutputFrameLimit,
+            ElasticError::OutputFrameLimitOutOfRange,
+        )?;
         Ok(Self {
             sample_rate,
             channels,
@@ -99,30 +92,18 @@ impl TryFrom<(u32, usize, usize, usize)> for ElasticConfig {
     }
 }
 
-impl ElasticConfig {
-    /// Interleaved channel count.
-    #[must_use]
-    pub const fn channels(self) -> usize {
-        self.channels
+/// Backends address blocks and channels with `i32`, so every prepared count is
+/// positive and representable there.
+fn frame_count(
+    value: usize,
+    empty: ElasticError,
+    out_of_range: fn(usize) -> ElasticError,
+) -> Result<usize, ElasticError> {
+    if value == 0 {
+        return Err(empty);
     }
-
-    /// Largest accepted output block in frames.
-    #[must_use]
-    pub const fn max_output_frames(self) -> usize {
-        self.max_output_frames
-    }
-
-    /// Largest accepted source block in frames.
-    #[must_use]
-    pub const fn max_source_frames(self) -> usize {
-        self.max_source_frames
-    }
-
-    /// Source sample rate in Hz.
-    #[must_use]
-    pub const fn sample_rate(self) -> u32 {
-        self.sample_rate
-    }
+    i32::try_from(value).map_err(|_| out_of_range(value))?;
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -153,5 +134,31 @@ mod tests {
         assert_eq!(config.continuity_tolerance(), 1.0e-5);
         assert_eq!(config.max_phase_error(), 0.5);
         assert_eq!(config.max_correction_per_block(), 0.25);
+    }
+
+    #[kithara::test]
+    fn config_names_the_shape_field_it_rejects() {
+        let out_of_range = usize::try_from(i32::MAX).map_or(usize::MAX, |limit| limit + 1);
+
+        for (shape, expected) in [
+            ((0, 2, 512, 512), ElasticError::InvalidSampleRate),
+            ((48_000, 0, 512, 512), ElasticError::InvalidChannelCount),
+            (
+                (48_000, out_of_range, 512, 512),
+                ElasticError::ChannelCountOutOfRange(out_of_range),
+            ),
+            ((48_000, 2, 0, 512), ElasticError::InvalidSourceFrameLimit),
+            (
+                (48_000, 2, out_of_range, 512),
+                ElasticError::SourceFrameLimitOutOfRange(out_of_range),
+            ),
+            ((48_000, 2, 512, 0), ElasticError::InvalidOutputFrameLimit),
+            (
+                (48_000, 2, 512, out_of_range),
+                ElasticError::OutputFrameLimitOutOfRange(out_of_range),
+            ),
+        ] {
+            assert_eq!(ElasticConfig::try_from(shape), Err(expected));
+        }
     }
 }

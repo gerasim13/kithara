@@ -1,24 +1,24 @@
-#[cfg(feature = "stretch-signalsmith")]
+use std::ops::RangeInclusive;
+
 use num_traits::ToPrimitive;
 
-#[cfg(feature = "stretch-signalsmith")]
-use super::ElasticRequest;
+use super::{ElasticError, ElasticRequest};
 
-/// Supported source-frame advance per output frame.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Supported source-frame advance per output frame. Every engine declares its
+/// own window; nothing outside the adapter knows which library is behind it.
+#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get)]
 #[non_exhaustive]
 pub struct ElasticRateEnvelope {
-    pub(super) max_source_frames_per_output: f64,
-    pub(super) min_source_frames_per_output: f64,
+    /// Maximum source-frame advance per output frame.
+    #[field(get, copy)]
+    max_source_frames_per_output: f64,
+    /// Minimum source-frame advance per output frame.
+    #[field(get, copy)]
+    min_source_frames_per_output: f64,
 }
 
 impl ElasticRateEnvelope {
-    #[cfg(feature = "stretch-signalsmith")]
-    const SIGNALSMITH_MAX_SOURCE_FRAMES_PER_OUTPUT: f64 = 4.0 / 3.0;
-    #[cfg(feature = "stretch-signalsmith")]
-    const SIGNALSMITH_MIN_SOURCE_FRAMES_PER_OUTPUT: f64 = 2.0 / 3.0;
-
-    #[cfg(feature = "stretch-signalsmith")]
     pub(crate) fn contains(self, request: ElasticRequest) -> bool {
         request
             .source_frames()
@@ -29,14 +29,6 @@ impl ElasticRateEnvelope {
             })
     }
 
-    #[cfg(feature = "stretch-signalsmith")]
-    pub(crate) const fn signalsmith() -> Self {
-        Self {
-            max_source_frames_per_output: Self::SIGNALSMITH_MAX_SOURCE_FRAMES_PER_OUTPUT,
-            min_source_frames_per_output: Self::SIGNALSMITH_MIN_SOURCE_FRAMES_PER_OUTPUT,
-        }
-    }
-
     /// Returns whether a continuous source advance is supported.
     #[must_use]
     pub fn contains_rate(self, source_frames_per_output: f64) -> bool {
@@ -44,29 +36,44 @@ impl ElasticRateEnvelope {
             && source_frames_per_output >= self.min_source_frames_per_output.next_down()
             && source_frames_per_output <= self.max_source_frames_per_output.next_up()
     }
+}
 
-    /// Maximum source-frame advance per output frame.
-    #[must_use]
-    pub const fn max_source_frames_per_output(self) -> f64 {
-        self.max_source_frames_per_output
-    }
+impl TryFrom<RangeInclusive<f64>> for ElasticRateEnvelope {
+    type Error = ElasticError;
 
-    /// Minimum source-frame advance per output frame.
-    #[must_use]
-    pub const fn min_source_frames_per_output(self) -> f64 {
-        self.min_source_frames_per_output
+    fn try_from(rates: RangeInclusive<f64>) -> Result<Self, Self::Error> {
+        let (min_source_frames_per_output, max_source_frames_per_output) = rates.into_inner();
+        if [min_source_frames_per_output, max_source_frames_per_output]
+            .into_iter()
+            .any(|rate| !rate.is_finite() || rate <= 0.0)
+            || min_source_frames_per_output > max_source_frames_per_output
+        {
+            return Err(ElasticError::InvalidRateEnvelope {
+                max: max_source_frames_per_output,
+                min: min_source_frames_per_output,
+            });
+        }
+        Ok(Self {
+            max_source_frames_per_output,
+            min_source_frames_per_output,
+        })
     }
 }
 
-#[cfg(all(test, feature = "stretch-signalsmith"))]
+#[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::ElasticRateEnvelope;
+    use super::{ElasticError, ElasticRateEnvelope};
+
+    fn envelope() -> ElasticRateEnvelope {
+        ElasticRateEnvelope::try_from(2.0 / 3.0..=4.0 / 3.0)
+            .expect("invariant: the declared window is finite, positive and ordered")
+    }
 
     #[kithara::test]
     fn accepts_one_rounding_step_at_the_declared_rate_boundary() {
-        let envelope = ElasticRateEnvelope::signalsmith();
+        let envelope = envelope();
         let minimum = envelope.min_source_frames_per_output();
         let maximum = envelope.max_source_frames_per_output();
         let one_step_below = minimum.next_down();
@@ -78,5 +85,20 @@ mod tests {
         assert!(!envelope.contains_rate(two_steps_below));
         assert!(envelope.contains_rate(one_step_above));
         assert!(!envelope.contains_rate(two_steps_above));
+    }
+
+    #[kithara::test]
+    fn rejects_windows_that_cannot_bound_a_rate() {
+        for rates in [
+            0.0..=1.0,
+            f64::NAN..=1.0,
+            1.0..=f64::INFINITY,
+            4.0 / 3.0..=2.0 / 3.0,
+        ] {
+            assert!(matches!(
+                ElasticRateEnvelope::try_from(rates),
+                Err(ElasticError::InvalidRateEnvelope { .. })
+            ));
+        }
     }
 }

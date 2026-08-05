@@ -61,6 +61,15 @@ pub enum ElasticError {
     /// A block sample count overflowed the platform index type.
     #[error("elastic block sample count overflow")]
     SampleCountOverflow,
+    /// A backend declared a rate window that cannot bound a rate.
+    #[error("elastic rate envelope {min}..={max} is not a finite positive range")]
+    InvalidRateEnvelope { min: f64, max: f64 },
+    /// The engine could not be constructed for the prepared shape.
+    #[error("elastic engine could not be prepared: {0}")]
+    EnginePreparation(&'static str),
+    /// The engine rendered a different output span than the request asked for.
+    #[error("elastic engine rendered {actual} output frames; expected {expected}")]
+    EngineOutputFrameCount { actual: usize, expected: usize },
     /// A continuous source coordinate was not finite or representable.
     #[error("elastic source coordinate {0} is not finite or representable")]
     InvalidSourceCoordinate(f64),

@@ -33,35 +33,24 @@ impl SourceDirection {
 }
 
 /// One continuous source path mapped onto an exact output frame count.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get)]
 #[non_exhaustive]
 pub struct ElasticSpan {
+    /// Continuous source coordinate at the end of this span.
+    #[field(get, copy)]
     source_end: f64,
+    /// Continuous source coordinate at the start of this span.
+    #[field(get, copy)]
     source_start: f64,
+    /// Exact number of output frames represented by this span.
+    #[field(get, copy)]
     output_frames: usize,
 }
 
 impl ElasticSpan {
     fn direction(self) -> SourceDirection {
         self.into()
-    }
-
-    /// Exact number of output frames represented by this span.
-    #[must_use]
-    pub const fn output_frames(self) -> usize {
-        self.output_frames
-    }
-
-    /// Continuous source coordinate at the end of this span.
-    #[must_use]
-    pub const fn source_end(self) -> f64 {
-        self.source_end
-    }
-
-    /// Continuous source coordinate at the start of this span.
-    #[must_use]
-    pub const fn source_start(self) -> f64 {
-        self.source_start
     }
 }
 
@@ -92,26 +81,19 @@ impl TryFrom<(Range<f64>, usize)> for ElasticSpan {
 }
 
 /// Persistent continuous and integer source position between exact-span blocks.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get)]
 #[non_exhaustive]
 pub struct ElasticCursor {
+    /// Continuous source position after the last planned block.
+    #[field(get, copy)]
     continuous: f64,
+    /// Integer source boundary from which the next block must continue.
+    #[field(get, copy)]
     integer: i64,
 }
 
 impl ElasticCursor {
-    /// Continuous source position after the last planned block.
-    #[must_use]
-    pub const fn continuous(self) -> f64 {
-        self.continuous
-    }
-
-    /// Integer source boundary from which the next block must continue.
-    #[must_use]
-    pub const fn integer(self) -> i64 {
-        self.integer
-    }
-
     fn with_integer(continuous: f64, integer: i64) -> Result<Self, ElasticError> {
         if !continuous.is_finite() {
             return Err(ElasticError::InvalidSourceCoordinate(continuous));
@@ -131,40 +113,32 @@ impl TryFrom<f64> for ElasticCursor {
     }
 }
 
-/// One quantized source span ready for exact backend processing.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// One quantized source span ready for exact engine processing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get)]
 #[non_exhaustive]
 pub struct ElasticSpanRequest {
+    /// Exact positive source/output frame counts for the engine.
+    #[field(get, copy)]
     request: ElasticRequest,
+    /// Integer exclusive source boundary after this request.
+    #[field(get, copy)]
     source_end: i64,
+    /// Integer source boundary from which this request begins.
+    #[field(get, copy)]
     source_start: i64,
 }
 
-impl ElasticSpanRequest {
-    /// Exact positive source/output frame counts for the backend.
-    #[must_use]
-    pub const fn request(self) -> ElasticRequest {
-        self.request
-    }
-
-    /// Integer exclusive source boundary after this request.
-    #[must_use]
-    pub const fn source_end(self) -> i64 {
-        self.source_end
-    }
-
-    /// Integer source boundary from which this request begins.
-    #[must_use]
-    pub const fn source_start(self) -> i64 {
-        self.source_start
-    }
-}
-
 /// Bounded integer exact-span plan and the cursor it commits on success.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get)]
 #[non_exhaustive]
 pub struct ElasticSpanPlan {
+    /// Cursor to publish only after every planned segment renders
+    /// successfully.
+    #[field(get, copy)]
     cursor: ElasticCursor,
+    #[field(skip)]
     segments: SmallVec<[ElasticSpanRequest; MAX_SPANS]>,
 }
 
@@ -253,12 +227,6 @@ impl ElasticSpanPlan {
         Ok(Self { cursor, segments })
     }
 
-    /// Cursor to publish only after every planned segment renders successfully.
-    #[must_use]
-    pub const fn cursor(&self) -> ElasticCursor {
-        self.cursor
-    }
-
     /// Quantized source spans in the same order as the continuous input.
     #[must_use]
     pub fn segments(&self) -> &[ElasticSpanRequest] {
@@ -284,7 +252,7 @@ impl PhasePlan {
         output_frames: usize,
     ) -> Result<Self, ElasticError> {
         let first = spans.first().ok_or(ElasticError::EmptySpanPlan)?;
-        let cursor_origin = cursor.map_or(first.source_start, ElasticCursor::continuous);
+        let cursor_origin = cursor.map_or(first.source_start, |cursor| cursor.continuous());
         let error = first.source_start - cursor_origin;
         if error.abs() > config.max_phase_error() {
             return Err(ElasticError::PhaseDiscontinuity {

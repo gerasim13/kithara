@@ -18,12 +18,14 @@ mod factory;
 pub use factory::build_backend;
 
 mod backends;
+#[cfg(feature = "stretch-bungee")]
+pub use backends::BungeeElastic;
 #[cfg(feature = "stretch-signalsmith")]
-pub use backends::SignalsmithBackend;
+pub use backends::SignalsmithElastic;
 
 mod elastic;
 pub use elastic::{
-    ElasticCapabilities, ElasticConfig, ElasticCursor, ElasticError, ElasticLatency,
-    ElasticRateEnvelope, ElasticRequest, ElasticSpan, ElasticSpanConfig, ElasticSpanPlan,
-    ElasticSpanRequest,
+    ElasticCapabilities, ElasticConfig, ElasticCursor, ElasticEngine, ElasticError, ElasticLatency,
+    ElasticPriming, ElasticRateEnvelope, ElasticRequest, ElasticSpan, ElasticSpanConfig,
+    ElasticSpanPlan, ElasticSpanRequest,
 };

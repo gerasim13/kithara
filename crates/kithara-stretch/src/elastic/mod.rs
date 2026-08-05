@@ -4,6 +4,9 @@ pub use capabilities::ElasticCapabilities;
 mod config;
 pub use config::{ElasticConfig, ElasticSpanConfig};
 
+mod engine;
+pub use engine::{ElasticEngine, ElasticPriming};
+
 mod error;
 pub use error::ElasticError;
 

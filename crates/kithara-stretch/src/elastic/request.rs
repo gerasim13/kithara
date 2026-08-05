@@ -1,13 +1,17 @@
-#[cfg(feature = "stretch-signalsmith")]
 use num_traits::ToPrimitive;
 
 use super::ElasticError;
 
 /// One exact source-span to output-span rendering request.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get)]
 #[non_exhaustive]
 pub struct ElasticRequest {
+    /// Number of output frames filled by this request.
+    #[field(get, copy)]
     output_frames: usize,
+    /// Number of source frames consumed by this request.
+    #[field(get, copy)]
     source_frames: usize,
 }
 
@@ -28,19 +32,6 @@ impl ElasticRequest {
         })
     }
 
-    /// Number of output frames filled by this request.
-    #[must_use]
-    pub const fn output_frames(self) -> usize {
-        self.output_frames
-    }
-
-    /// Number of source frames consumed by this request.
-    #[must_use]
-    pub const fn source_frames(self) -> usize {
-        self.source_frames
-    }
-
-    #[cfg(feature = "stretch-signalsmith")]
     pub(crate) fn source_frames_per_output(self) -> Result<f64, ElasticError> {
         let source_frames = self
             .source_frames
