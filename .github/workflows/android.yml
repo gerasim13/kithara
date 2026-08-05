@@ -4,6 +4,7 @@ name: Android
 # the guest's, the emulator is a virtual machine rather than an interpreter,
 # which is what makes running them here worth the minutes.
 on:
+  workflow_call:
   workflow_dispatch:
 
 env:
