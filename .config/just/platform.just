@@ -133,7 +133,18 @@ apple MODE="xcframework" *ARGS:
           echo "KITHARA_TEST_SERVER_URL must name the running hermetic test server"
           exit 2
         fi
-        just platform apple xcframework --profile debug
+        # `--skip-build` is for a caller that already has the framework, which
+        # in CI is a job that took it from the one that built it. The framework
+        # has to be there: building it here anyway would hide the artifact
+        # never arriving behind ten silent minutes.
+        if [[ "${1:-}" == "--skip-build" ]]; then
+          if [[ ! -d apple/KitharaFFIInternal.xcframework ]]; then
+            echo "apple/KitharaFFIInternal.xcframework is missing; drop --skip-build or fetch it"
+            exit 2
+          fi
+        else
+          just platform apple xcframework --profile debug
+        fi
         just platform _xcodegen-local
         KITHARA_LOCAL_DEV=1 \
         TEST_RUNNER_KITHARA_TEST_SERVER_URL="$test_server_url" \

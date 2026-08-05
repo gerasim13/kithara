@@ -65,6 +65,13 @@ apple:xcframework:
     - apple:lint
   script:
     - just ci run apple-xcframework
+  # The simulator suite consumes this rather than building its own. The guest
+  # that runs it may be a different one, and a job cleans the checkout of
+  # everything the commit does not carry, so the framework has to travel.
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - apple/KitharaFFIInternal.xcframework
 
 apple:swift-test:
   extends: .apple-job
@@ -91,7 +98,8 @@ apple:ios-test:
   stage: apple
   timeout: 60 minutes
   needs:
-    - apple:xcframework
+    - job: apple:xcframework
+      artifacts: true
   script:
     - just ci run apple-ios-test
 

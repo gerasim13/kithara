@@ -137,7 +137,10 @@ pub(crate) fn ios_test(process: &Process, config: &CiConfig) -> Result<()> {
     command
         .env("KITHARA_LOCAL_DEV", "1")
         .env("KITHARA_TEST_SERVER_URL", server.url())
-        .args(["platform", "apple", "test"]);
+        // The framework comes from the job that builds it. This one holds the
+        // measured group while a simulator runs, and rebuilding what another
+        // job already produced spends that window twice.
+        .args(["platform", "apple", "test", "--skip-build"]);
     process.run_command(&mut command, "iOS Simulator tests")
 }
 
