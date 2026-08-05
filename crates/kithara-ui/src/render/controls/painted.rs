@@ -5,7 +5,7 @@ use iced::{
     mouse::{self, Cursor},
     widget::{
         Space,
-        canvas::{self, Action, Canvas, Frame, Geometry},
+        canvas::{self, Action, Canvas, Geometry},
     },
 };
 use kithara_platform::time::Instant;
@@ -73,10 +73,36 @@ where
     text_resources: &'skin TextResources,
 }
 
-/// The shaping context one painted canvas reuses between frames.
+/// What one painted canvas keeps between frames: the shaping context, the
+/// geometry it last tessellated, and the list that geometry was drawn from.
 #[derive(Default)]
 pub(crate) struct PaintState {
+    drawn: RefCell<Option<DrawList>>,
+    geometry: canvas::Cache,
     text: RefCell<Option<TextContext>>,
+}
+
+impl PaintState {
+    /// Drops the kept geometry when the list behind it changed, and reports
+    /// whether it had to. That answer is the whole of this cache, so it is
+    /// returned rather than inferred from the pixels.
+    ///
+    /// The key is the drawn list itself and not a hash of what went into it.
+    /// An input hash has to name everything a painter reads — the value, the
+    /// box, and the shape the skin gave it — and anything it forgets freezes a
+    /// control on the screen. Two equal lists draw the same picture by
+    /// construction, and equality also settles the floats for free: `-0.0`
+    /// compares equal to `0.0`, which is the normalisation the lsq wheel spells
+    /// out with `OrderedFloat` for its own path caches.
+    fn refresh(&self, list: &DrawList) -> bool {
+        let mut drawn = self.drawn.borrow_mut();
+        if drawn.as_ref() == Some(list) {
+            return false;
+        }
+        self.geometry.clear();
+        *drawn = Some(list.clone());
+        true
+    }
 }
 
 impl<'skin, Painter> Paint<'skin, Painter>
@@ -116,7 +142,6 @@ where
         renderer: &Renderer,
         bounds: Rectangle,
     ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
         let list = self.draw_list(
             state,
             Rect {
@@ -126,8 +151,10 @@ where
                 y: 0.0,
             },
         );
-        replay_ordered(&list, &mut frame, self.text_resources);
-        vec![frame.into_geometry()]
+        state.refresh(&list);
+        vec![state.geometry.draw(renderer, bounds.size(), |frame| {
+            replay_ordered(&list, frame, self.text_resources);
+        })]
     }
 }
 
@@ -272,7 +299,7 @@ mod tests {
             toggle::Binary,
         },
         builtin,
-        module::Tone,
+        module::{ButtonStyle, ChipStyle, Tone},
         render::{
             StereoLevels,
             masonry::{MasonryControl, Painted},
@@ -440,5 +467,91 @@ mod tests {
         let mut masonry = Painted::new(StereoMeter::new(skin), LEVELS, skin);
 
         assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+    }
+}
+
+/// What the cache is allowed to keep, and what it must drop.
+#[cfg(test)]
+mod cached {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        atoms::{design::meter::Meter, toggle::Binary},
+        builtin,
+    };
+
+    const BOX: Rect = Rect {
+        h: 40.0,
+        w: 120.0,
+        x: 0.0,
+        y: 0.0,
+    };
+
+    /// One frame of the immediate-mode host: the element is built afresh, and
+    /// the canvas state is the one thing that survived the last frame.
+    fn frame<Painter>(
+        state: &PaintState,
+        painter: Painter,
+        data: Painter::Data,
+        bounds: Rect,
+    ) -> bool
+    where
+        Painter: ControlPainter,
+    {
+        let paint = Paint::new(painter, data, builtin::skin());
+        state.refresh(&paint.draw_list(state, bounds))
+    }
+
+    /// The host rebuilds the whole element tree every frame. A control whose
+    /// value did not move must not be tessellated again — and must be the
+    /// moment it does.
+    #[kithara::test]
+    fn an_unchanged_control_keeps_the_geometry_it_drew() {
+        let skin = builtin::skin();
+        let state = PaintState::default();
+
+        assert!(
+            frame(&state, Meter::new(skin), 0.5, BOX),
+            "the first frame draws"
+        );
+        assert!(
+            !frame(&state, Meter::new(skin), 0.5, BOX),
+            "an unchanged control must keep what it drew"
+        );
+        assert!(
+            frame(&state, Meter::new(skin), 0.75, BOX),
+            "a control whose value moved must draw again"
+        );
+    }
+
+    /// The same value in a different box is a different picture.
+    #[kithara::test]
+    fn a_control_that_was_resized_draws_again() {
+        let skin = builtin::skin();
+        let state = PaintState::default();
+        let wider = Rect {
+            w: BOX.w + 1.0,
+            ..BOX
+        };
+
+        assert!(frame(&state, Meter::new(skin), 0.5, BOX));
+        assert!(frame(&state, Meter::new(skin), 0.5, wider));
+    }
+
+    /// The canvas state belongs to a place in the tree, not to a control, so a
+    /// document that puts a different control there must get a different
+    /// picture. Keying on what a painter *reads* would miss this: a switch and
+    /// a checkbox are one painter type and read the same `false`.
+    #[kithara::test]
+    fn a_control_replaced_by_another_does_not_keep_its_picture() {
+        let skin = builtin::skin();
+        let state = PaintState::default();
+
+        assert!(frame(&state, Binary::toggle(skin), false, BOX));
+        assert!(
+            frame(&state, Binary::checkbox(skin), false, BOX),
+            "a checkbox must not be left showing a switch"
+        );
     }
 }
