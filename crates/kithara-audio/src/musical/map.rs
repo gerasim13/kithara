@@ -20,8 +20,13 @@ pub enum CoordinateError {
 }
 
 /// A continuous coordinate in decoded, normalized, host-rate source audio.
-#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
-pub struct SourceFrame(f64);
+#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, fieldwork::Fieldwork)]
+#[fieldwork(get)]
+pub struct SourceFrame(
+    /// Returns the continuous source-frame coordinate.
+    #[field(get = get, copy)]
+    f64,
+);
 
 impl SourceFrame {
     /// Creates a finite, non-negative source-frame coordinate.
@@ -38,12 +43,6 @@ impl SourceFrame {
         }
         Ok(Self(value))
     }
-
-    /// Returns the continuous source-frame coordinate.
-    #[must_use]
-    pub fn get(self) -> f64 {
-        self.0
-    }
 }
 
 impl TryFrom<u64> for SourceFrame {
@@ -59,8 +58,13 @@ impl TryFrom<u64> for SourceFrame {
 }
 
 /// A continuous coordinate in one track's analysed beat map.
-#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
-pub struct TrackBeat(f64);
+#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, fieldwork::Fieldwork)]
+#[fieldwork(get)]
+pub struct TrackBeat(
+    /// Returns the continuous track-beat coordinate.
+    #[field(get = get, copy)]
+    f64,
+);
 
 impl TrackBeat {
     /// Creates a finite track-beat coordinate. Negative beats are valid.
@@ -74,12 +78,6 @@ impl TrackBeat {
         } else {
             Err(CoordinateError::NonFinite)
         }
-    }
-
-    /// Returns the continuous track-beat coordinate.
-    #[must_use]
-    pub fn get(self) -> f64 {
-        self.0
     }
 }
 
@@ -134,14 +132,26 @@ pub enum BeatMapError {
 }
 
 /// Immutable piecewise-linear mapping from analysed track beats to host-rate source frames.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get)]
 #[non_exhaustive]
 pub struct TrackBeatMap {
+    /// Returns the consistently observed number of beats per bar, when
+    /// available.
+    #[field(get, copy)]
     beats_per_bar: Option<u16>,
+    /// Returns analysed downbeats on the track-beat axis.
+    #[field(get)]
     downbeats: Vec<TrackBeat>,
+    /// Returns the host sample rate defining the source-frame axis.
+    #[field(get, copy)]
     host_sample_rate: NonZeroU32,
+    /// Returns the exclusive host-rate source bound for the range `0..count`.
+    #[field(get, copy)]
     source_frame_count: u64,
+    #[field(skip)]
     source_markers: Vec<SourceFrame>,
+    #[field(skip)]
     zero_index: usize,
 }
 
@@ -166,30 +176,6 @@ impl TrackBeatMap {
             source_rate,
             host_sample_rate,
         )
-    }
-
-    /// Returns the consistently observed number of beats per bar, when available.
-    #[must_use]
-    pub fn beats_per_bar(&self) -> Option<u16> {
-        self.beats_per_bar
-    }
-
-    /// Returns analysed downbeats on the track-beat axis.
-    #[must_use]
-    pub fn downbeats(&self) -> &[TrackBeat] {
-        &self.downbeats
-    }
-
-    /// Returns the host sample rate defining the source-frame axis.
-    #[must_use]
-    pub fn host_sample_rate(&self) -> NonZeroU32 {
-        self.host_sample_rate
-    }
-
-    /// Returns the exclusive host-rate source bound for the range `0..count`.
-    #[must_use]
-    pub const fn source_frame_count(&self) -> u64 {
-        self.source_frame_count
     }
 
     /// Maps a track beat within the analysed marker domain to a source frame.

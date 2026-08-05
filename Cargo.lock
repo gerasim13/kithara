@@ -4927,6 +4927,7 @@ dependencies = [
  "delegate",
  "derive_more",
  "fast-interleave",
+ "fieldwork",
  "kithara-bufpool",
  "kithara-test-utils",
  "kithara-workspace-hack",

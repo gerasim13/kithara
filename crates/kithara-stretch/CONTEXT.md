@@ -17,6 +17,29 @@ default or global pool.
 - `StretchOptions` (a `#[non_exhaustive]` `bon` builder) owns backend construction settings: source
   sample rate, channel count, `max_input_frames` (default 8192), and the injected `PcmPool`.
 - `build_backend(kind, &options)` dispatches selector → concrete backend.
+- `ElasticEngine` / `ElasticPriming` define the exact-span contract, and `ElasticCapabilities` is
+  how an engine declares its shape, latency and rate window. Nothing above the adapter names a
+  library: the planner, the request and the conformance suite read capabilities only.
+
+## Exact-span contract
+
+`ElasticEngine` renders exactly `request.output_frames()` from exactly `request.source_frames()`;
+the frame counts are the only rate control, so the caller owns the transport and two engines fed the
+same plan advance through the source identically. `prepare` allocates outside the render core;
+`capabilities()` is fixed for the engine's lifetime; `reset()` clears history and may fail for an
+engine that clears state by rebuilding itself.
+
+Each engine declares its own `ElasticRateEnvelope` (source advance per output frame) and its own
+`ElasticLatency`. Envelope comparisons admit one floating-point rounding step at a declared
+boundary but reject the next representable value, so coordinate interpolation cannot turn an exact
+contract edge into a rate violation. Request shape, buffer lengths and the rate window are checked
+once, by `ElasticCapabilities`, so every engine accepts and rejects the same requests.
+
+`ElasticPriming` is separate because it is not universal. Priming resets the engine, absorbs the
+declared source history **without emitting it**, and discards exactly the declared output latency,
+so the next `process` starts at the source frame after the warmup span with no leading gap. An
+engine whose pipeline can only emit what it has already consumed cannot do this and does not
+implement the trait.
 
 ## Backend contract
 
@@ -48,6 +71,21 @@ sample rate and channel count, so the trait intentionally does not depend on
   `Stretcher` API.
 - Bungee constructs disabled (warning once) when the pool budget cannot cover its planar scratch or
   `Stream::new` fails; `process` then emits nothing rather than erroring per chunk.
+- `BungeeElastic` does not implement `ElasticPriming`, for the same root cause as the missing tail
+  drain. Its `Stream` emits with a fixed lag: the input-frame coordinate of the next output frame is
+  always `emitted_output_frames - latency`, so absorbing history costs exactly as much emitted
+  output as it consumes input, and no history/warmup pair leaves the engine aligned. A primed
+  Bungee engine needs the low-level granular `Stretcher` API, whose `Request::position` is a source
+  coordinate.
+- `BungeeElastic::reset` rebuilds the stream (the high-level `Stream` has no reset), so it
+  allocates and can fail; `SignalsmithElastic::reset` is allocation-free. Callers that reset on the
+  audio thread must account for that.
+- Bungee reports its latency only once a grain has been analysed, and the value keeps growing until
+  the pipeline is full; it also moves with the rate. `BungeeElastic` therefore saturates the number
+  on a throwaway stream at prepare and reports that unity steady-state value for its lifetime.
+- `BungeeElastic` declares a `0.5..=2.0` source-advance window and `SignalsmithElastic` declares
+  `2/3..=4/3`. Both are the windows the conformance suite verifies, not library limits; widen a
+  window together with the tests that exercise its edges.
 - Bungee on iOS is opt-in. Its CMake C++ build must see `IPHONEOS_DEPLOYMENT_TARGET`; `xtask apple`
   exports the value from `[workspace.metadata.apple] deployment-target` before invoking
   `cargo swift package`. Preserve the same env for manual `-F stretch-bungee` Apple builds.
@@ -61,7 +99,12 @@ sample rate and channel count, so the trait intentionally does not depend on
 1. Gate the adapter module, the `StretchKind` variant, its `all()` entry, its `From`/`u8` arms, and
   the `build_backend` factory arm on `#[cfg(feature = "stretch-<name>")]`; keep the discriminant
   stable.
-1. Document any target or tail-drain limitation above.
+1. Add a `<Name>Elastic` engine in the same file when the library can render exact spans: declare
+  its rate window and latency, implement `ElasticEngine`, implement `ElasticPriming` only if it can
+  absorb history without emitting it, and add one `elastic_engine_conformance!` line (plus
+  `elastic_priming_conformance!` when it primes) in `tests/elastic.rs`. The suite is the contract;
+  the only backend-specific test is the one asserting the declared window and latency.
+1. Document any target, tail-drain or priming limitation above.
 
 Do not declare `stretch-native` or add `backends/native.rs` until the pure-Rust engine exists.
 
