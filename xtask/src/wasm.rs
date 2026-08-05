@@ -1,4 +1,4 @@
-use std::{fs, path::Path, process::Command, sync::LazyLock};
+use std::{env, fs, path::Path, process::Command, sync::LazyLock};
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
@@ -38,9 +38,17 @@ pub(crate) fn run(cmd: WasmCommand, ctx: &Ctx) -> Result<()> {
     }
 }
 
+/// Which nightly builds the wasm bundle. The repository pins one, and CI
+/// installs that exact name — asking for a toolchain called `nightly` there
+/// fails, and `rustup` reports it the same way it reports its own absence.
+fn nightly_toolchain() -> String {
+    env::var("KITHARA_NIGHTLY_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_string())
+}
+
 fn check_rust_target_nightly(target: &str) -> Result<bool> {
     let output = Command::new("rustup")
-        .args(["target", "list", "--installed", "--toolchain", "nightly"])
+        .args(["target", "list", "--installed", "--toolchain"])
+        .arg(nightly_toolchain())
         .output()
         .context("rustup target list")?;
     Ok(String::from_utf8_lossy(&output.stdout)
@@ -49,8 +57,10 @@ fn check_rust_target_nightly(target: &str) -> Result<bool> {
 }
 
 fn check_rust_component_nightly(component: &str) -> Result<()> {
+    let toolchain = nightly_toolchain();
     let output = Command::new("rustup")
-        .args(["component", "list", "--installed", "--toolchain", "nightly"])
+        .args(["component", "list", "--installed", "--toolchain"])
+        .arg(&toolchain)
         .output()
         .context("rustup component list")?;
     let installed = String::from_utf8_lossy(&output.stdout)
@@ -58,7 +68,7 @@ fn check_rust_component_nightly(component: &str) -> Result<()> {
         .any(|l| l.starts_with(component));
     if !installed {
         bail!(
-            "{component} not installed. Run: rustup component add {component} --toolchain nightly"
+            "{component} not installed. Run: rustup component add {component} --toolchain {toolchain}"
         );
     }
     Ok(())
@@ -66,9 +76,10 @@ fn check_rust_component_nightly(component: &str) -> Result<()> {
 
 fn run_build(profile: crate::BuildProfile) -> Result<()> {
     check_tool("trunk", &["--version"], "cargo install trunk")?;
+    let toolchain = nightly_toolchain();
     check_tool(
         "rustup",
-        &["run", "nightly", "rustc", "--version"],
+        &["run", &toolchain, "rustc", "--version"],
         "rustup toolchain install nightly",
     )?;
     if !check_rust_target_nightly("wasm32-unknown-unknown")? {
@@ -89,7 +100,7 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
     if matches!(profile, crate::BuildProfile::Release) {
         cmd.arg("--release");
     }
-    cmd.env("RUSTUP_TOOLCHAIN", "nightly");
+    cmd.env("RUSTUP_TOOLCHAIN", &toolchain);
     cmd.current_dir(&wasm_dir);
 
     let status = cmd.status().context("failed to run trunk build")?;
