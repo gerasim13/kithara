@@ -390,7 +390,7 @@ fn ndk_root() -> Result<PathBuf> {
     }
     let ndk = android_sdk_root()?.join("ndk");
     let mut versions: Vec<PathBuf> = fs::read_dir(&ndk)
-        .with_context(|| format!("reading installed NDKs in {}", ndk.display()))?
+        .with_context(|| format!("reading the installed NDK versions in {}", ndk.display()))?
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|path| path.is_dir())
         .collect();
