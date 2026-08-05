@@ -39,6 +39,7 @@ fn in_async_poll() -> bool {
 
 /// Mark the current thread as a dedicated virtual-time pacer.
 /// Dedicated threads hold active credit while working between wrapped waits.
+#[track_caller]
 pub(crate) fn mark_dedicated() {
     ctx::set_dedicated(true);
     // The pacer's `active` slot is taken EAGERLY by [`pre_count_dedicated`] on the
@@ -269,6 +270,7 @@ impl WaitGuard<'_> {
 
     /// Settle the firer's `active` bump per this thread's credit class —
     /// see [`FlashInner::resume_after_wait`].
+    #[track_caller]
     pub(crate) fn resume(self) {
         let flash = self.flash;
         mem::forget(self);
@@ -419,6 +421,7 @@ impl FlashInner {
     /// - NON-DEDICATED, non-async: undo the `active` bump (the thread is not a pacer and
     ///   never entered `active` on the wait side).
     /// - DEDICATED pacer: keep the bump and mark the thread `Running`.
+    #[track_caller]
     pub(in crate::flash) fn resume_after_wait(&self) {
         if in_async_poll() {
             let mut s = self.core.lock();
@@ -458,13 +461,19 @@ impl FlashInner {
     /// slot ([`mark_dedicated`]) and each time it resumes `Running` from a wait
     /// (dedicated [`resume_after_wait`](FlashInner::resume_after_wait)). Keyed by
     /// the thread; named by it. Diagnostic only — it does not touch `active`.
+    #[track_caller]
     pub(in crate::flash) fn sync_holder_running(&self) {
         let key = current_thread_key();
         let name = current_thread_name();
-        self.core
-            .lock()
-            .registry
-            .active_sync_holders
-            .insert(key, SyncHolder { name });
+        let resumed_from = Location::caller();
+        let resumed_at_ns = self.clock.now_nanos();
+        self.core.lock().registry.active_sync_holders.insert(
+            key,
+            SyncHolder {
+                name,
+                resumed_from,
+                resumed_at_ns,
+            },
+        );
     }
 }

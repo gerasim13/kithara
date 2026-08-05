@@ -148,6 +148,16 @@ pub(in crate::flash) struct Registry {
 pub(in crate::flash) struct SyncHolder {
     /// The OS thread name, if it was named (`spawn_named` pacers always are).
     pub(super) name: Option<String>,
+    /// Where the pacer last re-entered `Running` — its claim site the first
+    /// time, the wait it came back from after that. A pacer that pins
+    /// quiescence has been running since, so this is the last thing it is
+    /// known to have finished waiting on; without it the dump names a thread
+    /// and says nothing about what it is doing.
+    pub(super) resumed_from: &'static Location<'static>,
+    /// Virtual time at that resume. Against `virtual_now` it gives how long
+    /// the pin has lasted, which separates "busy right now" from "stuck since
+    /// the clock last moved".
+    pub(super) resumed_at_ns: u64,
 }
 
 /// Provenance of one engine-backed primitive, keyed by its [`CvId`] in

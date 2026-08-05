@@ -84,6 +84,31 @@ pub enum DecodeError {
     #[error("Interrupted by seek")]
     Interrupted,
 
+    /// `frames * channels` does not fit a `usize`. Carries both operands so
+    /// the caller reads the numbers instead of parsing them back out of a
+    /// formatted message. Reachable only where `usize` is narrower than
+    /// `u64` — on 64-bit targets the conversion is total.
+    #[error("frame count {frames} x {channels} channels overflows usize")]
+    SampleCountOverflow { frames: u64, channels: u64 },
+
+    /// A planar read found the cursor's interleaved scratch buffer absent —
+    /// the buffer is taken and restored within one call, so its absence
+    /// means re-entry, not bad stream data.
+    #[error("cursor scratch buffer detached during a planar read")]
+    ScratchDetached,
+
+    /// The PCM stream feeding a consumer ended in failure, carrying the
+    /// producer-side cause as a typed source plus a `&'static str` tag for
+    /// the site that observed it. Distinct from [`Io`](Self::Io): a channel
+    /// that closed without a marker is not an IO fault, and collapsing the
+    /// causes into one message leaves them separable only by string.
+    #[error("PCM stream failed at {what}: {source}")]
+    PcmStream {
+        what: &'static str,
+        #[source]
+        source: Box<dyn StdError + Send + Sync>,
+    },
+
     #[error("Decoder error: {source}")]
     Backend {
         #[source]
@@ -219,6 +244,20 @@ impl DecodeError {
         }
     }
 
+    /// Wrap a producer-side stream failure as a [`DecodeError::PcmStream`]
+    /// with a `&'static str` site tag, keeping the cause a typed source
+    /// instead of a pre-formatted message.
+    #[must_use]
+    pub fn pcm_stream<E>(what: &'static str, err: E) -> Self
+    where
+        E: Into<Box<dyn StdError + Send + Sync>>,
+    {
+        Self::PcmStream {
+            what,
+            source: err.into(),
+        }
+    }
+
     /// Typed [`PendingReason`] carried by a transient source-read error
     /// (`Interrupted`/`WouldBlock` `io::Error` with a `StreamPending` /
     /// `PendingReason` payload). Demuxers use this to honour the
@@ -297,6 +336,18 @@ mod tests {
     #[case::backend_status(
         DecodeError::BackendStatus { code: -42, op: "AudioFileOpen" },
         "decoder backend status -42 (AudioFileOpen)"
+    )]
+    #[case::sample_count_overflow(
+        DecodeError::SampleCountOverflow { frames: u64::MAX, channels: 2 },
+        "frame count 18446744073709551615 x 2 channels overflows usize"
+    )]
+    #[case::scratch_detached(
+        DecodeError::ScratchDetached,
+        "cursor scratch buffer detached during a planar read"
+    )]
+    #[case::pcm_stream(
+        DecodeError::pcm_stream("preload", IoError::other("producer gone")),
+        "PCM stream failed at preload: producer gone"
     )]
     fn test_error_display(#[case] error: DecodeError, #[case] expected: &str) {
         assert_eq!(error.to_string(), expected);

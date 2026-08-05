@@ -344,4 +344,41 @@ mod tests {
 
         assert!(waiter.join().expect("allocation waiter thread"));
     }
+
+    /// The scheduler's shape: a `spawn_named` thread — counted `active` by the
+    /// quiescence engine for its whole life — loops `wait_timeout` while
+    /// something else keeps the edge moving. `wait_timeout` returns at once
+    /// whenever the edge moved, so the loop never parks; a participant that
+    /// never parks never lets the engine quiesce, and the virtual clock a
+    /// sleeper waits on cannot advance. The sleep below is the discriminator:
+    /// if a spinning participant can freeze the clock, it never returns.
+    #[kithara::test]
+    fn a_spinning_gate_waiter_must_not_freeze_the_virtual_clock() {
+        let gate = Arc::new(ThreadGate::default());
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let waiter_gate = Arc::clone(&gate);
+        let waiter_stop = Arc::clone(&stop);
+        let waiter = thread::spawn_named("gate-spin-waiter", move || {
+            while !waiter_stop.load(Ordering::Acquire) {
+                let since = waiter_gate.current();
+                waiter_gate.wait_timeout(since, Duration::from_millis(10));
+            }
+        });
+
+        let signal_gate = Arc::clone(&gate);
+        let signal_stop = Arc::clone(&stop);
+        let signaller = thread::spawn_named("gate-spin-signaller", move || {
+            while !signal_stop.load(Ordering::Acquire) {
+                signal_gate.signal();
+            }
+        });
+
+        thread::sleep(Duration::from_secs(1));
+
+        stop.store(true, Ordering::Release);
+        gate.signal();
+        waiter.join().expect("spin waiter thread");
+        signaller.join().expect("spin signaller thread");
+    }
 }

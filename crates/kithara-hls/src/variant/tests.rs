@@ -1836,6 +1836,29 @@ fn rebuild_fills_forward_window_from_seg() {
     assert_eq!(queue_seg_indices(&v), vec![2, 3, 4, 5, 6, 7, 8, 9]);
 }
 
+/// A rebuild whose forward window is already cached must still drop the
+/// fetches a previous epoch left *behind* the new target.
+///
+/// The cheap early return reasons from `fetch_plan_satisfied`, which only
+/// inspects `[from_seg, num_segments)` — it never sees the prefix entries and
+/// its "dispatch skips them" argument does not cover them, because nothing
+/// says a segment behind the target is loaded. Returning early there keeps
+/// dispatching prefix fetches after a seek has moved past them.
+#[kithara::test]
+fn rebuild_drops_prefix_fetches_when_forward_window_is_cached() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100; 10], &ctx);
+    for segment in v.segments() {
+        segment.state().mark_loaded();
+    }
+    push_planned(&v, 2);
+    push_planned(&v, 3);
+
+    v.rebuild(&ctx, 8);
+
+    assert_eq!(queue_seg_indices(&v), vec![8, 9]);
+}
+
 #[kithara::test]
 fn skeleton_types_instantiate() {
     let ctx = test_ctx(3);

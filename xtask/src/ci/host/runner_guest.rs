@@ -55,21 +55,6 @@ impl RunnerManager<'_> {
             ],
             "install guest host profile",
         )?;
-        sudo(
-            &["install", "-d", "-m", "0755", "/etc/gitlab-runner/certs"],
-            "create guest runner CA directory",
-        )?;
-        let ca_name = format!("{}.crt", self.config.host.gitlab_host()?);
-        sudo(
-            &[
-                "install",
-                "-m",
-                "0644",
-                path_text(&shared.join("kithara-certs").join(&ca_name))?,
-                path_text(&Path::new("/etc/gitlab-runner/certs").join(&ca_name))?,
-            ],
-            "install guest runner CA",
-        )?;
         let xcode =
             self.process
                 .capture("/usr/bin/xcodebuild", &["-version"], "guest Xcode version")?;
