@@ -184,6 +184,22 @@ fn replace_github_nightly(
     assets: &[PathBuf],
 ) -> Result<()> {
     let repo = &cfg.github_repo;
+    // The commit has to be in the mirror before the old release is taken down.
+    // GitHub mirrors the default branch alone, and the release that goes away
+    // first would leave the channel carrying nothing at all if the commit that
+    // replaces it turned out not to be there.
+    let target = Command::new("gh")
+        .args(["api", &format!("repos/{repo}/commits/{sha}")])
+        .output()
+        .context("run gh api commits")?;
+    if !target.status.success() {
+        bail!(
+            "github mirror {repo} does not carry {sha}; the nightly channel publishes what the \
+             mirrored branch builds, and nothing was replaced.\n{}",
+            command_output_text(&target).trim()
+        );
+    }
+
     let view = Command::new("gh")
         .args(["release", "view", tag, "--repo", repo])
         .output()
