@@ -99,12 +99,6 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
     cmd.args(["build", "--config", "Trunk.toml"]);
     if matches!(profile, crate::BuildProfile::Release) {
         cmd.arg("--release");
-        // The release profile strips symbols, and the threading transform
-        // then cannot find `__heap_base` to inject a thread id into — it
-        // fails with exactly that sentence. Debug information can still go;
-        // the names cannot. `wasm-opt` shrinks the bundle afterwards either
-        // way, so the budget this lane measures is unaffected.
-        cmd.env("CARGO_PROFILE_RELEASE_STRIP", "debuginfo");
     }
     cmd.env("RUSTUP_TOOLCHAIN", &toolchain);
     cmd.current_dir(&wasm_dir);
