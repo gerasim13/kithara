@@ -11,8 +11,8 @@ use iced::{
 
 use crate::{
     atoms::nav_item::NavItem,
-    backends::IcedBackend,
-    draw::{DrawList, DrawListBuilder, Rect, replay},
+    backends::replay_ordered,
+    draw::{DrawList, DrawListBuilder, Rect},
     interact::{CursorShape, Hover, iced as iced_interact, recognizers::click},
     render::{Icon, InputOwner, ReadValue, Skin, UiEvent, activate},
     text::{TextContext, TextResources},
@@ -164,10 +164,7 @@ impl<'data, 'skin> NavItemPaint<'data, 'skin> {
                 y: 0.0,
             },
         );
-        replay(
-            &list,
-            &mut IcedBackend::new(&mut frame, self.text_resources),
-        );
+        replay_ordered(&list, &mut frame, self.text_resources);
         vec![frame.into_geometry()]
     }
 

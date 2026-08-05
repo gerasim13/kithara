@@ -15,8 +15,8 @@ use iced::{
 
 use crate::{
     atoms::tab::TabLarge,
-    backends::IcedBackend,
-    draw::{DrawList, DrawListBuilder, Rect, replay},
+    backends::replay_ordered,
+    draw::{DrawList, DrawListBuilder, Rect},
     render::{ControlAction, InputOwner, ReadValue, Skin, UiEvent, control_event},
     text::TextContext,
 };
@@ -128,10 +128,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Painted<'_, '_> {
                     y: 0.0,
                 },
             );
-            replay(
-                &list,
-                &mut IcedBackend::new(&mut frame, self.skin.text_resources()),
-            );
+            replay_ordered(&list, &mut frame, self.skin.text_resources());
             renderer.draw_geometry(frame.into_geometry());
         });
     }

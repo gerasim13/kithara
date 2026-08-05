@@ -9,8 +9,8 @@ use kithara_platform::time::Instant;
 
 use super::{paint::PickerPaint, picker_hits, widget::PickerState};
 use crate::{
-    backends::IcedBackend,
-    draw::{Rect, replay},
+    backends::replay_ordered,
+    draw::Rect,
     engine::Target,
     interact::iced as iced_interact,
     render::{UiEvent, engine as engine_event},
@@ -124,10 +124,7 @@ fn geometry(
             y: 0.0,
         },
     );
-    replay(
-        &list,
-        &mut IcedBackend::new(&mut frame, paint.skin().text_resources()),
-    );
+    replay_ordered(&list, &mut frame, paint.skin().text_resources());
     vec![frame.into_geometry()]
 }
 

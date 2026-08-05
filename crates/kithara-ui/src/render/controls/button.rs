@@ -8,8 +8,8 @@ use iced::{
 
 use crate::{
     atoms::button::{Button, ButtonConfig, ButtonLabel, VisualState},
-    backends::IcedBackend,
-    draw::{DrawList, DrawListBuilder, Rect, replay},
+    backends::replay_ordered,
+    draw::{DrawList, DrawListBuilder, Rect},
     interact::{
         CursorShape, Hover, Input, PointerPhase, iced as iced_interact, recognizers::click,
     },
@@ -300,10 +300,7 @@ impl<'data, 'skin> ButtonPaint<'data, 'skin> {
             },
             visual,
         );
-        replay(
-            &list,
-            &mut IcedBackend::new(&mut frame, self.text_resources),
-        );
+        replay_ordered(&list, &mut frame, self.text_resources);
         vec![frame.into_geometry()]
     }
 

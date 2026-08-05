@@ -13,7 +13,7 @@ use skrifa::{
 };
 
 use crate::{
-    draw::{Backend, DrawList, Geom, Pt, Rect, Rgba, Transform, replay},
+    draw::{Backend, DrawCmd, DrawList, Geom, Pt, Rect, Rgba, Transform},
     skin::{FontFamily, FontWeight},
     text::{GlyphFace, GlyphRun, GlyphSegment, TextResources, select},
 };
@@ -29,18 +29,73 @@ impl<'frame> IcedBackend<'frame> {
     }
 }
 
+/// Paints a whole list into a frame, keeping the order the list asked for.
+///
+/// `iced_wgpu` pastes a clipped sub-frame's geometry *ahead* of whatever its
+/// parent drew directly, so a control that fills its own box and then draws
+/// inside a clip would paint over its own clipped content. Nothing is drawn
+/// directly here: every run of commands goes through a sub-frame too, and the
+/// pastes then land in list order.
+pub(crate) fn replay_ordered(list: &DrawList, frame: &mut Frame, resources: &TextResources) {
+    let bounds = Rect {
+        h: frame.height(),
+        w: frame.width(),
+        x: 0.0,
+        y: 0.0,
+    };
+    ordered(list, frame, resources, bounds);
+}
+
+fn ordered(list: &DrawList, frame: &mut Frame, resources: &TextResources, bounds: Rect) {
+    let mut run = Vec::new();
+    for command in list.commands() {
+        if let DrawCmd::Clip { region, list } = command {
+            flush(&mut run, frame, resources, bounds);
+            frame.with_clip(region_of(*region), |frame| {
+                ordered(list, frame, resources, *region);
+            });
+        } else {
+            run.push(command);
+        }
+    }
+    flush(&mut run, frame, resources, bounds);
+}
+
+fn flush(run: &mut Vec<&DrawCmd>, frame: &mut Frame, resources: &TextResources, bounds: Rect) {
+    if run.is_empty() {
+        return;
+    }
+    let commands = std::mem::take(run);
+    frame.with_clip(region_of(bounds), |frame| {
+        let mut backend = IcedBackend::new(frame, resources);
+        for command in commands {
+            match command {
+                DrawCmd::Clip { region, list } => backend.clip(*region, list),
+                DrawCmd::Fill { geom, color } => backend.fill(*geom, *color),
+                DrawCmd::Stroke { geom, color, width } => backend.stroke(*geom, *color, *width),
+                DrawCmd::Text {
+                    run,
+                    content,
+                    transform,
+                    color,
+                } => backend.text(run, content, *transform, *color),
+            }
+        }
+    });
+}
+
+const fn region_of(region: Rect) -> Rectangle {
+    Rectangle {
+        height: region.h,
+        width: region.w,
+        x: region.x,
+        y: region.y,
+    }
+}
+
 impl Backend for IcedBackend<'_> {
     fn clip(&mut self, region: Rect, list: &DrawList) {
-        let resources = self.resources;
-        self.frame.with_clip(
-            Rectangle {
-                height: region.h,
-                width: region.w,
-                x: region.x,
-                y: region.y,
-            },
-            |frame| replay(list, &mut IcedBackend::new(frame, resources)),
-        );
+        ordered(list, self.frame, self.resources, region);
     }
 
     fn fill(&mut self, geom: Geom, color: Rgba) {

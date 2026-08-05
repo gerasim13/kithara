@@ -10,8 +10,8 @@ use num_traits::ToPrimitive;
 
 use super::{RetainedCanvas, RetainedCanvasState, tree_row::TreeRowPaint};
 use crate::{
-    backends::IcedBackend,
-    draw::{DrawList, DrawListBuilder, Rect, replay},
+    backends::replay_ordered,
+    draw::{DrawList, DrawListBuilder, Rect},
     engine::{ScrollConfig, ScrollState},
     interact::{ScrollAxis, iced as iced_interact},
     render::{InputOwner, Skin, TreeRow, UiEvent, index},
@@ -177,10 +177,7 @@ impl<'skin> TreePaint<'skin> {
             cursor,
         );
         let list = self.commands(text, viewport, state.scroll.offset(), hovered);
-        replay(
-            &list,
-            &mut IcedBackend::new(&mut frame, self.skin.text_resources()),
-        );
+        replay_ordered(&list, &mut frame, self.skin.text_resources());
         vec![frame.into_geometry()]
     }
 

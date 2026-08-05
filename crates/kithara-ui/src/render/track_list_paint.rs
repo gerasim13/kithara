@@ -9,8 +9,8 @@ use num_traits::ToPrimitive;
 
 use super::{Skin, UiEvent, controls::RetainedCanvasState};
 use crate::{
-    backends::IcedBackend,
-    draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform, replay},
+    backends::replay_ordered,
+    draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform},
     engine::{ScrollConfig, ScrollState},
     interact::{
         ScrollAxis,
@@ -72,10 +72,7 @@ impl<'skin> TrackListPaint<'skin> {
             hovered,
             state.pressed_index,
         );
-        replay(
-            &list,
-            &mut IcedBackend::new(&mut frame, self.skin.text_resources()),
-        );
+        replay_ordered(&list, &mut frame, self.skin.text_resources());
         vec![frame.into_geometry()]
     }
 

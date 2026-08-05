@@ -9,8 +9,8 @@ use kithara_platform::time::Instant;
 
 use crate::{
     atoms::knob::Knob,
-    backends::IcedBackend,
-    draw::{DrawList, DrawListBuilder, Rect, replay},
+    backends::replay_ordered,
+    draw::{DrawList, DrawListBuilder, Rect},
     interact::{
         CursorShape, Hover, iced as iced_interact,
         recognizers::{Scalar, ScalarState, Track, WheelStep},
@@ -163,10 +163,7 @@ impl canvas::Program<UiEvent> for KnobPaint<'_, '_> {
                 y: 0.0,
             },
         );
-        replay(
-            &list,
-            &mut IcedBackend::new(&mut frame, self.text_resources),
-        );
+        replay_ordered(&list, &mut frame, self.text_resources);
         vec![frame.into_geometry()]
     }
 }

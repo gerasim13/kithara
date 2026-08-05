@@ -4,8 +4,8 @@ use iced::{
 };
 
 use crate::{
-    backends::IcedBackend,
-    draw::{DrawList, DrawListBuilder, Pt, Rect, Transform, replay},
+    backends::replay_ordered,
+    draw::{DrawList, DrawListBuilder, Pt, Rect, Transform},
     engine::TextInputSnapshot,
     interact::TextInputLayout,
     render::Skin,
@@ -59,7 +59,7 @@ impl<'a> TextInputPaint<'a> {
         bounds: Rectangle,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        replay(
+        replay_ordered(
             &self.commands(
                 snapshot,
                 Rect {
@@ -69,7 +69,8 @@ impl<'a> TextInputPaint<'a> {
                     y: 0.0,
                 },
             ),
-            &mut IcedBackend::new(&mut frame, self.skin.text_resources()),
+            &mut frame,
+            self.skin.text_resources(),
         );
         vec![frame.into_geometry()]
     }

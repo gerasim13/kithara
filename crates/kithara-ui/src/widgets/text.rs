@@ -14,8 +14,8 @@ use iced::{
 
 use crate::{
     atoms::text::Text as TextAtom,
-    backends::IcedBackend,
-    draw::{DrawListBuilder, Rect, replay},
+    backends::replay_ordered,
+    draw::{DrawListBuilder, Rect},
     module::TextStyle,
     render::{ReadValue, Skin, UiEvent, tree::active_tone},
     skin::{ColorRole, TextRoleSkin},
@@ -146,10 +146,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Painted<'_> {
                     y: 0.0,
                 },
             );
-            replay(
-                &builder.finish(),
-                &mut IcedBackend::new(&mut frame, self.skin.text_resources()),
-            );
+            replay_ordered(&builder.finish(), &mut frame, self.skin.text_resources());
             renderer.draw_geometry(frame.into_geometry());
         });
     }

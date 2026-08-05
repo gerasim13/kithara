@@ -11,8 +11,8 @@ use iced::{
 
 use crate::{
     atoms::chip::Chip,
-    backends::IcedBackend,
-    draw::{DrawList, DrawListBuilder, Rect, replay},
+    backends::replay_ordered,
+    draw::{DrawList, DrawListBuilder, Rect},
     interact::{CursorShape, Hover, iced as iced_interact, recognizers::click},
     module::ChipStyle,
     render::{InputOwner, ReadValue, Skin, UiEvent, activate},
@@ -143,10 +143,7 @@ impl<'data, 'skin> ChipPaint<'data, 'skin> {
                 y: 0.0,
             },
         );
-        replay(
-            &list,
-            &mut IcedBackend::new(&mut frame, self.text_resources),
-        );
+        replay_ordered(&list, &mut frame, self.text_resources);
         vec![frame.into_geometry()]
     }
 

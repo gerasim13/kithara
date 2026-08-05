@@ -13,8 +13,8 @@ use kithara_platform::time::Instant;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    backends::IcedBackend,
-    draw::{DrawList, DrawListBuilder, Rect, Rgba, replay},
+    backends::replay_ordered,
+    draw::{DrawList, DrawListBuilder, Rect, Rgba},
     interact::{
         CursorShape, Hover, Input, iced as iced_interact,
         recognizers::{Scalar, ScalarState, Track},
@@ -310,10 +310,7 @@ impl MiniWavePaint<'_> {
             .draw(renderer, Size::new(bounds.w, bounds.h), |frame| {
                 let mut list = DrawListBuilder::default();
                 paint.paint_wave(&mut list, text, bounds);
-                replay(
-                    &list.finish(),
-                    &mut IcedBackend::new(frame, self.skin.text_resources()),
-                );
+                replay_ordered(&list.finish(), frame, self.skin.text_resources());
             });
         let mut layers = vec![wave];
         let show_overlay = !cursor.is_over(iced_bounds(overlay_bounds));
@@ -381,10 +378,7 @@ impl MiniWavePaint<'_> {
 
 fn geometry(renderer: &Renderer, bounds: Rect, list: &DrawList, skin: &Skin) -> Geometry {
     let mut frame = Frame::new(renderer, Size::new(bounds.w, bounds.h));
-    replay(
-        list,
-        &mut IcedBackend::new(&mut frame, skin.text_resources()),
-    );
+    replay_ordered(list, &mut frame, skin.text_resources());
     frame.into_geometry()
 }
 

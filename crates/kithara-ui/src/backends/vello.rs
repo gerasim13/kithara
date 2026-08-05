@@ -218,7 +218,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        draw::{DrawCmd, DrawListBuilder, Rect, replay},
+        draw::{DrawCmd, DrawListBuilder, Rect},
         skin::{ColorRole, FontFamily, FontWeight, TextRoleSkin},
         text::{FontPolicy, GlyphRun, TextContext, TextResources},
     };

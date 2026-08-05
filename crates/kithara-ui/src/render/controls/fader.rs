@@ -16,8 +16,8 @@ use crate::{
         crossfader::Crossfader,
         fader::{Fader, rail_bounds},
     },
-    backends::IcedBackend,
-    draw::{DrawList, DrawListBuilder, Rect, replay},
+    backends::replay_ordered,
+    draw::{DrawList, DrawListBuilder, Rect},
     engine::scalar_value,
     interact::{
         CursorShape, Hit, Hover, iced as iced_interact,
@@ -183,10 +183,7 @@ impl<'skin> FaderPaint<'skin> {
                 y: 0.0,
             },
         );
-        replay(
-            &builder.finish(),
-            &mut IcedBackend::new(&mut frame, self.resources),
-        );
+        replay_ordered(&builder.finish(), &mut frame, self.resources);
         vec![frame.into_geometry()]
     }
 }
@@ -345,7 +342,7 @@ impl<'skin> CrossfaderPaint<'skin> {
                 y: 0.0,
             },
         );
-        replay(&list, &mut IcedBackend::new(&mut frame, self.resources));
+        replay_ordered(&list, &mut frame, self.resources);
         vec![frame.into_geometry()]
     }
 }

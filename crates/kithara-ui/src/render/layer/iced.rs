@@ -14,8 +14,7 @@ use iced::{
 
 use super::{cursor, handle};
 use crate::{
-    backends::IcedBackend,
-    draw::replay,
+    backends::replay_ordered,
     interact::{Input, Outcome, PointerPhase, iced as iced_interact},
     render::{HostLayer, Skin, UiEvent, WindowCommand, window as window_event},
     text::{TextContext, TextResources},
@@ -33,7 +32,7 @@ pub(crate) fn draw_host_layer<A>(
     }
     renderer.with_translation(Vector::new(bounds.x, bounds.y), |renderer| {
         let mut frame = Frame::new(renderer, Size::new(bounds.w, bounds.h));
-        replay(layer.draw(), &mut IcedBackend::new(&mut frame, resources));
+        replay_ordered(layer.draw(), &mut frame, resources);
         renderer.draw_geometry(frame.into_geometry());
     });
 }
