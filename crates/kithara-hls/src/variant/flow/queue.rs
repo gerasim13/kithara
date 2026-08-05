@@ -37,13 +37,37 @@ impl HlsVariant {
         })
     }
 
+    /// True when a rebuild from `from_seg` would change nothing.
+    ///
+    /// Two conditions, and both are needed. Everything the rebuild would
+    /// enqueue is already `Loaded`, so it would only reseed entries `dispatch`
+    /// skips — that is [`Self::fetch_plan_satisfied`]. *And* the queue holds no
+    /// fetch for a segment behind `from_seg`. Those are entries a previous
+    /// epoch left there; they are not part of the plan a rebuild would produce,
+    /// and `fetch_plan_satisfied` never sees them because it only inspects
+    /// `[from_seg, num_segments)`. Its "dispatch skips them" argument does not
+    /// cover them either — nothing says a segment behind the new target is
+    /// loaded — so skipping the rebuild while they linger keeps dispatching
+    /// prefix fetches the seek target does not want.
+    pub(super) fn queue_matches_plan(&self, from_seg: u32) -> bool {
+        if !self.fetch_plan_satisfied(from_seg) {
+            return false;
+        }
+        !self
+            .flow
+            .queue
+            .lock()
+            .iter()
+            .any(|fetch| matches!(fetch, PlannedFetch::Segment(idx) if *idx < from_seg))
+    }
+
     #[kithara::probe(
         variant = self.variant as u64,
         from_seg,
         old_queue_len = self.flow.queue.lock().len() as u64
     )]
     pub(crate) fn rebuild(&self, _ctx: &PlanCtx, from_seg: u32) {
-        if self.fetch_plan_satisfied(from_seg) {
+        if self.queue_matches_plan(from_seg) {
             return;
         }
         self.rebuild_queue(from_seg, None);

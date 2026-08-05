@@ -13,6 +13,7 @@ use kithara::{
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
+        thread::paced_backoff,
         time::Duration,
         tokio::task::{spawn, spawn_blocking},
     },
@@ -295,6 +296,19 @@ fn read_phase_until_samples<S: StreamType>(
 /// for has issued a request. `settled` keeps the window open until the thing
 /// under observation has actually happened; the harness timeout, not the
 /// sample budget, is what fails a switch that never comes.
+/// Once the sample target is met the phase is only waiting for the switch, and
+/// from there it consumes at playback rate.
+///
+/// The incoming variant is fetched over the network while the outgoing one is
+/// already cached, so an unpaced consumer decides the race before it starts.
+/// Measured on a failing run: within 1.5 s of wall clock the outgoing frontier
+/// had run 87 s of content ahead of the incoming's staged end, and the gap grew
+/// from there — the consumer was pulling about fifty times faster than
+/// playback. No link is fifty times faster than itself, so the assertion below
+/// was asking for something the transition cannot do at any landing. Pacing the
+/// wait gives the switch the same opportunity it has in production; the
+/// assertion itself is unchanged.
+#[kithara::flash(true)]
 fn read_phase_until<S: StreamType>(
     audio: &mut Audio<Stream<S>>,
     target_samples: u64,
@@ -307,10 +321,15 @@ fn read_phase_until<S: StreamType>(
         pending: 0,
         saw_eof: false,
     };
+    let mut consumed = Duration::ZERO;
 
     while stats.samples < target_samples || !settled() {
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => {
+            Ok(ReadOutcome::Frames { count, position }) => {
+                if stats.samples >= target_samples {
+                    paced_backoff(position.saturating_sub(consumed));
+                }
+                consumed = position;
                 let n = count.get();
                 for &sample in &buf[..n] {
                     assert!(
@@ -1874,10 +1893,21 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
         "repro result"
     );
 
+    // `audio_trace` says nothing about the transition: its filter admits four
+    // audio events, none of which the variant-transition path publishes. The
+    // two that discriminate are the variant tags on segment reads — an entry
+    // for the target variant means the incoming session was created and read,
+    // so the transition started and failed to commit, while only source-variant
+    // entries mean the incoming reader never opened — and the raw event tail,
+    // which shows whether the intent reached the ABR state at all and whether a
+    // decision was skipped while the seek held the lock.
+    let reader_segments = collector.reader_segments();
+    let event_tail = collector.event_tail();
     assert!(
         targets.contains(&0),
         "Manual(0) (slq AAC) must publish VariantApplied, saw: {targets:?}, \
-         audio_trace={audio_trace:?}"
+         phase4={phase4:?}, reader_segments={reader_segments:?}, \
+         event_tail={event_tail:?}, audio_trace={audio_trace:?}"
     );
 
     // Bug surfaces as samples_phase4 ≪ expected. 10 s @ 44.1 kHz

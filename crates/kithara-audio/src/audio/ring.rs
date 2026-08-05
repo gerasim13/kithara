@@ -7,8 +7,8 @@ use kithara_platform::{CancelToken, sync::Arc};
 use kithara_test_utils::kithara;
 
 use super::{
-    AudioWorkerHandle, ConsumerPhase, EpochValidator, Fetch, Inlet, Outlet, ThreadWake, WakeSignal,
-    connect,
+    AudioWorkerHandle, ConsumerPhase, EpochValidator, FailureSource, Fetch, Inlet, Outlet,
+    ThreadWake, WakeSignal, connect,
     cursor::ChunkCursor,
     event::ReaderOutputWake,
     park::{receive_is_nonblocking, wait_for_fetch},
@@ -136,7 +136,9 @@ impl RingConsumer {
                 FetchOutcome::Return(None)
             }
             Fetch::Failure { .. } => {
-                self.phase = ConsumerPhase::Failed;
+                self.phase = ConsumerPhase::Failed {
+                    source: FailureSource::Producer,
+                };
                 FetchOutcome::Return(None)
             }
             Fetch::Data { data, .. } => FetchOutcome::Return(Some(data)),
@@ -211,7 +213,9 @@ impl RingConsumer {
                 RecvOutcome::Empty => return None,
                 RecvOutcome::Closed => {
                     hang_reset!();
-                    self.phase = ConsumerPhase::Failed;
+                    self.phase = ConsumerPhase::Failed {
+                        source: FailureSource::ChannelClosed,
+                    };
                     return None;
                 }
             }
@@ -245,7 +249,9 @@ impl RingConsumer {
                 self.phase = ConsumerPhase::AtEof;
             }
             Fetch::Failure { .. } => {
-                self.phase = ConsumerPhase::Failed;
+                self.phase = ConsumerPhase::Failed {
+                    source: FailureSource::ProducerAfterSeek,
+                };
             }
         }
     }
@@ -504,7 +510,12 @@ mod tests {
                 })
                 .is_none()
         );
-        assert_eq!(fixture.ring.phase, ConsumerPhase::Failed);
+        assert_eq!(
+            fixture.ring.phase,
+            ConsumerPhase::Failed {
+                source: FailureSource::ChannelClosed
+            }
+        );
     }
 
     #[kithara::test]
@@ -530,6 +541,11 @@ mod tests {
             .expect("failure reaches ring");
         let _ = failed.recv();
         assert_ne!(failed.ring.phase, ConsumerPhase::AtEof);
-        assert_eq!(failed.ring.phase, ConsumerPhase::Failed);
+        assert_eq!(
+            failed.ring.phase,
+            ConsumerPhase::Failed {
+                source: FailureSource::Producer
+            }
+        );
     }
 }

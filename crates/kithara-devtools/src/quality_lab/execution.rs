@@ -424,6 +424,15 @@ mod tests {
     #[cfg(unix)]
     use crate::quality_lab::adapter::{InvocationSpec, ReportKind};
 
+    /// Budget for the tests whose subject is not the budget.
+    ///
+    /// These prove how an invocation's exit status and output become a
+    /// [`Status`]. A reachable budget can only change that by killing the
+    /// child, which reports no exit code and lands in the tool-error arm — so
+    /// on a busy host the assertion would be answering a question about the
+    /// machine. The budget-exhausted arms are proven by their own scripts.
+    const NOT_UNDER_TEST: Duration = Duration::MAX;
+
     #[test]
     fn version_matching_rejects_prefix_versions() {
         assert!(contains_exact_version("rustqual 1.8.1", "1.8.1"));
@@ -438,9 +447,7 @@ mod tests {
         let spec = fake_spec(&temp, r#"{"findings":1}"#, 1);
         let mut invocations = Vec::new();
         let started = Instant::now();
-        // The property under test is status mapping, not the time budget;
-        // a small budget here flakes under host load.
-        let budget = Duration::from_secs(3600);
+        let budget = NOT_UNDER_TEST;
 
         let (version_status, version_note) = check_version(
             &spec,
@@ -479,7 +486,7 @@ mod tests {
             temp.path(),
             temp.path(),
             Instant::now(),
-            Duration::from_secs(3600),
+            NOT_UNDER_TEST,
             &mut invocations,
         );
 
