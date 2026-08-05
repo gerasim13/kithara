@@ -1,4 +1,4 @@
-name: Stress (self-hosted)
+name: Stress
 
 # Repeat a selection of tests many times over. A flake that shows up in a few
 # percent of runs needs hundreds of them before the rate means anything, which
@@ -17,22 +17,21 @@ on:
         type: string
 
 concurrency:
-  group: kithara-self-hosted
+  group: stress-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   stress:
-    name: Repeated run on x86_64
-    # Set only where self-hosted runners exist. Elsewhere the job never starts,
-    # so the workflow can live in every copy of the tree without dispatching
-    # work that nothing can serve.
-    if: vars.KITHARA_SELF_HOSTED == 'true'
-    runs-on: [self-hosted, linux, x64, kithara]
+    name: Repeated run
+    # Set only where self-hosted runners exist, so a copy of this repository
+    # without them never starts the job. See .github/workflows/ci.yml.
+    if: vars.KITHARA_SELF_HOSTED == 'true' && github.actor == github.repository_owner
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 720
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Dispatch inputs reach the command through the environment: interpolating
       # them into the script would let the caller write the script.

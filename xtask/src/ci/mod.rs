@@ -3,6 +3,7 @@ mod command;
 mod config;
 mod environment;
 mod host;
+mod image;
 mod process;
 mod release;
 mod run;

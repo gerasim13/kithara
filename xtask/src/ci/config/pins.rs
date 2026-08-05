@@ -11,6 +11,9 @@ pub(crate) const PINS_PATH: &str = ".config/ci-pins.toml";
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CiPins {
+    pub(crate) actions_runner_linux_amd64_sha256: String,
+    pub(crate) actions_runner_linux_arm64_sha256: String,
+    pub(crate) actions_runner_version: String,
     pub(crate) android_avd: String,
     pub(crate) android_build_tools_version: String,
     pub(crate) android_commandline_tools_sha256: String,
@@ -36,6 +39,7 @@ pub(crate) struct CiPins {
     pub(crate) gitleaks_version: String,
     pub(crate) linux_base_digest: String,
     pub(crate) linux_image: String,
+    pub(crate) linux_runner_image: String,
     pub(crate) msrv_toolchain: String,
     pub(crate) nightly_toolchain: String,
     pub(crate) stable_toolchain: String,
@@ -60,6 +64,10 @@ impl CiPins {
 
     pub(crate) fn validate(&self) -> Result<()> {
         for (name, value) in [
+            (
+                "actions_runner_version",
+                self.actions_runner_version.as_str(),
+            ),
             ("android_avd", self.android_avd.as_str()),
             (
                 "android_build_tools_version",
@@ -82,6 +90,7 @@ impl CiPins {
             ("gitlab_runner_version", self.gitlab_runner_version.as_str()),
             ("gitleaks_version", self.gitleaks_version.as_str()),
             ("linux_image", self.linux_image.as_str()),
+            ("linux_runner_image", self.linux_runner_image.as_str()),
             ("msrv_toolchain", self.msrv_toolchain.as_str()),
             ("nightly_toolchain", self.nightly_toolchain.as_str()),
             ("stable_toolchain", self.stable_toolchain.as_str()),
@@ -109,6 +118,14 @@ impl CiPins {
             bail!("CI tool package names and versions must not be empty");
         }
         for (name, digest) in [
+            (
+                "actions_runner_linux_amd64_sha256",
+                self.actions_runner_linux_amd64_sha256.as_str(),
+            ),
+            (
+                "actions_runner_linux_arm64_sha256",
+                self.actions_runner_linux_arm64_sha256.as_str(),
+            ),
             (
                 "android_commandline_tools_sha256",
                 self.android_commandline_tools_sha256.as_str(),

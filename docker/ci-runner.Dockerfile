@@ -1,15 +1,16 @@
 # A GitHub Actions runner that carries the CI toolchain in the image.
 #
 # Jobs therefore install nothing: no toolchain action, no package step, and no
-# third-party action beyond the checkout itself. Point CI_IMAGE at the tag built
-# from docker/ci.Dockerfile so a self-hosted job sees the same toolchain as
-# every other lane.
+# third-party action beyond the checkout itself. `CI_IMAGE` is the tag built
+# from docker/ci.Dockerfile, so a self-hosted job sees the same toolchain as
+# every other lane. Build it through `just ci image runner`, which passes every
+# argument below from the reviewed pins.
 ARG CI_IMAGE
 FROM ${CI_IMAGE}
 
-ARG ACTIONS_RUNNER_VERSION=2.336.0
-ARG ACTIONS_RUNNER_AMD64_SHA256=04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e8d68535aa9505d5d
-ARG ACTIONS_RUNNER_ARM64_SHA256=58b758e420b87093fbd4bfddd368074960053e2f1388f01848c82624b90f27d1
+ARG ACTIONS_RUNNER_AMD64_SHA256
+ARG ACTIONS_RUNNER_ARM64_SHA256
+ARG ACTIONS_RUNNER_VERSION
 
 # The runner is a .NET application and needs the ICU libraries at run time.
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -33,5 +34,6 @@ RUN case "$(dpkg --print-architecture)" in \
  && tar -xzf /tmp/runner.tar.gz -C /runner \
  && rm /tmp/runner.tar.gz
 
-COPY docker/ci-runner-entrypoint.sh /usr/local/bin/ci-runner
-ENTRYPOINT ["/usr/local/bin/ci-runner"]
+# The just-in-time configuration is read once and dropped from the environment,
+# so a job's own steps never inherit the credentials that registered them.
+ENTRYPOINT ["/bin/sh", "-c", "config=${ACTIONS_RUNNER_JITCONFIG:?the host must supply a just-in-time runner configuration}; unset ACTIONS_RUNNER_JITCONFIG; exec ./run.sh --jitconfig \"$config\""]
