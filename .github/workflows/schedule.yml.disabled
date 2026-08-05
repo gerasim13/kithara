@@ -18,10 +18,11 @@ on:
     - cron: '0 3 * * *'
     # The RealtimeSanitizer soak.
     - cron: '0 5 * * *'
-    # The suite on Windows and on an Android emulator, on the machines that
-    # have them.
+    # The suite on Windows, on an Android emulator, and on a graphics
+    # device, on the machines that have them.
     - cron: '0 23 * * *'
     - cron: '0 2 * * *'
+    - cron: '30 4 * * *'
     # Miri, weekly: the interpreter is slow enough that a nightly run would
     # hold the machine for hours it owes to lanes that answer faster.
     - cron: '0 6 * * 0'
@@ -51,3 +52,7 @@ jobs:
   android:
     if: github.event.schedule == '0 2 * * *'
     uses: ./.github/workflows/android.yml
+
+  gpu:
+    if: github.event.schedule == '30 4 * * *'
+    uses: ./.github/workflows/gpu.yml

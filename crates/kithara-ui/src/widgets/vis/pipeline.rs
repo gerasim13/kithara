@@ -201,3 +201,160 @@ impl Uniforms {
         bytes
     }
 }
+
+#[cfg(all(test, feature = "gpu"))]
+mod tests {
+    use iced::wgpu::util::DeviceExt as _;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    /// Render one frame of the visualiser off screen and hand back its pixels.
+    ///
+    /// This is the whole point of a lane with a graphics device: the uniform
+    /// block is packed by hand, field by field, and nothing but a real draw
+    /// tells us the shader reads back what Rust wrote.
+    fn render(uniforms: Uniforms) -> Vec<u8> {
+        const SIDE: u32 = 64;
+        const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+        // A row of a mapped texture is padded to 256 bytes, and 64 pixels of
+        // four bytes each is exactly that, so the readback needs no unpacking.
+        const ROW_BYTES: u32 = SIDE * 4;
+
+        let instance = wgpu::Instance::default();
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .expect("this lane runs where a graphics device exists");
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                .expect("the adapter must give up a device");
+
+        let pipeline = <VisPipeline as shader::Pipeline>::new(&device, &queue, FORMAT);
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("kithara_ui.vis.test.uniforms"),
+            contents: &uniforms.bytes(),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("kithara_ui.vis.test.bind_group"),
+            layout: &pipeline.bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
+        });
+
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("kithara_ui.vis.test.target"),
+            size: wgpu::Extent3d {
+                width: SIDE,
+                height: SIDE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("kithara_ui.vis.test.readback"),
+            size: u64::from(ROW_BYTES * SIDE),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("kithara_ui.vis.test.pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&pipeline.render_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        encoder.copy_texture_to_buffer(
+            target.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(ROW_BYTES),
+                    rows_per_image: Some(SIDE),
+                },
+            },
+            wgpu::Extent3d {
+                width: SIDE,
+                height: SIDE,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit([encoder.finish()]);
+
+        readback.slice(..).map_async(wgpu::MapMode::Read, |result| {
+            result.expect("the readback buffer must map");
+        });
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .expect("the queue drains");
+        let pixels = readback.slice(..).get_mapped_range().to_vec();
+        readback.unmap();
+        pixels
+    }
+
+    fn uniforms(level: f32, preset: u32) -> Uniforms {
+        Uniforms {
+            origin: [0.0, 0.0],
+            resolution: [64.0, 64.0],
+            level,
+            time: 0.5,
+            preset,
+        }
+    }
+
+    #[kithara::test]
+    fn the_visualiser_draws_what_the_uniform_block_says() {
+        let silent = render(uniforms(0.0, 0));
+        let loud = render(uniforms(1.0, 0));
+        let other_preset = render(uniforms(1.0, 1));
+
+        assert_eq!(
+            silent,
+            render(uniforms(0.0, 0)),
+            "the same uniforms must draw the same frame"
+        );
+        assert!(
+            silent.chunks_exact(4).any(|pixel| pixel[..3] != [0, 0, 0]),
+            "the visualiser drew nothing at all"
+        );
+        assert_ne!(
+            silent, loud,
+            "the level never reached the shader: the uniform block is packed by \
+             hand and its layout has drifted from assets/shaders/vis.wgsl"
+        );
+        assert_ne!(
+            loud, other_preset,
+            "the preset never reached the shader: see the layout above"
+        );
+    }
+}

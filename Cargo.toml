@@ -310,6 +310,7 @@ objc2-foundation = { version = "0.3.2", default-features = false }
 parking_lot = "0.12"
 pin-project-lite = "0.2"
 plist = "1"
+pollster = "0.4"
 portable-atomic = { version = "1.13.1", default-features = false, features = ["fallback", "float"] }
 
 # proc macros

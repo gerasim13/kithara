@@ -12,6 +12,9 @@ categories = ["gui", "config"]
 [features]
 default = []
 render = ["dep:iced", "dep:lucide-icons", "dep:num-traits", "iced/advanced"]
+# Tests that need a graphics device. Off by default: a machine without one
+# would fail them for having no hardware rather than for a defect.
+gpu = ["render", "dep:pollster"]
 
 [dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
@@ -23,6 +26,7 @@ fieldwork = { workspace = true }
 iced = { workspace = true, optional = true }
 lucide-icons = { workspace = true, optional = true }
 num-traits = { workspace = true, optional = true }
+pollster = { workspace = true, optional = true }
 ron = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
