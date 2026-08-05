@@ -108,7 +108,7 @@ mod tests {
     use super::{Binary, DrawListBuilder, Rect};
     use crate::{
         builtin,
-        draw::{DrawCmd, Geom, Paint},
+        draw::{DrawCmd, Geom, Paint, Pen},
     };
 
     const TOGGLE: Rect = Rect {
@@ -167,7 +167,7 @@ mod tests {
                     x: 0.5,
                     y: 0.5,
                 }),
-                width: 1.0,
+                pen: Pen { width: 1.0, .. },
                 ..
             }
         ));

@@ -655,8 +655,8 @@ mod tests {
             Some(DrawCmd::Stroke {
                 geom: Geom::Rect(_),
                 color,
-                width,
-            }) if *color == skin.rgba(frame.border) && *width == frame.border_width
+                pen,
+            }) if *color == skin.rgba(frame.border) && pen.width == frame.border_width
         ));
 
         let wide = ControlsProgram::new(WindowControlsStyle::CloseWide, skin);

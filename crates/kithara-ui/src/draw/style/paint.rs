@@ -1,4 +1,4 @@
-use super::ir::{Pt, Rgba};
+use crate::draw::{Pt, Rgba};
 
 /// The most colour stops one ramp carries.
 ///

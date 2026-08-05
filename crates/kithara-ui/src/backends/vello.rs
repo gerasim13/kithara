@@ -4,15 +4,15 @@ use vello::{
     Glyph, Scene,
     kurbo::{
         Affine, Arc, BezPath, Cap, Circle, Join, Line, Point, Rect as KurboRect, RoundedRect,
-        Shape, Stroke, Vec2,
+        Shape, Stroke as KurboStroke, Vec2,
     },
     peniko::{Brush, Color, ColorStop, Fill, FontData, Gradient},
 };
 
 use crate::{
     draw::{
-        Backend, Caps, DrawCmd, DrawList, FillRule, Geom, Paint, Path, Pt, Rect, Rgba, Stops,
-        Transform, Verb, replay,
+        Backend, Caps, DrawCmd, DrawList, FillRule, Geom, LineCap, LineJoin, Paint, Path, Pen, Pt,
+        Rect, Rgba, Stops, Transform, Verb, replay,
     },
     text::{GlyphFace, GlyphRun},
 };
@@ -37,9 +37,9 @@ impl<'scene> VelloBackend<'scene> {
             .fill(rule, Affine::IDENTITY, &brush(paint), None, shape);
     }
 
-    fn stroke_shape(&mut self, shape: &impl Shape, color: Rgba, width: f32) {
+    fn stroke_shape(&mut self, shape: &impl Shape, color: Rgba, pen: Pen) {
         self.scene.stroke(
-            &stroke(width),
+            &stroke(pen),
             Affine::IDENTITY,
             Color::from(color),
             None,
@@ -133,7 +133,7 @@ impl Backend for VelloBackend<'_> {
         }
     }
 
-    fn stroke(&mut self, geom: &Geom, color: Rgba, width: f32) {
+    fn stroke(&mut self, geom: &Geom, color: Rgba, pen: Pen) {
         match geom {
             Geom::Arc {
                 center,
@@ -149,13 +149,13 @@ impl Backend for VelloBackend<'_> {
                     0.0,
                 ),
                 color,
-                width,
+                pen,
             ),
             Geom::Circle { center, radius } => {
-                self.stroke_shape(&Circle::new(*center, f64::from(*radius)), color, width);
+                self.stroke_shape(&Circle::new(*center, f64::from(*radius)), color, pen);
             }
-            Geom::Line { from, to } => self.stroke_shape(&Line::new(*from, *to), color, width),
-            Geom::Path(outline) => self.stroke_shape(&bez(outline), color, width),
+            Geom::Line { from, to } => self.stroke_shape(&Line::new(*from, *to), color, pen),
+            Geom::Path(outline) => self.stroke_shape(&bez(outline), color, pen),
             Geom::Rect(rect) => self.stroke_shape(
                 &KurboRect::new(
                     f64::from(rect.x),
@@ -164,7 +164,7 @@ impl Backend for VelloBackend<'_> {
                     f64::from(rect.y + rect.h),
                 ),
                 color,
-                width,
+                pen,
             ),
             Geom::RoundedRect { rect, radius } => self.stroke_shape(
                 &RoundedRect::new(
@@ -175,7 +175,7 @@ impl Backend for VelloBackend<'_> {
                     f64::from(*radius),
                 ),
                 color,
-                width,
+                pen,
             ),
         }
     }
@@ -250,10 +250,18 @@ fn bez(outline: &Path) -> BezPath {
     path
 }
 
-fn stroke(width: f32) -> Stroke {
-    Stroke::new(f64::from(width))
-        .with_caps(Cap::Butt)
-        .with_join(Join::Miter)
+fn stroke(pen: Pen) -> KurboStroke {
+    KurboStroke::new(f64::from(pen.width))
+        .with_caps(match pen.cap {
+            LineCap::Butt => Cap::Butt,
+            LineCap::Round => Cap::Round,
+            LineCap::Square => Cap::Square,
+        })
+        .with_join(match pen.join {
+            LineJoin::Bevel => Join::Bevel,
+            LineJoin::Miter => Join::Miter,
+            LineJoin::Round => Join::Round,
+        })
 }
 
 impl From<Rgba> for Color {
@@ -346,12 +354,37 @@ mod tests {
     }
 
     #[kithara::test]
-    fn stroke_uses_butt_caps_and_miter_join() {
-        let stroke = stroke(2.0);
+    fn a_plain_pen_cuts_its_ends_flush_and_its_corners_to_a_point() {
+        let stroke = stroke(Pen::new(2.0));
 
         assert_eq!(stroke.start_cap, Cap::Butt);
         assert_eq!(stroke.end_cap, Cap::Butt);
         assert_eq!(stroke.join, Join::Miter);
+    }
+
+    /// Every shape a pen can take reaches Vello as the shape it named.
+    #[kithara::test]
+    fn a_shaped_pen_keeps_its_shape_through_the_backend() {
+        for (cap, expected) in [
+            (LineCap::Butt, Cap::Butt),
+            (LineCap::Round, Cap::Round),
+            (LineCap::Square, Cap::Square),
+        ] {
+            let stroke = stroke(Pen::new(2.0).with_cap(cap));
+            assert_eq!(stroke.start_cap, expected, "cap {cap:?}");
+            assert_eq!(stroke.end_cap, expected, "cap {cap:?}");
+        }
+        for (join, expected) in [
+            (LineJoin::Bevel, Join::Bevel),
+            (LineJoin::Miter, Join::Miter),
+            (LineJoin::Round, Join::Round),
+        ] {
+            assert_eq!(
+                stroke(Pen::new(2.0).with_join(join)).join,
+                expected,
+                "join {join:?}"
+            );
+        }
     }
 
     #[kithara::test]

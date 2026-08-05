@@ -511,7 +511,7 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        draw::{DrawCmd, DrawListBuilder, Geom, Paint, Rect},
+        draw::{DrawCmd, DrawListBuilder, Geom, Paint, Pen, Rect},
         module::ButtonStyle,
         text::{FontId, GlyphFace, GlyphSegment, TextContext},
     };
@@ -562,7 +562,7 @@ mod tests {
             DrawCmd::Stroke {
                 geom: Geom::Rect(_),
                 color,
-                width: 1.0,
+                pen: Pen { width: 1.0, .. },
             } if color == skin.palette.line
         ));
         assert!(matches!(

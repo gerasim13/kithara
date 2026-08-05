@@ -93,7 +93,7 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        draw::{DrawCmd, DrawListBuilder, Geom, Paint, Rect},
+        draw::{DrawCmd, DrawListBuilder, Geom, Paint, Pen, Rect},
         text::TextContext,
     };
 
@@ -160,7 +160,7 @@ mod tests {
                     y: 5.5,
                 }),
                 color,
-                width: 1.0,
+                pen: Pen { width: 1.0, .. },
             } if *color == skin.rgba(skin.chip.inactive_frame.border)
         ));
         assert!(matches!(

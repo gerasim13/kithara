@@ -2,12 +2,12 @@ mod backend;
 mod caps;
 mod ir;
 mod list;
-mod paint;
 mod path;
+mod style;
 
 pub use backend::{Backend, replay};
 pub use caps::{Caps, Needs, Unsupported};
 pub use ir::{DrawCmd, Geom, Pt, Rect, Rgba, Transform};
 pub use list::{DrawList, DrawListBuilder};
-pub use paint::{MAX_STOPS, Paint, Stop, Stops, StopsError};
 pub use path::{FillRule, Path, Verb};
+pub use style::{LineCap, LineJoin, MAX_STOPS, Paint, Pen, Stop, Stops, StopsError};

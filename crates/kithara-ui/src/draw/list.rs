@@ -1,4 +1,4 @@
-use super::{DrawCmd, Geom, Paint, Path, Pt, Rect, Rgba, Transform};
+use super::{DrawCmd, Geom, Paint, Path, Pen, Pt, Rect, Rgba, Transform};
 use crate::text::GlyphRun;
 
 /// An ordered retained list of drawing commands.
@@ -32,23 +32,23 @@ impl DrawListBuilder {
         });
     }
 
-    pub fn stroke_circle(&mut self, center: Pt, radius: f32, color: Rgba, width: f32) {
+    pub fn stroke_circle<P: Into<Pen>>(&mut self, center: Pt, radius: f32, color: Rgba, pen: P) {
         self.commands.push(DrawCmd::Stroke {
             geom: Geom::Circle { center, radius },
             color,
-            width,
+            pen: pen.into(),
         });
     }
 
     /// Strokes an arc whose angles are expressed in radians.
-    pub fn stroke_arc(
+    pub fn stroke_arc<P: Into<Pen>>(
         &mut self,
         center: Pt,
         radius: f32,
         start: f32,
         end: f32,
         color: Rgba,
-        width: f32,
+        pen: P,
     ) {
         self.commands.push(DrawCmd::Stroke {
             geom: Geom::Arc {
@@ -58,15 +58,15 @@ impl DrawListBuilder {
                 end,
             },
             color,
-            width,
+            pen: pen.into(),
         });
     }
 
-    pub fn stroke_line(&mut self, from: Pt, to: Pt, color: Rgba, width: f32) {
+    pub fn stroke_line<P: Into<Pen>>(&mut self, from: Pt, to: Pt, color: Rgba, pen: P) {
         self.commands.push(DrawCmd::Stroke {
             geom: Geom::Line { from, to },
             color,
-            width,
+            pen: pen.into(),
         });
     }
 
@@ -88,7 +88,13 @@ impl DrawListBuilder {
         });
     }
 
-    pub fn stroke_rounded_rect(&mut self, rect: Rect, radius: f32, color: Rgba, width: f32) {
+    pub fn stroke_rounded_rect<P: Into<Pen>>(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        color: Rgba,
+        pen: P,
+    ) {
         self.commands.push(DrawCmd::Stroke {
             geom: if radius == 0.0 {
                 Geom::Rect(rect)
@@ -96,7 +102,7 @@ impl DrawListBuilder {
                 Geom::RoundedRect { rect, radius }
             },
             color,
-            width,
+            pen: pen.into(),
         });
     }
 
@@ -128,6 +134,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::draw::{LineCap, LineJoin};
 
     #[kithara::test]
     fn a_zero_radius_rounded_fill_is_the_existing_rect_list() {
@@ -175,14 +182,42 @@ mod tests {
                 DrawCmd::Stroke {
                     geom: Geom::RoundedRect { rect, radius: 4.0 },
                     color,
-                    width: 1.5,
+                    pen: Pen::new(1.5),
                 },
                 DrawCmd::Stroke {
                     geom: Geom::Rect(rect),
                     color,
-                    width: 1.5,
+                    pen: Pen::new(1.5),
                 },
             ]
+        );
+    }
+
+    /// A pen the caller shaped travels to the command untouched.
+    #[kithara::test]
+    fn a_shaped_pen_reaches_the_command_it_was_given_to() {
+        let color = Rgba {
+            a: 1.0,
+            b: 0.25,
+            g: 0.5,
+            r: 0.75,
+        };
+        let pen = Pen::new(3.0)
+            .with_cap(LineCap::Round)
+            .with_join(LineJoin::Round);
+        let mut builder = DrawListBuilder::default();
+        builder.stroke_line(Pt { x: 0.0, y: 0.0 }, Pt { x: 8.0, y: 0.0 }, color, pen);
+
+        assert_eq!(
+            builder.finish().commands(),
+            [DrawCmd::Stroke {
+                geom: Geom::Line {
+                    from: Pt { x: 0.0, y: 0.0 },
+                    to: Pt { x: 8.0, y: 0.0 },
+                },
+                color,
+                pen,
+            }]
         );
     }
 

@@ -3,8 +3,9 @@ use iced::{
     advanced::graphics::{Gradient, gradient},
     font::{Family, Stretch, Style, Weight},
     widget::canvas::{
-        Fill, Frame, Path, Stroke, fill,
+        Fill, Frame, Path, Stroke as IcedStroke, fill,
         path::{Arc, Builder},
+        stroke::{LineCap as IcedCap, LineJoin as IcedJoin},
     },
 };
 use skrifa::{
@@ -15,8 +16,8 @@ use skrifa::{
 
 use crate::{
     draw::{
-        Backend, Caps, DrawCmd, DrawList, FillRule, Geom, Needs, Paint, Pt, Rect, Rgba, Transform,
-        Verb,
+        Backend, Caps, DrawCmd, DrawList, FillRule, Geom, LineCap, LineJoin, Needs, Paint, Pen, Pt,
+        Rect, Rgba, Transform, Verb,
     },
     skin::{FontFamily, FontWeight},
     text::{GlyphFace, GlyphRun, GlyphSegment, TextResources, select},
@@ -84,7 +85,7 @@ fn flush(run: &mut Vec<&DrawCmd>, frame: &mut Frame, resources: &TextResources, 
             match command {
                 DrawCmd::Clip { region, list } => backend.clip(*region, list),
                 DrawCmd::Fill { geom, paint } => backend.fill(geom, *paint),
-                DrawCmd::Stroke { geom, color, width } => backend.stroke(geom, *color, *width),
+                DrawCmd::Stroke { geom, color, pen } => backend.stroke(geom, *color, *pen),
                 DrawCmd::Text {
                     run,
                     content,
@@ -139,8 +140,8 @@ impl Backend for IcedBackend<'_> {
         }
     }
 
-    fn stroke(&mut self, geom: &Geom, color: Rgba, width: f32) {
-        self.frame.stroke(&path(geom), stroke(color, width));
+    fn stroke(&mut self, geom: &Geom, color: Rgba, pen: Pen) {
+        self.frame.stroke(&path(geom), stroke(color, pen));
     }
 
     fn text(&mut self, run: &GlyphRun, _content: &str, transform: Transform, color: Rgba) {
@@ -374,8 +375,18 @@ impl From<Pt> for Point {
     }
 }
 
-fn stroke(color: Rgba, width: f32) -> Stroke<'static> {
-    Stroke::default()
+fn stroke(color: Rgba, pen: Pen) -> IcedStroke<'static> {
+    IcedStroke::default()
         .with_color(Color::from(color))
-        .with_width(width)
+        .with_width(pen.width)
+        .with_line_cap(match pen.cap {
+            LineCap::Butt => IcedCap::Butt,
+            LineCap::Round => IcedCap::Round,
+            LineCap::Square => IcedCap::Square,
+        })
+        .with_line_join(match pen.join {
+            LineJoin::Bevel => IcedJoin::Bevel,
+            LineJoin::Miter => IcedJoin::Miter,
+            LineJoin::Round => IcedJoin::Round,
+        })
 }

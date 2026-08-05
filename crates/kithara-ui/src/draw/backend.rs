@@ -1,4 +1,4 @@
-use super::{Caps, DrawCmd, DrawList, Geom, Needs, Paint, Rect, Rgba, Transform};
+use super::{Caps, DrawCmd, DrawList, Geom, Needs, Paint, Pen, Rect, Rgba, Transform};
 use crate::text::GlyphRun;
 
 /// Consumes toolkit-neutral retained drawing commands.
@@ -13,7 +13,7 @@ pub trait Backend {
 
     fn fill(&mut self, geom: &Geom, paint: Paint);
 
-    fn stroke(&mut self, geom: &Geom, color: Rgba, width: f32);
+    fn stroke(&mut self, geom: &Geom, color: Rgba, pen: Pen);
 
     fn text(&mut self, run: &GlyphRun, content: &str, transform: Transform, color: Rgba);
 }
@@ -38,7 +38,7 @@ fn draw<B: Backend>(list: &DrawList, backend: &mut B) {
         match command {
             DrawCmd::Clip { region, list } => backend.clip(*region, list),
             DrawCmd::Fill { geom, paint } => backend.fill(geom, *paint),
-            DrawCmd::Stroke { geom, color, width } => backend.stroke(geom, *color, *width),
+            DrawCmd::Stroke { geom, color, pen } => backend.stroke(geom, *color, *pen),
             DrawCmd::Text {
                 run,
                 content,
@@ -53,7 +53,9 @@ fn draw<B: Backend>(list: &DrawList, backend: &mut B) {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{Backend, Caps, DrawCmd, DrawList, Geom, Paint, Rect, Rgba, Transform, replay};
+    use super::{
+        Backend, Caps, DrawCmd, DrawList, Geom, Paint, Pen, Rect, Rgba, Transform, replay,
+    };
     use crate::{
         draw::{DrawListBuilder, FillRule, Path, Pt, Verb},
         text::GlyphRun,
@@ -79,7 +81,7 @@ mod tests {
             self.drawn += 1;
         }
 
-        fn stroke(&mut self, _geom: &Geom, _color: Rgba, _width: f32) {
+        fn stroke(&mut self, _geom: &Geom, _color: Rgba, _pen: Pen) {
             self.drawn += 1;
         }
 

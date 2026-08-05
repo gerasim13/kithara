@@ -48,7 +48,7 @@ mod tests {
 
     use super::{Rect, border, quad};
     use crate::{
-        draw::{DrawCmd, DrawListBuilder, Geom, Rgba},
+        draw::{DrawCmd, DrawListBuilder, Geom, Pen, Rgba},
         skin::{ColorRole, FrameSkin},
     };
 
@@ -92,7 +92,7 @@ mod tests {
                     x: 5.0,
                     y: 7.0,
                 }),
-                width: 2.0,
+                pen: Pen { width: 2.0, .. },
                 ..
             }]
         ));

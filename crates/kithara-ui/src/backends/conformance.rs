@@ -35,7 +35,8 @@ use super::{VelloBackend, replay_ordered};
 use crate::{
     builtin,
     draw::{
-        DrawList, DrawListBuilder, FillRule, Paint, Path, Pt, Rect, Rgba, Stop, Stops, Verb, replay,
+        DrawList, DrawListBuilder, FillRule, LineCap, LineJoin, Paint, Path, Pen, Pt, Rect, Rgba,
+        Stop, Stops, Verb, replay,
     },
     render::fonts::{FONT_BYTES, SANS},
 };
@@ -95,6 +96,21 @@ impl Fixture {
     const HOLE: Rect = Rect {
         h: 16.0,
         w: 16.0,
+        x: 24.0,
+        y: 24.0,
+    };
+
+    /// How wide the pen is when a test asks about its ends and corners. Wide
+    /// enough that what a cap or a join adds is several pixels across.
+    const NIB: f32 = 12.0;
+
+    /// A line whose free ends the cap shapes.
+    const RULE: (Pt, Pt) = (Pt { x: 20.0, y: 8.0 }, Pt { x: 40.0, y: 8.0 });
+
+    /// A box whose four right angles the join shapes.
+    const CORNER: Rect = Rect {
+        h: 40.0,
+        w: 40.0,
         x: 24.0,
         y: 24.0,
     };
@@ -212,6 +228,38 @@ fn ramp_runs_across(rgba: &[u8]) -> bool {
     near < 64 && far > 192
 }
 
+/// A pen that keeps a stroke inside its geometry: ends cut flush, corners
+/// flattened.
+fn flush() -> Pen {
+    Pen::new(Fixture::NIB).with_join(LineJoin::Bevel)
+}
+
+/// A pen that reaches past it: ends rounded off, corners carried to a point.
+fn reaching() -> Pen {
+    Pen::new(Fixture::NIB).with_cap(LineCap::Round)
+}
+
+/// A line and a box, both stroked with the same pen. Nothing else separates one
+/// pen from another here: same geometry, same width, same colour.
+fn shaped(pen: Pen) -> DrawList {
+    let mut list = DrawListBuilder::default();
+    list.stroke_line(Fixture::RULE.0, Fixture::RULE.1, Fixture::INK, pen);
+    list.stroke_rounded_rect(Fixture::CORNER, 0.0, Fixture::INK, pen);
+    list.finish()
+}
+
+/// Ink past the line's last point — where only a round cap reaches.
+fn marks_past_its_end(rgba: &[u8]) -> bool {
+    let reach = Fixture::NIB / 3.0;
+    sample(rgba, Fixture::RULE.1.x + reach, Fixture::RULE.1.y) > 128
+}
+
+/// Ink out at the box's outer corner — where only a mitred join reaches.
+fn marks_past_its_corner(rgba: &[u8]) -> bool {
+    let reach = Fixture::NIB / 3.0;
+    sample(rgba, Fixture::CORNER.x - reach, Fixture::CORNER.y - reach) > 128
+}
+
 /// Dark at the centre and light out at the rim, in the same shape.
 fn ramp_runs_outward(rgba: &[u8]) -> bool {
     let center = Fixture::OUTER.x + Fixture::OUTER.w / 2.0;
@@ -306,6 +354,53 @@ fn iced_refuses_a_list_holding_a_ramp_it_cannot_draw() {
     assert!(
         surface_is_untouched(&through_iced(&radial())),
         "the iced backend painted part of a list it cannot draw whole"
+    );
+}
+
+/// A pen that cuts flush and bevels stops at its geometry; one that rounds its
+/// ends and mitres its corners reaches past it. The cap and the join are asked
+/// about separately, so a backend that honours one and drops the other is
+/// caught by the half it dropped.
+#[kithara::test]
+fn vello_shapes_a_stroke_the_way_the_pen_asked() {
+    let flush = through_vello(&shaped(flush()));
+    let reaching = through_vello(&shaped(reaching()));
+
+    assert!(
+        !marks_past_its_end(&flush),
+        "vello: a flush end reached out"
+    );
+    assert!(
+        !marks_past_its_corner(&flush),
+        "vello: a bevelled corner reached out"
+    );
+    assert!(
+        marks_past_its_end(&reaching),
+        "vello: a round end stopped short"
+    );
+    assert!(
+        marks_past_its_corner(&reaching),
+        "vello: a mitred corner stopped short"
+    );
+}
+
+#[kithara::test]
+fn iced_shapes_a_stroke_the_way_the_pen_asked() {
+    let flush = through_iced(&shaped(flush()));
+    let reaching = through_iced(&shaped(reaching()));
+
+    assert!(!marks_past_its_end(&flush), "iced: a flush end reached out");
+    assert!(
+        !marks_past_its_corner(&flush),
+        "iced: a bevelled corner reached out"
+    );
+    assert!(
+        marks_past_its_end(&reaching),
+        "iced: a round end stopped short"
+    );
+    assert!(
+        marks_past_its_corner(&reaching),
+        "iced: a mitred corner stopped short"
     );
 }
 

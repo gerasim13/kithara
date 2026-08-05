@@ -1,4 +1,4 @@
-use super::{ir::DrawCmd, list::DrawList, paint::Paint};
+use super::{ir::DrawCmd, list::DrawList, style::Paint};
 
 /// What a backend is able to draw.
 ///
