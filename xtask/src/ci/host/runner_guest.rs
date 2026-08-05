@@ -68,6 +68,19 @@ impl RunnerManager<'_> {
             &["xcodebuild", "-runFirstLaunch"],
             "install guest Xcode system content",
         )?;
+        // The host enables both of these once, when it is provisioned. The
+        // guest is a fresh clone of a plain macOS install every time and
+        // inherits neither: without developer mode the debugger cannot attach
+        // to a test process, and without this Safari refuses to be driven, so
+        // the browser lane has nothing to talk to.
+        sudo(
+            &["/usr/sbin/DevToolsSecurity", "-enable"],
+            "enable guest developer mode",
+        )?;
+        sudo(
+            &["/usr/bin/safaridriver", "--enable"],
+            "enable guest Safari driver",
+        )?;
         // A freshly installed macOS has no /usr/local/bin, so `install` into it
         // fails until the directory exists.
         sudo(
