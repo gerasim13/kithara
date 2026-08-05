@@ -178,6 +178,8 @@ pub(crate) fn run_build(profile: BuildProfile, android: &AndroidConfig) -> Resul
         bail!("compiled library not found at {}", lib_path.display());
     }
 
+    copy_cxx_runtime(&jni_dir, RUST_TARGETS)?;
+
     println!("==> Generating Kotlin bindings");
 
     let mut cmd = Command::new("cargo");
@@ -352,6 +354,50 @@ fn run_app(
     }
 
     Ok(())
+}
+
+/// Put the NDK's C++ runtime beside the library that needs it.
+///
+/// `cargo ndk` writes the library it built and nothing else, and the stretch
+/// backend links the C++ standard library. On the device that showed up as
+/// `java.lang.UnsatisfiedLinkError: dlopen failed: library "libc++_shared.so"
+/// not found` — the connected suite installed, started, and could not load a
+/// single test.
+fn copy_cxx_runtime(jni_dir: &Path, targets: &[(&str, &str)]) -> Result<()> {
+    let ndk = ndk_root()?;
+    // The NDK ships one host toolchain per platform and Apple silicon reads
+    // the same `darwin-x86_64` directory as Intel does.
+    let sysroot = ndk.join("toolchains/llvm/prebuilt/darwin-x86_64/sysroot/usr/lib");
+    for (target, abi) in targets {
+        let source = sysroot.join(target).join("libc++_shared.so");
+        if !source.is_file() {
+            bail!("NDK C++ runtime not found at {}", source.display());
+        }
+        let destination = jni_dir.join(abi).join("libc++_shared.so");
+        fs::copy(&source, &destination).with_context(|| {
+            format!("copying {} to {}", source.display(), destination.display())
+        })?;
+    }
+    println!("==> Bundled the NDK C++ runtime");
+    Ok(())
+}
+
+fn ndk_root() -> Result<PathBuf> {
+    for name in ["ANDROID_NDK_HOME", "ANDROID_NDK_ROOT", "NDK_HOME"] {
+        if let Ok(value) = env::var(name) {
+            return Ok(PathBuf::from(value));
+        }
+    }
+    let ndk = android_sdk_root()?.join("ndk");
+    let mut versions: Vec<PathBuf> = fs::read_dir(&ndk)
+        .with_context(|| format!("reading installed NDKs in {}", ndk.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_dir())
+        .collect();
+    versions.sort();
+    versions
+        .pop()
+        .with_context(|| format!("no NDK installed under {}", ndk.display()))
 }
 
 fn android_sdk_root() -> Result<PathBuf> {
