@@ -7,6 +7,13 @@ android:build:
   needs: []
   script:
     - just ci run android-build
+  # The suite consumes these rather than building both ABIs again while it
+  # holds the emulator and the measured group.
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - android/lib/build/generated/jniLibs
+      - android/lib/build/generated/uniffi/kotlin
 
 android:test:
   extends:
@@ -16,7 +23,8 @@ android:test:
   stage: android
   timeout: 90 minutes
   needs:
-    - android:build
+    - job: android:build
+      artifacts: true
   script:
     - just ci run android-test
   artifacts:
