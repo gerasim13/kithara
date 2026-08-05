@@ -19,14 +19,7 @@ pub(crate) fn tests(process: &Process, target: &str) -> Result<()> {
     let xtask = env::current_exe().context("locating the running xtask executable")?;
     let mut command = process.command(&xtask);
     command
-        .args([
-            "test",
-            "--lane=windows",
-            "--profile",
-            "ci",
-            "--target",
-            target,
-        ])
+        .args(["test", "--profile", "ci", "--target", target])
         // `bungee-sys` builds through the `cmake` crate, which asks for the
         // Visual Studio generator and hard-codes `-Thost=x64` for every MSVC
         // target. This host is ARM64, so that picks the emulated x64 tools:

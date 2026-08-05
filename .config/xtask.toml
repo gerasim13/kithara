@@ -118,27 +118,6 @@ prefix_args = [
   "test-release",
 ]
 
-# Windows runs the product crates. `kithara-encode` is the fixture encoder and
-# links FFmpeg, for which the executor carries no development package. The
-# integration suite builds its fixtures through that encoder, so it waits on
-# the same thing.
-[test.lanes.windows]
-program = "cargo"
-default_features = ["kithara-ui/render"]
-prefix_args = [
-  "nextest",
-  "run",
-  "--workspace",
-  "--exclude",
-  "kithara-fuzz",
-  "--exclude",
-  "kithara-encode",
-  "--exclude",
-  "kithara-integration-tests",
-  "--cargo-profile",
-  "test-release",
-]
-
 [test.lanes.cached]
 program = "cargo"
 default_features = ["kithara-ui/render"]
