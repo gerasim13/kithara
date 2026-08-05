@@ -144,7 +144,9 @@ async fn create_pipeline_with_url(url: Url) -> Audio<Stream<Hls>> {
         .media_info(wav_info)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config).await.unwrap();
-    audio.preload().expect("start preloading the stress fixture");
+    audio
+        .preload()
+        .expect("start preloading the stress fixture");
     audio
 }
 
