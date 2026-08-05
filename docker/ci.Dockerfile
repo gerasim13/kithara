@@ -97,7 +97,10 @@ RUN rustup component add clippy llvm-tools-preview rustfmt \
       --component rustfmt \
  && rustup toolchain install "${MSRV_TOOLCHAIN}" --profile minimal \
  && rustup target add wasm32-unknown-unknown \
- && rustup target add wasm32-unknown-unknown --toolchain "${NIGHTLY_TOOLCHAIN}"
+ && rustup target add wasm32-unknown-unknown --toolchain "${NIGHTLY_TOOLCHAIN}" \
+ && host="$(rustc -vV | sed -n 's/^host: //p')" \
+ && ln -s "${RUSTUP_HOME}/toolchains/${NIGHTLY_TOOLCHAIN}-${host}" \
+      "${RUSTUP_HOME}/toolchains/nightly-${host}"
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
