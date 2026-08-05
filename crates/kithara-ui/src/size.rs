@@ -3,8 +3,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     compile::{CompiledNode, compiled_node_size},
     expand::{BlockSpec, ControlSpec, ExpandedNode},
-    module::{ButtonStyle, ChromeStyle, GlyphStyle, TextStyle},
-    skin::{SkinDoc, WindowControlSkin},
+    module::ChromeStyle,
+    mount,
+    skin::SkinDoc,
 };
 
 /// One-axis size rule. `Fill` takes available space, `Shrink` takes exactly what
@@ -132,109 +133,22 @@ pub(crate) fn combine_vertical(sizes: impl IntoIterator<Item = SizeSpec>) -> Siz
     SizeSpec::new(Dim::from(width), Dim::from(height))
 }
 
-/// An icon renders as a text glyph, whose line box is taller than the icon
-/// size; the row it sits in owns the height so the glyph centres against its
-/// siblings.
-fn icon_cell(side: f32) -> SizeSpec {
-    SizeSpec::new(Dim::Fixed(side), Dim::Fill)
-}
-
 /// Returns the intrinsic size for a typed control specification.
 #[must_use]
 pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
-    match spec {
-        ControlSpec::DeckSummary { .. } => skin.deck.summary_size,
-        ControlSpec::Brand => skin.global_bar.brand_size,
-        ControlSpec::Spacer => skin.global_bar.spacer_size,
-        ControlSpec::Divider => SizeSpec::new(Dim::Fixed(skin.divider.width), Dim::Fill),
-        ControlSpec::PresetSelector => skin.global_bar.preset_size,
-        ControlSpec::SettingsButton => skin.global_bar.settings_size,
-        ControlSpec::WindowDrag | ControlSpec::TitleBar { .. } => SizeSpec::FILL,
-        ControlSpec::WindowControls { style } => match skin.window.controls(*style) {
-            WindowControlSkin::Buttons {
-                minus_icon_size,
-                maximize_icon_size,
-                close_icon_size,
-                gap,
-                padding,
-            } => SizeSpec::new(
-                Dim::Fixed(
-                    minus_icon_size
-                        + maximize_icon_size
-                        + close_icon_size
-                        + gap * 2.0
-                        + padding * 2.0,
-                ),
-                Dim::Fill,
-            ),
-            WindowControlSkin::Close { cell_size, .. } => {
-                SizeSpec::new(Dim::Fixed(cell_size), Dim::Fill)
-            }
-        },
-        ControlSpec::Text { style, .. } => match style {
-            TextStyle::VisFooter => SizeSpec::new(Dim::Fill, Dim::Fixed(skin.vis.footer_height)),
-            TextStyle::VisMeta | TextStyle::VisTitle => {
-                SizeSpec::new(Dim::Fill, Dim::Fixed(skin.vis.header_height))
-            }
-            TextStyle::BrandSmall | TextStyle::Mono | TextStyle::Caption => {
-                SizeSpec::new(Dim::Shrink, Dim::Fill)
-            }
-            TextStyle::Body
-            | TextStyle::Brand
-            | TextStyle::DeckLetter
-            | TextStyle::TrackTitle
-            | TextStyle::Telemetry
-            | TextStyle::MicroLabel
-            | TextStyle::Section => skin.text.size,
-        },
-        ControlSpec::Glyph { style, .. } => match style {
-            GlyphStyle::Menu => icon_cell(skin.menu.icon_size),
-            GlyphStyle::MenuBurger => icon_cell(skin.menu.burger_icon_size),
-            GlyphStyle::MenuSmall => icon_cell(skin.menu.small_icon_size),
-            GlyphStyle::MenuCell => icon_cell(skin.menu.cell_icon_size),
-            GlyphStyle::Default | GlyphStyle::Vis => SizeSpec::new(
-                Dim::Fixed(skin.nav.header_icon_size),
-                Dim::Fixed(skin.nav.header_height),
-            ),
-        },
-        ControlSpec::NavItem { .. } => SizeSpec::new(Dim::Fill, Dim::Fixed(skin.nav.item_height)),
-        ControlSpec::TabLarge { .. } => SizeSpec::new(Dim::Fill, Dim::Fixed(skin.tab_large.height)),
-        ControlSpec::Button { style, .. } => match style {
-            ButtonStyle::VisNav => SizeSpec::new(
-                Dim::Fixed(skin.vis.nav_cell_size),
-                Dim::Fixed(skin.vis.nav_cell_size),
-            ),
-            ButtonStyle::MicroPrimary => SizeSpec::new(
-                Dim::Fixed(skin.button.micro_size),
-                Dim::Fixed(skin.button.micro_size),
-            ),
-            _ => skin.button.size,
-        },
-        ControlSpec::Bpm { .. } => skin.deck.bpm_size,
-        ControlSpec::Time => skin.deck.time_size,
-        ControlSpec::Scalar { .. } => skin.telemetry.size,
-        ControlSpec::Crossfader { .. } => skin.crossfader.size,
-        ControlSpec::Fader { .. } => skin.fader.size,
-        ControlSpec::Wave { .. } => skin.wave.size,
-        ControlSpec::Vis => skin.vis.size,
-        ControlSpec::TrackList { .. } => skin.track_list.size,
-        ControlSpec::Tree { .. } => skin.tree.size,
-        ControlSpec::ContextBar { .. } => {
-            SizeSpec::new(Dim::Fill, Dim::Fixed(skin.tree.context_height))
-        }
-        ControlSpec::Toggle => skin.toggle.size,
-        ControlSpec::Checkbox => skin.checkbox.size,
-        ControlSpec::Segmented { .. } => skin.segmented.size,
-        ControlSpec::Select { .. } => skin.select.size,
-        ControlSpec::StatusDot { .. } => skin.status_dot.size,
-        ControlSpec::Swatch { .. } => skin.swatch.size,
-        ControlSpec::Cell { .. } => skin.cell.size,
-        ControlSpec::Readout { .. } => skin.readout.size,
-        ControlSpec::Chip { .. } => skin.chip.size,
-        ControlSpec::Knob { .. } => skin.knob.size,
-        ControlSpec::VuStereo => skin.vu_stereo.size,
-        ControlSpec::Meter => skin.meter.size,
-        ControlSpec::VuVertical { .. } => skin.vu_vertical.size,
+    mount::dispatch(spec, Intrinsic { skin })
+}
+
+/// Asks whichever control the document named how big its skin makes it.
+struct Intrinsic<'a> {
+    skin: &'a SkinDoc,
+}
+
+impl mount::Visit for Intrinsic<'_> {
+    type Output = SizeSpec;
+
+    fn visit<C: mount::Control>(self, control: &C) -> SizeSpec {
+        control.size(self.skin)
     }
 }
 
@@ -465,7 +379,9 @@ mod tests {
         builtin,
         expand::{Binding, BindingKind},
         ids::{Interner, SourceUri},
-        module::{AdaptivePolicy, GlyphStyle, IconName, PopoverAlign, PopoverAt, TextAlign},
+        module::{
+            AdaptivePolicy, GlyphStyle, IconName, PopoverAlign, PopoverAt, TextAlign, TextStyle,
+        },
     };
 
     fn control(interner: &mut Interner, id: &str, size: SizeSpec) -> ExpandedNode {

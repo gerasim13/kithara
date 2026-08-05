@@ -16,6 +16,7 @@ pub mod expand;
 pub mod ids;
 #[cfg(feature = "render")]
 pub mod interact;
+pub(crate) mod mount;
 pub mod registry;
 #[cfg(feature = "render")]
 pub mod render;
