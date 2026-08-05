@@ -57,7 +57,23 @@ pub(super) fn install(
         .windows
         .as_ref()
         .context("this machine's profile defines no Windows guest")?;
-    process.require_tools(&["virt-install", "xorriso"])?;
+    process.require_tools(&["virsh", "virt-install", "xorriso"])?;
+
+    // libvirt ships its network defined but not started, and a guest attached
+    // to a network that is down installs with no way to reach anything.
+    process
+        .run(
+            "virsh",
+            &["net-start", &guest.network],
+            "start the guest network",
+        )
+        .or_else(|_| {
+            process.run(
+                "virsh",
+                &["net-info", &guest.network],
+                "confirm the guest network exists",
+            )
+        })?;
 
     let media = host.cache_root.join("iso/windows-eval.iso");
     verify_media(
@@ -89,7 +105,7 @@ pub(super) fn install(
         "--disk",
         &format!("{},device=cdrom", path_text(&answers)?),
         "--network",
-        &format!("network={}", host.network),
+        &format!("network={}", guest.network),
         "--graphics",
         "none",
         "--noautoconsole",

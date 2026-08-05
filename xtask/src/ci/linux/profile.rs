@@ -47,6 +47,15 @@ pub(crate) struct WindowsGuest {
     pub(crate) vcpus: u32,
     pub(crate) memory_mib: u32,
     pub(crate) disk_gib: u32,
+    /// libvirt network the guest is attached to. This is not the Docker
+    /// network the containers use: the two live in different worlds and a
+    /// name that exists in one means nothing in the other.
+    #[serde(default = "default_libvirt_network")]
+    pub(crate) network: String,
+}
+
+fn default_libvirt_network() -> String {
+    "default".to_owned()
 }
 
 /// One runner served by this machine.
@@ -135,6 +144,9 @@ impl WindowsGuest {
         // but cannot compile is worse than one that never started.
         if self.vcpus < 2 || self.memory_mib < 4096 || self.disk_gib < 64 {
             bail!("the Windows guest needs at least 2 vCPUs, 4 GiB, and 64 GiB");
+        }
+        if !safe_name(&self.network) {
+            bail!("the Windows guest's network name is unusable");
         }
         Ok(())
     }
