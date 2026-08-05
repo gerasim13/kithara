@@ -10,7 +10,7 @@ keywords = ["ui", "layout", "modular", "serde", "ron"]
 categories = ["gui", "config"]
 
 [features]
-default = []
+default = ["render"]
 masonry-host = ["dep:futures-lite", "dep:masonry", "dep:winit", "render", "vello-backend"]
 render = [
     "dep:iced",
