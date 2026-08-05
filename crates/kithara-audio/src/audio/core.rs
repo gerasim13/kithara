@@ -1,5 +1,4 @@
 use std::{
-    io::Error as IoError,
     marker::PhantomData,
     num::NonZeroU32,
     sync::atomic::{AtomicU32, Ordering},
@@ -378,9 +377,9 @@ fn chunk_outcome(
 ) -> Result<ChunkOutcome, DecodeError> {
     match phase {
         super::ConsumerPhase::AtEof => Ok(ChunkOutcome::Eof { position }),
-        super::ConsumerPhase::Failed { source: failure } => Err(DecodeError::Io {
-            source: IoError::other(failure.label()),
-        }),
+        super::ConsumerPhase::Failed { source: failure } => {
+            Err(DecodeError::pcm_stream("chunk read", failure))
+        }
         super::ConsumerPhase::SeekPending { .. } => Ok(ChunkOutcome::Pending {
             position,
             reason: PendingReason::SeekInProgress,
@@ -393,9 +392,7 @@ fn chunk_outcome(
 }
 
 fn channel_closed_during_preload(failure: super::FailureSource) -> DecodeError {
-    DecodeError::Io {
-        source: IoError::other(format!("{} during preload", failure.label())),
-    }
+    DecodeError::pcm_stream("preload", failure)
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-use std::{io::Error as IoError, num::NonZeroUsize};
+use std::num::NonZeroUsize;
 
 use fast_interleave::deinterleave_variable;
 use kithara_bufpool::{PcmBuf, PcmPool};
@@ -189,9 +189,7 @@ impl ChunkCursor {
         let frames = output[0].len();
         let total_samples = frames * channels;
         let Some(mut interleaved) = self.interleaved.take() else {
-            return Err(DecodeError::Io {
-                source: IoError::other("interleaved scratch detached during planar read"),
-            });
+            return Err(DecodeError::ScratchDetached);
         };
         interleaved.clear();
         interleaved.ensure_len(total_samples)?;
@@ -226,12 +224,8 @@ struct CopyOutcome {
 }
 
 fn frames_to_samples(frames: u64, channels: u64) -> Result<usize, DecodeError> {
-    let samples = frames.saturating_mul(channels);
-    usize::try_from(samples).map_err(|error| DecodeError::Io {
-        source: IoError::other(format!(
-            "frames*channels overflow: {samples} does not fit usize: {error}"
-        )),
-    })
+    usize::try_from(frames.saturating_mul(channels))
+        .map_err(|_| DecodeError::SampleCountOverflow { frames, channels })
 }
 
 fn interpolated_position(meta: PcmMeta, consumed_frames: u64) -> kithara_platform::time::Duration {
@@ -246,9 +240,7 @@ fn interpolated_position(meta: PcmMeta, consumed_frames: u64) -> kithara_platfor
 }
 
 fn channel_failed(failure: FailureSource) -> DecodeError {
-    DecodeError::Io {
-        source: IoError::other(failure.label()),
-    }
+    DecodeError::pcm_stream("cursor read", failure)
 }
 
 fn pending(playhead: &dyn PlayheadWrite, reason: PendingReason) -> CursorRead {
