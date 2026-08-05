@@ -6,7 +6,20 @@ use tracing::info;
 use super::profile::{LINUX_CONFIG_PATH, LinuxHost, LinuxRunner, RunnerFlavor};
 use crate::ci::{config::CiPins, process::Process};
 
-const SYSTEMD_ROOT: &str = "/etc/systemd/system";
+/// Where the services live and what they call.
+///
+/// The executable is copied out of the build tree: run from there it expects
+/// to find the repository around it, and a service starting from no particular
+/// directory would not.
+struct Layout {
+    systemd_root: &'static str,
+    executable: &'static str,
+}
+
+const LAYOUT: Layout = Layout {
+    systemd_root: "/etc/systemd/system",
+    executable: "/usr/local/bin/kithara-ci",
+};
 
 /// Write one service per runner and hand them to systemd.
 ///
@@ -19,9 +32,17 @@ pub(super) fn install(
     pins: &CiPins,
     executable: &str,
 ) -> Result<()> {
+    std::fs::copy(executable, LAYOUT.executable)
+        .with_context(|| format!("installing {}", LAYOUT.executable))?;
+    std::fs::set_permissions(
+        LAYOUT.executable,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .with_context(|| format!("making {} executable", LAYOUT.executable))?;
+
     for runner in &host.runners {
-        let path = PathBuf::from(SYSTEMD_ROOT).join(runner.service());
-        std::fs::write(&path, unit(host, runner, pins, executable)?)
+        let path = PathBuf::from(LAYOUT.systemd_root).join(runner.service());
+        std::fs::write(&path, unit(host, runner, pins, LAYOUT.executable)?)
             .with_context(|| format!("writing {}", path.display()))?;
         info!(service = runner.service(), "runner service installed");
     }
