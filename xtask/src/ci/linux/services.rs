@@ -73,8 +73,8 @@ fn unit(host: &LinuxHost, runner: &LinuxRunner, pins: &CiPins, executable: &str)
          RestartSec=10\n\
          RuntimeDirectory=kithara-ci\n\
          RuntimeDirectoryMode=0700\n\n\
-         ExecStartPre={executable} ci linux firewall --config {config}\n\
-         ExecStartPre={executable} ci linux configure --config {config} --runner {name} \
+         ExecStartPre={executable} ci linux --config {config} firewall\n\
+         ExecStartPre={executable} ci linux --config {config} configure --runner {name} \
          --env-file {env_file}\n",
         name = runner.name,
         config = LINUX_CONFIG_PATH,
@@ -154,8 +154,39 @@ pub(super) fn health(process: &Process, host: &LinuxHost) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
+
     use super::*;
-    use crate::ci::{config::fixture, linux::profile::tests::host_fixture};
+    use crate::{
+        Cli,
+        ci::{config::fixture, linux::profile::tests::host_fixture},
+    };
+
+    /// A unit is a command line, and one this crate cannot parse fails only
+    /// once systemd has already started the service it belongs to.
+    #[test]
+    fn the_generated_commands_are_ones_this_executable_accepts() {
+        let host = host_fixture();
+        let pins = &fixture().pins;
+        let unit = unit(
+            &host,
+            host.runner("kithara-ci").unwrap(),
+            pins,
+            "/usr/local/bin/kithara-ci",
+        )
+        .unwrap();
+
+        let commands = unit
+            .lines()
+            .filter_map(|line| line.strip_prefix("ExecStartPre="))
+            .map(|line| line.split_whitespace().skip(1).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        assert_eq!(commands.len(), 2, "{unit}");
+        for command in commands {
+            let argv = std::iter::once("xtask").chain(command.iter().copied());
+            assert!(Cli::try_parse_from(argv).is_ok(), "{command:?}");
+        }
+    }
 
     #[test]
     fn a_gpu_runner_reaches_the_devices_a_plain_one_does_not() {
