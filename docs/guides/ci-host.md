@@ -162,6 +162,23 @@ whole inactive cache namespaces are pruned; individual Cargo, Gradle, and
 sccache files are never deleted in place. Active jobs hold a 12-hour cache
 lease, while sccache enforces its own 50 GB LRU limit.
 
+The quota cannot be raised in place: this macOS has no `diskutil apfs` verb for
+it, and `-quota` is only accepted when a volume is created. Cleanup is
+therefore the whole answer, and it is written against where the space goes
+rather than against a list of names:
+
+- A cache namespace nothing writes to any more is pruned once it has been
+  quiet for a week, and immediately when jobs are already being refused. The
+  named steps alone left six gigabytes of `cargo-reapi` stores behind after
+  that tool came off the CI path: a namespace that stops being written to goes
+  invisible rather than stale.
+- The macOS guest grows on this volume for as long as it lives and returns the
+  space only when it is thrown away — one recycle gave back 38 GiB, against
+  three and a half for every other step together. A guest serves six jobs
+  (`JobVm::MAX_BUILDS`) before it is replaced, and cleanup restarts the agent
+  outright once the volume is above the refusal threshold. That costs the job
+  in flight, which is why nothing below that threshold does it.
+
 Health and cleanup run through launchd. They can also be checked directly:
 
 ```text

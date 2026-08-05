@@ -39,6 +39,19 @@ impl<'a> HostStorage<'a> {
     const DAY: Duration = Duration::from_secs(24 * 60 * 60);
     const LOG_LIMIT_BYTES: u64 = 20_000_000;
     const REMOVABLE_ROOTS: &'static [&'static str] = &["cache", "logs", "vm", "workspaces"];
+    /// The cache namespaces this repository still writes to.
+    ///
+    /// The steps below prune by name, so a namespace that stops being written
+    /// to becomes invisible rather than stale, and nothing ever comes back for
+    /// it. Six gigabytes of `cargo-reapi` stores sat here after that tool came
+    /// off the CI path. Anything not named here is pruned on its own age.
+    const CACHE_NAMESPACES: &'static [&'static str] = &[
+        "bootstrap",
+        "gitlab-runner",
+        "quarantine",
+        "review",
+        "trusted",
+    ];
 
     pub(super) fn new(config: &'a CiConfig, process: &'a Process) -> Result<Self> {
         let root = config.host.host_root.clone();
@@ -98,6 +111,7 @@ impl<'a> HostStorage<'a> {
         self.prune_old_trees("vm/android/avd", Self::DAY)?;
         self.prune_old_files("logs", 14 * Self::DAY)?;
         self.rotate_logs()?;
+        self.prune_retired_caches(7 * Self::DAY)?;
 
         match pressure {
             Pressure::Soft => {
@@ -124,6 +138,19 @@ impl<'a> HostStorage<'a> {
         if final_used >= self.config.host.reject_bytes {
             self.prune_old_trees("cache/trusted", Duration::ZERO)?;
             self.prune_old_trees("cache/bootstrap/trusted", Duration::ZERO)?;
+            self.prune_retired_caches(Duration::ZERO)?;
+            final_used = self.used_bytes()?;
+        }
+        if final_used >= self.config.host.reject_bytes {
+            // Every step above works on what jobs leave behind, and none of it
+            // is where the space went: the macOS guest grows on this volume for
+            // as long as it lives and only gives the space back when it is
+            // thrown away — measured at 38 gibibytes in one recycle, against
+            // three and a half for everything else together. Restarting the
+            // agent is what an operator does by hand here, and it costs the
+            // job now in flight. That trade only makes sense once jobs are
+            // being refused anyway, which is exactly this branch.
+            self.recycle_macos_guest();
             final_used = self.used_bytes()?;
         }
         let final_pressure = self.pressure(final_used);
@@ -179,6 +206,37 @@ impl<'a> HostStorage<'a> {
             self.config.host.aggressive_cleanup_bytes,
             self.config.host.reject_bytes,
         )
+    }
+
+    /// Cache namespaces nothing writes to any more, once they have gone quiet
+    /// for a week.
+    fn prune_retired_caches(&self, age: Duration) -> Result<()> {
+        let directory = self.root.join("cache");
+        if !directory.is_dir() {
+            return Ok(());
+        }
+        for entry in fs::read_dir(&directory)
+            .with_context(|| format!("reading cache directory {}", directory.display()))?
+        {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if Self::CACHE_NAMESPACES.contains(&name.as_ref()) {
+                continue;
+            }
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)?;
+            if !metadata.file_type().is_dir() || !older_than(&metadata, age)? {
+                continue;
+            }
+            if self.active(&path) {
+                info!(path = %path.display(), "keeping active CI path");
+                continue;
+            }
+            info!(path = %path.display(), "removing retired cache namespace");
+            self.remove_path(&path)?;
+        }
+        Ok(())
     }
 
     fn prune_old_trees(&self, relative: &str, age: Duration) -> Result<()> {
@@ -328,6 +386,24 @@ impl<'a> HostStorage<'a> {
         }
     }
 
+    /// Restart the macOS runner agent, which throws its guest away and clones
+    /// a fresh one from the base image.
+    fn recycle_macos_guest(&self) {
+        let uid = self
+            .process
+            .capture("id", &["-u"], "current user id")
+            .unwrap_or_default();
+        let label = format!("gui/{uid}/com.zvuk.kithara-ci.macos-runner");
+        info!(label, "recycling the macOS guest to reclaim volume space");
+        if let Err(error) = self.process.run(
+            "/bin/launchctl",
+            &["kickstart", "-k", &label],
+            "recycle the macOS guest",
+        ) {
+            warn!(%error, "could not recycle the macOS guest");
+        }
+    }
+
     fn runner_state(&self) -> &'static str {
         if !self.config.host.brew_tool("gitlab-runner").is_file() {
             return "not-installed";
@@ -443,6 +519,49 @@ mod tests {
         assert_eq!(pressure_for(240, 240, 270, 285), Pressure::Soft);
         assert_eq!(pressure_for(270, 240, 270, 285), Pressure::Aggressive);
         assert_eq!(pressure_for(285, 240, 270, 285), Pressure::Reject);
+    }
+
+    #[test]
+    fn a_namespace_nothing_writes_to_is_pruned_and_the_live_ones_are_not() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = directory.path().join("cache");
+        for name in [
+            "trusted",
+            "review",
+            "gitlab-runner",
+            "reapi",
+            "reapi-sccache",
+        ] {
+            fs::create_dir_all(cache.join(name)).unwrap();
+        }
+        let cfg = config(directory.path());
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage =
+            HostStorage::for_test(directory.path().to_path_buf(), &cfg, &process).unwrap();
+
+        storage.prune_retired_caches(Duration::ZERO).unwrap();
+
+        for name in ["trusted", "review", "gitlab-runner"] {
+            assert!(cache.join(name).is_dir(), "{name} is still written to");
+        }
+        for name in ["reapi", "reapi-sccache"] {
+            assert!(!cache.join(name).exists(), "{name} is retired");
+        }
+    }
+
+    #[test]
+    fn a_retired_namespace_survives_until_it_has_gone_quiet() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = directory.path().join("cache");
+        fs::create_dir_all(cache.join("reapi")).unwrap();
+        let cfg = config(directory.path());
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage =
+            HostStorage::for_test(directory.path().to_path_buf(), &cfg, &process).unwrap();
+
+        storage.prune_retired_caches(HostStorage::DAY).unwrap();
+
+        assert!(cache.join("reapi").is_dir());
     }
 
     #[test]
