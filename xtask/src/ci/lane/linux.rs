@@ -46,7 +46,17 @@ pub(crate) fn wasm(process: &Process) -> Result<()> {
 
 pub(crate) fn test(process: &Process) -> Result<()> {
     preflight(process)?;
-    process.run("just", &["test", "run", "--profile", "ci"], "Linux tests")
+    let mut command = process.command("just");
+    command
+        // The container has five CPUs and under eight gigabytes, so Cargo runs
+        // five compilations at once and the peak lands past the cgroup limit.
+        // The kernel logged `Killed process (rustc) anon-rss:1727320kB` twice
+        // in one second, and Cargo reported only "could not compile" with no
+        // diagnostic, because the compiler never reached one. The coverage
+        // lane keeps to two for the same reason.
+        .env("CARGO_BUILD_JOBS", "2")
+        .args(["test", "run", "--profile", "ci"]);
+    process.run_command(&mut command, "Linux tests")
 }
 
 pub(crate) fn coverage(process: &Process) -> Result<()> {
