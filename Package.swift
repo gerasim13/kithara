@@ -89,6 +89,14 @@ let package = Package(
                 .target(name: "KitharaFFIInternal"),
             ],
             path: "apple/Sources/KitharaFFI",
+            // The generator emits `static let vtablePtr: UnsafePointer<…>` for
+            // every callback interface, and Swift 6 rejects each one: the
+            // pointer is not `Sendable`, and it is deliberately a process-
+            // lifetime global because Rust keeps it. The file is rewritten by
+            // `cargo swift package` on every build, so it cannot be annotated
+            // here; the generated target keeps the older language mode while
+            // everything written by hand stays on Swift 6.
+            swiftSettings: [.swiftLanguageMode(.v5)],
             linkerSettings: [
                 .linkedFramework("Accelerate"),
                 .linkedFramework("AudioToolbox"),

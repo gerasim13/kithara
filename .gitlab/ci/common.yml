@@ -33,7 +33,8 @@
 
 .windows-job:
   variables:
-    KITHARA_CI_HOST_CONFIG: C:/KitharaCI/host.toml
+    # Beside the pins and the runner token, the way the macOS host keeps them.
+    KITHARA_CI_HOST_CONFIG: C:/KitharaCI/services/host.toml
   tags:
     - kithara-windows
 
