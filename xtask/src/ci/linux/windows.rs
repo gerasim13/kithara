@@ -130,6 +130,18 @@ pub(super) fn install(
     process.run_command(&mut command, "create the Windows guest")?;
 
     press_a_key(process, &guest.name)?;
+
+    // Windows installs in phases with a power cycle between them, and
+    // virt-install leaves the guest set to stay down after the first one so a
+    // caller can inspect it. A CI machine has nobody to inspect it: the guest
+    // should come back on its own until it is a runner.
+    process.require_tools(&["virt-xml"])?;
+    process.run(
+        "virt-xml",
+        &[&guest.name, "--edit", "--events", "on_poweroff=restart"],
+        "keep the guest through its install phases",
+    )?;
+
     info!(
         guest = guest.name,
         "Windows guest created; the unattended install runs on its own from here"

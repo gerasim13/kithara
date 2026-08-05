@@ -106,6 +106,21 @@
   </settings>
 
   <settings pass="oobeSystem">
+    <!-- The locale settings in windowsPE govern Setup itself and say nothing
+         about the machine it produces, so without this the finished guest
+         stops on the first out-of-box screen and asks which country it is in.
+    -->
+    <component name="Microsoft-Windows-International-Core"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <InputLocale>en-US</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-US</UserLocale>
+    </component>
+
     <component name="Microsoft-Windows-Shell-Setup"
                processorArchitecture="amd64"
                publicKeyToken="31bf3856ad364e35"
