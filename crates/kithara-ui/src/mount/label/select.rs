@@ -1,7 +1,12 @@
-use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
+use bon::Builder;
+
+use crate::{ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// A labelled picker the document opens.
-pub(crate) struct Select;
+#[derive(Builder)]
+pub(crate) struct Select {
+    pub(crate) label: InternId,
+}
 
 impl Control for Select {
     fn size(&self, skin: &SkinDoc) -> SizeSpec {

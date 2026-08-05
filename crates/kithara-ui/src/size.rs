@@ -136,7 +136,7 @@ pub(crate) fn combine_vertical(sizes: impl IntoIterator<Item = SizeSpec>) -> Siz
 /// Returns the intrinsic size for a typed control specification.
 #[must_use]
 pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
-    mount::dispatch(spec, Intrinsic { skin })
+    mount::controls!(spec, Intrinsic { skin })
 }
 
 /// Asks whichever control the document named how big its skin makes it.
@@ -144,10 +144,8 @@ struct Intrinsic<'a> {
     skin: &'a SkinDoc,
 }
 
-impl mount::Visit for Intrinsic<'_> {
-    type Output = SizeSpec;
-
-    fn visit<C: mount::Control>(self, control: &C) -> SizeSpec {
+impl Intrinsic<'_> {
+    fn apply<C: mount::Control>(self, control: &C) -> SizeSpec {
         control.size(self.skin)
     }
 }

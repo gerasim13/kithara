@@ -7,64 +7,46 @@ use std::{
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    CustomWidget, MasonryControl, MasonryKnob, MasonryNode, Painted,
+    CustomWidget, MasonryControl, MasonryNode, Painted,
     controls::Retained,
     custom::{HostAction, MappedCustom, MountedCustom},
     flex::{ChildLayout, Flex},
-    layout::{
-        NodeLayout, activates, alignment, control_declared, declared, leaf_paints, length,
-        main_length, text_role,
+    leaf::{Leaf, WindowLeafLayer},
+    mount::{
+        Cx, NodeControl, NodeLayout, activates, alignment, control_declared, declared, leaf_paints,
+        length, main_length, text_role,
     },
-    leaf::{DragProgram, Leaf, WindowLeafLayer},
     node::LayerParts,
     popover::{PopoverLayer, PopoverState},
     root::WindowLayer,
 };
 use crate::{
-    atoms::{
-        button::{Button, ButtonConfig, ButtonLabel},
-        chip::Chip,
-        design::{
-            cell::Cell as CellFace, crossfader::Crossfader, fader::Fader, meter::Meter,
-            status_dot::StatusDot, swatch::Swatch,
-        },
-        meter::StereoMeter,
-        nav_item::NavItem,
-        painter::{ButtonData, CellData, FaderData, Labelled},
-        tab::TabLarge,
-        toggle::Binary,
-        vu::VerticalVu,
-    },
     compile::CompiledUi,
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
-    interact::recognizers::{Track, WheelStep},
     layout::Axis,
     module::{ChromeStyle, TextStyle},
+    mount,
     render::{
-        ControlAction, HostedControlPlan, InputOwner, ReadValue, Reads, Skin, StereoLevels,
-        UiEvent,
-        controls::button_glyphs,
+        ControlAction, InputOwner, ReadValue, Reads, Skin, StereoLevels, UiEvent,
         document::{Group, Host, Module, Popover, read::resolve},
         hosted_control_plan,
-        icons::document_icon,
     },
     size::SizeSpec,
     skin::ColorRole,
     solve,
     text::TextContext,
-    widgets::window::{ControlsProgram, TitleProgram},
 };
 
 /// Mounts the toolkit-neutral document fold into a retained Masonry widget tree.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, with)]
 pub struct MasonryHost<'a, Action = UiEvent> {
-    ui: &'a CompiledUi,
-    reads: &'a dyn Reads,
-    skin: &'a Skin,
+    pub(super) ui: &'a CompiledUi,
+    pub(super) reads: &'a dyn Reads,
+    pub(super) skin: &'a Skin,
     custom: BTreeMap<String, Box<dyn MountedCustom>>,
-    map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+    pub(super) map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
     #[field(with)]
     state: MasonryState,
     action: std::marker::PhantomData<fn() -> Action>,
@@ -146,7 +128,7 @@ impl<Action> MasonryHost<'_, Action>
 where
     Action: std::fmt::Debug + Send + 'static,
 {
-    fn empty(declared: solve::Size<solve::Length>) -> MasonryNode<Action> {
+    pub(super) fn empty(&self, declared: solve::Size<solve::Length>) -> MasonryNode<Action> {
         MasonryNode::document(
             NodeLayout::Leaf(Leaf::Empty),
             declared,
@@ -157,7 +139,7 @@ where
         )
     }
 
-    fn text_leaf(
+    pub(super) fn text_leaf(
         &self,
         content: String,
         style: TextStyle,
@@ -212,7 +194,8 @@ where
         )
     }
 
-    fn control_leaf(
+    pub(super) fn control_leaf(
+        &self,
         control: impl MasonryControl + 'static,
         declared: solve::Size<solve::Length>,
     ) -> MasonryNode<Action> {
@@ -227,252 +210,16 @@ where
     }
 }
 
-/// Choosing the painter for one built-in control.
+/// Mounting one built-in control, and the pieces its own file reaches for.
 ///
-/// Its own block: the match grows by an arm per control the retained host
-/// learns to draw, and it should not drag the rest of the host over the
-/// size gate with it.
+/// Its own block so the leaf helpers do not drag the rest of the host over
+/// the size gate.
 impl<Action> MasonryHost<'_, Action>
 where
     Action: std::fmt::Debug + Send + 'static,
 {
-    /// Builds the leaf that paints one built-in control, or an empty box where
-    /// this host cannot paint it yet.
-    fn painted_leaf(
-        &self,
-        spec: &ControlSpec,
-        read: Option<&Binding>,
-        owner: InputOwner,
-        path: &str,
-        declared: solve::Size<solve::Length>,
-        plan: Option<&HostedControlPlan>,
-    ) -> MasonryNode<Action> {
-        match spec {
-            ControlSpec::Text {
-                style,
-                label,
-                color,
-                active_color,
-                active,
-                ..
-            } => {
-                let content = read
-                    .and_then(|binding| resolve(self.reads, binding, self.ui))
-                    .and_then(|value| match value {
-                        ReadValue::Text(value) => Some(value.to_owned()),
-                        _ => None,
-                    })
-                    .or_else(|| label.map(|label| self.ui.resolve(label).to_owned()))
-                    .unwrap_or_default();
-                self.text_leaf(
-                    content,
-                    *style,
-                    *color,
-                    *active_color,
-                    self.reads_true(active.as_ref()),
-                    declared,
-                )
-            }
-            ControlSpec::Knob { label } => match plan {
-                Some(HostedControlPlan::Knob {
-                    current,
-                    drag_range,
-                    wheel_step,
-                    ..
-                }) => {
-                    let knob = MasonryKnob::new(
-                        label.map(|label| self.ui.resolve(label).to_owned()),
-                        *current,
-                        self.skin,
-                    );
-                    let knob = match owner {
-                        InputOwner::Leaf => knob.interactive(
-                            path.to_owned(),
-                            Track::RelativeVertical {
-                                range: *drag_range,
-                                value: *current,
-                            },
-                            WheelStep {
-                                value: *current,
-                                step: *wheel_step,
-                            },
-                            Rc::clone(&self.map_event),
-                        ),
-                        InputOwner::Engine => knob,
-                    };
-                    Self::control_leaf(knob, declared)
-                }
-                _ => Self::empty(declared),
-            },
-            ControlSpec::Chip { style, label } => {
-                let chip = Painted::new(
-                    Chip::new(*style, self.skin),
-                    Labelled {
-                        active: self.reads_true(read),
-                        label: self.ui.resolve(*label).to_owned(),
-                    },
-                    self.skin,
-                );
-                Self::control_leaf(
-                    self.owned(chip, owner, path, Painted::interactive),
-                    declared,
-                )
-            }
-            ControlSpec::TabLarge { label } => {
-                let tab = Painted::new(
-                    TabLarge::new(self.skin),
-                    Labelled {
-                        active: self.reads_true(read),
-                        label: self.ui.resolve(*label).to_owned(),
-                    },
-                    self.skin,
-                );
-                Self::control_leaf(self.owned(tab, owner, path, Painted::interactive), declared)
-            }
-            // A switch draws nothing until its endpoint says which way it is
-            // set, so an unbound one is an empty box rather than an idle switch.
-            // An unbound meter is an empty track rather than an empty box:
-            // that is what the other host has always drawn for it.
-            ControlSpec::Meter => Self::control_leaf(
-                Painted::new(
-                    Meter::new(self.skin),
-                    match read.and_then(|binding| resolve(self.reads, binding, self.ui)) {
-                        Some(ReadValue::Scalar(level)) => level.clamp(0.0, 1.0).as_(),
-                        _ => 0.0,
-                    },
-                    self.skin,
-                ),
-                declared,
-            ),
-            ControlSpec::Cell { label, highlighted } => Self::control_leaf(
-                Painted::new(
-                    CellFace::new(self.skin),
-                    CellData {
-                        highlighted: *highlighted,
-                        label: label.map(|label| self.ui.resolve(label).to_owned()),
-                    },
-                    self.skin,
-                ),
-                declared,
-            ),
-            ControlSpec::Swatch { role, label } => Self::control_leaf(
-                Painted::new(
-                    Swatch::new(*role, self.skin),
-                    self.ui.resolve(*label).to_owned(),
-                    self.skin,
-                ),
-                declared,
-            ),
-            ControlSpec::StatusDot { label, tone } => Self::control_leaf(
-                Painted::new(
-                    StatusDot::new(*tone, self.skin),
-                    self.ui.resolve(*label).to_owned(),
-                    self.skin,
-                ),
-                declared,
-            ),
-            ControlSpec::Toggle | ControlSpec::Checkbox => {
-                let painter = if matches!(spec, ControlSpec::Toggle) {
-                    Binary::toggle(self.skin)
-                } else {
-                    Binary::checkbox(self.skin)
-                };
-                match read.and_then(|binding| resolve(self.reads, binding, self.ui)) {
-                    Some(ReadValue::Bool(active)) => Self::control_leaf(
-                        self.owned(
-                            Painted::new(painter, active, self.skin),
-                            owner,
-                            path,
-                            Painted::interactive,
-                        ),
-                        declared,
-                    ),
-                    _ => Self::empty(declared),
-                }
-            }
-            ControlSpec::VuVertical { ticks } => {
-                self.meter_leaf(VerticalVu::new(*ticks, self.skin), read, declared)
-            }
-            ControlSpec::VuStereo => self.meter_leaf(StereoMeter::new(self.skin), read, declared),
-            ControlSpec::Crossfader { ticks } => {
-                self.scalar_leaf(Crossfader::new(*ticks, self.skin), read, declared)
-            }
-            ControlSpec::Fader { style, label } => {
-                match read.and_then(|binding| resolve(self.reads, binding, self.ui)) {
-                    Some(ReadValue::Scalar(value)) => Self::control_leaf(
-                        Painted::new(
-                            Fader::new(*style, self.skin),
-                            FaderData {
-                                label: label.map(|label| self.ui.resolve(label).to_owned()),
-                                value: value.clamp(0.0, 1.0).as_(),
-                            },
-                            self.skin,
-                        ),
-                        declared,
-                    ),
-                    _ => Self::empty(declared),
-                }
-            }
-            ControlSpec::NavItem { icon, label } => {
-                let value = read.and_then(|binding| resolve(self.reads, binding, self.ui));
-                match (document_icon(*icon).lucide_glyph(), value) {
-                    (Some(glyph), Some(ReadValue::Bool(active))) => {
-                        let item = Painted::new(
-                            NavItem::new(glyph, self.skin),
-                            Labelled {
-                                active,
-                                label: self.ui.resolve(*label).to_owned(),
-                            },
-                            self.skin,
-                        );
-                        Self::control_leaf(
-                            self.owned(item, owner, path, Painted::interactive),
-                            declared,
-                        )
-                    }
-                    _ => Self::empty(declared),
-                }
-            }
-            ControlSpec::Button {
-                active_label,
-                frame,
-                icon,
-                label,
-                style,
-            } => {
-                let Ok(glyphs) = button_glyphs(*style, icon.map(document_icon)) else {
-                    return Self::empty(declared);
-                };
-                let button = Painted::new(
-                    Button::new(
-                        ButtonConfig::builder()
-                            .maybe_frame(*frame)
-                            .maybe_glyph(glyphs.idle)
-                            .style(*style)
-                            .build(),
-                        glyphs.active,
-                        self.skin,
-                    ),
-                    ButtonData {
-                        active: self.reads_true(read),
-                        label: ButtonLabel {
-                            active: active_label.map(|label| self.ui.resolve(label).to_owned()),
-                            label: self.ui.resolve(*label).to_owned(),
-                        },
-                    },
-                    self.skin,
-                );
-                Self::control_leaf(
-                    self.owned(button, owner, path, Painted::interactive),
-                    declared,
-                )
-            }
-            _ => Self::empty(declared),
-        }
-    }
-
     /// Mounts a control the engine drags, painted from the scalar it reads.
-    fn scalar_leaf<Painter>(
+    pub(super) fn scalar_leaf<Painter>(
         &self,
         painter: Painter,
         read: Option<&Binding>,
@@ -482,17 +229,17 @@ where
         Painter: Retained<Data = f32> + 'static,
     {
         match read.and_then(|binding| resolve(self.reads, binding, self.ui)) {
-            Some(ReadValue::Scalar(value)) => Self::control_leaf(
+            Some(ReadValue::Scalar(value)) => self.control_leaf(
                 Painted::new(painter, value.clamp(0.0, 1.0).as_(), self.skin),
                 declared,
             ),
-            _ => Self::empty(declared),
+            _ => self.empty(declared),
         }
     }
 
     /// Mounts a meter, which paints the levels it reads and leaves its drag to
     /// the engine plan.
-    fn meter_leaf<Painter>(
+    pub(super) fn meter_leaf<Painter>(
         &self,
         painter: Painter,
         read: Option<&Binding>,
@@ -503,20 +250,20 @@ where
     {
         match read.and_then(|binding| resolve(self.reads, binding, self.ui)) {
             Some(ReadValue::Stereo(levels)) => {
-                Self::control_leaf(Painted::new(painter, levels, self.skin), declared)
+                self.control_leaf(Painted::new(painter, levels, self.skin), declared)
             }
-            _ => Self::empty(declared),
+            _ => self.empty(declared),
         }
     }
 
-    fn reads_true(&self, read: Option<&Binding>) -> bool {
+    pub(super) fn reads_true(&self, read: Option<&Binding>) -> bool {
         read.and_then(|binding| resolve(self.reads, binding, self.ui))
             .is_some_and(|value| matches!(value, ReadValue::Bool(true)))
     }
 
     /// Gives a control its own click gesture only where the document says the
     /// leaf owns input; an engine-owned control is painted and left alone.
-    fn owned<Control>(
+    pub(super) fn owned<Control>(
         &self,
         control: Control,
         owner: InputOwner,
@@ -529,7 +276,10 @@ where
         }
     }
 
-    fn event(&self, event: impl Fn() -> UiEvent + 'static) -> Box<dyn Fn() -> HostAction> {
+    pub(super) fn event(
+        &self,
+        event: impl Fn() -> UiEvent + 'static,
+    ) -> Box<dyn Fn() -> HostAction> {
         let map = Rc::clone(&self.map_event);
         Box::new(move || map(event()))
     }
@@ -547,8 +297,11 @@ where
         Rc::new(move || map(crate::render::control_event(&path, action.clone())))
     }
 
-    fn add_window_layer<Program>(&self, output: &mut MasonryNode<Action>, program: Program)
-    where
+    pub(super) fn add_window_layer<Program>(
+        &self,
+        output: &mut MasonryNode<Action>,
+        program: Program,
+    ) where
         Program: crate::render::WindowLayerProgram + 'static,
     {
         let geometry = output.track_geometry();
@@ -628,7 +381,7 @@ where
                     self.skin.chrome.inner_line_width,
                     Some(self.skin.rgba(self.skin.chrome.inner_line)),
                 );
-                let content = content.unwrap_or_else(|| Self::empty(declared(SizeSpec::FILL)));
+                let content = content.unwrap_or_else(|| self.empty(declared(SizeSpec::FILL)));
                 let second_line = furniture(
                     self.skin.chrome.inner_line_width,
                     Some(self.skin.rgba(self.skin.chrome.inner_line)),
@@ -660,7 +413,7 @@ where
                 )
             }
             ChromeStyle::Frame | ChromeStyle::Plain => {
-                let child = content.unwrap_or_else(|| Self::empty(declared(SizeSpec::FILL)));
+                let child = content.unwrap_or_else(|| self.empty(declared(SizeSpec::FILL)));
                 MasonryNode::document(
                     NodeLayout::Stack,
                     solve::Size::new(solve::Length::Fill, solve::Length::Fill),
@@ -819,8 +572,23 @@ where
         let leaf_owns_control = owner == InputOwner::Leaf && leaf_paints(spec);
         let custom = self.custom.remove(path);
         let custom_installed = custom.is_some();
+        let cx = Cx {
+            declared,
+            owner,
+            path,
+            plan: plan.as_ref(),
+            read,
+        };
         let mut output = custom.map_or_else(
-            || self.painted_leaf(spec, read, owner, path, declared, plan.as_ref()),
+            || {
+                mount::controls!(
+                    spec,
+                    Mount {
+                        cx: &cx,
+                        host: &*self
+                    }
+                )
+            },
             |widget| self.custom_leaf(widget, declared),
         );
         if custom_installed {
@@ -832,17 +600,13 @@ where
         if leaf_owns_control {
             return output;
         }
-        match spec {
-            ControlSpec::WindowDrag => self.add_window_layer(&mut output, DragProgram),
-            ControlSpec::TitleBar { label } => self.add_window_layer(
-                &mut output,
-                TitleProgram::new(self.ui.resolve(*label), self.skin),
-            ),
-            ControlSpec::WindowControls { style } => {
-                self.add_window_layer(&mut output, ControlsProgram::new(*style, self.skin));
+        mount::controls!(
+            spec,
+            Wire {
+                host: &*self,
+                output: &mut output
             }
-            _ => {}
-        }
+        );
         if let Some(plan) = plan {
             output.add_engine_control(plan);
             if owner == InputOwner::Leaf {
@@ -853,8 +617,6 @@ where
                 Some(self.control_action(path.to_owned(), ControlAction::Activate)),
                 None,
             );
-        } else if matches!(spec, ControlSpec::SettingsButton) {
-            output.set_actions(Some(self.event(|| UiEvent::OpenSettings)), None);
         }
         output
     }
@@ -896,4 +658,35 @@ fn furniture<Action>(height: f32, background: Option<crate::draw::Rgba>) -> Maso
         solve::Size::new(solve::Length::Fill, solve::Length::Fixed(height)),
         background,
     )
+}
+
+/// Asks whichever control the document named to mount itself as a leaf.
+struct Mount<'cx, 'host, 'a, Action> {
+    cx: &'cx Cx<'cx>,
+    host: &'host MasonryHost<'a, Action>,
+}
+
+impl<Action> Mount<'_, '_, '_, Action>
+where
+    Action: std::fmt::Debug + Send + 'static,
+{
+    fn apply<C: NodeControl>(self, control: &C) -> MasonryNode<Action> {
+        control.leaf(self.host, self.cx)
+    }
+}
+
+/// Asks whichever control the document named to attach whatever it still needs
+/// beyond its own leaf.
+struct Wire<'out, 'host, 'a, Action> {
+    host: &'host MasonryHost<'a, Action>,
+    output: &'out mut MasonryNode<Action>,
+}
+
+impl<Action> Wire<'_, '_, '_, Action>
+where
+    Action: std::fmt::Debug + Send + 'static,
+{
+    fn apply<C: NodeControl>(self, control: &C) {
+        control.wire(self.host, self.output);
+    }
 }

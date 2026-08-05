@@ -1,7 +1,13 @@
-use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
+use bon::Builder;
+
+use crate::{ids::InternId, module::Tone, mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// A toned dot beside a word.
-pub(crate) struct StatusDot;
+#[derive(Builder)]
+pub(crate) struct StatusDot {
+    pub(crate) label: InternId,
+    pub(crate) tone: Tone,
+}
 
 impl Control for StatusDot {
     fn size(&self, skin: &SkinDoc) -> SizeSpec {

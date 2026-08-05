@@ -1,16 +1,26 @@
+use bon::Builder;
+
 use crate::{
-    module::TextStyle,
+    expand::Binding,
+    ids::InternId,
+    module::{TextAlign, TextStyle},
     mount::Control,
     size::{Dim, SizeSpec},
-    skin::SkinDoc,
+    skin::{ColorRole, SkinDoc},
 };
 
 /// A run of text the document supplies or reads.
-pub(crate) struct Text {
+#[derive(Builder)]
+pub(crate) struct Text<'a> {
+    pub(crate) active: Option<&'a Binding>,
+    pub(crate) active_color: Option<ColorRole>,
+    pub(crate) align: TextAlign,
+    pub(crate) color: Option<ColorRole>,
+    pub(crate) label: Option<InternId>,
     pub(crate) style: TextStyle,
 }
 
-impl Control for Text {
+impl Control for Text<'_> {
     fn size(&self, skin: &SkinDoc) -> SizeSpec {
         match self.style {
             TextStyle::VisFooter => SizeSpec::new(Dim::Fill, Dim::Fixed(skin.vis.footer_height)),

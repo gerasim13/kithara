@@ -1,6 +1,6 @@
 use iced::Element;
 
-use super::read::{read_scope, resolve};
+use super::{read_scope, resolve};
 use crate::{
     compile::CompiledUi,
     expand::Binding,

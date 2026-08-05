@@ -1,12 +1,21 @@
+use bon::Builder;
+
 use crate::{
-    module::ButtonStyle,
+    ids::InternId,
+    layout::FrameSides,
+    module::{ButtonStyle, IconName},
     mount::Control,
     size::{Dim, SizeSpec},
     skin::SkinDoc,
 };
 
 /// A pressable button, worded and optionally iconed by the document.
+#[derive(Builder)]
 pub(crate) struct Button {
+    pub(crate) active_label: Option<InternId>,
+    pub(crate) frame: Option<FrameSides>,
+    pub(crate) icon: Option<IconName>,
+    pub(crate) label: InternId,
     pub(crate) style: ButtonStyle,
 }
 

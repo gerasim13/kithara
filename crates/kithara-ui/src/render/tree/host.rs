@@ -10,10 +10,7 @@ use iced::{
 };
 use kithara_platform::time::Instant;
 
-use super::{
-    geometry::effective_size,
-    read::{read_flag, read_scope, resolve},
-};
+use super::{geometry::effective_size, read_flag, read_scope, resolve};
 use crate::{
     compile::CompiledUi,
     engine::{Descriptor, Engine, PickerSnapshot, Target},

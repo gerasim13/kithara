@@ -1,9 +1,14 @@
-use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
+use bon::Builder;
+
+use crate::{ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// A row of mutually exclusive segments, one of them picked.
-pub(crate) struct Segmented;
+#[derive(Builder)]
+pub(crate) struct Segmented<'a> {
+    pub(crate) items: &'a [InternId],
+}
 
-impl Control for Segmented {
+impl Control for Segmented<'_> {
     fn size(&self, skin: &SkinDoc) -> SizeSpec {
         skin.segmented.size
     }

@@ -1,7 +1,12 @@
-use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
+use bon::Builder;
+
+use crate::{ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// The deck's tempo, editable in place.
-pub(crate) struct Bpm;
+#[derive(Builder)]
+pub(crate) struct Bpm {
+    pub(crate) placeholder: Option<InternId>,
+}
 
 impl Control for Bpm {
     fn size(&self, skin: &SkinDoc) -> SizeSpec {

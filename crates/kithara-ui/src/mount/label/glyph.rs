@@ -1,16 +1,25 @@
+use bon::Builder;
+
 use crate::{
-    module::GlyphStyle,
+    expand::Binding,
+    module::{GlyphStyle, IconName},
     mount::Control,
     size::{Dim, SizeSpec},
-    skin::SkinDoc,
+    skin::{ColorRole, SkinDoc},
 };
 
 /// A single icon, drawn as a text glyph.
-pub(crate) struct Glyph {
+#[derive(Builder)]
+pub(crate) struct Glyph<'a> {
+    pub(crate) active: Option<&'a Binding>,
+    pub(crate) active_color: Option<ColorRole>,
+    pub(crate) active_icon: Option<IconName>,
+    pub(crate) color: Option<ColorRole>,
+    pub(crate) icon: IconName,
     pub(crate) style: GlyphStyle,
 }
 
-impl Control for Glyph {
+impl Control for Glyph<'_> {
     fn size(&self, skin: &SkinDoc) -> SizeSpec {
         match self.style {
             GlyphStyle::Menu => cell(skin.menu.icon_size),
