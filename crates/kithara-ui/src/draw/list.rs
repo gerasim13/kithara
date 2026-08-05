@@ -1,4 +1,4 @@
-use super::{DrawCmd, Geom, Path, Pt, Rect, Rgba, Transform};
+use super::{DrawCmd, Geom, Paint, Path, Pt, Rect, Rgba, Transform};
 use crate::text::GlyphRun;
 
 /// An ordered retained list of drawing commands.
@@ -25,10 +25,10 @@ impl DrawListBuilder {
         self.commands.push(DrawCmd::Clip { region, list });
     }
 
-    pub fn fill_circle(&mut self, center: Pt, radius: f32, color: Rgba) {
+    pub fn fill_circle<P: Into<Paint>>(&mut self, center: Pt, radius: f32, paint: P) {
         self.commands.push(DrawCmd::Fill {
             geom: Geom::Circle { center, radius },
-            color,
+            paint: paint.into(),
         });
     }
 
@@ -70,21 +70,21 @@ impl DrawListBuilder {
         });
     }
 
-    pub fn fill_rect(&mut self, rect: Rect, color: Rgba) {
+    pub fn fill_rect<P: Into<Paint>>(&mut self, rect: Rect, paint: P) {
         self.commands.push(DrawCmd::Fill {
             geom: Geom::Rect(rect),
-            color,
+            paint: paint.into(),
         });
     }
 
-    pub fn fill_rounded_rect(&mut self, rect: Rect, radius: f32, color: Rgba) {
+    pub fn fill_rounded_rect<P: Into<Paint>>(&mut self, rect: Rect, radius: f32, paint: P) {
         self.commands.push(DrawCmd::Fill {
             geom: if radius == 0.0 {
                 Geom::Rect(rect)
             } else {
                 Geom::RoundedRect { rect, radius }
             },
-            color,
+            paint: paint.into(),
         });
     }
 
@@ -100,10 +100,10 @@ impl DrawListBuilder {
         });
     }
 
-    pub fn fill_path(&mut self, path: Path, color: Rgba) {
+    pub fn fill_path<P: Into<Paint>>(&mut self, path: Path, paint: P) {
         self.commands.push(DrawCmd::Fill {
             geom: Geom::Path(path),
-            color,
+            paint: paint.into(),
         });
     }
 

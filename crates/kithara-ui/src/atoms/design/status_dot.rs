@@ -73,7 +73,7 @@ mod tests {
     use super::{DrawListBuilder, Rect, StatusDot, TextContext, Tone};
     use crate::{
         builtin,
-        draw::{DrawCmd, Geom},
+        draw::{DrawCmd, Geom, Paint},
     };
 
     /// The tone is the whole point of the control, and the caption clears the
@@ -102,7 +102,7 @@ mod tests {
             dot,
             DrawCmd::Fill {
                 geom: Geom::Circle { center, radius },
-                color,
+                paint: Paint::Solid(color),
             } if *color == skin.palette.danger
                 && *radius == skin.status_dot.dot_size / 2.0
                 && center.x == bounds.x + *radius

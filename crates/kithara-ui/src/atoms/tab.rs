@@ -84,7 +84,7 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        draw::{DrawCmd, Geom},
+        draw::{DrawCmd, Geom, Paint},
     };
 
     #[kithara::test]
@@ -137,7 +137,7 @@ mod tests {
                     x: 17.0,
                     y: 31.0,
                 }),
-                color,
+                paint: Paint::Solid(color),
             } if *color == skin.palette.accent
         ));
         assert!(matches!(

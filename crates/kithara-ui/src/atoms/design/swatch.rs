@@ -94,7 +94,7 @@ mod tests {
     use super::{DrawListBuilder, Rect, Swatch, TextContext, hex};
     use crate::{
         builtin,
-        draw::{DrawCmd, Geom, Rgba},
+        draw::{DrawCmd, Geom, Paint, Rgba},
         skin::ColorRole,
     };
 
@@ -130,7 +130,7 @@ mod tests {
         let [
             DrawCmd::Fill {
                 geom: Geom::Rect(block),
-                color,
+                paint: Paint::Solid(color),
             },
             _,
             DrawCmd::Text {

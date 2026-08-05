@@ -124,7 +124,7 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        draw::{DrawCmd, Geom},
+        draw::{DrawCmd, Geom, Paint},
         text::{FontId, GlyphFace, GlyphSegment},
     };
 
@@ -150,7 +150,7 @@ mod tests {
             background,
             DrawCmd::Fill {
                 geom: Geom::Rect(rect),
-                color,
+                paint: Paint::Solid(color),
             } if *rect == bounds && *color == skin.palette.bg_select
         ));
         assert!(matches!(
@@ -162,7 +162,7 @@ mod tests {
                     x: 3.0,
                     y: 5.0,
                 }),
-                color,
+                paint: Paint::Solid(color),
             } if *color == skin.palette.accent
         ));
         let DrawCmd::Text {
@@ -231,9 +231,13 @@ mod tests {
         let list = builder.finish();
         let [
             DrawCmd::Fill {
-                color: background, ..
+                paint: Paint::Solid(background),
+                ..
             },
-            DrawCmd::Fill { color: marker, .. },
+            DrawCmd::Fill {
+                paint: Paint::Solid(marker),
+                ..
+            },
             DrawCmd::Text {
                 color: icon_color, ..
             },

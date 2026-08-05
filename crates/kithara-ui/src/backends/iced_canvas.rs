@@ -1,5 +1,6 @@
 use iced::{
     Color, Font, Point, Radians, Rectangle, Size,
+    advanced::graphics::{Gradient, gradient},
     font::{Family, Stretch, Style, Weight},
     widget::canvas::{
         Fill, Frame, Path, Stroke, fill,
@@ -13,7 +14,7 @@ use skrifa::{
 };
 
 use crate::{
-    draw::{Backend, DrawCmd, DrawList, FillRule, Geom, Pt, Rect, Rgba, Transform, Verb},
+    draw::{Backend, DrawCmd, DrawList, FillRule, Geom, Paint, Pt, Rect, Rgba, Transform, Verb},
     skin::{FontFamily, FontWeight},
     text::{GlyphFace, GlyphRun, GlyphSegment, TextResources, select},
 };
@@ -71,7 +72,7 @@ fn flush(run: &mut Vec<&DrawCmd>, frame: &mut Frame, resources: &TextResources, 
         for command in commands {
             match command {
                 DrawCmd::Clip { region, list } => backend.clip(*region, list),
-                DrawCmd::Fill { geom, color } => backend.fill(geom, *color),
+                DrawCmd::Fill { geom, paint } => backend.fill(geom, *paint),
                 DrawCmd::Stroke { geom, color, width } => backend.stroke(geom, *color, *width),
                 DrawCmd::Text {
                     run,
@@ -98,8 +99,8 @@ impl Backend for IcedBackend<'_> {
         ordered(list, self.frame, self.resources, region);
     }
 
-    fn fill(&mut self, geom: &Geom, color: Rgba) {
-        if let Geom::Rect(rect) = geom {
+    fn fill(&mut self, geom: &Geom, paint: Paint) {
+        if let (Geom::Rect(rect), Paint::Solid(color)) = (geom, paint) {
             self.frame.fill_rectangle(
                 Point::new(rect.x, rect.y),
                 Size::new(rect.w, rect.h),
@@ -110,7 +111,7 @@ impl Backend for IcedBackend<'_> {
                 &path(geom),
                 Fill {
                     rule: rule(geom),
-                    style: fill::Style::Solid(Color::from(color)),
+                    style: style(paint),
                 },
             );
         }
@@ -205,6 +206,21 @@ pub(crate) const fn font(family: FontFamily, weight: FontWeight) -> Font {
         weight,
         stretch: Stretch::Normal,
         style: Style::Normal,
+    }
+}
+
+/// One paint as iced spells it. A ramp's ends are already in the same pixels as
+/// the shape, which is the space an iced linear gradient reads them in.
+fn style(paint: Paint) -> fill::Style {
+    match paint {
+        Paint::Linear { from, stops, to } => {
+            let mut gradient = gradient::Linear::new(from.into(), to.into());
+            for stop in stops.as_slice() {
+                gradient = gradient.add_stop(stop.offset, Color::from(stop.color));
+            }
+            fill::Style::Gradient(Gradient::Linear(gradient))
+        }
+        Paint::Solid(color) => fill::Style::Solid(Color::from(color)),
     }
 }
 

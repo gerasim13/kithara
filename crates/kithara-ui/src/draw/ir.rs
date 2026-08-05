@@ -1,7 +1,7 @@
 #[cfg(feature = "render")]
 use num_traits::ToPrimitive;
 
-use super::{list::DrawList, path::Path};
+use super::{list::DrawList, paint::Paint, path::Path};
 use crate::text::GlyphRun;
 
 /// A toolkit-neutral RGBA colour.
@@ -137,7 +137,7 @@ pub enum DrawCmd {
     },
     Fill {
         geom: Geom,
-        color: Rgba,
+        paint: Paint,
     },
     Stroke {
         geom: Geom,

@@ -108,7 +108,7 @@ mod tests {
     use super::{Binary, DrawListBuilder, Rect};
     use crate::{
         builtin,
-        draw::{DrawCmd, Geom},
+        draw::{DrawCmd, Geom, Paint},
     };
 
     const TOGGLE: Rect = Rect {
@@ -138,7 +138,7 @@ mod tests {
             body,
             DrawCmd::Fill {
                 geom: Geom::Rect(rect),
-                color,
+                paint: Paint::Solid(color),
             } if *rect == TOGGLE && *color == skin.palette.accent
         ));
         assert!(matches!(
@@ -150,7 +150,7 @@ mod tests {
                     x: 15.0,
                     y: 2.5,
                 }),
-                color,
+                paint: Paint::Solid(color),
             } if *color == skin.palette.bg_deep
         ));
 
@@ -175,7 +175,7 @@ mod tests {
             thumb,
             DrawCmd::Fill {
                 geom: Geom::Rect(Rect { x: 2.0, .. }),
-                color,
+                paint: Paint::Solid(color),
             } if *color == skin.palette.muted
         ));
     }

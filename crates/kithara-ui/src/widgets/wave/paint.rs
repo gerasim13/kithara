@@ -205,7 +205,7 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        draw::{DrawCmd, Geom, Transform},
+        draw::{DrawCmd, Geom, Paint, Transform},
         widgets::wave::overlay::OverlayPalette,
     };
 
@@ -422,7 +422,7 @@ mod tests {
     fn has_fill(commands: &[DrawCmd], color: Rgba) -> bool {
         commands
             .iter()
-            .any(|command| matches!(command, DrawCmd::Fill { color: found, .. } if *found == color))
+            .any(|command| matches!(command, DrawCmd::Fill { paint: Paint::Solid(found), .. } if *found == color))
     }
 
     fn has_line(commands: &[DrawCmd], color: Rgba) -> bool {
@@ -448,7 +448,7 @@ mod tests {
         commands.iter().find_map(|command| match command {
             DrawCmd::Fill {
                 geom: Geom::Rect(rect),
-                color: found,
+                paint: Paint::Solid(found),
             } if *found == color => Some(*rect),
             _ => None,
         })

@@ -6,12 +6,13 @@ use vello::{
         Affine, Arc, BezPath, Cap, Circle, Join, Line, Point, Rect as KurboRect, RoundedRect,
         Shape, Stroke, Vec2,
     },
-    peniko::{Color, Fill, FontData},
+    peniko::{Brush, Color, ColorStop, Fill, FontData, Gradient},
 };
 
 use crate::{
     draw::{
-        Backend, DrawCmd, DrawList, FillRule, Geom, Path, Pt, Rect, Rgba, Transform, Verb, replay,
+        Backend, DrawCmd, DrawList, FillRule, Geom, Paint, Path, Pt, Rect, Rgba, Transform, Verb,
+        replay,
     },
     text::{GlyphFace, GlyphRun},
 };
@@ -27,13 +28,13 @@ impl<'scene> VelloBackend<'scene> {
         Self { scene }
     }
 
-    fn fill_shape(&mut self, shape: &impl Shape, color: Rgba) {
-        self.fill_with(Fill::NonZero, shape, color);
+    fn fill_shape(&mut self, shape: &impl Shape, paint: Paint) {
+        self.fill_with(Fill::NonZero, shape, paint);
     }
 
-    fn fill_with(&mut self, rule: Fill, shape: &impl Shape, color: Rgba) {
+    fn fill_with(&mut self, rule: Fill, shape: &impl Shape, paint: Paint) {
         self.scene
-            .fill(rule, Affine::IDENTITY, Color::from(color), None, shape);
+            .fill(rule, Affine::IDENTITY, &brush(paint), None, shape);
     }
 
     fn stroke_shape(&mut self, shape: &impl Shape, color: Rgba, width: f32) {
@@ -80,7 +81,7 @@ impl Backend for VelloBackend<'_> {
         self.scene.pop_layer();
     }
 
-    fn fill(&mut self, geom: &Geom, color: Rgba) {
+    fn fill(&mut self, geom: &Geom, paint: Paint) {
         match geom {
             Geom::Arc {
                 center,
@@ -95,18 +96,18 @@ impl Backend for VelloBackend<'_> {
                     f64::from(*end - *start),
                     0.0,
                 ),
-                color,
+                paint,
             ),
             Geom::Circle { center, radius } => {
-                self.fill_shape(&Circle::new(*center, f64::from(*radius)), color);
+                self.fill_shape(&Circle::new(*center, f64::from(*radius)), paint);
             }
-            Geom::Line { from, to } => self.fill_shape(&Line::new(*from, *to), color),
+            Geom::Line { from, to } => self.fill_shape(&Line::new(*from, *to), paint),
             Geom::Path(outline) => {
                 let rule = match outline.rule() {
                     FillRule::EvenOdd => Fill::EvenOdd,
                     FillRule::NonZero => Fill::NonZero,
                 };
-                self.fill_with(rule, &bez(outline), color);
+                self.fill_with(rule, &bez(outline), paint);
             }
             Geom::Rect(rect) => self.fill_shape(
                 &KurboRect::new(
@@ -115,7 +116,7 @@ impl Backend for VelloBackend<'_> {
                     f64::from(rect.x + rect.w),
                     f64::from(rect.y + rect.h),
                 ),
-                color,
+                paint,
             ),
             Geom::RoundedRect { rect, radius } => self.fill_shape(
                 &RoundedRect::new(
@@ -125,7 +126,7 @@ impl Backend for VelloBackend<'_> {
                     f64::from(rect.y + rect.h),
                     f64::from(*radius),
                 ),
-                color,
+                paint,
             ),
         }
     }
@@ -204,6 +205,24 @@ impl Backend for VelloBackend<'_> {
 }
 
 /// Rebuilds one of our outlines as the curve type Vello draws.
+/// One paint as Vello spells it. A ramp's ends are already in the same pixels as
+/// the shape, so the brush needs no transform of its own.
+fn brush(paint: Paint) -> Brush {
+    match paint {
+        Paint::Linear { from, stops, to } => Brush::Gradient(
+            Gradient::new_linear((from.x, from.y), (to.x, to.y)).with_stops(
+                stops
+                    .as_slice()
+                    .iter()
+                    .map(|stop| ColorStop::from((stop.offset, Color::from(stop.color))))
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+            ),
+        ),
+        Paint::Solid(color) => Brush::Solid(Color::from(color)),
+    }
+}
+
 fn bez(outline: &Path) -> BezPath {
     let mut path = BezPath::new();
     for verb in outline.verbs() {

@@ -418,7 +418,7 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        draw::{DrawCmd, Geom},
+        draw::{DrawCmd, Geom, Paint},
         interact::mouse as mouse_input,
     };
 
@@ -680,7 +680,7 @@ mod tests {
             wide_list.commands().last(),
             Some(DrawCmd::Fill {
                 geom: Geom::Rect(Rect { h: 32.0, w, x: 0.0, y: 0.0 }),
-                color,
+                paint: Paint::Solid(color),
             }) if *w == divider_width && *color == skin.rgba(divider_role)
         ));
     }

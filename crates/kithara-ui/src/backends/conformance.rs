@@ -34,7 +34,9 @@ use vello::{
 use super::{VelloBackend, replay_ordered};
 use crate::{
     builtin,
-    draw::{DrawList, DrawListBuilder, FillRule, Path, Pt, Rect, Rgba, Verb, replay},
+    draw::{
+        DrawList, DrawListBuilder, FillRule, Paint, Path, Pt, Rect, Rgba, Stop, Stops, Verb, replay,
+    },
     render::fonts::{FONT_BYTES, SANS},
 };
 
@@ -143,6 +145,47 @@ fn ring() -> DrawList {
     list.finish()
 }
 
+/// One shape filled with a ramp that runs left to right, black to white. A
+/// backend that drops the ramp paints one flat colour, and both ends read the
+/// same.
+fn ramped() -> DrawList {
+    let stops = Stops::new(&[
+        Stop {
+            color: Fixture::UNDER,
+            offset: 0.0,
+        },
+        Stop {
+            color: Fixture::INK,
+            offset: 1.0,
+        },
+    ])
+    .unwrap_or_else(|error| panic!("a two-stop ramp is valid: {error}"));
+    let mut list = DrawListBuilder::default();
+    list.fill_rect(
+        Fixture::OUTER,
+        Paint::Linear {
+            from: Pt {
+                x: Fixture::OUTER.x,
+                y: Fixture::OUTER.y,
+            },
+            stops,
+            to: Pt {
+                x: Fixture::OUTER.x + Fixture::OUTER.w,
+                y: Fixture::OUTER.y,
+            },
+        },
+    );
+    list.finish()
+}
+
+/// Dark at the ramp's start and light at its end, in the same shape.
+fn ramp_runs_across(rgba: &[u8]) -> bool {
+    let middle = Fixture::OUTER.y + Fixture::OUTER.h / 2.0;
+    let near = sample(rgba, Fixture::OUTER.x + 2.0, middle);
+    let far = sample(rgba, Fixture::OUTER.x + Fixture::OUTER.w - 2.0, middle);
+    near < 64 && far > 192
+}
+
 /// The green channel where the surface was asked about, or zero off-surface.
 fn sample(rgba: &[u8], x: f32, y: f32) -> u8 {
     let x = (Fixture::ORIGIN.0 + x) as usize;
@@ -196,6 +239,22 @@ fn vello_leaves_the_hole_an_outline_asked_for() {
     assert!(
         ring_has_a_hole(&through_vello(&ring())),
         "the Vello backend ignored the outline's fill rule"
+    );
+}
+
+#[kithara::test]
+fn vello_runs_a_ramp_across_the_shape_it_fills() {
+    assert!(
+        ramp_runs_across(&through_vello(&ramped())),
+        "the Vello backend flattened the ramp"
+    );
+}
+
+#[kithara::test]
+fn iced_runs_a_ramp_across_the_shape_it_fills() {
+    assert!(
+        ramp_runs_across(&through_iced(&ramped())),
+        "the iced backend flattened the ramp"
     );
 }
 

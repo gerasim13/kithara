@@ -511,7 +511,7 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        draw::{DrawCmd, DrawListBuilder, Geom, Rect},
+        draw::{DrawCmd, DrawListBuilder, Geom, Paint, Rect},
         module::ButtonStyle,
         text::{FontId, GlyphFace, GlyphSegment, TextContext},
     };
@@ -554,7 +554,7 @@ mod tests {
             list.commands()[0],
             DrawCmd::Fill {
                 geom: Geom::Rect(rect),
-                color,
+                paint: Paint::Solid(color),
             } if rect == bounds && color == skin.palette.bg_panel
         ));
         assert!(matches!(
@@ -650,7 +650,7 @@ mod tests {
             list.commands()[0],
             DrawCmd::Fill {
                 geom: Geom::Rect(rect),
-                color,
+                paint: Paint::Solid(color),
             } if rect == bounds && color.a == 0.0
         ));
         assert!(matches!(
@@ -712,7 +712,7 @@ mod tests {
 
         assert!(matches!(
             list.commands()[0],
-            DrawCmd::Fill { color, .. } if color == skin.palette.accent
+            DrawCmd::Fill { paint: Paint::Solid(color), .. } if color == skin.palette.accent
         ));
         assert!(matches!(
             list.commands().last(),

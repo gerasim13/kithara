@@ -93,7 +93,7 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        draw::{DrawCmd, DrawListBuilder, Geom, Rect},
+        draw::{DrawCmd, DrawListBuilder, Geom, Paint, Rect},
         text::TextContext,
     };
 
@@ -121,7 +121,7 @@ mod tests {
             fill,
             DrawCmd::Fill {
                 geom: Geom::Rect(rect),
-                color,
+                paint: Paint::Solid(color),
             } if *rect == bounds && *color == skin.palette.accent
         ));
         assert!(matches!(
@@ -147,7 +147,7 @@ mod tests {
             fill,
             DrawCmd::Fill {
                 geom: Geom::Rect(rect),
-                color,
+                paint: Paint::Solid(color),
             } if *rect == bounds && color.a == 0.0
         ));
         assert!(matches!(

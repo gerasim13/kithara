@@ -254,7 +254,7 @@ mod tests {
     use super::{Fader, FaderStyle, Rect, rail_bounds};
     use crate::{
         builtin,
-        draw::{DrawCmd, DrawList, DrawListBuilder, Geom},
+        draw::{DrawCmd, DrawList, DrawListBuilder, Geom, Paint},
         text::TextContext,
     };
 
@@ -404,7 +404,7 @@ mod tests {
             list.commands()
                 .iter()
                 .filter(
-                    |command| matches!(command, DrawCmd::Fill { color, .. } if *color == colour),
+                    |command| matches!(command, DrawCmd::Fill { paint: Paint::Solid(color), .. } if *color == colour),
                 )
                 .count()
         };
