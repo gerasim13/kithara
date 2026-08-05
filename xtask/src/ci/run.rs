@@ -36,6 +36,7 @@ pub(crate) enum Lane {
     WebSize,
     WindowsArm64,
     WindowsX64,
+    WindowsX64Build,
     DeepRtsan,
     DeepPerf,
     DeepBench,
@@ -93,7 +94,7 @@ impl Lane {
             | Self::DepsFeatures
             | Self::DepsSemver
             | Self::Mutants => CacheGroup::Linux,
-            Self::WindowsArm64 | Self::WindowsX64 => CacheGroup::Windows,
+            Self::WindowsArm64 | Self::WindowsX64 | Self::WindowsX64Build => CacheGroup::Windows,
             Self::AndroidBuild
             | Self::AndroidTest
             | Self::ReleaseAndroid
@@ -176,6 +177,7 @@ pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         Lane::WebSize => lane::web::size(&process),
         Lane::WindowsArm64 => lane::windows::tests(&process, "aarch64-pc-windows-msvc"),
         Lane::WindowsX64 => lane::windows::tests(&process, "x86_64-pc-windows-msvc"),
+        Lane::WindowsX64Build => lane::windows::build(&process, "x86_64-pc-windows-msvc"),
         Lane::DeepRtsan => lane::deep::rtsan(&process),
         Lane::DeepPerf => lane::deep::perf(&process),
         Lane::DeepBench => lane::deep::bench(&process),
@@ -243,7 +245,7 @@ mod tests {
         assert_eq!(Lane::ReleaseXcframework.cache_group(), CacheGroup::Macos);
         assert_eq!(Lane::WebFirefox.cache_group(), CacheGroup::Linux);
         assert_eq!(Lane::ReleaseAndroid.cache_group(), CacheGroup::Host);
-        assert_eq!(Lane::WindowsX64.cache_group(), CacheGroup::Windows);
+        assert_eq!(Lane::WindowsX64Build.cache_group(), CacheGroup::Windows);
     }
 
     #[test]

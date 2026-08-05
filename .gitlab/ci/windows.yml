@@ -5,6 +5,9 @@
   stage: windows
   timeout: 120 minutes
   needs: []
+
+.windows-suite:
+  extends: .windows-lane
   artifacts:
     when: always
     expire_in: 30 days
@@ -14,11 +17,24 @@
       - target/nextest/ci/junit.xml
 
 windows:arm64:
-  extends: .windows-lane
+  extends: .windows-suite
   script:
     - cargo run --locked -p xtask -- ci run windows-arm64
 
+# Off on this host, not gone. The guest is ARM64, so the suite ran under
+# emulation and reported on it as much as on the commit; an x86 executor runs
+# the same lane on hardware. Set the variable to bring it back here.
 windows:x64:
-  extends: .windows-lane
+  extends: .windows-suite
+  rules:
+    - if: $KITHARA_WINDOWS_X64_SUITE == "1"
   script:
     - cargo run --locked -p xtask -- ci run windows-x64
+
+# Compiles the workspace and everything it tests with, runs none of it. Whether
+# the target still builds is a question this host answers cheaply: the native
+# dependencies break per target rather than per instruction executed.
+windows:x64-build:
+  extends: .windows-lane
+  script:
+    - cargo run --locked -p xtask -- ci run windows-x64-build
