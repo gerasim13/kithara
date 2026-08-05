@@ -37,7 +37,11 @@ ARG WASM_SLIM_VERSION
 ENV KITHARA_NIGHTLY_TOOLCHAIN=${NIGHTLY_TOOLCHAIN}
 ENV WASM_SLIM_TOOLCHAIN=${NIGHTLY_TOOLCHAIN}
 
+# Firefox alone is 76 megabytes, which does not fit the two-minute default
+# transfer timeout on a slow mirror, and a build that reaches that point has
+# already spent minutes to be told the connection failed.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    -o Acquire::Retries=5 -o Acquire::http::Timeout=600 \
     ca-certificates chromium chromium-driver curl ffmpeg firefox-esr git \
     clang libclang-dev lld pkg-config \
     libasound2-dev libdbus-1-dev libssl-dev \
