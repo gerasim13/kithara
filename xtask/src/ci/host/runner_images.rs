@@ -87,12 +87,25 @@ impl RunnerManager<'_> {
                 "NIGHTLY_TOOLCHAIN",
                 self.config.pins.nightly_toolchain.as_str(),
             ),
+            ("CMAKE_VERSION", self.config.pins.cmake_version.as_str()),
+            (
+                "CMAKE_AMD64_SHA256",
+                self.config.pins.cmake_linux_amd64_sha256.as_str(),
+            ),
+            (
+                "CMAKE_ARM64_SHA256",
+                self.config.pins.cmake_linux_arm64_sha256.as_str(),
+            ),
             (
                 "GECKODRIVER_VERSION",
                 self.config.pins.geckodriver_version.as_str(),
             ),
             (
-                "GECKODRIVER_SHA256",
+                "GECKODRIVER_AMD64_SHA256",
+                self.config.pins.geckodriver_linux_amd64_sha256.as_str(),
+            ),
+            (
+                "GECKODRIVER_ARM64_SHA256",
                 self.config.pins.geckodriver_linux_arm64_sha256.as_str(),
             ),
             (
@@ -100,7 +113,11 @@ impl RunnerManager<'_> {
                 self.config.pins.gitleaks_version.as_str(),
             ),
             (
-                "GITLEAKS_SHA256",
+                "GITLEAKS_AMD64_SHA256",
+                self.config.pins.gitleaks_linux_amd64_sha256.as_str(),
+            ),
+            (
+                "GITLEAKS_ARM64_SHA256",
                 self.config.pins.gitleaks_linux_arm64_sha256.as_str(),
             ),
         ];

@@ -23,10 +23,15 @@ pub(crate) struct CiPins {
     pub(crate) cilicon_image_digest: String,
     pub(crate) cilicon_sha256: String,
     pub(crate) cilicon_version: String,
+    pub(crate) cmake_linux_amd64_sha256: String,
+    pub(crate) cmake_linux_arm64_sha256: String,
+    pub(crate) cmake_version: String,
     pub(crate) expected_xcode_version: String,
+    pub(crate) geckodriver_linux_amd64_sha256: String,
     pub(crate) geckodriver_linux_arm64_sha256: String,
     pub(crate) geckodriver_version: String,
     pub(crate) gitlab_runner_version: String,
+    pub(crate) gitleaks_linux_amd64_sha256: String,
     pub(crate) gitleaks_linux_arm64_sha256: String,
     pub(crate) gitleaks_version: String,
     pub(crate) linux_base_digest: String,
@@ -68,6 +73,7 @@ impl CiPins {
             ("cilicon_image", self.cilicon_image.as_str()),
             ("cilicon_image_digest", self.cilicon_image_digest.as_str()),
             ("cilicon_version", self.cilicon_version.as_str()),
+            ("cmake_version", self.cmake_version.as_str()),
             (
                 "expected_xcode_version",
                 self.expected_xcode_version.as_str(),
@@ -109,8 +115,24 @@ impl CiPins {
             ),
             ("cilicon_sha256", self.cilicon_sha256.as_str()),
             (
+                "cmake_linux_amd64_sha256",
+                self.cmake_linux_amd64_sha256.as_str(),
+            ),
+            (
+                "cmake_linux_arm64_sha256",
+                self.cmake_linux_arm64_sha256.as_str(),
+            ),
+            (
+                "geckodriver_linux_amd64_sha256",
+                self.geckodriver_linux_amd64_sha256.as_str(),
+            ),
+            (
                 "geckodriver_linux_arm64_sha256",
                 self.geckodriver_linux_arm64_sha256.as_str(),
+            ),
+            (
+                "gitleaks_linux_amd64_sha256",
+                self.gitleaks_linux_amd64_sha256.as_str(),
             ),
             (
                 "gitleaks_linux_arm64_sha256",
