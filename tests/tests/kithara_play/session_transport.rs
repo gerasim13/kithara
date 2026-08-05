@@ -2,7 +2,12 @@
 
 use std::num::NonZeroU32;
 
-use kithara::play::{Cmd, Reply, SessionBeat, SessionTransportSnapshot, Tempo};
+use kithara::{
+    bufpool::PcmPool,
+    events::{Event, EventBus, EventReceiver, TransportEvent},
+    platform::tokio::sync::broadcast::error::TryRecvError,
+    play::{Cmd, Reply, SessionBeat, SessionTransportSnapshot, Tempo},
+};
 use kithara_integration_tests::{
     kithara,
     ring::{ManualRingConfig, ManualRingSession},
@@ -23,6 +28,36 @@ fn expect_ok(reply: Reply) {
         Reply::Err(error) => panic!("session command failed: {error}"),
         _ => panic!("unexpected session command reply"),
     }
+}
+
+fn register_transport_events(session: &ManualRingSession) -> EventReceiver {
+    let bus = EventBus::default();
+    let events = bus.subscribe();
+    match session
+        .exec(Cmd::RegisterPlayer {
+            bus,
+            eq_layout: Vec::new(),
+            pcm_pool: PcmPool::default(),
+        })
+        .expect("invariant: player registration reaches the session")
+    {
+        Reply::PlayerRegistered(_) => events,
+        Reply::Err(error) => panic!("player registration failed: {error}"),
+        _ => panic!("unexpected player registration reply"),
+    }
+}
+
+fn drain_transport_events(events: &mut EventReceiver) -> Vec<TransportEvent> {
+    let mut transport = Vec::new();
+    loop {
+        match events.try_recv().map(|envelope| envelope.event) {
+            Ok(Event::Transport(event)) => transport.push(event),
+            Ok(_) => {}
+            Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            Err(TryRecvError::Lagged(_)) => continue,
+        }
+    }
+    transport
 }
 
 fn set_tempo(session: &ManualRingSession, beats_per_minute: f64) {
@@ -53,6 +88,31 @@ fn snapshot(session: &ManualRingSession) -> SessionTransportSnapshot {
     }
 }
 
+fn commit_initial_transport(
+    session: &ManualRingSession,
+    events: &mut EventReceiver,
+) -> SessionTransportSnapshot {
+    set_tempo(session, 120.0);
+    session
+        .credit(1)
+        .expect("invariant: initial transport commit renders");
+    let committed = snapshot(session);
+    assert_eq!(
+        drain_transport_events(events),
+        vec![
+            TransportEvent::TempoCommitted {
+                beats_per_minute: 120.0,
+                revision: committed.revision().get(),
+            },
+            TransportEvent::PlayStateCommitted {
+                playing: true,
+                revision: committed.revision().get(),
+            },
+        ]
+    );
+    committed
+}
+
 fn position(session: &ManualRingSession) -> f64 {
     snapshot(session).position().get()
 }
@@ -65,6 +125,144 @@ fn clock_samples(session: &ManualRingSession) -> u64 {
 
 fn sample_tolerance(beats_per_second: f64) -> f64 {
     beats_per_second / f64::from(SAMPLE_RATE)
+}
+
+#[kithara::test]
+fn transport_commit_is_published_to_every_registered_player_bus() {
+    let session = session(512, 2);
+    let mut left_events = register_transport_events(&session);
+    let mut right_events = register_transport_events(&session);
+
+    set_tempo(&session, 120.0);
+    session
+        .credit(1)
+        .expect("invariant: initial transport commit renders");
+    let committed = snapshot(&session);
+    let expected = vec![
+        TransportEvent::TempoCommitted {
+            beats_per_minute: 120.0,
+            revision: committed.revision().get(),
+        },
+        TransportEvent::PlayStateCommitted {
+            playing: true,
+            revision: committed.revision().get(),
+        },
+    ];
+
+    assert_eq!(drain_transport_events(&mut left_events), expected);
+    assert_eq!(drain_transport_events(&mut right_events), expected);
+}
+
+#[kithara::test]
+fn tempo_commit_announces_only_the_tempo() {
+    let session = session(512, 4);
+    let mut events = register_transport_events(&session);
+    let _ = commit_initial_transport(&session, &mut events);
+
+    set_tempo(&session, 90.0);
+    session
+        .credit(2)
+        .expect("invariant: changed tempo reaches its render boundary");
+    let committed = snapshot(&session);
+
+    assert_eq!(
+        drain_transport_events(&mut events),
+        vec![TransportEvent::TempoCommitted {
+            beats_per_minute: 90.0,
+            revision: committed.revision().get(),
+        }]
+    );
+}
+
+#[kithara::test]
+fn pause_commit_announces_the_play_state_with_the_applied_revision() {
+    let session = session(512, 4);
+    let mut events = register_transport_events(&session);
+    let _ = commit_initial_transport(&session, &mut events);
+
+    set_playing(&session, false);
+    session
+        .credit(2)
+        .expect("invariant: pause reaches its render boundary");
+    let committed = snapshot(&session);
+
+    assert_eq!(
+        drain_transport_events(&mut events),
+        vec![TransportEvent::PlayStateCommitted {
+            playing: false,
+            revision: committed.revision().get(),
+        }]
+    );
+}
+
+#[kithara::test]
+fn seek_commit_announces_the_target_beat() {
+    let session = session(512, 4);
+    let mut events = register_transport_events(&session);
+    let _ = commit_initial_transport(&session, &mut events);
+    let target = SessionBeat::new(7.25).expect("invariant: seek target is finite");
+
+    expect_ok(
+        session
+            .exec(Cmd::SeekSession { target })
+            .expect("invariant: seek command reaches the session"),
+    );
+    session
+        .credit(2)
+        .expect("invariant: seek reaches its render boundary");
+    let committed = snapshot(&session);
+
+    assert_eq!(
+        drain_transport_events(&mut events),
+        vec![TransportEvent::SeekCommitted {
+            position_beats: target.get(),
+            revision: committed.revision().get(),
+        }]
+    );
+}
+
+#[kithara::test]
+fn a_redundant_tempo_publishes_nothing() {
+    let session = session(512, 4);
+    let mut events = register_transport_events(&session);
+    let initial = commit_initial_transport(&session, &mut events);
+
+    set_tempo(&session, 120.0);
+    session
+        .credit(2)
+        .expect("invariant: redundant tempo renders no commit");
+    let later = snapshot(&session);
+
+    assert_eq!(later.revision(), initial.revision());
+    assert!(drain_transport_events(&mut events).is_empty());
+}
+
+#[kithara::test]
+fn each_commit_publishes_its_events_once() {
+    let session = session(512, 8);
+    let mut events = register_transport_events(&session);
+    let _ = commit_initial_transport(&session, &mut events);
+
+    set_tempo(&session, 90.0);
+    session
+        .credit(2)
+        .expect("invariant: changed tempo reaches its render boundary");
+    let committed = snapshot(&session);
+    let expected = vec![TransportEvent::TempoCommitted {
+        beats_per_minute: 90.0,
+        revision: committed.revision().get(),
+    }];
+    let mut published = drain_transport_events(&mut events);
+
+    for _ in 0..3 {
+        session
+            .credit(1)
+            .expect("invariant: later blocks continue rendering");
+        assert_eq!(snapshot(&session).revision(), committed.revision());
+        published.extend(drain_transport_events(&mut events));
+    }
+
+    assert_eq!(published, expected);
 }
 
 #[kithara::test]

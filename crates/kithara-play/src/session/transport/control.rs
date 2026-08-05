@@ -1,10 +1,11 @@
 use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
+use kithara_events::TransportEvent;
 
 use super::commit::{
-    RenderFrame, SessionTransportCommit, TransportCommitResult, TransportCommitStamp,
-    TransportObservation,
+    RenderFrame, SessionTransportCommit, TransportBoundary, TransportCommitResult,
+    TransportCommitStamp, TransportObservation,
 };
 use crate::{
     api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision},
@@ -182,6 +183,13 @@ fn schedule_commit<B: AudioBackend>(
     queue_stamp(state, stamp)?;
     state.transport.ledger_mut().last = Some(revision);
     if let Err(error) = update_context(state) {
+        publish_transport_event(
+            state,
+            &TransportEvent::Failed {
+                revision: Some(revision.get()),
+                reason: error.to_string(),
+            },
+        );
         abort_commit(state, revision)?;
         return Err(error);
     }
@@ -331,11 +339,11 @@ fn apply_completion<B: AudioBackend>(
     }
     let observed = state.transport.observed();
     let phase = std::mem::take(&mut state.transport.phase);
-    let (active, rejected) = match (completion, phase) {
+    let (active, committed, rejected) = match (completion, phase) {
         (TransportCommitResult::Applied(_), TransportPhase::Applying { next, .. })
             if next.revision() == revision =>
         {
-            (Some(next), false)
+            (Some(next), Some(next), false)
         }
         // The graph is authoritative about what it aborted: if it reports our
         // pending revision, the abort happened whether or not our own delivery
@@ -347,8 +355,8 @@ fn apply_completion<B: AudioBackend>(
                 revision: pending_revision,
                 ..
             },
-        ) if pending_revision == revision => (previous, false),
-        _ => (observed, true),
+        ) if pending_revision == revision => (previous, None, false),
+        _ => (observed, None, true),
     };
     let ledger = state.transport.ledger_mut();
     ledger.completed = Some(revision);
@@ -358,4 +366,58 @@ fn apply_completion<B: AudioBackend>(
     state.transport.phase = active.map_or(TransportPhase::Unconfigured, |active| {
         TransportPhase::Stable { active }
     });
+    if let Some(next) = committed {
+        publish_transport_commit(state, observed, next);
+    } else if rejected {
+        publish_transport_event(
+            state,
+            &TransportEvent::Failed {
+                revision: Some(revision.get()),
+                reason: "render graph rejected transport commit".to_owned(),
+            },
+        );
+    }
+}
+
+fn publish_transport_commit<B: AudioBackend>(
+    state: &SessionState<B>,
+    previous: Option<SessionTransportCommit>,
+    next: SessionTransportCommit,
+) {
+    for event in transport_events(previous, next).into_iter().flatten() {
+        publish_transport_event(state, &event);
+    }
+}
+
+fn transport_events(
+    previous: Option<SessionTransportCommit>,
+    next: SessionTransportCommit,
+) -> [Option<TransportEvent>; 3] {
+    let revision = next.revision().get();
+    let tempo = previous
+        .is_none_or(|commit| commit.tempo() != next.tempo())
+        .then(|| TransportEvent::TempoCommitted {
+            revision,
+            beats_per_minute: next.tempo().beats_per_minute(),
+        });
+    let play_state = previous
+        .is_none_or(|commit| commit.is_playing() != next.is_playing())
+        .then(|| TransportEvent::PlayStateCommitted {
+            revision,
+            playing: next.is_playing(),
+        });
+    let seek = match next.boundary() {
+        TransportBoundary::Continuous => None,
+        TransportBoundary::Relocate(target) => Some(TransportEvent::SeekCommitted {
+            position_beats: target.get(),
+            revision,
+        }),
+    };
+    [tempo, play_state, seek]
+}
+
+fn publish_transport_event<B: AudioBackend>(state: &SessionState<B>, event: &TransportEvent) {
+    for player in &state.players {
+        player.bus.publish(event.clone());
+    }
 }

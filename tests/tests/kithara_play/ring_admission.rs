@@ -13,6 +13,7 @@ use firewheel::{
 use kithara::{
     self,
     bufpool::{PcmPool, Region},
+    events::EventBus,
     platform::sync::Arc,
     play::{Cmd, PlayerConfig, PlayerId, PlayerImpl, Reply, SessionDispatcher},
 };
@@ -52,6 +53,7 @@ fn expect_ok(reply: Reply) {
 fn register_started_player(session: &ManualRingSession) -> PlayerId {
     let player_id = match session
         .exec(Cmd::RegisterPlayer {
+            bus: EventBus::default(),
             eq_layout: Vec::new(),
             pcm_pool: PcmPool::default(),
         })

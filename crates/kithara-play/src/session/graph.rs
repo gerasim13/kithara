@@ -504,6 +504,7 @@ mod tests {
     };
     use kithara_audio::generate_log_spaced_bands;
     use kithara_bufpool::PcmPool;
+    use kithara_events::EventBus;
     use kithara_platform::time::{Duration, Instant};
     use kithara_test_utils::kithara;
 
@@ -652,6 +653,7 @@ mod tests {
         match run_cmd(
             state,
             Cmd::RegisterPlayer {
+                bus: EventBus::default(),
                 eq_layout: generate_log_spaced_bands(5),
                 pcm_pool: PcmPool::default().clone(),
             },

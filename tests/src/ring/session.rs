@@ -3,6 +3,7 @@ use std::{any::Any, num::NonZeroU32};
 use firewheel::FirewheelCtx;
 use kithara::{
     bufpool::PcmPool,
+    events::EventBus,
     platform::{
         sync::{Mutex, mpsc},
         thread::{JoinHandle, spawn_named},
@@ -367,6 +368,7 @@ fn bootstrap(
     let player_id = match run_cmd(
         state,
         Cmd::RegisterPlayer {
+            bus: EventBus::default(),
             eq_layout: Vec::new(),
             pcm_pool: PcmPool::default(),
         },

@@ -24,8 +24,8 @@ pub use api::{
     CrossfaderBus, DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus,
     PlaybackDirection, PlayerEvent, PlayerStatus, RouteChangeReason, SessionBeat, SessionBeatError,
     SessionDuckingMode, SessionEvent, SessionTransportSnapshot, SlotId, SyncUnavailable, Tempo,
-    TempoError, TimeControlStatus, TimeRange, TrackBinding, TransportRevision, WaitingReason,
-    crossfader_gain,
+    TempoError, TimeControlStatus, TimeRange, TrackBinding, TransportEvent, TransportRevision,
+    WaitingReason, crossfader_gain,
 };
 pub use bridge::{
     AllocatedSlot, Cmd, CmdMsg, NodeInputs, PlaybackShared, PlaybackSnapshot, PlayerId,

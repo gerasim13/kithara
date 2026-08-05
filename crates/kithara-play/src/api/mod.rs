@@ -13,5 +13,5 @@ pub use transport::{
 pub use types::{
     DjEvent, EngineEvent, InterruptionKind, ItemEvent, ItemStatus, PlaybackDirection, PlayerEvent,
     PlayerStatus, RouteChangeReason, SessionDuckingMode, SessionEvent, SlotId, TimeControlStatus,
-    TimeRange, WaitingReason,
+    TimeRange, TransportEvent, WaitingReason,
 };

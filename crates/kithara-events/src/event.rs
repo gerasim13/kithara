@@ -22,7 +22,7 @@ use crate::HlsEvent;
 #[cfg(feature = "queue")]
 use crate::QueueEvent;
 #[cfg(feature = "player")]
-use crate::{DjEvent, EngineEvent, ItemEvent, PlayerEvent, SessionEvent};
+use crate::{DjEvent, EngineEvent, ItemEvent, PlayerEvent, SessionEvent, TransportEvent};
 
 /// Unified event for the full audio pipeline.
 ///
@@ -61,6 +61,9 @@ pub enum Event {
     /// Audio session event.
     #[cfg(feature = "player")]
     Session(SessionEvent),
+    /// Session transport event.
+    #[cfg(feature = "player")]
+    Transport(TransportEvent),
     /// DJ feature event.
     #[cfg(feature = "player")]
     Dj(DjEvent),
@@ -147,6 +150,13 @@ impl From<ItemEvent> for Event {
 impl From<SessionEvent> for Event {
     fn from(e: SessionEvent) -> Self {
         Self::Session(e)
+    }
+}
+
+#[cfg(feature = "player")]
+impl From<TransportEvent> for Event {
+    fn from(e: TransportEvent) -> Self {
+        Self::Transport(e)
     }
 }
 
@@ -260,6 +270,23 @@ mod tests {
                 kind: crate::DecodeErrorKind::InvalidData,
                 codec: None,
                 detail: "invalid data",
+            })
+        ));
+    }
+
+    #[cfg(feature = "player")]
+    #[kithara::test]
+    fn transport_event_into_event() {
+        let event: Event = TransportEvent::TempoCommitted {
+            beats_per_minute: 120.0,
+            revision: 3,
+        }
+        .into();
+        assert!(matches!(
+            event,
+            Event::Transport(TransportEvent::TempoCommitted {
+                beats_per_minute: 120.0,
+                revision: 3,
             })
         ));
     }

@@ -73,7 +73,7 @@ pub use play::{
     BpmInfo, DjEvent, EngineEvent, InterruptionKind, ItemEvent, ItemStatus, MediaTime,
     PlaybackDirection, PlayerEvent, PlayerStatus, PortDescription, PortType, RouteChangeReason,
     RouteDescription, SessionEvent, StretchBackendKind, TimeControlStatus, TimeRange,
-    WaitingReason,
+    TransportEvent, WaitingReason,
 };
 #[cfg(feature = "queue")]
 pub use queue::{AdvanceReason, QueueEvent, QueueRepeatMode, TrackStatus};
