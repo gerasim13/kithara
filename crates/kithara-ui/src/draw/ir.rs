@@ -126,6 +126,15 @@ pub enum Geom {
     },
 }
 
+impl Geom {
+    /// Whether this is an outline a backend has to be able to fill, rather than
+    /// one of the shapes every backend names.
+    #[must_use]
+    pub const fn is_outline(&self) -> bool {
+        matches!(self, Self::Path(_))
+    }
+}
+
 /// A retained drawing command.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]

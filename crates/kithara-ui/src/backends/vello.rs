@@ -11,8 +11,8 @@ use vello::{
 
 use crate::{
     draw::{
-        Backend, DrawCmd, DrawList, FillRule, Geom, Paint, Path, Pt, Rect, Rgba, Transform, Verb,
-        replay,
+        Backend, Caps, DrawCmd, DrawList, FillRule, Geom, Paint, Path, Pt, Rect, Rgba, Transform,
+        Verb, replay,
     },
     text::{GlyphFace, GlyphRun},
 };
@@ -60,6 +60,8 @@ fn has_system_text(list: &DrawList) -> bool {
 }
 
 impl Backend for VelloBackend<'_> {
+    const CAPS: Caps = Caps::EVERYTHING;
+
     fn clip(&mut self, region: Rect, list: &DrawList) {
         if has_system_text(list) {
             tracing::warn!(

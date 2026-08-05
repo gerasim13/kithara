@@ -14,7 +14,9 @@ use skrifa::{
 };
 
 use crate::{
-    draw::{Backend, DrawCmd, DrawList, FillRule, Geom, Paint, Pt, Rect, Rgba, Transform, Verb},
+    draw::{
+        Backend, Caps, DrawCmd, DrawList, FillRule, Geom, Paint, Pt, Rect, Rgba, Transform, Verb,
+    },
     skin::{FontFamily, FontWeight},
     text::{GlyphFace, GlyphRun, GlyphSegment, TextResources, select},
 };
@@ -95,6 +97,8 @@ const fn region_of(region: Rect) -> Rectangle {
 }
 
 impl Backend for IcedBackend<'_> {
+    const CAPS: Caps = Caps::EVERYTHING;
+
     fn clip(&mut self, region: Rect, list: &DrawList) {
         ordered(list, self.frame, self.resources, region);
     }
