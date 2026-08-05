@@ -14,8 +14,7 @@ name: RTSan
 # are all deferred off the forbid path); see kithara-play/README.md
 # "Real-Time Audio Thread".
 on:
-  schedule:
-    - cron: '0 5 * * *'
+  workflow_call:
   workflow_dispatch:
 
 env:

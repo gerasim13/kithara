@@ -1,0 +1,41 @@
+name: Scheduled runs
+
+# Rename to `schedule.yml` in a copy of this repository that has runners.
+#
+# A schedule belongs to whichever copy of the repository carries it, so a copy
+# without runners would spend one skipped run per lane per day proving it has
+# nothing to do. Keeping the calendar in its own file — and out of the lanes
+# themselves — lets the shared lanes stay silent everywhere except the machines
+# that can actually serve them, while the calendar itself stays readable here.
+#
+# The lanes below are the same ones a maintainer can start by hand; this only
+# decides when they run unattended.
+on:
+  schedule:
+    # The suite on a second architecture, nightly.
+    - cron: '0 1 * * *'
+    # The repeated run that turns "fails sometimes" into a rate.
+    - cron: '0 3 * * *'
+    # The RealtimeSanitizer soak.
+    - cron: '0 5 * * *'
+    # Miri, weekly: the interpreter is slow enough that a nightly run would
+    # hold the machine for hours it owes to lanes that answer faster.
+    - cron: '0 6 * * 0'
+  workflow_dispatch:
+
+jobs:
+  suite:
+    if: github.event.schedule == '0 1 * * *' || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/ci.yml
+
+  stress:
+    if: github.event.schedule == '0 3 * * *'
+    uses: ./.github/workflows/stress.yml
+
+  rtsan:
+    if: github.event.schedule == '0 5 * * *'
+    uses: ./.github/workflows/rtsan.yml
+
+  miri:
+    if: github.event.schedule == '0 6 * * 0'
+    uses: ./.github/workflows/miri.yml

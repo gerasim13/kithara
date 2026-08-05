@@ -4,10 +4,7 @@ name: Stress
 # percent of runs needs hundreds of them before the rate means anything, which
 # is more than a shared machine can spare.
 on:
-  # Nightly, because a rate is only a rate once it has been measured: the whole
-  # suite repeated overnight turns "fails sometimes" into a number.
-  schedule:
-    - cron: '0 3 * * *'
+  workflow_call:
   workflow_dispatch:
     inputs:
       filter:
