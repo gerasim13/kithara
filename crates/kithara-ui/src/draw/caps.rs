@@ -14,6 +14,8 @@ pub struct Caps {
     pub linear_gradient: bool,
     /// Fills an outline that no named shape covers.
     pub outline: bool,
+    /// Ramps a fill out from a centre.
+    pub radial_gradient: bool,
 }
 
 impl Caps {
@@ -22,6 +24,7 @@ impl Caps {
         clip: true,
         linear_gradient: true,
         outline: true,
+        radial_gradient: true,
     };
 
     /// Refuses a list this backend cannot draw whole.
@@ -38,6 +41,9 @@ impl Caps {
         if needs.linear_gradient && !self.linear_gradient {
             return Err(Unsupported::LinearGradient);
         }
+        if needs.radial_gradient && !self.radial_gradient {
+            return Err(Unsupported::RadialGradient);
+        }
         Ok(())
     }
 }
@@ -51,6 +57,7 @@ pub struct Needs {
     pub(super) clip: bool,
     pub(super) linear_gradient: bool,
     pub(super) outline: bool,
+    pub(super) radial_gradient: bool,
 }
 
 impl Needs {
@@ -64,6 +71,7 @@ impl Needs {
                 DrawCmd::Fill { geom, paint } => {
                     self.outline |= geom.is_outline();
                     self.linear_gradient |= matches!(paint, Paint::Linear { .. });
+                    self.radial_gradient |= matches!(paint, Paint::Radial { .. });
                 }
                 DrawCmd::Stroke { geom, .. } => self.outline |= geom.is_outline(),
                 DrawCmd::Text { .. } => {}
@@ -90,6 +98,8 @@ pub enum Unsupported {
     LinearGradient,
     #[error("this backend cannot fill an outline")]
     Outline,
+    #[error("this backend cannot ramp a fill out from a centre")]
+    RadialGradient,
 }
 
 #[cfg(test)]
@@ -124,8 +134,8 @@ mod tests {
         )
     }
 
-    fn ramp() -> Paint {
-        let stops = Stops::new(&[
+    fn stops() -> Stops {
+        Stops::new(&[
             Stop {
                 color: ink(),
                 offset: 0.0,
@@ -135,11 +145,22 @@ mod tests {
                 offset: 1.0,
             },
         ])
-        .unwrap_or_else(|error| panic!("a two-stop ramp is valid: {error}"));
+        .unwrap_or_else(|error| panic!("a two-stop ramp is valid: {error}"))
+    }
+
+    fn ramp() -> Paint {
         Paint::Linear {
             from: Pt { x: 0.0, y: 0.0 },
-            stops,
+            stops: stops(),
             to: Pt { x: 1.0, y: 0.0 },
+        }
+    }
+
+    fn radial() -> Paint {
+        Paint::Radial {
+            center: Pt { x: 5.0, y: 5.0 },
+            radius: 5.0,
+            stops: stops(),
         }
     }
 
@@ -196,6 +217,33 @@ mod tests {
             }
             .accepts(needs),
             Err(Unsupported::LinearGradient)
+        );
+    }
+
+    /// The two kinds of ramp are asked for separately, so a backend with one of
+    /// them is not credited with the other.
+    #[kithara::test]
+    fn a_radial_ramp_is_its_own_question() {
+        let mut list = DrawListBuilder::default();
+        list.fill_rect(unit_box(), radial());
+        let needs = Needs::from(&list.finish());
+
+        assert_eq!(Caps::EVERYTHING.accepts(needs), Ok(()));
+        assert_eq!(
+            Caps {
+                linear_gradient: false,
+                ..Caps::EVERYTHING
+            }
+            .accepts(needs),
+            Ok(())
+        );
+        assert_eq!(
+            Caps {
+                radial_gradient: false,
+                ..Caps::EVERYTHING
+            }
+            .accepts(needs),
+            Err(Unsupported::RadialGradient)
         );
     }
 }

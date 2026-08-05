@@ -67,9 +67,8 @@ mod tests {
 
     impl Backend for Recorder {
         const CAPS: Caps = Caps {
-            clip: true,
-            linear_gradient: true,
             outline: false,
+            ..Caps::EVERYTHING
         };
 
         fn clip(&mut self, _region: Rect, list: &DrawList) {

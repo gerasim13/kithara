@@ -11,8 +11,8 @@ use vello::{
 
 use crate::{
     draw::{
-        Backend, Caps, DrawCmd, DrawList, FillRule, Geom, Paint, Path, Pt, Rect, Rgba, Transform,
-        Verb, replay,
+        Backend, Caps, DrawCmd, DrawList, FillRule, Geom, Paint, Path, Pt, Rect, Rgba, Stops,
+        Transform, Verb, replay,
     },
     text::{GlyphFace, GlyphRun},
 };
@@ -206,25 +206,36 @@ impl Backend for VelloBackend<'_> {
     }
 }
 
-/// Rebuilds one of our outlines as the curve type Vello draws.
-/// One paint as Vello spells it. A ramp's ends are already in the same pixels as
-/// the shape, so the brush needs no transform of its own.
+/// One paint as Vello spells it. A ramp's geometry is already in the same pixels
+/// as the shape, so the brush needs no transform of its own.
 fn brush(paint: Paint) -> Brush {
     match paint {
-        Paint::Linear { from, stops, to } => Brush::Gradient(
-            Gradient::new_linear((from.x, from.y), (to.x, to.y)).with_stops(
-                stops
-                    .as_slice()
-                    .iter()
-                    .map(|stop| ColorStop::from((stop.offset, Color::from(stop.color))))
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-            ),
-        ),
+        Paint::Linear { from, stops, to } => {
+            ramp(Gradient::new_linear((from.x, from.y), (to.x, to.y)), stops)
+        }
+        Paint::Radial {
+            center,
+            radius,
+            stops,
+        } => ramp(Gradient::new_radial((center.x, center.y), radius), stops),
         Paint::Solid(color) => Brush::Solid(Color::from(color)),
     }
 }
 
+fn ramp(gradient: Gradient, stops: Stops) -> Brush {
+    Brush::Gradient(
+        gradient.with_stops(
+            stops
+                .as_slice()
+                .iter()
+                .map(|stop| ColorStop::from((stop.offset, Color::from(stop.color))))
+                .collect::<Vec<_>>()
+                .as_slice(),
+        ),
+    )
+}
+
+/// Rebuilds one of our outlines as the curve type Vello draws.
 fn bez(outline: &Path) -> BezPath {
     let mut path = BezPath::new();
     for verb in outline.verbs() {

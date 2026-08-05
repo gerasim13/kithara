@@ -15,7 +15,8 @@ use skrifa::{
 
 use crate::{
     draw::{
-        Backend, Caps, DrawCmd, DrawList, FillRule, Geom, Paint, Pt, Rect, Rgba, Transform, Verb,
+        Backend, Caps, DrawCmd, DrawList, FillRule, Geom, Needs, Paint, Pt, Rect, Rgba, Transform,
+        Verb,
     },
     skin::{FontFamily, FontWeight},
     text::{GlyphFace, GlyphRun, GlyphSegment, TextResources, select},
@@ -34,12 +35,20 @@ impl<'frame> IcedBackend<'frame> {
 
 /// Paints a whole list into a frame, keeping the order the list asked for.
 ///
+/// This is the iced host's door, so it is where a list this backend cannot draw
+/// is refused whole, exactly as [`replay`](crate::draw::replay) does for one
+/// that walks the list itself.
+///
 /// `iced_wgpu` pastes a clipped sub-frame's geometry *ahead* of whatever its
 /// parent drew directly, so a control that fills its own box and then draws
 /// inside a clip would paint over its own clipped content. Nothing is drawn
 /// directly here: every run of commands goes through a sub-frame too, and the
 /// pastes then land in list order.
 pub(crate) fn replay_ordered(list: &DrawList, frame: &mut Frame, resources: &TextResources) {
+    if let Err(error) = <IcedBackend<'_> as Backend>::CAPS.accepts(Needs::from(list)) {
+        tracing::error!(%error, "the iced backend refused a draw list it cannot draw");
+        return;
+    }
     let bounds = Rect {
         h: frame.height(),
         w: frame.width(),
@@ -97,7 +106,14 @@ const fn region_of(region: Rect) -> Rectangle {
 }
 
 impl Backend for IcedBackend<'_> {
-    const CAPS: Caps = Caps::EVERYTHING;
+    /// iced 0.14 has one kind of gradient, and it is linear: `iced_core`'s own
+    /// `Gradient` documents the radial one as still to be decided. There is
+    /// nothing below it to reach for either, so a list that asks for a radial
+    /// ramp is refused rather than approximated with a flat colour.
+    const CAPS: Caps = Caps {
+        radial_gradient: false,
+        ..Caps::EVERYTHING
+    };
 
     fn clip(&mut self, region: Rect, list: &DrawList) {
         ordered(list, self.frame, self.resources, region);
@@ -110,14 +126,16 @@ impl Backend for IcedBackend<'_> {
                 Size::new(rect.w, rect.h),
                 Color::from(color),
             );
-        } else {
+        } else if let Some(style) = style(paint) {
             self.frame.fill(
                 &path(geom),
                 Fill {
                     rule: rule(geom),
-                    style: style(paint),
+                    style,
                 },
             );
+        } else {
+            tracing::error!("a paint iced cannot spell reached it past the door");
         }
     }
 
@@ -213,18 +231,20 @@ pub(crate) const fn font(family: FontFamily, weight: FontWeight) -> Font {
     }
 }
 
-/// One paint as iced spells it. A ramp's ends are already in the same pixels as
-/// the shape, which is the space an iced linear gradient reads them in.
-fn style(paint: Paint) -> fill::Style {
+/// One paint as iced spells it, or nothing when iced has no way to spell it. A
+/// ramp's ends are already in the same pixels as the shape, which is the space
+/// an iced linear gradient reads them in.
+fn style(paint: Paint) -> Option<fill::Style> {
     match paint {
         Paint::Linear { from, stops, to } => {
             let mut gradient = gradient::Linear::new(from.into(), to.into());
             for stop in stops.as_slice() {
                 gradient = gradient.add_stop(stop.offset, Color::from(stop.color));
             }
-            fill::Style::Gradient(Gradient::Linear(gradient))
+            Some(fill::Style::Gradient(Gradient::Linear(gradient)))
         }
-        Paint::Solid(color) => fill::Style::Solid(Color::from(color)),
+        Paint::Radial { .. } => None,
+        Paint::Solid(color) => Some(fill::Style::Solid(Color::from(color))),
     }
 }
 

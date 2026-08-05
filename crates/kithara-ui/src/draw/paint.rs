@@ -91,6 +91,12 @@ pub enum Paint {
     Solid(Rgba),
     /// A ramp along the segment `from` to `to`.
     Linear { from: Pt, stops: Stops, to: Pt },
+    /// A ramp out from `center`, reaching its last stop at `radius`.
+    Radial {
+        center: Pt,
+        radius: f32,
+        stops: Stops,
+    },
 }
 
 impl From<Rgba> for Paint {
