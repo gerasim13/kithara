@@ -1,0 +1,43 @@
+name: Stress (self-hosted)
+
+# Repeat a selection of tests many times over. A flake that shows up in a few
+# percent of runs needs hundreds of them before the rate means anything, which
+# is more than a shared machine can spare.
+on:
+  workflow_dispatch:
+    inputs:
+      filter:
+        description: nextest expression selecting the tests to repeat
+        required: true
+        type: string
+      count:
+        description: how many times to repeat the selection
+        required: false
+        default: "100"
+        type: string
+
+concurrency:
+  group: kithara-self-hosted
+  cancel-in-progress: false
+
+jobs:
+  stress:
+    name: Repeated run on x86_64
+    # Set only where self-hosted runners exist. Elsewhere the job never starts,
+    # so the workflow can live in every copy of the tree without dispatching
+    # work that nothing can serve.
+    if: vars.KITHARA_SELF_HOSTED == 'true'
+    runs-on: [self-hosted, linux, x64, kithara]
+    timeout-minutes: 720
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      # Dispatch inputs reach the command through the environment: interpolating
+      # them into the script would let the caller write the script.
+      - name: Repeat the selection
+        env:
+          FILTER: ${{ inputs.filter }}
+          COUNT: ${{ inputs.count }}
+        run: just test run -E "$FILTER" --stress-count "$COUNT"
