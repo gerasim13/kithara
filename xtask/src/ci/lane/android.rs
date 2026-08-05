@@ -31,11 +31,16 @@ pub(crate) fn test(process: &Process, config: &CiConfig) -> Result<()> {
         "Android emulator launch",
     )?;
 
+    // Named relative to the working directory the command is given, not to the
+    // checkout: a relative program path is resolved against the child's own
+    // directory, so `android/gradlew` from inside `android` looked for
+    // `android/android/gradlew` and the lane failed to start after the
+    // emulator had been up for twenty minutes.
     let mut gradle = process.command_in(
         if cfg!(windows) {
-            "android/gradlew.bat"
+            "./gradlew.bat"
         } else {
-            "android/gradlew"
+            "./gradlew"
         },
         "android",
     );
