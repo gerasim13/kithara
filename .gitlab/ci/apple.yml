@@ -80,6 +80,21 @@ apple:ios:
   script:
     - just ci run apple-ios
 
+# The suite plays audio and asserts on what came back, so it takes the measured
+# group: a simulator sharing the host with a full build reports on the load
+# rather than on the commit.
+apple:ios-test:
+  extends:
+    - .macos-job
+    - .rules-integration
+    - .measured
+  stage: apple
+  timeout: 60 minutes
+  needs:
+    - apple:xcframework
+  script:
+    - just ci run apple-ios-test
+
 apple:safari:
   extends:
     - .macos-job

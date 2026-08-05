@@ -1,4 +1,10 @@
-use std::path::Path;
+use std::{
+    net::{SocketAddr, TcpStream},
+    path::Path,
+    process::Child,
+    thread,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result, bail};
 
@@ -117,6 +123,94 @@ pub(crate) fn ios(process: &Process, config: &CiConfig) -> Result<()> {
         .env("KITHARA_LOCAL_DEV", "1")
         .args(["platform", "apple", "ios"]);
     process.run_command(&mut command, "iOS Simulator build")
+}
+
+/// The `XCTest` suite on a simulator. It reads its fixtures from a hermetic
+/// server rather than from the network, and nothing else in the job starts
+/// one, so this lane owns its lifetime: the guard stops the server however the
+/// job ends, because one left holding the port fails the next run with nothing
+/// more informative than a bind error.
+pub(crate) fn ios_test(process: &Process, config: &CiConfig) -> Result<()> {
+    preflight(process, config)?;
+    let server = TestServer::start(process)?;
+    let mut command = process.command("just");
+    command
+        .env("KITHARA_LOCAL_DEV", "1")
+        .env("KITHARA_TEST_SERVER_URL", server.url())
+        .args(["platform", "apple", "test"]);
+    process.run_command(&mut command, "iOS Simulator tests")
+}
+
+struct Consts;
+
+impl Consts {
+    /// The simulator shares the host network stack, so it reaches the server
+    /// over loopback. The port is fixed because the lane runs alone in an
+    /// ephemeral guest and nothing else on that machine competes for it.
+    const TEST_SERVER_PORT: u16 = 3444;
+    const TEST_SERVER_POLL: Duration = Duration::from_millis(200);
+    const TEST_SERVER_READY: Duration = Duration::from_secs(60);
+}
+
+struct TestServer {
+    child: Child,
+    url: String,
+}
+
+impl TestServer {
+    fn start(process: &Process) -> Result<Self> {
+        process.run(
+            "cargo",
+            &[
+                "build",
+                "-p",
+                "kithara-integration-tests",
+                "--bin",
+                "test_server",
+            ],
+            "hermetic test server",
+        )?;
+        let binary = process.target_dir().join("debug/test_server");
+        let mut command = process.command(&binary);
+        command.env("TEST_SERVER_PORT", Consts::TEST_SERVER_PORT.to_string());
+        let child = command
+            .spawn()
+            .with_context(|| format!("starting {}", binary.display()))?;
+        let server = Self {
+            child,
+            url: format!("http://127.0.0.1:{}", Consts::TEST_SERVER_PORT),
+        };
+        wait_until_listening()?;
+        Ok(server)
+    }
+
+    fn url(&self) -> &str {
+        &self.url
+    }
+}
+
+/// The server binds its socket last, so a connection that completes means it
+/// is answering.
+fn wait_until_listening() -> Result<()> {
+    let address = SocketAddr::from(([127, 0, 0, 1], Consts::TEST_SERVER_PORT));
+    let deadline = Instant::now() + Consts::TEST_SERVER_READY;
+    while Instant::now() < deadline {
+        if TcpStream::connect_timeout(&address, Consts::TEST_SERVER_POLL).is_ok() {
+            return Ok(());
+        }
+        thread::sleep(Consts::TEST_SERVER_POLL);
+    }
+    bail!(
+        "the hermetic test server did not listen on {address} within {}s",
+        Consts::TEST_SERVER_READY.as_secs()
+    )
+}
+
+impl Drop for TestServer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 /// Safari goes through the repository's wasm recipe for the same reason the

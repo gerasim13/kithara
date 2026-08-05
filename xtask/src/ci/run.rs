@@ -22,6 +22,7 @@ pub(crate) enum Lane {
     AppleXcframework,
     AppleSwiftTest,
     AppleIos,
+    AppleIosTest,
     AppleSafari,
     LinuxSecrets,
     LinuxCheck,
@@ -71,6 +72,7 @@ impl Lane {
             | Self::AppleXcframework
             | Self::AppleSwiftTest
             | Self::AppleIos
+            | Self::AppleIosTest
             | Self::AppleSafari
             | Self::DeepRtsan
             | Self::DeepPerf
@@ -160,6 +162,7 @@ pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         Lane::AppleXcframework => lane::apple::xcframework(&process, &ci_config),
         Lane::AppleSwiftTest => lane::apple::swift_test(&process, &ci_config, &swiftpm_cache),
         Lane::AppleIos => lane::apple::ios(&process, &ci_config),
+        Lane::AppleIosTest => lane::apple::ios_test(&process, &ci_config),
         Lane::AppleSafari => lane::apple::safari(&process),
         Lane::LinuxSecrets => lane::linux::secrets(&process),
         Lane::LinuxCheck => lane::linux::check(&process),

@@ -31,6 +31,15 @@ impl Process {
         &self.root
     }
 
+    /// Where the builds this process runs leave their output. A lane that runs
+    /// a binary it just built has to look where Cargo was told to write it,
+    /// which is not the default directory on an executor.
+    pub(crate) fn target_dir(&self) -> PathBuf {
+        self.vars
+            .get(OsStr::new("CARGO_TARGET_DIR"))
+            .map_or_else(|| self.root.join("target"), PathBuf::from)
+    }
+
     /// A command that runs inside a subdirectory of the checkout. Build tools
     /// that locate their project by walking up from the working directory —
     /// Gradle looks for the settings file — need the directory that owns them,
