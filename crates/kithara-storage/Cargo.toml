@@ -9,6 +9,9 @@ description = "mmap-backed storage resource with random-access I/O."
 keywords = ["storage", "mmap", "cache", "audio", "io"]
 categories = ["caching"]
 
+[package.metadata.cargo-machete]
+ignored = ["unimock"]
+
 [features]
 default = ["client-reqwest", "tls-rustls"]
 probe = []

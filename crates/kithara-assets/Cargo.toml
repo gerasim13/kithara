@@ -9,6 +9,9 @@ description = "Disk cache with lease/pin semantics and LRU eviction."
 keywords = ["cache", "lru", "storage", "audio", "disk"]
 categories = ["caching"]
 
+[package.metadata.cargo-machete]
+ignored = ["unimock"]
+
 [features]
 default = ["client-reqwest", "tls-rustls"]
 probe = []

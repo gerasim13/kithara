@@ -55,7 +55,6 @@ reqwest = { workspace = true, optional = true, features = [
     "cookies",
 ] }
 thiserror = { workspace = true }
-tracing = { workspace = true }
 unimock = { workspace = true, optional = true }
 url = { workspace = true }
 

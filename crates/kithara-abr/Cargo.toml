@@ -9,6 +9,9 @@ description = "Protocol-agnostic adaptive bitrate algorithm for audio streaming.
 keywords = ["abr", "streaming", "hls", "audio", "bitrate"]
 categories = ["multimedia::audio", "network-programming"]
 
+[package.metadata.cargo-machete]
+ignored = ["unimock"]
+
 [features]
 default = ["client-reqwest", "tls-rustls"]
 # No-op shim retained so `#[kithara::probe]` macro expansions

@@ -9,6 +9,9 @@ description = "Player engine: audio graph, EQ, crossfade, DJ-ready."
 keywords = ["audio", "player", "dj", "crossfade", "playback"]
 categories = ["multimedia::audio"]
 
+[package.metadata.cargo-machete]
+ignored = ["unimock"]
+
 [features]
 default = [
     "backend-cpal",
