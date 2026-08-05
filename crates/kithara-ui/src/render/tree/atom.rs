@@ -120,11 +120,11 @@ pub(super) fn vu_vertical<'a>(
 }
 
 pub(super) fn meter<'a>(value: Option<&ReadValue<'_>>, skin: &'a Skin) -> Element<'a, UiEvent> {
-    Meter::builder()
-        .maybe_value(value)
-        .skin(skin)
-        .build()
-        .view()
+    let level = match value {
+        Some(ReadValue::Scalar(level)) => level.clamp(0.0, 1.0).as_(),
+        _ => 0.0,
+    };
+    Paint::new(Meter::new(skin), level, skin).view()
 }
 
 pub(super) fn knob<'a>(
@@ -208,14 +208,14 @@ pub(super) fn status_dot<'a>(
     label: InternId,
     tone: Tone,
     ui: &'a CompiledUi,
-    skin: &Skin,
+    skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
-    StatusDot::builder()
-        .label(ui.resolve(label))
-        .tone(tone)
-        .skin(skin)
-        .build()
-        .view()
+    Paint::new(
+        StatusDot::new(tone, skin),
+        ui.resolve(label).to_owned(),
+        skin,
+    )
+    .view()
 }
 
 pub(super) fn cell<'a>(

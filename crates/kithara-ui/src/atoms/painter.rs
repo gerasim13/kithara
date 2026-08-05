@@ -2,7 +2,7 @@ use crate::{
     atoms::{
         button::{Button, ButtonLabel, VisualState},
         chip::Chip,
-        design::{crossfader::Crossfader, fader::Fader},
+        design::{crossfader::Crossfader, fader::Fader, meter::Meter, status_dot::StatusDot},
         meter::StereoMeter,
         nav_item::NavItem,
         tab::TabLarge,
@@ -186,5 +186,35 @@ impl ControlPainter for Binary {
         _state: VisualState,
     ) {
         self.paint(list, *data, bounds);
+    }
+}
+
+impl ControlPainter for Meter {
+    type Data = f32;
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        _text: &mut TextContext,
+        data: &Self::Data,
+        bounds: Rect,
+        _state: VisualState,
+    ) {
+        self.paint(list, *data, bounds);
+    }
+}
+
+impl ControlPainter for StatusDot {
+    type Data = String;
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        data: &Self::Data,
+        bounds: Rect,
+        _state: VisualState,
+    ) {
+        self.paint(list, text, data, bounds);
     }
 }

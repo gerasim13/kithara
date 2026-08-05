@@ -24,7 +24,7 @@ use crate::{
     atoms::{
         button::{Button, ButtonConfig, ButtonLabel},
         chip::Chip,
-        design::{crossfader::Crossfader, fader::Fader},
+        design::{crossfader::Crossfader, fader::Fader, meter::Meter, status_dot::StatusDot},
         meter::StereoMeter,
         nav_item::NavItem,
         painter::{ButtonData, FaderData, Labelled},
@@ -318,6 +318,27 @@ where
             }
             // A switch draws nothing until its endpoint says which way it is
             // set, so an unbound one is an empty box rather than an idle switch.
+            // An unbound meter is an empty track rather than an empty box:
+            // that is what the other host has always drawn for it.
+            ControlSpec::Meter => Self::control_leaf(
+                Painted::new(
+                    Meter::new(self.skin),
+                    match read.and_then(|binding| resolve(self.reads, binding, self.ui)) {
+                        Some(ReadValue::Scalar(level)) => level.clamp(0.0, 1.0).as_(),
+                        _ => 0.0,
+                    },
+                    self.skin,
+                ),
+                declared,
+            ),
+            ControlSpec::StatusDot { label, tone } => Self::control_leaf(
+                Painted::new(
+                    StatusDot::new(*tone, self.skin),
+                    self.ui.resolve(*label).to_owned(),
+                    self.skin,
+                ),
+                declared,
+            ),
             ControlSpec::Toggle | ControlSpec::Checkbox => {
                 let painter = if matches!(spec, ControlSpec::Toggle) {
                     Binary::toggle(self.skin)

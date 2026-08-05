@@ -269,8 +269,12 @@ mod tests {
 
     use super::*;
     use crate::{
-        atoms::toggle::Binary,
+        atoms::{
+            design::{meter::Meter, status_dot::StatusDot},
+            toggle::Binary,
+        },
         builtin,
+        module::Tone,
         render::{
             StereoLevels,
             masonry::{MasonryControl, Painted},
@@ -340,6 +344,44 @@ mod tests {
                     "the two hosts must record the same {name}"
                 );
             }
+        }
+    }
+
+    /// A meter with no endpoint behind it is an empty track under both hosts,
+    /// not an empty box under one of them.
+    #[kithara::test]
+    fn iced_and_masonry_record_the_same_meter() {
+        let skin = builtin::skin();
+        let bounds = Rect {
+            h: 10.0,
+            w: 100.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        for level in [0.0, 0.5, 1.0] {
+            let iced =
+                Paint::new(Meter::new(skin), level, skin).draw_list(&PaintState::default(), bounds);
+            let mut masonry = Painted::new(Meter::new(skin), level, skin);
+
+            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+        }
+    }
+
+    #[kithara::test]
+    fn iced_and_masonry_record_the_same_status_dot() {
+        let skin = builtin::skin();
+        let bounds = Rect {
+            h: 18.0,
+            w: 64.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        for tone in [Tone::Neutral, Tone::Accent, Tone::Success, Tone::Danger] {
+            let iced = Paint::new(StatusDot::new(tone, skin), "LIVE".to_owned(), skin)
+                .draw_list(&PaintState::default(), bounds);
+            let mut masonry = Painted::new(StatusDot::new(tone, skin), "LIVE".to_owned(), skin);
+
+            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
         }
     }
 

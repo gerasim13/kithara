@@ -1613,7 +1613,7 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     ),
     (
         "StatusDot",
-        Paints::NotYet,
+        Paints::Yes,
         r#"StatusDot(id: "control", label: "LIVE")"#,
     ),
     (
@@ -1633,7 +1633,7 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     ),
     (
         "Meter",
-        Paints::NotYet,
+        Paints::Yes,
         r#"Meter(id: "control", read: Model(id: "deck.view.zoom"))"#,
     ),
     (

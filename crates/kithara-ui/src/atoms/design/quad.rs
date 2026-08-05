@@ -1,6 +1,7 @@
 use crate::{
     draw::{DrawListBuilder, Rect, Rgba},
     skin::FrameSkin,
+    text::GlyphRun,
 };
 
 /// The filled, framed box almost every control is built on.
@@ -33,6 +34,12 @@ pub(crate) fn border(list: &mut DrawListBuilder, bounds: Rect, frame: FrameSkin,
         color,
         frame.border_width,
     );
+}
+
+/// Where a run sits when it is centred down the box but placed across it by
+/// the caller.
+pub(crate) fn center_y(bounds: Rect, run: &GlyphRun) -> f32 {
+    bounds.y + (bounds.h - run.height()) / 2.0
 }
 
 #[cfg(test)]

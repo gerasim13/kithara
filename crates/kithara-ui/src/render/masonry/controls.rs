@@ -8,7 +8,7 @@ use crate::{
     atoms::{
         button::{Button, VisualState},
         chip::Chip,
-        design::{crossfader::Crossfader, fader::Fader},
+        design::{crossfader::Crossfader, fader::Fader, meter::Meter, status_dot::StatusDot},
         knob::Knob,
         meter::StereoMeter,
         nav_item::NavItem,
@@ -381,6 +381,15 @@ impl Retained for Crossfader {
         set_scalar(data, value)
     }
 }
+
+impl Retained for Meter {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        set_scalar(data, value)
+    }
+}
+
+/// A status dot shows what the document said; no endpoint moves it.
+impl Retained for StatusDot {}
 
 impl Retained for Binary {
     fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
