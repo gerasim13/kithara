@@ -98,6 +98,13 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 
+# `fdk-aac` decodes HE-AAC v1/v2, which the stock symphonia path reports as
+# LC-only; the rapid-scrub and stress-seek fixtures need it. Its vendored
+# `FDK_archdef.h` has no branch for MSVC on ARM64 and stops at `fatal error
+# C1021: invalid preprocessor command`, so that one target goes without.
+[target.'cfg(all(not(target_arch = "wasm32"), not(all(target_os = "windows", target_arch = "aarch64"))))'.dependencies]
+kithara = { workspace = true, features = ["fdk-aac"] }
+
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
 kithara = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 
@@ -120,11 +127,11 @@ kithara = { workspace = true, features = [
     "stretch-signalsmith",
     "stretch-bungee",
     "backend-cpal",
-    "fdk-aac",
     "tokio-net",
     "tokio-rt-multi-thread",
 ] }
 kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "lib-only"] }
+
 # Only `architecture_trace` reaches for it, and that module is already native
 # only: the crate's LSP client builds file URLs, which `url` offers everywhere
 # but wasm.
