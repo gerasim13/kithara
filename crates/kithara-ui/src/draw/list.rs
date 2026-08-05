@@ -1,4 +1,4 @@
-use super::{DrawCmd, Geom, Pt, Rect, Rgba, Transform};
+use super::{DrawCmd, Geom, Path, Pt, Rect, Rgba, Transform};
 use crate::text::GlyphRun;
 
 /// An ordered retained list of drawing commands.
@@ -97,6 +97,13 @@ impl DrawListBuilder {
             },
             color,
             width,
+        });
+    }
+
+    pub fn fill_path(&mut self, path: Path, color: Rgba) {
+        self.commands.push(DrawCmd::Fill {
+            geom: Geom::Path(path),
+            color,
         });
     }
 

@@ -1,7 +1,7 @@
 #[cfg(feature = "render")]
 use num_traits::ToPrimitive;
 
-use super::list::DrawList;
+use super::{list::DrawList, path::Path};
 use crate::text::GlyphRun;
 
 /// A toolkit-neutral RGBA colour.
@@ -99,7 +99,7 @@ impl Transform {
 }
 
 /// Native geometry retained by a draw list.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum Geom {
     /// A circular arc whose angles are expressed in radians.
@@ -117,6 +117,8 @@ pub enum Geom {
         from: Pt,
         to: Pt,
     },
+    /// An outline no named shape covers.
+    Path(Path),
     Rect(Rect),
     RoundedRect {
         rect: Rect,

@@ -6,9 +6,9 @@ pub trait Backend {
     /// Encodes a nested list inside a rectangular clip region.
     fn clip(&mut self, region: Rect, list: &DrawList);
 
-    fn fill(&mut self, geom: Geom, color: Rgba);
+    fn fill(&mut self, geom: &Geom, color: Rgba);
 
-    fn stroke(&mut self, geom: Geom, color: Rgba, width: f32);
+    fn stroke(&mut self, geom: &Geom, color: Rgba, width: f32);
 
     fn text(&mut self, run: &GlyphRun, content: &str, transform: Transform, color: Rgba);
 }
@@ -18,8 +18,8 @@ pub fn replay<B: Backend>(list: &DrawList, backend: &mut B) {
     for command in list.commands() {
         match command {
             DrawCmd::Clip { region, list } => backend.clip(*region, list),
-            DrawCmd::Fill { geom, color } => backend.fill(*geom, *color),
-            DrawCmd::Stroke { geom, color, width } => backend.stroke(*geom, *color, *width),
+            DrawCmd::Fill { geom, color } => backend.fill(geom, *color),
+            DrawCmd::Stroke { geom, color, width } => backend.stroke(geom, *color, *width),
             DrawCmd::Text {
                 run,
                 content,

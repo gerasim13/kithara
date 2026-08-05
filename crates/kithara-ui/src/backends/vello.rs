@@ -3,14 +3,16 @@ use std::borrow::Cow;
 use vello::{
     Glyph, Scene,
     kurbo::{
-        Affine, Arc, Cap, Circle, Join, Line, Point, Rect as KurboRect, RoundedRect, Shape, Stroke,
-        Vec2,
+        Affine, Arc, BezPath, Cap, Circle, Join, Line, Point, Rect as KurboRect, RoundedRect,
+        Shape, Stroke, Vec2,
     },
     peniko::{Color, Fill, FontData},
 };
 
 use crate::{
-    draw::{Backend, DrawCmd, DrawList, Geom, Pt, Rect, Rgba, Transform, replay},
+    draw::{
+        Backend, DrawCmd, DrawList, FillRule, Geom, Path, Pt, Rect, Rgba, Transform, Verb, replay,
+    },
     text::{GlyphFace, GlyphRun},
 };
 
@@ -26,13 +28,12 @@ impl<'scene> VelloBackend<'scene> {
     }
 
     fn fill_shape(&mut self, shape: &impl Shape, color: Rgba) {
-        self.scene.fill(
-            Fill::NonZero,
-            Affine::IDENTITY,
-            Color::from(color),
-            None,
-            shape,
-        );
+        self.fill_with(Fill::NonZero, shape, color);
+    }
+
+    fn fill_with(&mut self, rule: Fill, shape: &impl Shape, color: Rgba) {
+        self.scene
+            .fill(rule, Affine::IDENTITY, Color::from(color), None, shape);
     }
 
     fn stroke_shape(&mut self, shape: &impl Shape, color: Rgba, width: f32) {
@@ -79,7 +80,7 @@ impl Backend for VelloBackend<'_> {
         self.scene.pop_layer();
     }
 
-    fn fill(&mut self, geom: Geom, color: Rgba) {
+    fn fill(&mut self, geom: &Geom, color: Rgba) {
         match geom {
             Geom::Arc {
                 center,
@@ -88,18 +89,25 @@ impl Backend for VelloBackend<'_> {
                 end,
             } => self.fill_shape(
                 &Arc::new(
-                    center,
-                    Vec2::splat(f64::from(radius)),
-                    f64::from(start),
-                    f64::from(end - start),
+                    *center,
+                    Vec2::splat(f64::from(*radius)),
+                    f64::from(*start),
+                    f64::from(*end - *start),
                     0.0,
                 ),
                 color,
             ),
             Geom::Circle { center, radius } => {
-                self.fill_shape(&Circle::new(center, f64::from(radius)), color);
+                self.fill_shape(&Circle::new(*center, f64::from(*radius)), color);
             }
-            Geom::Line { from, to } => self.fill_shape(&Line::new(from, to), color),
+            Geom::Line { from, to } => self.fill_shape(&Line::new(*from, *to), color),
+            Geom::Path(outline) => {
+                let rule = match outline.rule() {
+                    FillRule::EvenOdd => Fill::EvenOdd,
+                    FillRule::NonZero => Fill::NonZero,
+                };
+                self.fill_with(rule, &bez(outline), color);
+            }
             Geom::Rect(rect) => self.fill_shape(
                 &KurboRect::new(
                     f64::from(rect.x),
@@ -115,14 +123,14 @@ impl Backend for VelloBackend<'_> {
                     f64::from(rect.y),
                     f64::from(rect.x + rect.w),
                     f64::from(rect.y + rect.h),
-                    f64::from(radius),
+                    f64::from(*radius),
                 ),
                 color,
             ),
         }
     }
 
-    fn stroke(&mut self, geom: Geom, color: Rgba, width: f32) {
+    fn stroke(&mut self, geom: &Geom, color: Rgba, width: f32) {
         match geom {
             Geom::Arc {
                 center,
@@ -131,19 +139,20 @@ impl Backend for VelloBackend<'_> {
                 end,
             } => self.stroke_shape(
                 &Arc::new(
-                    center,
-                    Vec2::splat(f64::from(radius)),
-                    f64::from(start),
-                    f64::from(end - start),
+                    *center,
+                    Vec2::splat(f64::from(*radius)),
+                    f64::from(*start),
+                    f64::from(*end - *start),
                     0.0,
                 ),
                 color,
                 width,
             ),
             Geom::Circle { center, radius } => {
-                self.stroke_shape(&Circle::new(center, f64::from(radius)), color, width);
+                self.stroke_shape(&Circle::new(*center, f64::from(*radius)), color, width);
             }
-            Geom::Line { from, to } => self.stroke_shape(&Line::new(from, to), color, width),
+            Geom::Line { from, to } => self.stroke_shape(&Line::new(*from, *to), color, width),
+            Geom::Path(outline) => self.stroke_shape(&bez(outline), color, width),
             Geom::Rect(rect) => self.stroke_shape(
                 &KurboRect::new(
                     f64::from(rect.x),
@@ -160,7 +169,7 @@ impl Backend for VelloBackend<'_> {
                     f64::from(rect.y),
                     f64::from(rect.x + rect.w),
                     f64::from(rect.y + rect.h),
-                    f64::from(radius),
+                    f64::from(*radius),
                 ),
                 color,
                 width,
@@ -192,6 +201,21 @@ impl Backend for VelloBackend<'_> {
                 .draw(Fill::NonZero, glyphs);
         }
     }
+}
+
+/// Rebuilds one of our outlines as the curve type Vello draws.
+fn bez(outline: &Path) -> BezPath {
+    let mut path = BezPath::new();
+    for verb in outline.verbs() {
+        match *verb {
+            Verb::Close => path.close_path(),
+            Verb::CurveTo { first, second, to } => path.curve_to(first, second, to),
+            Verb::LineTo(to) => path.line_to(to),
+            Verb::MoveTo(to) => path.move_to(to),
+            Verb::QuadTo { control, to } => path.quad_to(control, to),
+        }
+    }
+    path
 }
 
 fn stroke(width: f32) -> Stroke {

@@ -2,7 +2,7 @@ use iced::{
     Color, Font, Point, Radians, Rectangle, Size,
     font::{Family, Stretch, Style, Weight},
     widget::canvas::{
-        Frame, Path, Stroke,
+        Fill, Frame, Path, Stroke, fill,
         path::{Arc, Builder},
     },
 };
@@ -13,7 +13,7 @@ use skrifa::{
 };
 
 use crate::{
-    draw::{Backend, DrawCmd, DrawList, Geom, Pt, Rect, Rgba, Transform},
+    draw::{Backend, DrawCmd, DrawList, FillRule, Geom, Pt, Rect, Rgba, Transform, Verb},
     skin::{FontFamily, FontWeight},
     text::{GlyphFace, GlyphRun, GlyphSegment, TextResources, select},
 };
@@ -71,8 +71,8 @@ fn flush(run: &mut Vec<&DrawCmd>, frame: &mut Frame, resources: &TextResources, 
         for command in commands {
             match command {
                 DrawCmd::Clip { region, list } => backend.clip(*region, list),
-                DrawCmd::Fill { geom, color } => backend.fill(*geom, *color),
-                DrawCmd::Stroke { geom, color, width } => backend.stroke(*geom, *color, *width),
+                DrawCmd::Fill { geom, color } => backend.fill(geom, *color),
+                DrawCmd::Stroke { geom, color, width } => backend.stroke(geom, *color, *width),
                 DrawCmd::Text {
                     run,
                     content,
@@ -98,7 +98,7 @@ impl Backend for IcedBackend<'_> {
         ordered(list, self.frame, self.resources, region);
     }
 
-    fn fill(&mut self, geom: Geom, color: Rgba) {
+    fn fill(&mut self, geom: &Geom, color: Rgba) {
         if let Geom::Rect(rect) = geom {
             self.frame.fill_rectangle(
                 Point::new(rect.x, rect.y),
@@ -106,11 +106,17 @@ impl Backend for IcedBackend<'_> {
                 Color::from(color),
             );
         } else {
-            self.frame.fill(&path(geom), Color::from(color));
+            self.frame.fill(
+                &path(geom),
+                Fill {
+                    rule: rule(geom),
+                    style: fill::Style::Solid(Color::from(color)),
+                },
+            );
         }
     }
 
-    fn stroke(&mut self, geom: Geom, color: Rgba, width: f32) {
+    fn stroke(&mut self, geom: &Geom, color: Rgba, width: f32) {
         self.frame.stroke(&path(geom), stroke(color, width));
     }
 
@@ -202,7 +208,23 @@ pub(crate) const fn font(family: FontFamily, weight: FontWeight) -> Font {
     }
 }
 
-fn path(geom: Geom) -> Path {
+/// How a shape decides its own interior. Only an authored outline can ask for
+/// anything but the default.
+fn rule(geom: &Geom) -> fill::Rule {
+    match geom {
+        Geom::Path(path) => match path.rule() {
+            FillRule::EvenOdd => fill::Rule::EvenOdd,
+            FillRule::NonZero => fill::Rule::NonZero,
+        },
+        Geom::Arc { .. }
+        | Geom::Circle { .. }
+        | Geom::Line { .. }
+        | Geom::Rect(_)
+        | Geom::RoundedRect { .. } => fill::Rule::NonZero,
+    }
+}
+
+fn path(geom: &Geom) -> Path {
     match geom {
         Geom::Arc {
             center,
@@ -211,19 +233,34 @@ fn path(geom: Geom) -> Path {
             end,
         } => Path::new(|builder| {
             builder.arc(Arc {
-                radius,
-                center: center.into(),
-                start_angle: Radians(start),
-                end_angle: Radians(end),
+                radius: *radius,
+                center: (*center).into(),
+                start_angle: Radians(*start),
+                end_angle: Radians(*end),
             });
         }),
-        Geom::Circle { center, radius } => Path::circle(center.into(), radius),
-        Geom::Line { from, to } => Path::line(from.into(), to.into()),
+        Geom::Circle { center, radius } => Path::circle((*center).into(), *radius),
+        Geom::Line { from, to } => Path::line((*from).into(), (*to).into()),
+        Geom::Path(outline) => Path::new(|builder| {
+            for verb in outline.verbs() {
+                match *verb {
+                    Verb::Close => builder.close(),
+                    Verb::CurveTo { first, second, to } => {
+                        builder.bezier_curve_to(first.into(), second.into(), to.into());
+                    }
+                    Verb::LineTo(to) => builder.line_to(to.into()),
+                    Verb::MoveTo(to) => builder.move_to(to.into()),
+                    Verb::QuadTo { control, to } => {
+                        builder.quadratic_curve_to(control.into(), to.into());
+                    }
+                }
+            }
+        }),
         Geom::Rect(rect) => Path::rectangle(Point::new(rect.x, rect.y), Size::new(rect.w, rect.h)),
         Geom::RoundedRect { rect, radius } => Path::rounded_rectangle(
             Point::new(rect.x, rect.y),
             Size::new(rect.w, rect.h),
-            radius.into(),
+            (*radius).into(),
         ),
     }
 }

@@ -34,7 +34,7 @@ use vello::{
 use super::{VelloBackend, replay_ordered};
 use crate::{
     builtin,
-    draw::{DrawList, DrawListBuilder, Rect, Rgba, replay},
+    draw::{DrawList, DrawListBuilder, FillRule, Path, Pt, Rect, Rgba, Verb, replay},
     render::fonts::{FONT_BYTES, SANS},
 };
 
@@ -81,6 +81,21 @@ impl Fixture {
         g: 0.0,
         r: 1.0,
     };
+
+    /// The outer square of a ring, and the square that must be a hole in it.
+    const OUTER: Rect = Rect {
+        h: 48.0,
+        w: 48.0,
+        x: 8.0,
+        y: 8.0,
+    };
+
+    const HOLE: Rect = Rect {
+        h: 16.0,
+        w: 16.0,
+        x: 24.0,
+        y: 24.0,
+    };
 }
 
 /// A control that fills its own box and then draws inside a clip — the order
@@ -94,6 +109,56 @@ fn clipped() -> DrawList {
     list.finish()
 }
 
+fn square(rect: Rect) -> [Verb; 5] {
+    [
+        Verb::MoveTo(Pt {
+            x: rect.x,
+            y: rect.y,
+        }),
+        Verb::LineTo(Pt {
+            x: rect.x + rect.w,
+            y: rect.y,
+        }),
+        Verb::LineTo(Pt {
+            x: rect.x + rect.w,
+            y: rect.y + rect.h,
+        }),
+        Verb::LineTo(Pt {
+            x: rect.x,
+            y: rect.y + rect.h,
+        }),
+        Verb::Close,
+    ]
+}
+
+/// A square with a square hole, both wound the same way. Only the even-odd rule
+/// makes the middle a hole; under the default it is simply more ink. An
+/// authored icon is exactly this shape, which is why the rule travels with the
+/// outline rather than being assumed by a backend.
+fn ring() -> DrawList {
+    let mut verbs = Vec::from(square(Fixture::OUTER));
+    verbs.extend(square(Fixture::HOLE));
+    let mut list = DrawListBuilder::default();
+    list.fill_path(Path::new(FillRule::EvenOdd, verbs), Fixture::INK);
+    list.finish()
+}
+
+/// The green channel where the surface was asked about, or zero off-surface.
+fn sample(rgba: &[u8], x: f32, y: f32) -> u8 {
+    let x = (Fixture::ORIGIN.0 + x) as usize;
+    let y = (Fixture::ORIGIN.1 + y) as usize;
+    rgba.get((y * Fixture::SURFACE.0 as usize + x) * 4 + 1)
+        .copied()
+        .unwrap_or_default()
+}
+
+/// Ink on the ring itself, and nothing in the hole.
+fn ring_has_a_hole(rgba: &[u8]) -> bool {
+    let middle = Fixture::HOLE.y + Fixture::HOLE.h / 2.0;
+    sample(rgba, Fixture::OUTER.x + 4.0, middle) > 128
+        && sample(rgba, Fixture::HOLE.x + Fixture::HOLE.w / 2.0, middle) < 128
+}
+
 /// Whether the clip's contents won the centre pixel. The rectangle under it is
 /// red and the clipped one is white, so a high green channel means the clipped
 /// rectangle is on top — which is the order the list asked for.
@@ -104,10 +169,9 @@ fn clip_is_on_top(rgba: &[u8]) -> bool {
     rgba.get(pixel + 1).is_some_and(|green| *green > 128)
 }
 
-#[kithara::test]
-fn vello_paints_what_a_clip_contains() {
+fn through_vello(list: &DrawList) -> Vec<u8> {
     let mut control = Scene::new();
-    replay(&clipped(), &mut VelloBackend::new(&mut control));
+    replay(list, &mut VelloBackend::new(&mut control));
     let mut scene = Scene::new();
     scene.append(
         &control,
@@ -116,16 +180,42 @@ fn vello_paints_what_a_clip_contains() {
             f64::from(Fixture::ORIGIN.1),
         ))),
     );
-    let rgba = rasterise(&scene).unwrap_or_else(|error| panic!("vello must rasterise: {error}"));
+    rasterise(&scene).unwrap_or_else(|error| panic!("vello must rasterise: {error}"))
+}
 
+#[kithara::test]
+fn vello_paints_what_a_clip_contains() {
     assert!(
-        clip_is_on_top(&rgba),
+        clip_is_on_top(&through_vello(&clipped())),
         "the Vello backend painted its own geometry over what the clip contained"
     );
 }
 
 #[kithara::test]
+fn vello_leaves_the_hole_an_outline_asked_for() {
+    assert!(
+        ring_has_a_hole(&through_vello(&ring())),
+        "the Vello backend ignored the outline's fill rule"
+    );
+}
+
+#[kithara::test]
+fn iced_leaves_the_hole_an_outline_asked_for() {
+    assert!(
+        ring_has_a_hole(&through_iced(&ring())),
+        "the iced backend ignored the outline's fill rule"
+    );
+}
+
+#[kithara::test]
 fn iced_paints_what_a_clip_contains() {
+    assert!(
+        clip_is_on_top(&through_iced(&clipped())),
+        "the iced backend painted its own geometry over what the clip contained"
+    );
+}
+
+fn through_iced(list: &DrawList) -> Vec<u8> {
     let skin = builtin::skin();
     let mut fonts = font_system()
         .write()
@@ -145,7 +235,7 @@ fn iced_paints_what_a_clip_contains() {
         &renderer,
         Size::new(Fixture::SURFACE.0 as f32, Fixture::SURFACE.1 as f32),
     );
-    replay_ordered(&clipped(), &mut frame, skin.text_resources());
+    replay_ordered(list, &mut frame, skin.text_resources());
     let geometry = frame.into_geometry();
     renderer.with_translation(
         Vector::new(Fixture::ORIGIN.0, Fixture::ORIGIN.1),
@@ -153,16 +243,11 @@ fn iced_paints_what_a_clip_contains() {
             renderer.draw_geometry(geometry);
         },
     );
-    let rgba = renderer.screenshot(
+    renderer.screenshot(
         Size::new(Fixture::SURFACE.0, Fixture::SURFACE.1),
         1.0,
         Color::from_rgb(0.0, 0.0, 0.0),
-    );
-
-    assert!(
-        clip_is_on_top(&rgba),
-        "the iced backend painted its own geometry over what the clip contained"
-    );
+    )
 }
 
 /// A wgpu device with no surface, and one scene rasterised through it.
