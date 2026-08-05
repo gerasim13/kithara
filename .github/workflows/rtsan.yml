@@ -31,9 +31,10 @@ concurrency:
 jobs:
   rtsan:
     name: RTSan ${{ matrix.lane }}
-    # Set only where self-hosted runners exist, so a copy of this repository
-    # without them never starts the job. See .github/workflows/ci.yml.
-    if: vars.KITHARA_SELF_HOSTED == 'true' && github.actor == github.repository_owner
+    # `KITHARA_RUNNER_LABELS` is set only where runners are attached, so a
+    # copy of this repository without them never starts the job.
+    # See .github/workflows/ci.yml.
+    if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
     continue-on-error: true
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 120

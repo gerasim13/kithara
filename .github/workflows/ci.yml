@@ -18,14 +18,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The single gate every other job depends on. `KITHARA_SELF_HOSTED` is a
-  # repository variable set only where runners are attached, so a copy of this
-  # repository without them skips this job and, with it, the whole workflow.
-  # `KITHARA_RUNNER_LABELS` names those runners, so neither an owner nor a
-  # machine is written into the workflow itself.
+  # The single gate every other job depends on. `KITHARA_RUNNER_LABELS` names
+  # the runners to use and is set only where runners are attached, so a copy of
+  # this repository without them skips this job and, with it, the whole
+  # workflow. Neither an owner nor a machine is written into the workflow.
   gate:
     name: Self-hosted gate
-    if: vars.KITHARA_SELF_HOSTED == 'true' && github.actor == github.repository_owner
+    if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 5
     steps:
