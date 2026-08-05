@@ -185,7 +185,7 @@ pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         Lane::ReleaseDocs => super::release::docs(&process, ctx, &ext),
         Lane::ReleaseWasm => super::release::wasm(&process, ctx, &ext),
         Lane::ReleaseAndroid => super::release::build_android(&process, ctx, &ext),
-        Lane::ReleasePublish => super::release::publish(ctx, &ext),
+        Lane::ReleasePublish => super::release::publish(&process, ctx, &ext),
     };
     process.best_effort("sccache", &["--show-stats"], "sccache statistics");
     result

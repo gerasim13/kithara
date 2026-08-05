@@ -128,7 +128,11 @@ pub(crate) fn build_android(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> R
     Ok(())
 }
 
-pub(crate) fn publish(ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
+pub(crate) fn publish(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
+    // The jobs this one waits for take hours, and these tools are reached deep
+    // inside the publish steps. Ask for them first, so a host that lacks one
+    // says so before a release is built rather than after.
+    process.require_tools(&["cargo", "gh", "git", "unzip"])?;
     for variable in ["CARGO_REGISTRY_TOKEN", "GH_TOKEN", "GITLAB_TOKEN"] {
         required_env(variable)?;
     }
