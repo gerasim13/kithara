@@ -59,8 +59,10 @@ impl TransportObservationInput {
         Self(input)
     }
 
-    fn write(&mut self, observation: TransportObservation) {
-        self.0.write(observation);
+    delegate::delegate! {
+        to self.0 {
+            fn write(&mut self, observation: TransportObservation);
+        }
     }
 }
 

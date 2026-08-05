@@ -1,4 +1,4 @@
-use std::{fmt, num::NonZeroU64};
+use std::num::NonZeroU64;
 
 const SECONDS_PER_MINUTE: f64 = 60.0;
 
@@ -57,8 +57,13 @@ pub struct TempoError {
 }
 
 /// A continuous beat coordinate on the session transport.
-#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
-pub struct SessionBeat(f64);
+#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, fieldwork::Fieldwork)]
+#[fieldwork(get)]
+pub struct SessionBeat(
+    /// Returns the continuous beat coordinate.
+    #[field(get = get, copy)]
+    f64,
+);
 
 impl SessionBeat {
     /// Creates a finite session-beat coordinate. Negative beats are valid.
@@ -68,12 +73,6 @@ impl SessionBeat {
         } else {
             Err(SessionBeatError { value })
         }
-    }
-
-    #[must_use]
-    /// Returns the continuous beat coordinate.
-    pub fn get(self) -> f64 {
-        self.0
     }
 }
 
@@ -94,7 +93,8 @@ pub struct SessionBeatError {
 }
 
 /// Monotonic generation of a committed session transport configuration.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, derive_more::Display)]
+#[display("{_0}")]
 #[repr(transparent)]
 pub struct TransportRevision(NonZeroU64);
 
@@ -109,16 +109,12 @@ impl TransportRevision {
             .map(Self)
     }
 
-    #[must_use]
-    /// Returns the serialized revision value.
-    pub const fn get(self) -> u64 {
-        self.0.get()
-    }
-}
-
-impl fmt::Display for TransportRevision {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.get().fmt(formatter)
+    delegate::delegate! {
+        to self.0 {
+            /// Returns the serialized revision value.
+            #[must_use]
+            pub fn get(&self) -> u64;
+        }
     }
 }
 

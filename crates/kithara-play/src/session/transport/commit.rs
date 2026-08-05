@@ -95,21 +95,12 @@ impl TransportCommitStamp {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get, vis = "pub(crate)")]
 pub(crate) enum TransportCommitResult {
-    Aborted(TransportRevision),
-    Applied(TransportRevision),
-    Rejected(TransportRevision),
-}
-
-impl TransportCommitResult {
-    pub(crate) const fn revision(self) -> TransportRevision {
-        match self {
-            Self::Aborted(revision) | Self::Applied(revision) | Self::Rejected(revision) => {
-                revision
-            }
-        }
-    }
+    Aborted(#[field(rename = revision)] TransportRevision),
+    Applied(#[field(rename = revision)] TransportRevision),
+    Rejected(#[field(rename = revision, copy)] TransportRevision),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, fieldwork::Fieldwork)]
