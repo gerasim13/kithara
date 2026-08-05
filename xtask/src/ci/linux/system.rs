@@ -9,12 +9,14 @@ use crate::ci::process::Process;
 /// host because they reach hardware.
 ///
 /// Most of them are what a Windows guest costs: the daemon that owns it, the
-/// resolver its network cannot start without, firmware it can boot from, a
+/// resolver its network cannot start without, the tool that creates its disk,
+/// firmware it can boot from, a
 /// software TPM it refuses to install without, the tool that creates it, and
 /// one to build the answer file that installs it unattended.
-const HOST_PACKAGES: [&str; 9] = [
+const HOST_PACKAGES: [&str; 10] = [
     "iptables",
     "dnsmasq-base",
+    "qemu-utils",
     "nvidia-container-toolkit",
     "qemu-system-x86",
     "libvirt-daemon-system",
