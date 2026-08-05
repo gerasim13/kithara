@@ -1,5 +1,4 @@
 mod button;
-mod chip;
 mod chrome;
 mod fader;
 mod knob;
@@ -13,7 +12,6 @@ mod tree_row;
 #[cfg(feature = "masonry-host")]
 pub(crate) use button::button_glyphs;
 pub(crate) use button::{ButtonView, supports_engine_input, view as button};
-pub(crate) use chip::chip;
 pub(crate) use chrome::{ChromeLeaf, chrome_leaf, header_chevron};
 pub(crate) use fader::{crossfader, fader_slider};
 pub(crate) use knob::{KnobPaint, KnobProgram};

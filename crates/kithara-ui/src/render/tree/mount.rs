@@ -1,7 +1,7 @@
 use iced::{alignment::Horizontal, widget::Space};
 
 use super::{
-    atom::{chip, crossfader, fader, glyph, knob, nav_item, readout, segmented, select, tab_large},
+    atom::{crossfader, fader, glyph, knob, nav_item, readout, segmented, select, tab_large},
     geometry::Rendered,
     panel::{context_bar, deck_summary, time, track_list, tree, vis},
     read_flag, wave_zoom,
@@ -352,14 +352,7 @@ impl ViewControl for mount::Readout {
 
 impl ViewControl for mount::Chip {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(chip(
-            cx.path,
-            cx.ui.resolve(self.label),
-            self.style,
-            cx.value,
-            cx.skin,
-            cx.owner,
-        ))
+        painted(self, cx)
     }
 }
 

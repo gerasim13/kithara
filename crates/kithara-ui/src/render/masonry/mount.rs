@@ -16,7 +16,6 @@ use super::{
 use crate::{
     atoms::{
         button::{Button, ButtonConfig, ButtonLabel},
-        chip::Chip,
         design::{crossfader::Crossfader, fader::Fader},
         nav_item::NavItem,
         painter::{ButtonData, FaderData, Labelled},
@@ -200,18 +199,7 @@ impl NodeControl for mount::Chip {
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        let chip = Painted::new(
-            Chip::new(self.style, host.skin),
-            Labelled {
-                active: host.reads_true(cx.read),
-                label: host.ui.resolve(self.label).to_owned(),
-            },
-            host.skin,
-        );
-        host.control_leaf(
-            host.owned(chip, cx.owner, cx.path, Painted::interactive),
-            cx.declared,
-        )
+        painted(self, host, cx)
     }
 }
 

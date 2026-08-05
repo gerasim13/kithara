@@ -9,7 +9,7 @@ use crate::{
     },
     compile::CompiledUi,
     ids::InternId,
-    module::{ChipStyle, FaderStyle, GlyphStyle, IconName, Tone},
+    module::{FaderStyle, GlyphStyle, IconName, Tone},
     render::{
         IcedSkin, InputOwner, ReadValue, Skin, UiEvent,
         controls::{KnobPaint, KnobProgram},
@@ -47,17 +47,6 @@ pub(super) fn fader<'a>(
         .owner(owner)
         .build()
         .view()
-}
-
-pub(super) fn chip<'a>(
-    path: &'a str,
-    label: &'a str,
-    style: ChipStyle,
-    value: Option<&ReadValue<'_>>,
-    skin: &'a Skin,
-    owner: InputOwner,
-) -> Element<'a, UiEvent> {
-    crate::render::controls::chip(path, label, style, value, skin, owner)
 }
 
 pub(super) fn knob<'a>(

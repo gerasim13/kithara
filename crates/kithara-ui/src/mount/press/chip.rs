@@ -14,3 +14,38 @@ impl Control for Chip {
         skin.chip.size
     }
 }
+
+#[cfg(feature = "render")]
+mod host {
+    use super::Chip;
+    use crate::{
+        atoms::{chip::Chip as Face, painter::Labelled},
+        compile::CompiledUi,
+        render::{
+            ReadValue, Skin,
+            controls::{Draws, Grip},
+        },
+    };
+
+    impl Draws for Chip {
+        type Painter = Face;
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(self.style, skin)
+        }
+
+        /// A chip carries a word the document wrote, so it shows it whether or
+        /// not an endpoint has said which way it is set — unlike a switch,
+        /// which is nothing but its state.
+        fn data(&self, value: Option<&ReadValue<'_>>, ui: &CompiledUi) -> Option<Labelled> {
+            Some(Labelled {
+                active: matches!(value, Some(ReadValue::Bool(true))),
+                label: ui.resolve(self.label).to_owned(),
+            })
+        }
+
+        fn grip(&self) -> Grip {
+            Grip::Press
+        }
+    }
+}
