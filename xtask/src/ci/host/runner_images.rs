@@ -22,9 +22,14 @@ impl JobVm {
     /// a build directory behind on the guest's own disk, and a guest that
     /// never stops never gives that space back: one grew from the base image's
     /// 27 gibibytes to 85 of its 90 and then failed a lint job on "No space
-    /// left on device". A nightly is eleven macOS jobs, so this recycles about
-    /// once per two full runs and costs one boot to do it.
-    const MAX_BUILDS: u32 = 24;
+    /// left on device".
+    ///
+    /// A nightly is eleven macOS jobs and cost about 1.3 gibibytes each,
+    /// measured across one run. The binding limit is the CI volume rather
+    /// than the guest's own disk — the image grows on the volume, which also
+    /// carries the other two guests and every cache — so the guest is
+    /// recycled once per full run, for one boot.
+    const MAX_BUILDS: u32 = 12;
 }
 
 impl RunnerManager<'_> {
