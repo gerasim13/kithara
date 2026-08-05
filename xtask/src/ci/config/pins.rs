@@ -14,6 +14,7 @@ pub(crate) struct CiPins {
     pub(crate) actions_runner_linux_amd64_sha256: String,
     pub(crate) actions_runner_linux_arm64_sha256: String,
     pub(crate) actions_runner_version: String,
+    pub(crate) actions_runner_windows_sha256: String,
     pub(crate) android_avd: String,
     pub(crate) android_build_tools_version: String,
     pub(crate) android_commandline_tools_linux_sha256: String,
@@ -45,7 +46,11 @@ pub(crate) struct CiPins {
     pub(crate) linux_runner_image: String,
     pub(crate) msrv_toolchain: String,
     pub(crate) nightly_toolchain: String,
+    pub(crate) rustup_version: String,
+    pub(crate) rustup_windows_sha256: String,
     pub(crate) stable_toolchain: String,
+    pub(crate) windows_eval_iso_sha256: String,
+    pub(crate) windows_eval_iso_url: String,
     /// Serialised last: TOML requires tables after plain values.
     pub(crate) cargo_tools: BTreeMap<String, String>,
 }
@@ -101,7 +106,9 @@ impl CiPins {
             ("linux_runner_image", self.linux_runner_image.as_str()),
             ("msrv_toolchain", self.msrv_toolchain.as_str()),
             ("nightly_toolchain", self.nightly_toolchain.as_str()),
+            ("rustup_version", self.rustup_version.as_str()),
             ("stable_toolchain", self.stable_toolchain.as_str()),
+            ("windows_eval_iso_url", self.windows_eval_iso_url.as_str()),
         ] {
             if value.trim().is_empty() {
                 bail!("CI pin {name} must not be empty");
@@ -133,6 +140,10 @@ impl CiPins {
             (
                 "actions_runner_linux_arm64_sha256",
                 self.actions_runner_linux_arm64_sha256.as_str(),
+            ),
+            (
+                "actions_runner_windows_sha256",
+                self.actions_runner_windows_sha256.as_str(),
             ),
             (
                 "android_commandline_tools_linux_sha256",
@@ -168,6 +179,11 @@ impl CiPins {
                 self.gitleaks_linux_arm64_sha256.as_str(),
             ),
             ("linux_base_digest", self.linux_base_digest.as_str()),
+            ("rustup_windows_sha256", self.rustup_windows_sha256.as_str()),
+            (
+                "windows_eval_iso_sha256",
+                self.windows_eval_iso_sha256.as_str(),
+            ),
         ] {
             if !is_sha256(digest) {
                 bail!("CI pin {name} must be a SHA-256 digest");

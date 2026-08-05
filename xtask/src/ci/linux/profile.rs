@@ -31,6 +31,22 @@ pub(crate) struct LinuxHost {
     pub(crate) token_file: PathBuf,
     /// Serialised last: TOML requires tables after plain values.
     pub(crate) runners: Vec<LinuxRunner>,
+    /// The Windows guest this machine hosts, if it hosts one.
+    #[serde(default)]
+    pub(crate) windows: Option<WindowsGuest>,
+}
+
+/// A Windows virtual machine serving the lane that needs a real Windows.
+///
+/// Cross-compiling to MSVC answers whether the code builds; only a guest
+/// answers whether it runs.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WindowsGuest {
+    pub(crate) name: String,
+    pub(crate) vcpus: u32,
+    pub(crate) memory_mib: u32,
+    pub(crate) disk_gib: u32,
 }
 
 /// One runner served by this machine.
@@ -89,6 +105,9 @@ impl LinuxHost {
         if self.runners.is_empty() {
             bail!("Linux CI profile must define at least one runner");
         }
+        if let Some(windows) = &self.windows {
+            windows.validate()?;
+        }
         let mut seen = BTreeSet::new();
         for runner in &self.runners {
             runner.validate()?;
@@ -104,6 +123,20 @@ impl LinuxHost {
             .iter()
             .find(|runner| runner.name == name)
             .with_context(|| format!("Linux CI profile has no runner named {name}"))
+    }
+}
+
+impl WindowsGuest {
+    fn validate(&self) -> Result<()> {
+        if !safe_name(&self.name) {
+            bail!("Linux CI profile's Windows guest name is unusable");
+        }
+        // Windows 11 refuses to install below these, and a guest that installs
+        // but cannot compile is worse than one that never started.
+        if self.vcpus < 2 || self.memory_mib < 4096 || self.disk_gib < 64 {
+            bail!("the Windows guest needs at least 2 vCPUs, 4 GiB, and 64 GiB");
+        }
+        Ok(())
     }
 }
 

@@ -7,7 +7,21 @@ use crate::ci::process::Process;
 /// Host packages a runner machine needs beyond Docker itself. Everything a job
 /// compiles with lives in the image; these are the pieces that must sit on the
 /// host because they reach hardware.
-const HOST_PACKAGES: [&str; 3] = ["iptables", "nvidia-container-toolkit", "qemu-system-x86"];
+///
+/// The last five are what a Windows guest costs: the daemon that owns it,
+/// firmware it can boot from, a software TPM it refuses to install without, the
+/// tool that creates it, and one to build the answer file that installs it
+/// unattended.
+const HOST_PACKAGES: [&str; 8] = [
+    "iptables",
+    "nvidia-container-toolkit",
+    "qemu-system-x86",
+    "libvirt-daemon-system",
+    "ovmf",
+    "swtpm-tools",
+    "virtinst",
+    "xorriso",
+];
 
 /// Prepare the machine a runner will live on: its caches, its network, and the
 /// packages that cannot live in an image.

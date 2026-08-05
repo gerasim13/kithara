@@ -6,7 +6,7 @@ use clap::{Args, Subcommand};
 use super::{
     firewall,
     profile::{LINUX_CONFIG_PATH, LinuxHost},
-    registration, services, system,
+    registration, services, system, windows,
 };
 use crate::ci::{
     config::{CiPins, PINS_PATH},
@@ -44,6 +44,8 @@ enum LinuxCommand {
     },
     /// Write and enable one service per runner in the profile.
     InstallServices,
+    /// Install the Windows guest that serves the Windows lane.
+    InstallWindows,
     /// Report what the machine is currently serving.
     Health,
 }
@@ -70,6 +72,10 @@ pub(crate) fn run(args: &LinuxArgs) -> Result<()> {
                 .to_str()
                 .context("this executable's path is not UTF-8")?;
             services::install(&process, &host, &pins, executable)
+        }
+        LinuxCommand::InstallWindows => {
+            let pins = CiPins::load(&args.pins)?;
+            windows::install(&process, &host, &pins, &root)
         }
         LinuxCommand::Health => services::health(&process, &host),
     }
@@ -108,6 +114,7 @@ mod tests {
             ]
             .as_slice(),
             ["install-services"].as_slice(),
+            ["install-windows"].as_slice(),
             ["health"].as_slice(),
         ] {
             assert!(parse(command).is_ok(), "{command:?} must parse");

@@ -24,3 +24,9 @@ memory = "48g"
 labels = ["self-hosted", "linux", "x64", "kithara", "android"]
 devices = ["/dev/kvm"]
 flavor = "android"
+
+[windows]
+name = "kithara-ci-windows"
+vcpus = 8
+memory_mib = 16384
+disk_gib = 200
