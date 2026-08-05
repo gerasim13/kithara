@@ -81,7 +81,8 @@ mutator of track state through `update_state`. Sub-owners never take
 - `SharedStream<T>` — byte-space ground truth (position, len, phase, byte map,
   anchors, init range). No other owner clones byte-range policy.
 - `ActiveDecode` — the authoritative active `DecoderGeneration`, the optional
-  `IncomingDecode`, the always-on `PcmBlender`, the effect chain, the EOF drain.
+  `IncomingDecode`, the always-on `PcmBlender`, the zero-retention
+  `SourceWindow`, the effect chain, and the EOF drain.
   Each `DecoderGeneration` owns its decoder facts, base offset, install epoch,
   per-generation `GaplessStage`, and staged chunks.
 - `ReadinessGate` — the only owner of byte-range readiness calculations; gate and
@@ -317,11 +318,11 @@ stretch slot exists only when a stretch backend is compiled in and
 `AudioConfig::stretch` is set; without one, including wasm, no speed DSP is
 inserted and PCM output is pinned to 1.0.
 
-**Coordinate space.** The whole pipeline runs in decoder/song time
-(`PcmMeta.timestamp` / `end_timestamp` / `frame_offset`, the seek target, the UI
-playhead). A duration-changing `AudioEffect` is the sole timeline authority: it
-restamps only `spec` + `frames` and carries the consumed input's song-time meta
-forward, so there is no translation layer and no parallel frame counter.
+**Coordinate space.** `PcmMeta.timestamp`, `end_timestamp`, and `frame_offset`
+stay in decoder/song time, while a duration-changing effect rewrites `frames` in
+the output domain. `SourceWindow` is the explicit translation boundary: resume
+and splice frontiers come from its source endpoint minus source frames still held
+by the effect chain, never from transformed output frame counts.
 
 **Sample guard.** `sanitize_sample` (`kithara-decode`, which owns it) runs on the
 *input* of every stage taking untrusted samples: `IsolatorEq::process_sample`
@@ -357,6 +358,25 @@ is a typed config decision, never a runtime fallback chain. Output capacity is a
 correctness invariant, not a knob: the backend reports `output_frames_for_input`
 in the ceil frame domain and the decoder adapter sizes buffers from that.
 
+## Source window
+
+`ActiveDecode` owns a zero-retention `SourceWindow` between `PcmBlender` and the
+effect chain. `admit` records the track-absolute source endpoint and decoded
+sample rate while returning the same `PcmChunk` by move, so forward samples are
+not copied or allocated. After an effect emits, the committed source endpoint is
+the admitted endpoint minus the chain's saturating sum of held source frames.
+`ResumeCursor` records only that committed endpoint; no admitted endpoint means
+the previous proven head remains unchanged. Seek and recreate resets clear the
+window with the effects and EOF drain.
+
+`AudioEffect::held_source_frames` has no default: a wrong answer moves where a
+recreate resumes and where a variant splice lands, so every effect states its own
+hold instead of inheriting a silent zero. The count is on the **source** axis,
+which only a stage owning the source-to-output mapping can express. The chain
+production builds is `[TimeStretchProcessor?, ..custom]` and the stretch slot is
+its sole duration-changing stage; an effect behind it that buffered could not name
+its hold in source frames, so such an effect must be sample-synchronous.
+
 ## Time-stretch (speed and key-lock)
 
 Playback speed lives in the source-domain `TimeStretchProcessor`; the resampler
@@ -387,6 +407,13 @@ are stable: 1 = Signalsmith, 2 = Bungee), so an absent backend is
 un-representable rather than a runtime error. With no `stretch-*` feature the
 dependency is not linked and the kind/backend/processor re-exports compile out;
 `StretchControls` still exposes speed and region-plan storage.
+
+While active, `TimeStretchProcessor` reports the backend's source-frame input
+latency clamped to source frames pushed since its last backend reset. Unity
+passthrough reports zero. A real Signalsmith tail drain releases the hold;
+Bungee's no-op flush retains it because that backend drops the tail. This held
+count is the source/output translation used by `SourceWindow`; transformed
+`PcmMeta.frames` is never a decode frontier.
 
 **Region plan (beat-aligned stretch).** The pure region types live in
 `kithara_audio::region` and are re-exported unconditionally. Plans are sorted,

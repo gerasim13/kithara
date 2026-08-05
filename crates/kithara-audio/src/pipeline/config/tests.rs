@@ -13,6 +13,9 @@ impl AudioEffect for PassthroughEffect {
     fn flush(&mut self) -> Option<PcmChunk> {
         None
     }
+    fn held_source_frames(&self) -> u64 {
+        0
+    }
     fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
         Some(chunk)
     }
