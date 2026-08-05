@@ -20,13 +20,8 @@ pub enum CoordinateError {
 }
 
 /// A continuous coordinate in decoded, normalized, host-rate source audio.
-#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, fieldwork::Fieldwork)]
-#[fieldwork(get)]
-pub struct SourceFrame(
-    /// Returns the continuous source-frame coordinate.
-    #[field(get = get, copy)]
-    f64,
-);
+#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, derive_more::Into)]
+pub struct SourceFrame(f64);
 
 impl SourceFrame {
     /// Creates a finite, non-negative source-frame coordinate.
@@ -58,13 +53,8 @@ impl TryFrom<u64> for SourceFrame {
 }
 
 /// A continuous coordinate in one track's analysed beat map.
-#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, fieldwork::Fieldwork)]
-#[fieldwork(get)]
-pub struct TrackBeat(
-    /// Returns the continuous track-beat coordinate.
-    #[field(get = get, copy)]
-    f64,
-);
+#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, derive_more::Into)]
+pub struct TrackBeat(f64);
 
 impl TrackBeat {
     /// Creates a finite track-beat coordinate. Negative beats are valid.
@@ -184,7 +174,7 @@ impl TrackBeatMap {
     #[must_use]
     pub fn source_frame_at(&self, beat: TrackBeat) -> Option<SourceFrame> {
         let zero = self.zero_index.to_f64()?;
-        let ordinal = beat.get() + zero;
+        let ordinal = f64::from(beat) + zero;
         let last = self.source_markers.len().checked_sub(1)?;
         let last_f64 = last.to_f64()?;
         if ordinal < 0.0 || ordinal > last_f64 {
@@ -194,8 +184,8 @@ impl TrackBeatMap {
             return self.source_markers.get(last).copied();
         }
         let segment = ordinal.floor().to_usize()?;
-        let start = self.source_markers.get(segment)?.get();
-        let end = self.source_markers.get(segment + 1)?.get();
+        let start = f64::from(*self.source_markers.get(segment)?);
+        let end = f64::from(*self.source_markers.get(segment + 1)?);
         let fraction = ordinal - segment.to_f64()?;
         SourceFrame::new(start + (end - start) * fraction).ok()
     }
@@ -212,15 +202,15 @@ impl TrackBeatMap {
         }
         let upper = self
             .source_markers
-            .partition_point(|marker| marker.get() <= source.get());
+            .partition_point(|marker| *marker <= source);
         let segment = match upper {
             0 => 0,
             value if value >= self.source_markers.len() => self.source_markers.len() - 2,
             value => value - 1,
         };
-        let start = self.source_markers[segment].get();
-        let end = self.source_markers[segment + 1].get();
-        let fraction = (source.get() - start) / (end - start);
+        let start = f64::from(self.source_markers[segment]);
+        let end = f64::from(self.source_markers[segment + 1]);
+        let fraction = (f64::from(source) - start) / (end - start);
         let beat = segment.to_f64()? - self.zero_index.to_f64()? + fraction;
         TrackBeat::new(beat).ok()
     }
@@ -255,7 +245,7 @@ impl TrackBeatMap {
                 });
             }
             let source = SourceFrame::try_from(frame)
-                .and_then(|frame| SourceFrame::new(frame.get() * scale))
+                .and_then(|frame| SourceFrame::new(f64::from(frame) * scale))
                 .map_err(|source| BeatMapError::SourceCoordinate { index, source })?;
             source_markers.push(source);
         }
@@ -442,9 +432,9 @@ mod tests {
             // The 160/147 ratio is not representable in f64; markers land within
             // sub-nanosample rounding of the exact rational.
             assert!(
-                (source.get() - expected).abs() <= 1e-9,
+                (f64::from(source) - expected).abs() <= 1e-9,
                 "scaled marker: expected {expected}, got {}",
-                source.get()
+                f64::from(source)
             );
         }
         assert_eq!(map.source_frame_count(), 96_000);
@@ -479,9 +469,10 @@ mod tests {
             Err(CoordinateError::NegativeSourceFrame)
         );
         assert_eq!(
-            TrackBeat::new(-1.0)
-                .expect("invariant: negative track beats are part of the coordinate domain")
-                .get(),
+            f64::from(
+                TrackBeat::new(-1.0)
+                    .expect("invariant: negative track beats are part of the coordinate domain")
+            ),
             -1.0
         );
     }

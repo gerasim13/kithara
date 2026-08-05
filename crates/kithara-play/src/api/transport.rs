@@ -1,5 +1,5 @@
 /// A continuous beat coordinate on the session transport.
-#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, derive_more::Into)]
 pub struct SessionBeat(f64);
 
 impl SessionBeat {
@@ -10,12 +10,6 @@ impl SessionBeat {
         } else {
             Err(SessionBeatError { value })
         }
-    }
-
-    #[must_use]
-    /// Returns the continuous beat coordinate.
-    pub fn get(self) -> f64 {
-        self.0
     }
 }
 
@@ -46,8 +40,8 @@ mod tests {
         let negative = SessionBeat::new(-1.5).expect("invariant: finite negative beat is valid");
         let zero = SessionBeat::new(0.0).expect("invariant: zero beat is valid");
 
-        assert_eq!(negative.get(), -1.5);
-        assert_eq!(zero.get(), 0.0);
+        assert_eq!(f64::from(negative), -1.5);
+        assert_eq!(f64::from(zero), 0.0);
     }
 
     #[kithara::test]
