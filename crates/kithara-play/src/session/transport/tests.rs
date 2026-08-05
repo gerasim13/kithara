@@ -211,7 +211,7 @@ fn tempo_commit_waits_for_the_matching_render_boundary() {
     let staged = snapshot(&mut output);
     assert_eq!(staged.revision(), TransportRevision::FIRST);
     assert_eq!(staged.tempo(), active.tempo());
-    assert!((staged.position().get() - 0.04).abs() <= f64::EPSILON);
+    assert!((f64::from(staged.position()) - 0.04).abs() <= f64::EPSILON);
 
     process_node(
         &mut processor,
@@ -230,7 +230,7 @@ fn tempo_commit_waits_for_the_matching_render_boundary() {
         .expect("invariant: applied transport publishes a snapshot");
     assert_eq!(applied.revision(), second_revision());
     assert_eq!(applied.tempo(), next.tempo());
-    assert!((applied.position().get() - 0.05).abs() <= f64::EPSILON);
+    assert!((f64::from(applied.position()) - 0.05).abs() <= f64::EPSILON);
 }
 
 #[kithara::test]
@@ -261,7 +261,7 @@ fn relocation_commit_reanchors_the_exact_target_beat() {
 
     let relocated = snapshot(&mut output);
     assert_eq!(relocated.revision(), second_revision());
-    assert!((relocated.position().get() - 3.27).abs() <= f64::EPSILON);
+    assert!((f64::from(relocated.position()) - 3.27).abs() <= f64::EPSILON);
 }
 
 #[kithara::test]
@@ -291,7 +291,7 @@ fn inactive_transport_publishes_a_frozen_position() {
     let paused_snapshot = snapshot(&mut output);
     assert!(!paused_snapshot.is_playing());
     assert_eq!(paused_snapshot.revision(), second_revision());
-    assert!((paused_snapshot.position().get() - 0.04).abs() <= f64::EPSILON);
+    assert!((f64::from(paused_snapshot.position()) - 0.04).abs() <= f64::EPSILON);
 
     assert_eq!(
         process_result(&proc_info_at(block_frame(3)), &mut extra, None, None,),
@@ -341,7 +341,7 @@ fn late_transport_commit_is_rejected_without_changing_the_active_commit() {
         .snapshot()
         .expect("invariant: rejection keeps the active snapshot");
     assert_eq!(current.revision(), TransportRevision::FIRST);
-    assert!((current.position().get() - 0.08).abs() <= f64::EPSILON);
+    assert!((f64::from(current.position()) - 0.08).abs() <= f64::EPSILON);
 }
 
 #[kithara::test]
@@ -377,7 +377,7 @@ fn stale_transport_commit_is_rejected_without_breaking_the_clock() {
     );
     let current = snapshot(&mut output);
     assert_eq!(current.revision(), active.revision());
-    assert!((current.position().get() - 0.06).abs() <= f64::EPSILON);
+    assert!((f64::from(current.position()) - 0.06).abs() <= f64::EPSILON);
 }
 
 #[kithara::test]
@@ -448,7 +448,7 @@ fn route_reset_rejects_pending_commit_and_reanchors_the_active_beat() {
     process_node(&mut processor, &proc_info_at(0), &mut extra, None, None);
     let restarted = snapshot(&mut output);
     assert_eq!(restarted.revision(), TransportRevision::FIRST);
-    assert!((restarted.position().get() - 0.06).abs() <= f64::EPSILON);
+    assert!((f64::from(restarted.position()) - 0.06).abs() <= f64::EPSILON);
 }
 
 #[kithara::test]

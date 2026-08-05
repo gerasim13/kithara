@@ -186,7 +186,7 @@ fn schedule_commit<B: AudioBackend>(
         publish_transport_event(
             state,
             &TransportEvent::Failed {
-                revision: Some(revision.get()),
+                revision: Some(u64::from(revision)),
                 reason: error.to_string(),
             },
         );
@@ -372,7 +372,7 @@ fn apply_completion<B: AudioBackend>(
         publish_transport_event(
             state,
             &TransportEvent::Failed {
-                revision: Some(revision.get()),
+                revision: Some(u64::from(revision)),
                 reason: "render graph rejected transport commit".to_owned(),
             },
         );
@@ -393,7 +393,7 @@ fn transport_events(
     previous: Option<SessionTransportCommit>,
     next: SessionTransportCommit,
 ) -> [Option<TransportEvent>; 3] {
-    let revision = next.revision().get();
+    let revision = u64::from(next.revision());
     let tempo = previous
         .is_none_or(|commit| commit.tempo() != next.tempo())
         .then(|| TransportEvent::TempoCommitted {
@@ -409,7 +409,7 @@ fn transport_events(
     let seek = match next.boundary() {
         TransportBoundary::Continuous => None,
         TransportBoundary::Relocate(target) => Some(TransportEvent::SeekCommitted {
-            position_beats: target.get(),
+            position_beats: f64::from(target),
             revision,
         }),
     };

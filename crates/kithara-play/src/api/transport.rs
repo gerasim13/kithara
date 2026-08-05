@@ -57,13 +57,8 @@ pub struct TempoError {
 }
 
 /// A continuous beat coordinate on the session transport.
-#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, fieldwork::Fieldwork)]
-#[fieldwork(get)]
-pub struct SessionBeat(
-    /// Returns the continuous beat coordinate.
-    #[field(get = get, copy)]
-    f64,
-);
+#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, derive_more::Into)]
+pub struct SessionBeat(f64);
 
 impl SessionBeat {
     /// Creates a finite session-beat coordinate. Negative beats are valid.
@@ -93,8 +88,20 @@ pub struct SessionBeatError {
 }
 
 /// Monotonic generation of a committed session transport configuration.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, derive_more::Display)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    derive_more::Display,
+    derive_more::Into,
+)]
 #[display("{_0}")]
+#[into(u64)]
 #[repr(transparent)]
 pub struct TransportRevision(NonZeroU64);
 
@@ -107,14 +114,6 @@ impl TransportRevision {
             .checked_add(1)
             .and_then(NonZeroU64::new)
             .map(Self)
-    }
-
-    delegate::delegate! {
-        to self.0 {
-            /// Returns the serialized revision value.
-            #[must_use]
-            pub fn get(&self) -> u64;
-        }
     }
 }
 
@@ -164,8 +163,8 @@ mod tests {
         let negative = SessionBeat::new(-1.5).expect("invariant: finite negative beat is valid");
         let zero = SessionBeat::new(0.0).expect("invariant: zero beat is valid");
 
-        assert_eq!(negative.get(), -1.5);
-        assert_eq!(zero.get(), 0.0);
+        assert_eq!(f64::from(negative), -1.5);
+        assert_eq!(f64::from(zero), 0.0);
     }
 
     #[kithara::test]

@@ -102,11 +102,11 @@ fn commit_initial_transport(
         vec![
             TransportEvent::TempoCommitted {
                 beats_per_minute: 120.0,
-                revision: committed.revision().get(),
+                revision: u64::from(committed.revision()),
             },
             TransportEvent::PlayStateCommitted {
                 playing: true,
-                revision: committed.revision().get(),
+                revision: u64::from(committed.revision()),
             },
         ]
     );
@@ -114,7 +114,7 @@ fn commit_initial_transport(
 }
 
 fn position(session: &ManualRingSession) -> f64 {
-    snapshot(session).position().get()
+    f64::from(snapshot(session).position())
 }
 
 fn clock_samples(session: &ManualRingSession) -> u64 {
@@ -141,11 +141,11 @@ fn transport_commit_is_published_to_every_registered_player_bus() {
     let expected = vec![
         TransportEvent::TempoCommitted {
             beats_per_minute: 120.0,
-            revision: committed.revision().get(),
+            revision: u64::from(committed.revision()),
         },
         TransportEvent::PlayStateCommitted {
             playing: true,
-            revision: committed.revision().get(),
+            revision: u64::from(committed.revision()),
         },
     ];
 
@@ -169,7 +169,7 @@ fn tempo_commit_announces_only_the_tempo() {
         drain_transport_events(&mut events),
         vec![TransportEvent::TempoCommitted {
             beats_per_minute: 90.0,
-            revision: committed.revision().get(),
+            revision: u64::from(committed.revision()),
         }]
     );
 }
@@ -190,7 +190,7 @@ fn pause_commit_announces_the_play_state_with_the_applied_revision() {
         drain_transport_events(&mut events),
         vec![TransportEvent::PlayStateCommitted {
             playing: false,
-            revision: committed.revision().get(),
+            revision: u64::from(committed.revision()),
         }]
     );
 }
@@ -215,8 +215,8 @@ fn seek_commit_announces_the_target_beat() {
     assert_eq!(
         drain_transport_events(&mut events),
         vec![TransportEvent::SeekCommitted {
-            position_beats: target.get(),
-            revision: committed.revision().get(),
+            position_beats: f64::from(target),
+            revision: u64::from(committed.revision()),
         }]
     );
 }
@@ -250,7 +250,7 @@ fn each_commit_publishes_its_events_once() {
     let committed = snapshot(&session);
     let expected = vec![TransportEvent::TempoCommitted {
         beats_per_minute: 90.0,
-        revision: committed.revision().get(),
+        revision: u64::from(committed.revision()),
     }];
     let mut published = drain_transport_events(&mut events);
 
@@ -323,7 +323,7 @@ fn tempo_change_preserves_beat_and_changes_slope_at_the_scheduled_boundary() {
     let old_step = f64::from(BLOCK_FRAMES) * 2.0 / f64::from(SAMPLE_RATE);
     assert_eq!(boundary.revision(), initial.revision());
     assert!(
-        (boundary.position().get() - initial.position().get() - old_step).abs()
+        (f64::from(boundary.position()) - f64::from(initial.position()) - old_step).abs()
             <= sample_tolerance(2.0)
     );
 
@@ -332,10 +332,13 @@ fn tempo_change_preserves_beat_and_changes_slope_at_the_scheduled_boundary() {
         .expect("invariant: new tempo applies at the boundary");
     let changed = snapshot(&session);
     let new_step = f64::from(BLOCK_FRAMES) / f64::from(SAMPLE_RATE);
-    assert_eq!(changed.revision().get(), initial.revision().get() + 1);
+    assert_eq!(
+        u64::from(changed.revision()),
+        u64::from(initial.revision()) + 1
+    );
     assert_eq!(changed.tempo().beats_per_minute(), 60.0);
     assert!(
-        (changed.position().get() - boundary.position().get() - new_step).abs()
+        (f64::from(changed.position()) - f64::from(boundary.position()) - new_step).abs()
             <= sample_tolerance(1.0)
     );
 }
@@ -363,7 +366,7 @@ fn setting_the_same_tempo_does_not_create_a_new_revision() {
         .credit(1)
         .expect("invariant: initial tempo commits once");
     let committed = snapshot(&session);
-    assert_eq!(committed.revision().get(), 1);
+    assert_eq!(u64::from(committed.revision()), 1);
 
     set_tempo(&session, 120.0);
     // Render past where a redundant revision would have landed: without this
@@ -396,8 +399,8 @@ fn session_seek_relocates_to_the_exact_target_beat() {
         .expect("invariant: seek applies at the exact boundary");
 
     let rendered_step = f64::from(BLOCK_FRAMES) * 2.0 / f64::from(SAMPLE_RATE);
-    let relocated_boundary = snapshot(&session).position().get() - rendered_step;
-    assert!((relocated_boundary - target.get()).abs() <= sample_tolerance(2.0));
+    let relocated_boundary = f64::from(snapshot(&session).position()) - rendered_step;
+    assert!((relocated_boundary - f64::from(target)).abs() <= sample_tolerance(2.0));
 }
 
 #[kithara::test]
@@ -472,7 +475,8 @@ fn resuming_after_a_pause_continues_from_the_held_position() {
     let step = f64::from(BLOCK_FRAMES) * 2.0 / f64::from(SAMPLE_RATE);
     assert!(resumed.is_playing());
     assert!(
-        (resumed.position().get() - paused.position().get() - step).abs() <= sample_tolerance(2.0),
+        (f64::from(resumed.position()) - f64::from(paused.position()) - step).abs()
+            <= sample_tolerance(2.0),
         "resume must continue from the held beat, not skip the paused span"
     );
 }

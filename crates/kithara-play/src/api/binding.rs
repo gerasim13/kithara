@@ -74,10 +74,11 @@ impl TrackBinding {
 
     /// Returns the track beat corresponding to this session beat.
     pub fn track_beat_at(&self, session_beat: SessionBeat) -> Result<TrackBeat, SyncUnavailable> {
-        let delta = session_beat.get() - self.session_anchor.get();
+        let delta = f64::from(session_beat) - f64::from(self.session_anchor);
+        let anchor = f64::from(self.track_anchor);
         let value = match self.direction {
-            PlaybackDirection::Forward => self.track_anchor.get() + delta,
-            PlaybackDirection::Reverse => self.track_anchor.get() - delta,
+            PlaybackDirection::Forward => anchor + delta,
+            PlaybackDirection::Reverse => anchor - delta,
         };
         TrackBeat::new(value).map_err(|_| SyncUnavailable::CoordinateOverflow)
     }

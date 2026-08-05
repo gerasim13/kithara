@@ -23,12 +23,11 @@ struct TransportAnchor {
 
 impl TransportAnchor {
     fn beat_at(self, frame: RenderFrame) -> Result<SessionBeat, TransportProcessError> {
-        let frames = frame
-            .get()
-            .checked_sub(self.frame.get())
+        let frames = i64::from(frame)
+            .checked_sub(i64::from(self.frame))
             .and_then(|value| value.to_f64())
             .ok_or(TransportProcessError::InvalidBeatRange)?;
-        let beats = self.beat.get()
+        let beats = f64::from(self.beat)
             + frames * self.commit.tempo().beats_per_second() / f64::from(self.sample_rate.get());
         SessionBeat::new(beats).map_err(|_| TransportProcessError::InvalidBeatRange)
     }
@@ -156,7 +155,7 @@ impl TransportCommitState {
         };
         if stamp.previous() != self.active
             || stamp.sample_rate() != info.sample_rate
-            || stamp.target_frame().get() != info.clock_samples.0
+            || i64::from(stamp.target_frame()) != info.clock_samples.0
         {
             self.reject_revision(revision);
             return Ok(());
@@ -235,7 +234,7 @@ impl TransportCommitState {
         if self.pending.is_some()
             || stamp.previous() != self.active
             || stamp.sample_rate() != info.sample_rate
-            || stamp.target_frame().get() < info.clock_samples.0
+            || i64::from(stamp.target_frame()) < info.clock_samples.0
         {
             self.reject_revision(revision);
             return;
@@ -381,7 +380,7 @@ impl TransportCommitState {
             return Err(TransportProcessError::FrameDiscontinuity);
         }
         if let Some(boundary) = self.boundary
-            && boundary.frame.get() != info.clock_samples.0
+            && i64::from(boundary.frame) != info.clock_samples.0
         {
             return Err(TransportProcessError::FrameDiscontinuity);
         }

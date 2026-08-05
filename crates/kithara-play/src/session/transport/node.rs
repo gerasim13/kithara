@@ -80,9 +80,9 @@ impl TransportControl {
         ctx.schedule_event_for(
             self.node_id,
             NodeEventType::custom(TransportCommitEvent::Apply(stamp.revision())),
-            Some(EventInstant::Samples(InstantSamples(
-                stamp.target_frame().get(),
-            ))),
+            Some(EventInstant::Samples(InstantSamples(i64::from(
+                stamp.target_frame(),
+            )))),
         );
     }
 }

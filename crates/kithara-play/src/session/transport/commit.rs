@@ -47,16 +47,12 @@ impl SessionTransportCommit {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, derive_more::Into)]
 pub(crate) struct RenderFrame(i64);
 
 impl RenderFrame {
     pub(crate) const fn new(value: i64) -> Self {
         Self(value)
-    }
-
-    pub(crate) const fn get(self) -> i64 {
-        self.0
     }
 }
 
