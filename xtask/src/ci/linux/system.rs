@@ -8,12 +8,13 @@ use crate::ci::process::Process;
 /// compiles with lives in the image; these are the pieces that must sit on the
 /// host because they reach hardware.
 ///
-/// The last five are what a Windows guest costs: the daemon that owns it,
-/// firmware it can boot from, a software TPM it refuses to install without, the
-/// tool that creates it, and one to build the answer file that installs it
-/// unattended.
-const HOST_PACKAGES: [&str; 8] = [
+/// Most of them are what a Windows guest costs: the daemon that owns it, the
+/// resolver its network cannot start without, firmware it can boot from, a
+/// software TPM it refuses to install without, the tool that creates it, and
+/// one to build the answer file that installs it unattended.
+const HOST_PACKAGES: [&str; 9] = [
     "iptables",
+    "dnsmasq-base",
     "nvidia-container-toolkit",
     "qemu-system-x86",
     "libvirt-daemon-system",

@@ -60,20 +60,28 @@ pub(super) fn install(
     process.require_tools(&["virsh", "virt-install", "xorriso"])?;
 
     // libvirt ships its network defined but not started, and a guest attached
-    // to a network that is down installs with no way to reach anything.
-    process
-        .run(
-            "virsh",
-            &["net-start", &guest.network],
-            "start the guest network",
-        )
-        .or_else(|_| {
-            process.run(
-                "virsh",
-                &["net-info", &guest.network],
-                "confirm the guest network exists",
-            )
-        })?;
+    // to a network that is down installs with no way to reach anything. Its
+    // state is read back rather than inferred from the start succeeding: a
+    // network that was already up reports an error that means nothing is wrong.
+    let _ = process.run(
+        "virsh",
+        &["net-start", &guest.network],
+        "start the guest network",
+    );
+    let state = process.capture(
+        "virsh",
+        &["net-info", &guest.network],
+        "read the guest network",
+    )?;
+    if !state
+        .lines()
+        .any(|line| line.starts_with("Active:") && line.contains("yes"))
+    {
+        bail!(
+            "the guest network {} is not running; libvirt reported:\n{state}",
+            guest.network
+        );
+    }
 
     let media = host.cache_root.join("iso/windows-eval.iso");
     verify_media(
@@ -100,8 +108,9 @@ pub(super) fn install(
         &guest.memory_mib.to_string(),
         "--disk",
         &format!("size={},format=qcow2", guest.disk_gib),
-        "--disk",
-        &format!("{},device=cdrom", path_text(&media)?),
+        // The installation media is the install method, not just another disk.
+        "--cdrom",
+        path_text(&media)?,
         "--disk",
         &format!("{},device=cdrom", path_text(&answers)?),
         "--network",
