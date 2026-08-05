@@ -11,7 +11,9 @@ use tracing::{info, warn};
 
 use crate::ci::{config::CiConfig, process::Process};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+/// Ordered least to most urgent: the watchdog reports the worst volume, not
+/// the total, so that a roomy one cannot hide a full one.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(super) enum Pressure {
     Normal,
@@ -30,8 +32,39 @@ pub(super) struct HostStorage<'a> {
 struct Health<'a> {
     volume_used_bytes: u64,
     pressure: Pressure,
+    /// Named so an operator can see which volume is under pressure without
+    /// running `df` by hand.
+    volumes: Vec<VolumeHealth>,
     runner: &'a str,
     timestamp: u64,
+}
+
+#[derive(Serialize)]
+struct VolumeHealth {
+    path: String,
+    used_bytes: u64,
+    total_bytes: u64,
+    pressure: Pressure,
+}
+
+struct Volume {
+    path: PathBuf,
+    used: u64,
+    total: u64,
+}
+
+impl Volume {
+    fn read(path: &Path) -> Result<Self> {
+        let total = fs4::total_space(path)
+            .with_context(|| format!("reading total space for {}", path.display()))?;
+        let available = fs4::available_space(path)
+            .with_context(|| format!("reading available space for {}", path.display()))?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            used: total.saturating_sub(available),
+            total,
+        })
+    }
 }
 
 impl<'a> HostStorage<'a> {
@@ -75,14 +108,11 @@ impl<'a> HostStorage<'a> {
 
     pub(super) fn preflight(&self) -> Result<()> {
         let used = self.used_bytes()?;
-        let pressure = self.pressure(used);
+        let (pressure, volume) = self.worst_pressure()?;
         match pressure {
-            Pressure::Reject => bail!(
-                "CI volume uses {used} bytes; new jobs stop at {}",
-                self.config.host.reject_bytes
-            ),
+            Pressure::Reject => bail!("{} is full; new jobs stop here", volume.display()),
             Pressure::Soft | Pressure::Aggressive => {
-                warn!(used_bytes = used, ?pressure, "CI volume is under pressure");
+                warn!(volume = %volume.display(), ?pressure, "CI volume is under pressure");
             }
             Pressure::Normal => {}
         }
@@ -167,13 +197,24 @@ impl<'a> HostStorage<'a> {
 
     pub(super) fn health(&self) -> Result<()> {
         let used = self.used_bytes()?;
-        let pressure = self.pressure(used);
+        let volumes: Vec<VolumeHealth> = self
+            .volumes()?
+            .into_iter()
+            .map(|volume| VolumeHealth {
+                path: volume.path.display().to_string(),
+                used_bytes: volume.used,
+                total_bytes: volume.total,
+                pressure: self.pressure_of(&volume),
+            })
+            .collect();
+        let (pressure, worst) = self.worst_pressure()?;
         let runner = self.runner_state();
         serde_json::to_writer(
             io::stdout().lock(),
             &Health {
                 volume_used_bytes: used,
                 pressure,
+                volumes,
                 runner,
                 timestamp: unix_time()?,
             },
@@ -183,7 +224,7 @@ impl<'a> HostStorage<'a> {
             .write_all(b"\n")
             .context("terminating host health JSON")?;
         if pressure == Pressure::Reject {
-            bail!("CI volume is above the new-job threshold");
+            bail!("{} is above the new-job threshold", worst.display());
         }
         if runner == "stopped" {
             bail!("GitLab runner service is stopped");
@@ -192,11 +233,64 @@ impl<'a> HostStorage<'a> {
     }
 
     fn used_bytes(&self) -> Result<u64> {
-        let total = fs4::total_space(&self.root)
-            .with_context(|| format!("reading total space for {}", self.root.display()))?;
-        let available = fs4::available_space(&self.root)
-            .with_context(|| format!("reading available space for {}", self.root.display()))?;
-        Ok(total.saturating_sub(available))
+        Ok(self.volumes()?.into_iter().map(|volume| volume.used).sum())
+    }
+
+    /// Every volume CI storage sits on, in the order they should be reported.
+    ///
+    /// The guest images can be given a volume of their own, so that one guest
+    /// growing cannot refuse work for lanes that never touch it. `df` on the
+    /// checkout root then stops seeing them entirely, and a watchdog blind to
+    /// the largest consumer on the machine is worse than one watching a single
+    /// shared volume. Anything reached through `vm` that turns out to live on
+    /// another filesystem is measured as well.
+    fn volumes(&self) -> Result<Vec<Volume>> {
+        let mut volumes = vec![Volume::read(&self.root)?];
+        let guests = self.root.join("vm");
+        if guests.is_dir()
+            && let Ok(guests) = guests.canonicalize()
+            && !guests.starts_with(&self.root)
+        {
+            volumes.push(Volume::read(&guests)?);
+        }
+        Ok(volumes)
+    }
+
+    /// The worst any single volume is doing, and which one that is.
+    ///
+    /// Summing them would let a roomy volume hide a full one, which is the
+    /// failure this split exists to prevent.
+    fn worst_pressure(&self) -> Result<(Pressure, PathBuf)> {
+        let volumes = self.volumes()?;
+        let mut worst = (Pressure::Normal, self.root.clone());
+        for volume in volumes {
+            let pressure = self.pressure_of(&volume);
+            if pressure > worst.0 {
+                worst = (pressure, volume.path);
+            }
+        }
+        Ok(worst)
+    }
+
+    /// Thresholds are configured against the main volume. Any other volume is
+    /// held to the same proportions of its own capacity, so a second volume
+    /// needs no second set of numbers to go stale.
+    fn pressure_of(&self, volume: &Volume) -> Pressure {
+        let quota = self.config.host.quota_bytes;
+        if volume.path == self.root || volume.total == 0 || quota == 0 {
+            return self.pressure(volume.used);
+        }
+        let scale = |bytes: u64| -> u64 {
+            (u128::from(bytes) * u128::from(volume.total) / u128::from(quota))
+                .try_into()
+                .unwrap_or(u64::MAX)
+        };
+        pressure_for(
+            volume.used,
+            scale(self.config.host.soft_cleanup_bytes),
+            scale(self.config.host.aggressive_cleanup_bytes),
+            scale(self.config.host.reject_bytes),
+        )
     }
 
     fn pressure(&self, used: u64) -> Pressure {
@@ -519,6 +613,33 @@ mod tests {
         assert_eq!(pressure_for(240, 240, 270, 285), Pressure::Soft);
         assert_eq!(pressure_for(270, 240, 270, 285), Pressure::Aggressive);
         assert_eq!(pressure_for(285, 240, 270, 285), Pressure::Reject);
+    }
+
+    #[test]
+    fn a_second_volume_is_held_to_the_same_proportions_of_its_own_size() {
+        let directory = tempfile::tempdir().unwrap();
+        let cfg = config(directory.path());
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage =
+            HostStorage::for_test(directory.path().to_path_buf(), &cfg, &process).unwrap();
+        // Thresholds are 240/270/285 against a 300-byte main volume, so a
+        // volume half that size refuses at 142 and is content at 119.
+        let half = |used| Volume {
+            path: PathBuf::from("/elsewhere"),
+            used,
+            total: 150,
+        };
+
+        assert_eq!(storage.pressure_of(&half(119)), Pressure::Normal);
+        assert_eq!(storage.pressure_of(&half(120)), Pressure::Soft);
+        assert_eq!(storage.pressure_of(&half(135)), Pressure::Aggressive);
+        assert_eq!(storage.pressure_of(&half(143)), Pressure::Reject);
+    }
+
+    #[test]
+    fn a_full_volume_is_not_hidden_by_a_roomy_one() {
+        assert!(Pressure::Reject > Pressure::Normal);
+        assert!(Pressure::Aggressive > Pressure::Soft);
     }
 
     #[test]
