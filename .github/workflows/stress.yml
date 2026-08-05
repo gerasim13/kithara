@@ -4,16 +4,21 @@ name: Stress
 # percent of runs needs hundreds of them before the rate means anything, which
 # is more than a shared machine can spare.
 on:
+  # Nightly, because a rate is only a rate once it has been measured: the whole
+  # suite repeated overnight turns "fails sometimes" into a number.
+  schedule:
+    - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
       filter:
         description: nextest expression selecting the tests to repeat
-        required: true
+        required: false
+        default: all()
         type: string
       count:
         description: how many times to repeat the selection
         required: false
-        default: "100"
+        default: "50"
         type: string
 
 concurrency:
@@ -37,7 +42,9 @@ jobs:
       # Dispatch inputs reach the command through the environment: interpolating
       # them into the script would let the caller write the script.
       - name: Repeat the selection
+        # A scheduled run carries no inputs at all, so the defaults live here
+        # too rather than only in the dispatch form.
         env:
-          FILTER: ${{ inputs.filter }}
-          COUNT: ${{ inputs.count }}
+          FILTER: ${{ inputs.filter || 'all()' }}
+          COUNT: ${{ inputs.count || '50' }}
         run: just test run -E "$FILTER" --stress-count "$COUNT"

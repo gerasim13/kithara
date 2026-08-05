@@ -5,6 +5,10 @@ name: CI
 # able to start one; only a push to a copy of this repository can.
 on:
   push:
+  # A nightly full run on a second architecture catches what a branch
+  # push does not: a machine the maintainers do not develop on.
+  schedule:
+    - cron: '0 1 * * *'
   workflow_dispatch:
 
 env:

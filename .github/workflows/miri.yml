@@ -3,9 +3,12 @@ name: Miri
 # Interpret the crates that carry shared state, looking for unsound memory
 # ordering and for undefined behaviour reached through a dependency. Miri runs
 # a program hundreds of times slower than the machine does, so this is a soak
-# rather than a gate, and it is dispatched rather than scheduled: a schedule
-# here would queue one in every copy of this repository.
+# rather than a gate.
 on:
+  # Weekly: the interpreter is slow enough that a nightly run would hold the
+  # machine for hours it owes to lanes that answer faster.
+  schedule:
+    - cron: '0 6 * * 0'
   workflow_dispatch:
 
 env:

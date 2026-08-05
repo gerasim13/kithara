@@ -13,11 +13,9 @@ name: RTSan
 # verified kevent/yield-free (wake, on-core seek, and FSM AudioEvent emission
 # are all deferred off the forbid path); see kithara-play/README.md
 # "Real-Time Audio Thread".
-#
-# Dispatched rather than scheduled: the machines that own these runners decide
-# when a soak runs, and a schedule here would queue one in every copy of this
-# repository.
 on:
+  schedule:
+    - cron: '0 5 * * *'
   workflow_dispatch:
 
 env:

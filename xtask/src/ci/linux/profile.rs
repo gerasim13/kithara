@@ -50,6 +50,19 @@ pub(crate) struct LinuxRunner {
     /// Whether jobs on this runner reach the machine's GPUs.
     #[serde(default)]
     pub(crate) gpus: bool,
+    /// Which image this runner starts from.
+    #[serde(default)]
+    pub(crate) flavor: RunnerFlavor,
+}
+
+/// The images a runner can be built on. A plain runner carries the workspace
+/// toolchain; an Android one carries an emulator on top of it.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub(crate) enum RunnerFlavor {
+    #[default]
+    Plain,
+    Android,
 }
 
 impl LinuxHost {

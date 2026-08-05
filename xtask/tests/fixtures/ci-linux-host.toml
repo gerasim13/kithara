@@ -15,5 +15,12 @@ name = "kithara-ci-gpu"
 cpus = "8"
 memory = "32g"
 labels = ["self-hosted", "linux", "x64", "kithara", "gpu"]
-devices = ["/dev/kvm"]
 gpus = true
+
+[[runners]]
+name = "kithara-ci-android"
+cpus = "12"
+memory = "48g"
+labels = ["self-hosted", "linux", "x64", "kithara", "android"]
+devices = ["/dev/kvm"]
+flavor = "android"

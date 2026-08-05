@@ -3,7 +3,7 @@ use std::{fmt::Write as _, path::PathBuf};
 use anyhow::{Context, Result};
 use tracing::info;
 
-use super::profile::{LINUX_CONFIG_PATH, LinuxHost, LinuxRunner};
+use super::profile::{LINUX_CONFIG_PATH, LinuxHost, LinuxRunner, RunnerFlavor};
 use crate::ci::{config::CiPins, process::Process};
 
 const SYSTEMD_ROOT: &str = "/etc/systemd/system";
@@ -85,7 +85,11 @@ fn unit(host: &LinuxHost, runner: &LinuxRunner, pins: &CiPins, executable: &str)
     for device in &runner.devices {
         write!(unit, " --device {}", device.display())?;
     }
-    writeln!(unit, " {image}", image = pins.linux_runner_image)?;
+    let image = match runner.flavor {
+        RunnerFlavor::Plain => &pins.linux_runner_image,
+        RunnerFlavor::Android => &pins.linux_android_runner_image,
+    };
+    writeln!(unit, " {image}")?;
 
     writeln!(
         unit,
@@ -151,10 +155,23 @@ mod tests {
         )
         .unwrap();
 
+        let android = unit(
+            &host,
+            host.runner("kithara-ci-android").unwrap(),
+            pins,
+            "/usr/bin/xtask",
+        )
+        .unwrap();
+
         assert!(!plain.contains("--gpus"), "{plain}");
+        assert!(!plain.contains("--device"), "{plain}");
         assert!(gpu.contains("--gpus all"), "{gpu}");
-        assert!(gpu.contains("--device /dev/kvm"), "{gpu}");
-        for unit in [&plain, &gpu] {
+        assert!(android.contains("--device /dev/kvm"), "{android}");
+        assert!(
+            android.contains(pins.linux_android_runner_image.as_str()),
+            "{android}"
+        );
+        for unit in [&plain, &gpu, &android] {
             assert!(unit.contains("--security-opt no-new-privileges"), "{unit}");
             assert!(!unit.contains("docker.sock"), "{unit}");
         }

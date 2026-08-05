@@ -47,6 +47,18 @@ pub(crate) enum AndroidCommand {
         #[arg(long)]
         skip_build: bool,
     },
+    /// Boot an emulator (if needed) and run the instrumented tests on it.
+    Test {
+        /// Build profile for the underlying Rust JNI libs.
+        #[arg(long, default_value_t = crate::BuildProfile::Debug)]
+        profile: BuildProfile,
+        /// AVD name to boot (must already exist in `avdmanager`).
+        #[arg(long)]
+        avd: Option<String>,
+        /// Skip the JNI/Kotlin rebuild (use the cached `android/lib/build`).
+        #[arg(long)]
+        skip_build: bool,
+    },
 }
 
 pub(crate) fn run(cmd: AndroidCommand, ctx: &Ctx) -> Result<()> {
@@ -60,6 +72,11 @@ pub(crate) fn run(cmd: AndroidCommand, ctx: &Ctx) -> Result<()> {
             debug,
             skip_build,
         } => run_app(profile, avd.as_deref(), debug, skip_build, &ext.android),
+        AndroidCommand::Test {
+            profile,
+            avd,
+            skip_build,
+        } => run_tests(profile, avd.as_deref(), skip_build, &ext.android),
     }
 }
 
@@ -232,13 +249,20 @@ fn run_aar(android: &AndroidConfig) -> Result<()> {
     Ok(())
 }
 
-fn run_app(
+/// Everything both the demo launch and the instrumented tests need: a booted
+/// device to talk to and a Gradle wrapper to drive it.
+struct Device {
+    adb: PathBuf,
+    android_root: PathBuf,
+    gradlew: PathBuf,
+}
+
+fn prepare_device(
     profile: BuildProfile,
     avd: Option<&str>,
-    debug: bool,
     skip_build: bool,
     android: &AndroidConfig,
-) -> Result<()> {
+) -> Result<Device> {
     let sdk_root = android_sdk_root()?;
     let adb = sdk_root.join("platform-tools/adb");
     let emulator = sdk_root.join("emulator/emulator");
@@ -265,6 +289,69 @@ fn run_app(
         None => require_android_str(&android.default_avd, "default_avd")?,
     };
     ensure_emulator_running(&adb, &emulator, avd_name, android)?;
+
+    Ok(Device {
+        adb,
+        android_root,
+        gradlew,
+    })
+}
+
+/// Run the instrumented tests, then put the emulator down whether they passed
+/// or not: a CI machine that leaves one running has one fewer job's worth of
+/// memory for the next job.
+fn run_tests(
+    profile: BuildProfile,
+    avd: Option<&str>,
+    skip_build: bool,
+    android: &AndroidConfig,
+) -> Result<()> {
+    let device = prepare_device(profile, avd, skip_build, android)?;
+
+    println!("==> Running instrumented tests via gradle");
+    let tests = Command::new(&device.gradlew)
+        .args([
+            ":lib:connectedDebugAndroidTest",
+            "-x",
+            "generateKitharaFfi",
+            "--no-daemon",
+        ])
+        .current_dir(&device.android_root)
+        .status()
+        .with_context(|| format!("failed to run {}", device.gradlew.display()))
+        .and_then(|status| {
+            status
+                .success()
+                .then_some(())
+                .context("gradle connected tests failed")
+        });
+
+    let shutdown = Command::new(&device.adb)
+        .args(["emu", "kill"])
+        .status()
+        .context("failed to invoke `adb emu kill`")
+        .and_then(|status| {
+            status
+                .success()
+                .then_some(())
+                .context("adb emu kill failed")
+        });
+
+    tests.and(shutdown)
+}
+
+fn run_app(
+    profile: BuildProfile,
+    avd: Option<&str>,
+    debug: bool,
+    skip_build: bool,
+    android: &AndroidConfig,
+) -> Result<()> {
+    let Device {
+        adb,
+        android_root,
+        gradlew,
+    } = prepare_device(profile, avd, skip_build, android)?;
 
     println!("==> Installing demo APK via gradle");
     let gradle_task = match profile {

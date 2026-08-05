@@ -16,6 +16,7 @@ pub(crate) struct CiPins {
     pub(crate) actions_runner_version: String,
     pub(crate) android_avd: String,
     pub(crate) android_build_tools_version: String,
+    pub(crate) android_commandline_tools_linux_sha256: String,
     pub(crate) android_commandline_tools_sha256: String,
     pub(crate) android_commandline_tools_version: String,
     pub(crate) android_ndk_version: String,
@@ -38,6 +39,8 @@ pub(crate) struct CiPins {
     pub(crate) gitleaks_linux_arm64_sha256: String,
     pub(crate) gitleaks_version: String,
     pub(crate) linux_base_digest: String,
+    pub(crate) linux_android_image: String,
+    pub(crate) linux_android_runner_image: String,
     pub(crate) linux_image: String,
     pub(crate) linux_runner_image: String,
     pub(crate) msrv_toolchain: String,
@@ -89,6 +92,11 @@ impl CiPins {
             ("geckodriver_version", self.geckodriver_version.as_str()),
             ("gitlab_runner_version", self.gitlab_runner_version.as_str()),
             ("gitleaks_version", self.gitleaks_version.as_str()),
+            ("linux_android_image", self.linux_android_image.as_str()),
+            (
+                "linux_android_runner_image",
+                self.linux_android_runner_image.as_str(),
+            ),
             ("linux_image", self.linux_image.as_str()),
             ("linux_runner_image", self.linux_runner_image.as_str()),
             ("msrv_toolchain", self.msrv_toolchain.as_str()),
@@ -125,6 +133,10 @@ impl CiPins {
             (
                 "actions_runner_linux_arm64_sha256",
                 self.actions_runner_linux_arm64_sha256.as_str(),
+            ),
+            (
+                "android_commandline_tools_linux_sha256",
+                self.android_commandline_tools_linux_sha256.as_str(),
             ),
             (
                 "android_commandline_tools_sha256",

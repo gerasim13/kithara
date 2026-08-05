@@ -24,13 +24,20 @@ pub(crate) enum ImageCommand {
     Toolchain,
     /// Build the GitHub Actions runner image on top of the toolchain image.
     Runner,
+    /// Build the Android emulator image on top of the toolchain image.
+    Android,
+    /// Build the runner image an Android job starts in.
+    AndroidRunner,
 }
 
 impl ImageCommand {
     pub(crate) fn dockerfile(self) -> &'static str {
         match self {
             Self::Toolchain => "docker/ci.Dockerfile",
-            Self::Runner => "docker/ci-runner.Dockerfile",
+            // One recipe serves both runners; they differ by the image they
+            // are layered on, which is a build argument rather than a file.
+            Self::Runner | Self::AndroidRunner => "docker/ci-runner.Dockerfile",
+            Self::Android => "docker/ci-android.Dockerfile",
         }
     }
 
@@ -38,13 +45,17 @@ impl ImageCommand {
         match self {
             Self::Toolchain => &pins.linux_image,
             Self::Runner => &pins.linux_runner_image,
+            Self::Android => &pins.linux_android_image,
+            Self::AndroidRunner => &pins.linux_android_runner_image,
         }
     }
 
-    pub(crate) fn build_args(self, pins: &CiPins) -> Result<Vec<(&'static str, &str)>> {
+    pub(crate) fn build_args(self, pins: &CiPins) -> Result<Vec<(&'static str, String)>> {
         match self {
             Self::Toolchain => linux_build_args(pins),
-            Self::Runner => Ok(runner_build_args(pins)),
+            Self::Runner => Ok(runner_build_args(pins, &pins.linux_image)),
+            Self::Android => android_build_args(pins),
+            Self::AndroidRunner => Ok(runner_build_args(pins, &pins.linux_android_image)),
         }
     }
 }
@@ -69,7 +80,7 @@ fn build(
     process: &Process,
     dockerfile: &str,
     tag: &str,
-    arguments: &[(&'static str, &str)],
+    arguments: &[(&'static str, String)],
 ) -> Result<()> {
     let recipe =
         fs::File::open(dockerfile).with_context(|| format!("reading Dockerfile {dockerfile}"))?;
@@ -86,32 +97,32 @@ fn build(
 
 /// Build arguments for the toolchain image. Each download that differs by
 /// architecture carries a checksum per slice; the Dockerfile picks between them.
-pub(crate) fn linux_build_args(pins: &CiPins) -> Result<Vec<(&'static str, &str)>> {
+pub(crate) fn linux_build_args(pins: &CiPins) -> Result<Vec<(&'static str, String)>> {
     let mut args = vec![
-        ("RUST_VERSION", pins.stable_toolchain.as_str()),
-        ("RUST_BASE_DIGEST", pins.linux_base_digest.as_str()),
-        ("MSRV_TOOLCHAIN", pins.msrv_toolchain.as_str()),
-        ("NIGHTLY_TOOLCHAIN", pins.nightly_toolchain.as_str()),
-        ("CMAKE_VERSION", pins.cmake_version.as_str()),
-        ("CMAKE_AMD64_SHA256", pins.cmake_linux_amd64_sha256.as_str()),
-        ("CMAKE_ARM64_SHA256", pins.cmake_linux_arm64_sha256.as_str()),
-        ("GECKODRIVER_VERSION", pins.geckodriver_version.as_str()),
+        ("RUST_VERSION", pins.stable_toolchain.clone()),
+        ("RUST_BASE_DIGEST", pins.linux_base_digest.clone()),
+        ("MSRV_TOOLCHAIN", pins.msrv_toolchain.clone()),
+        ("NIGHTLY_TOOLCHAIN", pins.nightly_toolchain.clone()),
+        ("CMAKE_VERSION", pins.cmake_version.clone()),
+        ("CMAKE_AMD64_SHA256", pins.cmake_linux_amd64_sha256.clone()),
+        ("CMAKE_ARM64_SHA256", pins.cmake_linux_arm64_sha256.clone()),
+        ("GECKODRIVER_VERSION", pins.geckodriver_version.clone()),
         (
             "GECKODRIVER_AMD64_SHA256",
-            pins.geckodriver_linux_amd64_sha256.as_str(),
+            pins.geckodriver_linux_amd64_sha256.clone(),
         ),
         (
             "GECKODRIVER_ARM64_SHA256",
-            pins.geckodriver_linux_arm64_sha256.as_str(),
+            pins.geckodriver_linux_arm64_sha256.clone(),
         ),
-        ("GITLEAKS_VERSION", pins.gitleaks_version.as_str()),
+        ("GITLEAKS_VERSION", pins.gitleaks_version.clone()),
         (
             "GITLEAKS_AMD64_SHA256",
-            pins.gitleaks_linux_amd64_sha256.as_str(),
+            pins.gitleaks_linux_amd64_sha256.clone(),
         ),
         (
             "GITLEAKS_ARM64_SHA256",
-            pins.gitleaks_linux_arm64_sha256.as_str(),
+            pins.gitleaks_linux_arm64_sha256.clone(),
         ),
     ];
     for (name, tool) in [
@@ -136,27 +147,55 @@ pub(crate) fn linux_build_args(pins: &CiPins) -> Result<Vec<(&'static str, &str)
         ("WASM_PACK_VERSION", "wasm-pack"),
         ("WASM_SLIM_VERSION", "wasm-slim"),
     ] {
-        args.push((name, pins.cargo_tool_version(tool)?));
+        args.push((name, pins.cargo_tool_version(tool)?.to_owned()));
     }
     Ok(args)
 }
 
-pub(crate) fn runner_build_args(pins: &CiPins) -> Vec<(&'static str, &str)> {
+pub(crate) fn runner_build_args(pins: &CiPins, base: &str) -> Vec<(&'static str, String)> {
     vec![
-        ("CI_IMAGE", pins.linux_image.as_str()),
+        ("CI_IMAGE", base.to_owned()),
         (
             "ACTIONS_RUNNER_VERSION",
-            pins.actions_runner_version.as_str(),
+            pins.actions_runner_version.clone(),
         ),
         (
             "ACTIONS_RUNNER_AMD64_SHA256",
-            pins.actions_runner_linux_amd64_sha256.as_str(),
+            pins.actions_runner_linux_amd64_sha256.clone(),
         ),
         (
             "ACTIONS_RUNNER_ARM64_SHA256",
-            pins.actions_runner_linux_arm64_sha256.as_str(),
+            pins.actions_runner_linux_arm64_sha256.clone(),
         ),
     ]
+}
+
+fn android_build_args(pins: &CiPins) -> Result<Vec<(&'static str, String)>> {
+    Ok(vec![
+        ("CI_IMAGE", pins.linux_image.clone()),
+        ("ANDROID_AVD", pins.android_avd.clone()),
+        (
+            "ANDROID_BUILD_TOOLS_VERSION",
+            pins.android_build_tools_version.clone(),
+        ),
+        (
+            "ANDROID_CMDLINE_TOOLS_LINUX_SHA256",
+            pins.android_commandline_tools_linux_sha256.clone(),
+        ),
+        (
+            "ANDROID_CMDLINE_TOOLS_VERSION",
+            pins.android_commandline_tools_version.clone(),
+        ),
+        ("ANDROID_NDK_VERSION", pins.android_ndk_version.clone()),
+        (
+            "ANDROID_PLATFORM_VERSION",
+            pins.android_platform_version.to_string(),
+        ),
+        (
+            "CARGO_NDK_VERSION",
+            pins.cargo_tool_version("cargo-ndk")?.to_owned(),
+        ),
+    ])
 }
 
 #[cfg(test)]
@@ -180,7 +219,7 @@ mod tests {
             .collect()
     }
 
-    fn configured_arguments(arguments: Vec<(&'static str, &str)>) -> BTreeSet<String> {
+    fn configured_arguments(arguments: Vec<(&'static str, String)>) -> BTreeSet<String> {
         arguments
             .into_iter()
             .map(|(name, _)| name.to_owned())
@@ -190,7 +229,12 @@ mod tests {
     #[test]
     fn dockerfile_versions_are_owned_by_typed_config() {
         let pins = &fixture().pins;
-        for image in [ImageCommand::Toolchain, ImageCommand::Runner] {
+        for image in [
+            ImageCommand::Toolchain,
+            ImageCommand::Runner,
+            ImageCommand::Android,
+            ImageCommand::AndroidRunner,
+        ] {
             let dockerfile = image.dockerfile();
             let configured = configured_arguments(image.build_args(pins).unwrap());
             assert_eq!(declared_arguments(dockerfile), configured, "{dockerfile}");
