@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fs, io::Read, path::Path};
+use std::{collections::BTreeMap, fs, io::Read, path::Path, thread, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
@@ -12,6 +12,9 @@ use crate::ci::{config::CiPins, process::Process};
 /// cannot be pinned, and the tools the lane needs beyond the toolchain. All of
 /// it is here rather than pasted into a machine by hand.
 struct GuestSources {
+    /// How long the boot prompt is answered for, in one-second attempts: it
+    /// shows a few seconds in and lasts about five.
+    prompt_attempts: u32,
     answer_file: &'static str,
     provision_script: &'static str,
     build_tools_url: &'static str,
@@ -19,6 +22,7 @@ struct GuestSources {
 }
 
 const GUEST: GuestSources = GuestSources {
+    prompt_attempts: 25,
     answer_file: "ci/windows/autounattend.xml",
     provision_script: "ci/windows/provision.ps1",
     build_tools_url: "https://aka.ms/vs/17/release/vs_buildtools.exe",
@@ -122,12 +126,36 @@ pub(super) fn install(
         "--graphics",
         "vnc,listen=127.0.0.1",
         "--noautoconsole",
-        "--wait",
-        "-1",
     ]);
-    process.run_command(&mut command, "install the Windows guest")?;
-    info!(guest = guest.name, "Windows guest installed");
+    process.run_command(&mut command, "create the Windows guest")?;
+
+    press_a_key(process, &guest.name);
+    info!(
+        guest = guest.name,
+        "Windows guest created; the unattended install runs on its own from here"
+    );
     Ok(())
+}
+
+/// Get past the prompt that stands between a Windows disc and an unattended
+/// install.
+///
+/// Windows installation media asks for a keypress before it will boot, and
+/// answers nothing if none arrives: the firmware moves on to a disk with no
+/// operating system on it and stops. The prompt appears a few seconds after
+/// the guest starts and lasts a few more, so the key is sent repeatedly across
+/// that window rather than once at a moment that has to be guessed exactly.
+fn press_a_key(process: &Process, guest: &str) {
+    for _ in 0..GUEST.prompt_attempts {
+        thread::sleep(Duration::from_secs(1));
+        // Before the prompt appears the guest is not listening, and after it
+        // has booted the key lands in the installer, which ignores it.
+        let _ = process.run(
+            "virsh",
+            &["send-key", guest, "KEY_ENTER"],
+            "answer the boot prompt",
+        );
+    }
 }
 
 /// Build the small disk Windows Setup reads its answers from.
