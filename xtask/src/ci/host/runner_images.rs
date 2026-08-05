@@ -18,18 +18,22 @@ impl JobVm {
     const BOOT_ATTEMPTS: u32 = 40;
     const BOOT_POLL: Duration = Duration::from_secs(5);
     const WAIT_SECONDS: u32 = 7200;
-    /// How many jobs a guest serves before it is thrown away. Each one leaves
-    /// a build directory behind on the guest's own disk, and a guest that
-    /// never stops never gives that space back: one grew from the base image's
-    /// 27 gibibytes to 85 of its 90 and then failed a lint job on "No space
-    /// left on device".
+    /// How many jobs a guest serves before it is thrown away. The build
+    /// directory is kept between jobs, so it only ever grows, and the guest's
+    /// own disk is what runs out first.
     ///
-    /// A nightly is eleven macOS jobs and cost about 1.3 gibibytes each,
-    /// measured across one run. The binding limit is the CI volume rather
-    /// than the guest's own disk — the image grows on the volume, which also
-    /// carries the other two guests and every cache — so the guest is
-    /// recycled once per full run, for one boot.
-    const MAX_BUILDS: u32 = 12;
+    /// Measured over one nightly: the 90-gigabyte disk presents a 78-gibibyte
+    /// container, macOS and its swap hold about 20 of it, and eleven macOS
+    /// jobs left 44 gibibytes under `target` — 18 in `debug`, 9 in
+    /// `test-release`, the rest spread over one directory per Apple triple.
+    /// That reached 114 mebibytes free, and `apple:ios` stopped in `lipo` on
+    /// "No space left on device" while writing the universal archive.
+    ///
+    /// Six jobs keeps the peak near 30 gibibytes, which leaves room for the
+    /// transient a universal link needs. It costs one extra cold build per
+    /// nightly. Raising it again means giving the guest a larger disk, and
+    /// that needs room on the CI volume the quota does not currently allow.
+    const MAX_BUILDS: u32 = 6;
 }
 
 impl RunnerManager<'_> {
