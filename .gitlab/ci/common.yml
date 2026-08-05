@@ -79,6 +79,11 @@
   interruptible: false
   rules:
     - if: $KITHARA_PIPELINE_KIND == "release"
+    # The build lanes only produce artifacts, so whether they still work is a
+    # question worth answering before a release rather than during one. Any
+    # pipeline may ask by setting this. `release:publish` carries its own rule
+    # and stays out of reach: it is the only job that leaves this machine.
+    - if: $KITHARA_VERIFY_RELEASE_LANES == "1"
 
 # Dropping the serial chain let two runners work at once, which is the point —
 # but a full suite, a browser run, and every perf measurement report on how

@@ -26,6 +26,11 @@ impl Process {
         self.command_in(program, "")
     }
 
+    /// The checkout every command of this process runs against.
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// A command that runs inside a subdirectory of the checkout. Build tools
     /// that locate their project by walking up from the working directory —
     /// Gradle looks for the settings file — need the directory that owns them,
