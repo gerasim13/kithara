@@ -12,8 +12,8 @@ use crate::ci::{config::CiPins, process::Process};
 /// cannot be pinned, and the tools the lane needs beyond the toolchain. All of
 /// it is here rather than pasted into a machine by hand.
 struct GuestSources {
-    /// How long the boot prompt is answered for, in one-second attempts: it
-    /// shows a few seconds in and lasts about five.
+    /// How long to wait for the guest to start installing, in one-second
+    /// attempts, answering the boot prompt until it does.
     prompt_attempts: u32,
     answer_file: &'static str,
     provision_script: &'static str,
@@ -22,7 +22,7 @@ struct GuestSources {
 }
 
 const GUEST: GuestSources = GuestSources {
-    prompt_attempts: 25,
+    prompt_attempts: 40,
     answer_file: "ci/windows/autounattend.xml",
     provision_script: "ci/windows/provision.ps1",
     build_tools_url: "https://aka.ms/vs/17/release/vs_buildtools.exe",
@@ -129,7 +129,7 @@ pub(super) fn install(
     ]);
     process.run_command(&mut command, "create the Windows guest")?;
 
-    press_a_key(process, &guest.name);
+    press_a_key(process, &guest.name)?;
     info!(
         guest = guest.name,
         "Windows guest created; the unattended install runs on its own from here"
@@ -143,19 +143,46 @@ pub(super) fn install(
 /// Windows installation media asks for a keypress before it will boot, and
 /// answers nothing if none arrives: the firmware moves on to a disk with no
 /// operating system on it and stops. The prompt appears a few seconds after
-/// the guest starts and lasts a few more, so the key is sent repeatedly across
-/// that window rather than once at a moment that has to be guessed exactly.
-fn press_a_key(process: &Process, guest: &str) {
+/// the guest starts and lasts a few more, so the key is sent across that
+/// window rather than at a moment that would have to be guessed exactly.
+///
+/// Sending stops the moment the disk starts filling. Past that point Setup is
+/// running and reads the same keys as its own: a stray Enter reaches the
+/// Cancel button and asks whether to abandon the install.
+fn press_a_key(process: &Process, guest: &str) -> Result<()> {
+    let idle = written_bytes(process, guest)?;
     for _ in 0..GUEST.prompt_attempts {
         thread::sleep(Duration::from_secs(1));
-        // Before the prompt appears the guest is not listening, and after it
-        // has booted the key lands in the installer, which ignores it.
+        if written_bytes(process, guest)? > idle {
+            info!(guest, "the guest is installing");
+            return Ok(());
+        }
         let _ = process.run(
             "virsh",
             &["send-key", guest, "KEY_ENTER"],
             "answer the boot prompt",
         );
     }
+    bail!("the guest never started writing to its disk; watch it over VNC")
+}
+
+/// How much of the guest's own disk is filled. libvirt reports this per
+/// device; the first one is the disk the guest installs onto.
+fn written_bytes(process: &Process, guest: &str) -> Result<u64> {
+    let report = process.capture(
+        "virsh",
+        &["domstats", guest, "--block"],
+        "read the guest's disk usage",
+    )?;
+    report
+        .lines()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("block.0.allocation=")?
+                .parse()
+                .ok()
+        })
+        .context("libvirt reported no allocation for the guest's first disk")
 }
 
 /// Build the small disk Windows Setup reads its answers from.
