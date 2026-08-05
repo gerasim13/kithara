@@ -227,10 +227,14 @@ impl ElasticSpanPlan {
         Ok(Self { cursor, segments })
     }
 
-    /// Quantized source spans in the same order as the continuous input.
-    #[must_use]
-    pub fn segments(&self) -> &[ElasticSpanRequest] {
-        &self.segments
+    delegate::delegate! {
+        to self.segments {
+            /// Quantized source spans in the same order as the continuous
+            /// input.
+            #[must_use]
+            #[call(as_slice)]
+            pub fn segments(&self) -> &[ElasticSpanRequest];
+        }
     }
 }
 
