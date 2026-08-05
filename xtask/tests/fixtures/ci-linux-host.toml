@@ -1,0 +1,19 @@
+cache_root = "/var/lib/kithara-ci"
+network = "kithara-ci"
+repository = "owner/kithara"
+subnet = "172.16.240.0/24"
+token_file = "/etc/kithara-ci/github.token"
+
+[[runners]]
+name = "kithara-ci"
+cpus = "24"
+memory = "96g"
+labels = ["self-hosted", "linux", "x64", "kithara"]
+
+[[runners]]
+name = "kithara-ci-gpu"
+cpus = "8"
+memory = "32g"
+labels = ["self-hosted", "linux", "x64", "kithara", "gpu"]
+devices = ["/dev/kvm"]
+gpus = true

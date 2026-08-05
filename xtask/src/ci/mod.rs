@@ -4,6 +4,7 @@ mod config;
 mod environment;
 mod host;
 mod image;
+mod linux;
 mod process;
 mod release;
 mod run;

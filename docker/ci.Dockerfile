@@ -92,6 +92,7 @@ RUN case "$(dpkg --print-architecture)" in \
 RUN rustup component add clippy llvm-tools-preview rustfmt \
  && rustup toolchain install "${NIGHTLY_TOOLCHAIN}" \
       --profile minimal \
+      --component miri \
       --component rust-src \
       --component rustfmt \
  && rustup toolchain install "${MSRV_TOOLCHAIN}" --profile minimal \
