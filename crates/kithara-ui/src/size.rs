@@ -227,13 +227,21 @@ pub(crate) fn effective_size(node: &ExpandedNode, skin: &SkinDoc) -> Option<Size
         | ExpandedNode::Control { size, .. } => *size,
     };
     declared.or_else(|| match node {
-        ExpandedNode::Control {
-            spec: ControlSpec::TabLarge { .. },
-            ..
-        } => None,
-        ExpandedNode::Control { spec, .. } => Some(control_size(spec, skin)),
+        ExpandedNode::Control { spec, .. } => mount::controls!(spec, Composed { skin }),
         _ => None,
     })
+}
+
+/// Asks whichever control the document named for the size a parent composes
+/// with, which some controls leave to the row that holds them.
+struct Composed<'a> {
+    skin: &'a SkinDoc,
+}
+
+impl Composed<'_> {
+    fn apply<C: mount::Control>(self, control: &C) -> Option<SizeSpec> {
+        control.composes_size().then(|| control.size(self.skin))
+    }
 }
 
 /// Computes a node's intrinsic size from its override, children, or control specification.

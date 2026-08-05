@@ -9,4 +9,10 @@ pub(crate) trait Control {
     /// The size the skin gives this control, before any override the document
     /// declares on the node itself.
     fn size(&self, skin: &SkinDoc) -> SizeSpec;
+
+    /// Whether that size is what a parent composes with. A control that says
+    /// no takes its box from whatever holds it.
+    fn composes_size(&self) -> bool {
+        true
+    }
 }
