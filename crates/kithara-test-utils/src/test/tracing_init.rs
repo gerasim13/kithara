@@ -4,6 +4,15 @@ pub fn setup_tracing() {
     setup_tracing_with_filter("warn");
 }
 
+/// Under the sanitizer the filter is never built. `init_tracing` installs no
+/// subscriber there, but constructing an `EnvFilter` parses the directives and
+/// allocates, and the test body it is called from sits inside the checked
+/// region — the sanitizer reported it as an unsafe `malloc` in a real-time
+/// context, attributed to whichever test happened to run first.
+#[cfg(rtsan)]
+pub fn setup_tracing_with_filter(_directives: &str) {}
+
+#[cfg(not(rtsan))]
 pub fn setup_tracing_with_filter(directives: &str) {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(directives));
     init_tracing(filter);
