@@ -11,7 +11,7 @@ use num_traits::ToPrimitive;
 
 use crate::{
     interact::{iced as iced_interact, recognizers::click},
-    render::{ReadValue, Skin, UiEvent, fonts, index},
+    render::{IcedSkin, ReadValue, Skin, UiEvent, fonts, index},
     skin::SegmentedSkin,
     widgets::Widget,
 };

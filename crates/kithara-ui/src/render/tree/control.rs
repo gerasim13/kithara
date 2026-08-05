@@ -17,11 +17,13 @@ use super::{
     window::{titlebar, window_controls},
 };
 use crate::{
+    atoms::design::fader::rail_bounds,
     compile::CompiledUi,
+    draw::Rect,
     engine::{Descriptor, Engine, Target},
     expand::{Binding, ControlSpec},
     ids::InternId,
-    interact::iced as iced_interact,
+    interact::{Hit, iced as iced_interact},
     module::TextAlign,
     render::{
         HostedControlPlan, InputOwner, ReadValue, Reads, Skin, UiEvent,
@@ -31,7 +33,6 @@ use crate::{
     widgets::{
         Widget,
         deck::Bpm,
-        fader::fader_input_layout,
         global_bar::{Brand, Divider, PresetSelector, SettingsButton, Spacer},
         telemetry::Telemetry,
         text::Text,
@@ -272,11 +273,22 @@ impl HostedControl {
 
     fn input_layout<'a>(&self, layout: Layout<'a>) -> Option<Layout<'a>> {
         match &self.plan {
-            HostedControlPlan::Fader {
-                style, labelled, ..
-            } => fader_input_layout(layout, *style, *labelled),
             HostedControlPlan::Picker { .. } => picker_input_layout(layout),
             _ => Some(layout),
+        }
+    }
+
+    /// Narrows a control's rectangle to the part a pointer actually drives. A
+    /// fader is one canvas holding a caption and a rail; only the rail answers.
+    fn input_bounds(&self, bounds: Rect) -> Rect {
+        match &self.plan {
+            HostedControlPlan::Fader {
+                style,
+                labelled,
+                metrics,
+                ..
+            } => rail_bounds(bounds, *style, *labelled, *metrics),
+            _ => bounds,
         }
     }
 
@@ -326,7 +338,10 @@ pub(super) fn append_control_targets<'a>(
     } else {
         targets.push(Target::new(
             control.path(),
-            iced_interact::hit(layout.bounds(), cursor),
+            Hit::new(
+                cursor.position().map(Into::into),
+                control.input_bounds(layout.bounds().into()),
+            ),
         ));
     }
 }

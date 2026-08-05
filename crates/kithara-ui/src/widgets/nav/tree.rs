@@ -6,8 +6,8 @@ use iced::{
 
 use crate::{
     render::{
-        Icon, InputOwner, ReadValue, Skin, UiEvent, fonts, scope_picker, search_input, shaped_text,
-        tree_rows,
+        IcedSkin, Icon, InputOwner, ReadValue, Skin, UiEvent, fonts, scope_picker, search_input,
+        shaped_text, tree_rows,
     },
     widgets::Widget,
 };
@@ -67,7 +67,10 @@ impl<'a, 'skin: 'a> Widget<'a> for ContextBar<'a, '_, '_, '_, 'skin> {
             return Space::new().into();
         };
         let content_height = self.skin.tree.context_height - self.skin.tree.context_divider_width;
-        let icon = Icon::Zvuk.view(self.skin.tree.context_icon_size, self.skin.palette.text);
+        let icon = Icon::Zvuk.view(
+            self.skin.tree.context_icon_size,
+            self.skin.palette.text.into(),
+        );
         let breadcrumb = shaped_text((*label).to_owned())
             .font(fonts::mono(self.skin.tree.context_text.weight))
             .size(self.skin.tree.context_text.size)
@@ -127,7 +130,7 @@ fn search_bar<'a>(
     skin: &'a Skin,
     owner: InputOwner,
 ) -> Element<'a, UiEvent> {
-    let icon = container(Icon::Search.view(skin.tree.search_icon_size, skin.palette.muted))
+    let icon = container(Icon::Search.view(skin.tree.search_icon_size, skin.palette.muted.into()))
         .width(Length::Fixed(skin.tree.search_icon_width))
         .height(Length::Fill)
         .align_x(Horizontal::Center)

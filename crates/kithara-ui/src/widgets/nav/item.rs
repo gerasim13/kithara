@@ -1,5 +1,5 @@
 use iced::{
-    Alignment, Background, Border, Element, Length, Theme,
+    Alignment, Background, Border, Color, Element, Length, Theme,
     widget::{
         Space, button,
         button::{Status as ButtonStatus, Style as ButtonStyle},
@@ -30,19 +30,19 @@ impl<'a> Widget<'a> for NavItem<'a, '_, '_, '_> {
         };
         let active = *active;
         let palette = self.skin.palette;
-        let color = if active {
-            palette.text
+        let color: Color = if active {
+            palette.text.into()
         } else {
-            palette.text_dim
+            palette.text_dim.into()
         };
         let marker = container(Space::new())
             .width(Length::Fixed(self.skin.nav.marker_width))
             .height(Length::Fill)
             .style(move |_| {
                 ContainerStyle::default().background(Background::Color(if active {
-                    palette.accent
+                    palette.accent.into()
                 } else {
-                    iced::Color::TRANSPARENT
+                    Color::TRANSPARENT
                 }))
             });
         let content = container(
@@ -77,11 +77,11 @@ fn nav_item_style(
 ) -> impl Fn(&Theme, ButtonStatus) -> ButtonStyle + 'static {
     let palette = skin.palette;
     move |_theme, _status| ButtonStyle {
-        background: active.then_some(Background::Color(palette.bg_select)),
+        background: active.then_some(Background::Color(palette.bg_select.into())),
         text_color: if active {
-            palette.text
+            palette.text.into()
         } else {
-            palette.text_dim
+            palette.text_dim.into()
         },
         border: Border::default(),
         ..ButtonStyle::default()

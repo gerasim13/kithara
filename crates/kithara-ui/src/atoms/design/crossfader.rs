@@ -1,176 +1,185 @@
-use iced::{
-    Color, Element, Event, Length, Padding, Point, Rectangle, Renderer, Size, Theme,
-    alignment::{Horizontal, Vertical},
-    mouse::{self, Cursor},
-    widget::{
-        Column, Row, Space,
-        canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
-        container,
-    },
-};
-use kithara_platform::time::Instant;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    backends::IcedBackend,
-    draw::{DrawListBuilder, Rect, replay},
-    interact::{
-        CursorShape, Hover, iced as iced_interact,
-        recognizers::{Scalar, ScalarState, Track},
-    },
-    render::{Icon, ReadValue, Skin, UiEvent, fonts, scalar, shaped_text},
-    skin::{FrameSkin, TickSkin},
-    text::TextResources,
-    widgets::Widget,
+    draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
+    render::Skin,
+    skin::{ColorRole, CrossfaderSkin, FontFamily, FontSkin, TextRoleSkin, TickSkin},
+    text::{GlyphRun, TextContext},
 };
 
-#[derive(bon::Builder)]
-pub(crate) struct Crossfader<'path, 'value, 'data, 'skin> {
-    skin: &'skin Skin,
-    path: &'path str,
-    value: Option<&'value ReadValue<'data>>,
-    ticks: bool,
-}
-
-impl<'a> Widget<'a> for Crossfader<'_, '_, '_, 'a> {
-    fn view(self) -> Element<'a, UiEvent> {
-        self.render(true)
-    }
-}
-
-impl<'a> Crossfader<'_, '_, '_, 'a> {
-    pub(crate) fn painted(self) -> Element<'a, UiEvent> {
-        self.render(false)
-    }
-
-    fn render(self, interactive: bool) -> Element<'a, UiEvent> {
-        let Some(ReadValue::Scalar(value)) = self.value else {
-            return Space::new().into();
-        };
-        let metrics = &self.skin.crossfader;
-        let letter = |content: &'a str| {
-            shaped_text(content)
-                .font(fonts::mono(metrics.letter_text.weight))
-                .size(metrics.letter_text.size)
-                .color(self.skin.color(metrics.letter_color))
-        };
-        let arrow =
-            |icon: Icon| icon.view(metrics.arrow_size, self.skin.color(metrics.arrow_color));
-        let side = |children: [Element<'a, UiEvent>; 2], alignment| {
-            container(
-                Row::with_children(children)
-                    .spacing(metrics.arrow_gap)
-                    .align_y(Vertical::Center),
-            )
-            .width(Length::Fill)
-            .align_x(alignment)
-            .into()
-        };
-        let labels = Row::with_children([
-            side(
-                [
-                    letter(&metrics.left_label).into(),
-                    arrow(Icon::ChevronsLeft),
-                ],
-                Horizontal::Left,
-            ),
-            container(
-                shaped_text(&metrics.center_label)
-                    .font(fonts::mono(metrics.label_text.weight))
-                    .size(metrics.label_text.size)
-                    .color(self.skin.color(metrics.label_color)),
-            )
-            .width(Length::Fill)
-            .align_x(Horizontal::Center)
-            .into(),
-            side(
-                [
-                    arrow(Icon::ChevronsRight),
-                    letter(&metrics.right_label).into(),
-                ],
-                Horizontal::Right,
-            ),
-        ])
-        .width(Length::Fill);
-        let ticks = self
-            .ticks
-            .then(|| TickRail::new(TickAxis::Horizontal, metrics.ticks, self.skin));
-        let slider_height = ticks.as_ref().map_or(0.0, TickRail::reserved) + metrics.thumb_height;
-        let paint = CrossfaderPaint {
-            ticks,
-            rail_background: self.skin.color(metrics.rail_background),
-            rail_color: self.skin.color(metrics.rail_frame.border),
-            rail_frame: metrics.rail_frame,
-            rail_height: metrics.rail_height,
-            thumb_color: self.skin.color(metrics.thumb_color),
-            thumb_height: metrics.thumb_height,
-            thumb_width: metrics.thumb_width,
-            thumb_notch_color: self.skin.color(metrics.thumb_notch_color),
-            thumb_notch_height: metrics.thumb_notch_height,
-            thumb_notch_width: metrics.thumb_notch_width,
-            text_resources: self.skin.text_resources(),
-            value: value.clamp(0.0, 1.0).as_(),
-        };
-        let slider: Element<'a, UiEvent> = if interactive {
-            Canvas::new(CrossfaderCanvas {
-                paint,
-                drag: Scalar::builder()
-                    .track(Track::AbsoluteHorizontal)
-                    .hover(Hover::new(CursorShape::ResizeH))
-                    .build(),
-                path: self.path.to_owned(),
-            })
-            .width(Length::Fill)
-            .height(Length::Fixed(slider_height))
-            .into()
-        } else {
-            Canvas::new(paint)
-                .width(Length::Fill)
-                .height(Length::Fixed(slider_height))
-                .into()
-        };
-
-        container(
-            Column::new()
-                .push(slider)
-                .push(labels)
-                .spacing(metrics.label_gap)
-                .width(Length::Fill)
-                .height(Length::Fill),
-        )
-        .padding(
-            Padding::ZERO
-                .top(metrics.padding_top)
-                .bottom(metrics.padding_bottom)
-                .left(metrics.padding_x)
-                .right(metrics.padding_x),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
-    }
-}
-
-struct CrossfaderCanvas<'skin> {
-    paint: CrossfaderPaint<'skin>,
-    drag: Scalar,
-    path: String,
-}
-
-struct CrossfaderPaint<'skin> {
-    text_resources: &'skin TextResources,
-    rail_background: Color,
-    rail_color: Color,
-    thumb_color: Color,
-    thumb_notch_color: Color,
-    rail_frame: FrameSkin,
+pub(crate) struct Crossfader {
+    arrow_color: Rgba,
+    arrows: (char, char),
+    label_color: Rgba,
+    label_role: TextRoleSkin,
+    letter_color: Rgba,
+    letter_role: TextRoleSkin,
+    metrics: CrossfaderSkin,
+    rail_background: Rgba,
+    rail_border: Rgba,
+    thumb_color: Rgba,
+    thumb_notch_color: Rgba,
     ticks: Option<TickRail>,
-    rail_height: f32,
-    thumb_height: f32,
-    thumb_notch_height: f32,
-    thumb_notch_width: f32,
-    thumb_width: f32,
-    value: f32,
+}
+
+impl Crossfader {
+    pub(crate) fn new(ticks: bool, skin: &Skin) -> Self {
+        let metrics = skin.crossfader.clone();
+        Self {
+            arrow_color: skin.rgba(metrics.arrow_color),
+            arrows: (
+                char::from(lucide_icons::Icon::ChevronsLeft),
+                char::from(lucide_icons::Icon::ChevronsRight),
+            ),
+            label_color: skin.rgba(metrics.label_color),
+            label_role: role(metrics.label_text),
+            letter_color: skin.rgba(metrics.letter_color),
+            letter_role: role(metrics.letter_text),
+            rail_background: skin.rgba(metrics.rail_background),
+            rail_border: skin.rgba(metrics.rail_frame.border),
+            thumb_color: skin.rgba(metrics.thumb_color),
+            thumb_notch_color: skin.rgba(metrics.thumb_notch_color),
+            ticks: ticks.then(|| TickRail::new(TickAxis::Horizontal, metrics.ticks, skin)),
+            metrics,
+        }
+    }
+
+    pub(crate) fn paint(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        value: f32,
+        bounds: Rect,
+    ) {
+        let inner = Rect {
+            h: (bounds.h - self.metrics.padding_top - self.metrics.padding_bottom).max(0.0),
+            w: (bounds.w - self.metrics.padding_x * 2.0).max(0.0),
+            x: bounds.x + self.metrics.padding_x,
+            y: bounds.y + self.metrics.padding_top,
+        };
+        let slider = Rect {
+            h: self.slider_height().min(inner.h),
+            ..inner
+        };
+        let labels = Rect {
+            h: (inner.h - slider.h - self.metrics.label_gap).max(0.0),
+            y: slider.y + slider.h + self.metrics.label_gap,
+            ..inner
+        };
+        self.paint_slider(list, value.clamp(0.0, 1.0), slider);
+        self.paint_labels(list, text, labels);
+    }
+
+    /// The strip the rail and its ticks occupy above the labels.
+    fn slider_height(&self) -> f32 {
+        self.ticks.as_ref().map_or(0.0, TickRail::reserved) + self.metrics.thumb_height
+    }
+
+    fn paint_slider(&self, list: &mut DrawListBuilder, value: f32, bounds: Rect) {
+        let reserved = self.ticks.as_ref().map_or(0.0, |ticks| {
+            ticks.paint(
+                list,
+                Rect {
+                    h: ticks.extent(),
+                    ..bounds
+                },
+            );
+            ticks.reserved()
+        });
+        let track_height = (bounds.h - reserved).max(0.0);
+        let rail_height = self.metrics.rail_height.min(track_height).max(0.0);
+        let rail = Rect {
+            h: rail_height,
+            w: bounds.w,
+            x: bounds.x,
+            y: bounds.y + reserved + (track_height - rail_height) / 2.0,
+        };
+        let frame = self.metrics.rail_frame;
+        list.fill_rounded_rect(rail, frame.radius, self.rail_background);
+        list.stroke_rounded_rect(rail, frame.radius, self.rail_border, frame.border_width);
+
+        let width = self.metrics.thumb_width.min(bounds.w).max(0.0);
+        let height = self.metrics.thumb_height.min(track_height).max(0.0);
+        let thumb = Rect {
+            h: height,
+            w: width,
+            x: bounds.x + (value * (bounds.w - width).max(0.0)).round(),
+            y: bounds.y + reserved + (track_height - height) / 2.0,
+        };
+        list.fill_rect(thumb, self.thumb_color);
+
+        let notch_height = self.metrics.thumb_notch_height.min(height);
+        if notch_height > 0.0 && self.metrics.thumb_notch_width > 0.0 {
+            list.fill_rect(
+                Rect {
+                    h: notch_height,
+                    w: self.metrics.thumb_notch_width,
+                    x: thumb.x + (width - self.metrics.thumb_notch_width) / 2.0,
+                    y: thumb.y + (height - notch_height) / 2.0,
+                },
+                self.thumb_notch_color,
+            );
+        }
+    }
+
+    /// Draws the deck letters, their arrows, and the centre caption on one row:
+    /// the letters hug the outer edges, the caption owns the middle third.
+    fn paint_labels(&self, list: &mut DrawListBuilder, text: &mut TextContext, bounds: Rect) {
+        let metrics = &self.metrics;
+        let left = text.shape(&metrics.left_label, self.letter_role, None);
+        let right = text.shape(&metrics.right_label, self.letter_role, None);
+        let center = text.shape(&metrics.center_label, self.label_role, None);
+        let back = self.arrows.0.to_string();
+        let forward = self.arrows.1.to_string();
+        let back_run = text.shape_lucide(&back, metrics.arrow_size);
+        let forward_run = text.shape_lucide(&forward, metrics.arrow_size);
+        let height = [&left, &right, &center, &back_run, &forward_run]
+            .into_iter()
+            .map(GlyphRun::height)
+            .fold(0.0_f32, f32::max);
+        let mut place = |run: &GlyphRun, content: &str, x: f32, color: Rgba| {
+            list.text(
+                run,
+                content,
+                Transform::translate(Pt {
+                    x,
+                    y: bounds.y + (height - run.height()) / 2.0,
+                }),
+                color,
+            );
+            x + run.width() + metrics.arrow_gap
+        };
+
+        let x = place(&left, &metrics.left_label, bounds.x, self.letter_color);
+        place(&back_run, &back, x, self.arrow_color);
+
+        let column = bounds.w / 3.0;
+        place(
+            &center,
+            &metrics.center_label,
+            bounds.x + column + (column - center.width()) / 2.0,
+            self.label_color,
+        );
+
+        let tail = forward_run.width() + metrics.arrow_gap + right.width();
+        let x = place(
+            &forward_run,
+            &forward,
+            bounds.x + bounds.w - tail,
+            self.arrow_color,
+        );
+        place(&right, &metrics.right_label, x, self.letter_color);
+    }
+}
+
+const fn role(font: FontSkin) -> TextRoleSkin {
+    TextRoleSkin {
+        color: ColorRole::Text,
+        font: FontFamily::Mono,
+        size: font.size,
+        spacing: 0.0,
+        weight: font.weight,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -180,8 +189,8 @@ pub(crate) enum TickAxis {
 }
 
 pub(crate) struct TickRail {
-    center_color: Color,
-    color: Color,
+    center_color: Rgba,
+    color: Rgba,
     axis: TickAxis,
     metrics: TickSkin,
 }
@@ -191,8 +200,8 @@ impl TickRail {
         Self {
             axis,
             metrics,
-            color: skin.color(metrics.color),
-            center_color: skin.color(metrics.center_color),
+            color: skin.rgba(metrics.color),
+            center_color: skin.rgba(metrics.center_color),
         }
     }
 
@@ -245,123 +254,13 @@ impl TickRail {
                     y: rail.y + offset,
                 },
             };
-            builder.fill_rect(tick, color.into());
+            builder.fill_rect(tick, color);
         }
     }
 
     pub(crate) fn reserved(&self) -> f32 {
         self.last()
             .map_or(0.0, |_| self.extent() + self.metrics.gap)
-    }
-}
-
-impl canvas::Program<UiEvent> for CrossfaderCanvas<'_> {
-    type State = ScalarState;
-
-    fn draw(
-        &self,
-        _state: &ScalarState,
-        renderer: &Renderer,
-        theme: &Theme,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Vec<Geometry> {
-        self.paint.draw(&(), renderer, theme, bounds, cursor)
-    }
-
-    fn mouse_interaction(
-        &self,
-        state: &ScalarState,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> mouse::Interaction {
-        self.drag
-            .cursor(state, &iced_interact::hit(bounds, cursor))
-            .into()
-    }
-
-    fn update(
-        &self,
-        state: &mut ScalarState,
-        event: &Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
-        let input = iced_interact::input(event)?;
-        let hit = iced_interact::hit(bounds, cursor);
-        scalar(
-            &self.path,
-            self.drag
-                .on_input(state, input, &hit, Instant::now())
-                .map(f64::from),
-        )
-    }
-}
-
-impl canvas::Program<UiEvent> for CrossfaderPaint<'_> {
-    type State = ();
-
-    fn draw(
-        &self,
-        _state: &(),
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        _cursor: Cursor,
-    ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        let mut builder = DrawListBuilder::default();
-        let reserved = self.ticks.as_ref().map_or(0.0, |ticks| {
-            ticks.paint(
-                &mut builder,
-                Rect {
-                    h: ticks.extent(),
-                    w: bounds.width,
-                    x: 0.0,
-                    y: 0.0,
-                },
-            );
-            ticks.reserved()
-        });
-        replay(
-            &builder.finish(),
-            &mut IcedBackend::new(&mut frame, self.text_resources),
-        );
-        let track_height = (bounds.height - reserved).max(0.0);
-        let rail_height = self.rail_height.min(track_height).max(0.0);
-        let rail_point = Point::new(0.0, reserved + (track_height - rail_height) / 2.0);
-        let rail_size = Size::new(bounds.width, rail_height);
-        let rail = Path::rounded_rectangle(rail_point, rail_size, self.rail_frame.radius.into());
-        frame.fill(&rail, self.rail_background);
-        frame.stroke(
-            &rail,
-            Stroke::default()
-                .with_color(self.rail_color)
-                .with_width(self.rail_frame.border_width),
-        );
-
-        let thumb_width = self.thumb_width.min(bounds.width).max(0.0);
-        let thumb_height = self.thumb_height.min(track_height).max(0.0);
-        let travel = (bounds.width - thumb_width).max(0.0);
-        let thumb_x = (self.value * travel).round();
-        let thumb_y = reserved + (track_height - thumb_height) / 2.0;
-        frame.fill_rectangle(
-            Point::new(thumb_x, thumb_y),
-            Size::new(thumb_width, thumb_height),
-            self.thumb_color,
-        );
-        let notch_height = self.thumb_notch_height.min(thumb_height);
-        if notch_height > 0.0 && self.thumb_notch_width > 0.0 {
-            frame.fill_rectangle(
-                Point::new(
-                    thumb_x + (thumb_width - self.thumb_notch_width) / 2.0,
-                    thumb_y + (thumb_height - notch_height) / 2.0,
-                ),
-                Size::new(self.thumb_notch_width, notch_height),
-                self.thumb_notch_color,
-            );
-        }
-        vec![frame.into_geometry()]
     }
 }
 
@@ -389,8 +288,8 @@ mod tests {
                 color: ColorRole::LineDim,
                 center_color: ColorRole::LineDim,
             },
-            color: builtin::skin().color(ColorRole::LineDim),
-            center_color: builtin::skin().color(ColorRole::AccentSoft),
+            color: builtin::skin().rgba(ColorRole::LineDim),
+            center_color: builtin::skin().rgba(ColorRole::AccentSoft),
         }
     }
 

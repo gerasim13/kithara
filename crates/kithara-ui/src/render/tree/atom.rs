@@ -5,20 +5,18 @@ use super::geometry::active_tone;
 use crate::{
     atoms::{
         design::{
-            cell::Cell, crossfader::Crossfader, meter::Meter, segmented::Segmented, select::Select,
-            status_dot::StatusDot, swatch::Swatch,
+            cell::Cell, meter::Meter, segmented::Segmented, select::Select, status_dot::StatusDot,
+            swatch::Swatch,
         },
-        meter::StereoMeter,
         readout::Readout,
-        toggle::{Checkbox, Toggle},
-        vu::VerticalVu,
+        toggle::Binary,
     },
     compile::CompiledUi,
     ids::InternId,
     module::{ChipStyle, FaderStyle, GlyphStyle, IconName, Tone},
     render::{
-        InputOwner, ReadValue, Skin, UiEvent,
-        controls::{KnobPaint, KnobProgram},
+        IcedSkin, InputOwner, ReadValue, Skin, UiEvent,
+        controls::{Gesture, KnobPaint, KnobProgram, Paint},
         icons::document_icon,
     },
     skin::ColorRole,
@@ -32,16 +30,7 @@ pub(super) fn crossfader<'a>(
     skin: &'a Skin,
     owner: InputOwner,
 ) -> Element<'a, UiEvent> {
-    let crossfader = Crossfader::builder()
-        .path(path)
-        .ticks(ticks)
-        .maybe_value(value)
-        .skin(skin)
-        .build();
-    match owner {
-        InputOwner::Leaf => crossfader.view(),
-        InputOwner::Engine => crossfader.painted(),
-    }
+    crate::render::controls::crossfader(path, ticks, value, skin, owner)
 }
 
 pub(super) fn fader<'a>(
@@ -81,15 +70,7 @@ pub(super) fn toggle<'a>(
     skin: &'a Skin,
     owner: InputOwner,
 ) -> Element<'a, UiEvent> {
-    let toggle = Toggle::builder()
-        .path(path)
-        .maybe_value(value)
-        .skin(skin)
-        .build();
-    match owner {
-        InputOwner::Leaf => toggle.view(),
-        InputOwner::Engine => toggle.painted(),
-    }
+    binary(Binary::toggle(skin), path, value, skin, owner)
 }
 
 pub(super) fn checkbox<'a>(
@@ -98,14 +79,24 @@ pub(super) fn checkbox<'a>(
     skin: &'a Skin,
     owner: InputOwner,
 ) -> Element<'a, UiEvent> {
-    let checkbox = Checkbox::builder()
-        .path(path)
-        .maybe_value(value)
-        .skin(skin)
-        .build();
+    binary(Binary::checkbox(skin), path, value, skin, owner)
+}
+
+/// A switch draws nothing at all until its endpoint says which way it is set.
+fn binary<'a>(
+    painter: Binary,
+    path: &'a str,
+    value: Option<&ReadValue<'_>>,
+    skin: &'a Skin,
+    owner: InputOwner,
+) -> Element<'a, UiEvent> {
+    let Some(ReadValue::Bool(active)) = value else {
+        return Space::new().into();
+    };
+    let paint = Paint::new(painter, *active, skin);
     match owner {
-        InputOwner::Leaf => checkbox.view(),
-        InputOwner::Engine => checkbox.painted(),
+        InputOwner::Leaf => Gesture::press(path, paint).view(),
+        InputOwner::Engine => paint.view(),
     }
 }
 
@@ -115,15 +106,7 @@ pub(super) fn vu_stereo<'a>(
     skin: &'a Skin,
     owner: InputOwner,
 ) -> Element<'a, UiEvent> {
-    let meter = StereoMeter::builder()
-        .path(path)
-        .maybe_value(value)
-        .skin(skin)
-        .build();
-    match owner {
-        InputOwner::Leaf => meter.view(),
-        InputOwner::Engine => meter.painted(),
-    }
+    crate::render::controls::vu_stereo(path, value, skin, owner)
 }
 
 pub(super) fn vu_vertical<'a>(
@@ -133,16 +116,7 @@ pub(super) fn vu_vertical<'a>(
     skin: &'a Skin,
     owner: InputOwner,
 ) -> Element<'a, UiEvent> {
-    let vu = VerticalVu::builder()
-        .path(path)
-        .ticks(ticks)
-        .maybe_value(value)
-        .skin(skin)
-        .build();
-    match owner {
-        InputOwner::Leaf => vu.view(),
-        InputOwner::Engine => vu.painted(),
-    }
+    crate::render::controls::vu_vertical(path, ticks, value, skin, owner)
 }
 
 pub(super) fn meter<'a>(value: Option<&ReadValue<'_>>, skin: &'a Skin) -> Element<'a, UiEvent> {
@@ -295,7 +269,7 @@ fn glyph_base(style: GlyphStyle, skin: &Skin) -> Color {
         | GlyphStyle::Menu
         | GlyphStyle::MenuBurger
         | GlyphStyle::MenuSmall
-        | GlyphStyle::MenuCell => skin.palette.text,
+        | GlyphStyle::MenuCell => skin.palette.text.into(),
     }
 }
 
@@ -422,7 +396,11 @@ mod tests {
             GlyphStyle::MenuSmall,
             GlyphStyle::MenuCell,
         ] {
-            assert_eq!(glyph_base(style, skin), skin.palette.text, "{style:?}");
+            assert_eq!(
+                glyph_base(style, skin),
+                skin.color(ColorRole::Text),
+                "{style:?}"
+            );
         }
     }
 }

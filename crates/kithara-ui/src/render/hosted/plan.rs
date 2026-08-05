@@ -60,7 +60,6 @@ pub(crate) enum HostedControlPlan {
         labelled: bool,
         drag_step: Option<f64>,
         wheel: Option<WheelStep>,
-        #[cfg(feature = "masonry-host")]
         metrics: crate::skin::FaderSkin,
     },
     Crossfader {
@@ -224,7 +223,6 @@ impl HostedControlPlan {
                     labelled: label.is_some(),
                     drag_step,
                     wheel,
-                    #[cfg(feature = "masonry-host")]
                     metrics: skin.fader,
                 })
             }

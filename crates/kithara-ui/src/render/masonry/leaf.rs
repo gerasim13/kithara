@@ -25,7 +25,7 @@ use crate::{
     interact::{
         CursorShape, Hit, Input, MOUSE, Outcome, PointerInput, PointerOwnership, PointerPhase,
     },
-    render::{HostLayer, UiEvent, WindowCommand, WindowLayerProgram},
+    render::{HostLayer, ReadValue, UiEvent, WindowCommand, WindowLayerProgram},
     skin::TextRoleSkin,
     text::{TextContext, TextResources},
 };
@@ -153,6 +153,24 @@ impl Leaf {
         match self {
             Self::Control(control) => control.hover(hovered),
             Self::Custom { .. } | Self::Empty | Self::Text { .. } => false,
+        }
+    }
+
+    /// Takes what this leaf's endpoint now reads. This is the one way a mounted
+    /// leaf learns a new value without the tree being rebuilt around it.
+    pub(crate) fn set_read(&mut self, value: &ReadValue<'_>) -> bool {
+        match self {
+            Self::Control(control) => control.set_read(value),
+            Self::Text { content, .. } => match value {
+                ReadValue::Text(text) => {
+                    *text != content && {
+                        *content = (*text).to_owned();
+                        true
+                    }
+                }
+                _ => false,
+            },
+            Self::Custom { .. } | Self::Empty => false,
         }
     }
 

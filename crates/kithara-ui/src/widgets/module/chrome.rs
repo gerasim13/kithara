@@ -13,7 +13,8 @@ use crate::{
     layout::FrameSides,
     module::ChromeStyle,
     render::{
-        ChromeLeaf, InputOwner, Skin, UiEvent, chrome_leaf, fonts, header_chevron, shaped_text,
+        ChromeLeaf, IcedSkin, InputOwner, Skin, UiEvent, chrome_leaf, fonts, header_chevron,
+        shaped_text,
     },
     widgets::Widget,
 };
@@ -73,14 +74,14 @@ where
     Content: Into<Element<'a, UiEvent>>,
 {
     let drop = chrome.drop.take();
-    let accent = chrome.skin.palette.accent;
+    let accent = chrome.skin.palette.accent.into();
     let border_width = chrome.skin.chrome.frame.border_width;
     let shell = match chrome.style {
         ChromeStyle::Full => full(chrome),
         ChromeStyle::Frame => framed(
             chrome.content.into(),
             chrome.skin,
-            chrome.skin.palette.bg_panel,
+            chrome.skin.palette.bg_panel.into(),
             Length::Fill,
             chrome.frame,
             chrome.corners,

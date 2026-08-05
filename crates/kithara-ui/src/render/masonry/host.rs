@@ -4,11 +4,17 @@ use std::{
     rc::Rc,
 };
 
+use num_traits::cast::AsPrimitive;
+
 use super::{
-    Click, CustomWidget, MasonryControl, MasonryKnob, MasonryNode,
+    CustomWidget, MasonryControl, MasonryKnob, MasonryNode, Painted,
+    controls::Retained,
     custom::{HostAction, MappedCustom, MountedCustom},
     flex::{ChildLayout, Flex},
-    layout::NodeLayout,
+    layout::{
+        NodeLayout, activates, alignment, control_declared, declared, leaf_paints, length,
+        main_length, text_role,
+    },
     leaf::{DragProgram, Leaf, WindowLeafLayer},
     node::LayerParts,
     popover::{PopoverLayer, PopoverState},
@@ -18,25 +24,30 @@ use crate::{
     atoms::{
         button::{Button, ButtonConfig, ButtonLabel},
         chip::Chip,
+        design::{crossfader::Crossfader, fader::Fader},
+        meter::StereoMeter,
         nav_item::NavItem,
+        painter::{ButtonData, FaderData, Labelled},
+        tab::TabLarge,
+        toggle::Binary,
+        vu::VerticalVu,
     },
     compile::CompiledUi,
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
     interact::recognizers::{Track, WheelStep},
     layout::Axis,
-    module::{ButtonStyle, ChromeStyle, TextAlign, TextStyle},
+    module::{ChromeStyle, TextStyle},
     render::{
-        ControlAction, HostedControlPlan, InputOwner, ReadValue, Reads, Skin, UiEvent,
-        controls::{
-            EffectiveIcon, effective_icon, nav_item_supports_engine_input, supports_engine_input,
-        },
+        ControlAction, HostedControlPlan, InputOwner, ReadValue, Reads, Skin, StereoLevels,
+        UiEvent,
+        controls::button_glyphs,
         document::{Group, Host, Module, Popover, read::resolve},
         hosted_control_plan,
         icons::document_icon,
     },
-    size::{Dim, SizeSpec, control_size},
-    skin::{ColorRole, TextRoleSkin},
+    size::SizeSpec,
+    skin::ColorRole,
     solve,
     text::TextContext,
     widgets::window::{ControlsProgram, TitleProgram},
@@ -125,7 +136,13 @@ where
         );
         self
     }
+}
 
+/// Mounting one document control as a leaf.
+impl<Action> MasonryHost<'_, Action>
+where
+    Action: std::fmt::Debug + Send + 'static,
+{
     fn empty(declared: solve::Size<solve::Length>) -> MasonryNode<Action> {
         MasonryNode::document(
             NodeLayout::Leaf(Leaf::Empty),
@@ -275,24 +292,88 @@ where
                 _ => Self::empty(declared),
             },
             ControlSpec::Chip { style, label } => {
-                let chip = Click::new(
-                    Chip::new(*style, self.reads_true(read), self.skin),
-                    self.ui.resolve(*label).to_owned(),
+                let chip = Painted::new(
+                    Chip::new(*style, self.skin),
+                    Labelled {
+                        active: self.reads_true(read),
+                        label: self.ui.resolve(*label).to_owned(),
+                    },
                     self.skin,
                 );
-                Self::control_leaf(self.owned(chip, owner, path, Click::interactive), declared)
+                Self::control_leaf(
+                    self.owned(chip, owner, path, Painted::interactive),
+                    declared,
+                )
+            }
+            ControlSpec::TabLarge { label } => {
+                let tab = Painted::new(
+                    TabLarge::new(self.skin),
+                    Labelled {
+                        active: self.reads_true(read),
+                        label: self.ui.resolve(*label).to_owned(),
+                    },
+                    self.skin,
+                );
+                Self::control_leaf(self.owned(tab, owner, path, Painted::interactive), declared)
+            }
+            // A switch draws nothing until its endpoint says which way it is
+            // set, so an unbound one is an empty box rather than an idle switch.
+            ControlSpec::Toggle | ControlSpec::Checkbox => {
+                let painter = if matches!(spec, ControlSpec::Toggle) {
+                    Binary::toggle(self.skin)
+                } else {
+                    Binary::checkbox(self.skin)
+                };
+                match read.and_then(|binding| resolve(self.reads, binding, self.ui)) {
+                    Some(ReadValue::Bool(active)) => Self::control_leaf(
+                        self.owned(
+                            Painted::new(painter, active, self.skin),
+                            owner,
+                            path,
+                            Painted::interactive,
+                        ),
+                        declared,
+                    ),
+                    _ => Self::empty(declared),
+                }
+            }
+            ControlSpec::VuVertical { ticks } => {
+                self.meter_leaf(VerticalVu::new(*ticks, self.skin), read, declared)
+            }
+            ControlSpec::VuStereo => self.meter_leaf(StereoMeter::new(self.skin), read, declared),
+            ControlSpec::Crossfader { ticks } => {
+                self.scalar_leaf(Crossfader::new(*ticks, self.skin), read, declared)
+            }
+            ControlSpec::Fader { style, label } => {
+                match read.and_then(|binding| resolve(self.reads, binding, self.ui)) {
+                    Some(ReadValue::Scalar(value)) => Self::control_leaf(
+                        Painted::new(
+                            Fader::new(*style, self.skin),
+                            FaderData {
+                                label: label.map(|label| self.ui.resolve(label).to_owned()),
+                                value: value.clamp(0.0, 1.0).as_(),
+                            },
+                            self.skin,
+                        ),
+                        declared,
+                    ),
+                    _ => Self::empty(declared),
+                }
             }
             ControlSpec::NavItem { icon, label } => {
                 let value = read.and_then(|binding| resolve(self.reads, binding, self.ui));
                 match (document_icon(*icon).lucide_glyph(), value) {
                     (Some(glyph), Some(ReadValue::Bool(active))) => {
-                        let item = Click::new(
-                            NavItem::new(glyph, active, self.skin),
-                            self.ui.resolve(*label).to_owned(),
+                        let item = Painted::new(
+                            NavItem::new(glyph, self.skin),
+                            Labelled {
+                                active,
+                                label: self.ui.resolve(*label).to_owned(),
+                            },
                             self.skin,
                         );
                         Self::control_leaf(
-                            self.owned(item, owner, path, Click::interactive),
+                            self.owned(item, owner, path, Painted::interactive),
                             declared,
                         )
                     }
@@ -306,32 +387,70 @@ where
                 label,
                 style,
             } => {
-                let active = self.reads_true(read);
-                let glyph = match effective_icon(*style, icon.map(document_icon), active) {
-                    EffectiveIcon::Glyph(glyph) => Some(glyph),
-                    EffectiveIcon::None => None,
-                    EffectiveIcon::Svg(_) => return Self::empty(declared),
+                let Ok(glyphs) = button_glyphs(*style, icon.map(document_icon)) else {
+                    return Self::empty(declared);
                 };
-                let button = Click::new(
+                let button = Painted::new(
                     Button::new(
                         ButtonConfig::builder()
-                            .active(active)
                             .maybe_frame(*frame)
-                            .maybe_glyph(glyph)
+                            .maybe_glyph(glyphs.idle)
                             .style(*style)
                             .build(),
+                        glyphs.active,
                         self.skin,
                     ),
-                    ButtonLabel {
-                        active: active_label.map(|label| self.ui.resolve(label).to_owned()),
-                        label: self.ui.resolve(*label).to_owned(),
+                    ButtonData {
+                        active: self.reads_true(read),
+                        label: ButtonLabel {
+                            active: active_label.map(|label| self.ui.resolve(label).to_owned()),
+                            label: self.ui.resolve(*label).to_owned(),
+                        },
                     },
                     self.skin,
                 );
                 Self::control_leaf(
-                    self.owned(button, owner, path, Click::interactive),
+                    self.owned(button, owner, path, Painted::interactive),
                     declared,
                 )
+            }
+            _ => Self::empty(declared),
+        }
+    }
+
+    /// Mounts a control the engine drags, painted from the scalar it reads.
+    fn scalar_leaf<Painter>(
+        &self,
+        painter: Painter,
+        read: Option<&Binding>,
+        declared: solve::Size<solve::Length>,
+    ) -> MasonryNode<Action>
+    where
+        Painter: Retained<Data = f32> + 'static,
+    {
+        match read.and_then(|binding| resolve(self.reads, binding, self.ui)) {
+            Some(ReadValue::Scalar(value)) => Self::control_leaf(
+                Painted::new(painter, value.clamp(0.0, 1.0).as_(), self.skin),
+                declared,
+            ),
+            _ => Self::empty(declared),
+        }
+    }
+
+    /// Mounts a meter, which paints the levels it reads and leaves its drag to
+    /// the engine plan.
+    fn meter_leaf<Painter>(
+        &self,
+        painter: Painter,
+        read: Option<&Binding>,
+        declared: solve::Size<solve::Length>,
+    ) -> MasonryNode<Action>
+    where
+        Painter: Retained<Data = StereoLevels> + 'static,
+    {
+        match read.and_then(|binding| resolve(self.reads, binding, self.ui)) {
+            Some(ReadValue::Stereo(levels)) => {
+                Self::control_leaf(Painted::new(painter, levels, self.skin), declared)
             }
             _ => Self::empty(declared),
         }
@@ -562,7 +681,7 @@ where
             MasonryNode::document(NodeLayout::Stack, size, vec![anchor], false, None, None);
         output.add_popover(Rc::clone(&state), Rc::clone(&dismiss));
         if let Some(content) = content {
-            let (content, declared, layers, popovers, engine_targets, pickers, window) =
+            let (content, declared, layers, popovers, engine_targets, engines, window, watched) =
                 LayerParts::from(content);
             let layer = PopoverLayer::new(
                 content,
@@ -575,7 +694,8 @@ where
             output.append_layers(layers);
             output.append_popovers(popovers);
             output.append_engine_targets(engine_targets);
-            output.append_pickers(pickers);
+            output.append_engines(engines);
+            output.append_watched(watched);
             if let Some(window) = window {
                 output.set_window_tracker(window);
             }
@@ -653,6 +773,9 @@ where
         if custom_installed {
             return output;
         }
+        if let Some(read) = read {
+            output.watch(read);
+        }
         if leaf_owns_control {
             return output;
         }
@@ -719,138 +842,5 @@ fn furniture<Action>(height: f32, background: Option<crate::draw::Rgba>) -> Maso
         NodeLayout::Leaf(Leaf::Empty),
         solve::Size::new(solve::Length::Fill, solve::Length::Fixed(height)),
         background,
-    )
-}
-
-const fn main_length(dim: Dim) -> solve::Length {
-    match dim {
-        Dim::Fixed(value) => solve::Length::Fixed(value),
-        Dim::Range { .. } | Dim::Fill | Dim::Shrink => solve::Length::Fill,
-    }
-}
-
-const fn length(dim: Dim) -> solve::Length {
-    match dim {
-        Dim::Fixed(value) => solve::Length::Fixed(value),
-        Dim::Shrink => solve::Length::Shrink,
-        Dim::Range { .. } | Dim::Fill => solve::Length::Fill,
-    }
-}
-
-const fn declared(size: SizeSpec) -> solve::Size<solve::Length> {
-    solve::Size::new(length(size.w), length(size.h))
-}
-
-fn control_declared(
-    spec: &ControlSpec,
-    size: Option<SizeSpec>,
-    skin: &Skin,
-) -> solve::Size<solve::Length> {
-    let intrinsic = match spec {
-        ControlSpec::DeckSummary { .. } => solve::Size::new(
-            solve::Length::FillPortion(skin.deck.summary_fill),
-            solve::Length::Fixed(skin.deck.summary_height),
-        ),
-        ControlSpec::Button { style, .. } => solve::Size::new(
-            match style {
-                ButtonStyle::Transport => solve::Length::FillPortion(skin.button.transport_fill),
-                ButtonStyle::TransportPrimary => {
-                    solve::Length::FillPortion(skin.button.primary_fill)
-                }
-                ButtonStyle::Default | ButtonStyle::MicroPrimary | ButtonStyle::VisNav => {
-                    solve::Length::Shrink
-                }
-            },
-            solve::Length::Fill,
-        ),
-        ControlSpec::Text { .. } => solve::Size::new(solve::Length::Shrink, solve::Length::Fill),
-        ControlSpec::Spacer | ControlSpec::WindowDrag | ControlSpec::TitleBar { .. } => {
-            solve::Size::new(solve::Length::Fill, solve::Length::Fill)
-        }
-        _ => declared(control_size(spec, skin.document())),
-    };
-    size.map_or(intrinsic, |size| {
-        solve::Size::new(
-            control_length(size.w, intrinsic.width),
-            control_length(size.h, intrinsic.height),
-        )
-    })
-}
-
-const fn control_length(dim: Dim, intrinsic: solve::Length) -> solve::Length {
-    match dim {
-        Dim::Fixed(value) => solve::Length::Fixed(value),
-        Dim::Shrink => solve::Length::Shrink,
-        Dim::Range { .. } => match intrinsic {
-            solve::Length::FillPortion(portion) => solve::Length::FillPortion(portion),
-            solve::Length::Fill | solve::Length::Shrink | solve::Length::Fixed(_) => {
-                solve::Length::Fill
-            }
-        },
-        Dim::Fill => solve::Length::Fill,
-    }
-}
-
-const fn alignment(value: TextAlign) -> solve::Alignment {
-    match value {
-        TextAlign::Start => solve::Alignment::Start,
-        TextAlign::Center => solve::Alignment::Center,
-        TextAlign::End => solve::Alignment::End,
-    }
-}
-
-fn text_role(
-    style: TextStyle,
-    color: Option<ColorRole>,
-    active_color: Option<ColorRole>,
-    active: bool,
-    skin: &Skin,
-) -> TextRoleSkin {
-    let (role, skin_active) = match style {
-        TextStyle::Body => (skin.text.body, None),
-        TextStyle::Brand => (skin.text.brand, None),
-        TextStyle::BrandSmall => (skin.text.brand_small, None),
-        TextStyle::DeckLetter => (skin.text.deck_letter, Some(skin.text.deck_letter_active)),
-        TextStyle::TrackTitle => (skin.text.track_title, None),
-        TextStyle::Telemetry => (skin.text.telemetry, None),
-        TextStyle::MicroLabel => (skin.text.micro_label, None),
-        TextStyle::Section => (skin.text.section, None),
-        TextStyle::Mono => (skin.text.mono, None),
-        TextStyle::Caption => (skin.text.caption, None),
-        TextStyle::VisFooter | TextStyle::VisMeta => (skin.vis.meta, None),
-        TextStyle::VisTitle => (skin.vis.title, None),
-    };
-    TextRoleSkin {
-        color: active
-            .then_some(active_color.or(skin_active))
-            .flatten()
-            .or(color)
-            .unwrap_or(role.color),
-        ..role
-    }
-}
-
-/// Whether this control reaches Vello as a painted leaf that can own the
-/// pointer itself, rather than as an empty box the engine drives.
-fn leaf_paints(spec: &ControlSpec) -> bool {
-    match spec {
-        ControlSpec::Button { icon, style, .. } => {
-            supports_engine_input(*style, icon.map(document_icon))
-        }
-        ControlSpec::NavItem { icon, .. } => nav_item_supports_engine_input(document_icon(*icon)),
-        ControlSpec::Chip { .. } | ControlSpec::Knob { .. } => true,
-        _ => false,
-    }
-}
-
-const fn activates(spec: &ControlSpec) -> bool {
-    matches!(
-        spec,
-        ControlSpec::NavItem { .. }
-            | ControlSpec::TabLarge { .. }
-            | ControlSpec::Button { .. }
-            | ControlSpec::Toggle
-            | ControlSpec::Checkbox
-            | ControlSpec::Chip { .. }
     )
 }

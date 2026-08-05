@@ -5,7 +5,7 @@ use iced::{
 
 use crate::{
     module::Tone,
-    render::{ReadValue, Skin, UiEvent, fonts, shaped_text},
+    render::{IcedSkin, ReadValue, Skin, UiEvent, fonts, shaped_text},
     widgets::Widget,
 };
 

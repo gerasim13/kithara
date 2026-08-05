@@ -1,388 +1,238 @@
-use iced::{
-    Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
-    mouse::{self, Cursor},
-    widget::{
-        Space,
-        canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
-    },
-};
-
 use crate::{
-    interact::{CursorShape, Hover, iced as iced_interact, recognizers::click},
-    render::{ReadValue, Skin, UiEvent, activate, theme::RenderPalette},
-    skin::{CheckboxSkin, FrameSkin, ToggleSkin},
-    widgets::Widget,
+    atoms::design::quad::border,
+    draw::{DrawListBuilder, Rect, Rgba},
+    render::Skin,
+    skin::FrameSkin,
 };
 
-#[derive(bon::Builder)]
-pub(crate) struct Toggle<'path, 'value, 'data, 'skin> {
-    skin: &'skin Skin,
-    path: &'path str,
-    value: Option<&'value ReadValue<'data>>,
+/// A switch with two states and nothing else: the toggle and the checkbox are
+/// the same picture, one of them with a thumb sliding across it.
+pub(crate) struct Binary {
+    active: Face,
+    idle: Face,
+    thumb: Option<Thumb>,
 }
 
-impl<'a> Widget<'a> for Toggle<'_, '_, '_, '_> {
-    fn view(self) -> Element<'a, UiEvent> {
-        self.control().view()
-    }
-}
-
-impl<'path, 'value, 'data, 'skin> Toggle<'path, 'value, 'data, 'skin> {
-    fn control(self) -> BinaryControl<'path, 'value, 'data, 'skin> {
-        BinaryControl::builder()
-            .path(self.path)
-            .maybe_value(self.value)
-            .skin(self.skin)
-            .shape(Shape::Toggle {
-                metrics: self.skin.toggle,
-                active_border: self.skin.color(self.skin.toggle.active_frame.border),
-                inactive_border: self.skin.color(self.skin.toggle.inactive_frame.border),
-            })
-            .build()
-    }
-
-    pub(crate) fn painted<'a>(self) -> Element<'a, UiEvent> {
-        self.control().painted()
-    }
-}
-
-#[derive(bon::Builder)]
-pub(crate) struct Checkbox<'path, 'value, 'data, 'skin> {
-    skin: &'skin Skin,
-    path: &'path str,
-    value: Option<&'value ReadValue<'data>>,
-}
-
-impl<'a> Widget<'a> for Checkbox<'_, '_, '_, '_> {
-    fn view(self) -> Element<'a, UiEvent> {
-        self.control().view()
-    }
-}
-
-impl<'path, 'value, 'data, 'skin> Checkbox<'path, 'value, 'data, 'skin> {
-    fn control(self) -> BinaryControl<'path, 'value, 'data, 'skin> {
-        BinaryControl::builder()
-            .path(self.path)
-            .maybe_value(self.value)
-            .skin(self.skin)
-            .shape(Shape::Checkbox {
-                metrics: self.skin.checkbox,
-                active_border: self.skin.color(self.skin.checkbox.active_frame.border),
-                inactive_border: self.skin.color(self.skin.checkbox.inactive_frame.border),
-            })
-            .build()
-    }
-
-    pub(crate) fn painted<'a>(self) -> Element<'a, UiEvent> {
-        self.control().painted()
-    }
-}
-
-#[derive(bon::Builder)]
-struct BinaryControl<'path, 'value, 'data, 'skin> {
-    skin: &'skin Skin,
-    path: &'path str,
-    value: Option<&'value ReadValue<'data>>,
-    shape: Shape,
-}
-
-impl<'a> Widget<'a> for BinaryControl<'_, '_, '_, '_> {
-    fn view(self) -> Element<'a, UiEvent> {
-        let Some(paint) = self.paint() else {
-            return Space::new().into();
-        };
-        Canvas::new(BinaryControlCanvas {
-            paint,
-            path: self.path.to_owned(),
-        })
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
-    }
-}
-
-impl<'a> BinaryControl<'_, '_, '_, '_> {
-    fn paint(&self) -> Option<BinaryControlPaint> {
-        let Some(ReadValue::Bool(active)) = self.value else {
-            return None;
-        };
-        Some(BinaryControlPaint {
-            active: *active,
-            palette: self.skin.palette,
-            shape: self.shape,
-        })
-    }
-
-    fn painted(self) -> Element<'a, UiEvent> {
-        let Some(paint) = self.paint() else {
-            return Space::new().into();
-        };
-        Canvas::new(paint)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-    }
+/// How the switch looks in one of its states. Both are resolved from the skin
+/// when the switch is built, so flipping it is a repaint rather than a reason
+/// to rebuild the control.
+struct Face {
+    border: Rgba,
+    /// The idle switch has no body of its own: it is a frame around nothing.
+    fill: Option<Rgba>,
+    frame: FrameSkin,
+    thumb: Rgba,
 }
 
 #[derive(Clone, Copy)]
-enum Shape {
-    Toggle {
-        metrics: ToggleSkin,
-        active_border: Color,
-        inactive_border: Color,
-    },
-    Checkbox {
-        metrics: CheckboxSkin,
-        active_border: Color,
-        inactive_border: Color,
-    },
+struct Thumb {
+    inset: f32,
+    radius: f32,
+    size: f32,
 }
 
-struct BinaryControlCanvas {
-    paint: BinaryControlPaint,
-    path: String,
-}
-
-struct BinaryControlPaint {
-    palette: RenderPalette,
-    shape: Shape,
-    active: bool,
-}
-
-impl canvas::Program<UiEvent> for BinaryControlCanvas {
-    type State = ();
-
-    fn draw(
-        &self,
-        _state: &(),
-        renderer: &Renderer,
-        theme: &Theme,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Vec<Geometry> {
-        self.paint.draw(&(), renderer, theme, bounds, cursor)
-    }
-
-    fn mouse_interaction(
-        &self,
-        _state: &(),
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> mouse::Interaction {
-        Hover::new(CursorShape::Pointer)
-            .cursor(false, &iced_interact::hit(bounds, cursor))
-            .into()
-    }
-
-    fn update(
-        &self,
-        _state: &mut (),
-        event: &Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
-        let input = iced_interact::input(event)?;
-        let hit = iced_interact::hit(bounds, cursor);
-        activate(&self.path, click::on_input(input, &hit))
-    }
-}
-
-impl canvas::Program<UiEvent> for BinaryControlPaint {
-    type State = ();
-
-    fn draw(
-        &self,
-        _state: &(),
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        _cursor: Cursor,
-    ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        match self.shape {
-            Shape::Toggle {
-                metrics,
-                active_border,
-                inactive_border,
-            } => draw_toggle(
-                &mut frame,
-                bounds,
-                self.active,
-                metrics,
-                active_border,
-                inactive_border,
-                self.palette,
-            ),
-            Shape::Checkbox {
-                metrics,
-                active_border,
-                inactive_border,
-            } => draw_checkbox(
-                &mut frame,
-                bounds,
-                self.active,
-                metrics,
-                active_border,
-                inactive_border,
-                self.palette,
-            ),
+impl Binary {
+    pub(crate) fn toggle(skin: &Skin) -> Self {
+        let metrics = skin.toggle;
+        Self {
+            active: Face {
+                border: skin.rgba(metrics.active_frame.border),
+                fill: Some(skin.palette.accent),
+                frame: metrics.active_frame,
+                thumb: skin.palette.bg_deep,
+            },
+            idle: Face {
+                border: skin.rgba(metrics.inactive_frame.border),
+                fill: None,
+                frame: metrics.inactive_frame,
+                thumb: skin.palette.muted,
+            },
+            thumb: Some(Thumb {
+                inset: metrics.thumb_inset,
+                radius: metrics.thumb_radius,
+                size: metrics.thumb_size,
+            }),
         }
-        vec![frame.into_geometry()]
     }
-}
 
-fn draw_toggle(
-    frame: &mut Frame,
-    bounds: Rectangle,
-    active: bool,
-    metrics: ToggleSkin,
-    active_border: Color,
-    inactive_border: Color,
-    palette: RenderPalette,
-) {
-    let frame_skin = if active {
-        metrics.active_frame
-    } else {
-        metrics.inactive_frame
-    };
-    if active {
-        fill_rounded(
-            frame,
-            Point::ORIGIN,
-            bounds.size(),
-            frame_skin.radius,
-            palette.accent,
+    pub(crate) fn checkbox(skin: &Skin) -> Self {
+        let metrics = skin.checkbox;
+        Self {
+            active: Face {
+                border: skin.rgba(metrics.active_frame.border),
+                fill: Some(skin.palette.accent),
+                frame: metrics.active_frame,
+                thumb: skin.palette.bg_deep,
+            },
+            idle: Face {
+                border: skin.rgba(metrics.inactive_frame.border),
+                fill: None,
+                frame: metrics.inactive_frame,
+                thumb: skin.palette.muted,
+            },
+            thumb: None,
+        }
+    }
+
+    pub(crate) fn paint(&self, list: &mut DrawListBuilder, active: bool, bounds: Rect) {
+        let face = if active { &self.active } else { &self.idle };
+        if let Some(fill) = face.fill {
+            list.fill_rounded_rect(bounds, face.frame.radius, fill);
+        }
+        border(list, bounds, face.frame, face.border);
+        let Some(thumb) = self.thumb else {
+            return;
+        };
+        let offset = if active {
+            bounds.w - thumb.inset - thumb.size
+        } else {
+            thumb.inset
+        };
+        list.fill_rounded_rect(
+            Rect {
+                h: thumb.size,
+                w: thumb.size,
+                x: bounds.x + offset,
+                y: bounds.y + (bounds.h - thumb.size) / 2.0,
+            },
+            thumb.radius,
+            face.thumb,
         );
     }
-    draw_border(
-        frame,
-        bounds,
-        frame_skin,
-        if active {
-            active_border
-        } else {
-            inactive_border
-        },
-    );
-    let x = if active {
-        bounds.width - metrics.thumb_inset - metrics.thumb_size
-    } else {
-        metrics.thumb_inset
-    };
-    fill_rounded(
-        frame,
-        Point::new(x, (bounds.height - metrics.thumb_size) / 2.0),
-        Size::new(metrics.thumb_size, metrics.thumb_size),
-        metrics.thumb_radius,
-        if active {
-            palette.bg_deep
-        } else {
-            palette.muted
-        },
-    );
-}
-
-fn draw_checkbox(
-    frame: &mut Frame,
-    bounds: Rectangle,
-    active: bool,
-    metrics: CheckboxSkin,
-    active_border: Color,
-    inactive_border: Color,
-    palette: RenderPalette,
-) {
-    let frame_skin = if active {
-        metrics.active_frame
-    } else {
-        metrics.inactive_frame
-    };
-    if active {
-        fill_rounded(
-            frame,
-            Point::ORIGIN,
-            bounds.size(),
-            frame_skin.radius,
-            palette.accent,
-        );
-    }
-    draw_border(
-        frame,
-        bounds,
-        frame_skin,
-        if active {
-            active_border
-        } else {
-            inactive_border
-        },
-    );
-}
-
-fn draw_border(frame: &mut Frame, bounds: Rectangle, skin: FrameSkin, color: Color) {
-    if skin.border_width <= 0.0 {
-        return;
-    }
-    let inset = skin.border_width / 2.0;
-    let path = Path::rounded_rectangle(
-        Point::new(inset, inset),
-        Size::new(
-            (bounds.width - skin.border_width).max(0.0),
-            (bounds.height - skin.border_width).max(0.0),
-        ),
-        skin.radius.into(),
-    );
-    frame.stroke(
-        &path,
-        Stroke::default()
-            .with_color(color)
-            .with_width(skin.border_width),
-    );
-}
-
-fn fill_rounded(frame: &mut Frame, point: Point, size: Size, radius: f32, color: Color) {
-    frame.fill(&Path::rounded_rectangle(point, size, radius.into()), color);
 }
 
 #[cfg(test)]
 mod tests {
-    use iced::{Size, mouse::Button, widget::canvas::Program};
     use kithara_test_utils::kithara;
 
-    use super::*;
-    use crate::{builtin, render::ControlAction};
+    use super::{Binary, DrawListBuilder, Rect};
+    use crate::{
+        builtin,
+        draw::{DrawCmd, Geom},
+    };
 
+    const TOGGLE: Rect = Rect {
+        h: 14.0,
+        w: 26.0,
+        x: 0.0,
+        y: 0.0,
+    };
+
+    /// The thumb travels to the far end when the switch is on, and the body
+    /// only exists there — an idle toggle is an outline.
     #[kithara::test]
-    fn a_press_on_the_control_activates_its_own_path() {
+    fn a_toggle_lights_its_body_and_slides_its_thumb_across() {
         let skin = builtin::skin();
-        let control = BinaryControlCanvas {
-            path: "deck-a/sync".to_owned(),
-            paint: BinaryControlPaint {
-                active: false,
-                palette: skin.palette,
-                shape: Shape::Toggle {
-                    metrics: skin.toggle,
-                    active_border: skin.color(skin.toggle.active_frame.border),
-                    inactive_border: skin.color(skin.toggle.inactive_frame.border),
-                },
-            },
+        let toggle = Binary::toggle(skin);
+        let draw = |active| {
+            let mut list = DrawListBuilder::default();
+            toggle.paint(&mut list, active, TOGGLE);
+            list.finish()
         };
-        let bounds = Rectangle::new(Point::ORIGIN, Size::new(28.0, 18.0));
-        let press = Event::Mouse(mouse::Event::ButtonPressed(Button::Left));
 
-        let action = control
-            .update(
-                &mut (),
-                &press,
-                bounds,
-                Cursor::Available(Point::new(14.0, 9.0)),
-            )
-            .unwrap_or_else(|| panic!("a press on the control must publish"));
+        let on = draw(true);
+        let [body, thumb] = on.commands() else {
+            panic!("an active toggle must draw its body and its thumb");
+        };
+        assert!(matches!(
+            body,
+            DrawCmd::Fill {
+                geom: Geom::Rect(rect),
+                color,
+            } if *rect == TOGGLE && *color == skin.palette.accent
+        ));
+        assert!(matches!(
+            thumb,
+            DrawCmd::Fill {
+                geom: Geom::Rect(Rect {
+                    h: 9.0,
+                    w: 9.0,
+                    x: 15.0,
+                    y: 2.5,
+                }),
+                color,
+            } if *color == skin.palette.bg_deep
+        ));
 
-        assert_eq!(
-            action.into_inner().0,
-            Some(UiEvent::Control {
-                path: "deck-a/sync".to_owned(),
-                action: ControlAction::Activate,
-            })
+        let off = draw(false);
+        let [outline, thumb] = off.commands() else {
+            panic!("an idle toggle must draw its outline and its thumb");
+        };
+        assert!(matches!(
+            outline,
+            DrawCmd::Stroke {
+                geom: Geom::Rect(Rect {
+                    h: 13.0,
+                    w: 25.0,
+                    x: 0.5,
+                    y: 0.5,
+                }),
+                width: 1.0,
+                ..
+            }
+        ));
+        assert!(matches!(
+            thumb,
+            DrawCmd::Fill {
+                geom: Geom::Rect(Rect { x: 2.0, .. }),
+                color,
+            } if *color == skin.palette.muted
+        ));
+    }
+
+    /// A checkbox is the same switch without the thumb. The thumb is the one
+    /// part that does not span the box, so a checkbox must draw nothing that
+    /// sits inside its own frame — whichever way it is set.
+    #[kithara::test]
+    fn a_checkbox_is_the_same_switch_without_a_thumb() {
+        let skin = builtin::skin();
+        let square = Rect {
+            h: 14.0,
+            w: 14.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let draw = |painter: &Binary, active| {
+            let mut list = DrawListBuilder::default();
+            painter.paint(&mut list, active, square);
+            list.finish()
+        };
+        let inner = |list: &crate::draw::DrawList| {
+            list.commands()
+                .iter()
+                .filter(|command| {
+                    let (DrawCmd::Fill {
+                        geom: Geom::Rect(rect),
+                        ..
+                    }
+                    | DrawCmd::Stroke {
+                        geom: Geom::Rect(rect),
+                        ..
+                    }) = command
+                    else {
+                        return false;
+                    };
+                    rect.w < square.w - 2.0
+                })
+                .count()
+        };
+
+        for active in [false, true] {
+            assert_eq!(
+                inner(&draw(&Binary::checkbox(skin), active)),
+                0,
+                "a checkbox must draw the switch and no thumb"
+            );
+            assert_eq!(
+                inner(&draw(&Binary::toggle(skin), active)),
+                1,
+                "a toggle must draw exactly one thumb inside its box"
+            );
+        }
+        assert_ne!(
+            draw(&Binary::checkbox(skin), true),
+            draw(&Binary::checkbox(skin), false),
+            "the same checkbox must draw differently once it is ticked"
         );
     }
 }

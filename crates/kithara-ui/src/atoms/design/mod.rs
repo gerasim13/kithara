@@ -1,6 +1,8 @@
 pub(crate) mod cell;
 pub(crate) mod crossfader;
+pub(crate) mod fader;
 pub(crate) mod meter;
+pub(crate) mod quad;
 pub(crate) mod segmented;
 pub(crate) mod select;
 pub(crate) mod status_dot;

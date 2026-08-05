@@ -1,6 +1,8 @@
 mod cursor;
 pub(crate) mod iced;
 mod input;
+#[cfg(feature = "masonry-host")]
+pub(crate) mod masonry;
 mod outcome;
 mod pointer;
 pub(crate) mod recognizers;

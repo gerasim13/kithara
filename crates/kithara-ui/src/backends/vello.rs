@@ -403,9 +403,10 @@ mod tests {
         };
 
         let mut builder = DrawListBuilder::default();
-        crate::atoms::knob::Knob::new(0.25, crate::builtin::skin()).paint(
+        crate::atoms::knob::Knob::new(crate::builtin::skin()).paint(
             &mut builder,
             &mut TextContext::new().unwrap(),
+            0.25,
             Some("GAIN"),
             BOUNDS,
         );

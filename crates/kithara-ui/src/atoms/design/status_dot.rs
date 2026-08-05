@@ -5,7 +5,7 @@ use iced::{
 
 use crate::{
     module::Tone,
-    render::{Skin, UiEvent, fonts, shaped_text},
+    render::{IcedSkin, Skin, UiEvent, fonts, shaped_text},
     widgets::Widget,
 };
 
@@ -30,7 +30,7 @@ impl<'a> Widget<'a> for StatusDot<'a, '_> {
             .height(Length::Fixed(metrics.dot_size))
             .style(move |_| {
                 ContainerStyle::default()
-                    .background(Background::Color(dot_color))
+                    .background(Background::Color(dot_color.into()))
                     .border(Border {
                         radius: (metrics.dot_size / 2.0).into(),
                         ..Border::default()

@@ -116,7 +116,7 @@ impl<'skin> TrackListPaint<'skin> {
                 x: -horizontal,
                 ..bounds
             },
-            self.skin.palette.line_soft.into(),
+            self.skin.palette.line_soft,
         );
         self.paint_header(&mut content, text, bounds, horizontal);
         self.paint_body(
@@ -150,7 +150,7 @@ impl<'skin> TrackListPaint<'skin> {
             x: -horizontal,
             y: bounds.y,
         };
-        list.fill_rect(header, self.skin.palette.bg_panel.into());
+        list.fill_rect(header, self.skin.palette.bg_panel);
         for (column, cell) in column_cells(bounds, &self.columns, horizontal) {
             let align = if column.column == TrackColumn::Index {
                 TextAlign::Right
@@ -168,7 +168,7 @@ impl<'skin> TrackListPaint<'skin> {
                 (
                     self.skin.track_list.header_text,
                     FontFamily::Mono,
-                    self.skin.palette.muted.into(),
+                    self.skin.palette.muted,
                     self.skin.track_list.cell_padding_x,
                     align,
                 ),
@@ -229,13 +229,13 @@ impl<'skin> TrackListPaint<'skin> {
         let row = &self.rows[index];
         let frame = self.skin.track_list.row_frame;
         let fill = if pressed {
-            self.skin.palette.accent_soft.into()
+            self.skin.palette.accent_soft
         } else if row.selected {
-            self.skin.palette.bg_select.into()
+            self.skin.palette.bg_select
         } else if hovered {
-            self.skin.palette.bg_panel_2.into()
+            self.skin.palette.bg_panel_2
         } else {
-            self.skin.palette.bg_inset.into()
+            self.skin.palette.bg_inset
         };
         list.fill_rounded_rect(bounds, frame.radius, fill);
         paint_frame(list, bounds, frame, self.skin);
@@ -290,7 +290,7 @@ impl<'skin> TrackListPaint<'skin> {
                 (
                     self.skin.track_list.index_text,
                     FontFamily::Mono,
-                    self.skin.palette.muted.into(),
+                    self.skin.palette.muted,
                     self.skin.track_list.cell_padding_x,
                     TextAlign::Right,
                 ),
@@ -304,7 +304,7 @@ impl<'skin> TrackListPaint<'skin> {
                 (
                     self.skin.track_list.title_text,
                     FontFamily::Display,
-                    self.skin.palette.text.into(),
+                    self.skin.palette.text,
                     self.skin.track_list.cell_padding_x,
                     TextAlign::Left,
                 ),
@@ -317,7 +317,7 @@ impl<'skin> TrackListPaint<'skin> {
                 (
                     self.skin.track_list.artist_text,
                     FontFamily::Sans,
-                    self.skin.palette.text_dim.into(),
+                    self.skin.palette.text_dim,
                     self.skin.track_list.cell_padding_x,
                     TextAlign::Left,
                 ),
@@ -331,7 +331,7 @@ impl<'skin> TrackListPaint<'skin> {
                 (
                     self.skin.track_list.key_text,
                     FontFamily::Mono,
-                    self.skin.palette.accent.into(),
+                    self.skin.palette.accent,
                     self.skin.track_list.cell_padding_x,
                     TextAlign::Left,
                 ),
@@ -344,7 +344,7 @@ impl<'skin> TrackListPaint<'skin> {
                 (
                     self.skin.track_list.time_text,
                     FontFamily::Mono,
-                    self.skin.palette.text_dim.into(),
+                    self.skin.palette.text_dim,
                     self.skin.track_list.cell_padding_x,
                     TextAlign::Right,
                 ),
@@ -363,7 +363,7 @@ impl<'skin> TrackListPaint<'skin> {
                     (
                         self.skin.track_list.transition_text,
                         FontFamily::Mono,
-                        self.skin.palette.muted.into(),
+                        self.skin.palette.muted,
                         self.skin.track_list.cell_padding_x,
                         TextAlign::Left,
                     ),
@@ -390,7 +390,7 @@ fn paint_deck(
         y: bounds.y + (bounds.h - paint.skin.track_list.deck_chip_height) / 2.0,
     };
     let frame = paint.skin.track_list.deck_chip_frame;
-    list.fill_rounded_rect(chip, frame.radius, paint.skin.palette.accent.into());
+    list.fill_rounded_rect(chip, frame.radius, paint.skin.palette.accent);
     paint_frame(list, chip, frame, paint.skin);
     paint_text(
         list,
@@ -400,7 +400,7 @@ fn paint_deck(
         (
             paint.skin.track_list.deck_text,
             FontFamily::Mono,
-            paint.skin.palette.bg_deep.into(),
+            paint.skin.palette.bg_deep,
             0.0,
             TextAlign::Center,
         ),
@@ -442,7 +442,7 @@ fn paint_bpm(
             x: badge.x + paint.skin.track_list.bpm_badge_padding_x,
             y: badge.y + (badge.h - run.height()) / 2.0,
         }),
-        paint.skin.palette.text.into(),
+        paint.skin.palette.text,
     );
 }
 
@@ -470,7 +470,7 @@ fn paint_energy(
             w: bar.w * ratio,
             ..bar
         },
-        paint.skin.palette.accent.into(),
+        paint.skin.palette.accent,
     );
     let label = value.map_or_else(|| "\u{2014}".to_owned(), |value| value.to_string());
     let label_x = bar.x + bar.w + paint.skin.track_list.energy_bar_gap;
@@ -488,7 +488,7 @@ fn paint_energy(
         (
             paint.skin.track_list.energy_text,
             FontFamily::Mono,
-            paint.skin.palette.accent.into(),
+            paint.skin.palette.accent,
             0.0,
             TextAlign::Left,
         ),
@@ -508,7 +508,7 @@ fn paint_footer(
         x: -horizontal,
         y: bounds.y + bounds.h - paint.skin.track_list.footer_height,
     };
-    list.fill_rect(footer, paint.skin.palette.bg_footer.into());
+    list.fill_rect(footer, paint.skin.palette.bg_footer);
     let label = format!(
         "{} {}",
         paint.rows.len(),
@@ -522,7 +522,7 @@ fn paint_footer(
         (
             paint.skin.track_list.footer_text,
             FontFamily::Mono,
-            paint.skin.palette.muted.into(),
+            paint.skin.palette.muted,
             paint.skin.track_list.footer_padding_x,
             TextAlign::Left,
         ),

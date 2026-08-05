@@ -1,5 +1,6 @@
 //! Serializable modular UI model for kithara.
 
+pub mod app;
 #[cfg(feature = "render")]
 pub(crate) mod atoms;
 #[cfg(any(feature = "render", feature = "vello-backend"))]

@@ -13,7 +13,7 @@ use iced::{
 
 use crate::{
     module::{PopoverAlign, PopoverAt},
-    render::Skin,
+    render::{IcedSkin, Skin},
     skin::PopSkin,
 };
 

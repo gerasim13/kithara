@@ -11,7 +11,7 @@ categories = ["gui", "config"]
 
 [features]
 default = []
-masonry-host = ["dep:masonry", "render", "vello-backend"]
+masonry-host = ["dep:futures-lite", "dep:masonry", "dep:winit", "render", "vello-backend"]
 render = [
     "dep:iced",
     "dep:kithara-platform",
@@ -33,6 +33,7 @@ bon = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
+futures-lite = { workspace = true, optional = true }
 iced = { workspace = true, optional = true }
 lucide-icons = { workspace = true, optional = true }
 masonry = { workspace = true, optional = true }
@@ -45,6 +46,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true, optional = true }
 vello = { workspace = true, optional = true }
+winit = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-platform = { path = "../kithara-platform" }

@@ -4,45 +4,38 @@
 //! Enabled by `KITHARA_GALLERY_CAPTURE_MASONRY=<dir>`; it runs instead of the
 //! iced window so the two hosts can be compared page by page.
 
-use std::{env, fs::create_dir_all, path::PathBuf};
+use std::{
+    env,
+    fs::create_dir_all,
+    path::{Path, PathBuf},
+};
 
 use futures_lite::future::block_on;
 use kithara_ui::{
+    app::{Config, Ui},
     builtin,
-    compile::compile,
-    render::{
-        document,
-        masonry::{MasonryHost, MasonryRoot, MasonryState},
-    },
-    source::UiConfig,
 };
-use masonry::{
-    app::{RenderRootOptions, WindowSizePolicy},
-    core::WindowEvent,
-    dpi::PhysicalSize,
-    theme::default_property_set,
-    vello::{
-        AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene,
-        peniko::color::palette,
-        wgpu::{
-            Backends, BufferDescriptor, BufferUsages, CommandEncoderDescriptor, Device,
-            DeviceDescriptor, Extent3d, Instance, InstanceDescriptor, MapMode, PollType, Queue,
-            RequestAdapterOptions, TexelCopyBufferInfo, TexelCopyBufferLayout, Texture,
-            TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
-            TextureViewDescriptor,
-        },
+use masonry::vello::{
+    AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene,
+    peniko::color::palette,
+    wgpu::{
+        Backends, BufferDescriptor, BufferUsages, CommandEncoderDescriptor, Device,
+        DeviceDescriptor, Extent3d, Instance, InstanceDescriptor, MapMode, PollType, Queue,
+        RequestAdapterOptions, TexelCopyBufferInfo, TexelCopyBufferLayout, Texture,
+        TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureViewDescriptor,
     },
 };
 use num_traits::cast::AsPrimitive;
 
 use super::{
     Consts,
-    capture::{Shot, write_png},
+    capture::{Frame, Shot, read_frame, write_frame, write_png},
+    host::Gallery,
     mock, resolver,
 };
 
 /// A wgpu device with no surface, plus the Vello renderer that targets it.
-struct Offscreen {
+pub(super) struct Offscreen {
     device: Device,
     queue: Queue,
     renderer: Renderer,
@@ -52,7 +45,7 @@ struct Offscreen {
 }
 
 impl Offscreen {
-    fn new(width: u32, height: u32) -> Result<Self, String> {
+    pub(super) fn new(width: u32, height: u32) -> Result<Self, String> {
         let instance = Instance::new(&wgpu_options());
         let adapter = block_on(instance.request_adapter(&RequestAdapterOptions::default()))
             .map_err(|error| format!("no wgpu adapter: {error}"))?;
@@ -93,7 +86,7 @@ impl Offscreen {
     }
 
     /// Rasterises one scene and reads the pixels back as tightly packed RGBA.
-    fn rasterise(&mut self, scene: &Scene) -> Result<Vec<u8>, String> {
+    pub(super) fn rasterise(&mut self, scene: &Scene) -> Result<Vec<u8>, String> {
         let view = self.texture.create_view(&TextureViewDescriptor::default());
         self.renderer
             .render_to_texture(
@@ -179,52 +172,46 @@ pub(super) fn run() -> bool {
 
 fn capture(dir: &PathBuf) -> Result<usize, String> {
     create_dir_all(dir).map_err(|error| format!("create {}: {error}", dir.display()))?;
-    let width = AsPrimitive::<u32>::as_(Consts::WIDTH);
-    let height = AsPrimitive::<u32>::as_(Consts::HEIGHT);
-    let mut off = Offscreen::new(width, height)?;
+    let frame = frame(dir);
+    let mut off = Offscreen::new(frame.width, frame.height)?;
     let resolver = resolver();
     let endpoints = mock::registry();
-    let skin = builtin::skin();
+    let config = Config::builder()
+        .endpoints(&endpoints)
+        .resolver(&resolver)
+        .skin(builtin::skin())
+        .skin_doc(builtin::skin_doc())
+        .build();
+    write_frame(dir, frame)?;
     let mut written = 0;
 
     for shot in Shot::all() {
-        let mut reads = mock::MockReads::default();
-        reads.select_tab(shot.tab);
-        if let Some(module) = shot.module {
-            reads.select_module(module);
-        }
-        let entry = shot.module.map_or_else(|| shot.tab.entry(), |m| m.entry());
-        let ui = compile(
-            entry,
-            &resolver,
-            &endpoints,
-            builtin::skin_doc(),
-            &UiConfig::default(),
+        let mut ui = Ui::new(
+            Gallery::at(shot),
+            config,
+            (frame.width, frame.height),
+            frame.scale,
         )
-        .map_err(|error| format!("compile {entry}: {error}"))?;
-
-        let host = MasonryHost::new(&ui, &reads, skin).with_state(MasonryState::default());
-        let node = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
-        let mut root = MasonryRoot::new(
-            node,
-            RenderRootOptions {
-                default_properties: kithara_platform::sync::Arc::new(default_property_set()),
-                use_system_fonts: false,
-                size_policy: WindowSizePolicy::User,
-                size: PhysicalSize::new(width, height),
-                scale_factor: 1.0,
-                test_font: None,
-            },
-        )
-        .map_err(|error| format!("masonry root: {error}"))?;
-        root.handle_window_event(WindowEvent::Resize(PhysicalSize::new(width, height)))
-            .map_err(|error| format!("resize: {error}"))?;
-        let (scene, _) = root.redraw().map_err(|error| format!("redraw: {error}"))?;
+        .map_err(|error| format!("mount {}: {error}", shot.name()))?;
+        let scene = ui
+            .scene()
+            .map_err(|error| format!("draw {}: {error}", shot.name()))?;
         let rgba = off.rasterise(&scene)?;
         let path = dir.join(format!("{}.png", shot.name()));
-        write_png(&path, &rgba, width, height)?;
+        write_png(&path, &rgba, frame.width, frame.height)?;
         println!("captured {}", path.display());
         written += 1;
     }
     Ok(written)
+}
+
+/// The geometry to photograph at: whatever an iced capture already sitting in
+/// this directory used, so the two sets can be compared pixel for pixel.
+/// Falls back to the gallery's own logical size at 1x.
+fn frame(dir: &Path) -> Frame {
+    read_frame(dir).unwrap_or_else(|| Frame {
+        height: AsPrimitive::<u32>::as_(Consts::HEIGHT),
+        scale: 1.0,
+        width: AsPrimitive::<u32>::as_(Consts::WIDTH),
+    })
 }

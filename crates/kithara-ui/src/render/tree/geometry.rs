@@ -7,7 +7,7 @@ use iced::{
 use crate::{
     expand::ExpandedNode,
     layout::FrameSides,
-    render::{Skin, UiEvent},
+    render::{IcedSkin, Skin, UiEvent},
     size::{Dim, SizeSpec},
     skin::ColorRole,
     widgets::frame_overlay,

@@ -10,7 +10,6 @@ use crate::{
 /// What a document asks a button to be, before a skin resolves it.
 #[derive(bon::Builder, Clone, Copy)]
 pub(crate) struct ButtonConfig {
-    active: bool,
     frame: Option<FrameSides>,
     glyph: Option<char>,
     style: ButtonStyle,
@@ -26,6 +25,14 @@ pub(crate) struct ButtonLabel<Words> {
 }
 
 pub(crate) struct Button {
+    active: Face,
+    idle: Face,
+}
+
+/// How the button looks in one of its two states. Both are resolved from the
+/// skin when the button is built, so the endpoint behind it flipping is a
+/// repaint rather than a reason to rebuild the control.
+struct Face {
     active: bool,
     content: Rgba,
     fill: Fill,
@@ -78,9 +85,56 @@ enum Placement {
 }
 
 impl Button {
-    pub(crate) fn new(config: ButtonConfig, skin: &Skin) -> Self {
+    /// `config` describes the button at rest. `active_glyph` is the icon it
+    /// swaps in while active, for the styles whose icon changes with the state.
+    pub(crate) fn new(config: ButtonConfig, active_glyph: Option<char>, skin: &Skin) -> Self {
+        Self {
+            active: Face::new(
+                ButtonConfig {
+                    glyph: active_glyph,
+                    ..config
+                },
+                true,
+                skin,
+            ),
+            idle: Face::new(config, false, skin),
+        }
+    }
+
+    pub(crate) fn paint<Words>(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        label: &ButtonLabel<Words>,
+        active: bool,
+        bounds: Rect,
+        state: VisualState,
+    ) where
+        Words: AsRef<str>,
+    {
+        self.face(active).paint(list, text, label, bounds, state);
+    }
+
+    pub(crate) fn intrinsic_width<Words>(
+        &self,
+        text: &mut TextContext,
+        label: &ButtonLabel<Words>,
+        active: bool,
+    ) -> f32
+    where
+        Words: AsRef<str>,
+    {
+        self.face(active).intrinsic_width(text, label)
+    }
+
+    const fn face(&self, active: bool) -> &Face {
+        if active { &self.active } else { &self.idle }
+    }
+}
+
+impl Face {
+    fn new(config: ButtonConfig, active: bool, skin: &Skin) -> Self {
         let ButtonConfig {
-            active,
             frame,
             glyph,
             style,
@@ -94,9 +148,9 @@ impl Button {
         let content: Rgba = if style == ButtonStyle::VisNav {
             skin.rgba(skin.vis.nav_text_color)
         } else if highlighted {
-            palette.bg.into()
+            palette.bg
         } else {
-            palette.text.into()
+            palette.text
         };
         let font: FontSkin = if primary(style) || active {
             skin.button.primary_text
@@ -124,7 +178,7 @@ impl Button {
                 placement: placement(style, transport),
                 size: icon_size(style, transport, skin),
                 solo_color: if transport && !highlighted {
-                    palette.text_dim.into()
+                    palette.text_dim
                 } else {
                     content
                 },
@@ -144,7 +198,7 @@ impl Button {
         }
     }
 
-    pub(crate) fn paint<Words>(
+    fn paint<Words>(
         &self,
         list: &mut DrawListBuilder,
         text: &mut TextContext,
@@ -159,11 +213,7 @@ impl Button {
         self.paint_content(list, text, self.label(label), bounds);
     }
 
-    pub(crate) fn intrinsic_width<Words>(
-        &self,
-        text: &mut TextContext,
-        label: &ButtonLabel<Words>,
-    ) -> f32
+    fn intrinsic_width<Words>(&self, text: &mut TextContext, label: &ButtonLabel<Words>) -> f32
     where
         Words: AsRef<str>,
     {
@@ -384,20 +434,20 @@ fn fill(style: ButtonStyle, highlighted: bool, transport: bool, skin: &Skin) -> 
     let palette = skin.palette;
     if style == ButtonStyle::VisNav {
         return Fill {
-            hovered: palette.bg_select.into(),
+            hovered: palette.bg_select,
             idle: skin.rgba(skin.vis.nav_background),
-            pressed: palette.accent_soft.into(),
+            pressed: palette.accent_soft,
         };
     }
     if highlighted {
         return Fill {
-            hovered: palette.accent_strong.into(),
-            idle: palette.accent.into(),
-            pressed: palette.accent_soft.into(),
+            hovered: palette.accent_strong,
+            idle: palette.accent,
+            pressed: palette.accent_soft,
         };
     }
     Fill {
-        hovered: palette.bg_panel_2.into(),
+        hovered: palette.bg_panel_2,
         idle: if transport {
             Rgba {
                 a: 0.0,
@@ -406,9 +456,9 @@ fn fill(style: ButtonStyle, highlighted: bool, transport: bool, skin: &Skin) -> 
                 r: 0.0,
             }
         } else {
-            palette.bg_panel.into()
+            palette.bg_panel
         },
-        pressed: palette.accent_soft.into(),
+        pressed: palette.accent_soft,
     }
 }
 
@@ -485,16 +535,15 @@ mod tests {
         let mut text = TextContext::from(skin.text_resources());
         let mut builder = DrawListBuilder::default();
         Button::new(
-            ButtonConfig::builder()
-                .active(false)
-                .style(ButtonStyle::Default)
-                .build(),
+            ButtonConfig::builder().style(ButtonStyle::Default).build(),
+            None,
             skin,
         )
         .paint(
             &mut builder,
             &mut text,
             &plain("DEFAULT"),
+            false,
             bounds,
             VisualState::Idle,
         );
@@ -506,7 +555,7 @@ mod tests {
             DrawCmd::Fill {
                 geom: Geom::Rect(rect),
                 color,
-            } if rect == bounds && color == skin.palette.bg_panel.into()
+            } if rect == bounds && color == skin.palette.bg_panel
         ));
         assert!(matches!(
             list.commands()[1],
@@ -514,7 +563,7 @@ mod tests {
                 geom: Geom::Rect(_),
                 color,
                 width: 1.0,
-            } if color == skin.palette.line.into()
+            } if color == skin.palette.line
         ));
         assert!(matches!(
             &list.commands()[2],
@@ -533,16 +582,17 @@ mod tests {
         let mut builder = DrawListBuilder::default();
         Button::new(
             ButtonConfig::builder()
-                .active(false)
                 .glyph(glyph)
                 .style(ButtonStyle::MicroPrimary)
                 .build(),
+            Some(glyph),
             skin,
         )
         .paint(
             &mut builder,
             &mut text,
             &plain("PLAY"),
+            false,
             Rect {
                 h: 34.0,
                 w: 34.0,
@@ -575,7 +625,6 @@ mod tests {
         let mut builder = DrawListBuilder::default();
         Button::new(
             ButtonConfig::builder()
-                .active(false)
                 .frame(FrameSides {
                     top: true,
                     right: false,
@@ -584,12 +633,14 @@ mod tests {
                 })
                 .style(ButtonStyle::TransportPrimary)
                 .build(),
+            None,
             skin,
         )
         .paint(
             &mut builder,
             &mut text,
             &plain("PLAY"),
+            false,
             bounds,
             VisualState::Idle,
         );
@@ -636,9 +687,9 @@ mod tests {
         let mut builder = DrawListBuilder::default();
         Button::new(
             ButtonConfig::builder()
-                .active(true)
                 .style(ButtonStyle::TransportPrimary)
                 .build(),
+            None,
             skin,
         )
         .paint(
@@ -648,6 +699,7 @@ mod tests {
                 active: Some("PAUSE"),
                 label: "PLAY",
             },
+            true,
             Rect {
                 h: 28.0,
                 w: 48.0,
@@ -660,12 +712,12 @@ mod tests {
 
         assert!(matches!(
             list.commands()[0],
-            DrawCmd::Fill { color, .. } if color == skin.palette.accent.into()
+            DrawCmd::Fill { color, .. } if color == skin.palette.accent
         ));
         assert!(matches!(
             list.commands().last(),
             Some(DrawCmd::Text { content, color, .. })
-                if content == "PAUSE" && *color == skin.palette.bg.into()
+                if content == "PAUSE" && *color == skin.palette.bg
         ));
     }
 }

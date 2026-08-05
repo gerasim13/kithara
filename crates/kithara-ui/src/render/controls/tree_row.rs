@@ -45,9 +45,9 @@ impl TreeRowPaint {
             r: 0.0,
         };
         let background = if self.selected {
-            skin.palette.bg_select.into()
+            skin.palette.bg_select
         } else if hovered {
-            skin.palette.bg_panel_2.into()
+            skin.palette.bg_panel_2
         } else {
             transparent
         };
@@ -61,18 +61,18 @@ impl TreeRowPaint {
         list.fill_rect(
             marker,
             if self.selected {
-                skin.palette.accent.into()
+                skin.palette.accent
             } else {
                 transparent
             },
         );
 
         let color = if self.selected {
-            skin.palette.text.into()
+            skin.palette.text
         } else if self.muted {
-            skin.palette.muted.into()
+            skin.palette.muted
         } else {
-            skin.palette.text_dim.into()
+            skin.palette.text_dim
         };
         let indent = skin
             .tree
@@ -117,7 +117,7 @@ impl TreeRowPaint {
                 x: x + (skin.tree.chevron_width - run.width()) / 2.0,
                 y: bounds.y + (bounds.h - run.height()) / 2.0,
             }),
-            skin.palette.muted.into(),
+            skin.palette.muted,
         );
     }
 
@@ -204,7 +204,7 @@ impl TreeRowPaint {
                     x: right - run.width(),
                     y: bounds.y + (bounds.h - run.height()) / 2.0,
                 }),
-                skin.palette.muted.into(),
+                skin.palette.muted,
             );
         }
     }

@@ -1,12 +1,12 @@
 use super::plan::{HostedControlPlan, TrackListPlan};
 use crate::{
+    atoms::design::fader::rail_bounds as fader_bounds,
     compile::CompiledUi,
     draw::{Pt, Rect},
     engine::{Descriptor, Engine, Target},
     expand::{Binding, ControlSpec},
     ids::InternId,
     interact::{Hit, ScrollAxis},
-    module::FaderStyle,
     render::{
         Reads, Skin,
         document::read::{read_scope, resolve},
@@ -230,32 +230,6 @@ impl TrackListPlan {
     }
 }
 
-fn fader_bounds(
-    bounds: Rect,
-    style: FaderStyle,
-    labelled: bool,
-    metrics: crate::skin::FaderSkin,
-) -> Rect {
-    let (offset, centering_height, hit_height) = match style {
-        FaderStyle::Default => (
-            if labelled { metrics.label_width } else { 0.0 },
-            metrics.ticks_height,
-            metrics.slider_height,
-        ),
-        FaderStyle::Volume => (
-            metrics.icon_width + metrics.content_gap,
-            metrics.strip_height,
-            metrics.strip_height,
-        ),
-    };
-    Rect {
-        x: bounds.x + metrics.control_padding_x + offset,
-        y: bounds.y + (bounds.h - centering_height).max(0.0) / 2.0,
-        w: (bounds.w - metrics.control_padding_x * 2.0 - offset).max(0.0),
-        h: hit_height,
-    }
-}
-
 const fn empty_bounds(bounds: Rect) -> Rect {
     Rect {
         x: bounds.x,
@@ -278,41 +252,6 @@ mod tests {
         render::text_input_layout,
         widgets::track_list::ColumnLayout,
     };
-
-    #[kithara::test]
-    fn fader_target_is_the_visible_rail_or_strip() {
-        let skin = builtin::skin();
-        let bounds = Rect {
-            x: 10.0,
-            y: 20.0,
-            w: 220.0,
-            h: 40.0,
-        };
-        assert_eq!(
-            fader_bounds(bounds, FaderStyle::Default, true, skin.fader),
-            Rect {
-                x: 10.0 + skin.fader.control_padding_x + skin.fader.label_width,
-                y: 20.0 + (40.0 - skin.fader.ticks_height) / 2.0,
-                w: 220.0 - skin.fader.control_padding_x * 2.0 - skin.fader.label_width,
-                h: skin.fader.slider_height,
-            }
-        );
-        assert_eq!(
-            fader_bounds(bounds, FaderStyle::Volume, false, skin.fader),
-            Rect {
-                x: 10.0
-                    + skin.fader.control_padding_x
-                    + skin.fader.icon_width
-                    + skin.fader.content_gap,
-                y: 20.0 + (40.0 - skin.fader.strip_height) / 2.0,
-                w: 220.0
-                    - skin.fader.control_padding_x * 2.0
-                    - skin.fader.icon_width
-                    - skin.fader.content_gap,
-                h: skin.fader.strip_height,
-            }
-        );
-    }
 
     #[kithara::test]
     fn tree_targets_keep_search_and_rows_disjoint() {

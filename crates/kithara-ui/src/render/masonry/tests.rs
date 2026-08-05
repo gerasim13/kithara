@@ -1498,7 +1498,64 @@ enum Paints {
 /// The `NotYet` rows are the remaining work, stated once and checked rather
 /// than described. A control that starts drawing fails this test until its row
 /// moves to `Yes`; a control that stops drawing fails it immediately.
+///
+/// Every `ControlSpec` variant has a row. A census that covered only the
+/// controls someone remembered to add left the rest invisible: not drawn, and
+/// not reported as undrawn either.
 const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
+    ("Brand", Paints::NotYet, r#"Brand(id: "control")"#),
+    ("Spacer", Paints::NotYet, r#"Spacer(id: "control")"#),
+    ("Divider", Paints::NotYet, r#"Divider(id: "control")"#),
+    (
+        "PresetSelector",
+        Paints::NotYet,
+        r#"PresetSelector(id: "control")"#,
+    ),
+    (
+        "SettingsButton",
+        Paints::NotYet,
+        r#"SettingsButton(id: "control")"#,
+    ),
+    (
+        "DeckSummary",
+        Paints::NotYet,
+        r#"DeckSummary(id: "control")"#,
+    ),
+    ("WindowDrag", Paints::NotYet, r#"WindowDrag(id: "control")"#),
+    (
+        "TitleBar",
+        Paints::Yes,
+        r#"TitleBar(id: "control", label: "KITHARA")"#,
+    ),
+    (
+        "WindowControls",
+        Paints::Yes,
+        r#"WindowControls(id: "control")"#,
+    ),
+    (
+        "Bpm",
+        Paints::NotYet,
+        r#"Bpm(id: "control", placeholder: Some("128.0"))"#,
+    ),
+    ("Time", Paints::NotYet, r#"Time(id: "control")"#),
+    (
+        "Scalar",
+        Paints::NotYet,
+        r#"Scalar(id: "control", read: Model(id: "deck.view.zoom"))"#,
+    ),
+    ("Wave", Paints::NotYet, r#"Wave(id: "control")"#),
+    ("Vis", Paints::NotYet, r#"Vis(id: "control")"#),
+    (
+        "TrackList",
+        Paints::NotYet,
+        r#"TrackList(id: "control", read: Model(id: "library.visible_tracks"), columns: Some([Title]))"#,
+    ),
+    ("Tree", Paints::NotYet, r#"Tree(id: "control")"#),
+    (
+        "ContextBar",
+        Paints::NotYet,
+        r#"ContextBar(id: "control", scope_items: ["ALL", "MINE"], scope: Model(id: "library.scope"), write: Model(id: "library.scope"))"#,
+    ),
     (
         "Text",
         Paints::Yes,
@@ -1531,17 +1588,17 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     ),
     (
         "TabLarge",
-        Paints::NotYet,
+        Paints::Yes,
         r#"TabLarge(id: "control", label: "MIXER", read: Model(id: "ui.menu.open"))"#,
     ),
     (
         "Toggle",
-        Paints::NotYet,
+        Paints::Yes,
         r#"Toggle(id: "control", read: Model(id: "ui.menu.open"))"#,
     ),
     (
         "Checkbox",
-        Paints::NotYet,
+        Paints::Yes,
         r#"Checkbox(id: "control", read: Model(id: "ui.menu.open"))"#,
     ),
     (
@@ -1581,17 +1638,22 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     ),
     (
         "VuVertical",
-        Paints::NotYet,
+        Paints::Yes,
         r#"VuVertical(id: "control", read: Telemetry(id: "player.output.levels"))"#,
     ),
     (
+        "VuStereo",
+        Paints::Yes,
+        r#"VuStereo(id: "control", read: Telemetry(id: "player.output.levels"))"#,
+    ),
+    (
         "Fader",
-        Paints::NotYet,
+        Paints::Yes,
         r#"Fader(id: "control", read: Parameter(id: "player.output.volume"), write: Parameter(id: "player.output.volume"))"#,
     ),
     (
         "Crossfader",
-        Paints::NotYet,
+        Paints::Yes,
         r#"Crossfader(id: "control", read: Parameter(id: "player.output.volume"), write: Parameter(id: "player.output.volume"))"#,
     ),
 ];

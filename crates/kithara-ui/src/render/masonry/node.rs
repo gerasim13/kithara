@@ -3,7 +3,7 @@ use std::{cell::Cell, marker::PhantomData, rc::Rc};
 use masonry::{
     accesskit::{Node as AccessNode, Role},
     core::{
-        AccessCtx, AllowRawMut, BoxConstraints, ChildrenIds, ComposeCtx, CursorIcon, EventCtx, Ime,
+        AccessCtx, AllowRawMut, BoxConstraints, ChildrenIds, ComposeCtx, CursorIcon, EventCtx,
         LayoutCtx, NewWidget, PaintCtx, PointerButton as MasonryPointerButton, PointerEvent,
         PropertiesMut, PropertiesRef, QueryCtx, RegisterCtx, TextEvent, Update, UpdateCtx, Widget,
         WidgetId, WidgetPod,
@@ -25,17 +25,22 @@ use super::{
 use crate::{
     backends::VelloBackend,
     draw::{DrawListBuilder, Pt, Rect, Rgba, replay},
+    expand::Binding,
     interact::{
-        CursorShape, Hit, Input, InputMethod, Key, MOUSE, Modifiers, PointerButton, PointerInput,
-        PointerOwnership, PointerPhase,
+        CursorShape, Hit, Input, MOUSE, PointerButton, PointerInput, PointerOwnership,
+        PointerPhase,
+        masonry::{portable_modifiers, portable_text_input},
     },
     layout::FrameSides,
-    render::{HostedControlPlan, UiEvent},
+    render::{HostedControlPlan, ReadValue, UiEvent},
     solve,
 };
 
 type PopoverRegistration = (WidgetId, Rc<PopoverState>, Rc<dyn Fn() -> HostAction>);
 type WindowTracker = (Rc<Cell<Option<Pt>>>, Option<WidgetId>, bool);
+/// One mounted leaf and the endpoint it shows, so the value can be re-read into
+/// it without the tree being rebuilt around it.
+pub(crate) type Watched = (WidgetId, Binding);
 pub(super) type LayerParts = (
     NewWidget<Node>,
     solve::Size<solve::Length>,
@@ -44,6 +49,7 @@ pub(super) type LayerParts = (
     Vec<EngineTarget>,
     Vec<Rc<HostedEngine>>,
     Option<WindowTracker>,
+    Vec<Watched>,
 );
 pub(super) type RootParts = (
     NewWidget<dyn Widget>,
@@ -51,6 +57,7 @@ pub(super) type RootParts = (
     Vec<PopoverRegistration>,
     Vec<Rc<HostedEngine>>,
     Option<WindowTracker>,
+    Vec<Watched>,
 );
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -86,7 +93,8 @@ pub struct MasonryNode<Action> {
     layers: Vec<NewWidget<dyn Widget>>,
     popovers: Vec<PopoverRegistration>,
     engine_targets: Vec<EngineTarget>,
-    pickers: Vec<Rc<HostedEngine>>,
+    engines: Vec<Rc<HostedEngine>>,
+    watched: Vec<Watched>,
     window: Option<WindowTracker>,
     #[cfg(test)]
     document_ids: Vec<WidgetId>,
@@ -192,6 +200,12 @@ impl Node {
         exclusive
     }
 
+    /// Shows the value an engine just published for this node's control, without
+    /// waiting for the rebuild that follows the gesture.
+    pub(crate) fn show_live(&mut self, value: &ReadValue<'_>) -> bool {
+        self.layout.leaf().is_some_and(|leaf| leaf.set_read(value))
+    }
+
     fn engine_input(
         &mut self,
         ctx: &mut EventCtx<'_>,
@@ -203,7 +217,8 @@ impl Node {
             return false;
         };
         let retained = self.pointer_owner == Some(NodePointerOwner::Engine);
-        let (outcome, focused) = engine.route(input, point);
+        let routed = engine.route(input, point);
+        let (outcome, focused) = (routed.outcome, routed.focused);
         if matches!(event, PointerEvent::Down(_)) {
             if focused {
                 ctx.request_focus();
@@ -276,7 +291,7 @@ impl Node {
         let Some(engine) = &self.engine else {
             return false;
         };
-        let (outcome, _) = engine.route(input, None);
+        let outcome = engine.route(input, None).outcome;
         sync_ime_area(ctx, engine);
         let captured = outcome.is_captured();
         if let Some(action) = outcome.value() {
@@ -696,7 +711,7 @@ fn local_ime_area(engine: &HostedEngine, transform: Affine) -> Option<MasonryRec
     })
 }
 
-pub(super) fn pointer_button(button: MasonryPointerButton) -> PointerButton {
+pub(crate) fn pointer_button(button: MasonryPointerButton) -> PointerButton {
     match button {
         MasonryPointerButton::Primary => PointerButton::Primary,
         MasonryPointerButton::Secondary => PointerButton::Secondary,
@@ -705,72 +720,6 @@ pub(super) fn pointer_button(button: MasonryPointerButton) -> PointerButton {
         MasonryPointerButton::X2 => PointerButton::Forward,
         button => PointerButton::Other(button as u32),
     }
-}
-
-fn portable_text_input(event: &TextEvent) -> Option<Input<'_>> {
-    match event {
-        TextEvent::Keyboard(event) => {
-            let key = portable_key(&event.key);
-            let modifiers = portable_modifiers(event.modifiers);
-            if event.state.is_down() {
-                let text = if event.is_composing || event.modifiers.ctrl() || event.modifiers.meta()
-                {
-                    None
-                } else {
-                    match &event.key {
-                        masonry::ui_events::keyboard::Key::Character(text) => Some(text.as_str()),
-                        masonry::ui_events::keyboard::Key::Named(_) => None,
-                    }
-                };
-                Some(Input::KeyPressed {
-                    key,
-                    modifiers,
-                    text,
-                })
-            } else {
-                Some(Input::KeyReleased { key, modifiers })
-            }
-        }
-        TextEvent::Ime(event) => Some(Input::InputMethod(match event {
-            Ime::Enabled => InputMethod::Opened,
-            Ime::Preedit(content, selection) => InputMethod::Preedit {
-                content,
-                selection: *selection,
-            },
-            Ime::Commit(content) => InputMethod::Commit(content),
-            Ime::Disabled => InputMethod::Closed,
-        })),
-        TextEvent::WindowFocusChange(_) | TextEvent::ClipboardPaste(_) => None,
-    }
-}
-
-fn portable_key(key: &masonry::ui_events::keyboard::Key) -> Key<'_> {
-    use masonry::ui_events::keyboard::{Key as MasonryKey, NamedKey};
-
-    match key {
-        MasonryKey::Named(NamedKey::ArrowDown) => Key::ArrowDown,
-        MasonryKey::Named(NamedKey::ArrowLeft) => Key::ArrowLeft,
-        MasonryKey::Named(NamedKey::ArrowRight) => Key::ArrowRight,
-        MasonryKey::Named(NamedKey::ArrowUp) => Key::ArrowUp,
-        MasonryKey::Named(NamedKey::Backspace) => Key::Backspace,
-        MasonryKey::Named(NamedKey::Delete) => Key::Delete,
-        MasonryKey::Named(NamedKey::End) => Key::End,
-        MasonryKey::Named(NamedKey::Enter) => Key::Enter,
-        MasonryKey::Named(NamedKey::Escape) => Key::Escape,
-        MasonryKey::Named(NamedKey::Home) => Key::Home,
-        MasonryKey::Character(character) if character == " " => Key::Space,
-        MasonryKey::Character(character) => Key::Character(character),
-        MasonryKey::Named(_) => Key::Other,
-    }
-}
-
-fn portable_modifiers(modifiers: masonry::ui_events::keyboard::Modifiers) -> Modifiers {
-    Modifiers::new(
-        modifiers.alt(),
-        modifiers.ctrl(),
-        modifiers.meta(),
-        modifiers.shift(),
-    )
 }
 
 impl<Action> MasonryNode<Action> {
@@ -786,7 +735,8 @@ impl<Action> MasonryNode<Action> {
         let mut layers = Vec::new();
         let mut popovers = Vec::new();
         let mut engine_targets = Vec::new();
-        let mut pickers = Vec::new();
+        let mut engines = Vec::new();
+        let mut watched = Vec::new();
         let mut window = None;
         #[cfg(test)]
         let mut child_ids = Vec::new();
@@ -794,7 +744,8 @@ impl<Action> MasonryNode<Action> {
             layers.extend(child.layers);
             popovers.extend(child.popovers);
             engine_targets.extend(child.engine_targets);
-            pickers.extend(child.pickers);
+            engines.extend(child.engines);
+            watched.extend(child.watched);
             window = merge_window(window, child.window);
             #[cfg(test)]
             if _expose_children {
@@ -823,7 +774,8 @@ impl<Action> MasonryNode<Action> {
             layers,
             popovers,
             engine_targets,
-            pickers,
+            engines,
+            watched,
             window,
             #[cfg(test)]
             document_ids,
@@ -843,7 +795,8 @@ impl<Action> MasonryNode<Action> {
             layers: Vec::new(),
             popovers: Vec::new(),
             engine_targets: Vec::new(),
-            pickers: Vec::new(),
+            engines: Vec::new(),
+            watched: Vec::new(),
             window: None,
             #[cfg(test)]
             document_ids: Vec::new(),
@@ -886,7 +839,10 @@ impl<Action> MasonryNode<Action> {
             return;
         }
         let geometry = self.track_geometry();
-        self.engine_targets.push((plan, geometry));
+        self.engine_targets.push(EngineTarget {
+            area: geometry,
+            plan,
+        });
     }
 
     pub(crate) fn track_geometry(&mut self) -> Rc<Cell<MasonryRect>> {
@@ -902,8 +858,18 @@ impl<Action> MasonryNode<Action> {
         self.engine_targets.extend(targets);
     }
 
-    pub(crate) fn append_pickers(&mut self, pickers: Vec<Rc<HostedEngine>>) {
-        self.pickers.extend(pickers);
+    pub(crate) fn append_engines(&mut self, engines: Vec<Rc<HostedEngine>>) {
+        self.engines.extend(engines);
+    }
+
+    pub(crate) fn append_watched(&mut self, watched: Vec<Watched>) {
+        self.watched.extend(watched);
+    }
+
+    /// Remembers that this node's leaf shows one endpoint, so its value can be
+    /// re-read into the mounted tree instead of rebuilding the tree to show it.
+    pub(crate) fn watch(&mut self, binding: &Binding) {
+        self.watched.push((self.widget.id(), binding.clone()));
     }
 
     pub(crate) fn host_engine(&mut self, map_event: Rc<dyn Fn(UiEvent) -> HostAction>) {
@@ -911,13 +877,8 @@ impl<Action> MasonryNode<Action> {
             return;
         }
         let targets = std::mem::take(&mut self.engine_targets);
-        let has_picker = targets
-            .iter()
-            .any(|(plan, _)| matches!(plan, HostedControlPlan::Picker { .. }));
         let engine = HostedEngine::new(self.widget.id(), targets, map_event);
-        if has_picker {
-            self.pickers.push(Rc::clone(&engine));
-        }
+        self.engines.push(Rc::clone(&engine));
         self.widget.widget.engine = Some(engine);
     }
 
@@ -956,8 +917,9 @@ impl<Action> From<MasonryNode<Action>> for LayerParts {
             node.layers,
             node.popovers,
             node.engine_targets,
-            node.pickers,
+            node.engines,
             node.window,
+            node.watched,
         )
     }
 }
@@ -968,8 +930,9 @@ impl<Action> From<MasonryNode<Action>> for RootParts {
             node.widget.erased(),
             node.layers,
             node.popovers,
-            node.pickers,
+            node.engines,
             node.window,
+            node.watched,
         )
     }
 }

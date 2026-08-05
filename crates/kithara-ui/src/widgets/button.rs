@@ -10,7 +10,9 @@ use iced::{
 use crate::{
     layout::FrameSides,
     module::ButtonStyle,
-    render::{ControlAction, Icon, ReadValue, Skin, UiEvent, control_event, fonts, shaped_text},
+    render::{
+        ControlAction, IcedSkin, Icon, ReadValue, Skin, UiEvent, control_event, fonts, shaped_text,
+    },
     skin::FontSkin,
     widgets::{Widget, frame_overlay},
 };
@@ -47,7 +49,7 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
         let content: Element<'a, UiEvent> = match self.style {
             ButtonStyle::MicroPrimary => {
                 let icon = if active { Icon::Pause } else { Icon::Play };
-                icon.view(self.skin.button.micro_icon_size, palette.bg)
+                icon.view(self.skin.button.micro_icon_size, palette.bg.into())
             }
             ButtonStyle::Transport | ButtonStyle::TransportPrimary => {
                 transport_content(self.icon, label, font, highlighted, self.skin)
@@ -56,9 +58,9 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
                 || text_content(label, font),
                 |icon| {
                     let color = if highlighted {
-                        palette.bg
+                        palette.bg.into()
                     } else {
-                        palette.text
+                        palette.text.into()
                     };
                     icon_label(icon, label, font, color, self.skin)
                 },
@@ -117,16 +119,16 @@ fn transport_content<'a>(
     };
     if label.is_empty() {
         let color = if highlighted {
-            skin.palette.bg
+            skin.palette.bg.into()
         } else {
-            skin.palette.text_dim
+            skin.palette.text_dim.into()
         };
         return icon.view(skin.button.transport_icon_size, color);
     }
     let color = if highlighted {
-        skin.palette.bg
+        skin.palette.bg.into()
     } else {
-        skin.palette.text
+        skin.palette.text.into()
     };
     icon_label(icon, label, font, color, skin)
 }
@@ -197,27 +199,27 @@ fn control_button_style(
     move |_theme, status| {
         let background = if style == ButtonStyle::VisNav {
             match status {
-                ButtonStatus::Hovered => palette.bg_select,
-                ButtonStatus::Pressed => palette.accent_soft,
+                ButtonStatus::Hovered => palette.bg_select.into(),
+                ButtonStatus::Pressed => palette.accent_soft.into(),
                 ButtonStatus::Active | ButtonStatus::Disabled => vis_background,
             }
         } else if highlighted {
             match status {
-                ButtonStatus::Hovered => palette.accent_strong,
-                ButtonStatus::Pressed => palette.accent_soft,
-                ButtonStatus::Active | ButtonStatus::Disabled => palette.accent,
+                ButtonStatus::Hovered => palette.accent_strong.into(),
+                ButtonStatus::Pressed => palette.accent_soft.into(),
+                ButtonStatus::Active | ButtonStatus::Disabled => palette.accent.into(),
             }
         } else if is_transport {
             match status {
-                ButtonStatus::Hovered => palette.bg_panel_2,
-                ButtonStatus::Pressed => palette.accent_soft,
+                ButtonStatus::Hovered => palette.bg_panel_2.into(),
+                ButtonStatus::Pressed => palette.accent_soft.into(),
                 ButtonStatus::Active | ButtonStatus::Disabled => Color::TRANSPARENT,
             }
         } else {
             match status {
-                ButtonStatus::Hovered => palette.bg_panel_2,
-                ButtonStatus::Pressed => palette.accent_soft,
-                ButtonStatus::Active | ButtonStatus::Disabled => palette.bg_panel,
+                ButtonStatus::Hovered => palette.bg_panel_2.into(),
+                ButtonStatus::Pressed => palette.accent_soft.into(),
+                ButtonStatus::Active | ButtonStatus::Disabled => palette.bg_panel.into(),
             }
         };
         IcedButtonStyle {
@@ -225,9 +227,9 @@ fn control_button_style(
             text_color: if style == ButtonStyle::VisNav {
                 vis_text
             } else if highlighted {
-                palette.bg
+                palette.bg.into()
             } else {
-                palette.text
+                palette.text.into()
             },
             border,
             ..IcedButtonStyle::default()
@@ -260,12 +262,15 @@ mod tests {
                 Some(Background::Color(Color::TRANSPARENT)),
                 "{button:?} must let the wave through while it is off",
             );
-            assert_eq!(style(button, false).text_color, skin.palette.text);
+            assert_eq!(
+                style(button, false).text_color,
+                Color::from(skin.palette.text)
+            );
             assert_eq!(
                 style(button, true).background,
-                Some(Background::Color(skin.palette.accent))
+                Some(Background::Color(skin.palette.accent.into()))
             );
-            assert_eq!(style(button, true).text_color, skin.palette.bg);
+            assert_eq!(style(button, true).text_color, Color::from(skin.palette.bg));
         }
     }
 

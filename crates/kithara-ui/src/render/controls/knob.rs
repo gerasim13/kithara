@@ -118,14 +118,16 @@ pub(crate) struct KnobPaint<'data, 'skin> {
     knob: Knob,
     label: Option<&'data str>,
     text_resources: &'skin TextResources,
+    value: f32,
 }
 
 impl<'data, 'skin> KnobPaint<'data, 'skin> {
     pub(crate) fn new(label: Option<&'data str>, value: f32, skin: &'skin Skin) -> Self {
         Self {
-            knob: Knob::new(value, skin),
+            knob: Knob::new(skin),
             label,
             text_resources: skin.text_resources(),
+            value,
         }
     }
 
@@ -179,7 +181,8 @@ impl KnobPaint<'_, '_> {
         let mut text = state.text.borrow_mut();
         let text = text.get_or_insert_with(|| self.text_resources.into());
         let mut builder = DrawListBuilder::default();
-        self.knob.paint(&mut builder, text, self.label, bounds);
+        self.knob
+            .paint(&mut builder, text, self.value, self.label, bounds);
         builder.finish()
     }
 }

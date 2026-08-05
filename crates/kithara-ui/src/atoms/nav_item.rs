@@ -6,16 +6,24 @@ use crate::{
 };
 
 pub(crate) struct NavItem {
-    background: Rgba,
-    content: Rgba,
+    active: Face,
     glyph: char,
-    marker_color: Rgba,
+    idle: Face,
     metrics: NavSkin,
     role: TextRoleSkin,
 }
 
+/// How the item looks in one of its two states. Both are resolved from the skin
+/// when the item is built, so the page it points at becoming the current one is
+/// a paint-time choice rather than a reason to rebuild the control.
+struct Face {
+    background: Rgba,
+    content: Rgba,
+    marker: Rgba,
+}
+
 impl NavItem {
-    pub(crate) fn new(glyph: char, active: bool, skin: &Skin) -> Self {
+    pub(crate) fn new(glyph: char, skin: &Skin) -> Self {
         let transparent = Rgba {
             a: 0.0,
             b: 0.0,
@@ -23,21 +31,16 @@ impl NavItem {
             r: 0.0,
         };
         Self {
-            background: if active {
-                skin.palette.bg_select.into()
-            } else {
-                transparent
-            },
-            content: if active {
-                skin.palette.text.into()
-            } else {
-                skin.palette.text_dim.into()
+            active: Face {
+                background: skin.palette.bg_select,
+                content: skin.palette.text,
+                marker: skin.palette.accent,
             },
             glyph,
-            marker_color: if active {
-                skin.palette.accent.into()
-            } else {
-                transparent
+            idle: Face {
+                background: transparent,
+                content: skin.palette.text_dim,
+                marker: transparent,
             },
             metrics: skin.nav,
             role: TextRoleSkin {
@@ -55,12 +58,14 @@ impl NavItem {
         list: &mut DrawListBuilder,
         text: &mut TextContext,
         label: &str,
+        active: bool,
         bounds: Rect,
     ) {
+        let face = if active { &self.active } else { &self.idle };
         let marker = self.marker(bounds);
-        list.fill_rect(bounds, self.background);
-        list.fill_rect(marker, self.marker_color);
-        self.paint_content(list, text, label, bounds, marker);
+        list.fill_rect(bounds, face.background);
+        list.fill_rect(marker, face.marker);
+        self.paint_content(list, text, label, face.content, bounds, marker);
     }
 
     fn marker(&self, bounds: Rect) -> Rect {
@@ -79,6 +84,7 @@ impl NavItem {
         list: &mut DrawListBuilder,
         text: &mut TextContext,
         label: &str,
+        content: Rgba,
         bounds: Rect,
         marker: Rect,
     ) {
@@ -92,7 +98,7 @@ impl NavItem {
                 x,
                 y: bounds.y + (bounds.h - icon.height()) / 2.0,
             }),
-            self.content,
+            content,
         );
 
         if label.is_empty() {
@@ -106,7 +112,7 @@ impl NavItem {
                 x: x + icon.width() + self.metrics.icon_gap,
                 y: bounds.y + (bounds.h - run.height()) / 2.0,
             }),
-            self.content,
+            content,
         );
     }
 }
@@ -134,7 +140,7 @@ mod tests {
         let glyph = char::from(lucide_icons::Icon::Disc);
         let mut text = TextContext::from(skin.text_resources());
         let mut builder = DrawListBuilder::default();
-        NavItem::new(glyph, true, skin).paint(&mut builder, &mut text, "PRIMITIVES", bounds);
+        NavItem::new(glyph, skin).paint(&mut builder, &mut text, "PRIMITIVES", true, bounds);
         let list = builder.finish();
 
         let [background, marker, icon, label] = list.commands() else {
@@ -145,7 +151,7 @@ mod tests {
             DrawCmd::Fill {
                 geom: Geom::Rect(rect),
                 color,
-            } if *rect == bounds && *color == skin.palette.bg_select.into()
+            } if *rect == bounds && *color == skin.palette.bg_select
         ));
         assert!(matches!(
             marker,
@@ -157,7 +163,7 @@ mod tests {
                     y: 5.0,
                 }),
                 color,
-            } if *color == skin.palette.accent.into()
+            } if *color == skin.palette.accent
         ));
         let DrawCmd::Text {
             run: icon_run,
@@ -178,7 +184,7 @@ mod tests {
             icon_transform.dy,
             bounds.y + (bounds.h - icon_run.height()) / 2.0
         );
-        assert_eq!(*icon_color, skin.palette.text.into());
+        assert_eq!(*icon_color, skin.palette.text);
 
         let DrawCmd::Text {
             run: label_run,
@@ -202,7 +208,7 @@ mod tests {
             label_transform.dy,
             bounds.y + (bounds.h - label_run.height()) / 2.0
         );
-        assert_eq!(*label_color, skin.palette.text.into());
+        assert_eq!(*label_color, skin.palette.text);
     }
 
     #[kithara::test]
@@ -210,10 +216,11 @@ mod tests {
         let skin = builtin::skin();
         let mut text = TextContext::from(skin.text_resources());
         let mut builder = DrawListBuilder::default();
-        NavItem::new(char::from(lucide_icons::Icon::Disc), false, skin).paint(
+        NavItem::new(char::from(lucide_icons::Icon::Disc), skin).paint(
             &mut builder,
             &mut text,
             "PRIMITIVES",
+            false,
             Rect {
                 h: 30.0,
                 w: 198.0,
@@ -240,7 +247,33 @@ mod tests {
 
         assert_eq!(background.a, 0.0);
         assert_eq!(marker.a, 0.0);
-        assert_eq!(*icon_color, skin.palette.text_dim.into());
-        assert_eq!(*label_color, skin.palette.text_dim.into());
+        assert_eq!(*icon_color, skin.palette.text_dim);
+        assert_eq!(*label_color, skin.palette.text_dim);
+    }
+
+    /// Turning to another page is a repaint, not a rebuild, so one mounted item
+    /// must be able to draw both states.
+    #[kithara::test]
+    fn one_nav_item_draws_both_states() {
+        let skin = builtin::skin();
+        let bounds = Rect {
+            h: 30.0,
+            w: 198.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let item = NavItem::new(char::from(lucide_icons::Icon::Disc), skin);
+        let mut text = TextContext::from(skin.text_resources());
+        let mut draw = |active| {
+            let mut builder = DrawListBuilder::default();
+            item.paint(&mut builder, &mut text, "PRIMITIVES", active, bounds);
+            builder.finish()
+        };
+
+        assert_ne!(
+            draw(true),
+            draw(false),
+            "the same nav item must draw differently once it is told it is current"
+        );
     }
 }

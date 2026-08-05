@@ -6,7 +6,7 @@ use iced::{
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    render::{ReadValue, Skin, UiEvent},
+    render::{IcedSkin, ReadValue, Skin, UiEvent},
     widgets::Widget,
 };
 

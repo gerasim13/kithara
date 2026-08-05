@@ -100,6 +100,7 @@ impl canvas::Program<UiEvent> for ChipProgram<'_, '_> {
 }
 
 struct ChipPaint<'data, 'skin> {
+    active: bool,
     chip: Chip,
     label: &'data str,
     text_resources: &'skin TextResources,
@@ -108,7 +109,8 @@ struct ChipPaint<'data, 'skin> {
 impl<'data, 'skin> ChipPaint<'data, 'skin> {
     fn new(label: &'data str, style: ChipStyle, active: bool, skin: &'skin Skin) -> Self {
         Self {
-            chip: Chip::new(style, active, skin),
+            active,
+            chip: Chip::new(style, skin),
             label,
             text_resources: skin.text_resources(),
         }
@@ -152,7 +154,8 @@ impl<'data, 'skin> ChipPaint<'data, 'skin> {
         let mut text = state.text.borrow_mut();
         let text = text.get_or_insert_with(|| self.text_resources.into());
         let mut builder = DrawListBuilder::default();
-        self.chip.paint(&mut builder, text, self.label, bounds);
+        self.chip
+            .paint(&mut builder, text, self.label, self.active, bounds);
         builder.finish()
     }
 }
@@ -184,7 +187,7 @@ mod tests {
 
     use super::*;
     #[cfg(feature = "masonry-host")]
-    use crate::render::masonry::{Click, MasonryControl};
+    use crate::render::masonry::{MasonryControl, Painted};
     use crate::{builtin, render::ControlAction};
 
     #[cfg(feature = "masonry-host")]
@@ -203,7 +206,14 @@ mod tests {
         ] {
             let iced = ChipPaint::new(label, style, active, skin)
                 .draw_list(&ChipPaintState::default(), bounds);
-            let mut masonry = Click::new(Chip::new(style, active, skin), label.to_owned(), skin);
+            let mut masonry = Painted::new(
+                Chip::new(style, skin),
+                crate::atoms::painter::Labelled {
+                    active,
+                    label: label.to_owned(),
+                },
+                skin,
+            );
 
             assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
         }

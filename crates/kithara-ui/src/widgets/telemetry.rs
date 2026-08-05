@@ -6,7 +6,7 @@ use iced::{
 
 use crate::{
     module::ScalarFormat,
-    render::{ReadValue, Skin, UiEvent, fonts, shaped_text},
+    render::{IcedSkin, ReadValue, Skin, UiEvent, fonts, shaped_text},
     widgets::Widget,
 };
 
@@ -55,7 +55,7 @@ impl<'a> Widget<'a> for Telemetry<'_, '_, '_> {
             .width(Length::Fill)
             .style(move |_| {
                 ContainerStyle::default()
-                    .background(Background::Color(palette.bg_inset))
+                    .background(Background::Color(palette.bg_inset.into()))
                     .border(border)
             })
             .into()

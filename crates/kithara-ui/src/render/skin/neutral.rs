@@ -1,22 +1,22 @@
-use iced::{Border, Color};
-
-use super::theme::RenderPalette;
 use crate::{
     draw::Rgba,
     error::UiDocError,
     ids::SourceUri,
+    render::theme::RenderPalette,
     skin::{
         ButtonSkin, CellSkin, CheckboxSkin, ChipSkin, ChromeSkin, ColorRole, CrossfaderSkin,
-        DeckSkin, DividerSkin, DragSkin, FaderSkin, FrameSkin, GlobalBarSkin, KnobSkin,
-        LayoutPreviewSkin, LayoutSkin, MenuSkin, MeterSkin, NavSkin, PopSkin, ReadoutSkin,
-        SegmentedSkin, SelectSkin, SkinDoc, StatusDotSkin, SwatchSkin, TabLargeSkin, TelemetrySkin,
-        TextInputSkin, TextSkin, ToggleSkin, TrackListSkin, TreeSkin, VisSkin, VuStereoSkin,
-        VuVerticalSkin, WaveSkin, WindowSkin, parse_color,
+        DeckSkin, DividerSkin, DragSkin, FaderSkin, GlobalBarSkin, KnobSkin, LayoutPreviewSkin,
+        LayoutSkin, MenuSkin, MeterSkin, NavSkin, PopSkin, ReadoutSkin, SegmentedSkin, SelectSkin,
+        SkinDoc, StatusDotSkin, SwatchSkin, TabLargeSkin, TelemetrySkin, TextInputSkin, TextSkin,
+        ToggleSkin, TrackListSkin, TreeSkin, VisSkin, VuStereoSkin, VuVerticalSkin, WaveSkin,
+        WindowSkin, parse_color,
     },
     text::{FontPolicy, TextResources},
 };
 
-/// Resolved skin consumed by iced renderers.
+const CHANNEL_MAX: f32 = 255.0;
+
+/// Resolved skin consumed by renderers.
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
 #[non_exhaustive]
 #[fieldwork(opt_in, get)]
@@ -64,15 +64,7 @@ pub struct Skin {
 }
 
 impl Skin {
-    pub(crate) fn border(&self, frame: FrameSkin) -> Border {
-        Border {
-            color: self.color(frame.border),
-            width: frame.border_width,
-            radius: frame.radius.into(),
-        }
-    }
-
-    pub(crate) fn color(&self, role: ColorRole) -> Color {
+    pub(crate) fn rgba(&self, role: ColorRole) -> Rgba {
         match role {
             ColorRole::Bg => self.palette.bg,
             ColorRole::BgDeep => self.palette.bg_deep,
@@ -103,11 +95,7 @@ impl Skin {
         }
     }
 
-    pub(crate) fn rgba(&self, role: ColorRole) -> Rgba {
-        self.color(role).into()
-    }
-
-    /// Resolves a parsed document into iced colors and render metrics.
+    /// Resolves a parsed document into neutral colors and render metrics.
     ///
     /// # Errors
     /// Returns [`UiDocError`] when a palette value or embedded font is invalid.
@@ -194,12 +182,12 @@ impl Skin {
     }
 }
 
-fn color(value: &str, origin: &SourceUri) -> Result<Color, UiDocError> {
+fn color(value: &str, origin: &SourceUri) -> Result<Rgba, UiDocError> {
     let [red, green, blue, alpha] = parse_color(value, origin)?;
-    Ok(Color::from_rgba8(
-        red,
-        green,
-        blue,
-        f32::from(alpha) / 255.0,
-    ))
+    Ok(Rgba {
+        r: f32::from(red) / CHANNEL_MAX,
+        g: f32::from(green) / CHANNEL_MAX,
+        b: f32::from(blue) / CHANNEL_MAX,
+        a: f32::from(alpha) / CHANNEL_MAX,
+    })
 }

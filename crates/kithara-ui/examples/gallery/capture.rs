@@ -1,6 +1,6 @@
 use std::{
     env,
-    fs::{File, create_dir_all},
+    fs::{File, create_dir_all, read_to_string, write},
     io::BufWriter,
     path::{Path, PathBuf},
 };
@@ -84,6 +84,14 @@ impl Capture {
     pub(super) fn save(&mut self, shot: Shot, screenshot: &Screenshot) -> Result<PathBuf, String> {
         create_dir_all(&self.dir)
             .map_err(|error| format!("create {}: {error}", self.dir.display()))?;
+        write_frame(
+            &self.dir,
+            Frame {
+                height: screenshot.size.height,
+                scale: f64::from(screenshot.scale_factor),
+                width: screenshot.size.width,
+            },
+        )?;
         let path = self.dir.join(format!("{}.png", shot.name()));
         write_png(
             &path,
@@ -118,4 +126,36 @@ pub(super) fn write_png(path: &Path, rgba: &[u8], width: u32, height: u32) -> Re
         .write_header()
         .and_then(|mut writer| writer.write_image_data(rgba))
         .map_err(|error| format!("encode {}: {error}", path.display()))
+}
+
+/// The pixel geometry one capture set was taken at. Written beside the pages so
+/// another host can be photographed on exactly the same terms, which is the
+/// only way a comparison between the two means anything.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Frame {
+    pub(super) height: u32,
+    pub(super) scale: f64,
+    pub(super) width: u32,
+}
+
+const FRAME_FILE: &str = "frame.txt";
+
+pub(super) fn write_frame(dir: &Path, frame: Frame) -> Result<(), String> {
+    let path = dir.join(FRAME_FILE);
+    write(
+        &path,
+        format!("{} {} {}\n", frame.width, frame.height, frame.scale),
+    )
+    .map_err(|error| format!("write {}: {error}", path.display()))
+}
+
+/// Reads the geometry a capture set was taken at, if one was recorded.
+pub(super) fn read_frame(dir: &Path) -> Option<Frame> {
+    let text = read_to_string(dir.join(FRAME_FILE)).ok()?;
+    let mut parts = text.split_whitespace();
+    Some(Frame {
+        width: parts.next()?.parse().ok()?,
+        height: parts.next()?.parse().ok()?,
+        scale: parts.next()?.parse().ok()?,
+    })
 }

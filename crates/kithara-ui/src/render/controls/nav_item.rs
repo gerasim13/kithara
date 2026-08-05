@@ -117,6 +117,7 @@ impl canvas::Program<UiEvent> for NavItemProgram<'_, '_> {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 struct NavItemPaint<'data, 'skin> {
+    active: bool,
     #[field(get, vis = "")]
     height: f32,
     item: NavItem,
@@ -127,8 +128,9 @@ struct NavItemPaint<'data, 'skin> {
 impl<'data, 'skin> NavItemPaint<'data, 'skin> {
     fn new(label: &'data str, glyph: char, active: bool, skin: &'skin Skin) -> Self {
         Self {
+            active,
             height: skin.nav.item_height,
-            item: NavItem::new(glyph, active, skin),
+            item: NavItem::new(glyph, skin),
             label,
             text_resources: skin.text_resources(),
         }
@@ -173,7 +175,8 @@ impl<'data, 'skin> NavItemPaint<'data, 'skin> {
         let mut text = state.text.borrow_mut();
         let text = text.get_or_insert_with(|| self.text_resources.into());
         let mut builder = DrawListBuilder::default();
-        self.item.paint(&mut builder, text, self.label, bounds);
+        self.item
+            .paint(&mut builder, text, self.label, self.active, bounds);
         builder.finish()
     }
 }
@@ -205,7 +208,10 @@ mod tests {
 
     use super::*;
     #[cfg(feature = "masonry-host")]
-    use crate::render::masonry::{Click, MasonryControl};
+    use crate::{
+        atoms::painter::Labelled,
+        render::masonry::{MasonryControl, Painted},
+    };
     use crate::{builtin, render::ControlAction};
 
     #[cfg(feature = "masonry-host")]
@@ -224,9 +230,12 @@ mod tests {
         for active in [false, true] {
             let iced = NavItemPaint::new("BUTTONS", glyph, active, skin)
                 .draw_list(&NavItemPaintState::default(), bounds);
-            let mut masonry = Click::new(
-                NavItem::new(glyph, active, skin),
-                "BUTTONS".to_owned(),
+            let mut masonry = Painted::new(
+                NavItem::new(glyph, skin),
+                Labelled {
+                    active,
+                    label: "BUTTONS".to_owned(),
+                },
                 skin,
             );
 

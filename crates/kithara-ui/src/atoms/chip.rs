@@ -1,4 +1,5 @@
 use crate::{
+    atoms::design::quad::border,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     module::ChipStyle,
     render::Skin,
@@ -7,43 +8,46 @@ use crate::{
 };
 
 pub(crate) struct Chip {
+    active: Face,
+    idle: Face,
+    padding: Pt,
+    role: TextRoleSkin,
+}
+
+/// How the chip looks in one of its two states. Both are resolved from the skin
+/// when the chip is built, so switching states is a paint-time choice rather
+/// than a reason to rebuild the control.
+struct Face {
     border: Rgba,
     fill: Rgba,
     frame: FrameSkin,
-    padding: Pt,
-    role: TextRoleSkin,
-    text_color: Rgba,
+    text: Rgba,
 }
 
 impl Chip {
-    pub(crate) fn new(style: ChipStyle, active: bool, skin: &Skin) -> Self {
-        let frame = if active {
-            skin.chip.active_frame
-        } else {
-            skin.chip.inactive_frame
-        };
+    pub(crate) fn new(style: ChipStyle, skin: &Skin) -> Self {
         let font: FontSkin = match style {
             ChipStyle::Deck => skin.chip.deck_text,
             ChipStyle::Routing => skin.chip.routing_text,
         };
-        let text_color = if active {
-            skin.palette.bg_deep
-        } else {
-            skin.palette.text_dim
-        };
         Self {
-            border: skin.rgba(frame.border),
-            fill: if active {
-                skin.palette.accent.into()
-            } else {
-                Rgba {
+            active: Face {
+                border: skin.rgba(skin.chip.active_frame.border),
+                fill: skin.palette.accent,
+                frame: skin.chip.active_frame,
+                text: skin.palette.bg_deep,
+            },
+            idle: Face {
+                border: skin.rgba(skin.chip.inactive_frame.border),
+                fill: Rgba {
                     a: 0.0,
                     b: 0.0,
                     g: 0.0,
                     r: 0.0,
-                }
+                },
+                frame: skin.chip.inactive_frame,
+                text: skin.palette.text_dim,
             },
-            frame,
             padding: Pt {
                 x: skin.chip.padding_x,
                 y: skin.chip.padding_y,
@@ -55,7 +59,6 @@ impl Chip {
                 spacing: 0.0,
                 weight: font.weight,
             },
-            text_color: text_color.into(),
         }
     }
 
@@ -64,10 +67,12 @@ impl Chip {
         list: &mut DrawListBuilder,
         text: &mut TextContext,
         label: &str,
+        active: bool,
         bounds: Rect,
     ) {
-        list.fill_rounded_rect(bounds, self.frame.radius, self.fill);
-        self.paint_frame(list, bounds);
+        let face = if active { &self.active } else { &self.idle };
+        list.fill_rounded_rect(bounds, face.frame.radius, face.fill);
+        border(list, bounds, face.frame, face.border);
         let run = text.shape(label, self.role, None);
         list.text(
             &run,
@@ -76,25 +81,7 @@ impl Chip {
                 x: bounds.x + self.padding.x,
                 y: bounds.y + self.padding.y,
             }),
-            self.text_color,
-        );
-    }
-
-    fn paint_frame(&self, list: &mut DrawListBuilder, bounds: Rect) {
-        if self.frame.border_width <= 0.0 {
-            return;
-        }
-        let inset = self.frame.border_width / 2.0;
-        list.stroke_rounded_rect(
-            Rect {
-                h: (bounds.h - self.frame.border_width).max(0.0),
-                w: (bounds.w - self.frame.border_width).max(0.0),
-                x: bounds.x + inset,
-                y: bounds.y + inset,
-            },
-            self.frame.radius,
-            self.border,
-            self.frame.border_width,
+            face.text,
         );
     }
 }
@@ -122,7 +109,7 @@ mod tests {
         let draw = |label, style, active| {
             let mut text = TextContext::from(skin.text_resources());
             let mut builder = DrawListBuilder::default();
-            Chip::new(style, active, skin).paint(&mut builder, &mut text, label, bounds);
+            Chip::new(style, skin).paint(&mut builder, &mut text, label, active, bounds);
             builder.finish()
         };
 
@@ -135,7 +122,7 @@ mod tests {
             DrawCmd::Fill {
                 geom: Geom::Rect(rect),
                 color,
-            } if *rect == bounds && *color == skin.palette.accent.into()
+            } if *rect == bounds && *color == skin.palette.accent
         ));
         assert!(matches!(
             label,
@@ -149,7 +136,7 @@ mod tests {
                 && run.size() == skin.chip.deck_text.size
                 && transform.dx == 11.0
                 && transform.dy == 8.0
-                && *color == skin.palette.bg_deep.into()
+                && *color == skin.palette.bg_deep
         ));
 
         let inactive = draw("FX1", ChipStyle::Routing, false);
@@ -188,7 +175,33 @@ mod tests {
                 && run.size() == skin.chip.routing_text.size
                 && transform.dx == 11.0
                 && transform.dy == 8.0
-                && *color == skin.palette.text_dim.into()
+                && *color == skin.palette.text_dim
         ));
+    }
+
+    /// The two states differ only in how the chip is painted, so one chip must
+    /// be able to draw both without being rebuilt.
+    #[kithara::test]
+    fn one_chip_draws_both_states() {
+        let skin = builtin::skin();
+        let bounds = Rect {
+            h: 16.0,
+            w: 28.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let chip = Chip::new(ChipStyle::Deck, skin);
+        let mut text = TextContext::from(skin.text_resources());
+        let mut draw = |active| {
+            let mut builder = DrawListBuilder::default();
+            chip.paint(&mut builder, &mut text, "A", active, bounds);
+            builder.finish()
+        };
+
+        assert_ne!(
+            draw(true),
+            draw(false),
+            "the same chip must draw differently once it is told it is active"
+        );
     }
 }

@@ -22,15 +22,16 @@ use tracing::{Span, trace_span};
 
 use super::{
     custom::HostAction,
-    node::{MasonryNode, RootParts},
+    node::{MasonryNode, Node, RootParts, Watched},
     picker::{self, HostedEngine},
     popover::PopoverState,
 };
 use crate::{
     backends::VelloBackend,
+    compile::CompiledUi,
     draw::{Pt, Rect, replay},
     interact::CursorShape,
-    render::{Skin, UiEvent, WindowCommand},
+    render::{Reads, Skin, UiEvent, WindowCommand, document::read::resolve},
     text::TextContext,
     widgets::{drag_ghost::DragGhost, window::WindowSurface},
 };
@@ -44,8 +45,9 @@ type PopoverRegistration = (WidgetId, Rc<PopoverState>, Rc<dyn Fn() -> HostActio
 pub struct MasonryRoot<Action> {
     actions: Vec<Action>,
     platform: Vec<RenderRootSignal>,
-    pickers: Vec<Rc<HostedEngine>>,
+    engines: Vec<Rc<HostedEngine>>,
     popovers: Vec<PopoverRegistration>,
+    watched: Vec<Watched>,
     window: Option<WindowTracker>,
     #[field(get, vis = "pub")]
     root: RenderRoot,
@@ -79,7 +81,7 @@ where
         node: MasonryNode<Action>,
         options: RenderRootOptions,
     ) -> Result<Self, MasonryRootError> {
-        let (base, layers, popovers, pickers, window) = RootParts::from(node);
+        let (base, layers, popovers, engines, window, watched) = RootParts::from(node);
         let signals = Rc::new(RefCell::new(VecDeque::new()));
         let sink = Rc::clone(&signals);
         let root = RenderRoot::new(
@@ -90,8 +92,9 @@ where
         let mut this = Self {
             actions: Vec::new(),
             platform: Vec::new(),
-            pickers,
+            engines,
             popovers,
+            watched,
             window,
             root,
             signals,
@@ -135,12 +138,33 @@ where
         Ok(handled)
     }
 
+    /// Re-reads every endpoint the mounted document shows and hands each value
+    /// to the widget that draws it.
+    ///
+    /// This is what a rebuild was doing, minus the rebuild: the tree stays, so a
+    /// gesture in flight and the pointer capture that feeds it both survive, and
+    /// every control bound to the same endpoint moves together rather than one
+    /// of them being poked by hand.
+    pub fn refresh(&mut self, ui: &CompiledUi, reads: &dyn Reads) {
+        for (id, binding) in &self.watched {
+            let Some(value) = resolve(reads, binding, ui) else {
+                continue;
+            };
+            self.root.edit_widget(*id, |mut widget| {
+                let mut node = widget.downcast::<Node>();
+                if node.widget.show_live(&value) {
+                    node.ctx.request_paint_only();
+                }
+            });
+        }
+    }
+
     fn routes_open_picker(&mut self, event: &PointerEvent) -> Result<bool, MasonryRootError> {
         let Some((input, point)) = picker::input(event) else {
             return Ok(false);
         };
         let Some(engine) = self
-            .pickers
+            .engines
             .iter()
             .rev()
             .find(|engine| engine.has_open_picker())
@@ -149,7 +173,8 @@ where
             return Ok(false);
         };
         let owner = engine.owner();
-        let (outcome, focused) = engine.route(input, Some(point));
+        let routed = engine.route(input, Some(point));
+        let (outcome, focused) = (routed.outcome, routed.focused);
         self.sync_picker_focus(owner, focused);
         let captured = outcome.is_captured();
         if let Some(action) = outcome.value() {

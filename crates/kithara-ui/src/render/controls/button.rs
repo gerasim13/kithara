@@ -41,29 +41,48 @@ pub(crate) enum EffectiveIcon {
     Svg(Icon),
 }
 
+/// The icon a button shows at rest, and the one it swaps in while active. Some
+/// styles change the icon along with the word, so both are resolved together
+/// and a control that flips can repaint instead of being rebuilt.
+#[derive(Clone, Copy)]
+pub(crate) struct ButtonGlyphs {
+    pub(crate) active: Option<char>,
+    pub(crate) idle: Option<char>,
+}
+
+/// Resolves both of a button's icons, or names the SVG icon that neither this
+/// painter nor its retained twin can draw.
+pub(crate) fn button_glyphs(style: ButtonStyle, icon: Option<Icon>) -> Result<ButtonGlyphs, Icon> {
+    let glyph = |active| match effective_icon(style, icon, active) {
+        EffectiveIcon::Glyph(glyph) => Ok(Some(glyph)),
+        EffectiveIcon::None => Ok(None),
+        EffectiveIcon::Svg(icon) => Err(icon),
+    };
+    Ok(ButtonGlyphs {
+        active: glyph(true)?,
+        idle: glyph(false)?,
+    })
+}
+
 pub(crate) fn view<'a>(args: &ButtonView<'a, '_, '_>) -> Element<'a, UiEvent> {
     let active = matches!(args.value, Some(ReadValue::Bool(true)));
-    let glyph = match effective_icon(args.style, args.icon, active) {
-        EffectiveIcon::Glyph(glyph) => Some(glyph),
-        EffectiveIcon::None => None,
-        EffectiveIcon::Svg(icon) => {
-            return ControlButton::builder()
-                .path(args.path)
-                .label(args.label)
-                .icon(icon)
-                .maybe_active_label(args.active_label)
-                .style(args.style)
-                .maybe_frame(args.frame)
-                .maybe_value(args.value)
-                .skin(args.skin)
-                .build()
-                .view();
-        }
+    let Ok(glyphs) = button_glyphs(args.style, args.icon) else {
+        return ControlButton::builder()
+            .path(args.path)
+            .label(args.label)
+            .maybe_icon(args.icon)
+            .maybe_active_label(args.active_label)
+            .style(args.style)
+            .maybe_frame(args.frame)
+            .maybe_value(args.value)
+            .skin(args.skin)
+            .build()
+            .view();
     };
     let paint = ButtonPaint::new(
         args.label,
         args.active_label,
-        glyph,
+        glyphs,
         active,
         args.style,
         args.frame,
@@ -203,6 +222,7 @@ pub(crate) struct ButtonState {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct ButtonPaint<'data, 'skin> {
+    active: bool,
     button: Button,
     label: ButtonLabel<&'data str>,
     text_resources: &'skin TextResources,
@@ -214,7 +234,7 @@ impl<'data, 'skin> ButtonPaint<'data, 'skin> {
     pub(crate) fn new(
         label: &'data str,
         active_label: Option<&'data str>,
-        glyph: Option<char>,
+        glyphs: ButtonGlyphs,
         active: bool,
         style: ButtonStyle,
         frame: Option<FrameSides>,
@@ -222,11 +242,11 @@ impl<'data, 'skin> ButtonPaint<'data, 'skin> {
     ) -> Self {
         let button = Button::new(
             ButtonConfig::builder()
-                .active(active)
                 .maybe_frame(frame)
-                .maybe_glyph(glyph)
+                .maybe_glyph(glyphs.idle)
                 .style(style)
                 .build(),
+            glyphs.active,
             skin,
         );
         let label = ButtonLabel {
@@ -238,11 +258,14 @@ impl<'data, 'skin> ButtonPaint<'data, 'skin> {
             ButtonStyle::TransportPrimary => Length::FillPortion(skin.button.primary_fill),
             ButtonStyle::MicroPrimary => Length::Fixed(skin.button.micro_size),
             ButtonStyle::VisNav => Length::Fixed(skin.vis.nav_cell_size),
-            ButtonStyle::Default => Length::Fixed(
-                button.intrinsic_width(&mut TextContext::from(skin.text_resources()), &label),
-            ),
+            ButtonStyle::Default => Length::Fixed(button.intrinsic_width(
+                &mut TextContext::from(skin.text_resources()),
+                &label,
+                active,
+            )),
         };
         Self {
+            active,
             button,
             label,
             text_resources: skin.text_resources(),
@@ -294,7 +317,7 @@ impl<'data, 'skin> ButtonPaint<'data, 'skin> {
         let text = text.get_or_insert_with(|| self.text_resources.into());
         let mut builder = DrawListBuilder::default();
         self.button
-            .paint(&mut builder, text, &self.label, bounds, visual);
+            .paint(&mut builder, text, &self.label, self.active, bounds, visual);
         builder.finish()
     }
 }
@@ -331,7 +354,10 @@ mod tests {
 
     use super::*;
     #[cfg(feature = "masonry-host")]
-    use crate::render::masonry::{Click, MasonryControl};
+    use crate::{
+        atoms::painter::ButtonData,
+        render::masonry::{MasonryControl, Painted},
+    };
     use crate::{builtin, render::ControlAction};
 
     #[kithara::test]
@@ -339,7 +365,10 @@ mod tests {
         let paint = ButtonPaint::new(
             "PLAY",
             Some("PAUSE"),
-            None,
+            ButtonGlyphs {
+                active: None,
+                idle: None,
+            },
             false,
             ButtonStyle::TransportPrimary,
             None,
@@ -397,24 +426,27 @@ mod tests {
             (ButtonStyle::MicroPrimary, Some(Icon::Play), false),
             (ButtonStyle::VisNav, None, false),
         ] {
-            let glyph = match effective_icon(style, icon, active) {
-                EffectiveIcon::Glyph(glyph) => Some(glyph),
-                EffectiveIcon::None | EffectiveIcon::Svg(_) => None,
-            };
-            let iced = ButtonPaint::new("PLAY", Some("PAUSE"), glyph, active, style, None, skin)
+            let glyphs = button_glyphs(style, icon).unwrap_or(ButtonGlyphs {
+                active: None,
+                idle: None,
+            });
+            let iced = ButtonPaint::new("PLAY", Some("PAUSE"), glyphs, active, style, None, skin)
                 .draw_list(&ButtonPaintState::default(), bounds, VisualState::Idle);
-            let mut masonry = Click::new(
+            let mut masonry = Painted::new(
                 Button::new(
                     ButtonConfig::builder()
-                        .active(active)
-                        .maybe_glyph(glyph)
+                        .maybe_glyph(glyphs.idle)
                         .style(style)
                         .build(),
+                    glyphs.active,
                     skin,
                 ),
-                ButtonLabel {
-                    active: Some("PAUSE".to_owned()),
-                    label: "PLAY".to_owned(),
+                ButtonData {
+                    active,
+                    label: ButtonLabel {
+                        active: Some("PAUSE".to_owned()),
+                        label: "PLAY".to_owned(),
+                    },
                 },
                 skin,
             );

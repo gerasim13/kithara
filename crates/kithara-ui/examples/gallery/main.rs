@@ -1,4 +1,7 @@
 mod capture;
+mod compare;
+#[cfg(feature = "masonry-host")]
+mod host;
 #[cfg(feature = "masonry-host")]
 mod masonry_shots;
 mod mock;
@@ -458,8 +461,11 @@ impl Gallery {
 }
 
 fn main() -> iced::Result {
+    if compare::run() {
+        return Ok(());
+    }
     #[cfg(feature = "masonry-host")]
-    if masonry_shots::run() {
+    if masonry_shots::run() || host::run() {
         return Ok(());
     }
     let daemon = iced::daemon(Gallery::new, update, view)
@@ -548,12 +554,12 @@ fn theme(skin: &Skin) -> Theme {
     Theme::custom(
         "Kithara".to_owned(),
         iced::theme::Palette {
-            background: palette.bg,
-            text: palette.text,
-            primary: palette.accent,
-            success: palette.success,
-            danger: palette.danger,
-            warning: palette.warning,
+            background: palette.bg.into(),
+            text: palette.text.into(),
+            primary: palette.accent.into(),
+            success: palette.success.into(),
+            danger: palette.danger.into(),
+            warning: palette.warning.into(),
         },
     )
 }

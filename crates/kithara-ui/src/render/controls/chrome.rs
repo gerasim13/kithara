@@ -18,7 +18,7 @@ use crate::{
     backends::IcedBackend,
     draw::{DrawListBuilder, Rect, replay},
     interact::{CursorShape, Hover, iced as iced_interact, recognizers::click},
-    render::{InputOwner, Skin, UiEvent, toggle_module},
+    render::{IcedSkin, InputOwner, Skin, UiEvent, toggle_module},
     skin::{ColorRole, FontFamily, FontWeight, FrameSkin, TextRoleSkin},
     text::TextContext,
 };

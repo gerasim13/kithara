@@ -5,7 +5,7 @@ use iced::{
 
 use crate::{
     backends::font,
-    render::{Skin, UiEvent},
+    render::{IcedSkin, Skin, UiEvent},
     skin::TextRoleSkin,
 };
 

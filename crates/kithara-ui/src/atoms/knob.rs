@@ -12,12 +12,11 @@ pub(crate) struct Knob {
     label: Rgba,
     metrics: KnobSkin,
     track: Rgba,
-    value: f32,
     value_color: Rgba,
 }
 
 impl Knob {
-    pub(crate) fn new(value: f32, skin: &Skin) -> Self {
+    pub(crate) fn new(skin: &Skin) -> Self {
         let metrics = skin.knob;
         Self {
             body_border: skin.rgba(metrics.body_border),
@@ -26,7 +25,6 @@ impl Knob {
             label: skin.rgba(metrics.label_text.color),
             metrics,
             track: skin.rgba(metrics.track_color),
-            value,
             value_color: skin.rgba(metrics.value_color),
         }
     }
@@ -35,6 +33,7 @@ impl Knob {
         &self,
         list: &mut DrawListBuilder,
         text: &mut TextContext,
+        value: f32,
         label: Option<&str>,
         bounds: Rect,
     ) {
@@ -46,7 +45,7 @@ impl Knob {
             x: dial.x + dial.w / 2.0,
             y: dial.y + dial.h / 2.0,
         };
-        let angle = metrics.start_angle + metrics.sweep_angle * self.value;
+        let angle = metrics.start_angle + metrics.sweep_angle * value;
 
         if radius > 0.0 {
             list.stroke_arc(
@@ -203,7 +202,7 @@ mod tests {
             y: 0.0,
         };
         let metrics = skin.knob;
-        let knob = Knob::new(0.5, &skin);
+        let knob = Knob::new(&skin);
         let (dial, caption) = knob.rects(bounds);
 
         assert_eq!(
@@ -222,9 +221,15 @@ mod tests {
             y: 0.0,
         };
 
-        let knob = Knob::new(0.25, skin);
+        let knob = Knob::new(skin);
         let mut list = DrawListBuilder::default();
-        knob.paint(&mut list, &mut TextContext::new().unwrap(), label, BOUNDS);
+        knob.paint(
+            &mut list,
+            &mut TextContext::new().unwrap(),
+            0.25,
+            label,
+            BOUNDS,
+        );
         list.finish()
     }
 

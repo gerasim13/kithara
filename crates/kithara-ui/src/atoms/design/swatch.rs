@@ -4,7 +4,7 @@ use iced::{
 };
 
 use crate::{
-    render::{Skin, UiEvent, typography::styled_text},
+    render::{IcedSkin, Skin, UiEvent, typography::styled_text},
     skin::ColorRole,
     widgets::Widget,
 };

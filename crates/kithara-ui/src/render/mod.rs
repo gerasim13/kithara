@@ -44,6 +44,7 @@ pub(crate) use picker::picker_width;
 pub(crate) use picker::{
     hosted_picker_overlay, picker_hits, picker_selected_index, scope_picker, sync_picker,
 };
+pub(crate) use skin::IcedSkin;
 pub use skin::Skin;
 pub(crate) use text_input::{search_input, sync_text_input, text_input_layout};
 pub(crate) use track_list::{sync_track_list_scroll, track_list};

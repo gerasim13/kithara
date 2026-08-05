@@ -5015,6 +5015,7 @@ dependencies = [
  "tracing",
  "unicode-segmentation",
  "vello",
+ "winit",
 ]
 
 [[package]]

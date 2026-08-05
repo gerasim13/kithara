@@ -17,7 +17,17 @@ use crate::{
     render::{HostedControlPlan, UiEvent, engine_value},
 };
 
-pub(super) type EngineTarget = (HostedControlPlan, Rc<Cell<MasonryRect>>);
+/// One control an engine drives: what it is and where it sits.
+pub(crate) struct EngineTarget {
+    pub(super) area: Rc<Cell<MasonryRect>>,
+    pub(super) plan: HostedControlPlan,
+}
+
+/// What routing one event through the engine produced.
+pub(super) struct Routed {
+    pub(super) focused: bool,
+    pub(super) outcome: Outcome<HostAction>,
+}
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
@@ -39,9 +49,9 @@ impl HostedEngine {
     ) -> Rc<Self> {
         let text_input = targets
             .iter()
-            .any(|(plan, _)| matches!(plan, HostedControlPlan::Tree { .. }));
+            .any(|target| matches!(target.plan, HostedControlPlan::Tree { .. }));
         let mut engine = Engine::default();
-        engine.reconcile(targets.iter().flat_map(|(plan, _)| plan.descriptors()));
+        engine.reconcile(targets.iter().flat_map(|target| target.plan.descriptors()));
         Rc::new(Self {
             engine: RefCell::new(engine),
             map_event,
@@ -51,13 +61,13 @@ impl HostedEngine {
         })
     }
 
-    pub(super) fn route(&self, input: Input<'_>, point: Option<Pt>) -> (Outcome<HostAction>, bool) {
+    pub(super) fn route(&self, input: Input<'_>, point: Option<Pt>) -> Routed {
         let mut engine = self.engine.borrow_mut();
         let targets = self.targets(&engine, point);
         let descriptors = self
             .targets
             .iter()
-            .flat_map(|(plan, _)| plan.active_descriptors(&targets))
+            .flat_map(|target| target.plan.active_descriptors(&targets))
             .collect::<Vec<_>>();
         engine.reconcile(descriptors);
         for target in &targets {
@@ -66,14 +76,17 @@ impl HostedEngine {
         let emission = engine.handle(input, &targets, kithara_platform::time::Instant::now());
         let focused = engine.focused_path().is_some();
         let Some(emission) = emission else {
-            return (Outcome::IGNORED, focused);
+            return Routed {
+                focused,
+                outcome: Outcome::IGNORED,
+            };
         };
         let path = emission.path;
         let child = emission.child;
         let outcome = emission
             .outcome
             .map(|event| (self.map_event)(engine_value(&path, child, event)));
-        (outcome, focused)
+        Routed { focused, outcome }
     }
 
     pub(super) fn input_method_area(&self) -> Option<Rect> {
@@ -90,8 +103,8 @@ impl HostedEngine {
 
     pub(super) fn has_open_picker(&self) -> bool {
         let engine = self.engine.borrow();
-        self.targets.iter().any(|(plan, _)| {
-            let HostedControlPlan::Picker { path, .. } = plan else {
+        self.targets.iter().any(|target| {
+            let HostedControlPlan::Picker { path, .. } = &target.plan else {
                 return false;
             };
             engine
@@ -108,9 +121,9 @@ impl HostedEngine {
 
     fn targets<'a>(&'a self, engine: &Engine, point: Option<Pt>) -> Vec<Target<'a>> {
         let mut targets = Vec::new();
-        for (plan, area) in &self.targets {
-            let area = area.get();
-            plan.append_targets(
+        for target in &self.targets {
+            let area = target.area.get();
+            target.plan.append_targets(
                 Rect {
                     x: area.x0.as_(),
                     y: area.y0.as_(),

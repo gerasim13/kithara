@@ -1,79 +1,79 @@
 use crate::{
-    draw::{DrawListBuilder, Pt, Rect, Transform},
+    draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
-    skin::{ColorRole, FontFamily, FontWeight, TextRoleSkin},
+    skin::{ColorRole, FontFamily, FontWeight, TabLargeSkin, TextRoleSkin},
     text::{GlyphRun, TextContext},
 };
 
-pub(crate) struct TabLarge<'data, 'skin> {
-    active: bool,
-    label: &'data str,
-    skin: &'skin Skin,
+pub(crate) struct TabLarge {
+    active_color: Rgba,
+    idle_color: Rgba,
+    metrics: TabLargeSkin,
+    role: TextRoleSkin,
+    underline: Rgba,
 }
 
-impl<'data, 'skin> TabLarge<'data, 'skin> {
-    pub(crate) const fn new(label: &'data str, active: bool, skin: &'skin Skin) -> Self {
+impl TabLarge {
+    pub(crate) fn new(skin: &Skin) -> Self {
         Self {
-            active,
-            label,
-            skin,
+            active_color: skin.palette.text,
+            idle_color: skin.palette.text_dim,
+            metrics: skin.tab_large,
+            role: TextRoleSkin {
+                color: ColorRole::Text,
+                font: FontFamily::Mono,
+                size: skin.tab_large.text_size,
+                spacing: 0.0,
+                weight: FontWeight::Normal,
+            },
+            underline: skin.palette.accent,
         }
     }
 
-    pub(crate) fn measure(&self, text: &mut TextContext) -> (f32, f32) {
-        let run = self.shape(text);
-        (
-            run.width() + self.skin.tab_large.pad_x * 2.0,
-            self.skin.tab_large.height,
-        )
+    pub(crate) fn measure(&self, text: &mut TextContext, label: &str) -> (f32, f32) {
+        let run = self.shape(text, label);
+        (run.width() + self.metrics.pad_x * 2.0, self.metrics.height)
     }
 
-    pub(crate) fn paint(&self, list: &mut DrawListBuilder, text: &mut TextContext, bounds: Rect) {
-        let run = self.shape(text);
+    pub(crate) fn paint(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        label: &str,
+        active: bool,
+        bounds: Rect,
+    ) {
+        let run = self.shape(text, label);
         let label_height =
-            (bounds.h - self.skin.tab_large.pad_y * 2.0 - self.skin.tab_large.underline_width)
-                .max(0.0);
-        let color = if self.active {
-            self.skin.palette.text
-        } else {
-            self.skin.palette.text_dim
-        };
+            (bounds.h - self.metrics.pad_y * 2.0 - self.metrics.underline_width).max(0.0);
         list.text(
             &run,
-            self.label,
+            label,
             Transform::translate(Pt {
-                x: bounds.x + self.skin.tab_large.pad_x,
-                y: bounds.y + self.skin.tab_large.pad_y + (label_height - run.height()) / 2.0,
+                x: bounds.x + self.metrics.pad_x,
+                y: bounds.y + self.metrics.pad_y + (label_height - run.height()) / 2.0,
             }),
-            color.into(),
+            if active {
+                self.active_color
+            } else {
+                self.idle_color
+            },
         );
-        if self.active {
+        if active {
             list.fill_rect(
                 Rect {
-                    h: self.skin.tab_large.underline_width,
-                    w: (bounds.w - self.skin.tab_large.pad_x * 2.0).max(0.0),
-                    x: bounds.x + self.skin.tab_large.pad_x,
-                    y: bounds.y + bounds.h
-                        - self.skin.tab_large.pad_y
-                        - self.skin.tab_large.underline_width,
+                    h: self.metrics.underline_width,
+                    w: (bounds.w - self.metrics.pad_x * 2.0).max(0.0),
+                    x: bounds.x + self.metrics.pad_x,
+                    y: bounds.y + bounds.h - self.metrics.pad_y - self.metrics.underline_width,
                 },
-                self.skin.palette.accent.into(),
+                self.underline,
             );
         }
     }
 
-    fn shape(&self, text: &mut TextContext) -> GlyphRun {
-        text.shape(
-            self.label,
-            TextRoleSkin {
-                color: ColorRole::Text,
-                font: FontFamily::Mono,
-                size: self.skin.tab_large.text_size,
-                spacing: 0.0,
-                weight: FontWeight::Normal,
-            },
-            None,
-        )
+    fn shape(&self, text: &mut TextContext, label: &str) -> GlyphRun {
+        text.shape(label, self.role, None)
     }
 }
 
@@ -91,7 +91,7 @@ mod tests {
     fn shaped_width_stays_equal_to_the_iced_tab_width() {
         let skin = builtin::skin();
         let mut text = TextContext::from(skin.text_resources());
-        let (width, height) = TabLarge::new("DECK MICRO", true, skin).measure(&mut text);
+        let (width, height) = TabLarge::new(skin).measure(&mut text, "DECK MICRO");
 
         assert!(
             (width - 94.0).abs() < 0.001,
@@ -110,10 +110,11 @@ mod tests {
             x: 3.0,
             y: 5.0,
         };
+        let tab = TabLarge::new(skin);
         let draw = |active| {
             let mut text = TextContext::from(skin.text_resources());
             let mut builder = DrawListBuilder::default();
-            TabLarge::new("DECK MICRO", active, skin).paint(&mut builder, &mut text, bounds);
+            tab.paint(&mut builder, &mut text, "DECK MICRO", active, bounds);
             builder.finish()
         };
         let active = draw(true);
@@ -125,7 +126,7 @@ mod tests {
         assert!(matches!(
             label,
             DrawCmd::Text { content, color, .. }
-                if content == "DECK MICRO" && *color == skin.palette.text.into()
+                if content == "DECK MICRO" && *color == skin.palette.text
         ));
         assert!(matches!(
             underline,
@@ -137,12 +138,12 @@ mod tests {
                     y: 31.0,
                 }),
                 color,
-            } if *color == skin.palette.accent.into()
+            } if *color == skin.palette.accent
         ));
         assert!(matches!(
             inactive.commands(),
             [DrawCmd::Text { content, color, .. }]
-                if content == "DECK MICRO" && *color == skin.palette.text_dim.into()
+                if content == "DECK MICRO" && *color == skin.palette.text_dim
         ));
     }
 }

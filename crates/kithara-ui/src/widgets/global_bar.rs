@@ -12,7 +12,7 @@ use iced::{
 
 use crate::{
     builtin,
-    render::{Icon, ReadValue, Reads, Skin, UiEvent, fonts, shaped_text},
+    render::{IcedSkin, Icon, ReadValue, Reads, Skin, UiEvent, fonts, shaped_text},
     widgets::Widget,
 };
 
@@ -45,7 +45,9 @@ impl<'a> Widget<'a> for Brand<'_> {
         .width(Length::Fixed(self.skin.global_bar.brand_width))
         .height(Length::Fixed(self.skin.global_bar.height))
         .align_y(Vertical::Center)
-        .style(move |_| ContainerStyle::default().background(Background::Color(palette.bg_panel)))
+        .style(move |_| {
+            ContainerStyle::default().background(Background::Color(palette.bg_panel.into()))
+        })
         .into()
     }
 }
@@ -84,7 +86,7 @@ impl<'a> Widget<'a> for PresetSelector<'_, '_> {
         let selector_border = self.skin.border(self.skin.global_bar.selector_frame);
         container(container(chips).style(move |_| {
             ContainerStyle::default()
-                .background(Background::Color(palette.line))
+                .background(Background::Color(palette.line.into()))
                 .border(selector_border)
         }))
         .padding([
@@ -94,7 +96,9 @@ impl<'a> Widget<'a> for PresetSelector<'_, '_> {
         .width(Length::Fixed(self.skin.global_bar.selector_width))
         .height(Length::Fixed(self.skin.global_bar.height))
         .center_y(Length::Fill)
-        .style(move |_| ContainerStyle::default().background(Background::Color(palette.bg_panel)))
+        .style(move |_| {
+            ContainerStyle::default().background(Background::Color(palette.bg_panel.into()))
+        })
         .into()
     }
 }
@@ -112,7 +116,7 @@ impl<'a> Widget<'a> for Spacer<'_> {
             .height(Length::Fixed(self.skin.global_bar.height))
             .align_y(Vertical::Center)
             .style(move |_| {
-                ContainerStyle::default().background(Background::Color(palette.bg_panel))
+                ContainerStyle::default().background(Background::Color(palette.bg_panel.into()))
             })
             .into()
     }
@@ -142,11 +146,12 @@ pub(crate) struct SettingsButton<'skin> {
 impl<'a> Widget<'a> for SettingsButton<'_> {
     fn view(self) -> Element<'a, UiEvent> {
         let palette = self.skin.palette;
-        let icon = container(Icon::Gear.view(self.skin.global_bar.gear_size, palette.text_dim))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill);
+        let icon =
+            container(Icon::Gear.view(self.skin.global_bar.gear_size, palette.text_dim.into()))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill);
         button(icon)
             .padding(self.skin.global_bar.settings_padding)
             .width(Length::Fill)
@@ -202,15 +207,19 @@ fn preset_chip_style(
     let border = skin.border(skin.global_bar.chip_frame);
     move |_theme, status| {
         let background = match status {
-            ButtonStatus::Hovered if active => palette.accent_strong,
-            ButtonStatus::Hovered => palette.bg_panel_2,
-            ButtonStatus::Pressed => palette.accent_soft,
-            ButtonStatus::Active | ButtonStatus::Disabled if active => palette.accent,
-            ButtonStatus::Active | ButtonStatus::Disabled => palette.bg_panel,
+            ButtonStatus::Hovered if active => palette.accent_strong.into(),
+            ButtonStatus::Hovered => palette.bg_panel_2.into(),
+            ButtonStatus::Pressed => palette.accent_soft.into(),
+            ButtonStatus::Active | ButtonStatus::Disabled if active => palette.accent.into(),
+            ButtonStatus::Active | ButtonStatus::Disabled => palette.bg_panel.into(),
         };
         ButtonStyle {
             background: Some(Background::Color(background)),
-            text_color: if active { palette.bg } else { palette.text_dim },
+            text_color: if active {
+                palette.bg.into()
+            } else {
+                palette.text_dim.into()
+            },
             border,
             ..ButtonStyle::default()
         }
@@ -222,13 +231,13 @@ fn settings_button_style(skin: &Skin) -> impl Fn(&Theme, ButtonStatus) -> Button
     let border = skin.border(skin.global_bar.settings_frame);
     move |_theme, status| {
         let background = match status {
-            ButtonStatus::Hovered => palette.bg_panel_2,
-            ButtonStatus::Pressed => palette.accent_soft,
-            ButtonStatus::Active | ButtonStatus::Disabled => palette.bg_panel,
+            ButtonStatus::Hovered => palette.bg_panel_2.into(),
+            ButtonStatus::Pressed => palette.accent_soft.into(),
+            ButtonStatus::Active | ButtonStatus::Disabled => palette.bg_panel.into(),
         };
         ButtonStyle {
             background: Some(Background::Color(background)),
-            text_color: palette.text_dim,
+            text_color: palette.text_dim.into(),
             border,
             ..ButtonStyle::default()
         }

@@ -16,7 +16,7 @@ use iced::{
 use crate::{
     atoms::tab::TabLarge,
     backends::IcedBackend,
-    draw::{DrawListBuilder, Rect, replay},
+    draw::{DrawList, DrawListBuilder, Rect, replay},
     render::{ControlAction, InputOwner, ReadValue, Skin, UiEvent, control_event},
     text::TextContext,
 };
@@ -32,7 +32,9 @@ pub(crate) fn tab_large<'a>(
         return Space::new().into();
     };
     let painted: Element<'a, UiEvent> = Painted {
-        tab: TabLarge::new(label, *active, skin),
+        active: *active,
+        label,
+        tab: TabLarge::new(skin),
         skin,
     }
     .into();
@@ -47,8 +49,19 @@ pub(crate) fn tab_large<'a>(
 }
 
 struct Painted<'data, 'skin> {
-    tab: TabLarge<'data, 'skin>,
+    active: bool,
+    label: &'data str,
+    tab: TabLarge,
     skin: &'skin Skin,
+}
+
+impl Painted<'_, '_> {
+    fn draw_list(&self, text: &mut TextContext, bounds: Rect) -> DrawList {
+        let mut builder = DrawListBuilder::default();
+        self.tab
+            .paint(&mut builder, text, self.label, self.active, bounds);
+        builder.finish()
+    }
 }
 
 #[derive(Default)]
@@ -78,7 +91,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Painted<'_, '_> {
         let state = tree.state.downcast_mut::<State>();
         let mut text = state.text.borrow_mut();
         let text = text.get_or_insert_with(|| self.skin.text_resources().into());
-        let (width, height) = self.tab.measure(text);
+        let (width, height) = self.tab.measure(text, self.label);
         layout::Node::new(limits.resolve(
             Length::Shrink,
             Length::Fixed(height),
@@ -106,9 +119,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Painted<'_, '_> {
         let text = text.get_or_insert_with(|| self.skin.text_resources().into());
         renderer.with_translation(Vector::new(bounds.x, bounds.y), |renderer| {
             let mut frame = Frame::new(renderer, bounds.size());
-            let mut builder = DrawListBuilder::default();
-            self.tab.paint(
-                &mut builder,
+            let list = self.draw_list(
                 text,
                 Rect {
                     h: bounds.height,
@@ -118,7 +129,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Painted<'_, '_> {
                 },
             );
             replay(
-                &builder.finish(),
+                &list,
                 &mut IcedBackend::new(&mut frame, self.skin.text_resources()),
             );
             renderer.draw_geometry(frame.into_geometry());
@@ -191,6 +202,41 @@ mod tests {
                 size.width
             );
             assert_eq!(size.height, 28.0);
+        }
+    }
+
+    #[cfg(feature = "masonry-host")]
+    #[kithara::test]
+    fn iced_and_masonry_record_the_same_tab() {
+        let skin = builtin::skin();
+        let bounds = Rect {
+            h: skin.tab_large.height,
+            w: 94.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        for active in [false, true] {
+            let mut text = TextContext::from(skin.text_resources());
+            let iced = Painted {
+                active,
+                label: "DECK MICRO",
+                tab: TabLarge::new(skin),
+                skin,
+            }
+            .draw_list(&mut text, bounds);
+            let mut masonry = crate::render::masonry::Painted::new(
+                TabLarge::new(skin),
+                crate::atoms::painter::Labelled {
+                    active,
+                    label: "DECK MICRO".to_owned(),
+                },
+                skin,
+            );
+
+            assert_eq!(
+                iced,
+                crate::render::masonry::MasonryControl::draw_list(&mut masonry, bounds)
+            );
         }
     }
 }
