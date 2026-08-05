@@ -1,7 +1,4 @@
-use std::sync::{
-    OnceLock,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::OnceLock;
 
 use gloo_timers::future::TimeoutFuture;
 use kithara::{
@@ -24,10 +21,13 @@ use url::Url;
 
 mod test_statics {
     use super::*;
-    /// Guard: init must only run once per page.
-    pub(super) static INITIALIZED: AtomicBool = AtomicBool::new(false);
     pub(super) static FIXTURE_URL: OnceLock<String> = OnceLock::new();
     pub(super) static FIXTURE_JITTER_URL: OnceLock<String> = OnceLock::new();
+}
+
+/// Whether the fixtures this module reads are already published.
+fn fixtures_ready() -> bool {
+    test_statics::FIXTURE_URL.get().is_some() && test_statics::FIXTURE_JITTER_URL.get().is_some()
 }
 
 fn fixture_url() -> Url {
@@ -70,14 +70,19 @@ impl Xorshift64 {
 
 /// One-time initialization: panic hook + tracing.
 ///
-/// Idempotent — safe to call from every test. All tests share one page
-/// in `wasm_bindgen_test`, so init must only run once.
+/// Idempotent — safe to call from every test. All tests share one page in
+/// `wasm_bindgen_test`, so this returns as soon as the fixtures are
+/// published. Keying on the fixtures rather than on a flag raised at entry
+/// lets a run that stopped short be retried by the next test, instead of
+/// being reported eight times over as a missing fixture URL.
 async fn init() {
-    if test_statics::INITIALIZED.swap(true, Ordering::SeqCst) {
+    if fixtures_ready() {
         return;
     }
     console_error_panic_hook::set_once();
-    tracing_wasm::set_as_global_default();
+    // Whichever test the page runs first installs a dispatcher, and the one
+    // this module wants is not worth a panic when it is already there.
+    let _ = tracing_wasm::try_set_as_global_default();
     let helper = TestServerHelper::new().await;
     let bytes_per_second = 44_100.0 * 2.0 * 2.0;
     let base_builder = HlsFixtureBuilder::new()
@@ -139,7 +144,7 @@ async fn create_pipeline_with_url(url: Url) -> Audio<Stream<Hls>> {
         .media_info(wav_info)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config).await.unwrap();
-    audio.preload();
+    audio.preload().expect("start preloading the stress fixture");
     audio
 }
 
