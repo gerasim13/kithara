@@ -81,6 +81,39 @@ impl RunnerManager<'_> {
             &["/usr/bin/safaridriver", "--enable"],
             "enable guest Safari driver",
         )?;
+        // `safaridriver --enable` is the machine half. Safari itself will not
+        // pair with an automation session until the account it runs under also
+        // asks for it, and a fresh guest has never opened Safari: the driver
+        // started and answered `ready`, then every session died on "Request to
+        // pair with an automation session" timing out.
+        for key in ["IncludeDevelopMenu", "AllowRemoteAutomation"] {
+            plain(
+                &[
+                    "/usr/bin/defaults",
+                    "write",
+                    "com.apple.Safari",
+                    key,
+                    "-bool",
+                    "true",
+                ],
+                "allow guest Safari automation",
+            )?;
+        }
+        // A stock install sleeps after a minute. A browser lane is minutes of
+        // waiting on a driver, and a suite is longer still.
+        sudo(
+            &[
+                "/usr/bin/pmset",
+                "-a",
+                "sleep",
+                "0",
+                "displaysleep",
+                "0",
+                "disablesleep",
+                "1",
+            ],
+            "keep the guest awake",
+        )?;
         // A freshly installed macOS has no /usr/local/bin, so `install` into it
         // fails until the directory exists.
         sudo(
@@ -173,6 +206,23 @@ fn create_guest_symlink(source: &Path, target: &Path) -> Result<()> {
 #[cfg(not(unix))]
 fn create_guest_symlink(_source: &Path, _target: &Path) -> Result<()> {
     bail!("macOS guest preparation requires Unix symlinks")
+}
+
+/// Runs as the guest account rather than through `sudo`. Per-user settings
+/// written as root land in root's own domain and the account never sees them.
+fn plain(args: &[&str], label: &str) -> Result<()> {
+    let (program, rest) = args.split_first().context("empty guest command")?;
+    let status = std::process::Command::new(program)
+        .args(rest)
+        .status()
+        .with_context(|| format!("starting {label}"))?;
+    if !status.success() {
+        bail!(
+            "{label} failed with exit code {}",
+            status.code().unwrap_or(-1)
+        );
+    }
+    Ok(())
 }
 
 fn sudo(args: &[&str], label: &str) -> Result<()> {
