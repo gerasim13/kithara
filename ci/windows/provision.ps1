@@ -73,6 +73,22 @@ if ($install.ExitCode -notin 0, 3010) {
     throw "the build tools installer exited with $($install.ExitCode)"
 }
 
+# A vendored native dependency builds through CMake, and the build tools carry
+# one only inside their own developer prompt, where nothing here runs. This is
+# the same version the Linux image pins, and for the same reason: CMake 4
+# refuses any project asking for a minimum below 3.5, which several vendored
+# trees still do.
+Write-Host '==> Installing CMake'
+Get-Verified -Url $settings.cmake_url `
+             -Sha256 $settings.cmake_sha256 `
+             -Path "$root\downloads\cmake.zip"
+Expand-Archive -Path "$root\downloads\cmake.zip" -DestinationPath $root -Force
+$cmake = (Get-ChildItem -Path $root -Directory -Filter 'cmake-*-windows-x86_64').FullName
+[Environment]::SetEnvironmentVariable(
+    'PATH',
+    [Environment]::GetEnvironmentVariable('PATH', 'Machine') + ";$cmake\bin",
+    'Machine')
+
 # The repository's recipes are bash scripts, so `just` on this machine is
 # useless without a shell to run them in. Git for Windows carries one, and the
 # checkout the runner performs wants git anyway.

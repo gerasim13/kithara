@@ -27,6 +27,7 @@ pub(crate) struct CiPins {
     pub(crate) cmake_linux_amd64_sha256: String,
     pub(crate) cmake_linux_arm64_sha256: String,
     pub(crate) cmake_version: String,
+    pub(crate) cmake_windows_amd64_sha256: String,
     pub(crate) expected_xcode_version: String,
     pub(crate) geckodriver_linux_amd64_sha256: String,
     pub(crate) geckodriver_linux_arm64_sha256: String,
@@ -163,8 +164,8 @@ impl CiPins {
                 self.cmake_linux_amd64_sha256.as_str(),
             ),
             (
-                "cmake_linux_arm64_sha256",
-                self.cmake_linux_arm64_sha256.as_str(),
+                "cmake_windows_amd64_sha256",
+                self.cmake_windows_amd64_sha256.as_str(),
             ),
             (
                 "geckodriver_linux_amd64_sha256",

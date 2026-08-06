@@ -60,6 +60,8 @@ struct GuestSettings<'a> {
     /// verifies its signature instead. See ci/windows/provision.ps1.
     build_tools_sha256: &'a str,
     cargo_tools: BTreeMap<&'a str, &'a str>,
+    cmake_sha256: &'a str,
+    cmake_url: String,
     git_sha256: &'a str,
     git_url: String,
     runner_sha256: &'a str,
@@ -368,6 +370,11 @@ fn build_answer_media(
             .iter()
             .map(|tool| Ok((*tool, pins.cargo_tool_version(tool)?)))
             .collect::<Result<_>>()?,
+        cmake_sha256: &pins.cmake_windows_amd64_sha256,
+        cmake_url: format!(
+            "https://github.com/Kitware/CMake/releases/download/v{version}/cmake-{version}-windows-x86_64.zip",
+            version = pins.cmake_version,
+        ),
         git_sha256: &pins.git_windows_sha256,
         git_url: pins.git_windows_url.clone(),
         runner_sha256: &pins.actions_runner_windows_sha256,
@@ -458,6 +465,8 @@ mod tests {
                 .iter()
                 .map(|tool| (*tool, pins.cargo_tool_version(tool).unwrap()))
                 .collect(),
+            cmake_sha256: &pins.cmake_windows_amd64_sha256,
+            cmake_url: String::new(),
             git_sha256: &pins.git_windows_sha256,
             git_url: String::new(),
             runner_sha256: &pins.actions_runner_windows_sha256,
