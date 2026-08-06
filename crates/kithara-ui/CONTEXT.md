@@ -106,6 +106,25 @@ fader remains on its existing canvas painter; its engine-owned variant reuses th
 the interactive program. The crossfader remains on its existing iced path in this slice; the new
 vocabulary does not by itself authorize that separate port.
 
+### What a backend must be able to draw
+
+Every backend states `const CAPS: Caps` once. `Needs::from(&DrawList)` reads what a list actually
+asks for, recursing into clips, and a backend that lacks any of it is given **none of the list**:
+`draw::replay` refuses and logs, and `backends::iced_canvas::replay_ordered` — the iced host's own
+door, which walks the list itself rather than going through `replay` — repeats that check. Refusing
+whole is the contract because painting the rest puts a picture on the screen that no list described:
+a clip-less backend would spill a clip's contents, and a gradient-less one would flatten a ramp to a
+colour appearing nowhere in the document. A backend that overstates `CAPS` therefore paints the
+wrong thing silently; the conformance tests in `backends::conformance` rasterise through the real
+renderers precisely because recorded commands cannot catch that.
+
+Today only one capability differs between hosts: iced 0.14 has no radial gradient at any layer, so
+`IcedBackend::CAPS` sets `radial_gradient: false` and a list holding `Paint::Radial` reaches the
+Vello host only. `style()` answers `None` for such a paint rather than substituting a colour.
+
+Stroke shape travels as `Pen { cap, join, width }`; `impl From<f32> for Pen` means a caller with a
+bare width keeps working, the way `impl From<Rgba> for Paint` does for fills.
+
 `backends::iced_canvas` owns iced translation, glyph-outline filling, and canvas calls.
 `backends::vello` owns Vello translation and scene encoding; the draw list needs no GPU dependency.
 Vello is held at 0.6 because masonry 0.4 hands a widget a `Scene` from that release, and `Scene`
@@ -868,16 +887,16 @@ drawn by `widgets/wheel.rs::WheelSurface`):
 
 `atoms::button::Button` owns button painting. It emits the background, either the uniform rounded
 border or transport seam strips, and the centred label or Lucide glyph into one retained list; both
-the interactive Leaf canvas and paint-only Engine canvas replay that list. Lucide icons cross as
-text because their source is a glyph in the tenth embedded face. An effective `IconSource::Svg`
-cannot cross this seam and remains on the existing iced button adapter as a capability boundary,
-not as an owner-based second rendering. `MicroPrimary` retains its existing forced Play/Pause
-glyph and therefore ignores a declared icon before that capability decision. The hosted gallery
-buttons declare no explicit icons, and the app's SVG reverse-play button remains on its unhosted
-path for the later vector wave.
+the interactive Leaf canvas and paint-only Engine canvas replay that list. An icon reaches the atom
+as `render::Mark`: a Lucide glyph crosses as text because its source is a glyph in the tenth
+embedded face, and authored art crosses as `Geom::Path`, read from its document by `draw::outline`
+into a unit-square `Outline` that `Outline::placed` sizes to the icon box. Both halves stay inside
+the draw list, so neither host reaches a toolkit widget for an icon and no capability predicate
+routes around one. `MicroPrimary` retains its existing forced Play/Pause glyph and therefore
+ignores a declared icon.
 
 `atoms::nav_item::NavItem` likewise owns one retained painting: the selected background, marker
-rectangle, Lucide icon glyph, and mono label. Its canvas remains `Fill` wide and fixes only
+rectangle, icon mark, and mono label. Its canvas remains `Fill` wide and fixes only
 `skin.nav.item_height`, so shaping the two glyph runs never participates in intrinsic layout.
 `TabLarge` is the first base-painted activation control whose size comes from its own text.
 `atoms::tab::TabLarge` shapes the label through `TextContext`; that shaped width is the measurement,
