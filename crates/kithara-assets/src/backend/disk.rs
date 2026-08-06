@@ -17,7 +17,7 @@ use super::AssetDeleter;
 use crate::{
     decorator::{Assets, Capabilities},
     error::{AssetsError, AssetsResult},
-    index::AvailabilityIndex,
+    index::{AvailabilityIndex, PinDurability},
     layout::{ResourceKey, ResourceKeyKind},
     resource::{AcquisitionResult, AssetResourceState, BaseReader, BaseWriter, RequestIdentity},
 };
@@ -76,7 +76,10 @@ impl AssetDeleter for DiskAssetDeleter {
     fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
         delete_asset_dir(&self.root_dir, asset_root).map_err(AssetsError::from)?;
         self.availability.clear_root(asset_root);
-        let pins_result = self.pins.remove(asset_root).map(|_| ());
+        let pins_result = self
+            .pins
+            .remove(asset_root, PinDurability::Durable)
+            .map(|_| ());
         let lru_result = self.lru.remove(asset_root);
         pins_result.and(lru_result)
     }
@@ -486,7 +489,7 @@ mod tests {
         availability.record_commit(&key, 4);
 
         let pins = PinsIndex::ephemeral();
-        pins.add(asset_root).unwrap();
+        pins.add(asset_root, PinDurability::Durable).unwrap();
         let lru = LruIndex::ephemeral();
         lru.touch(asset_root, Some(4)).unwrap();
 

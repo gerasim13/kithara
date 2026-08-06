@@ -3,7 +3,10 @@
 use std::collections::HashSet;
 
 use kithara::{
-    assets::{Assets, AssetsResult, BytePool, index::PinsIndex as InnerPinsIndex},
+    assets::{
+        Assets, AssetsResult, BytePool,
+        index::{PinDurability, PinsIndex as InnerPinsIndex},
+    },
     platform::CancelToken,
 };
 
@@ -52,10 +55,10 @@ impl PinsIndex {
     pub fn store(&self, pins: &HashSet<String>) -> AssetsResult<()> {
         let current = self.inner.snapshot();
         for outdated in current.difference(pins) {
-            self.inner.remove(outdated)?;
+            self.inner.remove(outdated, PinDurability::Durable)?;
         }
         for added in pins.difference(&current) {
-            self.inner.add(added)?;
+            self.inner.add(added, PinDurability::Durable)?;
         }
         self.inner.flush()
     }

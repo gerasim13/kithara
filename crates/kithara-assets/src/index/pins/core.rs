@@ -2,7 +2,6 @@
 
 use std::{
     collections::HashSet,
-    num::NonZeroU32,
     sync::{OnceLock, Weak, atomic::AtomicBool},
 };
 
@@ -14,10 +13,71 @@ use crate::{
     index::persistence::{FlushHub, Flushable, flush_sync},
 };
 
+/// How long a pin has to outlive its holder.
+///
+/// Both kinds bar eviction identically while they are held; they differ
+/// only in whether the pin reaches `_index/pins.bin`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PinDurability {
+    /// Outlives the process: an unfinished write whose bytes a later run
+    /// must not evict before the download completes. Persisted.
+    Durable,
+    /// Bounded by the process: a reader holding committed bytes open.
+    /// In-memory only — a pin that cannot survive a restart has nothing
+    /// to say to the next one.
+    Local,
+}
+
+/// Per-root pin refcounts, split by what each pin has to outlive.
+///
+/// Fields are open to `disk`, which picks the persisted subset by `durable`
+/// and seeds hydrated roots.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct PinCounts {
+    pub(super) durable: u32,
+    pub(super) local: u32,
+}
+
+impl PinCounts {
+    fn is_pinned(self) -> bool {
+        self.durable > 0 || self.local > 0
+    }
+
+    /// Add one pin; `true` when the durable count went 0→1.
+    fn pin(&mut self, durability: PinDurability) -> bool {
+        match durability {
+            PinDurability::Durable => {
+                self.durable = self.durable.saturating_add(1);
+                self.durable == 1
+            }
+            PinDurability::Local => {
+                self.local = self.local.saturating_add(1);
+                false
+            }
+        }
+    }
+
+    /// Drop one pin; `true` when the durable count went 1→0.
+    fn unpin(&mut self, durability: PinDurability) -> bool {
+        match durability {
+            PinDurability::Durable => {
+                let held = self.durable;
+                self.durable = held.saturating_sub(1);
+                held == 1
+            }
+            PinDurability::Local => {
+                self.local = self.local.saturating_sub(1);
+                false
+            }
+        }
+    }
+}
+
 /// In-memory + best-effort disk-backed index of pinned `asset_root`s.
 ///
-/// Refcounted per root, lazily persisted, flushed only on 0→1 / 1→0
-/// transitions. See the crate `CONTEXT.md` "Pins index" for the contract.
+/// Refcounted per root, lazily persisted. Only durable pins reach disk,
+/// and only on their 0→1 / 1→0 transitions. See the crate `CONTEXT.md`
+/// "Pins index" for the contract.
 #[derive(Clone)]
 pub struct PinsIndex {
     pub(super) inner: Arc<PinsInner>,
@@ -35,7 +95,7 @@ impl std::fmt::Debug for PinsIndex {
 
 pub(super) struct PinsInner {
     pub(super) dirty: AtomicBool,
-    pub(super) pins: DashMap<String, NonZeroU32>,
+    pub(super) pins: DashMap<String, PinCounts>,
     /// Set by [`FlushHub::register`]. While `None`, mutators flush
     /// synchronously through [`Flushable::flush`] directly — matches
     /// the historical inline-flush path for ad-hoc tests that never
@@ -49,31 +109,30 @@ impl PinsIndex {
     /// Pin an `asset_root`. Returns `true` on the 0→1 transition (newly pinned),
     /// `false` when an existing pin's refcount was incremented.
     ///
-    /// Disk-backed instances flush the snapshot synchronously on the 0→1
-    /// transition only; intermediate refcount increments stay in-memory.
-    /// An `Err` here means the pin is **not** durable. Ephemeral instances
-    /// cannot fail.
+    /// Disk-backed instances flush the snapshot synchronously when the
+    /// **durable** count goes 0→1; every other increment, and every
+    /// [`PinDurability::Local`] pin, stays in memory. An `Err` here means the
+    /// pin is **not** durable. Ephemeral instances cannot fail.
     ///
     /// # Errors
     ///
     /// Propagates the underlying [`AssetsError`](crate::error::AssetsError)
     /// when the on-disk flush fails (mmap open, atomic swap, rkyv serialise).
-    pub fn add(&self, asset_root: &str) -> AssetsResult<bool> {
-        let transitioned = match self.inner.pins.entry(asset_root.to_string()) {
-            Entry::Occupied(mut e) => {
-                let count = e.get_mut();
-                *count = count.saturating_add(1);
-                false
-            }
-            Entry::Vacant(e) => {
-                e.insert(NonZeroU32::MIN);
-                true
-            }
-        };
-        if transitioned {
+    pub fn add(&self, asset_root: &str, durability: PinDurability) -> AssetsResult<bool> {
+        let (newly_pinned, persisted_set_changed) =
+            match self.inner.pins.entry(asset_root.to_string()) {
+                Entry::Occupied(mut e) => (false, e.get_mut().pin(durability)),
+                Entry::Vacant(e) => {
+                    let mut counts = PinCounts::default();
+                    let changed = counts.pin(durability);
+                    e.insert(counts);
+                    (true, changed)
+                }
+            };
+        if persisted_set_changed {
             flush_sync(&*self.inner)?;
         }
-        Ok(transitioned)
+        Ok(newly_pinned)
     }
 
     /// Bind this index to a [`FlushHub`] for coordinated flushing.
@@ -126,18 +185,19 @@ impl PinsIndex {
     /// removed), `false` when the refcount was decremented but the asset
     /// is still pinned by other holders or was not pinned at all.
     ///
-    /// Same durability contract as [`Self::add`]: flush only fires on
-    /// 1→0 transitions.
+    /// Same durability contract as [`Self::add`]: the flush fires when the
+    /// durable count goes 1→0, not when the last reader lets go.
     ///
     /// # Errors
     ///
     /// Propagates the underlying [`AssetsError`](crate::error::AssetsError)
     /// when the on-disk flush fails.
-    pub fn remove(&self, asset_root: &str) -> AssetsResult<bool> {
-        let transitioned =
+    pub fn remove(&self, asset_root: &str, durability: PinDurability) -> AssetsResult<bool> {
+        let mut persisted_set_changed = false;
+        let fully_unpinned =
             if let Entry::Occupied(mut e) = self.inner.pins.entry(asset_root.to_string()) {
-                if let Some(decremented) = NonZeroU32::new(e.get().get() - 1) {
-                    *e.get_mut() = decremented;
+                persisted_set_changed = e.get_mut().unpin(durability);
+                if e.get().is_pinned() {
                     false
                 } else {
                     e.remove();
@@ -146,13 +206,15 @@ impl PinsIndex {
             } else {
                 false
             };
-        if transitioned {
+        if persisted_set_changed {
             flush_sync(&*self.inner)?;
         }
-        Ok(transitioned)
+        Ok(fully_unpinned)
     }
 
-    /// Snapshot of currently pinned `asset_root`s (keys only — refcount stays internal).
+    /// Snapshot of currently pinned `asset_root`s (keys only — refcounts stay
+    /// internal). Covers both durabilities: eviction must respect a reader's
+    /// pin exactly as it respects a writer's.
     #[must_use]
     pub fn snapshot(&self) -> HashSet<String> {
         self.inner.pins.iter().map(|r| r.key().clone()).collect()
@@ -164,7 +226,7 @@ impl Flushable for PinsInner {
         &self.dirty
     }
 
-    /// Serialise the current pinned set to `_index/pins.bin`. Refcount
+    /// Serialise the durable pinned set to `_index/pins.bin`. Refcount
     /// is collapsed to mere set-membership on disk — the persisted
     /// format only records keys.
     fn flush(&self) -> AssetsResult<()> {
@@ -214,95 +276,162 @@ mod tests {
         );
     }
 
+    fn disk_index(path: &std::path::Path) -> PinsIndex {
+        PinsIndex::with_persist_at(
+            path.to_path_buf(),
+            CancelToken::never(),
+            &BytePool::default(),
+        )
+    }
+
     #[kithara::test(timeout(Duration::from_secs(1)))]
-    fn add_and_remove_persist_immediately() {
+    fn durable_pin_persists_immediately() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
-        let idx =
-            PinsIndex::with_persist_at(path.clone(), CancelToken::never(), &BytePool::default());
+        let idx = disk_index(&path);
 
-        assert!(idx.add("asset_a").unwrap(), "first pin reports 0→1");
-        assert!(path.exists(), "first add must materialise pins.bin");
-        assert!(idx.add("asset_b").unwrap(), "fresh root reports 0→1");
-        assert!(
-            !idx.add("asset_a").unwrap(),
-            "second add of same root reports refcount-only update"
-        );
-        assert!(idx.contains("asset_a"));
-        assert_eq!(idx.snapshot().len(), 2);
+        idx.add("asset_a", PinDurability::Durable).unwrap();
+
+        assert!(path.exists(), "a durable pin must materialise pins.bin");
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn durable_unpin_persists_immediately() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("pins.bin");
+        let idx = disk_index(&path);
+        idx.add("asset_a", PinDurability::Durable).unwrap();
+
+        idx.remove("asset_a", PinDurability::Durable).unwrap();
 
         assert!(
-            !idx.remove("asset_a").unwrap(),
-            "decrement-only remove must not signal a 1→0 transition"
+            !disk_index(&path).contains("asset_a"),
+            "dropping the last durable pin must reach disk at once"
         );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn local_pin_stays_off_disk() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("pins.bin");
+        let idx = disk_index(&path);
+
+        idx.add("asset_a", PinDurability::Local).unwrap();
+
+        assert!(
+            !path.exists(),
+            "a pin that cannot outlive the process must not be written"
+        );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn local_pin_bars_eviction_like_any_other() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("pins.bin");
+        let idx = disk_index(&path);
+
+        idx.add("asset_a", PinDurability::Local).unwrap();
+
+        assert!(
+            idx.snapshot().contains("asset_a"),
+            "eviction reads the in-memory set, which covers local pins"
+        );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn a_local_pin_alongside_a_durable_one_leaves_the_file_alone() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("pins.bin");
+        let idx = disk_index(&path);
+        idx.add("asset_a", PinDurability::Durable).unwrap();
+        let written = fs::read(&path).unwrap();
+
+        idx.add("asset_a", PinDurability::Local).unwrap();
+        idx.remove("asset_a", PinDurability::Local).unwrap();
+
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            written,
+            "local pin churn must not rewrite the durable set"
+        );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn a_live_local_pin_survives_the_durable_one() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("pins.bin");
+        let idx = disk_index(&path);
+        idx.add("asset_a", PinDurability::Durable).unwrap();
+        idx.add("asset_a", PinDurability::Local).unwrap();
+
+        idx.remove("asset_a", PinDurability::Durable).unwrap();
+
         assert!(
             idx.contains("asset_a"),
-            "still pinned by remaining refcount"
+            "the reader still holds the asset even once the writer is done"
         );
-        assert!(idx.remove("asset_a").unwrap());
-        assert!(!idx.contains("asset_a"));
-        assert!(!idx.remove("asset_a").unwrap());
-        assert!(idx.contains("asset_b"));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn refcount_coalesces_repeated_pins() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
-        let idx =
-            PinsIndex::with_persist_at(path.clone(), CancelToken::never(), &BytePool::default());
+        let idx = disk_index(&path);
 
-        let transitions_in = (0..5).filter(|_| idx.add("hot_asset").unwrap()).count();
+        let transitions_in = (0..5)
+            .filter(|_| idx.add("hot_asset", PinDurability::Durable).unwrap())
+            .count();
         assert_eq!(transitions_in, 1, "only the 0→1 transition counts");
-        assert!(idx.contains("hot_asset"));
 
-        let transitions_out = (0..4).filter(|_| idx.remove("hot_asset").unwrap()).count();
+        let transitions_out = (0..4)
+            .filter(|_| idx.remove("hot_asset", PinDurability::Durable).unwrap())
+            .count();
         assert_eq!(transitions_out, 0, "intermediate decrements stay in-memory");
-        assert!(idx.contains("hot_asset"), "refcount=1 keeps the pin alive");
-
-        assert!(idx.remove("hot_asset").unwrap());
-        assert!(!idx.contains("hot_asset"));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn concurrent_leases_keep_pin_alive() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
-        let idx = PinsIndex::with_persist_at(path, CancelToken::never(), &BytePool::default());
+        let idx = disk_index(&path);
 
-        idx.add("playlist").unwrap();
-        idx.add("playlist").unwrap();
+        idx.add("playlist", PinDurability::Durable).unwrap();
+        idx.add("playlist", PinDurability::Durable).unwrap();
 
-        assert!(!idx.remove("playlist").unwrap());
+        assert!(!idx.remove("playlist", PinDurability::Durable).unwrap());
         assert!(idx.contains("playlist"));
 
-        assert!(idx.remove("playlist").unwrap());
+        assert!(idx.remove("playlist", PinDurability::Durable).unwrap());
         assert!(!idx.contains("playlist"));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
-    fn persistence_across_instances() {
+    fn durable_pins_persist_across_instances() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("shared.bin");
+        disk_index(&path)
+            .add("persistent_asset", PinDurability::Durable)
+            .unwrap();
 
-        {
-            let idx = PinsIndex::with_persist_at(
-                path.clone(),
-                CancelToken::never(),
-                &BytePool::default(),
-            );
-            idx.add("persistent_asset").unwrap();
-        }
+        let reopened = disk_index(&path);
 
-        {
-            let idx = PinsIndex::with_persist_at(
-                path.clone(),
-                CancelToken::never(),
-                &BytePool::default(),
-            );
-            assert!(idx.contains("persistent_asset"));
-            assert_eq!(idx.snapshot().len(), 1);
-        }
+        assert!(reopened.contains("persistent_asset"));
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn local_pins_do_not_cross_instances() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("shared.bin");
+        disk_index(&path)
+            .add("reader_only", PinDurability::Local)
+            .unwrap();
+
+        let reopened = disk_index(&path);
+
+        assert!(
+            !reopened.contains("reader_only"),
+            "a process-local pin must not be resurrected as a phantom"
+        );
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -318,7 +447,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn ephemeral_index_does_not_persist() {
         let idx = PinsIndex::ephemeral();
-        assert!(idx.add("asset").unwrap());
+        assert!(idx.add("asset", PinDurability::Durable).unwrap());
         assert!(idx.contains("asset"));
     }
 
@@ -329,10 +458,10 @@ mod tests {
         let idx = PinsIndex::with_persist_at(path, CancelToken::never(), &BytePool::default());
         let idx2 = idx.clone();
 
-        idx.add("from_first").unwrap();
+        idx.add("from_first", PinDurability::Durable).unwrap();
         assert!(idx2.contains("from_first"));
 
-        idx2.remove("from_first").unwrap();
+        idx2.remove("from_first", PinDurability::Durable).unwrap();
         assert!(!idx.contains("from_first"));
     }
 }
