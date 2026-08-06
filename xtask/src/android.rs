@@ -470,10 +470,7 @@ fn run_app(
 /// not found` — the connected suite installed, started, and could not load a
 /// single test.
 fn copy_cxx_runtime(jni_dir: &Path, targets: &[(&str, &str)]) -> Result<()> {
-    let ndk = ndk_root()?;
-    // The NDK ships one host toolchain per platform and Apple silicon reads
-    // the same `darwin-x86_64` directory as Intel does.
-    let sysroot = ndk.join("toolchains/llvm/prebuilt/darwin-x86_64/sysroot/usr/lib");
+    let sysroot = ndk_prebuilt()?.join("sysroot/usr/lib");
     for (target, abi) in targets {
         let source = sysroot.join(target).join("libc++_shared.so");
         if !source.is_file() {
@@ -486,6 +483,31 @@ fn copy_cxx_runtime(jni_dir: &Path, targets: &[(&str, &str)]) -> Result<()> {
     }
     println!("==> Bundled the NDK C++ runtime");
     Ok(())
+}
+
+/// The toolchain inside the NDK. An NDK is downloaded for one machine and
+/// carries one, under a name that describes that machine rather than the
+/// architecture it builds for — Apple silicon reads `darwin-x86_64` as Intel
+/// does. Reading the directory rather than naming it keeps the answer right on
+/// a machine nobody had in mind.
+fn ndk_prebuilt() -> Result<PathBuf> {
+    let prebuilt = ndk_root()?.join("toolchains/llvm/prebuilt");
+    let mut hosts = fs::read_dir(&prebuilt)
+        .with_context(|| format!("reading the NDK toolchains in {}", prebuilt.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_dir());
+    let host = hosts
+        .next()
+        .with_context(|| format!("the NDK at {} carries no toolchain", prebuilt.display()))?;
+    if let Some(extra) = hosts.next() {
+        bail!(
+            "the NDK at {} carries more than one toolchain: {} and {}",
+            prebuilt.display(),
+            host.display(),
+            extra.display()
+        );
+    }
+    Ok(host)
 }
 
 fn ndk_root() -> Result<PathBuf> {
