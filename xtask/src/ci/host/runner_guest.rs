@@ -6,7 +6,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 
 use super::runners::{RunnerManager, path_text, require_macos};
-use crate::ci::config::{LANE_CONFIG_DIR, LANE_CONFIG_PATH};
+use crate::ci::config::{LANE_CONFIG_DIR, MAC_CONFIG_PATH};
 
 /// Where the guest reaches the shared directories.
 ///
@@ -139,8 +139,8 @@ impl RunnerManager<'_> {
                 "install",
                 "-m",
                 "0644",
-                path_text(&shared.join("kithara-tools/host.toml"))?,
-                LANE_CONFIG_PATH,
+                path_text(&shared.join("kithara-tools/mac-host.toml"))?,
+                MAC_CONFIG_PATH,
             ],
             "install guest host profile",
         )?;

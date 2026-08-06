@@ -32,6 +32,18 @@ function Get-Verified {
     }
 }
 
+# The evaluation licence runs ninety days from the image's own release, not
+# from installation, and Microsoft leaves an image published far longer than
+# that. An expired Windows shuts itself down every hour, which ends a test run
+# mid-suite; rearming restarts the period. It is allowed a handful of times,
+# which outlives any guest this rebuilds.
+$rearm = Start-Process -FilePath 'cscript.exe' `
+                       -ArgumentList '//nologo', "$env:SystemRoot\System32\slmgr.vbs", '/rearm' `
+                       -Wait -PassThru -NoNewWindow
+if ($rearm.ExitCode -ne 0) {
+    Write-Warning "could not rearm the evaluation licence (exit $($rearm.ExitCode))"
+}
+
 $settings = Get-Content 'E:\guest.json' -Raw | ConvertFrom-Json
 $root = 'C:\kithara-ci'
 New-Item -ItemType Directory -Force -Path $root, "$root\downloads" | Out-Null

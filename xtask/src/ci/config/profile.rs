@@ -40,7 +40,7 @@ pub(crate) fn workspace_root() -> &'static Path {
 #[cfg(test)]
 pub(crate) fn fixture() -> CiConfig {
     CiConfig::load(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-host.toml"),
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-mac-host.toml"),
         &workspace_root().join(".config/ci-pins.toml"),
     )
     .expect("fixture host profile and tracked pins must load")
@@ -64,7 +64,7 @@ mod tests {
     fn installed_copies_round_trip_through_toml() {
         let config = fixture();
         let directory = tempfile::tempdir().unwrap();
-        let host = directory.path().join("host.toml");
+        let host = directory.path().join("mac-host.toml");
         let pins = directory.path().join("pins.toml");
         config.host.write(&host).unwrap();
         config.pins.write(&pins).unwrap();

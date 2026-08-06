@@ -378,7 +378,7 @@ impl RunnerManager<'_> {
             &format!(
                 "export PATH={path}; \
                  {shared}/kithara-tools/kithara-ci ci host --config \
-                 {shared}/kithara-tools/host.toml --pins \
+                 {shared}/kithara-tools/mac-host.toml --pins \
                  {shared}/kithara-tools/pins.toml guest-prepare"
             ),
             "prepare CI macOS guest",

@@ -116,7 +116,7 @@ mod tests {
             "ci",
             "host",
             "--config",
-            "/etc/kithara-ci/host.toml",
+            "/etc/kithara-ci/mac-host.toml",
         ];
         argv.extend_from_slice(command);
         Cli::try_parse_from(argv)
