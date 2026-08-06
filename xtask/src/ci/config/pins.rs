@@ -31,6 +31,10 @@ pub(crate) struct CiPins {
     pub(crate) geckodriver_linux_amd64_sha256: String,
     pub(crate) geckodriver_linux_arm64_sha256: String,
     pub(crate) geckodriver_version: String,
+    pub(crate) git_windows_sha256: String,
+    /// Named in full rather than built from a version: the release tag and the
+    /// file name spell the same version differently.
+    pub(crate) git_windows_url: String,
     pub(crate) gitlab_runner_version: String,
     pub(crate) gitleaks_linux_amd64_sha256: String,
     pub(crate) gitleaks_linux_arm64_sha256: String,
@@ -166,6 +170,7 @@ impl CiPins {
                 "geckodriver_linux_amd64_sha256",
                 self.geckodriver_linux_amd64_sha256.as_str(),
             ),
+            ("git_windows_sha256", self.git_windows_sha256.as_str()),
             (
                 "geckodriver_linux_arm64_sha256",
                 self.geckodriver_linux_arm64_sha256.as_str(),

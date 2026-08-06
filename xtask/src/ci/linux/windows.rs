@@ -22,6 +22,9 @@ struct GuestSources {
     /// ten-second attempts. A guest that has just been given its credentials
     /// signs in, enrols, and starts the runner, which takes minutes.
     enrolment_attempts: u32,
+    /// How long to watch for the power-off that ends the first install phase,
+    /// in thirty-second attempts.
+    first_phase_attempts: u32,
     answer_file: &'static str,
     provision_script: &'static str,
     build_tools_url: &'static str,
@@ -31,6 +34,7 @@ struct GuestSources {
 const GUEST: GuestSources = GuestSources {
     prompt_attempts: 40,
     enrolment_attempts: 60,
+    first_phase_attempts: 60,
     answer_file: "ci/windows/autounattend.xml",
     provision_script: "ci/windows/provision.ps1",
     build_tools_url: "https://aka.ms/vs/17/release/vs_buildtools.exe",
@@ -56,6 +60,8 @@ struct GuestSettings<'a> {
     /// verifies its signature instead. See ci/windows/provision.ps1.
     build_tools_sha256: &'a str,
     cargo_tools: BTreeMap<&'a str, &'a str>,
+    git_sha256: &'a str,
+    git_url: String,
     runner_sha256: &'a str,
     runner_url: String,
     rustup_sha256: &'a str,
@@ -160,10 +166,33 @@ pub(super) fn install(
         "keep the guest through its install phases",
     )?;
 
+    resume_first_phase(process, &guest.name)?;
+
     info!(
         guest = guest.name,
         "Windows guest created; the unattended install runs on its own from here"
     );
+    Ok(())
+}
+
+/// Start the guest again after the one power-off the edit above cannot cover.
+///
+/// libvirt applies an edited event to a domain's next start, and the power-off
+/// that ends the first install phase comes before any start it could apply to —
+/// so the guest goes down still carrying the setting it was created with, and
+/// stays there. Waiting for that one power-off and starting the guest again is
+/// enough: every later phase is covered by the setting, which is now live.
+fn resume_first_phase(process: &Process, guest: &str) -> Result<()> {
+    for _ in 0..GUEST.first_phase_attempts {
+        thread::sleep(Duration::from_secs(30));
+        let state = process.capture("virsh", &["domstate", guest], "read the guest state")?;
+        if state.trim() == "shut off" {
+            return process.run("virsh", &["start", guest], "resume the install");
+        }
+    }
+    // Setup can also get through its phases on reboots alone, which libvirt
+    // already restarts. Nothing to resume then.
+    info!(guest, "the guest stayed up through its first phase");
     Ok(())
 }
 
@@ -339,6 +368,8 @@ fn build_answer_media(
             .iter()
             .map(|tool| Ok((*tool, pins.cargo_tool_version(tool)?)))
             .collect::<Result<_>>()?,
+        git_sha256: &pins.git_windows_sha256,
+        git_url: pins.git_windows_url.clone(),
         runner_sha256: &pins.actions_runner_windows_sha256,
         runner_url: format!(
             "https://github.com/actions/runner/releases/download/v{version}/actions-runner-win-x64-{version}.zip",
@@ -427,6 +458,8 @@ mod tests {
                 .iter()
                 .map(|tool| (*tool, pins.cargo_tool_version(tool).unwrap()))
                 .collect(),
+            git_sha256: &pins.git_windows_sha256,
+            git_url: String::new(),
             runner_sha256: &pins.actions_runner_windows_sha256,
             runner_url: String::new(),
             rustup_sha256: &pins.rustup_windows_sha256,

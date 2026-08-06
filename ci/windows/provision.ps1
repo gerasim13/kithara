@@ -37,12 +37,18 @@ function Get-Verified {
 # that. An expired Windows shuts itself down every hour, which ends a test run
 # mid-suite; rearming restarts the period. It is allowed a handful of times,
 # which outlives any guest this rebuilds.
+#
+# Whether it worked is reported rather than assumed: an expired Windows shuts
+# itself down on a timer, and a guest that does that mid-suite is worth knowing
+# about before a lane starts blaming the tests.
 $rearm = Start-Process -FilePath 'cscript.exe' `
                        -ArgumentList '//nologo', "$env:SystemRoot\System32\slmgr.vbs", '/rearm' `
                        -Wait -PassThru -NoNewWindow
 if ($rearm.ExitCode -ne 0) {
     Write-Warning "could not rearm the evaluation licence (exit $($rearm.ExitCode))"
 }
+Write-Host '==> Licence state'
+& cscript.exe //nologo "$env:SystemRoot\System32\slmgr.vbs" /dli
 
 $settings = Get-Content 'E:\guest.json' -Raw | ConvertFrom-Json
 $root = 'C:\kithara-ci'
@@ -66,6 +72,25 @@ $install = Start-Process -FilePath "$root\downloads\vs_buildtools.exe" `
 if ($install.ExitCode -notin 0, 3010) {
     throw "the build tools installer exited with $($install.ExitCode)"
 }
+
+# The repository's recipes are bash scripts, so `just` on this machine is
+# useless without a shell to run them in. Git for Windows carries one, and the
+# checkout the runner performs wants git anyway.
+Write-Host '==> Installing Git for Windows'
+Get-Verified -Url $settings.git_url `
+             -Sha256 $settings.git_sha256 `
+             -Path "$root\downloads\git.exe"
+$install = Start-Process -FilePath "$root\downloads\git.exe" `
+                         -ArgumentList '/VERYSILENT', '/NORESTART', '/NOCANCEL', `
+                                       '/SP-', '/SUPPRESSMSGBOXES' `
+                         -Wait -PassThru
+if ($install.ExitCode -ne 0) {
+    throw "the Git installer exited with $($install.ExitCode)"
+}
+[Environment]::SetEnvironmentVariable(
+    'PATH',
+    [Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';C:\Program Files\Git\bin',
+    'Machine')
 
 Write-Host '==> Installing the Rust toolchain'
 Get-Verified -Url $settings.rustup_url `
