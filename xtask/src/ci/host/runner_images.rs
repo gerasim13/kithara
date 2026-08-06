@@ -9,6 +9,7 @@ use super::{
         RunnerManager, Tokens, docker_host, path_text, read_trimmed, require_macos, write_secure,
     },
 };
+use crate::ci::image::linux_build_args;
 
 /// The throwaway VM the macOS lane clones for every job.
 struct JobVm;
@@ -73,7 +74,7 @@ impl RunnerManager<'_> {
                 "--tag",
                 &self.config.pins.linux_image,
             ]);
-            for (name, value) in self.linux_build_args()? {
+            for (name, value) in linux_build_args(&self.config.pins)? {
                 command.arg("--build-arg").arg(format!("{name}={value}"));
             }
             command.arg(path_text(&context)?);
@@ -95,68 +96,6 @@ impl RunnerManager<'_> {
         let cleanup = fs::remove_dir_all(&context)
             .with_context(|| format!("removing Docker build context {}", context.display()));
         result.and(cleanup)
-    }
-
-    fn linux_build_args(&self) -> Result<Vec<(&'static str, &str)>> {
-        let mut args = vec![
-            ("RUST_VERSION", self.config.pins.stable_toolchain.as_str()),
-            (
-                "RUST_BASE_DIGEST",
-                self.config.pins.linux_base_digest.as_str(),
-            ),
-            ("MSRV_TOOLCHAIN", self.config.pins.msrv_toolchain.as_str()),
-            (
-                "NIGHTLY_TOOLCHAIN",
-                self.config.pins.nightly_toolchain.as_str(),
-            ),
-            ("CMAKE_VERSION", self.config.pins.cmake_version.as_str()),
-            (
-                "CMAKE_SHA256",
-                self.config.pins.cmake_linux_arm64_sha256.as_str(),
-            ),
-            (
-                "GECKODRIVER_VERSION",
-                self.config.pins.geckodriver_version.as_str(),
-            ),
-            (
-                "GECKODRIVER_SHA256",
-                self.config.pins.geckodriver_linux_arm64_sha256.as_str(),
-            ),
-            (
-                "GITLEAKS_VERSION",
-                self.config.pins.gitleaks_version.as_str(),
-            ),
-            (
-                "GITLEAKS_SHA256",
-                self.config.pins.gitleaks_linux_arm64_sha256.as_str(),
-            ),
-        ];
-        for (name, tool) in [
-            ("AST_GREP_VERSION", "ast-grep"),
-            ("CARGO_DENY_VERSION", "cargo-deny"),
-            ("CARGO_HACK_VERSION", "cargo-hack"),
-            ("CARGO_LLVM_COV_VERSION", "cargo-llvm-cov"),
-            ("CARGO_MACHETE_VERSION", "cargo-machete"),
-            ("CARGO_MUTANTS_VERSION", "cargo-mutants"),
-            ("CARGO_NEXTEST_VERSION", "cargo-nextest"),
-            ("CARGO_SEMVER_CHECKS_VERSION", "cargo-semver-checks"),
-            ("CARGO_SHEAR_VERSION", "cargo-shear"),
-            ("CARGO_SORT_VERSION", "cargo-sort"),
-            ("JUST_VERSION", "just"),
-            ("MD_FORMATTER_VERSION", "md-formatter"),
-            ("SCCACHE_VERSION", "sccache"),
-            ("SIMILARITY_RS_VERSION", "similarity-rs"),
-            ("TAPLO_CLI_VERSION", "taplo-cli"),
-            ("TIDY_JSON_VERSION", "tidy-json"),
-            ("TRUNK_VERSION", "trunk"),
-            ("TYPOS_CLI_VERSION", "typos-cli"),
-            ("WASM_BINDGEN_CLI_VERSION", "wasm-bindgen-cli"),
-            ("WASM_PACK_VERSION", "wasm-pack"),
-            ("WASM_SLIM_VERSION", "wasm-slim"),
-        ] {
-            args.push((name, self.config.pins.cargo_tool_version(tool)?));
-        }
-        Ok(args)
     }
 
     pub(super) fn smoke_linux(&self) -> Result<()> {
@@ -439,7 +378,7 @@ impl RunnerManager<'_> {
             &format!(
                 "export PATH={path}; \
                  {shared}/kithara-tools/kithara-ci ci host --config \
-                 {shared}/kithara-tools/host.toml --pins \
+                 {shared}/kithara-tools/mac-host.toml --pins \
                  {shared}/kithara-tools/pins.toml guest-prepare"
             ),
             "prepare CI macOS guest",
@@ -555,44 +494,12 @@ fn valid_digest(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
-
     use super::*;
-    use crate::ci::{config::fixture, process::Process};
 
     #[test]
     fn image_digest_is_strict() {
         assert!(valid_digest(&format!("sha256:{}", "a".repeat(64))));
         assert!(!valid_digest(&format!("sha256:{}", "a".repeat(63))));
         assert!(!valid_digest(&format!("md5:{}", "a".repeat(64))));
-    }
-
-    #[test]
-    fn dockerfile_versions_are_owned_by_typed_config() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let config = fixture();
-        let process = Process::new(&root, BTreeMap::new());
-        let manager = RunnerManager::new(&config, &process);
-        let configured = manager
-            .linux_build_args()
-            .unwrap()
-            .into_iter()
-            .map(|(name, _)| name)
-            .collect::<BTreeSet<_>>();
-        let dockerfile = fs::read_to_string(root.join("docker/ci.Dockerfile")).unwrap();
-        let declared = dockerfile
-            .lines()
-            .filter_map(|line| line.strip_prefix("ARG "))
-            .inspect(|argument| {
-                assert!(
-                    !argument.contains('='),
-                    "Docker build argument must not own a default: {argument}"
-                );
-            })
-            .collect::<BTreeSet<_>>();
-        assert_eq!(declared, configured);
     }
 }

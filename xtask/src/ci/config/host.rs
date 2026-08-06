@@ -10,8 +10,10 @@ use serde::{Deserialize, Serialize};
 /// Directory every Unix executor reads the installed host profile from.
 pub(crate) const LANE_CONFIG_DIR: &str = "/etc/kithara-ci";
 
-/// Installed host profile every CI lane reads through `KITHARA_CI_HOST_CONFIG`.
-pub(crate) const LANE_CONFIG_PATH: &str = "/etc/kithara-ci/host.toml";
+/// Installed profile of the Mac mini and the guests it hosts, read through
+/// `KITHARA_CI_HOST_CONFIG`. A Linux machine carries its own; see
+/// [`crate::ci::linux`].
+pub(crate) const MAC_CONFIG_PATH: &str = "/etc/kithara-ci/mac-host.toml";
 
 /// Machine profile of one CI host: volumes, accounts, and installed roots.
 /// It is provisioned per machine and never tracked in the repository; the

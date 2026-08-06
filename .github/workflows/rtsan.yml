@@ -1,0 +1,55 @@
+name: RTSan
+
+# RealtimeSanitizer gate for the audio produce-core.
+#
+# Compiles the player RT path under `-Zsanitizer=realtime --cfg rtsan` and runs
+# the offline-render produce-core lanes without an audio device. Any malloc /
+# lock / syscall reached inside a `#[kithara::rtsan_forbid_blocking]` region
+# (the worker produce-core, kithara-play `process()`) aborts the run unless
+# wrapped by a documented `#[kithara::rtsan_allow_blocking]`.
+#
+# Soak phase: advisory. Flip the lanes to required by dropping
+# `continue-on-error` once they hold green across a soak. The read/seek path is
+# verified kevent/yield-free (wake, on-core seek, and FSM AudioEvent emission
+# are all deferred off the forbid path); see kithara-play/README.md
+# "Real-Time Audio Thread".
+on:
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+concurrency:
+  group: rtsan-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rtsan:
+    name: RTSan ${{ matrix.lane }}
+    # `KITHARA_RUNNER_LABELS` is set only where runners are attached, so a
+    # copy of this repository without them never starts the job.
+    # See .github/workflows/ci.yml.
+    if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    continue-on-error: true
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        lane:
+          - rtsan        # mock decoder (suite_light, fast tripwire)
+          - rtsan-file   # real-decoder file-offline (suite_stress)
+          - rtsan-hls    # real-decoder HLS-offline (suite_stress)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The sanitizer needs the pinned nightly, which the image already carries
+      # and names, so the toolchain stays owned by the reviewed pins.
+      - name: Run RTSan lane
+        env:
+          LANE: ${{ matrix.lane }}
+        run: just test "$LANE"

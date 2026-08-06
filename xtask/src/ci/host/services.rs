@@ -8,7 +8,7 @@ use serde::Deserialize;
 use tracing::info;
 
 use crate::ci::{
-    config::{CiConfig, LANE_CONFIG_DIR, LANE_CONFIG_PATH},
+    config::{CiConfig, LANE_CONFIG_DIR, MAC_CONFIG_PATH},
     process::Process,
 };
 
@@ -25,7 +25,7 @@ pub(super) struct ServiceInstaller<'a> {
 
 impl<'a> ServiceInstaller<'a> {
     const BINARY_NAME: &'static str = "kithara-ci";
-    const HOST_CONFIG_NAME: &'static str = "host.toml";
+    const HOST_CONFIG_NAME: &'static str = "mac-host.toml";
     const PINS_NAME: &'static str = "pins.toml";
 
     pub(super) fn new(config: &'a CiConfig, process: &'a Process) -> Self {
@@ -246,7 +246,7 @@ impl<'a> ServiceInstaller<'a> {
             )?;
         }
         self.install_directory(Path::new(LANE_CONFIG_DIR), "0755", "root")?;
-        self.install_file(&host, Path::new(LANE_CONFIG_PATH), "0644", "root")
+        self.install_file(&host, Path::new(MAC_CONFIG_PATH), "0644", "root")
     }
 
     fn install_maintenance_agents(&self) -> Result<()> {

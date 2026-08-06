@@ -11,6 +11,16 @@ run *ARGS:
 host *ARGS:
     just _xtask ci host "$@"
 
+# Build a pinned CI container image for this machine's architecture.
+[positional-arguments]
+image *ARGS:
+    just _xtask ci image "$@"
+
+# Provision or maintain a Linux CI machine and the runners it serves.
+[positional-arguments]
+linux *ARGS:
+    just _xtask ci linux "$@"
+
 # Reconcile the private GitLab repository with the public GitHub repository.
 [positional-arguments]
 bridge *ARGS:

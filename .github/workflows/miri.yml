@@ -1,0 +1,37 @@
+name: Miri
+
+# Interpret the crates that carry shared state, looking for unsound memory
+# ordering and for undefined behaviour reached through a dependency. Miri runs
+# a program hundreds of times slower than the machine does, so this is a soak
+# rather than a gate.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+concurrency:
+  group: miri-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  miri:
+    name: Interpret the shared-state crates
+    # `KITHARA_RUNNER_LABELS` is set only where runners are attached, so a
+    # copy of this repository without them never starts the job.
+    # See .github/workflows/ci.yml.
+    if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    # Advisory while the selection settles: a crate that turns out to reach an
+    # operation Miri cannot interpret should not read as a defect in the code.
+    continue-on-error: true
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run Miri
+        run: just test miri

@@ -1,0 +1,38 @@
+name: Code Coverage
+
+# Coverage is a report, not a gate, and instrumented runs cost several times a
+# plain one. It is produced on demand and on the default branch rather than for
+# every push.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: Coverage
+    # `KITHARA_RUNNER_LABELS` is set only where runners are attached, so a
+    # copy of this repository without them never starts the job.
+    # See .github/workflows/ci.yml.
+    if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Generate coverage
+        run: just test coverage
+
+      - name: Archive coverage results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 30

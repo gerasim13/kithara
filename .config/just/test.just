@@ -107,6 +107,27 @@ loom-debug FILE *ARGS:
     shift
     LOOM_LOG=trace LOOM_LOCATION=1 LOOM_CHECKPOINT_INTERVAL=1 LOOM_CHECKPOINT_FILE="$file" exec just test run --loom=on --no-capture "$@"
 
+# Interpret the crates that carry shared state under Miri.
+#
+# Miri cannot enter a C library, and every `unsafe` block that matters here is
+# an FFI call into one, so the selection is the crates that hold atomics and
+# forbid `unsafe` themselves. What it can still answer is whether their memory
+# ordering is sound and whether a dependency reaches undefined behaviour.
+[positional-arguments]
+miri *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Isolation hides the clock and the environment, which every one of these
+    # crates reads on the way to its first assertion.
+    MIRIFLAGS="-Zmiri-disable-isolation" \
+        cargo +nightly miri test --lib \
+        -p kithara-abr \
+        -p kithara-bufpool \
+        -p kithara-events \
+        -p kithara-queue \
+        -p kithara-stream \
+        "$@"
+
 # The sanitizer needs `-Zbuild-std`, which needs the `rust-src` component. The
 # repository pins a nightly and installs the component into that one; plain
 # `nightly` is whatever the host last downloaded and usually has no `rust-src`.

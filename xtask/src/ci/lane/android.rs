@@ -15,7 +15,8 @@ pub(crate) fn build(process: &Process) -> Result<()> {
 /// only mean anything while the device this job booted is still alive, and a
 /// device left running would poison the next Android job on the host.
 pub(crate) fn test(process: &Process, config: &CiConfig) -> Result<()> {
-    require_os("macos", "Android emulator")?;
+    // The emulator runs wherever the machine's own architecture matches the
+    // guest's; on a host that has to emulate a foreign one it is merely slow.
     process.require_tools(&["adb", "cargo", "emulator", "java", "just", "sccache"])?;
     // The libraries and the bindings come from the job that builds them. This
     // one holds the emulator and the measured group while the suite runs, and
@@ -26,39 +27,13 @@ pub(crate) fn test(process: &Process, config: &CiConfig) -> Result<()> {
         &[
             "platform",
             "android",
-            "run",
+            "test",
             "--avd",
             &config.pins.android_avd,
             "--skip-build",
         ],
-        "Android emulator launch",
-    )?;
-
-    // Named relative to the working directory the command is given, not to the
-    // checkout: a relative program path is resolved against the child's own
-    // directory, so `android/gradlew` from inside `android` looked for
-    // `android/android/gradlew` and the lane failed to start after the
-    // emulator had been up for twenty minutes.
-    let mut gradle = process.command_in(
-        if cfg!(windows) {
-            "./gradlew.bat"
-        } else {
-            "./gradlew"
-        },
-        "android",
-    );
-    gradle.args([
-        ":lib:connectedDebugAndroidTest",
-        "-x",
-        "generateKitharaFfi",
-        "--no-daemon",
-    ]);
-    let tests = process.run_command(&mut gradle, "Android connected tests");
-    let cleanup = process.run("adb", &["emu", "kill"], "Android emulator shutdown");
-    match (tests, cleanup) {
-        (Err(error), _) => Err(error),
-        (Ok(()), cleanup) => cleanup,
-    }
+        "Android connected tests",
+    )
 }
 
 fn native_build(process: &Process) -> Result<()> {

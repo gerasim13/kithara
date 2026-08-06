@@ -33,7 +33,7 @@ variables:
   # hide part of it. Keep the two build directories; everything else is still
   # removed, so a job never sees a file the commit does not carry.
   GIT_CLEAN_FLAGS: -ffdx -e target -e target-flash-off
-  KITHARA_CI_HOST_CONFIG: /etc/kithara-ci/host.toml
+  KITHARA_CI_HOST_CONFIG: /etc/kithara-ci/mac-host.toml
   RUST_BACKTRACE: "1"
   SCCACHE_CACHE_SIZE: 50G
 

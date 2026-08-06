@@ -12,11 +12,14 @@ ARG CARGO_NEXTEST_VERSION
 ARG CARGO_SEMVER_CHECKS_VERSION
 ARG CARGO_SHEAR_VERSION
 ARG CARGO_SORT_VERSION
-ARG CMAKE_SHA256
+ARG CMAKE_AMD64_SHA256
+ARG CMAKE_ARM64_SHA256
 ARG CMAKE_VERSION
-ARG GECKODRIVER_SHA256
+ARG GECKODRIVER_AMD64_SHA256
+ARG GECKODRIVER_ARM64_SHA256
 ARG GECKODRIVER_VERSION
-ARG GITLEAKS_SHA256
+ARG GITLEAKS_AMD64_SHA256
+ARG GITLEAKS_ARM64_SHA256
 ARG GITLEAKS_VERSION
 ARG JUST_VERSION
 ARG MD_FORMATTER_VERSION
@@ -32,11 +35,16 @@ ARG WASM_BINDGEN_CLI_VERSION
 ARG WASM_PACK_VERSION
 ARG WASM_SLIM_VERSION
 
+ENV KITHARA_MSRV_TOOLCHAIN=${MSRV_TOOLCHAIN}
 ENV KITHARA_NIGHTLY_TOOLCHAIN=${NIGHTLY_TOOLCHAIN}
 ENV WASM_SLIM_TOOLCHAIN=${NIGHTLY_TOOLCHAIN}
 
+# Firefox alone is 76 megabytes, which does not fit the two-minute default
+# transfer timeout on a slow mirror, and a build that reaches that point has
+# already spent minutes to be told the connection failed.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates chromium chromium-driver curl firefox-esr git \
+    -o Acquire::Retries=5 -o Acquire::http::Timeout=600 \
+    ca-certificates chromium chromium-driver curl ffmpeg firefox-esr git \
     clang libclang-dev lld pkg-config \
     bubblewrap socat ripgrep nodejs npm \
     libasound2-dev libdbus-1-dev libssl-dev \
@@ -48,26 +56,41 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # newer, so `cargo check` could not build the workspace here at all. The 3.31
 # series is deliberate: CMake 4 refuses any project that asks for a minimum
 # below 3.5, which several vendored trees still do.
-RUN curl -fsSL \
+RUN case "$(dpkg --print-architecture)" in \
+      amd64) slice=x86_64; sum="${CMAKE_AMD64_SHA256}" ;; \
+      arm64) slice=aarch64; sum="${CMAKE_ARM64_SHA256}" ;; \
+      *) echo "unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL \
       -o /tmp/cmake.tar.gz \
-      "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-aarch64.tar.gz" \
- && echo "${CMAKE_SHA256}  /tmp/cmake.tar.gz" | sha256sum -c - \
+      "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-${slice}.tar.gz" \
+ && echo "${sum}  /tmp/cmake.tar.gz" | sha256sum -c - \
  && tar -xzf /tmp/cmake.tar.gz -C /usr/local --strip-components=1 \
  && rm /tmp/cmake.tar.gz \
  && cmake --version
 
-RUN curl -fsSL \
+RUN case "$(dpkg --print-architecture)" in \
+      amd64) slice=linux64; sum="${GECKODRIVER_AMD64_SHA256}" ;; \
+      arm64) slice=linux-aarch64; sum="${GECKODRIVER_ARM64_SHA256}" ;; \
+      *) echo "unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL \
       -o /tmp/geckodriver.tar.gz \
-      "https://github.com/mozilla/geckodriver/releases/download/v${GECKODRIVER_VERSION}/geckodriver-v${GECKODRIVER_VERSION}-linux-aarch64.tar.gz" \
- && echo "${GECKODRIVER_SHA256}  /tmp/geckodriver.tar.gz" | sha256sum -c - \
+      "https://github.com/mozilla/geckodriver/releases/download/v${GECKODRIVER_VERSION}/geckodriver-v${GECKODRIVER_VERSION}-${slice}.tar.gz" \
+ && echo "${sum}  /tmp/geckodriver.tar.gz" | sha256sum -c - \
  && tar -xzf /tmp/geckodriver.tar.gz -C /usr/local/bin geckodriver \
  && rm /tmp/geckodriver.tar.gz \
  && ln -s /usr/bin/firefox-esr /usr/local/bin/firefox
 
-RUN curl -fsSL \
+RUN case "$(dpkg --print-architecture)" in \
+      amd64) slice=x64; sum="${GITLEAKS_AMD64_SHA256}" ;; \
+      arm64) slice=arm64; sum="${GITLEAKS_ARM64_SHA256}" ;; \
+      *) echo "unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL \
       -o /tmp/gitleaks.tar.gz \
-      "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_arm64.tar.gz" \
- && echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c - \
+      "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${slice}.tar.gz" \
+ && echo "${sum}  /tmp/gitleaks.tar.gz" | sha256sum -c - \
  && tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks \
  && rm /tmp/gitleaks.tar.gz
 
@@ -78,11 +101,15 @@ RUN curl -fsSL \
 RUN rustup component add clippy llvm-tools-preview rust-src rustfmt \
  && rustup toolchain install "${NIGHTLY_TOOLCHAIN}" \
       --profile minimal \
+      --component miri \
       --component rust-src \
       --component rustfmt \
  && rustup toolchain install "${MSRV_TOOLCHAIN}" --profile minimal \
  && rustup target add wasm32-unknown-unknown \
- && rustup target add wasm32-unknown-unknown --toolchain "${NIGHTLY_TOOLCHAIN}"
+ && rustup target add wasm32-unknown-unknown --toolchain "${NIGHTLY_TOOLCHAIN}" \
+ && host="$(rustc -vV | sed -n 's/^host: //p')" \
+ && ln -s "${RUSTUP_HOME}/toolchains/${NIGHTLY_TOOLCHAIN}-${host}" \
+      "${RUSTUP_HOME}/toolchains/nightly-${host}"
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
