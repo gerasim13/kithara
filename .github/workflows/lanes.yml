@@ -1,0 +1,54 @@
+name: Lanes
+
+# The test lanes `.config/xtask.toml` declares that no gate runs. Each answers
+# a question the workspace lane cannot: a resampler shape, a loom model, a
+# regression suite, a browser.
+on:
+  workflow_call:
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: one configured lane, or all of them
+        required: false
+        default: all
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+concurrency:
+  group: lanes-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  lanes:
+    name: ${{ matrix.lane }}
+    if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 180
+    # One red lane must not hide the others: this run exists to enumerate.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        lane:
+          - integration-regressions
+          - loom
+          - e2e
+          - e2e-fused
+          - e2e-glide
+          - selenium
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run the lane
+        if: >-
+          github.event.inputs.lane == ''
+          || github.event.inputs.lane == 'all'
+          || github.event.inputs.lane == matrix.lane
+        env:
+          LANE: ${{ matrix.lane }}
+        run: CARGO_TARGET_DIR="target-lane-$LANE" just test run "--lane=$LANE"

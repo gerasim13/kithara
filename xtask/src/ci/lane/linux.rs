@@ -59,6 +59,17 @@ pub(crate) fn test(process: &Process) -> Result<()> {
     process.run_command(&mut command, "Linux tests")
 }
 
+/// One lane configured in `.config/xtask.toml`. Two build jobs for the same
+/// reason `test` keeps to two.
+pub(crate) fn configured(process: &Process, lane: &str) -> Result<()> {
+    preflight(process)?;
+    let mut command = process.command("just");
+    command
+        .env("CARGO_BUILD_JOBS", "2")
+        .args(["test", "run", &format!("--lane={lane}")]);
+    process.run_command(&mut command, &format!("Linux {lane} lane"))
+}
+
 pub(crate) fn coverage(process: &Process) -> Result<()> {
     preflight(process)?;
     let mut command = process.command("just");

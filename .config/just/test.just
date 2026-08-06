@@ -30,7 +30,7 @@ coverage:
     set -uo pipefail
     OUTPUT_DIR="${COVERAGE_OUTPUT_DIR:-./coverage}"
     COVERAGE_MIN="${COVERAGE_MIN:-80}"
-    IGNORE_REGEX='(tests/|examples/|benches/)'
+    IGNORE_REGEX='(tests/|examples/|benches/|xtask/)'
     COBERTURA="$OUTPUT_DIR/cobertura.xml"
     LCOV="$OUTPUT_DIR/lcov.info"
     mkdir -p "$OUTPUT_DIR"
