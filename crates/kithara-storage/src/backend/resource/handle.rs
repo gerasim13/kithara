@@ -177,6 +177,14 @@ impl<D: DriverIo> Resource<Active, D> {
             /// cannot finalize.
             #[call(commit_inner)]
             pub(crate) fn commit_in_place(&self, final_len: Option<u64>) -> StorageResult<()>;
+            /// Commit in place without publishing a snapshot, for a decorator
+            /// that republishes the resource itself right after.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled, failed, or the backend
+            /// cannot flush.
+            #[call(seal_inner)]
+            pub(crate) fn seal_in_place(&self, final_len: Option<u64>) -> StorageResult<()>;
             /// Mark the resource as failed, consuming the writer.
             #[call(fail_inner)]
             pub fn fail(self, reason: String);
