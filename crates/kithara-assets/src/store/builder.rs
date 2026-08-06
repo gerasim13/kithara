@@ -320,7 +320,7 @@ mod tests {
     use super::*;
     use crate::{
         AssetResourceState, AssetWriter, AssetsError, ResourceAcquisition, ResourceKey,
-        decorator::{Assets, Capabilities},
+        decorator::Capabilities,
         resource::{AcquisitionResult, ReadSide, WriteSide},
     };
 
