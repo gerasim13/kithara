@@ -4,13 +4,14 @@
 use std::sync::Weak;
 use std::{
     ops::Range,
+    path::PathBuf,
     sync::{
         OnceLock,
         atomic::{AtomicBool, Ordering},
     },
 };
 
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_storage::AvailabilityObserver;
 use rangemap::RangeSet;
@@ -79,6 +80,10 @@ pub(super) struct InnerIndex {
     /// just marks `dirty` so the next call to
     /// [`AvailabilityIndex::flush`] writes the snapshot.
     pub(super) hub: OnceLock<Arc<FlushHub>>,
+    /// Committed files still awaiting their durability barrier. The flush
+    /// forces these down before writing the snapshot, so a resource is
+    /// never named in the manifest ahead of its own bytes.
+    pub(super) pending_durability: DashSet<PathBuf>,
     /// Disk-backed persist target. Set once via
     /// `AvailabilityIndex::enable_persistence`; later flushes reuse
     /// the cached `Atomic<MmapDriver>` handle. Native only.
@@ -96,6 +101,7 @@ impl AvailabilityIndex {
                 persist: OnceLock::new(),
                 hub: OnceLock::new(),
                 dirty: AtomicBool::new(false),
+                pending_durability: DashSet::new(),
             }),
         }
     }
@@ -210,6 +216,13 @@ impl AvailabilityIndex {
         }
     }
 
+    /// Enqueue a committed file for the durability barrier. The manifest
+    /// flush pays one barrier per queued file and only then names them, so
+    /// the download path never waits on the medium itself.
+    pub(crate) fn record_pending_durability(&self, path: PathBuf) {
+        self.inner.pending_durability.insert(path);
+    }
+
     pub(crate) fn record_commit(&self, key: &ResourceKey, final_len: u64) {
         let (root, path) = Self::resolve_refs(key);
         let arc = self.insert_or_get_entry(root, path);
@@ -296,16 +309,36 @@ impl std::fmt::Debug for AvailabilityIndex {
 pub(crate) struct ScopedAvailabilityObserver {
     index: AvailabilityIndex,
     key: ResourceKey,
+    /// Backing file, when the resource has one whose durability the index
+    /// must force before naming it in the manifest.
+    path: Option<PathBuf>,
 }
 
 impl ScopedAvailabilityObserver {
     pub(crate) fn new(key: ResourceKey, index: AvailabilityIndex) -> Arc<Self> {
-        Arc::new(Self { index, key })
+        Arc::new(Self {
+            index,
+            key,
+            path: None,
+        })
+    }
+
+    /// Observer for a file-backed resource: its commit enqueues the file for
+    /// the durability barrier the manifest flush pays on everyone's behalf.
+    pub(crate) fn for_file(key: ResourceKey, index: AvailabilityIndex, path: PathBuf) -> Arc<Self> {
+        Arc::new(Self {
+            index,
+            key,
+            path: Some(path),
+        })
     }
 }
 
 impl AvailabilityObserver for ScopedAvailabilityObserver {
     fn on_commit(&self, final_len: u64) {
+        if let Some(path) = self.path.as_ref() {
+            self.index.record_pending_durability(path.clone());
+        }
         self.index.record_commit(&self.key, final_len);
     }
 

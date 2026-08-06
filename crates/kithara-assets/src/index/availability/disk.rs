@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::BTreeMap, path::PathBuf, sync::OnceLock};
+use std::{collections::BTreeMap, fs, path::PathBuf, sync::OnceLock};
 
 use dashmap::DashMap;
 use kithara_platform::{
@@ -122,9 +122,34 @@ impl InnerIndex {
         let Some(p) = self.persist.get() else {
             return Ok(());
         };
+        // Order is the whole point: force the committed files onto the medium
+        // first, then name them. Reversed, a crash could leave the manifest
+        // vouching for bytes that never landed.
+        self.barrier_pending_files();
         let atomic = init_atomic(&p.res, &p.path, &p.cancel)?;
         write_aggregate(self, atomic, durable)?;
         Ok(())
+    }
+
+    /// `sync_data` every committed file queued since the last flush. A file
+    /// that vanished (evicted, or its asset deleted) simply drops out — the
+    /// manifest entry goes with it.
+    fn barrier_pending_files(&self) {
+        let queued: Vec<PathBuf> = self
+            .pending_durability
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect();
+        for path in queued {
+            self.pending_durability.remove(&path);
+            let synced = fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .and_then(|file| file.sync_data());
+            if let Err(error) = synced {
+                tracing::debug!(?path, %error, "availability: durability barrier skipped");
+            }
+        }
     }
 }
 

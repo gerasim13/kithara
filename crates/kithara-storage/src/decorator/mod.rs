@@ -7,4 +7,4 @@ pub(crate) mod atomic;
 pub(crate) mod chunked;
 
 pub use atomic::Atomic;
-pub use chunked::{AtomicChunked, OpenIntent};
+pub use chunked::{AtomicChunked, Barrier, OpenIntent};
