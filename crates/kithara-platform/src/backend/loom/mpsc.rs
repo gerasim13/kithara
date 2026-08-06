@@ -40,10 +40,10 @@ impl<T> Receiver<T> {
 
     delegate::delegate! {
         to self {
-            #[expr(core::iter::from_fn(|| $.ok()))]
+            #[expr(core::iter::from_fn(move || $.ok()))]
             #[call(recv)]
             pub fn iter(&self) -> impl Iterator<Item = T> + '_;
-            #[expr(core::iter::from_fn(|| $.ok()))]
+            #[expr(core::iter::from_fn(move || $.ok()))]
             #[call(try_recv)]
             pub fn try_iter(&self) -> impl Iterator<Item = T> + '_;
         }
