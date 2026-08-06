@@ -300,14 +300,15 @@ mod tests {
         atoms::{
             design::{cell::Cell, meter::Meter, status_dot::StatusDot, swatch::Swatch},
             meter::StereoMeter,
-            painter::CellData,
+            nav_item::NavItem,
+            painter::{CellData, NavData},
             toggle::Binary,
             vu::VerticalVu,
         },
         builtin,
         module::Tone,
         render::{
-            StereoLevels,
+            Icon, StereoLevels,
             masonry::{MasonryControl, Painted},
         },
         skin::ColorRole,
@@ -459,6 +460,41 @@ mod tests {
         }
     }
 
+    /// Both kinds of icon, on both hosts. The authored one is here because it
+    /// used to leave the draw list for an iced widget, which left the retained
+    /// host with nothing to paint at all.
+    #[kithara::test]
+    fn iced_and_masonry_record_the_same_nav_item() {
+        let skin = builtin::skin();
+        let bounds = Rect {
+            h: 30.0,
+            w: 198.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        for icon in [Icon::Play, Icon::Zvuk] {
+            let mark = icon
+                .mark()
+                .unwrap_or_else(|| panic!("{icon:?} must have a mark"));
+            for active in [false, true] {
+                let data = || NavData {
+                    active,
+                    label: "BUTTONS".to_owned(),
+                    mark,
+                };
+                let iced = Paint::new(NavItem::new(skin), data(), skin)
+                    .draw_list(&PaintState::default(), bounds);
+                let mut masonry = Painted::new(NavItem::new(skin), data(), skin);
+
+                assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+                assert!(
+                    iced.commands().len() >= 4,
+                    "{icon:?} must draw its icon alongside the rest"
+                );
+            }
+        }
+    }
+
     #[kithara::test]
     fn iced_and_masonry_record_the_same_stereo_meter() {
         let skin = builtin::skin();
@@ -473,6 +509,64 @@ mod tests {
         let mut masonry = Painted::new(StereoMeter::new(skin), LEVELS, skin);
 
         assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+    }
+}
+
+/// What a press on the shared adapter means, for every control that grips one.
+#[cfg(test)]
+mod pressed {
+    use iced::{Point, event, mouse, window::RedrawRequest};
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        atoms::{nav_item::NavItem, painter::NavData},
+        builtin,
+        render::{ControlAction, Icon},
+    };
+
+    /// One pin for every `Grip::Press` control rather than one per control:
+    /// what a press publishes is the adapter's answer, not the painter's.
+    #[kithara::test]
+    fn a_press_inside_the_bounds_publishes_an_activation() {
+        let skin = builtin::skin();
+        let mark = Icon::Play
+            .mark()
+            .unwrap_or_else(|| panic!("the play icon must have a mark"));
+        let paint = Paint::new(
+            NavItem::new(skin),
+            NavData {
+                active: false,
+                label: "BUTTONS".to_owned(),
+                mark,
+            },
+            skin,
+        );
+        let gesture = Gesture::press("gallery/buttons/item", paint);
+        let bounds = Rectangle {
+            height: 30.0,
+            width: 198.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let cursor = Cursor::Available(Point::new(99.0, 15.0));
+        let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+        let mut state = GestureState::default();
+
+        let action = canvas::Program::update(&gesture, &mut state, &press, bounds, cursor)
+            .unwrap_or_else(|| panic!("a press inside the bounds must publish"));
+
+        assert_eq!(
+            action.into_inner(),
+            (
+                Some(UiEvent::Control {
+                    path: "gallery/buttons/item".to_owned(),
+                    action: ControlAction::Activate,
+                }),
+                RedrawRequest::Wait,
+                event::Status::Captured,
+            )
+        );
     }
 }
 

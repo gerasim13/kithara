@@ -20,3 +20,45 @@ impl Control for NavItem {
         SizeSpec::new(Dim::Fill, Dim::Fixed(skin.nav.item_height))
     }
 }
+
+#[cfg(feature = "render")]
+mod host {
+    use super::NavItem;
+    use crate::{
+        atoms::{nav_item::NavItem as Face, painter::NavData},
+        compile::CompiledUi,
+        render::{
+            ReadValue, Skin,
+            controls::{Draws, Grip},
+            document_icon,
+        },
+    };
+
+    impl Draws for NavItem {
+        type Painter = Face;
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(skin)
+        }
+
+        /// A rail item is nothing without the page it points at, so an item
+        /// whose endpoint has not said which page is current draws nothing —
+        /// and neither does one whose art could not be read.
+        fn data(&self, value: Option<&ReadValue<'_>>, ui: &CompiledUi) -> Option<NavData> {
+            let (Some(ReadValue::Bool(active)), Some(mark)) =
+                (value, document_icon(self.icon).mark())
+            else {
+                return None;
+            };
+            Some(NavData {
+                active: *active,
+                label: ui.resolve(self.label).to_owned(),
+                mark,
+            })
+        }
+
+        fn grip(&self) -> Grip {
+            Grip::Press
+        }
+    }
+}

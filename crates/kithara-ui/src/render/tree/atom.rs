@@ -162,17 +162,6 @@ fn glyph_tone(
     active_tone(color, active_color, active).map(|role| skin.color(role))
 }
 
-pub(super) fn nav_item<'a>(
-    path: &'a str,
-    label: &'a str,
-    icon: IconName,
-    value: Option<&ReadValue<'_>>,
-    skin: &'a Skin,
-    owner: InputOwner,
-) -> Element<'a, UiEvent> {
-    crate::render::controls::nav_item(path, label, document_icon(icon), value, skin, owner)
-}
-
 pub(super) fn tab_large<'a>(
     path: &'a str,
     label: &'a str,

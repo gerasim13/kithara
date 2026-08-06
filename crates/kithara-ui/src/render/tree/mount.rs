@@ -1,7 +1,7 @@
 use iced::{alignment::Horizontal, widget::Space};
 
 use super::{
-    atom::{crossfader, fader, glyph, knob, nav_item, readout, segmented, select, tab_large},
+    atom::{crossfader, fader, glyph, knob, readout, segmented, select, tab_large},
     geometry::Rendered,
     panel::{context_bar, deck_summary, time, track_list, tree, vis},
     read_flag, wave_zoom,
@@ -144,14 +144,7 @@ impl ViewControl for mount::Glyph<'_> {
 
 impl ViewControl for mount::NavItem {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(nav_item(
-            cx.path,
-            cx.ui.resolve(self.label),
-            self.icon,
-            cx.value,
-            cx.skin,
-            cx.owner,
-        ))
+        painted(self, cx)
     }
 }
 

@@ -1537,6 +1537,36 @@ mod tests {
         .unwrap_or_else(|error| panic!("gallery nav fixture must compile: {error}"))
     }
 
+    /// A nav item outside any hosted subtree. Every one the repository ships is
+    /// inside one, so this is the only way the item's own grip is what answers
+    /// a press.
+    fn compiled_leaf_nav_item() -> CompiledUi {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "layout.klayout.ron",
+            r#"(schema: "kithara.layout", version: 1, id: "nav-leaf-host",
+                root: Module(instance: "nav", source: "nav-leaf.kmodule.ron"))"#,
+        );
+        resolver.insert(
+            "nav-leaf.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "nav-leaf",
+                root: NavItem(
+                    id: "item",
+                    label: "BUTTONS",
+                    icon: "Play",
+                    read: Model(id: "mock.toggle.off"),
+                ))"#,
+        );
+        compile(
+            "layout.klayout.ron",
+            &resolver,
+            &Registry::default(),
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap_or_else(|error| panic!("the leaf nav fixture must compile: {error}"))
+    }
+
     fn compiled_overview_row() -> CompiledUi {
         let mut resolver = MemResolver::default();
         resolver.insert(
@@ -4235,6 +4265,49 @@ mod tests {
             messages,
             [UiEvent::Control {
                 path: "gallery/buttons/item".to_owned(),
+                action: ControlAction::Activate,
+            }]
+        );
+    }
+
+    /// Outside a hosted subtree the item answers for itself, through the grip
+    /// it declares. Nothing else reaches that arm: every nav item the
+    /// repository ships is hosted, so the engine answers all of them.
+    #[kithara::test]
+    fn a_leaf_nav_item_publishes_an_activation_of_its_own() {
+        let ui = compiled_leaf_nav_item();
+        let reads = FixtureReads::default();
+        let renderer = headless_renderer();
+        let viewport = Size::new(198.0, 30.0);
+        let mut element =
+            super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let mut tree = Tree::new(element.as_widget());
+        assert_eq!(host_count(&tree), 0, "a leaf nav item owns no engine");
+
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            Layout::new(&node),
+            Cursor::Available(Point::new(99.0, 15.0)),
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(viewport),
+        );
+        drop(shell);
+
+        assert_eq!(
+            messages,
+            [UiEvent::Control {
+                path: "nav/item".to_owned(),
                 action: ControlAction::Activate,
             }]
         );

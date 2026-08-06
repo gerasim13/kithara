@@ -13,7 +13,7 @@ use crate::{
         vu::VerticalVu,
     },
     draw::{DrawListBuilder, Rect},
-    render::StereoLevels,
+    render::{Mark, StereoLevels},
     text::TextContext,
 };
 
@@ -59,8 +59,20 @@ impl ControlPainter for Chip {
     }
 }
 
+/// What a nav item is handed each frame: its word, its state, and the mark it
+/// shows beside them.
+///
+/// The mark travels with the word rather than with the skin because reading an
+/// authored icon can fail, and a control whose art cannot be read draws nothing
+/// at all rather than a row with a hole in it.
+pub(crate) struct NavData {
+    pub(crate) active: bool,
+    pub(crate) label: String,
+    pub(crate) mark: Mark,
+}
+
 impl ControlPainter for NavItem {
-    type Data = Labelled;
+    type Data = NavData;
 
     fn draw(
         &self,
@@ -70,7 +82,7 @@ impl ControlPainter for NavItem {
         bounds: Rect,
         _state: VisualState,
     ) {
-        self.paint(list, text, &data.label, data.active, bounds);
+        self.paint(list, text, data, bounds);
     }
 }
 

@@ -204,7 +204,7 @@ mod flags {
             button::{Button, ButtonConfig, ButtonLabel},
             chip::Chip,
             nav_item::NavItem,
-            painter::{ButtonData, Labelled},
+            painter::{ButtonData, Labelled, NavData},
             tab::TabLarge,
         },
         builtin,
@@ -244,7 +244,15 @@ mod flags {
             ),
             (
                 "NavItem",
-                Box::new(Painted::new(NavItem::new(mark, skin), labelled(), skin)),
+                Box::new(Painted::new(
+                    NavItem::new(skin),
+                    NavData {
+                        active: false,
+                        label: "MIXER".to_owned(),
+                        mark,
+                    },
+                    skin,
+                )),
             ),
             (
                 "TabLarge",
@@ -363,7 +371,7 @@ impl Retained for Chip {
 
 impl Retained for NavItem {
     fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
-        set_labelled(data, value)
+        set_bool(&mut data.active, value)
     }
 }
 

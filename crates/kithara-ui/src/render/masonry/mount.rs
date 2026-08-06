@@ -17,7 +17,6 @@ use crate::{
     atoms::{
         button::{Button, ButtonConfig, ButtonLabel},
         design::{crossfader::Crossfader, fader::Fader},
-        nav_item::NavItem,
         painter::{ButtonData, FaderData, Labelled},
         tab::TabLarge,
     },
@@ -334,25 +333,7 @@ impl NodeControl for mount::NavItem {
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        let value = cx
-            .read
-            .and_then(|binding| resolve(host.reads, binding, host.ui));
-        let (Some(mark), Some(ReadValue::Bool(active))) = (document_icon(self.icon).mark(), value)
-        else {
-            return host.empty(cx.declared);
-        };
-        let item = Painted::new(
-            NavItem::new(mark, host.skin),
-            Labelled {
-                active,
-                label: host.ui.resolve(self.label).to_owned(),
-            },
-            host.skin,
-        );
-        host.control_leaf(
-            host.owned(item, cx.owner, cx.path, Painted::interactive),
-            cx.declared,
-        )
+        painted(self, host, cx)
     }
 }
 
