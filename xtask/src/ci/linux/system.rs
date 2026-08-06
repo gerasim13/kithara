@@ -50,11 +50,7 @@ pub(super) fn bootstrap(process: &Process, host: &LinuxHost) -> Result<()> {
         )?;
     }
 
-    for volume in [
-        "kithara-ci-cargo-registry",
-        "kithara-ci-cargo-git",
-        "kithara-ci-target",
-    ] {
+    for volume in ["kithara-ci-cargo-home", "kithara-ci-target"] {
         process.run(
             "docker",
             &["volume", "create", volume],

@@ -21,17 +21,15 @@ ARG ACTIONS_RUNNER_VERSION
 # reached through `PATH`, which already names the image's `bin`, so only the
 # mutable state moves.
 #
-# The host mounts a cache volume over three of these paths. Docker creates a
-# mount point the image does not have, and creates it owned by root, so they
-# are declared here: an empty volume mounted over a directory that exists
-# inherits that directory's owner.
+# The host mounts a cache volume over the cargo home and over the target
+# directory. Docker creates a mount point the image does not have, and creates
+# it owned by root, so both are declared here: an empty volume mounted over a
+# directory that exists inherits that directory's owner.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libicu72 \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --create-home --shell /bin/bash runner \
- && install -d -o runner -g runner \
-      /runner /cache/target \
-      /home/runner/.cargo /home/runner/.cargo/git /home/runner/.cargo/registry
+ && install -d -o runner -g runner /runner /cache/target /home/runner/.cargo
 
 ENV CARGO_HOME=/home/runner/.cargo
 

@@ -59,6 +59,11 @@ pub(super) fn install(
 
 /// The runner takes one job and exits, the container goes with it, and systemd
 /// starts the next one. Nothing survives a job except the caches.
+///
+/// The cargo home is mounted whole rather than as its registry and its git
+/// checkouts separately: cargo guards both with a lock file kept beside them,
+/// and jobs on this machine run at the same time. Mounting the data without
+/// the lock leaves two of them unpacking one crate into one directory.
 fn unit(host: &LinuxHost, runner: &LinuxRunner, pins: &CiPins, executable: &str) -> Result<String> {
     let mut unit = String::new();
     writeln!(
@@ -91,8 +96,7 @@ fn unit(host: &LinuxHost, runner: &LinuxRunner, pins: &CiPins, executable: &str)
          --security-opt no-new-privileges \
          --env-file {env_file} \
          --env CARGO_TARGET_DIR=/cache/target \
-         --mount type=volume,source=kithara-ci-cargo-registry,target=/home/runner/.cargo/registry \
-         --mount type=volume,source=kithara-ci-cargo-git,target=/home/runner/.cargo/git \
+         --mount type=volume,source=kithara-ci-cargo-home,target=/home/runner/.cargo \
          --mount type=volume,source=kithara-ci-target,target=/cache/target",
         name = runner.name,
         network = host.network,
