@@ -13,7 +13,7 @@ pub(crate) use crate::{
     SeekOutcome, ServiceClass, StretchControls,
     pipeline::{
         config::create_effects,
-        consumer::ConsumerPhase,
+        consumer::{ConsumerPhase, FailureSource},
         fetch::EpochValidator,
         parts::SourceParts,
         rebuild::port::RebuildRuntime,

@@ -394,6 +394,38 @@ pub enum SessionEvent {
     },
 }
 
+/// Facts committed by the session transport owner.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum TransportEvent {
+    TempoCommitted {
+        beats_per_minute: f64,
+        revision: u64,
+    },
+    PlayStateCommitted {
+        playing: bool,
+        revision: u64,
+    },
+    SeekCommitted {
+        position_beats: f64,
+        revision: u64,
+    },
+    Failed {
+        revision: Option<u64>,
+        reason: String,
+    },
+}
+
+/// Audible movement through a track's beat map.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PlaybackDirection {
+    /// Session beats advance toward higher track beats.
+    #[default]
+    Forward,
+    /// Session beats advance toward lower track beats.
+    Reverse,
+}
+
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum DjEvent {

@@ -1,29 +1,76 @@
-deep:nightly:
-  extends: .macos-job
+.deep-job:
+  extends:
+    - .macos-job
+    - .rules-nightly
+    - .measured
   stage: deep
-  timeout: 180 minutes
-  needs:
-    - windows:nightly
+  needs: []
+
+deep:rtsan:
+  extends: .deep-job
+  timeout: 120 minutes
   script:
-    - just ci run deep
-  rules:
-    - if: $KITHARA_PIPELINE_KIND == "nightly"
+    - just ci run deep-rtsan
+
+deep:perf:
+  extends: .deep-job
+  timeout: 90 minutes
+  script:
+    - just ci run deep-perf
   artifacts:
     when: always
     expire_in: 30 days
     paths:
       - perf-results.txt
+
+deep:bench:
+  extends: .deep-job
+  timeout: 120 minutes
+  script:
+    - just ci run deep-bench
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
       - bench-results.txt
       - target/criterion/
 
-deep:weekly:
-  extends: .linux-job
+.deps-job:
+  extends:
+    - .linux-job
+    - .rules-weekly
   stage: deep
+  needs: []
+
+deps:deny:
+  extends: .deps-job
+  timeout: 30 minutes
+  script:
+    - just ci run deps-deny
+
+deps:unused:
+  extends: .deps-job
+  timeout: 30 minutes
+  script:
+    - just ci run deps-unused
+
+deps:features:
+  extends: .deps-job
+  timeout: 3 hours
+  script:
+    - just ci run deps-features
+
+deps:semver:
+  extends: .deps-job
+  timeout: 60 minutes
+  script:
+    - just ci run deps-semver
+
+deps:mutants:
+  extends: .deps-job
   timeout: 6 hours
   script:
-    - just ci run weekly
-  rules:
-    - if: $KITHARA_PIPELINE_KIND == "weekly"
+    - just ci run mutants
   artifacts:
     when: always
     expire_in: 30 days

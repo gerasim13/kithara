@@ -9,7 +9,10 @@ use std::{
 use anyhow::{Context, Result, bail};
 use kithara_devtools::Ctx;
 
-use super::{config::CiConfig, run::Lane};
+use super::{
+    config::CiConfig,
+    run::{CacheGroup, Lane},
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CacheTrust {
@@ -51,6 +54,7 @@ pub(crate) struct CiEnvironment {
 impl CiEnvironment {
     pub(crate) fn prepare(ctx: &Ctx, config: &CiConfig, lane: Lane) -> Result<Self> {
         config.validate()?;
+        raise_open_file_limit()?;
         let home = env::var_os("HOME")
             .or_else(|| env::var_os("USERPROFILE"))
             .map(PathBuf::from)
@@ -69,12 +73,10 @@ impl CiEnvironment {
         fs::create_dir_all(&shared_root)
             .with_context(|| format!("creating CI cache root {}", shared_root.display()))?;
 
-        let used_bytes = used_bytes(&shared_root)?;
-        if is_ci() && used_bytes >= config.host.reject_bytes {
-            bail!(
-                "CI volume uses {used_bytes} bytes; new jobs are blocked at {} bytes",
-                config.host.reject_bytes
-            );
+        let free_bytes = free_bytes(&shared_root)?;
+        let required_free = config.host.free_bytes_for_a_job();
+        if is_ci() && free_bytes < required_free {
+            bail!("the CI cache has {free_bytes} bytes free; a job needs {required_free} bytes");
         }
 
         let trust = CacheTrust::from_environment()?;
@@ -90,7 +92,7 @@ impl CiEnvironment {
         let project_root =
             env::var_os("CI_PROJECT_DIR").map_or_else(|| ctx.root.clone(), PathBuf::from);
         let target = project_root.join("target");
-        let temp = project_root.join(".ci-tmp");
+        let temp = scratch_root().join(trust.as_str());
 
         for directory in [
             &cache_root,
@@ -128,7 +130,16 @@ impl CiEnvironment {
             &config.pins.nightly_toolchain,
         );
         insert(&mut vars, "npm_config_cache", npm_cache);
-        insert(&mut vars, "RUSTC_WRAPPER", "sccache");
+        // Everywhere but Windows. `ffmpeg-sys-next` declares a `--cfg` for
+        // every library version it knows, which is thousands of them, and the
+        // command Cargo builds for it passes what Windows accepts. Cargo hands
+        // that to the wrapper through a response file; sccache expands it and
+        // spawns the compiler with the arguments themselves, which does not
+        // fit: `failed to spawn rustc.exe: The filename or extension is too
+        // long. (os error 206)`. The cache is worth less than the lane.
+        if !cfg!(windows) {
+            insert(&mut vars, "RUSTC_WRAPPER", "sccache");
+        }
         insert(
             &mut vars,
             "RUSTUP_HOME",
@@ -189,17 +200,53 @@ impl Drop for CiEnvironment {
     }
 }
 
+/// Scratch space answers to three constraints at once. It sits outside the
+/// checkout, or tools that walk the working tree — the architecture reporter,
+/// for one — trip over the temporary copies they just created. It stays short,
+/// because macOS caps Unix socket paths at `SUN_LEN` and the suite binds
+/// sockets here. And it lives on local storage: the macOS guest reaches the
+/// shared cache over virtiofs, which cannot bind a socket at all.
+fn scratch_root() -> PathBuf {
+    PathBuf::from("/tmp/kithara-ci")
+}
+
+/// The integration suite opens far more files across its cache and segment
+/// fixtures than the 256 descriptor soft limit a macOS session starts with.
+/// The lane raises its own ceiling so every executor gets the same budget.
+const OPEN_FILES: u64 = 65536;
+
+#[cfg(unix)]
+fn raise_open_file_limit() -> Result<()> {
+    use nix::sys::resource::{Resource, getrlimit, setrlimit};
+
+    let (soft, hard) =
+        getrlimit(Resource::RLIMIT_NOFILE).context("reading the file descriptor limit")?;
+    let target = hard.min(OPEN_FILES);
+    if soft >= target {
+        return Ok(());
+    }
+    setrlimit(Resource::RLIMIT_NOFILE, target, hard)
+        .context("raising the file descriptor limit")?;
+    Ok(())
+}
+
+/// Windows hands out handles from a pool and has no per-process ceiling to
+/// lift, so the suite already gets the budget the Unix executors have to ask
+/// for.
+#[cfg(not(unix))]
+fn raise_open_file_limit() -> Result<()> {
+    Ok(())
+}
+
 fn shared_root(config: &CiConfig, lane: Lane) -> PathBuf {
     if let Some(root) = env::var_os("KITHARA_CI_CACHE_ROOT") {
         return PathBuf::from(root);
     }
-    match lane {
-        Lane::Apple | Lane::Deep | Lane::ReleaseApple => config.host.cache_root_cilicon.clone(),
-        Lane::Linux | Lane::Web | Lane::Weekly => config.host.cache_root_linux.clone(),
-        Lane::Windows => config.host.cache_root_windows.clone(),
-        Lane::Android | Lane::ReleaseAndroid | Lane::ReleasePublish => {
-            config.host.host_root.join("cache")
-        }
+    match lane.cache_group() {
+        CacheGroup::Macos => config.host.cache_root_macos.clone(),
+        CacheGroup::Linux => config.host.cache_root_linux.clone(),
+        CacheGroup::Windows => config.host.cache_root_windows.clone(),
+        CacheGroup::Host => config.host.host_root.join("cache"),
     }
 }
 
@@ -207,12 +254,17 @@ fn is_ci() -> bool {
     env::var_os("CI").is_some_and(|value| !value.is_empty())
 }
 
-fn used_bytes(path: &Path) -> Result<u64> {
-    let total = fs4::total_space(path)
-        .with_context(|| format!("reading total space for {}", path.display()))?;
-    let available = fs4::available_space(path)
-        .with_context(|| format!("reading available space for {}", path.display()))?;
-    Ok(total.saturating_sub(available))
+/// How much room the cache still has. A job reads this through whatever the
+/// executor mounted the cache with — a virtiofs share into an ephemeral macOS
+/// guest, a bind mount into a container — and those report the filesystem
+/// backing the share, which is the host's whole disk rather than the CI volume.
+/// Free space survives that translation and still answers the question a job
+/// asks; occupancy does not, and comparing the host's disk against a threshold
+/// sized for the CI volume rejected every macOS job while the volume was barely
+/// half full.
+fn free_bytes(path: &Path) -> Result<u64> {
+    fs4::available_space(path)
+        .with_context(|| format!("reading available space for {}", path.display()))
 }
 
 fn set_path(vars: &mut BTreeMap<OsString, OsString>, home: &Path, config: &CiConfig) -> Result<()> {

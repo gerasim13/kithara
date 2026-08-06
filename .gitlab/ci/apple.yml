@@ -1,19 +1,37 @@
-apple:required:
-  extends: .macos-job
+.apple-job:
+  extends:
+    - .macos-job
+    - .rules-verify
   stage: apple
   timeout: 60 minutes
-  interruptible: true
+
+apple:lint:
+  extends: .apple-job
+  needs: []
   script:
-    - just ci run apple
-  rules:
-    - if: $KITHARA_PIPELINE_KIND == "merge-request"
-    - if: $KITHARA_PIPELINE_KIND == "quarantine"
-    - if: $KITHARA_PIPELINE_KIND == "main"
-      interruptible: false
-    - if: $KITHARA_PIPELINE_KIND == "nightly"
-      interruptible: false
-    - if: $KITHARA_PIPELINE_KIND == "release"
-      interruptible: false
+    - just ci run apple-lint
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - target/quality-report.md
+      - target/trait-mock-audit.md
+      - target/rstest-audit.md
+
+apple:msrv:
+  extends: .apple-job
+  needs: []
+  script:
+    - just ci run apple-msrv
+
+apple:test:
+  extends:
+    - .apple-job
+    - .measured
+  needs:
+    - apple:lint
+  script:
+    - just ci run apple-test
   artifacts:
     when: always
     expire_in: 30 days
@@ -21,6 +39,77 @@ apple:required:
       junit: target/nextest/ci/junit.xml
     paths:
       - target/nextest/ci/junit.xml
-      - target/quality-report.md
-      - target/trait-mock-audit.md
-      - target/rstest-audit.md
+
+apple:test-flash-off:
+  extends:
+    - .macos-job
+    - .rules-integration
+    - .measured
+  stage: apple
+  timeout: 60 minutes
+  needs:
+    - apple:lint
+  script:
+    - just ci run apple-test-flash-off
+  artifacts:
+    when: always
+    expire_in: 30 days
+    reports:
+      junit: target/nextest/ci/junit.xml
+    paths:
+      - target/nextest/ci/junit.xml
+
+apple:xcframework:
+  extends: .apple-job
+  needs:
+    - apple:lint
+  script:
+    - just ci run apple-xcframework
+  # The simulator suite consumes this rather than building its own. The guest
+  # that runs it may be a different one, and a job cleans the checkout of
+  # everything the commit does not carry, so the framework has to travel.
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - apple/KitharaFFIInternal.xcframework
+
+apple:swift-test:
+  extends: .apple-job
+  needs:
+    - apple:xcframework
+  script:
+    - just ci run apple-swift-test
+
+apple:ios:
+  extends: .apple-job
+  needs:
+    - apple:xcframework
+  script:
+    - just ci run apple-ios
+
+# The suite plays audio and asserts on what came back, so it takes the measured
+# group: a simulator sharing the host with a full build reports on the load
+# rather than on the commit.
+apple:ios-test:
+  extends:
+    - .macos-job
+    - .rules-integration
+    - .measured
+  stage: apple
+  timeout: 60 minutes
+  needs:
+    - job: apple:xcframework
+      artifacts: true
+  script:
+    - just ci run apple-ios-test
+
+apple:safari:
+  extends:
+    - .macos-job
+    - .rules-nightly
+  stage: apple
+  timeout: 60 minutes
+  needs:
+    - apple:lint
+  script:
+    - just ci run apple-safari

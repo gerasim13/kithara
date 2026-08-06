@@ -143,6 +143,10 @@ fn host_frame(position: f64, label: &str) -> i64 {
         .expect("validated host frame fits signed frame coordinates")
 }
 
+/// Desktop-graph twin of the module's `render_paced`; the guard keeps the
+/// modelled playback clock on the same virtual clock as the fixture delays and
+/// the decode worker.
+#[kithara::flash(true)]
 async fn render_paced(harness: &OfflinePlayerHarness, frames: usize) -> Vec<f32> {
     let block = harness.render(frames);
     let _ = harness.tick_and_drain();

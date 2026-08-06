@@ -21,5 +21,9 @@ mod quality_switch_continuity;
 mod red_crossfade_hls_to_mp3_blocks_render;
 mod resource_internal;
 mod resource_regressions;
+#[cfg(not(target_arch = "wasm32"))]
+mod ring_admission;
 mod seamless_queue_advance;
+#[cfg(not(target_arch = "wasm32"))]
+mod session_transport;
 mod silvercomet_seek_hang;

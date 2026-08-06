@@ -6,12 +6,14 @@ use firewheel::{
 };
 use kithara_audio::EqBandConfig;
 use kithara_bufpool::PcmPool;
+use kithara_events::EventBus;
 use tracing::{debug, warn};
 
 use super::{
     dispatch::{restart_stream, trace_stream_info},
     graph::ducking_gain,
     protocol::{PlayerId, SessionError, StartStreamFn},
+    transport::{SessionTransportState, TransportControl, install},
 };
 use crate::{
     api::{SessionDuckingMode, SlotId},
@@ -28,6 +30,7 @@ pub(super) struct SlotNodes {
 }
 
 pub(super) struct PlayerState {
+    pub(super) bus: EventBus,
     pub(super) master_eq_memo: Option<Memo<MasterEqNode>>,
     pub(super) master_eq_node_id: Option<NodeID>,
     pub(super) master_vol_pan_memo: Option<Memo<VolumePanNode>>,
@@ -43,12 +46,18 @@ pub(super) struct PlayerState {
 }
 
 impl PlayerState {
-    fn new(player_id: PlayerId, eq_layout: Vec<EqBandConfig>, pcm_pool: PcmPool) -> Self {
+    fn new(
+        player_id: PlayerId,
+        bus: EventBus,
+        eq_layout: Vec<EqBandConfig>,
+        pcm_pool: PcmPool,
+    ) -> Self {
         let (eq_layout, gains) = prepare_eq_layout(eq_layout);
         let band_count = eq_layout.len();
         let shared_eq = SharedEq::new(band_count);
         shared_eq.replace(&gains);
         Self {
+            bus,
             eq_layout,
             pcm_pool,
             player_id,
@@ -75,6 +84,7 @@ pub(super) fn prepare_eq_layout(mut eq_layout: Vec<EqBandConfig>) -> (Vec<EqBand
 
 pub struct SessionState<B: AudioBackend> {
     pub(super) ctx: Option<FirewheelCtx<B>>,
+    pub(super) transport_control: Option<TransportControl>,
     pub(super) session_limiter_node_id: Option<NodeID>,
     pub(super) session_output_memo: Option<Memo<VolumePanNode>>,
     pub(super) session_output_node_id: Option<NodeID>,
@@ -84,16 +94,21 @@ pub struct SessionState<B: AudioBackend> {
     pub(super) players: Vec<PlayerState>,
     pub(super) stream_needs_restart: bool,
     pub(super) sample_rate_hint: u32,
+    pub(super) transport: SessionTransportState,
 }
 
 impl<B: AudioBackend> SessionState<B> {
     pub const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 
     #[must_use]
-    pub fn new(start_stream_fn: StartStreamFn<B>) -> Self {
+    pub fn new<F>(start_stream_fn: F) -> Self
+    where
+        F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
+    {
         Self {
-            start_stream_fn,
+            start_stream_fn: Box::new(start_stream_fn),
             ctx: None,
+            transport_control: None,
             next_player_id: 1,
             players: Vec::new(),
             sample_rate_hint: Self::DEFAULT_SAMPLE_RATE,
@@ -102,6 +117,7 @@ impl<B: AudioBackend> SessionState<B> {
             session_output_node_id: None,
             session_limiter_node_id: None,
             stream_needs_restart: false,
+            transport: SessionTransportState::default(),
         }
     }
 
@@ -112,6 +128,7 @@ impl<B: AudioBackend> SessionState<B> {
 
 pub(super) fn register_player<B: AudioBackend>(
     state: &mut SessionState<B>,
+    bus: EventBus,
     eq_layout: Vec<EqBandConfig>,
     pcm_pool: PcmPool,
 ) -> PlayerId {
@@ -119,7 +136,7 @@ pub(super) fn register_player<B: AudioBackend>(
     state.next_player_id += 1;
     state
         .players
-        .push(PlayerState::new(player_id, eq_layout, pcm_pool));
+        .push(PlayerState::new(player_id, bus, eq_layout, pcm_pool));
     debug!(
         player_id,
         players = state.players.len(),
@@ -165,8 +182,10 @@ fn create_firewheel_context<B: AudioBackend>(
         ..FirewheelConfig::default()
     };
     let mut ctx = FirewheelCtx::<B>::new(config);
+    let transport_control = install(&mut ctx).map_err(|error| SessionError::Graph(error.into()))?;
     (state.start_stream_fn)(&mut ctx, sample_rate).map_err(SessionError::StreamStart)?;
     state.ctx = Some(ctx);
+    state.transport_control = Some(transport_control);
     state.sample_rate_hint = sample_rate;
     state.stream_needs_restart = false;
     trace_stream_info(state, "start-stream");

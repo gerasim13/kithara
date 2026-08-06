@@ -225,9 +225,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "arbitrary"
@@ -1928,9 +1928,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.18"
+version = "0.9.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -4361,7 +4361,6 @@ dependencies = [
  "realfft",
  "ringbuf 0.5.0",
  "serde",
- "smallvec",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
@@ -4512,7 +4511,6 @@ dependencies = [
  "num-traits",
  "portable-atomic",
  "smallvec",
- "tracing",
  "url",
  "wasm-bindgen-test",
 ]
@@ -4573,7 +4571,6 @@ dependencies = [
  "delegate",
  "derive_more",
  "fieldwork",
- "futures",
  "hotpath",
  "kithara-abr",
  "kithara-assets",
@@ -4637,9 +4634,6 @@ dependencies = [
  "kithara-stream",
  "kithara-test-utils",
  "kithara-workspace-hack",
- "num-traits",
- "rangemap",
- "re_mp4",
  "serial_test",
  "tempfile",
  "thiserror 2.0.18",
@@ -4735,7 +4729,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tower-layer",
  "tower-service",
- "tracing",
  "tracing-subscriber",
  "unimock",
  "url",
@@ -4813,6 +4806,7 @@ dependencies = [
  "thiserror 2.0.18",
  "thunderdome",
  "tracing",
+ "triple_buffer",
  "unimock",
  "url",
  "wasm-bindgen-test",
@@ -4923,12 +4917,16 @@ version = "0.0.1-alpha4"
 dependencies = [
  "bon",
  "bungee-rs",
+ "delegate",
  "derive_more",
  "fast-interleave",
+ "fieldwork",
  "kithara-bufpool",
+ "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
  "signalsmith-stretch",
+ "smallvec",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -6783,9 +6781,9 @@ checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 
 [[package]]
 name = "quick-xml"
-version = "0.39.2"
+version = "0.39.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "958f21e8e7ceb5a1aa7fa87fab28e7c75976e0bfe7e23ff069e0a260f894067d"
+checksum = "cdcc8dd4e2f670d309a5f0e83fe36dfdc05af317008fea29144da1a2ac858e5e"
 dependencies = [
  "memchr",
 ]
@@ -11010,10 +11008,8 @@ dependencies = [
  "rustdoc-types",
  "serde",
  "serde_json",
- "serde_yml",
  "sha2 0.11.0",
  "signal-hook",
- "syn 3.0.3",
  "tempfile",
  "toml 1.1.2+spec-1.1.0",
  "tracing",

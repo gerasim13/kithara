@@ -22,13 +22,13 @@ use crate::HlsEvent;
 #[cfg(feature = "queue")]
 use crate::QueueEvent;
 #[cfg(feature = "player")]
-use crate::{DjEvent, EngineEvent, ItemEvent, PlayerEvent, SessionEvent};
+use crate::{DjEvent, EngineEvent, ItemEvent, PlayerEvent, SessionEvent, TransportEvent};
 
 /// Unified event for the full audio pipeline.
 ///
 /// Hierarchical: each subsystem has its own variant with a sub-enum.
 /// All variants are feature-gated.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, derive_more::From)]
 #[non_exhaustive]
 pub enum Event {
     /// Bus-level synthetic event.
@@ -61,6 +61,9 @@ pub enum Event {
     /// Audio session event.
     #[cfg(feature = "player")]
     Session(SessionEvent),
+    /// Session transport event.
+    #[cfg(feature = "player")]
+    Transport(TransportEvent),
     /// DJ feature event.
     #[cfg(feature = "player")]
     Dj(DjEvent),
@@ -79,117 +82,6 @@ pub enum Event {
     /// ABR controller event.
     #[cfg(feature = "abr")]
     Abr(AbrEvent),
-}
-
-impl From<BusEvent> for Event {
-    fn from(e: BusEvent) -> Self {
-        Self::Bus(e)
-    }
-}
-
-#[cfg(feature = "downloader")]
-impl From<DownloaderEvent> for Event {
-    fn from(e: DownloaderEvent) -> Self {
-        Self::Downloader(e)
-    }
-}
-
-#[cfg(feature = "hls")]
-impl From<HlsEvent> for Event {
-    fn from(e: HlsEvent) -> Self {
-        Self::Hls(e)
-    }
-}
-
-#[cfg(feature = "file")]
-impl From<FileEvent> for Event {
-    fn from(e: FileEvent) -> Self {
-        Self::File(e)
-    }
-}
-
-#[cfg(feature = "audio")]
-impl From<AudioEvent> for Event {
-    fn from(e: AudioEvent) -> Self {
-        Self::Audio(e)
-    }
-}
-
-#[cfg(feature = "decoder")]
-impl From<DecoderEvent> for Event {
-    fn from(e: DecoderEvent) -> Self {
-        Self::Decoder(e)
-    }
-}
-
-#[cfg(feature = "player")]
-impl From<PlayerEvent> for Event {
-    fn from(e: PlayerEvent) -> Self {
-        Self::Player(e)
-    }
-}
-
-#[cfg(feature = "player")]
-impl From<EngineEvent> for Event {
-    fn from(e: EngineEvent) -> Self {
-        Self::Engine(e)
-    }
-}
-
-#[cfg(feature = "player")]
-impl From<ItemEvent> for Event {
-    fn from(e: ItemEvent) -> Self {
-        Self::Item(e)
-    }
-}
-
-#[cfg(feature = "player")]
-impl From<SessionEvent> for Event {
-    fn from(e: SessionEvent) -> Self {
-        Self::Session(e)
-    }
-}
-
-#[cfg(feature = "player")]
-impl From<DjEvent> for Event {
-    fn from(e: DjEvent) -> Self {
-        Self::Dj(e)
-    }
-}
-
-#[cfg(feature = "app")]
-impl From<AppEvent> for Event {
-    fn from(e: AppEvent) -> Self {
-        Self::App(e)
-    }
-}
-
-#[cfg(feature = "asset")]
-impl From<AssetEvent> for Event {
-    fn from(e: AssetEvent) -> Self {
-        Self::Asset(e)
-    }
-}
-
-#[cfg(feature = "queue")]
-impl From<QueueEvent> for Event {
-    fn from(e: QueueEvent) -> Self {
-        Self::Queue(e)
-    }
-}
-
-#[cfg(feature = "drm")]
-impl From<DrmEvent> for Event {
-    fn from(e: DrmEvent) -> Self {
-        Self::Drm(e)
-    }
-}
-
-#[cfg(feature = "abr")]
-impl From<AbrEvent> for Event {
-    fn from(e: AbrEvent) -> Self {
-        Self::Abr(e)
-    }
 }
 
 #[cfg(test)]
@@ -260,6 +152,23 @@ mod tests {
                 kind: crate::DecodeErrorKind::InvalidData,
                 codec: None,
                 detail: "invalid data",
+            })
+        ));
+    }
+
+    #[cfg(feature = "player")]
+    #[kithara::test]
+    fn transport_event_into_event() {
+        let event: Event = TransportEvent::TempoCommitted {
+            beats_per_minute: 120.0,
+            revision: 3,
+        }
+        .into();
+        assert!(matches!(
+            event,
+            Event::Transport(TransportEvent::TempoCommitted {
+                beats_per_minute: 120.0,
+                revision: 3,
             })
         ));
     }

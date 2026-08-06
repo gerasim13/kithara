@@ -9,6 +9,9 @@ description = "Serializable modular UI model: layout and module documents, regis
 keywords = ["ui", "layout", "modular", "serde", "ron"]
 categories = ["gui", "config"]
 
+[package.metadata.cargo-machete]
+ignored = ["kithara-workspace-hack"]
+
 [features]
 default = []
 render = ["dep:iced", "dep:lucide-icons", "dep:num-traits", "iced/advanced"]

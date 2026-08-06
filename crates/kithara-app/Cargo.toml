@@ -82,7 +82,13 @@ url = { workspace = true }
 # `cargo build` on Linux/Windows would leave the binary with no audio
 # backend at all.
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
-kithara = { workspace = true, default-features = false, features = ["symphonia", "fdk-aac", "client-reqwest", "tls-rustls"] }
+kithara = { workspace = true, default-features = false, features = ["symphonia", "client-reqwest", "tls-rustls"] }
+
+# HE-AAC v1/v2 through libfdk. Its vendored `FDK_archdef.h` has no branch for
+# MSVC on ARM64 and stops at `fatal error C1021: invalid preprocessor command`,
+# so that one target decodes AAC through symphonia alone.
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"), not(all(target_os = "windows", target_arch = "aarch64"))))'.dependencies]
+kithara = { workspace = true, default-features = false, features = ["fdk-aac"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 kithara = { workspace = true, default-features = false, features = ["apple", "client-wreq"] }

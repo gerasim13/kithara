@@ -18,9 +18,21 @@ stages:
   - release-build
   - release-publish
 
+# The compiler cache is configured by the lane, not here. Naming it here needs
+# the executor's cache root, and only some executors can supply one: a runner
+# configuration contributes variables that take part in expansion, while the
+# macOS lane is served by `run-single` with a process environment, which does
+# not. There the root expanded to nothing and sccache tried to write to the
+# root of the filesystem. The bootstrap build it was meant to cover is covered
+# instead by keeping the build directory between jobs.
 variables:
   CARGO_INCREMENTAL: "0"
   GIT_DEPTH: "0"
+  # Cleaning the tree between jobs deleted the build directory with it, so
+  # every job relinked the whole workspace and the compiler cache could only
+  # hide part of it. Keep the two build directories; everything else is still
+  # removed, so a job never sees a file the commit does not carry.
+  GIT_CLEAN_FLAGS: -ffdx -e target -e target-flash-off
   KITHARA_CI_HOST_CONFIG: /etc/kithara-ci/host.toml
   RUST_BACKTRACE: "1"
   SCCACHE_CACHE_SIZE: 50G

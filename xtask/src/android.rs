@@ -80,6 +80,27 @@ pub(crate) fn run(cmd: AndroidCommand, ctx: &Ctx) -> Result<()> {
     }
 }
 
+/// Whether the generator left any Kotlin under this root. It writes into the
+/// package path rather than the output directory itself — `kotlin/com/kithara/
+/// ffi/kithara_ffi.kt` — so a check that reads only the top level calls a
+/// successful run empty.
+fn has_kotlin_source(path: &Path) -> Result<bool> {
+    let entries = fs::read_dir(path).with_context(|| format!("read_dir {}", path.display()))?;
+    for entry in entries {
+        let entry = entry.with_context(|| format!("read_dir {}", path.display()))?;
+        let candidate = entry.path();
+        let found = if candidate.is_dir() {
+            has_kotlin_source(&candidate)?
+        } else {
+            candidate.extension().is_some_and(|kind| kind == "kt")
+        };
+        if found {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn recreate_dir(path: &Path) -> Result<()> {
     if path.exists() {
         fs::remove_dir_all(path).with_context(|| format!("remove {}", path.display()))?;
@@ -148,7 +169,18 @@ pub(crate) fn run_build(profile: BuildProfile, android: &AndroidConfig) -> Resul
         ]);
 
     if matches!(profile, BuildProfile::Release) {
-        cmd.arg("--release");
+        // `uniffi-bindgen --library` reads the interface out of the static
+        // symbol table, and the release profile strips it. The dynamic table
+        // survives, so the library still loads and still exports every entry
+        // point — the generator simply finds no components, writes no Kotlin,
+        // and exits successfully, leaving the Gradle compile to fail on every
+        // import of the bindings. Keep the names through this build; Gradle
+        // strips the library again on its way into the AAR.
+        cmd.args([
+            "--release",
+            "--config",
+            "profile.release.strip=\"debuginfo\"",
+        ]);
     }
 
     cmd.current_dir(root);
@@ -162,6 +194,8 @@ pub(crate) fn run_build(profile: BuildProfile, android: &AndroidConfig) -> Resul
     if !lib_path.exists() {
         bail!("compiled library not found at {}", lib_path.display());
     }
+
+    copy_cxx_runtime(&jni_dir, RUST_TARGETS)?;
 
     println!("==> Generating Kotlin bindings");
 
@@ -197,6 +231,16 @@ pub(crate) fn run_build(profile: BuildProfile, android: &AndroidConfig) -> Resul
     let status = cmd.status().context("failed to run uniffi-bindgen")?;
     if !status.success() {
         bail!("uniffi-bindgen failed");
+    }
+    // A library the generator cannot read is not an error to it: it finds no
+    // components and exits successfully, and the miss only surfaces later as
+    // an unresolved import in Kotlin.
+    if !has_kotlin_source(&kotlin_dir)? {
+        bail!(
+            "uniffi-bindgen wrote no Kotlin into {}; {} carries no readable interface metadata",
+            kotlin_dir.display(),
+            lib_path.display()
+        );
     }
 
     println!("==> Done!");
@@ -397,6 +441,50 @@ fn run_app(
     }
 
     Ok(())
+}
+
+/// Put the NDK's C++ runtime beside the library that needs it.
+///
+/// `cargo ndk` writes the library it built and nothing else, and the stretch
+/// backend links the C++ standard library. On the device that showed up as
+/// `java.lang.UnsatisfiedLinkError: dlopen failed: library "libc++_shared.so"
+/// not found` — the connected suite installed, started, and could not load a
+/// single test.
+fn copy_cxx_runtime(jni_dir: &Path, targets: &[(&str, &str)]) -> Result<()> {
+    let ndk = ndk_root()?;
+    // The NDK ships one host toolchain per platform and Apple silicon reads
+    // the same `darwin-x86_64` directory as Intel does.
+    let sysroot = ndk.join("toolchains/llvm/prebuilt/darwin-x86_64/sysroot/usr/lib");
+    for (target, abi) in targets {
+        let source = sysroot.join(target).join("libc++_shared.so");
+        if !source.is_file() {
+            bail!("NDK C++ runtime not found at {}", source.display());
+        }
+        let destination = jni_dir.join(abi).join("libc++_shared.so");
+        fs::copy(&source, &destination).with_context(|| {
+            format!("copying {} to {}", source.display(), destination.display())
+        })?;
+    }
+    println!("==> Bundled the NDK C++ runtime");
+    Ok(())
+}
+
+fn ndk_root() -> Result<PathBuf> {
+    for name in ["ANDROID_NDK_HOME", "ANDROID_NDK_ROOT", "NDK_HOME"] {
+        if let Ok(value) = env::var(name) {
+            return Ok(PathBuf::from(value));
+        }
+    }
+    let ndk = android_sdk_root()?.join("ndk");
+    let mut versions: Vec<PathBuf> = fs::read_dir(&ndk)
+        .with_context(|| format!("reading the installed NDK versions in {}", ndk.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_dir())
+        .collect();
+    versions.sort();
+    versions
+        .pop()
+        .with_context(|| format!("no NDK installed under {}", ndk.display()))
 }
 
 fn android_sdk_root() -> Result<PathBuf> {

@@ -1836,9 +1836,9 @@ public func FfiConverterTypeAudioPlayerItem_lower(_ value: AudioPlayerItem) -> U
  */
 public protocol FfiAssetLayout: AnyObject, Sendable {
 
-    func root(source: FfiAssetSource)  -> String
-
     func path(resource: FfiAssetResource)  -> String
+
+    func root(source: FfiAssetSource)  -> String
 
 }
 /**
@@ -1914,20 +1914,20 @@ open class FfiAssetLayoutImpl: FfiAssetLayout, @unchecked Sendable {
 
 
 
-open func root(source: FfiAssetSource) -> String  {
-    return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_kithara_ffi_fn_method_ffiassetlayout_root(
-            self.uniffiCloneHandle(),
-        FfiConverterTypeFfiAssetSource_lower(source),$0
-    )
-})
-}
-
 open func path(resource: FfiAssetResource) -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_ffiassetlayout_path(
             self.uniffiCloneHandle(),
         FfiConverterTypeFfiAssetResource_lower(resource),$0
+    )
+})
+}
+
+open func root(source: FfiAssetSource) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_ffiassetlayout_root(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiAssetSource_lower(source),$0
     )
 })
 }
@@ -1961,30 +1961,6 @@ fileprivate struct UniffiCallbackInterfaceFfiAssetLayout {
                 fatalError("Uniffi callback interface FfiAssetLayout: handle missing in uniffiClone")
             }
         },
-        root: { (
-            uniffiHandle: UInt64,
-            source: RustBuffer,
-            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> String in
-                guard let uniffiObj = try? FfiConverterTypeFfiAssetLayout.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.root(
-                     source: try FfiConverterTypeFfiAssetSource_lift(source)
-                )
-            }
-
-
-            let writeReturn = { uniffiOutReturn.pointee = FfiConverterString.lower($0) }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
         path: { (
             uniffiHandle: UInt64,
             resource: RustBuffer,
@@ -1998,6 +1974,30 @@ fileprivate struct UniffiCallbackInterfaceFfiAssetLayout {
                 }
                 return uniffiObj.path(
                      resource: try FfiConverterTypeFfiAssetResource_lift(resource)
+                )
+            }
+
+
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterString.lower($0) }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        root: { (
+            uniffiHandle: UInt64,
+            source: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> String in
+                guard let uniffiObj = try? FfiConverterTypeFfiAssetLayout.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.root(
+                     source: try FfiConverterTypeFfiAssetSource_lift(source)
                 )
             }
 
@@ -3576,8 +3576,8 @@ public struct FfiItemConfig: Equatable, Hashable {
      * Audio source. Accepts a network URL (`https://example.com/song.mp3`,
      * `https://…/master.m3u8`) **or** an absolute local file path
      * (`/Users/…/song.flac`). Parsed via
-     * [`kithara::play::ResourceConfig::for_src`] at insert time, so the
-     * same string flows untouched into the player core.
+     * [`kithara::play::ResourceConfig::parse_src`] at insert time, then passed
+     * to [`kithara::play::ResourceConfig::for_src`].
      */
     public let url: String
     /**
@@ -3614,8 +3614,8 @@ public struct FfiItemConfig: Equatable, Hashable {
          * Audio source. Accepts a network URL (`https://example.com/song.mp3`,
          * `https://…/master.m3u8`) **or** an absolute local file path
          * (`/Users/…/song.flac`). Parsed via
-         * [`kithara::play::ResourceConfig::for_src`] at insert time, so the
-         * same string flows untouched into the player core.
+         * [`kithara::play::ResourceConfig::parse_src`] at insert time, then passed
+         * to [`kithara::play::ResourceConfig::for_src`].
          */url: String,
         /**
          * Caller-declared live-stream flag. `true` means the source is a
@@ -3921,13 +3921,13 @@ public func FfiConverterTypeFfiKeyRule_lower(_ value: FfiKeyRule) -> RustBuffer 
  */
 public struct FfiPlayerConfig {
     /**
-     * DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
-     */
-    public let keyOptions: FfiKeyOptions
-    /**
      * Shared asset store used by every item created by this player.
      */
     public let store: FfiAssetStore
+    /**
+     * DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
+     */
+    public let keyOptions: FfiKeyOptions
     /**
      * Number of EQ bands (log-spaced). Default: 10.
      */
@@ -3937,16 +3937,16 @@ public struct FfiPlayerConfig {
     // declare one manually.
     public init(
         /**
-         * DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
-         */keyOptions: FfiKeyOptions,
-        /**
          * Shared asset store used by every item created by this player.
          */store: FfiAssetStore,
         /**
+         * DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
+         */keyOptions: FfiKeyOptions,
+        /**
          * Number of EQ bands (log-spaced). Default: 10.
          */eqBandCount: UInt32) {
-        self.keyOptions = keyOptions
         self.store = store
+        self.keyOptions = keyOptions
         self.eqBandCount = eqBandCount
     }
 
@@ -3966,15 +3966,15 @@ public struct FfiConverterTypeFfiPlayerConfig: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPlayerConfig {
         return
             try FfiPlayerConfig(
-                keyOptions: FfiConverterTypeFfiKeyOptions.read(from: &buf),
                 store: FfiConverterTypeFfiAssetStore.read(from: &buf),
+                keyOptions: FfiConverterTypeFfiKeyOptions.read(from: &buf),
                 eqBandCount: FfiConverterUInt32.read(from: &buf)
         )
     }
 
     public static func write(_ value: FfiPlayerConfig, into buf: inout [UInt8]) {
-        FfiConverterTypeFfiKeyOptions.write(value.keyOptions, into: &buf)
         FfiConverterTypeFfiAssetStore.write(value.store, into: &buf)
+        FfiConverterTypeFfiKeyOptions.write(value.keyOptions, into: &buf)
         FfiConverterUInt32.write(value.eqBandCount, into: &buf)
     }
 }
@@ -8506,10 +8506,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_uuid_i64() != 18592) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_ffiassetlayout_root() != 48334) {
+    if (uniffi_kithara_ffi_checksum_method_ffiassetlayout_path() != 40154) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_ffiassetlayout_path() != 15364) {
+    if (uniffi_kithara_ffi_checksum_method_ffiassetlayout_root() != 60895) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_ffikeyprocessor_process_key() != 2649) {

@@ -23,14 +23,16 @@ pub(crate) struct CiHost {
     pub(crate) aggressive_cleanup_bytes: u64,
     pub(crate) android_home: PathBuf,
     pub(crate) brew_root: PathBuf,
-    pub(crate) cache_root_cilicon: PathBuf,
+    pub(crate) cache_root_macos: PathBuf,
     pub(crate) cache_root_linux: PathBuf,
     pub(crate) cache_root_windows: PathBuf,
     pub(crate) ci_uid: u32,
     pub(crate) ci_user: String,
-    pub(crate) cilicon_guest_shared_root: PathBuf,
-    pub(crate) cilicon_ssh_user: String,
-    pub(crate) cilicon_xcode_developer_dir: PathBuf,
+    pub(crate) macos_guest_shared_root: PathBuf,
+    pub(crate) macos_guest_user: String,
+    /// Locally built macOS VM bundle cloned for every job.
+    pub(crate) macos_vm_bundle: PathBuf,
+    pub(crate) macos_guest_xcode_developer_dir: PathBuf,
     pub(crate) gitlab_url: Url,
     pub(crate) host_root: PathBuf,
     pub(crate) host_xcode_developer_dir: PathBuf,
@@ -61,13 +63,14 @@ impl CiHost {
         for (name, path) in [
             ("android_home", &self.android_home),
             ("brew_root", &self.brew_root),
-            ("cache_root_cilicon", &self.cache_root_cilicon),
+            ("cache_root_macos", &self.cache_root_macos),
             ("cache_root_linux", &self.cache_root_linux),
             ("cache_root_windows", &self.cache_root_windows),
-            ("cilicon_guest_shared_root", &self.cilicon_guest_shared_root),
+            ("macos_guest_shared_root", &self.macos_guest_shared_root),
+            ("macos_vm_bundle", &self.macos_vm_bundle),
             (
-                "cilicon_xcode_developer_dir",
-                &self.cilicon_xcode_developer_dir,
+                "macos_guest_xcode_developer_dir",
+                &self.macos_guest_xcode_developer_dir,
             ),
             ("host_root", &self.host_root),
             ("host_xcode_developer_dir", &self.host_xcode_developer_dir),
@@ -101,7 +104,7 @@ impl CiHost {
         for (name, user) in [
             ("admin_user", self.admin_user.as_str()),
             ("ci_user", self.ci_user.as_str()),
-            ("cilicon_ssh_user", self.cilicon_ssh_user.as_str()),
+            ("macos_guest_user", self.macos_guest_user.as_str()),
             ("sync_user", self.sync_user.as_str()),
         ] {
             if !safe_account(user) {
@@ -116,11 +119,12 @@ impl CiHost {
         for (name, path) in [
             ("android_home", &self.android_home),
             ("brew_root", &self.brew_root),
-            ("cache_root_cilicon", &self.cache_root_cilicon),
-            ("cilicon_guest_shared_root", &self.cilicon_guest_shared_root),
+            ("cache_root_macos", &self.cache_root_macos),
+            ("macos_guest_shared_root", &self.macos_guest_shared_root),
+            ("macos_vm_bundle", &self.macos_vm_bundle),
             (
-                "cilicon_xcode_developer_dir",
-                &self.cilicon_xcode_developer_dir,
+                "macos_guest_xcode_developer_dir",
+                &self.macos_guest_xcode_developer_dir,
             ),
             ("host_root", &self.host_root),
             ("host_xcode_developer_dir", &self.host_xcode_developer_dir),
@@ -137,6 +141,45 @@ impl CiHost {
 
     pub(crate) fn gitlab_origin(&self) -> String {
         self.gitlab_url.as_str().trim_end_matches('/').to_string()
+    }
+
+    /// The headroom a job insists on before it starts. The host stops handing
+    /// out work once the CI volume passes `reject_bytes`, so the room left at
+    /// that point is what the policy already considers too little to start on.
+    pub(crate) fn free_bytes_for_a_job(&self) -> u64 {
+        self.quota_bytes.saturating_sub(self.reject_bytes)
+    }
+
+    /// `tart` resolves VM names under `TART_HOME`, and the configured bundle
+    /// is `<TART_HOME>/vms/<name>`. A launch agent inherits none of the
+    /// shell's environment, so without this it looks in `~/.tart` and cannot
+    /// see the base image at all.
+    pub(crate) fn tart_home(&self) -> Result<&Path> {
+        self.macos_vm_bundle
+            .parent()
+            .and_then(Path::parent)
+            .context("macos_vm_bundle must be <TART_HOME>/vms/<name>")
+    }
+
+    /// The guest mounts this bundle instead of carrying its own Xcode, so the
+    /// pinned version is whatever the host has, and the image stays small.
+    pub(crate) fn host_xcode_app(&self) -> Result<&Path> {
+        self.host_xcode_developer_dir
+            .parent()
+            .and_then(Path::parent)
+            .filter(|bundle| bundle.extension().is_some_and(|kind| kind == "app"))
+            .context("host_xcode_developer_dir must be <Xcode>.app/Contents/Developer")
+    }
+
+    /// `launchd` starts agents with a minimal PATH, so any agent that shells
+    /// out to a Homebrew or Cargo tool has to be told where they live.
+    pub(crate) fn agent_path(&self, home: &Path) -> String {
+        format!(
+            "{}:{}:{}:/usr/bin:/bin:/usr/sbin:/sbin",
+            self.brew_root.join("bin").display(),
+            self.brew_root.join("sbin").display(),
+            home.join(".cargo/bin").display()
+        )
     }
 
     pub(crate) fn brew_tool(&self, name: &str) -> PathBuf {
@@ -165,5 +208,21 @@ mod tests {
         assert!(safe_account("kithara-ci"));
         assert!(!safe_account("../root"));
         assert!(!safe_account("ci user"));
+    }
+
+    /// A job cannot see the CI volume the way the host does, so it asks for
+    /// room instead of occupancy. The room it asks for is the same policy read
+    /// from the other end, and the ordering `validate` enforces keeps it above
+    /// zero.
+    #[test]
+    fn a_job_asks_for_the_room_the_host_policy_reserves() {
+        let mut host = super::super::fixture().host;
+        host.soft_cleanup_bytes = 240;
+        host.aggressive_cleanup_bytes = 270;
+        host.reject_bytes = 285;
+        host.quota_bytes = 300;
+        assert_eq!(host.free_bytes_for_a_job(), 15);
+        assert!(host.validate().is_ok());
+        assert!(host.free_bytes_for_a_job() > 0);
     }
 }

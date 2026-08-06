@@ -501,17 +501,30 @@ mod tests {
         handle.shutdown();
     }
 
-    /// A track that blocks inside `step_track()` (simulating Symphonia read
-    /// waiting on network data) must not starve other tracks.
+    /// A track whose `step_track()` blocks must not set the delivery rate of
+    /// every other track on the shared worker.
     ///
-    /// This is the REAL production bug: HLS decode path enters `wait_range()`
-    /// which blocks the entire worker thread. MP3 track's ringbuf drains
-    /// during the block, causing audio underrun.
+    /// The worker runs one pass over all slots and calls `tick()` — hence
+    /// `step_track()` — exactly once per slot per pass, so a slot that blocks
+    /// for `BLOCK_MS` caps the pass rate at `1000 / BLOCK_MS` per second. With
+    /// one chunk produced per tick, every other track is capped at that same
+    /// rate no matter how fast its own source is. In production the blocking
+    /// step is a decode that holds the `SharedStream` mutex, or a CPU-bound
+    /// demuxer step (see `apple::audio_file_demuxer`, 10-77 ms).
     ///
-    /// Target: even with 50ms blocking per HLS step, MP3 track should
-    /// still receive enough chunks for glitch-free playback.
+    /// The oracle counts chunks, not wall-clock gaps: a ready track must be
+    /// able to drain its whole source within a bounded number of polls. A gap
+    /// oracle cannot see this defect — at `BLOCK_MS` the gap stays near
+    /// `BLOCK_MS`, well inside any limit chosen for glitch-free playback,
+    /// while the track still delivers an order of magnitude too few chunks.
     #[kithara::test]
     fn shared_worker_sync_blocking_step_starves_other_tracks() {
+        /// Chunks the fast track's source can produce before EOF.
+        const SOURCE_CHUNKS: u32 = 1000;
+        /// Polls the consumer is allowed before the source must be drained.
+        const POLL_BUDGET: u32 = 600;
+        /// How long the slow track holds the worker inside one step.
+        const BLOCK_MS: u64 = 10;
         struct SlowDecodeSource {
             seek_obs: Arc<dyn SeekObserve>,
             block_ms: u64,
@@ -532,39 +545,50 @@ mod tests {
 
         let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
-        let (reg_a, mut rx_a, _) = make_registration(MockSource::new(1000), 32, 0);
+        let (reg_a, mut rx_a, _) =
+            make_registration(MockSource::new(SOURCE_CHUNKS as usize), 32, 0);
         let _id_a = handle.register_track(reg_a);
 
         let slow_source = SlowDecodeSource {
             seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-            block_ms: 10,
+            block_ms: BLOCK_MS,
         };
         let (reg_b, mut rx_b, _) = make_registration(slow_source, 32, 0);
         let _id_b = handle.register_track(reg_b);
 
-        let mut max_gap = Duration::ZERO;
-        let mut last_chunk_time = Instant::now();
-        let mut total_chunks = 0u32;
-        let deadline = Instant::now() + Duration::from_secs(1);
+        let mut delivered = 0u32;
+        let mut polls = 0u32;
 
-        while Instant::now() < deadline {
-            if rx_a.try_pop().is_some() {
-                let gap = last_chunk_time.elapsed();
-                if total_chunks > 0 && gap > max_gap {
-                    max_gap = gap;
-                }
-                last_chunk_time = Instant::now();
-                total_chunks += 1;
+        let mut deepest_poll = 0u32;
+
+        while delivered < SOURCE_CHUNKS && polls < POLL_BUDGET {
+            let mut this_poll = 0u32;
+            while rx_a.try_pop().is_some() {
+                delivered += 1;
+                this_poll += 1;
             }
+            deepest_poll = deepest_poll.max(this_poll);
             while rx_b.try_pop().is_some() {}
-            thread_sleep(Duration::from_millis(5));
+            polls += 1;
+            // The budget has to bound the pipeline, not the host. A real pause
+            // makes these polls a window of real seconds, and how many chunks
+            // arrive inside it is a property of the machine — which is how this
+            // same budget passed on an idle host and failed on a loaded one.
+            // `park_timeout` is on the macro's rewrite list, so the window is
+            // virtual and advances only once the worker has parked.
+            thread::park_timeout(Duration::from_millis(5));
         }
 
+        handle.shutdown();
+
+        // `delivered` may overshoot by the EOF marker, which `try_pop` hands
+        // over like any other item once the source is exhausted.
         assert!(
-            max_gap < Duration::from_millis(46),
-            "Max gap between chunks for fast track: {max_gap:?} (limit 46ms). \
-             Slow track's sync blocking causes starvation. \
-             Total chunks delivered: {total_chunks}"
+            delivered >= SOURCE_CHUNKS,
+            "fast track drained {delivered} of {SOURCE_CHUNKS} chunks in {polls} polls \
+             (deepest single poll {deepest_poll}) while a co-scheduled track blocked \
+             {BLOCK_MS}ms per step — the blocking step sets the worker's pass rate and \
+             every other track is capped at one chunk per pass"
         );
     }
 }

@@ -16,11 +16,13 @@ mod kithara_audio {
 }
 
 mod kithara_decode {
+    #[cfg(not(target_arch = "wasm32"))]
     mod fixture_integration;
     #[cfg(not(target_arch = "wasm32"))]
     mod gapless_encoding_parity;
     #[cfg(not(target_arch = "wasm32"))]
     mod gapless_parity;
+    #[cfg(not(target_arch = "wasm32"))]
     mod hls_abr_variant_switch;
     mod stress_timeline;
 
@@ -28,10 +30,15 @@ mod kithara_decode {
     mod stress_seek_random;
 }
 
+// The rest of this suite drives the local test server, the filesystem, and
+// several players at once. The browser has none of that; only
+// `kithara_ffi_web` is meant to run there.
+#[cfg(not(target_arch = "wasm32"))]
 mod kithara_file {
     mod live_stress_real_mp3;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 mod kithara_hls {
     mod deferred_abr_debug;
     mod drm_stream_integrity;
@@ -40,4 +47,6 @@ mod kithara_hls {
 }
 
 mod kithara_ffi_web;
+
+#[cfg(not(target_arch = "wasm32"))]
 mod multi_instance;

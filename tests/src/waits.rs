@@ -170,9 +170,17 @@ pub async fn wait_for_position_near(
 
 /// Event-driven [`wait_for_position_near`]: resolves the moment sink-truth
 /// `PlaybackProgress` or `SeekComplete` lands within `tolerance` of `target`,
-/// returning that position. The queue state is re-checked on the same virtual
-/// poll cadence so a dropped / delayed broadcast receiver cannot hide an
-/// already-near position.
+/// returning that position.
+///
+/// Only an event resolves it. `Queue::seek` writes its target into the queue's
+/// position cache optimistically, before the render thread drains the command,
+/// so consulting that cache after a seek answers with the position that was
+/// *asked for* — instantly, having consumed nothing. A caller that then treats
+/// the next event as its post-seek anchor gets the block that was already in
+/// flight, carrying the pre-seek playhead. That is not a delayed receiver
+/// hiding an already-near position; it is the cache being unable to say
+/// whether the seek has landed, so there is nothing here for a cache read to
+/// fall back to.
 pub async fn wait_for_position_near_event(
     rx: &mut EventReceiver,
     queue: &Queue,
@@ -180,18 +188,8 @@ pub async fn wait_for_position_near_event(
     tolerance: f64,
     deadline: Duration,
 ) -> Result<f64, String> {
-    if let Some(pos) = queue.position_seconds()
-        && (pos - target).abs() < tolerance
-    {
-        return Ok(pos);
-    }
     timeout(deadline, async {
         loop {
-            if let Some(pos) = queue.position_seconds()
-                && (pos - target).abs() < tolerance
-            {
-                return Ok(pos);
-            }
             match timeout(POLL_TICK, rx.recv())
                 .await
                 .map(|r| r.map(|env| env.event))

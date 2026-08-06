@@ -137,7 +137,7 @@ fn path_format_command(target: PathFormatTarget, root: &Path, path: &Path) -> Pa
             program: "rustup",
             args: vec![
                 "run".into(),
-                "nightly".into(),
+                nightly_toolchain().into(),
                 "rustfmt".into(),
                 "--edition".into(),
                 "2024".into(),
@@ -202,8 +202,19 @@ impl FormatTarget {
     }
 }
 
+/// The nightly channel the repository pins. CI exports it from
+/// `.config/ci-pins.toml`; a plain `nightly` is the local-development default.
+fn nightly_toolchain() -> String {
+    std::env::var("KITHARA_NIGHTLY_TOOLCHAIN")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "nightly".to_owned())
+}
+
 fn run_rustfmt(check: bool) -> Result<()> {
-    let mut args = vec!["+nightly", "fmt", "--all"];
+    let toolchain = format!("+{}", nightly_toolchain());
+    let mut args = vec![toolchain.as_str(), "fmt", "--all"];
     if check {
         args.push("--check");
     }
@@ -461,8 +472,8 @@ mod tests {
     use anyhow::Result;
 
     use super::{
-        FileKind, PathFormatTarget, format_path, matches_file_kind, path_format_command,
-        should_skip_dir,
+        FileKind, PathFormatTarget, format_path, matches_file_kind, nightly_toolchain,
+        path_format_command, should_skip_dir,
     };
 
     #[test]
@@ -500,7 +511,13 @@ mod tests {
         let rust_command = path_format_command(PathFormatTarget::Rust, root, rust);
         assert_eq!(rust_command.program, "rustup");
         assert_eq!(rust_command.args.first(), Some(&OsString::from("run")));
-        assert!(rust_command.args.iter().any(|arg| arg == "nightly"));
+        assert!(
+            rust_command
+                .args
+                .iter()
+                .any(|arg| arg == nightly_toolchain().as_str()),
+            "rustfmt must run under the toolchain the repository pins"
+        );
         assert!(rust_command.args.iter().any(|arg| arg == "--edition"));
         assert!(rust_command.args.iter().any(|arg| arg == "2024"));
         assert!(

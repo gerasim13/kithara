@@ -8,6 +8,7 @@ use tracing::{debug, warn};
 use super::{
     protocol::{AllocatedSlot, PlayerId, PlayerLevel, Reply, SessionError},
     state::{PlayerState, SessionState, SlotNodes, ensure_ctx, prepare_eq_layout},
+    transport::SessionTransportState,
 };
 use crate::{
     api::{SessionDuckingMode, SlotId},
@@ -151,6 +152,8 @@ pub(super) mod lifecycle {
                 fw_ctx.stop_stream();
             }
             state.ctx = None;
+            state.transport_control = None;
+            state.transport = SessionTransportState::default();
             state.session_output_node_id = None;
             state.session_output_memo = None;
             state.session_limiter_node_id = None;
@@ -501,6 +504,7 @@ mod tests {
     };
     use kithara_audio::generate_log_spaced_bands;
     use kithara_bufpool::PcmPool;
+    use kithara_events::EventBus;
     use kithara_platform::time::{Duration, Instant};
     use kithara_test_utils::kithara;
 
@@ -649,6 +653,7 @@ mod tests {
         match run_cmd(
             state,
             Cmd::RegisterPlayer {
+                bus: EventBus::default(),
                 eq_layout: generate_log_spaced_bands(5),
                 pcm_pool: PcmPool::default().clone(),
             },

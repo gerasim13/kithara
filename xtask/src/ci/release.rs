@@ -7,30 +7,46 @@ use anyhow::{Context, Result, bail};
 use kithara_devtools::Ctx;
 use sha2::{Digest, Sha256};
 
-use super::process::Process;
+use super::{
+    process::{Process, require_os},
+    run::PipelineKind,
+};
 use crate::{
     config::{KitharaExt, ReleaseConfig},
     publish, release,
 };
 
-pub(crate) fn build_apple(
+/// The retained framework, the documentation archive, and the WASM bundle are
+/// built by three jobs. They share nothing but the checkout, so a failure in
+/// one is retried without rebuilding the other two, and the release pipeline
+/// shows which artifact is missing by name.
+pub(crate) fn xcframework(
     process: &Process,
     ctx: &Ctx,
     ext: &KitharaExt,
     temp: &Path,
+    kind: PipelineKind,
 ) -> Result<()> {
     require_os("macos", "Apple release")?;
-    let version = required_env("KITHARA_RELEASE_VERSION")?;
-    let manifest = fs::read_to_string(ctx.root.join(&ext.release.manifest))
-        .with_context(|| format!("reading {}", ext.release.manifest))?;
-    let manifest_version = manifest_field(&manifest, "version")?;
-    let manifest_checksum = manifest_field(&manifest, "checksum")?;
-    if manifest_version != version {
-        bail!(
-            "{} version is {manifest_version}, requested {version}",
-            ext.release.manifest
-        );
-    }
+    // The manifest pins the checksum of the framework a released version
+    // resolves to, so the two have to agree before that version is published.
+    // A nightly answers a different question — what the branch builds into
+    // today — and the framework it produces is not the one the manifest names.
+    let expected = if kind == PipelineKind::Nightly {
+        None
+    } else {
+        let version = required_env("KITHARA_RELEASE_VERSION")?;
+        let manifest = fs::read_to_string(ctx.root.join(&ext.release.manifest))
+            .with_context(|| format!("reading {}", ext.release.manifest))?;
+        let manifest_version = manifest_field(&manifest, "version")?;
+        if manifest_version != version {
+            bail!(
+                "{} version is {manifest_version}, requested {version}",
+                ext.release.manifest
+            );
+        }
+        Some(manifest_field(&manifest, "checksum")?)
+    };
 
     process.run(
         "just",
@@ -45,23 +61,48 @@ pub(crate) fn build_apple(
         copy_required(&source, &ctx.root.join(name))?;
     }
 
-    let primary = ctx.root.join(&ext.release.asset);
-    let actual_checksum = swift_checksum(process, &primary)?;
-    if actual_checksum != manifest_checksum {
-        bail!(
-            "{} checksum does not match the retained XCFramework: expected \
-             {manifest_checksum}, found {actual_checksum}",
-            ext.release.manifest
-        );
+    if let Some(manifest_checksum) = expected {
+        let primary = ctx.root.join(&ext.release.asset);
+        let actual_checksum = swift_checksum(process, &primary)?;
+        if actual_checksum != manifest_checksum {
+            bail!(
+                "{} checksum does not match the retained XCFramework: expected \
+                 {manifest_checksum}, found {actual_checksum}",
+                ext.release.manifest
+            );
+        }
     }
 
+    for name in [&ext.release.asset, &ext.release.single_asset] {
+        if !name.is_empty() {
+            write_checksum(&ctx.root.join(name))?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn docs(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
+    require_os("macos", "Apple documentation release")?;
+    // The documentation is generated against the local Swift package, and the
+    // package resolves its binary target from the debug build tree. Without
+    // it the manifest itself refuses to load, long before anything is
+    // documented, so this job builds the framework it reads.
+    process.run(
+        "just",
+        &["platform", "apple", "xcframework", "--profile", "debug"],
+        "Apple XCFramework",
+    )?;
     process.run("just", &["platform", "apple", "doc"], "Apple documentation")?;
     zip_directory(
         process,
         &ctx.root.join(&ext.release.docs_archive),
         &ctx.root.join(&ext.release.docs_asset),
     )?;
+    write_checksum(&ctx.root.join(&ext.release.docs_asset))
+}
 
+pub(crate) fn wasm(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
+    require_os("macos", "WASM release")?;
     process.run(
         "just",
         &["platform", "wasm", "build", "--profile", "release"],
@@ -72,22 +113,15 @@ pub(crate) fn build_apple(
         &ctx.root.join(&ext.release.wasm_dist),
         &ctx.root.join(&ext.release.wasm_asset),
     )?;
-
-    for name in [
-        &ext.release.asset,
-        &ext.release.single_asset,
-        &ext.release.docs_asset,
-        &ext.release.wasm_asset,
-    ] {
-        if !name.is_empty() {
-            write_checksum(&ctx.root.join(name))?;
-        }
-    }
-    Ok(())
+    write_checksum(&ctx.root.join(&ext.release.wasm_asset))
 }
 
 pub(crate) fn build_android(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
     require_os("macos", "Android release")?;
+    // The archive builds the libraries and generates the bindings itself, for
+    // the release profile the artifact ships. A native build before it took
+    // thirteen minutes for both ABIs in the debug profile, and the archive
+    // then recreated the directories it had written and did the work again.
     process.run(
         "just",
         &["platform", "android", "aar"],
@@ -102,7 +136,19 @@ pub(crate) fn build_android(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> R
     Ok(())
 }
 
-pub(crate) fn publish(ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
+pub(crate) fn publish(
+    process: &Process,
+    ctx: &Ctx,
+    ext: &KitharaExt,
+    kind: PipelineKind,
+) -> Result<()> {
+    // The jobs this one waits for take hours, and these tools are reached deep
+    // inside the publish steps. Ask for them first, so a host that lacks one
+    // says so before a release is built rather than after.
+    process.require_tools(&["cargo", "gh", "git", "unzip"])?;
+    if kind == PipelineKind::Nightly {
+        return publish_nightly(ctx, ext);
+    }
     for variable in ["CARGO_REGISTRY_TOKEN", "GH_TOKEN", "GITLAB_TOKEN"] {
         required_env(variable)?;
     }
@@ -121,6 +167,24 @@ pub(crate) fn publish(ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
     release::publish_retained(ctx, &source_sha, &ctx.root)?;
     release::publish_pages_retained(ctx, &source_sha, &ctx.root)?;
     publish::publish_release(ctx)
+}
+
+/// The rolling channel publishes the same artifacts to one replaceable tag. It
+/// reaches no crate registry — a nightly carries no version to publish under —
+/// and leaves the pages branch to releases, which is what a documentation site
+/// should follow.
+fn publish_nightly(ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
+    for variable in ["GH_TOKEN", "GITLAB_TOKEN"] {
+        required_env(variable)?;
+    }
+    let source_sha = required_env("CI_COMMIT_SHA")?;
+    for name in retained_assets(&ext.release) {
+        let path = ctx.root.join(name);
+        if path.is_file() {
+            verify_checksum(&path)?;
+        }
+    }
+    release::publish_nightly_retained(ctx, &source_sha, &ctx.root)
 }
 
 fn retained_assets(config: &ReleaseConfig) -> impl Iterator<Item = &str> {
@@ -281,16 +345,6 @@ fn required_env(name: &str) -> Result<String> {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .with_context(|| format!("{name} is required"))
-}
-
-fn require_os(expected: &str, label: &str) -> Result<()> {
-    if env::consts::OS != expected {
-        bail!(
-            "{label} requires {expected}, current platform is {}",
-            env::consts::OS
-        );
-    }
-    Ok(())
 }
 
 #[cfg(test)]

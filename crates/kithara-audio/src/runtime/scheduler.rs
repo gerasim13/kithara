@@ -36,6 +36,33 @@ impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
     /// more aggressively.
     const WAITING_TIMEOUT: Duration = Duration::from_millis(10);
 
+    /// Consecutive `Produced` passes between cooperative `yield_now()` calls.
+    ///
+    /// The produce core never parks while it is making progress; a bare
+    /// per-pass `yield_now()` would still hand the scheduler off on every chunk.
+    /// Yielding only every Nth straight `Produced` pass keeps the worker hot
+    /// under sustained decode while still ceding the CPU often enough to stay
+    /// fair to other threads. The streak resets on any non-`Produced` outcome,
+    /// which already parks via `wait_timeout`.
+    const FAIRNESS_YIELD_EVERY: u32 = 16;
+
+    /// Consecutive `tick()` calls one slot may take within a single pass.
+    ///
+    /// A pass visits every slot once, so the pass rate is set by the slowest slot:
+    /// a step that blocks for 10 ms holds it near 100 passes/s, and a slot that
+    /// produces one chunk per tick is then capped at ~100 chunks/s however fast
+    /// its own source runs. Serving a slot ahead into its own ring removes that
+    /// coupling — the ring exists precisely to absorb a neighbour's slow step.
+    ///
+    /// Two bounds end a visit, and both are needed. This count stops a slot whose
+    /// consumer drains as fast as it produces: it never reports `Backpressured`,
+    /// so an unbounded burst would let it hold the worker forever. The elapsed
+    /// bound — [`SLOW_TICK_THRESHOLD`](Scheduler::SLOW_TICK_THRESHOLD), the same
+    /// span that already marks a tick as starving its neighbours — stops a slot
+    /// whose own ticks are expensive, so bursting a blocking slot cannot just move
+    /// the stall from the pass into the burst and leave the rate unchanged.
+    const SLOT_BURST: u32 = 32;
+
     /// Spawn a new scheduler thread and return a handle.
     ///
     /// `cancel` is the externally-owned [`CancelToken`] that drives the run
@@ -59,16 +86,6 @@ impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
         SchedulerHandle::new(wake, cancel, cmd_tx)
     }
 }
-
-/// Consecutive `Produced` passes between cooperative `yield_now()` calls.
-///
-/// The produce core never parks while it is making progress; a bare
-/// per-pass `yield_now()` would still hand the scheduler off on every chunk.
-/// Yielding only every Nth straight `Produced` pass keeps the worker hot
-/// under sustained decode while still ceding the CPU often enough to stay
-/// fair to other threads. The streak resets on any non-`Produced` outcome,
-/// which already parks via `wait_timeout`.
-const FAIRNESS_YIELD_EVERY: u32 = 16;
 
 /// Unchecked scheduler shell.
 ///
@@ -163,7 +180,7 @@ fn park_after_outcome<N: Node, O: SchedulerObserver>(
     match outcome {
         PassOutcome::Produced => {
             *produced_streak += 1;
-            if *produced_streak >= FAIRNESS_YIELD_EVERY {
+            if *produced_streak >= Scheduler::<N, O>::FAIRNESS_YIELD_EVERY {
                 *produced_streak = 0;
                 yield_now();
             }
@@ -208,29 +225,64 @@ fn produce_pass<N: Node, O: SchedulerObserver>(
         }
         let slot = &mut slots[idx];
 
-        let start = Instant::now();
-        let result = if let Ok(r) = catch_unwind(AssertUnwindSafe(|| {
-            if slot.rt_policy == RtPolicy::Heavy {
-                produce_tick_heavy(&mut slot.node)
-            } else {
-                produce_tick_rt(&mut slot.node)
+        // Serve the slot ahead into its own ring instead of handing one chunk
+        // per pass, so a neighbour's blocking step cannot set this slot's rate.
+        // The visit ends as soon as it stops being free for the others: a slot
+        // whose own ticks are expensive gets exactly one, which is what keeps
+        // this from simply moving the stall from the pass to the burst.
+        let visit_start = Instant::now();
+        let mut last = TickResult::Progress;
+        let mut progressed = false;
+        for tick in 0..Scheduler::<N, O>::SLOT_BURST {
+            // The trash ring is sized for the chunks one visit puts in flight,
+            // and the consumer returns spent buffers as it drains them. A burst
+            // therefore has to reclaim between its own ticks, not once per pass,
+            // or the ring overflows and the free lands on the audio thread. This
+            // runs in the scheduler shell, outside `produce_tick_rt`, so the
+            // free still never reaches the forbid-blocking core.
+            if tick > 0 {
+                slot.node.recycle();
             }
-        })) {
-            r
-        } else {
-            warn!(slot_id = slot.id, "scheduler: node panicked");
-            slot.is_terminal = true;
-            slot.node.on_cancel();
-            TickResult::Done
-        };
-        let elapsed = start.elapsed();
+            let start = Instant::now();
+            last = if let Ok(r) = catch_unwind(AssertUnwindSafe(|| {
+                if slot.rt_policy == RtPolicy::Heavy {
+                    produce_tick_heavy(&mut slot.node)
+                } else {
+                    produce_tick_rt(&mut slot.node)
+                }
+            })) {
+                r
+            } else {
+                warn!(slot_id = slot.id, "scheduler: node panicked");
+                slot.is_terminal = true;
+                slot.node.on_cancel();
+                TickResult::Done
+            };
+            let elapsed = start.elapsed();
 
-        if elapsed > Scheduler::<N, O>::SLOW_TICK_THRESHOLD {
-            observer.on_event(SchedulerEvent::SlowTick {
-                elapsed,
-                slot: slot.id,
-            });
+            if elapsed > Scheduler::<N, O>::SLOW_TICK_THRESHOLD {
+                observer.on_event(SchedulerEvent::SlowTick {
+                    elapsed,
+                    slot: slot.id,
+                });
+            }
+
+            if last != TickResult::Progress {
+                break;
+            }
+            progressed = true;
+            if visit_start.elapsed() >= Scheduler::<N, O>::SLOW_TICK_THRESHOLD {
+                break;
+            }
         }
+
+        // A burst that produced and then hit its consumer's backpressure still
+        // made progress; only a terminal tick overrides that.
+        let result = match last {
+            TickResult::Done => TickResult::Done,
+            _ if progressed => TickResult::Progress,
+            other => other,
+        };
 
         report.record(slot.id, slot.service_class, result);
 
@@ -743,8 +795,11 @@ mod tests {
         let _ = produce_pass(&mut slots, &order, &mut observer);
         let _ = produce_pass(&mut slots, &order, &mut observer);
 
+        // The cached policy is read once at registration and never again, no
+        // matter how many ticks a visit runs — a pass serves a slot as a burst,
+        // so the tick count is not one per pass.
         assert_eq!(slots[0].node.policy_calls.get(), 1);
-        assert_eq!(slots[0].node.ticks, 2);
+        assert!(slots[0].node.ticks >= 2);
     }
 
     #[kithara::test]
@@ -912,14 +967,18 @@ mod tests {
         let wake = SchedulerWake::default();
         let mut streak = 0u32;
 
-        for _ in 0..FAIRNESS_YIELD_EVERY - 1 {
+        for _ in 0..Scheduler::<DummyNode, TestObserver>::FAIRNESS_YIELD_EVERY - 1 {
             park_after_outcome::<DummyNode, TestObserver>(
                 &wake,
                 PassOutcome::Produced,
                 &mut streak,
             );
         }
-        assert_eq!(streak, FAIRNESS_YIELD_EVERY - 1, "streak accumulates");
+        assert_eq!(
+            streak,
+            Scheduler::<DummyNode, TestObserver>::FAIRNESS_YIELD_EVERY - 1,
+            "streak accumulates"
+        );
 
         park_after_outcome::<DummyNode, TestObserver>(&wake, PassOutcome::Produced, &mut streak);
         assert_eq!(streak, 0, "streak resets to zero after the Nth yield");

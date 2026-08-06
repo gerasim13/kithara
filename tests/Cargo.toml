@@ -60,8 +60,6 @@ apple-fused-src = ["kithara/apple-fused-src"]
 
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
-kithara = { workspace = true, features = ["full", "queue", "probe", "mock", "symphonia", "stretch-signalsmith", "stretch-bungee"] }
-kithara-devtools = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 
 # Crypto (for HLS encryption tests)
@@ -100,6 +98,13 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 
+# `fdk-aac` decodes HE-AAC v1/v2, which the stock symphonia path reports as
+# LC-only; the rapid-scrub and stress-seek fixtures need it. Its vendored
+# `FDK_archdef.h` has no branch for MSVC on ARM64 and stops at `fatal error
+# C1021: invalid preprocessor command`, so that one target goes without.
+[target.'cfg(all(not(target_arch = "wasm32"), not(all(target_os = "windows", target_arch = "aarch64"))))'.dependencies]
+kithara = { workspace = true, features = ["fdk-aac"] }
+
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
 kithara = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 
@@ -113,8 +118,24 @@ kithara = { workspace = true, features = ["apple", "client-wreq"] }
 
 # --- Native-only dependencies ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara = { workspace = true, features = ["backend-cpal", "fdk-aac", "tokio-net", "tokio-rt-multi-thread"] }
+kithara = { workspace = true, features = [
+    "full",
+    "queue",
+    "probe",
+    "mock",
+    "symphonia",
+    "stretch-signalsmith",
+    "stretch-bungee",
+    "backend-cpal",
+    "tokio-net",
+    "tokio-rt-multi-thread",
+] }
 kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "lib-only"] }
+
+# Only `architecture_trace` reaches for it, and that module is already native
+# only: the crate's LSP client builds file URLs, which `url` offers everywhere
+# but wasm.
+kithara-devtools = { workspace = true }
 # fdk-aac came from kithara-decode defaults before Phase 2 (workspace
 # default-features=false). HE-AAC v2 fMP4 fixtures in rapid-scrub /
 # stress-seek tests decode through the symphonia path, and without fdk-aac
@@ -158,7 +179,25 @@ unimock = { workspace = true }
 
 # --- WASM-only dependencies ---
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-kithara = { workspace = true, features = ["backend-web-audio", "client-reqwest"] }
+# What the native tests take, minus time stretching: the stretch backends are
+# C++ libraries and `kithara-stretch` declares them for non-wasm targets only,
+# so on wasm the feature compiles a module whose imports do not exist.
+kithara = { workspace = true, default-features = false, features = [
+    "full",
+    "queue",
+    "probe",
+    "mock",
+    "symphonia",
+    "resample-rubato",
+    "analysis-beat",
+    "analysis-waveform",
+    "backend-web-audio",
+    # `probe` re-exports the WebCodecs capability probe on wasm, and the probe
+    # only exists when the decoder that owns it is compiled in.
+    "webcodecs",
+    "client-reqwest",
+    "tls-rustls",
+] }
 
 console_error_panic_hook = { workspace = true }
 gloo-timers = { workspace = true }

@@ -103,7 +103,6 @@ portable-atomic = { workspace = true }
 realfft = { workspace = true, optional = true }
 ringbuf = { workspace = true }
 serde = { workspace = true }
-smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 unimock = { workspace = true, optional = true }

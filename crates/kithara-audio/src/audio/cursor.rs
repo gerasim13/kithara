@@ -1,4 +1,4 @@
-use std::{io::Error as IoError, num::NonZeroUsize};
+use std::num::NonZeroUsize;
 
 use fast_interleave::deinterleave_variable;
 use kithara_bufpool::{PcmBuf, PcmPool};
@@ -7,7 +7,7 @@ use kithara_stream::{ChunkPosition, PlayheadWrite};
 use kithara_test_utils::kithara;
 
 use super::{
-    ConsumerPhase, DecodeError, PendingReason, ReadOutcome,
+    ConsumerPhase, DecodeError, FailureSource, PendingReason, ReadOutcome,
     event::AudioEvents,
     ring::{RecvCtx, RingConsumer},
 };
@@ -112,7 +112,7 @@ impl ChunkCursor {
             ConsumerPhase::AtEof if ring.current_chunk.is_none() => {
                 return Ok(eof(playhead));
             }
-            ConsumerPhase::Failed => return Err(channel_failed()),
+            ConsumerPhase::Failed { source } => return Err(channel_failed(source)),
             _ => {}
         }
 
@@ -168,7 +168,7 @@ impl ChunkCursor {
 
         Ok(match ring.phase {
             ConsumerPhase::AtEof => eof(playhead),
-            ConsumerPhase::Failed => return Err(channel_failed()),
+            ConsumerPhase::Failed { source } => return Err(channel_failed(source)),
             ConsumerPhase::SeekPending { .. } => pending(playhead, PendingReason::SeekInProgress),
             _ => pending(playhead, PendingReason::Buffering),
         })
@@ -189,9 +189,7 @@ impl ChunkCursor {
         let frames = output[0].len();
         let total_samples = frames * channels;
         let Some(mut interleaved) = self.interleaved.take() else {
-            return Err(DecodeError::Io {
-                source: IoError::other("interleaved scratch detached during planar read"),
-            });
+            return Err(DecodeError::ScratchDetached);
         };
         interleaved.clear();
         interleaved.ensure_len(total_samples)?;
@@ -226,12 +224,8 @@ struct CopyOutcome {
 }
 
 fn frames_to_samples(frames: u64, channels: u64) -> Result<usize, DecodeError> {
-    let samples = frames.saturating_mul(channels);
-    usize::try_from(samples).map_err(|error| DecodeError::Io {
-        source: IoError::other(format!(
-            "frames*channels overflow: {samples} does not fit usize: {error}"
-        )),
-    })
+    usize::try_from(frames.saturating_mul(channels))
+        .map_err(|_| DecodeError::SampleCountOverflow { frames, channels })
 }
 
 fn interpolated_position(meta: PcmMeta, consumed_frames: u64) -> kithara_platform::time::Duration {
@@ -245,10 +239,8 @@ fn interpolated_position(meta: PcmMeta, consumed_frames: u64) -> kithara_platfor
     kithara_platform::time::Duration::from_nanos(nanos)
 }
 
-fn channel_failed() -> DecodeError {
-    DecodeError::Io {
-        source: IoError::other("pcm channel closed / producer failed"),
-    }
+fn channel_failed(failure: FailureSource) -> DecodeError {
+    DecodeError::pcm_stream("cursor read", failure)
 }
 
 fn pending(playhead: &dyn PlayheadWrite, reason: PendingReason) -> CursorRead {

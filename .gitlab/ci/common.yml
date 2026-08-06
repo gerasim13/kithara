@@ -1,22 +1,100 @@
+# Keeping the build directory across jobs also keeps the cached `xtask` binary,
+# which is built from one commit and would then be used by the next. When the
+# two disagree it fails while parsing its own configuration, and the staleness
+# check runs that same stale binary to find out — so it cannot report the
+# problem. Stamp the cache with the commit that produced it and drop it when
+# the stamp no longer matches. Not applied to Windows, whose shell is not this
+# one; that lane has no runner today.
+.unix-job:
+  before_script:
+    - |
+      stamp=target/xtask-self-cache/.commit
+      if [ "$(cat "$stamp" 2>/dev/null)" != "$CI_COMMIT_SHA" ]; then
+        rm -rf target/xtask-self-cache
+        mkdir -p target/xtask-self-cache
+        printf '%s' "$CI_COMMIT_SHA" > "$stamp"
+      fi
+
 .macos-job:
+  extends: .unix-job
   tags:
     - kithara-macos
 
 .linux-job:
+  extends: .unix-job
   image: kithara-ci:linux-20260729
   tags:
     - kithara-linux
 
 .android-job:
+  extends: .unix-job
   tags:
     - kithara-android
 
 .windows-job:
   variables:
-    KITHARA_CI_HOST_CONFIG: C:/KitharaCI/host.toml
+    # Beside the pins and the runner token, the way the macOS host keeps them.
+    KITHARA_CI_HOST_CONFIG: C:/KitharaCI/services/host.toml
   tags:
     - kithara-windows
 
 .release-job:
+  extends: .unix-job
   tags:
     - kithara-release
+
+# Jobs declare only the dependencies they really have. Ordering on the shared
+# host belongs to the runners — each takes a single build at a time — so a lane
+# no longer queues behind an unrelated lane, and a lane whose runner is not
+# registered cannot hold the rest of the pipeline hostage.
+.rules-verify:
+  interruptible: true
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "merge-request"
+    - if: $KITHARA_PIPELINE_KIND == "quarantine"
+    - if: $KITHARA_PIPELINE_KIND == "main"
+      interruptible: false
+    - if: $KITHARA_PIPELINE_KIND == "nightly"
+      interruptible: false
+    - if: $KITHARA_PIPELINE_KIND == "release"
+      interruptible: false
+
+.rules-integration:
+  interruptible: false
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "main"
+    - if: $KITHARA_PIPELINE_KIND == "nightly"
+
+.rules-nightly:
+  interruptible: false
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "nightly"
+
+.rules-weekly:
+  interruptible: false
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "weekly"
+
+.rules-release:
+  interruptible: false
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "release"
+    # The same artifacts feed the rolling nightly channel, so the build lanes
+    # run there too. What differs is the checksum gate a version carries and
+    # the tag the publish job writes, and the lanes read the kind for both.
+    - if: $KITHARA_PIPELINE_KIND == "nightly"
+    # The build lanes only produce artifacts, so whether they still work is a
+    # question worth answering before a release rather than during one. Any
+    # pipeline may ask by setting this — on a protected ref, because two of
+    # these lanes are tagged for protected runners and a job no runner may take
+    # holds the pipeline's resource group until it times out. `release:publish`
+    # carries its own rule and stays out of reach: it is the only job that
+    # leaves this machine.
+    - if: $KITHARA_VERIFY_RELEASE_LANES == "1" && $CI_COMMIT_REF_PROTECTED == "true"
+
+# Dropping the serial chain let two runners work at once, which is the point —
+# but a full suite, a browser run, and every perf measurement report on how
+# loaded the host was, not only on the commit. Those take this group, so one of
+# them holds the machine at a time while lint, checks, and scans run alongside.
+.measured:
+  resource_group: kithara-suite

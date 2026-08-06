@@ -5,7 +5,7 @@ deny:
     cargo deny check
 
 machete:
-    cargo machete --skip-target-dir $(find crates -maxdepth 1 -mindepth 1 -not -name kithara-workspace-hack | sort) tests examples xtask
+    cargo machete --skip-target-dir $(find crates -maxdepth 1 -mindepth 1 -not -name kithara-workspace-hack | sort) tests xtask
 
 shear:
     cargo shear --deny-warnings

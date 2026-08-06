@@ -83,6 +83,247 @@ pub(crate) fn publish_pages_retained(ctx: &Ctx, git_ref: &str, artifacts: &Path)
     pages(&ext.release, git_ref, Some(artifacts))
 }
 
+pub(crate) fn publish_nightly_retained(ctx: &Ctx, git_ref: &str, artifacts: &Path) -> Result<()> {
+    let ext = KitharaExt::from_ctx(ctx)?;
+    publish_nightly(&ext.release, git_ref, artifacts)
+}
+
+/// The rolling build channel. A nightly is not a version: it carries no
+/// manifest checksum, reaches no crate registry, and answers one question —
+/// what does the head of the default branch build into today. One tag holds
+/// it, and every run replaces that tag, its release, and its package files
+/// wholesale, because an asset cannot take new bytes under a name a release
+/// already uses. A consumer pins the tag once and follows the branch.
+fn publish_nightly(cfg: &ReleaseConfig, git_ref: &str, artifacts: &Path) -> Result<()> {
+    require_config(cfg)?;
+    check_tool("gh", &["--version"], "brew install gh")?;
+    if cfg.nightly_tag.is_empty() {
+        bail!("ext.release.nightly_tag is not set in .config/xtask.toml");
+    }
+    let tag = cfg.nightly_tag.as_str();
+    let sha = git_capture(&["rev-parse", git_ref])?;
+    let assets = nightly_assets(cfg, artifacts)?;
+    let notes = nightly_notes(cfg, &sha, &assets)?;
+    println!(
+        "Nightly {tag} from {git_ref} ({short})",
+        short = &sha[..12.min(sha.len())]
+    );
+
+    replace_github_nightly(cfg, tag, &sha, &notes, &assets)?;
+    replace_gitlab_nightly(cfg, tag, &sha, &notes, &assets)?;
+
+    println!();
+    println!("Nightly {tag} published:");
+    println!(
+        "  https://github.com/{}/releases/tag/{tag}",
+        cfg.github_repo
+    );
+    println!(
+        "  https://{}/{}/-/releases/{tag}",
+        cfg.gitlab_host, cfg.gitlab_project
+    );
+    Ok(())
+}
+
+/// Whatever the build jobs handed over. The primary framework has to be there —
+/// without it the channel publishes nothing anyone asked for — and the rest
+/// ships when it was built, so one lane failing does not withhold the others.
+fn nightly_assets(cfg: &ReleaseConfig, artifacts: &Path) -> Result<Vec<PathBuf>> {
+    let primary = artifacts.join(&cfg.asset);
+    if !primary.is_file() {
+        bail!(
+            "the nightly channel needs {}, which the release build jobs did not leave at {}",
+            cfg.asset,
+            primary.display()
+        );
+    }
+    let optional = [&cfg.single_asset, &cfg.docs_asset, &cfg.wasm_asset]
+        .into_iter()
+        .chain(cfg.platform_assets.iter());
+    let mut assets = vec![primary];
+    for name in optional {
+        if name.is_empty() {
+            continue;
+        }
+        let path = artifacts.join(name);
+        match path.is_file() {
+            true => assets.push(path),
+            false => println!("[nightly] {name} was not built — skipping"),
+        }
+    }
+    Ok(assets)
+}
+
+fn nightly_notes(cfg: &ReleaseConfig, sha: &str, assets: &[PathBuf]) -> Result<String> {
+    let date = git_capture(&["show", "-s", "--format=%cI", sha])?;
+    let subject = git_capture(&["show", "-s", "--format=%s", sha])?;
+    let mut notes = format!(
+        "## {} nightly\n\nBuilt from `{sha}` ({date}).\n\n> {subject}\n\n## Artifacts\n\n",
+        cfg.title
+    );
+    for asset in assets {
+        let name = file_name(asset)?;
+        let checksum = sha256(asset)?;
+        let _ = writeln!(notes, "- `{name}` — `{checksum}`");
+    }
+    let _ = writeln!(
+        notes,
+        "\nThis release is replaced by every nightly run. Pin a version tag for anything durable."
+    );
+    Ok(notes)
+}
+
+/// `gh` amends a release in place but will not take new bytes for an asset
+/// name it already holds, so the release goes away with its tag and comes back
+/// pointing at today's commit.
+fn replace_github_nightly(
+    cfg: &ReleaseConfig,
+    tag: &str,
+    sha: &str,
+    notes: &str,
+    assets: &[PathBuf],
+) -> Result<()> {
+    let repo = &cfg.github_repo;
+    // The commit has to be in the mirror before the old release is taken down.
+    // GitHub mirrors the default branch alone, and the release that goes away
+    // first would leave the channel carrying nothing at all if the commit that
+    // replaces it turned out not to be there.
+    let target = Command::new("gh")
+        .args(["api", &format!("repos/{repo}/commits/{sha}")])
+        .output()
+        .context("run gh api commits")?;
+    if !target.status.success() {
+        bail!(
+            "github mirror {repo} does not carry {sha}; the nightly channel publishes what the \
+             mirrored branch builds, and nothing was replaced.\n{}",
+            command_output_text(&target).trim()
+        );
+    }
+
+    let view = Command::new("gh")
+        .args(["release", "view", tag, "--repo", repo])
+        .output()
+        .context("run gh release view")?;
+    if view.status.success() {
+        println!("[github] replacing nightly release {tag}...");
+        run_step(
+            Command::new("gh").args([
+                "release",
+                "delete",
+                tag,
+                "--repo",
+                repo,
+                "--cleanup-tag",
+                "--yes",
+            ]),
+            "gh release delete",
+        )?;
+    } else {
+        let text = command_output_text(&view);
+        if !gh_release_missing(&text) {
+            bail!("gh release view failed: {}", text.trim());
+        }
+        println!("[github] creating nightly release {tag}...");
+    }
+
+    let mut create = Command::new("gh");
+    create.args([
+        "release",
+        "create",
+        tag,
+        "--repo",
+        repo,
+        "--target",
+        sha,
+        "--title",
+        &format!("{} nightly", cfg.title),
+        "--notes",
+        notes,
+        "--prerelease",
+    ]);
+    for asset in assets {
+        create.arg(asset);
+    }
+    run_step(&mut create, "gh release create")?;
+
+    for asset in assets {
+        let name = file_name(asset)?;
+        verify_github_asset(repo, tag, &name, &sha256(asset)?)?;
+    }
+    Ok(())
+}
+
+/// The `GitLab` side replaces the same three things the GitHub side does: the
+/// release, the tag under it, and the package version the release links to.
+fn replace_gitlab_nightly(
+    cfg: &ReleaseConfig,
+    tag: &str,
+    sha: &str,
+    notes: &str,
+    assets: &[PathBuf],
+) -> Result<()> {
+    let token = gitlab_token(&cfg.gitlab_host)?;
+    let api = GitlabApi::new(cfg, &token)?;
+
+    let (code, body) = api.delete(&format!("releases/{tag}"))?;
+    match code {
+        200 | 204 => println!("[gitlab] removed the previous nightly release"),
+        404 => {}
+        other => bail!("gitlab release delete failed (HTTP {other}): {body}"),
+    }
+    let (code, body) = api.delete(&format!("repository/tags/{tag}"))?;
+    match code {
+        200 | 204 | 404 => {}
+        other => bail!("gitlab tag delete failed (HTTP {other}): {body}"),
+    }
+    if let Some(id) = api.package_id(tag)? {
+        let (code, body) = api.delete(&format!("packages/{id}"))?;
+        match code {
+            200 | 204 | 404 => println!("[gitlab] removed the previous nightly package"),
+            other => bail!("gitlab package delete failed (HTTP {other}): {body}"),
+        }
+    }
+
+    let (code, body) = api.post(&format!("repository/tags?tag_name={tag}&ref={sha}"), None)?;
+    if code != 201 {
+        bail!("gitlab tag create failed (HTTP {code}): {body}");
+    }
+
+    for asset in assets {
+        let name = file_name(asset)?;
+        println!("[gitlab] uploading {name} to package registry...");
+        let (code, body) = api.upload(&gitlab_package_path(cfg, tag, &name), asset)?;
+        if code != 200 && code != 201 {
+            bail!("gitlab upload of {name} failed (HTTP {code}): {body}");
+        }
+    }
+
+    let links = assets
+        .iter()
+        .map(|asset| {
+            let name = file_name(asset)?;
+            Ok(gitlab_release_link(cfg, tag, &name).as_json())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let payload = json!({
+        "tag_name": tag,
+        "name": format!("{} nightly", cfg.title),
+        "description": notes,
+        "assets": { "links": links },
+    });
+    let (code, body) = api.post("releases", Some(&payload.to_string()))?;
+    if code != 201 {
+        bail!("gitlab release create failed (HTTP {code}): {body}");
+    }
+    Ok(())
+}
+
+fn file_name(path: &Path) -> Result<String> {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .with_context(|| format!("{} has no file name", path.display()))
+}
+
 fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()> {
     require_config(cfg)?;
     validate_version(version)?;
@@ -794,6 +1035,10 @@ impl GitlabApi {
         self.curl(&extra, path)
     }
 
+    fn delete(&self, path: &str) -> Result<(u16, String)> {
+        self.curl(&["--request", "DELETE"], path)
+    }
+
     fn upload(&self, path: &str, file: &Path) -> Result<(u16, String)> {
         let file_arg = file.display().to_string();
         let timeout = self.upload_timeout_secs.to_string();
@@ -836,21 +1081,26 @@ impl GitlabApi {
         Ok((code, body.to_string()))
     }
 
-    /// sha256 of the asset file in the generic registry for `tag`,
-    /// or None when the package or file does not exist yet.
-    fn package_file_sha(&self, tag: &str, name: &str) -> Result<Option<String>> {
+    /// Registry id of the generic package holding `tag`, or None when nothing
+    /// has been published under it yet.
+    fn package_id(&self, tag: &str) -> Result<Option<i64>> {
         let (code, body) = self.get(&format!("packages?package_version={tag}"))?;
         if code != 200 {
             bail!("gitlab package lookup failed (HTTP {code}): {body}");
         }
         let packages: Value = serde_json::from_str(&body).context("parse packages json")?;
-        let Some(pkg_id) = packages
+        Ok(packages
             .as_array()
             .into_iter()
             .flatten()
             .find(|p| p["version"].as_str() == Some(tag))
-            .and_then(|p| p["id"].as_i64())
-        else {
+            .and_then(|p| p["id"].as_i64()))
+    }
+
+    /// sha256 of the asset file in the generic registry for `tag`,
+    /// or None when the package or file does not exist yet.
+    fn package_file_sha(&self, tag: &str, name: &str) -> Result<Option<String>> {
+        let Some(pkg_id) = self.package_id(tag)? else {
             return Ok(None);
         };
 
@@ -1433,6 +1683,7 @@ mod tests {
             gitlab_host: "gitlab.zvq.me".into(),
             gitlab_project: "disrupt/kithara".into(),
             gitlab_package: "kithara".into(),
+            nightly_tag: "nightly".into(),
             asset: "KitharaFFIInternal.xcframework.zip".into(),
             single_asset: "Kithara.xcframework.zip".into(),
             platform_assets: vec!["kithara.aar".into(), "rust-tls.aar".into()],
@@ -1476,6 +1727,7 @@ mod tests {
             gitlab_host: "gitlab.zvq.me".into(),
             gitlab_project: "disrupt/kithara".into(),
             gitlab_package: "kithara".into(),
+            nightly_tag: "nightly".into(),
             asset: "KitharaFFIInternal.xcframework.zip".into(),
             single_asset: "Kithara.xcframework.zip".into(),
             platform_assets: vec!["kithara.aar".into(), "rust-tls.aar".into()],
@@ -1507,6 +1759,56 @@ mod tests {
         );
     }
 
+    /// Every field empty: a test names only what it exercises, and a new
+    /// release setting does not rewrite unrelated tests.
+    fn release_config_fixture() -> ReleaseConfig {
+        ReleaseConfig {
+            manifest: String::new(),
+            title: String::new(),
+            github_repo: String::new(),
+            gitlab_host: String::new(),
+            gitlab_project: String::new(),
+            gitlab_package: String::new(),
+            nightly_tag: String::new(),
+            asset: String::new(),
+            single_asset: String::new(),
+            platform_assets: Vec::new(),
+            docs_asset: String::new(),
+            docs_archive: String::new(),
+            wasm_asset: String::new(),
+            wasm_dist: String::new(),
+            pages_branch: String::new(),
+            http_timeout_secs: None,
+            upload_timeout_secs: None,
+        }
+    }
+
+    /// A nightly ships what was built. One build lane failing costs the channel
+    /// that lane's artifact, not the whole publish — but the framework the
+    /// channel exists to carry is not optional.
+    #[test]
+    fn the_nightly_channel_ships_what_was_built() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let cfg = ReleaseConfig {
+            asset: "primary.zip".into(),
+            single_asset: "single.zip".into(),
+            platform_assets: vec!["kithara.aar".into()],
+            docs_asset: "docs.zip".into(),
+            wasm_asset: String::new(),
+            ..release_config_fixture()
+        };
+
+        let error = nightly_assets(&cfg, dir.path()).expect_err("no primary artifact");
+        assert!(error.to_string().contains("primary.zip"), "{error}");
+
+        for name in ["primary.zip", "kithara.aar"] {
+            fs::write(dir.path().join(name), b"x").expect("write artifact");
+        }
+        let assets = nightly_assets(&cfg, dir.path()).expect("primary artifact is there");
+        let names: Vec<_> = assets.iter().map(|p| file_name(p).unwrap()).collect();
+        assert_eq!(names, ["primary.zip", "kithara.aar"]);
+    }
+
     #[test]
     fn gh_release_missing_does_not_hide_auth_failures() {
         assert!(gh_release_missing("HTTP 404: release not found"));
@@ -1521,22 +1823,9 @@ mod tests {
     #[test]
     fn release_http_timeout_uses_config() {
         let cfg = ReleaseConfig {
-            manifest: String::new(),
-            title: String::new(),
-            github_repo: String::new(),
-            gitlab_host: String::new(),
-            gitlab_project: String::new(),
-            gitlab_package: String::new(),
-            asset: String::new(),
-            single_asset: String::new(),
-            platform_assets: Vec::new(),
-            docs_asset: String::new(),
-            docs_archive: String::new(),
-            wasm_asset: String::new(),
-            wasm_dist: String::new(),
-            pages_branch: String::new(),
             http_timeout_secs: Some(60),
             upload_timeout_secs: Some(600),
+            ..release_config_fixture()
         };
 
         assert_eq!(resolve_http_timeout_secs(&cfg).unwrap(), 60);
@@ -1546,22 +1835,9 @@ mod tests {
     #[test]
     fn release_http_timeout_requires_config() {
         let cfg = ReleaseConfig {
-            manifest: String::new(),
-            title: String::new(),
-            github_repo: String::new(),
-            gitlab_host: String::new(),
-            gitlab_project: String::new(),
-            gitlab_package: String::new(),
-            asset: String::new(),
-            single_asset: String::new(),
-            platform_assets: Vec::new(),
-            docs_asset: String::new(),
-            docs_archive: String::new(),
-            wasm_asset: String::new(),
-            wasm_dist: String::new(),
-            pages_branch: String::new(),
             http_timeout_secs: None,
             upload_timeout_secs: Some(600),
+            ..release_config_fixture()
         };
 
         let error = resolve_http_timeout_secs(&cfg).unwrap_err();
@@ -1571,22 +1847,9 @@ mod tests {
     #[test]
     fn release_upload_timeout_requires_config() {
         let cfg = ReleaseConfig {
-            manifest: String::new(),
-            title: String::new(),
-            github_repo: String::new(),
-            gitlab_host: String::new(),
-            gitlab_project: String::new(),
-            gitlab_package: String::new(),
-            asset: String::new(),
-            single_asset: String::new(),
-            platform_assets: Vec::new(),
-            docs_asset: String::new(),
-            docs_archive: String::new(),
-            wasm_asset: String::new(),
-            wasm_dist: String::new(),
-            pages_branch: String::new(),
             http_timeout_secs: Some(60),
             upload_timeout_secs: None,
+            ..release_config_fixture()
         };
 
         let error = resolve_upload_timeout_secs(&cfg).unwrap_err();

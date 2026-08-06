@@ -23,8 +23,32 @@ impl Process {
     }
 
     pub(crate) fn command(&self, program: impl AsRef<OsStr>) -> Command {
+        self.command_in(program, "")
+    }
+
+    /// The checkout every command of this process runs against.
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Where the builds this process runs leave their output. A lane that runs
+    /// a binary it just built has to look where Cargo was told to write it,
+    /// which is not the default directory on an executor.
+    pub(crate) fn target_dir(&self) -> PathBuf {
+        self.vars
+            .get(OsStr::new("CARGO_TARGET_DIR"))
+            .map_or_else(|| self.root.join("target"), PathBuf::from)
+    }
+
+    /// A command that runs inside a subdirectory of the checkout. Build tools
+    /// that locate their project by walking up from the working directory —
+    /// Gradle looks for the settings file — need the directory that owns them,
+    /// not the workspace root.
+    pub(crate) fn command_in(&self, program: impl AsRef<OsStr>, relative: &str) -> Command {
         let mut command = Command::new(program);
-        command.current_dir(&self.root).envs(&self.vars);
+        command
+            .current_dir(self.root.join(relative))
+            .envs(&self.vars);
         command
     }
 
@@ -91,6 +115,16 @@ impl Process {
             })
         })
     }
+}
+
+pub(crate) fn require_os(expected: &str, label: &str) -> Result<()> {
+    if env::consts::OS != expected {
+        bail!(
+            "{label} lane requires {expected}, current platform is {}",
+            env::consts::OS
+        );
+    }
+    Ok(())
 }
 
 fn executable_extensions(vars: &BTreeMap<OsString, OsString>) -> Vec<String> {

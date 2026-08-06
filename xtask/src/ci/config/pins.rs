@@ -24,10 +24,6 @@ pub(crate) struct CiPins {
     pub(crate) android_platform_version: u32,
     pub(crate) brew_casks: Vec<String>,
     pub(crate) brew_formulae: Vec<String>,
-    pub(crate) cilicon_image: String,
-    pub(crate) cilicon_image_digest: String,
-    pub(crate) cilicon_sha256: String,
-    pub(crate) cilicon_version: String,
     pub(crate) cmake_linux_amd64_sha256: String,
     pub(crate) cmake_linux_arm64_sha256: String,
     pub(crate) cmake_version: String,
@@ -44,6 +40,9 @@ pub(crate) struct CiPins {
     pub(crate) linux_android_runner_image: String,
     pub(crate) linux_image: String,
     pub(crate) linux_runner_image: String,
+    /// Build the guest macOS must report. The CI VM is built locally from the
+    /// matching Apple restore image instead of pulled from a registry.
+    pub(crate) macos_guest_build: String,
     pub(crate) msrv_toolchain: String,
     pub(crate) nightly_toolchain: String,
     pub(crate) rustup_version: String,
@@ -86,9 +85,6 @@ impl CiPins {
                 self.android_commandline_tools_version.as_str(),
             ),
             ("android_ndk_version", self.android_ndk_version.as_str()),
-            ("cilicon_image", self.cilicon_image.as_str()),
-            ("cilicon_image_digest", self.cilicon_image_digest.as_str()),
-            ("cilicon_version", self.cilicon_version.as_str()),
             ("cmake_version", self.cmake_version.as_str()),
             (
                 "expected_xcode_version",
@@ -104,6 +100,7 @@ impl CiPins {
             ),
             ("linux_image", self.linux_image.as_str()),
             ("linux_runner_image", self.linux_runner_image.as_str()),
+            ("macos_guest_build", self.macos_guest_build.as_str()),
             ("msrv_toolchain", self.msrv_toolchain.as_str()),
             ("nightly_toolchain", self.nightly_toolchain.as_str()),
             ("rustup_version", self.rustup_version.as_str()),
@@ -153,7 +150,10 @@ impl CiPins {
                 "android_commandline_tools_sha256",
                 self.android_commandline_tools_sha256.as_str(),
             ),
-            ("cilicon_sha256", self.cilicon_sha256.as_str()),
+            (
+                "cmake_linux_arm64_sha256",
+                self.cmake_linux_arm64_sha256.as_str(),
+            ),
             (
                 "cmake_linux_amd64_sha256",
                 self.cmake_linux_amd64_sha256.as_str(),
@@ -188,13 +188,6 @@ impl CiPins {
             if !is_sha256(digest) {
                 bail!("CI pin {name} must be a SHA-256 digest");
             }
-        }
-        if !self
-            .cilicon_image_digest
-            .strip_prefix("sha256:")
-            .is_some_and(is_sha256)
-        {
-            bail!("cilicon_image_digest must be a prefixed SHA-256 digest");
         }
         Ok(())
     }

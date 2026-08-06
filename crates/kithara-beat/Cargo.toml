@@ -10,6 +10,9 @@ keywords = ["audio", "beat", "tempo", "bpm", "dsp"]
 categories = ["multimedia::audio"]
 exclude = ["tests/**"]
 
+[package.metadata.cargo-machete]
+ignored = ["kithara-workspace-hack"]
+
 [features]
 default = []
 embed-small-model = []

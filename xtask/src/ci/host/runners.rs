@@ -1,10 +1,12 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::Stdio,
+    thread,
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
 use tracing::info;
 
 use super::services::launchd;
@@ -30,20 +32,17 @@ impl<'a> RunnerManager<'a> {
         let config_root = home.join(".config/kithara-ci");
         let runner_root = home.join(".gitlab-runner");
         let image_digest_path = config_root.join("linux-image.digest");
-        let cilicon_password_path = config_root.join("cilicon-ssh.password");
         let expected_linux = read_trimmed(&image_digest_path)?;
         let actual_linux = self.linux_image_digest(&home)?;
         if expected_linux != actual_linux {
             bail!("Linux CI image digest changed: expected {expected_linux}, found {actual_linux}");
         }
         let tokens = Tokens::load(&config_root)?;
-        let cilicon_password = read_secret(&cilicon_password_path)?;
         for path in [
             &config_root,
             &runner_root,
             &self.config.host.host_root.join("cache/gitlab-runner"),
             &self.config.host.host_root.join("toolchains/shared-bin"),
-            &self.config.host.host_root.join("vm/cilicon-clone"),
             &self.config.host.host_root.join("workspaces/gitlab"),
             &self.agent_root(),
         ] {
@@ -52,37 +51,31 @@ impl<'a> RunnerManager<'a> {
         }
         self.copy_shared_tool("xcodegen")?;
         let current = std::env::current_exe().context("resolving CI executable")?;
-        fs::copy(
-            current,
-            self.config
+        replace_file(
+            &current,
+            &self
+                .config
                 .host
                 .host_root
                 .join("toolchains/shared-bin/kithara-ci"),
         )
-        .context("installing CI executable for Cilicon guests")?;
+        .context("installing CI executable for macOS guests")?;
         for name in ["host.toml", "pins.toml"] {
-            fs::copy(
-                self.config.host.host_root.join("services").join(name),
-                self.config
+            replace_file(
+                &self.config.host.host_root.join("services").join(name),
+                &self
+                    .config
                     .host
                     .host_root
                     .join("toolchains/shared-bin")
                     .join(name),
             )
-            .with_context(|| format!("installing Cilicon guest {name}"))?;
+            .with_context(|| format!("installing macOS guest {name}"))?;
         }
 
         write_secure(
             &runner_root.join("config.toml"),
             &self.runner_config(&home, &tokens),
-        )?;
-        write_secure(
-            &home.join("cilicon.yml"),
-            &self.cilicon_config(&home, &tokens, &cilicon_password)?,
-        )?;
-        write_secure(
-            &config_root.join("cilicon-image.digest"),
-            &format!("{}\n", self.config.pins.cilicon_image_digest),
         )?;
         self.install_runner_agents(&home)?;
         self.process.run(
@@ -103,29 +96,31 @@ impl<'a> RunnerManager<'a> {
         self.require_ci_user()?;
         let uid = self.process.capture("/usr/bin/id", &["-u"], "CI user id")?;
         let domain = format!("gui/{uid}");
-        let status = self
-            .process
-            .command("/bin/launchctl")
-            .args(["print", &domain])
-            .status()
-            .context("checking CI GUI session")?;
-        if !status.success() {
+        if !self.launchctl_knows(&domain) {
             bail!(
                 "the {} GUI session is not active; log in locally first",
                 self.config.host.ci_user
             );
         }
-        for name in ["cleanup", "health", "colima", "gitlab-runner", "cilicon"] {
+        for name in [
+            "cleanup",
+            "health",
+            "colima",
+            "gitlab-runner",
+            "macos-runner",
+        ] {
             let label = format!("com.zvuk.kithara-ci.{name}");
             let plist = self.agent_root().join(format!("{label}.plist"));
             if !plist.is_file() {
                 continue;
             }
+            let service = format!("{domain}/{label}");
             let _ = self
                 .process
                 .command("/bin/launchctl")
-                .args(["bootout", &format!("{domain}/{label}")])
+                .args(["bootout", &service])
                 .status();
+            self.await_unload(&service)?;
             self.process.run(
                 "/bin/launchctl",
                 &["bootstrap", &domain, path_text(&plist)?],
@@ -146,6 +141,38 @@ impl<'a> RunnerManager<'a> {
         Ok(())
     }
 
+    /// `launchctl print` answers for a domain or a loaded service and fails
+    /// otherwise. Its output is enormous, so keep it off the console.
+    fn launchctl_knows(&self, target: &str) -> bool {
+        self.process
+            .command("/bin/launchctl")
+            .args(["print", target])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
+    /// launchd tears a service down asynchronously, and bootstrapping one
+    /// that is still on its way out fails with `EIO` — which would leave the
+    /// service unloaded and its process stopped.
+    fn await_unload(&self, service: &str) -> Result<()> {
+        const ATTEMPTS: u32 = 120;
+        const POLL: Duration = Duration::from_millis(500);
+        for _ in 0..ATTEMPTS {
+            if !self.launchctl_knows(service) {
+                return Ok(());
+            }
+            thread::sleep(POLL);
+        }
+        bail!("{service} is still loaded after being booted out")
+    }
+
+    /// The Linux container's ceiling is deliberately below the VM's eight
+    /// gigabytes, so a runaway job cannot take the VM down with it. Five was
+    /// too low: one `rustc` compiling the largest test crate reached 3.3
+    /// gibibytes on its own and the kernel killed it, which Cargo reported
+    /// only as "could not compile" with no diagnostic at all.
     fn runner_config(&self, home: &Path, tokens: &Tokens) -> String {
         let root = self.config.host.host_root.display();
         let url = self.config.host.gitlab_origin();
@@ -154,9 +181,9 @@ impl<'a> RunnerManager<'a> {
         format!(
             "concurrent = 1\ncheck_interval = 3\nshutdown_timeout = 30\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"RUSTUP_HOME=/usr/local/rustup\"]\n\
-             [runners.docker]\n    host = \"{}\"\n    image = \"{}\"\n    pull_policy = \"if-not-present\"\n    allowed_pull_policies = [\"if-not-present\"]\n    allowed_images = [\"kithara-ci:*\"]\n    cpus = \"5\"\n    memory = \"5g\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/host.toml:{lane_config}:ro\"]\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_HOST_CONFIG={lane_config}\"]\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_HOST_CONFIG={lane_config}\"]\n",
+             [runners.docker]\n    host = \"{}\"\n    image = \"{}\"\n    pull_policy = \"if-not-present\"\n    allowed_pull_policies = [\"if-not-present\"]\n    allowed_images = [\"kithara-ci:*\"]\n    cpus = \"5\"\n    memory = \"6500m\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/host.toml:{lane_config}:ro\"]\n\n\
+             [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\"]\n\n\
+             [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\"]\n",
             tokens.linux,
             docker_host(home),
             self.config.pins.linux_image,
@@ -165,110 +192,75 @@ impl<'a> RunnerManager<'a> {
         )
     }
 
-    fn cilicon_config(&self, home: &Path, tokens: &Tokens, ssh_password: &str) -> Result<String> {
+    /// A bind mount is resolved by the Docker daemon, which lives inside
+    /// colima's virtual machine — not on the Mac. colima mounts the CI home
+    /// and nothing else, so every other source the runner binds was missing
+    /// there, and Docker substitutes an empty directory for a source it cannot
+    /// find rather than refusing. That is how the Linux lane ran with no host
+    /// profile and no shared cache, reporting only that the profile it was
+    /// handed had somehow become a directory.
+    ///
+    /// The mounts name siblings of the CI home rather than the volume root:
+    /// colima already mounts the home, and lima rejects one mount nested
+    /// inside another.
+    fn colima_args(&self, colima: &str) -> Vec<String> {
         let root = &self.config.host.host_root;
-        let shared = self.config.host.cilicon_guest_shared_root.display();
-        let pre_run = format!(
-            "\"{shared}/kithara-tools/kithara-ci\" ci host --config \
-             \"{shared}/kithara-tools/host.toml\" --pins \
-             \"{shared}/kithara-tools/pins.toml\" guest-prepare"
-        );
-        let config = CiliconConfig {
-            source: &self.config.pins.cilicon_image,
-            runner_name: "kithara-mac-mini-macos",
-            vm_clone_path: root.join("vm/cilicon-clone"),
-            retry_delay: 30,
-            ssh_connect_max_retries: 30,
-            console_devices: ["tart-version-2"],
-            ssh_credentials: SshCredentials {
-                username: &self.config.host.cilicon_ssh_user,
-                password: ssh_password,
-            },
-            hardware: Hardware {
-                cpu_cores: 8,
-                ram_gigabytes: 12,
-                connects_to_audio_device: false,
-                display: Display {
-                    width: 1_440,
-                    height: 900,
-                    pixels_per_inch: 80,
-                },
-            },
-            directory_mounts: [
-                DirectoryMount {
-                    host_path: root.join("cache"),
-                    guest_folder: "kithara-cache",
-                    read_only: false,
-                },
-                DirectoryMount {
-                    host_path: home.join(".cargo"),
-                    guest_folder: "kithara-cargo",
-                    read_only: true,
-                },
-                DirectoryMount {
-                    host_path: home.join(".rustup"),
-                    guest_folder: "kithara-rustup",
-                    read_only: true,
-                },
-                DirectoryMount {
-                    host_path: root.join("toolchains/shared-bin"),
-                    guest_folder: "kithara-tools",
-                    read_only: true,
-                },
-            ],
-            pre_run: &pre_run,
-            provisioner: Provisioner {
-                kind: "gitlab",
-                config: GitlabProvisioner {
-                    gitlab_url: self.config.host.gitlab_origin(),
-                    runner_token: &tokens.macos,
-                    executor: "shell",
-                    max_number_of_builds: 1,
-                    download_latest: true,
-                    download_url: format!(
-                        "https://gitlab-runner-downloads.s3.amazonaws.com/v{}/binaries/\
-                         gitlab-runner-darwin-arm64",
-                        self.config.pins.gitlab_runner_version
-                    ),
-                },
-            },
-        };
-        serde_yml::to_string(&config).context("serializing Cilicon configuration")
+        let mut args: Vec<String> = [
+            colima,
+            "start",
+            "--profile",
+            "kithara",
+            "--foreground",
+            "--cpus",
+            "5",
+            // Linking is this workspace's memory peak, not compiling it. At
+            // five gigabytes the kernel killed `ld` outright in both the test
+            // and the coverage lane, leaving only "terminated with signal 9"
+            // behind. The macOS guest keeps twelve of the host's twenty-four
+            // and the two rarely peak together.
+            "--memory",
+            "8",
+            "--disk",
+            "100",
+            "--vm-type",
+            "vz",
+            "--vz-rosetta",
+            "--mount-type",
+            "virtiofs",
+        ]
+        .iter()
+        .map(|value| (*value).to_string())
+        .collect();
+        for mount in [
+            format!("{}:w", root.join("cache").display()),
+            format!("{}:w", root.join("services").display()),
+        ] {
+            args.push("--mount".to_string());
+            args.push(mount);
+        }
+        args
     }
 
     fn install_runner_agents(&self, home: &Path) -> Result<()> {
         let logs = self.config.host.host_root.join("logs");
         let colima = self.config.host.brew_tool("colima").display().to_string();
+        let colima_args = self.colima_args(&colima);
+        let colima_args: Vec<&str> = colima_args.iter().map(String::as_str).collect();
         let gitlab_runner = self
             .config
             .host
             .brew_tool("gitlab-runner")
             .display()
             .to_string();
+        let agent_path = self.config.host.agent_path(home);
         let agents = [
             (
                 "colima",
                 launchd(
                     "com.zvuk.kithara-ci.colima",
-                    &[
-                        &colima,
-                        "start",
-                        "--profile",
-                        "kithara",
-                        "--foreground",
-                        "--cpus",
-                        "5",
-                        "--memory",
-                        "5",
-                        "--disk",
-                        "100",
-                        "--vm-type",
-                        "vz",
-                        "--vz-rosetta",
-                        "--mount-type",
-                        "virtiofs",
-                    ],
+                    &colima_args,
                     &logs.join("colima.log"),
+                    &agent_path,
                     "<key>KeepAlive</key><true/><key>ProcessType</key><string>Background</string>",
                 ),
             ),
@@ -294,19 +286,27 @@ impl<'a> RunnerManager<'a> {
                             .to_string(),
                     ],
                     &logs.join("gitlab-runner.log"),
-                    "<key>KeepAlive</key><true/><key>ProcessType</key><string>Background</string>",
+                    &agent_path,
+                    "<key>KeepAlive</key><true/><key>ProcessType</key><string>Background</string>\
+                     <key>SoftResourceLimits</key><dict>\
+                     <key>NumberOfFiles</key><integer>65536</integer></dict>",
                 ),
             ),
             (
-                "cilicon",
+                "macos-runner",
                 launchd(
-                    "com.zvuk.kithara-ci.cilicon",
+                    "com.zvuk.kithara-ci.macos-runner",
                     &[
+                        // The copy `configure-runners` installs, not the
+                        // root-owned one. This agent's own plist already lives
+                        // in the CI user's home, so requiring root to replace
+                        // the binary it names protects nothing and blocks every
+                        // routine update of the runner loop.
                         &self
                             .config
                             .host
                             .host_root
-                            .join("services/bin/kithara-ci")
+                            .join("toolchains/shared-bin/kithara-ci")
                             .display()
                             .to_string(),
                         "ci",
@@ -327,9 +327,10 @@ impl<'a> RunnerManager<'a> {
                             .join("services/pins.toml")
                             .display()
                             .to_string(),
-                        "start-cilicon",
+                        "run-macos-runner",
                     ],
-                    &logs.join("cilicon.log"),
+                    &logs.join("macos-runner.log"),
+                    &agent_path,
                     "<key>KeepAlive</key><true/><key>ProcessType</key><string>Interactive</string>",
                 ),
             ),
@@ -346,16 +347,16 @@ impl<'a> RunnerManager<'a> {
     }
 
     fn copy_shared_tool(&self, name: &str) -> Result<()> {
-        fs::copy(
-            self.config.host.brew_tool(name),
-            self.config
+        replace_file(
+            &self.config.host.brew_tool(name),
+            &self
+                .config
                 .host
                 .host_root
                 .join("toolchains/shared-bin")
                 .join(name),
         )
-        .with_context(|| format!("installing shared {name}"))?;
-        Ok(())
+        .with_context(|| format!("installing shared {name}"))
     }
 
     pub(super) fn require_ci_user(&self) -> Result<()> {
@@ -391,82 +392,15 @@ pub(super) fn docker_host(home: &Path) -> String {
     )
 }
 
-struct Tokens {
-    macos: String,
+pub(super) struct Tokens {
+    pub(super) macos: String,
     linux: String,
     android: String,
     release: String,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CiliconConfig<'a> {
-    source: &'a str,
-    runner_name: &'a str,
-    vm_clone_path: PathBuf,
-    retry_delay: u64,
-    ssh_connect_max_retries: u64,
-    console_devices: [&'a str; 1],
-    ssh_credentials: SshCredentials<'a>,
-    hardware: Hardware,
-    directory_mounts: [DirectoryMount<'a>; 4],
-    pre_run: &'a str,
-    provisioner: Provisioner<'a>,
-}
-
-#[derive(Serialize)]
-struct SshCredentials<'a> {
-    username: &'a str,
-    password: &'a str,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Hardware {
-    cpu_cores: u8,
-    ram_gigabytes: u8,
-    connects_to_audio_device: bool,
-    display: Display,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Display {
-    width: u16,
-    height: u16,
-    pixels_per_inch: u8,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DirectoryMount<'a> {
-    host_path: PathBuf,
-    guest_folder: &'a str,
-    read_only: bool,
-}
-
-#[derive(Serialize)]
-struct Provisioner<'a> {
-    #[serde(rename = "type")]
-    kind: &'a str,
-    config: GitlabProvisioner<'a>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GitlabProvisioner<'a> {
-    #[serde(rename = "gitlabURL")]
-    gitlab_url: String,
-    runner_token: &'a str,
-    executor: &'a str,
-    max_number_of_builds: u8,
-    download_latest: bool,
-    #[serde(rename = "downloadURL")]
-    download_url: String,
-}
-
 impl Tokens {
-    fn load(root: &Path) -> Result<Self> {
+    pub(super) fn load(root: &Path) -> Result<Self> {
         Ok(Self {
             macos: read_token(root, "macos")?,
             linux: read_token(root, "linux")?,
@@ -485,7 +419,7 @@ fn read_token(root: &Path, name: &str) -> Result<String> {
     Ok(token)
 }
 
-fn read_secret(path: &Path) -> Result<String> {
+pub(super) fn read_secret(path: &Path) -> Result<String> {
     let metadata = fs::symlink_metadata(path)
         .with_context(|| format!("reading metadata for {}", path.display()))?;
     if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
@@ -527,6 +461,39 @@ pub(super) fn path_text(path: &Path) -> Result<&str> {
         .with_context(|| format!("path is not UTF-8: {}", path.display()))
 }
 
+/// Provisioning reruns, and some sources are mode `0555` (Homebrew binaries),
+/// so the destination cannot be reopened for writing. Stage beside it and
+/// rename over it: renaming needs no write permission on the file itself, and
+/// it never leaves the destination missing — clearing it first destroyed the
+/// only copy whenever a command installed the executable it was running from.
+///
+/// Renaming is also what keeps a signed executable runnable. macOS validates a
+/// signature once per inode and caches the verdict; rewriting the bytes in
+/// place leaves that verdict attached to content it no longer describes, and
+/// the kernel answers the next exec with SIGKILL. A rename installs a new
+/// inode, so the next exec is validated afresh.
+pub(super) fn replace_file(source: &Path, destination: &Path) -> Result<()> {
+    let name = destination
+        .file_name()
+        .with_context(|| format!("no file name in destination {}", destination.display()))?;
+    let mut staged = name.to_os_string();
+    staged.push(format!(".incoming.{}", std::process::id()));
+    let staged = destination.with_file_name(staged);
+
+    fs::copy(source, &staged).with_context(|| {
+        format!(
+            "staging {} beside {}",
+            source.display(),
+            destination.display()
+        )
+    })?;
+    fs::rename(&staged, destination)
+        .inspect_err(|_| {
+            let _ = fs::remove_file(&staged);
+        })
+        .with_context(|| format!("installing {}", destination.display()))
+}
+
 pub(super) fn require_macos() -> Result<()> {
     if std::env::consts::OS != "macos" {
         bail!("runner host command supports macOS only");
@@ -536,10 +503,39 @@ pub(super) fn require_macos() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, os::unix::fs::PermissionsExt};
 
     use super::*;
     use crate::ci::config::fixture;
+
+    #[test]
+    fn installing_an_executable_over_itself_keeps_it() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("kithara-ci");
+        fs::write(&path, b"payload").expect("seed the destination");
+
+        replace_file(&path, &path).expect("install in place");
+
+        assert_eq!(fs::read(&path).expect("read the destination"), b"payload");
+    }
+
+    #[test]
+    fn installing_over_a_read_only_destination_replaces_it() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("source");
+        let destination = directory.path().join("destination");
+        fs::write(&source, b"new").expect("seed the source");
+        fs::write(&destination, b"old").expect("seed the destination");
+        fs::set_permissions(&destination, PermissionsExt::from_mode(0o555))
+            .expect("make the destination read-only");
+
+        replace_file(&source, &destination).expect("install over a read-only file");
+
+        assert_eq!(
+            fs::read(&destination).expect("read the destination"),
+            b"new"
+        );
+    }
 
     #[test]
     fn rendered_runner_configs_are_valid_toml_and_yaml() {
@@ -563,14 +559,77 @@ mod tests {
         };
 
         toml::from_str::<toml::Value>(&manager.runner_config(&home, &tokens)).unwrap();
-        let cilicon = manager
-            .cilicon_config(&home, &tokens, "fixture-password")
-            .unwrap();
-        serde_yml::from_str::<serde_yml::Value>(&cilicon).unwrap();
-        assert!(cilicon.contains("gitlabURL:"));
-        assert!(cilicon.contains("downloadURL:"));
-        assert!(cilicon.contains("preRun:"));
-        assert!(!cilicon.contains("password: admin"));
+    }
+
+    /// The runner config and the colima agent are written by two different
+    /// functions and read by two different programs; nothing but this test
+    /// says they have to agree. When they stopped agreeing, Docker filled the
+    /// gap with empty directories and the lane failed several steps later,
+    /// describing a file as a directory.
+    #[test]
+    fn colima_mounts_every_source_the_docker_runner_binds() {
+        let config = fixture();
+        let process = Process::new(Path::new("/"), BTreeMap::new());
+        let manager = RunnerManager::new(&config, &process);
+        let home = config
+            .host
+            .host_root
+            .join("home")
+            .join(&config.host.ci_user);
+        let tokens = Tokens {
+            macos: "glrt-macos".into(),
+            linux: "glrt-linux".into(),
+            android: "glrt-android".into(),
+            release: "glrt-release".into(),
+        };
+        let rendered: toml::Value =
+            toml::from_str(&manager.runner_config(&home, &tokens)).expect("runner config is TOML");
+        // The pipeline builds `SCCACHE_DIR` out of this, so a runner that
+        // leaves it unset would resolve the compiler cache against the
+        // filesystem root and fail every build on that executor.
+        for runner in rendered["runners"].as_array().expect("runners is an array") {
+            let environment = runner["environment"]
+                .as_array()
+                .expect("every runner declares an environment");
+            assert!(
+                environment
+                    .iter()
+                    .filter_map(toml::Value::as_str)
+                    .any(|entry| entry.starts_with("KITHARA_CI_CACHE_ROOT=")),
+                "{} does not name a cache root",
+                runner["name"]
+            );
+        }
+
+        let volumes = rendered["runners"]
+            .as_array()
+            .expect("runners is an array")
+            .iter()
+            .filter_map(|runner| runner.get("docker")?.get("volumes")?.as_array())
+            .flatten()
+            .filter_map(toml::Value::as_str);
+
+        let args = manager.colima_args("colima");
+        let mounts: Vec<&str> = args
+            .windows(2)
+            .filter(|pair| pair[0] == "--mount")
+            .map(|pair| pair[1].trim_end_matches(":w"))
+            .collect();
+        assert!(!mounts.is_empty(), "the agent declares no mounts");
+
+        let mut checked = 0;
+        for volume in volumes {
+            let source = volume.split(':').next().expect("a volume has a source");
+            if !source.starts_with('/') || source.starts_with(home.to_str().expect("UTF-8 home")) {
+                continue;
+            }
+            assert!(
+                mounts.iter().any(|mount| source.starts_with(mount)),
+                "{source} is bound into containers but colima does not mount it"
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "no host-side bind sources were checked");
     }
 
     #[test]
@@ -595,10 +654,7 @@ mod tests {
         };
 
         let runner = manager.runner_config(&home, &tokens);
-        let cilicon = manager
-            .cilicon_config(&home, &tokens, "fixture-password")
-            .unwrap();
-        for rendered in [&runner, &cilicon] {
+        for rendered in [&runner] {
             for forbidden in [
                 "tls-ca-file",
                 "tls_ca_file",
@@ -615,6 +671,24 @@ mod tests {
             }
         }
         assert!(runner.contains(&config.host.gitlab_origin()));
+    }
+
+    /// Homebrew ships tools as mode `0555`, so a plain `fs::copy` onto a
+    /// previous provisioning pass fails with EACCES.
+    #[cfg(unix)]
+    #[test]
+    fn replacing_a_read_only_file_succeeds() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        let destination = directory.path().join("destination");
+        fs::write(&source, "new").unwrap();
+        fs::write(&destination, "old").unwrap();
+        fs::set_permissions(&destination, fs::Permissions::from_mode(0o555)).unwrap();
+
+        replace_file(&source, &destination).unwrap();
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "new");
     }
 
     #[cfg(unix)]

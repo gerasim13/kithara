@@ -358,8 +358,8 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             )
         }
         let ffiConfig = FfiPlayerConfig(
-            keyOptions: FfiKeyOptions(rules: ffiRules),
             store: config.store.inner,
+            keyOptions: FfiKeyOptions(rules: ffiRules),
             eqBandCount: UInt32(config.eqBandCount)
         )
         self._inner = AudioPlayer(config: ffiConfig)

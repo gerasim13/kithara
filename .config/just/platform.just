@@ -17,28 +17,42 @@ wasm MODE="check" *ARGS:
         cargo check -p kithara-ffi --target wasm32-unknown-unknown --features wasm --no-default-features
         ;;
       test)
-        CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" \
+        # The wasm target rebuilds std for shared memory, which only a nightly
+        # honours, and the repository pins one. `wasm-pack` cannot be used
+        # here: it drives Cargo with the default toolchain, so `[unstable]` is
+        # ignored, std keeps its stock features, and the linker rejects
+        # `--shared-memory` against it.
+        browser="${1:-chrome}"
+        toolchain="${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
+        case "$browser" in
+          chrome)  export CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" ;;
+          firefox) export GECKODRIVER="${GECKODRIVER:-geckodriver}" ;;
+          safari)  export SAFARIDRIVER="${SAFARIDRIVER:-safaridriver}" ;;
+          *)
+            echo "unknown wasm test browser: $browser (use chrome|firefox|safari)"
+            exit 2
+            ;;
+        esac
         WASM_BINDGEN_TEST_TIMEOUT=300 \
         WASM_BINDGEN_USE_BROWSER=1 \
-        cargo +nightly test --target wasm32-unknown-unknown -p kithara-integration-tests
+        # The browser talks to a fixture server that runs on this machine, and
+        # the runner looks for it beside itself. Nothing in a wasm build
+        # produces a host binary, so the lane used to depend on some earlier
+        # native job having left one behind, and failed with "failed to start
+        # test_server ... No such file or directory" whenever it ran first.
+        cargo build -p kithara-integration-tests --bin test_server
+        # Only `suite_heavy` carries browser tests. Building the whole crate
+        # for wasm compiles every native suite too, and those reach for
+        # threads, the filesystem, and a local test server that the browser
+        # has no way to offer.
+        cargo "+$toolchain" test --target wasm32-unknown-unknown \
+          -p kithara-integration-tests --test suite_heavy
         ;;
       build)
         just _xtask wasm build "$@"
         ;;
       size-check)
-        toolchain="${WASM_SLIM_TOOLCHAIN:-nightly}"
-        if command -v wasm-slim >/dev/null 2>&1; then
-          slim_cmd="wasm-slim"
-        elif command -v cargo-wasm-slim >/dev/null 2>&1; then
-          slim_cmd="cargo wasm-slim"
-        else
-          echo "wasm-slim is not installed"; exit 2
-        fi
-        mkdir -p target
-        ln -sfn ../../target crates/kithara-ffi/target
-        cd crates/kithara-ffi
-        RUSTUP_TOOLCHAIN="$toolchain" $slim_cmd build --check --no-emoji --json > ../../target/wasm-slim-result.json
-        echo "wasm-slim report: target/wasm-slim-result.json"
+        just _xtask wasm size-check "$@"
         ;;
       *)
         echo "unknown wasm mode: $mode (use check|test|build|size-check)"
@@ -104,8 +118,13 @@ apple MODE="xcframework" *ARGS:
         destination="${2:-generic/platform=iOS Simulator}"
         just platform apple xcframework --profile debug
         just platform _xcodegen-local
+        # The debug framework carries one simulator slice, arm64 — the fat
+        # slice is built for release. A generic simulator destination asks for
+        # every simulator architecture, so the link failed with `symbol(s) not
+        # found for architecture x86_64` against a framework that never
+        # claimed to have them.
         KITHARA_LOCAL_DEV=1 xcodebuild -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
-            -scheme "$scheme" -destination "$destination" build
+            -scheme "$scheme" -destination "$destination" ARCHS=arm64 build
         ;;
       test)
         destination=$(ios_destination) || exit 1
@@ -114,7 +133,18 @@ apple MODE="xcframework" *ARGS:
           echo "KITHARA_TEST_SERVER_URL must name the running hermetic test server"
           exit 2
         fi
-        just platform apple xcframework --profile debug
+        # `--skip-build` is for a caller that already has the framework, which
+        # in CI is a job that took it from the one that built it. The framework
+        # has to be there: building it here anyway would hide the artifact
+        # never arriving behind ten silent minutes.
+        if [[ "${1:-}" == "--skip-build" ]]; then
+          if [[ ! -d apple/KitharaFFIInternal.xcframework ]]; then
+            echo "apple/KitharaFFIInternal.xcframework is missing; drop --skip-build or fetch it"
+            exit 2
+          fi
+        else
+          just platform apple xcframework --profile debug
+        fi
         just platform _xcodegen-local
         KITHARA_LOCAL_DEV=1 \
         TEST_RUNNER_KITHARA_TEST_SERVER_URL="$test_server_url" \

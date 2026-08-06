@@ -40,6 +40,12 @@ rustflags = [
   "link-arg=--export=__tls_align",
   "-C",
   "link-arg=--export=__tls_base",
+  # `wasm-bindgen`'s threading transform reads `__heap_base` to place each
+  # thread's id, and reports its absence as "failed to prepare module for
+  # threading". The linker defines it but exports nothing by default with
+  # imported shared memory, the same reason the TLS symbols are named above.
+  "-C",
+  "link-arg=--export=__heap_base",
   # panic=abort (NOT immediate-abort) so panic messages appear in the
   # browser console.  console_error_panic_hook shows stack traces.
   "-C",
