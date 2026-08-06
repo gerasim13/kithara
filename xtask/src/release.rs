@@ -265,15 +265,26 @@ fn replace_gitlab_nightly(
     let token = gitlab_token(&cfg.gitlab_host)?;
     let api = GitlabApi::new(cfg, &token)?;
 
-    let (code, body) = api.delete(&format!("releases/{tag}"))?;
+    // Ask before removing. `GitLab` answers a delete for a release that does
+    // not exist with 403 rather than 404 — it evaluates the permission against
+    // nothing — and a first run has nothing to remove. Reading that as a
+    // permission failure stopped the channel on the one run where there was
+    // provably no problem.
+    let (code, body) = api.get(&format!("releases/{tag}"))?;
     match code {
-        200 | 204 => println!("[gitlab] removed the previous nightly release"),
-        404 => {}
-        other => bail!("gitlab release delete failed (HTTP {other}): {body}"),
+        200 => {
+            let (code, body) = api.delete(&format!("releases/{tag}"))?;
+            match code {
+                200 | 204 => println!("[gitlab] removed the previous nightly release"),
+                other => bail!("gitlab release delete failed (HTTP {other}): {body}"),
+            }
+        }
+        403 | 404 => {}
+        other => bail!("gitlab release lookup failed (HTTP {other}): {body}"),
     }
     let (code, body) = api.delete(&format!("repository/tags/{tag}"))?;
     match code {
-        200 | 204 | 404 => {}
+        200 | 204 | 403 | 404 => {}
         other => bail!("gitlab tag delete failed (HTTP {other}): {body}"),
     }
     if let Some(id) = api.package_id(tag)? {
