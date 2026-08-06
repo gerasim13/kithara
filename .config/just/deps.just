@@ -32,6 +32,7 @@ hack:
       case " ${skip[*]} " in *" $crate "*) continue ;; esac
       cargo hack check --feature-powerset --no-dev-deps --depth 2 -p "$crate" \
         --at-least-one-of client-reqwest,client-wreq \
+        --at-least-one-of tls-rustls,tls-native \
         --exclude-features client-apple
     done
 

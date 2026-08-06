@@ -10,6 +10,16 @@ compile_error!(
     "kithara-net: enable at least one HTTP client backend; wasm32 requires `client-reqwest`"
 );
 
+// The reqwest backend reaches for TLS through reqwest, so a build without one
+// fails deep inside that crate rather than here. `client-wreq` carries its own
+// and on wasm32 the browser owns it.
+#[cfg(all(
+    feature = "client-reqwest",
+    not(target_arch = "wasm32"),
+    not(any(feature = "tls-rustls", feature = "tls-native"))
+))]
+compile_error!("kithara-net: `client-reqwest` needs `tls-rustls` or `tls-native`");
+
 #[cfg(all(feature = "client-apple", any(target_os = "macos", target_os = "ios")))]
 #[path = "apple/mod.rs"]
 mod selected;
