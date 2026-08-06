@@ -137,6 +137,18 @@ where
     read_block_with_position(audio, buf, label).map(|(n, _)| n)
 }
 
+/// Pull one block, retrying while the decoder has nothing yet.
+///
+/// The guard is what makes `READ_PENDING_RETRIES` a statement about the
+/// pipeline rather than about the machine. `paced_backoff` under flash is a
+/// deadline-less yield that re-polls in lockstep with the producer's clock
+/// advances, so a retry is spent only when the decode worker genuinely had
+/// nothing to hand over. Unannotated it is a real 1 ms sleep — the test macro
+/// rewrites time calls in the test body, not in the helpers it calls — and the
+/// retry budget then measures how fast the host is, which is why a loaded
+/// machine reports a starved decoder. The sibling `consumer_pace` below already
+/// carries the same guard.
+#[kithara::flash(true)]
 fn read_block_with_position<T>(
     audio: &mut Audio<Stream<T>>,
     buf: &mut [f32],
@@ -171,6 +183,8 @@ fn start_frame_from_read_position(position: Duration, frames_read: u64) -> u64 {
     end_frame.saturating_sub(frames_read)
 }
 
+/// Async twin of [`read_block_with_position`]; same reason for the guard.
+#[kithara::flash(true)]
 async fn read_block_async<T>(
     audio: &mut Audio<Stream<T>>,
     buf: &mut [f32],
@@ -217,8 +231,18 @@ fn check_against_previous(
     if frames_in_buf < 2 {
         return None;
     }
+    // The source is mono: both channels carry the same sine
+    // (`signal_pcm`), so the timeline this asserts on is the channel mean.
+    // Reading one channel measures the decoder's stereo synthesis as well:
+    // HE-AAC v2 reconstructs L and R from a mono core plus quantised spatial
+    // parameters, and that reconstruction error is antisymmetric between the
+    // channels — it cancels in the mean and shows up in either channel alone.
     let mono: Vec<f64> = (0..frames_in_buf)
-        .map(|f| f64::from(buf[f * chan]))
+        .map(|f| {
+            let frame = &buf[f * chan..f * chan + chan];
+            let sum: f64 = frame.iter().map(|s| f64::from(*s)).sum();
+            sum / chan.to_f64().unwrap_or(1.0)
+        })
         .collect();
     let delta = sine.delta_rad_per_sample();
     let (measured, amp) = measure_phase_rad_window(&mono, delta);

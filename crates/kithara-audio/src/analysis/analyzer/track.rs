@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 #[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
 use kithara_decode::PcmChunk;
 
@@ -28,15 +30,39 @@ pub struct TrackAnalysis {
     /// Total decoded source frames: the denominator for `BeatGrid` frame to fraction.
     #[field(get)]
     source_frames: u64,
+    /// Sample-rate axis of `source_frames` and the beat-grid markers.
+    #[field(get, copy)]
+    source_sample_rate: Option<NonZeroU32>,
 }
 
 impl TrackAnalysis {
+    /// Creates a snapshot without a decoded-source sample-rate axis.
+    ///
+    /// Use [`Self::with_source_rate`] when beat markers must form a
+    /// [`crate::TrackBeatMap`].
     #[must_use]
     pub fn new(beat: Option<BeatGrid>, waveform: Option<Waveform>, source_frames: u64) -> Self {
         Self {
             beat,
             waveform,
             source_frames,
+            source_sample_rate: None,
+        }
+    }
+
+    /// Creates an analysis snapshot with its decoded-source sample-rate axis.
+    #[must_use]
+    pub fn with_source_rate(
+        beat: Option<BeatGrid>,
+        waveform: Option<Waveform>,
+        source_frames: u64,
+        source_sample_rate: NonZeroU32,
+    ) -> Self {
+        Self {
+            beat,
+            waveform,
+            source_frames,
+            source_sample_rate: Some(source_sample_rate),
         }
     }
 

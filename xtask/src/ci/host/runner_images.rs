@@ -1,18 +1,41 @@
 use std::{fs, path::Path, process::Stdio, thread, time::Duration};
 
 use anyhow::{Context, Result, bail};
-use reqwest::{
-    blocking::Client,
-    header::{ACCEPT, AUTHORIZATION},
-};
-use serde::Deserialize;
 use tracing::info;
 
-use super::runners::{
-    RunnerManager, docker_host, path_text, read_trimmed, require_macos, write_secure,
+use super::{
+    runner_guest::{GUEST_SHARE, guest_developer_dir},
+    runners::{
+        RunnerManager, Tokens, docker_host, path_text, read_trimmed, require_macos, write_secure,
+    },
 };
+use crate::ci::image::linux_build_args;
 
-const CILICON_ACCEPT: &str = "application/vnd.oci.image.manifest.v1+json";
+/// The throwaway VM the macOS lane clones for every job.
+struct JobVm;
+
+impl JobVm {
+    const NAME: &'static str = "kithara-ci-job";
+    const BOOT_ATTEMPTS: u32 = 40;
+    const BOOT_POLL: Duration = Duration::from_secs(5);
+    const WAIT_SECONDS: u32 = 7200;
+    /// How many jobs a guest serves before it is thrown away. The build
+    /// directory is kept between jobs, so it only ever grows, and the guest's
+    /// own disk is what runs out first.
+    ///
+    /// Measured over one nightly: the 90-gigabyte disk presents a 78-gibibyte
+    /// container, macOS and its swap hold about 20 of it, and eleven macOS
+    /// jobs left 44 gibibytes under `target` — 18 in `debug`, 9 in
+    /// `test-release`, the rest spread over one directory per Apple triple.
+    /// That reached 114 mebibytes free, and `apple:ios` stopped in `lipo` on
+    /// "No space left on device" while writing the universal archive.
+    ///
+    /// Six jobs keeps the peak near 30 gibibytes, which leaves room for the
+    /// transient a universal link needs. It costs one extra cold build per
+    /// nightly. Raising it again means giving the guest a larger disk, and
+    /// that needs room on the CI volume the quota does not currently allow.
+    const MAX_BUILDS: u32 = 6;
+}
 
 impl RunnerManager<'_> {
     pub(super) fn build_linux_image(&self, dockerfile: &Path) -> Result<()> {
@@ -51,7 +74,7 @@ impl RunnerManager<'_> {
                 "--tag",
                 &self.config.pins.linux_image,
             ]);
-            for (name, value) in self.linux_build_args()? {
+            for (name, value) in linux_build_args(&self.config.pins)? {
                 command.arg("--build-arg").arg(format!("{name}={value}"));
             }
             command.arg(path_text(&context)?);
@@ -73,62 +96,6 @@ impl RunnerManager<'_> {
         let cleanup = fs::remove_dir_all(&context)
             .with_context(|| format!("removing Docker build context {}", context.display()));
         result.and(cleanup)
-    }
-
-    fn linux_build_args(&self) -> Result<Vec<(&'static str, &str)>> {
-        let mut args = vec![
-            ("RUST_VERSION", self.config.pins.stable_toolchain.as_str()),
-            (
-                "RUST_BASE_DIGEST",
-                self.config.pins.linux_base_digest.as_str(),
-            ),
-            ("MSRV_TOOLCHAIN", self.config.pins.msrv_toolchain.as_str()),
-            (
-                "NIGHTLY_TOOLCHAIN",
-                self.config.pins.nightly_toolchain.as_str(),
-            ),
-            (
-                "GECKODRIVER_VERSION",
-                self.config.pins.geckodriver_version.as_str(),
-            ),
-            (
-                "GECKODRIVER_SHA256",
-                self.config.pins.geckodriver_linux_arm64_sha256.as_str(),
-            ),
-            (
-                "GITLEAKS_VERSION",
-                self.config.pins.gitleaks_version.as_str(),
-            ),
-            (
-                "GITLEAKS_SHA256",
-                self.config.pins.gitleaks_linux_arm64_sha256.as_str(),
-            ),
-        ];
-        for (name, tool) in [
-            ("AST_GREP_VERSION", "ast-grep"),
-            ("CARGO_DENY_VERSION", "cargo-deny"),
-            ("CARGO_HACK_VERSION", "cargo-hack"),
-            ("CARGO_LLVM_COV_VERSION", "cargo-llvm-cov"),
-            ("CARGO_MACHETE_VERSION", "cargo-machete"),
-            ("CARGO_MUTANTS_VERSION", "cargo-mutants"),
-            ("CARGO_NEXTEST_VERSION", "cargo-nextest"),
-            ("CARGO_SEMVER_CHECKS_VERSION", "cargo-semver-checks"),
-            ("CARGO_SHEAR_VERSION", "cargo-shear"),
-            ("CARGO_SORT_VERSION", "cargo-sort"),
-            ("JUST_VERSION", "just"),
-            ("MD_FORMATTER_VERSION", "md-formatter"),
-            ("SCCACHE_VERSION", "sccache"),
-            ("SIMILARITY_RS_VERSION", "similarity-rs"),
-            ("TAPLO_CLI_VERSION", "taplo-cli"),
-            ("TIDY_JSON_VERSION", "tidy-json"),
-            ("TYPOS_CLI_VERSION", "typos-cli"),
-            ("WASM_BINDGEN_CLI_VERSION", "wasm-bindgen-cli"),
-            ("WASM_PACK_VERSION", "wasm-pack"),
-            ("WASM_SLIM_VERSION", "wasm-slim"),
-        ] {
-            args.push((name, self.config.pins.cargo_tool_version(tool)?));
-        }
-        Ok(args)
     }
 
     pub(super) fn smoke_linux(&self) -> Result<()> {
@@ -274,30 +241,225 @@ impl RunnerManager<'_> {
         result
     }
 
-    pub(super) fn start_cilicon(&self) -> Result<()> {
+    /// Serves `GitLab` jobs from throwaway macOS VMs: each job gets a fresh clone
+    /// of the pinned base image, and the clone is destroyed afterwards. Xcode
+    /// and the Rust toolchain are mounted from the host, so the image itself
+    /// stays a plain macOS install.
+    pub(super) fn run_macos_runner(&self) -> Result<()> {
         require_macos()?;
         self.require_ci_user()?;
-        let expected = read_trimmed(
-            &self
-                .ci_home()
-                .join(".config/kithara-ci/cilicon-image.digest"),
+        self.verify_macos_base()?;
+        let tart = path_text(&self.config.host.brew_tool("tart"))?.to_string();
+        // One guest serves every job it is offered. Recreating it per job left
+        // the queue waiting for a runner that did not exist yet, and the guest
+        // is thrown away and rebuilt from the base image whenever it does stop,
+        // so a job never inherits a half-finished predecessor.
+        loop {
+            self.destroy_job_vm(&tart);
+            self.process.run(
+                &tart,
+                &["clone", self.base_vm_name()?, JobVm::NAME],
+                "clone CI macOS VM",
+            )?;
+            let outcome = self
+                .boot_job_vm(&tart)
+                .and_then(|address| self.serve_jobs(&address));
+            self.destroy_job_vm(&tart);
+            outcome?;
+        }
+    }
+
+    fn verify_macos_base(&self) -> Result<()> {
+        let bundle = &self.config.host.macos_vm_bundle;
+        for part in ["config.json", "disk.img", "nvram.bin"] {
+            let path = bundle.join(part);
+            if !path.is_file() {
+                bail!(
+                    "CI macOS VM bundle is incomplete: {} is missing. Build it with \
+                     `tart create --from-ipsw` for macOS build {}",
+                    path.display(),
+                    self.config.pins.macos_guest_build
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn base_vm_name(&self) -> Result<&str> {
+        self.config
+            .host
+            .macos_vm_bundle
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("macos_vm_bundle has no VM name")
+    }
+
+    fn boot_job_vm(&self, tart: &str) -> Result<String> {
+        let mut command = self.process.command(tart);
+        command
+            .args(["run", "--no-graphics"])
+            .args(self.job_vm_mounts())
+            .arg(JobVm::NAME)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command.spawn().context("starting CI macOS VM")?;
+        for _ in 0..JobVm::BOOT_ATTEMPTS {
+            thread::sleep(JobVm::BOOT_POLL);
+            if let Ok(address) =
+                self.process
+                    .capture(tart, &["ip", JobVm::NAME], "CI macOS VM address")
+                && !address.trim().is_empty()
+            {
+                return Ok(address.trim().to_string());
+            }
+        }
+        bail!("CI macOS VM did not report an address within the boot timeout")
+    }
+
+    fn job_vm_mounts(&self) -> Vec<String> {
+        let root = &self.config.host.host_root;
+        let home = self.ci_home();
+        let xcode = self
+            .config
+            .host
+            .host_xcode_app()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        [
+            ("Xcode.app", xcode, true),
+            // `kithara-encode` links ffmpeg, and several `*-sys` crates shell
+            // out to cmake and pkg-config. A stock macOS image carries none of
+            // them, so share the host prefix; the guest links it back to the
+            // canonical path, which the install names in these dylibs need.
+            ("kithara-brew", self.config.host.brew_root.clone(), true),
+            ("kithara-tools", root.join("toolchains/shared-bin"), true),
+            // virtiofs cannot serve rustup's downloads, so the guest must find
+            // every toolchain already installed here.
+            ("kithara-rustup", home.join(".rustup"), true),
+            // Cargo writes its registry and git checkouts; `concurrent = 1`
+            // keeps one job from racing another over the same cache.
+            ("kithara-cargo", home.join(".cargo"), false),
+            ("kithara-cache", root.join("cache"), false),
+        ]
+        .into_iter()
+        .map(|(tag, path, read_only)| {
+            let suffix = if read_only { ":ro" } else { "" };
+            format!("--dir={tag}:{}{suffix}", path.display())
+        })
+        .collect()
+    }
+
+    fn serve_jobs(&self, address: &str) -> Result<()> {
+        let shared = GUEST_SHARE;
+        let brew = self.config.host.brew_root.join("bin");
+        let brew = brew.display();
+        let path = format!("$HOME/.cargo/bin:{brew}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
+        let tokens = Tokens::load(&self.ci_home().join(".config/kithara-ci"))?;
+        // Move the share off the auto-mounted path before anything reads it:
+        // its name contains spaces, which GNU make cannot express. Nothing may
+        // be running from the mount at this point, so this is the only moment
+        // the unmount can succeed.
+        self.guest_shell(
+            address,
+            &format!(
+                "set -e; \
+                 if [ ! -d {shared}/Xcode.app ]; then \
+                 sudo -n diskutil unmount force '{}' >/dev/null; \
+                 sudo -n install -d -m 0755 {shared}; \
+                 sudo -n mount_virtiofs com.apple.virtio-fs.automount {shared}; \
+                 fi",
+                self.config.host.macos_guest_shared_root.display(),
+            ),
+            "remount guest share without spaces",
+            None,
         )?;
-        let actual = self.remote_cilicon_digest()?;
-        if expected != self.config.pins.cilicon_image_digest || actual != expected {
+        self.guest_shell(
+            address,
+            &format!(
+                "export PATH={path}; \
+                 {shared}/kithara-tools/kithara-ci ci host --config \
+                 {shared}/kithara-tools/mac-host.toml --pins \
+                 {shared}/kithara-tools/pins.toml guest-prepare"
+            ),
+            "prepare CI macOS guest",
+            None,
+        )?;
+        // One guest serves a run of jobs rather than one, so the second job of
+        // a pipeline does not wait for a new one to boot — but it serves a
+        // bounded run, because the space each job leaves behind comes back
+        // only when the guest is destroyed.
+        self.guest_shell(
+            address,
+            &format!(
+                "read -r RUNNER_TOKEN; \
+                 export PATH={path}; \
+                 export DEVELOPER_DIR={}; \
+                 export KITHARA_CI_CACHE_ROOT={shared}/kithara-cache; \
+                 exec {shared}/kithara-tools/gitlab-runner run-single --url {} \
+                 --token \"$RUNNER_TOKEN\" --executor shell --shell bash \
+                 --max-builds {} --wait-timeout {}",
+                guest_developer_dir(),
+                self.config.host.gitlab_origin(),
+                JobVm::MAX_BUILDS,
+                JobVm::WAIT_SECONDS,
+            ),
+            "serve GitLab jobs",
+            Some(&tokens.macos),
+        )
+    }
+
+    /// The runner token reaches the guest over stdin so it never lands in
+    /// `argv`, where any local process could read it.
+    fn guest_shell(
+        &self,
+        address: &str,
+        script: &str,
+        label: &str,
+        stdin: Option<&str>,
+    ) -> Result<()> {
+        let mut command = self.process.command("/usr/bin/ssh");
+        command
+            .args([
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                &format!("{}@{address}", self.config.host.macos_guest_user),
+                script,
+            ])
+            .stdin(if stdin.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            });
+        let mut child = command
+            .spawn()
+            .with_context(|| format!("running guest command: {label}"))?;
+        if let Some(secret) = stdin
+            && let Some(pipe) = child.stdin.as_mut()
+        {
+            use std::io::Write;
+            writeln!(pipe, "{secret}").context("passing the runner token to the guest")?;
+        }
+        let status = child
+            .wait()
+            .with_context(|| format!("waiting for guest command: {label}"))?;
+        if !status.success() {
             bail!(
-                "Cilicon image digest changed: configured {}, pinned {expected}, remote {actual}",
-                self.config.pins.cilicon_image_digest
+                "{label} failed with exit code {}",
+                status.code().unwrap_or(-1)
             );
         }
-        self.process.run(
-            path_text(
-                &self
-                    .ci_home()
-                    .join("Applications/Cilicon.app/Contents/MacOS/Cilicon"),
-            )?,
-            &[],
-            "run Cilicon",
-        )
+        Ok(())
+    }
+
+    fn destroy_job_vm(&self, tart: &str) {
+        self.process
+            .best_effort(tart, &["stop", JobVm::NAME], "stop CI macOS VM");
+        self.process
+            .best_effort(tart, &["delete", JobVm::NAME], "delete CI macOS VM");
     }
 
     pub(super) fn linux_image_digest(&self, home: &Path) -> Result<String> {
@@ -322,55 +484,6 @@ impl RunnerManager<'_> {
             .context("Docker image digest is not UTF-8")
             .map(|digest| digest.trim().to_owned())
     }
-
-    fn remote_cilicon_digest(&self) -> Result<String> {
-        let image = self
-            .config
-            .pins
-            .cilicon_image
-            .strip_prefix("oci://ghcr.io/")
-            .context("cilicon_image must use oci://ghcr.io/")?;
-        let (repository, tag) = image
-            .rsplit_once(':')
-            .context("cilicon_image must include a tag")?;
-        let client = Client::builder()
-            .https_only(true)
-            .build()
-            .context("building GHCR client")?;
-        let mut token_url =
-            reqwest::Url::parse("https://ghcr.io/token").context("parsing GHCR token URL")?;
-        token_url
-            .query_pairs_mut()
-            .append_pair("scope", &format!("repository:{repository}:pull"));
-        let token: RegistryToken = client
-            .get(token_url)
-            .send()
-            .context("requesting GHCR pull token")?
-            .error_for_status()
-            .context("GHCR pull token request failed")?
-            .json()
-            .context("decoding GHCR pull token")?;
-        let response = client
-            .head(format!("https://ghcr.io/v2/{repository}/manifests/{tag}"))
-            .header(AUTHORIZATION, format!("Bearer {}", token.token))
-            .header(ACCEPT, CILICON_ACCEPT)
-            .send()
-            .context("requesting Cilicon image manifest")?
-            .error_for_status()
-            .context("Cilicon image manifest request failed")?;
-        response
-            .headers()
-            .get("docker-content-digest")
-            .context("GHCR response has no Docker-Content-Digest")?
-            .to_str()
-            .context("GHCR digest header is not UTF-8")
-            .map(ToOwned::to_owned)
-    }
-}
-
-#[derive(Deserialize)]
-struct RegistryToken {
-    token: String,
 }
 
 fn valid_digest(value: &str) -> bool {
@@ -381,44 +494,12 @@ fn valid_digest(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
-
     use super::*;
-    use crate::ci::{config::fixture, process::Process};
 
     #[test]
     fn image_digest_is_strict() {
         assert!(valid_digest(&format!("sha256:{}", "a".repeat(64))));
         assert!(!valid_digest(&format!("sha256:{}", "a".repeat(63))));
         assert!(!valid_digest(&format!("md5:{}", "a".repeat(64))));
-    }
-
-    #[test]
-    fn dockerfile_versions_are_owned_by_typed_config() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let config = fixture();
-        let process = Process::new(&root, BTreeMap::new());
-        let manager = RunnerManager::new(&config, &process);
-        let configured = manager
-            .linux_build_args()
-            .unwrap()
-            .into_iter()
-            .map(|(name, _)| name)
-            .collect::<BTreeSet<_>>();
-        let dockerfile = fs::read_to_string(root.join("docker/ci.Dockerfile")).unwrap();
-        let declared = dockerfile
-            .lines()
-            .filter_map(|line| line.strip_prefix("ARG "))
-            .inspect(|argument| {
-                assert!(
-                    !argument.contains('='),
-                    "Docker build argument must not own a default: {argument}"
-                );
-            })
-            .collect::<BTreeSet<_>>();
-        assert_eq!(declared, configured);
     }
 }

@@ -1,0 +1,178 @@
+name: CI
+
+# Nothing here reacts to a pull request. A self-hosted runner executes whatever
+# the checked-out tree tells it to, so a fork proposing a branch must never be
+# able to start one; only a push to a copy of this repository can.
+on:
+  push:
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# One runner serves one job at a time, so a new push should not leave the queue
+# holding work for a commit nobody is waiting on any more.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The single gate every other job depends on. `KITHARA_RUNNER_LABELS` names
+  # the runners to use and is set only where runners are attached, so a copy of
+  # this repository without them skips this job and, with it, the whole
+  # workflow. Neither an owner nor a machine is written into the workflow.
+  gate:
+    name: Self-hosted gate
+    if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 5
+    steps:
+      - name: Confirm the runner is reachable
+        run: just --version
+
+  lint:
+    name: Lint
+    needs: gate
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 60
+
+    steps:
+      # The runner image carries the toolchain, so no job here installs
+      # anything: no toolchain action, no package step, no cache action.
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run lint checks
+        run: just lint full
+
+  test:
+    name: Test
+    needs: lint
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run tests
+        run: just test all
+
+  msrv:
+    name: MSRV
+    needs: lint
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The image knows which toolchain is the minimum supported one, so the
+      # version stays owned by the reviewed pins rather than repeated here.
+      - name: Check the minimum supported toolchain
+        run: RUSTUP_TOOLCHAIN="${KITHARA_MSRV_TOOLCHAIN}" just check
+
+  deny:
+    name: cargo-deny
+    needs: gate
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run cargo-deny
+        run: just deps deny
+
+  arch:
+    name: Architecture checks
+    needs: gate
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run architecture checks
+        run: just lint arch
+
+  wasm:
+    name: WASM checks
+    needs: lint
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run wasm checks
+        run: just platform wasm
+
+  machete:
+    name: cargo-machete (advisory)
+    needs: gate
+    continue-on-error: true
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run cargo-machete
+        run: just deps machete
+
+  wasm-size:
+    name: WASM size budget (advisory)
+    needs: lint
+    continue-on-error: true
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run wasm-slim check
+        run: just platform wasm size-check
+
+      - name: Upload wasm-slim report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wasm-slim-report
+          path: target/wasm-slim-result.json
+
+  hack:
+    name: Feature powerset (advisory)
+    needs: lint
+    continue-on-error: true
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run cargo-hack
+        run: just deps hack
+
+  semver:
+    name: Semver checks (advisory)
+    needs: lint
+    continue-on-error: true
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run semver checks
+        run: just deps semver

@@ -13,5 +13,5 @@ pub use demand::{DemandLease, ProducerHandle};
 pub(crate) use lru::{EvictConfig, LruIndex};
 pub use persistence::schema;
 pub(crate) use persistence::{FlushHub, FlushPolicy};
-pub use pins::PinsIndex;
+pub use pins::{PinDurability, PinsIndex};
 pub(crate) use transaction::ResourceTransactionIndex;

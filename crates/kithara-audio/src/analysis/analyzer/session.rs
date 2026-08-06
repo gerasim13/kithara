@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara_decode::PcmChunk;
 use kithara_resampler::ResamplerBackend;
 use num_traits::cast::AsPrimitive;
@@ -7,7 +9,7 @@ use crate::{
     waveform::{BeatGrid, bucket::Waveform},
 };
 
-#[derive(Default, fieldwork::Fieldwork)]
+#[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct TrackAnalyzers<B>
 where
@@ -17,6 +19,9 @@ where
     pub(super) waveform: waveform::Slot,
     #[field(get, vis = "pub(crate)")]
     pub(super) source_frames: u64,
+    /// Sample-rate axis frozen from the first decoded chunk of this pass.
+    #[field(get, copy, vis = "pub(crate)")]
+    pub(super) source_sample_rate: NonZeroU32,
 }
 
 impl<B> TrackAnalyzers<B>

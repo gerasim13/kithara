@@ -43,8 +43,15 @@ pub(crate) fn emit_async_runtime_test(
         quote! { { #body } }
     };
 
+    // Installing the subscriber parses filter directives and allocates. The
+    // real-time sanitizer checks every poll of the test future, and the first
+    // test to reach this — whichever it happens to be — was reported as an
+    // unsafe `malloc` in a real-time context. Process-wide setup belongs
+    // before the future exists.
+    let tracing_init = make_tracing_init(args);
     let runtime_body = quote! {
         {
+            #tracing_init
             let __rt = #runtime_builder;
             let __probe_install_id =
                 ::kithara_test_utils::probe::bump_install_id();
@@ -156,8 +163,15 @@ pub(crate) fn emit_async_timeout_test(
     let runtime_builder = make_runtime_builder(args);
     let flash = args.flash.unwrap_or(true);
 
+    // Installing the subscriber parses filter directives and allocates. The
+    // real-time sanitizer checks every poll of the test future, and the first
+    // test to reach this — whichever it happens to be — was reported as an
+    // unsafe `malloc` in a real-time context. Process-wide setup belongs
+    // before the future exists.
+    let tracing_init = make_tracing_init(args);
     let runtime_body = quote! {
         {
+            #tracing_init
             let __rt = #runtime_builder;
             let __probe_install_id =
                 ::kithara_test_utils::probe::bump_install_id();
@@ -300,7 +314,8 @@ pub(crate) fn emit_browser_test(
         let native_is_async = is_async || args.is_tokio;
         // Plain body for the async-native branches: their sole ambient holder
         // is the per-poll `with_ambient` inside the emitted runtime wrapper.
-        let native_body = quote! { #tracing_init #preamble #(#body_stmts)* };
+        // Tracing is not set up here — see `emit_async_runtime_test`.
+        let native_body = quote! { #preamble #(#body_stmts)* };
 
         if native_is_async && args.timeout.is_some() {
             output.extend(emit_async_timeout_test(

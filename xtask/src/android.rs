@@ -47,6 +47,18 @@ pub(crate) enum AndroidCommand {
         #[arg(long)]
         skip_build: bool,
     },
+    /// Boot an emulator (if needed) and run the instrumented tests on it.
+    Test {
+        /// Build profile for the underlying Rust JNI libs.
+        #[arg(long, default_value_t = crate::BuildProfile::Debug)]
+        profile: BuildProfile,
+        /// AVD name to boot (must already exist in `avdmanager`).
+        #[arg(long)]
+        avd: Option<String>,
+        /// Skip the JNI/Kotlin rebuild (use the cached `android/lib/build`).
+        #[arg(long)]
+        skip_build: bool,
+    },
 }
 
 pub(crate) fn run(cmd: AndroidCommand, ctx: &Ctx) -> Result<()> {
@@ -60,7 +72,33 @@ pub(crate) fn run(cmd: AndroidCommand, ctx: &Ctx) -> Result<()> {
             debug,
             skip_build,
         } => run_app(profile, avd.as_deref(), debug, skip_build, &ext.android),
+        AndroidCommand::Test {
+            profile,
+            avd,
+            skip_build,
+        } => run_tests(profile, avd.as_deref(), skip_build, &ext.android),
     }
+}
+
+/// Whether the generator left any Kotlin under this root. It writes into the
+/// package path rather than the output directory itself — `kotlin/com/kithara/
+/// ffi/kithara_ffi.kt` — so a check that reads only the top level calls a
+/// successful run empty.
+fn has_kotlin_source(path: &Path) -> Result<bool> {
+    let entries = fs::read_dir(path).with_context(|| format!("read_dir {}", path.display()))?;
+    for entry in entries {
+        let entry = entry.with_context(|| format!("read_dir {}", path.display()))?;
+        let candidate = entry.path();
+        let found = if candidate.is_dir() {
+            has_kotlin_source(&candidate)?
+        } else {
+            candidate.extension().is_some_and(|kind| kind == "kt")
+        };
+        if found {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn recreate_dir(path: &Path) -> Result<()> {
@@ -131,7 +169,18 @@ pub(crate) fn run_build(profile: BuildProfile, android: &AndroidConfig) -> Resul
         ]);
 
     if matches!(profile, BuildProfile::Release) {
-        cmd.arg("--release");
+        // `uniffi-bindgen --library` reads the interface out of the static
+        // symbol table, and the release profile strips it. The dynamic table
+        // survives, so the library still loads and still exports every entry
+        // point — the generator simply finds no components, writes no Kotlin,
+        // and exits successfully, leaving the Gradle compile to fail on every
+        // import of the bindings. Keep the names through this build; Gradle
+        // strips the library again on its way into the AAR.
+        cmd.args([
+            "--release",
+            "--config",
+            "profile.release.strip=\"debuginfo\"",
+        ]);
     }
 
     cmd.current_dir(root);
@@ -145,6 +194,8 @@ pub(crate) fn run_build(profile: BuildProfile, android: &AndroidConfig) -> Resul
     if !lib_path.exists() {
         bail!("compiled library not found at {}", lib_path.display());
     }
+
+    copy_cxx_runtime(&jni_dir, RUST_TARGETS)?;
 
     println!("==> Generating Kotlin bindings");
 
@@ -180,6 +231,16 @@ pub(crate) fn run_build(profile: BuildProfile, android: &AndroidConfig) -> Resul
     let status = cmd.status().context("failed to run uniffi-bindgen")?;
     if !status.success() {
         bail!("uniffi-bindgen failed");
+    }
+    // A library the generator cannot read is not an error to it: it finds no
+    // components and exits successfully, and the miss only surfaces later as
+    // an unresolved import in Kotlin.
+    if !has_kotlin_source(&kotlin_dir)? {
+        bail!(
+            "uniffi-bindgen wrote no Kotlin into {}; {} carries no readable interface metadata",
+            kotlin_dir.display(),
+            lib_path.display()
+        );
     }
 
     println!("==> Done!");
@@ -232,13 +293,39 @@ fn run_aar(android: &AndroidConfig) -> Result<()> {
     Ok(())
 }
 
-fn run_app(
+/// Everything both the demo launch and the instrumented tests need: a booted
+/// device to talk to and a Gradle wrapper to drive it.
+struct Device {
+    adb: PathBuf,
+    android_root: PathBuf,
+    gradlew: PathBuf,
+}
+
+/// Whether the emulator draws. Launching the demo is the case where someone is
+/// watching; the instrumented tests read their verdict through `adb`, and the
+/// machine that runs them has no display to draw on.
+#[derive(Clone, Copy)]
+enum Screen {
+    Windowed,
+    Headless,
+}
+
+impl Screen {
+    fn args(self) -> &'static [&'static str] {
+        match self {
+            Self::Windowed => &[],
+            Self::Headless => &["-no-window"],
+        }
+    }
+}
+
+fn prepare_device(
     profile: BuildProfile,
     avd: Option<&str>,
-    debug: bool,
     skip_build: bool,
+    screen: Screen,
     android: &AndroidConfig,
-) -> Result<()> {
+) -> Result<Device> {
     let sdk_root = android_sdk_root()?;
     let adb = sdk_root.join("platform-tools/adb");
     let emulator = sdk_root.join("emulator/emulator");
@@ -264,7 +351,70 @@ fn run_app(
         Some(avd) => avd,
         None => require_android_str(&android.default_avd, "default_avd")?,
     };
-    ensure_emulator_running(&adb, &emulator, avd_name, android)?;
+    ensure_emulator_running(&adb, &emulator, avd_name, screen, android)?;
+
+    Ok(Device {
+        adb,
+        android_root,
+        gradlew,
+    })
+}
+
+/// Run the instrumented tests, then put the emulator down whether they passed
+/// or not: a CI machine that leaves one running has one fewer job's worth of
+/// memory for the next job.
+fn run_tests(
+    profile: BuildProfile,
+    avd: Option<&str>,
+    skip_build: bool,
+    android: &AndroidConfig,
+) -> Result<()> {
+    let device = prepare_device(profile, avd, skip_build, Screen::Headless, android)?;
+
+    println!("==> Running instrumented tests via gradle");
+    let tests = Command::new(&device.gradlew)
+        .args([
+            ":lib:connectedDebugAndroidTest",
+            "-x",
+            "generateKitharaFfi",
+            "--no-daemon",
+        ])
+        .current_dir(&device.android_root)
+        .status()
+        .with_context(|| format!("failed to run {}", device.gradlew.display()))
+        .and_then(|status| {
+            status
+                .success()
+                .then_some(())
+                .context("gradle connected tests failed")
+        });
+
+    let shutdown = Command::new(&device.adb)
+        .args(["emu", "kill"])
+        .status()
+        .context("failed to invoke `adb emu kill`")
+        .and_then(|status| {
+            status
+                .success()
+                .then_some(())
+                .context("adb emu kill failed")
+        });
+
+    tests.and(shutdown)
+}
+
+fn run_app(
+    profile: BuildProfile,
+    avd: Option<&str>,
+    debug: bool,
+    skip_build: bool,
+    android: &AndroidConfig,
+) -> Result<()> {
+    let Device {
+        adb,
+        android_root,
+        gradlew,
+    } = prepare_device(profile, avd, skip_build, Screen::Windowed, android)?;
 
     println!("==> Installing demo APK via gradle");
     let gradle_task = match profile {
@@ -312,6 +462,72 @@ fn run_app(
     Ok(())
 }
 
+/// Put the NDK's C++ runtime beside the library that needs it.
+///
+/// `cargo ndk` writes the library it built and nothing else, and the stretch
+/// backend links the C++ standard library. On the device that showed up as
+/// `java.lang.UnsatisfiedLinkError: dlopen failed: library "libc++_shared.so"
+/// not found` — the connected suite installed, started, and could not load a
+/// single test.
+fn copy_cxx_runtime(jni_dir: &Path, targets: &[(&str, &str)]) -> Result<()> {
+    let sysroot = ndk_prebuilt()?.join("sysroot/usr/lib");
+    for (target, abi) in targets {
+        let source = sysroot.join(target).join("libc++_shared.so");
+        if !source.is_file() {
+            bail!("NDK C++ runtime not found at {}", source.display());
+        }
+        let destination = jni_dir.join(abi).join("libc++_shared.so");
+        fs::copy(&source, &destination).with_context(|| {
+            format!("copying {} to {}", source.display(), destination.display())
+        })?;
+    }
+    println!("==> Bundled the NDK C++ runtime");
+    Ok(())
+}
+
+/// The toolchain inside the NDK. An NDK is downloaded for one machine and
+/// carries one, under a name that describes that machine rather than the
+/// architecture it builds for — Apple silicon reads `darwin-x86_64` as Intel
+/// does. Reading the directory rather than naming it keeps the answer right on
+/// a machine nobody had in mind.
+fn ndk_prebuilt() -> Result<PathBuf> {
+    let prebuilt = ndk_root()?.join("toolchains/llvm/prebuilt");
+    let mut hosts = fs::read_dir(&prebuilt)
+        .with_context(|| format!("reading the NDK toolchains in {}", prebuilt.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_dir());
+    let host = hosts
+        .next()
+        .with_context(|| format!("the NDK at {} carries no toolchain", prebuilt.display()))?;
+    if let Some(extra) = hosts.next() {
+        bail!(
+            "the NDK at {} carries more than one toolchain: {} and {}",
+            prebuilt.display(),
+            host.display(),
+            extra.display()
+        );
+    }
+    Ok(host)
+}
+
+fn ndk_root() -> Result<PathBuf> {
+    for name in ["ANDROID_NDK_HOME", "ANDROID_NDK_ROOT", "NDK_HOME"] {
+        if let Ok(value) = env::var(name) {
+            return Ok(PathBuf::from(value));
+        }
+    }
+    let ndk = android_sdk_root()?.join("ndk");
+    let mut versions: Vec<PathBuf> = fs::read_dir(&ndk)
+        .with_context(|| format!("reading the installed NDK versions in {}", ndk.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_dir())
+        .collect();
+    versions.sort();
+    versions
+        .pop()
+        .with_context(|| format!("no NDK installed under {}", ndk.display()))
+}
+
 fn android_sdk_root() -> Result<PathBuf> {
     if let Ok(value) = env::var("ANDROID_HOME") {
         return Ok(PathBuf::from(value));
@@ -334,6 +550,7 @@ fn ensure_emulator_running(
     adb: &Path,
     emulator: &Path,
     avd_name: &str,
+    screen: Screen,
     android: &AndroidConfig,
 ) -> Result<()> {
     if has_online_device(adb)? {
@@ -351,6 +568,7 @@ fn ensure_emulator_running(
     println!("==> Booting AVD '{avd_name}' in the background");
     Command::new(emulator)
         .args(["-avd", avd_name])
+        .args(screen.args())
         .spawn()
         .with_context(|| format!("failed to spawn emulator -avd {avd_name}"))?;
 

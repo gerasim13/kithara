@@ -1,38 +1,61 @@
+actions_runner_linux_amd64_sha256 = "04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e8d68535aa9505d5d"
+actions_runner_linux_arm64_sha256 = "58b758e420b87093fbd4bfddd368074960053e2f1388f01848c82624b90f27d1"
+actions_runner_version = "2.336.0"
+actions_runner_windows_sha256 = "d59123a43003e357b0805b5d0f611d0bd2f65ab67d51bd070dd4e7a0f685c162"
 android_avd = "Kithara_CI_API_36"
 android_build_tools_version = "36.0.0"
+android_commandline_tools_linux_sha256 = "4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583"
 android_commandline_tools_sha256 = "835b62a26162b229b441d1f6d4680383815a270809eb33522c0d480fa5002c4e"
 android_commandline_tools_version = "15859902"
 android_ndk_version = "27.2.12479018"
 android_platform_version = 36
 brew_casks = ["utm"]
 brew_formulae = [
+  "cmake",
   "colima",
   "docker",
   "docker-buildx",
+  "ffmpeg",
+  "gh",
   "git-lfs",
   "gitlab-runner",
   "jq",
   "lima",
+  "node",
   "openjdk@17",
+  "pkg-config",
   "qemu",
+  "ripgrep",
   "rustup",
   "xcodegen",
 ]
-cilicon_image = "oci://ghcr.io/cirruslabs/macos-runner:tahoe"
-cilicon_image_digest = "sha256:90fa5647e02962a5c222d67bf805e40714f9394443cfd30d89fbfd018603d309"
-cilicon_sha256 = "b4886bc74d6c4a802b24ef3bc40afa894d8cc13e9c25a912fdc6940a1a79a17c"
-cilicon_version = "2.4.2"
+cmake_linux_amd64_sha256 = "0dc2e9a6860f06bf10bd8fadc03e35d9eeb4df46e33763a7e480e987758f385c"
+cmake_linux_arm64_sha256 = "83f8fd91d2038a56556e1400390fcfe42f79602940c494f6c6f1cdae7f9e7f40"
+cmake_version = "3.31.12"
+cmake_windows_amd64_sha256 = "0c4baa40f28b3f8225eb3fdf6946c987b4fe901403b4eaf2fbbd9378100aaa0c"
 expected_xcode_version = "26.6"
+geckodriver_linux_amd64_sha256 = "0bde38707eb0a686a20c6bd50f4adcc7d60d4f73c60eb83ee9e0db8f65823e04"
 geckodriver_linux_arm64_sha256 = "b5fd13fc8f05ca99292700896d43fa986747a01b5fdc77f7bfc88a3707dc4241"
 geckodriver_version = "0.36.0"
+git_windows_sha256 = "af12577d0fdff74243a5988197aa49b957d5044edc17004f6ddf0768996f1dca"
+git_windows_url = "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/Git-2.55.0.3-64-bit.exe"
 gitlab_runner_version = "19.2.1"
+gitleaks_linux_amd64_sha256 = "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
 gitleaks_linux_arm64_sha256 = "e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080"
 gitleaks_version = "8.30.1"
 linux_base_digest = "77fac8b98f9f46062bb680b6d25d5bcaabfc400143952ebc572e924bcbedc3fa"
-linux_image = "kithara-ci:linux-20260729"
-msrv_toolchain = "1.89.0"
+linux_android_image = "kithara-ci-android:linux-20260806d"
+linux_android_runner_image = "kithara-ci-android-runner:linux-20260806d"
+linux_image = "kithara-ci:linux-20260806d"
+linux_runner_image = "kithara-ci-runner:linux-20260806d"
+macos_guest_build = "25G72"
+msrv_toolchain = "1.92.0"
 nightly_toolchain = "nightly-2026-07-29"
+rustup_version = "1.28.2"
+rustup_windows_sha256 = "88d8258dcf6ae4f7a80c7d1088e1f36fa7025a1cfd1343731b4ee6f385121fc0"
 stable_toolchain = "1.97.1"
+windows_eval_iso_sha256 = "755a90d43e826a74b9e1932a34788b898e028272439b777e5593dee8d53622ae"
+windows_eval_iso_url = "https://software-static.download.prss.microsoft.com/dbazure/888969d5-f34g-4e03-ac9d-1f9786c66749/26100.1742.240906-0331.ge_release_svc_refresh_CLIENTENTERPRISEEVAL_OEMRET_x64FRE_en-us.iso"
 
 [cargo_tools]
 ast-grep = "0.45.0"
@@ -55,6 +78,7 @@ similarity-rs = "0.5.0"
 taplo-cli = "0.10.0"
 tidy-json = "0.2.9"
 typos-cli = "1.48.0"
+trunk = "0.21.14"
 wasm-bindgen-cli = "0.2.120"
 wasm-pack = "0.15.0"
 wasm-slim = "0.1.1"

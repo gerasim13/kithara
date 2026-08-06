@@ -81,7 +81,6 @@ impl<'a> ToolchainInstaller<'a> {
         self.install_rust()?;
         self.install_cargo_tools()?;
         self.install_android()?;
-        self.install_cilicon()?;
         self.install_docker_config()?;
         info!("CI user toolchain installed");
         Ok(())
@@ -93,6 +92,13 @@ impl<'a> ToolchainInstaller<'a> {
         let rustup_home = home.join(".rustup");
         let cargo_bin = cargo_home.join("bin");
         fs::create_dir_all(&cargo_bin)?;
+        // The macOS guest reaches these over a share and traverses them as its
+        // own account, so they have to stay readable to everyone. A directory
+        // left at 0750 is not an error here and is a missing `cargo` there:
+        // every job on that executor died reporting no such file.
+        for directory in [&home, &cargo_home, &cargo_bin, &rustup_home] {
+            make_traversable(directory)?;
+        }
         let rustup_source = self
             .config
             .host
@@ -101,7 +107,11 @@ impl<'a> ToolchainInstaller<'a> {
         if !rustup_source.is_file() {
             bail!("missing Homebrew rustup proxy: {}", rustup_source.display());
         }
-        fs::copy(&rustup_source, cargo_bin.join("rustup")).context("installing rustup proxy")?;
+        // Copying over the previous proxy left it unrunnable: the bytes change
+        // but the inode does not, and macOS answers the next exec with SIGKILL
+        // because the cached signature verdict describes the old content.
+        super::runners::replace_file(&rustup_source, &cargo_bin.join("rustup"))
+            .context("installing rustup proxy")?;
         for proxy in [
             "cargo",
             "cargo-clippy",
@@ -127,25 +137,53 @@ impl<'a> ToolchainInstaller<'a> {
             &["set", "profile", "minimal"],
             "set Rust installation profile",
         )?;
+        // `rust-src` is not optional here. Anything reaching for `-Zbuild-std`
+        // needs it, and third-party tools reach for it through the channel
+        // names rather than the pinned toolchain: `cargo swift` and the
+        // sanitizer both asked for plain `nightly`, and the documentation
+        // build asked for stable. Installing the component only on the pinned
+        // nightly left each of them failing on a missing standard library.
+        for toolchain in [
+            &self.config.pins.stable_toolchain,
+            &self.config.pins.msrv_toolchain,
+            &self.config.pins.nightly_toolchain,
+        ] {
+            run(
+                &["toolchain", "install", toolchain, "--component", "rust-src"],
+                "install pinned Rust toolchain",
+            )?;
+        }
         run(
-            &["toolchain", "install", &self.config.pins.stable_toolchain],
-            "install stable Rust",
-        )?;
-        run(
-            &["toolchain", "install", &self.config.pins.msrv_toolchain],
-            "install project MSRV",
+            &[
+                "component",
+                "add",
+                "rustfmt",
+                "--toolchain",
+                &self.config.pins.nightly_toolchain,
+            ],
+            "install nightly formatter",
         )?;
         run(
             &[
                 "toolchain",
                 "install",
-                &self.config.pins.nightly_toolchain,
+                "nightly",
                 "--component",
                 "rust-src",
-                "--component",
-                "rustfmt",
+                "--profile",
+                "minimal",
             ],
-            "install pinned nightly Rust",
+            "install the nightly channel third-party tools resolve",
+        )?;
+        run(
+            &[
+                "target",
+                "add",
+                "wasm32-unknown-unknown",
+                "--toolchain",
+                "nightly",
+            ],
+            "install the WASM target on the nightly channel",
         )?;
         run(
             &["default", &self.config.pins.stable_toolchain],
@@ -339,67 +377,6 @@ impl<'a> ToolchainInstaller<'a> {
         Ok(())
     }
 
-    fn install_cilicon(&self) -> Result<()> {
-        let home = self.ci_home();
-        let applications = home.join("Applications");
-        let app = applications.join("Cilicon.app");
-        fs::create_dir_all(&applications)?;
-        if app.is_dir() {
-            let version = self.process.capture(
-                "/usr/bin/defaults",
-                &[
-                    "read",
-                    path_text(&app.join("Contents/Info"))?,
-                    "CFBundleShortVersionString",
-                ],
-                "installed Cilicon version",
-            )?;
-            if version != self.config.pins.cilicon_version {
-                bail!(
-                    "Cilicon {version} is installed; {} is required",
-                    self.config.pins.cilicon_version
-                );
-            }
-            return Ok(());
-        }
-        let temporary = self
-            .config
-            .host
-            .host_root
-            .join(format!("toolchains/cilicon-install.{}", std::process::id()));
-        fs::create_dir(&temporary)?;
-        let result = (|| {
-            let archive = temporary.join("Cilicon.zip");
-            download(
-                &format!(
-                    "https://github.com/traderepublic/Cilicon/releases/download/v{0}/Cilicon_{0}_25_adhoc.zip",
-                    self.config.pins.cilicon_version
-                ),
-                &archive,
-            )?;
-            verify_sha256(&archive, &self.config.pins.cilicon_sha256)?;
-            let unpacked = temporary.join("unpacked");
-            self.process.run(
-                "/usr/bin/ditto",
-                &["-x", "-k", path_text(&archive)?, path_text(&unpacked)?],
-                "extract Cilicon",
-            )?;
-            self.process.run(
-                "/usr/bin/ditto",
-                &[path_text(&unpacked.join("Cilicon.app"))?, path_text(&app)?],
-                "install Cilicon",
-            )?;
-            self.process.run(
-                "/usr/bin/codesign",
-                &["--verify", "--deep", "--strict", path_text(&app)?],
-                "verify Cilicon signature",
-            )
-        })();
-        let cleanup = fs::remove_dir_all(&temporary)
-            .with_context(|| format!("removing {}", temporary.display()));
-        result.and(cleanup)
-    }
-
     fn install_docker_config(&self) -> Result<()> {
         let directory = self.ci_home().join(".docker");
         fs::create_dir_all(&directory)?;
@@ -517,6 +494,32 @@ fn require_macos() -> Result<()> {
     if std::env::consts::OS != "macos" {
         bail!("toolchain installation supports macOS only");
     }
+    Ok(())
+}
+
+/// Directories shared into the macOS guest have to stay traversable by an
+/// account that is not the one that created them. The guest mounts them and
+/// reads them as its own user, and a directory that lost its group and other
+/// bits reports every tool inside it as missing rather than as forbidden.
+#[cfg(unix)]
+fn make_traversable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path)
+        .with_context(|| format!("reading permissions of {}", path.display()))?
+        .permissions();
+    let mode = permissions.mode();
+    let wanted = mode | 0o055;
+    if mode == wanted {
+        return Ok(());
+    }
+    permissions.set_mode(wanted);
+    fs::set_permissions(path, permissions)
+        .with_context(|| format!("making {} traversable by the guest", path.display()))
+}
+
+#[cfg(not(unix))]
+fn make_traversable(_path: &Path) -> Result<()> {
     Ok(())
 }
 

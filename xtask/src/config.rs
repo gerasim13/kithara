@@ -237,6 +237,9 @@ pub(crate) struct ReleaseConfig {
     pub(crate) gitlab_project: String,
     /// Generic package name in the `GitLab` registry.
     pub(crate) gitlab_package: String,
+    /// Tag the rolling build channel replaces on every nightly run. Empty
+    /// disables that channel.
+    pub(crate) nightly_tag: String,
     /// Primary release asset: the SPM Rust `XCFramework` zip.
     pub(crate) asset: String,
     /// Optional single self-contained framework zip for manual drag-in. Empty

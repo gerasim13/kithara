@@ -24,6 +24,18 @@ pub(super) fn make_tmp_path(canonical: &Path) -> Option<PathBuf> {
     Some(parent.join(format!("{name}.tmp")))
 }
 
+/// When the committed bytes are forced onto the medium.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Barrier {
+    /// `sync_data` before the rename. The canonical path can then only ever
+    /// appear fully durable, at the cost of one medium-speed wait per commit.
+    Inline,
+    /// No barrier here — the owner forces these files down itself and only
+    /// then records them as usable. Until it does, the file on disk proves
+    /// nothing, so the owner must not treat its mere existence as readiness.
+    Deferred,
+}
+
 /// Hint passed to the factory closure to disambiguate the two
 /// lifecycle calls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,11 +71,10 @@ type FactoryFn<D> =
 /// [`ResourceWriter`].
 ///
 /// During the write phase the inner resource is mmapped at
-/// `<canonical>.tmp`. On `commit()` the data is durably flushed
-/// (`sync_data`), the temp file is atomically renamed to
-/// `canonical`, and the inner is reopened on the canonical path —
-/// guaranteeing that any external observer of the canonical path
-/// either sees no file or sees the fully durable committed bytes.
+/// `<canonical>.tmp`. On `commit()` the temp file is atomically renamed to
+/// `canonical` and the inner is reopened there, so an external observer of
+/// the canonical path either sees no file or sees the whole thing. Whether
+/// those bytes are also *durable* by then is [`Barrier`]'s business.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get, deref = false)]
 pub struct AtomicChunked<D: DriverIo> {
@@ -77,6 +88,7 @@ pub struct AtomicChunked<D: DriverIo> {
     /// Factory to reopen the inner on the canonical path post-rename.
     /// `None` when the wrapper was constructed in passthrough mode.
     factory: Option<FactoryFn<D>>,
+    barrier: Barrier,
     #[field(get(
         deref = Path,
         doc = "Path the resource will land at on a successful commit."
@@ -103,28 +115,42 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// # Errors
     /// Propagates the inner commit error and any filesystem error.
     pub fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        self.inner.load().commit_in_place(final_len)?;
+        let Some(tmp) = self.tmp_path.lock().take() else {
+            return self.inner.load().commit_in_place(final_len);
+        };
 
-        let tmp = self.tmp_path.lock().take();
-        if let Some(tmp) = tmp {
-            let f = OpenOptions::new().write(true).open(&tmp).map_err(|e| {
-                StorageError::Failed(format!("AtomicChunked commit: open tmp {tmp:?}: {e}"))
+        // Sealing skips the driver's snapshot: it would map the temp file
+        // that the rename below retires. One handle then trims the surplus
+        // reservation and forces the bytes down, so the canonical path can
+        // only ever appear fully durable.
+        self.inner.load().seal_in_place(final_len)?;
+
+        let f = OpenOptions::new().write(true).open(&tmp).map_err(|e| {
+            StorageError::Failed(format!("AtomicChunked commit: open tmp {tmp:?}: {e}"))
+        })?;
+        if let Some(len) = final_len
+            && f.metadata().is_ok_and(|m| m.len() > len)
+        {
+            f.set_len(len).map_err(|e| {
+                StorageError::Failed(format!("AtomicChunked commit: trim {tmp:?}: {e}"))
             })?;
+        }
+        if self.barrier == Barrier::Inline {
             f.sync_data().map_err(|e| {
                 StorageError::Failed(format!("AtomicChunked commit: sync_data {tmp:?}: {e}"))
             })?;
-            drop(f);
-            fs::rename(&tmp, &self.canonical_path).map_err(|e| {
-                StorageError::Failed(format!(
-                    "AtomicChunked commit: rename {tmp:?} -> {:?}: {e}",
-                    self.canonical_path
-                ))
-            })?;
+        }
+        drop(f);
+        fs::rename(&tmp, &self.canonical_path).map_err(|e| {
+            StorageError::Failed(format!(
+                "AtomicChunked commit: rename {tmp:?} -> {:?}: {e}",
+                self.canonical_path
+            ))
+        })?;
 
-            if let Some(factory) = self.factory.as_ref() {
-                let new_inner = factory(&self.canonical_path, OpenIntent::Reopen)?;
-                self.inner.store(Arc::new(new_inner));
-            }
+        if let Some(factory) = self.factory.as_ref() {
+            let new_inner = factory(&self.canonical_path, OpenIntent::Reopen)?;
+            self.inner.store(Arc::new(new_inner));
         }
         Ok(())
     }
@@ -171,6 +197,30 @@ impl<D: DriverIo> AtomicChunked<D> {
     where
         F: Fn(&Path, OpenIntent) -> StorageResult<ResourceWriter<D>> + Send + Sync + 'static,
     {
+        Self::open_with_barrier(canonical_path, factory, Barrier::Inline)
+    }
+
+    /// Like [`Self::open`], but the caller owns the durability barrier — see
+    /// [`Barrier::Deferred`] for what it takes on by doing so.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::open`].
+    pub fn open_deferred<F>(canonical_path: PathBuf, factory: F) -> StorageResult<Self>
+    where
+        F: Fn(&Path, OpenIntent) -> StorageResult<ResourceWriter<D>> + Send + Sync + 'static,
+    {
+        Self::open_with_barrier(canonical_path, factory, Barrier::Deferred)
+    }
+
+    fn open_with_barrier<F>(
+        canonical_path: PathBuf,
+        factory: F,
+        barrier: Barrier,
+    ) -> StorageResult<Self>
+    where
+        F: Fn(&Path, OpenIntent) -> StorageResult<ResourceWriter<D>> + Send + Sync + 'static,
+    {
         let tmp_path = make_tmp_path(&canonical_path).ok_or_else(|| {
             StorageError::Failed(format!(
                 "AtomicChunked: cannot derive tmp path from {canonical_path:?}"
@@ -194,6 +244,7 @@ impl<D: DriverIo> AtomicChunked<D> {
         }
         let inner = factory(&tmp_path, OpenIntent::Fresh)?;
         Ok(Self {
+            barrier,
             canonical_path,
             inner: ArcSwap::from_pointee(inner),
             tmp_path: Mutex::new(Some(tmp_path)),
@@ -212,6 +263,7 @@ impl<D: DriverIo> AtomicChunked<D> {
             inner: ArcSwap::from_pointee(inner),
             tmp_path: Mutex::default(),
             factory: None,
+            barrier: Barrier::Inline,
         }
     }
 

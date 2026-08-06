@@ -11,7 +11,9 @@ use tracing::{info, warn};
 
 use crate::ci::{config::CiConfig, process::Process};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+/// Ordered least to most urgent: the watchdog reports the worst volume, not
+/// the total, so that a roomy one cannot hide a full one.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(super) enum Pressure {
     Normal,
@@ -30,8 +32,39 @@ pub(super) struct HostStorage<'a> {
 struct Health<'a> {
     volume_used_bytes: u64,
     pressure: Pressure,
+    /// Named so an operator can see which volume is under pressure without
+    /// running `df` by hand.
+    volumes: Vec<VolumeHealth>,
     runner: &'a str,
     timestamp: u64,
+}
+
+#[derive(Serialize)]
+struct VolumeHealth {
+    path: String,
+    used_bytes: u64,
+    total_bytes: u64,
+    pressure: Pressure,
+}
+
+struct Volume {
+    path: PathBuf,
+    used: u64,
+    total: u64,
+}
+
+impl Volume {
+    fn read(path: &Path) -> Result<Self> {
+        let total = fs4::total_space(path)
+            .with_context(|| format!("reading total space for {}", path.display()))?;
+        let available = fs4::available_space(path)
+            .with_context(|| format!("reading available space for {}", path.display()))?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            used: total.saturating_sub(available),
+            total,
+        })
+    }
 }
 
 impl<'a> HostStorage<'a> {
@@ -39,6 +72,19 @@ impl<'a> HostStorage<'a> {
     const DAY: Duration = Duration::from_secs(24 * 60 * 60);
     const LOG_LIMIT_BYTES: u64 = 20_000_000;
     const REMOVABLE_ROOTS: &'static [&'static str] = &["cache", "logs", "vm", "workspaces"];
+    /// The cache namespaces this repository still writes to.
+    ///
+    /// The steps below prune by name, so a namespace that stops being written
+    /// to becomes invisible rather than stale, and nothing ever comes back for
+    /// it. Six gigabytes of `cargo-reapi` stores sat here after that tool came
+    /// off the CI path. Anything not named here is pruned on its own age.
+    const CACHE_NAMESPACES: &'static [&'static str] = &[
+        "bootstrap",
+        "gitlab-runner",
+        "quarantine",
+        "review",
+        "trusted",
+    ];
 
     pub(super) fn new(config: &'a CiConfig, process: &'a Process) -> Result<Self> {
         let root = config.host.host_root.clone();
@@ -62,14 +108,11 @@ impl<'a> HostStorage<'a> {
 
     pub(super) fn preflight(&self) -> Result<()> {
         let used = self.used_bytes()?;
-        let pressure = self.pressure(used);
+        let (pressure, volume) = self.worst_pressure()?;
         match pressure {
-            Pressure::Reject => bail!(
-                "CI volume uses {used} bytes; new jobs stop at {}",
-                self.config.host.reject_bytes
-            ),
+            Pressure::Reject => bail!("{} is full; new jobs stop here", volume.display()),
             Pressure::Soft | Pressure::Aggressive => {
-                warn!(used_bytes = used, ?pressure, "CI volume is under pressure");
+                warn!(volume = %volume.display(), ?pressure, "CI volume is under pressure");
             }
             Pressure::Normal => {}
         }
@@ -98,6 +141,7 @@ impl<'a> HostStorage<'a> {
         self.prune_old_trees("vm/android/avd", Self::DAY)?;
         self.prune_old_files("logs", 14 * Self::DAY)?;
         self.rotate_logs()?;
+        self.prune_retired_caches(7 * Self::DAY)?;
 
         match pressure {
             Pressure::Soft => {
@@ -114,7 +158,7 @@ impl<'a> HostStorage<'a> {
                 self.prune_old_trees("cache/bootstrap/review", Duration::ZERO)?;
                 self.prune_old_trees("cache/trusted", 7 * Self::DAY)?;
                 self.prune_old_trees("cache/bootstrap/trusted", 7 * Self::DAY)?;
-                self.prune_old_trees("vm/cilicon/images", 7 * Self::DAY)?;
+                self.prune_old_trees("vm/tart/cache", 7 * Self::DAY)?;
                 self.prune_docker_cache("168h");
             }
             Pressure::Normal => {}
@@ -124,6 +168,19 @@ impl<'a> HostStorage<'a> {
         if final_used >= self.config.host.reject_bytes {
             self.prune_old_trees("cache/trusted", Duration::ZERO)?;
             self.prune_old_trees("cache/bootstrap/trusted", Duration::ZERO)?;
+            self.prune_retired_caches(Duration::ZERO)?;
+            final_used = self.used_bytes()?;
+        }
+        if final_used >= self.config.host.reject_bytes {
+            // Every step above works on what jobs leave behind, and none of it
+            // is where the space went: the macOS guest grows on this volume for
+            // as long as it lives and only gives the space back when it is
+            // thrown away — measured at 38 gibibytes in one recycle, against
+            // three and a half for everything else together. Restarting the
+            // agent is what an operator does by hand here, and it costs the
+            // job now in flight. That trade only makes sense once jobs are
+            // being refused anyway, which is exactly this branch.
+            self.recycle_macos_guest();
             final_used = self.used_bytes()?;
         }
         let final_pressure = self.pressure(final_used);
@@ -140,13 +197,24 @@ impl<'a> HostStorage<'a> {
 
     pub(super) fn health(&self) -> Result<()> {
         let used = self.used_bytes()?;
-        let pressure = self.pressure(used);
+        let volumes: Vec<VolumeHealth> = self
+            .volumes()?
+            .into_iter()
+            .map(|volume| VolumeHealth {
+                path: volume.path.display().to_string(),
+                used_bytes: volume.used,
+                total_bytes: volume.total,
+                pressure: self.pressure_of(&volume),
+            })
+            .collect();
+        let (pressure, worst) = self.worst_pressure()?;
         let runner = self.runner_state();
         serde_json::to_writer(
             io::stdout().lock(),
             &Health {
                 volume_used_bytes: used,
                 pressure,
+                volumes,
                 runner,
                 timestamp: unix_time()?,
             },
@@ -156,7 +224,7 @@ impl<'a> HostStorage<'a> {
             .write_all(b"\n")
             .context("terminating host health JSON")?;
         if pressure == Pressure::Reject {
-            bail!("CI volume is above the new-job threshold");
+            bail!("{} is above the new-job threshold", worst.display());
         }
         if runner == "stopped" {
             bail!("GitLab runner service is stopped");
@@ -165,11 +233,64 @@ impl<'a> HostStorage<'a> {
     }
 
     fn used_bytes(&self) -> Result<u64> {
-        let total = fs4::total_space(&self.root)
-            .with_context(|| format!("reading total space for {}", self.root.display()))?;
-        let available = fs4::available_space(&self.root)
-            .with_context(|| format!("reading available space for {}", self.root.display()))?;
-        Ok(total.saturating_sub(available))
+        Ok(self.volumes()?.into_iter().map(|volume| volume.used).sum())
+    }
+
+    /// Every volume CI storage sits on, in the order they should be reported.
+    ///
+    /// The guest images can be given a volume of their own, so that one guest
+    /// growing cannot refuse work for lanes that never touch it. `df` on the
+    /// checkout root then stops seeing them entirely, and a watchdog blind to
+    /// the largest consumer on the machine is worse than one watching a single
+    /// shared volume. Anything reached through `vm` that turns out to live on
+    /// another filesystem is measured as well.
+    fn volumes(&self) -> Result<Vec<Volume>> {
+        let mut volumes = vec![Volume::read(&self.root)?];
+        let guests = self.root.join("vm");
+        if guests.is_dir()
+            && let Ok(guests) = guests.canonicalize()
+            && !guests.starts_with(&self.root)
+        {
+            volumes.push(Volume::read(&guests)?);
+        }
+        Ok(volumes)
+    }
+
+    /// The worst any single volume is doing, and which one that is.
+    ///
+    /// Summing them would let a roomy volume hide a full one, which is the
+    /// failure this split exists to prevent.
+    fn worst_pressure(&self) -> Result<(Pressure, PathBuf)> {
+        let volumes = self.volumes()?;
+        let mut worst = (Pressure::Normal, self.root.clone());
+        for volume in volumes {
+            let pressure = self.pressure_of(&volume);
+            if pressure > worst.0 {
+                worst = (pressure, volume.path);
+            }
+        }
+        Ok(worst)
+    }
+
+    /// Thresholds are configured against the main volume. Any other volume is
+    /// held to the same proportions of its own capacity, so a second volume
+    /// needs no second set of numbers to go stale.
+    fn pressure_of(&self, volume: &Volume) -> Pressure {
+        let quota = self.config.host.quota_bytes;
+        if volume.path == self.root || volume.total == 0 || quota == 0 {
+            return self.pressure(volume.used);
+        }
+        let scale = |bytes: u64| -> u64 {
+            (u128::from(bytes) * u128::from(volume.total) / u128::from(quota))
+                .try_into()
+                .unwrap_or(u64::MAX)
+        };
+        pressure_for(
+            volume.used,
+            scale(self.config.host.soft_cleanup_bytes),
+            scale(self.config.host.aggressive_cleanup_bytes),
+            scale(self.config.host.reject_bytes),
+        )
     }
 
     fn pressure(&self, used: u64) -> Pressure {
@@ -179,6 +300,37 @@ impl<'a> HostStorage<'a> {
             self.config.host.aggressive_cleanup_bytes,
             self.config.host.reject_bytes,
         )
+    }
+
+    /// Cache namespaces nothing writes to any more, once they have gone quiet
+    /// for a week.
+    fn prune_retired_caches(&self, age: Duration) -> Result<()> {
+        let directory = self.root.join("cache");
+        if !directory.is_dir() {
+            return Ok(());
+        }
+        for entry in fs::read_dir(&directory)
+            .with_context(|| format!("reading cache directory {}", directory.display()))?
+        {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if Self::CACHE_NAMESPACES.contains(&name.as_ref()) {
+                continue;
+            }
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)?;
+            if !metadata.file_type().is_dir() || !older_than(&metadata, age)? {
+                continue;
+            }
+            if self.active(&path) {
+                info!(path = %path.display(), "keeping active CI path");
+                continue;
+            }
+            info!(path = %path.display(), "removing retired cache namespace");
+            self.remove_path(&path)?;
+        }
+        Ok(())
     }
 
     fn prune_old_trees(&self, relative: &str, age: Duration) -> Result<()> {
@@ -328,6 +480,24 @@ impl<'a> HostStorage<'a> {
         }
     }
 
+    /// Restart the macOS runner agent, which throws its guest away and clones
+    /// a fresh one from the base image.
+    fn recycle_macos_guest(&self) {
+        let uid = self
+            .process
+            .capture("id", &["-u"], "current user id")
+            .unwrap_or_default();
+        let label = format!("gui/{uid}/com.zvuk.kithara-ci.macos-runner");
+        info!(label, "recycling the macOS guest to reclaim volume space");
+        if let Err(error) = self.process.run(
+            "/bin/launchctl",
+            &["kickstart", "-k", &label],
+            "recycle the macOS guest",
+        ) {
+            warn!(%error, "could not recycle the macOS guest");
+        }
+    }
+
     fn runner_state(&self) -> &'static str {
         if !self.config.host.brew_tool("gitlab-runner").is_file() {
             return "not-installed";
@@ -427,7 +597,7 @@ mod tests {
     fn config(root: &Path) -> CiConfig {
         let mut config = fixture();
         config.host.host_root = root.to_path_buf();
-        config.host.cache_root_cilicon = root.join("cache");
+        config.host.cache_root_macos = root.join("cache");
         config.host.cache_root_linux = root.join("cache");
         config.host.cache_root_windows = root.join("cache");
         config.host.quota_bytes = 300;
@@ -443,6 +613,76 @@ mod tests {
         assert_eq!(pressure_for(240, 240, 270, 285), Pressure::Soft);
         assert_eq!(pressure_for(270, 240, 270, 285), Pressure::Aggressive);
         assert_eq!(pressure_for(285, 240, 270, 285), Pressure::Reject);
+    }
+
+    #[test]
+    fn a_second_volume_is_held_to_the_same_proportions_of_its_own_size() {
+        let directory = tempfile::tempdir().unwrap();
+        let cfg = config(directory.path());
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage =
+            HostStorage::for_test(directory.path().to_path_buf(), &cfg, &process).unwrap();
+        // Thresholds are 240/270/285 against a 300-byte main volume, so a
+        // volume half that size refuses at 142 and is content at 119.
+        let half = |used| Volume {
+            path: PathBuf::from("/elsewhere"),
+            used,
+            total: 150,
+        };
+
+        assert_eq!(storage.pressure_of(&half(119)), Pressure::Normal);
+        assert_eq!(storage.pressure_of(&half(120)), Pressure::Soft);
+        assert_eq!(storage.pressure_of(&half(135)), Pressure::Aggressive);
+        assert_eq!(storage.pressure_of(&half(143)), Pressure::Reject);
+    }
+
+    #[test]
+    fn a_full_volume_is_not_hidden_by_a_roomy_one() {
+        assert!(Pressure::Reject > Pressure::Normal);
+        assert!(Pressure::Aggressive > Pressure::Soft);
+    }
+
+    #[test]
+    fn a_namespace_nothing_writes_to_is_pruned_and_the_live_ones_are_not() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = directory.path().join("cache");
+        for name in [
+            "trusted",
+            "review",
+            "gitlab-runner",
+            "reapi",
+            "reapi-sccache",
+        ] {
+            fs::create_dir_all(cache.join(name)).unwrap();
+        }
+        let cfg = config(directory.path());
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage =
+            HostStorage::for_test(directory.path().to_path_buf(), &cfg, &process).unwrap();
+
+        storage.prune_retired_caches(Duration::ZERO).unwrap();
+
+        for name in ["trusted", "review", "gitlab-runner"] {
+            assert!(cache.join(name).is_dir(), "{name} is still written to");
+        }
+        for name in ["reapi", "reapi-sccache"] {
+            assert!(!cache.join(name).exists(), "{name} is retired");
+        }
+    }
+
+    #[test]
+    fn a_retired_namespace_survives_until_it_has_gone_quiet() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = directory.path().join("cache");
+        fs::create_dir_all(cache.join("reapi")).unwrap();
+        let cfg = config(directory.path());
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage =
+            HostStorage::for_test(directory.path().to_path_buf(), &cfg, &process).unwrap();
+
+        storage.prune_retired_caches(HostStorage::DAY).unwrap();
+
+        assert!(cache.join("reapi").is_dir());
     }
 
     #[test]

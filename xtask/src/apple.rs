@@ -1278,7 +1278,14 @@ fn verify_single(out: &Path) -> Result<()> {
     Ok(())
 }
 
-/// `xcrun --sdk <sdk> --show-sdk-path`.
+/// `xcrun --sdk <sdk> --show-sdk-path`, resolved to the directory it names.
+///
+/// `xcrun` answers with the versioned name, which is a symlink, while
+/// `xcodebuild` resolves `SDKROOT` to the directory behind it. Both spellings
+/// reached one compilation and Swift's explicit module build registered the
+/// SDK's own modules under each: `iPhoneSimulator26.5.sdk/…/module.modulemap:
+/// error: redefinition of module 'SwiftShims'`, previously defined under
+/// `iPhoneSimulator.sdk/…`. Resolving here leaves one spelling downstream.
 fn sdk_path(sdk: &str) -> Result<PathBuf> {
     let output = Command::new("xcrun")
         .args(["--sdk", sdk, "--show-sdk-path"])
@@ -1287,9 +1294,10 @@ fn sdk_path(sdk: &str) -> Result<PathBuf> {
     if !output.status.success() {
         bail!("xcrun --show-sdk-path {sdk} failed");
     }
-    Ok(PathBuf::from(
-        String::from_utf8_lossy(&output.stdout).trim().to_string(),
-    ))
+    let reported = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim().to_string());
+    reported
+        .canonicalize()
+        .with_context(|| format!("resolving {sdk} SDK path {}", reported.display()))
 }
 
 /// Extract a single arch from a fat static lib.

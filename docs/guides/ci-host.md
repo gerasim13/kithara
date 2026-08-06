@@ -11,7 +11,7 @@ CI reads two strict TOML files, and they have different owners:
 | File | Owner | Tracked |
 | --- | --- | --- |
 | `.config/ci-pins.toml` | the repository | yes, reviewed with the code it pins |
-| host profile (`host.toml`) | the machine | no, provisioned per host |
+| host profile (`mac-host.toml`, `linux-host.toml`) | the machine | no, provisioned per host |
 
 The pins hold everything a build depends on: toolchains, Xcode and Android
 versions, `cargo install` versions, image tags and digests, download checksums.
@@ -23,16 +23,16 @@ Every command takes `--config <host profile>`; `--pins` defaults to
 `.config/ci-pins.toml` inside a checkout. Both accept the environment variables
 `KITHARA_CI_HOST_CONFIG` and `KITHARA_CI_PINS`. Lanes read the host profile
 only through `KITHARA_CI_HOST_CONFIG`, which every executor sets to
-`/etc/kithara-ci/host.toml` (`C:/KitharaCI/host.toml` on Windows).
+`/etc/kithara-ci/mac-host.toml` (`C:/KitharaCI/mac-host.toml` on Windows).
 
 ## Host installation
 
 Write the machine profile for this host first — start from the field list in
-`xtask/tests/fixtures/ci-host.toml` — and keep it outside the repository.
+`xtask/tests/fixtures/ci-mac-host.toml` — and keep it outside the repository.
 Then build the installer from a reviewed GitLab commit:
 
 ```text
-export KITHARA_CI_HOST_CONFIG=/path/to/ci-host.toml
+export KITHARA_CI_HOST_CONFIG=/path/to/ci-mac-host.toml
 cargo build --locked --release -p xtask
 sudo -E target/release/xtask ci host bootstrap
 target/release/xtask ci host install-host-tools
@@ -44,13 +44,13 @@ quota, user IDs, automatic login, SSH access, and the power policy before it
 changes anything that already exists. `finish` validates Xcode and installs the
 current Rust binary, the host profile, and the pins under
 `/Volumes/KitharaCI/services`, and publishes the host profile to
-`/etc/kithara-ci/host.toml` for the lanes.
+`/etc/kithara-ci/mac-host.toml` for the lanes.
 
 Run the remaining commands in the logged-in `kithara-ci` GUI session, where the
 installed copies are the source of truth:
 
 ```text
-export KITHARA_CI_HOST_CONFIG=/Volumes/KitharaCI/services/host.toml
+export KITHARA_CI_HOST_CONFIG=/Volumes/KitharaCI/services/mac-host.toml
 export KITHARA_CI_PINS=/Volumes/KitharaCI/services/pins.toml
 /Volumes/KitharaCI/services/bin/kithara-ci ci host install-user-tools
 /Volumes/KitharaCI/services/bin/kithara-ci ci host build-linux-image /path/to/kithara/docker/ci.Dockerfile
@@ -68,17 +68,34 @@ Create four project runner authentication tokens in corporate GitLab:
 
 | File under `~/.config/kithara-ci` | Tag | Executor |
 | --- | --- | --- |
-| `runner-macos.token` | `kithara-macos` | Cilicon disposable macOS VM |
+| `runner-macos.token` | `kithara-macos` | throwaway `tart` macOS VM |
 | `runner-linux.token` | `kithara-linux` | pinned local Docker image |
 | `runner-android.token` | `kithara-android` | macOS shell |
 | `runner-release.token` | `kithara-release` | protected macOS shell |
 
 Each token file must contain one `glrt-...` token and have mode `0600`. Also
-create `~/.config/kithara-ci/cilicon-ssh.password` with the SSH password of the
-pinned Cilicon image and mode `0600`; this value is written only to the local
-`cilicon.yml`.
+create `~/.config/kithara-ci/macos-guest.password` with the SSH password of the
+macOS guest account and mode `0600`.
 
-GitLab is reached over its public certificate chain, so runners, Cilicon
+The macOS lane runs each job in a throwaway VM. `xtask ci host run-macos-runner`
+clones the base image named by `macos_vm_bundle`, boots the clone headless
+with Xcode and the Rust toolchain mounted from the host, lets GitLab hand it a
+single build through `gitlab-runner run-single --max-builds 1`, and destroys the
+clone afterwards. Build that base image once, from the Apple restore image
+matching `macos_guest_build`:
+
+```text
+tart create --from-ipsw <UniversalMac_<version>_<build>_Restore.ipsw> kithara-macos-base
+tart run kithara-macos-base
+```
+
+Complete Setup Assistant in the guest, create the `macos_guest_user` account
+with the password above, enable Remote Login, authorise the CI account's SSH
+key, grant that account passwordless `sudo`, and accept the Xcode licence once
+with the host Xcode mounted. The image carries no Xcode of its own, so it stays
+small and always matches `expected_xcode_version` on the host.
+
+GitLab is reached over its public certificate chain, so runners, macOS
 guests, and the bridge all validate `gitlab_url` against the platform trust
 store. No private CA is installed or configured anywhere. A host that cannot
 build that chain is a network fault to fix upstream, never a certificate to
@@ -106,7 +123,7 @@ official GitLab Runner inside the Windows 11 ARM guest with:
 - `concurrent = 1`;
 - builds under `C:\KitharaCI\workspaces`;
 - cache under `C:\KitharaCI\cache`;
-- a copy of the host profile at `C:\KitharaCI\host.toml`.
+- a copy of the host profile at `C:\KitharaCI\mac-host.toml`.
 
 The Windows installation media and license are intentionally not automated.
 After the guest is registered, its job invokes the Rust CI command through
@@ -144,6 +161,23 @@ at 240 GB and becomes aggressive at 270 GB. Workspaces, VM overlays, logs, and
 whole inactive cache namespaces are pruned; individual Cargo, Gradle, and
 sccache files are never deleted in place. Active jobs hold a 12-hour cache
 lease, while sccache enforces its own 50 GB LRU limit.
+
+The quota cannot be raised in place: this macOS has no `diskutil apfs` verb for
+it, and `-quota` is only accepted when a volume is created. Cleanup is
+therefore the whole answer, and it is written against where the space goes
+rather than against a list of names:
+
+- A cache namespace nothing writes to any more is pruned once it has been
+  quiet for a week, and immediately when jobs are already being refused. The
+  named steps alone left six gigabytes of `cargo-reapi` stores behind after
+  that tool came off the CI path: a namespace that stops being written to goes
+  invisible rather than stale.
+- The macOS guest grows on this volume for as long as it lives and returns the
+  space only when it is thrown away — one recycle gave back 38 GiB, against
+  three and a half for every other step together. A guest serves six jobs
+  (`JobVm::MAX_BUILDS`) before it is replaced, and cleanup restarts the agent
+  outright once the volume is above the refusal threshold. That costs the job
+  in flight, which is why nothing below that threshold does it.
 
 Health and cleanup run through launchd. They can also be checked directly:
 

@@ -2,16 +2,18 @@ mod wire {
     use firewheel::FirewheelCtx;
     use kithara_audio::EqBandConfig;
     use kithara_bufpool::PcmPool;
+    use kithara_events::EventBus;
     use kithara_platform::sync::mpsc;
 
     use crate::{
-        api::{SessionDuckingMode, SlotId},
+        api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
         bridge::SlotControl,
     };
 
     pub type PlayerId = u64;
 
-    pub type StartStreamFn<B> = fn(&mut FirewheelCtx<B>, u32) -> Result<(), String>;
+    pub type StartStreamFn<B> =
+        Box<dyn FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send>;
 
     #[derive(Debug, Clone, thiserror::Error)]
     #[non_exhaustive]
@@ -36,6 +38,16 @@ mod wire {
         StreamStart(String),
         #[error("graph edit failed: {0}")]
         Graph(String),
+        #[error("session transport has not been processed")]
+        TransportNotProcessed,
+        #[error("session transport commit was rejected at the render boundary")]
+        TransportCommitRejected,
+        #[error("session transport update failed: {0}")]
+        TransportSync(String),
+        #[error("session transport frame is exhausted")]
+        TransportFrameExhausted,
+        #[error("session transport revision is exhausted")]
+        TransportRevisionExhausted,
         #[error("stream stopped: {reason}; restart failed: {source}")]
         RestartFailed { reason: String, r#source: String },
     }
@@ -43,6 +55,7 @@ mod wire {
     #[non_exhaustive]
     pub enum Cmd {
         RegisterPlayer {
+            bus: EventBus,
             eq_layout: Vec<EqBandConfig>,
             pcm_pool: PcmPool,
         },
@@ -85,6 +98,16 @@ mod wire {
             mode: SessionDuckingMode,
         },
         SessionDucking,
+        SetSessionTempo {
+            tempo: Tempo,
+        },
+        SetSessionPlaying {
+            playing: bool,
+        },
+        SeekSession {
+            target: SessionBeat,
+        },
+        QuerySessionTransport,
         InvalidateAudioRoute {
             reason: String,
         },
@@ -118,6 +141,7 @@ mod wire {
         Ok,
         PlayerRegistered(PlayerId),
         SessionDucking(SessionDuckingMode),
+        SessionTransport(SessionTransportSnapshot),
         SlotAllocated(AllocatedSlot),
         SampleRate(u32),
         Err(SessionError),
@@ -133,6 +157,7 @@ mod wire {
 mod handle {
     use kithara_audio::EqBandConfig;
     use kithara_bufpool::PcmPool;
+    use kithara_events::EventBus;
     use kithara_platform::sync::Arc;
 
     use super::wire::{AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply};
@@ -196,10 +221,12 @@ mod handle {
 
         pub fn register_player(
             &self,
+            bus: EventBus,
             eq_layout: Vec<EqBandConfig>,
             pcm_pool: PcmPool,
         ) -> Result<PlayerId, PlayError> {
             match self.exec_ok(Cmd::RegisterPlayer {
+                bus,
                 eq_layout,
                 pcm_pool,
             })? {

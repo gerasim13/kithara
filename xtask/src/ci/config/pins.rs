@@ -11,29 +11,50 @@ pub(crate) const PINS_PATH: &str = ".config/ci-pins.toml";
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CiPins {
+    pub(crate) actions_runner_linux_amd64_sha256: String,
+    pub(crate) actions_runner_linux_arm64_sha256: String,
+    pub(crate) actions_runner_version: String,
+    pub(crate) actions_runner_windows_sha256: String,
     pub(crate) android_avd: String,
     pub(crate) android_build_tools_version: String,
+    pub(crate) android_commandline_tools_linux_sha256: String,
     pub(crate) android_commandline_tools_sha256: String,
     pub(crate) android_commandline_tools_version: String,
     pub(crate) android_ndk_version: String,
     pub(crate) android_platform_version: u32,
     pub(crate) brew_casks: Vec<String>,
     pub(crate) brew_formulae: Vec<String>,
-    pub(crate) cilicon_image: String,
-    pub(crate) cilicon_image_digest: String,
-    pub(crate) cilicon_sha256: String,
-    pub(crate) cilicon_version: String,
+    pub(crate) cmake_linux_amd64_sha256: String,
+    pub(crate) cmake_linux_arm64_sha256: String,
+    pub(crate) cmake_version: String,
+    pub(crate) cmake_windows_amd64_sha256: String,
     pub(crate) expected_xcode_version: String,
+    pub(crate) geckodriver_linux_amd64_sha256: String,
     pub(crate) geckodriver_linux_arm64_sha256: String,
     pub(crate) geckodriver_version: String,
+    pub(crate) git_windows_sha256: String,
+    /// Named in full rather than built from a version: the release tag and the
+    /// file name spell the same version differently.
+    pub(crate) git_windows_url: String,
     pub(crate) gitlab_runner_version: String,
+    pub(crate) gitleaks_linux_amd64_sha256: String,
     pub(crate) gitleaks_linux_arm64_sha256: String,
     pub(crate) gitleaks_version: String,
     pub(crate) linux_base_digest: String,
+    pub(crate) linux_android_image: String,
+    pub(crate) linux_android_runner_image: String,
     pub(crate) linux_image: String,
+    pub(crate) linux_runner_image: String,
+    /// Build the guest macOS must report. The CI VM is built locally from the
+    /// matching Apple restore image instead of pulled from a registry.
+    pub(crate) macos_guest_build: String,
     pub(crate) msrv_toolchain: String,
     pub(crate) nightly_toolchain: String,
+    pub(crate) rustup_version: String,
+    pub(crate) rustup_windows_sha256: String,
     pub(crate) stable_toolchain: String,
+    pub(crate) windows_eval_iso_sha256: String,
+    pub(crate) windows_eval_iso_url: String,
     /// Serialised last: TOML requires tables after plain values.
     pub(crate) cargo_tools: BTreeMap<String, String>,
 }
@@ -55,6 +76,10 @@ impl CiPins {
 
     pub(crate) fn validate(&self) -> Result<()> {
         for (name, value) in [
+            (
+                "actions_runner_version",
+                self.actions_runner_version.as_str(),
+            ),
             ("android_avd", self.android_avd.as_str()),
             (
                 "android_build_tools_version",
@@ -65,9 +90,7 @@ impl CiPins {
                 self.android_commandline_tools_version.as_str(),
             ),
             ("android_ndk_version", self.android_ndk_version.as_str()),
-            ("cilicon_image", self.cilicon_image.as_str()),
-            ("cilicon_image_digest", self.cilicon_image_digest.as_str()),
-            ("cilicon_version", self.cilicon_version.as_str()),
+            ("cmake_version", self.cmake_version.as_str()),
             (
                 "expected_xcode_version",
                 self.expected_xcode_version.as_str(),
@@ -75,10 +98,19 @@ impl CiPins {
             ("geckodriver_version", self.geckodriver_version.as_str()),
             ("gitlab_runner_version", self.gitlab_runner_version.as_str()),
             ("gitleaks_version", self.gitleaks_version.as_str()),
+            ("linux_android_image", self.linux_android_image.as_str()),
+            (
+                "linux_android_runner_image",
+                self.linux_android_runner_image.as_str(),
+            ),
             ("linux_image", self.linux_image.as_str()),
+            ("linux_runner_image", self.linux_runner_image.as_str()),
+            ("macos_guest_build", self.macos_guest_build.as_str()),
             ("msrv_toolchain", self.msrv_toolchain.as_str()),
             ("nightly_toolchain", self.nightly_toolchain.as_str()),
+            ("rustup_version", self.rustup_version.as_str()),
             ("stable_toolchain", self.stable_toolchain.as_str()),
+            ("windows_eval_iso_url", self.windows_eval_iso_url.as_str()),
         ] {
             if value.trim().is_empty() {
                 bail!("CI pin {name} must not be empty");
@@ -104,30 +136,64 @@ impl CiPins {
         }
         for (name, digest) in [
             (
+                "actions_runner_linux_amd64_sha256",
+                self.actions_runner_linux_amd64_sha256.as_str(),
+            ),
+            (
+                "actions_runner_linux_arm64_sha256",
+                self.actions_runner_linux_arm64_sha256.as_str(),
+            ),
+            (
+                "actions_runner_windows_sha256",
+                self.actions_runner_windows_sha256.as_str(),
+            ),
+            (
+                "android_commandline_tools_linux_sha256",
+                self.android_commandline_tools_linux_sha256.as_str(),
+            ),
+            (
                 "android_commandline_tools_sha256",
                 self.android_commandline_tools_sha256.as_str(),
             ),
-            ("cilicon_sha256", self.cilicon_sha256.as_str()),
+            (
+                "cmake_linux_arm64_sha256",
+                self.cmake_linux_arm64_sha256.as_str(),
+            ),
+            (
+                "cmake_linux_amd64_sha256",
+                self.cmake_linux_amd64_sha256.as_str(),
+            ),
+            (
+                "cmake_windows_amd64_sha256",
+                self.cmake_windows_amd64_sha256.as_str(),
+            ),
+            (
+                "geckodriver_linux_amd64_sha256",
+                self.geckodriver_linux_amd64_sha256.as_str(),
+            ),
+            ("git_windows_sha256", self.git_windows_sha256.as_str()),
             (
                 "geckodriver_linux_arm64_sha256",
                 self.geckodriver_linux_arm64_sha256.as_str(),
+            ),
+            (
+                "gitleaks_linux_amd64_sha256",
+                self.gitleaks_linux_amd64_sha256.as_str(),
             ),
             (
                 "gitleaks_linux_arm64_sha256",
                 self.gitleaks_linux_arm64_sha256.as_str(),
             ),
             ("linux_base_digest", self.linux_base_digest.as_str()),
+            ("rustup_windows_sha256", self.rustup_windows_sha256.as_str()),
+            (
+                "windows_eval_iso_sha256",
+                self.windows_eval_iso_sha256.as_str(),
+            ),
         ] {
             if !is_sha256(digest) {
                 bail!("CI pin {name} must be a SHA-256 digest");
             }
-        }
-        if !self
-            .cilicon_image_digest
-            .strip_prefix("sha256:")
-            .is_some_and(is_sha256)
-        {
-            bail!("cilicon_image_digest must be a prefixed SHA-256 digest");
         }
         Ok(())
     }

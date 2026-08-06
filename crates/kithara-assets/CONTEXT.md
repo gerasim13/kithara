@@ -80,8 +80,9 @@ Outermost to innermost:
 
 A decorator becomes a transparent pass-through for an absolute `ResourceKey` and whenever its
 capability bit is absent. Handles opened through `LeaseAssets` pin their `asset_root` for the
-handle's lifetime via an RAII guard inside `LeaseWriter` / `LeaseReader`; the 0→1 and 1→0
-transitions flush `_index/pins.bin`. Abandoning a `LeaseWriter` without committing removes the
+handle's lifetime via an RAII guard inside `LeaseWriter` / `LeaseReader`; a writer's pin is durable
+and its 0→1 / 1→0 transitions flush `_index/pins.bin`, a reader's pin is process-local and stays in
+memory. Abandoning a `LeaseWriter` without committing removes the
 partial resource; an explicit `fail(reason)` keeps it observable through `resource_state` instead.
 `retain()` on a cached handle pins it in the LRU cache until `CachedReader::release` for the same
 key; retained entries are exempt from both capacity and byte-bound eviction.
@@ -152,9 +153,13 @@ aggregate `AvailabilityIndex` keyed by the `asset_root` and relative path alread
   `on_commit(len)`, and opening a pre-existing committed file seeds `0..final_len`.
 - **Queried** aggregate-first, with a single cold-miss fallback to `resource_state` so pre-existing
   committed files are discoverable before the observer fires.
-- **Persisted** in two tiers (below); a missing, stale, or corrupt `availability.bin` is never a
-  correctness dependency — it loads as an empty seed and the slow path re-derives from committed
-  files.
+- **Persisted** in two tiers (below), and it is the **authority on what survives a restart**. A
+  segment's file becomes visible at `rename`, but the barrier that puts its blocks on the medium is
+  paid later, by the manifest flush, which forces every queued file down *before* naming it. So a
+  file alone proves nothing — after a power cut it can carry the right name and length over
+  unwritten blocks. `DiskAssetStore` therefore treats an existing file as ready only when
+  `availability` knows its final length; anything else is a torn write and is refetched. A missing
+  or corrupt `availability.bin` costs a refetch, never a wrong read.
 
 The persisted snapshot is a **committed-only** contract — an uncommitted partial write is never
 serialised, so a flush racing a writer's cleanup cannot resurrect a partial segment whose `.tmp`
@@ -175,8 +180,14 @@ All three write through `Atomic<R>` and register with a shared `FlushHub` (`Flus
 50 ms debounce, 100 ms poll, forced flush every 256 signals). Two tiers:
 
 - **Non-durable** best-effort: the background worker atomically renames without `sync_data`.
-  Availability uses this tier because it is rewritten on every write/commit; it buys cross-instance
-  visibility and fast crash-recovery hydration.
+  Availability uses this tier for the snapshot itself because it is rewritten on every
+  write/commit. The files it vouches for are a different matter: each availability flush first
+  `sync_data`s the segment files committed since the last one, and only then writes the snapshot.
+  That ordering is what lets a segment commit skip its own barrier (`Barrier::Deferred`) — the cost
+  is paid once per flush instead of once per segment, off the download path. Reversing it would let
+  the manifest vouch for bytes that never landed.
+- `AssetStore` checkpoints itself when its last handle drops. Every index holds the flush hub
+  alive, so waiting for the hub's own teardown would find the sources already gone.
 - **Durable** authoritative: `AssetStore::checkpoint()` → `FlushHub::flush_now` → `flush_durable`
   (`sync_data` before rename) over every source. It also re-flushes sources the worker last wrote
   non-durably even when their `dirty` flag is clear, so a checkpoint never leaves a stale worker
@@ -187,9 +198,13 @@ All three write through `Atomic<R>` and register with a shared `FlushHub` (`Flus
 
 ### Pins index
 
-- `PinsIndex` encapsulates its `Arc`, so `Clone` is a refcount bump. Each `asset_root` is
-  refcounted; the on-disk set changes and flushes only on 0→1 and 1→0 transitions, intermediate
-  steps stay in memory.
+- `PinsIndex` encapsulates its `Arc`, so `Clone` is a refcount bump. Each `asset_root` carries two
+  refcounts, split by `PinDurability`. Both bar eviction identically — `snapshot` covers them
+  together — and they differ only in reach: a `Durable` pin (an unfinished write) is persisted, a
+  `Local` one (a reader holding committed bytes) is not. Only the durable count's 0→1 and 1→0
+  transitions flush `_index/pins.bin`; everything else stays in memory, which is what keeps the
+  decoder read loop off the disk. A `Local` pin is deliberately invisible to the next process: a pin
+  that cannot outlive its holder would hydrate as a phantom that nothing ever releases.
 - Persistence is lazy — the file materialises on the first flush — while an existing file from a
   previous run is opened and hydrated eagerly in `with_persist_at` (native only). On wasm32 the
   index is always ephemeral.

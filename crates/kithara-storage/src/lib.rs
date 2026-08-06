@@ -30,7 +30,7 @@ pub use backend::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use backend::{MmapDriver, MmapOptions, MmapResource};
-pub use decorator::{Atomic, AtomicChunked, OpenIntent};
+pub use decorator::{Atomic, AtomicChunked, Barrier, OpenIntent};
 pub use error::{StorageError, StorageResult};
 pub use resource::{OpenMode, ResourceStatus, WaitOutcome};
 pub use unified::StorageResource;

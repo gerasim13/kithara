@@ -17,7 +17,7 @@ use super::AssetDeleter;
 use crate::{
     decorator::{Assets, Capabilities},
     error::{AssetsError, AssetsResult},
-    index::AvailabilityIndex,
+    index::{AvailabilityIndex, PinDurability},
     layout::{ResourceKey, ResourceKeyKind},
     resource::{AcquisitionResult, AssetResourceState, BaseReader, BaseWriter, RequestIdentity},
 };
@@ -76,7 +76,10 @@ impl AssetDeleter for DiskAssetDeleter {
     fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
         delete_asset_dir(&self.root_dir, asset_root).map_err(AssetsError::from)?;
         self.availability.clear_root(asset_root);
-        let pins_result = self.pins.remove(asset_root).map(|_| ());
+        let pins_result = self
+            .pins
+            .remove(asset_root, PinDurability::Durable)
+            .map(|_| ());
         let lru_result = self.lru.remove(asset_root);
         pins_result.and(lru_result)
     }
@@ -156,8 +159,9 @@ impl DiskAssetStore {
     }
 
     /// Open a fresh segment as an `AtomicChunked<MmapResource>`. The
-    /// inner mmap is bound to `<path>.tmp`; on `commit()` the tmp
-    /// file is `sync_data`'d and renamed atomically to `path`. The
+    /// inner mmap is bound to `<path>.tmp`; on `commit()` the tmp file is
+    /// renamed atomically to `path`, and the durability barrier is deferred
+    /// to the manifest flush rather than paid on the download path. The
     /// availability observer is attached to the inner mmap so
     /// `record_write` / `record_commit` fire as bytes arrive — same
     /// contract as the non-atomic path.
@@ -166,9 +170,18 @@ impl DiskAssetStore {
         key: &ResourceKey,
         path: PathBuf,
     ) -> AssetsResult<AtomicChunked<MmapDriver>> {
-        let observer = self.scoped_observer(key);
+        /// Bytes reserved for a fresh segment's temp file. A segment arrives
+        /// in many small chunks, and every time the writes outgrow the
+        /// mapping the driver re-maps the file — the single most expensive
+        /// step of a segment commit. One reservation that covers a typical
+        /// segment removes those re-maps; anything larger still grows, and
+        /// the surplus is trimmed back to `final_len` on commit, so this
+        /// costs a sparse extent and nothing else.
+        const SEGMENT_RESERVATION: u64 = 1024 * 1024;
+
+        let observer = self.segment_observer(key, path.clone());
         let cancel = self.cancel.clone();
-        let chunked = AtomicChunked::open(path, move |target, intent| {
+        let chunked = AtomicChunked::open_deferred(path, move |target, intent| {
             let mode = match intent {
                 OpenIntent::Fresh => OpenMode::ReadWrite,
                 OpenIntent::Reopen => OpenMode::ReadOnly,
@@ -177,6 +190,7 @@ impl DiskAssetStore {
                 cancel.clone(),
                 MmapOptions::for_path(target.to_path_buf())
                     .mode(mode)
+                    .maybe_initial_len((intent == OpenIntent::Fresh).then_some(SEGMENT_RESERVATION))
                     .build(),
                 Some(Arc::clone(&observer) as Arc<dyn AvailabilityObserver>),
             )
@@ -220,6 +234,16 @@ impl DiskAssetStore {
         self.root_dir.join("_index").join("pins.bin")
     }
 
+    /// Whether `key`'s bytes are known durable. The file existing is not
+    /// enough: it becomes visible at `rename`, while the barrier that puts
+    /// its blocks on the medium lands later, so an unconfirmed file may be
+    /// the right length over unwritten blocks. The availability manifest is
+    /// written only after that barrier, and is therefore the authority.
+    fn is_confirmed(&self, key: &ResourceKey, path: &Path) -> bool {
+        self.availability.final_len(key).is_some()
+            && path.metadata().is_ok_and(|meta| meta.len() > 0)
+    }
+
     fn resource_path(&self, key: &ResourceKey) -> AssetsResult<PathBuf> {
         match key.kind() {
             ResourceKeyKind::Relative {
@@ -242,6 +266,16 @@ impl DiskAssetStore {
 
     fn scoped_observer(&self, key: &ResourceKey) -> Arc<dyn AvailabilityObserver> {
         crate::index::ScopedAvailabilityObserver::new(key.clone(), self.availability.clone())
+    }
+
+    /// Observer for a segment: its commit hands the file to the manifest's
+    /// durability barrier instead of paying one inline.
+    fn segment_observer(&self, key: &ResourceKey, path: PathBuf) -> Arc<dyn AvailabilityObserver> {
+        crate::index::ScopedAvailabilityObserver::for_file(
+            key.clone(),
+            self.availability.clone(),
+            path,
+        )
     }
 
     /// Like [`DiskAssetStore::new`] but shares the given aggregate
@@ -292,13 +326,19 @@ impl Assets for DiskAssetStore {
         }
 
         let path = self.resource_path(key)?;
-        if path.exists() && path.metadata().is_ok_and(|m| m.len() > 0) {
+        if self.is_confirmed(key, &path) {
             let storage =
                 StorageResource::from(self.open_storage_resource(key, path, OpenMode::Auto)?);
             if matches!(storage.status(), ResourceStatus::Committed { .. }) {
                 return Ok(AcquisitionResult::Ready(BaseReader::new(storage)));
             }
             return Ok(AcquisitionResult::Pending(BaseWriter::new(storage)));
+        }
+        // Unconfirmed leftovers are indistinguishable from a torn write, so
+        // they are refetched rather than trusted. Clear the path so the fresh
+        // acquisition can claim its temp file.
+        if path.exists() {
+            let _ = fs::remove_file(&path);
         }
         let chunked = self.open_atomic_chunked_resource(key, path)?;
         Ok(AcquisitionResult::Pending(BaseWriter::new(
@@ -396,7 +436,7 @@ mod tests {
     use super::*;
     use crate::{
         index::{EvictConfig, LruIndex, PinsIndex},
-        resource::ReadSide,
+        resource::{ReadSide, WriteSide},
     };
 
     #[kithara::test]
@@ -455,6 +495,91 @@ mod tests {
         assert_eq!(&buf[..n], b"fake audio data");
     }
 
+    /// Bytes reach the disk before the barrier that makes them durable, so a
+    /// file on its own proves nothing: after a power cut it can carry the
+    /// right name and length over unwritten blocks. Only the availability
+    /// manifest, written after that barrier, says a resource is readable.
+    #[kithara::test]
+    fn an_unconfirmed_file_is_not_served_as_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DiskAssetStore::new(
+            dir.path().to_path_buf(),
+            CancelToken::never(),
+            &crate::BytePool::default(),
+        );
+        let key = ResourceKey::relative("asset", "segments/0001.bin");
+        let path = dir.path().join("asset").join("segments").join("0001.bin");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, vec![0xEEu8; 4096]).unwrap();
+
+        let acquired = store.acquire_resource(&key, None).unwrap();
+
+        assert!(
+            !acquired.is_ready(),
+            "a file the manifest never confirmed must not be handed out as committed"
+        );
+    }
+
+    /// A media segment arrives in many small chunks. If the backing file
+    /// starts small and doubles, every crossing re-maps it — the dominant
+    /// cost of a segment commit. Writing a typical segment must leave the
+    /// file's size untouched.
+    #[kithara::test]
+    fn writing_a_segment_does_not_resize_its_backing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DiskAssetStore::new(
+            dir.path().to_path_buf(),
+            CancelToken::never(),
+            &crate::BytePool::default(),
+        );
+        let key = ResourceKey::relative("asset", "segments/0001.bin");
+        let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
+            panic!("a fresh segment key must acquire a writer");
+        };
+        let tmp = dir
+            .path()
+            .join("asset")
+            .join("segments")
+            .join("0001.bin.tmp");
+        let reserved = fs::metadata(&tmp).unwrap().len();
+
+        let chunk = vec![0xABu8; 16 * 1024];
+        for i in 0..12u64 {
+            writer.write_at(i * chunk.len() as u64, &chunk).unwrap();
+        }
+
+        assert_eq!(
+            fs::metadata(&tmp).unwrap().len(),
+            reserved,
+            "a segment-sized write must fit the reservation instead of re-mapping the file"
+        );
+    }
+
+    #[kithara::test]
+    fn a_committed_segment_keeps_only_its_own_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DiskAssetStore::new(
+            dir.path().to_path_buf(),
+            CancelToken::never(),
+            &crate::BytePool::default(),
+        );
+        let key = ResourceKey::relative("asset", "segments/0001.bin");
+        let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
+            panic!("a fresh segment key must acquire a writer");
+        };
+        let payload = vec![0xCDu8; 100_000];
+        writer.write_at(0, &payload).unwrap();
+
+        drop(writer.commit(Some(payload.len() as u64)).unwrap());
+
+        let canonical = dir.path().join("asset").join("segments").join("0001.bin");
+        assert_eq!(
+            fs::metadata(&canonical).unwrap().len(),
+            payload.len() as u64,
+            "the reservation must be trimmed back to the committed length"
+        );
+    }
+
     #[kithara::test]
     fn direct_store_cannot_remove_absolute_resource() {
         let dir = tempfile::tempdir().unwrap();
@@ -486,7 +611,7 @@ mod tests {
         availability.record_commit(&key, 4);
 
         let pins = PinsIndex::ephemeral();
-        pins.add(asset_root).unwrap();
+        pins.add(asset_root, PinDurability::Durable).unwrap();
         let lru = LruIndex::ephemeral();
         lru.touch(asset_root, Some(4)).unwrap();
 

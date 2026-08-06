@@ -25,6 +25,7 @@ where
             beat: beat::Config::build(&self.beat, spec, &self.pcm_pool),
             waveform: waveform::build(&self.waveform, spec),
             source_frames: 0,
+            source_sample_rate: spec.sample_rate,
         }
     }
 

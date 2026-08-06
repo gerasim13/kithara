@@ -1,0 +1,35 @@
+cache_root = "/var/lib/kithara-ci"
+network = "kithara-ci"
+repository = "owner/kithara"
+subnet = "172.16.240.0/24"
+token_file = "/etc/kithara-ci/github.token"
+
+[[runners]]
+name = "kithara-ci"
+cpus = "24"
+memory = "96g"
+labels = ["self-hosted", "linux", "x64", "kithara"]
+
+[[runners]]
+name = "kithara-ci-gpu"
+cpus = "8"
+memory = "32g"
+labels = ["self-hosted", "linux", "x64", "kithara", "gpu"]
+devices = ["/dev/dri"]
+groups = [993]
+
+[[runners]]
+name = "kithara-ci-android"
+cpus = "12"
+memory = "48g"
+labels = ["self-hosted", "linux", "x64", "kithara", "android"]
+devices = ["/dev/kvm"]
+groups = [994]
+flavor = "android"
+
+[windows]
+name = "kithara-ci-windows"
+labels = ["self-hosted", "windows", "x64", "kithara"]
+vcpus = 8
+memory_mib = 16384
+disk_gib = 200

@@ -107,13 +107,38 @@ loom-debug FILE *ARGS:
     shift
     LOOM_LOG=trace LOOM_LOCATION=1 LOOM_CHECKPOINT_INTERVAL=1 LOOM_CHECKPOINT_FILE="$file" exec just test run --loom=on --no-capture "$@"
 
+# Interpret the crates that carry shared state under Miri.
+#
+# Miri cannot enter a C library, and every `unsafe` block that matters here is
+# an FFI call into one, so the selection is the crates that hold atomics and
+# forbid `unsafe` themselves. What it can still answer is whether their memory
+# ordering is sound and whether a dependency reaches undefined behaviour.
+[positional-arguments]
+miri *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Isolation hides the clock and the environment, which every one of these
+    # crates reads on the way to its first assertion.
+    MIRIFLAGS="-Zmiri-disable-isolation" \
+        cargo +nightly miri test --lib \
+        -p kithara-abr \
+        -p kithara-bufpool \
+        -p kithara-events \
+        -p kithara-queue \
+        -p kithara-stream \
+        "$@"
+
+# The sanitizer needs `-Zbuild-std`, which needs the `rust-src` component. The
+# repository pins a nightly and installs the component into that one; plain
+# `nightly` is whatever the host last downloaded and usually has no `rust-src`.
 _rtsan SUITE FILTER:
     #!/usr/bin/env bash
     set -euo pipefail
     target="$(rustc -vV | sed -n 's/^host: //p')"
+    toolchain="${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
     RUSTFLAGS="-Zsanitizer=realtime --cfg rtsan" \
     RUSTDOCFLAGS="-Zsanitizer=realtime --cfg rtsan" \
-        cargo +nightly test -p kithara-integration-tests --test {{ SUITE }} \
+        cargo "+$toolchain" test -p kithara-integration-tests --test {{ SUITE }} \
         --features apple-fused-src \
         --target "$target" -- --nocapture {{ FILTER }}
 
@@ -121,10 +146,11 @@ rtsan-async FILTER="no_block":
     #!/usr/bin/env bash
     set -euo pipefail
     target="$(rustc -vV | sed -n 's/^host: //p')"
+    toolchain="${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
     RTSAN_OPTIONS="suppressions=$(pwd)/.config/rtsan/async-suppressions.txt" \
     RUSTFLAGS="-Zsanitizer=realtime --cfg rtsan" \
     RUSTDOCFLAGS="-Zsanitizer=realtime --cfg rtsan" \
-        cargo +nightly test -p kithara-integration-tests --test suite_light \
+        cargo "+$toolchain" test -p kithara-integration-tests --test suite_light \
         --features kithara/no-block,kithara-test-utils/no-block --target "$target" -- --nocapture {{ FILTER }}
 
 rtsan FILTER="offline_harness": (_rtsan "suite_light" FILTER)

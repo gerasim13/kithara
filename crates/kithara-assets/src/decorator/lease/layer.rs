@@ -19,7 +19,7 @@ use super::{
 use crate::{
     decorator::{Assets, ByteRecorder, CachedAssets, Capabilities, ProcessCtx},
     error::AssetsResult,
-    index::PinsIndex,
+    index::{PinDurability, PinsIndex},
     layout::ResourceKey,
     resource::{AcquisitionResult, AssetResourceState, ReadSide, RequestIdentity},
 };
@@ -83,8 +83,9 @@ where
     event_bus: LeaseEvents,
     byte_recorder: Option<Arc<dyn ByteRecorder>>,
     /// Shared pins index — same instance held by `EvictAssets` and
-    /// `DiskAssetDeleter`. Mutations (`add` / `remove`) flush
-    /// immediately via the index's internal best-effort persistence.
+    /// `DiskAssetDeleter`. A writer's pin is durable and flushes on its
+    /// 0→1 / 1→0 transitions; a reader's pin is process-local and stays
+    /// in memory, so the decoder read loop never reaches disk.
     pins: PinsIndex,
 }
 
@@ -151,8 +152,8 @@ where
         }
     }
 
-    fn pin(&self, asset_root: &str) -> AssetsResult<LeaseGuard> {
-        self.pins.add(asset_root)?;
+    fn pin(&self, asset_root: &str, durability: PinDurability) -> AssetsResult<LeaseGuard> {
+        self.pins.add(asset_root, durability)?;
 
         let pins = self.pins.clone();
         let ar = asset_root.to_string();
@@ -163,7 +164,7 @@ where
                 return;
             }
             tracing::trace!(asset_root = %ar, "LeaseGuard::drop - removing pin");
-            if let Err(e) = pins.remove(&ar) {
+            if let Err(e) = pins.remove(&ar, durability) {
                 tracing::warn!(
                     asset_root = %ar,
                     error = %e,
@@ -255,14 +256,18 @@ where
 {
     /// Resolve the pin guard + removal channel + byte recorder for `key`.
     /// Absolute keys (and the bypass capability) yield a no-op lease.
-    fn lease_for(&self, key: &ResourceKey) -> AssetsResult<LeaseBindings> {
+    fn lease_for(
+        &self,
+        key: &ResourceKey,
+        durability: PinDurability,
+    ) -> AssetsResult<LeaseBindings> {
         let pin = (self.is_active() && !key.is_absolute())
             .then(|| key.asset_root())
             .flatten();
         let Some(asset_root) = pin else {
             return Ok((LeaseGuard::inactive(), None, None));
         };
-        let lease = self.pin(asset_root)?;
+        let lease = self.pin(asset_root, durability)?;
         let remove: RemoveFn = {
             let inner = Arc::clone(&self.inner);
             Arc::new(move |key: &ResourceKey| {
@@ -278,7 +283,7 @@ where
         inner: A::ReadyRes,
     ) -> AssetsResult<LeaseReader<A::ReadyRes, LeaseGuard>> {
         let live = self.open_live_resource(key, inner.status());
-        let (lease, remove, byte_recorder) = self.lease_for(key)?;
+        let (lease, remove, byte_recorder) = self.lease_for(key, PinDurability::Local)?;
         Ok(LeaseReader::new(
             inner,
             lease,
@@ -296,7 +301,7 @@ where
         inner: A::ActiveRes,
     ) -> AssetsResult<LeaseWriter<A::ActiveRes, LeaseGuard>> {
         let live = self.open_live_resource(key, ResourceStatus::Active);
-        let (lease, remove, byte_recorder) = self.lease_for(key)?;
+        let (lease, remove, byte_recorder) = self.lease_for(key, PinDurability::Durable)?;
         Ok(LeaseWriter::new(
             inner,
             lease,
@@ -325,7 +330,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{backend::DiskAssetStore, layout::ResourceKey};
+    use crate::{backend::DiskAssetStore, layout::ResourceKey, resource::WriteSide};
 
     const ROOT: &str = "test_asset";
 
@@ -359,6 +364,53 @@ mod tests {
         let idx =
             PinsIndex::with_persist_at(path, CancelToken::never(), &crate::BytePool::default());
         idx.snapshot()
+    }
+
+    /// Write `payload` under `key` and commit it, leaving no live handle.
+    fn commit_resource(lease: &LeaseAssets<DiskAssetStore>, key: &ResourceKey, payload: &[u8]) {
+        let AcquisitionResult::Pending(writer) = lease.acquire_resource(key, None).unwrap() else {
+            panic!("a fresh key must acquire a writer");
+        };
+        writer.write_at(0, payload).unwrap();
+        let len = u64::try_from(payload.len()).unwrap();
+        drop(writer.commit(Some(len)).unwrap());
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn reading_a_committed_resource_does_not_write_the_pins_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = make_lease(dir.path());
+        let key = ResourceKey::relative(ROOT, "audio.mp3");
+        commit_resource(&lease, &key, b"data");
+
+        let path = dir.path().join("_index").join("pins.bin");
+        fs::remove_file(&path).unwrap();
+
+        for _ in 0..16 {
+            let reader = lease.open_resource(&key, None).unwrap();
+            let mut buf = [0u8; 4];
+            reader.read_at(0, &mut buf).unwrap();
+        }
+
+        assert!(
+            !path.exists(),
+            "reads of a committed resource must not reach the pins index on disk"
+        );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn reader_lease_still_guards_the_asset_against_eviction() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = make_lease(dir.path());
+        let key = ResourceKey::relative(ROOT, "audio.mp3");
+        commit_resource(&lease, &key, b"data");
+
+        let _reader = lease.open_resource(&key, None).unwrap();
+
+        assert!(
+            lease.pins.snapshot().contains(ROOT),
+            "a live reader must keep its asset root pinned in memory"
+        );
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]

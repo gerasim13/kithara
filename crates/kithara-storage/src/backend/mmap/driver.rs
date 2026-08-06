@@ -72,6 +72,11 @@ pub struct MmapDriver {
     pub(super) mmap: Mutex<MmapState>,
     pub(super) mode: OpenMode,
     pub(super) path: PathBuf,
+    /// Size a fresh mapping starts at, from `MmapOptions::initial_len`. A
+    /// re-download reuses it so the rewrite generation is reserved exactly
+    /// like the first one instead of restarting from the default and
+    /// re-mapping its way back up.
+    pub(super) initial_len: u64,
     /// Lock-free queue for fast-path range notifications.
     pub(super) ready_ranges: SegQueue<Range<u64>>,
 }
@@ -150,6 +155,7 @@ impl Driver for MmapDriver {
             committed,
             mmap: Mutex::new(mmap_state),
             path: opts.path,
+            initial_len: opts.initial_len.unwrap_or(Consts::DEFAULT_INITIAL_SIZE),
             ready_ranges: SegQueue::new(),
         };
 
@@ -369,6 +375,44 @@ mod tests {
         let n = res.read_at(0, &mut buf).unwrap();
         assert_eq!(n, 1024);
         assert!(buf.iter().all(|&b| b == 42));
+    }
+
+    /// Sealing finalizes the bytes without publishing a snapshot, because the
+    /// caller is about to rename the file and republish it itself. Until that
+    /// happens the live mapping is all a reader has, so it must keep serving.
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn a_sealed_resource_still_serves_its_bytes() {
+        let dir = TempDir::new().unwrap();
+        let res = create_resource_with_size(&dir, Some(64 * 1024));
+        res.write_at(0, b"payload").unwrap();
+
+        res.seal_in_place(Some(7)).unwrap();
+
+        let mut buf = [0u8; 7];
+        res.reader().read_at(0, &mut buf).unwrap();
+        assert_eq!(&buf, b"payload", "a sealed resource must stay readable");
+    }
+
+    /// A re-download starts a fresh generation in a rewrite temp file. It
+    /// carries the same payload as the first one, so it must start from the
+    /// same reservation — otherwise the rewrite re-maps its way back up from
+    /// the default while the original never had to.
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn rewrite_generation_reuses_the_original_reservation() {
+        let dir = TempDir::new().unwrap();
+        let reservation = 1024 * 1024;
+        let res = create_resource_with_size(&dir, Some(reservation));
+        res.write_at(0, b"first").unwrap();
+        let res = res.commit(Some(5)).unwrap();
+
+        let _writer = res.reactivate().unwrap();
+
+        let rewrite = dir.path().join("test.dat.kithara-rewrite");
+        assert_eq!(
+            fs::metadata(&rewrite).unwrap().len(),
+            reservation,
+            "the rewrite generation must be reserved like the first one"
+        );
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]

@@ -9,6 +9,9 @@ description = "Streaming source-to-bytes layer with sync Read+Seek for audio pla
 keywords = ["audio", "streaming", "hls", "io", "seek"]
 categories = ["multimedia::audio", "asynchronous"]
 
+[package.metadata.cargo-machete]
+ignored = ["unimock"]
+
 [features]
 default = ["client-reqwest", "tls-rustls"]
 perf = ["dep:hotpath", "hotpath/hotpath"]

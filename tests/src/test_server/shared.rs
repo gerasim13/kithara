@@ -17,6 +17,12 @@ static SHARED: OnceLock<SharedTestServer> = OnceLock::new();
 /// Get the process-global server, starting it on first use.
 pub(crate) fn shared() -> &'static SharedTestServer {
     SHARED.get_or_init(|| {
+        // Standing up the fixture server is process-wide setup, not audio
+        // work: it builds a cache and a channel, and the first test to reach
+        // it pays for that inside the region the real-time sanitizer checks —
+        // which reported it as an unsafe `malloc` against whichever test ran
+        // first. The permit says plainly that this stretch is not real time.
+        let _permit = kithara_test_utils::no_block::permit();
         let state = TestServerState::new();
         let state_for_thread = Arc::clone(&state);
         let (tx, rx) = std::sync::mpsc::channel::<Url>();

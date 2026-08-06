@@ -104,6 +104,32 @@ impl DriverIo for MmapDriver {
         Ok(())
     }
 
+    /// Flush the written pages and stop, keeping the active mapping. The
+    /// caller renames the file and reopens on its canonical path, so the
+    /// snapshot this would have published is dead on arrival — and the live
+    /// mapping is what serves readers until that reopen lands. A zero-length
+    /// or already-published resource has nothing to keep alive and takes the
+    /// ordinary commit path.
+    fn seal(&self, final_len: Option<u64>) -> StorageResult<()> {
+        if final_len == Some(0) {
+            return self.commit(final_len);
+        }
+        let mmap_guard = self.mmap.lock();
+        let MmapState::Active(mmap) = &*mmap_guard else {
+            drop(mmap_guard);
+            return self.commit(final_len);
+        };
+        // Flush the written prefix, not the whole mapping: the reservation
+        // beyond `final_len` is untouched, and syncing it back would cost
+        // more than the re-map this seal exists to avoid.
+        match final_len.filter(|len| *len < mmap.len()) {
+            Some(len) => mmap.flush_range(0, len)?,
+            None => mmap.flush()?,
+        }
+        drop(mmap_guard);
+        Ok(())
+    }
+
     fn committed_len(&self) -> Option<u64> {
         self.committed.load().as_ref().map(|m| m.len())
     }
@@ -137,7 +163,7 @@ impl DriverIo for MmapDriver {
                 let temp = self.rewrite_temp_path();
                 // Drop any stale temp left by a previously-cancelled rewrite.
                 let _ = fs::remove_file(&temp);
-                let rw = MemoryMappedFile::create_rw(&temp, Consts::DEFAULT_INITIAL_SIZE)?;
+                let rw = MemoryMappedFile::create_rw(&temp, self.initial_len)?;
                 *mmap_guard = MmapState::Active(rw);
             }
         }

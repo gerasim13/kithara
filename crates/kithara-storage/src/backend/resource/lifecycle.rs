@@ -10,11 +10,32 @@ use crate::{
     resource::{ResourceStatus, range_covered_by},
 };
 
+/// Whether finalizing also publishes the driver's committed snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Publish {
+    Snapshot,
+    Skip,
+}
+
 impl<D: DriverIo> ResourceCore<D> {
     pub(super) fn commit_inner(&self, final_len: Option<u64>) -> StorageResult<()> {
+        self.finish_inner(final_len, Publish::Snapshot)
+    }
+
+    /// Commit without publishing a driver snapshot — see [`DriverIo::seal`].
+    /// Readiness is announced exactly as in [`Self::commit_inner`]: waiters
+    /// must wake whether or not a snapshot was published.
+    pub(super) fn seal_inner(&self, final_len: Option<u64>) -> StorageResult<()> {
+        self.finish_inner(final_len, Publish::Skip)
+    }
+
+    fn finish_inner(&self, final_len: Option<u64>, publish: Publish) -> StorageResult<()> {
         self.check_health()?;
 
-        self.inner.driver.commit(final_len)?;
+        match publish {
+            Publish::Snapshot => self.inner.driver.commit(final_len)?,
+            Publish::Skip => self.inner.driver.seal(final_len)?,
+        }
         self.inner.committed.store(true, Ordering::Release);
 
         {

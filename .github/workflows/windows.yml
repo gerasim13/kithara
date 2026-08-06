@@ -1,0 +1,35 @@
+name: Windows
+
+# Cross-compiling to MSVC answers whether the code builds on Windows. Whether
+# it runs there is a question only a Windows machine answers.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Suite on Windows
+    # Set only where a Windows runner is attached, so a copy of this repository
+    # without one never starts the job. See .github/workflows/ci.yml.
+    if: vars.KITHARA_WINDOWS_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    runs-on: ${{ fromJSON(vars.KITHARA_WINDOWS_RUNNER_LABELS) }}
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The guest carries the toolchain, so this installs nothing either.
+      - name: Check the workspace
+        run: just check
+
+      - name: Run tests
+        run: just test
