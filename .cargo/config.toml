@@ -52,11 +52,8 @@ rustflags = [
   "panic=abort",
 ]
 
-# Only takes effect with nightly cargo (ignored by stable).
-# Needed to rebuild std with shared-memory support for wasm32 + atomics.
-# optimize_for_size mirrors crates/kithara-ffi/.cargo/config.toml so both
-# config layers rebuild one identical std (smaller algorithm variants, no
-# default std features).
-[unstable]
-build-std = ["std", "panic_abort", "core", "alloc"]
-build-std-features = ["optimize_for_size"]
+# Rebuilding the standard library belongs to the one target that needs it, and
+# is asked for by the command that builds for it. Declared here it would reach
+# every nightly invocation from this directory, including the ones that build a
+# standard library of their own — Miri builds its interpreter's sysroot and
+# then finds two of every crate in it.

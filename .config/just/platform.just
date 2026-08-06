@@ -19,8 +19,8 @@ wasm MODE="check" *ARGS:
       test)
         # The wasm target rebuilds std for shared memory, which only a nightly
         # honours, and the repository pins one. `wasm-pack` cannot be used
-        # here: it drives Cargo with the default toolchain, so `[unstable]` is
-        # ignored, std keeps its stock features, and the linker rejects
+        # here: it drives Cargo with the default toolchain, which refuses the
+        # flags below, so std keeps its stock features and the linker rejects
         # `--shared-memory` against it.
         browser="${1:-chrome}"
         toolchain="${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
@@ -45,7 +45,12 @@ wasm MODE="check" *ARGS:
         # for wasm compiles every native suite too, and those reach for
         # threads, the filesystem, and a local test server that the browser
         # has no way to offer.
+        # `optimize_for_size` matches crates/kithara-ffi/.cargo/config.toml, so
+        # the bundle lane and this one rebuild one identical std rather than
+        # two that differ.
         cargo "+$toolchain" test --target wasm32-unknown-unknown \
+          -Z build-std=std,panic_abort,core,alloc \
+          -Z build-std-features=optimize_for_size \
           -p kithara-integration-tests --test suite_heavy
         ;;
       build)

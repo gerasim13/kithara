@@ -65,6 +65,10 @@ RUN image="system-images;android-${ANDROID_PLATFORM_VERSION};google_apis;$(dpkg 
       --device pixel_6 \
  && chown -R runner:runner "${ANDROID_USER_HOME}"
 
+# Where the NDK landed. `cargo ndk` works this out from the SDK, but the build
+# scripts of vendored C libraries do not: they read this variable and stop.
+ENV ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}
+
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/tmp/cargo-install-target \
