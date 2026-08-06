@@ -6,7 +6,10 @@ use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, VariantPromotion, VariantReaderPlan, VariantTransition,
     VariantTransitionId,
 };
-use kithara_test_utils::kithara;
+use kithara_test_utils::{
+    hang::{HangDetector, NoContext, default_timeout},
+    kithara,
+};
 
 use super::rebuild::{
     Consts, RouteFixture, TestDecoder, media_info, produced_data, route_signal_source,
@@ -47,14 +50,16 @@ fn request_incoming_plan(abr: &AbrState) -> VariantReaderPlan {
 
 async fn wait_for_incoming_priming(fixture: &mut RouteFixture, transition: VariantTransition) {
     // Waits for the build, not for a number of yields: on a real clock the
-    // build takes milliseconds while sixty-four yields take microseconds. A
-    // build that never completes is caught by the harness watchdog.
+    // build takes milliseconds while sixty-four yields take microseconds. The
+    // bound is the detector, which names the spinning line when it fires.
+    let mut hang = HangDetector::<NoContext>::new("incoming decoder build", default_timeout());
     loop {
         yield_now().await;
         fixture.source.flush_deferred();
         if fixture.source.decode.incoming_is_priming(transition) {
             return;
         }
+        hang.tick();
     }
 }
 
