@@ -3,7 +3,6 @@
 use std::{
     collections::BTreeMap,
     fs,
-    num::NonZeroU32,
     path::PathBuf,
     sync::{
         OnceLock,
@@ -16,7 +15,7 @@ use kithara_bufpool::BytePool;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::{Atomic, MmapDriver, StorageError};
 
-use super::core::{PinsIndex, PinsInner};
+use super::core::{PinCounts, PinsIndex, PinsInner};
 use crate::{
     error::{AssetsError, AssetsResult},
     index::persistence::{init_atomic, open_existing, schema::PinsIndexFile},
@@ -58,12 +57,21 @@ impl PinsIndex {
 }
 
 impl PinsInner {
+    /// Roots held by at least one durable pin — the set that belongs on disk.
+    fn durable_roots(&self) -> Vec<String> {
+        self.pins
+            .iter()
+            .filter(|r| r.value().durable > 0)
+            .map(|r| r.key().clone())
+            .collect()
+    }
+
     pub(super) fn flush_with_durability(&self, durable: bool) -> AssetsResult<()> {
         let Some(persist) = self.persist.as_ref() else {
             self.dirty.store(false, Ordering::Release);
             return Ok(());
         };
-        let snapshot: Vec<String> = self.pins.iter().map(|r| r.key().clone()).collect();
+        let snapshot = self.durable_roots();
         let atomic = init_atomic(&persist.res, &persist.path, &persist.cancel)?;
         write_pins(atomic, &snapshot, durable)?;
         self.dirty.store(false, Ordering::Release);
@@ -75,7 +83,7 @@ fn hydrate_existing(
     path: &std::path::Path,
     cancel: &CancelToken,
     pool: &BytePool,
-) -> (DashMap<String, NonZeroU32>, Option<Atomic<MmapDriver>>) {
+) -> (DashMap<String, PinCounts>, Option<Atomic<MmapDriver>>) {
     let nonempty = fs::metadata(path).is_ok_and(|m| m.len() > 0);
     if !nonempty {
         return (DashMap::new(), None);
@@ -93,10 +101,19 @@ fn hydrate_existing(
     }
 }
 
+/// Counts for a root read back from `pins.bin`: whoever set that pin is gone,
+/// so the surviving claim is a single durable one.
+fn hydrated_counts() -> PinCounts {
+    PinCounts {
+        durable: 1,
+        local: 0,
+    }
+}
+
 fn read_pins(
     res: &Atomic<MmapDriver>,
     pool: &BytePool,
-) -> AssetsResult<DashMap<String, NonZeroU32>> {
+) -> AssetsResult<DashMap<String, PinCounts>> {
     let mut buf = pool.get();
     let n = res.read_into(&mut buf)?;
 
@@ -119,7 +136,7 @@ fn read_pins(
         .pinned
         .iter()
         .filter(|(_, v)| **v)
-        .map(|(k, _)| (k.as_str().to_string(), NonZeroU32::MIN))
+        .map(|(k, _)| (k.as_str().to_string(), hydrated_counts()))
         .collect();
     Ok(pinned)
 }

@@ -4,4 +4,4 @@ mod core;
 #[cfg(not(target_arch = "wasm32"))]
 mod disk;
 
-pub use core::PinsIndex;
+pub use core::{PinDurability, PinsIndex};

@@ -17,7 +17,7 @@ use super::AssetDeleter;
 use crate::{
     decorator::{Assets, Capabilities},
     error::{AssetsError, AssetsResult},
-    index::{AvailabilityIndex, ScopedAvailabilityObserver},
+    index::{AvailabilityIndex, PinDurability, ScopedAvailabilityObserver},
     layout::ResourceKey,
     resource::{AcquisitionResult, AssetResourceState, BaseReader, BaseWriter, RequestIdentity},
 };
@@ -91,7 +91,10 @@ impl AssetDeleter for MemAssetDeleter {
         self.active_resources
             .retain(|k, _| k.key.asset_root() != Some(asset_root));
         self.availability.clear_root(asset_root);
-        let pins_result = self.pins.remove(asset_root).map(|_| ());
+        let pins_result = self
+            .pins
+            .remove(asset_root, PinDurability::Durable)
+            .map(|_| ());
         let lru_result = self.lru.remove(asset_root);
         pins_result.and(lru_result)
     }
