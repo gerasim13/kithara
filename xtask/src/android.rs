@@ -301,10 +301,29 @@ struct Device {
     gradlew: PathBuf,
 }
 
+/// Whether the emulator draws. Launching the demo is the case where someone is
+/// watching; the instrumented tests read their verdict through `adb`, and the
+/// machine that runs them has no display to draw on.
+#[derive(Clone, Copy)]
+enum Screen {
+    Windowed,
+    Headless,
+}
+
+impl Screen {
+    fn args(self) -> &'static [&'static str] {
+        match self {
+            Self::Windowed => &[],
+            Self::Headless => &["-no-window"],
+        }
+    }
+}
+
 fn prepare_device(
     profile: BuildProfile,
     avd: Option<&str>,
     skip_build: bool,
+    screen: Screen,
     android: &AndroidConfig,
 ) -> Result<Device> {
     let sdk_root = android_sdk_root()?;
@@ -332,7 +351,7 @@ fn prepare_device(
         Some(avd) => avd,
         None => require_android_str(&android.default_avd, "default_avd")?,
     };
-    ensure_emulator_running(&adb, &emulator, avd_name, android)?;
+    ensure_emulator_running(&adb, &emulator, avd_name, screen, android)?;
 
     Ok(Device {
         adb,
@@ -350,7 +369,7 @@ fn run_tests(
     skip_build: bool,
     android: &AndroidConfig,
 ) -> Result<()> {
-    let device = prepare_device(profile, avd, skip_build, android)?;
+    let device = prepare_device(profile, avd, skip_build, Screen::Headless, android)?;
 
     println!("==> Running instrumented tests via gradle");
     let tests = Command::new(&device.gradlew)
@@ -395,7 +414,7 @@ fn run_app(
         adb,
         android_root,
         gradlew,
-    } = prepare_device(profile, avd, skip_build, android)?;
+    } = prepare_device(profile, avd, skip_build, Screen::Windowed, android)?;
 
     println!("==> Installing demo APK via gradle");
     let gradle_task = match profile {
@@ -509,6 +528,7 @@ fn ensure_emulator_running(
     adb: &Path,
     emulator: &Path,
     avd_name: &str,
+    screen: Screen,
     android: &AndroidConfig,
 ) -> Result<()> {
     if has_online_device(adb)? {
@@ -526,6 +546,7 @@ fn ensure_emulator_running(
     println!("==> Booting AVD '{avd_name}' in the background");
     Command::new(emulator)
         .args(["-avd", avd_name])
+        .args(screen.args())
         .spawn()
         .with_context(|| format!("failed to spawn emulator -avd {avd_name}"))?;
 

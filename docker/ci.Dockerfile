@@ -141,3 +141,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cargo install --locked --version "${WASM_BINDGEN_CLI_VERSION}" wasm-bindgen-cli \
  && cargo install --locked --version "${WASM_PACK_VERSION}" wasm-pack \
  && cargo install --locked --version "${WASM_SLIM_VERSION}" wasm-slim
+
+# The account a job runs as. It is declared here rather than in the image that
+# starts the runner because images built on top of this one have state to hand
+# over — an emulator writes into the SDK it was created in — and they can only
+# name an owner that already exists.
+RUN useradd --create-home --shell /bin/bash runner

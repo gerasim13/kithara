@@ -46,6 +46,9 @@ ENV PATH=${PATH}:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platfo
 # and it reads the answers from standard input. The system image matches the
 # machine, which is the whole point of running the emulator here: a guest whose
 # architecture is the host's is virtualised rather than interpreted.
+#
+# Booting an AVD writes back into it, so what the build creates is handed to the
+# account the job runs as rather than kept by the one that created it.
 RUN image="system-images;android-${ANDROID_PLATFORM_VERSION};google_apis;$(dpkg --print-architecture | sed 's/^amd64$/x86_64/;s/^arm64$/arm64-v8a/')" \
  && yes | sdkmanager --licenses > /dev/null \
  && sdkmanager \
@@ -59,7 +62,8 @@ RUN image="system-images;android-${ANDROID_PLATFORM_VERSION};google_apis;$(dpkg 
       --force \
       --name "${ANDROID_AVD}" \
       --package "${image}" \
-      --device pixel_6
+      --device pixel_6 \
+ && chown -R runner:runner "${ANDROID_USER_HOME}"
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \

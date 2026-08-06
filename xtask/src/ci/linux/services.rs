@@ -225,6 +225,9 @@ mod tests {
         // A graphics device is useless to a job that may not open it.
         assert!(gpu.contains("--group-add 993"), "{gpu}");
         assert!(android.contains("--device /dev/kvm"), "{android}");
+        // Without it the emulator interprets the guest instead of virtualising
+        // it, which is the whole reason the lane runs on this machine.
+        assert!(android.contains("--group-add 994"), "{android}");
         assert!(
             android.contains(pins.linux_android_runner_image.as_str()),
             "{android}"

@@ -28,7 +28,6 @@ ARG ACTIONS_RUNNER_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libicu72 \
  && rm -rf /var/lib/apt/lists/* \
- && useradd --create-home --shell /bin/bash runner \
  && install -d -o runner -g runner /runner /cache/target /home/runner/.cargo
 
 ENV CARGO_HOME=/home/runner/.cargo
