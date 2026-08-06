@@ -26,10 +26,16 @@ pub(crate) fn tests(process: &Process, target: &str) -> Result<()> {
 pub(crate) fn build(process: &Process, target: &str) -> Result<()> {
     prepare(process, target)?;
     let mut command = process.command("cargo");
+    // `xtask` runs on the executor, never on the target, and its own tests
+    // reach for `std::os::unix`. Asking for every target of every crate built
+    // it too, and the lane failed on a tool that has no business compiling for
+    // Windows in the first place.
     command.args([
         "check",
         "--locked",
         "--workspace",
+        "--exclude",
+        "xtask",
         "--all-targets",
         "--target",
         target,
@@ -56,6 +62,15 @@ fn windows_build_env(process: &Process, command: &mut Command, target: &str) -> 
     // link.exe could not be run`. Ninja is the one generator the crate leaves
     // alone, and it uses the compiler the target already resolved.
     command.env("CMAKE_GENERATOR", "Ninja");
+    // `bungee-sys` builds its C++ against the static CRT and says so twice —
+    // `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded` for the library and
+    // `static_crt(true)` for the shim — neither of which an environment
+    // variable can reach. Rust on MSVC takes the dynamic one by default, and
+    // the two met in the linker: `LNK2038: mismatch detected for
+    // 'RuntimeLibrary'`. Windows here builds test binaries and ships no
+    // artifact, so the whole lane takes the CRT the dependency insists on;
+    // `cc` reads the same feature and compiles every other C crate to match.
+    command.env("RUSTFLAGS", "-C target-feature=+crt-static");
     for (name, value) in fdk_flags(process, target)? {
         command.env(name, value);
     }
