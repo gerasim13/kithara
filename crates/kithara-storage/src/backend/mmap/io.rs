@@ -137,7 +137,7 @@ impl DriverIo for MmapDriver {
                 let temp = self.rewrite_temp_path();
                 // Drop any stale temp left by a previously-cancelled rewrite.
                 let _ = fs::remove_file(&temp);
-                let rw = MemoryMappedFile::create_rw(&temp, Consts::DEFAULT_INITIAL_SIZE)?;
+                let rw = MemoryMappedFile::create_rw(&temp, self.initial_len)?;
                 *mmap_guard = MmapState::Active(rw);
             }
         }

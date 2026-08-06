@@ -169,6 +169,15 @@ impl DiskAssetStore {
         key: &ResourceKey,
         path: PathBuf,
     ) -> AssetsResult<AtomicChunked<MmapDriver>> {
+        /// Bytes reserved for a fresh segment's temp file. A segment arrives
+        /// in many small chunks, and every time the writes outgrow the
+        /// mapping the driver re-maps the file — the single most expensive
+        /// step of a segment commit. One reservation that covers a typical
+        /// segment removes those re-maps; anything larger still grows, and
+        /// the surplus is trimmed back to `final_len` on commit, so this
+        /// costs a sparse extent and nothing else.
+        const SEGMENT_RESERVATION: u64 = 1024 * 1024;
+
         let observer = self.scoped_observer(key);
         let cancel = self.cancel.clone();
         let chunked = AtomicChunked::open(path, move |target, intent| {
@@ -180,6 +189,7 @@ impl DiskAssetStore {
                 cancel.clone(),
                 MmapOptions::for_path(target.to_path_buf())
                     .mode(mode)
+                    .maybe_initial_len((intent == OpenIntent::Fresh).then_some(SEGMENT_RESERVATION))
                     .build(),
                 Some(Arc::clone(&observer) as Arc<dyn AvailabilityObserver>),
             )
@@ -399,7 +409,7 @@ mod tests {
     use super::*;
     use crate::{
         index::{EvictConfig, LruIndex, PinsIndex},
-        resource::ReadSide,
+        resource::{ReadSide, WriteSide},
     };
 
     #[kithara::test]
@@ -456,6 +466,66 @@ mod tests {
         let mut buf = [0u8; 15];
         let n = res.read_at(0, &mut buf).unwrap();
         assert_eq!(&buf[..n], b"fake audio data");
+    }
+
+    /// A media segment arrives in many small chunks. If the backing file
+    /// starts small and doubles, every crossing re-maps it — the dominant
+    /// cost of a segment commit. Writing a typical segment must leave the
+    /// file's size untouched.
+    #[kithara::test]
+    fn writing_a_segment_does_not_resize_its_backing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DiskAssetStore::new(
+            dir.path().to_path_buf(),
+            CancelToken::never(),
+            &crate::BytePool::default(),
+        );
+        let key = ResourceKey::relative("asset", "segments/0001.bin");
+        let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
+            panic!("a fresh segment key must acquire a writer");
+        };
+        let tmp = dir
+            .path()
+            .join("asset")
+            .join("segments")
+            .join("0001.bin.tmp");
+        let reserved = fs::metadata(&tmp).unwrap().len();
+
+        let chunk = vec![0xABu8; 16 * 1024];
+        for i in 0..12u64 {
+            writer.write_at(i * chunk.len() as u64, &chunk).unwrap();
+        }
+
+        assert_eq!(
+            fs::metadata(&tmp).unwrap().len(),
+            reserved,
+            "a segment-sized write must fit the reservation instead of re-mapping the file"
+        );
+    }
+
+    #[kithara::test]
+    fn a_committed_segment_keeps_only_its_own_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DiskAssetStore::new(
+            dir.path().to_path_buf(),
+            CancelToken::never(),
+            &crate::BytePool::default(),
+        );
+        let key = ResourceKey::relative("asset", "segments/0001.bin");
+        let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
+            panic!("a fresh segment key must acquire a writer");
+        };
+        let payload = vec![0xCDu8; 100_000];
+        writer.write_at(0, &payload).unwrap();
+
+        drop(writer.commit(Some(payload.len() as u64)).unwrap());
+
+        let canonical = dir.path().join("asset").join("segments").join("0001.bin");
+        assert_eq!(
+            fs::metadata(&canonical).unwrap().len(),
+            payload.len() as u64,
+            "the reservation must be trimmed back to the committed length"
+        );
     }
 
     #[kithara::test]
