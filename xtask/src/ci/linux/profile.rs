@@ -47,6 +47,8 @@ pub(crate) struct WindowsGuest {
     pub(crate) vcpus: u32,
     pub(crate) memory_mib: u32,
     pub(crate) disk_gib: u32,
+    /// Labels a workflow selects this guest by.
+    pub(crate) labels: Vec<String>,
     /// libvirt network the guest is attached to. This is not the Docker
     /// network the containers use: the two live in different worlds and a
     /// name that exists in one means nothing in the other.
@@ -149,6 +151,9 @@ impl WindowsGuest {
         }
         if !safe_name(&self.network) {
             bail!("the Windows guest's network name is unusable");
+        }
+        if self.labels.is_empty() || self.labels.iter().any(|label| !safe_label(label)) {
+            bail!("the Windows guest has an unusable label");
         }
         Ok(())
     }

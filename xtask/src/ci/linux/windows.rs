@@ -5,7 +5,10 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tracing::info;
 
-use super::profile::LinuxHost;
+use super::{
+    profile::{LinuxHost, WindowsGuest},
+    registration,
+};
 use crate::ci::{config::CiPins, process::Process};
 
 /// What a guest is built from: two tracked files, one vendor download that
@@ -15,6 +18,10 @@ struct GuestSources {
     /// How long to wait for the guest to start installing, in one-second
     /// attempts, answering the boot prompt until it does.
     prompt_attempts: u32,
+    /// How long to wait for an enrolled guest to report for work, in
+    /// ten-second attempts. A guest that has just been given its credentials
+    /// signs in, enrols, and starts the runner, which takes minutes.
+    enrolment_attempts: u32,
     answer_file: &'static str,
     provision_script: &'static str,
     build_tools_url: &'static str,
@@ -23,11 +30,22 @@ struct GuestSources {
 
 const GUEST: GuestSources = GuestSources {
     prompt_attempts: 40,
+    enrolment_attempts: 60,
     answer_file: "ci/windows/autounattend.xml",
     provision_script: "ci/windows/provision.ps1",
     build_tools_url: "https://aka.ms/vs/17/release/vs_buildtools.exe",
     cargo_tools: ["cargo-nextest", "just"],
 };
+
+/// What the guest needs to register itself, written to the volume it reads its
+/// answers from. The token is good for an hour and for one registration.
+#[derive(Serialize)]
+struct Enrolment<'a> {
+    labels: String,
+    name: &'a str,
+    token: &'a str,
+    url: String,
+}
 
 /// Everything the guest's first sign-in needs to know, written beside the
 /// answer file so the script carries no versions of its own.
@@ -147,6 +165,101 @@ pub(super) fn install(
         "Windows guest created; the unattended install runs on its own from here"
     );
     Ok(())
+}
+
+/// Make the installed guest a runner for this repository.
+///
+/// The guest reads its answers from a small disc rather than from a network
+/// service the host would have to run, so its credentials arrive the same way:
+/// the disc it already has is replaced with one carrying an enrolment, and the
+/// guest picks it up at its next sign-in. The token never passes through a
+/// command line.
+///
+/// The guest is asked to report back rather than assumed to have: a machine
+/// that booted and did nothing looks exactly like one that enrolled, from the
+/// host's side.
+pub(super) fn enrol(process: &Process, host: &LinuxHost) -> Result<()> {
+    let guest = host
+        .windows
+        .as_ref()
+        .context("this machine's profile defines no Windows guest")?;
+    process.require_tools(&["virsh", "xorriso"])?;
+
+    let media = build_enrolment_media(process, host, guest, &registration::enrolment_token(host)?)?;
+    process.run(
+        "virsh",
+        &[
+            "change-media",
+            &guest.name,
+            path_text(&host.cache_root.join("windows-answers.iso"))?,
+            path_text(&media)?,
+            "--update",
+            "--config",
+            "--live",
+        ],
+        "hand the guest its enrolment",
+    )?;
+    // A guest that is already up has read the old disc; one that is down has
+    // read nothing. Either way it signs in from cold and finds the new one.
+    let _ = process.run("virsh", &["destroy", &guest.name], "put the guest down");
+    process.run("virsh", &["start", &guest.name], "start the guest")?;
+
+    for _ in 0..GUEST.enrolment_attempts {
+        thread::sleep(Duration::from_secs(10));
+        if registration::is_online(host, &guest.name)? {
+            info!(guest = guest.name, "the guest is registered and waiting");
+            return Ok(());
+        }
+    }
+    bail!(
+        "the guest {} never reported for work; watch it over VNC",
+        guest.name
+    )
+}
+
+/// Build the disc the guest reads its enrolment from. It replaces the one that
+/// carried the answer file, so the drive letter the guest reads does not move.
+fn build_enrolment_media(
+    process: &Process,
+    host: &LinuxHost,
+    guest: &WindowsGuest,
+    token: &str,
+) -> Result<std::path::PathBuf> {
+    let staging = host.cache_root.join("windows-enrolment");
+    if staging.exists() {
+        fs::remove_dir_all(&staging).with_context(|| format!("clearing {}", staging.display()))?;
+    }
+    fs::create_dir_all(&staging).with_context(|| format!("creating {}", staging.display()))?;
+
+    let enrolment = Enrolment {
+        labels: guest.labels.join(","),
+        name: &guest.name,
+        token,
+        url: format!("https://github.com/{}", host.repository),
+    };
+    fs::write(
+        staging.join("enrolment.json"),
+        serde_json::to_vec_pretty(&enrolment).context("serialising the enrolment")?,
+    )
+    .context("writing the enrolment")?;
+
+    let media = host.cache_root.join("windows-enrolment.iso");
+    let mut command = process.command("xorriso");
+    command.args([
+        "-as",
+        "mkisofs",
+        "-quiet",
+        "-J",
+        "-rock",
+        "-volid",
+        "ANSWERS",
+        "-output",
+        path_text(&media)?,
+        path_text(&staging)?,
+    ]);
+    process.run_command(&mut command, "build the enrolment media")?;
+    fs::remove_dir_all(&staging).with_context(|| format!("clearing {}", staging.display()))?;
+    Ok(media)
 }
 
 /// Get past the prompt that stands between a Windows disc and an unattended

@@ -93,14 +93,38 @@ Get-Verified -Url $settings.runner_url `
              -Path "$root\downloads\runner.zip"
 Expand-Archive -Path "$root\downloads\runner.zip" -DestinationPath "$root\runner" -Force
 
-# The host mints a fresh just-in-time configuration for every job and drops it
-# on the shared volume; the guest never holds a token of its own.
-$service = @'
-$config = Get-Content E:\jitconfig -Raw
+# What the guest does on every sign-in from here on. It registers once, with
+# credentials the host leaves on the answer volume, and then serves jobs until
+# it is restarted. The registration outlives a restart, so the enrolment branch
+# is taken exactly once per installed guest; a guest that boots before the host
+# has left it anything says so and stops rather than looking busy.
+$runner = @'
 Set-Location C:\kithara-ci\runner
-.\run.cmd --jitconfig $config.Trim()
+if (-not (Test-Path '.runner')) {
+    if (-not (Test-Path 'E:\enrolment.json')) {
+        Write-Host 'no enrolment on E:; nothing to register with'
+        exit 1
+    }
+    $enrolment = Get-Content 'E:\enrolment.json' -Raw | ConvertFrom-Json
+    .\config.cmd --unattended --replace --work _work `
+                 --url $enrolment.url --token $enrolment.token `
+                 --name $enrolment.name --labels $enrolment.labels
+    if ($LASTEXITCODE -ne 0) { throw "runner enrolment failed with $LASTEXITCODE" }
+}
+.\run.cmd
 '@
-Set-Content -Path "$root\runner\start.ps1" -Value $service -Encoding UTF8
+Set-Content -Path "$root\runner\start.ps1" -Value $runner -Encoding UTF8
+
+# Windows runs whatever is in this folder at sign-in, which needs no scheduled
+# task and no password to register one with.
+$startup = [Environment]::GetFolderPath('Startup')
+Set-Content -Path "$startup\kithara-ci-runner.cmd" `
+            -Value "powershell -NoProfile -ExecutionPolicy Bypass -File $root\runner\start.ps1" `
+            -Encoding ASCII
 
 Remove-Item -Recurse -Force "$root\downloads"
 Write-Host '==> Guest provisioned'
+
+# The sign-in that ran this one was granted by the answer file; every later one
+# is the automatic sign-in, which only takes effect on a restart.
+Restart-Computer -Force

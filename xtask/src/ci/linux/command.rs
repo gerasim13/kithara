@@ -46,6 +46,8 @@ enum LinuxCommand {
     InstallServices,
     /// Install the Windows guest that serves the Windows lane.
     InstallWindows,
+    /// Register the installed Windows guest as a runner and wait for it.
+    EnrolWindows,
     /// Report what the machine is currently serving.
     Health,
 }
@@ -77,6 +79,7 @@ pub(crate) fn run(args: &LinuxArgs) -> Result<()> {
             let pins = CiPins::load(&args.pins)?;
             windows::install(&process, &host, &pins, &root)
         }
+        LinuxCommand::EnrolWindows => windows::enrol(&process, &host),
         LinuxCommand::Health => services::health(&process, &host),
     }
 }
@@ -115,6 +118,7 @@ mod tests {
             .as_slice(),
             ["install-services"].as_slice(),
             ["install-windows"].as_slice(),
+            ["enrol-windows"].as_slice(),
             ["health"].as_slice(),
         ] {
             assert!(parse(command).is_ok(), "{command:?} must parse");

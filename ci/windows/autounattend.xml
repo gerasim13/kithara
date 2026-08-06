@@ -147,8 +147,11 @@
         </LocalAccounts>
       </UserAccounts>
 
-      <!-- The runner is a foreground process until it is installed as a
-           service, so the guest signs in on its own after a restart. -->
+      <!-- The runner is a foreground process rather than a service: a test
+           suite for an audio library wants a session with a device in it. So
+           the guest signs itself in on every restart, and keeps doing it -
+           a count that runs out leaves a machine sitting at a lock screen
+           nobody is there to answer. -->
       <AutoLogon>
         <Enabled>true</Enabled>
         <Username>ci</Username>
@@ -156,7 +159,7 @@
           <Value>kithara-ci</Value>
           <PlainText>true</PlainText>
         </Password>
-        <LogonCount>1</LogonCount>
+        <LogonCount>100000</LogonCount>
       </AutoLogon>
 
       <FirstLogonCommands>

@@ -29,6 +29,11 @@ struct JitConfig {
     encoded_jit_config: String,
 }
 
+#[derive(Deserialize)]
+struct RegistrationToken {
+    token: String,
+}
+
 #[derive(Serialize)]
 struct JitRequest<'a> {
     name: String,
@@ -84,6 +89,56 @@ pub(super) fn configure(host: &LinuxHost, runner: &LinuxRunner, env_file: &Path)
     )?;
     info!(runner = runner.name, "runner configuration written");
     Ok(())
+}
+
+/// Mint the token a machine registers itself with, once.
+///
+/// A container is handed a configuration that serves one job, because a
+/// container is built again for the next one. A guest is installed once and
+/// kept, so it enrols the way a physical machine does: it registers itself and
+/// holds that registration across the jobs and the restarts that follow. The
+/// token minted here is what it registers with, and it expires within the hour
+/// whether or not it was used.
+pub(super) fn enrolment_token(host: &LinuxHost) -> Result<String> {
+    let token = read_token(&host.token_file)?;
+    let client = client(&token)?;
+    let response = client
+        .post(format!(
+            "https://api.github.com/repos/{}/actions/runners/registration-token",
+            host.repository
+        ))
+        .send()
+        .context("requesting a runner registration token")?;
+    if !response.status().is_success() {
+        bail!("GitHub refused a registration token: {}", response.status());
+    }
+    let minted: RegistrationToken = response
+        .json()
+        .context("reading the runner registration token")?;
+    Ok(minted.token)
+}
+
+/// Whether a runner of this name is registered and waiting for work. This is
+/// the only answer that distinguishes a guest that enrolled from one that
+/// booted and did nothing.
+pub(super) fn is_online(host: &LinuxHost, name: &str) -> Result<bool> {
+    let token = read_token(&host.token_file)?;
+    let client = client(&token)?;
+    let response = client
+        .get(format!(
+            "https://api.github.com/repos/{}/actions/runners",
+            host.repository
+        ))
+        .send()
+        .context("listing the repository's runners")?;
+    if !response.status().is_success() {
+        bail!("GitHub refused to list runners: {}", response.status());
+    }
+    let listing: Listing = response.json().context("reading the runner listing")?;
+    Ok(listing
+        .runners
+        .iter()
+        .any(|runner| runner.name == name && runner.status == "online"))
 }
 
 /// Drop registrations left behind by runners that never got a job. An ephemeral
