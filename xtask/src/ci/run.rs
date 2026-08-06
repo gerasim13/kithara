@@ -229,6 +229,31 @@ mod tests {
         lanes
     }
 
+    /// The image a Linux job starts in is named twice: in the reviewed pins,
+    /// which every machine builds and provisions from, and in the pipeline that
+    /// runs the job. Nothing but this test connects them, and a machine that
+    /// has built one tag cannot serve a pipeline asking for the other — which
+    /// is how a host ended up with an image its own provisioning refused.
+    #[test]
+    fn the_linux_pipeline_starts_the_image_the_pins_name() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask has a workspace root");
+        let pins = crate::ci::config::CiPins::load(&root.join(crate::ci::config::PINS_PATH))
+            .expect("the reviewed pins load");
+        let common = fs::read_to_string(root.join(".gitlab/ci/common.yml"))
+            .expect("the shared pipeline definition is readable");
+        let declared = common
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("image: "))
+            .expect("the Linux job names an image");
+
+        assert_eq!(
+            declared, pins.linux_image,
+            "the pipeline and the pins name different images"
+        );
+    }
+
     #[test]
     fn ci_lane_is_typed_and_uses_modular_names() {
         assert!(Cli::try_parse_from(["xtask", "ci", "run", "apple-lint"]).is_ok());
