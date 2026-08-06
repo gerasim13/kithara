@@ -161,9 +161,10 @@ impl AssetStore {
     /// Persist the in-memory byte-availability aggregate snapshot to
     /// disk. For an in-memory store this is a no-op.
     ///
-    /// Checkpointing is always explicit — there is no `Drop` hook and
-    /// no background flush timer. Callers decide when a consistent
-    /// aggregate must survive a restart.
+    /// Callers can checkpoint at any point they want a consistent
+    /// aggregate on disk; the store also checkpoints itself when the last
+    /// handle drops, because the manifest is what makes a resource usable
+    /// after a restart.
     ///
     /// # Errors
     ///
@@ -336,6 +337,23 @@ impl AssetStore {
         Fut: Future<Output = T>,
     {
         self.transactions().run(key, operation).await
+    }
+}
+
+/// The manifest decides what survives a restart, so the last handle writes
+/// it before the indexes go away. Waiting for the flush hub's own teardown
+/// is too late: every index holds the hub alive, so by the time the hub
+/// drops there is nothing left to flush.
+impl Drop for AssetStoreInner {
+    fn drop(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let StoreBackendInner::Disk {
+            base: Some(base), ..
+        } = &self.backend
+            && let Err(error) = base.checkpoint()
+        {
+            tracing::warn!(%error, "AssetStore: final checkpoint failed");
+        }
     }
 }
 

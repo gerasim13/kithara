@@ -9,4 +9,4 @@ pub(crate) mod core;
 #[cfg(test)]
 mod tests;
 
-pub use core::{AtomicChunked, OpenIntent};
+pub use core::{AtomicChunked, Barrier, OpenIntent};
