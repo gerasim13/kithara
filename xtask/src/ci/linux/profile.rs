@@ -72,9 +72,11 @@ pub(crate) struct LinuxRunner {
     /// Host devices the job needs, such as `/dev/kvm` for an emulator.
     #[serde(default)]
     pub(crate) devices: Vec<PathBuf>,
-    /// Whether jobs on this runner reach the machine's GPUs.
+    /// Groups the job joins on top of its own. A device node is typically
+    /// owned by one, and its number is a property of the machine rather than
+    /// of the image, which is why it is named here.
     #[serde(default)]
-    pub(crate) gpus: bool,
+    pub(crate) groups: Vec<u32>,
     /// Which image this runner starts from.
     #[serde(default)]
     pub(crate) flavor: RunnerFlavor,

@@ -42,11 +42,16 @@ ENV WASM_SLIM_TOOLCHAIN=${NIGHTLY_TOOLCHAIN}
 # Firefox alone is 76 megabytes, which does not fit the two-minute default
 # transfer timeout on a slow mirror, and a build that reaches that point has
 # already spent minutes to be told the connection failed.
+#
+# The Mesa drivers are what makes a graphics device usable from inside the
+# container: the kernel side is the host's, but the userspace driver and the
+# manifest the Vulkan loader reads to find it have to be in the image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     -o Acquire::Retries=5 -o Acquire::http::Timeout=600 \
     ca-certificates chromium chromium-driver curl ffmpeg firefox-esr git \
     clang libclang-dev lld pkg-config \
     bubblewrap socat ripgrep nodejs npm \
+    mesa-vulkan-drivers \
     libasound2-dev libdbus-1-dev libssl-dev \
     libavcodec-dev libavformat-dev libavfilter-dev libavdevice-dev \
     libavutil-dev libswresample-dev libswscale-dev libpostproc-dev \

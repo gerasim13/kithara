@@ -15,7 +15,8 @@ name = "kithara-ci-gpu"
 cpus = "8"
 memory = "32g"
 labels = ["self-hosted", "linux", "x64", "kithara", "gpu"]
-gpus = true
+devices = ["/dev/dri"]
+groups = [993]
 
 [[runners]]
 name = "kithara-ci-android"

@@ -104,11 +104,11 @@ fn unit(host: &LinuxHost, runner: &LinuxRunner, pins: &CiPins, executable: &str)
         memory = runner.memory,
         env_file = env_file(runner),
     )?;
-    if runner.gpus {
-        write!(unit, " --gpus all --env NVIDIA_DRIVER_CAPABILITIES=all")?;
-    }
     for device in &runner.devices {
         write!(unit, " --device {}", device.display())?;
+    }
+    for group in &runner.groups {
+        write!(unit, " --group-add {group}")?;
     }
     let image = match runner.flavor {
         RunnerFlavor::Plain => &pins.linux_runner_image,
@@ -219,9 +219,11 @@ mod tests {
         )
         .unwrap();
 
-        assert!(!plain.contains("--gpus"), "{plain}");
         assert!(!plain.contains("--device"), "{plain}");
-        assert!(gpu.contains("--gpus all"), "{gpu}");
+        assert!(!plain.contains("--group-add"), "{plain}");
+        assert!(gpu.contains("--device /dev/dri"), "{gpu}");
+        // A graphics device is useless to a job that may not open it.
+        assert!(gpu.contains("--group-add 993"), "{gpu}");
         assert!(android.contains("--device /dev/kvm"), "{android}");
         assert!(
             android.contains(pins.linux_android_runner_image.as_str()),
