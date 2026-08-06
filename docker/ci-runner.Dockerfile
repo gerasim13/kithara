@@ -13,11 +13,18 @@ ARG ACTIONS_RUNNER_ARM64_SHA256
 ARG ACTIONS_RUNNER_VERSION
 
 # The runner is a .NET application and needs the ICU libraries at run time.
+#
+# The host mounts a cache volume over each of the last three paths. Docker
+# creates a mount point the image does not have, and creates it owned by root,
+# so a job running as `runner` cannot write the caches it is given; an empty
+# volume mounted over a directory that does exist inherits that directory's
+# owner instead. They are therefore declared here rather than left to Docker.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libicu72 \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --create-home --shell /bin/bash runner \
- && install -d -o runner -g runner /runner
+ && install -d -o runner -g runner \
+      /runner /cache/target "${CARGO_HOME}/git" "${CARGO_HOME}/registry"
 
 USER runner
 WORKDIR /runner
