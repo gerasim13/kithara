@@ -46,14 +46,16 @@ fn request_incoming_plan(abr: &AbrState) -> VariantReaderPlan {
 }
 
 async fn wait_for_incoming_priming(fixture: &mut RouteFixture, transition: VariantTransition) {
-    for _ in 0..64 {
+    // Waits for the build, not for a number of yields: on a real clock the
+    // build takes milliseconds while sixty-four yields take microseconds. A
+    // build that never completes is caught by the harness watchdog.
+    loop {
         yield_now().await;
         fixture.source.flush_deferred();
         if fixture.source.decode.incoming_is_priming(transition) {
             return;
         }
     }
-    panic!("incoming decoder build did not complete");
 }
 
 #[kithara::test(tokio)]
