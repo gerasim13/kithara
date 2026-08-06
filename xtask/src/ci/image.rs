@@ -50,11 +50,15 @@ impl ImageCommand {
         }
     }
 
-    pub(crate) fn build_args(self, pins: &CiPins) -> Result<Vec<(&'static str, String)>> {
+    pub(crate) fn build_args(
+        self,
+        pins: &CiPins,
+        root: &std::path::Path,
+    ) -> Result<Vec<(&'static str, String)>> {
         match self {
             Self::Toolchain => linux_build_args(pins),
             Self::Runner => Ok(runner_build_args(pins, &pins.linux_image)),
-            Self::Android => android_build_args(pins),
+            Self::Android => android_build_args(pins, root),
             Self::AndroidRunner => Ok(runner_build_args(pins, &pins.linux_android_image)),
         }
     }
@@ -69,7 +73,7 @@ pub(crate) fn run(args: &ImageArgs) -> Result<()> {
         &process,
         args.command.dockerfile(),
         args.command.tag(&pins),
-        &args.command.build_args(&pins)?,
+        &args.command.build_args(&pins, &root)?,
     )
 }
 
@@ -171,10 +175,17 @@ pub(crate) fn runner_build_args(pins: &CiPins, base: &str) -> Vec<(&'static str,
     ]
 }
 
-fn android_build_args(pins: &CiPins) -> Result<Vec<(&'static str, String)>> {
+/// The emulator this image carries is the one the workspace boots, so its name
+/// is read from the workspace rather than repeated here. Two names for one
+/// device is a machine that builds an emulator nothing asks for.
+fn android_build_args(
+    pins: &CiPins,
+    root: &std::path::Path,
+) -> Result<Vec<(&'static str, String)>> {
+    let android = crate::config::KitharaExt::load(root)?.android;
     Ok(vec![
         ("CI_IMAGE", pins.linux_image.clone()),
-        ("ANDROID_AVD", pins.android_avd.clone()),
+        ("ANDROID_AVD", android.default_avd),
         (
             "ANDROID_BUILD_TOOLS_VERSION",
             pins.android_build_tools_version.clone(),
@@ -237,7 +248,10 @@ mod tests {
             ImageCommand::AndroidRunner,
         ] {
             let dockerfile = image.dockerfile();
-            let configured = configured_arguments(image.build_args(pins).unwrap());
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .expect("the crate sits inside the workspace");
+            let configured = configured_arguments(image.build_args(pins, root).unwrap());
             assert_eq!(declared_arguments(dockerfile), configured, "{dockerfile}");
         }
     }
