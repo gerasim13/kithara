@@ -377,6 +377,22 @@ mod tests {
         assert!(buf.iter().all(|&b| b == 42));
     }
 
+    /// Sealing finalizes the bytes without publishing a snapshot, because the
+    /// caller is about to rename the file and republish it itself. Until that
+    /// happens the live mapping is all a reader has, so it must keep serving.
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn a_sealed_resource_still_serves_its_bytes() {
+        let dir = TempDir::new().unwrap();
+        let res = create_resource_with_size(&dir, Some(64 * 1024));
+        res.write_at(0, b"payload").unwrap();
+
+        res.seal_in_place(Some(7)).unwrap();
+
+        let mut buf = [0u8; 7];
+        res.reader().read_at(0, &mut buf).unwrap();
+        assert_eq!(&buf, b"payload", "a sealed resource must stay readable");
+    }
+
     /// A re-download starts a fresh generation in a rewrite temp file. It
     /// carries the same payload as the first one, so it must start from the
     /// same reservation — otherwise the rewrite re-maps its way back up from

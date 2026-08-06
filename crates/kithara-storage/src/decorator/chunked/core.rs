@@ -103,28 +103,40 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// # Errors
     /// Propagates the inner commit error and any filesystem error.
     pub fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        self.inner.load().commit_in_place(final_len)?;
+        let Some(tmp) = self.tmp_path.lock().take() else {
+            return self.inner.load().commit_in_place(final_len);
+        };
 
-        let tmp = self.tmp_path.lock().take();
-        if let Some(tmp) = tmp {
-            let f = OpenOptions::new().write(true).open(&tmp).map_err(|e| {
-                StorageError::Failed(format!("AtomicChunked commit: open tmp {tmp:?}: {e}"))
-            })?;
-            f.sync_data().map_err(|e| {
-                StorageError::Failed(format!("AtomicChunked commit: sync_data {tmp:?}: {e}"))
-            })?;
-            drop(f);
-            fs::rename(&tmp, &self.canonical_path).map_err(|e| {
-                StorageError::Failed(format!(
-                    "AtomicChunked commit: rename {tmp:?} -> {:?}: {e}",
-                    self.canonical_path
-                ))
-            })?;
+        // Sealing skips the driver's snapshot: it would map the temp file
+        // that the rename below retires. One handle then trims the surplus
+        // reservation and forces the bytes down, so the canonical path can
+        // only ever appear fully durable.
+        self.inner.load().seal_in_place(final_len)?;
 
-            if let Some(factory) = self.factory.as_ref() {
-                let new_inner = factory(&self.canonical_path, OpenIntent::Reopen)?;
-                self.inner.store(Arc::new(new_inner));
-            }
+        let f = OpenOptions::new().write(true).open(&tmp).map_err(|e| {
+            StorageError::Failed(format!("AtomicChunked commit: open tmp {tmp:?}: {e}"))
+        })?;
+        if let Some(len) = final_len
+            && f.metadata().is_ok_and(|m| m.len() > len)
+        {
+            f.set_len(len).map_err(|e| {
+                StorageError::Failed(format!("AtomicChunked commit: trim {tmp:?}: {e}"))
+            })?;
+        }
+        f.sync_data().map_err(|e| {
+            StorageError::Failed(format!("AtomicChunked commit: sync_data {tmp:?}: {e}"))
+        })?;
+        drop(f);
+        fs::rename(&tmp, &self.canonical_path).map_err(|e| {
+            StorageError::Failed(format!(
+                "AtomicChunked commit: rename {tmp:?} -> {:?}: {e}",
+                self.canonical_path
+            ))
+        })?;
+
+        if let Some(factory) = self.factory.as_ref() {
+            let new_inner = factory(&self.canonical_path, OpenIntent::Reopen)?;
+            self.inner.store(Arc::new(new_inner));
         }
         Ok(())
     }
