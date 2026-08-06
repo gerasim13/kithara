@@ -13,16 +13,27 @@ shear:
 hack:
     #!/usr/bin/env bash
     set -euo pipefail
-    cargo hack check --feature-powerset --no-dev-deps --depth 2 --workspace \
-      --exclude kithara-play \
-      --exclude kithara-app \
-      --exclude kithara-fuzz \
-      --exclude kithara-net
-    # kithara-net rejects a backendless build with compile_error!;
+    # A crate that forwards the HTTP backend choice cannot be built with none
+    # of them: kithara-net says so with compile_error!. Those crates declare
+    # the invariant; the rest keep the whole powerset, because --at-least-one-of
+    # drops combinations from a crate that has none of the named features.
     # client-apple builds only on Apple targets.
-    cargo hack check --feature-powerset --no-dev-deps --depth 2 -p kithara-net \
-      --at-least-one-of client-reqwest,client-wreq \
-      --exclude-features client-apple
+    forwarding=$(grep -l '^client-reqwest' crates/*/Cargo.toml \
+      | xargs -n1 dirname | xargs -n1 basename | sort)
+    skip=(kithara-play kithara-app kithara-fuzz)
+    exclude=()
+    for crate in "${skip[@]}"; do exclude+=(--exclude "$crate"); done
+    for crate in $forwarding; do
+      case " ${skip[*]} " in *" $crate "*) continue ;; esac
+      exclude+=(--exclude "$crate")
+    done
+    cargo hack check --feature-powerset --no-dev-deps --depth 2 --workspace "${exclude[@]}"
+    for crate in $forwarding; do
+      case " ${skip[*]} " in *" $crate "*) continue ;; esac
+      cargo hack check --feature-powerset --no-dev-deps --depth 2 -p "$crate" \
+        --at-least-one-of client-reqwest,client-wreq \
+        --exclude-features client-apple
+    done
 
 # Baseline is a revision here, not crates.io: the workspace is unpublished.
 semver BASELINE="HEAD~1":
