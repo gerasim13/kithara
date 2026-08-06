@@ -13,10 +13,11 @@ use crate::{
     compile::CompiledUi,
     draw::{DrawList, DrawListBuilder, Rect},
     interact::{
-        CursorShape, Hover, iced as iced_interact,
-        recognizers::{Scalar, ScalarState, Track, click},
+        CursorShape, Hit, Hover, Input, iced as iced_interact,
+        recognizers::{Crossing, Scalar, ScalarState, Track, click},
     },
-    render::{ReadValue, Skin, UiEvent, activate, scalar},
+    render::{ReadValue, Skin, UiEvent, activate, controls::Press, scalar},
+    solve,
     text::{TextContext, TextResources},
 };
 
@@ -117,21 +118,34 @@ where
     }
 
     pub(crate) fn view(self) -> Element<'skin, UiEvent> {
-        self.sized(Length::Fill, Length::Fill)
-    }
-
-    /// Sized to what the control asked for rather than to its parent, for the
-    /// controls whose skin fixes their box.
-    pub(crate) fn sized(self, width: Length, height: Length) -> Element<'skin, UiEvent> {
+        let (width, height) = self.length();
         Canvas::new(self).width(width).height(height).into()
     }
 
-    pub(crate) fn draw_list(&self, state: &PaintState, bounds: Rect) -> DrawList {
+    /// The box the painter asks for, in the toolkit's own words.
+    ///
+    /// Shaping a word to measure it needs a context the mounted canvas does not
+    /// have yet, so this builds one. It is the same cost the button paid before
+    /// it reached this adapter, and only the styles that measure their label
+    /// pay it at all.
+    fn length(&self) -> (Length, Length) {
+        let size = self
+            .painter
+            .length(&mut self.text_resources.into(), &self.data);
+        (iced_length(size.width), iced_length(size.height))
+    }
+
+    pub(crate) fn draw_list(
+        &self,
+        state: &PaintState,
+        bounds: Rect,
+        visual: VisualState,
+    ) -> DrawList {
         let mut text = state.text.borrow_mut();
         let text = text.get_or_insert_with(|| self.text_resources.into());
         let mut builder = DrawListBuilder::default();
         self.painter
-            .draw(&mut builder, text, &self.data, bounds, VisualState::Idle);
+            .draw(&mut builder, text, &self.data, bounds, visual);
         builder.finish()
     }
 
@@ -140,6 +154,7 @@ where
         state: &PaintState,
         renderer: &Renderer,
         bounds: Rectangle,
+        visual: VisualState,
     ) -> Vec<Geometry> {
         let list = self.draw_list(
             state,
@@ -149,11 +164,34 @@ where
                 x: 0.0,
                 y: 0.0,
             },
+            visual,
         );
         state.refresh(&list);
         vec![state.geometry.draw(renderer, bounds.size(), |frame| {
             replay_ordered(&list, frame, self.text_resources);
         })]
+    }
+}
+
+/// What the pointer alone says about the picture, for a painter mounted without
+/// a gesture: a control the engine drives still lights up under the hand, it
+/// just does not answer the click itself.
+fn hovered(reads_pointer: bool, bounds: Rectangle, cursor: Cursor) -> VisualState {
+    if reads_pointer && iced_interact::hit(bounds, cursor).over() {
+        VisualState::Hovered
+    } else {
+        VisualState::Idle
+    }
+}
+
+/// The solver's length in the toolkit's words. The two vocabularies agree case
+/// for case; only the solver's can be spoken by a painter.
+fn iced_length(length: solve::Length) -> Length {
+    match length {
+        solve::Length::Fill => Length::Fill,
+        solve::Length::FillPortion(factor) => Length::FillPortion(factor),
+        solve::Length::Fixed(value) => Length::Fixed(value),
+        solve::Length::Shrink => Length::Shrink,
     }
 }
 
@@ -169,9 +207,14 @@ where
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
-        _cursor: Cursor,
+        cursor: Cursor,
     ) -> Vec<Geometry> {
-        self.geometry(state, renderer, bounds)
+        self.geometry(
+            state,
+            renderer,
+            bounds,
+            hovered(Painter::READS_POINTER, bounds, cursor),
+        )
     }
 }
 
@@ -199,8 +242,10 @@ enum Recognize {
 /// context the painter draws through.
 #[derive(Default)]
 pub(crate) struct GestureState {
+    crossing: Crossing,
     drag: ScalarState,
     paint: PaintState,
+    press: Press,
 }
 
 impl<'skin, Painter> Gesture<'skin, Painter>
@@ -234,10 +279,8 @@ where
     }
 
     pub(crate) fn view(self) -> Element<'skin, UiEvent> {
-        Canvas::new(self)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        let (width, height) = self.paint.length();
+        Canvas::new(self).width(width).height(height).into()
     }
 }
 
@@ -255,7 +298,8 @@ where
         bounds: Rectangle,
         _cursor: Cursor,
     ) -> Vec<Geometry> {
-        self.paint.geometry(&state.paint, renderer, bounds)
+        self.paint
+            .geometry(&state.paint, renderer, bounds, state.press.visual())
     }
 
     fn mouse_interaction(
@@ -266,7 +310,9 @@ where
     ) -> mouse::Interaction {
         let hit = iced_interact::hit(bounds, cursor);
         match &self.recognize {
-            Recognize::Press => Hover::new(CursorShape::Pointer).cursor(false, &hit).into(),
+            Recognize::Press => Hover::new(CursorShape::Pointer)
+                .cursor(state.press.is_pressed(), &hit)
+                .into(),
             Recognize::Drag(drag) => drag.cursor(&state.drag, &hit).into(),
         }
     }
@@ -280,14 +326,31 @@ where
     ) -> Option<Action<UiEvent>> {
         let input = iced_interact::input(event)?;
         let hit = iced_interact::hit(bounds, cursor);
-        match &self.recognize {
+        let repaint = Painter::READS_POINTER && state.follow(input, &hit);
+        let action = match &self.recognize {
             Recognize::Press => activate(&self.path, click::on_input(input, &hit)),
             Recognize::Drag(drag) => scalar(
                 &self.path,
                 drag.on_input(&mut state.drag, input, &hit, Instant::now())
                     .map(f64::from),
             ),
-        }
+        };
+        action.or_else(|| repaint.then(Action::request_redraw))
+    }
+}
+
+impl GestureState {
+    /// Follows the pointer over and onto the control, answering whether the
+    /// painter now draws something else. Crossing and pressing are recognised
+    /// rather than read off the raw event, so a leaf agrees with the engine
+    /// about what those words mean.
+    fn follow(&mut self, input: Input<'_>, hit: &Hit) -> bool {
+        let crossed = self
+            .crossing
+            .on_input(input, hit)
+            .value()
+            .is_some_and(|over| self.press.hover(over));
+        self.press.press(input, hit) || crossed
     }
 }
 
@@ -298,15 +361,16 @@ mod tests {
     use super::*;
     use crate::{
         atoms::{
+            button::{Button, ButtonConfig, ButtonLabel},
             design::{cell::Cell, meter::Meter, status_dot::StatusDot, swatch::Swatch},
             meter::StereoMeter,
             nav_item::NavItem,
-            painter::{CellData, NavData},
+            painter::{ButtonData, CellData, NavData},
             toggle::Binary,
             vu::VerticalVu,
         },
         builtin,
-        module::Tone,
+        module::{ButtonStyle, Tone},
         render::{
             Icon, StereoLevels,
             masonry::{MasonryControl, Painted},
@@ -330,8 +394,11 @@ mod tests {
             y: 0.0,
         };
         for ticks in [false, true] {
-            let iced = Paint::new(VerticalVu::new(ticks, skin), LEVELS, skin)
-                .draw_list(&PaintState::default(), bounds);
+            let iced = Paint::new(VerticalVu::new(ticks, skin), LEVELS, skin).draw_list(
+                &PaintState::default(),
+                bounds,
+                VisualState::Idle,
+            );
             let mut masonry = Painted::new(VerticalVu::new(ticks, skin), LEVELS, skin);
 
             assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
@@ -367,8 +434,11 @@ mod tests {
             ),
         ] {
             for active in [false, true] {
-                let iced = Paint::new(painter(skin), active, skin)
-                    .draw_list(&PaintState::default(), bounds);
+                let iced = Paint::new(painter(skin), active, skin).draw_list(
+                    &PaintState::default(),
+                    bounds,
+                    VisualState::Idle,
+                );
                 let mut masonry = Painted::new(painter(skin), active, skin);
 
                 assert_eq!(
@@ -392,8 +462,11 @@ mod tests {
             y: 0.0,
         };
         for level in [0.0, 0.5, 1.0] {
-            let iced =
-                Paint::new(Meter::new(skin), level, skin).draw_list(&PaintState::default(), bounds);
+            let iced = Paint::new(Meter::new(skin), level, skin).draw_list(
+                &PaintState::default(),
+                bounds,
+                VisualState::Idle,
+            );
             let mut masonry = Painted::new(Meter::new(skin), level, skin);
 
             assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
@@ -415,8 +488,11 @@ mod tests {
                     highlighted,
                     label: label.clone(),
                 };
-                let iced = Paint::new(Cell::new(skin), data(), skin)
-                    .draw_list(&PaintState::default(), bounds);
+                let iced = Paint::new(Cell::new(skin), data(), skin).draw_list(
+                    &PaintState::default(),
+                    bounds,
+                    VisualState::Idle,
+                );
                 let mut masonry = Painted::new(Cell::new(skin), data(), skin);
 
                 assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
@@ -434,8 +510,11 @@ mod tests {
             y: 0.0,
         };
         for role in [ColorRole::Accent, ColorRole::BgInset] {
-            let iced = Paint::new(Swatch::new(role, skin), "ACCENT".to_owned(), skin)
-                .draw_list(&PaintState::default(), bounds);
+            let iced = Paint::new(Swatch::new(role, skin), "ACCENT".to_owned(), skin).draw_list(
+                &PaintState::default(),
+                bounds,
+                VisualState::Idle,
+            );
             let mut masonry = Painted::new(Swatch::new(role, skin), "ACCENT".to_owned(), skin);
 
             assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
@@ -452,8 +531,11 @@ mod tests {
             y: 0.0,
         };
         for tone in [Tone::Neutral, Tone::Accent, Tone::Success, Tone::Danger] {
-            let iced = Paint::new(StatusDot::new(tone, skin), "LIVE".to_owned(), skin)
-                .draw_list(&PaintState::default(), bounds);
+            let iced = Paint::new(StatusDot::new(tone, skin), "LIVE".to_owned(), skin).draw_list(
+                &PaintState::default(),
+                bounds,
+                VisualState::Idle,
+            );
             let mut masonry = Painted::new(StatusDot::new(tone, skin), "LIVE".to_owned(), skin);
 
             assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
@@ -482,14 +564,71 @@ mod tests {
                     label: "BUTTONS".to_owned(),
                     mark,
                 };
-                let iced = Paint::new(NavItem::new(skin), data(), skin)
-                    .draw_list(&PaintState::default(), bounds);
+                let iced = Paint::new(NavItem::new(skin), data(), skin).draw_list(
+                    &PaintState::default(),
+                    bounds,
+                    VisualState::Idle,
+                );
                 let mut masonry = Painted::new(NavItem::new(skin), data(), skin);
 
                 assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
                 assert!(
                     iced.commands().len() >= 4,
                     "{icon:?} must draw its icon alongside the rest"
+                );
+            }
+        }
+    }
+
+    /// Every style the document can ask for, in both states, through both
+    /// hosts. The button is the one control whose picture also moves with the
+    /// pointer, so each style is checked in every visual state as well.
+    #[kithara::test]
+    fn iced_and_masonry_record_the_same_button() {
+        let skin = builtin::skin();
+        let bounds = Rect {
+            h: 30.0,
+            w: 72.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        for (style, icon) in [
+            (ButtonStyle::Default, None),
+            (ButtonStyle::Default, Some(Icon::Play)),
+            (ButtonStyle::Transport, None),
+            (ButtonStyle::TransportPrimary, None),
+            (ButtonStyle::MicroPrimary, Some(Icon::Play)),
+            (ButtonStyle::VisNav, None),
+        ] {
+            for active in [false, true] {
+                let painter = || {
+                    Button::new(
+                        ButtonConfig::builder()
+                            .maybe_mark(icon.and_then(Icon::mark))
+                            .style(style)
+                            .build(),
+                        icon.and_then(Icon::mark),
+                        skin,
+                    )
+                };
+                let data = || ButtonData {
+                    active,
+                    label: ButtonLabel {
+                        active: Some("PAUSE".to_owned()),
+                        label: "PLAY".to_owned(),
+                    },
+                };
+                let iced = Paint::new(painter(), data(), skin).draw_list(
+                    &PaintState::default(),
+                    bounds,
+                    VisualState::Idle,
+                );
+                let mut masonry = Painted::new(painter(), data(), skin);
+
+                assert_eq!(
+                    iced,
+                    MasonryControl::draw_list(&mut masonry, bounds),
+                    "the two hosts must record the same {style:?} button"
                 );
             }
         }
@@ -504,8 +643,11 @@ mod tests {
             x: 0.0,
             y: 0.0,
         };
-        let iced = Paint::new(StereoMeter::new(skin), LEVELS, skin)
-            .draw_list(&PaintState::default(), bounds);
+        let iced = Paint::new(StereoMeter::new(skin), LEVELS, skin).draw_list(
+            &PaintState::default(),
+            bounds,
+            VisualState::Idle,
+        );
         let mut masonry = Painted::new(StereoMeter::new(skin), LEVELS, skin);
 
         assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
@@ -520,8 +662,13 @@ mod pressed {
 
     use super::*;
     use crate::{
-        atoms::{nav_item::NavItem, painter::NavData},
+        atoms::{
+            button::{Button, ButtonConfig, ButtonLabel},
+            nav_item::NavItem,
+            painter::{ButtonData, NavData},
+        },
         builtin,
+        module::ButtonStyle,
         render::{ControlAction, Icon},
     };
 
@@ -568,6 +715,216 @@ mod pressed {
             )
         );
     }
+
+    /// Only a painter that says it reads the pointer gets one. The button is
+    /// the only control that does today, so it is where the tracking is pinned;
+    /// letting go of it must repaint even though it publishes nothing.
+    #[kithara::test]
+    fn releasing_a_pressed_button_repaints_without_publishing() {
+        let skin = builtin::skin();
+        let gesture = Gesture::press("transport/play", button_paint(skin, false));
+        let bounds = Rectangle {
+            height: 28.0,
+            width: 48.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let cursor = Cursor::Available(Point::new(24.0, 14.0));
+        let mut state = GestureState::default();
+
+        let pressed = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+        let _ = canvas::Program::update(&gesture, &mut state, &pressed, bounds, cursor);
+        assert!(state.press.is_pressed(), "a press inside the bounds holds");
+
+        let released = Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+        let action = canvas::Program::update(&gesture, &mut state, &released, bounds, cursor)
+            .unwrap_or_else(|| panic!("letting go of a pressed button must repaint it"));
+
+        assert!(!state.press.is_pressed());
+        assert_eq!(action.into_inner().0, None);
+    }
+
+    /// The pointer changes the picture, and only for the painters that asked
+    /// for it. A control that does not read the pointer draws the same list
+    /// under the hand as away from it.
+    #[kithara::test]
+    fn a_button_draws_a_different_list_while_it_is_pressed() {
+        let skin = builtin::skin();
+        let paint = button_paint(skin, false);
+        let bounds = Rect {
+            h: 28.0,
+            w: 48.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let state = PaintState::default();
+
+        assert_ne!(
+            paint.draw_list(&state, bounds, VisualState::Idle),
+            paint.draw_list(&state, bounds, VisualState::Pressed)
+        );
+    }
+
+    #[kithara::test]
+    fn a_painter_that_ignores_the_pointer_says_so() {
+        assert!(Button::READS_POINTER);
+        assert!(!NavItem::READS_POINTER);
+    }
+
+    fn button_paint(skin: &Skin, active: bool) -> Paint<'_, Button> {
+        Paint::new(
+            Button::new(
+                ButtonConfig::builder()
+                    .style(ButtonStyle::TransportPrimary)
+                    .build(),
+                None,
+                skin,
+            ),
+            ButtonData {
+                active,
+                label: ButtonLabel {
+                    active: Some("PAUSE".to_owned()),
+                    label: "PLAY".to_owned(),
+                },
+            },
+            skin,
+        )
+    }
+}
+
+/// What a control asks its row for, which is the one length a document cannot
+/// state.
+#[cfg(test)]
+mod lengths {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    #[cfg(feature = "masonry-host")]
+    use crate::atoms::button::declared_width;
+    use crate::{
+        atoms::{
+            button::{Button, ButtonConfig, ButtonLabel},
+            painter::ButtonData,
+        },
+        builtin,
+        module::ButtonStyle,
+    };
+
+    fn paint(style: ButtonStyle, skin: &Skin) -> Paint<'_, Button> {
+        Paint::new(
+            Button::new(ButtonConfig::builder().style(style).build(), None, skin),
+            ButtonData {
+                active: false,
+                label: ButtonLabel {
+                    active: None,
+                    label: "PLAY".to_owned(),
+                },
+            },
+            skin,
+        )
+    }
+
+    /// The transport row is weighted: its primary button is wider than the rest
+    /// by a factor the skin names. `Fill` would divide the row evenly and the
+    /// row would be wrong, so the share has to survive the shared adapter.
+    #[kithara::test]
+    fn a_transport_button_keeps_its_share_of_the_row() {
+        let skin = builtin::skin();
+
+        assert_eq!(
+            paint(ButtonStyle::Transport, skin).length().0,
+            Length::FillPortion(skin.button.transport_fill)
+        );
+        assert_eq!(
+            paint(ButtonStyle::TransportPrimary, skin).length().0,
+            Length::FillPortion(skin.button.primary_fill)
+        );
+    }
+
+    /// A button with no share is as wide as the skin or its own word says.
+    #[kithara::test]
+    fn a_fixed_button_takes_the_width_its_skin_names() {
+        let skin = builtin::skin();
+
+        assert_eq!(
+            paint(ButtonStyle::MicroPrimary, skin).length().0,
+            Length::Fixed(skin.button.micro_size)
+        );
+        assert_eq!(
+            paint(ButtonStyle::VisNav, skin).length().0,
+            Length::Fixed(skin.vis.nav_cell_size)
+        );
+    }
+
+    #[kithara::test]
+    fn a_default_button_is_as_wide_as_its_word() {
+        let skin = builtin::skin();
+
+        assert!(matches!(
+            paint(ButtonStyle::Default, skin).length().0,
+            Length::Fixed(width) if width > 0.0
+        ));
+    }
+
+    /// The retained host settles a row's shares while it is still walking the
+    /// document, which is before it holds a painter. It reads the same table
+    /// rather than keeping a second copy, and this is the pin that the two
+    /// answers cannot drift apart.
+    #[cfg(feature = "masonry-host")]
+    #[kithara::test]
+    fn what_a_parent_is_told_matches_what_the_painter_asks_for() {
+        let skin = builtin::skin();
+        for style in [
+            ButtonStyle::MicroPrimary,
+            ButtonStyle::Transport,
+            ButtonStyle::TransportPrimary,
+            ButtonStyle::VisNav,
+        ] {
+            assert_eq!(
+                iced_length(declared_width(style, skin)),
+                paint(style, skin).length().0,
+                "the two hosts must weigh a {style:?} button the same"
+            );
+        }
+    }
+
+    /// The one width a parent cannot be told, because the button only knows it
+    /// once it holds the word it is going to draw.
+    #[cfg(feature = "masonry-host")]
+    #[kithara::test]
+    fn a_measured_width_is_not_something_a_parent_can_be_told() {
+        assert_eq!(
+            declared_width(ButtonStyle::Default, builtin::skin()),
+            solve::Length::Shrink
+        );
+    }
+
+    /// Answering the length is not enough: it has to reach the mounted canvas,
+    /// or the row divides evenly and the share is lost on the way.
+    #[kithara::test]
+    fn a_painted_canvas_is_sized_from_its_painter() {
+        let skin = builtin::skin();
+        let element = paint(ButtonStyle::TransportPrimary, skin).view();
+
+        assert_eq!(
+            element.as_widget().size(),
+            iced::Size::new(Length::FillPortion(skin.button.primary_fill), Length::Fill)
+        );
+    }
+
+    /// And the same for the canvas that also answers a press: it is a second
+    /// call site, so it is a second way to lose the share.
+    #[kithara::test]
+    fn a_gesturing_canvas_is_sized_from_its_painter() {
+        let skin = builtin::skin();
+        let element =
+            Gesture::press("transport/play", paint(ButtonStyle::TransportPrimary, skin)).view();
+
+        assert_eq!(
+            element.as_widget().size(),
+            iced::Size::new(Length::FillPortion(skin.button.primary_fill), Length::Fill)
+        );
+    }
 }
 
 /// What the cache is allowed to keep, and what it must drop.
@@ -600,7 +957,7 @@ mod cached {
         Painter: ControlPainter,
     {
         let paint = Paint::new(painter, data, builtin::skin());
-        state.refresh(&paint.draw_list(state, bounds))
+        state.refresh(&paint.draw_list(state, bounds, VisualState::Idle))
     }
 
     /// The host rebuilds the whole element tree every frame. A control whose

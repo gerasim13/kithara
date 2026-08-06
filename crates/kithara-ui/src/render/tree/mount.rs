@@ -13,8 +13,7 @@ use crate::{
     mount,
     render::{
         InputOwner, ReadValue, Reads, Skin,
-        controls::{ButtonView, Draws, Gesture, Grip, Paint, button},
-        icons::document_icon,
+        controls::{Draws, Gesture, Grip, Paint},
     },
     widgets::{
         Widget,
@@ -162,17 +161,7 @@ impl ViewControl for mount::Tab {
 
 impl ViewControl for mount::Button {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(button(&ButtonView {
-            active_label: self.active_label.map(|id| cx.ui.resolve(id)),
-            frame: self.frame,
-            icon: self.icon.map(document_icon),
-            label: cx.ui.resolve(self.label),
-            owner: cx.owner,
-            path: cx.path,
-            skin: cx.skin,
-            style: self.style,
-            value: cx.value,
-        }))
+        painted(self, cx)
     }
 }
 

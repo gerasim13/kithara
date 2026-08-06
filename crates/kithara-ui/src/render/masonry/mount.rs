@@ -15,20 +15,19 @@ use super::{
 };
 use crate::{
     atoms::{
-        button::{Button, ButtonConfig, ButtonLabel},
+        button::declared_width,
         design::{crossfader::Crossfader, fader::Fader},
-        painter::{ButtonData, FaderData, Labelled},
+        painter::{FaderData, Labelled},
         tab::TabLarge,
     },
     expand::{Binding, ControlSpec},
     interact::recognizers::{Track, WheelStep},
-    module::{ButtonStyle, TextAlign, TextStyle},
+    module::{TextAlign, TextStyle},
     mount,
     render::{
         HostedControlPlan, InputOwner, ReadValue, Skin, UiEvent,
-        controls::{Draws, Grip, button_marks},
+        controls::{Draws, Grip},
         document::read::resolve,
-        icons::document_icon,
     },
     size::{Dim, SizeSpec, control_size},
     skin::{ColorRole, TextRoleSkin},
@@ -342,32 +341,7 @@ impl NodeControl for mount::Button {
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        let marks = button_marks(self.style, self.icon.map(document_icon));
-        let button = Painted::new(
-            Button::new(
-                ButtonConfig::builder()
-                    .maybe_frame(self.frame)
-                    .maybe_mark(marks.idle)
-                    .style(self.style)
-                    .build(),
-                marks.active,
-                host.skin,
-            ),
-            ButtonData {
-                active: host.reads_true(cx.read),
-                label: ButtonLabel {
-                    active: self
-                        .active_label
-                        .map(|label| host.ui.resolve(label).to_owned()),
-                    label: host.ui.resolve(self.label).to_owned(),
-                },
-            },
-            host.skin,
-        );
-        host.control_leaf(
-            host.owned(button, cx.owner, cx.path, Painted::interactive),
-            cx.declared,
-        )
+        painted(self, host, cx)
     }
 }
 
@@ -471,18 +445,9 @@ pub(crate) fn control_declared(
             solve::Length::FillPortion(skin.deck.summary_fill),
             solve::Length::Fixed(skin.deck.summary_height),
         ),
-        ControlSpec::Button { style, .. } => solve::Size::new(
-            match style {
-                ButtonStyle::Transport => solve::Length::FillPortion(skin.button.transport_fill),
-                ButtonStyle::TransportPrimary => {
-                    solve::Length::FillPortion(skin.button.primary_fill)
-                }
-                ButtonStyle::Default | ButtonStyle::MicroPrimary | ButtonStyle::VisNav => {
-                    solve::Length::Shrink
-                }
-            },
-            solve::Length::Fill,
-        ),
+        ControlSpec::Button { style, .. } => {
+            solve::Size::new(declared_width(*style, skin), solve::Length::Fill)
+        }
         ControlSpec::Text { .. } => solve::Size::new(solve::Length::Shrink, solve::Length::Fill),
         ControlSpec::Spacer | ControlSpec::WindowDrag | ControlSpec::TitleBar { .. } => {
             solve::Size::new(solve::Length::Fill, solve::Length::Fill)

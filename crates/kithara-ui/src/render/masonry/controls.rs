@@ -6,7 +6,7 @@ use num_traits::cast::AsPrimitive;
 use super::custom::{HostAction, Repaint};
 use crate::{
     atoms::{
-        button::{Button, VisualState},
+        button::Button,
         chip::Chip,
         design::{
             cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter, status_dot::StatusDot,
@@ -25,7 +25,9 @@ use crate::{
         CursorShape, Hit, Hover, Input, Outcome, PointerOwnership, PointerPhase,
         recognizers::{Scalar, ScalarState, Track, WheelStep, click},
     },
-    render::{ControlAction, ReadValue, Skin, StereoLevels, UiEvent, control_event},
+    render::{
+        ControlAction, ReadValue, Skin, StereoLevels, UiEvent, control_event, controls::Press,
+    },
     text::TextContext,
 };
 
@@ -305,10 +307,6 @@ mod flags {
 /// clicks a double click is made of. So it tells the mounted control instead,
 /// through here.
 pub(crate) trait Retained: ControlPainter {
-    /// Whether the pointer resting on or pressing the control changes what it
-    /// draws, which decides if the host tracks and repaints on those edges.
-    const READS_POINTER: bool = false;
-
     /// Puts what the endpoint now reads into the data this painter draws, and
     /// says whether that changed the picture.
     fn set_read(_data: &mut Self::Data, _value: &ReadValue<'_>) -> bool {
@@ -426,8 +424,6 @@ impl Retained for StereoMeter {
 }
 
 impl Retained for Button {
-    const READS_POINTER: bool = true;
-
     fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
         set_bool(&mut data.active, value)
     }
@@ -451,43 +447,6 @@ where
 struct Activation {
     map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
     path: String,
-}
-
-/// What the pointer is doing to a control right now, for painters that draw
-/// differently under it.
-#[derive(Default)]
-struct Press {
-    hovered: bool,
-    pressed: bool,
-}
-
-impl Press {
-    const fn visual(&self) -> VisualState {
-        if self.pressed && self.hovered {
-            VisualState::Pressed
-        } else if self.hovered {
-            VisualState::Hovered
-        } else {
-            VisualState::Idle
-        }
-    }
-
-    fn track(&mut self, input: Input<'_>, hit: &Hit) -> bool {
-        let Input::Pointer(pointer) = input else {
-            return false;
-        };
-        let pressed = match pointer.phase {
-            PointerPhase::Down => hit.over(),
-            PointerPhase::Cancel
-            | PointerPhase::DoubleClick
-            | PointerPhase::Leave
-            | PointerPhase::Up => false,
-            PointerPhase::LongPress | PointerPhase::Move | PointerPhase::MoveLongPress => {
-                self.pressed
-            }
-        };
-        std::mem::replace(&mut self.pressed, pressed) != pressed
-    }
 }
 
 impl<Painter> Painted<Painter>
@@ -534,7 +493,7 @@ where
 
     fn input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<HostAction> {
         if Painter::READS_POINTER {
-            self.repaint |= self.press.track(input, hit);
+            self.repaint |= self.press.press(input, hit);
         }
         self.activation
             .as_ref()
@@ -556,7 +515,7 @@ where
 
     fn cursor(&self, hit: &Hit) -> CursorShape {
         self.activation.as_ref().map_or(CursorShape::None, |_| {
-            Hover::new(CursorShape::Pointer).cursor(self.press.pressed, hit)
+            Hover::new(CursorShape::Pointer).cursor(self.press.is_pressed(), hit)
         })
     }
 
@@ -564,7 +523,7 @@ where
         if !Painter::READS_POINTER {
             return false;
         }
-        self.repaint |= std::mem::replace(&mut self.press.hovered, hovered) != hovered;
+        self.repaint |= self.press.hover(hovered);
         self.repaint
     }
 

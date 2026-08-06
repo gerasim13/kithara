@@ -14,6 +14,7 @@ use crate::{
     },
     draw::{DrawListBuilder, Rect},
     render::{Mark, StereoLevels},
+    solve::{Length, Size},
     text::TextContext,
 };
 
@@ -28,6 +29,10 @@ pub(crate) trait ControlPainter {
     /// button swaps between while active, a value for a meter.
     type Data;
 
+    /// Whether the pointer resting on or pressing the control changes what it
+    /// draws, which decides if a host tracks those edges and repaints on them.
+    const READS_POINTER: bool = false;
+
     fn draw(
         &self,
         list: &mut DrawListBuilder,
@@ -36,6 +41,16 @@ pub(crate) trait ControlPainter {
         bounds: Rect,
         state: VisualState,
     );
+
+    /// The box it asks for when the skin, rather than the row it sits in,
+    /// settles an axis.
+    ///
+    /// A share of the row is the one length a document cannot state — `Dim` has
+    /// no portion, and the portions in this repository all come from the skin —
+    /// so it is said once here rather than once per host.
+    fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
+        Size::new(Length::Fill, Length::Fill)
+    }
 }
 
 /// What a control that shows one word and a state is handed each frame.
@@ -177,6 +192,8 @@ pub(crate) struct ButtonData {
 impl ControlPainter for Button {
     type Data = ButtonData;
 
+    const READS_POINTER: bool = true;
+
     fn draw(
         &self,
         list: &mut DrawListBuilder,
@@ -186,6 +203,10 @@ impl ControlPainter for Button {
         state: VisualState,
     ) {
         self.paint(list, text, &data.label, data.active, bounds, state);
+    }
+
+    fn length(&self, text: &mut TextContext, data: &Self::Data) -> Size<Length> {
+        self.measure(text, &data.label, data.active)
     }
 }
 
