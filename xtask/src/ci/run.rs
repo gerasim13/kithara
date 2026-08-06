@@ -51,7 +51,6 @@ pub(crate) enum Lane {
     DepsUnused,
     DepsFeatures,
     DepsSemver,
-    Mutants,
     ReleaseXcframework,
     ReleaseDocs,
     ReleaseWasm,
@@ -106,8 +105,7 @@ impl Lane {
             | Self::DepsDeny
             | Self::DepsUnused
             | Self::DepsFeatures
-            | Self::DepsSemver
-            | Self::Mutants => CacheGroup::Linux,
+            | Self::DepsSemver => CacheGroup::Linux,
             Self::WindowsArm64 | Self::WindowsX64 | Self::WindowsX64Build => CacheGroup::Windows,
             Self::AndroidBuild
             | Self::AndroidTest
@@ -208,7 +206,6 @@ pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         Lane::DepsUnused => lane::deps::unused(&process),
         Lane::DepsFeatures => lane::deps::features(&process),
         Lane::DepsSemver => lane::deps::semver(&process),
-        Lane::Mutants => lane::deps::mutants(&process),
         Lane::ReleaseXcframework => {
             super::release::xcframework(&process, ctx, &ext, &temp, args.kind)
         }
