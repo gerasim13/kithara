@@ -91,8 +91,8 @@ fn unit(host: &LinuxHost, runner: &LinuxRunner, pins: &CiPins, executable: &str)
          --security-opt no-new-privileges \
          --env-file {env_file} \
          --env CARGO_TARGET_DIR=/cache/target \
-         --mount type=volume,source=kithara-ci-cargo-registry,target=/usr/local/cargo/registry \
-         --mount type=volume,source=kithara-ci-cargo-git,target=/usr/local/cargo/git \
+         --mount type=volume,source=kithara-ci-cargo-registry,target=/home/runner/.cargo/registry \
+         --mount type=volume,source=kithara-ci-cargo-git,target=/home/runner/.cargo/git \
          --mount type=volume,source=kithara-ci-target,target=/cache/target",
         name = runner.name,
         network = host.network,

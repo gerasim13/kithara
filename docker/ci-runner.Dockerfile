@@ -14,17 +14,26 @@ ARG ACTIONS_RUNNER_VERSION
 
 # The runner is a .NET application and needs the ICU libraries at run time.
 #
-# The host mounts a cache volume over each of the last three paths. Docker
-# creates a mount point the image does not have, and creates it owned by root,
-# so a job running as `runner` cannot write the caches it is given; an empty
-# volume mounted over a directory that does exist inherits that directory's
-# owner instead. They are therefore declared here rather than left to Docker.
+# A job gets a cargo home of its own rather than writing into the one the
+# image was built with: that one belongs to root, and every file cargo wants
+# to create or lock inside it — a registry index, a git checkout, the download
+# lock — is a separate way for a job to be denied. The toolchain itself is
+# reached through `PATH`, which already names the image's `bin`, so only the
+# mutable state moves.
+#
+# The host mounts a cache volume over three of these paths. Docker creates a
+# mount point the image does not have, and creates it owned by root, so they
+# are declared here: an empty volume mounted over a directory that exists
+# inherits that directory's owner.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libicu72 \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --create-home --shell /bin/bash runner \
  && install -d -o runner -g runner \
-      /runner /cache/target "${CARGO_HOME}/git" "${CARGO_HOME}/registry"
+      /runner /cache/target \
+      /home/runner/.cargo /home/runner/.cargo/git /home/runner/.cargo/registry
+
+ENV CARGO_HOME=/home/runner/.cargo
 
 USER runner
 WORKDIR /runner
