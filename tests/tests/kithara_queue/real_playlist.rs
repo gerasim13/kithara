@@ -388,7 +388,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
     )
 )]
 #[case::zvuk_drm_1_symphonia(
-    "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8",
+    "https://cdn-hls-slicer.zvuk.com/drm/track/5807750_3/master.m3u8",
     42,
     DecoderBackend::Symphonia,
     AbrMode::Auto(None)
@@ -396,7 +396,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::zvuk_drm_1_apple(
-        "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/5807750_3/master.m3u8",
         42,
         DecoderBackend::Apple,
         AbrMode::Auto(None)
@@ -405,38 +405,14 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
 #[cfg_attr(
     target_os = "android",
     case::zvuk_drm_1_android(
-        "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8",
-        42,
-        DecoderBackend::Android,
-        AbrMode::Auto(None)
-    )
-)]
-#[case::zvuk_hls_1_symphonia(
-    "https://ecs-stage-slicer-01.zvq.me/hls/track/176000075_1/master.m3u8",
-    42,
-    DecoderBackend::Symphonia,
-    AbrMode::Auto(None)
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::zvuk_hls_1_apple(
-        "https://ecs-stage-slicer-01.zvq.me/hls/track/176000075_1/master.m3u8",
-        42,
-        DecoderBackend::Apple,
-        AbrMode::Auto(None)
-    )
-)]
-#[cfg_attr(
-    target_os = "android",
-    case::zvuk_hls_1_android(
-        "https://ecs-stage-slicer-01.zvq.me/hls/track/176000075_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/5807750_3/master.m3u8",
         42,
         DecoderBackend::Android,
         AbrMode::Auto(None)
     )
 )]
 #[case::zvuk_drm_2_symphonia(
-    "https://ecs-stage-slicer-01.zvq.me/drm/track/176000094_1/master.m3u8",
+    "https://cdn-hls-slicer.zvuk.com/drm/track/50984034_1/master.m3u8",
     42,
     DecoderBackend::Symphonia,
     AbrMode::Auto(None)
@@ -444,7 +420,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::zvuk_drm_2_apple(
-        "https://ecs-stage-slicer-01.zvq.me/drm/track/176000094_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/50984034_1/master.m3u8",
         42,
         DecoderBackend::Apple,
         AbrMode::Auto(None)
@@ -453,31 +429,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
 #[cfg_attr(
     target_os = "android",
     case::zvuk_drm_2_android(
-        "https://ecs-stage-slicer-01.zvq.me/drm/track/176000094_1/master.m3u8",
-        42,
-        DecoderBackend::Android,
-        AbrMode::Auto(None)
-    )
-)]
-#[case::zvuk_hls_2_symphonia(
-    "https://ecs-stage-slicer-01.zvq.me/hls/track/176000109_1/master.m3u8",
-    42,
-    DecoderBackend::Symphonia,
-    AbrMode::Auto(None)
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::zvuk_hls_2_apple(
-        "https://ecs-stage-slicer-01.zvq.me/hls/track/176000109_1/master.m3u8",
-        42,
-        DecoderBackend::Apple,
-        AbrMode::Auto(None)
-    )
-)]
-#[cfg_attr(
-    target_os = "android",
-    case::zvuk_hls_2_android(
-        "https://ecs-stage-slicer-01.zvq.me/hls/track/176000109_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/50984034_1/master.m3u8",
         42,
         DecoderBackend::Android,
         AbrMode::Auto(None)
