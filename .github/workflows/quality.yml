@@ -39,12 +39,16 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Depth buys more evidence; the profile decides what is being judged.
+      # `complete` drops every exclusion, so it would score xtask and devtools
+      # as if they were the product and produce a number nothing can be
+      # compared against.
       - name: Assess
         env:
           DEPTH: ${{ inputs.depth || 'shallow' }}
         run: |
           if [[ "$DEPTH" == "deep" ]]; then
-            just quality assess --profile complete --depth deep
+            just quality assess --depth deep
           else
             just quality assess
           fi
