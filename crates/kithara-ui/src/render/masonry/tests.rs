@@ -1536,9 +1536,12 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
         r#"WindowControls(id: "control")"#,
     ),
     (
+        // The placeholder names which stand-in a deck shows when no tempo was
+        // measured, not a word to display; `time` is the one the shipped decks
+        // ask for.
         "Bpm",
-        Paints::NotYet,
-        r#"Bpm(id: "control", placeholder: Some("128.0"))"#,
+        Paints::Yes,
+        r#"Bpm(id: "control", placeholder: Some("time"))"#,
     ),
     (
         "Time",

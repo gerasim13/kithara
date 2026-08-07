@@ -141,7 +141,14 @@ impl NodeControl for mount::Glyph<'_> {
         painted(self, host, cx)
     }
 }
-impl NodeControl for mount::Bpm {}
+impl NodeControl for mount::Bpm {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        painted(self, host, cx)
+    }
+}
 impl NodeControl for mount::Time {
     fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where

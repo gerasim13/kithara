@@ -6,6 +6,7 @@ use crate::{
         deck::{
             clock::{Clock, Elapsed},
             summary::{Loaded, Summary},
+            tempo::{Reading as Beat, Tempo},
         },
         design::{
             cell::Cell,
@@ -457,6 +458,21 @@ impl ControlPainter for Summary {
     /// wrong.
     fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
         Self::declared_length(self.metrics())
+    }
+}
+
+impl ControlPainter for Tempo {
+    type Data = Beat;
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        data: &Self::Data,
+        bounds: Rect,
+        _state: VisualState,
+    ) {
+        self.paint(list, text, data, bounds);
     }
 }
 

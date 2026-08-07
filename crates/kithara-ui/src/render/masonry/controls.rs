@@ -9,7 +9,7 @@ use crate::{
         bar::{brand::Brand, divider::Divider, spacer::Spacer},
         button::Button,
         chip::Chip,
-        deck::{clock::Clock, summary::Summary},
+        deck::{clock::Clock, summary::Summary, tempo::Tempo},
         design::{
             cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter, segmented::Segmented,
             select::Select, status_dot::StatusDot, swatch::Swatch,
@@ -473,6 +473,10 @@ impl Retained for Summary {
         !title.is_empty() && std::mem::replace(&mut data.title, (*title).to_owned()) != data.title
     }
 }
+
+/// A tempo readout is rebuilt when the track it reads changes, which is the
+/// only thing that turns one reading into the other.
+impl Retained for Tempo {}
 
 impl Retained for Select {}
 

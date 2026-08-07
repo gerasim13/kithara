@@ -16,7 +16,6 @@ use crate::{
     },
     widgets::{
         Widget,
-        deck::Bpm,
         global_bar::{PresetSelector, SettingsButton},
         text::Text,
         wave::mini::MiniWave,
@@ -149,16 +148,7 @@ impl ViewControl for mount::Button {
 
 impl ViewControl for mount::Bpm {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(
-            Bpm::builder()
-                .maybe_placeholder(self.placeholder.map(|id| cx.ui.resolve(id)))
-                .maybe_value(cx.value)
-                .scope(cx.scope)
-                .reads(cx.reads)
-                .skin(cx.skin)
-                .build()
-                .view(),
-        )
+        painted(self, cx)
     }
 }
 
