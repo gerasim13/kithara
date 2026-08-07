@@ -18,6 +18,17 @@ targets = []
 ignore = [
   # paste is unmaintained but only a transitive dev-dep (unimock -> higher-kinded-types -> paste)
   "RUSTSEC-2024-0436",
+  # 2026-08-07. ttf-parser is unmaintained. It arrives under iced's text
+  # renderer — fontdb <- cosmic-text <- cryoglyph <- iced_wgpu — and no feature
+  # switches that path off, so nothing short of leaving iced removes it. Not a
+  # vulnerability. Drop this entry when iced's text stack moves off ttf-parser.
+  "RUSTSEC-2026-0192",
+  # 2026-08-07. rustybuzz is unmaintained. It arrives under iced's `svg`
+  # feature — usvg <- resvg <- iced_tiny_skia — which crates/kithara-ui uses for
+  # two icons (play-reverse, zvuk). Removable by rasterising those two and
+  # dropping the feature; that file is being rewritten in parallel, so the entry
+  # holds until that work lands. Not a vulnerability.
+  "RUSTSEC-2026-0206",
 ]
 
 [licenses]
