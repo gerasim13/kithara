@@ -9,6 +9,7 @@ ARG CARGO_GEIGER_VERSION
 ARG CARGO_HACK_VERSION
 ARG CARGO_LLVM_COV_VERSION
 ARG CARGO_MACHETE_VERSION
+ARG CARGO_MODULES_VERSION
 ARG CARGO_MUTANTS_VERSION
 ARG CARGO_NEXTEST_VERSION
 ARG CARGO_SEMVER_CHECKS_VERSION
@@ -130,6 +131,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cargo install --locked --version "${CARGO_HACK_VERSION}" cargo-hack \
  && cargo install --locked --version "${CARGO_LLVM_COV_VERSION}" cargo-llvm-cov \
  && cargo install --locked --version "${CARGO_MACHETE_VERSION}" cargo-machete \
+ && cargo install --locked --version "${CARGO_MODULES_VERSION}" cargo-modules \
  && cargo install --locked --version "${CARGO_MUTANTS_VERSION}" cargo-mutants \
  && cargo install --locked --version "${CARGO_NEXTEST_VERSION}" cargo-nextest \
  && cargo install --locked --version "${CARGO_SEMVER_CHECKS_VERSION}" cargo-semver-checks \
