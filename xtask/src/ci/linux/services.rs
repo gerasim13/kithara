@@ -67,9 +67,11 @@ pub(super) fn install(
     Ok(())
 }
 
-/// A generation of images is tens of gigabytes and this host keeps every one
-/// it has ever built. Nothing else reclaims them: the machine is shared, so a
-/// blanket prune is not available.
+/// The host keeps every image generation it has ever built, and nothing else
+/// reclaims them: the machine is shared, so a blanket prune is not available.
+/// Generations share their base layers, so removing five of six freed single
+/// gigabytes rather than the hundreds `docker images` reports per image — the
+/// point is that the count stops growing, not that a run reclaims much.
 fn install_cleanup_timer() -> Result<()> {
     let service = format!(
         "[Unit]\n\
