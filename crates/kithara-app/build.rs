@@ -168,7 +168,7 @@ fn main() {
 
     let yaml_src = fs::read_to_string(&app_yaml_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", app_yaml_path.display()));
-    let app: AppConfig = serde_yml::from_str(&yaml_src)
+    let app: AppConfig = serde_yaml_ng::from_str(&yaml_src)
         .unwrap_or_else(|e| panic!("parse {}: {e}", app_yaml_path.display()));
 
     let env_map = load_env(&dotenv_path);

@@ -337,7 +337,9 @@ rustls-platform-verifier = "0.7.0"
 send_wrapper = "0.6"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_yml = "0.0.13"
+# `serde_yml` is unsound and unmaintained (RUSTSEC-2025-0068). This is the
+# maintained continuation of `serde_yaml`, which `serde_yml` itself forked.
+serde_yaml_ng = "0.10.0"
 serial_test = "3.5.0"
 sha2 = "0.11"
 signal-hook = "0.3"
