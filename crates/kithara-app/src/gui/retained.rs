@@ -59,6 +59,10 @@ impl App for Studio {
         with(&Walk::new(&root))
     }
 
+    fn tick(&mut self) {
+        drop(update::update(&mut self.state, Message::Tick));
+    }
+
     fn update(&mut self, event: UiEvent) {
         // A window command is the host's to carry out, and this host takes it
         // from `take_window_commands` instead.
@@ -68,10 +72,6 @@ impl App for Studio {
         if let Some(message) = studio_ui::translate(&mut self.state, event) {
             drop(update::update(&mut self.state, message));
         }
-    }
-
-    fn tick(&mut self) {
-        drop(update::update(&mut self.state, Message::Tick));
     }
 }
 

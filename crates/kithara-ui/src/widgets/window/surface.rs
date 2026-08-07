@@ -27,24 +27,6 @@ impl WindowSurface {
         }
     }
 
-    pub(crate) const fn resize(edge: WindowEdge, width: Length, height: Length) -> Self {
-        Self {
-            width,
-            height,
-            command: WindowCommand::Resize(edge),
-            cursor: resize_cursor(edge),
-        }
-    }
-
-    const fn program(&self) -> SurfaceProgram {
-        SurfaceProgram {
-            command: self.command,
-            cursor: self.cursor,
-            height: self.height,
-            width: self.width,
-        }
-    }
-
     pub(crate) fn frame(bounds: Rect, thickness: f32) -> HostLayer<WindowCommand> {
         let side_width = (bounds.w - thickness * 2.0).max(0.0);
         let side_height = (bounds.h - thickness * 2.0).max(0.0);
@@ -132,6 +114,24 @@ impl WindowSurface {
                 ),
             ],
         )
+    }
+
+    const fn program(&self) -> SurfaceProgram {
+        SurfaceProgram {
+            command: self.command,
+            cursor: self.cursor,
+            height: self.height,
+            width: self.width,
+        }
+    }
+
+    pub(crate) const fn resize(edge: WindowEdge, width: Length, height: Length) -> Self {
+        Self {
+            width,
+            height,
+            command: WindowCommand::Resize(edge),
+            cursor: resize_cursor(edge),
+        }
     }
 }
 

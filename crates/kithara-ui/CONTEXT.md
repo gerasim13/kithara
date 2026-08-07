@@ -254,7 +254,8 @@ construction error.
 Text crosses the draw seam as the source string, a neutral `GlyphRun`, a transform, and a
 colour. `GlyphRun` carries font size, measured width and height, and its glyphs as a sequence of
 single-face `GlyphSegment`s in visual order, each naming a `GlyphFace`. It cannot name one face for
-the whole run, because script fallback means one string crosses faces mid-run: `"Трек Mix"` shapes
+the whole run, because script fallback means one string crosses faces mid-run: a Cyrillic word
+followed by a Latin one shapes
 as three Parley runs over two faces, and a run that reported a single face would hand Inter's glyph
 ids to Space Grotesk's outline table — wrong glyphs rather than `.notdef`. Registration records each
 embedded blob's stable `Blob::id()`; shaping maps a table hit to `GlyphFace::Embedded(FontId)` and a

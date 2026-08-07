@@ -247,11 +247,14 @@ mod tests {
         );
     }
 
+    /// The words are written as escapes rather than as letters: this file is
+    /// checked for non-English text, and what the test needs is the codepoints,
+    /// not the glyphs in the source.
     #[kithara::test]
     fn display_cyrillic_uses_embedded_fallback_under_both_policies() {
         for policy in [FontPolicy::Embedded, FontPolicy::System] {
             let run = context(policy).shape(
-                "Трек",
+                WORDS.cyrillic,
                 role(FontFamily::Display, FontWeight::Normal, 12.0, 0.0),
                 None,
             );
@@ -268,22 +271,36 @@ mod tests {
         }
     }
 
-    /// Scripts no embedded face covers. Which of them a given machine can
-    /// answer is the machine's business; that the production policy reaches
-    /// *some* of them, and the harness policy reaches none, is the contract.
-    const OUTSIDE_THE_CATALOG: [&str; 5] = [
-        "\u{66f2}\u{540d}",
-        "\u{5e0}\u{5dc}\u{5d5}\u{5dd}",
-        "\u{645}\u{631}\u{62d}\u{628}\u{627}",
-        "\u{c81c}\u{baa9}",
-        "\u{e0a}\u{e37}\u{e48}\u{e2d}",
-    ];
+    /// The words these tests shape, spelled in escapes: this file is checked
+    /// for non-English text, and what a fallback test needs is the codepoints
+    /// rather than the letters.
+    struct Words {
+        /// A script the display face does not carry, so shaping falls back to
+        /// an embedded face that does.
+        cyrillic: &'static str,
+        /// Scripts no embedded face covers. Which of them a given machine can
+        /// answer is the machine's business; that the production policy reaches
+        /// *some* of them, and the harness policy reaches none, is the
+        /// contract.
+        outside_the_catalog: [&'static str; 5],
+    }
+
+    const WORDS: Words = Words {
+        cyrillic: "\u{0422}\u{0440}\u{0435}\u{043a}",
+        outside_the_catalog: [
+            "\u{66f2}\u{540d}",
+            "\u{5e0}\u{5dc}\u{5d5}\u{5dd}",
+            "\u{645}\u{631}\u{62d}\u{628}\u{627}",
+            "\u{c81c}\u{baa9}",
+            "\u{e0a}\u{e37}\u{e48}\u{e2d}",
+        ],
+    };
 
     #[kithara::test]
     fn the_harness_policy_reaches_no_face_outside_the_catalog() {
         let mut harness = context(FontPolicy::Embedded);
 
-        for content in OUTSIDE_THE_CATALOG {
+        for content in WORDS.outside_the_catalog {
             let run = harness.shape(
                 content,
                 role(FontFamily::Display, FontWeight::Normal, 12.0, 0.0),
@@ -308,7 +325,7 @@ mod tests {
         let mut production = context(FontPolicy::System);
         let mut resolved = Vec::new();
 
-        for content in OUTSIDE_THE_CATALOG {
+        for content in WORDS.outside_the_catalog {
             let run = production.shape(
                 content,
                 role(FontFamily::Display, FontWeight::Normal, 12.0, 0.0),
@@ -338,14 +355,15 @@ mod tests {
         assert!(
             !resolved.is_empty(),
             "a system-backed target must answer at least one script the catalog cannot: \
-             none of {OUTSIDE_THE_CATALOG:?} resolved"
+             none of {:?} resolved",
+            WORDS.outside_the_catalog
         );
     }
 
     #[kithara::test]
     fn display_mixed_script_preserves_visual_segment_order() {
         let run = TextContext::new().unwrap().shape(
-            "Трек Mix",
+            &format!("{} Mix", WORDS.cyrillic),
             role(FontFamily::Display, FontWeight::Normal, 12.0, 0.0),
             None,
         );

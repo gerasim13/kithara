@@ -25,11 +25,11 @@ pub trait App {
     /// hand back a reference to.
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R;
 
-    /// Applies one event the document published.
-    fn update(&mut self, event: UiEvent);
-
     /// Advances anything that moves on its own. Called once per frame.
     fn tick(&mut self) {}
+
+    /// Applies one event the document published.
+    fn update(&mut self, event: UiEvent);
 }
 
 /// Everything a host needs besides the application itself.
