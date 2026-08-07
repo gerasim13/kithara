@@ -8,7 +8,7 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use super::profile::{LinuxHost, LinuxRunner};
+use super::profile::{LinuxHost, LinuxRunner, WindowsGuest};
 
 const API_VERSION: &str = "X-GitHub-Api-Version";
 
@@ -49,11 +49,12 @@ struct JitRequest<'a> {
 /// and expires with the job it serves. The token that mints it stays on the
 /// host: only the generated configuration reaches the container.
 pub(super) fn configure(host: &LinuxHost, runner: &LinuxRunner, env_file: &Path) -> Result<()> {
-    let token = read_token(&host.token_file)?;
+    let credential = host.credential(&runner.repository)?;
+    let token = read_token(&credential.token_file)?;
     let client = client(&token)?;
     let endpoint = format!(
         "https://api.github.com/repos/{}/actions/runners",
-        host.repository
+        credential.name
     );
 
     prune_offline(&client, &endpoint, &runner.name)?;
@@ -99,13 +100,14 @@ pub(super) fn configure(host: &LinuxHost, runner: &LinuxRunner, env_file: &Path)
 /// holds that registration across the jobs and the restarts that follow. The
 /// token minted here is what it registers with, and it expires within the hour
 /// whether or not it was used.
-pub(super) fn enrolment_token(host: &LinuxHost) -> Result<String> {
-    let token = read_token(&host.token_file)?;
+pub(super) fn enrolment_token(host: &LinuxHost, guest: &WindowsGuest) -> Result<String> {
+    let credential = host.credential(&guest.repository)?;
+    let token = read_token(&credential.token_file)?;
     let client = client(&token)?;
     let response = client
         .post(format!(
             "https://api.github.com/repos/{}/actions/runners/registration-token",
-            host.repository
+            credential.name
         ))
         .send()
         .context("requesting a runner registration token")?;
@@ -121,13 +123,14 @@ pub(super) fn enrolment_token(host: &LinuxHost) -> Result<String> {
 /// Whether a runner of this name is registered and waiting for work. This is
 /// the only answer that distinguishes a guest that enrolled from one that
 /// booted and did nothing.
-pub(super) fn is_online(host: &LinuxHost, name: &str) -> Result<bool> {
-    let token = read_token(&host.token_file)?;
+pub(super) fn is_online(host: &LinuxHost, guest: &WindowsGuest) -> Result<bool> {
+    let credential = host.credential(&guest.repository)?;
+    let token = read_token(&credential.token_file)?;
     let client = client(&token)?;
     let response = client
         .get(format!(
             "https://api.github.com/repos/{}/actions/runners",
-            host.repository
+            credential.name
         ))
         .send()
         .context("listing the repository's runners")?;
@@ -138,7 +141,7 @@ pub(super) fn is_online(host: &LinuxHost, name: &str) -> Result<bool> {
     Ok(listing
         .runners
         .iter()
-        .any(|runner| runner.name == name && runner.status == "online"))
+        .any(|runner| runner.name == guest.name && runner.status == "online"))
 }
 
 /// Drop registrations left behind by runners that never got a job. An ephemeral

@@ -23,17 +23,33 @@ pub(crate) struct LinuxHost {
     pub(crate) cache_root: PathBuf,
     /// Docker network the runners are confined to.
     pub(crate) network: String,
-    /// `owner/name` of the repository the runners register with.
-    pub(crate) repository: String,
     /// Address block of that network, fenced off from the rest of the machine.
     pub(crate) subnet: String,
-    /// File holding the token that mints runner registrations.
-    pub(crate) token_file: PathBuf,
     /// Serialised last: TOML requires tables after plain values.
+    ///
+    /// The repositories this machine serves, each with the token that mints
+    /// registrations for it. A GitHub runner registration is bound to exactly
+    /// one repository, so a machine serving two of them holds two credentials
+    /// and runs separate runners against each.
+    pub(crate) repositories: Vec<RepositoryCredential>,
     pub(crate) runners: Vec<LinuxRunner>,
     /// The Windows guest this machine hosts, if it hosts one.
     #[serde(default)]
     pub(crate) windows: Option<WindowsGuest>,
+}
+
+/// One repository this machine serves, and the token that speaks for it.
+///
+/// Kept apart from the runners so the path to a secret is written once per
+/// repository rather than once per runner, and so reading the profile answers
+/// "whose work does this machine take" without counting runner entries.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RepositoryCredential {
+    /// `owner/name` of the repository.
+    pub(crate) name: String,
+    /// File holding the token that mints registrations for it.
+    pub(crate) token_file: PathBuf,
 }
 
 /// A Windows virtual machine serving the lane that needs a real Windows.
@@ -44,6 +60,8 @@ pub(crate) struct LinuxHost {
 #[serde(deny_unknown_fields)]
 pub(crate) struct WindowsGuest {
     pub(crate) name: String,
+    /// Which repository of [`LinuxHost::repositories`] this guest enrols with.
+    pub(crate) repository: String,
     pub(crate) vcpus: u32,
     pub(crate) memory_mib: u32,
     pub(crate) disk_gib: u32,
@@ -66,6 +84,10 @@ fn default_libvirt_network() -> String {
 pub(crate) struct LinuxRunner {
     /// Identifies the runner's service, registration, and container.
     pub(crate) name: String,
+    /// Which repository of [`LinuxHost::repositories`] this runner serves. A
+    /// registration reaches exactly one, so the choice belongs to the runner
+    /// rather than to the machine underneath it.
+    pub(crate) repository: String,
     /// How many cores one job may use. Handed to the container as a set of
     /// core numbers rather than a share of the machine: a share is a CFS
     /// quota, which throttles a job without telling it anything, so `nproc`
@@ -109,25 +131,37 @@ impl LinuxHost {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
-        if !self.cache_root.is_absolute() || !self.token_file.is_absolute() {
-            bail!("Linux CI profile cache_root and token_file must be absolute paths");
+        if !self.cache_root.is_absolute() {
+            bail!("Linux CI profile cache_root must be an absolute path");
         }
         if !safe_name(&self.network) {
             bail!("Linux CI profile network contains unsupported characters");
         }
-        if !valid_repository(&self.repository) {
-            bail!("Linux CI profile repository must read owner/name");
-        }
         parse_subnet(&self.subnet)?;
+        if self.repositories.is_empty() {
+            bail!("Linux CI profile must define at least one repository");
+        }
+        let mut repositories = BTreeSet::new();
+        for credential in &self.repositories {
+            credential.validate()?;
+            if !repositories.insert(credential.name.as_str()) {
+                bail!(
+                    "Linux CI profile defines repository {} twice",
+                    credential.name
+                );
+            }
+        }
         if self.runners.is_empty() {
             bail!("Linux CI profile must define at least one runner");
         }
         if let Some(windows) = &self.windows {
             windows.validate()?;
+            self.credential(&windows.repository)?;
         }
         let mut seen = BTreeSet::new();
         for runner in &self.runners {
             runner.validate()?;
+            self.credential(&runner.repository)?;
             if !seen.insert(runner.name.as_str()) {
                 bail!("Linux CI profile defines runner {} twice", runner.name);
             }
@@ -135,11 +169,40 @@ impl LinuxHost {
         Ok(())
     }
 
+    /// The credential a runner or guest registers with, by the repository it
+    /// names. Unknown names fail here rather than reaching GitHub as a 404.
+    pub(crate) fn credential(&self, repository: &str) -> Result<&RepositoryCredential> {
+        self.repositories
+            .iter()
+            .find(|credential| credential.name == repository)
+            .with_context(|| {
+                format!("Linux CI profile has no credential for repository {repository}")
+            })
+    }
+
     pub(crate) fn runner(&self, name: &str) -> Result<&LinuxRunner> {
         self.runners
             .iter()
             .find(|runner| runner.name == name)
             .with_context(|| format!("Linux CI profile has no runner named {name}"))
+    }
+}
+
+impl RepositoryCredential {
+    fn validate(&self) -> Result<()> {
+        if !valid_repository(&self.name) {
+            bail!(
+                "Linux CI profile repository {} must read owner/name",
+                self.name
+            );
+        }
+        if !self.token_file.is_absolute() {
+            bail!(
+                "Linux CI profile repository {} must name its token file by absolute path",
+                self.name
+            );
+        }
+        Ok(())
     }
 }
 
@@ -249,6 +312,69 @@ pub(crate) mod tests {
         let host = host_fixture();
         assert!(host.runner("kithara-ci").is_ok());
         assert!(host.runner("absent").is_err());
+    }
+
+    /// The point of the split: one machine, two repositories, and a runner that
+    /// serves the second one registers with the second one's token.
+    #[test]
+    fn a_runner_registers_with_the_repository_it_names() {
+        let host = host_fixture();
+
+        let own = host
+            .credential(&host.runner("kithara-ci").expect("runner").repository)
+            .expect("credential");
+        assert_eq!(own.name, "owner/kithara");
+        assert_eq!(own.token_file, Path::new("/etc/kithara-ci/github.token"));
+
+        let fork = host
+            .credential(&host.runner("kithara-ci-fork").expect("runner").repository)
+            .expect("credential");
+        assert_eq!(fork.name, "collaborator/kithara");
+        assert_eq!(
+            fork.token_file,
+            Path::new("/etc/kithara-ci/github-fork.token")
+        );
+    }
+
+    /// A runner naming a repository the machine holds no token for must fail
+    /// while the profile is read. Left to run, it would mint a registration
+    /// against whatever credential happened to be at hand.
+    #[test]
+    fn a_runner_naming_an_unknown_repository_is_rejected() {
+        let mut host = host_fixture();
+        "someone/else".clone_into(&mut host.runners[0].repository);
+        let error = host
+            .validate()
+            .expect_err("an unknown repository must fail");
+        assert!(
+            error.to_string().contains("someone/else"),
+            "the error must name the repository that has no credential: {error}"
+        );
+    }
+
+    #[test]
+    fn one_repository_declared_twice_is_rejected() {
+        let mut host = host_fixture();
+        let duplicate = host.repositories[0].clone();
+        host.repositories.push(duplicate);
+        let error = host.validate().expect_err("a duplicate must fail");
+        assert!(
+            error.to_string().contains("twice"),
+            "the error must say the repository is declared twice: {error}"
+        );
+    }
+
+    #[test]
+    fn a_repository_must_name_its_token_by_absolute_path() {
+        let mut host = host_fixture();
+        host.repositories[0].token_file = PathBuf::from("github.token");
+        let error = host
+            .validate()
+            .expect_err("a relative token file must fail");
+        assert!(
+            error.to_string().contains("absolute"),
+            "the error must say the path has to be absolute: {error}"
+        );
     }
 
     #[test]

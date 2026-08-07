@@ -28,7 +28,36 @@ only through `KITHARA_CI_HOST_CONFIG`, which every executor sets to
 ## Host installation
 
 Write the machine profile for this host first — start from the field list in
-`xtask/tests/fixtures/ci-mac-host.toml` — and keep it outside the repository.
+`xtask/tests/fixtures/ci-mac-host.toml` (`ci-linux-host.toml` for a Linux
+host) — and keep it outside the repository.
+
+A Linux host declares the repositories it serves and the token that speaks for
+each, then every runner names one of them:
+
+```toml
+[[repositories]]
+name = "zvuk/kithara"
+token_file = "/etc/kithara-ci/github.token"
+
+[[repositories]]
+name = "collaborator/kithara"
+token_file = "/etc/kithara-ci/github-fork.token"
+
+[[runners]]
+name = "kithara-ci-fork"
+repository = "collaborator/kithara"
+cpus = 12
+memory = "48g"
+labels = ["self-hosted", "linux", "x64", "kithara"]
+```
+
+This is not a convenience: a GitHub runner registration reaches exactly one
+repository, so serving a second one means separate runner processes holding a
+separate credential. Each token file is owned by root and readable only by it;
+`install -m 600 -o root -g root /dev/stdin <path>` creates one without the
+token passing through a shell history. A runner naming a repository the machine
+holds no credential for is refused while the profile is read, rather than
+registering against whichever token happened to be configured.
 Then build the installer from a reviewed GitLab commit:
 
 ```text
