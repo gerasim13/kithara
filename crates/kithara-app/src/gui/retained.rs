@@ -98,3 +98,74 @@ pub(crate) fn run(app: Studio) -> Result<(), RunError> {
         size,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+    use kithara_ui::{
+        app::Ui,
+        render::{ReadValue, Reads},
+    };
+
+    use super::{App, Config, builtin, endpoints, studio_ui};
+
+    /// A studio with nothing loaded: every control falls back to what the
+    /// document and the skin say, which is the hardest case for a host that
+    /// only draws what it was told.
+    struct Empty;
+
+    impl Reads for Empty {
+        fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
+            None
+        }
+    }
+
+    impl App for Empty {
+        fn document(&self) -> &str {
+            studio_ui::entry(super::super::studio_ui::cache::DeckLayout::Dual)
+        }
+
+        fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+            with(self)
+        }
+
+        fn update(&mut self, _event: kithara_ui::render::UiEvent) {}
+    }
+
+    /// The studio's own documents draw under the retained host. The control
+    /// census answers for one control at a time; this answers for the page the
+    /// application actually ships, mounted the way the window mounts it.
+    #[kithara::test]
+    fn the_studio_draws_under_the_retained_host() {
+        let resolver = studio_ui::resolver();
+        let endpoints = endpoints::StudioRegistry::default();
+        let mut ui = Ui::new(
+            Empty,
+            Config::builder()
+                .endpoints(&endpoints)
+                .resolver(&resolver)
+                .skin(builtin::skin())
+                .skin_doc(builtin::skin_doc())
+                .build(),
+            (1280, 760),
+            1.0,
+        )
+        .unwrap_or_else(|error| panic!("the studio must mount under the retained host: {error}"));
+
+        let scene = ui
+            .scene()
+            .unwrap_or_else(|error| panic!("the studio must reach a paint pass: {error}"));
+
+        let encoding = scene.encoding();
+
+        assert!(
+            !encoding.is_empty(),
+            "the retained host mounted the studio and drew nothing"
+        );
+        assert!(
+            !encoding.resources.glyphs.is_empty(),
+            "the studio is a page of labelled controls; a scene with no glyphs in it is a \
+             background and nothing else"
+        );
+    }
+}
