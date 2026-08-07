@@ -1,10 +1,10 @@
 use num_traits::{ToPrimitive, cast::AsPrimitive};
 
 use crate::{
-    draw::{DrawList, DrawListBuilder, Pt, Rect, Transform},
+    atoms::design::picker::Picker,
+    draw::{DrawList, DrawListBuilder, Rect},
     interact::CursorShape,
     render::{HostLayer, LayerHit, ReadValue, Skin},
-    skin::{FontFamily, TextRoleSkin},
     text::TextContext,
 };
 
@@ -16,18 +16,14 @@ pub(super) struct PickerPaint<'a> {
     selected: Option<usize>,
     #[field(get, vis = "pub(super)", copy)]
     skin: &'a Skin,
-    #[field(get, vis = "pub(super)")]
-    width: f32,
 }
 
 impl<'a> PickerPaint<'a> {
-    pub(super) fn new(items: Vec<&'a str>, selected: Option<usize>, skin: &'a Skin) -> Self {
-        let width = picker_width(items.iter().copied(), skin);
+    pub(super) const fn new(items: Vec<&'a str>, selected: Option<usize>, skin: &'a Skin) -> Self {
         Self {
             items,
             selected,
             skin,
-            width,
         }
     }
 
@@ -37,65 +33,6 @@ impl<'a> PickerPaint<'a> {
 
     pub(super) const fn item_height(&self) -> f32 {
         self.skin.tree.scope_item_height
-    }
-
-    pub(super) fn base_commands(&self, text: &mut TextContext, bounds: Rect) -> DrawList {
-        let mut list = DrawListBuilder::default();
-        list.fill_rounded_rect(
-            bounds,
-            self.skin.tree.scope_frame.radius,
-            self.skin.rgba(self.skin.tree.scope_background),
-        );
-        list.stroke_rounded_rect(
-            bounds,
-            self.skin.tree.scope_frame.radius,
-            self.skin.rgba(self.skin.tree.scope_frame.border),
-            self.skin.tree.scope_frame.border_width,
-        );
-        if let Some(label) = self.selected.and_then(|index| self.items.get(index)) {
-            paint_text(
-                &mut list,
-                text,
-                label,
-                bounds,
-                self.skin.tree.scope_padding_x,
-                self.skin.rgba(self.skin.tree.scope_text_color),
-                self.skin,
-            );
-        }
-        let size = self.skin.tree.scope_chevron_size;
-        let center = Pt {
-            x: bounds.x + bounds.w - self.skin.tree.scope_padding_x - size / 2.0,
-            y: bounds.y + bounds.h / 2.0,
-        };
-        let half = size / 2.0;
-        let color = self.skin.rgba(self.skin.tree.scope_chevron_color);
-        let width = self.skin.tree.scope_frame.border_width.max(1.0);
-        list.stroke_line(
-            Pt {
-                x: center.x - half,
-                y: center.y - half / 2.0,
-            },
-            Pt {
-                x: center.x,
-                y: center.y + half / 2.0,
-            },
-            color,
-            width,
-        );
-        list.stroke_line(
-            Pt {
-                x: center.x,
-                y: center.y + half / 2.0,
-            },
-            Pt {
-                x: center.x + half,
-                y: center.y - half / 2.0,
-            },
-            color,
-            width,
-        );
-        list.finish()
     }
 
     pub(super) fn popup_layer(
@@ -149,18 +86,16 @@ impl<'a> PickerPaint<'a> {
                     self.skin.rgba(self.skin.tree.scope_selected_background),
                 );
             }
-            paint_text(
+            Picker::new(self.skin).label(
                 &mut list,
                 text,
                 label,
                 item,
-                self.skin.tree.scope_padding_x,
                 self.skin.rgba(if active {
                     self.skin.tree.scope_selected_text
                 } else {
                     self.skin.tree.scope_menu_text
                 }),
-                self.skin,
             );
         }
         list.stroke_rounded_rect(
@@ -171,15 +106,6 @@ impl<'a> PickerPaint<'a> {
         );
         list.finish()
     }
-}
-
-pub(crate) fn picker_width<'a>(items: impl IntoIterator<Item = &'a str>, skin: &Skin) -> f32 {
-    let mut text = TextContext::from(skin.text_resources());
-    let label_width = items
-        .into_iter()
-        .map(|item| text.shape(item, text_role(skin), None).width())
-        .fold(0.0_f32, f32::max);
-    label_width + skin.tree.scope_padding_x * 3.0 + skin.tree.scope_chevron_size
 }
 
 pub(crate) fn picker_selected_index(
@@ -218,41 +144,6 @@ pub(crate) fn picker_hits(
         .collect()
 }
 
-fn text_role(skin: &Skin) -> TextRoleSkin {
-    TextRoleSkin {
-        color: skin.tree.scope_text_color,
-        font: FontFamily::Mono,
-        size: skin.tree.scope_text.size,
-        spacing: 0.0,
-        weight: skin.tree.scope_text.weight,
-    }
-}
-
-fn paint_text(
-    list: &mut DrawListBuilder,
-    text: &mut TextContext,
-    content: &str,
-    bounds: Rect,
-    padding_x: f32,
-    color: crate::draw::Rgba,
-    skin: &Skin,
-) {
-    let run = text.shape(
-        content,
-        text_role(skin),
-        Some((bounds.w - padding_x * 2.0).max(0.0)),
-    );
-    list.text(
-        &run,
-        content,
-        Transform::translate(Pt {
-            x: bounds.x + padding_x,
-            y: bounds.y + (bounds.h - run.height()) / 2.0,
-        }),
-        color,
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
@@ -267,19 +158,12 @@ mod tests {
         let mut text = TextContext::from(skin.text_resources());
         let bounds = Rect {
             h: skin.tree.scope_item_height,
-            w: paint.width(),
+            w: 72.0,
             x: 0.0,
             y: 0.0,
         };
-        let base = paint.base_commands(&mut text, bounds);
         let popup = paint.popup_layer(&mut text, bounds, Some(1));
 
-        assert!(
-            base.commands()
-                .iter()
-                .all(|command| !matches!(command, DrawCmd::Clip { .. })),
-            "the anchor list must not contain a nested popup clip"
-        );
         assert!(
             popup
                 .draw()
@@ -288,9 +172,6 @@ mod tests {
                 .all(|command| !matches!(command, DrawCmd::Clip { .. })),
             "the fresh overlay frame must receive an unclipped popup list"
         );
-        assert!(base.commands().iter().all(|command| {
-            !matches!(command, DrawCmd::Text { content, .. } if content == "LOCAL")
-        }));
         assert!(popup.draw().commands().iter().any(|command| {
             matches!(command, DrawCmd::Text { content, .. } if content == "LOCAL")
         }));

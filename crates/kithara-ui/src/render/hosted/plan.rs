@@ -3,9 +3,11 @@ use std::ops::Range;
 use num_traits::cast::AsPrimitive;
 
 #[cfg(feature = "masonry-host")]
-use super::masonry::{PickerMetrics, TreeMetrics};
+use super::masonry::TreeMetrics;
 use crate::{
+    atoms::bar::context::Context,
     compile::CompiledUi,
+    draw::Rect,
     engine::{Descriptor, ScrollConfig},
     expand::{Binding, ControlSpec},
     ids::InternId,
@@ -17,6 +19,7 @@ use crate::{
         model::derived,
         picker_selected_index, text_input_layout,
     },
+    text::TextContext,
     widgets::{
         track_list::{
             ColumnLayout, column_layouts, column_resizable, minimum_table_width,
@@ -39,8 +42,10 @@ pub(crate) enum HostedControlPlan {
         item_count: usize,
         item_height: f32,
         selected: Option<usize>,
-        #[cfg(feature = "masonry-host")]
-        metrics: PickerMetrics,
+        /// Where the strip put its closed face, as an offset from the strip's
+        /// own corner. Both hosts hit-test and anchor the menu against the box
+        /// the painter drew, rather than measuring the same parts again.
+        face: Rect,
     },
     Tree {
         path: String,
@@ -367,22 +372,14 @@ fn context_bar_plan(
 ) -> HostedControlPlan {
     let scope_value = scope.and_then(|binding| resolve(reads, binding, ui));
     let selected = picker_selected_index(scope_value.as_ref(), scope_items.len());
+    let mut text = TextContext::from(skin.text_resources());
     HostedControlPlan::Picker {
         path: path.to_owned(),
         item_count: scope_items.len(),
         item_height: skin.tree.scope_item_height,
         selected,
-        #[cfg(feature = "masonry-host")]
-        metrics: PickerMetrics {
-            width: crate::render::picker_width(
-                scope_items.iter().map(|item| ui.resolve(*item)),
-                skin,
-            ),
-            content_height: skin.tree.context_height - skin.tree.context_divider_width,
-            context_icon_size: skin.tree.context_icon_size,
-            context_padding_x: skin.tree.context_padding_x,
-            scope_gap: skin.tree.scope_gap,
-        },
+        face: Context::new(skin)
+            .face_of(&mut text, scope_items.iter().map(|item| ui.resolve(*item))),
     }
 }
 

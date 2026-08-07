@@ -6,7 +6,9 @@ use num_traits::cast::AsPrimitive;
 use super::custom::{HostAction, Repaint};
 use crate::{
     atoms::{
-        bar::{brand::Brand, divider::Divider, settings::Settings, spacer::Spacer},
+        bar::{
+            brand::Brand, context::Context, divider::Divider, settings::Settings, spacer::Spacer,
+        },
         button::Button,
         chip::Chip,
         deck::{clock::Clock, summary::Summary, tempo::Tempo},
@@ -413,6 +415,17 @@ impl Retained for Spacer {}
 /// The gear the settings button shows comes from the built-in art, not from an
 /// endpoint.
 impl Retained for Settings {}
+
+/// The strip follows the path its own endpoint reports; the scope beside it is
+/// the document's list and lands on rebuild.
+impl Retained for Context {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        let ReadValue::Text(breadcrumb) = value else {
+            return false;
+        };
+        std::mem::replace(&mut data.breadcrumb, (*breadcrumb).to_owned()) != data.breadcrumb
+    }
+}
 
 /// A status dot and a cell show what the document said; no endpoint moves
 /// either of them.

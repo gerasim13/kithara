@@ -41,8 +41,6 @@ pub use model::{
     ReadValue, Reads, StereoLevels, TrackRow, TreeIcon, TreeRow, WaveBucket, WaveformView,
 };
 pub use owner::InputOwner;
-#[cfg(feature = "masonry-host")]
-pub(crate) use picker::picker_width;
 pub(crate) use picker::{
     hosted_picker_overlay, picker_hits, picker_selected_index, scope_picker, sync_picker,
 };

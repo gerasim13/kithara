@@ -2,13 +2,13 @@ use iced::advanced::{layout::Layout, mouse};
 
 use super::{
     geometry::Rendered,
-    host::{picker_input_layout, tree_input_layout, tree_search_input_layout},
+    host::{tree_input_layout, tree_search_input_layout},
     mount::{Cx, ViewControl},
     read_scope, resolve,
     track_list::TrackListHost,
 };
 use crate::{
-    atoms::design::fader::rail_bounds,
+    atoms::{bar::context::Context, design::fader::rail_bounds},
     compile::CompiledUi,
     draw::Rect,
     engine::{Descriptor, Engine, Target},
@@ -90,13 +90,6 @@ impl HostedControl {
         }
     }
 
-    fn input_layout<'a>(&self, layout: Layout<'a>) -> Option<Layout<'a>> {
-        match &self.plan {
-            HostedControlPlan::Picker { .. } => picker_input_layout(layout),
-            _ => Some(layout),
-        }
-    }
-
     /// Narrows a control's rectangle to the part a pointer actually drives. A
     /// fader is one canvas holding a caption and a rail; only the rail answers.
     fn input_bounds(&self, bounds: Rect) -> Rect {
@@ -107,6 +100,7 @@ impl HostedControl {
                 metrics,
                 ..
             } => rail_bounds(bounds, *style, *labelled, *metrics),
+            HostedControlPlan::Picker { face, .. } => Context::placed(*face, bounds),
             _ => bounds,
         }
     }
@@ -149,9 +143,6 @@ pub(super) fn append_control_targets<'a>(
         }
         return;
     }
-    let Some(layout) = control.input_layout(layout) else {
-        return;
-    };
     if let Some(track_list) = &control.track_list {
         track_list.append_targets(layout, cursor, engine, targets);
     } else {

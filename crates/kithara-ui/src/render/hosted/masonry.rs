@@ -1,6 +1,6 @@
 use super::plan::{HostedControlPlan, TrackListPlan};
 use crate::{
-    atoms::design::fader::rail_bounds as fader_bounds,
+    atoms::{bar::context::Context, design::fader::rail_bounds as fader_bounds},
     compile::CompiledUi,
     draw::{Pt, Rect},
     engine::{Descriptor, Engine, Target},
@@ -17,15 +17,6 @@ use crate::{
         track_list_visible_divider_hit, track_list_visible_row_rect,
     },
 };
-
-#[derive(Clone)]
-pub(crate) struct PickerMetrics {
-    pub(crate) width: f32,
-    pub(super) content_height: f32,
-    pub(super) context_icon_size: f32,
-    pub(super) context_padding_x: f32,
-    pub(super) scope_gap: f32,
-}
 
 #[derive(Clone)]
 pub(crate) struct TreeMetrics {
@@ -79,18 +70,10 @@ impl HostedControlPlan {
                 path,
                 item_count,
                 item_height,
-                metrics,
+                face,
                 ..
             } => {
-                let anchor = Rect {
-                    x: bounds.x
-                        + metrics.context_padding_x
-                        + metrics.context_icon_size
-                        + metrics.scope_gap,
-                    y: bounds.y + (metrics.content_height - item_height).max(0.0) / 2.0,
-                    w: metrics.width,
-                    h: *item_height,
-                };
+                let anchor = Context::placed(*face, bounds);
                 targets.push(Target::new(path, Hit::new(point, anchor)));
                 if engine
                     .and_then(|engine| engine.picker_snapshot(path))
@@ -298,12 +281,11 @@ mod tests {
             item_count: 2,
             item_height: 18.0,
             selected: Some(0),
-            metrics: PickerMetrics {
-                width: 72.0,
-                content_height: 30.0,
-                context_icon_size: 12.0,
-                context_padding_x: 8.0,
-                scope_gap: 4.0,
+            face: Rect {
+                h: 30.0,
+                w: 72.0,
+                x: 24.0,
+                y: 0.0,
             },
         };
         let bounds = Rect {
@@ -333,7 +315,11 @@ mod tests {
         assert_eq!(open.len(), 3);
         assert_eq!(open[1].index, Some(0));
         assert_eq!(open[2].index, Some(1));
-        assert_eq!(open[1].hit.area().y, open[0].hit.area().y + 18.0);
+        assert_eq!(
+            open[1].hit.area().y,
+            open[0].hit.area().y + open[0].hit.area().h,
+            "the menu hangs off the bottom of the face the strip drew"
+        );
         assert_eq!(open[2].hit.area().y, open[1].hit.area().y + 18.0);
     }
 

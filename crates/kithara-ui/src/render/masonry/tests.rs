@@ -29,6 +29,7 @@ use super::{
     TextMeasurer, leaf::DragProgram,
 };
 use crate::{
+    atoms::bar::context::Context,
     builtin,
     compile::{CompiledUi, compile},
     draw::{DrawListBuilder, Pt, Rect},
@@ -37,10 +38,10 @@ use crate::{
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
         ControlAction, ReadValue, Reads, Skin, StereoLevels, UiEvent, WindowCommand, WindowEdge,
-        WindowLayerProgram, document, picker_hits, picker_width,
+        WindowLayerProgram, document, picker_hits,
     },
     source::{MemResolver, UiConfig},
-    text::FontPolicy,
+    text::{FontPolicy, TextContext},
 };
 
 struct FixtureReads;
@@ -1264,20 +1265,19 @@ fn picker_portal_honours_engine_and_leaf_owners_beneath_the_root_window_layer() 
         let skin = builtin::skin();
         let bounds_x: f32 = bounds.x0.as_();
         let bounds_y: f32 = bounds.y0.as_();
-        let anchor = Rect {
-            x: bounds_x
-                + skin.tree.context_padding_x
-                + skin.tree.context_icon_size
-                + skin.tree.scope_gap,
-            y: bounds_y
-                + (skin.tree.context_height
-                    - skin.tree.context_divider_width
-                    - skin.tree.scope_item_height)
-                    .max(0.0)
-                    / 2.0,
-            w: picker_width(["ZVUK", "LOCAL"], skin),
-            h: skin.tree.scope_item_height,
-        };
+        // Where the strip drew its face, asked of the painter that drew it —
+        // an anchor worked out a second time here would agree with the host
+        // only until one of the two changed.
+        let mut text = TextContext::from(skin.text_resources());
+        let anchor = Context::placed(
+            Context::new(skin).face_of(&mut text, ["ZVUK", "LOCAL"]),
+            Rect {
+                h: 0.0,
+                w: 0.0,
+                x: bounds_x,
+                y: bounds_y,
+            },
+        );
         let center = |area: Rect| (area.x + area.w / 2.0, area.y + area.h / 2.0);
         let (anchor_x, anchor_y) = center(anchor);
         assert_eq!(
@@ -1614,9 +1614,12 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     ),
     ("Tree", Paints::NotYet, r#"Tree(id: "control")"#),
     (
+        // The path in view is the strip's own reading, and the fixture never
+        // bound one: a strip with no path names nothing, so it drew nothing
+        // for a reason that had nothing to do with this host.
         "ContextBar",
-        Paints::NotYet,
-        r#"ContextBar(id: "control", scope_items: ["ALL", "MINE"], scope: Model(id: "library.scope"), write: Model(id: "library.scope"))"#,
+        Paints::Yes,
+        r#"ContextBar(id: "control", read: Model(id: "library.breadcrumb"), scope_items: ["ALL", "MINE"], scope: Model(id: "library.scope"), write: Model(id: "library.scope"))"#,
     ),
     (
         "Text",

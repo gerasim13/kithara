@@ -1,3 +1,3 @@
 mod tree;
 
-pub(crate) use tree::{ContextBar, Tree};
+pub(crate) use tree::Tree;

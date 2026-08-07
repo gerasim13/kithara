@@ -900,12 +900,6 @@ pub(super) fn tree_search_input_layout(layout: Layout<'_>) -> Option<Layout<'_>>
     row.children().nth(1)
 }
 
-pub(super) fn picker_input_layout(layout: Layout<'_>) -> Option<Layout<'_>> {
-    let content = first_child(layout)?;
-    let row = first_child(content)?;
-    row.children().nth(1)
-}
-
 pub(super) fn group_children(
     mut layout: Layout<'_>,
     sized: bool,

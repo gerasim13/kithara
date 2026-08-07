@@ -221,14 +221,14 @@ impl ViewControl for mount::Tree<'_> {
 
 impl ViewControl for mount::ContextBar<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
+        let Some(data) = self.data(reading(cx)) else {
+            return Rendered::leading(Space::new().into());
+        };
         Rendered::leading(context_bar(
-            cx.path,
+            cx,
             (self.scope_items, self.scope),
-            cx.value,
-            cx.ui,
-            cx.reads,
-            cx.skin,
-            cx.owner,
+            self.painter(cx.skin),
+            data,
         ))
     }
 }
@@ -317,12 +317,7 @@ where
     Control: Draws,
     Control::Painter: 'static,
 {
-    let Some(data) = control.data(Reading {
-        reads: cx.reads,
-        scope: cx.scope,
-        ui: cx.ui,
-        value: cx.value,
-    }) else {
+    let Some(data) = control.data(reading(cx)) else {
         return Rendered::leading(Space::new().into());
     };
     let grip = control.grip(cx.skin, &data);
@@ -334,6 +329,21 @@ where
         (InputOwner::Leaf, Grip::Index { count }) => Gesture::index(cx.path, paint, count).view(),
         (InputOwner::Engine, _) | (_, Grip::None) => paint.view(),
     })
+}
+
+/// What a control is handed when it decides what to draw, from what this host
+/// was handed when it mounted one.
+fn reading<'a, 'reads, 'value>(cx: &'a Cx<'a, 'reads, 'value>) -> Reading<'a>
+where
+    'reads: 'a,
+    'value: 'a,
+{
+    Reading {
+        reads: cx.reads,
+        scope: cx.scope,
+        ui: cx.ui,
+        value: cx.value,
+    }
 }
 
 fn horizontal(align: TextAlign) -> Horizontal {
