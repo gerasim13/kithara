@@ -4826,7 +4826,6 @@ dependencies = [
  "sha2",
  "smallvec",
  "thiserror 2.0.19",
- "thunderdome",
  "tracing",
  "triple_buffer",
  "unimock",

@@ -10,9 +10,9 @@ use smallvec::SmallVec;
 
 use crate::{
     BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
-    DecoderResamplerConfig, DecoderSeekOutcome, DecoderTrackInfo, GaplessInfo,
+    DecoderResamplerConfig, DecoderSeekOutcome, DecoderTrackInfo, Frames, GaplessInfo,
     GaplessTailCompensation, PcmChunk, PcmMeta, PcmSpec, TrackMetadata, duration_for_frames,
-    frames_for_duration,
+    frames_for_duration, sanitize_sample,
 };
 
 pub(crate) fn wrap<B>(
@@ -128,7 +128,7 @@ where
             let base = frame.saturating_mul(channels);
             for channel in 0..channels {
                 let dst = base_len + frame;
-                self.input[channel][dst] = chunk.samples[base + channel];
+                self.input[channel][dst] = sanitize_sample(chunk.samples[base + channel]);
             }
         }
         Ok(())
@@ -184,19 +184,19 @@ where
         if self.output[0].is_empty() {
             return Ok(None);
         }
-        let frames = self.output[0].len();
+        let frames = Frames::new(self.output[0].len());
         let samples = self.interleave(frames)?;
         let mut meta = self.pending_meta.take().unwrap_or_default();
         meta.spec = self.target_spec;
         meta.frame_offset = self.output_frame_offset;
-        meta.frames = u32::try_from(frames).unwrap_or(u32::MAX);
+        meta.frames = u32::try_from(frames.get()).unwrap_or(u32::MAX);
         meta.timestamp = duration_for_frames(self.target_sample_rate.get(), meta.frame_offset);
         self.output_frame_offset = self
             .output_frame_offset
-            .saturating_add(u64::try_from(frames).unwrap_or(u64::MAX));
+            .saturating_add(u64::try_from(frames.get()).unwrap_or(u64::MAX));
         self.emitted_frames = self
             .emitted_frames
-            .saturating_add(u64::try_from(frames).unwrap_or(u64::MAX));
+            .saturating_add(u64::try_from(frames.get()).unwrap_or(u64::MAX));
         meta.end_timestamp =
             duration_for_frames(self.target_sample_rate.get(), self.output_frame_offset);
         let channels = self.channels();
@@ -234,17 +234,21 @@ where
         self.finish_output()
     }
 
-    fn interleave(&self, frames: usize) -> DecodeResult<PcmBuf> {
-        let channels = self.channels();
+    fn interleave(&self, frames: Frames) -> DecodeResult<PcmBuf> {
+        let channels = self.channel_count();
         let mut samples = self.pool.get();
-        samples.ensure_len(frames.saturating_mul(channels))?;
-        for frame in 0..frames {
-            let base = frame.saturating_mul(channels);
-            for channel in 0..channels {
+        samples.ensure_len(frames.samples(channels).get())?;
+        for frame in 0..frames.get() {
+            let base = frame.saturating_mul(channels.get());
+            for channel in 0..channels.get() {
                 samples[base + channel] = self.output[channel][frame];
             }
         }
         Ok(samples)
+    }
+
+    fn channel_count(&self) -> NonZeroUsize {
+        NonZeroUsize::new(self.channels()).unwrap_or(NonZeroUsize::MIN)
     }
 
     fn process_block(&mut self, input_frames: usize) -> DecodeResult<ResamplerProcess> {

@@ -131,7 +131,9 @@ pub(crate) fn linux_build_args(pins: &CiPins) -> Result<Vec<(&'static str, Strin
     ];
     for (name, tool) in [
         ("AST_GREP_VERSION", "ast-grep"),
+        ("CARGO_CRAP_VERSION", "cargo-crap"),
         ("CARGO_DENY_VERSION", "cargo-deny"),
+        ("CARGO_GEIGER_VERSION", "cargo-geiger"),
         ("CARGO_HACK_VERSION", "cargo-hack"),
         ("CARGO_LLVM_COV_VERSION", "cargo-llvm-cov"),
         ("CARGO_MACHETE_VERSION", "cargo-machete"),
@@ -140,6 +142,10 @@ pub(crate) fn linux_build_args(pins: &CiPins) -> Result<Vec<(&'static str, Strin
         ("CARGO_SEMVER_CHECKS_VERSION", "cargo-semver-checks"),
         ("CARGO_SHEAR_VERSION", "cargo-shear"),
         ("CARGO_SORT_VERSION", "cargo-sort"),
+        (
+            "CARGO_WORKSPACE_UNUSED_PUB_VERSION",
+            "cargo-workspace-unused-pub",
+        ),
         ("JUST_VERSION", "just"),
         ("MD_FORMATTER_VERSION", "md-formatter"),
         ("SCCACHE_VERSION", "sccache"),

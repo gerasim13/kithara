@@ -8,6 +8,17 @@ repository.workspace = true
 description = "Synchronous audio encoding with packaged and byte outputs"
 publish = false
 
+[features]
+default = ["client-reqwest", "tls-rustls"]
+# HTTP backend forwarding. This crate encodes and never speaks HTTP, but it
+# takes its media types from kithara-stream, which reaches kithara-net, and
+# kithara-net refuses to build without a backend.
+client-apple = ["kithara-stream/client-apple"]
+client-reqwest = ["kithara-stream/client-reqwest"]
+client-wreq = ["kithara-stream/client-wreq"]
+tls-native = ["kithara-stream/tls-native"]
+tls-rustls = ["kithara-stream/tls-rustls"]
+
 [dependencies]
 kithara-stream = { workspace = true }
 

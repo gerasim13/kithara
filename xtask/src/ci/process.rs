@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 pub(crate) struct Process {
     root: PathBuf,
@@ -84,6 +84,15 @@ impl Process {
     pub(crate) fn best_effort(&self, program: &str, args: &[&str], label: &str) {
         if let Err(error) = self.run(program, args, label) {
             warn!(step = label, %error, "best-effort step failed");
+        }
+    }
+
+    /// Reach a state. Refusal because it already holds is success, not output.
+    pub(crate) fn ensure(&self, program: &str, args: &[&str], label: &str) {
+        match self.command(program).args(args).output() {
+            Ok(output) if output.status.success() => info!(step = label, "done"),
+            Ok(_) => debug!(step = label, "already so"),
+            Err(error) => warn!(step = label, %error, "could not start"),
         }
     }
 

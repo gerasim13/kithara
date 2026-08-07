@@ -25,7 +25,7 @@ mod factory;
 mod fmp4;
 mod gapless;
 mod mp4;
-mod pcm_time;
+mod pcm;
 mod resampled;
 #[cfg(feature = "symphonia")]
 mod symphonia;
@@ -49,7 +49,10 @@ pub use gapless::{
     GaplessInfo, GaplessMode, GaplessOutput, GaplessTailCompensation, GaplessTrimmer,
     SilenceTrimParams, probe_mp4_gapless,
 };
-pub use pcm_time::{duration_for_frames, frames_for_duration};
+pub use pcm::{
+    ChunkRetire, DropChunks, Frames, Samples, duration_for_frames, frames_for_duration,
+    sanitize_sample,
+};
 pub use traits::{
     Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome,
 };

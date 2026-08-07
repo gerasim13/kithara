@@ -60,6 +60,21 @@ jobs:
       - name: Run tests
         run: just test all
 
+  # The virtual clock collapses fixture delays, so order-of-service defects
+  # cannot reproduce above. Own target dir: the two builds differ.
+  test-real-clock:
+    name: Test on a real clock
+    needs: lint
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run tests on a real clock
+        run: CARGO_TARGET_DIR=target-flash-off just test run --flash=off
+
   msrv:
     name: MSRV
     needs: lint
@@ -171,8 +186,11 @@ jobs:
     timeout-minutes: 60
 
     steps:
+      # The baseline is a revision, so the history holding it must be here.
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Run semver checks
         run: just deps semver

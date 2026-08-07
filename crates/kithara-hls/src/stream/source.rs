@@ -9,7 +9,7 @@ use kithara_platform::{CancelScope, sync::Arc, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, BoxedEventSink, ByteMap, DeferredWake, MediaInfo, PlayheadRead, PlayheadWrite,
-    ReadOutcome, SeekControl, SeekObserve, Source, SourcePhase, StreamResult,
+    ReadOutcome, SeekControl, SeekObserve, SeekPrepare, Source, SourcePhase, StreamResult,
 };
 
 use super::coord::HlsCoord;
@@ -17,14 +17,12 @@ use crate::{peer::HlsPeer, reader::HlsReaderEventSink};
 
 /// HLS source: thin façade over [`HlsCoord`].
 ///
-/// Owns the per-track event bus and the bound peer handle / wake. Every
-/// `Source` trait method that touches segments, byte ranges, or timeline
-/// state is forwarded to `HlsCoord` via `delegate!` — coord is the
-/// single owner of the active-variant atomic, the cross-variant
-/// history, and the asset store. `HlsSource` keeps only what coord
-/// legitimately should not know about: the [`EventBus`] (for
-/// [`HlsReaderEventSink`]) and the [`HlsPeer`] handle (for teardown on
-/// drop and for the ABR handle the audio FSM consumes).
+/// Owns the per-track event bus and the bound peer handle / wake. Every `Source` trait method that
+/// touches segments, byte ranges, or timeline state is forwarded to `HlsCoord` via `delegate!` —
+/// coord is the single owner of the active-variant atomic, the cross-variant history, and the asset
+/// store. `HlsSource` keeps only what coord legitimately should not know about: the
+/// [`EventBus`](kithara_events::EventBus) (for [`HlsReaderEventSink`]) and the [`HlsPeer`] handle
+/// (for teardown on drop and for the ABR handle the audio FSM consumes).
 pub struct HlsSource {
     coord: Arc<HlsCoord>,
     /// Deferred HLS event sink shared with the reader hooks and fence-ack path.
@@ -119,6 +117,10 @@ impl Source for HlsSource {
 
     fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
         self.peer_wake.clone()
+    }
+
+    fn seek_prepare(&self) -> Option<Arc<dyn SeekPrepare>> {
+        Some(Arc::clone(&self.coord) as Arc<dyn SeekPrepare>)
     }
 
     fn take_reader_event_sink(&mut self) -> Option<BoxedEventSink> {

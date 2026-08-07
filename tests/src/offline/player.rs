@@ -72,6 +72,12 @@ impl OfflinePlayer {
             Arc::clone(&src),
             &kithara::bufpool::PcmPool::default(),
         );
+        // Keep the control half of the track's seek path, exactly as `EngineImpl::send_slot_cmd`
+        // does when a resource crosses to the audio thread. Without it a later `seek` would move
+        // the media clock while the source stayed put.
+        if let Some(handle) = pr.seek_handle() {
+            self.control.bind_seek(Arc::clone(&src), handle);
+        }
         self.control
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
@@ -119,6 +125,9 @@ impl OfflinePlayer {
     /// Panics if the command channel is full.
     pub fn seek(&mut self, seconds: f64, seek_epoch: u64) {
         self.playback.seek_epoch.store(seek_epoch, Ordering::SeqCst);
+        // Begin off the render loop, then hand the processor the re-base.
+        self.control
+            .begin_seek(kithara::platform::time::Duration::from_secs_f64(seconds));
         self.control
             .cmd_tx
             .try_push(PlayerCmd::Seek {

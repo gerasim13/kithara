@@ -411,7 +411,7 @@ where
         }
     })
     .await
-    .unwrap_or(None)
+    .unwrap_or_else(|_| panic!("no matching queue event within {deadline:?}"))
 }
 
 fn playlist_snapshot(queue: &Queue, ids: &[TrackId]) -> String {

@@ -14,11 +14,15 @@ use crate::ci::{config::CiPins, process::Process};
 struct Layout {
     systemd_root: &'static str,
     executable: &'static str,
+    cleanup_unit: &'static str,
+    cleanup_timer: &'static str,
 }
 
 const LAYOUT: Layout = Layout {
     systemd_root: "/etc/systemd/system",
     executable: "/usr/local/bin/kithara-ci",
+    cleanup_unit: "kithara-ci-cleanup.service",
+    cleanup_timer: "kithara-ci-cleanup.timer",
 };
 
 /// Write one service per runner and hand them to systemd.
@@ -46,6 +50,7 @@ pub(super) fn install(
             .with_context(|| format!("writing {}", path.display()))?;
         info!(service = runner.service(), "runner service installed");
     }
+    install_cleanup_timer()?;
     process.run("systemctl", &["daemon-reload"], "reload systemd")?;
     for runner in &host.runners {
         process.run(
@@ -53,6 +58,46 @@ pub(super) fn install(
             &["enable", "--now", &runner.service()],
             "enable runner service",
         )?;
+    }
+    process.run(
+        "systemctl",
+        &["enable", "--now", LAYOUT.cleanup_timer],
+        "enable the cleanup timer",
+    )?;
+    Ok(())
+}
+
+/// The host keeps every image generation it has ever built, and nothing else
+/// reclaims them: the machine is shared, so a blanket prune is not available.
+/// Generations share their base layers, so removing five of six freed single
+/// gigabytes rather than the hundreds `docker images` reports per image — the
+/// point is that the count stops growing, not that a run reclaims much.
+fn install_cleanup_timer() -> Result<()> {
+    let service = format!(
+        "[Unit]\n\
+         Description=Kithara CI cleanup\n\
+         After=docker.service\n\
+         Requires=docker.service\n\n\
+         [Service]\n\
+         Type=oneshot\n\
+         ExecStart={executable} ci linux --config {config} cleanup\n",
+        executable = LAYOUT.executable,
+        config = LINUX_CONFIG_PATH,
+    );
+    let timer = "[Unit]\n\
+                 Description=Kithara CI cleanup\n\n\
+                 [Timer]\n\
+                 OnCalendar=daily\n\
+                 Persistent=true\n\n\
+                 [Install]\n\
+                 WantedBy=timers.target\n";
+    for (name, body) in [
+        (LAYOUT.cleanup_unit, service.as_str()),
+        (LAYOUT.cleanup_timer, timer),
+    ] {
+        let path = PathBuf::from(LAYOUT.systemd_root).join(name);
+        std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
+        info!(unit = name, "cleanup unit installed");
     }
     Ok(())
 }

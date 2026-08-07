@@ -89,6 +89,7 @@ impl<T: StreamType> SharedStream<T> {
             /// inner source. Used by the decoder factory to activate the
             /// segment-by-segment fMP4 path on HLS.
             pub(crate) fn byte_map(&self) -> Option<Arc<dyn ByteMap>>;
+            pub(crate) fn seek_prepare(&self) -> Option<Arc<dyn kithara_stream::SeekPrepare>>;
             /// Narrow mutating playhead handle.
             pub(crate) fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
             /// Narrow seek-control handle.

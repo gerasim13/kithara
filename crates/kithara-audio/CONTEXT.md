@@ -33,7 +33,7 @@ Transport (`runtime/ports.rs`): SPSC `ringbuf::HeapRb` plus a one-slot overflow
 - **Off-RT deferral.** Signals the forbid-blocking core must not make are armed
   on-core and flushed by the shell from `AudioWorkerSource::flush_deferred`: FSM
   lifecycle events (`DeferredBus<Event>`), the reader→peer wake
-  (`ReadinessGate::flush_peer_wake`), retired state (`RetiredGenerations::drain`).
+  (`ReadinessGate::flush_peer_wake`), retired state (`Retired::drain`).
   `StreamAudioSource::drop` flushes once more — `retain` removes a terminal slot
   without another pass.
 
@@ -92,9 +92,10 @@ mutator of track state through `update_state`. Sub-owners never take
 - `RebuildPort<T>` — the two-phase rebuild boundary: `prepare` produces a pending
   job, `submit` (from `flush_deferred`) spawns it off-RT. The job constructs a
   complete `DecoderGeneration`; installation only moves it.
-- `RetiredGenerations` — retirement and off-RT drain; generation destruction
-  never happens in the RT region. Queue holds 4 entries; on overflow it
-  `mem::forget`s rather than freeing on-core, and warns on drain.
+- `Retired` — off-RT drain for everything the produce core displaces but must not
+  free: generations a rebuild replaced, and the chunks a seek flushed out of
+  staging and the gapless buffers. On overflow the queue `mem::forget`s rather
+  than freeing on-core, and warns on drain.
 - Format and anchor decisions are pure functions in `decode::format` and
   `seek::anchor`.
 
@@ -216,10 +217,19 @@ seek, so it lags across the requested-but-not-applied window. Decoded chunks
 EOF reached after a newer seek bumped the seek-state epoch would otherwise pass
 the consumer's `EpochValidator` as the new seek's terminal.
 
-Consumer side, `Audio::seek` bumps the epoch, marks pending, notifies the peer,
-rearms the preload gate, and `RingConsumer::begin_seek_epoch` drains stale
-fetches inside the RT no-free boundary (stale chunks to the trash ring; the first
-fetch at the new epoch is staged, not dropped). A `SourceSeekAnchor` byte offset
+Consumer side splits in two, because the begin half takes locks and some
+consumers sit on an audio device callback. **Begin** — `SeekBegin::begin`,
+implemented by `SeekHandle` (`Audio::seek_handle`) — bumps the epoch, marks
+pending, publishes `SeekLifecycle`, notifies the peer, rearms the preload gate
+and wakes the worker. **Adopt** — `Audio::sync_seek` — runs
+`RingConsumer::begin_seek_epoch` when that epoch differs from the ring's, draining
+stale fetches inside the RT no-free boundary (stale chunks to the trash ring; the
+first fetch at the new epoch is staged, not dropped). Adopting is lock-free, and
+every read entry point (`read`, `read_planar`, `next_chunk`, `preload`) does it
+first, so a new epoch reaches the reader without its caller touching the reader.
+
+`Audio::seek` remains the one-call form for consumers off the audio thread.
+A `SourceSeekAnchor` byte offset
 is valid only in the variant byte space that resolved it, so `ApplyingSeek` (and
 a wait carrying it) re-resolves the seek when the active ABR variant no longer
 matches `anchor.variant_index`.
@@ -266,7 +276,7 @@ and terminal phases abort the transition.
   output, tells the source (`VariantControl::promote_variant`), swaps the
   generation, and joins the blender. `VariantPromotion::Deferred` stops the pass,
   `Stale` discards the local incoming, and every displaced or aborted generation
-  goes to `RetiredGenerations` — never dropped on the produce core.
+  goes to `Retired` — never dropped on the produce core.
 
 **`PcmBlender`** is always on and owns the audible seam. `join_active` starts a
 `Pending` join when the two generations share a `PcmSpec` and ≥3 frames of
@@ -312,6 +322,18 @@ inserted and PCM output is pinned to 1.0.
 playhead). A duration-changing `AudioEffect` is the sole timeline authority: it
 restamps only `spec` + `frames` and carries the consumed input's song-time meta
 forward, so there is no translation layer and no parallel frame counter.
+
+**Sample guard.** `sanitize_sample` (`kithara-decode`, which owns it) runs on the
+*input* of every stage taking untrusted samples: `IsolatorEq::process_sample`
+before it branches, `PeakLimiter::process_planar` before it takes the frame peak.
+Input is the only placement covering every branch. The limiter guards each sample
+rather than the peak, since `f32::max` returns its non-`NaN` operand. Bit-exact
+bypass holds for finite samples.
+
+`IsolatorEq`'s crossover is IIR, so its tail decays into the denormal range. Each
+biquad section flushes state and returns exact zero once **both** its input and
+output fall below `f32::MIN_POSITIVE`; the input half keeps a live signal through
+a deep cut from losing its history.
 
 **EOF drain.** At true EOF `EofDrain` drains the chain incrementally, one emitted
 chunk per FSM step: each stage is flushed to exhaustion only after the upstream

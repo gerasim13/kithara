@@ -596,22 +596,12 @@ impl HlsTrackState {
         resolved
     }
 
-    /// Detect a seek-epoch bump on the shared seek state and delegate the
-    /// reset work to [`Self::seek_epoch_reset`] (which carries the
-    /// probe). Called every poll cycle; the equality short-circuit
-    /// keeps it free in the steady state.
-    ///
-    /// Collapses cross-variant byte-continuity layering on the new
-    /// seek epoch — a random seek into pre-switch territory would
-    /// otherwise pull bytes from a `history` variant whose data does
-    /// not match the variant ABR currently considers active.
     fn apply_seek_change(&mut self, coord: &HlsCoord, ctx: &PlanCtx) {
         let cur_seek = self.seek_obs.epoch();
         if cur_seek == self.last_seek_epoch {
             return;
         }
         self.last_seek_epoch = cur_seek;
-        coord.prepare_for_seek();
         self.seek_epoch_reset(coord, ctx);
     }
 

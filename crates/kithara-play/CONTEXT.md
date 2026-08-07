@@ -165,11 +165,61 @@ are forbidden and enforced by `just lint arch`; kithara-play is not on that allo
 Three Firewheel processors run on the audio thread and carry
 `#[kithara::rtsan_forbid_blocking]`: `PlayerNodeProcessor::process` (`rt/processor.rs`),
 `MasterEqProcessor::process` (`rt/eq.rs`), `LimiterProcessor::process` (`rt/limiter.rs`). They stay
-allocation-, free-, and lock-free: render scratch is (re)sized in `new_stream`
-(`RenderPass::resize`), and finished or evicted tracks go to the bounded trash ring from
-`bridge::slot_channels` instead of being freed on the audio thread - the main thread drains it in
-`PlayerImpl::process_notifications`. A full command ring surfaces as `PlayError::SlotChannelFull`,
-never as a block.
+allocation-, free-, and lock-free: render scratch is sized in `new_stream`
+(`RenderPass::resize`), which Firewheel calls on the main thread, and finished or evicted tracks go
+to the bounded trash ring from `bridge::slot_channels` instead of being freed on the audio thread -
+the main thread drains it in `PlayerImpl::process_notifications`. A full command ring surfaces as
+`PlayError::SlotChannelFull`, never as a block.
+
+`render_audio` clamps its block to the scratch it holds, so a host exceeding the `max_block_frames`
+it declared loses that block's tail rather than allocating in the callback.
+
+Pause and resume are ramps. `RenderPass` owns a transport gate - a smoothed `MixDSP` - open while
+`PlaybackShared::playing` is set. The flag flips at once for `Player::is_playing()` while the output
+ramps to zero, and the media clock advances by the length of that ramp. A processor's first block
+adopts the transport state rather than fading into it.
+
+`TrackFade::play` snaps only when its mix has settled, so a fade still in flight keeps its ramp.
+
+One block is the whole budget, shared by all three processors.
+`tests/benches/rt_block_budget.rs` derives it from the host's block and rate, and measures the share
+`PlayerNodeProcessor` takes.
+
+The audio thread never logs. Discrete facts leave through `PlayerNotification`, rates and faults
+through `PlaybackShared::metrics()` (`bridge::RtMetrics`); `RtSink` carries both into the per-track
+read path.
+
+**Memory ordering.** `playing` and `seek_epoch` decide whether the audio thread acts and carry
+`SeqCst`; touched once per command or block, never per sample. The `fetch_add` in
+`next_seek_epoch` **is** the publication - storing its result back would let two concurrent seeks
+reinstate the older epoch. Everything else is `Relaxed`: `RtMetrics` counters are monotonic deltas,
+and `PlaybackSnapshot`'s scalars are independent readouts that need not agree across a block.
+
+## Seek Ownership
+
+A seek is split in two, because beginning one publishes an event and wakes the decode worker - both
+lock-taking, both forbidden on the device callback.
+
+**Control thread begins.** `EngineImpl::begin_slot_seek` walks the slot's `SeekBindings` and calls
+`kithara_audio::SeekBegin::begin` on each. A handle is bound in `send_slot_cmd` when its resource
+crosses to the audio thread and released on `Unloaded`.
+
+**Audio thread re-bases.** `PlayerCmd::Seek` carries only data; `PlayerResource::reset_for_seek`
+calls the reader's lock-free `sync_seek`, which adopts that epoch and recycles stale chunks into the
+trash outlet. Nothing here can block or fail, so there is no seek-failure signal. The command still
+carries `seek_epoch`, so one minted before a newer seek is dropped rather than applied.
+
+`PcmControl::seek` remains the one-call form for consumers off the audio thread. A reader whose
+`seek_handle` is `None` cannot be seeked from the callback at all.
+
+`PlayerResource::scratch_frames` is a per-channel **frame** count, and `write_len` / `write_pos` /
+the `read` range share that scale. Sized once per resource off the audio thread and never re-zeroed,
+so every mixing path must fill its whole window - an underrun zero-fills rather than returning short.
+
+Loaded tracks live in `rt::TrackSlots`, a fixed `[Option<PlayerTrack>; MAX_TRACKS]`. A `TrackSlot`
+stays valid while its track lives, and iteration is slot order, so cleanup and eviction are
+deterministic. `insert` hands a rejected newcomer back, since a `PlayerTrack` must not be freed on
+the audio thread.
 
 When the arena's last track ends at *natural* EOF the processor keeps it resident but inert, so a
 later in-range seek can revive it; tracks finished via stop or a faded-out crossfade are discarded.
@@ -181,10 +231,12 @@ Cross-thread wakes reached on the core are *armed* lock-free (`kithara_stream::D
 and delivered by the shell (`flush`), never on the forbid path.
 
 Verification is gated by `--cfg rtsan`, so stable/production builds are byte-identical. Lanes:
-`just test rtsan` (mock decoder, `suite_light` tripwire), `just test rtsan-file` / `rtsan-hls`
-(real decoder, `suite_stress`), and `rtsan-async`. `.github/workflows/rtsan.yml.disabled` runs the
-three decoder lanes on linux+macos against a pinned nightly with `rust-src`, `continue-on-error`
-until green. `permit()` and the RT attribute macros live in `kithara-test-utils` /
+`just test rtsan` (mock decoder), `rtsan-file` / `rtsan-hls` (real decoder, `suite_stress`), and
+`rtsan-async` (`--features no-block`). A whole test body counts
+as a nonblocking region only in the `no-block` lane, where `.config/rtsan/async-suppressions.txt`
+narrows the check to genuine waits; the decoder lanes check the product's forbid regions alone and
+their harness allocates freely. `deep:nightly` runs all four through `just ci run deep`, where a
+violation fails the job. `permit()` and the RT attribute macros live in `kithara-test-utils` /
 `kithara-test-macros`; there is no separate rtsan crate.
 
 ## Session Hosting

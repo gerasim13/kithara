@@ -127,6 +127,14 @@ pub trait PcmSession {
     }
 }
 
+/// The control-plane half of a seek: the part that publishes an event and wakes a decode worker,
+/// both lock-taking, leaving the audio callback only [`PcmControl::sync_seek`].
+pub trait SeekBegin: Send + Sync {
+    /// Begin a seek to `position` and report where it will land. Blocking by design — never call
+    /// this from an audio callback.
+    fn begin(&self, position: Duration) -> SeekOutcome;
+}
+
 /// PCM control operations and runtime knobs.
 #[kithara::mock(api = PcmControlMock)]
 pub trait PcmControl {
@@ -160,6 +168,19 @@ pub trait PcmControl {
     /// Returns `Err(DecodeError)` when seek cannot complete: stream I/O
     /// failure, decoder recreate failure, or terminal producer error.
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
+
+    /// Control-plane handle that begins a seek without touching the reader, leaving
+    /// [`sync_seek`](Self::sync_seek) to pick the target up.
+    ///
+    /// `None` means the reader cannot be seeked from an audio callback at all: such a caller must
+    /// reach it off-thread through [`seek`](Self::seek).
+    fn seek_handle(&self) -> Option<Arc<dyn SeekBegin>> {
+        None
+    }
+
+    /// Adopt a seek epoch begun through [`seek_handle`](Self::seek_handle). Must be lock-free —
+    /// this is the only half an audio callback may run.
+    fn sync_seek(&mut self) {}
 
     /// Set the target sample rate of the audio host.
     ///

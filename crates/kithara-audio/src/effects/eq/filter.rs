@@ -14,16 +14,34 @@ impl Consts {
     };
 }
 
+struct Section(DirectForm1<f32>);
+
+impl Section {
+    fn new(coefficients: Coefficients<f32>) -> Self {
+        Self(DirectForm1::new(coefficients))
+    }
+
+    #[inline]
+    fn run(&mut self, input: f32) -> f32 {
+        let out = self.0.run(input);
+        if out.is_subnormal() && input.abs() < f32::MIN_POSITIVE {
+            self.0.reset_state();
+            return 0.0;
+        }
+        out
+    }
+}
+
 struct Lr4 {
-    first: DirectForm1<f32>,
-    second: DirectForm1<f32>,
+    first: Section,
+    second: Section,
 }
 
 impl Lr4 {
     fn new(coefficients: Coefficients<f32>) -> Self {
         Self {
-            first: DirectForm1::new(coefficients),
-            second: DirectForm1::new(coefficients),
+            first: Section::new(coefficients),
+            second: Section::new(coefficients),
         }
     }
 
@@ -34,7 +52,7 @@ impl Lr4 {
 }
 
 pub(crate) struct CrossoverFilters {
-    allpass: Vec<DirectForm1<f32>>,
+    allpass: Vec<Section>,
     allpass_offsets: Vec<usize>,
     crossover_freqs: Vec<f32>,
     highpass: Vec<Lr4>,
@@ -62,9 +80,11 @@ impl CrossoverFilters {
         for band in 0..band_count {
             allpass_offsets.push(allpass.len());
             if band + 1 < crossover_freqs.len() {
-                allpass.extend(crossover_freqs[band + 1..].iter().map(|&freq| {
-                    DirectForm1::new(biquad_coeffs(Type::AllPass, freq, sample_rate))
-                }));
+                allpass.extend(
+                    crossover_freqs[band + 1..]
+                        .iter()
+                        .map(|&freq| Section::new(biquad_coeffs(Type::AllPass, freq, sample_rate))),
+                );
             }
         }
         allpass_offsets.push(allpass.len());
@@ -111,7 +131,7 @@ impl CrossoverFilters {
             let end = self.allpass_offsets[band + 1];
             for (offset, filter) in self.allpass[start..end].iter_mut().enumerate() {
                 let freq = self.crossover_freqs[band + 1 + offset];
-                *filter = DirectForm1::new(biquad_coeffs(Type::AllPass, freq, self.sample_rate));
+                *filter = Section::new(biquad_coeffs(Type::AllPass, freq, self.sample_rate));
             }
         }
     }

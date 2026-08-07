@@ -32,6 +32,13 @@ on:
     # Miri, weekly: the interpreter is slow enough that a nightly run would
     # hold the machine for hours it owes to lanes that answer faster.
     - cron: '0 6 * * 0'
+    # The repository's own analysis, and the lanes no gate runs.
+    - cron: '0 20 * * *'
+    - cron: '0 21 * * *'
+    # Weekly, because they cost hours: the deep assessment and the mutation
+    # suites.
+    - cron: '0 8 * * 6'
+    - cron: '0 10 * * 6'
   workflow_dispatch:
 
 jobs:
@@ -71,3 +78,21 @@ jobs:
       vars.KITHARA_GPU_RUNNER_LABELS != ''
       && github.event.schedule == '30 4 * * *'
     uses: ./.github/workflows/gpu.yml
+
+  quality:
+    if: vars.KITHARA_RUNNER_LABELS != '' && github.event.schedule == '0 20 * * *'
+    uses: ./.github/workflows/quality.yml
+
+  lanes:
+    if: vars.KITHARA_RUNNER_LABELS != '' && github.event.schedule == '0 21 * * *'
+    uses: ./.github/workflows/lanes.yml
+
+  quality-deep:
+    if: vars.KITHARA_RUNNER_LABELS != '' && github.event.schedule == '0 8 * * 6'
+    uses: ./.github/workflows/quality.yml
+    with:
+      depth: deep
+
+  mutants:
+    if: vars.KITHARA_RUNNER_LABELS != '' && github.event.schedule == '0 10 * * 6'
+    uses: ./.github/workflows/mutants.yml

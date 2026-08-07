@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 
 use super::{
-    firewall,
+    cleanup, firewall,
     profile::{LINUX_CONFIG_PATH, LinuxHost},
     registration, services, system, windows,
 };
@@ -44,6 +44,8 @@ enum LinuxCommand {
     },
     /// Write and enable one service per runner in the profile.
     InstallServices,
+    /// Reclaim superseded project images and stale build cache.
+    Cleanup,
     /// Install the Windows guest that serves the Windows lane.
     InstallWindows,
     /// Register the installed Windows guest as a runner and wait for it.
@@ -66,6 +68,10 @@ pub(crate) fn run(args: &LinuxArgs) -> Result<()> {
         LinuxCommand::Firewall => firewall::apply(&process, &host),
         LinuxCommand::Configure { runner, env_file } => {
             registration::configure(&host, host.runner(runner)?, env_file)
+        }
+        LinuxCommand::Cleanup => {
+            let pins = CiPins::load(&args.pins)?;
+            cleanup::run(&process, &pins)
         }
         LinuxCommand::InstallServices => {
             let pins = CiPins::load(&args.pins)?;

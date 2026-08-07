@@ -2,11 +2,12 @@ use std::{num::NonZeroU32, ops::Range};
 
 use kithara_audio::ServiceClass;
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_platform::{maybe_send::WasmSend, sync::Arc, time::Duration};
-use tracing::warn;
+use kithara_decode::Frames;
+use kithara_platform::{maybe_send::WasmSend, sync::Arc};
 
 #[rustfmt::skip]
 use crate::resource::Resource;
+use crate::bridge::RtMetrics;
 
 /// RT-safe resource wrapper with internal scratch buffers.
 ///
@@ -59,24 +60,25 @@ impl PlayerResource {
     /// Number of stereo output channels.
     const STEREO_CHANNELS: usize = 2;
 
+    fn scratch_frames(sample_rate: u32) -> Frames {
+        Frames::new(sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
+    }
+
     /// Create a new `PlayerResource` wrapping the given resource.
     ///
-    /// Allocates two channel scratch buffers from the given PCM pool,
-    /// sized to `sample_rate / 5` frames (200ms worth of audio).
+    /// Allocates two per-channel scratch buffers from the given PCM pool, each holding
+    /// [`Self::scratch_frames`] frames.
     #[must_use]
     pub fn new(resource: Resource, src: Arc<str>, pool: &PcmPool) -> Self {
-        let spec = resource.spec();
-        let channels = spec.channels as usize;
-        let buffer_len = (spec.sample_rate.get() as usize / Self::BUFFER_DURATION_DIVISOR)
-            * channels.max(Self::STEREO_CHANNELS);
+        let buffer_frames = Self::scratch_frames(resource.spec().sample_rate.get()).get();
 
         let channel_buffers = std::array::from_fn(|_| {
             pool.get_with(|b: &mut Vec<f32>| {
                 let cap = b.capacity();
-                if cap < buffer_len {
-                    b.reserve(buffer_len - cap);
+                if cap < buffer_frames {
+                    b.reserve(buffer_frames - cap);
                 }
-                b.resize(buffer_len, 0.0);
+                b.resize(buffer_frames, 0.0);
             })
         });
 
@@ -105,7 +107,7 @@ impl PlayerResource {
         self.resource.get().decoded_frontier().as_secs_f64()
     }
 
-    fn fill_scratch(&mut self, target_frames: usize) -> bool {
+    fn fill_scratch(&mut self, target_frames: usize, metrics: &RtMetrics) -> bool {
         let mut eof_reached = self.eof_seen;
 
         while target_frames > self.write_len && !eof_reached {
@@ -128,8 +130,8 @@ impl PlayerResource {
                     eof_reached = true;
                     0
                 }
-                Err(err) => {
-                    warn!(src = %self.src, error = %err, "PlayerResource: decode error");
+                Err(_) => {
+                    metrics.record_decode_error();
                     self.failed = true;
                     0
                 }
@@ -164,9 +166,14 @@ impl PlayerResource {
     /// zero-fills the requested range and reports [`ReadOutcome::Full`].
     /// That silence is not a terminal condition and must not trigger track
     /// advancement.
-    pub fn read(&mut self, output: &mut [&mut [f32]], range: Range<usize>) -> ReadOutcome {
+    pub fn read(
+        &mut self,
+        output: &mut [&mut [f32]],
+        range: Range<usize>,
+        metrics: &RtMetrics,
+    ) -> ReadOutcome {
         let frames_to_read = range.end - range.start;
-        let mut eof_reached = self.fill_scratch(frames_to_read);
+        let mut eof_reached = self.fill_scratch(frames_to_read, metrics);
 
         if self.write_len == 0 && self.failed && !self.eof_seen {
             let range_len = range.len();
@@ -198,7 +205,7 @@ impl PlayerResource {
             self.write_pos = tail_size;
 
             if frames_to_write == frames_to_read {
-                eof_reached |= self.fill_scratch(frames_to_read);
+                eof_reached |= self.fill_scratch(frames_to_read, metrics);
             }
 
             if frames_to_write == frames_to_read {
@@ -210,6 +217,7 @@ impl PlayerResource {
                     frames: frames_to_write,
                 }
             } else {
+                metrics.record_underrun();
                 for ch in output.iter_mut() {
                     ch[frames_to_write..frames_to_read].fill(0.0);
                 }
@@ -220,6 +228,7 @@ impl PlayerResource {
         } else if eof_reached {
             ReadOutcome::Eof
         } else {
+            metrics.record_underrun();
             let range_len = range.len();
             for ch in output.iter_mut() {
                 ch[..range_len].fill(0.0);
@@ -228,22 +237,20 @@ impl PlayerResource {
         }
     }
 
-    /// Seek to the given position in seconds.
-    ///
-    /// Clears the internal scratch buffers on success.
-    pub fn seek(&mut self, seconds: f64) {
-        let position = Duration::from_secs_f64(seconds);
-        match self.resource.get_mut().seek(position) {
-            Ok(_) => {
-                self.write_len = 0;
-                self.write_pos = 0;
-                self.eof_seen = false;
-                self.failed = false;
-            }
-            Err(err) => {
-                warn!("failed to seek: {err}");
-            }
-        }
+    /// Drop everything buffered ahead of a seek the control thread began. Lock-free: the reader
+    /// picks up the epoch itself via `sync_seek`.
+    pub fn reset_for_seek(&mut self) {
+        self.resource.get_mut().sync_seek();
+        self.write_len = 0;
+        self.write_pos = 0;
+        self.eof_seen = false;
+        self.failed = false;
+    }
+
+    /// Control-plane handle used to begin a seek off the audio thread.
+    #[must_use]
+    pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>> {
+        self.resource.get().seek_handle()
     }
 
     delegate::delegate! {
@@ -259,5 +266,33 @@ impl PlayerResource {
             /// Update the scheduling priority hint for the shared worker.
             pub(crate) fn set_service_class(&self, class: ServiceClass);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroUsize;
+
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    #[case(44_100, 8_820)]
+    #[case(48_000, 9_600)]
+    #[case(96_000, 19_200)]
+    fn scratch_holds_200ms_of_frames(#[case] sample_rate: u32, #[case] expected: usize) {
+        assert_eq!(
+            PlayerResource::scratch_frames(sample_rate),
+            Frames::new(expected)
+        );
+    }
+
+    #[kithara::test]
+    fn an_interleaved_length_is_not_a_frame_count() {
+        const STEREO: NonZeroUsize = NonZeroUsize::new(2).expect("2 is non-zero");
+
+        let frames = PlayerResource::scratch_frames(48_000);
+        assert_eq!(frames.samples(STEREO).get(), frames.get() * 2);
     }
 }

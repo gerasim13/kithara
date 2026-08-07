@@ -72,8 +72,11 @@ impl TrackFade {
     }
 
     pub(super) fn play(&mut self) {
+        let settled = self.mix.has_settled();
         self.mix.set_mix(Mix::FULLY_DRY, self.curve);
-        self.mix.reset_to_target();
+        if settled {
+            self.mix.reset_to_target();
+        }
     }
 
     fn smoother_config(duration: f32) -> SmootherConfig {
@@ -94,6 +97,11 @@ impl TrackFade {
         sample_rate: NonZeroU32,
         leading: bool,
     ) {
+        if (duration - self.duration).abs() < f32::EPSILON {
+            self.mix.update_sample_rate(sample_rate);
+            return;
+        }
+
         let target_mix = if leading {
             Mix::FULLY_DRY
         } else {

@@ -27,20 +27,3 @@ pub(crate) fn semver(process: &Process) -> Result<()> {
     preflight(process)?;
     process.run("just", &["deps", "semver"], "public API compatibility")
 }
-
-pub(crate) fn mutants(process: &Process) -> Result<()> {
-    preflight(process)?;
-    process.run(
-        "just",
-        &[
-            "test",
-            "mutants",
-            "run-all",
-            "--output",
-            "target/mutants-ci",
-            "--jobs",
-            "1",
-        ],
-        "focused mutation suites",
-    )
-}

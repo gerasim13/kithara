@@ -1,3 +1,4 @@
+mod cleanup;
 mod command;
 mod firewall;
 mod profile;

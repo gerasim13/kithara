@@ -1,10 +1,12 @@
-use kithara_platform::sync::Arc;
+use kithara_audio::SeekBegin;
+use kithara_platform::{sync::Arc, time::Duration};
 use ringbuf::{HeapCons, HeapProd, HeapRb, traits::Split};
+use smallvec::SmallVec;
 
 use super::PlaybackShared;
 use crate::{
     bridge::{PlayerCmd, PlayerNotification, SharedEq},
-    rt::track::PlayerTrack,
+    rt::{PlayerNodeProcessor, track::PlayerTrack},
 };
 
 /// RT-owned channel halves and playback atomics for one player node.
@@ -24,6 +26,34 @@ pub struct SlotControl {
     pub trash_rx: HeapCons<PlayerTrack>,
     pub cmd_tx: HeapProd<PlayerCmd>,
     pub eq: SharedEq,
+    seek: SeekBindings,
+}
+
+#[derive(Default)]
+struct SeekBindings(SmallVec<[SeekBinding; SLOT_TRACKS]>);
+
+type SeekBinding = (Arc<str>, Arc<dyn SeekBegin>);
+
+const SLOT_TRACKS: usize = PlayerNodeProcessor::MAX_TRACKS;
+
+impl SlotControl {
+    /// Record the control half of a track's seek path.
+    pub fn bind_seek(&mut self, src: Arc<str>, handle: Arc<dyn SeekBegin>) {
+        self.unbind_seek(&src);
+        self.seek.0.push((src, handle));
+    }
+
+    /// Begin a seek on every track this slot holds, off the audio thread.
+    pub fn begin_seek(&self, position: Duration) {
+        for (_, handle) in &self.seek.0 {
+            handle.begin(position);
+        }
+    }
+
+    /// Forget a track's seek path once the processor reports it unloaded.
+    pub fn unbind_seek(&mut self, src: &str) {
+        self.seek.0.retain(|(bound, _)| &**bound != src);
+    }
 }
 
 #[must_use]
@@ -49,6 +79,7 @@ pub fn slot_channels(eq: SharedEq) -> (NodeInputs, SlotControl) {
         trash_rx,
         cmd_tx,
         eq,
+        seek: SeekBindings::default(),
     };
     (inputs, control)
 }

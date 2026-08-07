@@ -2,7 +2,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use portable_atomic::{AtomicF64, AtomicU32};
 
-/// Coherent snapshot of the live playback scalars.
+use super::RtMetrics;
+
+/// One read of each live playback scalar.
+///
+/// The fields are independent relaxed loads and can straddle two audio blocks, so a consumer
+/// needing two of them to agree must derive both from one field.
 #[derive(Clone, Copy, Debug, Default, PartialEq, fieldwork::Fieldwork)]
 #[non_exhaustive]
 #[fieldwork(get)]
@@ -44,16 +49,24 @@ pub struct PlaybackShared {
     pub process_count: AtomicU64,
     /// Current seek epoch used to invalidate stale seek requests.
     pub seek_epoch: AtomicU64,
+    metrics: RtMetrics,
 }
 
 impl PlaybackShared {
+    /// Lock-free counters the audio thread bumps instead of emitting `tracing` events.
+    #[must_use]
+    pub fn metrics(&self) -> &RtMetrics {
+        &self.metrics
+    }
+
     pub fn next_seek_epoch(&self) -> u64 {
         self.seek_epoch
             .fetch_add(1, Ordering::AcqRel)
             .wrapping_add(1)
     }
 
-    /// Single coherent read of the live playback scalars.
+    /// Read every live playback scalar once. See [`PlaybackSnapshot`] for what the fields do and do
+    /// not guarantee about each other.
     #[must_use]
     pub fn snapshot(&self) -> PlaybackSnapshot {
         let position = self.position.load(Ordering::Relaxed);

@@ -1,0 +1,42 @@
+.lane-job:
+  extends:
+    - .linux-job
+    - .rules-weekly
+  stage: lanes
+  timeout: 180 minutes
+  needs: []
+
+lanes:doc:
+  extends: .lane-job
+  script:
+    - just ci run linux-doc
+
+lanes:loom:
+  extends: .lane-job
+  script:
+    - just ci run linux-loom
+
+lanes:integration-regressions:
+  extends: .lane-job
+  script:
+    - just ci run linux-integration-regressions
+
+lanes:e2e:
+  extends: .lane-job
+  script:
+    - just ci run linux-e2e
+
+lanes:e2e-fused:
+  extends: .lane-job
+  script:
+    - just ci run linux-e2e-fused
+
+lanes:e2e-glide:
+  extends: .lane-job
+  script:
+    - just ci run linux-e2e-glide
+
+lanes:selenium:
+  extends: .lane-job
+  script:
+    - just ci run linux-selenium

@@ -30,7 +30,7 @@ coverage:
     set -uo pipefail
     OUTPUT_DIR="${COVERAGE_OUTPUT_DIR:-./coverage}"
     COVERAGE_MIN="${COVERAGE_MIN:-80}"
-    IGNORE_REGEX='(tests/|examples/|benches/)'
+    IGNORE_REGEX='(tests/|examples/|benches/|xtask/)'
     COBERTURA="$OUTPUT_DIR/cobertura.xml"
     LCOV="$OUTPUT_DIR/lcov.info"
     mkdir -p "$OUTPUT_DIR"
@@ -153,7 +153,9 @@ rtsan-async FILTER="no_block":
         cargo "+$toolchain" test -p kithara-integration-tests --test suite_light \
         --features kithara/no-block,kithara-test-utils/no-block --target "$target" -- --nocapture {{ FILTER }}
 
-rtsan FILTER="offline_harness": (_rtsan "suite_light" FILTER)
+# `rt_metrics` drives `process()` directly: decode error, underrun, eviction,
+# and the on-core seek re-base.
+rtsan FILTER="offline_harness kithara_play::rt_metrics": (_rtsan "suite_light" FILTER)
 
 rtsan-file FILTER="phase_continuity::file": (_rtsan "suite_stress" FILTER)
 

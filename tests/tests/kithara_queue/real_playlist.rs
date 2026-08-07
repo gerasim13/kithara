@@ -582,7 +582,7 @@ where
         }
     })
     .await;
-    res.unwrap_or(None)
+    res.unwrap_or_else(|_| panic!("no matching queue event within {deadline:?}"))
 }
 
 /// Drive `AppConfig::DEFAULT_TRACKS` (all 10 URLs including DRM) end-

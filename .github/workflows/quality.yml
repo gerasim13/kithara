@@ -1,0 +1,120 @@
+name: Quality
+
+# The repository's own analysis recipes. They exist, they are documented, and
+# until now nothing ran them unattended.
+on:
+  workflow_call:
+    inputs:
+      depth:
+        description: shallow for the routine run, deep for the weekly one
+        required: false
+        default: shallow
+        type: string
+  workflow_dispatch:
+    inputs:
+      depth:
+        description: shallow for the routine run, deep for the weekly one
+        required: false
+        default: shallow
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+concurrency:
+  group: quality-${{ github.ref }}-${{ inputs.depth }}
+  cancel-in-progress: true
+
+jobs:
+  assess:
+    name: Repository assessment
+    if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # Depth buys more evidence; the profile decides what is being judged.
+      # `complete` drops every exclusion, so it would score xtask and devtools
+      # as if they were the product and produce a number nothing can be
+      # compared against.
+      - name: Assess
+        env:
+          DEPTH: ${{ inputs.depth || 'shallow' }}
+        run: |
+          if [[ "$DEPTH" == "deep" ]]; then
+            just quality assess --depth deep
+          else
+            just quality assess
+          fi
+
+      - name: Upload the assessment
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: quality-assessment-${{ inputs.depth || 'shallow' }}
+          path: |
+            target/quality-assessment/
+            target/quality-report/
+            target/quality-lab/
+
+  similarity:
+    name: Duplication report
+    if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Report structural and behavioural duplication
+        run: just lint similarity
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: similarity-report
+          path: target/similarity/
+
+  architecture:
+    name: Architecture diagram and metrics
+    if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Render the architecture document
+        run: just arch viz
+
+      - name: Sweep for orphans
+        run: just arch orphans
+
+      - name: Upload the diagram and metrics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: architecture
+          path: target/architecture/
+
+  health:
+    name: Workspace health
+    if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Report workspace health
+        run: just ci health

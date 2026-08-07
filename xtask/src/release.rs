@@ -276,6 +276,8 @@ fn replace_gitlab_nightly(
             let (code, body) = api.delete(&format!("releases/{tag}"))?;
             match code {
                 200 | 204 => println!("[gitlab] removed the previous nightly release"),
+                // The same 403-for-nothing-to-delete as the lookup above.
+                403 | 404 => {}
                 other => bail!("gitlab release delete failed (HTTP {other}): {body}"),
             }
         }

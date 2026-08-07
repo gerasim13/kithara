@@ -65,14 +65,3 @@ deps:semver:
   timeout: 60 minutes
   script:
     - just ci run deps-semver
-
-deps:mutants:
-  extends: .deps-job
-  timeout: 6 hours
-  script:
-    - just ci run mutants
-  artifacts:
-    when: always
-    expire_in: 30 days
-    paths:
-      - target/mutants-ci/

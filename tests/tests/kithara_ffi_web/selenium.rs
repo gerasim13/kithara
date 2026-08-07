@@ -90,9 +90,8 @@ impl SeleniumConfig {
         Self {
             browser,
             chromedriver_path: env::var("CHROMEDRIVER")
-                .unwrap_or_else(|_| "/opt/homebrew/bin/chromedriver".to_string()),
-            geckodriver_path: env::var("GECKODRIVER")
-                .unwrap_or_else(|_| "/opt/homebrew/bin/geckodriver".to_string()),
+                .unwrap_or_else(|_| "chromedriver".to_string()),
+            geckodriver_path: env::var("GECKODRIVER").unwrap_or_else(|_| "geckodriver".to_string()),
             headless: env_bool("KITHARA_SELENIUM_HEADLESS", true),
             page_url_override: env::var("KITHARA_SELENIUM_PAGE_URL").ok(),
             startup_timeout: Duration::from_secs(env_u64(
@@ -152,11 +151,12 @@ struct ChildGuard {
 
 impl ChildGuard {
     fn spawn(name: &'static str, mut cmd: Command) -> Result<Self, String> {
+        let program = cmd.get_program().to_string_lossy().into_owned();
         let child = cmd
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .spawn()
-            .map_err(|err| format!("failed to spawn {name}: {err}"))?;
+            .map_err(|err| format!("failed to spawn {name} (`{program}`): {err}"))?;
         Ok(Self { child, name })
     }
 }

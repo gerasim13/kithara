@@ -150,8 +150,11 @@ codec open (`track_with_output_domain_gapless`, round-half-up) so
 `Some(GaplessInfo)` means the backend decoded the untrimmed PCM region and the
 `kithara-audio` pipeline must apply `GaplessTrimmer` before effects; `None` means
 no engine trim (no metadata, or a backend path that already trimmed internally).
-`GaplessTrimmer::notify_seek()` drops seek-sensitive state (leading trim, pending
-fade-in, buffered tail, tail compensation); trailing trim still applies at EOF.
+`GaplessTrimmer::notify_seek(retire)` drops seek-sensitive state (leading trim,
+pending fade-in, buffered tail, tail compensation); trailing trim still applies
+at EOF. Its buffered chunks go to a `ChunkRetire` rather than being dropped —
+returning a pooled `PcmChunk` to a full shard deallocates, and the caller is the
+produce core. `DropChunks` is the sink for callers free to deallocate.
 
 `Decoder::gapless_profile(codec) -> GaplessProfile` bundles spec, gapless, tail
 compensation, and `default_priming_frames` for trimmer construction, referencing
@@ -246,6 +249,21 @@ Shared AudioToolbox FFI (`AudioConverter`, `AudioFile`, `AudioBufferList`, POD
 byte-copy wrappers) stays in `kithara-apple`; the standalone PCM-to-PCM Apple
 backend stays in `kithara-resampler`. `kithara-decode` owns codec planning,
 gapless policy, and the codec-embedded Apple decode path.
+
+`Frames` and `Samples` (`pcm/units.rs`) keep the two PCM lengths apart: planar
+buffers are sized in frames, interleaved ones in samples, both are `usize`, and a
+buffer sized in the wrong one is silently off by the channel count. Conversion
+takes that count explicitly (`Frames::samples`, `Samples::frames`). Applied where
+the two units meet — `ResampledDecoder::interleave`, `PlayerResource::scratch_frames`.
+`PcmMeta.frames` stays a plain `u32`.
+
+`sanitize_sample` is the workspace's one sample guard: `NaN`, infinities and
+denormals become silence. `ResampledDecoder::append_chunk` applies it while
+deinterleaving, so a backend only ever sees finite normal input — the adapter is
+the last owner of the samples by value, while `Resampler::process_into_buffer`
+takes them by shared reference. `kithara-audio` reuses the function at its own
+untrusted-input stages. Pinned by
+`resampler_never_sees_a_sample_the_file_poisoned`.
 
 ## Apple AAC input format (ESDS rationale)
 

@@ -234,6 +234,12 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
         None
     }
 
+    /// Control-plane hook run once per seek, before the epoch is minted. Sources with a fixed byte
+    /// space keep the default `None`.
+    fn seek_prepare(&self) -> Option<Arc<dyn SeekPrepare>> {
+        None
+    }
+
     /// Overall source readiness at the current timeline position.
     ///
     /// Uses the source's internal knowledge of chunk/segment boundaries
@@ -409,6 +415,17 @@ pub trait VariantControl: Send + Sync + 'static {
         &self,
         transition: VariantTransition,
     ) -> StreamResult<VariantReaderTake>;
+}
+
+/// Rebuilds a source's byte space for a seek about to begin.
+///
+/// The rebuild takes the layout's write lock, so it cannot run on the produce core where the reader
+/// resolves its anchor. Running it before the epoch exists leaves every later observer reading a
+/// layout that matches the seek.
+pub trait SeekPrepare: Send + Sync + 'static {
+    /// Collapse the byte space onto the geometry a seek resolves against. Idempotent: a repeated
+    /// call for the same layout is a no-op.
+    fn prepare(&self);
 }
 
 /// Segment-table view exposed by segmented sources (HLS, fragmented

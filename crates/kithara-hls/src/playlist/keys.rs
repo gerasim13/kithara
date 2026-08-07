@@ -27,16 +27,6 @@ use crate::{
 /// cache coordination, fetching, validation, and processor execution.
 #[derive(Clone)]
 pub struct KeyStore {
-    /// In-memory hot-path cache of validated final keys.
-    ///
-    /// `get_cached_key` reads from here under a synchronous segment
-    /// fetch after prefetch, so that hot path stays zero-I/O. The final key is
-    /// persisted to the [`AssetStore`] by [`Self::get_raw_key`] under
-    /// the same layout-derived URL resource key as plain HLS-AES keys
-    /// — re-opening the same track in a later session resolves through
-    /// disk cache without re-hitting the key endpoint. The cached
-    /// **plaintext** is deterministic per track/quality and safe to
-    /// persist; request-specific wire material never touches disk.
     keys: Arc<DashMap<Url, Bytes>>,
     scope: AssetScope,
     /// Byte buffer pool for reading cached key bodies.
@@ -187,11 +177,12 @@ impl KeyStore {
 
     /// Synchronous key lookup — no network I/O.
     ///
-    /// Keys normally come from the in-memory map populated by a prior
-    /// [`Self::get_raw_key`] call on this session. The persistent
-    /// [`AssetStore`] remains a fallback for callers that have not prefetched.
+    /// Keys normally come from the in-memory map populated by a prior [`Self::get_raw_key`] call on
+    /// this session. The persistent [`AssetStore`](kithara_assets::AssetStore) remains a fallback
+    /// for callers that have not prefetched.
     ///
     /// # Errors
+    ///
     /// Returns an error when the key hasn't been fetched yet.
     pub fn get_cached_key(&self, url: &Url) -> HlsResult<Bytes> {
         if let Some(cached) = self.keys.get(url).map(|entry| entry.value().clone()) {
