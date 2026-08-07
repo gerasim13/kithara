@@ -1,11 +1,14 @@
-use std::{fmt::Write as _, path::PathBuf};
+use std::{
+    fmt::Write as _,
+    path::{Path, PathBuf},
+};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use tracing::info;
 
 use super::{
     container::{Container, container},
-    profile::{LINUX_CONFIG_PATH, LinuxHost, LinuxRunner},
+    profile::{LINUX_CONFIG_PATH, LinuxHost, LinuxRunner, RunnerFlavor},
 };
 use crate::ci::{config::CiPins, process::Process};
 
@@ -39,8 +42,11 @@ pub(super) fn install(
     pins: &CiPins,
     executable: &str,
 ) -> Result<()> {
-    std::fs::copy(executable, LAYOUT.executable)
-        .with_context(|| format!("installing {}", LAYOUT.executable))?;
+    require_pinned_images(process, host, pins)?;
+    if Path::new(executable) != Path::new(LAYOUT.executable) {
+        std::fs::copy(executable, LAYOUT.executable)
+            .with_context(|| format!("installing {}", LAYOUT.executable))?;
+    }
     std::fs::set_permissions(
         LAYOUT.executable,
         std::os::unix::fs::PermissionsExt::from_mode(0o755),
@@ -74,6 +80,53 @@ pub(super) fn install(
         &["enable", "--now", LAYOUT.cleanup_timer],
         "enable the cleanup timer",
     )?;
+    Ok(())
+}
+
+/// Which images this profile's runners start from, each named once.
+fn required_images<'a>(host: &LinuxHost, pins: &'a CiPins) -> Vec<&'a str> {
+    let mut images = Vec::new();
+    for runner in &host.runners {
+        let image = match runner.flavor {
+            RunnerFlavor::Plain => pins.linux_runner_image.as_str(),
+            RunnerFlavor::Android => pins.linux_android_runner_image.as_str(),
+        };
+        if !images.contains(&image) {
+            images.push(image);
+        }
+    }
+    images
+}
+
+/// Refuse to install services the machine cannot run.
+///
+/// A unit whose image is absent starts, fails to pull, and is restarted — for
+/// as long as anyone leaves it. The fleet reports nothing except that every
+/// runner is `activating (auto-restart)`, which reads like a runner problem
+/// and is a missing build. The pins move with the repository and the images are
+/// built by hand here, so the two drift apart on their own; this is where the
+/// drift becomes a sentence instead of a symptom.
+fn require_pinned_images(process: &Process, host: &LinuxHost, pins: &CiPins) -> Result<()> {
+    let missing: Vec<&str> = required_images(host, pins)
+        .into_iter()
+        .filter(|image| {
+            process
+                .capture(
+                    "docker",
+                    &["image", "inspect", "--format", "{{.Id}}", image],
+                    "look for a pinned runner image",
+                )
+                .is_err()
+        })
+        .collect();
+    if !missing.is_empty() {
+        bail!(
+            "this machine has no image for {}; the pins name it but nothing built it here. \
+             Run `kithara-ci ci image toolchain` then `runner` (and `android`, \
+             `android-runner` for the emulator lane) before installing services",
+            missing.join(" or ")
+        );
+    }
     Ok(())
 }
 
@@ -262,6 +315,24 @@ mod tests {
                 "index {index} repeats a core: {set}"
             );
         }
+    }
+
+    /// A machine serving both lanes needs both images, and the emulator image
+    /// is named once however many emulator runners there are.
+    #[test]
+    fn the_profile_asks_for_every_image_its_runners_start_from() {
+        let host = host_fixture();
+        let pins = &fixture().pins;
+        let images = required_images(&host, pins);
+        assert!(
+            images.contains(&pins.linux_runner_image.as_str()),
+            "{images:?}"
+        );
+        assert!(
+            images.contains(&pins.linux_android_runner_image.as_str()),
+            "{images:?}"
+        );
+        assert_eq!(images.len(), 2, "each image is named once: {images:?}");
     }
 
     /// More runners than cores is the point of the exercise: an idle listener
