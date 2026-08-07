@@ -14,7 +14,7 @@ use super::{
     state::{ItemQueue, PlayerParams, PlayerPhase},
 };
 use crate::{
-    api::{PlayerEvent, PlayerStatus, SessionTransportSnapshot, TrackBinding},
+    api::{PlayerEvent, PlayerStatus, SessionBeat, Tempo, TrackBinding},
     bridge::PlayerCmd,
     engine::{EngineConfig, EngineImpl},
     error::PlayError,
@@ -63,33 +63,38 @@ pub(crate) struct PlayerCore {
 /// `core` holds the phase-neutral fields. `phase` is declared first so it
 /// drops before `core.engine`.
 impl PlayerImpl {
-    /// Places this deck on the session grid at the transport's committed
-    /// position, so its analysed beats land on stamped session beats.
+    /// Places this deck on the session grid, so its analysed beats land on
+    /// stamped session beats.
     ///
-    /// The binding is taken at one revision and stays fixed: output frame zero
-    /// of the deck is the snapshot's position, and every later frame follows
-    /// the analysed map's local slope from there. Resources prepared after
-    /// this call render through the exact-span slot.
+    /// `at` is the session beat the deck's output frame zero plays on, which is
+    /// what makes the schedule's origin the track beat due there. Anchoring the
+    /// schedule anywhere else — the live position, say — would offset every
+    /// rendered frame by the wait before the start.
+    ///
+    /// The binding is taken at one revision and stays fixed: every frame after
+    /// the first follows the analysed map's local slope. Resources prepared
+    /// after this call render through the exact-span slot.
     ///
     /// # Errors
     ///
     /// Returns [`PlayError::BindUnavailable`] when the track has no usable
     /// analysed map at the anchored beat, or the committed tempo and host rate
     /// do not define a beat advance.
-    pub fn bind(
+    pub(crate) fn bind(
         &self,
         binding: &TrackBinding,
-        transport: SessionTransportSnapshot,
+        tempo: Tempo,
+        at: SessionBeat,
     ) -> Result<(), PlayError> {
         let origin = binding
-            .track_beat_at(transport.position())
+            .track_beat_at(at)
             .map_err(|reason| PlayError::BindUnavailable {
                 reason: reason.to_string(),
             })?;
         let schedule = SourceSchedule::new(
             binding.map().clone(),
             origin,
-            transport.tempo().beats_per_second(),
+            tempo.beats_per_second(),
             self.core.engine.master_sample_rate(),
             binding.direction(),
         )
@@ -99,7 +104,6 @@ impl PlayerImpl {
         *self.core.binding.lock() = Some(Arc::new(schedule));
         Ok(())
     }
-
 }
 
 impl PlayerCore {

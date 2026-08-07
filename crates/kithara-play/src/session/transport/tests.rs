@@ -13,6 +13,7 @@ use firewheel::{
 };
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
+use num_traits::ToPrimitive;
 use triple_buffer::{Output, triple_buffer};
 
 use super::{
@@ -587,4 +588,74 @@ fn a_failing_block_rejects_the_pending_stamp_and_still_publishes() {
         "the control thread must learn about the dropped stamp from a failing block"
     );
     assert!(observed.snapshot().is_some());
+}
+
+/// Frames per beat of the harness commit: 48000 Hz at 120 BPM.
+const FRAMES_PER_BEAT: i64 = 24_000;
+
+/// Tier A. A stamped beat resolves to its own frame, so the offset a track is
+/// started at is the frame the beat is on — not the block it falls in, not a
+/// rounded boundary. Zero frames of error is the whole point of the anchor.
+#[kithara::test]
+fn a_stamped_beat_resolves_to_its_exact_frame() {
+    let (_processor, extra, _output, _active) = active_harness();
+    let state = extra
+        .store
+        .try_get::<TransportCommitState>()
+        .expect("invariant: the harness installed the transport state");
+    let block = i64::try_from(BLOCK_FRAMES).expect("invariant: the block fits i64");
+
+    for beat in 1..5_i64 {
+        let frame = beat * FRAMES_PER_BEAT;
+        let block_start = frame - frame.rem_euclid(block);
+        let target = SessionBeat::new(
+            beat.to_f64()
+                .ok_or(())
+                .expect("invariant: the beat is representable"),
+        )
+        .expect("invariant: the beat is finite");
+
+        let offset =
+            state.offset_for_beat(&proc_info_at(block_start), target, TransportRevision::FIRST);
+
+        assert_eq!(
+            offset,
+            Some(usize::try_from(frame - block_start).expect("invariant: the offset fits usize")),
+            "beat {beat} must resolve to frame {frame}"
+        );
+    }
+}
+
+/// A beat that is not inside this block has no offset here. The render pass
+/// asks again next block rather than starting early.
+#[kithara::test]
+fn a_beat_outside_the_block_has_no_offset() {
+    let (_processor, extra, _output, _active) = active_harness();
+    let state = extra
+        .store
+        .try_get::<TransportCommitState>()
+        .expect("invariant: the harness installed the transport state");
+    let target = SessionBeat::new(1.0).expect("invariant: the beat is finite");
+
+    let offset = state.offset_for_beat(&proc_info_at(0), target, TransportRevision::FIRST);
+
+    assert_eq!(offset, None);
+}
+
+/// A start planned against a superseded commit is dropped, not re-aimed: the
+/// frame it was computed for is no longer the frame that beat lands on.
+#[kithara::test]
+fn a_stale_revision_yields_no_offset() {
+    let (_processor, extra, _output, _active) = active_harness();
+    let state = extra
+        .store
+        .try_get::<TransportCommitState>()
+        .expect("invariant: the harness installed the transport state");
+    let target = SessionBeat::new(1.0).expect("invariant: the beat is finite");
+    let block = i64::try_from(BLOCK_FRAMES).expect("invariant: the block fits i64");
+    let block_start = FRAMES_PER_BEAT - FRAMES_PER_BEAT.rem_euclid(block);
+
+    let offset = state.offset_for_beat(&proc_info_at(block_start), target, second_revision());
+
+    assert_eq!(offset, None);
 }

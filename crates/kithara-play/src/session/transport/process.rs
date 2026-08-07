@@ -22,6 +22,28 @@ struct TransportAnchor {
 }
 
 impl TransportAnchor {
+    /// Inverse of [`Self::beat_at`]: the render frame a session beat falls on.
+    ///
+    /// The two directions are one relation and stay on one owner, so a caller
+    /// that needs to place content at a beat never rebuilds the arithmetic.
+    /// A beat between frames resolves to the nearest one; the residual is
+    /// sub-frame by construction.
+    fn frame_at(self, beat: SessionBeat) -> Result<RenderFrame, TransportProcessError> {
+        let beats = f64::from(beat) - f64::from(self.beat);
+        let beats_per_second = self.commit.tempo().beats_per_second();
+        if beats_per_second <= 0.0 {
+            return Err(TransportProcessError::InvalidBeatRange);
+        }
+        let frames = (beats * f64::from(self.sample_rate.get()) / beats_per_second)
+            .round()
+            .to_i64()
+            .ok_or(TransportProcessError::InvalidBeatRange)?;
+        i64::from(self.frame)
+            .checked_add(frames)
+            .map(RenderFrame::new)
+            .ok_or(TransportProcessError::InvalidBeatRange)
+    }
+
     fn beat_at(self, frame: RenderFrame) -> Result<SessionBeat, TransportProcessError> {
         let frames = i64::from(frame)
             .checked_sub(i64::from(self.frame))
@@ -109,6 +131,34 @@ fn publish_observation(store: &mut ProcStore) -> Result<(), TransportProcessErro
 }
 
 impl TransportCommitState {
+    /// Offset inside this block where `target` falls, when it falls here at
+    /// all and the committed transport is still the one the caller planned
+    /// against.
+    ///
+    /// `None` is the answer to three different questions and all three mean
+    /// "not now": the transport has no anchor yet, the commit moved past the
+    /// revision the caller was holding, or the beat is simply not inside this
+    /// block. None of them may be turned into a guessed offset — a start
+    /// placed on a stale revision or on the wrong frame is audibly wrong, and
+    /// the caller's business is to ask again next block.
+    pub(crate) fn offset_for_beat(
+        &self,
+        info: &ProcInfo,
+        target: SessionBeat,
+        revision: TransportRevision,
+    ) -> Option<usize> {
+        let anchor = self.anchor?;
+        if self.snapshot?.revision() != revision {
+            return None;
+        }
+        let offset = i64::from(anchor.frame_at(target).ok()?).checked_sub(info.clock_samples.0)?;
+        let frames = i64::try_from(info.frames).ok()?;
+        (0..frames)
+            .contains(&offset)
+            .then(|| usize::try_from(offset).ok())
+            .flatten()
+    }
+
     fn apply_abort(&mut self, revision: TransportRevision) -> Result<(), TransportProcessError> {
         if self
             .ignored_through_revision

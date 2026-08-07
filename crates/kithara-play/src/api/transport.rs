@@ -87,6 +87,48 @@ pub struct SessionBeatError {
     value: f64,
 }
 
+/// The session-beat grid a start snaps to, counted in session beats: `1.0` is
+/// the next beat, `4.0` the next bar of four, `16.0` the next phrase.
+///
+/// A caller names the grid rather than the beat because the beat it would name
+/// is the transport's own position plus a rounding, read at a moment it cannot
+/// observe atomically. The deck resolves the quantum against the same commit it
+/// binds to, so the answer cannot be stale.
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, derive_more::Into)]
+pub struct BeatQuantum(f64);
+
+impl BeatQuantum {
+    /// Creates a quantum from a finite, strictly positive number of beats.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BeatQuantumError`] when `beats` is not finite or not positive:
+    /// neither names a grid.
+    pub fn new(beats: f64) -> Result<Self, BeatQuantumError> {
+        if beats.is_finite() && beats > 0.0 {
+            Ok(Self(beats))
+        } else {
+            Err(BeatQuantumError { beats })
+        }
+    }
+}
+
+impl TryFrom<f64> for BeatQuantum {
+    type Error = BeatQuantumError;
+
+    fn try_from(value: f64) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+/// The value supplied for a beat quantum was invalid.
+#[derive(Clone, Copy, Debug, PartialEq, thiserror::Error)]
+#[error("beat quantum must be finite and positive, got {beats}")]
+#[non_exhaustive]
+pub struct BeatQuantumError {
+    beats: f64,
+}
+
 /// Monotonic generation of a committed session transport configuration.
 #[derive(
     Clone,
@@ -150,13 +192,85 @@ impl SessionTransportSnapshot {
             playing,
         }
     }
+
+    /// The first beat on the `quantum` grid strictly after this position.
+    ///
+    /// Strictly, because a position that already sits on the grid names a
+    /// frame this block has passed: snapping to it would arm a start that can
+    /// never be resolved.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionBeatError`] when the position and the quantum are so
+    /// far apart that the next grid beat is not representable.
+    pub(crate) fn next_beat_on(
+        self,
+        quantum: BeatQuantum,
+    ) -> Result<SessionBeat, SessionBeatError> {
+        let step = f64::from(quantum);
+        let position = f64::from(self.position);
+        SessionBeat::new((position / step).floor().mul_add(step, step))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::SessionBeat;
+    use super::{BeatQuantum, SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision};
+
+    fn snapshot(position: f64) -> SessionTransportSnapshot {
+        SessionTransportSnapshot::new(
+            SessionBeat::new(position).expect("invariant: the fixture position is finite"),
+            true,
+            Tempo::new(120.0).expect("invariant: the fixture tempo is in range"),
+            TransportRevision::FIRST,
+        )
+    }
+
+    fn bar() -> BeatQuantum {
+        BeatQuantum::new(4.0).expect("invariant: four beats is a grid")
+    }
+
+    /// A position already on the grid names a frame this block has passed, so
+    /// the start snaps to the following bar rather than to the one underfoot.
+    #[kithara::test]
+    fn a_position_on_the_grid_snaps_to_the_next_one() {
+        let next = snapshot(8.0)
+            .next_beat_on(bar())
+            .expect("invariant: the next bar is representable");
+
+        assert_eq!(f64::from(next), 12.0);
+    }
+
+    /// Between grid beats the start snaps up to the coming one, never back to
+    /// the one already played.
+    #[kithara::test]
+    fn a_position_between_grid_beats_snaps_up() {
+        let next = snapshot(9.3)
+            .next_beat_on(bar())
+            .expect("invariant: the next bar is representable");
+
+        assert_eq!(f64::from(next), 12.0);
+    }
+
+    /// Before beat zero the grid still runs backwards, so a transport that has
+    /// not reached its origin arms on the coming negative bar line.
+    #[kithara::test]
+    fn a_negative_position_snaps_up_to_the_coming_grid_beat() {
+        let next = snapshot(-9.3)
+            .next_beat_on(bar())
+            .expect("invariant: the next bar is representable");
+
+        assert_eq!(f64::from(next), -8.0);
+    }
+
+    #[kithara::test]
+    fn a_quantum_must_be_positive_and_finite() {
+        assert!(BeatQuantum::new(0.0).is_err());
+        assert!(BeatQuantum::new(-4.0).is_err());
+        assert!(BeatQuantum::new(f64::NAN).is_err());
+    }
 
     #[kithara::test]
     fn accepts_negative_and_zero_coordinates() {

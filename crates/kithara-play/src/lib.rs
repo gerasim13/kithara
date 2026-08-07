@@ -21,11 +21,11 @@ pub mod wasm;
 pub mod mock;
 
 pub use api::{
-    CrossfaderBus, DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus,
-    PlaybackDirection, PlayerEvent, PlayerStatus, RouteChangeReason, SessionBeat, SessionBeatError,
-    SessionDuckingMode, SessionEvent, SessionTransportSnapshot, SlotId, SyncUnavailable, Tempo,
-    TempoError, TimeControlStatus, TimeRange, TrackBinding, TransportEvent, TransportRevision,
-    WaitingReason, crossfader_gain,
+    BeatQuantum, BeatQuantumError, CrossfaderBus, DjEvent, EngineEvent, Equalizer,
+    InterruptionKind, ItemEvent, ItemStatus, PlaybackDirection, PlayerEvent, PlayerStatus,
+    RouteChangeReason, SessionBeat, SessionBeatError, SessionDuckingMode, SessionEvent,
+    SessionTransportSnapshot, SlotId, SyncUnavailable, Tempo, TempoError, TimeControlStatus,
+    TimeRange, TrackBinding, TransportEvent, TransportRevision, WaitingReason, crossfader_gain,
 };
 pub use bridge::{
     AllocatedSlot, Cmd, CmdMsg, NodeInputs, PlaybackShared, PlaybackSnapshot, PlayerId,
@@ -37,7 +37,8 @@ pub use engine::{EngineConfig, EngineImpl, apply_mix};
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::{
-    AudioWorkerHandle, EngineLoadSnapshot, EqBandConfig, SeekOutcome, ServiceClass, StretchControls,
+    AudioWorkerHandle, EngineLoadSnapshot, EqBandConfig, SeekOutcome, ServiceClass,
+    StretchControls, TrackBeat, analysis::TrackAnalysis,
 };
 pub use kithara_net::Headers;
 pub use player::{PlayerConfig, PlayerImpl, SelectTransition};

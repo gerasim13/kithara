@@ -19,13 +19,17 @@ use kithara_platform::{
     sync::{Arc, Mutex},
 };
 use kithara_play::policy::{DomainKeyPolicy, DomainKeyRule};
-use kithara_queue::{Queue, QueueConfig, QueueError, RepeatMode, TrackSource, Transition};
+use kithara_queue::{
+    BeatQuantum, Queue, QueueConfig, QueueError, RepeatMode, TrackAnalysis, TrackBeat, TrackSource,
+    Transition,
+};
 
 use super::salt;
 use crate::{
     asset::FfiAssetStore,
     config::FfiPlayerConfig,
     event_bridge::EventBridge,
+    grid::FfiTrackGrid,
     item::AudioPlayerItem,
     observer::{AUTH_TOKEN_HEADER, FfiKeyProcessor, PlayerObserver, SALT_HEADER, SeekCallback},
     registry::ItemRegistry,
@@ -431,6 +435,37 @@ impl NativeInner {
     pub(crate) fn set_eq_gain(&self, band: u32, gain_db: f32) -> Result<(), FfiError> {
         self.queue
             .set_eq_gain(band as usize, gain_db)
+            .map_err(FfiError::from)
+    }
+
+    pub(crate) fn start_at_beat(
+        &self,
+        index: u32,
+        grid: FfiTrackGrid,
+        track_beat: f64,
+        quantum: f64,
+    ) -> Result<(), FfiError> {
+        let _rt = crate::FFI_RUNTIME.enter();
+        let tracks = self.queue.tracks();
+        let idx = index as usize;
+        let url = tracks
+            .get(idx)
+            .and_then(|entry| entry.url.clone())
+            .ok_or_else(|| FfiError::InvalidArgument {
+                reason: format!(
+                    "item index {idx} has no source location (len: {})",
+                    tracks.len()
+                ),
+            })?;
+        let analysis = TrackAnalysis::try_from(grid)?;
+        let anchor = TrackBeat::new(track_beat).map_err(|reason| FfiError::InvalidArgument {
+            reason: reason.to_string(),
+        })?;
+        let quantum = BeatQuantum::new(quantum).map_err(|reason| FfiError::InvalidArgument {
+            reason: reason.to_string(),
+        })?;
+        self.queue
+            .start_at_beat(Arc::from(url.as_str()), &analysis, anchor, quantum)
             .map_err(FfiError::from)
     }
 

@@ -160,8 +160,11 @@ mod handle {
     use kithara_events::EventBus;
     use kithara_platform::sync::Arc;
 
-    use super::wire::{AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply};
-    use crate::{api::SlotId, error::PlayError};
+    use super::wire::{AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionError};
+    use crate::{
+        api::{SessionTransportSnapshot, SlotId},
+        error::PlayError,
+    };
 
     pub trait SessionDispatcher: Send + Sync + 'static {
         fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
@@ -201,6 +204,19 @@ mod handle {
             to self.0 {
                 pub fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
                 pub fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError>;
+            }
+        }
+
+        /// The committed session transport as the audio graph last processed it.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`PlayError`] when the session rejects the query or the
+        /// transport has not been processed yet.
+        pub fn transport(&self) -> Result<SessionTransportSnapshot, PlayError> {
+            match self.exec_ok(Cmd::QuerySessionTransport)? {
+                Reply::SessionTransport(snapshot) => Ok(snapshot),
+                _ => Err(PlayError::Session(SessionError::TransportNotProcessed)),
             }
         }
 

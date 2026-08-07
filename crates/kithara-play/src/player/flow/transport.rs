@@ -1,15 +1,84 @@
-use std::sync::atomic::Ordering;
+use std::{num::NonZeroU32, sync::atomic::Ordering};
 
-use kithara_audio::SeekOutcome;
+use kithara_audio::{SeekOutcome, TrackBeat, analysis::TrackAnalysis};
+use kithara_events::PlaybackDirection;
 use kithara_platform::{sync::Arc, time::Duration};
 use tracing::{debug, warn};
 
 use super::super::core::PlayerImpl;
 use crate::{
-    api::{PlayerEvent, PlayerStatus},
+    api::{BeatQuantum, PlayerEvent, PlayerStatus, TrackBinding},
     bridge::{PlayerCmd, TrackTransition},
     error::PlayError,
+    rt::track::TrackStart,
 };
+
+impl PlayerImpl {
+    /// Starts `src` on a stamped session beat, with this deck following the
+    /// session grid from that point on.
+    ///
+    /// The caller brings what only it has — the analysed track, which of its
+    /// beats to align, and how coarse a grid to wait for — and the deck
+    /// supplies the rest: its own host rate and the committed transport.
+    /// Handing those in instead would ask the caller to know facts it cannot
+    /// read correctly, and a stale revision or a wrong rate places every frame
+    /// after the first one somewhere else.
+    ///
+    /// Binding and the start are one call because they are one decision: a
+    /// deck told to begin on a beat has to render as a function of session
+    /// beat, and a start planted on a free-running deck would land its first
+    /// frame right and everything after it wrong.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlayError::BindUnavailable`] when the track has no usable
+    /// analysed map, the committed tempo and host rate do not define a beat
+    /// advance, or the quantum names no representable beat. The start is not
+    /// sent in that case.
+    pub fn start_at_beat(
+        &self,
+        src: Arc<str>,
+        analysis: &TrackAnalysis,
+        track_anchor: TrackBeat,
+        quantum: BeatQuantum,
+    ) -> Result<(), PlayError> {
+        let transport = self.core.engine.session_handle().transport()?;
+        let host_sample_rate =
+            NonZeroU32::new(self.core.engine.master_sample_rate()).ok_or_else(|| {
+                PlayError::BindUnavailable {
+                    reason: "the audio engine has no host sample rate yet".to_owned(),
+                }
+            })?;
+        let target =
+            transport
+                .next_beat_on(quantum)
+                .map_err(|reason| PlayError::BindUnavailable {
+                    reason: reason.to_string(),
+                })?;
+        // The anchor pair is `track_anchor` plays at `target`, not at the
+        // position read a moment ago: the deck's first frame is due on the
+        // stamped beat, and anchoring at `now` would carry the wait into every
+        // frame after it.
+        let binding = TrackBinding::new(
+            analysis,
+            host_sample_rate,
+            target,
+            track_anchor,
+            PlaybackDirection::Forward,
+        )
+        .map_err(|reason| PlayError::BindUnavailable {
+            reason: reason.to_string(),
+        })?;
+        self.bind(&binding, transport.tempo(), target)?;
+        self.send_to_slot(PlayerCmd::SetTrackStart {
+            src,
+            start: TrackStart::Session {
+                target,
+                revision: transport.revision(),
+            },
+        })
+    }
+}
 
 /// How a [`PlayerImpl::select_item_with_crossfade`] transition behaves:
 /// whether to `autoplay` the selected item and the `crossfade_seconds`
