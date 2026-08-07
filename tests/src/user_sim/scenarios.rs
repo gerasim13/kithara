@@ -1,7 +1,7 @@
 use kithara::platform::time::Duration;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 
-use super::actions::Action;
+use crate::user_sim::actions::Action;
 
 /// The "scripted" scenario from the Player Robustness plan
 /// ("Understanding Lock" / "Mandatory scripted scenario"):
@@ -9,7 +9,7 @@ use super::actions::Action;
 /// to the end. Bugs #5 and #6 are expected to surface on the first two
 /// jumps; the third is the "near-end" stress that lights up Bug #7
 /// once the SeekRatio(0.5) → end transition has to walk the tail.
-pub(crate) fn scripted_forward_back_end() -> Vec<Action> {
+pub fn scripted_forward_back_end() -> Vec<Action> {
     // The exact sequence from the Player Robustness plan. Bug #5/#6
     // surface as: `SeekRatio(0.9)` lands close to EOF and false-EOF
     // auto-advances; `SeekRatio(0.1)` backward seek silently hangs.
@@ -27,7 +27,7 @@ pub(crate) fn scripted_forward_back_end() -> Vec<Action> {
 /// Targeted repro for Bug #5 — forward seek into the unbuffered tail
 /// triggers a false EOF and auto-advances. Short warm-up so the
 /// loader hasn't pre-fetched the destination range yet.
-pub(crate) fn seek_forward_unbuffered_repro() -> Vec<Action> {
+pub fn seek_forward_unbuffered_repro() -> Vec<Action> {
     vec![
         Action::PlayFor(Duration::from_millis(500)),
         // Far enough forward that the warmup never touched the bytes;
@@ -41,7 +41,7 @@ pub(crate) fn seek_forward_unbuffered_repro() -> Vec<Action> {
 /// scenario warms up, jumps forward, plays again, then jumps back
 /// to a region that *should* already be buffered. Hang shows as
 /// `position stuck` in `PlayFor`.
-pub(crate) fn seek_backward_repro() -> Vec<Action> {
+pub fn seek_backward_repro() -> Vec<Action> {
     vec![
         Action::PlayFor(Duration::from_millis(800)),
         Action::SeekRatio(0.6),
@@ -54,7 +54,7 @@ pub(crate) fn seek_backward_repro() -> Vec<Action> {
 /// Targeted repro for Bug #7 — seek to 95-99 % crashes the decode /
 /// audio thread. Single `SeekNearEnd` after a brief warm-up so the
 /// pipeline is mid-decode when the jump hits the tail.
-pub(crate) fn seek_near_end_repro() -> Vec<Action> {
+pub fn seek_near_end_repro() -> Vec<Action> {
     vec![
         Action::PlayFor(Duration::from_millis(500)),
         Action::SeekNearEnd(0.97),
@@ -68,7 +68,7 @@ pub(crate) fn seek_near_end_repro() -> Vec<Action> {
 /// or false-EOF auto-advance. Steps the pipeline first into the
 /// near-end window so any residual state from the natural-EOF
 /// approach is exercised, then forces a deep backward jump.
-pub(crate) fn seek_backward_after_long_play_repro() -> Vec<Action> {
+pub fn seek_backward_after_long_play_repro() -> Vec<Action> {
     vec![
         Action::SeekRatio(0.85),
         Action::PlayFor(Duration::from_secs(3)),
@@ -82,7 +82,7 @@ pub(crate) fn seek_backward_after_long_play_repro() -> Vec<Action> {
 /// track to its natural end, then seeks backward and expects the
 /// reader to land + resume. Reproduces the silent-hang variant
 /// of Bug #6 on the seeded random scenario (`random_seed_1337`).
-pub(crate) fn seek_backward_after_natural_eof_repro() -> Vec<Action> {
+pub fn seek_backward_after_natural_eof_repro() -> Vec<Action> {
     vec![
         // Skip almost all the way to the end so the natural-EOF
         // window is just a few PlayFor ticks away.
@@ -98,7 +98,7 @@ pub(crate) fn seek_backward_after_natural_eof_repro() -> Vec<Action> {
 /// User-observed manual sequence: open the app, listen for 30+ s,
 /// then drag the playhead back. Stresses the decoder's seek-from-
 /// late-position path with substantial accumulated state.
-pub(crate) fn long_play_then_seek_backward() -> Vec<Action> {
+pub fn long_play_then_seek_backward() -> Vec<Action> {
     vec![
         Action::RenderFor(Duration::from_secs(30)),
         Action::SeekRatio(0.15),
@@ -109,7 +109,7 @@ pub(crate) fn long_play_then_seek_backward() -> Vec<Action> {
 /// User-observed manual sequence: open the app, listen for 30+ s,
 /// then drag the playhead forward. Forward seek past buffered data
 /// triggers Bug #5 (false EOF) in the user's manual repro.
-pub(crate) fn long_play_then_seek_forward() -> Vec<Action> {
+pub fn long_play_then_seek_forward() -> Vec<Action> {
     vec![
         Action::RenderFor(Duration::from_secs(30)),
         Action::SeekRatio(0.85),
@@ -120,7 +120,7 @@ pub(crate) fn long_play_then_seek_forward() -> Vec<Action> {
 /// Switch from track 0 (e.g. DRM) → track 1 (e.g. plain MP3), seek
 /// inside the new track. Pins the cleanup of the previous track's
 /// DRM key state and re-init of the audio pipeline.
-pub(crate) fn switch_track_then_seek() -> Vec<Action> {
+pub fn switch_track_then_seek() -> Vec<Action> {
     vec![
         Action::PlayFor(Duration::from_secs(3)),
         Action::SelectAt(1),
@@ -133,7 +133,7 @@ pub(crate) fn switch_track_then_seek() -> Vec<Action> {
 /// Bounce between tracks repeatedly with seeks in between — covers
 /// the worst-case combinator: every (DRM ↔ plain) combination of
 /// transitions, decoder recreates, `AssetStore` key state carryover.
-pub(crate) fn bounce_between_tracks_with_seeks() -> Vec<Action> {
+pub fn bounce_between_tracks_with_seeks() -> Vec<Action> {
     vec![
         Action::PlayFor(Duration::from_secs(2)),
         Action::SeekRatio(0.5),
@@ -154,7 +154,7 @@ pub(crate) fn bounce_between_tracks_with_seeks() -> Vec<Action> {
 /// Long play on track 0, switch to track 1, seek immediately. Pins
 /// the "carryover of post-EOF state when the new track is a
 /// different content type" path the user might be tripping.
-pub(crate) fn long_play_then_switch_then_seek() -> Vec<Action> {
+pub fn long_play_then_switch_then_seek() -> Vec<Action> {
     vec![
         Action::PlayFor(Duration::from_secs(15)),
         Action::SelectAt(1),
@@ -169,7 +169,7 @@ pub(crate) fn long_play_then_switch_then_seek() -> Vec<Action> {
 /// `SeekOutOfRange` or false-EOF — Manual ABR (no switch) plays + seeks
 /// fine. So the post-switch decoder is desynced from the new variant's
 /// init segment. This scenario stresses that exact path on prod DRM.
-pub(crate) fn auto_abr_upswitch_then_seek_burst() -> Vec<Action> {
+pub fn auto_abr_upswitch_then_seek_burst() -> Vec<Action> {
     vec![
         // Play long enough for the ABR throughput estimator to decide
         // the connection can sustain the top variant. On the prod
@@ -193,7 +193,7 @@ pub(crate) fn auto_abr_upswitch_then_seek_burst() -> Vec<Action> {
 /// Aggressive seek storm — many seeks rapidly. Mimics a user
 /// dragging the slider; the loader has to cancel + restart fetches
 /// many times in quick succession.
-pub(crate) fn seek_storm() -> Vec<Action> {
+pub fn seek_storm() -> Vec<Action> {
     vec![
         Action::PlayFor(Duration::from_secs(2)),
         Action::SeekRatio(0.5),
@@ -216,7 +216,7 @@ pub(crate) fn seek_storm() -> Vec<Action> {
 /// Pause/Resume pairs are emitted together so the queue never spends
 /// long in the paused state (which would trip the `is_playing` guard
 /// inside `PlayFor`).
-pub(crate) fn random_seed(seed: u64, len: usize) -> Vec<Action> {
+pub fn random_seed(seed: u64, len: usize) -> Vec<Action> {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut out = Vec::with_capacity(len + 1);
     // Always start with a small warm-up so the first action sees a

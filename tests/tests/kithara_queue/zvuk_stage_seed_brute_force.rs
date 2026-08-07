@@ -77,7 +77,6 @@ async fn fetch(client: &Client, url: &str, headers: &[(&str, String)]) -> Result
 /// decrypt their corresponding segments (3/3 tracks tested 2026-05-20);
 /// waiting on server-team.
 #[kithara::test(tokio)]
-#[ignore = "live prod diagnostic — requires VPN + KITHARA_DRM_PROD_*"]
 async fn prod_chain_sanity_check() {
     let auth_token =
         std::env::var("KITHARA_DRM_PROD_AUTH_TOKEN").expect("set KITHARA_DRM_PROD_AUTH_TOKEN");

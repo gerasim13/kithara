@@ -67,7 +67,6 @@ const MAX_COMMITTED_STEP_SECS: f64 = 1.5;
 /// ```
 // flash(false): real-time paced on purpose (see doc) — sleep paces render at 1x wall clock vs prod CDN.
 #[kithara::test(tokio, timeout(Duration::from_secs(180)))]
-#[ignore = "requires zvuk prod creds baked at build (KITHARA_DRM_PROD_*) + VPN + usdt-probes — run with --run-ignored=only"]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

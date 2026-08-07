@@ -3,30 +3,12 @@
     clippy::unwrap_used,
     reason = "integration test crate — unwraps are acceptable in test code"
 )]
-
-mod common;
-
-#[cfg(not(target_arch = "wasm32"))]
-#[path = "common/continuity.rs"]
-pub(crate) mod continuity;
+//! Playback against real audio hardware. Everything here stays inside the
+//! runner: the fixtures are local, and the tests that need a remote host live
+//! in `suite_network` behind the `network` feature.
 
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_play {
     #[path = "../kithara_play/engine_cpal_tests.rs"]
     mod engine_cpal_tests;
-
-    #[path = "../kithara_play/silvercomet_seek_hang.rs"]
-    mod silvercomet_seek_hang;
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-mod kithara_queue {
-    #[path = "../kithara_queue/cold_seek_cpal.rs"]
-    mod cold_seek_cpal;
-
-    #[path = "../kithara_queue/real_playlist.rs"]
-    mod real_playlist;
-
-    #[path = "../kithara_queue/zvuk_prod_aac_to_flac_switch.rs"]
-    mod zvuk_prod_aac_to_flac_switch;
 }

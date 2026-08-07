@@ -25,11 +25,10 @@ use tracing_subscriber::EnvFilter;
 /// failing step is visible in nextest output (`kithara_hls=trace`,
 /// `kithara_stream=trace`, `kithara_net=debug`, `kithara_app=debug`).
 ///
-/// Marked `#[ignore]` — it talks to a real VPN-gated host and is
+/// Lives in `suite_network` — it talks to a real VPN-gated host and is
 /// pointless without `KITHARA_DRM_KEY` + `KITHARA_DRM_AUTH_TOKEN`
 /// baked at build time (`option_env!`).
 #[kithara::test(tokio)]
-#[ignore = "requires zvq.me VPN + .env-baked DRM creds - use the e2e test lane"]
 async fn zvuk_drm_master_playlist_trace() {
     install_tracing();
 

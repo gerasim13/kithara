@@ -40,6 +40,13 @@ e2e = []
 # known red does not turn the baseline into noise. A fixed regression test
 # moves to `suite_light.rs` and leaves this lane.
 integration-regressions = []
+# Tests that reach a host this workspace does not own: the zvuk production CDN
+# (public, but needs `KITHARA_DRM_PROD_*` baked at build) and `*.zvq.me`, which
+# resolves only from inside the corporate VPN. CI runners sit outside both, so
+# no lane in `.config/xtask.toml` enables this and none ever should — a runner
+# that fails here reports the fence around itself, not the code. Run by hand
+# with `just test run --lane=network` from a machine that has both.
+network = []
 # Selenium-driven WebDriver tests. Gated off by default so `just test`
 # doesn't try to spin up trunk + chromedriver. Run via
 # `just test run --lane=selenium`.
@@ -245,6 +252,11 @@ path = "tests/suite_stress.rs"
 name = "suite_e2e"
 path = "tests/suite_e2e.rs"
 required-features = ["e2e"]
+
+[[test]]
+name = "suite_network"
+path = "tests/suite_network.rs"
+required-features = ["network"]
 
 [[test]]
 name = "suite_integration_regressions"

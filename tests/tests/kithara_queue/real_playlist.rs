@@ -183,7 +183,6 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
 /// (DRM 403, MP3 seek-near-end hang, position drift).
 // flash(false): real-CDN e2e; sleeps are wall-clock gain windows racing real sockets.
 #[kithara::test(tokio)]
-#[ignore = "requires silvercomet.top real network — run with --include-ignored"]
 #[case::silvercomet_mp3_symphonia(
     "https://stream.silvercomet.top/track.mp3",
     42,
@@ -593,7 +592,6 @@ where
 /// test at the first bad entry.
 // flash(false): real-CDN e2e; sleeps are wall-clock pause/gain windows racing real sockets.
 #[kithara::test(tokio)]
-#[ignore = "requires AppConfig::DEFAULT_TRACKS real-network URLs (incl. silvercomet + DRM) — run with --include-ignored"]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -790,7 +788,6 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
 /// fetches.
 // flash(false): real zvuk prod CDN/keyserver e2e; wall-clock latency IS the assertion.
 #[kithara::test(tokio)]
-#[ignore = "real zvuk prod DRM network (needs baked .env tokens) — run with --include-ignored"]
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 async fn prod_tracks_sequential_startup_latency() {
     kithara_integration_tests::apple_warmup::warm_if_apple(DecoderBackend::Apple);
