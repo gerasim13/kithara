@@ -21,9 +21,13 @@ use crate::{
     draw::{DrawList, DrawListBuilder, Rect},
     interact::{
         CursorShape, Hit, Hover, Input, iced as iced_interact,
-        recognizers::{Crossing, Scalar, ScalarState, Track, click},
+        recognizers::{Crossing, Scalar, ScalarState, click},
     },
-    render::{ReadValue, Skin, UiEvent, activate, controls::Press, scalar},
+    render::{
+        ReadValue, Skin, UiEvent, activate,
+        controls::{Drag, Grip, Press},
+        scalar,
+    },
     solve,
     text::{TextContext, TextResources},
 };
@@ -49,21 +53,13 @@ pub(crate) trait Draws {
 
     /// What the pointer means to it where the document says the leaf owns
     /// input.
-    fn grip(&self) -> Grip {
+    ///
+    /// A drag counts from the value the control draws, and the skin names how
+    /// far the hand has to travel to cross it, so both are handed in rather
+    /// than read a second time.
+    fn grip(&self, _skin: &Skin, _data: &<Self::Painter as ControlPainter>::Data) -> Grip {
         Grip::None
     }
-}
-
-/// What the pointer means to a control.
-#[derive(Clone, Copy)]
-pub(crate) enum Grip {
-    /// Nothing the control itself recognises: either it is not interactive, or
-    /// the engine plan drives it.
-    None,
-    /// A press that activates it.
-    Press,
-    /// A drag along one axis that sets a scalar.
-    Drag { cursor: CursorShape, track: Track },
 }
 
 /// One neutral painter drawn straight into an iced canvas.
@@ -322,21 +318,11 @@ where
         }
     }
 
-    pub(crate) fn drag(
-        path: &str,
-        paint: Paint<'skin, Painter>,
-        track: Track,
-        cursor: CursorShape,
-    ) -> Self {
+    pub(crate) fn drag(path: &str, paint: Paint<'skin, Painter>, drag: Drag) -> Self {
         Self {
             paint,
             path: path.to_owned(),
-            recognize: Recognize::Drag(Box::new(
-                Scalar::builder()
-                    .track(track)
-                    .hover(Hover::new(cursor))
-                    .build(),
-            )),
+            recognize: Recognize::Drag(Box::new(drag.recognizer())),
         }
     }
 
@@ -492,9 +478,10 @@ mod tests {
         atoms::{
             button::{Button, ButtonConfig, ButtonLabel},
             design::{cell::Cell, meter::Meter, status_dot::StatusDot, swatch::Swatch},
+            knob::Knob,
             meter::StereoMeter,
             nav_item::NavItem,
-            painter::{ButtonData, CellData, Labelled, NavData},
+            painter::{ButtonData, Captioned, CellData, Labelled, NavData},
             tab::TabLarge,
             toggle::Binary,
             vu::VerticalVu,
@@ -789,6 +776,34 @@ mod tests {
         }
     }
 
+    /// With and without its caption: the caption is what moves the dial up
+    /// inside the box, so a host that drew one and not the other would put the
+    /// knob somewhere else.
+    #[kithara::test]
+    fn iced_and_masonry_record_the_same_knob() {
+        let skin = builtin::skin();
+        let bounds = Rect {
+            h: 39.0,
+            w: 28.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        for label in [None, Some("GAIN".to_owned())] {
+            let data = || Captioned {
+                label: label.clone(),
+                value: 0.25,
+            };
+            let iced = Paint::new(Knob::new(skin), data(), skin).draw_list(
+                &PaintState::default(),
+                bounds,
+                VisualState::Idle,
+            );
+            let mut masonry = Painted::new(Knob::new(skin), data(), skin);
+
+            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+        }
+    }
+
     #[kithara::test]
     fn iced_and_masonry_record_the_same_stereo_meter() {
         let skin = builtin::skin();
@@ -946,6 +961,90 @@ mod pressed {
             },
             skin,
         )
+    }
+}
+
+/// What a drag on the shared adapter means, for every control that grips one.
+#[cfg(test)]
+mod dragged {
+    use iced::{Point, mouse};
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        atoms::{knob::Knob, painter::Captioned},
+        builtin,
+        interact::recognizers::Track,
+        render::ControlAction,
+    };
+
+    const RANGE: f32 = 100.0;
+
+    /// One pin for every `Grip::Drag` control rather than one per control: the
+    /// track a control names is what its travel is measured against, and the
+    /// press that arms a relative drag publishes nothing on its own.
+    #[kithara::test]
+    fn a_relative_drag_publishes_the_value_it_walked_to() {
+        let skin = builtin::skin();
+        let gesture = Gesture::drag(
+            "mixer/gain",
+            Paint::new(
+                Knob::new(skin),
+                Captioned {
+                    label: None,
+                    value: 0.5,
+                },
+                skin,
+            ),
+            Drag::builder()
+                .cursor(CursorShape::ResizeV)
+                .track(Track::RelativeVertical {
+                    range: RANGE,
+                    value: 0.5,
+                })
+                .build(),
+        );
+        let bounds = Rectangle {
+            height: 40.0,
+            width: 40.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let mut state = GestureState::default();
+
+        let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+        let armed = gesture.on_input(
+            &mut state,
+            &press,
+            bounds,
+            Cursor::Available(Point::new(20.0, 30.0)),
+        );
+
+        assert_eq!(
+            armed.and_then(|action| action.into_inner().0),
+            None,
+            "a relative press arms the drag rather than seeking"
+        );
+
+        let moved = Event::Mouse(mouse::Event::CursorMoved {
+            position: Point::new(20.0, 20.0),
+        });
+        let action = gesture
+            .on_input(
+                &mut state,
+                &moved,
+                bounds,
+                Cursor::Available(Point::new(20.0, 20.0)),
+            )
+            .unwrap_or_else(|| panic!("a drag after a press must publish"));
+
+        assert_eq!(
+            action.into_inner().0,
+            Some(UiEvent::Control {
+                path: "mixer/gain".to_owned(),
+                action: ControlAction::SetScalar(f64::from(0.5 + 10.0 / RANGE)),
+            })
+        );
     }
 }
 

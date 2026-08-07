@@ -1,7 +1,7 @@
 use iced::{alignment::Horizontal, widget::Space};
 
 use super::{
-    atom::{crossfader, fader, glyph, knob, readout, segmented, select},
+    atom::{crossfader, fader, glyph, readout, segmented, select},
     geometry::Rendered,
     panel::{context_bar, deck_summary, time, track_list, tree, vis},
     read_flag, wave_zoom,
@@ -334,13 +334,7 @@ impl ViewControl for mount::Chip {
 
 impl ViewControl for mount::Knob {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(knob(
-            cx.path,
-            self.label.map(|id| cx.ui.resolve(id)),
-            cx.value,
-            cx.skin,
-            cx.owner,
-        ))
+        painted(self, cx)
     }
 }
 
@@ -371,12 +365,11 @@ where
     let Some(data) = control.data(cx.value, cx.ui) else {
         return Rendered::leading(Space::new().into());
     };
+    let grip = control.grip(cx.skin, &data);
     let paint = Paint::new(control.painter(cx.skin), data, cx.skin);
-    Rendered::leading(match (cx.owner, control.grip()) {
+    Rendered::leading(match (cx.owner, grip) {
         (InputOwner::Leaf, Grip::Press) => Gesture::press(cx.path, paint).view(),
-        (InputOwner::Leaf, Grip::Drag { cursor, track }) => {
-            Gesture::drag(cx.path, paint, track, cursor).view()
-        }
+        (InputOwner::Leaf, Grip::Drag(drag)) => Gesture::drag(cx.path, paint, drag).view(),
         (InputOwner::Engine, _) | (_, Grip::None) => paint.view(),
     })
 }

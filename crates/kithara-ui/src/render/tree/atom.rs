@@ -1,5 +1,4 @@
-use iced::{Color, Element, widget::Space};
-use num_traits::cast::AsPrimitive;
+use iced::{Color, Element};
 
 use super::geometry::active_tone;
 use crate::{
@@ -10,11 +9,7 @@ use crate::{
     compile::CompiledUi,
     ids::InternId,
     module::{FaderStyle, GlyphStyle, IconName, Tone},
-    render::{
-        IcedSkin, InputOwner, ReadValue, Skin, UiEvent,
-        controls::{KnobPaint, KnobProgram},
-        icons::document_icon,
-    },
+    render::{IcedSkin, InputOwner, ReadValue, Skin, UiEvent, icons::document_icon},
     skin::ColorRole,
     widgets::{Widget, fader::Fader, nav::Glyph},
 };
@@ -47,23 +42,6 @@ pub(super) fn fader<'a>(
         .owner(owner)
         .build()
         .view()
-}
-
-pub(super) fn knob<'a>(
-    path: &'a str,
-    label: Option<&'a str>,
-    value: Option<&ReadValue<'_>>,
-    skin: &'a Skin,
-    owner: InputOwner,
-) -> Element<'a, UiEvent> {
-    let Some(ReadValue::Scalar(value)) = value else {
-        return Space::new().into();
-    };
-    let value = value.clamp(0.0, 1.0).as_();
-    match owner {
-        InputOwner::Leaf => KnobProgram::new(path, label, value, skin).view(),
-        InputOwner::Engine => KnobPaint::new(label, value, skin).view(),
-    }
 }
 
 pub(super) fn readout<'a>(
@@ -164,38 +142,10 @@ fn glyph_tone(
 
 #[cfg(test)]
 mod tests {
-    use iced::advanced::widget::Tree;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::builtin;
-
-    #[kithara::test]
-    fn engine_owned_knob_selects_the_paint_only_program() {
-        let skin = builtin::skin();
-        let value = ReadValue::Scalar(0.5);
-        let hosted = knob(
-            "mixer/gain",
-            Some("GAIN"),
-            Some(&value),
-            skin,
-            InputOwner::Engine,
-        );
-        let painted = KnobPaint::new(Some("GAIN"), 0.5, skin).view();
-        let interactive = KnobProgram::new("mixer/gain", Some("GAIN"), 0.5, skin).view();
-        let hosted_tree = Tree::new(hosted.as_widget());
-        let painted_tree = Tree::new(painted.as_widget());
-        let interactive_tree = Tree::new(interactive.as_widget());
-
-        assert!(
-            hosted_tree.tag == painted_tree.tag,
-            "InputOwner::Engine must select the paint-only knob program"
-        );
-        assert!(
-            hosted_tree.tag != interactive_tree.tag,
-            "the hosted knob must not retain the leaf gesture state"
-        );
-    }
 
     #[kithara::test]
     fn every_glyph_style_takes_its_own_skin_icon_size() {

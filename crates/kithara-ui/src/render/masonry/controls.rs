@@ -23,10 +23,11 @@ use crate::{
     draw::{DrawList, DrawListBuilder, Rect},
     interact::{
         CursorShape, Hit, Hover, Input, Outcome, PointerOwnership, PointerPhase,
-        recognizers::{Scalar, ScalarState, Track, WheelStep, click},
+        recognizers::{Scalar, ScalarState, click},
     },
     render::{
-        ControlAction, ReadValue, Skin, StereoLevels, UiEvent, control_event, controls::Press,
+        ControlAction, ReadValue, Skin, StereoLevels, UiEvent, control_event,
+        controls::{Drag, Grip, Press},
     },
     text::TextContext,
 };
@@ -69,137 +70,6 @@ pub(crate) trait MasonryControl {
 
     fn repaint(&self) -> Repaint {
         Repaint::None
-    }
-}
-
-pub(crate) struct MasonryKnob {
-    input: Option<KnobInput>,
-    label: Option<String>,
-    painter: Knob,
-    repaint: bool,
-    text: TextContext,
-    value: f32,
-}
-
-struct KnobInput {
-    map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
-    path: String,
-    recognizer: Scalar,
-    state: ScalarState,
-}
-
-impl MasonryKnob {
-    pub(crate) fn new(label: Option<String>, value: f32, skin: &Skin) -> Self {
-        Self {
-            input: None,
-            label,
-            painter: Knob::new(skin),
-            repaint: false,
-            text: TextContext::from(skin.text_resources()),
-            value,
-        }
-    }
-
-    pub(crate) fn interactive(
-        mut self,
-        path: String,
-        track: Track,
-        wheel: WheelStep,
-        map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
-    ) -> Self {
-        self.input = Some(KnobInput {
-            map_event,
-            path,
-            recognizer: Scalar::builder()
-                .track(track)
-                .hover(Hover::new(CursorShape::ResizeV))
-                .reset(0.5)
-                .wheel(wheel)
-                .build(),
-            state: ScalarState::default(),
-        });
-        self
-    }
-}
-
-impl MasonryControl for MasonryKnob {
-    fn draw_list(&mut self, bounds: Rect) -> DrawList {
-        self.repaint = false;
-        let mut list = DrawListBuilder::default();
-        self.painter.paint(
-            &mut list,
-            &mut self.text,
-            self.value,
-            self.label.as_deref(),
-            bounds,
-        );
-        list.finish()
-    }
-
-    fn input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<HostAction> {
-        let Some(state) = &mut self.input else {
-            return Outcome::IGNORED;
-        };
-        let had_pointer = state.state.captures_pointer();
-        let outcome = state
-            .recognizer
-            .on_input(&mut state.state, input, hit, Instant::now());
-        if matches!(
-            input,
-            Input::Pointer(pointer)
-                if matches!(pointer.phase, PointerPhase::Cancel | PointerPhase::DoubleClick)
-        ) {
-            state.state.cancel_pointer();
-        }
-        let ownership = match (had_pointer, state.state.captures_pointer()) {
-            (false, true) => PointerOwnership::Claim,
-            (true, false) => PointerOwnership::Release,
-            _ => PointerOwnership::Unchanged,
-        };
-        // The knob draws the value it just authored: the application is told the
-        // same number, but its answer only reaches this leaf on the rebuild that
-        // follows the gesture.
-        if let Some(value) = outcome.value() {
-            self.repaint |= (self.value - value).abs() > f32::EPSILON;
-            self.value = value;
-        }
-        let Some(state) = &self.input else {
-            return Outcome::IGNORED;
-        };
-        outcome.with_ownership(ownership).map(|value| {
-            (state.map_event)(control_event(
-                &state.path,
-                ControlAction::SetScalar(f64::from(value)),
-            ))
-        })
-    }
-
-    fn accepts_input(&self) -> bool {
-        self.input.is_some()
-    }
-
-    fn set_read(&mut self, value: &ReadValue<'_>) -> bool {
-        let ReadValue::Scalar(value) = value else {
-            return false;
-        };
-        let value = AsPrimitive::<f32>::as_(value.clamp(0.0, 1.0));
-        self.repaint |= (self.value - value).abs() > f32::EPSILON;
-        self.value = value;
-        self.repaint
-    }
-
-    fn cursor(&self, hit: &Hit) -> CursorShape {
-        self.input.as_ref().map_or(CursorShape::None, |input| {
-            input.recognizer.cursor(&input.state, hit)
-        })
-    }
-
-    fn repaint(&self) -> Repaint {
-        if self.repaint {
-            Repaint::NextFrame
-        } else {
-            Repaint::None
-        }
     }
 }
 
@@ -306,6 +176,118 @@ mod flags {
     }
 }
 
+/// What a drag on a retained control counts its travel from.
+#[cfg(test)]
+mod dragged {
+    use std::rc::Rc;
+
+    use kithara_test_utils::kithara;
+
+    use super::{HostAction, Knob, MasonryControl, Painted};
+    use crate::{
+        atoms::painter::Captioned,
+        builtin,
+        draw::{Pt, Rect},
+        interact::{Hit, Input, PointerPhase, mouse},
+        mount,
+        render::{ControlAction, ReadValue, UiEvent, controls::Draws},
+    };
+
+    /// How far up the hand walks the knob, as a fraction of its travel.
+    const STEP: f32 = 0.05;
+
+    fn area() -> Rect {
+        Rect {
+            h: 40.0,
+            w: 40.0,
+            x: 0.0,
+            y: 0.0,
+        }
+    }
+
+    /// A relative track counts travel from the value its recognizer was built
+    /// with. A retained control is built once and told its new values, so a
+    /// recognizer left holding the mounted value walks the knob back to it the
+    /// next time a hand touches it.
+    #[kithara::test]
+    fn a_knob_drags_on_from_the_value_its_endpoint_last_reported() {
+        let mut knob = mounted(0.5);
+
+        assert!(knob.set_read(&ReadValue::Scalar(0.9)));
+        knob.input(down(20.0), &at(20.0));
+
+        assert!(
+            (dragged(&mut knob, 20.0) - 0.95).abs() < 0.001,
+            "a knob told its endpoint reads 0.9 must drag on from there"
+        );
+    }
+
+    /// And the same the second time a hand touches it: the knob draws what its
+    /// own gesture authored, so that is where the next one starts — the
+    /// application's answer is a frame behind and may never come at all.
+    ///
+    /// The second press lands away from the first so the two are not read as a
+    /// double click, which would reset the knob instead of dragging it.
+    #[kithara::test]
+    fn a_knob_drags_on_from_the_value_its_own_last_gesture_set() {
+        let mut knob = mounted(0.5);
+
+        knob.input(down(20.0), &at(20.0));
+        let first = dragged(&mut knob, 20.0);
+        knob.input(up(20.0), &at(20.0));
+        knob.input(down(32.0), &at(32.0));
+
+        assert!(
+            (dragged(&mut knob, 32.0) - (first + f64::from(STEP))).abs() < 0.001,
+            "the second drag must start where the first one left the knob"
+        );
+    }
+
+    fn mounted(value: f32) -> Painted<Knob> {
+        let skin = builtin::skin();
+        let control = mount::Knob::builder().build();
+        let data = Captioned { label: None, value };
+        let grip = control.grip(skin, &data);
+        Painted::new(control.painter(skin), data, skin).interactive(
+            grip,
+            "mixer/gain".to_owned(),
+            Rc::new(HostAction::new),
+        )
+    }
+
+    /// What the knob publishes when the hand walks it one step up from `from`.
+    fn dragged(knob: &mut Painted<Knob>, from: f32) -> f64 {
+        let to = from - builtin::skin().knob.drag_range * STEP;
+        knob.input(moved(to), &at(to))
+            .value()
+            .and_then(|action| action.downcast::<UiEvent>().ok())
+            .and_then(|event| match event {
+                UiEvent::Control {
+                    action: ControlAction::SetScalar(value),
+                    ..
+                } => Some(value),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("a move after a press must publish a scalar"))
+    }
+
+    fn at(y: f32) -> Hit {
+        Hit::new(Some(Pt { x: 20.0, y }), area())
+    }
+
+    fn down(y: f32) -> Input<'static> {
+        Input::Pointer(mouse(PointerPhase::Down, Some(Pt { x: 20.0, y })))
+    }
+
+    fn moved(y: f32) -> Input<'static> {
+        Input::Pointer(mouse(PointerPhase::Move, Some(Pt { x: 20.0, y })))
+    }
+
+    fn up(y: f32) -> Input<'static> {
+        Input::Pointer(mouse(PointerPhase::Up, Some(Pt { x: 20.0, y })))
+    }
+}
+
 /// The half of the painter contract only a host that keeps its widgets needs.
 ///
 /// A host that rebuilds its tree on every message learns a new value by being
@@ -386,6 +368,12 @@ impl Retained for TabLarge {
     }
 }
 
+impl Retained for Knob {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        set_scalar(&mut data.value, value)
+    }
+}
+
 impl Retained for Fader {
     fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
         set_scalar(&mut data.value, value)
@@ -437,23 +425,79 @@ impl Retained for Button {
 }
 
 /// One built-in control mounted as a Masonry leaf: a painter, the data it
-/// draws, and the press that may activate it.
+/// draws, and the gesture it may answer.
 pub(crate) struct Painted<Painter>
 where
     Painter: Retained,
 {
-    activation: Option<Activation>,
     data: Painter::Data,
+    interaction: Option<Interaction>,
     painter: Painter,
     press: Press,
     repaint: bool,
     text: TextContext,
 }
 
-/// Path and event mapping for a control that owns its own press.
-struct Activation {
+/// What a control does with the pointer, and where it publishes the answer.
+struct Interaction {
     map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
     path: String,
+    recognize: Recognize,
+}
+
+enum Recognize {
+    Press,
+    Drag(Box<Dragged>),
+}
+
+/// A scalar drag in flight: what it was described as, the recognizer made from
+/// that description, and the gesture's own state.
+///
+/// The recognizer is re-made whenever the value moves, because a relative track
+/// counts travel from the value it was built with. The state is kept across
+/// that, so a hand already dragging is not interrupted by its own answer coming
+/// back from the application.
+struct Dragged {
+    recognizer: Scalar,
+    spec: Drag,
+    state: ScalarState,
+}
+
+impl Dragged {
+    fn new(spec: Drag) -> Self {
+        Self {
+            recognizer: spec.recognizer(),
+            spec,
+            state: ScalarState::default(),
+        }
+    }
+
+    fn at(&mut self, value: f32) {
+        self.spec = self.spec.at(value);
+        self.recognizer = self.spec.recognizer();
+    }
+
+    /// One input through the recognizer, carrying the pointer ownership the
+    /// host needs to route the rest of the gesture to this leaf.
+    fn follow(&mut self, input: Input<'_>, hit: &Hit) -> Outcome {
+        let had_pointer = self.state.captures_pointer();
+        let outcome = self
+            .recognizer
+            .on_input(&mut self.state, input, hit, Instant::now());
+        if matches!(
+            input,
+            Input::Pointer(pointer)
+                if matches!(pointer.phase, PointerPhase::Cancel | PointerPhase::DoubleClick)
+        ) {
+            self.state.cancel_pointer();
+        }
+        let ownership = match (had_pointer, self.state.captures_pointer()) {
+            (false, true) => PointerOwnership::Claim,
+            (true, false) => PointerOwnership::Release,
+            _ => PointerOwnership::Unchanged,
+        };
+        outcome.with_ownership(ownership)
+    }
 }
 
 impl<Painter> Painted<Painter>
@@ -462,8 +506,8 @@ where
 {
     pub(crate) fn new(painter: Painter, data: Painter::Data, skin: &Skin) -> Self {
         Self {
-            activation: None,
             data,
+            interaction: None,
             painter,
             press: Press::default(),
             repaint: false,
@@ -473,11 +517,31 @@ where
 
     pub(crate) fn interactive(
         mut self,
+        grip: Grip,
         path: String,
         map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
     ) -> Self {
-        self.activation = Some(Activation { map_event, path });
+        let recognize = match grip {
+            Grip::None => return self,
+            Grip::Press => Recognize::Press,
+            Grip::Drag(drag) => Recognize::Drag(Box::new(Dragged::new(drag))),
+        };
+        self.interaction = Some(Interaction {
+            map_event,
+            path,
+            recognize,
+        });
         self
+    }
+
+    /// Takes the value the control now draws into whatever counts from it.
+    fn moved_to(&mut self, value: &ReadValue<'_>) {
+        let (Some(interaction), ReadValue::Scalar(value)) = (&mut self.interaction, value) else {
+            return;
+        };
+        if let Recognize::Drag(drag) = &mut interaction.recognize {
+            drag.at(AsPrimitive::<f32>::as_(value.clamp(0.0, 1.0)));
+        }
     }
 }
 
@@ -506,28 +570,58 @@ where
         if Painter::READS_POINTER {
             self.repaint |= self.press.press(input, hit);
         }
-        self.activation
-            .as_ref()
-            .map_or(Outcome::IGNORED, |activation| {
-                click::on_input(input, hit).map(|()| {
-                    (activation.map_event)(control_event(&activation.path, ControlAction::Activate))
-                })
-            })
+        let Some(interaction) = &mut self.interaction else {
+            return Outcome::IGNORED;
+        };
+        let outcome = match &mut interaction.recognize {
+            Recognize::Press => {
+                return click::on_input(input, hit).map(|()| {
+                    (interaction.map_event)(control_event(
+                        &interaction.path,
+                        ControlAction::Activate,
+                    ))
+                });
+            }
+            Recognize::Drag(drag) => drag.follow(input, hit),
+        };
+        // The control draws the value it just authored: the application is told
+        // the same number, but its answer only comes back a frame later.
+        if let Some(value) = outcome.value() {
+            self.repaint |= Painter::set_read(&mut self.data, &ReadValue::Scalar(f64::from(value)));
+            self.moved_to(&ReadValue::Scalar(f64::from(value)));
+        }
+        let Some(interaction) = &self.interaction else {
+            return Outcome::IGNORED;
+        };
+        outcome.map(|value| {
+            (interaction.map_event)(control_event(
+                &interaction.path,
+                ControlAction::SetScalar(f64::from(value)),
+            ))
+        })
     }
 
     fn accepts_input(&self) -> bool {
-        self.activation.is_some()
+        self.interaction.is_some()
     }
 
     fn set_read(&mut self, value: &ReadValue<'_>) -> bool {
         self.repaint |= Painter::set_read(&mut self.data, value);
+        self.moved_to(value);
         self.repaint
     }
 
     fn cursor(&self, hit: &Hit) -> CursorShape {
-        self.activation.as_ref().map_or(CursorShape::None, |_| {
-            Hover::new(CursorShape::Pointer).cursor(self.press.is_pressed(), hit)
-        })
+        self.interaction
+            .as_ref()
+            .map_or(CursorShape::None, |interaction| {
+                match &interaction.recognize {
+                    Recognize::Press => {
+                        Hover::new(CursorShape::Pointer).cursor(self.press.is_pressed(), hit)
+                    }
+                    Recognize::Drag(drag) => drag.recognizer.cursor(&drag.state, hit),
+                }
+            })
     }
 
     fn hover(&mut self, hovered: bool) -> bool {

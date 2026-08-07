@@ -18,7 +18,7 @@ mod host {
         interact::{CursorShape, recognizers::Track},
         render::{
             ReadValue, Skin, StereoLevels,
-            controls::{Draws, Grip},
+            controls::{Drag, Draws, Grip},
         },
     };
 
@@ -36,11 +36,13 @@ mod host {
             }
         }
 
-        fn grip(&self) -> Grip {
-            Grip::Drag {
-                cursor: CursorShape::ResizeH,
-                track: Track::AbsoluteHorizontal,
-            }
+        fn grip(&self, _skin: &Skin, _data: &StereoLevels) -> Grip {
+            Grip::Drag(
+                Drag::builder()
+                    .cursor(CursorShape::ResizeH)
+                    .track(Track::AbsoluteHorizontal)
+                    .build(),
+            )
         }
     }
 }

@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use masonry::{
     core::{BoxConstraints, LayoutCtx, WidgetPod},
     kurbo::{Point, Size as MasonrySize},
@@ -7,7 +5,7 @@ use masonry::{
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    MasonryHost, MasonryKnob, MasonryNode, Painted,
+    MasonryHost, MasonryNode, Painted,
     controls::Retained,
     flex::{box_constraints, normalized},
     leaf::{DragProgram, Leaf},
@@ -17,18 +15,13 @@ use crate::{
     atoms::{
         button::declared_width,
         design::{crossfader::Crossfader, fader::Fader},
-        painter::FaderData,
+        painter::Captioned,
         tab::TabLarge,
     },
     expand::{Binding, ControlSpec},
-    interact::recognizers::{Track, WheelStep},
     module::{TextAlign, TextStyle},
     mount,
-    render::{
-        HostedControlPlan, InputOwner, ReadValue, Skin, UiEvent,
-        controls::{Draws, Grip},
-        document::read::resolve,
-    },
+    render::{InputOwner, ReadValue, Skin, UiEvent, controls::Draws, document::read::resolve},
     size::{Dim, SizeSpec, control_size},
     skin::{ColorRole, TextRoleSkin},
     solve,
@@ -61,12 +54,11 @@ pub(super) trait NodeControl {
 }
 
 /// What a control is handed when it mounts: the box it was given, the endpoint
-/// behind it, and the engine plan that may already drive it.
+/// behind it, and who owns the pointer over it.
 pub(super) struct Cx<'a> {
     pub(super) declared: solve::Size<solve::Length>,
     pub(super) owner: InputOwner,
     pub(super) path: &'a str,
-    pub(super) plan: Option<&'a HostedControlPlan>,
     pub(super) read: Option<&'a Binding>,
 }
 
@@ -157,36 +149,7 @@ impl NodeControl for mount::Knob {
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        let Some(HostedControlPlan::Knob {
-            current,
-            drag_range,
-            wheel_step,
-            ..
-        }) = cx.plan
-        else {
-            return host.empty(cx.declared);
-        };
-        let knob = MasonryKnob::new(
-            self.label.map(|label| host.ui.resolve(label).to_owned()),
-            *current,
-            host.skin,
-        );
-        let knob = match cx.owner {
-            InputOwner::Leaf => knob.interactive(
-                cx.path.to_owned(),
-                Track::RelativeVertical {
-                    range: *drag_range,
-                    value: *current,
-                },
-                WheelStep {
-                    value: *current,
-                    step: *wheel_step,
-                },
-                Rc::clone(&host.map_event),
-            ),
-            InputOwner::Engine => knob,
-        };
-        host.control_leaf(knob, cx.declared)
+        painted(self, host, cx)
     }
 }
 
@@ -305,7 +268,7 @@ impl NodeControl for mount::Fader {
         host.control_leaf(
             Painted::new(
                 Fader::new(self.style, host.skin),
-                FaderData {
+                Captioned {
                     label: self.label.map(|label| host.ui.resolve(label).to_owned()),
                     value: value.clamp(0.0, 1.0).as_(),
                 },
@@ -505,9 +468,23 @@ pub(crate) fn text_role(
     }
 }
 
+/// Who answers the pointer over this control.
+///
+/// The document says whether the leaf may own it at all; this host narrows that
+/// to the controls it actually paints. One it still mounts as an empty box is
+/// driven by the engine plan, and a leaf gesture beside that plan would be two
+/// recognizers on one pointer.
+pub(crate) fn pointer_owner(owner: InputOwner, spec: &ControlSpec) -> InputOwner {
+    if owner == InputOwner::Leaf && leaf_paints(spec) {
+        InputOwner::Leaf
+    } else {
+        InputOwner::Engine
+    }
+}
+
 /// Whether this control reaches Vello as a painted leaf that can own the
 /// pointer itself, rather than as an empty box the engine drives.
-pub(crate) fn leaf_paints(spec: &ControlSpec) -> bool {
+fn leaf_paints(spec: &ControlSpec) -> bool {
     match spec {
         ControlSpec::Button { .. }
         | ControlSpec::Chip { .. }
@@ -543,13 +520,47 @@ where
     let Some(data) = control.data(value.as_ref(), host.ui) else {
         return host.empty(cx.declared);
     };
+    let grip = control.grip(host.skin, &data);
     let leaf = Painted::new(control.painter(host.skin), data, host.skin);
-    let leaf = match control.grip() {
-        Grip::Press => host.owned(leaf, cx.owner, cx.path, Painted::interactive),
-        // A scalar drag is a gesture only the immediate host recognises; here
-        // the engine plan drives it, which is what this host has always done.
-        // The two are reconciled by the gesture census, not by this arm.
-        Grip::Drag { .. } | Grip::None => leaf,
-    };
+    let leaf = host.owned(leaf, cx.owner, cx.path, |leaf, path, map_event| {
+        leaf.interactive(grip, path, map_event)
+    });
     host.control_leaf(leaf, cx.declared)
+}
+
+/// Which controls this host lets answer the pointer themselves.
+#[cfg(test)]
+mod owns {
+    use kithara_test_utils::kithara;
+
+    use super::{ControlSpec, InputOwner, pointer_owner};
+
+    /// A control this host still mounts as an empty box has an engine plan
+    /// behind it. Handing its leaf a gesture as well would put two recognizers
+    /// on one pointer, and the document cannot see the difference to say so.
+    #[kithara::test]
+    fn a_control_this_host_does_not_paint_is_left_to_the_engine() {
+        assert_eq!(
+            pointer_owner(InputOwner::Leaf, &ControlSpec::VuVertical { ticks: false }),
+            InputOwner::Engine
+        );
+    }
+
+    #[kithara::test]
+    fn a_control_this_host_paints_keeps_the_leaf_the_document_gave_it() {
+        assert_eq!(
+            pointer_owner(InputOwner::Leaf, &ControlSpec::Knob { label: None }),
+            InputOwner::Leaf
+        );
+    }
+
+    /// And a document that kept the pointer for the engine keeps it, whatever
+    /// this host can paint.
+    #[kithara::test]
+    fn an_engine_owned_control_stays_engine_owned() {
+        assert_eq!(
+            pointer_owner(InputOwner::Engine, &ControlSpec::Knob { label: None }),
+            InputOwner::Engine
+        );
+    }
 }

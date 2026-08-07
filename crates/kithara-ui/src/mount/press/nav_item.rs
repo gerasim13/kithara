@@ -57,7 +57,7 @@ mod host {
             })
         }
 
-        fn grip(&self) -> Grip {
+        fn grip(&self, _skin: &Skin, _data: &NavData) -> Grip {
             Grip::Press
         }
     }

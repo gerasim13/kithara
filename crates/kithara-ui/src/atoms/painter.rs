@@ -6,6 +6,7 @@ use crate::{
             cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter, status_dot::StatusDot,
             swatch::Swatch,
         },
+        knob::Knob,
         meter::StereoMeter,
         nav_item::NavItem,
         tab::TabLarge,
@@ -138,14 +139,29 @@ impl ControlPainter for TabLarge {
     }
 }
 
-/// What a fader is handed each frame: its value and the caption beside it.
-pub(crate) struct FaderData {
+/// What a control that sets one fraction and captions it is handed each frame.
+pub(crate) struct Captioned {
     pub(crate) label: Option<String>,
     pub(crate) value: f32,
 }
 
+impl ControlPainter for Knob {
+    type Data = Captioned;
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        data: &Self::Data,
+        bounds: Rect,
+        _state: VisualState,
+    ) {
+        self.paint(list, text, data.value, data.label.as_deref(), bounds);
+    }
+}
+
 impl ControlPainter for Fader {
-    type Data = FaderData;
+    type Data = Captioned;
 
     fn draw(
         &self,

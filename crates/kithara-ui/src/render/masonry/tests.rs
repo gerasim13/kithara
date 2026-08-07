@@ -1127,7 +1127,14 @@ fn leaf_owned_knob_uses_scalar_drag_wheel_reset_and_cursor() {
             .unwrap_or_else(|error| panic!("captured leaf move must remain typed: {error}")),
         Handled::Yes,
     );
-    assert_scalar_value(&root.take_actions(), "demo/volume", 0.85);
+    // The double click above reset the knob, so it draws 0.5 and the drag that
+    // follows counts from there — not from the 0.8 its endpoint reported when
+    // the tree was built and has not reported since.
+    assert_scalar_value(
+        &root.take_actions(),
+        "demo/volume",
+        0.5 + (50.0 - 43.0) / builtin::skin().knob.drag_range,
+    );
     assert_eq!(
         root.handle_pointer_event(pointer_up(150.0, 43.0))
             .unwrap_or_else(|error| panic!("leaf-owned release must remain typed: {error}")),

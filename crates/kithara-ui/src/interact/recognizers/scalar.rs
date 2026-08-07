@@ -34,6 +34,25 @@ impl Track {
     const fn arms(self) -> bool {
         !matches!(self, Self::HorizontalClick)
     }
+
+    /// The same track counting from a new value.
+    ///
+    /// A relative track starts from the value it was built with, so a host that
+    /// keeps its widgets has to re-make it whenever the endpoint moves or the
+    /// next drag walks the control back to where it mounted. An absolute track
+    /// reads the position itself and has nothing to move; a pixel track's value
+    /// is a width rather than a fraction, and is not what an endpoint reports.
+    #[cfg(feature = "masonry-host")]
+    pub(crate) const fn at(self, value: f32) -> Self {
+        match self {
+            Self::RelativeVertical { range, .. } => Self::RelativeVertical { range, value },
+            Self::RelativeHorizontal { scale, .. } => Self::RelativeHorizontal { scale, value },
+            Self::HorizontalPixels { .. }
+            | Self::AbsoluteVertical
+            | Self::AbsoluteHorizontal
+            | Self::HorizontalClick => self,
+        }
+    }
 }
 
 #[derive(bon::Builder)]

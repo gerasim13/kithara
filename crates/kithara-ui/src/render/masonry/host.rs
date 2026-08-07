@@ -13,8 +13,8 @@ use super::{
     flex::{ChildLayout, Flex},
     leaf::{Leaf, WindowLeafLayer},
     mount::{
-        Cx, NodeControl, NodeLayout, activates, alignment, control_declared, declared, leaf_paints,
-        length, main_length, text_role,
+        Cx, NodeControl, NodeLayout, activates, alignment, control_declared, declared, length,
+        main_length, pointer_owner, text_role,
     },
     node::LayerParts,
     popover::{PopoverLayer, PopoverState},
@@ -550,14 +550,16 @@ where
         let declared = control_declared(spec, size, self.skin);
         let plan = hosted_control_plan(path, spec, read, self.ui, self.reads, self.skin);
         let path = self.ui.resolve(path);
-        let leaf_owns_control = owner == InputOwner::Leaf && leaf_paints(spec);
+        // What the document says, narrowed to what this host actually paints:
+        // a control it still mounts as an empty box is driven by the engine
+        // plan below, whatever the document said about its leaf.
+        let owns_pointer = pointer_owner(owner, spec);
         let custom = self.custom.remove(path);
         let custom_installed = custom.is_some();
         let cx = Cx {
             declared,
-            owner,
+            owner: owns_pointer,
             path,
-            plan: plan.as_ref(),
             read,
         };
         let mut output = custom.map_or_else(
@@ -578,7 +580,7 @@ where
         if let Some(read) = read {
             output.watch(read);
         }
-        if leaf_owns_control {
+        if owns_pointer == InputOwner::Leaf {
             return output;
         }
         mount::controls!(
