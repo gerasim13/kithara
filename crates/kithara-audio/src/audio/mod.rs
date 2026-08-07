@@ -13,9 +13,9 @@ pub use seek::SeekHandle;
 pub(crate) use crate::{
     AudioConfig, AudioDecoderConfig, AudioEffect, AudioWorkerHandle, ChunkOutcome, DecodeError,
     EngineLoad, Fetch, PcmControl, PcmRead, PcmSession, PendingReason, PreloadGate, ReadOutcome,
-    SeekOutcome, ServiceClass, StretchControls,
+    SeekOutcome, ServiceClass,
     pipeline::{
-        config::create_effects,
+        config::{TempoSlot, create_effects},
         consumer::{ConsumerPhase, FailureSource},
         fetch::EpochValidator,
         parts::SourceParts,

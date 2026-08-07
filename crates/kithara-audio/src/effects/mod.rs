@@ -1,3 +1,8 @@
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
+pub(crate) mod bound;
 pub mod eq;
 pub mod limiter;
 pub mod timestretch;

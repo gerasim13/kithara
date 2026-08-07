@@ -5,7 +5,9 @@ use kithara_decode::{PcmChunk, PcmSpec};
 use kithara_test_utils::kithara;
 
 use super::create_effects;
-use crate::{effects::timestretch::StretchControls, traits::AudioEffect};
+use crate::{
+    effects::timestretch::StretchControls, pipeline::config::TempoSlot, traits::AudioEffect,
+};
 
 struct PassthroughEffect;
 
@@ -33,7 +35,8 @@ fn pool() -> PcmPool {
 #[kithara::test]
 fn create_effects_includes_custom_effects() {
     let pool = pool();
-    let effects = create_effects(spec(), None, &pool, vec![Box::new(PassthroughEffect)]);
+    let effects = create_effects(spec(), None, &pool, vec![Box::new(PassthroughEffect)])
+        .expect("invariant: an unbound chain always builds");
     assert_eq!(effects.len(), 1);
 }
 
@@ -82,7 +85,8 @@ mod no_stretch {
     fn create_effects_stretch_without_backends_keeps_chain_empty() {
         let controls = StretchControls::new(1.5);
         let pool = pool();
-        let effects = create_effects(spec(), Some(&controls), &pool, Vec::new());
+        let effects = create_effects(spec(), Some(&TempoSlot::from(controls)), &pool, Vec::new())
+            .expect("invariant: an unbound chain always builds");
         assert!(effects.is_empty());
     }
 }
@@ -102,10 +106,11 @@ mod stretch {
         let pool = pool();
         let effects = create_effects(
             spec(),
-            Some(&controls),
+            Some(&TempoSlot::from(controls)),
             &pool,
             vec![Box::new(PassthroughEffect)],
-        );
+        )
+        .expect("invariant: the streaming slot builds on a stretch build");
         assert_eq!(effects.len(), 2);
     }
 
@@ -115,7 +120,9 @@ mod stretch {
         let controls = StretchControls::new(1.5);
         controls.set_keylock(false);
         let pool = pool();
-        let mut effects = create_effects(spec(), Some(&controls), &pool, Vec::new());
+        let mut effects =
+            create_effects(spec(), Some(&TempoSlot::from(controls)), &pool, Vec::new())
+                .expect("invariant: the streaming slot builds on a stretch build");
         // Drive one chunk through the stretch slot (index 0).
         let frames = 1024usize;
         let samples = vec![0.0_f32; frames * 2];

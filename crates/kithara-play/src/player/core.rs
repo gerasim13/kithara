@@ -1,6 +1,6 @@
 use delegate::delegate;
 use kithara_abr::{AbrController, AbrSettings};
-use kithara_audio::{EngineLoad, StretchControls};
+use kithara_audio::{EngineLoad, SourceSchedule, StretchControls, TempoSlot};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::GaplessMode;
 use kithara_platform::{
@@ -14,7 +14,7 @@ use super::{
     state::{ItemQueue, PlayerParams, PlayerPhase},
 };
 use crate::{
-    api::{PlayerEvent, PlayerStatus},
+    api::{PlayerEvent, PlayerStatus, SessionTransportSnapshot, TrackBinding},
     bridge::PlayerCmd,
     engine::{EngineConfig, EngineImpl},
     error::PlayError,
@@ -32,6 +32,10 @@ pub(crate) struct PlayerCore {
     pub(crate) engine_load: Arc<EngineLoad>,
 
     pub(crate) timestretch: Arc<StretchControls>,
+    /// Session-grid binding for this deck. `Some` puts every prepared
+    /// resource on the exact-span slot instead of the streaming one; the two
+    /// are exclusive by construction.
+    pub(crate) binding: Mutex<Option<Arc<SourceSchedule>>>,
     pub(crate) byte_pool: BytePool,
     /// Engine drops last — worker shutdown happens after all tracks
     /// unregister and after `items` releases their resources.
@@ -58,6 +62,58 @@ pub(crate) struct PlayerCore {
 /// `Mutex<PlayerPhase>` carrying the slot / ABR handle / armed-next, while
 /// `core` holds the phase-neutral fields. `phase` is declared first so it
 /// drops before `core.engine`.
+impl PlayerImpl {
+    /// Places this deck on the session grid at the transport's committed
+    /// position, so its analysed beats land on stamped session beats.
+    ///
+    /// The binding is taken at one revision and stays fixed: output frame zero
+    /// of the deck is the snapshot's position, and every later frame follows
+    /// the analysed map's local slope from there. Resources prepared after
+    /// this call render through the exact-span slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlayError::BindUnavailable`] when the track has no usable
+    /// analysed map at the anchored beat, or the committed tempo and host rate
+    /// do not define a beat advance.
+    pub fn bind(
+        &self,
+        binding: &TrackBinding,
+        transport: SessionTransportSnapshot,
+    ) -> Result<(), PlayError> {
+        let origin = binding
+            .track_beat_at(transport.position())
+            .map_err(|reason| PlayError::BindUnavailable {
+                reason: reason.to_string(),
+            })?;
+        let schedule = SourceSchedule::new(
+            binding.map().clone(),
+            origin,
+            transport.tempo().beats_per_second(),
+            self.core.engine.master_sample_rate(),
+            binding.direction(),
+        )
+        .map_err(|reason| PlayError::BindUnavailable {
+            reason: reason.to_string(),
+        })?;
+        *self.core.binding.lock() = Some(Arc::new(schedule));
+        Ok(())
+    }
+
+}
+
+impl PlayerCore {
+    /// The slot every prepared resource is timed by. Bound wins when a
+    /// binding is installed: a deck asked to follow the session grid must not
+    /// quietly keep the streaming path.
+    pub(crate) fn tempo_slot(&self) -> TempoSlot {
+        self.binding.lock().clone().map_or_else(
+            || TempoSlot::Streaming(Arc::clone(&self.timestretch)),
+            TempoSlot::Bound,
+        )
+    }
+}
+
 pub struct PlayerImpl {
     pub(crate) phase: Mutex<PlayerPhase>,
     pub(crate) core: PlayerCore,
@@ -104,6 +160,7 @@ impl PlayerImpl {
             byte_pool: config.byte_pool,
             status: Mutex::default(),
             items: ItemQueue::new(bus),
+            binding: Mutex::default(),
         };
         Self {
             core,

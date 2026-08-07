@@ -33,7 +33,7 @@ fn exact_wav_config(speed: Option<f32>) -> AudioConfig<MemStream> {
     AudioConfig::<MemStream>::for_stream(stream)
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
-        .maybe_stretch(stretch)
+        .maybe_tempo(stretch.map(kithara::audio::TempoSlot::from))
         .pcm_buffer_chunks(1)
         .hint("wav".to_owned())
         .build()

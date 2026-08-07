@@ -373,9 +373,55 @@ window with the effects and EOF drain.
 recreate resumes and where a variant splice lands, so every effect states its own
 hold instead of inheriting a silent zero. The count is on the **source** axis,
 which only a stage owning the source-to-output mapping can express. The chain
-production builds is `[TimeStretchProcessor?, ..custom]` and the stretch slot is
-its sole duration-changing stage; an effect behind it that buffered could not name
-its hold in source frames, so such an effect must be sample-synchronous.
+production builds is `[TempoSlot?, ..custom]` and the tempo slot is its sole
+duration-changing stage; an effect behind it that buffered could not name its
+hold in source frames, so such an effect must be sample-synchronous.
+
+## Tempo slot: bound and unbound are exclusive
+
+A deck is timed one of two ways and `TempoSlot` makes that a choice rather than
+two independent options, so it cannot end up on both.
+
+`TempoSlot::Streaming` is the unbound deck: live speed, key-lock and region plan
+drive `TimeStretchProcessor`, and the output span is whatever the streaming
+backend renders — `StretchBackend::process` promises nothing about it.
+
+`TempoSlot::Bound` is a deck placed on the session grid, and it is the inverse
+of the streaming slot: **the producer chooses the output span and the plan
+determines the source span.** Per block `BoundRenderer` asks `SourceSchedule`
+which source coordinate is due at the block's first and last output frame,
+quantizes that continuous span through `ElasticSpanPlan`, and renders it with
+`ElasticEngine::process`, which returns exactly the requested output frames from
+exactly the requested source frames. Nothing here is block-synchronous with the
+audio callback: the only invariant is that bound output frame `n` is played at
+session frame `anchor + n`, so the renderer counts its own emitted frames and
+never consults the playhead. The fractional remainder between blocks lives in
+the plan's `ElasticCursor`; there is no second residual.
+
+`SourceSchedule` is the binding projected onto the deck's own output frames.
+`TrackBinding` (in `kithara-play`) stays the single owner of the session-beat to
+track-beat relation and publishes this projection downward: the analysed map,
+the track beat at output frame zero, and the signed beat advance per output
+frame. The projection reads `TrackBeatMap`, never `BeatGrid::bpm` — a drifting
+grid must be followed by the local slope of the segment the playhead is in, and
+an average tempo would place its beats somewhere else.
+
+The slot is forward-only and retains nothing behind what it has consumed. A plan
+that reaches behind the retained source is a broken contract and is reported as
+`BoundError::BehindWindow`: never clamped to the oldest frame still in hand, and
+never turned into a re-seek.
+
+An exact-span engine returns the whole output span immediately and carries its
+algorithmic latency as **content** delay, not as a frame-count deficit. A bound
+slot at unity therefore emits one output frame per source frame while
+`held_source_frames` still reports the engine's declared source latency: those
+frames were consumed but their content has not left the engine, so the decode
+frontier must stay behind them.
+
+Without a compiled exact-span engine the unbound slot degrades to unity, which
+is a lesser answer but not a wrong one. A bound deck has no such fallback —
+rendering it unbound would put its beats somewhere else — so binding is refused
+with `TempoSlotError::BoundEngineMissing`, surfacing as `PlayError::BindUnavailable`.
 
 ## Time-stretch (speed and key-lock)
 
