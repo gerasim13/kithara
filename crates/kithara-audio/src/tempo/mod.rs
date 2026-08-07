@@ -16,6 +16,12 @@
 //!   session's grid determines the source span, which is the only way a
 //!   marker lands on a stamped frame.
 
+/// The bound form needs a compiled exact-span engine, which no wasm target
+/// carries.
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
 pub mod bound;
 mod slot;
 pub mod streaming;
