@@ -15,7 +15,7 @@ use num_traits::cast::AsPrimitive;
 use winit::{
     application::ApplicationHandler,
     dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
-    event::{ElementState, MouseButton, WindowEvent},
+    event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     window::{ResizeDirection, Window, WindowId},
 };
@@ -26,7 +26,7 @@ use super::{
 };
 use crate::{
     draw::Pt,
-    interact::{Input, MOUSE, PointerInput, PointerPhase},
+    interact::{Input, MOUSE, PointerInput, PointerPhase, Scroll},
     render::{WindowCommand, WindowEdge},
 };
 
@@ -179,10 +179,12 @@ where
         };
         match event {
             WindowEvent::Resized(size) => live.resize(size),
+            WindowEvent::ScaleFactorChanged { .. } => live.resize(live.window.inner_size()),
             WindowEvent::CursorMoved { position, .. } => {
                 live.pointer = position;
                 live.point(PointerPhase::Move);
             }
+            WindowEvent::CursorLeft { .. } => live.point(PointerPhase::Leave),
             WindowEvent::MouseInput {
                 state,
                 button: MouseButton::Left,
@@ -191,6 +193,7 @@ where
                 ElementState::Pressed => PointerPhase::Down,
                 ElementState::Released => PointerPhase::Up,
             }),
+            WindowEvent::MouseWheel { delta, .. } => live.wheel(delta),
             WindowEvent::RedrawRequested => live.draw(),
             _ => {}
         }
@@ -313,6 +316,18 @@ where
             Some(at),
             clicks,
         )));
+        self.window.request_redraw();
+    }
+
+    /// One wheel notch, in whichever units the platform reports it.
+    fn wheel(&mut self, delta: MouseScrollDelta) {
+        self.ui.input(Input::Wheel(match delta {
+            MouseScrollDelta::LineDelta(x, y) => Scroll::Lines { x, y },
+            MouseScrollDelta::PixelDelta(at) => Scroll::Pixels {
+                x: at.x.as_(),
+                y: at.y.as_(),
+            },
+        }));
         self.window.request_redraw();
     }
 

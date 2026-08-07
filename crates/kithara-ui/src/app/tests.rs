@@ -7,7 +7,7 @@ use crate::{
     builtin,
     draw::Pt,
     ids::{EndpointId, SourceUri},
-    interact::{Input, MOUSE, PointerInput, PointerPhase},
+    interact::{Input, MOUSE, PointerInput, PointerPhase, Scroll},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{ControlAction, ReadValue, Reads, Skin, StereoLevels, UiEvent},
     source::MemResolver,
@@ -186,6 +186,105 @@ fn drag(control: &Draggable) -> Dragged {
     }
     ui.input(press(to, PointerPhase::Up));
     Dragged { drawn, seen }
+}
+
+/// Counts every source the compiler read, so a test can see whether the
+/// document was compiled again at all.
+struct Counted<'a> {
+    inner: &'a dyn crate::source::SourceResolver,
+    loads: std::cell::Cell<usize>,
+}
+
+impl crate::source::SourceResolver for Counted<'_> {
+    fn load(
+        &self,
+        base: Option<&crate::ids::SourceUri>,
+        rel: &str,
+    ) -> Result<crate::source::LoadedSource, crate::error::UiDocError> {
+        self.loads.set(self.loads.get() + 1);
+        self.inner.load(base, rel)
+    }
+}
+
+/// The wheel is how a knob is nudged without dragging it, how the hero wave
+/// zooms and how a list scrolls. None of it works unless the window forwards
+/// the notch and this layer carries it through.
+#[kithara::test]
+fn a_wheel_notch_over_a_knob_steps_it() {
+    let endpoints = Registry("fixture.dial", EndpointDesc::new(ValueKind::Scalar));
+    let resolver = one_control(
+        r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"))"#,
+    );
+    let skin = skin();
+    let mut ui = Ui::new(
+        Dial::new(false),
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .skin(&skin)
+            .skin_doc(builtin::skin_doc())
+            .build(),
+        (240, 120),
+        1.0,
+    )
+    .unwrap_or_else(|error| panic!("the knob must mount: {error}"));
+    let at = Pt { x: 19.0, y: 60.0 };
+    ui.input(press(at, PointerPhase::Move));
+    let before = ui.app().value;
+
+    // A wheel away from the hand reads as a negative delta, and that is the
+    // direction that raises a control.
+    ui.input(Input::Wheel(Scroll::Lines { x: 0.0, y: -1.0 }));
+
+    assert!(
+        ui.app().value > before,
+        "a notch over the knob must raise it, but it stayed at {before}"
+    );
+}
+
+/// A hand on a control publishes an action for every step it moves. Compiling
+/// the page again for each of them costs more than drawing it — and the page
+/// cannot have changed, because the application is still showing the same one.
+#[kithara::test]
+fn moving_a_control_does_not_compile_the_document_again() {
+    let endpoints = Registry("fixture.dial", EndpointDesc::new(ValueKind::Scalar));
+    let inner = one_control(
+        r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"))"#,
+    );
+    let resolver = Counted {
+        inner: &inner,
+        loads: std::cell::Cell::new(0),
+    };
+    let skin = skin();
+    let mut ui = Ui::new(
+        Dial::new(false),
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .skin(&skin)
+            .skin_doc(builtin::skin_doc())
+            .build(),
+        (240, 120),
+        1.0,
+    )
+    .unwrap_or_else(|error| panic!("the knob must mount: {error}"));
+    let mounted = resolver.loads.get();
+    assert!(mounted > 0, "mounting must have compiled the document once");
+
+    let at = |y: f32| Pt { x: 19.0, y };
+    ui.input(press(at(60.0), PointerPhase::Move));
+    ui.input(press(at(60.0), PointerPhase::Down));
+    for step in 1_u8..=8 {
+        ui.input(press(at(60.0 - f32::from(step) * 2.5), PointerPhase::Move));
+    }
+    ui.input(press(at(40.0), PointerPhase::Up));
+
+    assert!(ui.app().value > 0.5, "the drag must have moved the knob");
+    assert_eq!(
+        resolver.loads.get(),
+        mounted,
+        "the document was compiled again while the hand was on the knob"
+    );
 }
 
 /// A fingerprint of the geometry one frame drew, so two frames can be compared

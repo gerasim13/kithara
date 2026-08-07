@@ -8,13 +8,16 @@
 use kithara_platform::{sync::Arc, time::Duration};
 use masonry::{
     app::{RenderRootOptions, WindowSizePolicy},
-    core::{PointerEvent, WindowEvent},
+    core::{PointerEvent, TextEvent, WindowEvent},
     dpi::{PhysicalPosition, PhysicalSize},
     kurbo::Affine,
     theme::default_property_set,
-    ui_events::pointer::{
-        PointerButton as MasonryPointerButton, PointerButtonEvent, PointerButtons, PointerId,
-        PointerInfo, PointerState, PointerType, PointerUpdate,
+    ui_events::{
+        ScrollDelta,
+        pointer::{
+            PointerButton as MasonryPointerButton, PointerButtonEvent, PointerButtons, PointerId,
+            PointerInfo, PointerScrollEvent, PointerState, PointerType, PointerUpdate,
+        },
     },
     vello::Scene,
 };
@@ -22,7 +25,7 @@ use masonry::{
 use super::neutral::{App, Config, RunError};
 use crate::{
     compile::{CompiledUi, compile},
-    interact::{Input, PointerPhase},
+    interact::{Input, PointerPhase, ScrollAxis},
     render::{
         UiEvent, WindowCommand, document,
         masonry::{MasonryHost, MasonryRoot, MasonryState},
@@ -101,20 +104,57 @@ where
     /// Feeds one neutral input event in. Whatever the document publishes in
     /// response is applied to the application before this returns.
     pub fn input(&mut self, input: Input<'_>) {
-        if let Input::Pointer(pointer) = input {
-            if let Some(at) = pointer.at {
-                self.pointer = PhysicalPosition::new(
-                    f64::from(at.x) * self.scale,
-                    f64::from(at.y) * self.scale,
+        match input {
+            Input::Pointer(pointer) => {
+                if let Some(at) = pointer.at {
+                    self.pointer = PhysicalPosition::new(
+                        f64::from(at.x) * self.scale,
+                        f64::from(at.y) * self.scale,
+                    );
+                }
+                if let Some(event) = self.pointer_event(pointer.phase, pointer.clicks) {
+                    self.pointer_input(event);
+                }
+            }
+            Input::Wheel(scroll) => {
+                let (x, y) = (
+                    scroll.delta(ScrollAxis::Horizontal),
+                    scroll.delta(ScrollAxis::Vertical),
                 );
+                let delta = if scroll.is_pixels() {
+                    ScrollDelta::PixelDelta(PhysicalPosition::new(x.into(), y.into()))
+                } else {
+                    ScrollDelta::LineDelta(x, y)
+                };
+                self.pointer_input(PointerEvent::Scroll(PointerScrollEvent {
+                    pointer: pointer_info(),
+                    delta,
+                    state: pointer_state(self.pointer, false, self.scale, 1),
+                }));
             }
-            if let Some(event) = self.pointer_event(pointer.phase, pointer.clicks)
-                && let Err(error) = self.root.handle_pointer_event(event)
-            {
-                tracing::error!(%error, "masonry pointer");
-            }
+            Input::KeyPressed { .. }
+            | Input::KeyReleased { .. }
+            | Input::InputMethod(_)
+            | Input::ModifiersChanged(_) => {}
         }
         self.settle();
+    }
+
+    /// One typed keyboard or input-method event, in the toolkit's own words.
+    ///
+    /// Kept apart from [`Self::input`] because the neutral vocabulary borrows
+    /// the text it carries, and the toolkit's own event owns it.
+    pub fn text(&mut self, event: TextEvent) {
+        if let Err(error) = self.root.handle_text_event(event) {
+            tracing::error!(%error, "masonry text");
+        }
+        self.settle();
+    }
+
+    fn pointer_input(&mut self, event: PointerEvent) {
+        if let Err(error) = self.root.handle_pointer_event(event) {
+            tracing::error!(%error, "masonry pointer");
+        }
     }
 
     /// Advances one frame's worth of animation.
@@ -171,9 +211,11 @@ where
                 coalesced: Vec::new(),
                 predicted: Vec::new(),
             })),
+            // The hand leaving the window ends every hover under it; without
+            // this the control it left keeps drawing itself lit.
+            PointerPhase::Leave => Some(PointerEvent::Leave(pointer_info())),
             PointerPhase::Cancel
             | PointerPhase::DoubleClick
-            | PointerPhase::Leave
             | PointerPhase::LongPress
             | PointerPhase::MoveLongPress => None,
         }
@@ -187,7 +229,9 @@ where
     /// is in the middle of, the pointer capture that feeds it, and the run of
     /// clicks a double click is made of. The tree is only rebuilt when the
     /// application turns to a different document, which is the one case where
-    /// its shape really did change.
+    /// its shape really did change — and only then is the document compiled
+    /// again. A hand on a knob publishes an action for every step it moves, and
+    /// compiling the page for each of them costs more than drawing it.
     fn settle(&mut self) {
         let actions = self.root.take_actions();
         if actions.is_empty() {
@@ -200,17 +244,16 @@ where
             }
             self.app.update(event);
         }
+        if self.app.document() == was {
+            let Self { app, root, ui, .. } = self;
+            app.reads(|reads| root.refresh(ui, reads));
+            return;
+        }
         let Ok(ui) = compile_document(&self.app, &self.config)
             .inspect_err(|error| tracing::error!(%error, "document did not compile"))
         else {
             return;
         };
-        if self.app.document() == was {
-            let Self { app, root, .. } = self;
-            app.reads(|reads| root.refresh(&ui, reads));
-            self.ui = ui;
-            return;
-        }
         let Ok(root) = mount(
             &self.app,
             &self.config,
