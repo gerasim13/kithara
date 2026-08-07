@@ -49,9 +49,14 @@ impl Container<'_> {
     /// nothing.
     /// `sccache` keys on the inputs of a compilation instead, which is what
     /// makes sharing it across runners sound rather than merely concurrent.
-    pub(super) const ENVIRONMENT: [&'static str; 4] = [
+    pub(super) const ENVIRONMENT: [&'static str; 5] = [
         "CARGO_TARGET_DIR=/cache/target",
         "RUSTC_WRAPPER=sccache",
+        // Without this the wrapper is inert: sccache declines to cache an
+        // incremental compilation, and cargo leaves incremental on by default.
+        // Setting the wrapper and not this is how a cache gets installed,
+        // enabled, and still never hit.
+        "CARGO_INCREMENTAL=0",
         "SCCACHE_DIR=/cache/sccache",
         // Well under the volume it lives on, and sccache evicts by least use
         // rather than growing until the disk decides for it.
