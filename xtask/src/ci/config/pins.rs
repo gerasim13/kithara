@@ -213,11 +213,34 @@ fn is_sha256(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ci::config::profile::workspace_root;
 
     #[test]
     fn digests_are_bounded() {
         assert!(is_sha256(&"a".repeat(64)));
         assert!(!is_sha256(&"a".repeat(63)));
         assert!(!is_sha256(&"z".repeat(64)));
+    }
+
+    /// The Quality Lab checks the exact version of every tool it runs, and an
+    /// unattended profile turns a missing one into a failure rather than a
+    /// skip. The lab and the image declare their tools in different files, so
+    /// without this the coverage profile reports a tool error on a machine
+    /// nobody changed.
+    #[test]
+    fn the_image_carries_the_tools_the_coverage_profile_demands() {
+        let lab: toml::Value = toml::from_str(
+            &fs::read_to_string(workspace_root().join(".config/quality-lab.toml")).unwrap(),
+        )
+        .unwrap();
+        let pins = CiPins::load(&workspace_root().join(".config/ci-pins.toml")).unwrap();
+
+        let demanded = lab["profiles"]["coverage"]["tools"].as_array().unwrap();
+        assert!(!demanded.is_empty());
+        for tool in demanded {
+            let tool = tool.as_str().unwrap();
+            let expected = lab["tools"][tool]["version"].as_str().unwrap();
+            assert_eq!(pins.cargo_tool_version(tool).unwrap(), expected, "{tool}");
+        }
     }
 }

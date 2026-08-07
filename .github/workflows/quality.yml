@@ -57,6 +57,7 @@ jobs:
           path: |
             target/quality-assessment/
             target/quality-report/
+            target/quality-lab/
 
   similarity:
     name: Duplication report
@@ -100,26 +101,6 @@ jobs:
         with:
           name: architecture
           path: target/architecture/
-
-  coverage-risk:
-    name: Coverage risk
-    if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
-    timeout-minutes: 240
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Rank complexity against coverage
-        run: just quality coverage-risk
-
-      - name: Upload the ranking
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-risk
-          path: target/quality-lab/
 
   health:
     name: Workspace health

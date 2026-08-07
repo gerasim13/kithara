@@ -3,7 +3,9 @@ ARG RUST_VERSION
 FROM rust:${RUST_VERSION}-bookworm@sha256:${RUST_BASE_DIGEST}
 
 ARG AST_GREP_VERSION
+ARG CARGO_CRAP_VERSION
 ARG CARGO_DENY_VERSION
+ARG CARGO_GEIGER_VERSION
 ARG CARGO_HACK_VERSION
 ARG CARGO_LLVM_COV_VERSION
 ARG CARGO_MACHETE_VERSION
@@ -12,6 +14,7 @@ ARG CARGO_NEXTEST_VERSION
 ARG CARGO_SEMVER_CHECKS_VERSION
 ARG CARGO_SHEAR_VERSION
 ARG CARGO_SORT_VERSION
+ARG CARGO_WORKSPACE_UNUSED_PUB_VERSION
 ARG CMAKE_AMD64_SHA256
 ARG CMAKE_ARM64_SHA256
 ARG CMAKE_VERSION
@@ -121,7 +124,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/tmp/cargo-install-target \
     CARGO_TARGET_DIR=/tmp/cargo-install-target \
     cargo install --locked --version "${AST_GREP_VERSION}" ast-grep \
+ && cargo install --locked --version "${CARGO_CRAP_VERSION}" cargo-crap \
  && cargo install --locked --version "${CARGO_DENY_VERSION}" cargo-deny \
+ && cargo install --locked --version "${CARGO_GEIGER_VERSION}" cargo-geiger \
  && cargo install --locked --version "${CARGO_HACK_VERSION}" cargo-hack \
  && cargo install --locked --version "${CARGO_LLVM_COV_VERSION}" cargo-llvm-cov \
  && cargo install --locked --version "${CARGO_MACHETE_VERSION}" cargo-machete \
@@ -130,6 +135,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cargo install --locked --version "${CARGO_SEMVER_CHECKS_VERSION}" cargo-semver-checks \
  && cargo install --locked --version "${CARGO_SHEAR_VERSION}" cargo-shear \
  && cargo install --locked --version "${CARGO_SORT_VERSION}" cargo-sort \
+ && cargo install --locked --version "${CARGO_WORKSPACE_UNUSED_PUB_VERSION}" \
+      cargo-workspace-unused-pub \
  && cargo install --locked --version "${JUST_VERSION}" just \
  && cargo install --locked --version "${MD_FORMATTER_VERSION}" md-formatter \
  && cargo install --locked --version "${SCCACHE_VERSION}" sccache \
