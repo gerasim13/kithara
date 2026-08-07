@@ -24,7 +24,7 @@ mod host {
         compile::CompiledUi,
         interact::{CursorShape, recognizers::Track},
         render::{
-            ReadValue, Skin,
+            ReadValue, Reads, Skin,
             controls::{Drag, Draws, Grip},
         },
     };
@@ -39,7 +39,12 @@ mod host {
         /// A crossfader is the fraction it sits at, so one whose endpoint has
         /// not reported a fraction draws nothing rather than a rail centred on
         /// a guess.
-        fn data(&self, value: Option<&ReadValue<'_>>, _ui: &CompiledUi) -> Option<f32> {
+        fn data(
+            &self,
+            value: Option<&ReadValue<'_>>,
+            _reads: &dyn Reads,
+            _ui: &CompiledUi,
+        ) -> Option<f32> {
             let Some(ReadValue::Scalar(value)) = value else {
                 return None;
             };

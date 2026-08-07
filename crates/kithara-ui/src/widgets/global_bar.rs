@@ -1,8 +1,7 @@
 use iced::{
     Alignment, Background, Element, Length, Theme,
-    alignment::Vertical,
     widget::{
-        Row, Space, button,
+        button,
         button::{Status as ButtonStatus, Style as ButtonStyle},
         container,
         container::Style as ContainerStyle,
@@ -15,42 +14,6 @@ use crate::{
     render::{IcedSkin, Icon, ReadValue, Reads, Skin, UiEvent, fonts, shaped_text},
     widgets::Widget,
 };
-
-const BRAND_LETTERS: [&str; 7] = ["K", "I", "T", "H", "A", "R", "A"];
-
-#[derive(bon::Builder)]
-pub(crate) struct Brand<'skin> {
-    skin: &'skin Skin,
-}
-
-impl<'a> Widget<'a> for Brand<'_> {
-    fn view(self) -> Element<'a, UiEvent> {
-        let palette = self.skin.palette;
-        let letters = BRAND_LETTERS.into_iter().map(|letter| {
-            shaped_text(letter)
-                .font(fonts::display(self.skin.global_bar.brand_text.weight))
-                .size(self.skin.global_bar.brand_text.size)
-                .color(palette.text)
-                .into()
-        });
-        container(
-            Row::with_children(letters)
-                .spacing(self.skin.global_bar.brand_gap)
-                .align_y(Alignment::Center),
-        )
-        .padding([
-            self.skin.global_bar.brand_padding_y,
-            self.skin.global_bar.brand_padding_x,
-        ])
-        .width(Length::Fixed(self.skin.global_bar.brand_width))
-        .height(Length::Fixed(self.skin.global_bar.height))
-        .align_y(Vertical::Center)
-        .style(move |_| {
-            ContainerStyle::default().background(Background::Color(palette.bg_panel.into()))
-        })
-        .into()
-    }
-}
 
 #[derive(bon::Builder)]
 pub(crate) struct PresetSelector<'reads, 'skin> {
@@ -100,41 +63,6 @@ impl<'a> Widget<'a> for PresetSelector<'_, '_> {
             ContainerStyle::default().background(Background::Color(palette.bg_panel.into()))
         })
         .into()
-    }
-}
-
-#[derive(bon::Builder)]
-pub(crate) struct Spacer<'skin> {
-    skin: &'skin Skin,
-}
-
-impl<'a> Widget<'a> for Spacer<'_> {
-    fn view(self) -> Element<'a, UiEvent> {
-        let palette = self.skin.palette;
-        container(Space::new())
-            .width(Length::Fill)
-            .height(Length::Fixed(self.skin.global_bar.height))
-            .align_y(Vertical::Center)
-            .style(move |_| {
-                ContainerStyle::default().background(Background::Color(palette.bg_panel.into()))
-            })
-            .into()
-    }
-}
-
-#[derive(bon::Builder)]
-pub(crate) struct Divider<'skin> {
-    skin: &'skin Skin,
-}
-
-impl<'a> Widget<'a> for Divider<'_> {
-    fn view(self) -> Element<'a, UiEvent> {
-        let color = self.skin.color(self.skin.divider.color);
-        container(Space::new())
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(move |_| ContainerStyle::default().background(Background::Color(color)))
-            .into()
     }
 }
 

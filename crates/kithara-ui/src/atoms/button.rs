@@ -1,4 +1,5 @@
 use crate::{
+    atoms::icon::mark::Marked,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     layout::FrameSides,
     module::ButtonStyle,
@@ -81,11 +82,10 @@ enum Frame {
     },
 }
 
-/// The icon a button shows: what it is made of, how big, and where it sits.
+/// The icon a button shows: what it draws, and where it sits.
 struct Art {
-    mark: Mark,
+    marked: Marked,
     placement: Placement,
-    size: f32,
     solo_color: Rgba,
 }
 
@@ -97,47 +97,17 @@ enum Placement {
 }
 
 impl Art {
-    /// How much room the icon takes across. A glyph is as wide as it was shaped;
-    /// an outline is drawn in a square, so it is as wide as it is tall.
-    fn width(&self, text: &mut TextContext) -> f32 {
-        match self.mark {
-            Mark::Glyph(ch) => text.shape_lucide(&ch.to_string(), self.size).width(),
-            Mark::Outline(_) => self.size,
-        }
-    }
-
-    /// Draws the icon with its left edge at `x`, centred down the box.
-    fn paint(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        x: f32,
-        bounds: Rect,
-        color: Rgba,
-    ) {
-        match self.mark {
-            Mark::Glyph(ch) => {
-                let content = ch.to_string();
-                let run = text.shape_lucide(&content, self.size);
-                list.text(
-                    &run,
-                    &content,
-                    Transform::translate(Pt {
-                        x,
-                        y: bounds.y + (bounds.h - run.height()) / 2.0,
-                    }),
-                    color,
-                );
-            }
-            Mark::Outline(outline) => list.fill_path(
-                outline.placed(Rect {
-                    h: self.size,
-                    w: self.size,
-                    x,
-                    y: bounds.y + (bounds.h - self.size) / 2.0,
-                }),
-                color,
-            ),
+    delegate::delegate! {
+        to self.marked {
+            fn width(&self, text: &mut TextContext) -> f32;
+            fn paint(
+                &self,
+                list: &mut DrawListBuilder,
+                text: &mut TextContext,
+                x: f32,
+                bounds: Rect,
+                color: Rgba,
+            ) -> f32;
         }
     }
 }
@@ -280,9 +250,8 @@ impl Face {
             },
             gap: skin.button.icon_gap,
             art: mark.map(|mark| Art {
-                mark,
+                marked: Marked::new(mark, icon_size(style, transport, skin)),
                 placement: placement(style, transport),
-                size: icon_size(style, transport, skin),
                 solo_color: if transport && !highlighted {
                     palette.text_dim
                 } else {

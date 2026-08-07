@@ -8,3 +8,30 @@ impl Control for Brand {
         skin.global_bar.brand_size
     }
 }
+
+#[cfg(feature = "render")]
+mod host {
+    use super::Brand;
+    use crate::{
+        atoms::bar::brand::Brand as Face,
+        compile::CompiledUi,
+        render::{ReadValue, Reads, Skin, controls::Draws},
+    };
+
+    impl Draws for Brand {
+        type Painter = Face;
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(skin)
+        }
+
+        fn data(
+            &self,
+            _value: Option<&ReadValue<'_>>,
+            _reads: &dyn Reads,
+            _ui: &CompiledUi,
+        ) -> Option<()> {
+            Some(())
+        }
+    }
+}

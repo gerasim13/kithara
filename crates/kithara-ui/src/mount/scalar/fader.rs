@@ -25,7 +25,7 @@ mod host {
         compile::CompiledUi,
         interact::{CursorShape, recognizers::Track},
         render::{
-            ReadValue, Skin,
+            ReadValue, Reads, Skin,
             controls::{Drag, Draws, Grip},
         },
     };
@@ -39,7 +39,12 @@ mod host {
 
         /// A fader is the fraction it sits at, so one whose endpoint has not
         /// reported a fraction draws nothing rather than a rail at zero.
-        fn data(&self, value: Option<&ReadValue<'_>>, ui: &CompiledUi) -> Option<Captioned> {
+        fn data(
+            &self,
+            value: Option<&ReadValue<'_>>,
+            _reads: &dyn Reads,
+            ui: &CompiledUi,
+        ) -> Option<Captioned> {
             let Some(ReadValue::Scalar(value)) = value else {
                 return None;
             };

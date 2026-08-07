@@ -21,7 +21,7 @@ mod host {
     use crate::{
         atoms::{design::cell::Cell as Face, painter::CellData},
         compile::CompiledUi,
-        render::{ReadValue, Skin, controls::Draws},
+        render::{ReadValue, Reads, Skin, controls::Draws},
     };
 
     impl Draws for Cell {
@@ -31,7 +31,12 @@ mod host {
             Face::new(skin)
         }
 
-        fn data(&self, _value: Option<&ReadValue<'_>>, ui: &CompiledUi) -> Option<CellData> {
+        fn data(
+            &self,
+            _value: Option<&ReadValue<'_>>,
+            _reads: &dyn Reads,
+            ui: &CompiledUi,
+        ) -> Option<CellData> {
             Some(CellData {
                 highlighted: self.highlighted,
                 label: self.label.map(|label| ui.resolve(label).to_owned()),

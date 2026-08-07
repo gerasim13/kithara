@@ -32,7 +32,7 @@ mod host {
         atoms::{painter::Labelled, tab::TabLarge},
         compile::CompiledUi,
         render::{
-            ReadValue, Skin,
+            ReadValue, Reads, Skin,
             controls::{Draws, Grip},
         },
     };
@@ -46,7 +46,12 @@ mod host {
 
         /// A tab heads a page, so one whose endpoint has not said whether its
         /// page is the current one draws nothing rather than a tab at rest.
-        fn data(&self, value: Option<&ReadValue<'_>>, ui: &CompiledUi) -> Option<Labelled> {
+        fn data(
+            &self,
+            value: Option<&ReadValue<'_>>,
+            _reads: &dyn Reads,
+            ui: &CompiledUi,
+        ) -> Option<Labelled> {
             let Some(ReadValue::Bool(active)) = value else {
                 return None;
             };

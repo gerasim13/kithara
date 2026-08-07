@@ -16,7 +16,7 @@ mod host {
         atoms::toggle::Binary,
         compile::CompiledUi,
         render::{
-            ReadValue, Skin,
+            ReadValue, Reads, Skin,
             controls::{Draws, Grip},
         },
     };
@@ -28,7 +28,12 @@ mod host {
             Binary::toggle(skin)
         }
 
-        fn data(&self, value: Option<&ReadValue<'_>>, _ui: &CompiledUi) -> Option<bool> {
+        fn data(
+            &self,
+            value: Option<&ReadValue<'_>>,
+            _reads: &dyn Reads,
+            _ui: &CompiledUi,
+        ) -> Option<bool> {
             match value {
                 Some(ReadValue::Bool(active)) => Some(*active),
                 _ => None,

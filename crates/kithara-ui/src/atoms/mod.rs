@@ -1,6 +1,8 @@
+pub(crate) mod bar;
 pub(crate) mod button;
 pub(crate) mod chip;
 pub(crate) mod design;
+pub(crate) mod icon;
 pub(crate) mod knob;
 pub(crate) mod meter;
 pub(crate) mod nav_item;

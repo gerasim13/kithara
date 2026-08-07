@@ -28,7 +28,7 @@ mod host {
         atoms::{nav_item::NavItem as Face, painter::NavData},
         compile::CompiledUi,
         render::{
-            ReadValue, Skin,
+            ReadValue, Reads, Skin,
             controls::{Draws, Grip},
             document_icon,
         },
@@ -44,7 +44,12 @@ mod host {
         /// A rail item is nothing without the page it points at, so an item
         /// whose endpoint has not said which page is current draws nothing —
         /// and neither does one whose art could not be read.
-        fn data(&self, value: Option<&ReadValue<'_>>, ui: &CompiledUi) -> Option<NavData> {
+        fn data(
+            &self,
+            value: Option<&ReadValue<'_>>,
+            _reads: &dyn Reads,
+            ui: &CompiledUi,
+        ) -> Option<NavData> {
             let (Some(ReadValue::Bool(active)), Some(mark)) =
                 (value, document_icon(self.icon).mark())
             else {

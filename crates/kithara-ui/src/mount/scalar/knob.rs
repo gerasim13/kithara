@@ -27,7 +27,7 @@ mod host {
             recognizers::{Track, WheelStep},
         },
         render::{
-            ReadValue, Skin,
+            ReadValue, Reads, Skin,
             controls::{Drag, Draws, Grip},
         },
     };
@@ -44,7 +44,12 @@ mod host {
 
         /// A knob is the fraction it points at, so one whose endpoint has not
         /// reported a fraction draws nothing rather than a dial at rest.
-        fn data(&self, value: Option<&ReadValue<'_>>, ui: &CompiledUi) -> Option<Captioned> {
+        fn data(
+            &self,
+            value: Option<&ReadValue<'_>>,
+            _reads: &dyn Reads,
+            ui: &CompiledUi,
+        ) -> Option<Captioned> {
             let Some(ReadValue::Scalar(value)) = value else {
                 return None;
             };

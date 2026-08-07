@@ -1,7 +1,7 @@
 use iced::{alignment::Horizontal, widget::Space};
 
 use super::{
-    atom::{glyph, readout, segmented, select},
+    atom::segmented,
     geometry::Rendered,
     panel::{context_bar, deck_summary, time, track_list, tree, vis},
     read_flag, wave_zoom,
@@ -18,7 +18,7 @@ use crate::{
     widgets::{
         Widget,
         deck::Bpm,
-        global_bar::{Brand, Divider, PresetSelector, SettingsButton, Spacer},
+        global_bar::{PresetSelector, SettingsButton},
         telemetry::Telemetry,
         text::Text,
         wave::mini::MiniWave,
@@ -57,19 +57,19 @@ impl ViewControl for mount::Summary {
 
 impl ViewControl for mount::Brand {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(Brand::builder().skin(cx.skin).build().view())
+        painted(self, cx)
     }
 }
 
 impl ViewControl for mount::Spacer {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(Spacer::builder().skin(cx.skin).build().view())
+        painted(self, cx)
     }
 }
 
 impl ViewControl for mount::Divider {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(Divider::builder().skin(cx.skin).build().view())
+        painted(self, cx)
     }
 }
 
@@ -129,15 +129,7 @@ impl ViewControl for mount::Text<'_> {
 
 impl ViewControl for mount::Glyph<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(glyph(
-            self.icon,
-            self.active_icon,
-            self.style,
-            self.color,
-            self.active_color,
-            read_flag(self.active, cx.reads, cx.ui),
-            cx.skin,
-        ))
+        painted(self, cx)
     }
 }
 
@@ -289,7 +281,7 @@ impl ViewControl for mount::Segmented<'_> {
 
 impl ViewControl for mount::Select {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(select(self.label, cx.ui, cx.skin))
+        painted(self, cx)
     }
 }
 
@@ -313,14 +305,7 @@ impl ViewControl for mount::Cell {
 
 impl ViewControl for mount::Readout {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(readout(
-            self.label,
-            self.tone,
-            self.framed,
-            cx.value,
-            cx.ui,
-            cx.skin,
-        ))
+        painted(self, cx)
     }
 }
 
@@ -360,7 +345,7 @@ where
     Control: Draws,
     Control::Painter: 'static,
 {
-    let Some(data) = control.data(cx.value, cx.ui) else {
+    let Some(data) = control.data(cx.value, cx.reads, cx.ui) else {
         return Rendered::leading(Space::new().into());
     };
     let grip = control.grip(cx.skin, &data);

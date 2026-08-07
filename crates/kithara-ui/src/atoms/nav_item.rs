@@ -1,7 +1,7 @@
 use crate::{
-    atoms::painter::NavData,
+    atoms::{icon::mark::Marked, painter::NavData},
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
-    render::{Mark, Skin},
+    render::Skin,
     skin::{ColorRole, FontFamily, FontWeight, NavSkin, TextRoleSkin},
     text::TextContext,
 };
@@ -91,35 +91,8 @@ impl NavItem {
         marker: Rect,
     ) {
         let x = marker.x + marker.w + self.metrics.text_pad_x;
-        let size = self.metrics.icon_size;
-        let width = match data.mark {
-            Mark::Glyph(ch) => {
-                let glyph = ch.to_string();
-                let icon = text.shape_lucide(&glyph, size);
-                list.text(
-                    &icon,
-                    &glyph,
-                    Transform::translate(Pt {
-                        x,
-                        y: bounds.y + (bounds.h - icon.height()) / 2.0,
-                    }),
-                    content,
-                );
-                icon.width()
-            }
-            Mark::Outline(outline) => {
-                list.fill_path(
-                    outline.placed(Rect {
-                        h: size,
-                        w: size,
-                        x,
-                        y: bounds.y + (bounds.h - size) / 2.0,
-                    }),
-                    content,
-                );
-                size
-            }
-        };
+        let width =
+            Marked::new(data.mark, self.metrics.icon_size).paint(list, text, x, bounds, content);
 
         if data.label.is_empty() {
             return;
@@ -145,6 +118,7 @@ mod tests {
     use crate::{
         builtin,
         draw::{DrawCmd, Geom, Paint},
+        render::Mark,
         text::{FontId, GlyphFace, GlyphSegment},
     };
 

@@ -58,9 +58,30 @@ pub(super) struct Cx<'a> {
 }
 
 impl NodeControl for mount::Summary {}
-impl NodeControl for mount::Brand {}
-impl NodeControl for mount::Spacer {}
-impl NodeControl for mount::Divider {}
+impl NodeControl for mount::Brand {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        painted(self, host, cx)
+    }
+}
+impl NodeControl for mount::Spacer {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        painted(self, host, cx)
+    }
+}
+impl NodeControl for mount::Divider {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        painted(self, host, cx)
+    }
+}
 impl NodeControl for mount::Preset {}
 impl NodeControl for mount::Settings {
     fn wire<A>(&self, host: &MasonryHost<'_, A>, output: &mut MasonryNode<A>)
@@ -101,7 +122,14 @@ impl NodeControl for mount::Controls {
     }
 }
 
-impl NodeControl for mount::Glyph<'_> {}
+impl NodeControl for mount::Glyph<'_> {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        painted(self, host, cx)
+    }
+}
 impl NodeControl for mount::Bpm {}
 impl NodeControl for mount::Time {}
 impl NodeControl for mount::Telemetry {}
@@ -111,8 +139,22 @@ impl NodeControl for mount::TrackList<'_> {}
 impl NodeControl for mount::Tree<'_> {}
 impl NodeControl for mount::ContextBar<'_> {}
 impl NodeControl for mount::Segmented<'_> {}
-impl NodeControl for mount::Select {}
-impl NodeControl for mount::Readout {}
+impl NodeControl for mount::Select {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        painted(self, host, cx)
+    }
+}
+impl NodeControl for mount::Readout {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        painted(self, host, cx)
+    }
+}
 
 impl NodeControl for mount::Text<'_> {
     fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
@@ -496,7 +538,7 @@ where
     let value = cx
         .read
         .and_then(|binding| resolve(host.reads, binding, host.ui));
-    let Some(data) = control.data(value.as_ref(), host.ui) else {
+    let Some(data) = control.data(value.as_ref(), host.reads, host.ui) else {
         return host.empty(cx.declared);
     };
     let grip = control.grip(host.skin, &data);

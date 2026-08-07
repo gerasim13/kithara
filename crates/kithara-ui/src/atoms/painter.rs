@@ -1,14 +1,17 @@
 use crate::{
     atoms::{
+        bar::{brand::Brand, divider::Divider, spacer::Spacer},
         button::{Button, ButtonLabel, VisualState},
         chip::Chip,
         design::{
-            cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter, status_dot::StatusDot,
-            swatch::Swatch,
+            cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter, select::Select,
+            status_dot::StatusDot, swatch::Swatch,
         },
+        icon::glyph::{Glyph, GlyphData},
         knob::Knob,
         meter::StereoMeter,
         nav_item::NavItem,
+        readout::{Readout, ReadoutData},
         tab::TabLarge,
         toggle::Binary,
         vu::VerticalVu,
@@ -109,6 +112,21 @@ pub(crate) struct NavData {
 
 impl ControlPainter for NavItem {
     type Data = NavData;
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        data: &Self::Data,
+        bounds: Rect,
+        _state: VisualState,
+    ) {
+        self.paint(list, text, data, bounds);
+    }
+}
+
+impl ControlPainter for Glyph {
+    type Data = GlyphData;
 
     fn draw(
         &self,
@@ -331,6 +349,81 @@ impl ControlPainter for Cell {
         _state: VisualState,
     ) {
         self.paint(list, text, data.label.as_deref(), data.highlighted, bounds);
+    }
+}
+
+impl ControlPainter for Brand {
+    type Data = ();
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        _data: &Self::Data,
+        bounds: Rect,
+        _state: VisualState,
+    ) {
+        self.paint(list, text, bounds);
+    }
+}
+
+impl ControlPainter for Divider {
+    type Data = ();
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        _text: &mut TextContext,
+        _data: &Self::Data,
+        bounds: Rect,
+        _state: VisualState,
+    ) {
+        self.paint(list, bounds);
+    }
+}
+
+impl ControlPainter for Spacer {
+    type Data = ();
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        _text: &mut TextContext,
+        _data: &Self::Data,
+        bounds: Rect,
+        _state: VisualState,
+    ) {
+        self.paint(list, bounds);
+    }
+}
+
+impl ControlPainter for Readout {
+    type Data = ReadoutData;
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        data: &Self::Data,
+        bounds: Rect,
+        _state: VisualState,
+    ) {
+        self.paint(list, text, data, bounds);
+    }
+}
+
+impl ControlPainter for Select {
+    type Data = String;
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        data: &Self::Data,
+        bounds: Rect,
+        _state: VisualState,
+    ) {
+        self.paint(list, text, data, bounds);
     }
 }
 

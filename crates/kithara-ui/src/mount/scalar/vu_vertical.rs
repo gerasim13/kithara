@@ -22,7 +22,7 @@ mod host {
         compile::CompiledUi,
         interact::{CursorShape, recognizers::Track},
         render::{
-            ReadValue, Skin, StereoLevels,
+            ReadValue, Reads, Skin, StereoLevels,
             controls::{Drag, Draws, Grip},
         },
     };
@@ -34,7 +34,12 @@ mod host {
             VerticalVu::new(self.ticks, skin)
         }
 
-        fn data(&self, value: Option<&ReadValue<'_>>, _ui: &CompiledUi) -> Option<StereoLevels> {
+        fn data(
+            &self,
+            value: Option<&ReadValue<'_>>,
+            _reads: &dyn Reads,
+            _ui: &CompiledUi,
+        ) -> Option<StereoLevels> {
             match value {
                 Some(ReadValue::Stereo(levels)) => Some(*levels),
                 _ => None,

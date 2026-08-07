@@ -6,16 +6,19 @@ use num_traits::cast::AsPrimitive;
 use super::custom::{HostAction, Repaint};
 use crate::{
     atoms::{
+        bar::{brand::Brand, divider::Divider, spacer::Spacer},
         button::Button,
         chip::Chip,
         design::{
-            cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter, status_dot::StatusDot,
-            swatch::Swatch,
+            cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter, select::Select,
+            status_dot::StatusDot, swatch::Swatch,
         },
+        icon::glyph::Glyph,
         knob::Knob,
         meter::StereoMeter,
         nav_item::NavItem,
         painter::{ControlPainter, Labelled},
+        readout::Readout,
         tab::TabLarge,
         toggle::Binary,
         vu::VerticalVu,
@@ -356,6 +359,12 @@ impl Retained for Chip {
     }
 }
 
+impl Retained for Glyph {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        set_bool(&mut data.active, value)
+    }
+}
+
 impl Retained for NavItem {
     fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
         set_bool(&mut data.active, value)
@@ -392,11 +401,33 @@ impl Retained for Meter {
     }
 }
 
+/// The bar's furniture shows what the skin said; no endpoint moves any of it.
+impl Retained for Brand {}
+
+impl Retained for Divider {}
+
+impl Retained for Spacer {}
+
 /// A status dot and a cell show what the document said; no endpoint moves
 /// either of them.
 impl Retained for StatusDot {}
 
 impl Retained for Cell {}
+
+/// A readout shows what its endpoint last reported; the value is a word by the
+/// time it reaches the painter, so a new one is a new word.
+impl Retained for Readout {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        let next = match value {
+            ReadValue::Text(value) => (*value).to_owned(),
+            ReadValue::Scalar(value) => format!("{value:.2}"),
+            _ => return false,
+        };
+        std::mem::replace(&mut data.value, next) != data.value
+    }
+}
+
+impl Retained for Select {}
 
 impl Retained for Swatch {}
 

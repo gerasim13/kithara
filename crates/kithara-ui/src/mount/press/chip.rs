@@ -22,7 +22,7 @@ mod host {
         atoms::{chip::Chip as Face, painter::Labelled},
         compile::CompiledUi,
         render::{
-            ReadValue, Skin,
+            ReadValue, Reads, Skin,
             controls::{Draws, Grip},
         },
     };
@@ -37,7 +37,12 @@ mod host {
         /// A chip carries a word the document wrote, so it shows it whether or
         /// not an endpoint has said which way it is set — unlike a switch,
         /// which is nothing but its state.
-        fn data(&self, value: Option<&ReadValue<'_>>, ui: &CompiledUi) -> Option<Labelled> {
+        fn data(
+            &self,
+            value: Option<&ReadValue<'_>>,
+            _reads: &dyn Reads,
+            ui: &CompiledUi,
+        ) -> Option<Labelled> {
             Some(Labelled {
                 active: matches!(value, Some(ReadValue::Bool(true))),
                 label: ui.resolve(self.label).to_owned(),

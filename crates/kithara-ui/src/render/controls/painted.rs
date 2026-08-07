@@ -24,7 +24,7 @@ use crate::{
         recognizers::{Crossing, Scalar, ScalarState, click},
     },
     render::{
-        ReadValue, Skin, UiEvent, activate,
+        ReadValue, Reads, Skin, UiEvent, activate,
         controls::{Drag, Grip, Press},
         scalar,
     },
@@ -45,9 +45,13 @@ pub(crate) trait Draws {
 
     /// What it draws this frame, or nothing at all when its endpoint has not
     /// said yet — an unbound switch is an empty box, not an idle switch.
+    ///
+    /// Its own endpoint's value is handed in because both hosts already
+    /// resolved it; anything else the control names it reads for itself.
     fn data(
         &self,
         value: Option<&ReadValue<'_>>,
+        reads: &dyn Reads,
         ui: &CompiledUi,
     ) -> Option<<Self::Painter as ControlPainter>::Data>;
 
@@ -506,6 +510,7 @@ mod tests {
                 cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter,
                 status_dot::StatusDot, swatch::Swatch,
             },
+            icon::glyph::{Glyph, GlyphData},
             knob::Knob,
             meter::StereoMeter,
             nav_item::NavItem,
@@ -801,6 +806,47 @@ mod tests {
             let mut masonry = Painted::new(TabLarge::new(skin), data(), skin);
 
             assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+        }
+    }
+
+    /// Both states, and both kinds of art. The authored one is here for the
+    /// same reason it is on the rail item: it used to leave the draw list for
+    /// an iced widget, which left the retained host with nothing to paint.
+    #[kithara::test]
+    fn iced_and_masonry_record_the_same_glyph() {
+        let skin = builtin::skin();
+        let bounds = Rect {
+            h: 24.0,
+            w: 24.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let painter = || {
+            Glyph::new(
+                skin.rgba(ColorRole::Text),
+                skin.rgba(ColorRole::Accent),
+                14.0,
+            )
+        };
+        for icon in [Icon::Play, Icon::Zvuk] {
+            let mark = icon
+                .mark()
+                .unwrap_or_else(|| panic!("{icon:?} must have a mark"));
+            for active in [false, true] {
+                let data = || GlyphData {
+                    active,
+                    active_mark: None,
+                    mark,
+                };
+                let iced = Paint::new(painter(), data(), skin).draw_list(
+                    &PaintState::default(),
+                    bounds,
+                    VisualState::Idle,
+                );
+                let mut masonry = Painted::new(painter(), data(), skin);
+
+                assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+            }
         }
     }
 

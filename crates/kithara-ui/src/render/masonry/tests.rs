@@ -1510,9 +1510,9 @@ enum Paints {
 /// controls someone remembered to add left the rest invisible: not drawn, and
 /// not reported as undrawn either.
 const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
-    ("Brand", Paints::NotYet, r#"Brand(id: "control")"#),
-    ("Spacer", Paints::NotYet, r#"Spacer(id: "control")"#),
-    ("Divider", Paints::NotYet, r#"Divider(id: "control")"#),
+    ("Brand", Paints::Yes, r#"Brand(id: "control")"#),
+    ("Spacer", Paints::Yes, r#"Spacer(id: "control")"#),
+    ("Divider", Paints::Yes, r#"Divider(id: "control")"#),
     (
         "PresetSelector",
         Paints::NotYet,
@@ -1590,7 +1590,7 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     ),
     (
         "Glyph",
-        Paints::NotYet,
+        Paints::Yes,
         r#"Glyph(id: "control", icon: Playlist)"#,
     ),
     (
@@ -1615,7 +1615,7 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     ),
     (
         "Select",
-        Paints::NotYet,
+        Paints::Yes,
         r#"Select(id: "control", label: "QUALITY")"#,
     ),
     (
@@ -1635,7 +1635,7 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     ),
     (
         "Readout",
-        Paints::NotYet,
+        Paints::Yes,
         r#"Readout(id: "control", label: Some("BPM"), read: Model(id: "library.breadcrumb"))"#,
     ),
     (
