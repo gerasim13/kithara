@@ -69,6 +69,8 @@ impl Volume {
 
 impl<'a> HostStorage<'a> {
     const ACTIVE_LEASE: Duration = Duration::from_secs(12 * 60 * 60);
+    /// The profile `install-services` starts the Linux guest under.
+    const COLIMA_PROFILE: &'static str = "kithara";
     const DAY: Duration = Duration::from_secs(24 * 60 * 60);
     const LOG_LIMIT_BYTES: u64 = 20_000_000;
     const REMOVABLE_ROOTS: &'static [&'static str] = &["cache", "logs", "vm", "workspaces"];
@@ -171,21 +173,24 @@ impl<'a> HostStorage<'a> {
 
         let (mut final_pressure, _) = self.worst_pressure()?;
         if final_pressure == Pressure::Reject {
-            self.prune_old_trees("cache/trusted", Duration::ZERO)?;
-            self.prune_old_trees("cache/bootstrap/trusted", Duration::ZERO)?;
-            self.prune_retired_caches(Duration::ZERO)?;
+            // The guests are where the space is, and the caches are what the
+            // steps above can reach — so taking the caches first pays for the
+            // guests with the compiler output the machine exists to keep warm.
+            // Both guests only give their space back when they are thrown
+            // away: the macOS one measured 38 gibibytes in a recycle against
+            // three and a half for everything else together, and the Linux
+            // one's disk is allocated once and never deflates, so pruning
+            // inside it returns nothing to this volume. Recycling costs the
+            // job in flight and a cold image build, which is a trade worth
+            // making only once jobs are being refused anyway — this branch.
+            self.recycle_linux_guest();
+            self.recycle_macos_guest();
             final_pressure = self.worst_pressure()?.0;
         }
         if final_pressure == Pressure::Reject {
-            // Every step above works on what jobs leave behind, and none of it
-            // is where the space went: the macOS guest grows on this volume for
-            // as long as it lives and only gives the space back when it is
-            // thrown away — measured at 38 gibibytes in one recycle, against
-            // three and a half for everything else together. Restarting the
-            // agent is what an operator does by hand here, and it costs the
-            // job now in flight. That trade only makes sense once jobs are
-            // being refused anyway, which is exactly this branch.
-            self.recycle_macos_guest();
+            self.prune_old_trees("cache/trusted", Duration::ZERO)?;
+            self.prune_old_trees("cache/bootstrap/trusted", Duration::ZERO)?;
+            self.prune_retired_caches(Duration::ZERO)?;
             final_pressure = self.worst_pressure()?.0;
         }
         info!(
@@ -486,6 +491,26 @@ impl<'a> HostStorage<'a> {
 
     /// Restart the macOS runner agent, which throws its guest away and clones
     /// a fresh one from the base image.
+    /// Delete the Linux guest so its disk is allocated again from nothing.
+    ///
+    /// The agent runs `colima start` in the foreground, so the process ends
+    /// with the guest and launchd starts a fresh one. The images inside are
+    /// rebuilt, which is the cost.
+    fn recycle_linux_guest(&self) {
+        let colima = self.config.host.brew_tool("colima");
+        if !colima.is_file() {
+            return;
+        }
+        info!("recycling the Linux guest to reclaim volume space");
+        if let Err(error) = self.process.run(
+            &colima.display().to_string(),
+            &["delete", "--force", "--profile", Self::COLIMA_PROFILE],
+            "recycle the Linux guest",
+        ) {
+            warn!(%error, "could not recycle the Linux guest");
+        }
+    }
+
     fn recycle_macos_guest(&self) {
         let uid = self
             .process
