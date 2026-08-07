@@ -113,6 +113,13 @@ at_least_one_of = [["stretch-signalsmith", "stretch-bungee"]]
 when_feature = "symphonia"
 always = ["symphonia"]
 
+# Same shape, one layer down: kithara-play refuses a non-wasm build without an
+# output backend, and cpal is the only one off wasm — backend-web-audio is a
+# browser API. Every crate that forwards the choice inherits the refusal.
+[[health.feature_invariants]]
+when_feature = "backend-cpal"
+always = ["backend-cpal"]
+
 [test]
 default_lane = "workspace"
 default_backend = "wreq"
