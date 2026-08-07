@@ -50,7 +50,7 @@ pub(super) fn bootstrap(process: &Process, host: &LinuxHost) -> Result<()> {
         )?;
     }
 
-    for volume in ["kithara-ci-cargo-home", "kithara-ci-target"] {
+    for (volume, _) in super::container::Container::MOUNTS {
         process.run(
             "docker",
             &["volume", "create", volume],

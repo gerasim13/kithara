@@ -227,16 +227,17 @@ fn unit(
          --memory {memory} \
          --pids-limit {pids} \
          --security-opt no-new-privileges \
-         --env-file {env_file} \
-         --env {target_dir}",
+         --env-file {env_file}",
         name = job.name,
         network = job.network,
         cpuset = job.cpuset,
         memory = job.memory,
         pids = Container::PIDS_LIMIT,
         env_file = job.env_file,
-        target_dir = Container::TARGET_DIR,
     )?;
+    for entry in Container::ENVIRONMENT {
+        write!(unit, " --env {entry}")?;
+    }
     for (volume, target) in Container::MOUNTS {
         write!(unit, " --mount type=volume,source={volume},target={target}")?;
     }
@@ -333,6 +334,25 @@ mod tests {
             "{images:?}"
         );
         assert_eq!(images.len(), 2, "each image is named once: {images:?}");
+    }
+
+    /// The same contract as the Compose rendering: a unit that does not name
+    /// the wrapper leaves `sccache` installed and unused.
+    #[test]
+    fn a_unit_is_told_to_use_the_compiler_cache() {
+        let host = host_fixture();
+        let pins = &fixture().pins;
+        let text = unit(
+            &host,
+            host.runner("kithara-ci-octocat").expect("runner"),
+            "0,1,2",
+            pins,
+            "/usr/local/bin/kithara-ci",
+        )
+        .expect("the unit must render");
+        for entry in Container::ENVIRONMENT {
+            assert!(text.contains(&format!("--env {entry}")), "{entry}:\n{text}");
+        }
     }
 
     /// More runners than cores is the point of the exercise: an idle listener

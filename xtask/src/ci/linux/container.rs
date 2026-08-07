@@ -31,11 +31,32 @@ impl Container<'_> {
     /// them, and jobs on this machine run at the same time. Mounting the data
     /// without the lock leaves two of them unpacking one crate into one
     /// directory.
-    pub(super) const MOUNTS: [(&'static str, &'static str); 2] = [
+    pub(super) const MOUNTS: [(&'static str, &'static str); 3] = [
         ("kithara-ci-cargo-home", "/home/runner/.cargo"),
         ("kithara-ci-target", "/cache/target"),
+        ("kithara-ci-sccache", "/cache/sccache"),
     ];
-    pub(super) const TARGET_DIR: &'static str = "CARGO_TARGET_DIR=/cache/target";
+
+    /// What the job is told about where to build and what to reuse.
+    ///
+    /// `sccache` is in the image and was reaching nothing: without
+    /// `RUSTC_WRAPPER` every job compiled the workspace from source, and the
+    /// only thing the runners shared was the registry of downloaded crates and
+    /// one build directory that had grown past two hundred gigabytes. A build
+    /// directory is the wrong thing to share — its artefacts are valid only for
+    /// the exact features, profile and toolchain that produced them, so
+    /// twenty-four jobs of different shapes pile up beside each other and reuse
+    /// nothing.
+    /// `sccache` keys on the inputs of a compilation instead, which is what
+    /// makes sharing it across runners sound rather than merely concurrent.
+    pub(super) const ENVIRONMENT: [&'static str; 4] = [
+        "CARGO_TARGET_DIR=/cache/target",
+        "RUSTC_WRAPPER=sccache",
+        "SCCACHE_DIR=/cache/sccache",
+        // Well under the volume it lives on, and sccache evicts by least use
+        // rather than growing until the disk decides for it.
+        "SCCACHE_CACHE_SIZE=100G",
+    ];
     pub(super) const PIDS_LIMIT: u32 = 8192;
 }
 

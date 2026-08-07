@@ -74,8 +74,7 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
              mem_limit: {memory}\n    \
              pids_limit: {pids}\n    \
              security_opt: [\"no-new-privileges\"]\n    \
-             env_file: [\"{env_file}\"]\n    \
-             environment: [\"{target_dir}\"]",
+             env_file: [\"{env_file}\"]",
             name = runner.name,
             image = unit.image,
             container = unit.name,
@@ -83,8 +82,11 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
             memory = unit.memory,
             pids = Container::PIDS_LIMIT,
             env_file = unit.env_file,
-            target_dir = Container::TARGET_DIR,
         )?;
+        writeln!(yaml, "    environment:")?;
+        for entry in Container::ENVIRONMENT {
+            writeln!(yaml, "      - {entry}")?;
+        }
         writeln!(yaml, "    volumes:")?;
         for (volume, target) in Container::MOUNTS {
             writeln!(yaml, "      - {volume}:{target}")?;
@@ -135,6 +137,22 @@ mod tests {
             host.runners.len(),
             "every service must decline to restart:\n{yaml}"
         );
+    }
+
+    /// The compiler cache was in the image and reaching nothing. Whichever way
+    /// a runner is started, it must be told to use it — otherwise every job
+    /// compiles the workspace from source and the only thing the machine shares
+    /// is a build directory that cannot be shared.
+    #[test]
+    fn a_runner_is_told_to_use_the_compiler_cache() {
+        let yaml = project(&host_fixture(), &fixture().pins, 32).expect("the project must render");
+        for entry in Container::ENVIRONMENT {
+            assert!(
+                yaml.contains(&format!("      - {entry}")),
+                "{entry}:\n{yaml}"
+            );
+        }
+        assert!(yaml.contains("kithara-ci-sccache:/cache/sccache"), "{yaml}");
     }
 
     /// The Android runner reaches hardware a plain one must not, and Compose

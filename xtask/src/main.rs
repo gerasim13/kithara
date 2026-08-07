@@ -78,7 +78,20 @@ enum Command {
     Core(CoreCommand),
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> std::process::ExitCode {
+    match work() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        // A check that ran and found something is not a crash. Printing it as
+        // one — `Error:` and a backtrace through the Rust runtime — reads as a
+        // broken tool, which sends the reader looking for a defect that is not
+        // there. See `kithara_devtools::verdict`.
+        Err(error) => std::process::ExitCode::from(
+            u8::try_from(kithara_devtools::verdict::NotClean::report(&error)).unwrap_or(1),
+        ),
+    }
+}
+
+fn work() -> anyhow::Result<()> {
     let _ = tracing_subscriber::fmt()
         .with_target(false)
         .without_time()
