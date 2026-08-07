@@ -16,8 +16,10 @@ mod host {
     use super::Meter;
     use crate::{
         atoms::design::meter::Meter as Face,
-        compile::CompiledUi,
-        render::{ReadValue, Reads, Skin, controls::Draws},
+        render::{
+            ReadValue, Skin,
+            controls::{Draws, Reading},
+        },
     };
 
     impl Draws for Meter {
@@ -29,13 +31,8 @@ mod host {
 
         /// An unbound meter is an empty track rather than an empty box: a level
         /// nobody reports is a level of nothing.
-        fn data(
-            &self,
-            value: Option<&ReadValue<'_>>,
-            _reads: &dyn Reads,
-            _ui: &CompiledUi,
-        ) -> Option<f32> {
-            Some(match value {
+        fn data(&self, read: Reading<'_>) -> Option<f32> {
+            Some(match read.value {
                 Some(ReadValue::Scalar(level)) => level.clamp(0.0, 1.0).as_(),
                 _ => 0.0,
             })

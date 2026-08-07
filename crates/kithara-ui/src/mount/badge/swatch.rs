@@ -25,8 +25,10 @@ mod host {
     use super::Swatch;
     use crate::{
         atoms::design::swatch::Swatch as Face,
-        compile::CompiledUi,
-        render::{ReadValue, Reads, Skin, controls::Draws},
+        render::{
+            Skin,
+            controls::{Draws, Reading},
+        },
     };
 
     impl Draws for Swatch {
@@ -36,13 +38,8 @@ mod host {
             Face::new(self.role, skin)
         }
 
-        fn data(
-            &self,
-            _value: Option<&ReadValue<'_>>,
-            _reads: &dyn Reads,
-            ui: &CompiledUi,
-        ) -> Option<String> {
-            Some(ui.resolve(self.label).to_owned())
+        fn data(&self, read: Reading<'_>) -> Option<String> {
+            Some(read.ui.resolve(self.label).to_owned())
         }
     }
 }

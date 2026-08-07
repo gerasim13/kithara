@@ -9,7 +9,7 @@ use crate::{
     render::{InputOwner, ReadValue, Reads, Skin, UiEvent},
     widgets::{
         Widget,
-        deck::{DeckSummary, Time},
+        deck::DeckSummary,
         nav::{ContextBar, Tree},
         track_list::TrackList,
         vis::Vis,
@@ -25,21 +25,6 @@ pub(super) fn deck_summary<'a>(
 ) -> Element<'a, UiEvent> {
     DeckSummary::builder()
         .style(style)
-        .maybe_value(value)
-        .scope(scope)
-        .reads(reads)
-        .skin(skin)
-        .build()
-        .view()
-}
-
-pub(super) fn time<'a>(
-    value: Option<&ReadValue<'_>>,
-    scope: &'a str,
-    reads: &dyn Reads,
-    skin: &'a Skin,
-) -> Element<'a, UiEvent> {
-    Time::builder()
         .maybe_value(value)
         .scope(scope)
         .reads(reads)

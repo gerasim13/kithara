@@ -46,11 +46,13 @@ mod host {
     use super::Glyph;
     use crate::{
         atoms::icon::glyph::{Glyph as Face, GlyphData},
-        compile::CompiledUi,
         draw::Rgba,
         module::GlyphStyle,
         render::{
-            Icon, ReadValue, Reads, Skin, controls::Draws, document::read::resolve, document_icon,
+            Icon, ReadValue, Skin,
+            controls::{Draws, Reading},
+            document::read::resolve,
+            document_icon,
         },
         skin::ColorRole,
     };
@@ -74,15 +76,13 @@ mod host {
         ///
         /// The flag it shows comes from an endpoint of its own rather than from
         /// the control's value, so it is read here.
-        fn data(
-            &self,
-            _value: Option<&ReadValue<'_>>,
-            reads: &dyn Reads,
-            ui: &CompiledUi,
-        ) -> Option<GlyphData> {
+        fn data(&self, read: Reading<'_>) -> Option<GlyphData> {
             Some(GlyphData {
                 active: self.active.is_some_and(|binding| {
-                    matches!(resolve(reads, binding, ui), Some(ReadValue::Bool(true)))
+                    matches!(
+                        resolve(read.reads, binding, read.ui),
+                        Some(ReadValue::Bool(true))
+                    )
                 }),
                 active_mark: self.active_icon.map(document_icon).and_then(Icon::mark),
                 mark: document_icon(self.icon).mark()?,

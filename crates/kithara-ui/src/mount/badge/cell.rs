@@ -20,8 +20,10 @@ mod host {
     use super::Cell;
     use crate::{
         atoms::{design::cell::Cell as Face, painter::CellData},
-        compile::CompiledUi,
-        render::{ReadValue, Reads, Skin, controls::Draws},
+        render::{
+            Skin,
+            controls::{Draws, Reading},
+        },
     };
 
     impl Draws for Cell {
@@ -31,15 +33,10 @@ mod host {
             Face::new(skin)
         }
 
-        fn data(
-            &self,
-            _value: Option<&ReadValue<'_>>,
-            _reads: &dyn Reads,
-            ui: &CompiledUi,
-        ) -> Option<CellData> {
+        fn data(&self, read: Reading<'_>) -> Option<CellData> {
             Some(CellData {
                 highlighted: self.highlighted,
-                label: self.label.map(|label| ui.resolve(label).to_owned()),
+                label: self.label.map(|label| read.ui.resolve(label).to_owned()),
             })
         }
     }

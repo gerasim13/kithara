@@ -20,8 +20,10 @@ mod host {
     use super::StatusDot;
     use crate::{
         atoms::design::status_dot::StatusDot as Face,
-        compile::CompiledUi,
-        render::{ReadValue, Reads, Skin, controls::Draws},
+        render::{
+            Skin,
+            controls::{Draws, Reading},
+        },
     };
 
     impl Draws for StatusDot {
@@ -31,13 +33,8 @@ mod host {
             Face::new(self.tone, skin)
         }
 
-        fn data(
-            &self,
-            _value: Option<&ReadValue<'_>>,
-            _reads: &dyn Reads,
-            ui: &CompiledUi,
-        ) -> Option<String> {
-            Some(ui.resolve(self.label).to_owned())
+        fn data(&self, read: Reading<'_>) -> Option<String> {
+            Some(read.ui.resolve(self.label).to_owned())
         }
     }
 }

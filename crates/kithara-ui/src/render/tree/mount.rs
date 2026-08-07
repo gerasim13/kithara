@@ -3,7 +3,7 @@ use iced::{alignment::Horizontal, widget::Space};
 use super::{
     atom::segmented,
     geometry::Rendered,
-    panel::{context_bar, deck_summary, time, track_list, tree, vis},
+    panel::{context_bar, deck_summary, track_list, tree, vis},
     read_flag, wave_zoom,
     window::{titlebar, window_controls},
 };
@@ -13,13 +13,12 @@ use crate::{
     mount,
     render::{
         InputOwner, ReadValue, Reads, Skin,
-        controls::{Draws, Gesture, Grip, Paint},
+        controls::{Draws, Gesture, Grip, Paint, Reading},
     },
     widgets::{
         Widget,
         deck::Bpm,
         global_bar::{PresetSelector, SettingsButton},
-        telemetry::Telemetry,
         text::Text,
         wave::mini::MiniWave,
         window::WindowSurface,
@@ -168,21 +167,13 @@ impl ViewControl for mount::Bpm {
 
 impl ViewControl for mount::Time {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(time(cx.value, cx.scope, cx.reads, cx.skin))
+        painted(self, cx)
     }
 }
 
 impl ViewControl for mount::Telemetry {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(
-            Telemetry::builder()
-                .format(self.format)
-                .framed(self.framed)
-                .maybe_value(cx.value)
-                .skin(cx.skin)
-                .build()
-                .view(),
-        )
+        painted(self, cx)
     }
 }
 
@@ -345,7 +336,12 @@ where
     Control: Draws,
     Control::Painter: 'static,
 {
-    let Some(data) = control.data(cx.value, cx.reads, cx.ui) else {
+    let Some(data) = control.data(Reading {
+        reads: cx.reads,
+        scope: cx.scope,
+        ui: cx.ui,
+        value: cx.value,
+    }) else {
         return Rendered::leading(Space::new().into());
     };
     let grip = control.grip(cx.skin, &data);

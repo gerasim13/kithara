@@ -16,7 +16,11 @@ use crate::{
     expand::{Binding, ControlSpec},
     module::{TextAlign, TextStyle},
     mount,
-    render::{InputOwner, ReadValue, Skin, UiEvent, controls::Draws, document::read::resolve},
+    render::{
+        InputOwner, ReadValue, Skin, UiEvent,
+        controls::{Draws, Reading},
+        document::read::{read_scope, resolve},
+    },
     size::{Dim, SizeSpec, control_size},
     skin::{ColorRole, TextRoleSkin},
     solve,
@@ -131,8 +135,22 @@ impl NodeControl for mount::Glyph<'_> {
     }
 }
 impl NodeControl for mount::Bpm {}
-impl NodeControl for mount::Time {}
-impl NodeControl for mount::Telemetry {}
+impl NodeControl for mount::Time {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        painted(self, host, cx)
+    }
+}
+impl NodeControl for mount::Telemetry {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        painted(self, host, cx)
+    }
+}
 impl NodeControl for mount::Wave<'_> {}
 impl NodeControl for mount::Vis {}
 impl NodeControl for mount::TrackList<'_> {}
@@ -538,7 +556,12 @@ where
     let value = cx
         .read
         .and_then(|binding| resolve(host.reads, binding, host.ui));
-    let Some(data) = control.data(value.as_ref(), host.reads, host.ui) else {
+    let Some(data) = control.data(Reading {
+        reads: host.reads,
+        scope: read_scope(cx.read, host.ui),
+        ui: host.ui,
+        value: value.as_ref(),
+    }) else {
         return host.empty(cx.declared);
     };
     let grip = control.grip(host.skin, &data);

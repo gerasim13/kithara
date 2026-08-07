@@ -22,11 +22,10 @@ mod host {
     use super::Fader;
     use crate::{
         atoms::{design::fader::Fader as Face, painter::Captioned},
-        compile::CompiledUi,
         interact::{CursorShape, recognizers::Track},
         render::{
-            ReadValue, Reads, Skin,
-            controls::{Drag, Draws, Grip},
+            ReadValue, Skin,
+            controls::{Drag, Draws, Grip, Reading},
         },
     };
 
@@ -39,17 +38,12 @@ mod host {
 
         /// A fader is the fraction it sits at, so one whose endpoint has not
         /// reported a fraction draws nothing rather than a rail at zero.
-        fn data(
-            &self,
-            value: Option<&ReadValue<'_>>,
-            _reads: &dyn Reads,
-            ui: &CompiledUi,
-        ) -> Option<Captioned> {
-            let Some(ReadValue::Scalar(value)) = value else {
+        fn data(&self, read: Reading<'_>) -> Option<Captioned> {
+            let Some(ReadValue::Scalar(value)) = read.value else {
                 return None;
             };
             Some(Captioned {
-                label: self.label.map(|label| ui.resolve(label).to_owned()),
+                label: self.label.map(|label| read.ui.resolve(label).to_owned()),
                 value: value.clamp(0.0, 1.0).as_(),
             })
         }

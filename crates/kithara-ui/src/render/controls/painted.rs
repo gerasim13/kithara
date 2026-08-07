@@ -45,15 +45,7 @@ pub(crate) trait Draws {
 
     /// What it draws this frame, or nothing at all when its endpoint has not
     /// said yet — an unbound switch is an empty box, not an idle switch.
-    ///
-    /// Its own endpoint's value is handed in because both hosts already
-    /// resolved it; anything else the control names it reads for itself.
-    fn data(
-        &self,
-        value: Option<&ReadValue<'_>>,
-        reads: &dyn Reads,
-        ui: &CompiledUi,
-    ) -> Option<<Self::Painter as ControlPainter>::Data>;
+    fn data(&self, read: Reading<'_>) -> Option<<Self::Painter as ControlPainter>::Data>;
 
     /// What the pointer means to it where the document says the leaf owns
     /// input.
@@ -64,6 +56,20 @@ pub(crate) trait Draws {
     fn grip(&self, _skin: &Skin, _data: &<Self::Painter as ControlPainter>::Data) -> Grip {
         Grip::None
     }
+}
+
+/// What a control is handed when it decides what to draw.
+///
+/// Its own endpoint's value is resolved by the host, because the host had to
+/// resolve it anyway. Everything else a control names — a second flag, a
+/// sibling's reading — it looks up for itself, which needs the reads, the
+/// document the names live in, and the scope its siblings share.
+#[derive(Clone, Copy)]
+pub(crate) struct Reading<'a> {
+    pub(crate) reads: &'a dyn Reads,
+    pub(crate) scope: &'a str,
+    pub(crate) ui: &'a CompiledUi,
+    pub(crate) value: Option<&'a ReadValue<'a>>,
 }
 
 /// One neutral painter drawn straight into an iced canvas.

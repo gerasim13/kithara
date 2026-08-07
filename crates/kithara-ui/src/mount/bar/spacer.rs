@@ -14,8 +14,10 @@ mod host {
     use super::Spacer;
     use crate::{
         atoms::bar::spacer::Spacer as Face,
-        compile::CompiledUi,
-        render::{ReadValue, Reads, Skin, controls::Draws},
+        render::{
+            Skin,
+            controls::{Draws, Reading},
+        },
     };
 
     impl Draws for Spacer {
@@ -25,12 +27,7 @@ mod host {
             Face::new(skin)
         }
 
-        fn data(
-            &self,
-            _value: Option<&ReadValue<'_>>,
-            _reads: &dyn Reads,
-            _ui: &CompiledUi,
-        ) -> Option<()> {
+        fn data(&self, _read: Reading<'_>) -> Option<()> {
             Some(())
         }
     }

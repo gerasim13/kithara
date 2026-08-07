@@ -3,12 +3,14 @@ use crate::{
         bar::{brand::Brand, divider::Divider, spacer::Spacer},
         button::{Button, ButtonLabel, VisualState},
         chip::Chip,
+        deck::clock::{Clock, Elapsed},
         design::{
             cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter, select::Select,
             status_dot::StatusDot, swatch::Swatch,
         },
         icon::glyph::{Glyph, GlyphData},
         knob::Knob,
+        label::telemetry::Telemetry,
         meter::StereoMeter,
         nav_item::NavItem,
         readout::{Readout, ReadoutData},
@@ -409,6 +411,45 @@ impl ControlPainter for Readout {
         _state: VisualState,
     ) {
         self.paint(list, text, data, bounds);
+    }
+}
+
+impl ControlPainter for Clock {
+    type Data = Elapsed;
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        data: &Self::Data,
+        bounds: Rect,
+        _state: VisualState,
+    ) {
+        self.paint(list, text, data, bounds);
+    }
+}
+
+impl ControlPainter for Telemetry {
+    type Data = f64;
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        data: &Self::Data,
+        bounds: Rect,
+        _state: VisualState,
+    ) {
+        self.paint(list, text, &self.format(*data), bounds);
+    }
+
+    fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
+        self.declared()
+    }
+
+    /// Only the width: a reading fills the height of the row it sits in.
+    fn measure(&self, text: &mut TextContext, data: &Self::Data) -> Size {
+        Size::new(self.intrinsic_width(text, &self.format(*data)), 0.0)
     }
 }
 

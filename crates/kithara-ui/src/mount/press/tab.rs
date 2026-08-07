@@ -30,10 +30,9 @@ mod host {
     use super::Tab;
     use crate::{
         atoms::{painter::Labelled, tab::TabLarge},
-        compile::CompiledUi,
         render::{
-            ReadValue, Reads, Skin,
-            controls::{Draws, Grip},
+            ReadValue, Skin,
+            controls::{Draws, Grip, Reading},
         },
     };
 
@@ -46,18 +45,13 @@ mod host {
 
         /// A tab heads a page, so one whose endpoint has not said whether its
         /// page is the current one draws nothing rather than a tab at rest.
-        fn data(
-            &self,
-            value: Option<&ReadValue<'_>>,
-            _reads: &dyn Reads,
-            ui: &CompiledUi,
-        ) -> Option<Labelled> {
-            let Some(ReadValue::Bool(active)) = value else {
+        fn data(&self, read: Reading<'_>) -> Option<Labelled> {
+            let Some(ReadValue::Bool(active)) = read.value else {
                 return None;
             };
             Some(Labelled {
                 active: *active,
-                label: ui.resolve(self.label).to_owned(),
+                label: read.ui.resolve(self.label).to_owned(),
             })
         }
 

@@ -9,12 +9,14 @@ use crate::{
         bar::{brand::Brand, divider::Divider, spacer::Spacer},
         button::Button,
         chip::Chip,
+        deck::clock::Clock,
         design::{
             cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter, select::Select,
             status_dot::StatusDot, swatch::Swatch,
         },
         icon::glyph::Glyph,
         knob::Knob,
+        label::telemetry::Telemetry,
         meter::StereoMeter,
         nav_item::NavItem,
         painter::{ControlPainter, Labelled},
@@ -424,6 +426,28 @@ impl Retained for Readout {
             _ => return false,
         };
         std::mem::replace(&mut data.value, next) != data.value
+    }
+}
+
+/// A reading is the number its endpoint reports; the painter is what turns it
+/// into digits, so a new number is all this has to take.
+impl Retained for Telemetry {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        let ReadValue::Scalar(value) = value else {
+            return false;
+        };
+        std::mem::replace(data, *value) != *value
+    }
+}
+
+/// A clock moves with the track it reads, and the position is what its own
+/// endpoint reports; the duration comes from a sibling and lands on rebuild.
+impl Retained for Clock {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        let ReadValue::Scalar(position) = value else {
+            return false;
+        };
+        std::mem::replace(&mut data.position, *position) != *position
     }
 }
 

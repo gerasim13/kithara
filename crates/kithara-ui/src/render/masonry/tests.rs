@@ -1544,10 +1544,14 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
         Paints::NotYet,
         r#"Bpm(id: "control", placeholder: Some("128.0"))"#,
     ),
-    ("Time", Paints::NotYet, r#"Time(id: "control")"#),
+    (
+        "Time",
+        Paints::Yes,
+        r#"Time(id: "control", read: Model(id: "deck.view.zoom"))"#,
+    ),
     (
         "Scalar",
-        Paints::NotYet,
+        Paints::Yes,
         r#"Scalar(id: "control", read: Model(id: "deck.view.zoom"))"#,
     ),
     ("Wave", Paints::NotYet, r#"Wave(id: "control")"#),

@@ -18,8 +18,10 @@ mod host {
     use super::Divider;
     use crate::{
         atoms::bar::divider::Divider as Face,
-        compile::CompiledUi,
-        render::{ReadValue, Reads, Skin, controls::Draws},
+        render::{
+            Skin,
+            controls::{Draws, Reading},
+        },
     };
 
     impl Draws for Divider {
@@ -29,12 +31,7 @@ mod host {
             Face::new(skin)
         }
 
-        fn data(
-            &self,
-            _value: Option<&ReadValue<'_>>,
-            _reads: &dyn Reads,
-            _ui: &CompiledUi,
-        ) -> Option<()> {
+        fn data(&self, _read: Reading<'_>) -> Option<()> {
             Some(())
         }
     }

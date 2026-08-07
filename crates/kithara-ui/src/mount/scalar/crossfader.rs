@@ -21,11 +21,10 @@ mod host {
     use super::Crossfader;
     use crate::{
         atoms::design::crossfader::Crossfader as Face,
-        compile::CompiledUi,
         interact::{CursorShape, recognizers::Track},
         render::{
-            ReadValue, Reads, Skin,
-            controls::{Drag, Draws, Grip},
+            ReadValue, Skin,
+            controls::{Drag, Draws, Grip, Reading},
         },
     };
 
@@ -39,13 +38,8 @@ mod host {
         /// A crossfader is the fraction it sits at, so one whose endpoint has
         /// not reported a fraction draws nothing rather than a rail centred on
         /// a guess.
-        fn data(
-            &self,
-            value: Option<&ReadValue<'_>>,
-            _reads: &dyn Reads,
-            _ui: &CompiledUi,
-        ) -> Option<f32> {
-            let Some(ReadValue::Scalar(value)) = value else {
+        fn data(&self, read: Reading<'_>) -> Option<f32> {
+            let Some(ReadValue::Scalar(value)) = read.value else {
                 return None;
             };
             Some(value.clamp(0.0, 1.0).as_())

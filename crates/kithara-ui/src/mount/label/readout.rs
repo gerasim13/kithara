@@ -21,8 +21,10 @@ mod host {
     use super::Readout;
     use crate::{
         atoms::readout::{Readout as Face, ReadoutData},
-        compile::CompiledUi,
-        render::{ReadValue, Reads, Skin, controls::Draws},
+        render::{
+            ReadValue, Skin,
+            controls::{Draws, Reading},
+        },
     };
 
     impl Draws for Readout {
@@ -34,15 +36,10 @@ mod host {
 
         /// A readout is a caption and the number under it, so one missing
         /// either draws nothing rather than half of itself.
-        fn data(
-            &self,
-            value: Option<&ReadValue<'_>>,
-            _reads: &dyn Reads,
-            ui: &CompiledUi,
-        ) -> Option<ReadoutData> {
+        fn data(&self, read: Reading<'_>) -> Option<ReadoutData> {
             Some(ReadoutData {
-                label: ui.resolve(self.label?).to_owned(),
-                value: match value? {
+                label: read.ui.resolve(self.label?).to_owned(),
+                value: match read.value? {
                     ReadValue::Text(value) => (*value).to_owned(),
                     ReadValue::Scalar(value) => format!("{value:.2}"),
                     _ => return None,

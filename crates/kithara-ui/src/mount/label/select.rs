@@ -19,8 +19,10 @@ mod host {
     use super::Select;
     use crate::{
         atoms::design::select::Select as Face,
-        compile::CompiledUi,
-        render::{ReadValue, Reads, Skin, controls::Draws},
+        render::{
+            Skin,
+            controls::{Draws, Reading},
+        },
     };
 
     impl Draws for Select {
@@ -31,13 +33,8 @@ mod host {
         }
 
         /// A select shows the word the document wrote; no endpoint moves it.
-        fn data(
-            &self,
-            _value: Option<&ReadValue<'_>>,
-            _reads: &dyn Reads,
-            ui: &CompiledUi,
-        ) -> Option<String> {
-            Some(ui.resolve(self.label).to_owned())
+        fn data(&self, read: Reading<'_>) -> Option<String> {
+            Some(read.ui.resolve(self.label).to_owned())
         }
     }
 }

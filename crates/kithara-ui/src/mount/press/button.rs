@@ -43,11 +43,10 @@ mod host {
             button::{Button as Face, ButtonConfig, ButtonLabel},
             painter::ButtonData,
         },
-        compile::CompiledUi,
         module::ButtonStyle,
         render::{
-            Icon, Mark, ReadValue, Reads, Skin,
-            controls::{Draws, Grip},
+            Icon, Mark, ReadValue, Skin,
+            controls::{Draws, Grip, Reading},
             document_icon,
         },
     };
@@ -93,17 +92,14 @@ mod host {
         /// A button always draws. Unlike a switch, one whose endpoint has not
         /// spoken is a button at rest rather than an empty box — it still shows
         /// its word, and pressing it is how the endpoint first gets a value.
-        fn data(
-            &self,
-            value: Option<&ReadValue<'_>>,
-            _reads: &dyn Reads,
-            ui: &CompiledUi,
-        ) -> Option<ButtonData> {
+        fn data(&self, read: Reading<'_>) -> Option<ButtonData> {
             Some(ButtonData {
-                active: matches!(value, Some(ReadValue::Bool(true))),
+                active: matches!(read.value, Some(ReadValue::Bool(true))),
                 label: ButtonLabel {
-                    active: self.active_label.map(|label| ui.resolve(label).to_owned()),
-                    label: ui.resolve(self.label).to_owned(),
+                    active: self
+                        .active_label
+                        .map(|label| read.ui.resolve(label).to_owned()),
+                    label: read.ui.resolve(self.label).to_owned(),
                 },
             })
         }

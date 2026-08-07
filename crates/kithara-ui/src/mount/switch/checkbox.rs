@@ -14,10 +14,9 @@ mod host {
     use super::Checkbox;
     use crate::{
         atoms::toggle::Binary,
-        compile::CompiledUi,
         render::{
-            ReadValue, Reads, Skin,
-            controls::{Draws, Grip},
+            ReadValue, Skin,
+            controls::{Draws, Grip, Reading},
         },
     };
 
@@ -28,13 +27,8 @@ mod host {
             Binary::checkbox(skin)
         }
 
-        fn data(
-            &self,
-            value: Option<&ReadValue<'_>>,
-            _reads: &dyn Reads,
-            _ui: &CompiledUi,
-        ) -> Option<bool> {
-            match value {
+        fn data(&self, read: Reading<'_>) -> Option<bool> {
+            match read.value {
                 Some(ReadValue::Bool(active)) => Some(*active),
                 _ => None,
             }

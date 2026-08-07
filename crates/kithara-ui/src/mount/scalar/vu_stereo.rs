@@ -14,11 +14,10 @@ mod host {
     use super::VuStereo;
     use crate::{
         atoms::meter::StereoMeter,
-        compile::CompiledUi,
         interact::{CursorShape, recognizers::Track},
         render::{
-            ReadValue, Reads, Skin, StereoLevels,
-            controls::{Drag, Draws, Grip},
+            ReadValue, Skin, StereoLevels,
+            controls::{Drag, Draws, Grip, Reading},
         },
     };
 
@@ -29,13 +28,8 @@ mod host {
             StereoMeter::new(skin)
         }
 
-        fn data(
-            &self,
-            value: Option<&ReadValue<'_>>,
-            _reads: &dyn Reads,
-            _ui: &CompiledUi,
-        ) -> Option<StereoLevels> {
-            match value {
+        fn data(&self, read: Reading<'_>) -> Option<StereoLevels> {
+            match read.value {
                 Some(ReadValue::Stereo(levels)) => Some(*levels),
                 _ => None,
             }

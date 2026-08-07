@@ -20,10 +20,9 @@ mod host {
     use super::Chip;
     use crate::{
         atoms::{chip::Chip as Face, painter::Labelled},
-        compile::CompiledUi,
         render::{
-            ReadValue, Reads, Skin,
-            controls::{Draws, Grip},
+            ReadValue, Skin,
+            controls::{Draws, Grip, Reading},
         },
     };
 
@@ -37,15 +36,10 @@ mod host {
         /// A chip carries a word the document wrote, so it shows it whether or
         /// not an endpoint has said which way it is set — unlike a switch,
         /// which is nothing but its state.
-        fn data(
-            &self,
-            value: Option<&ReadValue<'_>>,
-            _reads: &dyn Reads,
-            ui: &CompiledUi,
-        ) -> Option<Labelled> {
+        fn data(&self, read: Reading<'_>) -> Option<Labelled> {
             Some(Labelled {
-                active: matches!(value, Some(ReadValue::Bool(true))),
-                label: ui.resolve(self.label).to_owned(),
+                active: matches!(read.value, Some(ReadValue::Bool(true))),
+                label: read.ui.resolve(self.label).to_owned(),
             })
         }
 
