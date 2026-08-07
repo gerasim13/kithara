@@ -310,29 +310,37 @@ pub(crate) mod tests {
     #[test]
     fn the_fixture_profile_matches_the_machine_contract() {
         let host = host_fixture();
-        assert!(host.runner("kithara-ci").is_ok());
+        assert!(host.runner("kithara-ci-octocat").is_ok());
         assert!(host.runner("absent").is_err());
     }
 
-    /// The point of the split: one machine, two repositories, and a runner that
-    /// serves the second one registers with the second one's token.
+    /// The point of the split: one machine, two repositories, and each runner
+    /// reaching the token of the repository it named — neither is the default.
     #[test]
     fn a_runner_registers_with_the_repository_it_names() {
         let host = host_fixture();
 
-        let own = host
-            .credential(&host.runner("kithara-ci").expect("runner").repository)
+        let octocat = host
+            .credential(
+                &host
+                    .runner("kithara-ci-octocat")
+                    .expect("runner")
+                    .repository,
+            )
             .expect("credential");
-        assert_eq!(own.name, "owner/kithara");
-        assert_eq!(own.token_file, Path::new("/etc/kithara-ci/github.token"));
-
-        let fork = host
-            .credential(&host.runner("kithara-ci-fork").expect("runner").repository)
-            .expect("credential");
-        assert_eq!(fork.name, "collaborator/kithara");
+        assert_eq!(octocat.name, "octocat/kithara");
         assert_eq!(
-            fork.token_file,
-            Path::new("/etc/kithara-ci/github-fork.token")
+            octocat.token_file,
+            Path::new("/etc/kithara-ci/tokens/octocat.token")
+        );
+
+        let hubot = host
+            .credential(&host.runner("kithara-ci-hubot").expect("runner").repository)
+            .expect("credential");
+        assert_eq!(hubot.name, "hubot/kithara");
+        assert_eq!(
+            hubot.token_file,
+            Path::new("/etc/kithara-ci/tokens/hubot.token")
         );
     }
 
@@ -387,7 +395,7 @@ pub(crate) mod tests {
 
     #[test]
     fn repositories_name_an_owner() {
-        assert!(valid_repository("owner/kithara"));
+        assert!(valid_repository("octocat/kithara"));
         assert!(!valid_repository("kithara"));
         assert!(!valid_repository("owner/kithara/extra"));
         assert!(!valid_repository("owner/../etc"));

@@ -3,23 +3,23 @@ network = "kithara-ci"
 subnet = "172.16.240.0/24"
 
 [[repositories]]
-name = "owner/kithara"
-token_file = "/etc/kithara-ci/github.token"
+name = "octocat/kithara"
+token_file = "/etc/kithara-ci/tokens/octocat.token"
 
 [[repositories]]
-name = "collaborator/kithara"
-token_file = "/etc/kithara-ci/github-fork.token"
+name = "hubot/kithara"
+token_file = "/etc/kithara-ci/tokens/hubot.token"
 
 [[runners]]
-name = "kithara-ci"
-repository = "owner/kithara"
+name = "kithara-ci-octocat"
+repository = "octocat/kithara"
 cpus = 24
 memory = "96g"
 labels = ["self-hosted", "linux", "x64", "kithara"]
 
 [[runners]]
-name = "kithara-ci-gpu"
-repository = "owner/kithara"
+name = "kithara-ci-octocat-gpu"
+repository = "octocat/kithara"
 cpus = 8
 memory = "32g"
 labels = ["self-hosted", "linux", "x64", "kithara", "gpu"]
@@ -27,8 +27,8 @@ devices = ["/dev/dri"]
 groups = [993]
 
 [[runners]]
-name = "kithara-ci-android"
-repository = "owner/kithara"
+name = "kithara-ci-octocat-android"
+repository = "octocat/kithara"
 cpus = 12
 memory = "48g"
 labels = ["self-hosted", "linux", "x64", "kithara", "android"]
@@ -37,15 +37,15 @@ groups = [994]
 flavor = "android"
 
 [[runners]]
-name = "kithara-ci-fork"
-repository = "collaborator/kithara"
+name = "kithara-ci-hubot"
+repository = "hubot/kithara"
 cpus = 12
 memory = "48g"
 labels = ["self-hosted", "linux", "x64", "kithara"]
 
 [windows]
 name = "kithara-ci-windows"
-repository = "owner/kithara"
+repository = "octocat/kithara"
 labels = ["self-hosted", "windows", "x64", "kithara"]
 vcpus = 8
 memory_mib = 16384

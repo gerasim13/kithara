@@ -36,28 +36,40 @@ each, then every runner names one of them:
 
 ```toml
 [[repositories]]
-name = "zvuk/kithara"
-token_file = "/etc/kithara-ci/github.token"
+name = "octocat/kithara"
+token_file = "/etc/kithara-ci/tokens/octocat.token"
 
 [[repositories]]
-name = "collaborator/kithara"
-token_file = "/etc/kithara-ci/github-fork.token"
+name = "hubot/kithara"
+token_file = "/etc/kithara-ci/tokens/hubot.token"
 
 [[runners]]
-name = "kithara-ci-fork"
-repository = "collaborator/kithara"
+name = "kithara-ci-hubot"
+repository = "hubot/kithara"
 cpus = 12
 memory = "48g"
 labels = ["self-hosted", "linux", "x64", "kithara"]
 ```
 
-This is not a convenience: a GitHub runner registration reaches exactly one
+No entry is the default and none is subordinate: the repositories are peers,
+named after their owners, and a runner belongs to whichever one it names. This
+is not a convenience — a GitHub runner registration reaches exactly one
 repository, so serving a second one means separate runner processes holding a
-separate credential. Each token file is owned by root and readable only by it;
-`install -m 600 -o root -g root /dev/stdin <path>` creates one without the
-token passing through a shell history. A runner naming a repository the machine
-holds no credential for is refused while the profile is read, rather than
-registering against whichever token happened to be configured.
+separate credential.
+
+One token per file, named after the owner it authorises. A shared file would
+widen a leak to every repository on the machine and make rotating one token an
+edit to the file the others depend on, and it would put a parsed format between
+the profile and a secret. Create one with
+`install -m 600 -o root -g root /dev/stdin /etc/kithara-ci/tokens/<owner>.token`,
+which sets the mode as the file is created and keeps the token out of shell
+history; `sudo` overrides an inherited `umask`, so `tee` leaves the file
+world-readable unless it is chmodded afterwards.
+
+A runner naming a repository the machine holds no credential for is refused
+while the profile is read. Left to run it would register against whichever
+token the machine happened to hold, come up, take work, and report to the wrong
+repository.
 Then build the installer from a reviewed GitLab commit:
 
 ```text

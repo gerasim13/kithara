@@ -279,7 +279,7 @@ mod tests {
         let pins = &fixture().pins;
         let unit = unit(
             &host,
-            host.runner("kithara-ci").unwrap(),
+            host.runner("kithara-ci-octocat").unwrap(),
             "0,1,2,3",
             pins,
             "/usr/local/bin/kithara-ci",
@@ -304,7 +304,7 @@ mod tests {
         let pins = &fixture().pins;
         let plain = unit(
             &host,
-            host.runner("kithara-ci").unwrap(),
+            host.runner("kithara-ci-octocat").unwrap(),
             "0,1,2,3",
             pins,
             "/usr/bin/xtask",
@@ -312,7 +312,7 @@ mod tests {
         .unwrap();
         let gpu = unit(
             &host,
-            host.runner("kithara-ci-gpu").unwrap(),
+            host.runner("kithara-ci-octocat-gpu").unwrap(),
             "0,1,2,3",
             pins,
             "/usr/bin/xtask",
@@ -321,7 +321,7 @@ mod tests {
 
         let android = unit(
             &host,
-            host.runner("kithara-ci-android").unwrap(),
+            host.runner("kithara-ci-octocat-android").unwrap(),
             "0,1,2,3",
             pins,
             "/usr/bin/xtask",
