@@ -15,6 +15,7 @@ use crate::{
     Ctx,
     common::walker::{relative_to, walk_rs_files},
     util::check_tool,
+    verdict::NotClean,
 };
 
 mod analysis;
@@ -218,7 +219,7 @@ pub(crate) fn run(args: &SimilarityArgs, ctx: &Ctx) -> Result<()> {
 
     let status = cmd.status()?;
     if !status.success() {
-        bail!("similarity-rs failed (exit code {:?})", status.code());
+        return Err(NotClean::reported("similarity-rs"));
     }
     Ok(())
 }

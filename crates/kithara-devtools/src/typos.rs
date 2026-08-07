@@ -1,11 +1,12 @@
 use std::process::Command;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use clap::Args;
 
 use crate::{
     Ctx,
     util::{check_tool, ensure_clean_tree},
+    verdict::NotClean,
 };
 
 struct Consts;
@@ -45,7 +46,7 @@ pub(crate) fn run(args: &TyposArgs, _ctx: &Ctx) -> Result<()> {
     }
     let status = cmd.status()?;
     if !status.success() {
-        bail!("typos failed (exit code {:?})", status.code());
+        return Err(NotClean::reported("typos"));
     }
     Ok(())
 }

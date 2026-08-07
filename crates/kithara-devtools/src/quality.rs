@@ -12,6 +12,7 @@ use crate::{
     Ctx,
     common::{project::ProjectConfig, timestamp::utc_timestamp, walker::walk_rs_files},
     quality_assessment, quality_lab,
+    verdict::NotClean,
 };
 
 const MOCK_COVERAGE_PATTERN: &str = r"(unimock::unimock\(|#\[\s*kithara::mock)";
@@ -254,7 +255,8 @@ fn run_report(
 
     if !gate_errors.is_empty() {
         let names = gate_errors.join(" ");
-        bail!("quality gates failed: {names}");
+        eprintln!("not clean: {names}");
+        return Err(NotClean::reported("quality gates"));
     }
 
     Ok(())

@@ -12,20 +12,28 @@ use std::fmt;
 pub struct NotClean {
     /// The check that reached the verdict, as the user invoked it.
     pub check: &'static str,
-    /// What it found, already printed above in full.
-    pub findings: usize,
+    /// What it found, already printed above in full. `None` when the check
+    /// reports only that the code did not pass, without a count.
+    pub findings: Option<usize>,
 }
 
 impl fmt::Display for NotClean {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{check}: {findings} finding{plural} above. The check ran; the code \
-             did not pass it.",
-            check = self.check,
-            findings = self.findings,
-            plural = if self.findings == 1 { "" } else { "s" },
-        )
+        match self.findings {
+            Some(findings) => write!(
+                f,
+                "{check}: {findings} finding{plural} above. The check ran; the \
+                 code did not pass it.",
+                check = self.check,
+                plural = if findings == 1 { "" } else { "s" },
+            ),
+            None => write!(
+                f,
+                "{check}: the check ran and the code did not pass it. Its \
+                 findings are above.",
+                check = self.check,
+            ),
+        }
     }
 }
 
@@ -36,7 +44,20 @@ impl NotClean {
     /// verdict itself, and a `new` that does not return `Self` reads wrong.
     #[must_use]
     pub fn raised(check: &'static str, findings: usize) -> anyhow::Error {
-        anyhow::Error::new(Self { check, findings })
+        anyhow::Error::new(Self {
+            check,
+            findings: Some(findings),
+        })
+    }
+
+    /// The same verdict from a check that prints its findings but does not
+    /// hand back a count.
+    #[must_use]
+    pub fn reported(check: &'static str) -> anyhow::Error {
+        anyhow::Error::new(Self {
+            check,
+            findings: None,
+        })
     }
 
     /// Print `error` the way it deserves and give the exit code to leave with.
@@ -62,7 +83,7 @@ mod tests {
     fn a_verdict_says_what_ran_and_what_it_found() {
         let verdict = NotClean {
             check: "ast-grep",
-            findings: 10,
+            findings: Some(10),
         };
         let text = verdict.to_string();
         assert!(text.starts_with("ast-grep: 10 findings"), "{text}");
@@ -76,9 +97,16 @@ mod tests {
     fn one_finding_is_not_pluralised() {
         let verdict = NotClean {
             check: "ast-grep",
-            findings: 1,
+            findings: Some(1),
         };
         assert!(verdict.to_string().contains("1 finding above"), "{verdict}");
+    }
+
+    #[test]
+    fn a_check_without_a_count_still_reads_as_a_verdict() {
+        let text = NotClean::reported("typos").to_string();
+        assert!(text.starts_with("typos: the check ran"), "{text}");
+        assert!(!text.contains("failed"), "{text}");
     }
 
     /// The distinction is the whole point: a verdict is recognised through the
