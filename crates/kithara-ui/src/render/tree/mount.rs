@@ -1,7 +1,7 @@
 use iced::{alignment::Horizontal, widget::Space};
 
 use super::{
-    atom::{crossfader, fader, glyph, readout, segmented, select},
+    atom::{fader, glyph, readout, segmented, select},
     geometry::Rendered,
     panel::{context_bar, deck_summary, time, track_list, tree, vis},
     read_flag, wave_zoom,
@@ -196,7 +196,7 @@ impl ViewControl for mount::Telemetry {
 
 impl ViewControl for mount::Crossfader {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(crossfader(cx.path, self.ticks, cx.value, cx.skin, cx.owner))
+        painted(self, cx)
     }
 }
 

@@ -477,7 +477,10 @@ mod tests {
     use crate::{
         atoms::{
             button::{Button, ButtonConfig, ButtonLabel},
-            design::{cell::Cell, meter::Meter, status_dot::StatusDot, swatch::Swatch},
+            design::{
+                cell::Cell, crossfader::Crossfader, meter::Meter, status_dot::StatusDot,
+                swatch::Swatch,
+            },
             knob::Knob,
             meter::StereoMeter,
             nav_item::NavItem,
@@ -776,6 +779,27 @@ mod tests {
         }
     }
 
+    #[kithara::test]
+    fn iced_and_masonry_record_the_same_crossfader() {
+        let skin = builtin::skin();
+        let bounds = Rect {
+            h: 64.0,
+            w: 220.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        for ticks in [false, true] {
+            let iced = Paint::new(Crossfader::new(ticks, skin), 0.8_f32, skin).draw_list(
+                &PaintState::default(),
+                bounds,
+                VisualState::Idle,
+            );
+            let mut masonry = Painted::new(Crossfader::new(ticks, skin), 0.8_f32, skin);
+
+            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+        }
+    }
+
     /// With and without its caption: the caption is what moves the dial up
     /// inside the box, so a host that drew one and not the other would put the
     /// knob somewhere else.
@@ -975,6 +999,7 @@ mod dragged {
         atoms::{knob::Knob, painter::Captioned},
         builtin,
         interact::recognizers::Track,
+        mount,
         render::ControlAction,
     };
 
@@ -1043,6 +1068,52 @@ mod dragged {
             Some(UiEvent::Control {
                 path: "mixer/gain".to_owned(),
                 action: ControlAction::SetScalar(f64::from(0.5 + 10.0 / RANGE)),
+            })
+        );
+    }
+
+    /// The other half of the vocabulary: an absolute track seeks, so the press
+    /// goes straight to the fraction of the rail it landed on.
+    ///
+    /// The drag comes from the control rather than being written out here, so
+    /// this is also the pin that a crossfader still declares one — the retained
+    /// host leaves it to the engine plan, and would not notice if it stopped.
+    #[kithara::test]
+    fn an_absolute_drag_seeks_to_the_fraction_the_press_landed_on() {
+        let skin = builtin::skin();
+        let control = mount::Crossfader::builder().ticks(false).build();
+        let value = 0.8_f32;
+        let Grip::Drag(drag) = control.grip(skin, &value) else {
+            panic!("a crossfader must grip a drag");
+        };
+        let gesture = Gesture::drag(
+            "mixer/xfade",
+            Paint::new(control.painter(skin), value, skin),
+            drag,
+        );
+        let bounds = Rectangle {
+            height: 40.0,
+            width: 200.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let mut state = GestureState::default();
+
+        let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+        let action = gesture
+            .on_input(
+                &mut state,
+                &press,
+                bounds,
+                Cursor::Available(Point::new(50.0, 20.0)),
+            )
+            .unwrap_or_else(|| panic!("an absolute press must seek"));
+
+        assert_eq!(
+            action.into_inner().0,
+            Some(UiEvent::Control {
+                path: "mixer/xfade".to_owned(),
+                action: ControlAction::SetScalar(0.25),
             })
         );
     }

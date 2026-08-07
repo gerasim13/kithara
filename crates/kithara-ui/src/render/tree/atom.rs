@@ -14,16 +14,6 @@ use crate::{
     widgets::{Widget, fader::Fader, nav::Glyph},
 };
 
-pub(super) fn crossfader<'a>(
-    path: &'a str,
-    ticks: bool,
-    value: Option<&ReadValue<'_>>,
-    skin: &'a Skin,
-    owner: InputOwner,
-) -> Element<'a, UiEvent> {
-    crate::render::controls::crossfader(path, ticks, value, skin, owner)
-}
-
 pub(super) fn fader<'a>(
     path: &'a str,
     style: FaderStyle,

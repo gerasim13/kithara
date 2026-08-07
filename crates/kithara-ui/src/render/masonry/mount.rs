@@ -12,12 +12,7 @@ use super::{
     node::Node,
 };
 use crate::{
-    atoms::{
-        button::declared_width,
-        design::{crossfader::Crossfader, fader::Fader},
-        painter::Captioned,
-        tab::TabLarge,
-    },
+    atoms::{button::declared_width, design::fader::Fader, painter::Captioned, tab::TabLarge},
     expand::{Binding, ControlSpec},
     module::{TextAlign, TextStyle},
     mount,
@@ -250,7 +245,7 @@ impl NodeControl for mount::Crossfader {
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        host.scalar_leaf(Crossfader::new(self.ticks, host.skin), cx.read, cx.declared)
+        painted(self, host, cx)
     }
 }
 

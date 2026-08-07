@@ -3,28 +3,22 @@ use std::cell::RefCell;
 use iced::{
     Element, Event, Length, Rectangle, Renderer, Theme,
     mouse::{Cursor, Interaction},
-    widget::{
-        Space,
-        canvas::{self, Action, Canvas, Frame, Geometry},
-    },
+    widget::canvas::{self, Action, Canvas, Frame, Geometry},
 };
 use kithara_platform::time::Instant;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    atoms::design::{
-        crossfader::Crossfader,
-        fader::{Fader, rail_bounds},
-    },
+    atoms::design::fader::{Fader, rail_bounds},
     backends::replay_ordered,
-    draw::{DrawList, DrawListBuilder, Rect},
+    draw::{DrawListBuilder, Rect},
     engine::scalar_value,
     interact::{
         CursorShape, Hit, Hover, iced as iced_interact,
         recognizers::{Scalar, ScalarState, Track},
     },
     module::FaderStyle,
-    render::{InputOwner, ReadValue, Skin, UiEvent, scalar},
+    render::{InputOwner, Skin, UiEvent, scalar},
     skin::FaderSkin,
     text::{TextContext, TextResources},
 };
@@ -203,165 +197,6 @@ impl canvas::Program<UiEvent> for FaderPaint<'_> {
     }
 }
 
-pub(crate) fn crossfader<'a>(
-    path: &str,
-    ticks: bool,
-    value: Option<&ReadValue<'_>>,
-    skin: &'a Skin,
-    owner: InputOwner,
-) -> Element<'a, UiEvent> {
-    let Some(ReadValue::Scalar(value)) = value else {
-        return Space::new().into();
-    };
-    let paint = CrossfaderPaint::new(
-        Crossfader::new(ticks, skin),
-        value.clamp(0.0, 1.0).as_(),
-        skin,
-    );
-    match owner {
-        InputOwner::Leaf => Canvas::new(CrossfaderProgram::new(path, paint))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into(),
-        InputOwner::Engine => Canvas::new(paint)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into(),
-    }
-}
-
-struct CrossfaderProgram<'skin> {
-    drag: Scalar,
-    paint: CrossfaderPaint<'skin>,
-    path: String,
-}
-
-impl<'skin> CrossfaderProgram<'skin> {
-    fn new(path: &str, paint: CrossfaderPaint<'skin>) -> Self {
-        Self {
-            drag: Scalar::builder()
-                .track(Track::AbsoluteHorizontal)
-                .hover(Hover::new(CursorShape::ResizeH))
-                .build(),
-            paint,
-            path: path.to_owned(),
-        }
-    }
-}
-
-impl canvas::Program<UiEvent> for CrossfaderProgram<'_> {
-    type State = CrossfaderState;
-
-    fn draw(
-        &self,
-        state: &CrossfaderState,
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        _cursor: Cursor,
-    ) -> Vec<Geometry> {
-        self.paint.geometry(&state.paint, renderer, bounds)
-    }
-
-    fn mouse_interaction(
-        &self,
-        state: &CrossfaderState,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Interaction {
-        self.drag
-            .cursor(&state.drag, &iced_interact::hit(bounds, cursor))
-            .into()
-    }
-
-    fn update(
-        &self,
-        state: &mut CrossfaderState,
-        event: &Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
-        let input = iced_interact::input(event)?;
-        let hit = iced_interact::hit(bounds, cursor);
-        scalar(
-            &self.path,
-            self.drag
-                .on_input(&mut state.drag, input, &hit, Instant::now())
-                .map(f64::from),
-        )
-    }
-}
-
-#[derive(Default)]
-struct CrossfaderState {
-    drag: ScalarState,
-    paint: CrossfaderPaintState,
-}
-
-#[derive(Default)]
-struct CrossfaderPaintState {
-    text: RefCell<Option<TextContext>>,
-}
-
-struct CrossfaderPaint<'skin> {
-    painter: Crossfader,
-    resources: &'skin TextResources,
-    value: f32,
-}
-
-impl<'skin> CrossfaderPaint<'skin> {
-    fn new(painter: Crossfader, value: f32, skin: &'skin Skin) -> Self {
-        Self {
-            painter,
-            resources: skin.text_resources(),
-            value,
-        }
-    }
-
-    fn draw_list(&self, state: &CrossfaderPaintState, bounds: Rect) -> DrawList {
-        let mut text = state.text.borrow_mut();
-        let text = text.get_or_insert_with(|| self.resources.into());
-        let mut builder = DrawListBuilder::default();
-        self.painter.paint(&mut builder, text, self.value, bounds);
-        builder.finish()
-    }
-
-    fn geometry(
-        &self,
-        state: &CrossfaderPaintState,
-        renderer: &Renderer,
-        bounds: Rectangle,
-    ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        let list = self.draw_list(
-            state,
-            Rect {
-                h: bounds.height,
-                w: bounds.width,
-                x: 0.0,
-                y: 0.0,
-            },
-        );
-        replay_ordered(&list, &mut frame, self.resources);
-        vec![frame.into_geometry()]
-    }
-}
-
-impl canvas::Program<UiEvent> for CrossfaderPaint<'_> {
-    type State = CrossfaderPaintState;
-
-    fn draw(
-        &self,
-        state: &CrossfaderPaintState,
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        _cursor: Cursor,
-    ) -> Vec<Geometry> {
-        self.geometry(state, renderer, bounds)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use iced::{Point, mouse};
@@ -439,29 +274,6 @@ mod tests {
             assert!(
                 (value - f64::from(fraction)).abs() <= STEP,
                 "a press at {fraction} of the rail set {value}"
-            );
-        }
-    }
-
-    #[cfg(feature = "masonry-host")]
-    #[kithara::test]
-    fn iced_and_masonry_record_the_same_crossfader() {
-        let skin = builtin::skin();
-        let bounds = Rect {
-            h: 64.0,
-            w: 220.0,
-            x: 0.0,
-            y: 0.0,
-        };
-        for ticks in [false, true] {
-            let iced = CrossfaderPaint::new(Crossfader::new(ticks, skin), 0.8, skin)
-                .draw_list(&CrossfaderPaintState::default(), bounds);
-            let mut masonry =
-                crate::render::masonry::Painted::new(Crossfader::new(ticks, skin), 0.8_f32, skin);
-
-            assert_eq!(
-                iced,
-                crate::render::masonry::MasonryControl::draw_list(&mut masonry, bounds)
             );
         }
     }

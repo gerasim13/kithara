@@ -4,11 +4,8 @@ use std::{
     rc::Rc,
 };
 
-use num_traits::cast::AsPrimitive;
-
 use super::{
-    CustomWidget, MasonryControl, MasonryNode, Painted,
-    controls::Retained,
+    CustomWidget, MasonryControl, MasonryNode,
     custom::{HostAction, MappedCustom, MountedCustom},
     flex::{ChildLayout, Flex},
     leaf::{Leaf, WindowLeafLayer},
@@ -218,25 +215,6 @@ impl<Action> MasonryHost<'_, Action>
 where
     Action: std::fmt::Debug + Send + 'static,
 {
-    /// Mounts a control the engine drags, painted from the scalar it reads.
-    pub(super) fn scalar_leaf<Painter>(
-        &self,
-        painter: Painter,
-        read: Option<&Binding>,
-        declared: solve::Size<solve::Length>,
-    ) -> MasonryNode<Action>
-    where
-        Painter: Retained<Data = f32> + 'static,
-    {
-        match read.and_then(|binding| resolve(self.reads, binding, self.ui)) {
-            Some(ReadValue::Scalar(value)) => self.control_leaf(
-                Painted::new(painter, value.clamp(0.0, 1.0).as_(), self.skin),
-                declared,
-            ),
-            _ => self.empty(declared),
-        }
-    }
-
     pub(super) fn reads_true(&self, read: Option<&Binding>) -> bool {
         read.and_then(|binding| resolve(self.reads, binding, self.ui))
             .is_some_and(|value| matches!(value, ReadValue::Bool(true)))

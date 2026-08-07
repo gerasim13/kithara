@@ -8,7 +8,7 @@ mod tree;
 mod tree_row;
 
 pub(crate) use chrome::{ChromeLeaf, chrome_leaf, header_chevron};
-pub(crate) use fader::{crossfader, fader_slider};
+pub(crate) use fader::fader_slider;
 pub(crate) use grip::{Drag, Grip};
 pub(crate) use painted::{Draws, Gesture, Paint};
 pub(crate) use press::Press;
