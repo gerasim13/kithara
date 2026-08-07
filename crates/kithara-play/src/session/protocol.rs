@@ -1,12 +1,12 @@
 mod wire {
     use firewheel::FirewheelCtx;
-    use kithara_audio::EqBandConfig;
+    use kithara_audio::{EqBandConfig, SessionAnchorCell, SessionBeat};
     use kithara_bufpool::PcmPool;
     use kithara_events::EventBus;
-    use kithara_platform::sync::mpsc;
+    use kithara_platform::sync::{Arc, mpsc};
 
     use crate::{
-        api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
+        api::{SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
         bridge::SlotControl,
     };
 
@@ -108,6 +108,7 @@ mod wire {
             target: SessionBeat,
         },
         QuerySessionTransport,
+        QuerySessionAnchor,
         InvalidateAudioRoute {
             reason: String,
         },
@@ -142,6 +143,7 @@ mod wire {
         PlayerRegistered(PlayerId),
         SessionDucking(SessionDuckingMode),
         SessionTransport(SessionTransportSnapshot),
+        SessionAnchor(Arc<SessionAnchorCell>),
         SlotAllocated(AllocatedSlot),
         SampleRate(u32),
         Err(SessionError),
@@ -155,7 +157,7 @@ mod wire {
 }
 
 mod handle {
-    use kithara_audio::EqBandConfig;
+    use kithara_audio::{EqBandConfig, SessionAnchorCell};
     use kithara_bufpool::PcmPool;
     use kithara_events::EventBus;
     use kithara_platform::sync::Arc;
@@ -216,6 +218,19 @@ mod handle {
         pub fn transport(&self) -> Result<SessionTransportSnapshot, PlayError> {
             match self.exec_ok(Cmd::QuerySessionTransport)? {
                 Reply::SessionTransport(snapshot) => Ok(snapshot),
+                _ => Err(PlayError::Session(SessionError::TransportNotProcessed)),
+            }
+        }
+
+        /// The session grid a deck binds to, shared so a tempo commit reaches
+        /// every bound deck without any of them holding a copy.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`PlayError`] when the session has no transport installed.
+        pub fn anchor(&self) -> Result<Arc<SessionAnchorCell>, PlayError> {
+            match self.exec_ok(Cmd::QuerySessionAnchor)? {
+                Reply::SessionAnchor(anchor) => Ok(anchor),
                 _ => Err(PlayError::Session(SessionError::TransportNotProcessed)),
             }
         }

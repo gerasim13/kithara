@@ -10,7 +10,10 @@ use kithara_test_utils::kithara;
 use super::{BoundError, BoundRenderer};
 use crate::{
     analysis::TrackAnalysis,
-    musical::{SourceSchedule, TrackBeat, TrackBeatMap},
+    musical::{
+        SessionAnchor, SessionAnchorCell, SessionBeat, SessionFrame, SourceSchedule, TrackBeat,
+        TrackBeatMap,
+    },
     traits::AudioEffect,
     waveform::BeatGrid,
 };
@@ -22,6 +25,8 @@ impl Consts {
     const RATE: u32 = 48_000;
     /// Frames between markers of the 120 BPM fixture.
     const BEAT_FRAMES: u64 = 24_000;
+    /// Session tempo equal to the fixture track's own.
+    const SESSION_BPM: f64 = 120.0;
     /// Frames carried by one fed chunk.
     const CHUNK_FRAMES: u64 = 512;
 }
@@ -46,16 +51,24 @@ fn identity_schedule() -> Arc<SourceSchedule> {
         rate(),
     );
     let map = TrackBeatMap::new(&analysis, rate()).expect("invariant: fixture markers form a map");
-    Arc::new(
-        SourceSchedule::new(
-            map,
-            TrackBeat::new(0.0).expect("invariant: zero is a finite beat"),
-            2.0,
-            Consts::RATE,
-            PlaybackDirection::Forward,
+    let anchor = SessionAnchorCell::new();
+    anchor.publish(
+        SessionAnchor::new(
+            SessionFrame::new(0),
+            SessionBeat::default(),
+            Consts::SESSION_BPM / 60.0,
+            rate(),
         )
-        .expect("invariant: the fixture tempo defines a beat advance"),
-    )
+        .expect("invariant: the fixture tempo is a positive rate"),
+    );
+    Arc::new(SourceSchedule::new(
+        map,
+        TrackBeat::default(),
+        SessionFrame::new(0),
+        SessionBeat::default(),
+        PlaybackDirection::Forward,
+        anchor,
+    ))
 }
 
 fn renderer() -> BoundRenderer<SignalsmithElastic> {

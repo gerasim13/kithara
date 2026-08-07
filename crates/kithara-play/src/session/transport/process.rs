@@ -4,66 +4,29 @@ use firewheel::{
     event::ProcEvents,
     node::{ProcInfo, ProcStore},
 };
-use num_traits::ToPrimitive;
+use kithara_audio::{SessionAnchor, SessionAnchorCell, SessionBeat, SessionFrame};
+use kithara_platform::sync::Arc;
 use triple_buffer::Input;
 
 use super::commit::{
-    RenderFrame, SessionTransportCommit, TransportBoundary, TransportCommitEvent,
-    TransportCommitResult, TransportCommitStamp, TransportObservation, TransportProcessError,
+    SessionTransportCommit, TransportBoundary, TransportCommitEvent, TransportCommitResult,
+    TransportCommitStamp, TransportObservation, TransportProcessError,
 };
-use crate::api::{SessionBeat, SessionTransportSnapshot, TransportRevision};
-
-#[derive(Clone, Copy, Debug)]
-struct TransportAnchor {
-    sample_rate: NonZeroU32,
-    frame: RenderFrame,
-    beat: SessionBeat,
-    commit: SessionTransportCommit,
-}
-
-impl TransportAnchor {
-    /// Inverse of [`Self::beat_at`]: the render frame a session beat falls on.
-    ///
-    /// The two directions are one relation and stay on one owner, so a caller
-    /// that needs to place content at a beat never rebuilds the arithmetic.
-    /// A beat between frames resolves to the nearest one; the residual is
-    /// sub-frame by construction.
-    fn frame_at(self, beat: SessionBeat) -> Result<RenderFrame, TransportProcessError> {
-        let beats = f64::from(beat) - f64::from(self.beat);
-        let beats_per_second = self.commit.tempo().beats_per_second();
-        if beats_per_second <= 0.0 {
-            return Err(TransportProcessError::InvalidBeatRange);
-        }
-        let frames = (beats * f64::from(self.sample_rate.get()) / beats_per_second)
-            .round()
-            .to_i64()
-            .ok_or(TransportProcessError::InvalidBeatRange)?;
-        i64::from(self.frame)
-            .checked_add(frames)
-            .map(RenderFrame::new)
-            .ok_or(TransportProcessError::InvalidBeatRange)
-    }
-
-    fn beat_at(self, frame: RenderFrame) -> Result<SessionBeat, TransportProcessError> {
-        let frames = i64::from(frame)
-            .checked_sub(i64::from(self.frame))
-            .and_then(|value| value.to_f64())
-            .ok_or(TransportProcessError::InvalidBeatRange)?;
-        let beats = f64::from(self.beat)
-            + frames * self.commit.tempo().beats_per_second() / f64::from(self.sample_rate.get());
-        SessionBeat::new(beats).map_err(|_| TransportProcessError::InvalidBeatRange)
-    }
-}
+use crate::api::{SessionTransportSnapshot, Tempo, TransportRevision};
 
 #[derive(Clone, Copy, Debug)]
 struct RenderBoundary {
-    frame: RenderFrame,
+    frame: SessionFrame,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct TransportCommitState {
+    /// The grid bound decks follow. Written only through
+    /// [`Self::set_anchor`], so the published value can never fall behind the
+    /// anchor this state is reasoning with.
+    anchor_cell: Arc<SessionAnchorCell>,
     active: Option<SessionTransportCommit>,
-    anchor: Option<TransportAnchor>,
+    anchor: Option<SessionAnchor>,
     boundary: Option<RenderBoundary>,
     completion: Option<TransportCommitResult>,
     ignored_through_revision: Option<TransportRevision>,
@@ -131,6 +94,21 @@ fn publish_observation(store: &mut ProcStore) -> Result<(), TransportProcessErro
 }
 
 impl TransportCommitState {
+    /// Builds the state that publishes its grid into `anchor_cell`.
+    pub(crate) fn new(anchor_cell: Arc<SessionAnchorCell>) -> Self {
+        Self {
+            anchor_cell,
+            active: None,
+            anchor: None,
+            boundary: None,
+            completion: None,
+            ignored_through_revision: None,
+            pending: None,
+            reanchor_beat: None,
+            snapshot: None,
+        }
+    }
+
     /// Offset inside this block where `target` falls, when it falls here at
     /// all and the committed transport is still the one the caller planned
     /// against.
@@ -215,9 +193,11 @@ impl TransportCommitState {
             (TransportBoundary::Continuous, Some(previous)) => {
                 let anchor = self.anchor.ok_or(TransportProcessError::InvalidBeatRange)?;
                 if previous.is_playing() {
-                    anchor.beat_at(stamp.target_frame())?
+                    anchor
+                        .beat_at(stamp.target_frame())
+                        .map_err(|_| TransportProcessError::InvalidBeatRange)?
                 } else {
-                    anchor.beat
+                    anchor.beat()
                 }
             }
             (TransportBoundary::Continuous, None) => {
@@ -225,12 +205,12 @@ impl TransportCommitState {
             }
         };
         self.active = Some(stamp.next());
-        self.anchor = Some(TransportAnchor {
+        self.set_anchor(
+            stamp.target_frame(),
             beat,
-            commit: stamp.next(),
-            frame: stamp.target_frame(),
-            sample_rate: stamp.sample_rate(),
-        });
+            stamp.next().tempo(),
+            stamp.sample_rate(),
+        )?;
         self.pending = None;
         self.completion = Some(TransportCommitResult::Applied(revision));
         Ok(())
@@ -309,7 +289,7 @@ impl TransportCommitState {
             .checked_add(frames)
             .ok_or(TransportProcessError::InvalidBeatRange)?;
         Ok(Some(RenderBoundary {
-            frame: RenderFrame::new(frame),
+            frame: SessionFrame::new(frame),
         }))
     }
 
@@ -327,7 +307,7 @@ impl TransportCommitState {
         } else {
             self.anchor
                 .ok_or(TransportProcessError::InvalidBeatRange)?
-                .beat
+                .beat()
         };
         Ok(Some(SessionTransportSnapshot::new(
             position,
@@ -356,12 +336,12 @@ impl TransportCommitState {
             return Ok(());
         };
         let commit = self.active.ok_or(TransportProcessError::InvalidBeatRange)?;
-        self.anchor = Some(TransportAnchor {
+        self.set_anchor(
+            SessionFrame::new(info.clock_samples.0),
             beat,
-            commit,
-            frame: RenderFrame::new(info.clock_samples.0),
-            sample_rate: info.sample_rate,
-        });
+            commit.tempo(),
+            info.sample_rate,
+        )?;
         self.boundary = None;
         Ok(())
     }
@@ -390,6 +370,10 @@ impl TransportCommitState {
         self.reject_pending();
         self.reanchor_beat = self.snapshot.map(|snapshot| snapshot.position());
         self.anchor = None;
+        // The clock restarts with the stream, so the published pin names a
+        // frame axis that no longer exists. Withdraw it until `reanchor`
+        // establishes one on the new axis.
+        self.anchor_cell.clear();
         self.boundary = None;
     }
 
@@ -406,14 +390,35 @@ impl TransportCommitState {
         let anchor = self.anchor.ok_or(TransportProcessError::InvalidBeatRange)?;
         let frames =
             i64::try_from(info.frames).map_err(|_| TransportProcessError::InvalidBeatRange)?;
-        let start = RenderFrame::new(info.clock_samples.0);
-        let end = RenderFrame::new(
+        let start = SessionFrame::new(info.clock_samples.0);
+        let end = SessionFrame::new(
             info.clock_samples
                 .0
                 .checked_add(frames)
                 .ok_or(TransportProcessError::InvalidBeatRange)?,
         );
-        Ok(Some(anchor.beat_at(start)?..anchor.beat_at(end)?))
+        let at = |frame| {
+            anchor
+                .beat_at(frame)
+                .map_err(|_| TransportProcessError::InvalidBeatRange)
+        };
+        Ok(Some(at(start)?..at(end)?))
+    }
+
+    /// Establishes the grid and publishes it in one step, so a bound deck can
+    /// never read a generation the transport has already moved past.
+    fn set_anchor(
+        &mut self,
+        frame: SessionFrame,
+        beat: SessionBeat,
+        tempo: Tempo,
+        sample_rate: NonZeroU32,
+    ) -> Result<(), TransportProcessError> {
+        let anchor = SessionAnchor::new(frame, beat, tempo.beats_per_second(), sample_rate)
+            .map_err(|_| TransportProcessError::InvalidBeatRange)?;
+        self.anchor = Some(anchor);
+        self.anchor_cell.publish(anchor);
+        Ok(())
     }
 
     fn set_once<T>(slot: &mut Option<T>, value: T) -> Result<(), TransportProcessError> {
@@ -425,7 +430,7 @@ impl TransportCommitState {
 
     fn validate_frame(&self, info: &ProcInfo) -> Result<(), TransportProcessError> {
         if let Some(anchor) = self.anchor
-            && anchor.sample_rate != info.sample_rate
+            && anchor.sample_rate() != info.sample_rate
         {
             return Err(TransportProcessError::FrameDiscontinuity);
         }

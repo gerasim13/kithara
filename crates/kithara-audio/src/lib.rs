@@ -37,8 +37,8 @@ pub use kithara_resampler::{
     NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality,
 };
 pub use musical::{
-    BeatMapError, CoordinateError, ScheduleError, SourceFrame, SourceSchedule, TrackBeat,
-    TrackBeatMap,
+    BeatMapError, CoordinateError, ScheduleError, SessionAnchor, SessionAnchorCell, SessionBeat,
+    SessionFrame, SourceFrame, SourceSchedule, TrackBeat, TrackBeatMap,
 };
 pub use pipeline::{
     config::{

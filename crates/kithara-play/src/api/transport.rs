@@ -1,5 +1,7 @@
 use std::num::NonZeroU64;
 
+use kithara_audio::{CoordinateError, SessionBeat};
+
 const SECONDS_PER_MINUTE: f64 = 60.0;
 
 /// A musical tempo in beats per minute, inside the range the session clock can
@@ -54,37 +56,6 @@ impl TryFrom<f64> for Tempo {
 #[non_exhaustive]
 pub struct TempoError {
     beats_per_minute: f64,
-}
-
-/// A continuous beat coordinate on the session transport.
-#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, derive_more::Into)]
-pub struct SessionBeat(f64);
-
-impl SessionBeat {
-    /// Creates a finite session-beat coordinate. Negative beats are valid.
-    pub fn new(value: f64) -> Result<Self, SessionBeatError> {
-        if value.is_finite() {
-            Ok(Self(value))
-        } else {
-            Err(SessionBeatError { value })
-        }
-    }
-}
-
-impl TryFrom<f64> for SessionBeat {
-    type Error = SessionBeatError;
-
-    fn try_from(value: f64) -> Result<Self, Self::Error> {
-        Self::new(value)
-    }
-}
-
-/// The value supplied for a session-beat coordinate was invalid.
-#[derive(Clone, Copy, Debug, PartialEq, thiserror::Error)]
-#[error("session beat must be finite, got {value}")]
-#[non_exhaustive]
-pub struct SessionBeatError {
-    value: f64,
 }
 
 /// The session-beat grid a start snaps to, counted in session beats: `1.0` is
@@ -201,12 +172,9 @@ impl SessionTransportSnapshot {
     ///
     /// # Errors
     ///
-    /// Returns [`SessionBeatError`] when the position and the quantum are so
+    /// Returns [`CoordinateError`] when the position and the quantum are so
     /// far apart that the next grid beat is not representable.
-    pub(crate) fn next_beat_on(
-        self,
-        quantum: BeatQuantum,
-    ) -> Result<SessionBeat, SessionBeatError> {
+    pub(crate) fn next_beat_on(self, quantum: BeatQuantum) -> Result<SessionBeat, CoordinateError> {
         let step = f64::from(quantum);
         let position = f64::from(self.position);
         SessionBeat::new((position / step).floor().mul_add(step, step))

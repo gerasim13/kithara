@@ -11,20 +11,21 @@ use firewheel::{
         ProcStore, ProcStreamCtx, ProcessStatus, StreamStatus,
     },
 };
-use kithara_platform::time::Duration;
+use kithara_audio::{SessionAnchorCell, SessionBeat, SessionFrame};
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 use triple_buffer::{Output, triple_buffer};
 
 use super::{
     commit::{
-        RenderFrame, SessionTransportCommit, TransportCommitEvent, TransportCommitResult,
-        TransportCommitStamp, TransportObservation, TransportProcessError,
+        SessionTransportCommit, TransportCommitEvent, TransportCommitResult, TransportCommitStamp,
+        TransportObservation, TransportProcessError,
     },
     node::SessionTransportProcessor,
     process::{TransportCommitState, TransportObservationInput, process_transport},
 };
-use crate::api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision};
+use crate::api::{SessionTransportSnapshot, Tempo, TransportRevision};
 
 const BLOCK_FRAMES: usize = 480;
 const SAMPLE_RATE: u32 = 48_000;
@@ -74,7 +75,11 @@ fn proc_extra() -> (ProcExtra, Output<TransportObservation>) {
     let (logger, _logger_rx) = realtime_logger(RealtimeLoggerConfig::default());
     let (observation_input, observation_output) = triple_buffer(&TransportObservation::default());
     let mut store = ProcStore::with_capacity(2);
-    assert!(store.insert(TransportCommitState::default()).is_ok());
+    assert!(
+        store
+            .insert(TransportCommitState::new(SessionAnchorCell::new()))
+            .is_ok()
+    );
     assert!(
         store
             .insert(TransportObservationInput::new(observation_input))
@@ -176,7 +181,7 @@ fn active_harness() -> (
     let (mut extra, mut output) = proc_extra();
     let mut processor = SessionTransportProcessor;
     let active = commit(120.0, true, TransportRevision::FIRST);
-    let stamp = TransportCommitStamp::new(None, active, RenderFrame::new(0), sample_rate());
+    let stamp = TransportCommitStamp::new(None, active, SessionFrame::new(0), sample_rate());
     process_node(
         &mut processor,
         &proc_info_at(0),
@@ -198,7 +203,7 @@ fn tempo_commit_waits_for_the_matching_render_boundary() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
 
@@ -242,7 +247,7 @@ fn relocation_commit_reanchors_the_exact_target_beat() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -272,7 +277,7 @@ fn inactive_transport_publishes_a_frozen_position() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         paused,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -308,7 +313,7 @@ fn late_transport_commit_is_rejected_without_changing_the_active_commit() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -353,7 +358,7 @@ fn stale_transport_commit_is_rejected_without_breaking_the_clock() {
     let stamp = TransportCommitStamp::new(
         Some(stale),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -388,7 +393,7 @@ fn transport_abort_is_idempotent() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -427,7 +432,7 @@ fn route_reset_rejects_pending_commit_and_reanchors_the_active_beat() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -456,7 +461,7 @@ fn route_reset_rejects_pending_commit_and_reanchors_the_active_beat() {
 fn duplicate_stage_in_one_block_is_rejected() {
     let (mut extra, _output) = proc_extra();
     let active = commit(120.0, true, TransportRevision::FIRST);
-    let stamp = TransportCommitStamp::new(None, active, RenderFrame::new(0), sample_rate());
+    let stamp = TransportCommitStamp::new(None, active, SessionFrame::new(0), sample_rate());
     assert_eq!(
         process_result(
             &proc_info_at(0),
@@ -499,7 +504,7 @@ fn stage_for_another_sample_rate_is_rejected() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         commit(60.0, true, second_revision()),
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         foreign_rate,
     );
 
@@ -527,7 +532,7 @@ fn apply_for_another_sample_rate_is_rejected() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -563,7 +568,7 @@ fn a_failing_block_rejects_the_pending_stamp_and_still_publishes() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         commit(60.0, true, second_revision()),
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(

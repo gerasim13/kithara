@@ -69,7 +69,7 @@ impl PlayerImpl {
         .map_err(|reason| PlayError::BindUnavailable {
             reason: reason.to_string(),
         })?;
-        self.bind(&binding, transport.tempo(), target)?;
+        self.bind(&binding, target)?;
         self.send_to_slot(PlayerCmd::SetTrackStart {
             src,
             start: TrackStart::Session {

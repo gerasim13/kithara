@@ -1,6 +1,6 @@
 use delegate::delegate;
 use kithara_abr::{AbrController, AbrSettings};
-use kithara_audio::{EngineLoad, SourceSchedule, StretchControls, TempoSlot};
+use kithara_audio::{EngineLoad, SessionBeat, SourceSchedule, StretchControls, TempoSlot};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::GaplessMode;
 use kithara_platform::{
@@ -14,7 +14,7 @@ use super::{
     state::{ItemQueue, PlayerParams, PlayerPhase},
 };
 use crate::{
-    api::{PlayerEvent, PlayerStatus, SessionBeat, Tempo, TrackBinding},
+    api::{PlayerEvent, PlayerStatus, TrackBinding},
     bridge::PlayerCmd,
     engine::{EngineConfig, EngineImpl},
     error::PlayError,
@@ -77,31 +77,36 @@ impl PlayerImpl {
     ///
     /// # Errors
     ///
-    /// Returns [`PlayError::BindUnavailable`] when the track has no usable
-    /// analysed map at the anchored beat, or the committed tempo and host rate
-    /// do not define a beat advance.
-    pub(crate) fn bind(
-        &self,
-        binding: &TrackBinding,
-        tempo: Tempo,
-        at: SessionBeat,
-    ) -> Result<(), PlayError> {
+    /// Returns [`PlayError::BindUnavailable`] when the session has committed
+    /// no grid yet, or the track has no usable analysed map at `at`.
+    pub(crate) fn bind(&self, binding: &TrackBinding, at: SessionBeat) -> Result<(), PlayError> {
+        let anchor = self.core.engine.session_handle().anchor()?;
+        // The deck's first output frame is due on `at`, so its own anchor pair
+        // is that beat and the frame the committed grid puts it on. Both are
+        // fixed here and never recomputed: a later tempo commit bends the grid
+        // ahead of the playhead instead of moving frames already rendered.
+        let start = anchor
+            .load()
+            .ok_or_else(|| PlayError::BindUnavailable {
+                reason: "the session has committed no tempo grid yet".to_owned(),
+            })?
+            .frame_at(at)
+            .map_err(|reason| PlayError::BindUnavailable {
+                reason: reason.to_string(),
+            })?;
         let origin = binding
             .track_beat_at(at)
             .map_err(|reason| PlayError::BindUnavailable {
                 reason: reason.to_string(),
             })?;
-        let schedule = SourceSchedule::new(
+        *self.core.binding.lock() = Some(Arc::new(SourceSchedule::new(
             binding.map().clone(),
             origin,
-            tempo.beats_per_second(),
-            self.core.engine.master_sample_rate(),
+            start,
+            at,
             binding.direction(),
-        )
-        .map_err(|reason| PlayError::BindUnavailable {
-            reason: reason.to_string(),
-        })?;
-        *self.core.binding.lock() = Some(Arc::new(schedule));
+            anchor,
+        )));
         Ok(())
     }
 }

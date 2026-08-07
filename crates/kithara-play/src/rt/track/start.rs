@@ -1,4 +1,6 @@
-use crate::api::{SessionBeat, TransportRevision};
+use kithara_audio::SessionBeat;
+
+use crate::api::TransportRevision;
 
 /// When a preloading track becomes audible.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
