@@ -99,7 +99,7 @@ kithara = { workspace = true, default-features = false, features = ["apple", "cl
 
 [build-dependencies]
 serde = { workspace = true }
-serde_yml = { workspace = true }
+serde_yaml_ng = { workspace = true }
 
 [dev-dependencies]
 kithara-test-macros = { workspace = true }

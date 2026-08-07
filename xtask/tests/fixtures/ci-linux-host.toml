@@ -6,13 +6,13 @@ token_file = "/etc/kithara-ci/github.token"
 
 [[runners]]
 name = "kithara-ci"
-cpus = "24"
+cpus = 24
 memory = "96g"
 labels = ["self-hosted", "linux", "x64", "kithara"]
 
 [[runners]]
 name = "kithara-ci-gpu"
-cpus = "8"
+cpus = 8
 memory = "32g"
 labels = ["self-hosted", "linux", "x64", "kithara", "gpu"]
 devices = ["/dev/dri"]
@@ -20,7 +20,7 @@ groups = [993]
 
 [[runners]]
 name = "kithara-ci-android"
-cpus = "12"
+cpus = 12
 memory = "48g"
 labels = ["self-hosted", "linux", "x64", "kithara", "android"]
 devices = ["/dev/kvm"]

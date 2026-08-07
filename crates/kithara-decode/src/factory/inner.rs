@@ -50,6 +50,19 @@ const READER_READ_AHEAD_BYTES: NonZeroU64 = match NonZeroU64::new(32 * 1_024) {
 /// Exactly one backend feature is expected per build: device builds
 /// (`apple` / `android`) compile with `--no-default-features` so
 /// `symphonia` is absent, and the hardware variant is the sole default.
+#[cfg(not(any(
+    feature = "symphonia",
+    all(feature = "apple", any(target_os = "macos", target_os = "ios")),
+    all(feature = "android", target_os = "android"),
+    all(target_arch = "wasm32", feature = "webcodecs"),
+)))]
+compile_error!(
+    "kithara-decode: enable a decoder backend for this target — `symphonia` \
+     anywhere, `apple` on macOS/iOS, `android` on Android, `webcodecs` on \
+     wasm32. With none of them every variant below is configured out, and a \
+     build that decodes nothing is not one this crate can serve."
+);
+
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, derive_more::Display, PartialEq, Eq)]
 pub enum DecoderBackend {

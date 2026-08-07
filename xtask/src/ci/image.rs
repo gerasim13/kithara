@@ -137,6 +137,7 @@ pub(crate) fn linux_build_args(pins: &CiPins) -> Result<Vec<(&'static str, Strin
         ("CARGO_HACK_VERSION", "cargo-hack"),
         ("CARGO_LLVM_COV_VERSION", "cargo-llvm-cov"),
         ("CARGO_MACHETE_VERSION", "cargo-machete"),
+        ("CARGO_MODULES_VERSION", "cargo-modules"),
         ("CARGO_MUTANTS_VERSION", "cargo-mutants"),
         ("CARGO_NEXTEST_VERSION", "cargo-nextest"),
         ("CARGO_SEMVER_CHECKS_VERSION", "cargo-semver-checks"),

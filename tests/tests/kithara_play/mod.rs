@@ -28,4 +28,3 @@ mod rt_metrics;
 mod seamless_queue_advance;
 #[cfg(not(target_arch = "wasm32"))]
 mod session_transport;
-mod silvercomet_seek_hang;

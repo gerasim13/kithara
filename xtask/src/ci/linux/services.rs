@@ -44,11 +44,18 @@ pub(super) fn install(
     )
     .with_context(|| format!("making {} executable", LAYOUT.executable))?;
 
-    for runner in &host.runners {
+    let cores = std::thread::available_parallelism()
+        .context("reading this machine's core count")?
+        .get();
+    for (index, runner) in host.runners.iter().enumerate() {
         let path = PathBuf::from(LAYOUT.systemd_root).join(runner.service());
-        std::fs::write(&path, unit(host, runner, pins, LAYOUT.executable)?)
+        let cpuset = cpuset(index, runner.cpus, cores);
+        std::fs::write(&path, unit(host, runner, &cpuset, pins, LAYOUT.executable)?)
             .with_context(|| format!("writing {}", path.display()))?;
-        info!(service = runner.service(), "runner service installed");
+        info!(
+            service = runner.service(),
+            cpuset, "runner service installed"
+        );
     }
     install_cleanup_timer()?;
     process.run("systemctl", &["daemon-reload"], "reload systemd")?;
@@ -102,6 +109,24 @@ fn install_cleanup_timer() -> Result<()> {
     Ok(())
 }
 
+/// Which cores this runner's jobs may use.
+///
+/// Blocks are handed out in order and wrap around the machine, so runners
+/// overlap once they outnumber the cores. The overlap is deliberate: what a set
+/// buys over a share is that `nproc` inside the container reports the size of
+/// the set, so Cargo starts that many compilations rather than one per host
+/// core. Sharing a core between two runners costs throughput; misreporting the
+/// count costs memory, and memory is what the kernel kills for.
+fn cpuset(index: usize, cpus: u32, cores: usize) -> String {
+    let cores = u32::try_from(cores).unwrap_or(u32::MAX).max(1);
+    let cpus = cpus.clamp(1, cores);
+    let first = u32::try_from(index).unwrap_or(0).saturating_mul(cpus) % cores;
+    (0..cpus)
+        .map(|offset| ((first + offset) % cores).to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// The runner takes one job and exits, the container goes with it, and systemd
 /// starts the next one. Nothing survives a job except the caches.
 ///
@@ -109,7 +134,13 @@ fn install_cleanup_timer() -> Result<()> {
 /// checkouts separately: cargo guards both with a lock file kept beside them,
 /// and jobs on this machine run at the same time. Mounting the data without
 /// the lock leaves two of them unpacking one crate into one directory.
-fn unit(host: &LinuxHost, runner: &LinuxRunner, pins: &CiPins, executable: &str) -> Result<String> {
+fn unit(
+    host: &LinuxHost,
+    runner: &LinuxRunner,
+    cpuset: &str,
+    pins: &CiPins,
+    executable: &str,
+) -> Result<String> {
     let mut unit = String::new();
     writeln!(
         unit,
@@ -135,7 +166,7 @@ fn unit(host: &LinuxHost, runner: &LinuxRunner, pins: &CiPins, executable: &str)
         unit,
         "\nExecStart=/usr/bin/docker run --rm --name kithara-ci-{name} \
          --network {network} \
-         --cpus {cpus} \
+         --cpuset-cpus {cpuset} \
          --memory {memory} \
          --pids-limit 8192 \
          --security-opt no-new-privileges \
@@ -145,7 +176,6 @@ fn unit(host: &LinuxHost, runner: &LinuxRunner, pins: &CiPins, executable: &str)
          --mount type=volume,source=kithara-ci-target,target=/cache/target",
         name = runner.name,
         network = host.network,
-        cpus = runner.cpus,
         memory = runner.memory,
         env_file = env_file(runner),
     )?;
@@ -211,6 +241,36 @@ mod tests {
         ci::{config::fixture, linux::profile::tests::host_fixture},
     };
 
+    /// The container must see as many cores as it was given, because that
+    /// count is what Cargo turns into concurrent compilations.
+    #[test]
+    fn a_runner_is_given_exactly_the_cores_it_asked_for() {
+        for index in 0..12 {
+            let set = cpuset(index, 3, 32);
+            let cores = set.split(',').collect::<Vec<_>>();
+            assert_eq!(cores.len(), 3, "index {index}: {set}");
+            assert_eq!(
+                cores
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len(),
+                3,
+                "index {index} repeats a core: {set}"
+            );
+        }
+    }
+
+    /// More runners than cores is the point of the exercise: an idle listener
+    /// costs nothing, so the machine carries more of them than it has cores.
+    #[test]
+    fn the_sets_wrap_instead_of_running_out() {
+        let set = cpuset(11, 3, 32);
+        assert_eq!(set, "1,2,3", "{set}");
+        assert_eq!(cpuset(0, 4, 4), "0,1,2,3");
+        // A runner may not ask for more of the machine than it has.
+        assert_eq!(cpuset(0, 9, 4), "0,1,2,3");
+    }
+
     /// A unit is a command line, and one this crate cannot parse fails only
     /// once systemd has already started the service it belongs to.
     #[test]
@@ -220,6 +280,7 @@ mod tests {
         let unit = unit(
             &host,
             host.runner("kithara-ci").unwrap(),
+            "0,1,2,3",
             pins,
             "/usr/local/bin/kithara-ci",
         )
@@ -244,6 +305,7 @@ mod tests {
         let plain = unit(
             &host,
             host.runner("kithara-ci").unwrap(),
+            "0,1,2,3",
             pins,
             "/usr/bin/xtask",
         )
@@ -251,6 +313,7 @@ mod tests {
         let gpu = unit(
             &host,
             host.runner("kithara-ci-gpu").unwrap(),
+            "0,1,2,3",
             pins,
             "/usr/bin/xtask",
         )
@@ -259,6 +322,7 @@ mod tests {
         let android = unit(
             &host,
             host.runner("kithara-ci-android").unwrap(),
+            "0,1,2,3",
             pins,
             "/usr/bin/xtask",
         )

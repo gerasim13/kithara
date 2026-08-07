@@ -364,7 +364,6 @@ async fn observe_scrub_outcome(obs: ScrubObservation<'_>) -> ScrubOutcome {
 /// path, so the bug — wherever it lives in those layers — must
 /// surface on both.
 #[kithara::test(tokio)]
-#[ignore = "needs KITHARA_DRM_PROD_* baked + prod CDN reachable — run with --run-ignored=only"]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

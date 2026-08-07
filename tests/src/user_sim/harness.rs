@@ -6,7 +6,7 @@ use kithara::{
     decode::DecoderBackend,
     events::{
         AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage,
-        TrackId, TrackStatus, VariantInfo,
+        TrackId, TrackStatus,
     },
     net::{HttpClient, NetOptions},
     platform::{
@@ -20,26 +20,32 @@ use kithara::{
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_integration_tests::{kithara, offline::OfflineSession};
 use url::Url;
 
-use super::actions::Action;
+use crate::{kithara, offline::OfflineSession, user_sim::actions::Action};
 
 /// Worst-case wall-clock budget for any single action. Anything longer
 /// is treated as a hang — matches the "no hang" invariant from the
 /// player robustness plan.
-pub(crate) const ACTION_BUDGET: Duration = Duration::from_secs(8);
+pub const ACTION_BUDGET: Duration = Duration::from_secs(8);
 /// Tolerance window around the seek target. The reader snaps to
 /// keyframe / segment boundaries, so an exact match is not realistic.
-pub(crate) const SEEK_TARGET_TOLERANCE_S: f64 = 1.5;
+pub const SEEK_TARGET_TOLERANCE_S: f64 = 1.5;
 /// If a track auto-advances within this window of `duration`, treat
 /// the transition as a legitimate natural EOF — not the false-EOF
 /// auto-advance the harness is trying to catch. Larger than seek
 /// tolerance so the post-seek decode can chew through any residual
 /// audio before EOF without the harness misclassifying it as a bug.
-pub(crate) const NATURAL_EOF_WINDOW_S: f64 = 3.0;
+pub const NATURAL_EOF_WINDOW_S: f64 = 3.0;
 /// Tick interval driving the loop polling helpers.
 const POLL_INTERVAL: Duration = Duration::from_millis(40);
+/// Consecutive no-progress producer-tick wakes before a stuck playhead is a
+/// SILENT HANG. At one wake per [`POLL_INTERVAL`] (40 ms) this is the ~3 s
+/// window the panic messages name.
+const STAGNATION_TICKS: u32 = 75;
+/// Producer-tick wakes a quality switch is given to land before the harness
+/// stops waiting for it.
+const SWITCH_PROGRESS_TICKS: u32 = 200;
 const RENDER_BLOCK_FRAMES: usize = 512;
 const RENDER_BATCH_BLOCKS: usize = 16;
 const RENDER_STALL_BUDGET: Duration = Duration::from_secs(3);
@@ -70,7 +76,7 @@ async fn run_tick_driver(queue: Arc<Queue>) {
 /// simulation scenarios. It owns a `Queue + Player + Downloader` triple
 /// plus a tokio tick task; callers drive it with `Action`s and the
 /// harness asserts the per-action invariants from the plan.
-pub(crate) struct SimHarness {
+pub struct SimHarness {
     queue: Arc<Queue>,
     session: Arc<OfflineSession>,
     tick: tokio::task::JoinHandle<()>,
@@ -90,14 +96,14 @@ pub(crate) struct SimHarness {
 /// `kithara-app` config — but tests parametrise over `Manual(idx)` as
 /// well so the ABR-on and ABR-off code paths both get exercised.
 #[derive(Clone, Debug)]
-pub(crate) struct TrackSpec {
+pub struct TrackSpec {
     pub url: Url,
     pub backend: DecoderBackend,
     pub abr_mode: AbrMode,
 }
 
 impl TrackSpec {
-    pub(crate) fn new(url: Url, backend: DecoderBackend) -> Self {
+    pub fn new(url: Url, backend: DecoderBackend) -> Self {
         Self {
             url,
             backend,
@@ -105,12 +111,12 @@ impl TrackSpec {
         }
     }
 
-    pub(crate) fn with_abr_mode(mut self, mode: AbrMode) -> Self {
+    pub fn with_abr_mode(mut self, mode: AbrMode) -> Self {
         self.abr_mode = mode;
         self
     }
 
-    pub(crate) fn with_backend(mut self, backend: DecoderBackend) -> Self {
+    pub fn with_backend(mut self, backend: DecoderBackend) -> Self {
         self.backend = backend;
         self
     }
@@ -120,7 +126,7 @@ impl SimHarness {
     /// Build a fresh `Queue + Player` against `cache_path` and append
     /// every track in `specs`. Does **not** call `select` — that's left
     /// to the scenario via `enter_track`.
-    pub(crate) async fn new(cache_path: &Path, specs: &[TrackSpec]) -> Self {
+    pub async fn new(cache_path: &Path, specs: &[TrackSpec]) -> Self {
         let session = Arc::new(OfflineSession::new());
         let player = Arc::new(PlayerImpl::new(
             PlayerConfig::builder()
@@ -146,7 +152,7 @@ impl SimHarness {
             ))
             .build(),
         );
-        let store = kithara_integration_tests::disk_asset_store(cache_path);
+        let store = crate::disk_asset_store(cache_path);
 
         let mut track_ids = Vec::with_capacity(specs.len());
         for spec in specs {
@@ -179,22 +185,22 @@ impl SimHarness {
         }
     }
 
-    pub(crate) fn queue(&self) -> &Arc<Queue> {
+    pub fn queue(&self) -> &Arc<Queue> {
         &self.queue
     }
 
-    pub(crate) fn track_id(&self, idx: usize) -> TrackId {
+    pub fn track_id(&self, idx: usize) -> TrackId {
         self.track_ids[idx]
     }
 
-    pub(crate) fn subscribe(&self) -> EventReceiver {
+    pub fn subscribe(&self) -> EventReceiver {
         self.queue.subscribe()
     }
 
     /// Start playback of the queue track at `idx`: select it, wait for
     /// Loaded, play for `warmup` so the audio worker is past initial
     /// pre-roll, then snapshot the codec so `SetQuality` has a baseline.
-    pub(crate) async fn enter_track(&mut self, idx: usize, warmup: Duration) {
+    pub async fn enter_track(&mut self, idx: usize, warmup: Duration) {
         let id = self.track_ids[idx];
         self.queue
             .select(id, Transition::None)
@@ -215,7 +221,7 @@ impl SimHarness {
     /// from the plan. Panics on hang, on out-of-tolerance seek landing,
     /// on spurious auto-advance, and on quality-switch cross-codec
     /// recreate — that's what gives the bug repros their teeth.
-    pub(crate) async fn apply(&mut self, action: Action) {
+    pub async fn apply(&mut self, action: Action) {
         match action {
             Action::SeekRatio(r) => self.do_seek(r, false).await,
             Action::SeekNearEnd(r) => self.do_seek(r, true).await,
@@ -234,7 +240,7 @@ impl SimHarness {
     /// Wait for any in-flight seek to settle, then assert the queue is
     /// at a sane terminal state for the scenario. Used as the final
     /// step in scripted scenarios.
-    pub(crate) async fn shutdown(self) {
+    pub async fn shutdown(self) {
         self.tick.abort();
         let _ = self.tick.await;
         drop(self.queue);
@@ -249,10 +255,6 @@ impl SimHarness {
 
     fn current_abr_handle(&self) -> Option<AbrHandle> {
         self.queue.current_abr_handle()
-    }
-
-    fn current_variant(&self) -> Option<VariantInfo> {
-        self.queue.current_variant()
     }
 
     fn position(&self) -> f64 {
@@ -494,9 +496,11 @@ impl SimHarness {
         let wait = async {
             loop {
                 match recv_event(rx).await {
-                    Ok(Some(Event::Queue(QueueEvent::CurrentTrackChanged { .. }))) => return,
+                    // The handover landed, or the bus closed and never will.
+                    Ok(Some(Event::Queue(QueueEvent::CurrentTrackChanged { .. }))) | Err(_) => {
+                        return;
+                    }
                     Ok(_) => {}
-                    Err(_) => return,
                 }
             }
         };
@@ -530,8 +534,6 @@ impl SimHarness {
         let mut no_progress_ticks: u32 = 0;
         let mut switch_ticks: u32 = 0;
         let mut seek_rebase_allowed = false;
-        const STAGNATION_TICKS: u32 = 75;
-        const SWITCH_PROGRESS_TICKS: u32 = 200;
 
         while switch_ticks < SWITCH_PROGRESS_TICKS {
             if pre_track.is_some() && self.current_track_id() != pre_track {
@@ -693,11 +695,6 @@ impl SimHarness {
         // virtual engine fast-forwards past.
         let mut no_progress_ticks: u32 = 0;
 
-        /// Consecutive no-progress producer-tick wakes before a stuck
-        /// playhead is a SILENT HANG. At one wake per `POLL_INTERVAL`
-        /// (40ms) this is the ~3s window the panic message names.
-        const STAGNATION_TICKS: u32 = 75;
-
         // Drive the watchdog off current playback opportunities instead of a
         // blind `sleep` cadence: `PlaybackProgress` proves the sink committed a
         // block, and a `POLL_INTERVAL` timeout proves one queue tick elapsed
@@ -763,10 +760,11 @@ impl SimHarness {
             // would busy-spin and (under flash) freeze the virtual clock.
             // Stop watching and fall through to the post-loop checks.
             let counts_as_playback_tick = match timeout(POLL_INTERVAL, recv_event(&mut rx)).await {
-                Ok(Ok(Some(Event::Audio(AudioEvent::PlaybackProgress { .. })))) => true,
+                // A committed block, or a poll tick that elapsed with no
+                // relevant event: both are one producer opportunity.
+                Ok(Ok(Some(Event::Audio(AudioEvent::PlaybackProgress { .. })))) | Err(_) => true,
                 Ok(Ok(Some(_)) | Ok(None)) => false,
                 Ok(Err(_)) => break,
-                Err(_) => true,
             };
             if counts_as_playback_tick {
                 // One more current-playback opportunity elapsed without
@@ -1035,11 +1033,7 @@ async fn await_progress(
     }
 }
 
-pub(crate) async fn wait_for_loaded(
-    queue: &Queue,
-    id: TrackId,
-    deadline: Duration,
-) -> Result<(), String> {
+pub async fn wait_for_loaded(queue: &Queue, id: TrackId, deadline: Duration) -> Result<(), String> {
     if let Some(entry) = queue.track(id) {
         match &entry.status {
             TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
@@ -1082,7 +1076,7 @@ pub(crate) async fn wait_for_loaded(
     }
 }
 
-pub(crate) async fn wait_for_position_at_least(
+pub async fn wait_for_position_at_least(
     queue: &Queue,
     min_secs: f64,
     deadline: Duration,

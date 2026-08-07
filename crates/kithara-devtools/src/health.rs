@@ -136,16 +136,10 @@ pub(crate) fn run(_args: &HealthArgs) -> Result<()> {
 }
 
 fn build_stages(project: &ProjectConfig) -> Vec<Stage> {
-    build_stages_with_excludes(
-        &project.health.feature_powerset_exclude,
-        &project.health.workspace_exclude,
-    )
+    build_stages_with_excludes(&project.health.workspace_exclude)
 }
 
-fn build_stages_with_excludes(
-    feature_powerset_exclude: &[String],
-    workspace_exclude: &[String],
-) -> Vec<Stage> {
+fn build_stages_with_excludes(workspace_exclude: &[String]) -> Vec<Stage> {
     vec![
         Stage::shared("format-check", SharedStage::FmtCheck),
         Stage::new(
@@ -164,20 +158,13 @@ fn build_stages_with_excludes(
         Stage::new("machete", "cargo", &["machete"]),
         Stage::new("shear", "cargo", &["shear", "--deny-warnings"]),
         Stage::new("deny", "cargo", &["deny", "check"]),
-        // NOTE: deliberately *not* passing `--no-dev-deps`. That flag asks
-        Stage::new(
-            "hack-feature-powerset",
-            "cargo",
-            &[
-                "hack",
-                "check",
-                "--feature-powerset",
-                "--depth",
-                "2",
-                "--workspace",
-            ],
-        )
-        .exclude_crates(feature_powerset_exclude),
+        // The powerset owns which crates refuse a combination and holds them
+        // out of the workspace pass, so this is one command rather than a shape
+        // repeated here and in the deps recipe. `--no-dev-deps` is deliberately
+        // absent: a crate whose tests need a feature its library does not
+        // declare still has the wrong feature set, and the health run is where
+        // that should show.
+        Stage::new("hack-feature-powerset", "cargo", &["xtask", "powerset"]),
         Stage::new(
             "semver-checks",
             "cargo",
@@ -427,7 +414,7 @@ mod tests {
 
     #[test]
     fn health_xtask_stage_argv_is_parseable() {
-        let stages = build_stages_with_excludes(&[], &[]);
+        let stages = build_stages_with_excludes(&[]);
         let command = CoreCommand::augment_subcommands(clap::Command::new("xtask"));
 
         for stage in stages
