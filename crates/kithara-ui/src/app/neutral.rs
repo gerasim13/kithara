@@ -16,8 +16,14 @@ pub trait App {
     /// The layout entry to compile for the state the application is in now.
     fn document(&self) -> &str;
 
-    /// The values the document binds to.
-    fn reads(&self) -> &dyn Reads;
+    /// Hands the host the values the document binds to, for as long as the
+    /// call lasts.
+    ///
+    /// Scoped rather than returned because an application that answers its
+    /// endpoints by walking its own state builds that walk on the stack: it
+    /// borrows the application, so there is nothing inside the application to
+    /// hand back a reference to.
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R;
 
     /// Applies one event the document published.
     fn update(&mut self, event: UiEvent);

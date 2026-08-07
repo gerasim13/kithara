@@ -206,7 +206,8 @@ where
             return;
         };
         if self.app.document() == was {
-            self.root.refresh(&ui, self.app.reads());
+            let Self { app, root, .. } = self;
+            app.reads(|reads| root.refresh(&ui, reads));
             self.ui = ui;
             return;
         }
@@ -259,9 +260,10 @@ fn mount<Application>(
 where
     Application: App,
 {
-    let reads = app.reads();
-    let host = MasonryHost::new(ui, reads, config.skin).with_state(state.clone());
-    let node = document::render(&ui.root, ui, reads, config.skin_doc, host);
+    let node = app.reads(|reads| {
+        let host = MasonryHost::new(ui, reads, config.skin).with_state(state.clone());
+        document::render(&ui.root, ui, reads, config.skin_doc, host)
+    });
     MasonryRoot::new(
         node,
         RenderRootOptions {

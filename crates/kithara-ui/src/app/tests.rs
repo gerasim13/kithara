@@ -47,8 +47,8 @@ impl App for Swapper {
         }
     }
 
-    fn reads(&self) -> &dyn Reads {
-        self
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        with(self)
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -97,8 +97,8 @@ impl App for Dial {
         "one.klayout.ron"
     }
 
-    fn reads(&self) -> &dyn Reads {
-        self
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        with(self)
     }
 
     fn update(&mut self, event: UiEvent) {

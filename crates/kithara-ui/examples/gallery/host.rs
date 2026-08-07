@@ -70,8 +70,8 @@ impl App for Gallery {
         }
     }
 
-    fn reads(&self) -> &dyn Reads {
-        &self.reads
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        with(&self.reads)
     }
 
     fn update(&mut self, event: UiEvent) {
