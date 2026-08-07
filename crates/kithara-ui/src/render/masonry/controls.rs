@@ -9,10 +9,10 @@ use crate::{
         bar::{brand::Brand, divider::Divider, spacer::Spacer},
         button::Button,
         chip::Chip,
-        deck::clock::Clock,
+        deck::{clock::Clock, summary::Summary},
         design::{
-            cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter, select::Select,
-            status_dot::StatusDot, swatch::Swatch,
+            cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter, segmented::Segmented,
+            select::Select, status_dot::StatusDot, swatch::Swatch,
         },
         icon::glyph::Glyph,
         knob::Knob,
@@ -451,6 +451,29 @@ impl Retained for Clock {
     }
 }
 
+/// The picked cell moves with the reading, rounded to a whole cell.
+impl Retained for Segmented {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        let ReadValue::Scalar(value) = value else {
+            return false;
+        };
+        let picked = num_traits::ToPrimitive::to_usize(&value.round())
+            .filter(|index| *index < data.items.len());
+        std::mem::replace(&mut data.active, picked) != picked
+    }
+}
+
+/// A summary shows the track its own endpoint names; where it came from is a
+/// sibling's reading and lands on rebuild.
+impl Retained for Summary {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        let ReadValue::Text(title) = value else {
+            return false;
+        };
+        !title.is_empty() && std::mem::replace(&mut data.title, (*title).to_owned()) != data.title
+    }
+}
+
 impl Retained for Select {}
 
 impl Retained for Swatch {}
@@ -580,6 +603,10 @@ where
             Grip::None => return self,
             Grip::Press => Recognize::Press,
             Grip::Drag(drag) => Recognize::Drag(Box::new(Dragged::new(drag))),
+            // Picking a cell is a gesture only the immediate host recognises;
+            // here the engine plan drives it, which is what this host has
+            // always done. The two are reconciled by the gesture census.
+            Grip::Index { .. } => return self,
         };
         self.interaction = Some(Interaction {
             map_event,

@@ -12,7 +12,7 @@ use super::{
     node::Node,
 };
 use crate::{
-    atoms::{button::declared_width, tab::TabLarge},
+    atoms::{button::declared_width, deck::summary::Summary, tab::TabLarge},
     expand::{Binding, ControlSpec},
     module::{TextAlign, TextStyle},
     mount,
@@ -61,7 +61,14 @@ pub(super) struct Cx<'a> {
     pub(super) read: Option<&'a Binding>,
 }
 
-impl NodeControl for mount::Summary {}
+impl NodeControl for mount::Summary {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        painted(self, host, cx)
+    }
+}
 impl NodeControl for mount::Brand {
     fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where
@@ -156,7 +163,14 @@ impl NodeControl for mount::Vis {}
 impl NodeControl for mount::TrackList<'_> {}
 impl NodeControl for mount::Tree<'_> {}
 impl NodeControl for mount::ContextBar<'_> {}
-impl NodeControl for mount::Segmented<'_> {}
+impl NodeControl for mount::Segmented<'_> {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        painted(self, host, cx)
+    }
+}
 impl NodeControl for mount::Select {
     fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where
@@ -432,10 +446,7 @@ pub(crate) fn control_declared(
     skin: &Skin,
 ) -> solve::Size<solve::Length> {
     let intrinsic = match spec {
-        ControlSpec::DeckSummary { .. } => solve::Size::new(
-            solve::Length::FillPortion(skin.deck.summary_fill),
-            solve::Length::Fixed(skin.deck.summary_height),
-        ),
+        ControlSpec::DeckSummary { .. } => Summary::declared_length(skin.deck),
         ControlSpec::Button { style, .. } => {
             solve::Size::new(declared_width(*style, skin), solve::Length::Fill)
         }

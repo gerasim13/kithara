@@ -16,6 +16,8 @@ pub(crate) enum Grip {
     Press,
     /// A drag along one axis that sets a scalar.
     Drag(Drag),
+    /// A press that picks one of a row of equal cells.
+    Index { count: usize },
 }
 
 /// A scalar drag, described rather than built.

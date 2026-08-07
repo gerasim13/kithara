@@ -26,7 +26,7 @@ use crate::{
     render::{
         ReadValue, Reads, Skin, UiEvent, activate,
         controls::{Drag, Grip, Press},
-        scalar,
+        index, scalar,
     },
     solve,
     text::{TextContext, TextResources},
@@ -309,6 +309,7 @@ where
 enum Recognize {
     Press,
     Drag(Box<Dragging>),
+    Index { count: usize },
 }
 
 /// A mounted scalar drag: the recognizer, and the description it was built from
@@ -337,6 +338,14 @@ where
             paint,
             path: path.to_owned(),
             recognize: Recognize::Press,
+        }
+    }
+
+    pub(crate) fn index(path: &str, paint: Paint<'skin, Painter>, count: usize) -> Self {
+        Self {
+            paint,
+            path: path.to_owned(),
+            recognize: Recognize::Index { count },
         }
     }
 
@@ -377,6 +386,9 @@ where
                     .on_input(&mut state.drag, input, &self.gripped(hit), Instant::now())
                     .map(|value| drag.spec.published(input, value)),
             ),
+            Recognize::Index { count } => hit.uniform_horizontal_index(*count).and_then(|picked| {
+                index(&self.path, click::on_input(input, &hit).map(|()| picked))
+            }),
         };
         action.or_else(|| repaint.then(Action::request_redraw))
     }
@@ -451,6 +463,7 @@ where
                 .recognizer
                 .cursor(&state.drag, &self.gripped(hit))
                 .into(),
+            Recognize::Index { .. } => Hover::new(CursorShape::Pointer).cursor(false, &hit).into(),
         }
     }
 

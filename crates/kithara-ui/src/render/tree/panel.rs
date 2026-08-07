@@ -5,33 +5,15 @@ use crate::{
     compile::CompiledUi,
     expand::Binding,
     ids::InternId,
-    module::{DeckSummaryStyle, TrackColumn},
+    module::TrackColumn,
     render::{InputOwner, ReadValue, Reads, Skin, UiEvent},
     widgets::{
         Widget,
-        deck::DeckSummary,
         nav::{ContextBar, Tree},
         track_list::TrackList,
         vis::Vis,
     },
 };
-
-pub(super) fn deck_summary<'a>(
-    style: DeckSummaryStyle,
-    value: Option<&ReadValue<'_>>,
-    scope: &str,
-    reads: &dyn Reads,
-    skin: &Skin,
-) -> Element<'a, UiEvent> {
-    DeckSummary::builder()
-        .style(style)
-        .maybe_value(value)
-        .scope(scope)
-        .reads(reads)
-        .skin(skin)
-        .build()
-        .view()
-}
 
 pub(super) fn vis<'a>(value: Option<&ReadValue<'_>>, reads: &dyn Reads) -> Element<'a, UiEvent> {
     Vis::builder()

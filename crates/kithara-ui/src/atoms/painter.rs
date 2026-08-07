@@ -3,10 +3,19 @@ use crate::{
         bar::{brand::Brand, divider::Divider, spacer::Spacer},
         button::{Button, ButtonLabel, VisualState},
         chip::Chip,
-        deck::clock::{Clock, Elapsed},
+        deck::{
+            clock::{Clock, Elapsed},
+            summary::{Loaded, Summary},
+        },
         design::{
-            cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter, select::Select,
-            status_dot::StatusDot, swatch::Swatch,
+            cell::Cell,
+            crossfader::Crossfader,
+            fader::Fader,
+            meter::Meter,
+            segmented::{Segmented, SegmentedData},
+            select::Select,
+            status_dot::StatusDot,
+            swatch::Swatch,
         },
         icon::glyph::{Glyph, GlyphData},
         knob::Knob,
@@ -429,6 +438,28 @@ impl ControlPainter for Clock {
     }
 }
 
+impl ControlPainter for Summary {
+    type Data = Loaded;
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        data: &Self::Data,
+        bounds: Rect,
+        _state: VisualState,
+    ) {
+        self.paint(list, text, data, bounds);
+    }
+
+    /// A deck's headline is wider than the controls beside it by a factor the
+    /// skin names, so `Fill` would divide the row evenly and the deck would be
+    /// wrong.
+    fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
+        Self::declared_length(self.metrics())
+    }
+}
+
 impl ControlPainter for Telemetry {
     type Data = f64;
 
@@ -450,6 +481,21 @@ impl ControlPainter for Telemetry {
     /// Only the width: a reading fills the height of the row it sits in.
     fn measure(&self, text: &mut TextContext, data: &Self::Data) -> Size {
         Size::new(self.intrinsic_width(text, &self.format(*data)), 0.0)
+    }
+}
+
+impl ControlPainter for Segmented {
+    type Data = SegmentedData;
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        data: &Self::Data,
+        bounds: Rect,
+        _state: VisualState,
+    ) {
+        self.paint(list, text, data, bounds);
     }
 }
 

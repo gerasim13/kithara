@@ -1,9 +1,8 @@
 use iced::{alignment::Horizontal, widget::Space};
 
 use super::{
-    atom::segmented,
     geometry::Rendered,
-    panel::{context_bar, deck_summary, track_list, tree, vis},
+    panel::{context_bar, track_list, tree, vis},
     read_flag, wave_zoom,
     window::{titlebar, window_controls},
 };
@@ -48,9 +47,7 @@ pub(super) struct Cx<'a, 'reads, 'value> {
 
 impl ViewControl for mount::Summary {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(deck_summary(
-            self.style, cx.value, cx.scope, cx.reads, cx.skin,
-        ))
+        painted(self, cx)
     }
 }
 
@@ -264,9 +261,7 @@ impl ViewControl for mount::Checkbox {
 
 impl ViewControl for mount::Segmented<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(segmented(
-            cx.path, self.items, cx.value, cx.ui, cx.skin, cx.owner,
-        ))
+        painted(self, cx)
     }
 }
 
@@ -349,6 +344,7 @@ where
     Rendered::leading(match (cx.owner, grip) {
         (InputOwner::Leaf, Grip::Press) => Gesture::press(cx.path, paint).view(),
         (InputOwner::Leaf, Grip::Drag(drag)) => Gesture::drag(cx.path, paint, drag).view(),
+        (InputOwner::Leaf, Grip::Index { count }) => Gesture::index(cx.path, paint, count).view(),
         (InputOwner::Engine, _) | (_, Grip::None) => paint.view(),
     })
 }

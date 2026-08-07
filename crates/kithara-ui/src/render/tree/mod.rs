@@ -1,4 +1,3 @@
-mod atom;
 mod control;
 mod flex;
 mod geometry;

@@ -1523,11 +1523,7 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
         Paints::NotYet,
         r#"SettingsButton(id: "control")"#,
     ),
-    (
-        "DeckSummary",
-        Paints::NotYet,
-        r#"DeckSummary(id: "control")"#,
-    ),
+    ("DeckSummary", Paints::Yes, r#"DeckSummary(id: "control")"#),
     ("WindowDrag", Paints::NotYet, r#"WindowDrag(id: "control")"#),
     (
         "TitleBar",
@@ -1614,7 +1610,7 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     ),
     (
         "Segmented",
-        Paints::NotYet,
+        Paints::Yes,
         r#"Segmented(id: "control", items: ["A", "B"], read: Model(id: "library.scope"))"#,
     ),
     (
