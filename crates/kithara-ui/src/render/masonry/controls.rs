@@ -6,7 +6,7 @@ use num_traits::cast::AsPrimitive;
 use super::custom::{HostAction, Repaint};
 use crate::{
     atoms::{
-        bar::{brand::Brand, divider::Divider, spacer::Spacer},
+        bar::{brand::Brand, divider::Divider, settings::Settings, spacer::Spacer},
         button::Button,
         chip::Chip,
         deck::{clock::Clock, summary::Summary, tempo::Tempo},
@@ -410,6 +410,10 @@ impl Retained for Divider {}
 
 impl Retained for Spacer {}
 
+/// The gear the settings button shows comes from the built-in art, not from an
+/// endpoint.
+impl Retained for Settings {}
+
 /// A status dot and a cell show what the document said; no endpoint moves
 /// either of them.
 impl Retained for StatusDot {}
@@ -529,6 +533,7 @@ struct Interaction {
 
 enum Recognize {
     Press,
+    Command(fn() -> UiEvent),
     Drag(Box<Dragged>),
 }
 
@@ -606,6 +611,7 @@ where
         let recognize = match grip {
             Grip::None => return self,
             Grip::Press => Recognize::Press,
+            Grip::Command(event) => Recognize::Command(event),
             Grip::Drag(drag) => Recognize::Drag(Box::new(Dragged::new(drag))),
             // Picking a cell is a gesture only the immediate host recognises;
             // here the engine plan drives it, which is what this host has
@@ -675,6 +681,10 @@ where
                     ))
                 });
             }
+            Recognize::Command(event) => {
+                let event = *event;
+                return click::on_input(input, hit).map(|()| (interaction.map_event)(event()));
+            }
             Recognize::Drag(drag) => (drag.follow(input, &gripped), drag.spec),
         };
         // The control draws the value it just authored: the application is told
@@ -709,7 +719,7 @@ where
             .as_ref()
             .map_or(CursorShape::None, |interaction| {
                 match &interaction.recognize {
-                    Recognize::Press => {
+                    Recognize::Press | Recognize::Command(_) => {
                         Hover::new(CursorShape::Pointer).cursor(self.press.is_pressed(), hit)
                     }
                     Recognize::Drag(drag) => {

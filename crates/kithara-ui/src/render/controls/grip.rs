@@ -4,6 +4,7 @@ use crate::{
         CursorShape, Hover, Input,
         recognizers::{Scalar, Track, WheelStep},
     },
+    render::UiEvent,
 };
 
 /// What the pointer means to a control.
@@ -14,6 +15,13 @@ pub(crate) enum Grip {
     None,
     /// A press that activates it.
     Press,
+    /// A press that says something to the document rather than setting the
+    /// control's own endpoint. The settings button opens a surface the
+    /// application owns; there is no endpoint under it to activate.
+    ///
+    /// The event is named by a function rather than carried, so a grip stays
+    /// `Copy` and a control that builds one every frame allocates nothing.
+    Command(fn() -> UiEvent),
     /// A drag along one axis that sets a scalar.
     Drag(Drag),
     /// A press that picks one of a row of equal cells.

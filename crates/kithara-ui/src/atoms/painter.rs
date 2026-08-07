@@ -1,6 +1,6 @@
 use crate::{
     atoms::{
-        bar::{brand::Brand, divider::Divider, spacer::Spacer},
+        bar::{brand::Brand, divider::Divider, settings::Settings, spacer::Spacer},
         button::{Button, ButtonLabel, VisualState},
         chip::Chip,
         deck::{
@@ -406,6 +406,23 @@ impl ControlPainter for Spacer {
         _state: VisualState,
     ) {
         self.paint(list, bounds);
+    }
+}
+
+impl ControlPainter for Settings {
+    type Data = Mark;
+
+    const READS_POINTER: bool = true;
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        data: &Self::Data,
+        bounds: Rect,
+        state: VisualState,
+    ) {
+        self.paint(list, text, *data, bounds, state);
     }
 }
 

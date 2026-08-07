@@ -24,7 +24,7 @@ use crate::{
         recognizers::{Crossing, Scalar, ScalarState, click},
     },
     render::{
-        ReadValue, Reads, Skin, UiEvent, activate,
+        ReadValue, Reads, Skin, UiEvent, activate, command,
         controls::{Drag, Grip, Press},
         index, scalar,
     },
@@ -308,6 +308,7 @@ where
 /// along one axis that sets a scalar.
 enum Recognize {
     Press,
+    Command(fn() -> UiEvent),
     Drag(Box<Dragging>),
     Index { count: usize },
 }
@@ -338,6 +339,18 @@ where
             paint,
             path: path.to_owned(),
             recognize: Recognize::Press,
+        }
+    }
+
+    pub(crate) fn command(
+        path: &str,
+        paint: Paint<'skin, Painter>,
+        event: fn() -> UiEvent,
+    ) -> Self {
+        Self {
+            paint,
+            path: path.to_owned(),
+            recognize: Recognize::Command(event),
         }
     }
 
@@ -380,6 +393,7 @@ where
         let repaint = Painter::READS_POINTER && state.follow(input, &hit);
         let action = match &self.recognize {
             Recognize::Press => activate(&self.path, click::on_input(input, &hit)),
+            Recognize::Command(event) => command(*event, click::on_input(input, &hit)),
             Recognize::Drag(drag) => scalar(
                 &self.path,
                 drag.recognizer
@@ -456,7 +470,7 @@ where
         let state = tree.state.downcast_ref::<GestureState>();
         let hit = iced_interact::hit(layout.bounds(), cursor);
         match &self.recognize {
-            Recognize::Press => Hover::new(CursorShape::Pointer)
+            Recognize::Press | Recognize::Command(_) => Hover::new(CursorShape::Pointer)
                 .cursor(state.press.is_pressed(), &hit)
                 .into(),
             Recognize::Drag(drag) => drag
@@ -983,6 +997,7 @@ mod pressed {
     use super::*;
     use crate::{
         atoms::{
+            bar::settings::Settings,
             button::{Button, ButtonConfig, ButtonLabel},
             nav_item::NavItem,
             painter::{ButtonData, NavData},
@@ -1031,6 +1046,44 @@ mod pressed {
                     path: "gallery/buttons/item".to_owned(),
                     action: ControlAction::Activate,
                 }),
+                RedrawRequest::Wait,
+                event::Status::Captured,
+            )
+        );
+    }
+
+    /// A command publishes the event its control named, not an activation of
+    /// the path it happens to sit at. The path is still where the control
+    /// lives, and a command that leaked it would set an endpoint nobody wrote.
+    #[kithara::test]
+    fn a_press_on_a_command_publishes_the_event_the_control_named() {
+        let skin = builtin::skin();
+        let mark = Icon::Gear
+            .mark()
+            .unwrap_or_else(|| panic!("the gear icon must have a mark"));
+        let gesture = Gesture::command(
+            "bar/settings",
+            Paint::new(Settings::new(skin), mark, skin),
+            || UiEvent::OpenSettings,
+        );
+        let bounds = Rectangle {
+            height: 32.0,
+            width: 32.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let cursor = Cursor::Available(Point::new(16.0, 16.0));
+        let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+        let mut state = GestureState::default();
+
+        let action = gesture
+            .on_input(&mut state, &press, bounds, cursor)
+            .unwrap_or_else(|| panic!("a press inside the bounds must publish"));
+
+        assert_eq!(
+            action.into_inner(),
+            (
+                Some(UiEvent::OpenSettings),
                 RedrawRequest::Wait,
                 event::Status::Captured,
             )

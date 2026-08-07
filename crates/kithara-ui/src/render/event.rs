@@ -70,6 +70,13 @@ pub(crate) fn window(command: WindowCommand, outcome: Outcome<()>) -> Option<Act
     action(outcome, |()| UiEvent::Window(command))
 }
 
+/// What a control says to the document rather than to its own endpoint. The
+/// event is built only once the gesture produced one, so a command that carries
+/// a word costs nothing on the inputs that are not it.
+pub(crate) fn command(event: fn() -> UiEvent, outcome: Outcome<()>) -> Option<Action<UiEvent>> {
+    action(outcome, |()| event())
+}
+
 pub(crate) fn index(path: &str, outcome: Outcome<usize>) -> Option<Action<UiEvent>> {
     action(outcome, |index| {
         control_event(path, ControlAction::SelectIndex(index))

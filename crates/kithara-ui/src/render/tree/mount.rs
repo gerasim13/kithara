@@ -15,11 +15,7 @@ use crate::{
         controls::{Draws, Gesture, Grip, Paint, Reading},
     },
     widgets::{
-        Widget,
-        global_bar::{PresetSelector, SettingsButton},
-        text::Text,
-        wave::mini::MiniWave,
-        window::WindowSurface,
+        Widget, global_bar::PresetSelector, text::Text, wave::mini::MiniWave, window::WindowSurface,
     },
 };
 
@@ -82,7 +78,7 @@ impl ViewControl for mount::Preset {
 
 impl ViewControl for mount::Settings {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(SettingsButton::builder().skin(cx.skin).build().view())
+        painted(self, cx)
     }
 }
 
@@ -333,6 +329,7 @@ where
     let paint = Paint::new(control.painter(cx.skin), data, cx.skin);
     Rendered::leading(match (cx.owner, grip) {
         (InputOwner::Leaf, Grip::Press) => Gesture::press(cx.path, paint).view(),
+        (InputOwner::Leaf, Grip::Command(event)) => Gesture::command(cx.path, paint, event).view(),
         (InputOwner::Leaf, Grip::Drag(drag)) => Gesture::drag(cx.path, paint, drag).view(),
         (InputOwner::Leaf, Grip::Index { count }) => Gesture::index(cx.path, paint, count).view(),
         (InputOwner::Engine, _) | (_, Grip::None) => paint.view(),

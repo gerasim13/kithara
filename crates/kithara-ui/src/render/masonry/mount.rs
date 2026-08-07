@@ -17,7 +17,7 @@ use crate::{
     module::{TextAlign, TextStyle},
     mount,
     render::{
-        InputOwner, ReadValue, Skin, UiEvent,
+        InputOwner, ReadValue, Skin,
         controls::{Draws, Reading},
         document::read::{read_scope, resolve},
     },
@@ -95,11 +95,11 @@ impl NodeControl for mount::Divider {
 }
 impl NodeControl for mount::Preset {}
 impl NodeControl for mount::Settings {
-    fn wire<A>(&self, host: &MasonryHost<'_, A>, output: &mut MasonryNode<A>)
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        output.set_actions(Some(host.event(|| UiEvent::OpenSettings)), None);
+        painted(self, host, cx)
     }
 }
 
@@ -547,6 +547,7 @@ fn leaf_paints(spec: &ControlSpec) -> bool {
         | ControlSpec::Chip { .. }
         | ControlSpec::Knob { .. }
         | ControlSpec::NavItem { .. }
+        | ControlSpec::SettingsButton
         | ControlSpec::TabLarge { .. } => true,
         _ => false,
     }

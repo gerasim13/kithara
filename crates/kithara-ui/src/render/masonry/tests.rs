@@ -26,7 +26,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     CustomWidget, MasonryHost, MasonryNode, MasonryRoot, MasonryState, Repaint, Size2, SizeLimits,
-    TextMeasurer,
+    TextMeasurer, leaf::DragProgram,
 };
 use crate::{
     builtin,
@@ -37,7 +37,7 @@ use crate::{
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
         ControlAction, ReadValue, Reads, Skin, StereoLevels, UiEvent, WindowCommand, WindowEdge,
-        document, picker_hits, picker_width,
+        WindowLayerProgram, document, picker_hits, picker_width,
     },
     source::{MemResolver, UiConfig},
     text::FontPolicy,
@@ -1042,6 +1042,42 @@ fn hosted_module_retains_its_engine_owned_knob_outside_the_control() {
     assert!(root.take_actions().is_empty());
 }
 
+/// The settings button has no endpoint to activate: pressing it says something
+/// to the document instead. The leaf that draws it also says it, so the answer
+/// does not depend on a second wiring the two hosts could disagree about.
+#[kithara::test]
+fn the_settings_button_leaf_opens_settings_on_press() {
+    let registry = fixture_registry();
+    let ui = fixture_ui(
+        "settings-fixture",
+        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            SettingsButton(id: "settings", size: Some((w: Fixed(40.0), h: Fixed(40.0)))),
+        ])"#,
+        &registry,
+    );
+    let reads = FixtureReads;
+    let host = MasonryHost::map_actions(&ui, &reads, builtin::skin(), TestAction::Document);
+    let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+    let mut root = masonry_root(output, 200, 120);
+
+    assert_eq!(
+        root.handle_pointer_event(pointer_down(10.0, 50.0))
+            .unwrap_or_else(|error| panic!("settings press must remain typed: {error}")),
+        Handled::Yes,
+    );
+    assert_eq!(
+        root.take_actions(),
+        vec![TestAction::Document(UiEvent::OpenSettings)]
+    );
+
+    root.handle_pointer_event(pointer_up(10.0, 50.0))
+        .unwrap_or_else(|error| panic!("settings release must remain typed: {error}"));
+    assert!(
+        root.take_actions().is_empty(),
+        "the press opened settings; letting go must not open them a second time"
+    );
+}
+
 #[kithara::test]
 fn leaf_owned_knob_uses_scalar_drag_wheel_reset_and_cursor() {
     let registry = fixture_registry();
@@ -1498,6 +1534,18 @@ fn assert_scalar_value(actions: &[TestAction], path: &str, expected: f32) {
 enum Paints {
     Yes,
     NotYet,
+    /// There is no picture to draw. A window-drag region is a place the hand
+    /// grabs the window by, and the immediate host draws nothing for it either,
+    /// so an empty scene here is the control working rather than a gap. That
+    /// claim is checked by `a_window_drag_region_has_no_picture_on_either_host`
+    /// rather than taken on trust.
+    Nothing,
+}
+
+impl Paints {
+    const fn draws(self) -> bool {
+        matches!(self, Self::Yes)
+    }
 }
 
 /// Every control the shared base draws, and whether Masonry draws it today.
@@ -1520,11 +1568,15 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     ),
     (
         "SettingsButton",
-        Paints::NotYet,
+        Paints::Yes,
         r#"SettingsButton(id: "control")"#,
     ),
     ("DeckSummary", Paints::Yes, r#"DeckSummary(id: "control")"#),
-    ("WindowDrag", Paints::NotYet, r#"WindowDrag(id: "control")"#),
+    (
+        "WindowDrag",
+        Paints::Nothing,
+        r#"WindowDrag(id: "control")"#,
+    ),
     (
         "TitleBar",
         Paints::Yes,
@@ -1710,17 +1762,13 @@ fn masonry_draws_every_control_the_census_claims_it_draws() {
             let encoding = scene.encoding();
             (
                 *name,
-                if encoding.is_empty() && encoding.resources.glyphs.is_empty() {
-                    Paints::NotYet
-                } else {
-                    Paints::Yes
-                },
+                !(encoding.is_empty() && encoding.resources.glyphs.is_empty()),
             )
         })
         .collect::<Vec<_>>();
     let expected = CONTROL_CENSUS
         .iter()
-        .map(|(name, paints, _)| (*name, *paints))
+        .map(|(name, paints, _)| (*name, paints.draws()))
         .collect::<Vec<_>>();
 
     assert_eq!(
@@ -1728,6 +1776,28 @@ fn masonry_draws_every_control_the_census_claims_it_draws() {
         "the census is stale — move a row when its painter lands, and never leave the census \
          describing a host it no longer matches"
     );
+}
+
+/// The one census row that claims a control has no picture at all.
+///
+/// `Paints::Nothing` is the only way a row can sit beside an empty scene
+/// without being read as unfinished, so the claim behind it is checked rather
+/// than trusted: the region this host mounts draws nothing and earns its place
+/// by carrying the drag. The immediate host's half of the same claim is
+/// `a_drag_surface_carries_the_window_and_draws_nothing`.
+#[kithara::test]
+fn the_retained_window_drag_region_carries_the_drag_and_draws_nothing() {
+    let bounds = Rect {
+        h: 40.0,
+        w: 200.0,
+        x: 0.0,
+        y: 0.0,
+    };
+    let pointer = Some(Pt { x: 10.0, y: 10.0 });
+    let layer = DragProgram.layer(&(), bounds, pointer);
+
+    assert!(layer.draw().commands().is_empty());
+    assert_eq!(layer.action_at(pointer), Some(&WindowCommand::Drag));
 }
 
 fn fixture_ui(module_id: &str, root: &str, registry: &dyn EndpointRegistry) -> CompiledUi {

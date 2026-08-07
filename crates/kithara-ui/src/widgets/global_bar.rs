@@ -11,7 +11,7 @@ use iced::{
 
 use crate::{
     builtin,
-    render::{IcedSkin, Icon, ReadValue, Reads, Skin, UiEvent, fonts, shaped_text},
+    render::{IcedSkin, ReadValue, Reads, Skin, UiEvent, fonts, shaped_text},
     widgets::Widget,
 };
 
@@ -63,30 +63,6 @@ impl<'a> Widget<'a> for PresetSelector<'_, '_> {
             ContainerStyle::default().background(Background::Color(palette.bg_panel.into()))
         })
         .into()
-    }
-}
-
-#[derive(bon::Builder)]
-pub(crate) struct SettingsButton<'skin> {
-    skin: &'skin Skin,
-}
-
-impl<'a> Widget<'a> for SettingsButton<'_> {
-    fn view(self) -> Element<'a, UiEvent> {
-        let palette = self.skin.palette;
-        let icon =
-            container(Icon::Gear.view(self.skin.global_bar.gear_size, palette.text_dim.into()))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .center_x(Length::Fill)
-                .center_y(Length::Fill);
-        button(icon)
-            .padding(self.skin.global_bar.settings_padding)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(settings_button_style(self.skin))
-            .on_press(UiEvent::OpenSettings)
-            .into()
     }
 }
 
@@ -148,24 +124,6 @@ fn preset_chip_style(
             } else {
                 palette.text_dim.into()
             },
-            border,
-            ..ButtonStyle::default()
-        }
-    }
-}
-
-fn settings_button_style(skin: &Skin) -> impl Fn(&Theme, ButtonStatus) -> ButtonStyle + 'static {
-    let palette = skin.palette;
-    let border = skin.border(skin.global_bar.settings_frame);
-    move |_theme, status| {
-        let background = match status {
-            ButtonStatus::Hovered => palette.bg_panel_2.into(),
-            ButtonStatus::Pressed => palette.accent_soft.into(),
-            ButtonStatus::Active | ButtonStatus::Disabled => palette.bg_panel.into(),
-        };
-        ButtonStyle {
-            background: Some(Background::Color(background)),
-            text_color: palette.text_dim.into(),
             border,
             ..ButtonStyle::default()
         }

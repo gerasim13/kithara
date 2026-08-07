@@ -36,6 +36,15 @@ impl WindowSurface {
         }
     }
 
+    const fn program(&self) -> SurfaceProgram {
+        SurfaceProgram {
+            command: self.command,
+            cursor: self.cursor,
+            height: self.height,
+            width: self.width,
+        }
+    }
+
     pub(crate) fn frame(bounds: Rect, thickness: f32) -> HostLayer<WindowCommand> {
         let side_width = (bounds.w - thickness * 2.0).max(0.0);
         let side_height = (bounds.h - thickness * 2.0).max(0.0);
@@ -128,12 +137,7 @@ impl WindowSurface {
 
 impl<'a> Widget<'a> for WindowSurface {
     fn view(self) -> Element<'a, UiEvent> {
-        window_layer(SurfaceProgram {
-            command: self.command,
-            cursor: self.cursor,
-            height: self.height,
-            width: self.width,
-        })
+        window_layer(self.program())
     }
 }
 
@@ -187,6 +191,25 @@ mod tests {
 
     fn pointer_down() -> Input<'static> {
         Input::Pointer(mouse_input(PointerPhase::Down, None))
+    }
+
+    /// The retained host's control census calls the window-drag region a
+    /// control with no picture rather than one still waiting for a painter.
+    /// That is only honest while this host draws nothing for it either, and
+    /// while the region still earns its place by carrying the window.
+    #[kithara::test]
+    fn a_drag_surface_carries_the_window_and_draws_nothing() {
+        let bounds = Rect {
+            h: 40.0,
+            w: 200.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let pointer = Some(Pt { x: 10.0, y: 10.0 });
+        let layer = WindowSurface::drag().program().layer(&(), bounds, pointer);
+
+        assert!(layer.draw().commands().is_empty());
+        assert_eq!(layer.action_at(pointer), Some(&WindowCommand::Drag));
     }
 
     #[kithara::test]
