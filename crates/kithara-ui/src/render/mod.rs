@@ -20,7 +20,7 @@ pub mod tree;
 pub mod typography;
 
 pub use address::{Node, Scope, Walk};
-pub(crate) use controls::{ChromeLeaf, chrome_leaf, fader_slider, header_chevron, tree_rows};
+pub(crate) use controls::{ChromeLeaf, chrome_leaf, header_chevron, tree_rows};
 #[cfg(feature = "masonry-host")]
 pub(crate) use event::engine_value;
 pub use event::{ControlAction, DragPhase, UiEvent, WindowCommand, WindowEdge};

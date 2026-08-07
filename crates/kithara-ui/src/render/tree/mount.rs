@@ -1,7 +1,7 @@
 use iced::{alignment::Horizontal, widget::Space};
 
 use super::{
-    atom::{fader, glyph, readout, segmented, select},
+    atom::{glyph, readout, segmented, select},
     geometry::Rendered,
     panel::{context_bar, deck_summary, time, track_list, tree, vis},
     read_flag, wave_zoom,
@@ -202,9 +202,7 @@ impl ViewControl for mount::Crossfader {
 
 impl ViewControl for mount::Fader {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(fader(
-            cx.path, self.style, self.label, cx.value, cx.ui, cx.skin, cx.owner,
-        ))
+        painted(self, cx)
     }
 }
 

@@ -1,7 +1,6 @@
 pub(crate) mod anchored;
 pub(crate) mod deck;
 pub(crate) mod drag_ghost;
-pub(crate) mod fader;
 pub(crate) mod global_bar;
 mod interaction;
 mod module;

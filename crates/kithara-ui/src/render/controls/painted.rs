@@ -151,6 +151,11 @@ where
         ))
     }
 
+    /// The part of the box the pointer works, as the painter carves it.
+    fn grip_bounds(&self, bounds: Rect) -> Rect {
+        self.painter.grip_bounds(&self.data, bounds)
+    }
+
     pub(crate) fn draw_list(
         &self,
         state: &PaintState,
@@ -293,7 +298,14 @@ where
 /// along one axis that sets a scalar.
 enum Recognize {
     Press,
-    Drag(Box<Scalar>),
+    Drag(Box<Dragging>),
+}
+
+/// A mounted scalar drag: the recognizer, and the description it was built from
+/// — which is what says how the published value is rounded.
+struct Dragging {
+    recognizer: Scalar,
+    spec: Drag,
 }
 
 /// What a gesturing canvas keeps between frames: the gesture, and the shaping
@@ -322,7 +334,10 @@ where
         Self {
             paint,
             path: path.to_owned(),
-            recognize: Recognize::Drag(Box::new(drag.recognizer())),
+            recognize: Recognize::Drag(Box::new(Dragging {
+                recognizer: drag.recognizer(),
+                spec: drag,
+            })),
         }
     }
 
@@ -348,11 +363,18 @@ where
             Recognize::Press => activate(&self.path, click::on_input(input, &hit)),
             Recognize::Drag(drag) => scalar(
                 &self.path,
-                drag.on_input(&mut state.drag, input, &hit, Instant::now())
-                    .map(f64::from),
+                drag.recognizer
+                    .on_input(&mut state.drag, input, &self.gripped(hit), Instant::now())
+                    .map(|value| drag.spec.published(input, value)),
             ),
         };
         action.or_else(|| repaint.then(Action::request_redraw))
+    }
+
+    /// The gesture is measured against the part of the box the painter says the
+    /// pointer works, which for most controls is all of it.
+    fn gripped(&self, hit: Hit) -> Hit {
+        Hit::new(hit.at(), self.paint.grip_bounds(hit.area()))
     }
 }
 
@@ -415,7 +437,10 @@ where
             Recognize::Press => Hover::new(CursorShape::Pointer)
                 .cursor(state.press.is_pressed(), &hit)
                 .into(),
-            Recognize::Drag(drag) => drag.cursor(&state.drag, &hit).into(),
+            Recognize::Drag(drag) => drag
+                .recognizer
+                .cursor(&state.drag, &self.gripped(hit))
+                .into(),
         }
     }
 
@@ -478,8 +503,8 @@ mod tests {
         atoms::{
             button::{Button, ButtonConfig, ButtonLabel},
             design::{
-                cell::Cell, crossfader::Crossfader, meter::Meter, status_dot::StatusDot,
-                swatch::Swatch,
+                cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter,
+                status_dot::StatusDot, swatch::Swatch,
             },
             knob::Knob,
             meter::StereoMeter,
@@ -490,7 +515,7 @@ mod tests {
             vu::VerticalVu,
         },
         builtin,
-        module::{ButtonStyle, Tone},
+        module::{ButtonStyle, FaderStyle, Tone},
         render::{
             Icon, StereoLevels,
             masonry::{MasonryControl, Painted},
@@ -779,6 +804,42 @@ mod tests {
         }
     }
 
+    /// Both looks, and the captioned one as well: the caption is what moves the
+    /// rail sideways, so a host that drew one and not the other would put the
+    /// travel somewhere else.
+    #[kithara::test]
+    fn iced_and_masonry_record_the_same_fader() {
+        let skin = builtin::skin();
+        let bounds = Rect {
+            h: 34.0,
+            w: 200.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        for (style, label) in [
+            (FaderStyle::Default, None),
+            (FaderStyle::Default, Some("VOL".to_owned())),
+            (FaderStyle::Volume, None),
+        ] {
+            let data = || Captioned {
+                label: label.clone(),
+                value: 0.5,
+            };
+            let iced = Paint::new(Fader::new(style, skin), data(), skin).draw_list(
+                &PaintState::default(),
+                bounds,
+                VisualState::Idle,
+            );
+            let mut masonry = Painted::new(Fader::new(style, skin), data(), skin);
+
+            assert_eq!(
+                iced,
+                MasonryControl::draw_list(&mut masonry, bounds),
+                "the two hosts must record the same {style:?} fader with caption {label:?}"
+            );
+        }
+    }
+
     #[kithara::test]
     fn iced_and_masonry_record_the_same_crossfader() {
         let skin = builtin::skin();
@@ -999,6 +1060,7 @@ mod dragged {
         atoms::{knob::Knob, painter::Captioned},
         builtin,
         interact::recognizers::Track,
+        module::FaderStyle,
         mount,
         render::ControlAction,
     };
@@ -1070,6 +1132,79 @@ mod dragged {
                 action: ControlAction::SetScalar(f64::from(0.5 + 10.0 / RANGE)),
             })
         );
+    }
+
+    /// A fader's pointer works the rail, not the whole box. The caption sits
+    /// beside the rail and is not part of the travel, so a gesture measured
+    /// against the control would put the zero of the value under the caption.
+    #[kithara::test]
+    fn a_fader_press_seeks_to_the_fraction_of_the_rail_it_landed_on() {
+        let step = builtin::skin().fader.step;
+
+        for fraction in [0.0_f32, 0.25, 0.5, 0.75] {
+            let value = fader_press(fraction);
+
+            assert!(
+                (value - f64::from(fraction)).abs() <= step,
+                "a press at {fraction} of the rail set {value}"
+            );
+        }
+    }
+
+    /// And what it publishes walks in the step the skin names. A rail is
+    /// hundreds of pixels wide, so a fader that answered every one of them
+    /// would never land on a round number.
+    #[kithara::test]
+    fn a_fader_publishes_a_multiple_of_the_step_its_skin_names() {
+        let step = builtin::skin().fader.step;
+        // A third of the way along, which no whole number of steps reaches.
+        let steps = fader_press(1.0 / 3.0) / step;
+
+        assert!(
+            (steps - steps.round()).abs() < 1e-9,
+            "a fader must publish a multiple of {step}, and {steps} steps is not one"
+        );
+    }
+
+    /// What a captioned fader publishes for a press at `fraction` of its rail.
+    fn fader_press(fraction: f32) -> f64 {
+        let skin = builtin::skin();
+        let control = mount::Fader::builder().style(FaderStyle::Default).build();
+        let data = || Captioned {
+            label: Some("VOL".to_owned()),
+            value: 0.5,
+        };
+        let Grip::Drag(drag) = control.grip(skin, &data()) else {
+            panic!("a fader must grip a drag");
+        };
+        let bounds = Rectangle {
+            height: 34.0,
+            width: 200.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let rail = control.painter(skin).rail(bounds.into(), true);
+        let gesture = Gesture::drag(
+            "mixer/vol",
+            Paint::new(control.painter(skin), data(), skin),
+            drag,
+        );
+        let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+        let cursor = Cursor::Available(Point::new(
+            rail.x + rail.w * fraction,
+            rail.y + rail.h / 2.0,
+        ));
+        let action = gesture
+            .on_input(&mut GestureState::default(), &press, bounds, cursor)
+            .unwrap_or_else(|| panic!("a press at {fraction} of the rail must publish"));
+        let Some(UiEvent::Control {
+            action: ControlAction::SetScalar(value),
+            ..
+        }) = action.into_inner().0
+        else {
+            panic!("a press at {fraction} of the rail must set a scalar");
+        };
+        value
     }
 
     /// The other half of the vocabulary: an absolute track seeks, so the press

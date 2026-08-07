@@ -534,6 +534,12 @@ where
         self
     }
 
+    /// The gesture is measured against the part of the box the painter says the
+    /// pointer works, which for most controls is all of it.
+    fn gripped(&self, hit: &Hit) -> Hit {
+        Hit::new(hit.at(), self.painter.grip_bounds(&self.data, hit.area()))
+    }
+
     /// Takes the value the control now draws into whatever counts from it.
     fn moved_to(&mut self, value: &ReadValue<'_>) {
         let (Some(interaction), ReadValue::Scalar(value)) = (&mut self.interaction, value) else {
@@ -570,10 +576,11 @@ where
         if Painter::READS_POINTER {
             self.repaint |= self.press.press(input, hit);
         }
+        let gripped = self.gripped(hit);
         let Some(interaction) = &mut self.interaction else {
             return Outcome::IGNORED;
         };
-        let outcome = match &mut interaction.recognize {
+        let (outcome, spec) = match &mut interaction.recognize {
             Recognize::Press => {
                 return click::on_input(input, hit).map(|()| {
                     (interaction.map_event)(control_event(
@@ -582,7 +589,7 @@ where
                     ))
                 });
             }
-            Recognize::Drag(drag) => drag.follow(input, hit),
+            Recognize::Drag(drag) => (drag.follow(input, &gripped), drag.spec),
         };
         // The control draws the value it just authored: the application is told
         // the same number, but its answer only comes back a frame later.
@@ -596,7 +603,7 @@ where
         outcome.map(|value| {
             (interaction.map_event)(control_event(
                 &interaction.path,
-                ControlAction::SetScalar(f64::from(value)),
+                ControlAction::SetScalar(spec.published(input, value)),
             ))
         })
     }
@@ -619,7 +626,9 @@ where
                     Recognize::Press => {
                         Hover::new(CursorShape::Pointer).cursor(self.press.is_pressed(), hit)
                     }
-                    Recognize::Drag(drag) => drag.recognizer.cursor(&drag.state, hit),
+                    Recognize::Drag(drag) => {
+                        drag.recognizer.cursor(&drag.state, &self.gripped(hit))
+                    }
                 }
             })
     }

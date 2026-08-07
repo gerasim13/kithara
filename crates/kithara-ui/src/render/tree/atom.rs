@@ -8,31 +8,11 @@ use crate::{
     },
     compile::CompiledUi,
     ids::InternId,
-    module::{FaderStyle, GlyphStyle, IconName, Tone},
+    module::{GlyphStyle, IconName, Tone},
     render::{IcedSkin, InputOwner, ReadValue, Skin, UiEvent, icons::document_icon},
     skin::ColorRole,
-    widgets::{Widget, fader::Fader, nav::Glyph},
+    widgets::{Widget, nav::Glyph},
 };
-
-pub(super) fn fader<'a>(
-    path: &'a str,
-    style: FaderStyle,
-    label: Option<InternId>,
-    value: Option<&ReadValue<'_>>,
-    ui: &'a CompiledUi,
-    skin: &'a Skin,
-    owner: InputOwner,
-) -> Element<'a, UiEvent> {
-    Fader::builder()
-        .path(path)
-        .style(style)
-        .maybe_label(label.map(|id| ui.resolve(id)))
-        .maybe_value(value)
-        .skin(skin)
-        .owner(owner)
-        .build()
-        .view()
-}
 
 pub(super) fn readout<'a>(
     label: Option<InternId>,

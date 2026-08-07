@@ -12,7 +12,7 @@ use super::{
     node::Node,
 };
 use crate::{
-    atoms::{button::declared_width, design::fader::Fader, painter::Captioned, tab::TabLarge},
+    atoms::{button::declared_width, tab::TabLarge},
     expand::{Binding, ControlSpec},
     module::{TextAlign, TextStyle},
     mount,
@@ -254,23 +254,7 @@ impl NodeControl for mount::Fader {
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        let Some(ReadValue::Scalar(value)) = cx
-            .read
-            .and_then(|binding| resolve(host.reads, binding, host.ui))
-        else {
-            return host.empty(cx.declared);
-        };
-        host.control_leaf(
-            Painted::new(
-                Fader::new(self.style, host.skin),
-                Captioned {
-                    label: self.label.map(|label| host.ui.resolve(label).to_owned()),
-                    value: value.clamp(0.0, 1.0).as_(),
-                },
-                host.skin,
-            ),
-            cx.declared,
-        )
+        painted(self, host, cx)
     }
 }
 

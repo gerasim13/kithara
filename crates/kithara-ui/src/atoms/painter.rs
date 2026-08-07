@@ -62,6 +62,16 @@ pub(crate) trait ControlPainter {
     fn measure(&self, _text: &mut TextContext, _data: &Self::Data) -> Size {
         Size::ZERO
     }
+
+    /// The part of its box the pointer works, when that is not all of it.
+    ///
+    /// A fader is a rail with a caption beside it, and the hand drives the rail
+    /// alone — measuring the gesture against the whole control would put the
+    /// zero of the value under the caption. Only the painter knows where it put
+    /// the rail, so it is asked rather than told.
+    fn grip_bounds(&self, _data: &Self::Data, bounds: Rect) -> Rect {
+        bounds
+    }
 }
 
 /// What a control that shows one word and a state is handed each frame.
@@ -172,6 +182,10 @@ impl ControlPainter for Fader {
         _state: VisualState,
     ) {
         self.paint(list, text, data.value, data.label.as_deref(), bounds);
+    }
+
+    fn grip_bounds(&self, data: &Self::Data, bounds: Rect) -> Rect {
+        self.rail(bounds, data.label.is_some())
     }
 }
 

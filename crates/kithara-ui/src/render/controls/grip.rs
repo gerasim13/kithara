@@ -1,6 +1,9 @@
-use crate::interact::{
-    CursorShape, Hover,
-    recognizers::{Scalar, Track, WheelStep},
+use crate::{
+    engine::scalar_value,
+    interact::{
+        CursorShape, Hover, Input,
+        recognizers::{Scalar, Track, WheelStep},
+    },
 };
 
 /// What the pointer means to a control.
@@ -26,6 +29,10 @@ pub(crate) struct Drag {
     cursor: CursorShape,
     track: Track,
     reset: Option<f32>,
+    /// What the published value is rounded to while the hand is on it. A fader
+    /// walks in steps the skin names; every other control publishes what the
+    /// pointer says.
+    step: Option<f64>,
     wheel: Option<WheelStep>,
 }
 
@@ -37,6 +44,11 @@ impl Drag {
             .maybe_reset(self.reset)
             .maybe_wheel(self.wheel)
             .build()
+    }
+
+    /// What this drag publishes for a value the recognizer produced.
+    pub(crate) fn published(self, input: Input<'_>, value: f32) -> f64 {
+        scalar_value(input, value, self.step)
     }
 
     /// The same drag counting from the value the control now draws. Only a

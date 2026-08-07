@@ -65,7 +65,7 @@ impl Fader {
     ) {
         list.fill_rect(bounds, self.panel);
         let value = value.clamp(0.0, 1.0);
-        let rail = rail_bounds(bounds, self.style, label.is_some(), self.metrics);
+        let rail = self.rail(bounds, label.is_some());
         match self.style {
             FaderStyle::Default => {
                 if let Some(label) = label {
@@ -221,6 +221,15 @@ impl Fader {
 /// Where the rail a pointer grabs actually sits inside the control. Both the
 /// painter and the engine that drags it read this, so the picture and the grab
 /// area cannot drift apart.
+/// The rail this fader draws inside the box it was given. The free function
+/// stays for the engine plan, which carves the same rectangle without holding a
+/// painter.
+impl Fader {
+    pub(crate) fn rail(&self, bounds: Rect, labelled: bool) -> Rect {
+        rail_bounds(bounds, self.style, labelled, self.metrics)
+    }
+}
+
 pub(crate) fn rail_bounds(
     bounds: Rect,
     style: FaderStyle,
