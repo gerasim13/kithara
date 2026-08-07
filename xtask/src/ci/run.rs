@@ -19,6 +19,7 @@ pub(crate) enum Lane {
     AppleMsrv,
     AppleTest,
     AppleTestFlashOff,
+    AppleE2e,
     AppleXcframework,
     AppleSwiftTest,
     AppleIos,
@@ -70,6 +71,7 @@ impl Lane {
             | Self::AppleMsrv
             | Self::AppleTest
             | Self::AppleTestFlashOff
+            | Self::AppleE2e
             | Self::AppleXcframework
             | Self::AppleSwiftTest
             | Self::AppleIos
@@ -105,6 +107,7 @@ impl Lane {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub(crate) enum PipelineKind {
+    Branch,
     MergeRequest,
     Quarantine,
     Main,
@@ -160,6 +163,7 @@ pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         Lane::AppleMsrv => lane::apple::msrv(&process, &ci_config),
         Lane::AppleTest => lane::apple::test(&process, &ci_config, args.kind),
         Lane::AppleTestFlashOff => lane::apple::test_flash_off(&process, &ci_config),
+        Lane::AppleE2e => lane::apple::e2e(&process, &ci_config),
         Lane::AppleXcframework => lane::apple::xcframework(&process, &ci_config),
         Lane::AppleSwiftTest => lane::apple::swift_test(&process, &ci_config, &swiftpm_cache),
         Lane::AppleIos => lane::apple::ios(&process, &ci_config),

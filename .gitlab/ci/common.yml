@@ -65,6 +65,33 @@
     - if: $KITHARA_PIPELINE_KIND == "main"
     - if: $KITHARA_PIPELINE_KIND == "nightly"
 
+# A branch push runs the iOS-facing subset, not everything: the platform under
+# focus, on the host that is that platform. The branch kind is therefore added
+# to the jobs that subset names rather than to the shared sets above, which the
+# Linux, Android and web lanes also extend. Cancellation comes from the parent
+# `dispatch:branch`, which is interruptible and takes the child pipeline with
+# it, so these keep the interruptibility their own kind asks for.
+.rules-verify-and-branch:
+  interruptible: true
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "branch"
+    - !reference [.rules-verify, rules]
+
+.rules-integration-and-branch:
+  interruptible: false
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "branch"
+    - !reference [.rules-integration, rules]
+
+# Long lanes a branch asks for on purpose. Keeping them off `main` leaves the
+# merge queue as short as it is today; the nightly channel is where they guard
+# the default branch.
+.rules-branch-or-nightly:
+  interruptible: false
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "branch"
+    - if: $KITHARA_PIPELINE_KIND == "nightly"
+
 .rules-nightly:
   interruptible: false
   rules:

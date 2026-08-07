@@ -7,6 +7,12 @@ workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    # A branch with an open merge request is already covered by the
+    # merge-request pipeline. A second pipeline on the same commit would take
+    # the one Apple host twice to report the same thing.
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "push"
     - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $KITHARA_RELEASE_VERSION =~ /^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/
     - if: $CI_PIPELINE_SOURCE == "api" && $KITHARA_QUARANTINE_SHA
@@ -28,6 +34,29 @@ dispatch:merge-request:
     KITHARA_PIPELINE_KIND: merge-request
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# Work in progress reaching the Apple host on its own, before anyone opens a
+# merge request. It answers a question rather than guarding anything, so it
+# takes neither the verdict nor the queue from the pipelines that do: the
+# trigger is allowed to fail, and it holds a resource group of its own, so a
+# push can never make `dispatch:main` or a merge request wait behind an hour of
+# somebody's branch. Measurement stays honest regardless — the suites, the
+# simulator run and every perf lane share `kithara-suite` across pipelines, so
+# one of them still holds the machine at a time.
+dispatch:branch:
+  stage: dispatch
+  resource_group: kithara-mac-mini-branch
+  allow_failure: true
+  interruptible: true
+  trigger:
+    include:
+      - local: .gitlab/ci/pipeline.yml
+    strategy: depend
+  variables:
+    KITHARA_CACHE_TRUST: review
+    KITHARA_PIPELINE_KIND: branch
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
 
 dispatch:main:
   extends: .serialized

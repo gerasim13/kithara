@@ -64,7 +64,13 @@ pub(crate) fn test(process: &Process, config: &CiConfig, kind: PipelineKind) -> 
             &["test", "run", "--profile", "ci"],
             "Apple merge-request tests",
         ),
-        PipelineKind::Main | PipelineKind::Nightly | PipelineKind::Release => process.run(
+        // A branch push asks the same question the default branch asks, before
+        // anyone opens a merge request: what a reviewer would have to fix
+        // anyway is cheaper to learn now.
+        PipelineKind::Branch
+        | PipelineKind::Main
+        | PipelineKind::Nightly
+        | PipelineKind::Release => process.run(
             "just",
             &[
                 "test",
@@ -94,6 +100,23 @@ pub(crate) fn test_flash_off(process: &Process, config: &CiConfig) -> Result<()>
         "ci",
     ]);
     process.run_command(&mut command, "Apple flash-off gate")
+}
+
+/// End-to-end playback across the resampler axis. Each lane pins one
+/// source-rate conversion shape, and a change to decode, blending or output can
+/// break one of them while every unit test still passes — so the three run
+/// together or the axis is not covered. They share a target directory: the
+/// lanes differ by feature, and the executor keeps the tree warm between them.
+pub(crate) fn e2e(process: &Process, config: &CiConfig) -> Result<()> {
+    preflight(process, config)?;
+    for lane in ["--lane=e2e", "--lane=e2e-fused", "--lane=e2e-glide"] {
+        process.run(
+            "just",
+            &["test", "run", lane, "--profile", "ci"],
+            "Apple end-to-end suite",
+        )?;
+    }
+    Ok(())
 }
 
 pub(crate) fn xcframework(process: &Process, config: &CiConfig) -> Result<()> {
