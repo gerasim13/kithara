@@ -49,7 +49,8 @@ pub(crate) enum Leaf {
 impl Leaf {
     pub(crate) fn measure(&mut self, limits: crate::solve::Limits) -> crate::solve::Size {
         match self {
-            Self::Empty | Self::Control(_) => crate::solve::Size::ZERO,
+            Self::Empty => crate::solve::Size::ZERO,
+            Self::Control(control) => control.measure(),
             Self::Text {
                 content,
                 role,
@@ -418,5 +419,58 @@ pub(super) const fn cursor_icon(shape: CursorShape) -> CursorIcon {
         CursorShape::ResizeH => CursorIcon::EwResize,
         CursorShape::ResizeV => CursorIcon::NsResize,
         CursorShape::Text => CursorIcon::Text,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::Leaf;
+    use crate::{
+        atoms::{painter::Labelled, tab::TabLarge, toggle::Binary},
+        builtin,
+        render::masonry::Painted,
+        solve::{Limits, Size},
+    };
+
+    /// The retained host has to be able to give a control the width it measures
+    /// for itself. Only a tab needs it today — every other mounted control is
+    /// declared `Fixed`, `Fill` or a share, and an intrinsic is consulted only
+    /// under `Shrink` — so a leaf that answered zero would look right until the
+    /// first tab reached this host.
+    #[kithara::test]
+    fn a_mounted_tab_measures_its_own_word() {
+        let skin = builtin::skin();
+        let mut leaf = Leaf::Control(Box::new(Painted::new(
+            TabLarge::new(skin),
+            Labelled {
+                active: true,
+                label: "DECK MICRO".to_owned(),
+            },
+            skin,
+        )));
+
+        let measured = leaf.measure(Limits::new(Size::ZERO, Size::new(320.0, 80.0)));
+
+        assert!(
+            (measured.width - 94.0).abs() < 0.001,
+            "iced gave this label and skin 94 px; the retained host measured {}",
+            measured.width
+        );
+        assert_eq!(measured.height, skin.tab_large.height);
+    }
+
+    /// A painter with no opinion leaves both axes to the row, which is what the
+    /// leaf answered for every control before it could ask one.
+    #[kithara::test]
+    fn a_painter_that_does_not_measure_leaves_the_box_to_the_row() {
+        let skin = builtin::skin();
+        let mut leaf = Leaf::Control(Box::new(Painted::new(Binary::toggle(skin), false, skin)));
+
+        assert_eq!(
+            leaf.measure(Limits::new(Size::ZERO, Size::new(320.0, 80.0))),
+            Size::ZERO
+        );
     }
 }

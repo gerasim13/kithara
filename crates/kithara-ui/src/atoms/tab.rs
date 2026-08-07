@@ -2,6 +2,7 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
     skin::{ColorRole, FontFamily, FontWeight, TabLargeSkin, TextRoleSkin},
+    solve::{Length, Size},
     text::{GlyphRun, TextContext},
 };
 
@@ -30,9 +31,26 @@ impl TabLarge {
         }
     }
 
-    pub(crate) fn measure(&self, text: &mut TextContext, label: &str) -> (f32, f32) {
+    pub(crate) fn intrinsic_size(&self, text: &mut TextContext, label: &str) -> (f32, f32) {
         let run = self.shape(text, label);
-        (run.width() + self.metrics.pad_x * 2.0, self.metrics.height)
+        (run.width() + self.metrics.pad_x * 2.0, self.height())
+    }
+
+    /// The one axis the skin settles outright: every tab in a strip is the same
+    /// height whatever its word.
+    pub(crate) const fn height(&self) -> f32 {
+        self.metrics.height
+    }
+
+    /// The box a tab asks for, said once for both hosts.
+    ///
+    /// A tab is as wide as its own word: a strip of tabs is a row of headings,
+    /// not a set of equal columns, so one that filled its share would move its
+    /// neighbours whenever a word changed. The retained host settles a row while
+    /// it is still walking the document, before it holds a painter, so it reads
+    /// this rather than restating it.
+    pub(crate) const fn declared_length(height: f32) -> Size<Length> {
+        Size::new(Length::Shrink, Length::Fixed(height))
     }
 
     pub(crate) fn paint(
@@ -91,7 +109,7 @@ mod tests {
     fn shaped_width_stays_equal_to_the_iced_tab_width() {
         let skin = builtin::skin();
         let mut text = TextContext::from(skin.text_resources());
-        let (width, height) = TabLarge::new(skin).measure(&mut text, "DECK MICRO");
+        let (width, height) = TabLarge::new(skin).intrinsic_size(&mut text, "DECK MICRO");
 
         assert!(
             (width - 94.0).abs() < 0.001,

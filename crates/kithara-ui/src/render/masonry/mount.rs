@@ -17,7 +17,7 @@ use crate::{
     atoms::{
         button::declared_width,
         design::{crossfader::Crossfader, fader::Fader},
-        painter::{FaderData, Labelled},
+        painter::FaderData,
         tab::TabLarge,
     },
     expand::{Binding, ControlSpec},
@@ -204,18 +204,7 @@ impl NodeControl for mount::Tab {
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        let tab = Painted::new(
-            TabLarge::new(host.skin),
-            Labelled {
-                active: host.reads_true(cx.read),
-                label: host.ui.resolve(self.label).to_owned(),
-            },
-            host.skin,
-        );
-        host.control_leaf(
-            host.owned(tab, cx.owner, cx.path, Painted::interactive),
-            cx.declared,
-        )
+        painted(self, host, cx)
     }
 }
 
@@ -448,6 +437,7 @@ pub(crate) fn control_declared(
         ControlSpec::Button { style, .. } => {
             solve::Size::new(declared_width(*style, skin), solve::Length::Fill)
         }
+        ControlSpec::TabLarge { .. } => TabLarge::declared_length(skin.tab_large.height),
         ControlSpec::Text { .. } => solve::Size::new(solve::Length::Shrink, solve::Length::Fill),
         ControlSpec::Spacer | ControlSpec::WindowDrag | ControlSpec::TitleBar { .. } => {
             solve::Size::new(solve::Length::Fill, solve::Length::Fill)

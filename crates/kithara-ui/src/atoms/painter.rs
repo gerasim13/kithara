@@ -51,6 +51,16 @@ pub(crate) trait ControlPainter {
     fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
         Size::new(Length::Fill, Length::Fill)
     }
+
+    /// How big it actually is, on the axes it settles for itself.
+    ///
+    /// A zero on an axis means the painter has no opinion there and the row
+    /// decides — which is what both hosts already do with a leaf that does not
+    /// measure. Only the painters whose [`Self::length`] can answer `Shrink` or
+    /// a measured `Fixed` need this; the rest fill what they are given.
+    fn measure(&self, _text: &mut TextContext, _data: &Self::Data) -> Size {
+        Size::ZERO
+    }
 }
 
 /// What a control that shows one word and a state is handed each frame.
@@ -113,6 +123,18 @@ impl ControlPainter for TabLarge {
         _state: VisualState,
     ) {
         self.paint(list, text, &data.label, data.active, bounds);
+    }
+
+    /// A tab is as wide as its own word: a strip of tabs is a row of headings,
+    /// not a set of equal columns, so a tab that filled its share would move
+    /// its neighbours whenever a word changed.
+    fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
+        Self::declared_length(self.height())
+    }
+
+    fn measure(&self, text: &mut TextContext, data: &Self::Data) -> Size {
+        let (width, height) = self.intrinsic_size(text, &data.label);
+        Size::new(width, height)
     }
 }
 
@@ -206,7 +228,12 @@ impl ControlPainter for Button {
     }
 
     fn length(&self, text: &mut TextContext, data: &Self::Data) -> Size<Length> {
-        self.measure(text, &data.label, data.active)
+        self.declared(text, &data.label, data.active)
+    }
+
+    /// Only the width: every button fills the height of the row it sits in.
+    fn measure(&self, text: &mut TextContext, data: &Self::Data) -> Size {
+        Size::new(self.intrinsic_width(text, &data.label, data.active), 0.0)
     }
 }
 

@@ -1,9 +1,16 @@
 use std::cell::RefCell;
 
 use iced::{
-    Element, Event, Length, Rectangle, Renderer, Theme,
+    Element, Event, Length, Rectangle, Renderer, Size as IcedSize, Theme, Vector,
+    advanced::{
+        Clipboard, Renderer as _, Shell, Widget as IcedWidget,
+        graphics::geometry::Renderer as _,
+        layout::{self, Layout},
+        renderer,
+        widget::{self, Tree},
+    },
     mouse::{self, Cursor},
-    widget::canvas::{self, Action, Canvas, Geometry},
+    widget::canvas::{self, Action},
 };
 use kithara_platform::time::Instant;
 
@@ -118,21 +125,34 @@ where
     }
 
     pub(crate) fn view(self) -> Element<'skin, UiEvent> {
-        let (width, height) = self.length();
-        Canvas::new(self).width(width).height(height).into()
+        Element::new(self)
     }
 
     /// The box the painter asks for, in the toolkit's own words.
     ///
-    /// Shaping a word to measure it needs a context the mounted canvas does not
+    /// Shaping a word to measure it needs a context the mounted widget does not
     /// have yet, so this builds one. It is the same cost the button paid before
-    /// it reached this adapter, and only the styles that measure their label
+    /// it reached this adapter, and only the painters that measure their word
     /// pay it at all.
     fn length(&self) -> (Length, Length) {
         let size = self
             .painter
             .length(&mut self.text_resources.into(), &self.data);
         (iced_length(size.width), iced_length(size.height))
+    }
+
+    /// The box the toolkit settles on: what the painter asks for, resolved
+    /// against the room it is offered and the size it measures for itself.
+    fn node(&self, state: &PaintState, limits: &layout::Limits) -> layout::Node {
+        let (width, height) = self.length();
+        let mut text = state.text.borrow_mut();
+        let text = text.get_or_insert_with(|| self.text_resources.into());
+        let measured = self.painter.measure(text, &self.data);
+        layout::Node::new(limits.resolve(
+            width,
+            height,
+            IcedSize::new(measured.width, measured.height),
+        ))
     }
 
     pub(crate) fn draw_list(
@@ -149,13 +169,20 @@ where
         builder.finish()
     }
 
-    fn geometry(
+    /// Replays the painter into the renderer at the box the layout gave it.
+    ///
+    /// The kept geometry is dropped only when the drawn list changed, so a
+    /// control that did not change is not tessellated again.
+    fn paint_into(
         &self,
         state: &PaintState,
-        renderer: &Renderer,
+        renderer: &mut Renderer,
         bounds: Rectangle,
         visual: VisualState,
-    ) -> Vec<Geometry> {
+    ) {
+        if bounds.width < 1.0 || bounds.height < 1.0 {
+            return;
+        }
         let list = self.draw_list(
             state,
             Rect {
@@ -167,9 +194,12 @@ where
             visual,
         );
         state.refresh(&list);
-        vec![state.geometry.draw(renderer, bounds.size(), |frame| {
-            replay_ordered(&list, frame, self.text_resources);
-        })]
+        renderer.with_translation(Vector::new(bounds.x, bounds.y), |renderer| {
+            let geometry = state.geometry.draw(renderer, bounds.size(), |frame| {
+                replay_ordered(&list, frame, self.text_resources);
+            });
+            renderer.draw_geometry(geometry);
+        });
     }
 }
 
@@ -195,26 +225,58 @@ fn iced_length(length: solve::Length) -> Length {
     }
 }
 
-impl<Painter> canvas::Program<UiEvent> for Paint<'_, Painter>
+impl<Painter> IcedWidget<UiEvent, Theme, Renderer> for Paint<'_, Painter>
 where
     Painter: ControlPainter,
 {
-    type State = PaintState;
+    fn size(&self) -> IcedSize<Length> {
+        let (width, height) = self.length();
+        IcedSize::new(width, height)
+    }
+
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<PaintState>()
+    }
+
+    fn state(&self) -> widget::tree::State {
+        widget::tree::State::new(PaintState::default())
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        _renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        self.node(tree.state.downcast_ref::<PaintState>(), limits)
+    }
 
     fn draw(
         &self,
-        state: &PaintState,
-        renderer: &Renderer,
+        tree: &Tree,
+        renderer: &mut Renderer,
         _theme: &Theme,
-        bounds: Rectangle,
+        _style: &renderer::Style,
+        layout: Layout<'_>,
         cursor: Cursor,
-    ) -> Vec<Geometry> {
-        self.geometry(
-            state,
+        _viewport: &Rectangle,
+    ) {
+        let bounds = layout.bounds();
+        self.paint_into(
+            tree.state.downcast_ref::<PaintState>(),
             renderer,
             bounds,
             hovered(Painter::READS_POINTER, bounds, cursor),
-        )
+        );
+    }
+}
+
+impl<'skin, Painter> From<Paint<'skin, Painter>> for Element<'skin, UiEvent>
+where
+    Painter: ControlPainter + 'skin,
+{
+    fn from(paint: Paint<'skin, Painter>) -> Self {
+        Self::new(paint)
     }
 }
 
@@ -279,45 +341,14 @@ where
     }
 
     pub(crate) fn view(self) -> Element<'skin, UiEvent> {
-        let (width, height) = self.paint.length();
-        Canvas::new(self).width(width).height(height).into()
-    }
-}
-
-impl<Painter> canvas::Program<UiEvent> for Gesture<'_, Painter>
-where
-    Painter: ControlPainter,
-{
-    type State = GestureState;
-
-    fn draw(
-        &self,
-        state: &GestureState,
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        _cursor: Cursor,
-    ) -> Vec<Geometry> {
-        self.paint
-            .geometry(&state.paint, renderer, bounds, state.press.visual())
+        Element::new(self)
     }
 
-    fn mouse_interaction(
-        &self,
-        state: &GestureState,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> mouse::Interaction {
-        let hit = iced_interact::hit(bounds, cursor);
-        match &self.recognize {
-            Recognize::Press => Hover::new(CursorShape::Pointer)
-                .cursor(state.press.is_pressed(), &hit)
-                .into(),
-            Recognize::Drag(drag) => drag.cursor(&state.drag, &hit).into(),
-        }
-    }
-
-    fn update(
+    /// What one input means to this control, and whether the picture moved.
+    ///
+    /// Split out of the toolkit's `update` so the gesture can be exercised
+    /// without a shell.
+    pub(crate) fn on_input(
         &self,
         state: &mut GestureState,
         event: &Event,
@@ -336,6 +367,104 @@ where
             ),
         };
         action.or_else(|| repaint.then(Action::request_redraw))
+    }
+}
+
+impl<Painter> IcedWidget<UiEvent, Theme, Renderer> for Gesture<'_, Painter>
+where
+    Painter: ControlPainter,
+{
+    fn size(&self) -> IcedSize<Length> {
+        IcedWidget::<UiEvent, Theme, Renderer>::size(&self.paint)
+    }
+
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<GestureState>()
+    }
+
+    fn state(&self) -> widget::tree::State {
+        widget::tree::State::new(GestureState::default())
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        _renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        self.paint
+            .node(&tree.state.downcast_ref::<GestureState>().paint, limits)
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut Renderer,
+        _theme: &Theme,
+        _style: &renderer::Style,
+        layout: Layout<'_>,
+        _cursor: Cursor,
+        _viewport: &Rectangle,
+    ) {
+        let state = tree.state.downcast_ref::<GestureState>();
+        self.paint.paint_into(
+            &state.paint,
+            renderer,
+            layout.bounds(),
+            state.press.visual(),
+        );
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: Cursor,
+        _viewport: &Rectangle,
+        _renderer: &Renderer,
+    ) -> mouse::Interaction {
+        let state = tree.state.downcast_ref::<GestureState>();
+        let hit = iced_interact::hit(layout.bounds(), cursor);
+        match &self.recognize {
+            Recognize::Press => Hover::new(CursorShape::Pointer)
+                .cursor(state.press.is_pressed(), &hit)
+                .into(),
+            Recognize::Drag(drag) => drag.cursor(&state.drag, &hit).into(),
+        }
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: Cursor,
+        _renderer: &Renderer,
+        _clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, UiEvent>,
+        _viewport: &Rectangle,
+    ) {
+        let state = tree.state.downcast_mut::<GestureState>();
+        let Some(action) = self.on_input(state, event, layout.bounds(), cursor) else {
+            return;
+        };
+        let (message, redraw, status) = action.into_inner();
+        shell.request_redraw_at(redraw);
+        if let Some(message) = message {
+            shell.publish(message);
+        }
+        if status == iced::event::Status::Captured {
+            shell.capture_event();
+        }
+    }
+}
+
+impl<'skin, Painter> From<Gesture<'skin, Painter>> for Element<'skin, UiEvent>
+where
+    Painter: ControlPainter + 'skin,
+{
+    fn from(gesture: Gesture<'skin, Painter>) -> Self {
+        Self::new(gesture)
     }
 }
 
@@ -365,7 +494,8 @@ mod tests {
             design::{cell::Cell, meter::Meter, status_dot::StatusDot, swatch::Swatch},
             meter::StereoMeter,
             nav_item::NavItem,
-            painter::{ButtonData, CellData, NavData},
+            painter::{ButtonData, CellData, Labelled, NavData},
+            tab::TabLarge,
             toggle::Binary,
             vu::VerticalVu,
         },
@@ -635,6 +765,31 @@ mod tests {
     }
 
     #[kithara::test]
+    fn iced_and_masonry_record_the_same_tab() {
+        let skin = builtin::skin();
+        let bounds = Rect {
+            h: skin.tab_large.height,
+            w: 94.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        for active in [false, true] {
+            let data = || Labelled {
+                active,
+                label: "DECK MICRO".to_owned(),
+            };
+            let iced = Paint::new(TabLarge::new(skin), data(), skin).draw_list(
+                &PaintState::default(),
+                bounds,
+                VisualState::Idle,
+            );
+            let mut masonry = Painted::new(TabLarge::new(skin), data(), skin);
+
+            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+        }
+    }
+
+    #[kithara::test]
     fn iced_and_masonry_record_the_same_stereo_meter() {
         let skin = builtin::skin();
         let bounds = Rect {
@@ -700,7 +855,8 @@ mod pressed {
         let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
         let mut state = GestureState::default();
 
-        let action = canvas::Program::update(&gesture, &mut state, &press, bounds, cursor)
+        let action = gesture
+            .on_input(&mut state, &press, bounds, cursor)
             .unwrap_or_else(|| panic!("a press inside the bounds must publish"));
 
         assert_eq!(
@@ -733,11 +889,12 @@ mod pressed {
         let mut state = GestureState::default();
 
         let pressed = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
-        let _ = canvas::Program::update(&gesture, &mut state, &pressed, bounds, cursor);
+        let _ = gesture.on_input(&mut state, &pressed, bounds, cursor);
         assert!(state.press.is_pressed(), "a press inside the bounds holds");
 
         let released = Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
-        let action = canvas::Program::update(&gesture, &mut state, &released, bounds, cursor)
+        let action = gesture
+            .on_input(&mut state, &released, bounds, cursor)
             .unwrap_or_else(|| panic!("letting go of a pressed button must repaint it"));
 
         assert!(!state.press.is_pressed());
@@ -796,6 +953,14 @@ mod pressed {
 /// state.
 #[cfg(test)]
 mod lengths {
+    use std::borrow::Cow;
+
+    use iced::{
+        Pixels,
+        advanced::{graphics::text::font_system, layout::Limits, widget::Tree},
+    };
+    use iced_renderer::fallback::Renderer as FallbackRenderer;
+    use iced_tiny_skia::Renderer as TinySkiaRenderer;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -804,11 +969,25 @@ mod lengths {
     use crate::{
         atoms::{
             button::{Button, ButtonConfig, ButtonLabel},
-            painter::ButtonData,
+            painter::{ButtonData, Labelled},
+            tab::TabLarge,
         },
         builtin,
         module::ButtonStyle,
+        render::fonts::{FONT_BYTES, SANS},
     };
+
+    fn headless_renderer() -> Renderer {
+        let mut fonts = font_system()
+            .write()
+            .unwrap_or_else(|error| panic!("iced font system must be available: {error}"));
+        for bytes in FONT_BYTES {
+            fonts.load_font(Cow::Borrowed(bytes));
+        }
+        drop(fonts);
+
+        FallbackRenderer::Secondary(TinySkiaRenderer::new(SANS, Pixels(14.0)))
+    }
 
     fn paint(style: ButtonStyle, skin: &Skin) -> Paint<'_, Button> {
         Paint::new(
@@ -896,6 +1075,56 @@ mod lengths {
         assert_eq!(
             declared_width(ButtonStyle::Default, builtin::skin()),
             solve::Length::Shrink
+        );
+    }
+
+    /// A tab is the one control whose width is neither fixed nor a share: it is
+    /// as wide as the word it shows. That number has to survive the adapter, or
+    /// a strip of tabs stops being a row of headings.
+    #[kithara::test]
+    fn a_tab_is_as_wide_as_its_word() {
+        let skin = builtin::skin();
+        let renderer = headless_renderer();
+        let mut element = Paint::new(
+            TabLarge::new(skin),
+            Labelled {
+                active: true,
+                label: "DECK MICRO".to_owned(),
+            },
+            skin,
+        )
+        .view();
+        let mut tree = Tree::new(element.as_widget());
+
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(IcedSize::ZERO, IcedSize::new(320.0, 80.0)),
+        );
+
+        assert!(
+            (node.size().width - 94.0).abs() < 0.001,
+            "iced gave this label and skin 94 px; a {} px tab would move its siblings",
+            node.size().width
+        );
+        assert_eq!(node.size().height, skin.tab_large.height);
+    }
+
+    /// The retained host is told a tab's length before it holds a painter, so
+    /// the two answers have to come from one place.
+    #[cfg(feature = "masonry-host")]
+    #[kithara::test]
+    fn both_hosts_ask_for_the_same_tab_box() {
+        let skin = builtin::skin();
+        let painter = TabLarge::new(skin);
+        let data = Labelled {
+            active: false,
+            label: "DECK MICRO".to_owned(),
+        };
+
+        assert_eq!(
+            painter.length(&mut skin.text_resources().into(), &data),
+            TabLarge::declared_length(skin.tab_large.height)
         );
     }
 

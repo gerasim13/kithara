@@ -39,6 +39,13 @@ use crate::{
 pub(crate) trait MasonryControl {
     fn draw_list(&mut self, bounds: Rect) -> DrawList;
 
+    /// How big the control is on the axes it settles for itself. A zero on an
+    /// axis leaves it to the row, which is what a leaf that cannot measure has
+    /// always answered on both.
+    fn measure(&mut self) -> crate::solve::Size {
+        crate::solve::Size::ZERO
+    }
+
     fn input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<HostAction>;
 
     fn accepts_input(&self) -> bool;
@@ -489,6 +496,10 @@ where
             self.press.visual(),
         );
         list.finish()
+    }
+
+    fn measure(&mut self) -> crate::solve::Size {
+        self.painter.measure(&mut self.text, &self.data)
     }
 
     fn input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<HostAction> {

@@ -162,16 +162,6 @@ fn glyph_tone(
     active_tone(color, active_color, active).map(|role| skin.color(role))
 }
 
-pub(super) fn tab_large<'a>(
-    path: &'a str,
-    label: &'a str,
-    value: Option<&ReadValue<'_>>,
-    skin: &'a Skin,
-    owner: InputOwner,
-) -> Element<'a, UiEvent> {
-    crate::render::controls::tab_large(path, label, value, skin, owner)
-}
-
 #[cfg(test)]
 mod tests {
     use iced::advanced::widget::Tree;

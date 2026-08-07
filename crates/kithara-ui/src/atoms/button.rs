@@ -162,7 +162,7 @@ impl Button {
 
     /// The box it asks for. Only the width is its own: every button fills the
     /// height of the row it sits in.
-    pub(crate) fn measure<Words>(
+    pub(crate) fn declared<Words>(
         &self,
         text: &mut TextContext,
         label: &ButtonLabel<Words>,
