@@ -6,6 +6,8 @@
 //! reproduces by hand in the GUI.
 //!
 //! Compiled only into `suite_network`, which needs the `network` feature.
+//! Everything here is on the public internet: the scenario that reached the
+//! corporate slicer moved out with the rest of what CI cannot serve.
 
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
@@ -637,10 +639,6 @@ fn assert_audio_live(samples: &[f32], label: &str) {
 /// surface of the variant-switch recreate hang: if the hang fires
 /// here too, the bug lives in `HlsVariant`/recreate, not the PKCS7
 /// padding seam.
-const PROD_PLAIN_PLAYLIST: &[&str] = &[
-    "https://stream.silvercomet.top/hls/master.m3u8",
-    "https://ecs-stage-slicer-01.zvq.me/hls/track/176000075_1/master.m3u8",
-];
 
 /// Body of both `user_sim_prod_*_multi_track_select_seek_end_hang`
 /// tests. PCM-driven scenario, no `sleep`: the test thread renders the
@@ -718,14 +716,4 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 async fn user_sim_prod_drm_multi_track_select_seek_end_hang() {
     run_multi_track_select_seek_end_hang(PROD_DRM_PLAYLIST, "prod-drm").await;
-}
-
-/// Companion to the DRM variant on plain (non-encrypted) HLS tracks
-/// from `app.yaml`. Isolation pin: if this fails too, the bug lives
-/// in the generic variant-switch recreate path (`HlsVariant` /
-/// `step_recreating_decoder`), not in the DRM PKCS7 `byte_shift` seam.
-/// If this passes while the DRM variant fails, the bug is DRM-only.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
-async fn user_sim_prod_plain_hls_multi_track_select_seek_end_hang() {
-    run_multi_track_select_seek_end_hang(PROD_PLAIN_PLAYLIST, "prod-plain-hls").await;
 }

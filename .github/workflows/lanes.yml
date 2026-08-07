@@ -34,6 +34,7 @@ jobs:
       matrix:
         lane:
           - integration-regressions
+          - network
           - loom
           - e2e
           - e2e-fused
@@ -51,4 +52,11 @@ jobs:
           || github.event.inputs.lane == matrix.lane
         env:
           LANE: ${{ matrix.lane }}
+          # The network lane builds against the production key server. These are
+          # baked at build time by kithara-app's build script, so they belong to
+          # the build rather than to the test process. Absent, every other lane
+          # compiles exactly as it did before.
+          KITHARA_DRM_PROD_KEY: ${{ secrets.KITHARA_DRM_PROD_KEY }}
+          KITHARA_DRM_PROD_AUTH_TOKEN: ${{ secrets.KITHARA_DRM_PROD_AUTH_TOKEN }}
+          KITHARA_DRM_PROD_SP_ZV_TOKEN: ${{ secrets.KITHARA_DRM_PROD_SP_ZV_TOKEN }}
         run: CARGO_TARGET_DIR="target-lane-$LANE" just test run "--lane=$LANE"

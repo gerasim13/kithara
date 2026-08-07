@@ -53,6 +53,7 @@ impl Container<'_> {
                 "/cache/target",
             ),
             ("kithara-ci-sccache".to_owned(), "/cache/sccache"),
+            ("kithara-ci-fixtures".to_owned(), "/cache/fixtures"),
         ]
     }
 
@@ -68,7 +69,15 @@ impl Container<'_> {
     /// nothing.
     /// `sccache` keys on the inputs of a compilation instead, which is what
     /// makes sharing it across runners sound rather than merely concurrent.
-    pub(super) const ENVIRONMENT: [&'static str; 5] = [
+    pub(super) const ENVIRONMENT: [&'static str; 6] = [
+        // Encoded audio fixtures. Their default home is the container's own
+        // temp directory, and a container serves one job and is thrown away —
+        // so every job re-encoded every fixture it touched, and a test that
+        // builds one inside its own deadline lost the race under load. Entries
+        // are content-addressed and namespaced by a build fingerprint, so
+        // sharing them across runners cannot serve one build's bytes to
+        // another.
+        "KITHARA_FIXTURE_CACHE=/cache/fixtures",
         "CARGO_TARGET_DIR=/cache/target",
         "RUSTC_WRAPPER=sccache",
         // Without this the wrapper is inert: sccache declines to cache an
