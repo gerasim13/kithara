@@ -249,6 +249,10 @@ default_flash = false
 # `KITHARA_DRM_PROD_*` are in the build environment; without them it fails on
 # the key request rather than on the code, which is why it is a lane of its own
 # rather than a gate job.
+#
+# `client-wreq` because the CDN sits behind a WAF that fingerprints the client:
+# reqwest gets HTTP 418, and the integration test crate pins reqwest on Linux.
+# Both features on selects wreq — see kithara-net's native backend.
 [test.lanes.network]
 program = "cargo"
 prefix_args = [
@@ -261,7 +265,7 @@ prefix_args = [
   "--test",
   "suite_network",
 ]
-default_features = ["network", "kithara/resample-rubato"]
+default_features = ["network", "kithara/resample-rubato", "kithara/client-wreq"]
 default_flash = false
 
 # The half of the network tests no runner can serve: `*.zvq.me`, which resolves
