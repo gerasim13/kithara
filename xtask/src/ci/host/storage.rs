@@ -131,8 +131,13 @@ impl<'a> HostStorage<'a> {
 
     pub(super) fn cleanup(&self) -> Result<()> {
         let initial = self.used_bytes()?;
-        let pressure = self.pressure(initial);
-        info!(used_bytes = initial, ?pressure, "cleanup started");
+        // The worst single volume, not the sum: adding a second volume's bytes
+        // to the first and comparing that against thresholds calibrated for the
+        // first reads every machine with a guest volume as full, and the branch
+        // it reaches for throws away the compiler caches that were never the
+        // problem. `preflight` already decides this way.
+        let (pressure, volume) = self.worst_pressure()?;
+        info!(used_bytes = initial, ?pressure, volume = %volume.display(), "cleanup started");
 
         self.prune_old_trees("workspaces/tmp", Self::DAY)?;
         self.prune_old_trees("workspaces/builds", Self::DAY)?;
@@ -164,14 +169,14 @@ impl<'a> HostStorage<'a> {
             Pressure::Normal => {}
         }
 
-        let mut final_used = self.used_bytes()?;
-        if final_used >= self.config.host.reject_bytes {
+        let (mut final_pressure, _) = self.worst_pressure()?;
+        if final_pressure == Pressure::Reject {
             self.prune_old_trees("cache/trusted", Duration::ZERO)?;
             self.prune_old_trees("cache/bootstrap/trusted", Duration::ZERO)?;
             self.prune_retired_caches(Duration::ZERO)?;
-            final_used = self.used_bytes()?;
+            final_pressure = self.worst_pressure()?.0;
         }
-        if final_used >= self.config.host.reject_bytes {
+        if final_pressure == Pressure::Reject {
             // Every step above works on what jobs leave behind, and none of it
             // is where the space went: the macOS guest grows on this volume for
             // as long as it lives and only gives the space back when it is
@@ -181,11 +186,10 @@ impl<'a> HostStorage<'a> {
             // job now in flight. That trade only makes sense once jobs are
             // being refused anyway, which is exactly this branch.
             self.recycle_macos_guest();
-            final_used = self.used_bytes()?;
+            final_pressure = self.worst_pressure()?.0;
         }
-        let final_pressure = self.pressure(final_used);
         info!(
-            used_bytes = final_used,
+            used_bytes = self.used_bytes()?,
             ?final_pressure,
             "cleanup completed"
         );
