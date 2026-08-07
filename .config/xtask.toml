@@ -158,6 +158,12 @@ default_flash = false
 # Apple shape (embedded AudioConverter SRC in the Apple codec; Symphonia stays
 # on Rubato; inert off Apple), `e2e-glide` the Glide backend (no Rubato in the
 # graph, otherwise the compile-time alias picks Rubato).
+#
+# None of them passes `--run-ignored`. The tests that reach zvuk staging and
+# production say so themselves with `#[ignore]`, and a lane that overrides that
+# reports the fence around the runners rather than anything about the code. Run
+# them by hand with `--run-ignored=only` from a machine that has the network and
+# the credentials.
 [test.lanes.e2e]
 program = "cargo"
 prefix_args = [
@@ -169,8 +175,6 @@ prefix_args = [
   "test-release",
   "--test",
   "suite_e2e",
-  "--run-ignored",
-  "all",
 ]
 default_features = ["e2e", "kithara/resample-rubato"]
 default_flash = false
@@ -186,8 +190,6 @@ prefix_args = [
   "test-release",
   "--test",
   "suite_e2e",
-  "--run-ignored",
-  "all",
 ]
 default_features = ["e2e", "kithara/resample-rubato", "apple-fused-src"]
 default_flash = false
@@ -203,8 +205,6 @@ prefix_args = [
   "test-release",
   "--test",
   "suite_e2e",
-  "--run-ignored",
-  "all",
 ]
 default_features = ["e2e", "kithara/resample-glide"]
 default_flash = false
