@@ -66,8 +66,12 @@ fn default_libvirt_network() -> String {
 pub(crate) struct LinuxRunner {
     /// Identifies the runner's service, registration, and container.
     pub(crate) name: String,
-    /// How much of the machine one job may take.
-    pub(crate) cpus: String,
+    /// How many cores one job may use. Handed to the container as a set of
+    /// core numbers rather than a share of the machine: a share is a CFS
+    /// quota, which throttles a job without telling it anything, so `nproc`
+    /// still reports the whole host and Cargo still starts one compilation
+    /// per host core. A set is what makes the container's own view true.
+    pub(crate) cpus: u32,
     pub(crate) memory: String,
     /// Labels a workflow selects this runner by.
     pub(crate) labels: Vec<String>,
@@ -164,7 +168,7 @@ impl LinuxRunner {
         if !safe_name(&self.name) {
             bail!("Linux CI runner name contains unsupported characters");
         }
-        if self.cpus.trim().is_empty() || self.memory.trim().is_empty() {
+        if self.cpus == 0 || self.memory.trim().is_empty() {
             bail!(
                 "Linux CI runner {} must bound its CPU and memory",
                 self.name
