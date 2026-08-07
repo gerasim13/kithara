@@ -81,19 +81,15 @@ impl PlayerImpl {
     /// no grid yet, or the track has no usable analysed map at `at`.
     pub(crate) fn bind(&self, binding: &TrackBinding, at: SessionBeat) -> Result<(), PlayError> {
         let anchor = self.core.engine.session_handle().anchor()?;
-        // The deck's first output frame is due on `at`, so its own anchor pair
-        // is that beat and the frame the committed grid puts it on. Both are
-        // fixed here and never recomputed: a later tempo commit bends the grid
-        // ahead of the playhead instead of moving frames already rendered.
-        let start = anchor
-            .load()
-            .ok_or_else(|| PlayError::BindUnavailable {
+        if anchor.load().is_none() {
+            return Err(PlayError::BindUnavailable {
                 reason: "the session has committed no tempo grid yet".to_owned(),
-            })?
-            .frame_at(at)
-            .map_err(|reason| PlayError::BindUnavailable {
-                reason: reason.to_string(),
-            })?;
+            });
+        }
+        // `at` fixes only where the deck *starts* on the track: its first
+        // output frame plays the track beat due on that session beat. How far
+        // it then advances is counted by the renderer, not derived from a pin
+        // on the session's frame axis, which a resume moves.
         let origin = binding
             .track_beat_at(at)
             .map_err(|reason| PlayError::BindUnavailable {
@@ -102,8 +98,6 @@ impl PlayerImpl {
         *self.core.binding.lock() = Some(Arc::new(SourceSchedule::new(
             binding.map().clone(),
             origin,
-            start,
-            at,
             binding.direction(),
             anchor,
         )));

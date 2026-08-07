@@ -37,6 +37,13 @@ pub(crate) struct BoundRenderer<E> {
     consumed: u64,
     /// Next output frame to plan.
     output_frame: u64,
+    /// Session beats this deck has advanced since its start.
+    ///
+    /// The deck's own count, not a reading of the session clock: a tempo
+    /// commit changes what the *next* block adds, and a pause moves the
+    /// session's frame axis without moving this. Deriving the position from a
+    /// frame pin instead would reinterpret frames already rendered.
+    elapsed_beats: f64,
     /// Interleaved output accumulated across the blocks of one call.
     scratch: Vec<f32>,
     last_input_meta: Option<PcmMeta>,
@@ -68,6 +75,7 @@ impl<E: ElasticEngine> BoundRenderer<E> {
             cursor: None,
             last_input_meta: None,
             output_frame: 0,
+            elapsed_beats: 0.0,
             pending: Vec::new(),
             pending_start: 0,
             scratch: Vec::new(),
@@ -85,21 +93,18 @@ impl<E: ElasticEngine> BoundRenderer<E> {
     }
 
     /// Quantized plan for the block starting at the current output frame.
-    fn plan_block(&self) -> Result<ElasticSpanPlan, BoundError> {
+    fn plan_block(&self) -> Result<(ElasticSpanPlan, f64), BoundError> {
         let block = usize::try_from(Self::BLOCK_FRAMES).map_err(|_| BoundError::BlockOverflow)?;
-        let next = self
-            .output_frame
-            .checked_add(Self::BLOCK_FRAMES)
-            .ok_or(BoundError::BlockOverflow)?;
-        let start = f64::from(self.schedule.source_at(self.output_frame)?);
-        let end = f64::from(self.schedule.source_at(next)?);
+        let per_frame = self.schedule.beats_per_frame()?;
+        let advance = per_frame * Self::BLOCK_FRAMES.to_f64().unwrap_or(f64::INFINITY);
+        let next = self.elapsed_beats + advance;
+        let start = f64::from(self.schedule.source_after(self.elapsed_beats)?);
+        let end = f64::from(self.schedule.source_after(next)?);
         let span = ElasticSpan::try_from((start..end, block))?;
-        Ok(ElasticSpanPlan::new(
-            [span],
-            self.cursor,
-            self.capabilities,
-            self.span_config,
-        )?)
+        Ok((
+            ElasticSpanPlan::new([span], self.cursor, self.capabilities, self.span_config)?,
+            next,
+        ))
     }
 
     /// Renders every block the pending source can cover, appending each to
@@ -107,7 +112,7 @@ impl<E: ElasticEngine> BoundRenderer<E> {
     /// has not arrived.
     pub(super) fn render_available(&mut self) -> Result<(), BoundError> {
         loop {
-            let plan = self.plan_block()?;
+            let (plan, next_elapsed) = self.plan_block()?;
             let segment = *plan.segments().first().ok_or(BoundError::EmptyPlan)?;
             let start =
                 u64::try_from(segment.source_start()).map_err(|_| BoundError::BehindWindow {
@@ -147,6 +152,7 @@ impl<E: ElasticEngine> BoundRenderer<E> {
             self.pending_start = start.saturating_add(consumed);
             self.consumed = self.consumed.saturating_add(consumed);
             self.output_frame = self.output_frame.saturating_add(Self::BLOCK_FRAMES);
+            self.elapsed_beats = next_elapsed;
             self.cursor = Some(plan.cursor());
         }
     }
@@ -210,6 +216,7 @@ impl<E: ElasticEngine + Send + 'static> AudioEffect for BoundRenderer<E> {
         self.cursor = None;
         self.consumed = 0;
         self.output_frame = 0;
+        self.elapsed_beats = 0.0;
         self.pending_start = 0;
         self.last_input_meta = None;
     }

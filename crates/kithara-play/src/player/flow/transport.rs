@@ -1,47 +1,57 @@
 use std::{num::NonZeroU32, sync::atomic::Ordering};
 
-use kithara_audio::{SeekOutcome, TrackBeat, analysis::TrackAnalysis};
+use kithara_audio::{SeekOutcome, SessionBeat, TrackBeat, analysis::TrackAnalysis};
 use kithara_events::PlaybackDirection;
 use kithara_platform::{sync::Arc, time::Duration};
 use tracing::{debug, warn};
 
 use super::super::core::PlayerImpl;
 use crate::{
-    api::{BeatQuantum, PlayerEvent, PlayerStatus, TrackBinding},
+    api::{BeatQuantum, PlayerEvent, PlayerStatus, TrackBinding, TransportRevision},
     bridge::{PlayerCmd, TrackTransition},
     error::PlayError,
     rt::track::TrackStart,
 };
 
+/// A start planned against one committed transport: the beat it lands on and
+/// the revision that plan was made against.
+///
+/// Carried between binding and arming because the two cannot be one call: the
+/// deck's resource has to be built *after* the bind to be built bound, and
+/// building it is asynchronous.
+#[derive(Clone, Copy, Debug, fieldwork::Fieldwork)]
+#[fieldwork(get)]
+#[non_exhaustive]
+pub struct BeatStart {
+    /// Returns the session beat the deck's first frame is due on.
+    #[field(get, copy)]
+    target: SessionBeat,
+    /// Returns the transport revision the plan was made against.
+    #[field(get, copy)]
+    revision: TransportRevision,
+}
+
 impl PlayerImpl {
-    /// Starts `src` on a stamped session beat, with this deck following the
-    /// session grid from that point on.
+    /// Places this deck on the session grid and plans a start on the next beat
+    /// that lands on `quantum`.
     ///
-    /// The caller brings what only it has — the analysed track, which of its
-    /// beats to align, and how coarse a grid to wait for — and the deck
-    /// supplies the rest: its own host rate and the committed transport.
-    /// Handing those in instead would ask the caller to know facts it cannot
-    /// read correctly, and a stale revision or a wrong rate places every frame
-    /// after the first one somewhere else.
-    ///
-    /// Binding and the start are one call because they are one decision: a
-    /// deck told to begin on a beat has to render as a function of session
-    /// beat, and a start planted on a free-running deck would land its first
-    /// frame right and everything after it wrong.
+    /// Binding and arming are separate calls because a resource is timed by
+    /// the slot in force when it is *built*: a deck bound after its track was
+    /// loaded would start on the beat and then drift at its own tempo. The
+    /// caller binds, rebuilds the track's resource, and only then arms it with
+    /// the returned plan.
     ///
     /// # Errors
     ///
-    /// Returns [`PlayError::BindUnavailable`] when the track has no usable
-    /// analysed map, the committed tempo and host rate do not define a beat
-    /// advance, or the quantum names no representable beat. The start is not
-    /// sent in that case.
-    pub fn start_at_beat(
+    /// Returns [`PlayError::BindUnavailable`] when the session has committed
+    /// no grid, the track has no usable analysed map, or the quantum names no
+    /// representable beat.
+    pub fn bind_to_grid(
         &self,
-        src: Arc<str>,
         analysis: &TrackAnalysis,
         track_anchor: TrackBeat,
         quantum: BeatQuantum,
-    ) -> Result<(), PlayError> {
+    ) -> Result<BeatStart, PlayError> {
         let transport = self.core.engine.session_handle().transport()?;
         let host_sample_rate =
             NonZeroU32::new(self.core.engine.master_sample_rate()).ok_or_else(|| {
@@ -70,11 +80,32 @@ impl PlayerImpl {
             reason: reason.to_string(),
         })?;
         self.bind(&binding, target)?;
+        Ok(BeatStart {
+            target,
+            revision: transport.revision(),
+        })
+    }
+
+    /// Arms the item at `index` and stamps it to start on `start`'s beat.
+    ///
+    /// Arming is what puts the track in the processor as preloading, which is
+    /// the only state a stamped start is resolved from: a track that has
+    /// already started cannot be started again, and one that is not in the
+    /// processor has nothing to stamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlayError::ItemConsumed`] when the item holds no resource to
+    /// arm — the caller's view of the queue is stale.
+    pub fn arm_at_beat(&self, index: usize, start: BeatStart) -> Result<(), PlayError> {
+        let src = self
+            .arm_next(index)
+            .ok_or(PlayError::ItemConsumed { index })?;
         self.send_to_slot(PlayerCmd::SetTrackStart {
             src,
             start: TrackStart::Session {
-                target,
-                revision: transport.revision(),
+                target: start.target,
+                revision: start.revision,
             },
         })
     }

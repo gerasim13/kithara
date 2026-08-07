@@ -1,10 +1,6 @@
 use delegate::delegate;
 use kithara_events::EventBus;
-use kithara_platform::sync::Arc;
-use kithara_play::{
-    BeatQuantum, EngineLoadSnapshot, EqBandConfig, PlayError, PlayerStatus, TrackAnalysis,
-    TrackBeat,
-};
+use kithara_play::{EngineLoadSnapshot, EqBandConfig, PlayError, PlayerStatus};
 
 use super::Queue;
 
@@ -73,18 +69,6 @@ impl Queue {
             /// # Errors
             /// Forwards `PlayError` from the underlying player.
             pub fn reset_eq(&self) -> Result<(), PlayError>;
-            /// Start `src` on the next session beat that lands on `quantum`,
-            /// with this deck following the session grid from there.
-            ///
-            /// # Errors
-            /// Forwards `PlayError` from the underlying player.
-            pub fn start_at_beat(
-                &self,
-                src: Arc<str>,
-                analysis: &TrackAnalysis,
-                track_anchor: TrackBeat,
-                quantum: BeatQuantum,
-            ) -> Result<(), PlayError>;
             /// Current track duration in seconds.
             #[must_use]
             pub fn duration_seconds(&self) -> Option<f64>;

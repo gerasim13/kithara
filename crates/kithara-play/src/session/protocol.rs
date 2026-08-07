@@ -164,7 +164,7 @@ mod handle {
 
     use super::wire::{AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionError};
     use crate::{
-        api::{SessionTransportSnapshot, SlotId},
+        api::{SessionTransportSnapshot, SlotId, Tempo},
         error::PlayError,
     };
 
@@ -220,6 +220,32 @@ mod handle {
                 Reply::SessionTransport(snapshot) => Ok(snapshot),
                 _ => Err(PlayError::Session(SessionError::TransportNotProcessed)),
             }
+        }
+
+        /// Commits a session tempo, in force from the next block boundary.
+        ///
+        /// The grid every bound deck follows. This is the session's own tempo,
+        /// not a deck's playback speed: a deck's speed knob moves that deck,
+        /// this moves what "on the beat" means for all of them.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`PlayError`] when the session rejects the commit — a
+        /// commit is already in flight, or the transport is not installed.
+        pub fn set_session_tempo(&self, tempo: Tempo) -> Result<(), PlayError> {
+            self.exec_ok(Cmd::SetSessionTempo { tempo }).map(drop)
+        }
+
+        /// Starts or stops the session clock.
+        ///
+        /// A stopped transport holds its beat, so a deck armed on a coming
+        /// beat waits rather than drifting.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`PlayError`] when the session rejects the commit.
+        pub fn set_session_playing(&self, playing: bool) -> Result<(), PlayError> {
+            self.exec_ok(Cmd::SetSessionPlaying { playing }).map(drop)
         }
 
         /// The session grid a deck binds to, shared so a tempo commit reaches

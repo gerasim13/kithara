@@ -144,7 +144,9 @@ impl SessionAnchor {
             .ok_or(CoordinateError::NonFinite)
     }
 
-    fn beats_per_frame(self) -> f64 {
+    /// Session beats one output frame advances at this tempo.
+    #[must_use]
+    pub fn beats_per_frame(self) -> f64 {
         self.beats_per_second / f64::from(self.sample_rate.get())
     }
 }

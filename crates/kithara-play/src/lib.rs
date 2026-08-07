@@ -41,6 +41,6 @@ pub use kithara_audio::{
     ServiceClass, SessionBeat, StretchControls, TrackBeat, analysis::TrackAnalysis,
 };
 pub use kithara_net::Headers;
-pub use player::{PlayerConfig, PlayerImpl, SelectTransition};
+pub use player::{BeatStart, PlayerConfig, PlayerImpl, SelectTransition};
 pub use resource::{PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType};
 pub use rt::PlayerNode;

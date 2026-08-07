@@ -64,8 +64,6 @@ fn identity_schedule() -> Arc<SourceSchedule> {
     Arc::new(SourceSchedule::new(
         map,
         TrackBeat::default(),
-        SessionFrame::new(0),
-        SessionBeat::default(),
         PlaybackDirection::Forward,
         anchor,
     ))

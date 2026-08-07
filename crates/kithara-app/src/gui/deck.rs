@@ -1,7 +1,7 @@
 use kithara::abr::AbrMode;
 use kithara_platform::sync::Arc;
-use kithara_queue::{BeatQuantum, TrackBeat, TrackId, Transition};
-use tracing::{debug, error, warn};
+use kithara_queue::{TrackId, Transition};
+use tracing::{debug, error};
 
 use crate::{
     deck::DeckId,
@@ -43,9 +43,6 @@ pub(crate) const TEMPO_RANGE: f32 = 50.0;
 /// What one wheel detent over the TEMPO block is worth, in percent.
 pub(crate) const TEMPO_STEP: f32 = 1.5;
 
-/// The grid SYNC waits for, in session beats: one bar of four.
-pub(crate) const BAR_BEATS: f64 = 4.0;
-
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TimestretchState {
     pub(crate) tempo: f32,
@@ -70,8 +67,6 @@ pub(crate) enum DeckMsg {
     DeleteTrack,
     SetTempo(f32),
     SetQuality(Option<usize>),
-    /// Place this deck on the session grid, starting on the next stamped beat.
-    SyncToSession,
 }
 
 /// Apply a deck message to its own deck. Nothing here reaches another deck.
@@ -94,7 +89,6 @@ pub(crate) fn handle(deck: &mut DeckUi, msg: &DeckMsg) {
         DeckMsg::EqBandChanged(band, db) => eq_band_changed(deck, band, db),
         DeckMsg::DeleteTrack => delete_track(deck),
         DeckMsg::SetTempo(tempo) => set_tempo(deck, tempo),
-        DeckMsg::SyncToSession => sync_to_session(deck),
         DeckMsg::SetQuality(variant) => set_quality(deck, variant),
     }
 }
@@ -166,35 +160,6 @@ fn delete_track(deck: &mut DeckUi) {
         && let Err(e) = deck.controller.queue().remove(id)
     {
         error!(index = idx, error = %e, "remove failed");
-    }
-}
-
-/// Put this deck on the session grid: its analysed first beat lands on the
-/// coming bar line, and the deck follows the session grid from there.
-///
-/// Nothing happens without an analysis — there is no grid to align to — and
-/// the deck keeps free-running, which is what it was already doing.
-fn sync_to_session(deck: &mut DeckUi) {
-    let Some(analysis) = deck.ui.analysis.clone() else {
-        return;
-    };
-    let Some(src) = deck
-        .ui
-        .current_track_index
-        .and_then(|index| deck.ui.tracks.get(index))
-        .and_then(|track| track.url.clone())
-    else {
-        return;
-    };
-    let (Ok(anchor), Ok(quantum)) = (TrackBeat::new(0.0), BeatQuantum::new(BAR_BEATS)) else {
-        return;
-    };
-    if let Err(err) =
-        deck.controller
-            .queue()
-            .start_at_beat(Arc::from(src.as_str()), &analysis, anchor, quantum)
-    {
-        warn!(?err, "failed to place the deck on the session grid");
     }
 }
 

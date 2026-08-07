@@ -1,5 +1,7 @@
 mod core;
 mod error;
+#[cfg(all(test, feature = "stretch-signalsmith"))]
+mod mixing;
 mod slot;
 #[cfg(all(test, feature = "stretch-signalsmith"))]
 mod tests;

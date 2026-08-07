@@ -448,15 +448,11 @@ impl NativeInner {
         let _rt = crate::FFI_RUNTIME.enter();
         let tracks = self.queue.tracks();
         let idx = index as usize;
-        let url = tracks
-            .get(idx)
-            .and_then(|entry| entry.url.clone())
-            .ok_or_else(|| FfiError::InvalidArgument {
-                reason: format!(
-                    "item index {idx} has no source location (len: {})",
-                    tracks.len()
-                ),
-            })?;
+        if idx >= tracks.len() {
+            return Err(FfiError::InvalidArgument {
+                reason: format!("item index {idx} is past the queue (len: {})", tracks.len()),
+            });
+        }
         let analysis = TrackAnalysis::try_from(grid)?;
         let anchor = TrackBeat::new(track_beat).map_err(|reason| FfiError::InvalidArgument {
             reason: reason.to_string(),
@@ -465,8 +461,10 @@ impl NativeInner {
             reason: reason.to_string(),
         })?;
         self.queue
-            .start_at_beat(Arc::from(url.as_str()), &analysis, anchor, quantum)
-            .map_err(FfiError::from)
+            .start_at_beat(idx, &analysis, anchor, quantum)
+            .map_err(|reason| FfiError::InvalidArgument {
+                reason: reason.to_string(),
+            })
     }
 
     pub(crate) fn set_observer(&self, observer: Arc<dyn PlayerObserver>) {
