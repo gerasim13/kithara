@@ -1,10 +1,10 @@
 use num_traits::cast::AsPrimitive;
 
 use crate::{
+    atoms::wave::zoom_math::DEFAULT_ZOOM,
     compile::CompiledUi,
     expand::{Binding, BindingKind},
     render::{ReadValue, Reads},
-    widgets::wave::zoom_math::DEFAULT_ZOOM,
 };
 
 pub(crate) fn resolve<'a>(

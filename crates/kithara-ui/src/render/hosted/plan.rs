@@ -5,7 +5,10 @@ use num_traits::cast::AsPrimitive;
 #[cfg(feature = "masonry-host")]
 use super::masonry::TreeMetrics;
 use crate::{
-    atoms::bar::context::Context,
+    atoms::{
+        bar::context::Context,
+        wave::zoom_math::{clamp_zoom, window_bounds, zoom_for_wheel},
+    },
     compile::CompiledUi,
     draw::Rect,
     engine::{Descriptor, ScrollConfig},
@@ -20,12 +23,9 @@ use crate::{
         picker_selected_index, text_input_layout,
     },
     text::TextContext,
-    widgets::{
-        track_list::{
-            ColumnLayout, column_layouts, column_resizable, minimum_table_width,
-            track_list_content_height,
-        },
-        wave::zoom_math::{clamp_zoom, window_bounds, zoom_for_wheel},
+    widgets::track_list::{
+        ColumnLayout, column_layouts, column_resizable, minimum_table_width,
+        track_list_content_height,
     },
 };
 #[derive(Clone)]

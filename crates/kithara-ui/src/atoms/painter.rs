@@ -33,6 +33,7 @@ use crate::{
         tab::TabLarge,
         toggle::Binary,
         vu::VerticalVu,
+        wave::face::{Drawn, Wave},
     },
     draw::{DrawListBuilder, Rect},
     render::{Mark, StereoLevels},
@@ -412,6 +413,25 @@ impl ControlPainter for Spacer {
         _state: VisualState,
     ) {
         self.paint(list, bounds);
+    }
+}
+
+/// The naming panel steps aside while the pointer is on the waveform, so the
+/// hand can see the shape it is about to scrub.
+impl ControlPainter for Wave {
+    type Data = Drawn;
+
+    const READS_POINTER: bool = true;
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        data: &Self::Data,
+        bounds: Rect,
+        state: VisualState,
+    ) {
+        self.paint(list, text, data, bounds, matches!(state, VisualState::Idle));
     }
 }
 

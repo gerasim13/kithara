@@ -165,7 +165,14 @@ impl NodeControl for mount::Telemetry {
         painted(self, host, cx)
     }
 }
-impl NodeControl for mount::Wave<'_> {}
+impl NodeControl for mount::Wave<'_> {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        painted(self, host, cx)
+    }
+}
 impl NodeControl for mount::Vis {}
 impl NodeControl for mount::TrackList<'_> {}
 impl NodeControl for mount::Tree<'_> {}

@@ -14,3 +14,4 @@ pub(crate) mod tab;
 pub(crate) mod text;
 pub(crate) mod toggle;
 pub(crate) mod vu;
+pub(crate) mod wave;

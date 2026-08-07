@@ -26,6 +26,7 @@ use crate::{
         tab::TabLarge,
         toggle::Binary,
         vu::VerticalVu,
+        wave::{face::Wave, snapshot::WaveformData},
     },
     draw::{DrawList, DrawListBuilder, Rect},
     interact::{
@@ -180,6 +181,78 @@ mod flags {
             },
             skin,
         )
+    }
+}
+
+/// What a wave does when its track's shape finally arrives.
+#[cfg(test)]
+mod analysed {
+    use kithara_test_utils::kithara;
+
+    use super::{MasonryControl, Painted};
+    use crate::{
+        atoms::wave::face::{Drawn, Wave},
+        builtin,
+        draw::Rect,
+        module::WaveStyle,
+        render::{ReadValue, Reads, WaveBucket, WaveformView},
+    };
+
+    struct NoReads;
+
+    impl Reads for NoReads {
+        fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
+            None
+        }
+    }
+
+    /// A deck mounts its wave before the track has been analysed, and the shape
+    /// arrives later. A retained wave that could not be told would show an
+    /// empty frame until something unrelated rebuilt it.
+    #[kithara::test]
+    fn a_wave_draws_the_shape_that_arrives_after_it_mounted() {
+        let skin = builtin::skin();
+        let bounds = Rect {
+            h: 120.0,
+            w: 640.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let mut wave = Painted::new(
+            Wave::new(WaveStyle::Default, skin),
+            Drawn::read(WaveStyle::Default, 1.0, None, None, &NoReads, ""),
+            skin,
+        );
+        let empty = wave.draw_list(bounds);
+        let buckets = [
+            WaveBucket {
+                low: 0.25,
+                mid: 0.5,
+                high: 0.75,
+            },
+            WaveBucket {
+                low: 0.75,
+                mid: 0.5,
+                high: 0.25,
+            },
+        ];
+
+        assert!(
+            wave.set_read(&ReadValue::Waveform(WaveformView {
+                buckets: &buckets,
+                beats: &[],
+                downbeats: &[],
+                bpm: None,
+                r#loop: None,
+                cues: &[],
+            })),
+            "a wave handed a shape must report that its picture changed"
+        );
+        assert_ne!(
+            empty,
+            wave.draw_list(bounds),
+            "the wave drew the same empty frame after its shape arrived"
+        );
     }
 }
 
@@ -415,6 +488,24 @@ impl Retained for Spacer {}
 /// The gear the settings button shows comes from the built-in art, not from an
 /// endpoint.
 impl Retained for Settings {}
+
+/// A wave follows the shape its own endpoint reports; the playhead beside it
+/// is a sibling's reading and lands on rebuild.
+impl Retained for Wave {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        let ReadValue::Waveform(view) = value else {
+            return false;
+        };
+        let next = WaveformData {
+            buckets: view.buckets.to_vec().into_boxed_slice(),
+            beats: view.beats.to_vec().into_boxed_slice(),
+            downbeats: view.downbeats.to_vec().into_boxed_slice(),
+            loop_region: view.r#loop,
+            cues: view.cues.to_vec().into_boxed_slice(),
+        };
+        data.waveform.replace(next).as_ref() != data.waveform.as_ref()
+    }
+}
 
 /// The strip follows the path its own endpoint reports; the scope beside it is
 /// the document's list and lands on rebuild.

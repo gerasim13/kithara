@@ -204,9 +204,9 @@ mod tests {
 
     use super::*;
     use crate::{
+        atoms::wave::overlay::OverlayPalette,
         builtin,
         draw::{DrawCmd, Geom, Paint, Transform},
-        widgets::wave::overlay::OverlayPalette,
     };
 
     #[kithara::test]

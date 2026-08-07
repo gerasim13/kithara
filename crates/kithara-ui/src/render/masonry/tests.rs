@@ -1605,7 +1605,7 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
         Paints::Yes,
         r#"Scalar(id: "control", read: Model(id: "deck.view.zoom"))"#,
     ),
-    ("Wave", Paints::NotYet, r#"Wave(id: "control")"#),
+    ("Wave", Paints::Yes, r#"Wave(id: "control")"#),
     ("Vis", Paints::NotYet, r#"Vis(id: "control")"#),
     (
         "TrackList",

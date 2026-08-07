@@ -50,4 +50,4 @@ pub(crate) use text_input::{search_input, sync_text_input, text_input_layout};
 pub(crate) use track_list::{sync_track_list_scroll, track_list};
 pub use typography::shaped_text;
 
-pub use crate::widgets::wave::zoom_math::{DEFAULT_ZOOM, zoom_in, zoom_out};
+pub use crate::atoms::wave::zoom_math::{DEFAULT_ZOOM, zoom_in, zoom_out};

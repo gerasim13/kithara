@@ -3,7 +3,7 @@ use iced::{alignment::Horizontal, widget::Space};
 use super::{
     geometry::Rendered,
     panel::{context_bar, track_list, tree, vis},
-    read_flag, wave_zoom,
+    read_flag,
     window::{titlebar, window_controls},
 };
 use crate::{
@@ -172,22 +172,27 @@ impl ViewControl for mount::Fader {
     }
 }
 
+/// The wave draws the same on both hosts; only the immediate host recognises
+/// the loop and zoom gestures itself, and only where the document left it the
+/// pointer. Reconciling that with the retained host's plan is the gesture
+/// census, not this.
 impl ViewControl for mount::Wave<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        let wave = MiniWave::builder()
-            .path(cx.path)
-            .style(self.style)
-            .zoom(wave_zoom(self.zoom, cx.reads, cx.ui))
-            .maybe_badge(self.badge.map(|id| cx.ui.resolve(id)))
-            .maybe_value(cx.value)
-            .scope(cx.scope)
-            .reads(cx.reads)
-            .skin(cx.skin)
-            .build();
-        Rendered::leading(match cx.owner {
-            InputOwner::Leaf => wave.view(),
-            InputOwner::Engine => wave.painted(),
-        })
+        if cx.owner == InputOwner::Engine {
+            return painted(self, cx);
+        }
+        let Some(data) = self.data(reading(cx)) else {
+            return Rendered::leading(Space::new().into());
+        };
+        Rendered::leading(
+            MiniWave::builder()
+                .path(cx.path)
+                .style(self.style)
+                .data(data)
+                .skin(cx.skin)
+                .build()
+                .view(),
+        )
     }
 }
 
