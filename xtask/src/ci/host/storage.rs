@@ -489,13 +489,21 @@ impl<'a> HostStorage<'a> {
         }
     }
 
-    /// Restart the macOS runner agent, which throws its guest away and clones
-    /// a fresh one from the base image.
-    /// Delete the Linux guest so its disk is allocated again from nothing.
+    /// Delete the Linux guest and the disk it kept, so the space is allocated
+    /// again from nothing.
     ///
     /// The agent runs `colima start` in the foreground, so the process ends
     /// with the guest and launchd starts a fresh one. The images inside are
     /// rebuilt, which is the cost.
+    ///
+    /// Deleting the instance alone reclaims almost nothing: lima keeps the data
+    /// disk as a named volume so that it survives a recreated guest, and the
+    /// disk is where the space goes. It is sparse, so it grows with every write
+    /// and never shrinks when the guest deletes. On 2026-08-07 the instance held
+    /// 2 GB and the disk held 95 GB.
+    ///
+    /// Both are attempted even if the first fails: with the instance already
+    /// gone, deleting the disk is exactly what still has to happen.
     fn recycle_linux_guest(&self) {
         let colima = self.config.host.brew_tool("colima");
         if !colima.is_file() {
@@ -509,6 +517,30 @@ impl<'a> HostStorage<'a> {
         ) {
             warn!(%error, "could not recycle the Linux guest");
         }
+
+        let limactl = self.config.host.brew_tool("limactl");
+        if !limactl.is_file() {
+            warn!("limactl is absent, so the guest's data disk stays allocated");
+            return;
+        }
+        let home = self.root.join("home").join(&self.config.host.ci_user);
+        let mut command = self.process.command(limactl);
+        command.env("LIMA_HOME", home.join(".colima/_lima")).args([
+            "disk",
+            "delete",
+            &Self::linux_guest_disk(),
+        ]);
+        if let Err(error) = self
+            .process
+            .run_command(&mut command, "delete the Linux guest's data disk")
+        {
+            warn!(%error, "could not delete the Linux guest's data disk");
+        }
+    }
+
+    /// colima names the disk after the profile it belongs to.
+    fn linux_guest_disk() -> String {
+        format!("colima-{}", Self::COLIMA_PROFILE)
     }
 
     fn recycle_macos_guest(&self) {
