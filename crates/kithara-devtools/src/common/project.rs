@@ -244,6 +244,42 @@ pub struct HealthConfig {
     pub feature_powerset_exclude: Vec<String>,
     /// Crates excluded from whole-workspace stages (semver, nextest, doc-test).
     pub workspace_exclude: Vec<String>,
+    /// Backend groups a crate refuses to be built without.
+    pub feature_invariants: Vec<FeatureInvariant>,
+}
+
+/// A rule some crates state with `compile_error!`: this build needs a backend.
+///
+/// The crate it applies to is not named here. It is found by the feature that
+/// names the group, so the rule follows the workspace rather than being
+/// repeated beside it.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FeatureInvariant {
+    /// Feature whose presence marks a crate as carrying this rule.
+    pub when_feature: String,
+    /// Groups the powerset must pick from rather than leave empty.
+    pub at_least_one_of: Vec<Vec<String>>,
+    /// Features every combination carries. A group of one is expressed here:
+    /// `--at-least-one-of` needs two or more names, and where only one backend
+    /// survives its target gate there is nothing to choose between.
+    pub always: Vec<String>,
+}
+
+impl FeatureInvariant {
+    #[must_use]
+    pub fn args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+        for group in &self.at_least_one_of {
+            args.push("--at-least-one-of".to_owned());
+            args.push(group.join(","));
+        }
+        if !self.always.is_empty() {
+            args.push("--features".to_owned());
+            args.push(self.always.join(","));
+        }
+        args
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]

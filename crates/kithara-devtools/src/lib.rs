@@ -17,6 +17,7 @@ pub mod manifest;
 pub mod orphans;
 pub mod perf;
 pub mod perf_compare;
+pub mod powerset;
 pub mod quality;
 pub mod quality_assessment;
 pub mod quality_lab;
@@ -59,6 +60,8 @@ pub enum CoreCommand {
     Lint(lint::LintArgs),
     /// Compare perf results.
     PerfCompare(perf_compare::PerfCompareArgs),
+    /// Check every feature combination the workspace admits.
+    Powerset(powerset::PowersetArgs),
     /// Test-suite performance measurement pipeline (matrix/slow/profile/report/trace).
     Perf(perf::PerfArgs),
     /// Code quality checks.
@@ -97,6 +100,7 @@ pub fn run(cmd: &CoreCommand, ctx: &Ctx) -> anyhow::Result<()> {
         #[cfg(feature = "lint")]
         CoreCommand::Lint(args) => lint::run(args),
         CoreCommand::PerfCompare(args) => perf_compare::run(args),
+        CoreCommand::Powerset(args) => powerset::run(args, ctx),
         CoreCommand::Perf(args) => perf::run(args, ctx),
         CoreCommand::Quality { command } => quality::run(command, ctx),
         CoreCommand::Scope(args) => scope::run(args),
