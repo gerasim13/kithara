@@ -6,7 +6,8 @@ use kithara_test_utils::kithara;
 
 use super::create_effects;
 use crate::{
-    effects::timestretch::StretchControls, pipeline::config::TempoSlot, traits::AudioEffect,
+    tempo::{TempoSlot, streaming::StretchControls},
+    traits::AudioEffect,
 };
 
 struct PassthroughEffect;

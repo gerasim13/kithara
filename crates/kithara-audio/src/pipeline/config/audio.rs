@@ -9,8 +9,9 @@ use kithara_stream::{MediaInfo, StreamType};
 use portable_atomic::AtomicF32;
 
 use crate::{
-    pipeline::config::{AudioDecoderConfig, TempoSlot},
+    pipeline::config::AudioDecoderConfig,
     renderer::{AudioWorkerHandle, EngineLoad},
+    tempo::TempoSlot,
     traits::AudioEffect,
 };
 

@@ -15,7 +15,7 @@ pub(crate) use crate::{
     EngineLoad, Fetch, PcmControl, PcmRead, PcmSession, PendingReason, PreloadGate, ReadOutcome,
     SeekOutcome, ServiceClass,
     pipeline::{
-        config::{TempoSlot, create_effects},
+        config::create_effects,
         consumer::{ConsumerPhase, FailureSource},
         fetch::EpochValidator,
         parts::SourceParts,
@@ -26,4 +26,5 @@ pub(crate) use crate::{
     },
     renderer::{ThreadWake, TrackId, TrackRegistration, WorkerWakeBridge},
     runtime::{AtomicServiceClass, Inlet, Outlet, WakeSignal, connect},
+    tempo::TempoSlot,
 };

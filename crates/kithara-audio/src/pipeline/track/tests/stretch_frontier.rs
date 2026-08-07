@@ -9,12 +9,12 @@ use super::rebuild::{
     Consts, RouteFixture, RouteParams, next_test_chunk, route_source_with_effects,
 };
 use crate::{
-    effects::timestretch::{StretchControls, TimeStretchProcessor},
     pipeline::{
         rebuild::RecreateNext,
         track::fsm::{CurrentFsm, TrackStep},
     },
     renderer::AudioWorkerSource,
+    tempo::streaming::{StretchControls, TimeStretchProcessor},
     traits::AudioEffect,
 };
 

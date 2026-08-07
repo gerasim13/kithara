@@ -1,6 +1,6 @@
 use kithara_platform::sync::Arc;
 
-use crate::{effects::timestretch::StretchControls, musical::SourceSchedule};
+use crate::{musical::SourceSchedule, tempo::streaming::StretchControls};
 
 /// A tempo slot cannot be built as configured.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]

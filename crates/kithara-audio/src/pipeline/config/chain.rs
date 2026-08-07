@@ -6,8 +6,10 @@ use kithara_decode::PcmSpec;
 ))]
 use kithara_platform::sync::Arc;
 
-use super::{TempoSlot, TempoSlotError};
-use crate::traits::AudioEffect;
+use crate::{
+    tempo::{TempoSlot, TempoSlotError},
+    traits::AudioEffect,
+};
 
 /// Build `[Tempo?, ..custom]`. Fixed-ratio sample-rate conversion belongs to
 /// the decoder plan.
@@ -42,7 +44,7 @@ fn append_tempo_slot(
     initial_spec: PcmSpec,
     pool: &PcmPool,
 ) -> Result<(), TempoSlotError> {
-    use crate::effects::{bound::bound_slot, timestretch::TimeStretchProcessor};
+    use crate::tempo::{bound::bound_slot, streaming::TimeStretchProcessor};
 
     match tempo {
         TempoSlot::Streaming(controls) => chain.push(Box::new(TimeStretchProcessor::new(

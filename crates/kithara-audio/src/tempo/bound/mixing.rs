@@ -12,7 +12,7 @@ use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
-use super::bound_slot;
+use super::{BoundRenderer, bound_slot};
 use crate::{
     analysis::TrackAnalysis,
     musical::{
@@ -45,6 +45,25 @@ impl Consts {
     const CHUNK_FRAMES: usize = 512;
     /// Silence floor an onset must cross.
     const ONSET_FLOOR: f32 = 0.02;
+    /// Where a ridden tempo ends up. Chosen so the slower record stays inside
+    /// the engine's stretch envelope: 126/96 is 1.3125, under the 4/3 ceiling.
+    const RAMP_TO: f64 = 126.0;
+    /// Commits a ride is made of. Each is far longer than a planning block, so
+    /// every deck samples the same one.
+    const RIDE_STEPS: usize = 32;
+    /// A hard sweep needs records near the middle of the stretch envelope, so
+    /// both survive both ends of it. 110 and 130 keep the session free between
+    /// 87 and 146 BPM; a 96 BPM record would cap the sweep at 128.
+    const SWEEP_SLOW_BPM: f64 = 110.0;
+    const SWEEP_FAST_BPM: f64 = 130.0;
+    /// Where a hard sweep starts and ends: 90 to 145 is 55 BPM, and it is the
+    /// widest both records take.
+    const SWEEP_FROM: f64 = 90.0;
+    const SWEEP_TO: f64 = 145.0;
+    /// Seconds a hard sweep takes. Short enough to be a gesture, not a drift.
+    const SWEEP_SECS: f64 = 10.0;
+    /// A ride that deliberately overruns the envelope: 140/96 is 1.458.
+    const RAMP_PAST_ENVELOPE: f64 = 140.0;
     /// Burst length as a fraction of a beat: short enough never to overlap.
     const BURST_OF_BEAT: f64 = 0.12;
 }
@@ -138,16 +157,57 @@ fn pulse_track(bpm: f64, shape: Pulse, tone_hz: f64) -> (Vec<f32>, Vec<u64>) {
 /// The one grid both decks follow.
 fn session_grid() -> Arc<SessionAnchorCell> {
     let cell = SessionAnchorCell::new();
+    commit_tempo(&cell, Consts::SESSION_BPM);
+    cell
+}
+
+fn commit_tempo(cell: &SessionAnchorCell, bpm: f64) {
     cell.publish(
         SessionAnchor::new(
             SessionFrame::new(0),
             SessionBeat::default(),
-            Consts::SESSION_BPM / 60.0,
+            bpm / 60.0,
             rate(),
         )
         .expect("invariant: the fixture tempo is a positive rate"),
     );
-    cell
+}
+
+/// How the session tempo moves while a deck renders, as a function of how far
+/// into the mix the deck has played.
+///
+/// A ride of the pitch fader is not one commit but a stream of them, and the
+/// deck reads the grid afresh for every block it plans. Keyed on **output**
+/// position so both decks see the same ride: they consume source at different
+/// rates, but they emit the same session.
+///
+/// Rides are quantized into [`Consts::RIDE_STEPS`] commits over the run.
+/// Continuous here would be a fiction: a transport commit is a discrete event
+/// scheduled to a block boundary, and every deck must see the same sequence of
+/// them or they are following different grids.
+type TempoRide = fn(f64) -> f64;
+
+/// Holds still: the ordinary case.
+fn steady(_progress: f64) -> f64 {
+    Consts::SESSION_BPM
+}
+
+/// Rides from 120 up to 126 across the measured run — a hand on the fader,
+/// not a step.
+fn ramp_up(progress: f64) -> f64 {
+    Consts::SESSION_BPM + (Consts::RAMP_TO - Consts::SESSION_BPM) * progress.clamp(0.0, 1.0)
+}
+
+/// A hard sweep: 90 up to 145 across the run. Both records are stretched hard
+/// in both directions before it is over.
+fn sweep(progress: f64) -> f64 {
+    Consts::SWEEP_FROM + (Consts::SWEEP_TO - Consts::SWEEP_FROM) * progress.clamp(0.0, 1.0)
+}
+
+/// The same ride, pushed past what the stretch engine will do.
+fn ramp_past_envelope(progress: f64) -> f64 {
+    Consts::SESSION_BPM
+        + (Consts::RAMP_PAST_ENVELOPE - Consts::SESSION_BPM) * progress.clamp(0.0, 1.0)
 }
 
 /// Renders one deck through the bound slot: its own tempo in, the session's
@@ -158,6 +218,127 @@ fn render_deck(
     tone_hz: f64,
     grid: &Arc<SessionAnchorCell>,
     frames: usize,
+) -> Vec<f32> {
+    render_deck_riding(bpm, shape, tone_hz, grid, frames, steady)
+}
+
+/// Both decks through one ride, driven in lockstep on one grid.
+///
+/// Rendering them one after the other would be a different experiment: a deck
+/// stretched up consumes source more slowly, so each would cross the ride's
+/// commits at its own pace and they would be following two rides, not one. A
+/// session is one clock, so the fixture has to be one loop.
+fn render_pair_riding(frames: usize, ride: TempoRide) -> (Vec<f32>, Vec<f32>) {
+    render_pair_riding_at(Consts::SLOW_BPM, Consts::FAST_BPM, frames, ride)
+}
+
+fn render_pair_riding_at(
+    slow_bpm: f64,
+    fast_bpm: f64,
+    frames: usize,
+    ride: TempoRide,
+) -> (Vec<f32>, Vec<f32>) {
+    let grid = session_grid();
+    let channels = usize::from(Consts::CHANNELS);
+    let want = frames * channels;
+    let mut slow = Deck::new(slow_bpm, Pulse::Sine, Consts::SLOW_HZ, &grid);
+    let mut fast = Deck::new(fast_bpm, Pulse::Square, Consts::FAST_HZ, &grid);
+
+    // Step by *session* time, not by source. A record stretched up eats its
+    // source faster and emits less output per chunk, so feeding both the same
+    // source would have them living in different parts of the mix. Each commit
+    // covers the same stretch of session for both decks — which is the
+    // readiness barrier a real transport applies before admitting one.
+    for step in 1..=Consts::RIDE_STEPS {
+        let progress = (step - 1)
+            .to_f64()
+            .expect("invariant: the step index is exact in f64")
+            / Consts::RIDE_STEPS
+                .to_f64()
+                .expect("invariant: the step count is exact in f64");
+        commit_tempo(&grid, ride(progress));
+        let through = want * step / Consts::RIDE_STEPS;
+        slow.render_through(through);
+        fast.render_through(through);
+    }
+    slow.out.truncate(want);
+    fast.out.truncate(want);
+    (slow.out, fast.out)
+}
+
+/// One deck mid-render: its source, its slot, and what it has emitted.
+struct Deck {
+    source: Vec<f32>,
+    slot: Box<dyn AudioEffect>,
+    out: Vec<f32>,
+    fed: usize,
+}
+
+impl Deck {
+    fn new(bpm: f64, shape: Pulse, tone_hz: f64, grid: &Arc<SessionAnchorCell>) -> Self {
+        let (source, markers) = pulse_track(bpm, shape, tone_hz);
+        let source_frames = u64::try_from(source.len() / usize::from(Consts::CHANNELS))
+            .expect("invariant: the fixture length fits u64");
+        let analysis = TrackAnalysis::with_source_rate(
+            Some(BeatGrid::new(bpm, markers, vec![0], Vec::new())),
+            None,
+            source_frames,
+            rate(),
+        );
+        let map =
+            TrackBeatMap::new(&analysis, rate()).expect("invariant: fixture markers form a map");
+        let schedule = Arc::new(SourceSchedule::new(
+            map,
+            TrackBeat::default(),
+            PlaybackDirection::Forward,
+            Arc::clone(grid),
+        ));
+        Self {
+            source,
+            slot: bound_slot(schedule, spec(), PcmPool::default())
+                .expect("invariant: an exact-span engine is compiled in"),
+            out: Vec::new(),
+            fed: 0,
+        }
+    }
+
+    /// Feeds source until this deck has emitted `samples` of output, or its
+    /// source runs out.
+    fn render_through(&mut self, samples: usize) {
+        let channels = usize::from(Consts::CHANNELS);
+        while self.out.len() < samples
+            && self.fed + Consts::CHUNK_FRAMES <= self.source.len() / channels
+        {
+            self.feed();
+        }
+    }
+
+    fn feed(&mut self) {
+        let channels = usize::from(Consts::CHANNELS);
+        let slice = &self.source[self.fed * channels..(self.fed + Consts::CHUNK_FRAMES) * channels];
+        let chunk = PcmChunk::new(
+            PcmMeta {
+                spec: spec(),
+                frames: u32::try_from(Consts::CHUNK_FRAMES).expect("invariant: the chunk fits u32"),
+                frame_offset: u64::try_from(self.fed).expect("invariant: the offset fits u64"),
+                ..Default::default()
+            },
+            PcmPool::default().attach(slice.to_vec()),
+        );
+        self.fed += Consts::CHUNK_FRAMES;
+        if let Some(rendered) = self.slot.process(chunk) {
+            self.out.extend_from_slice(&rendered.samples);
+        }
+    }
+}
+
+fn render_deck_riding(
+    bpm: f64,
+    shape: Pulse,
+    tone_hz: f64,
+    grid: &Arc<SessionAnchorCell>,
+    frames: usize,
+    ride: TempoRide,
 ) -> Vec<f32> {
     let (source, markers) = pulse_track(bpm, shape, tone_hz);
     let source_frames = u64::try_from(source.len() / usize::from(Consts::CHANNELS))
@@ -184,6 +365,13 @@ fn render_deck(
     let mut fed = 0_usize;
     let available = usize::try_from(source_frames).expect("invariant: the fixture fits memory");
     while out.len() < want && fed + Consts::CHUNK_FRAMES <= available {
+        let progress = (out.len() / channels)
+            .to_f64()
+            .expect("invariant: fixture frame counts are exact in f64")
+            / frames
+                .to_f64()
+                .expect("invariant: fixture frame counts are exact in f64");
+        commit_tempo(grid, ride(progress));
         let slice = &source[fed * channels..(fed + Consts::CHUNK_FRAMES) * channels];
         let chunk = PcmChunk::new(
             PcmMeta {
@@ -202,6 +390,10 @@ fn render_deck(
     out.truncate(want);
     out
 }
+
+/// Output frames the slot plans in one go, so one commit lands at most this
+/// late on any deck.
+const BLOCK_FRAMES: usize = 512;
 
 /// Frames where a burst begins.
 ///
@@ -343,6 +535,181 @@ fn the_uncompensated_engine_delay_offsets_the_decks() {
     );
 }
 
+/// A ride parts the decks, and the size of the parting is the commit
+/// quantization.
+///
+/// `BoundRenderer` plans whole blocks. A tempo commit therefore takes effect
+/// at the next block boundary rather than at the frame it was scheduled for —
+/// up to 512 frames late, and late by a different amount on each deck, because
+/// each is mid-block somewhere else. Under a steady tempo this never shows: it
+/// is one boundary, once. Under a ride it is one per commit, and they add up.
+///
+/// `spec-v3.md` §2 requires the opposite — content computed as a function of
+/// session beat, "splitting chunks at exact commit boundaries". Until the slot
+/// can split a block, this is the cost, pinned at its measured size so the
+/// split that removes it has something to change.
+#[kithara::test]
+fn a_tempo_ride_parts_the_decks_by_the_commit_quantization() {
+    let frames = session_beat_frames() * Consts::MEASURED_BEATS;
+    let (slow, fast) = render_pair_riding(frames, ramp_up);
+
+    let slow_beats = onsets(&slow);
+    let fast_beats = onsets(&fast);
+    let pairs = slow_beats.len().min(fast_beats.len());
+    assert!(pairs > 8, "both decks must strike through the ride");
+
+    let separation = |at: usize| {
+        i64::try_from(fast_beats[at].abs_diff(slow_beats[at]))
+            .expect("invariant: the separation fits i64")
+    };
+    let opened = (separation(pairs - 1) - separation(1)).abs();
+
+    assert!(
+        opened > 0,
+        "the parting is real today; a zero here means the slot learned to split \
+         a block at a commit and this oracle should become the together one"
+    );
+
+    let budget = i64::try_from(Consts::RIDE_STEPS * BLOCK_FRAMES)
+        .expect("invariant: the quantization budget fits i64");
+    assert!(
+        opened < budget,
+        "the parting must stay inside one block per commit: {opened} frames \
+         against a {budget}-frame budget over {} commits",
+        Consts::RIDE_STEPS
+    );
+}
+
+/// The ride is a ride: beats tighten monotonically as the tempo climbs, and
+/// no boundary between commits shows up as a jump.
+///
+/// Measured as the spacing early against the spacing late. A step would put
+/// one outsized gap between two normal ones; a ride puts the change in every
+/// gap.
+#[kithara::test]
+fn a_tempo_ride_tightens_the_beat_without_a_jump() {
+    let frames = session_beat_frames() * Consts::MEASURED_BEATS;
+    let grid = session_grid();
+    let rendered = render_deck_riding(
+        Consts::SLOW_BPM,
+        Pulse::Sine,
+        Consts::SLOW_HZ,
+        &grid,
+        frames,
+        ramp_up,
+    );
+
+    let beats = onsets(&rendered);
+    assert!(beats.len() > 8, "the deck must strike through the ride");
+    let spacings: Vec<usize> = beats.windows(2).map(|pair| pair[1] - pair[0]).collect();
+
+    let early = spacings[1];
+    let late = spacings[spacings.len() - 2];
+    assert!(
+        late < early,
+        "a climbing tempo must tighten the beat: {early} frames early, {late} late"
+    );
+
+    let widest_step = spacings
+        .windows(2)
+        .map(|pair| pair[0].abs_diff(pair[1]))
+        .max()
+        .expect("invariant: the ride has consecutive spacings");
+    let total = early.abs_diff(late);
+    assert!(
+        widest_step * 2 < total,
+        "the change must be spread across the ride, not sat in one boundary: \
+         widest single step {widest_step} against {total} overall"
+    );
+}
+
+/// Ridden past the engine's stretch envelope, the slot drops blocks.
+///
+/// A record at 96 asked to keep up with 140 needs a ratio of 1.458 and the
+/// engine stops at about 4/3. What happens then is not a typed refusal and not
+/// a degradation: `render_available` fails, the block is logged and dropped,
+/// and the deck loses audio. `spec-v3.md` §8.0 family 1 asks for a typed
+/// reject at the envelope edge; this pins what actually happens so the reject
+/// that replaces it has something to change.
+#[kithara::test]
+fn riding_past_the_stretch_envelope_drops_audio() {
+    let frames = session_beat_frames() * Consts::MEASURED_BEATS;
+    let grid = session_grid();
+
+    let rendered = render_deck_riding(
+        Consts::SLOW_BPM,
+        Pulse::Sine,
+        Consts::SLOW_HZ,
+        &grid,
+        frames,
+        ramp_past_envelope,
+    );
+
+    let inside = render_deck_riding(
+        Consts::SLOW_BPM,
+        Pulse::Sine,
+        Consts::SLOW_HZ,
+        &session_grid(),
+        frames,
+        ramp_up,
+    );
+
+    assert!(
+        onsets(&rendered).len() < onsets(&inside).len(),
+        "beyond the envelope the deck loses beats rather than refusing the ride"
+    );
+}
+
+/// A hard sweep — 90 to 145 BPM in ten seconds — moves the beat by the ratio
+/// it names, and both records follow it there.
+///
+/// The gentle ride proves the mechanism; this proves the range. Both records
+/// are stretched hard in both directions before it is over, and the spacing at
+/// the end must be the spacing at the start scaled by 90/145.
+#[kithara::test]
+fn a_hard_sweep_moves_the_beat_by_the_ratio_it_names() {
+    let frames = (f64::from(Consts::RATE) * Consts::SWEEP_SECS)
+        .to_usize()
+        .expect("invariant: the sweep length fits usize");
+    let (slow, _) = render_pair_riding_at(
+        Consts::SWEEP_SLOW_BPM,
+        Consts::SWEEP_FAST_BPM,
+        frames,
+        sweep,
+    );
+
+    let beats = onsets(&slow);
+    assert!(beats.len() > 8, "the sweep must carry many beats");
+    let spacings: Vec<usize> = beats.windows(2).map(|pair| pair[1] - pair[0]).collect();
+    let early = spacings[1]
+        .to_f64()
+        .expect("invariant: a spacing is exact in f64");
+    let late = spacings[spacings.len() - 2]
+        .to_f64()
+        .expect("invariant: a spacing is exact in f64");
+
+    // The measured spacings sit one commit inside each end of the sweep, so
+    // compare against the ratio the sweep actually reached there rather than
+    // its endpoints.
+    let reached = |at: usize| {
+        sweep(
+            at.to_f64().expect("invariant: the index is exact in f64")
+                / spacings
+                    .len()
+                    .to_f64()
+                    .expect("invariant: the count is exact in f64"),
+        )
+    };
+    let expected = late / early;
+    let named = reached(1) / reached(spacings.len() - 2);
+
+    assert!(
+        (expected - named).abs() < 0.06,
+        "the beat must move by the ratio the sweep names: measured {expected:.3}, \
+         named {named:.3}"
+    );
+}
+
 /// The unbound reference: left alone, a 96 BPM record keeps its own spacing
 /// and never matches the session's. Without this the oracles above would hold
 /// just as well against a slot that does nothing.
@@ -393,6 +760,26 @@ fn dump_the_mix_for_listening() {
     ] {
         write_wav(&dir.join(name), pcm);
     }
+
+    // The same pair with a hand on the fader: 120 climbing to 126 across the
+    // run, both decks following it.
+    let (slow, fast) = render_pair_riding(frames, ramp_up);
+    let ridden: Vec<f32> = slow.iter().zip(&fast).map(|(a, b)| (a + b) * 0.5).collect();
+    write_wav(&dir.join("04_mix_riding_120_to_126.wav"), &ridden);
+
+    // A hard sweep: 90 to 145 in ten seconds, on records at 110 and 130 so
+    // both survive both ends of the stretch envelope.
+    let sweep_frames = (f64::from(Consts::RATE) * Consts::SWEEP_SECS)
+        .to_usize()
+        .expect("invariant: the sweep length fits usize");
+    let (slow, fast) = render_pair_riding_at(
+        Consts::SWEEP_SLOW_BPM,
+        Consts::SWEEP_FAST_BPM,
+        sweep_frames,
+        sweep,
+    );
+    let swept: Vec<f32> = slow.iter().zip(&fast).map(|(a, b)| (a + b) * 0.5).collect();
+    write_wav(&dir.join("05_mix_sweeping_90_to_145.wav"), &swept);
 }
 
 /// Interleaved 16-bit PCM, the shape every player opens without asking.
