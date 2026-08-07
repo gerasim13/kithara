@@ -3,7 +3,10 @@ use std::{fmt::Write as _, path::PathBuf};
 use anyhow::{Context, Result};
 use tracing::info;
 
-use super::profile::{LINUX_CONFIG_PATH, LinuxHost, LinuxRunner, RunnerFlavor};
+use super::{
+    container::{Container, container},
+    profile::{LINUX_CONFIG_PATH, LinuxHost, LinuxRunner},
+};
 use crate::ci::{config::CiPins, process::Process};
 
 /// Where the services live and what they call.
@@ -117,7 +120,7 @@ fn install_cleanup_timer() -> Result<()> {
 /// the set, so Cargo starts that many compilations rather than one per host
 /// core. Sharing a core between two runners costs throughput; misreporting the
 /// count costs memory, and memory is what the kernel kills for.
-fn cpuset(index: usize, cpus: u32, cores: usize) -> String {
+pub(super) fn cpuset(index: usize, cpus: u32, cores: usize) -> String {
     let cores = u32::try_from(cores).unwrap_or(u32::MAX).max(1);
     let cpus = cpus.clamp(1, cores);
     let first = u32::try_from(index).unwrap_or(0).saturating_mul(cpus) % cores;
@@ -162,34 +165,35 @@ fn unit(
         env_file = env_file(runner),
     )?;
 
+    let job = container(host, runner, cpuset.to_owned(), pins);
     write!(
         unit,
-        "\nExecStart=/usr/bin/docker run --rm --name kithara-ci-{name} \
+        "\nExecStart=/usr/bin/docker run --rm --name {name} \
          --network {network} \
          --cpuset-cpus {cpuset} \
          --memory {memory} \
-         --pids-limit 8192 \
+         --pids-limit {pids} \
          --security-opt no-new-privileges \
          --env-file {env_file} \
-         --env CARGO_TARGET_DIR=/cache/target \
-         --mount type=volume,source=kithara-ci-cargo-home,target=/home/runner/.cargo \
-         --mount type=volume,source=kithara-ci-target,target=/cache/target",
-        name = runner.name,
-        network = host.network,
-        memory = runner.memory,
-        env_file = env_file(runner),
+         --env {target_dir}",
+        name = job.name,
+        network = job.network,
+        cpuset = job.cpuset,
+        memory = job.memory,
+        pids = Container::PIDS_LIMIT,
+        env_file = job.env_file,
+        target_dir = Container::TARGET_DIR,
     )?;
-    for device in &runner.devices {
+    for (volume, target) in Container::MOUNTS {
+        write!(unit, " --mount type=volume,source={volume},target={target}")?;
+    }
+    for device in job.devices {
         write!(unit, " --device {}", device.display())?;
     }
-    for group in &runner.groups {
+    for group in job.groups {
         write!(unit, " --group-add {group}")?;
     }
-    let image = match runner.flavor {
-        RunnerFlavor::Plain => &pins.linux_runner_image,
-        RunnerFlavor::Android => &pins.linux_android_runner_image,
-    };
-    writeln!(unit, " {image}")?;
+    writeln!(unit, " {}", job.image)?;
 
     writeln!(
         unit,
