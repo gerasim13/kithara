@@ -238,7 +238,7 @@ fn unit(
     for entry in Container::ENVIRONMENT {
         write!(unit, " --env {entry}")?;
     }
-    for (volume, target) in Container::MOUNTS {
+    for (volume, target) in &job.mounts {
         write!(unit, " --mount type=volume,source={volume},target={target}")?;
     }
     for device in job.devices {
@@ -352,6 +352,38 @@ mod tests {
         .expect("the unit must render");
         for entry in Container::ENVIRONMENT {
             assert!(text.contains(&format!("--env {entry}")), "{entry}:\n{text}");
+        }
+    }
+
+    /// A build directory holds artefacts valid only for the configuration that
+    /// made them, so runners must not share one. The registry and the compiler
+    /// cache are shared on purpose: both are keyed by content.
+    #[test]
+    fn each_runner_builds_in_a_directory_of_its_own() {
+        let host = host_fixture();
+        let first = Container::mounts(host.runner("kithara-ci-octocat").expect("runner"));
+        let second = Container::mounts(host.runner("kithara-ci-hubot").expect("runner"));
+
+        let target = |mounts: &[(String, &str)]| {
+            mounts
+                .iter()
+                .find(|(_, at)| *at == "/cache/target")
+                .expect("a build directory")
+                .0
+                .clone()
+        };
+        assert_ne!(target(&first), target(&second));
+
+        for shared in ["/home/runner/.cargo", "/cache/sccache"] {
+            let name = |mounts: &[(String, &str)]| {
+                mounts
+                    .iter()
+                    .find(|(_, at)| *at == shared)
+                    .expect(shared)
+                    .0
+                    .clone()
+            };
+            assert_eq!(name(&first), name(&second), "{shared} must be shared");
         }
     }
 

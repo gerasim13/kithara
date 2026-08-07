@@ -29,8 +29,8 @@ groups = [993]
 [[runners]]
 name = "kithara-ci-octocat-android"
 repository = "octocat/kithara"
-cpus = 12
-memory = "48g"
+cpus = 6
+memory = "16g"
 labels = ["self-hosted", "linux", "x64", "kithara", "android"]
 devices = ["/dev/kvm"]
 groups = [994]
@@ -39,8 +39,8 @@ flavor = "android"
 [[runners]]
 name = "kithara-ci-hubot"
 repository = "hubot/kithara"
-cpus = 12
-memory = "48g"
+cpus = 3
+memory = "8g"
 labels = ["self-hosted", "linux", "x64", "kithara"]
 
 [windows]

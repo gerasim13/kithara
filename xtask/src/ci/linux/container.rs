@@ -23,6 +23,8 @@ pub(super) struct Container<'a> {
     /// accepted once, so it is written before the container comes up and is
     /// gone when it stops.
     pub(super) env_file: String,
+    /// Volumes this runner mounts, in the order the job sees them.
+    pub(super) mounts: Vec<(String, &'static str)>,
 }
 
 impl Container<'_> {
@@ -31,11 +33,28 @@ impl Container<'_> {
     /// them, and jobs on this machine run at the same time. Mounting the data
     /// without the lock leaves two of them unpacking one crate into one
     /// directory.
-    pub(super) const MOUNTS: [(&'static str, &'static str); 3] = [
-        ("kithara-ci-cargo-home", "/home/runner/.cargo"),
-        ("kithara-ci-target", "/cache/target"),
-        ("kithara-ci-sccache", "/cache/sccache"),
-    ];
+    /// The volumes every runner shares, and the one it keeps to itself.
+    ///
+    /// The registry of downloaded crates is shared because that is what it is
+    /// for, and the compiler cache because `sccache` keys on the inputs of a
+    /// compilation, so one runner's entry is another's hit.
+    ///
+    /// The build directory is not. Its artefacts are valid only for the exact
+    /// features, profile and toolchain that produced them, so runners of
+    /// different shapes reuse none of each other's and only contend for the
+    /// same directory — which is how one grew past two hundred gigabytes while
+    /// every job still compiled from source. Each runner keeps its own and
+    /// warms it with its own repeat work.
+    pub(super) fn mounts(runner: &LinuxRunner) -> Vec<(String, &'static str)> {
+        vec![
+            ("kithara-ci-cargo-home".to_owned(), "/home/runner/.cargo"),
+            (
+                format!("kithara-ci-target-{}", runner.name),
+                "/cache/target",
+            ),
+            ("kithara-ci-sccache".to_owned(), "/cache/sccache"),
+        ]
+    }
 
     /// What the job is told about where to build and what to reuse.
     ///
@@ -83,5 +102,6 @@ pub(super) fn container<'a>(
         devices: &runner.devices,
         groups: &runner.groups,
         env_file: super::services::env_file(runner),
+        mounts: Container::mounts(runner),
     }
 }

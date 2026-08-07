@@ -57,7 +57,15 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
         file = FILE,
         network = host.network,
     )?;
-    for (volume, _) in Container::MOUNTS {
+    let mut volumes: Vec<String> = host
+        .runners
+        .iter()
+        .flat_map(|runner| Container::mounts(runner).into_iter().map(|(name, _)| name))
+        .collect();
+    volumes.dedup();
+    volumes.sort();
+    volumes.dedup();
+    for volume in &volumes {
         writeln!(yaml, "  {volume}:\n    external: true")?;
     }
     writeln!(yaml, "\nservices:")?;
@@ -88,7 +96,7 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
             writeln!(yaml, "      - {entry}")?;
         }
         writeln!(yaml, "    volumes:")?;
-        for (volume, target) in Container::MOUNTS {
+        for (volume, target) in &unit.mounts {
             writeln!(yaml, "      - {volume}:{target}")?;
         }
         if !unit.devices.is_empty() {

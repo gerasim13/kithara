@@ -50,7 +50,18 @@ pub(super) fn bootstrap(process: &Process, host: &LinuxHost) -> Result<()> {
         )?;
     }
 
-    for (volume, _) in super::container::Container::MOUNTS {
+    let mut volumes: Vec<String> = host
+        .runners
+        .iter()
+        .flat_map(|runner| {
+            super::container::Container::mounts(runner)
+                .into_iter()
+                .map(|(name, _)| name)
+        })
+        .collect();
+    volumes.sort();
+    volumes.dedup();
+    for volume in &volumes {
         process.run(
             "docker",
             &["volume", "create", volume],
