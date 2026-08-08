@@ -11,6 +11,109 @@ use kithara_integration_tests::{
 };
 use tracing::info;
 
+#[derive(Default)]
+struct SeekStats {
+    successful_reads: u64,
+    total_bytes_read: u64,
+    byte_mismatches: u64,
+}
+
+fn run_seek_iterations(
+    stream: &mut Stream<Hls>,
+    server: &HlsTestServer,
+    seek_positions: &[u64],
+    buf: &mut [u8],
+    total_bytes: u64,
+    with_encryption: bool,
+) -> SeekStats {
+    let mut stats = SeekStats::default();
+
+    for (i, &pos) in seek_positions.iter().enumerate() {
+        let actual_pos = stream.seek(SeekFrom::Start(pos)).unwrap_or_else(|e| {
+            panic!("seek #{i} to byte {pos} failed: {e}");
+        });
+        assert_eq!(actual_pos, pos, "seek #{i} position mismatch");
+
+        let n = stream.read(buf).unwrap_or_else(|e| {
+            panic!("read #{i} after seek to {pos} failed: {e}");
+        });
+        assert!(
+            n > 0,
+            "read returned 0 after seek #{i} to byte {pos} (total_len={total_bytes})",
+        );
+
+        if !with_encryption {
+            server.for_each_expected_byte_mismatch(0, pos, &buf[..n], |j, expected, byte| {
+                stats.byte_mismatches += 1;
+                if stats.byte_mismatches <= 5 {
+                    info!(
+                        iteration = i,
+                        offset = pos + j as u64,
+                        expected,
+                        actual = byte,
+                        "Byte mismatch"
+                    );
+                }
+            });
+        }
+
+        stats.successful_reads += 1;
+        stats.total_bytes_read += n as u64;
+
+        if (i + 1) % 200 == 0 {
+            info!(
+                iteration = i + 1,
+                successful_reads = stats.successful_reads,
+                total_bytes_read = stats.total_bytes_read,
+                byte_mismatches = stats.byte_mismatches,
+                "Progress"
+            );
+        }
+    }
+
+    stats
+}
+
+fn read_final_tail(
+    stream: &mut Stream<Hls>,
+    server: &HlsTestServer,
+    buf: &mut [u8],
+    final_seek: u64,
+) -> u64 {
+    stream
+        .seek(SeekFrom::Start(final_seek))
+        .unwrap_or_else(|e| {
+            panic!("final seek to {final_seek} failed: {e}");
+        });
+
+    let mut remaining_bytes = 0u64;
+    loop {
+        let n = stream.read(buf).unwrap_or_else(|e| {
+            panic!("final tail read failed: {e}");
+        });
+        if n == 0 {
+            break;
+        }
+
+        server.for_each_expected_byte_mismatch(
+            0,
+            final_seek + remaining_bytes,
+            &buf[..n],
+            |j, expected, byte| {
+                assert_eq!(
+                    byte,
+                    expected,
+                    "tail byte mismatch at offset {}",
+                    final_seek + remaining_bytes + j as u64
+                );
+            },
+        );
+        remaining_bytes += n as u64;
+    }
+
+    remaining_bytes
+}
+
 /// Random seek+read cycles with exact byte verification on HLS stream.
 ///
 /// Scenario:
@@ -157,49 +260,18 @@ async fn stress_random_seek_read_hls(
             max_seek, "Generated seek positions"
         );
 
-        let mut successful_reads = 0u64;
-        let mut total_bytes_read = 0u64;
-        let mut byte_mismatches = 0u64;
-
-        for (i, &pos) in seek_positions.iter().enumerate() {
-            let actual_pos = stream.seek(SeekFrom::Start(pos)).unwrap_or_else(|e| {
-                panic!("seek #{i} to byte {pos} failed: {e}");
-            });
-            assert_eq!(actual_pos, pos, "seek #{i} position mismatch");
-
-            let n = stream.read(&mut buf).unwrap_or_else(|e| {
-                panic!("read #{i} after seek to {pos} failed: {e}");
-            });
-            assert!(
-                n > 0,
-                "read returned 0 after seek #{i} to byte {pos} (total_len={total_bytes})",
-            );
-
-            if !with_encryption {
-                server.for_each_expected_byte_mismatch(0, pos, &buf[..n], |j, expected, byte| {
-                    byte_mismatches += 1;
-                    if byte_mismatches <= 5 {
-                        info!(
-                            iteration = i,
-                            offset = pos + j as u64,
-                            expected,
-                            actual = byte,
-                            "Byte mismatch"
-                        );
-                    }
-                });
-            }
-
-            successful_reads += 1;
-            total_bytes_read += n as u64;
-
-            if (i + 1) % 200 == 0 {
-                info!(
-                    iteration = i + 1,
-                    successful_reads, total_bytes_read, byte_mismatches, "Progress"
-                );
-            }
-        }
+        let SeekStats {
+            successful_reads,
+            total_bytes_read,
+            byte_mismatches,
+        } = run_seek_iterations(
+            &mut stream,
+            &server,
+            &seek_positions,
+            &mut buf,
+            total_bytes,
+            with_encryption,
+        );
 
         info!(
             successful_reads,
@@ -218,36 +290,7 @@ async fn stress_random_seek_read_hls(
             let final_seek = total_bytes - chunk_size as u64;
             info!(final_seek, "Final seek near end");
 
-            stream
-                .seek(SeekFrom::Start(final_seek))
-                .unwrap_or_else(|e| {
-                    panic!("final seek to {final_seek} failed: {e}");
-                });
-
-            let mut remaining_bytes = 0u64;
-            loop {
-                let n = stream.read(&mut buf).unwrap_or_else(|e| {
-                    panic!("final tail read failed: {e}");
-                });
-                if n == 0 {
-                    break;
-                }
-
-                server.for_each_expected_byte_mismatch(
-                    0,
-                    final_seek + remaining_bytes,
-                    &buf[..n],
-                    |j, expected, byte| {
-                        assert_eq!(
-                            byte,
-                            expected,
-                            "tail byte mismatch at offset {}",
-                            final_seek + remaining_bytes + j as u64
-                        );
-                    },
-                );
-                remaining_bytes += n as u64;
-            }
+            let remaining_bytes = read_final_tail(&mut stream, &server, &mut buf, final_seek);
 
             let expected_remaining = total_bytes - final_seek;
             assert_eq!(
