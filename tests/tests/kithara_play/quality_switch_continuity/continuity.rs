@@ -310,6 +310,39 @@ fn cochlea_failures(
     failures
 }
 
+/// TEMPORARY diagnostic: where every excursion sits, and how far apart.
+/// One frame number is numerology; the spacing between them names the boundary
+/// (segment 22050, AAC frame 1024, render block 512, or none of those).
+fn dump_excursions(samples: &[f32], channel: usize, background: f32) -> String {
+    let channels = usize::from(CHANNELS);
+    let frames = samples.len() / channels;
+    let omega = sine_omega();
+    let recurrence = 2.0 * omega.cos();
+    let sample = |frame: usize| samples[frame * channels + channel];
+    let threshold = background * 8.0;
+
+    let mut hits: Vec<(usize, f32)> = Vec::new();
+    for frame in 2..frames {
+        let residual = (sample(frame) - recurrence * sample(frame - 1) + sample(frame - 2)).abs();
+        // Only the first frame of each run: one event spans a few samples.
+        if residual > threshold && hits.last().is_none_or(|(last, _)| frame > last + 8) {
+            hits.push((frame, residual));
+        }
+    }
+
+    let mut out = format!(
+        "  excursions ch{channel} over {threshold:.6} (8x background {background:.6}): {} events\n",
+        hits.len(),
+    );
+    let mut previous: Option<usize> = None;
+    for (frame, residual) in hits.iter().take(40) {
+        let gap = previous.map_or_else(String::new, |last| format!(" gap={}", frame - last));
+        out.push_str(&format!("    {frame:>7} residual={residual:.6}{gap}\n"));
+        previous = Some(*frame);
+    }
+    out
+}
+
 /// TEMPORARY diagnostic: the shape of the discontinuity, not just its size.
 /// A single-sample click, a phase slip and a repeated block all read as one
 /// number here; only the neighbourhood tells them apart.
@@ -383,7 +416,11 @@ fn assert_clean_control(control: &[f32], label: &str) -> (CochleaMetric, Vec<f64
                 metric.peak_residual,
                 metric.peak_residual_frame,
                 residual_limit,
-                dump_around(control, channel, metric.peak_residual_frame),
+                format!(
+                    "{}{}",
+                    dump_around(control, channel, metric.peak_residual_frame),
+                    dump_excursions(control, channel, metric.background_residual),
+                ),
             ));
         }
         metrics.push(metric);
