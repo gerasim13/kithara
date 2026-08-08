@@ -43,14 +43,13 @@ pub(crate) fn estimate_target_byte<T: StreamType>(
         return None;
     }
     let payload = len - active.base_offset();
-    let relative = u64::try_from(
-        position
-            .as_nanos()
-            .saturating_mul(u128::from(payload))
-            .saturating_div(duration.as_nanos().max(1)),
-    )
-    .expect("seek target byte fits u64")
-    .min(payload);
+    let relative = position
+        .as_nanos()
+        .saturating_mul(u128::from(payload))
+        .saturating_div(duration.as_nanos().max(1))
+        .min(u128::from(payload));
+    let relative = u64::try_from(relative)
+        .expect("invariant: relative is clamped to payload (u64) above, so it fits");
     Some(active.base_offset().saturating_add(relative))
 }
 

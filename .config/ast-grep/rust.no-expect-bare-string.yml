@@ -31,3 +31,47 @@ rule:
           kind: string_literal
     - not:
         regex: '\.expect\s*\(\s*"(?:BUG:|invariant:|SAFETY:)'
+    # ast-grep does no cfg evaluation (see kithara-devtools/src/ast_grep.rs),
+    # so inline `#[cfg(test)]` needs an explicit `not: inside` clause here.
+    # `follows` with `stopBy: end` (the pattern used by e.g.
+    # style.no-magic-numbers.yml) was measured to match transitively: once
+    # any earlier sibling in the same block matches, every later sibling
+    # counts as "following" it too, regardless of what sits between them.
+    # On a real file that would silently un-flag any item placed after a
+    # `#[cfg(test)] mod tests { ... }` block (verified empirically on a
+    # throwaway probe file; every current in-repo test module happens to be
+    # last in its file, so the existing rules haven't tripped over it).
+    # `stopBy: neighbor` requires the attribute to be the *direct* previous
+    # sibling, which used to break on a second stacked attribute between the
+    # cfg gate and the item (e.g. `#[cfg(test)] #[cfg(not(target_arch =
+    # "wasm32"))] mod tests`) - measured to be the ENTIRE production hit set
+    # for this rule (18/18), not the rare case the old comment assumed.
+    # `stopBy` also accepts a Rule used as a boundary condition: walk
+    # backward through sibling `attribute_item`s (so multiple stacked
+    # attributes are all inspected) and stop at the first sibling that is
+    # *not* an attribute_item, which bounds the scan to exactly the item's
+    # own attribute list and keeps the stopBy:end over-matching bug out.
+    - not:
+        inside:
+          all:
+            - kind: mod_item
+            - follows:
+                kind: attribute_item
+                regex: 'cfg\(test\)|cfg\(all\([^)]*\btest\b'
+                stopBy:
+                  not:
+                    kind: attribute_item
+          stopBy: end
+    # Standalone test functions that are not wrapped in a `#[cfg(test)] mod`:
+    # bare `#[cfg(test)] fn ...`, `#[test] fn ...`, `#[kithara::test] fn ...`.
+    - not:
+        inside:
+          all:
+            - kind: function_item
+            - follows:
+                kind: attribute_item
+                regex: 'cfg\(test\)|cfg\(all\([^)]*\btest\b|^#\[test\]$|kithara::test'
+                stopBy:
+                  not:
+                    kind: attribute_item
+          stopBy: end

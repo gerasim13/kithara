@@ -99,11 +99,11 @@ impl HlsCoord {
         let seek_obs = Arc::clone(&seek) as Arc<dyn SeekObserve>;
         let active_index = abr
             .current_variant_index()
-            .expect("stateful ABR handle checked above");
+            .expect("invariant: stateful ABR handle checked above");
         let active_variant = Arc::clone(
             variants
                 .get(active_index)
-                .expect("ABR current variant must exist in HLS variants"),
+                .expect("invariant: ABR current variant must exist in HLS variants"),
         );
         let active_session = Arc::new(HlsSession::active(
             env.cancel.child(),
@@ -288,7 +288,7 @@ impl HlsCoord {
     pub(crate) fn selected_variant_for_seek(&self) -> usize {
         self.abr
             .selected_variant_for_seek()
-            .expect("HlsCoord always owns a stateful ABR handle")
+            .expect("invariant: HlsCoord always owns a stateful ABR handle")
     }
 
     /// Install the peer's `reader_advanced` wake so the `on_slow` hook can

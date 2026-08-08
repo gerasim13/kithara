@@ -175,7 +175,9 @@ fn fix_field_block<'src>(
         Err(other) => return Err(format!("engine error: {other:?}")),
     };
 
-    let last = blocks.last().expect("non-empty");
+    let last = blocks
+        .last()
+        .expect("invariant: fields.len() >= 2 checked above, blocks mirrors fields");
     if !src[last.item_bytes.end..last.bytes.end].contains(',') {
         return Err("last field has no trailing comma".to_string());
     }

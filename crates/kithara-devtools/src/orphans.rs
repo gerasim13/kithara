@@ -93,7 +93,7 @@ pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
         handles.push(thread::spawn(move || {
             loop {
                 let pkg = {
-                    let mut g = q.lock().expect("orphans queue mutex poisoned");
+                    let mut g = q.lock().expect("BUG: orphans queue mutex poisoned");
                     g.pop()
                 };
                 let Some(pkg) = pkg else { break };
@@ -111,7 +111,9 @@ pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
                 }
                 let ok = cmd.status().is_ok_and(|s| s.success());
                 if !ok {
-                    f.lock().expect("orphans failed mutex poisoned").push(pkg);
+                    f.lock()
+                        .expect("BUG: orphans failed mutex poisoned")
+                        .push(pkg);
                 }
             }
         }));
@@ -122,7 +124,7 @@ pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
     }
 
     let mut names: Vec<String> = {
-        let guard = failed.lock().expect("orphans failed mutex poisoned");
+        let guard = failed.lock().expect("BUG: orphans failed mutex poisoned");
         guard.clone()
     };
     if !names.is_empty() {
