@@ -444,6 +444,28 @@ path receives an embedded-policy `Skin`, and a corpus test holds every committed
 real glyphs across the embedded Display, Sans and Mono families. The remaining global behaviour is
 inherent to the iced path being pinned until those text sites are ported.
 
+### The picture parity lane
+
+The layout fixtures above pin geometry, which is what the two hosts agree about by construction. What
+they can still disagree about is the picture, and that is measured rather than reasoned about. The
+gallery example photographs every page three ways: through an iced window
+(`KITHARA_GALLERY_CAPTURE`), through iced with no window at all
+(`KITHARA_GALLERY_CAPTURE_OFFSCREEN`, rasterised by tiny-skia in memory), and through the retained
+host into a Vello scene rasterised on a graphics device (`KITHARA_GALLERY_CAPTURE_MASONRY`). Each set
+writes the geometry it was taken at beside its pages, and `KITHARA_GALLERY_COMPARE=<a>:<b>:<out>`
+refuses to compare two sets taken at different geometry, because two hosts scaled differently can be
+made to agree or disagree at will.
+
+`just test parity` is the lane: one binary takes the offscreen set and the masonry set, then compares
+them against `examples/gallery/parity-budget.txt`. The budget prices each page in whole percent of
+differing pixels past the noise floor, a page with no line is allowed nothing, and a page over its
+price or missing from a set ends the run non-zero. The floor is about one percent because tiny-skia
+and Vello disagree on antialiased edges; everything above it is a control that draws differently, or
+does not draw at all, under one of the hosts. The numbers are a debt: a control that lands must lower
+the pages it appears on, and a number may not rise without a reason written next to it. The window
+capture stays for a different question - whether the offscreen path draws what a window draws - and
+is the only one of the three that needs a display.
+
 ## Interaction Ownership
 
 `interact` owns the portable pointer, wheel, key-press, key-release, and modifier vocabulary, the

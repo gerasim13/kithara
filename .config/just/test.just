@@ -24,6 +24,25 @@ e2e-resamplers *ARGS:
     just test run --lane=e2e-fused "$@"
     just test run --lane=e2e-glide "$@"
 
+# Photograph every gallery page through both hosts and compare the two sets.
+#
+# One binary takes both sets, so a difference between them is a difference
+# between the hosts rather than between two builds of the same documents. The
+# iced set is rasterised in memory and needs no display; the masonry set goes
+# through Vello and needs a graphics device. `parity-budget.txt` prices each
+# page, and a page over its price - or missing from a set - ends this non-zero.
+parity:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir=target/parity
+    rm -rf "$dir/iced" "$dir/masonry" "$dir/masks"
+    gallery=(cargo run -p kithara-ui --example gallery --features kithara-ui/masonry-host)
+    KITHARA_GALLERY_CAPTURE_OFFSCREEN="$dir/iced" "${gallery[@]}"
+    KITHARA_GALLERY_CAPTURE_MASONRY="$dir/masonry" "${gallery[@]}"
+    KITHARA_GALLERY_COMPARE="$dir/iced:$dir/masonry:$dir/masks" \
+      KITHARA_GALLERY_COMPARE_BUDGET=crates/kithara-ui/examples/gallery/parity-budget.txt \
+      "${gallery[@]}"
+
 # Cobertura and LCOV reports from one instrumented test run.
 coverage:
     #!/usr/bin/env bash
