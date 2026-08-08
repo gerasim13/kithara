@@ -223,6 +223,11 @@ where
         let ResourceStatus::Committed { final_len } = reader.status() else {
             return None;
         };
+        // A committed resource of unknown length counts as unbounded so it
+        // cannot stay in a byte-bounded cache — see CONTEXT.md "Memory byte
+        // bound". Not a hidden-missing-value sentinel: `retained_bytes`'s
+        // eviction loop is designed to keep targeting an unbounded entry
+        // until it is the one removed.
         Some(final_len.or_else(|| reader.len()).unwrap_or(u64::MAX))
     }
 

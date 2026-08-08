@@ -245,21 +245,24 @@ pub(super) struct AtomicOptU64 {
 }
 
 impl AtomicOptU64 {
+    /// Reserved `None` marker (see the struct doc above).
+    const NONE_VALUE: u64 = u64::MAX;
+
     pub(super) fn load(&self) -> Option<u64> {
         match self.value.load(Ordering::Acquire) {
-            u64::MAX => None,
+            Self::NONE_VALUE => None,
             value => Some(value),
         }
     }
 
     pub(super) const fn none() -> Self {
         Self {
-            value: AtomicU64::new(u64::MAX),
+            value: AtomicU64::new(Self::NONE_VALUE),
         }
     }
 
     pub(super) fn store(&self, value: Option<u64>) {
         self.value
-            .store(value.unwrap_or(u64::MAX), Ordering::Release);
+            .store(value.unwrap_or(Self::NONE_VALUE), Ordering::Release);
     }
 }

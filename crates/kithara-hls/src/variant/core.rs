@@ -30,6 +30,9 @@ use crate::{
 };
 
 pub(super) const INIT_PLACEHOLDER_BYTES: u64 = 16 * 1024;
+/// Reserved [`VariantFlow::prefetch_resume_at`] marker for "nothing is
+/// deferred" (a `2^64 - 1` byte cursor is unreachable).
+pub(super) const NO_PREFETCH_DEFERRAL: u64 = u64::MAX;
 
 pub(crate) struct PlanCtx {
     pub(crate) scope: kithara_assets::AssetScope,
@@ -169,7 +172,7 @@ impl VariantFlow {
     fn new(seek_obs: Arc<dyn SeekObserve>, queue_capacity: usize) -> Self {
         Self {
             prefetch_anchor: AtomicU64::new(0),
-            prefetch_resume_at: AtomicU64::new(u64::MAX),
+            prefetch_resume_at: AtomicU64::new(NO_PREFETCH_DEFERRAL),
             // Preallocate to the worst-case rebuild size (init + every media
             // segment + the seg-0 decoder probe) so the per-seek
             // `clear` + `extend` in `rebuild_queue` never reallocates on the

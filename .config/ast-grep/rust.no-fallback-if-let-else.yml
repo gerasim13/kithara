@@ -25,3 +25,9 @@ rule:
             Ok($X) => $X,
             Err($$$) => $FALLBACK($$$),
         }
+  not:
+    # `Err(poisoned) => poisoned.into_inner()` is the standard std::sync
+    # poison-recovery idiom (`LockResult`/`PoisonError::into_inner`), not a
+    # "try an alternate path" fallback: there is no secondary computation,
+    # just recovering the guard std already handed back on `Err`.
+    regex: '\.into_inner\(\)'
