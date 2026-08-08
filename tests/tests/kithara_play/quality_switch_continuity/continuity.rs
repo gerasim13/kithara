@@ -131,7 +131,32 @@ fn channel_metric(samples: &[f32], channel: usize) -> ChannelMetric {
     }
 }
 
-fn time_aligned_excess_metric(switched: &[f32], control: &[f32], channel: usize) -> ChannelMetric {
+/// How far the switched render sits above the closest legitimate rendering of
+/// the same source frames, per frame.
+///
+/// A switch spends the window's first blocks on the source variant and the
+/// rest on the destination one, so one control is the right baseline for one
+/// part of it and the wrong one for the other. Measured against the source
+/// control alone, every artefact belonging to the destination codec reads as
+/// something the switch added: `aac-high-to-aac-low` failed on the residual
+/// its destination carries at frame 41404, which the `aac-low` control carries
+/// in the same place without any switch happening.
+///
+/// Splicing the two controls at the applied frame would fix the baseline and
+/// break the measurement: the splice is a cut between two independently
+/// decoded streams, so the baseline gains a discontinuity of its own exactly
+/// where the switch is, and a baseline that jumps there subtracts away the
+/// jump the test exists to catch.
+///
+/// So the switched render is asked to resemble *one of* the legitimate
+/// renderings at each frame, whichever is closer. A clean switch tracks the
+/// source, then the destination. A click resembles neither, and the minimum
+/// stays large.
+fn time_aligned_excess_metric(
+    switched: &[f32],
+    controls: &[&[f32]],
+    channel: usize,
+) -> ChannelMetric {
     let channels = usize::from(CHANNELS);
     let frames = switched.len() / channels;
     let omega = sine_omega();
@@ -143,12 +168,18 @@ fn time_aligned_excess_metric(switched: &[f32], control: &[f32], channel: usize)
     let mut peak_residual = 0.0f32;
     let mut peak_residual_frame = 0usize;
     let switched_sample = |frame: usize| switched[frame * channels + channel];
-    let control_sample = |frame: usize| control[frame * channels + channel];
+    let control_sample = |control: &[f32], frame: usize| control[frame * channels + channel];
 
     for frame in 1..frames {
         let switched_step = (switched_sample(frame) - switched_sample(frame - 1)).abs();
-        let control_step = (control_sample(frame) - control_sample(frame - 1)).abs();
-        let excess_step = (switched_step - control_step).max(0.0);
+        let excess_step = controls
+            .iter()
+            .map(|control| {
+                let control_step =
+                    (control_sample(control, frame) - control_sample(control, frame - 1)).abs();
+                (switched_step - control_step).max(0.0)
+            })
+            .fold(f32::INFINITY, f32::min);
         steps.push(excess_step);
         if excess_step > peak_step {
             peak_step = excess_step;
@@ -159,10 +190,16 @@ fn time_aligned_excess_metric(switched: &[f32], control: &[f32], channel: usize)
                 - recurrence * switched_sample(frame - 1)
                 + switched_sample(frame - 2))
             .abs();
-            let control_residual = (control_sample(frame) - recurrence * control_sample(frame - 1)
-                + control_sample(frame - 2))
-            .abs();
-            let excess_residual = (switched_residual - control_residual).max(0.0);
+            let excess_residual = controls
+                .iter()
+                .map(|control| {
+                    let control_residual = (control_sample(control, frame)
+                        - recurrence * control_sample(control, frame - 1)
+                        + control_sample(control, frame - 2))
+                    .abs();
+                    (switched_residual - control_residual).max(0.0)
+                })
+                .fold(f32::INFINITY, f32::min);
             residuals.push(excess_residual);
             if excess_residual > peak_residual {
                 peak_residual = excess_residual;
@@ -181,18 +218,24 @@ fn time_aligned_excess_metric(switched: &[f32], control: &[f32], channel: usize)
     }
 }
 
-fn primary_continuity_report(switched: &[f32], control: &[f32]) -> ContinuityReport {
-    assert_eq!(
-        switched.len(),
-        control.len(),
-        "switch and time-aligned control renders must have equal lengths",
-    );
+/// `controls` are the renderings the switch is allowed to resemble: the
+/// variant it starts on and the one it ends on. The first is also the one the
+/// report names, because it is the one the switch was captured against.
+fn primary_continuity_report(switched: &[f32], controls: &[&[f32]]) -> ContinuityReport {
+    for control in controls {
+        assert_eq!(
+            switched.len(),
+            control.len(),
+            "switch and time-aligned control renders must have equal lengths",
+        );
+    }
+    let reference = controls.first().expect("at least one legitimate rendering");
     let mut channels = Vec::with_capacity(usize::from(CHANNELS));
     let mut failures = Vec::new();
     for channel in 0..usize::from(CHANNELS) {
         let switched_metric = channel_metric(switched, channel);
-        let control_metric = channel_metric(control, channel);
-        let excess = time_aligned_excess_metric(switched, control, channel);
+        let control_metric = channel_metric(reference, channel);
+        let excess = time_aligned_excess_metric(switched, controls, channel);
         let step_limit = excess.background_step.mul_add(ORACLE_RATIO, ORACLE_SLACK);
         let residual_limit = excess
             .background_residual
@@ -422,13 +465,83 @@ fn quality_switch_oracle_rejects_an_injected_single_sample_click(
         clicked[click_frame * usize::from(CHANNELS) + channel] += click_delta;
     }
 
-    let report = primary_continuity_report(&clicked, &control);
+    let report = primary_continuity_report(&clicked, &[&control]);
     assert!(
         report.channels.iter().all(|channel| {
             channel.excess.peak_step > channel.step_limit
                 || channel.excess.peak_residual > channel.residual_limit
         }),
         "the production oracle must reject a calibrated {click_delta:+.1} one-sample click on every channel: {}",
+        format_channels(&report.channels),
+    );
+}
+
+/// A clean codec handoff may legitimately follow either rendering at each frame.
+#[kithara::test]
+fn the_two_baseline_oracle_accepts_a_clean_join() {
+    let frames = usize::try_from(SAMPLE_RATE)
+        .expect("fixture sample rate fits usize")
+        .saturating_mul(2);
+    let midpoint = frames / 2;
+    let mut control_a = Vec::with_capacity(frames * usize::from(CHANNELS));
+    let mut control_b = Vec::with_capacity(frames * usize::from(CHANNELS));
+    let mut switched = Vec::with_capacity(frames * usize::from(CHANNELS));
+    for frame in 0..frames {
+        let phase = sine_omega() * frame.to_f32().expect("fixture frame index fits f32");
+        let control_a_sample = 0.25 * phase.sin();
+        let control_b_sample = 0.24 * phase.sin();
+        control_a.extend_from_slice(&[control_a_sample, control_a_sample]);
+        control_b.extend_from_slice(&[control_b_sample, control_b_sample]);
+        let switched_sample = if frame < midpoint {
+            control_a_sample
+        } else {
+            control_b_sample
+        };
+        switched.extend_from_slice(&[switched_sample, switched_sample]);
+    }
+
+    let report = primary_continuity_report(&switched, &[&control_a, &control_b]);
+    assert!(
+        report.failures.is_empty(),
+        "the two-baseline oracle must accept a clean join: {}",
+        format_channels(&report.channels),
+    );
+}
+
+/// Offering two baselines must not license a switch to resemble neither rendering.
+#[kithara::test]
+fn the_two_baseline_oracle_still_rejects_a_click_at_the_join() {
+    let frames = usize::try_from(SAMPLE_RATE)
+        .expect("fixture sample rate fits usize")
+        .saturating_mul(2);
+    let midpoint = frames / 2;
+    let mut control_a = Vec::with_capacity(frames * usize::from(CHANNELS));
+    let mut control_b = Vec::with_capacity(frames * usize::from(CHANNELS));
+    let mut switched = Vec::with_capacity(frames * usize::from(CHANNELS));
+    for frame in 0..frames {
+        let phase = sine_omega() * frame.to_f32().expect("fixture frame index fits f32");
+        let control_a_sample = 0.25 * phase.sin();
+        let control_b_sample = 0.24 * phase.sin();
+        control_a.extend_from_slice(&[control_a_sample, control_a_sample]);
+        control_b.extend_from_slice(&[control_b_sample, control_b_sample]);
+        let switched_sample = if frame < midpoint {
+            control_a_sample
+        } else {
+            control_b_sample
+        };
+        switched.extend_from_slice(&[switched_sample, switched_sample]);
+    }
+    for channel in 0..usize::from(CHANNELS) {
+        switched[midpoint * usize::from(CHANNELS) + channel] += 0.4;
+    }
+
+    let report = primary_continuity_report(&switched, &[&control_a, &control_b]);
+    assert!(
+        report.channels.iter().all(|channel| {
+            channel.excess.peak_step > channel.step_limit
+                || channel.excess.peak_residual > channel.residual_limit
+        }),
+        "the two-baseline oracle must reject a one-sample click on every channel: {}",
         format_channels(&report.channels),
     );
 }
@@ -498,7 +611,13 @@ async fn manual_quality_switches_match_time_aligned_no_switch_pcm(#[case] backen
             transition.label, switched.capture_frame, source_control.render.capture_frame,
         );
 
-        let primary = primary_continuity_report(&switched.samples, &source_control.render.samples);
+        let primary = primary_continuity_report(
+            &switched.samples,
+            &[
+                &source_control.render.samples,
+                &destination_control.render.samples,
+            ],
+        );
         let cochlea = cochlea_failures(
             &switched.samples,
             source_control.cochlea,
