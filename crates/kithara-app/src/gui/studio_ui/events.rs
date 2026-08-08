@@ -82,7 +82,7 @@ fn deck_control(
         ),
         ("tempo", ControlAction::Activate) => DeckMsg::SetTempo(0.0),
         ("sync", ControlAction::Activate) => {
-            return Some(Message::Transport(TransportMsg::Sync(id)));
+            return Some(Message::Transport(TransportMsg::ToggleSync(id)));
         }
         ("play", ControlAction::Activate) => DeckMsg::TogglePlayPause,
         ("prev", ControlAction::Activate) => DeckMsg::Prev,

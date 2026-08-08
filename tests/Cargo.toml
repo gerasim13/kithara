@@ -130,7 +130,7 @@ kithara = { workspace = true, features = [
     "tokio-net",
     "tokio-rt-multi-thread",
 ] }
-kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "lib-only"] }
+kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "beat-nn", "lib-only"] }
 
 # Only `architecture_trace` reaches for it, and that module is already native
 # only: the crate's LSP client builds file URLs, which `url` offers everywhere

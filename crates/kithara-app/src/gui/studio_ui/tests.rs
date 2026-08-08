@@ -399,6 +399,9 @@ fn the_deck_transport_carries_the_zoom_pair() {
 /// Each deck can be put on the session grid from its own transport row, and
 /// the button addresses that deck alone — a SYNC that reached the other deck
 /// would place the wrong track on the beat.
+///
+/// Both halves are scoped: the press that turns the mode on, and the state the
+/// button lights from. A shared state binding would light both decks at once.
 #[kithara::test]
 fn every_deck_transport_carries_its_own_sync() {
     let ui = compile_studio(DeckLayout::Dual).unwrap();
@@ -409,11 +412,15 @@ fn every_deck_transport_carries_its_own_sync() {
             .iter()
             .find(|(path, _)| **path == want)
             .unwrap_or_else(|| panic!("missing control `{want}`"));
-        let binding = format!("deck.transport.sync_to_session@deck={letter}");
-        assert!(
-            keys.contains(&binding.as_str()),
-            "`{want}` must bind `{binding}`, got {keys:?}"
-        );
+        for binding in [
+            format!("deck.transport.sync@deck={letter}"),
+            format!("deck.transport.synced@deck={letter}"),
+        ] {
+            assert!(
+                keys.contains(&binding.as_str()),
+                "`{want}` must bind `{binding}`, got {keys:?}"
+            );
+        }
     }
 }
 

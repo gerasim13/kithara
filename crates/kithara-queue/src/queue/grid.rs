@@ -41,6 +41,13 @@ impl Queue {
         };
         let (id, source) =
             found.ok_or_else(|| QueueError::InvalidUrl(format!("no track at index {index}")))?;
+        // Rebuilding the resource is what puts it on the bound slot, and
+        // rebuilding the track that is *playing* takes its audio away. A deck
+        // already running has to be pulled into phase, not restarted, and that
+        // is a different mechanism — refuse rather than cut the sound.
+        if self.current_index() == Some(index) && self.player.rate() > 0.0 {
+            return Err(QueueError::NotReady(id));
+        }
         let start = self
             .player
             .bind_to_grid(analysis, track_anchor, quantum)

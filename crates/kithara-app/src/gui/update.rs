@@ -227,6 +227,7 @@ fn handle_tick(state: &mut Kithara) {
         let _ = deck.controller.queue().tick();
         deck.controller.refresh_continuous();
     }
+    transport::tick(state);
 }
 
 /// One consistent snapshot per deck per frame, taken after the update. The
