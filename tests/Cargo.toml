@@ -136,12 +136,19 @@ kithara = { workspace = true, features = [
     "mock",
     "symphonia",
     "stretch-signalsmith",
-    "stretch-bungee",
     "backend-cpal",
     "tokio-net",
     "tokio-rt-multi-thread",
 ] }
 kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "lib-only"] }
+
+# `bungee-sys` builds through `cmake`/MSVC and fails there; `kithara-stretch`
+# already drops the dependency for that target (see its `Cargo.toml`), so
+# requesting the feature here would compile a module whose imports do not
+# exist, the same failure wasm32 gets if it asks for the feature that block
+# above never lists.
+[target.'cfg(all(not(target_arch = "wasm32"), not(all(target_os = "windows", target_env = "msvc"))))'.dependencies]
+kithara = { workspace = true, features = ["stretch-bungee"] }
 
 # Only `architecture_trace` reaches for it, and that module is already native
 # only: the crate's LSP client builds file URLs, which `url` offers everywhere
