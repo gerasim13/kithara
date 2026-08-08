@@ -310,6 +310,41 @@ fn cochlea_failures(
     failures
 }
 
+/// TEMPORARY diagnostic: the shape of the discontinuity, not just its size.
+/// A single-sample click, a phase slip and a repeated block all read as one
+/// number here; only the neighbourhood tells them apart.
+fn dump_around(samples: &[f32], channel: usize, frame: usize) -> String {
+    let channels = usize::from(CHANNELS);
+    let frames = samples.len() / channels;
+    let omega = sine_omega();
+    let recurrence = 2.0 * omega.cos();
+    let sample = |frame: usize| samples[frame * channels + channel];
+
+    let first = frame.saturating_sub(12);
+    let last = frame.saturating_add(12).min(frames.saturating_sub(1));
+    let mut out = format!("  dump ch{channel} frames {first}..={last} (peak at {frame}):\n");
+    for at in first..=last {
+        let residual = if at >= 2 {
+            (sample(at) - recurrence * sample(at - 1) + sample(at - 2)).abs()
+        } else {
+            0.0
+        };
+        let step = if at >= 1 {
+            (sample(at) - sample(at - 1)).abs()
+        } else {
+            0.0
+        };
+        let mark = if at == frame { " <<<" } else { "" };
+        out.push_str(&format!(
+            "    {at:>7} x={:+.6} step={:.6} residual={:.6}{mark}\n",
+            sample(at),
+            step,
+            residual,
+        ));
+    }
+    out
+}
+
 fn assert_clean_control(control: &[f32], label: &str) -> (CochleaMetric, Vec<f64>) {
     let (cochlea, onsets_ms) = measure_cochlea(control);
     assert_eq!(
@@ -344,8 +379,11 @@ fn assert_clean_control(control: &[f32], label: &str) -> (CochleaMetric, Vec<f64
         }
         if metric.peak_residual > residual_limit {
             failures.push(format!(
-                "channel {channel} phase residual {:.6} at frame {} exceeds standalone control limit {:.6}",
-                metric.peak_residual, metric.peak_residual_frame, residual_limit,
+                "channel {channel} phase residual {:.6} at frame {} exceeds standalone control limit {:.6}\n{}",
+                metric.peak_residual,
+                metric.peak_residual_frame,
+                residual_limit,
+                dump_around(control, channel, metric.peak_residual_frame),
             ));
         }
         metrics.push(metric);
