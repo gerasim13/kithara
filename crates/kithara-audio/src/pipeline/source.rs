@@ -93,7 +93,6 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     pub(crate) shared_stream: SharedStream<T>,
 }
 
-// Construction, lifecycle, and state access
 impl<T: StreamType> StreamAudioSource<T> {
     /// Bounded off-RT retire queue for decode state displaced on the produce core.
     const GENERATION_RETIRE_CAPACITY: usize = 4;
