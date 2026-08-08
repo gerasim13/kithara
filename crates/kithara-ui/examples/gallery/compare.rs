@@ -21,20 +21,62 @@ use super::capture::{read_frame, write_png};
 /// different rasterisers, so antialiased edges never match bit for bit.
 const NOISE: u8 = 24;
 
-/// Runs the comparison when asked. Returns `false` when the environment
-/// variable is absent, so the caller falls through.
-pub(super) fn run() -> bool {
-    let Some(spec) = env::var_os("KITHARA_GALLERY_COMPARE") else {
-        return false;
-    };
-    match compare(&spec.to_string_lossy()) {
-        Ok(pages) => println!("{pages} page(s) compared"),
-        Err(error) => eprintln!("compare failed: {error}"),
-    }
-    true
+/// What a comparison run decided.
+pub(super) enum Verdict {
+    /// No comparison was asked for; the caller falls through.
+    NotAsked,
+    /// Every page compared within its budget, or no budget was given.
+    Passed,
+    /// A page differed more than its budget allows, or was missing from a set.
+    Failed,
 }
 
-fn compare(spec: &str) -> Result<usize, String> {
+/// Runs the comparison when asked.
+///
+/// A budget turns the numbers into a gate: `KITHARA_GALLERY_COMPARE_BUDGET`
+/// names a file of per-page allowances, and a page over its allowance — or
+/// missing from either set — fails the run. Without one this only reports, the
+/// way it always has.
+pub(super) fn run() -> Verdict {
+    let Some(spec) = env::var_os("KITHARA_GALLERY_COMPARE") else {
+        return Verdict::NotAsked;
+    };
+    let budget = env::var_os("KITHARA_GALLERY_COMPARE_BUDGET").map(PathBuf::from);
+    match compare(&spec.to_string_lossy(), budget.as_deref()) {
+        Ok(true) => Verdict::Passed,
+        Ok(false) => Verdict::Failed,
+        Err(error) => {
+            eprintln!("compare failed: {error}");
+            Verdict::Failed
+        }
+    }
+}
+
+/// The share of pixels each page is allowed to differ by, as whole percent.
+///
+/// One line per page: the file name, then the allowance. A page with no line
+/// is allowed nothing, so a set that grows a page has to say what that page is
+/// worth before the gate will pass.
+fn read_budget(path: &Path) -> Result<Vec<(String, f64)>, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| format!("read {}: {error}", path.display()))?;
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| {
+            let (name, share) = line
+                .split_once(char::is_whitespace)
+                .ok_or_else(|| format!("{}: expected `<page.png> <percent>`", path.display()))?;
+            let share = share
+                .trim()
+                .parse::<f64>()
+                .map_err(|error| format!("{}: {line:?}: {error}", path.display()))?;
+            Ok((name.to_owned(), share))
+        })
+        .collect()
+}
+
+fn compare(spec: &str, budget: Option<&Path>) -> Result<bool, String> {
     let parts = spec.split(':').collect::<Vec<_>>();
     let [left, right, out] = parts.as_slice() else {
         return Err("expected KITHARA_GALLERY_COMPARE=<a>:<b>:<out>".to_owned());
@@ -54,6 +96,7 @@ fn compare(spec: &str) -> Result<usize, String> {
         _ => {}
     }
     create_dir_all(&out).map_err(|error| format!("create {}: {error}", out.display()))?;
+    let budget = budget.map(read_budget).transpose()?;
 
     let mut pages = 0;
     let mut rows = Vec::new();
@@ -107,7 +150,33 @@ fn compare(spec: &str) -> Result<usize, String> {
          because the two hosts rasterise with different engines",
         out.display()
     );
-    Ok(pages)
+    let Some(budget) = budget else {
+        println!("{pages} page(s) compared; no budget given, so nothing was decided");
+        return Ok(true);
+    };
+    let over = rows
+        .iter()
+        .filter_map(|(name, share)| {
+            let allowed = budget
+                .iter()
+                .find(|(page, _)| page == name)
+                .map_or(0.0, |(_, allowed)| *allowed);
+            match share {
+                Some(share) if share * 100.0 > allowed => Some((name, share * 100.0, allowed)),
+                Some(_) => None,
+                None => Some((name, f64::INFINITY, allowed)),
+            }
+        })
+        .collect::<Vec<_>>();
+    for (name, share, allowed) in &over {
+        if share.is_finite() {
+            println!("over budget: {name} differs by {share:.1}%, allowed {allowed:.1}%");
+        } else {
+            println!("over budget: {name} is missing from one of the sets");
+        }
+    }
+    println!("{pages} page(s) compared, {} over budget", over.len());
+    Ok(over.is_empty())
 }
 
 struct Image {

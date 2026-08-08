@@ -1,0 +1,36 @@
+# What each gallery page may differ by between the two hosts, in whole percent
+# of pixels, past the rasteriser-noise floor the comparison already applies.
+#
+# A page with no line here is allowed nothing, so a new page has to be priced
+# before the gate passes. These numbers are a debt, not a target: every control
+# that lands must lower the pages it appears on, and no number may rise without
+# a reason written next to it.
+#
+# Measured 2026-08-08, offscreen iced against masonry at 1100x720 scale 1.
+# The floor is about 1%: tiny-skia and Vello disagree on antialiased edges.
+
+# The two undrawn controls: library2 holds the TrackList and the Tree.
+15-library2.png            43
+14-tree.png                22
+# Not accounted for by a missing control — read the masks before lowering.
+03-modules-deck.png        21
+07-tokens.png              15
+16-stress.png              13
+08-micro.png               11
+03-modules-telemetry.png    9
+
+09-mixer.png                3
+17-menu.png                 3
+13-tracklist.png            3
+05-cells.png                3
+03-modules-deckmicro.png    2
+00-atoms.png                2
+03-modules-layout.png       2
+06-sizes.png                2
+03-modules-globalbar.png    2
+02-faders.png               2
+10-vis.png                  2
+04-typography.png           2
+11-chrome.png               2
+01-buttons.png              2
+12-titlebars.png            2

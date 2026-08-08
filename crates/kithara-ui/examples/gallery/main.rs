@@ -9,6 +9,7 @@ mod mock_data;
 mod mock_mixer;
 mod mock_stress;
 mod mock_transport;
+mod offscreen;
 mod sections;
 
 use iced::{Element, Size, Subscription, Task, Theme, time as iced_time, window, window::Settings};
@@ -360,6 +361,30 @@ struct Gallery {
 }
 
 impl Gallery {
+    /// The gallery with no window of iced's: the offscreen capture rasterises
+    /// the same documents itself, and never opens one.
+    fn mounted() -> Self {
+        let resolver = resolver();
+        let endpoints = mock::registry();
+        Self {
+            layouts: Tab::ALL.map(|tab| compiled(tab.entry(), &resolver, &endpoints)),
+            module_layouts: ModuleDemo::ALL
+                .map(|module| compiled(module.entry(), &resolver, &endpoints)),
+            window_id: window::Id::unique(),
+            skin: builtin::skin(),
+            reads: MockReads::default(),
+            capture: None,
+        }
+    }
+
+    /// Turns to the page a shot names.
+    fn select(&mut self, shot: Shot) {
+        self.reads.select_tab(shot.tab);
+        if let Some(module) = shot.module {
+            self.reads.select_module(module);
+        }
+    }
+
     fn new() -> (Self, Task<Message>) {
         let resolver = resolver();
         let endpoints = mock::registry();
@@ -441,10 +466,7 @@ impl Gallery {
             capture.report();
             return iced::exit();
         };
-        self.reads.select_tab(shot.tab);
-        if let Some(module) = shot.module {
-            self.reads.select_module(module);
-        }
+        self.select(shot);
         Task::done(Message::CaptureShoot(shot))
     }
 
@@ -461,7 +483,14 @@ impl Gallery {
 }
 
 fn main() -> iced::Result {
-    if compare::run() {
+    match compare::run() {
+        compare::Verdict::Passed => return Ok(()),
+        // A gate says so with its exit code; iced's error type has no shape for
+        // "the two hosts disagree", and inventing one would say less.
+        compare::Verdict::Failed => std::process::exit(1),
+        compare::Verdict::NotAsked => {}
+    }
+    if offscreen::run() {
         return Ok(());
     }
     #[cfg(feature = "masonry-host")]
@@ -539,6 +568,27 @@ fn subscription(state: &Gallery) -> Subscription<Message> {
     } else {
         close
     }
+}
+
+/// The window every capture is taken at, so the three sets line up without
+/// anyone stating the geometry twice.
+fn window_size() -> Size {
+    Size::new(Consts::WIDTH, Consts::HEIGHT)
+}
+
+fn compiled(
+    entry: &str,
+    resolver: &MemResolver,
+    endpoints: &dyn kithara_ui::registry::EndpointRegistry,
+) -> CompiledUi {
+    compile(
+        entry,
+        resolver,
+        endpoints,
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_or_else(|error| panic!("embedded gallery document {entry} must compile: {error}"))
 }
 
 fn resolver() -> MemResolver {
