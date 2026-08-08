@@ -310,6 +310,38 @@ fn cochlea_failures(
     failures
 }
 
+/// TEMPORARY diagnostic: the amplitude envelope, sample by sample.
+///
+/// For a pure sine `A·sin(ωn)`, `x² + ((x[n+1]-x[n-1])/(2 sin ω))²` is `A²`
+/// whatever the phase. A gain event then reads directly as a dip, and its
+/// depth and length say what applied it — which a residual cannot.
+fn dump_envelope(samples: &[f32], channel: usize, centre: usize) -> String {
+    let channels = usize::from(CHANNELS);
+    let frames = samples.len() / channels;
+    let omega = sine_omega();
+    let two_sin = 2.0 * omega.sin();
+    let sample = |frame: usize| samples[frame * channels + channel];
+    let envelope = |frame: usize| {
+        let derivative = (sample(frame + 1) - sample(frame - 1)) / two_sin;
+        sample(frame)
+            .mul_add(sample(frame), derivative * derivative)
+            .sqrt()
+    };
+
+    let first = centre.saturating_sub(240).max(1);
+    let last = centre.saturating_add(240).min(frames.saturating_sub(2));
+    let reference = envelope(first);
+    let mut out = format!(
+        "  envelope ch{channel} {first}..={last}, reference {reference:.6} (every 8th frame)\n"
+    );
+    for at in (first..=last).step_by(8) {
+        let value = envelope(at);
+        let deviation = (value - reference) / reference * 100.0;
+        out.push_str(&format!("    {at:>7} A={value:.6} {deviation:+.3}%\n"));
+    }
+    out
+}
+
 /// TEMPORARY diagnostic: where every excursion sits, and how far apart.
 /// One frame number is numerology; the spacing between them names the boundary
 /// (segment 22050, AAC frame 1024, render block 512, or none of those).
@@ -419,7 +451,8 @@ fn assert_clean_control(control: &[f32], label: &str) -> (CochleaMetric, Vec<f64
                 format!(
                     "{}{}",
                     dump_around(control, channel, metric.peak_residual_frame),
-                    dump_excursions(control, channel, metric.background_residual),
+                    dump_excursions(control, channel, metric.background_residual)
+                        + &dump_envelope(control, channel, metric.peak_residual_frame),
                 ),
             ));
         }
