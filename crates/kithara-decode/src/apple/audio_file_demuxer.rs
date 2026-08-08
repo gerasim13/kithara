@@ -379,7 +379,6 @@ fn serialize_asbd(asbd: &AudioStreamBasicDescription) -> Vec<u8> {
 }
 
 #[cfg(test)]
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod tests {
     use std::{
         io::{self, Cursor, Error, ErrorKind, Read, Seek, SeekFrom},

@@ -31,11 +31,17 @@ ignores:
   # asymmetry: native runs a dedicated engine thread with a ringbuf+park
   # wake-up, while wasm32 splits state between the main thread (where the
   # AudioContext must live) and Workers (which proxy commands via mpsc).
-  # `impls/session/mod.rs` is the single structural boundary — two
-  # `#[cfg]` declarations on `mod host_native;` / `mod host_web;`. Inside
+  # `session/mod.rs` is the single structural boundary — the `#[cfg]`
+  # declarations on `mod native;` / `mod web;` and their re-exports. Inside
   # each host file there are zero inline cfg gates. Documented in
-  # `crates/kithara-play/README.md` "Session Hosting".
-  - "crates/kithara-play/src/impls/session/mod.rs"
+  # `crates/kithara-play/CONTEXT.md` "Session Hosting".
+  - "crates/kithara-play/src/session/mod.rs"
+  # `kithara-ffi` hosts native-only platform shims one level below the
+  # `native`/`web` split in `src/lib.rs` (already exempted above): Android
+  # JNI module wiring lives in `src/native/mod.rs` alongside the other
+  # native shims, gated on `target_os = "android"`. Documented in
+  # `crates/kithara-ffi/CONTEXT.md`.
+  - "crates/kithara-ffi/src/native/mod.rs"
 rule:
   any:
     - pattern: "#[cfg(target_os = $_)]"
