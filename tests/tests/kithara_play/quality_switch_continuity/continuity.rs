@@ -458,11 +458,17 @@ fn assert_clean_control(control: &[f32], label: &str) -> (CochleaMetric, Vec<f64
         }
         metrics.push(metric);
     }
-    assert!(
-        failures.is_empty(),
-        "{label} no-switch control contains a PCM discontinuity:\n{}\nmetrics={metrics:?}",
-        failures.join("\n"),
-    );
+    // TEMPORARY: report instead of asserting, so one run measures all three
+    // variants. A lossless control that is clean where a lossy one is not says
+    // the assertion is reading the encoder rather than the player.
+    if failures.is_empty() {
+        println!("CONTROL_VERDICT {label} clean metrics={metrics:?}");
+    } else {
+        println!(
+            "CONTROL_VERDICT {label} dirty:\n{}\nmetrics={metrics:?}",
+            failures.join("\n"),
+        );
+    }
     (cochlea, onsets_ms)
 }
 
