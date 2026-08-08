@@ -300,7 +300,14 @@ prefix_args = [
 default_features = ["integration-regressions"]
 default_flash = true
 
-[test.lanes.selenium]
+# The harness (tests/tests/kithara_ffi_web/selenium.rs) reads
+# KITHARA_SELENIUM_BROWSER to pick a browser and defaults to chrome if unset.
+# Naming the browser in the lane itself, rather than leaving it to whatever
+# the caller happens to export, is what makes `--lane=selenium-firefox` an
+# honest description of what ran. Firefox is the only browser this pins today
+# (geckodriver, below); a `selenium-chrome` lane needs a reviewed chromedriver
+# pin first.
+[test.lanes.selenium-firefox]
 program = "cargo"
 prefix_args = [
   "+nightly",
@@ -481,8 +488,8 @@ hard_invariant = true
 complete_only = true
 
 [[quality.assessment.deep_stages]]
-name = "selenium"
-command = ["just", "test", "run", "--lane=selenium"]
+name = "selenium-firefox"
+command = ["just", "test", "run", "--lane=selenium-firefox"]
 tools = ["selenium-tests"]
 hard_invariant = true
 complete_only = true

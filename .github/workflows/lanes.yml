@@ -43,7 +43,7 @@ jobs:
           REQUESTED: ${{ github.event.inputs.lane }}
         run: |
           set -euo pipefail
-          configured='["integration-regressions","network","loom","e2e","e2e-fused","e2e-glide","selenium"]'
+          configured='["integration-regressions","network","loom","e2e","e2e-fused","e2e-glide","selenium-firefox"]'
           if [ -z "$REQUESTED" ] || [ "$REQUESTED" = all ]; then
             echo "lanes=$configured" >> "$GITHUB_OUTPUT"
             exit 0
@@ -84,4 +84,11 @@ jobs:
           KITHARA_DRM_PROD_KEY: ${{ secrets.KITHARA_DRM_PROD_KEY }}
           KITHARA_DRM_PROD_AUTH_TOKEN: ${{ secrets.KITHARA_DRM_PROD_AUTH_TOKEN }}
           KITHARA_DRM_PROD_SP_ZV_TOKEN: ${{ secrets.KITHARA_DRM_PROD_SP_ZV_TOKEN }}
-        run: CARGO_TARGET_DIR="target-lane-$LANE" just test run "--lane=$LANE"
+        # A selenium-<browser> lane names the browser it exercises; the
+        # harness (tests/tests/kithara_ffi_web/selenium.rs) otherwise defaults
+        # to chrome regardless of what the fleet actually pins.
+        run: |
+          if [[ "$LANE" == selenium-* ]]; then
+            export KITHARA_SELENIUM_BROWSER="${LANE#selenium-}"
+          fi
+          CARGO_TARGET_DIR="target-lane-$LANE" just test run "--lane=$LANE"

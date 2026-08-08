@@ -52,8 +52,8 @@ network = []
 # stayed off CI because part of it could not go there.
 network-manual = []
 # Selenium-driven WebDriver tests. Gated off by default so `just test`
-# doesn't try to spin up trunk + chromedriver. Run via
-# `just test run --lane=selenium`.
+# doesn't try to spin up trunk + a webdriver. Run via
+# `just test run --lane=selenium-firefox`.
 selenium = []
 # Deterministic virtual-clock test mode. Routes the platform's blocking waits
 # (`thread::park_timeout`, `sync::Condvar`) onto the quiescence engine so timed

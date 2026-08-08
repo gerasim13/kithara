@@ -315,7 +315,7 @@ fn write_report(
     let _ = write!(out, "- per-stage logs: `{}/`\n\n", logs_dir.display());
     out.push_str("Excluded by design (run separately): `mutants`, `coverage`, `dead`, ");
     out.push_str(
-        "`test --lane=e2e`, `test --lane=selenium`, `wasm`, `bench`, `perf`, `memory-check`.\n\n",
+        "`test --lane=e2e`, `test --lane=selenium-firefox`, `wasm`, `bench`, `perf`, `memory-check`.\n\n",
     );
 
     out.push_str("## Summary\n\n");

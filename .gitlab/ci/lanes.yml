@@ -36,7 +36,7 @@ lanes:e2e-glide:
   script:
     - just ci run linux-e2e-glide
 
-lanes:selenium:
+lanes:selenium-firefox:
   extends: .lane-job
   script:
-    - just ci run linux-selenium
+    - just ci run linux-selenium-firefox

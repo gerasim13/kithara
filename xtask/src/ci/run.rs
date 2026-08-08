@@ -35,7 +35,7 @@ pub(crate) enum Lane {
     LinuxE2e,
     LinuxE2eFused,
     LinuxE2eGlide,
-    LinuxSelenium,
+    LinuxSeleniumFirefox,
     LinuxCoverage,
     AndroidBuild,
     AndroidTest,
@@ -99,7 +99,7 @@ impl Lane {
             | Self::LinuxE2e
             | Self::LinuxE2eFused
             | Self::LinuxE2eGlide
-            | Self::LinuxSelenium
+            | Self::LinuxSeleniumFirefox
             | Self::LinuxCoverage
             | Self::WebChromium
             | Self::WebFirefox
@@ -193,7 +193,7 @@ pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         Lane::LinuxE2e => lane::linux::configured(&process, "e2e"),
         Lane::LinuxE2eFused => lane::linux::configured(&process, "e2e-fused"),
         Lane::LinuxE2eGlide => lane::linux::configured(&process, "e2e-glide"),
-        Lane::LinuxSelenium => lane::linux::configured(&process, "selenium"),
+        Lane::LinuxSeleniumFirefox => lane::linux::selenium(&process, "firefox"),
         Lane::LinuxCoverage => lane::linux::coverage(&process),
         Lane::AndroidBuild => lane::android::build(&process),
         Lane::AndroidTest => lane::android::test(&process, &ci_config),

@@ -22,7 +22,7 @@ parameterization and `#[kithara::fixture]` injection.
 - `serial` — emits `#[serial_test::serial]`; requires `serial_test` at the call site.
 - `multi_thread` — `new_multi_thread().worker_threads(2)` instead of `new_current_thread()`; requires `tokio`.
 - `selenium` — implies `native + tokio + serial + multi_thread`. It injects no `#[ignore]`: the suite is picked up only by
-  the wasm-target driver (`just test run --lane=selenium`).
+  the wasm-target driver (`just test run --lane=selenium-firefox`).
 - `loom` — synchronous native model test returning `()`. Incompatible with `tokio`, async fns, non-unit returns,
   `soft_fail`, `wasm`, `browser`, `selenium`, and `multi_thread`.
 - `flash(true|false)` — opt the body into or out of flash time rewriting; default `true`.
