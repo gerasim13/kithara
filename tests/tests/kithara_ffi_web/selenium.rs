@@ -21,6 +21,40 @@ impl Consts {
     const POLL_INTERVAL: Duration = Duration::from_millis(500);
     const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
     const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
+
+    /// Installed before the page's own scripts run (via CDP
+    /// `Page.addScriptToEvaluateOnNewDocument` for Chrome, and again as a
+    /// same-origin script right after `goto()` for browsers without CDP
+    /// support). Captures `console.log/warn/error` plus uncaught errors and
+    /// unhandled promise rejections into `window.__consoleLogs`, so a
+    /// bootstrap failure that happens *before* the test can inject anything
+    /// (a failed dynamic `import()`, a rejected top-level `await`) still
+    /// shows up: without this a stuck "Initializing WASM..." status reports
+    /// only a bare timeout with no indication of what the browser saw.
+    const CONSOLE_CAPTURE_JS: &'static str = r#"
+        if (!window.__consoleLogs) {
+            window.__consoleLogs = [];
+            const push = (msg) => {
+                window.__consoleLogs.push(msg);
+                if (window.__consoleLogs.length > 200) {
+                    window.__consoleLogs.splice(0, window.__consoleLogs.length - 200);
+                }
+            };
+            const origLog = console.log.bind(console);
+            console.log = (...args) => { push(args.map(String).join(' ')); origLog(...args); };
+            const origWarn = console.warn.bind(console);
+            console.warn = (...args) => { push('[WARN] ' + args.map(String).join(' ')); origWarn(...args); };
+            const origErr = console.error.bind(console);
+            console.error = (...args) => { push('[ERROR] ' + args.map(String).join(' ')); origErr(...args); };
+            window.addEventListener('error', (e) => {
+                push(`[UNCAUGHT] ${e.message} at ${e.filename}:${e.lineno}:${e.colno}`);
+            });
+            window.addEventListener('unhandledrejection', (e) => {
+                const reason = e.reason && e.reason.stack ? e.reason.stack : e.reason;
+                push(`[UNHANDLED-REJECTION] ${reason}`);
+            });
+        }
+    "#;
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -306,10 +340,17 @@ impl SeleniumHarness {
 
     async fn new_session(&self) -> Result<WasmPlayerSelenium, String> {
         let driver = build_webdriver(&self.config).await?;
-        Ok(WasmPlayerSelenium {
+        let session = WasmPlayerSelenium {
             config: self.config.clone(),
             driver,
-        })
+        };
+        // Installed once per session, before the first navigation: a boot
+        // failure inside the page's top-level module script (a rejected
+        // dynamic import, a thrown error before the test gets a chance to
+        // inject anything) must still be visible in `wait_for`'s timeout
+        // error instead of vanishing into a bare timeout.
+        session.install_boot_capture().await;
+        Ok(session)
     }
 }
 
@@ -363,6 +404,7 @@ impl WasmPlayerSelenium {
                 .goto(self.config.page_url())
                 .await
                 .map_err(|err| format!("failed to open page: {err}"))?;
+            self.install_console_capture().await;
 
             let ready = self
                 .wait_for(
@@ -396,31 +438,33 @@ impl WasmPlayerSelenium {
         }
     }
 
+    /// Best-effort same-origin install, run right after `goto()`. Covers
+    /// browsers without CDP support (Firefox) and reinforces the CDP install
+    /// below; a no-op when the guard in [`Consts::CONSOLE_CAPTURE_JS`] shows
+    /// it is already installed for this document.
     async fn install_console_capture(&self) {
-        let script = r#"
-            if (!window.__consoleLogs) {
-                window.__consoleLogs = [];
-                const orig = console.log.bind(console);
-                console.log = (...args) => {
-                    window.__consoleLogs.push(args.map(String).join(' '));
-                    if (window.__consoleLogs.length > 200) {
-                        window.__consoleLogs.splice(0, window.__consoleLogs.length - 200);
-                    }
-                    orig(...args);
-                };
-                const origWarn = console.warn.bind(console);
-                console.warn = (...args) => {
-                    window.__consoleLogs.push('[WARN] ' + args.map(String).join(' '));
-                    origWarn(...args);
-                };
-                const origErr = console.error.bind(console);
-                console.error = (...args) => {
-                    window.__consoleLogs.push('[ERROR] ' + args.map(String).join(' '));
-                    origErr(...args);
-                };
-            }
-        "#;
-        let _ = self.driver.execute(script, Vec::<Value>::new()).await;
+        let _ = self
+            .driver
+            .execute(Consts::CONSOLE_CAPTURE_JS, Vec::<Value>::new())
+            .await;
+    }
+
+    /// Install [`Consts::CONSOLE_CAPTURE_JS`] via CDP
+    /// `Page.addScriptToEvaluateOnNewDocument` so it runs before any of the
+    /// page's own scripts, on every navigation in this session — including
+    /// the very first one. Chrome-only (CDP); Firefox relies solely on the
+    /// post-`goto()` injection in [`Self::install_console_capture`].
+    async fn install_boot_capture(&self) {
+        if self.config.browser != BrowserKind::Chrome {
+            return;
+        }
+        let dev_tools = ChromeDevTools::new(self.driver.handle().clone());
+        let _ = dev_tools
+            .execute_cdp_with_params(
+                "Page.addScriptToEvaluateOnNewDocument",
+                json!({ "source": Consts::CONSOLE_CAPTURE_JS }),
+            )
+            .await;
     }
 
     async fn collect_browser_logs(&self) -> String {
@@ -572,8 +616,12 @@ impl WasmPlayerSelenium {
             time::sleep(interval).await;
         }
 
+        // A timeout alone hides why: surface what the browser actually saw
+        // (console errors, uncaught exceptions, unhandled rejections) rather
+        // than only the last polled snapshot.
+        let logs = self.collect_browser_logs().await;
         Err(format!(
-            "timeout waiting for {description}; last_snapshot={last:?}"
+            "timeout waiting for {description}; last_snapshot={last:?}\nbrowser logs:\n{logs}"
         ))
     }
 
