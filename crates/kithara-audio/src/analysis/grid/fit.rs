@@ -38,6 +38,16 @@ impl Segment {
     }
 }
 
+/// Minimum trusted points a line can be fitted through.
+const MIN_POINTS_FOR_LINE_FIT: usize = 2;
+/// A residual is reported in milliseconds; `sample_rate` is in Hz.
+const MS_PER_SEC: f64 = 1000.0;
+/// A split produces two halves; below `SPLIT_HALVES * min_leaf_bars` neither
+/// half would meet `min_leaf_bars`, so the split is skipped.
+const SPLIT_HALVES: usize = 2;
+/// A span needs two boundary bar indices (`[start, end]`).
+const MIN_BOUNDARIES: usize = 2;
+
 /// Least-squares fit `src = intercept + slope × bar_idx` over the non-outlier
 /// downbeats of `[start, end]`. Returns `(intercept, slope, max_residual)`.
 /// Fewer than two trusted points: line through the endpoints, residual 0.
@@ -50,7 +60,7 @@ fn fit_segment(ctx: &GridFitCtx<'_>, segment: Segment) -> (f64, f64, f64) {
             (x, ctx.db[i])
         })
         .collect();
-    if points.len() < 2 {
+    if points.len() < MIN_POINTS_FOR_LINE_FIT {
         let span: f64 = (end - start).max(1).as_();
         return (ctx.db[start], (ctx.db[end] - ctx.db[start]) / span, 0.0);
     }
@@ -104,8 +114,9 @@ fn bisect_segment(ctx: &GridFitCtx<'_>, segment: Segment) -> Vec<usize> {
         return vec![start, end];
     }
     let (_, _, max_resid) = fit_segment(ctx, segment);
-    let resid_ms = max_resid / ctx.sample_rate * 1000.0;
-    if resid_ms < ctx.params.residual_ms || (end - start) < 2 * ctx.params.min_leaf_bars {
+    let resid_ms = max_resid / ctx.sample_rate * MS_PER_SEC;
+    if resid_ms < ctx.params.residual_ms || (end - start) < SPLIT_HALVES * ctx.params.min_leaf_bars
+    {
         return vec![start, end];
     }
     let mid = aligned_mid(start, end, ctx.params.align_bars, ctx.params.min_leaf_bars);
@@ -139,7 +150,7 @@ pub(super) fn build_segments(
     boundaries: &[usize],
     nominal_bar: f64,
 ) -> Vec<GridSegment> {
-    if boundaries.len() < 2 {
+    if boundaries.len() < MIN_BOUNDARIES {
         return Vec::new();
     }
     let mut spans: Vec<(usize, usize, f64, f64)> = Vec::with_capacity(boundaries.len() - 1);

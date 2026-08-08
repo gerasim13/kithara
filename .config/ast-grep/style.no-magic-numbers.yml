@@ -15,7 +15,18 @@ rule:
     - all:
         - kind: integer_literal
         - not:
-            regex: "^(?:0|1|-1)(?:[iu](?:8|16|32|64|128|size))?$"
+            inside:
+              stopBy: end
+              all:
+                - any:
+                    - kind: function_item
+                    - kind: function_signature_item
+                - follows:
+                    kind: attribute_item
+                    regex: 'cfg\(test\)|cfg\(all\(test,'
+                    stopBy: end
+        - not:
+            regex: "^(?:0|1|-1)_?(?:[iu](?:8|16|32|64|128|size))?$"
         - not:
             regex: "^0b[01]+$"
         - not:
@@ -44,17 +55,38 @@ rule:
               stopBy: end
         - not:
             inside:
+              kind: attribute_item
+              stopBy: end
+              regex: '\bbuilder\(|\bdefault_value_t\s*='
+        - not:
+            inside:
               all:
                 - kind: mod_item
                 - follows:
                     kind: attribute_item
-                    regex: 'cfg\(test\)'
+                    regex: 'cfg\(test\)|cfg\(all\(test,'
                     stopBy: end
               stopBy: end
     - all:
         - kind: float_literal
         - not:
-            regex: '^(?:-?1(?:\.0+)?|0(?:\.0+)?)(?:f(?:32|64))?$'
+            inside:
+              stopBy: end
+              all:
+                - any:
+                    - kind: function_item
+                    - kind: function_signature_item
+                - follows:
+                    kind: attribute_item
+                    regex: 'cfg\(test\)|cfg\(all\(test,'
+                    stopBy: end
+        - not:
+            inside:
+              kind: attribute_item
+              stopBy: end
+              regex: '\bbuilder\(|\bdefault_value_t\s*='
+        - not:
+            regex: '^(?:-?1(?:\.0+)?|0(?:\.0+)?)_?(?:f(?:32|64))?$'
         - not:
             inside:
               kind: const_item
@@ -69,6 +101,6 @@ rule:
                 - kind: mod_item
                 - follows:
                     kind: attribute_item
-                    regex: 'cfg\(test\)'
+                    regex: 'cfg\(test\)|cfg\(all\(test,'
                     stopBy: end
               stopBy: end

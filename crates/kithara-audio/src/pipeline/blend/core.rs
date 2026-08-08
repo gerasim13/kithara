@@ -5,6 +5,17 @@ struct Consts;
 impl Consts {
     const HISTORY_FRAMES: usize = 32;
     const JOIN_MICROS: u32 = 20_000;
+    const MICROS_PER_SEC: u32 = 1_000_000;
+    /// Second-order linear predictor: needs the two preceding history frames
+    /// (`frame - 2`, `frame - 1`) to predict `frame`.
+    const AR_ORDER: usize = 2;
+    /// Smallest `history_frames` that gives the AR(2) recurrence one valid
+    /// frame to fit (`AR_ORDER + 1`).
+    const MIN_JOIN_HISTORY: usize = Self::AR_ORDER + 1;
+    /// A ramp needs a start and an end frame.
+    const MIN_RAMP_FRAMES: u16 = 2;
+    /// `coefficient = 2 * cos(theta)`, so a real angle bounds it to `[-2, 2]`.
+    const COEFFICIENT_BOUND: f32 = 2.0;
 }
 
 enum JoinState {
@@ -84,9 +95,16 @@ impl PcmBlender {
             return;
         }
         for channel in 0..channels {
-            let coefficient = recurrence(&self.history, channels, channel, 2, self.history_frames)
-                .clamp(-2.0, 2.0);
-            let previous = self.history[(self.history_frames - 2) * channels + channel];
+            let coefficient = recurrence(
+                &self.history,
+                channels,
+                channel,
+                Consts::AR_ORDER,
+                self.history_frames,
+            )
+            .clamp(-Consts::COEFFICIENT_BOUND, Consts::COEFFICIENT_BOUND);
+            let previous =
+                self.history[(self.history_frames - Consts::AR_ORDER) * channels + channel];
             let current = self.history[(self.history_frames - 1) * channels + channel];
             let observed_bound = self
                 .history
@@ -115,15 +133,15 @@ impl PcmBlender {
                 .sample_rate
                 .get()
                 .saturating_mul(Consts::JOIN_MICROS)
-                .div_ceil(1_000_000),
+                .div_ceil(Consts::MICROS_PER_SEC),
         )
         .unwrap_or(u16::MAX)
-        .max(2);
+        .max(Consts::MIN_RAMP_FRAMES);
         self.join = JoinState::Active { frames, frame: 0 };
     }
 
     pub(crate) fn join_active(&mut self, active: BlenderProfile) {
-        if self.active.spec() == active.spec() && self.history_frames >= 3 {
+        if self.active.spec() == active.spec() && self.history_frames >= Consts::MIN_JOIN_HISTORY {
             self.active = active;
             self.join = JoinState::Pending;
         } else {
@@ -179,7 +197,7 @@ fn recurrence(history: &[f32], channels: usize, channel: usize, start: usize, en
     let mut numerator = 0.0;
     let mut denominator = 0.0;
     for frame in start..end {
-        let antecedent = history[(frame - 2) * channels + channel];
+        let antecedent = history[(frame - Consts::AR_ORDER) * channels + channel];
         let previous = history[(frame - 1) * channels + channel];
         let current = history[frame * channels + channel];
         numerator = previous.mul_add(current + antecedent, numerator);
@@ -188,12 +206,12 @@ fn recurrence(history: &[f32], channels: usize, channel: usize, start: usize, en
     if denominator > f32::EPSILON {
         numerator / denominator
     } else {
-        2.0
+        Consts::COEFFICIENT_BOUND
     }
 }
 
 fn recurrence_amplitude(previous: f32, current: f32, coefficient: f32) -> f32 {
-    let cosine = coefficient * 0.5;
+    let cosine = coefficient / Consts::COEFFICIENT_BOUND;
     let sine_squared = 1.0 - cosine * cosine;
     if sine_squared <= f32::EPSILON {
         return 0.0;

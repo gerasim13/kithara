@@ -84,9 +84,12 @@ pub(super) fn find_stable_window(
 /// outside the hard bar bounds or deviates from the neighbour-window median
 /// factor by more than `outlier_ratio`. The first downbeat never is.
 pub(super) fn classify_outliers(db: &[f64], nominal_bar: f64, params: &GridParams) -> Vec<bool> {
+    // bar_gaps needs at least two downbeats to produce one gap.
+    const MIN_DOWNBEATS: usize = 2;
+
     let n = db.len();
     let mut outlier = vec![false; n];
-    if n < 2 {
+    if n < MIN_DOWNBEATS {
         return outlier;
     }
     let raw: Vec<Option<f64>> = bar_gaps(db)

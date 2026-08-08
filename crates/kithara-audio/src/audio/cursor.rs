@@ -29,7 +29,10 @@ pub(super) struct ChunkCursor {
 
 impl ChunkCursor {
     pub(super) fn new(pool: &PcmPool, spec: PcmSpec) -> Self {
-        let channels = usize::from(spec.channels).max(2);
+        // Stereo floor: never allocate for fewer than 2 channels.
+        const DEFAULT_CHANNELS: usize = 2;
+
+        let channels = usize::from(spec.channels).max(DEFAULT_CHANNELS);
         let sample_rate = usize::try_from(spec.sample_rate.get()).unwrap_or(usize::MAX);
         let capacity = sample_rate.saturating_mul(channels);
         let interleaved = pool.get_with(|buffer| {

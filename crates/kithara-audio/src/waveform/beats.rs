@@ -1,3 +1,5 @@
+use core::mem::size_of;
+
 use crate::{
     blob::{self, Blob, BlobError, MAX_PREALLOC, Reader, Writer},
     region::GridSegment,
@@ -57,6 +59,15 @@ impl TryFrom<&[u8]> for BeatGrid {
     }
 }
 
+/// Byte size of one serialized `f64` (the `bpm` field).
+const F64_BYTES: usize = size_of::<f64>();
+/// Byte size of one serialized `u64` (a frame position or length prefix).
+const U64_BYTES: usize = size_of::<u64>();
+/// One length prefix per stored list: beats, downbeats, segments.
+const LEN_PREFIX_COUNT: usize = 3;
+/// One [`GridSegment`]: `start_frame` + `end_frame` (`u64`) + `ratio_correction` (`f64`).
+const SEGMENT_BYTES: usize = 3 * U64_BYTES;
+
 impl Blob for BeatGrid {
     const VERSION: u32 = BEAT_GRID_BYTES_VERSION;
 
@@ -78,7 +89,10 @@ impl Blob for BeatGrid {
 
     fn encode(&self, w: &mut Writer<'_>) {
         w.reserve(
-            8 + 3 * 8 + 8 * (self.beats.len() + self.downbeats.len()) + 24 * self.segments.len(),
+            F64_BYTES
+                + LEN_PREFIX_COUNT * U64_BYTES
+                + U64_BYTES * (self.beats.len() + self.downbeats.len())
+                + SEGMENT_BYTES * self.segments.len(),
         );
         w.write_f64(self.bpm);
         w.write_frames(&self.beats);

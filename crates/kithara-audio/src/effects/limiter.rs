@@ -43,7 +43,9 @@ impl PeakLimiter {
             return Err(LimiterError::Release { release_ms });
         }
 
-        let samples = release_ms / 1000.0 * sample_rate.get().to_f32().unwrap_or(1.0);
+        const MS_PER_SEC: f32 = 1000.0;
+
+        let samples = release_ms / MS_PER_SEC * sample_rate.get().to_f32().unwrap_or(1.0);
         let release_coeff = (-1.0 / samples).exp();
 
         Ok(Self {

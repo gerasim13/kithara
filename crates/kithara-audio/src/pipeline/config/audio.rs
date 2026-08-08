@@ -90,13 +90,18 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+const NATIVE_PCM_BUFFER_CHUNKS: usize = 10;
+#[cfg(target_arch = "wasm32")]
+const WASM_PCM_BUFFER_CHUNKS: usize = 32;
+
+#[cfg(not(target_arch = "wasm32"))]
 const fn default_pcm_buffer_chunks() -> usize {
-    10
+    NATIVE_PCM_BUFFER_CHUNKS
 }
 
 #[cfg(target_arch = "wasm32")]
 const fn default_pcm_buffer_chunks() -> usize {
-    32
+    WASM_PCM_BUFFER_CHUNKS
 }
 
 impl<T, B> AudioConfig<T, B>

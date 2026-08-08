@@ -56,6 +56,9 @@ impl Default for GridParams {
 /// outlier classification, stable-window anchor, recursive bisection into
 /// uniform-ratio segments. Positions convert from seconds to source frames at `sample_rate`.
 pub(crate) fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) -> BeatGrid {
+    // bar_gaps needs at least two downbeats to produce one gap.
+    const MIN_DOWNBEATS: usize = 2;
+
     let sr = f64::from(sample_rate);
     let beats = secs_to_frames(&raw.beats, sr);
 
@@ -66,7 +69,7 @@ pub(crate) fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) 
         .filter(|p| p.is_finite() && *p >= 0.0)
         .collect();
     db.sort_by(f64::total_cmp);
-    if db.len() < 2 {
+    if db.len() < MIN_DOWNBEATS {
         return BeatGrid::new(0.0, beats, positions_to_frames(&db), Vec::new());
     }
 
@@ -113,8 +116,11 @@ fn positions_to_frames(positions: &[f64]) -> Vec<u64> {
 
 /// 4/4 bars: bpm = beats-per-bar (4) × 60 / bar-seconds.
 fn bar_to_bpm(bar_samples: f64, sr: f64) -> f64 {
+    const BEATS_PER_BAR: f64 = 4.0;
+    const SECONDS_PER_MINUTE: f64 = 60.0;
+
     if bar_samples > 0.0 {
-        240.0 * sr / bar_samples
+        BEATS_PER_BAR * SECONDS_PER_MINUTE * sr / bar_samples
     } else {
         0.0
     }

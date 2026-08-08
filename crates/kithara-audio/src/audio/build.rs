@@ -37,6 +37,10 @@ use super::{
 };
 
 const WARM_DECODE_FRAMES: usize = 4608;
+/// Stereo floor: never warm fewer than 2 channels.
+const DEFAULT_CHANNELS: usize = 2;
+/// Pre-warm double the steady-state chunk count as headroom.
+const WARM_POOL_MULTIPLIER: usize = 2;
 
 #[derive(Clone)]
 struct DecoderDeps<B> {
@@ -574,7 +578,8 @@ where
 }
 
 fn warm_channels(info: Option<&MediaInfo>) -> usize {
-    info.and_then(|info| info.channels).map_or(2, usize::from)
+    info.and_then(|info| info.channels)
+        .map_or(DEFAULT_CHANNELS, usize::from)
 }
 
 fn warm_pcm_pool(pool: &PcmPool, channels: usize, chunks: usize) {
@@ -582,10 +587,13 @@ fn warm_pcm_pool(pool: &PcmPool, channels: usize, chunks: usize) {
         return;
     }
     let capacity = WARM_DECODE_FRAMES * channels.max(1);
-    pool.pre_warm(chunks.saturating_mul(2).max(1), |buffer| {
-        buffer.clear();
-        buffer.resize(capacity, 0.0);
-    });
+    pool.pre_warm(
+        chunks.saturating_mul(WARM_POOL_MULTIPLIER).max(1),
+        |buffer| {
+            buffer.clear();
+            buffer.resize(capacity, 0.0);
+        },
+    );
 }
 
 fn log_pipeline_ready(spec: PcmSpec, host_sample_rate: &Arc<AtomicU32>) {
