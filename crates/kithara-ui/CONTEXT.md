@@ -463,15 +463,16 @@ between pages by `UserInterface::draw`. It rasterises through wgpu and not throu
 backend, because the window draws through wgpu and this set exists to stand in for it — measured, that
 substitution costs 0.3-0.9% of pixels on 21 of 22 pages.
 
-`just test parity` is the lane: one binary takes the offscreen set and the masonry set, then compares
+`just test ui` is the lane: one binary takes the offscreen set and the masonry set, then compares
 them against `examples/gallery/parity-budget.txt`. The budget prices each page in whole percent of
 differing pixels past the noise floor, a page with no line is allowed nothing, and a page over its
 price or missing from a set ends the run non-zero. The floor is under one percent, where the two
 engines disagree on antialiased edges and text gamma; everything above it is a control that draws
 differently, or does not draw at all, under one of the hosts. The numbers are a debt: a control that
 lands must lower the pages it appears on, and a number may not rise without a reason written next to
-it. The window capture stays for a different question - whether the offscreen path draws what a window
-draws - and is the only one of the three that needs a display.
+it. The window capture, `just test ui-window`, stays for a different question - whether the offscreen path
+draws what a window draws - and is the only one of the three that needs a display. It is not one side
+of the parity: both its sides are the same host.
 
 ### The page behind a document
 

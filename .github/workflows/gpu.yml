@@ -48,7 +48,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Photograph both sets and compare them against the budget
-        run: just test parity
+        run: just test ui
 
       # The numbers name the page that disagrees; only the masks say where on
       # it. Kept on failure too, because that is when they are read.
