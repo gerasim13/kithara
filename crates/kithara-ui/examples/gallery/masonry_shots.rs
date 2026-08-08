@@ -17,7 +17,7 @@ use kithara_ui::{
 };
 use masonry::vello::{
     AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene,
-    peniko::color::palette,
+    peniko::Color,
     wgpu::{
         Backends, BufferDescriptor, BufferUsages, CommandEncoderDescriptor, Device,
         DeviceDescriptor, Extent3d, Instance, InstanceDescriptor, MapMode, PollType, Queue,
@@ -86,7 +86,11 @@ impl Offscreen {
     }
 
     /// Rasterises one scene and reads the pixels back as tightly packed RGBA.
-    pub(super) fn rasterise(&mut self, scene: &Scene) -> Result<Vec<u8>, String> {
+    ///
+    /// The base colour is the window's, not this capture's: the page behind a
+    /// document belongs to the skin, and a set cleared to anything else differs
+    /// from the other host wherever a document leaves its rectangle bare.
+    pub(super) fn rasterise(&mut self, scene: &Scene, base: Color) -> Result<Vec<u8>, String> {
         let view = self.texture.create_view(&TextureViewDescriptor::default());
         self.renderer
             .render_to_texture(
@@ -95,7 +99,7 @@ impl Offscreen {
                 scene,
                 &view,
                 &RenderParams {
-                    base_color: palette::css::BLACK,
+                    base_color: base,
                     width: self.width,
                     height: self.height,
                     antialiasing_method: AaConfig::Area,
@@ -196,7 +200,7 @@ fn capture(dir: &PathBuf) -> Result<usize, String> {
         let scene = ui
             .scene()
             .map_err(|error| format!("draw {}: {error}", shot.name()))?;
-        let rgba = off.rasterise(&scene)?;
+        let rgba = off.rasterise(&scene, ui.background().into())?;
         let path = dir.join(format!("{}.png", shot.name()));
         write_png(&path, &rgba, frame.width, frame.height)?;
         println!("captured {}", path.display());

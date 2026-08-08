@@ -5,7 +5,7 @@ use masonry::vello::Scene;
 use super::{App, Config, Ui};
 use crate::{
     builtin,
-    draw::Pt,
+    draw::{Pt, Rgba},
     ids::{EndpointId, SourceUri},
     interact::{Input, MOUSE, PointerInput, PointerPhase, Scroll},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
@@ -239,6 +239,43 @@ fn a_wheel_notch_over_a_knob_steps_it() {
     assert!(
         ui.app().value > before,
         "a notch over the knob must raise it, but it stayed at {before}"
+    );
+}
+
+/// The page behind a document is the skin's, and a host clears its target to it
+/// before the scene lands. The retained window's first answer was black, which
+/// showed through wherever a document left its rectangle bare and read as a
+/// difference between the hosts.
+#[kithara::test]
+fn a_mounted_ui_takes_its_page_colour_from_the_skin_document() {
+    let endpoints = Registry("fixture.lit", EndpointDesc::new(ValueKind::Bool));
+    let resolver = resolver();
+    let mut doc = builtin::skin_doc().clone();
+    doc.palette.bg = "#123456".to_owned();
+    let origin = SourceUri("fixture:app-input".to_owned());
+    let skin = Skin::resolve_with_font_policy(doc.clone(), &origin, FontPolicy::Embedded)
+        .unwrap_or_else(|error| panic!("the fixture skin must resolve: {error}"));
+    let ui = Ui::new(
+        Swapper::default(),
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .skin(&skin)
+            .skin_doc(&doc)
+            .build(),
+        (240, 120),
+        1.0,
+    )
+    .unwrap_or_else(|error| panic!("the fixture must mount: {error}"));
+
+    assert_eq!(
+        ui.background(),
+        Rgba {
+            a: 1.0,
+            b: f32::from(0x56_u8) / 255.0,
+            g: f32::from(0x34_u8) / 255.0,
+            r: f32::from(0x12_u8) / 255.0,
+        }
     );
 }
 

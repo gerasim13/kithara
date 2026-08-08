@@ -7,7 +7,6 @@ use kithara_platform::{
 };
 use masonry::vello::{
     AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene,
-    peniko::color::palette,
     util::{RenderContext, RenderSurface},
     wgpu::{CommandEncoderDescriptor, PresentMode, TextureViewDescriptor},
 };
@@ -374,7 +373,7 @@ where
             scene,
             &self.surface.target_view,
             &RenderParams {
-                base_color: palette::css::BLACK,
+                base_color: self.ui.background().into(),
                 width: size.width,
                 height: size.height,
                 antialiasing_method: AaConfig::Area,

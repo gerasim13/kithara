@@ -448,23 +448,39 @@ inherent to the iced path being pinned until those text sites are ported.
 
 The layout fixtures above pin geometry, which is what the two hosts agree about by construction. What
 they can still disagree about is the picture, and that is measured rather than reasoned about. The
-gallery example photographs every page three ways: through an iced window
-(`KITHARA_GALLERY_CAPTURE`), through iced with no window at all
-(`KITHARA_GALLERY_CAPTURE_OFFSCREEN`, rasterised by tiny-skia in memory), and through the retained
-host into a Vello scene rasterised on a graphics device (`KITHARA_GALLERY_CAPTURE_MASONRY`). Each set
-writes the geometry it was taken at beside its pages, and `KITHARA_GALLERY_COMPARE=<a>:<b>:<out>`
+gallery example photographs every page three ways: through an iced window (`KITHARA_GALLERY_CAPTURE`),
+through iced with no window at all (`KITHARA_GALLERY_CAPTURE_OFFSCREEN`), and through the retained
+host into a Vello scene (`KITHARA_GALLERY_CAPTURE_MASONRY`). All three rasterise on a graphics device.
+Each set writes the geometry it was taken at beside its pages, and `KITHARA_GALLERY_COMPARE=<a>:<b>:<out>`
 refuses to compare two sets taken at different geometry, because two hosts scaled differently can be
-made to agree or disagree at will.
+made to agree or disagree at will. A set inherits the geometry of a set already in its directory, so a
+window set taken at the screen's scale can be answered on its own terms.
+
+Two things the offscreen set gets from the runtime rather than from a hand-rolled layout-then-draw
+pass, because a capture that skips either draws a page of container backgrounds and nothing else: the
+overlay every window layer paints from is built by `UserInterface::update`, and the renderer is reset
+between pages by `UserInterface::draw`. It rasterises through wgpu and not through the software
+backend, because the window draws through wgpu and this set exists to stand in for it — measured, that
+substitution costs 0.3-0.9% of pixels on 21 of 22 pages.
 
 `just test parity` is the lane: one binary takes the offscreen set and the masonry set, then compares
 them against `examples/gallery/parity-budget.txt`. The budget prices each page in whole percent of
 differing pixels past the noise floor, a page with no line is allowed nothing, and a page over its
-price or missing from a set ends the run non-zero. The floor is about one percent because tiny-skia
-and Vello disagree on antialiased edges; everything above it is a control that draws differently, or
-does not draw at all, under one of the hosts. The numbers are a debt: a control that lands must lower
-the pages it appears on, and a number may not rise without a reason written next to it. The window
-capture stays for a different question - whether the offscreen path draws what a window draws - and
-is the only one of the three that needs a display.
+price or missing from a set ends the run non-zero. The floor is under one percent, where the two
+engines disagree on antialiased edges and text gamma; everything above it is a control that draws
+differently, or does not draw at all, under one of the hosts. The numbers are a debt: a control that
+lands must lower the pages it appears on, and a number may not rise without a reason written next to
+it. The window capture stays for a different question - whether the offscreen path draws what a window
+draws - and is the only one of the three that needs a display.
+
+### The page behind a document
+
+A document paints its panels and leaves the rest of its rectangle bare. That bare part is the page,
+and it belongs to the skin: `Ui::background` reports `skin.palette.bg`, and every host clears to it
+before the scene lands. The retained window, the headless masonry capture and the iced hosts all read
+it from there. Clearing to anything else - black was the retained host's first answer - shows through
+wherever a document does not reach, and reads as a difference between the hosts when the difference is
+really one line of host setup.
 
 ## Interaction Ownership
 

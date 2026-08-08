@@ -294,7 +294,9 @@ hotpath = "0.19.1"
 # UI frameworks
 iced = { version = "0.14", features = ["tokio", "svg", "canvas", "advanced"] }
 iced_renderer = "0.14.0"
+iced_runtime = "0.14.0"
 iced_tiny_skia = "0.14.0"
+iced_wgpu = "0.14.0"
 
 # FFI
 jni = "0.22"

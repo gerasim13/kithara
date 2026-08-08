@@ -25,6 +25,7 @@ use masonry::{
 use super::neutral::{App, Config, RunError};
 use crate::{
     compile::{CompiledUi, compile},
+    draw::Rgba,
     interact::{Input, PointerPhase, ScrollAxis},
     render::{
         UiEvent, WindowCommand, document,
@@ -80,6 +81,16 @@ where
             state,
             ui,
         })
+    }
+
+    /// What to clear the target to before the scene is painted onto it.
+    ///
+    /// A document paints its own panels and leaves the rest of the rectangle to
+    /// whoever owns it. That bare part is the page, and it is the skin's, not
+    /// the target's: clearing to anything else shows through wherever a
+    /// document does not reach, and the other host does not have that seam.
+    pub const fn background(&self) -> Rgba {
+        self.config.skin.palette.bg
     }
 
     /// Takes what the document asked its window to do since the last call. A
