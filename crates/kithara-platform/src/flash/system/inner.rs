@@ -8,8 +8,6 @@ use std::{
     thread::Thread,
 };
 
-use web_time::Instant;
-
 use super::{pace::Pacer, sched::Entry, wake::Wake};
 use crate::{
     common::time::Instant as RealInstant,
@@ -75,7 +73,7 @@ impl Clock {
     /// sampled anchor — a u64 in the same nanos space as the virtual clock,
     /// not a `web_time` composition.
     pub(in crate::flash) fn real_now_nanos(&self) -> u64 {
-        let epoch = self.real_epoch.get_or_init(Instant::now);
+        let epoch = self.real_epoch.get_or_init(web_time::Instant::now);
         let elapsed = u64::try_from(epoch.elapsed().as_nanos()).unwrap_or(u64::MAX);
         crate::flash::Instant::BASE_NANOS.saturating_add(elapsed)
     }

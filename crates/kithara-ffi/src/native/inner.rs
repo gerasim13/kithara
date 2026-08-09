@@ -20,7 +20,6 @@ use kithara_platform::{
 };
 use kithara_play::policy::{DomainKeyPolicy, DomainKeyRule};
 use kithara_queue::{Queue, QueueConfig, QueueError, RepeatMode, TrackSource, Transition};
-use url::Url;
 
 use super::salt;
 use crate::{
@@ -698,7 +697,7 @@ mod tests {
         );
 
         let registry = options.key_registry.expect("registry populated");
-        let url = Url::parse("https://keys.example.com/key").expect("valid key URL");
+        let url = url::Url::parse("https://keys.example.com/key").expect("valid key URL");
         let request = registry.prepare(&url).expect("matching key request");
 
         assert_eq!(
@@ -728,7 +727,7 @@ mod tests {
             .key_registry
             .clone()
             .expect("registry populated");
-        let url = Url::parse("https://keys.example.com/key").expect("valid key URL");
+        let url = url::Url::parse("https://keys.example.com/key").expect("valid key URL");
         let request = registry.prepare(&url).expect("matching key request");
 
         assert_eq!(

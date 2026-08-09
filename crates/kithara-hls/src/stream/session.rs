@@ -1,4 +1,3 @@
-use io::Error;
 mod cancel;
 mod reader;
 
@@ -130,7 +129,7 @@ impl HlsSession {
 
     fn check_live(&self) -> io::Result<()> {
         if self.cancel.root.is_cancelled() {
-            return Err(Error::other("HLS reader session cancelled"));
+            return Err(io::Error::other("HLS reader session cancelled"));
         }
         if !self.active.load(Ordering::Acquire)
             && self
@@ -262,7 +261,7 @@ impl HlsSession {
             profile,
         } = &self.readiness
         else {
-            return Err(StreamError::Source(SourceError::Io(Error::new(
+            return Err(StreamError::Source(SourceError::Io(io::Error::new(
                 ErrorKind::Unsupported,
                 "active HLS session does not carry a decoder reader profile",
             ))));
@@ -380,5 +379,5 @@ impl ByteMap for HlsSession {
 }
 
 fn pending(reason: PendingReason) -> io::Error {
-    Error::new(ErrorKind::Interrupted, reason)
+    io::Error::new(ErrorKind::Interrupted, reason)
 }

@@ -15,7 +15,6 @@ use iced::{
         },
     },
 };
-use mouse::Interaction;
 use num_traits::ToPrimitive;
 
 use super::{
@@ -380,7 +379,7 @@ fn header_cell(
             .path(format!("{path}/width/{}", column.column.endpoint_name()))
             .value(column.width)
             .minimum(style.metrics.min_column_width)
-            .hover(HoverState::new(Interaction::ResizingHorizontally))
+            .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
             .build(),
     })
     .width(Length::Fixed(style.metrics.divider_hit_width))

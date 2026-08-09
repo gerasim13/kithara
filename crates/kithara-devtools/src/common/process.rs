@@ -8,8 +8,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use io::ErrorKind;
-
 const SECRET_ENV_KEYS: &[&str] = &[
     "ANTHROPIC_API_KEY",
     "AWS_ACCESS_KEY_ID",
@@ -90,7 +88,7 @@ pub(crate) fn run_process_with_env(
     remove_secret_environment(&mut command);
     command.envs(environment.iter().copied());
     let mut child = command.spawn().map_err(|error| {
-        if error.kind() == ErrorKind::NotFound {
+        if error.kind() == io::ErrorKind::NotFound {
             ProcessError::MissingExecutable(request.program.to_owned())
         } else {
             ProcessError::Io(error)

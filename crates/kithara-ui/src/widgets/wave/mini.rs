@@ -3,7 +3,6 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
 };
 
-use canvas::Text;
 use iced::{
     Color, Element, Event, Font, Length, Point, Rectangle, Renderer, Size, Theme,
     alignment::Vertical,
@@ -14,9 +13,7 @@ use iced::{
         text,
     },
 };
-use mouse::{Button, Interaction};
 use num_traits::cast::AsPrimitive;
-use text::{Alignment, Shaping};
 
 use crate::{
     module::WaveStyle,
@@ -105,9 +102,9 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
                     ScalarDragMode::HorizontalClick
                 })
                 .hover(HoverState::new(if show_beats {
-                    Interaction::Grab
+                    mouse::Interaction::Grab
                 } else {
-                    Interaction::Pointer
+                    mouse::Interaction::Pointer
                 }))
                 .build(),
             overlay,
@@ -294,7 +291,7 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
         if self.has_waveform() {
             self.drag.mouse_interaction(&state.drag, bounds, cursor)
         } else {
-            Interaction::default()
+            mouse::Interaction::default()
         }
     }
 
@@ -314,7 +311,7 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
         }
         if self.hero() {
             match event {
-                Event::Mouse(mouse::Event::ButtonPressed(Button::Left))
+                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
                     if state.modifiers.shift() && cursor.is_over(bounds) =>
                 {
                     let start = self.track_position(bounds, cursor)?;
@@ -325,7 +322,7 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
                     let end = self.track_position(bounds, cursor)?;
                     return Some(self.drag.publish_child("loop_end", end));
                 }
-                Event::Mouse(mouse::Event::ButtonReleased(Button::Left))
+                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
                     if state.loop_start.take().is_some() =>
                 {
                     return Some(Action::capture());
@@ -495,7 +492,7 @@ fn draw_art(
             color: palette.art_label,
             skin: metrics.art_label,
             font: fonts::mono(metrics.art_label.weight),
-            align_x: Alignment::Center,
+            align_x: text::Alignment::Center,
             align_y: Vertical::Center,
         },
     );
@@ -538,7 +535,7 @@ fn draw_telemetry(
             color: palette.badge_text,
             skin: metrics.badge_text,
             font: fonts::display(metrics.badge_text.weight),
-            align_x: Alignment::Center,
+            align_x: text::Alignment::Center,
             align_y: Vertical::Center,
         },
     );
@@ -619,7 +616,7 @@ fn draw_summary(
                 color: palette.title,
                 skin: metrics.title,
                 font: fonts::display(metrics.title.weight),
-                align_x: Alignment::Left,
+                align_x: text::Alignment::Left,
                 align_y: Vertical::Top,
             },
         );
@@ -632,7 +629,7 @@ fn draw_summary(
                 color: palette.artist,
                 skin: metrics.artist,
                 font: fonts::sans(metrics.artist.weight),
-                align_x: Alignment::Left,
+                align_x: text::Alignment::Left,
                 align_y: Vertical::Top,
             },
         );
@@ -669,7 +666,7 @@ fn draw_readout(
             color: palette.readout_label,
             skin: metrics.readout_label,
             font: fonts::mono(metrics.readout_label.weight),
-            align_x: Alignment::Right,
+            align_x: text::Alignment::Right,
             align_y: Vertical::Top,
         },
     );
@@ -685,7 +682,7 @@ fn draw_readout(
             color: data.value_color,
             skin: metrics.readout_value,
             font: fonts::mono(metrics.readout_value.weight),
-            align_x: Alignment::Right,
+            align_x: text::Alignment::Right,
             align_y: Vertical::Top,
         },
     );
@@ -720,8 +717,8 @@ fn draw_text(frame: &mut Frame, text: CanvasText<'_>) {
         font: text.font,
         align_x: text.align_x,
         align_y: text.align_y,
-        shaping: Shaping::Advanced,
-        ..Text::default()
+        shaping: text::Shaping::Advanced,
+        ..canvas::Text::default()
     });
 }
 

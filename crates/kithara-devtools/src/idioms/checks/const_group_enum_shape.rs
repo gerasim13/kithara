@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use syn::{
-    BinOp, Expr, ExprBinary, ExprLit, ExprUnary, Item, ItemConst, Lit, LitInt, Type, TypePath, UnOp,
+    BinOp, Expr, ExprBinary, ExprLit, ExprUnary, Item, ItemConst, Lit, LitInt, Type, TypePath,
 };
 
 use super::{Check, Context};
@@ -142,7 +142,7 @@ fn literal_value(expr: &Expr) -> Option<i128> {
             lit: Lit::Int(li), ..
         }) => parse_int(li),
         Expr::Unary(ExprUnary {
-            op: UnOp::Neg(_),
+            op: syn::UnOp::Neg(_),
             expr,
             ..
         }) => literal_value(expr).map(|v| -v),

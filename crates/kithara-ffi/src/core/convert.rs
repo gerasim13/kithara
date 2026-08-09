@@ -583,11 +583,9 @@ mod tests {
 
     use kithara_events::{
         AssetEvent, CancelReason, DownloaderEvent, DrmEvent, EngineEvent, Event, EvictReason,
-        FileEvent, KeyFailureStage, KeySource, MediaTime, QueueEvent, QueueRepeatMode, RequestId,
-        RouteChangeReason, RouteDescription, SessionEvent, StretchBackendKind, TotalBytesSource,
-        TrackId,
+        FileEvent, KeyFailureStage, KeySource, MediaTime, QueueEvent, RequestId, RouteChangeReason,
+        RouteDescription, SessionEvent, StretchBackendKind, TotalBytesSource, TrackId,
     };
-    use kithara_net::NetError;
     use kithara_platform::time::Duration;
     use kithara_play::PlayerEvent;
 
@@ -626,7 +624,7 @@ mod tests {
         let request_id = request_id(9);
         let event = DownloaderEvent::RequestFailed {
             request_id,
-            error: NetError::Network("boom".into()),
+            error: kithara_net::NetError::Network("boom".into()),
             retryable: false,
         };
 
@@ -846,7 +844,7 @@ mod tests {
     #[kithara::test]
     fn queue_event_to_ffi_maps_repeat_mode() {
         let event = QueueEvent::RepeatModeChanged {
-            mode: QueueRepeatMode::All,
+            mode: kithara_events::QueueRepeatMode::All,
         };
 
         assert!(matches!(
@@ -861,7 +859,7 @@ mod tests {
     fn event_to_ffi_error_maps_request_failed() {
         let event = Event::Downloader(DownloaderEvent::RequestFailed {
             request_id: request_id(13),
-            error: NetError::Network("boom".into()),
+            error: kithara_net::NetError::Network("boom".into()),
             retryable: false,
         });
 

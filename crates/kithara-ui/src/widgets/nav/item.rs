@@ -1,6 +1,5 @@
 use iced::{
-    Alignment, Background, Border, Color, Element, Length, Theme,
-    alignment::Vertical,
+    Alignment, Background, Border, Element, Length, Theme,
     widget::{
         Space, button,
         button::{Status as ButtonStatus, Style as ButtonStyle},
@@ -43,7 +42,7 @@ impl<'a> Widget<'a> for NavItem<'a, '_, '_, '_> {
                 ContainerStyle::default().background(Background::Color(if active {
                     palette.accent
                 } else {
-                    Color::TRANSPARENT
+                    iced::Color::TRANSPARENT
                 }))
             });
         let content = container(
@@ -60,7 +59,7 @@ impl<'a> Widget<'a> for NavItem<'a, '_, '_, '_> {
         .padding([self.skin.nav.pad_y, self.skin.nav.text_pad_x])
         .width(Length::Fill)
         .height(Length::Fill)
-        .align_y(Vertical::Center);
+        .align_y(iced::alignment::Vertical::Center);
 
         button(row![marker, content].height(Length::Fill))
             .padding(self.skin.nav.pad_y)

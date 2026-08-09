@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use anyhow::Result;
 use glob::Pattern;
-use syn::{File, ImplItem, Item, TraitItem, spanned::Spanned, visit, visit::Visit};
+use syn::{File, Item, spanned::Spanned, visit::Visit};
 
 use super::{Check, Context};
 use crate::{
@@ -373,7 +373,7 @@ fn collect_macro_spans(file: &File) -> Vec<Range<usize>> {
             if m.mac.path.is_ident("macro_rules") {
                 self.spans.push(m.mac.tokens.span().byte_range());
             }
-            visit::visit_item_macro(self, m);
+            syn::visit::visit_item_macro(self, m);
         }
     }
     let mut v = V { spans: Vec::new() };
@@ -410,7 +410,7 @@ fn walk_items_for_fns(items: &[Item], path: &mut Vec<String>, out: &mut Vec<FnSp
             )),
             Item::Impl(im) => {
                 for it in &im.items {
-                    if let ImplItem::Fn(method) = it {
+                    if let syn::ImplItem::Fn(method) = it {
                         out.push(fn_span_from_block(
                             &qualified(path, &method.sig.ident.to_string()),
                             &method.block,
@@ -420,7 +420,7 @@ fn walk_items_for_fns(items: &[Item], path: &mut Vec<String>, out: &mut Vec<FnSp
             }
             Item::Trait(tr) => {
                 for it in &tr.items {
-                    if let TraitItem::Fn(tf) = it
+                    if let syn::TraitItem::Fn(tf) = it
                         && let Some(block) = &tf.default
                     {
                         out.push(fn_span_from_block(

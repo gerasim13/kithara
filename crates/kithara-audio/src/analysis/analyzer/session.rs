@@ -1,6 +1,5 @@
 use std::num::NonZeroU32;
 
-use beat::Slot;
 use kithara_decode::PcmChunk;
 use kithara_resampler::ResamplerBackend;
 use num_traits::cast::AsPrimitive;
@@ -30,7 +29,7 @@ where
     B: ResamplerBackend,
 {
     pub(crate) fn finish_beat(self, detector: Option<&mut beat::Detector>) -> Option<BeatGrid> {
-        Slot::finish(self.beat, detector)
+        beat::Slot::finish(self.beat, detector)
     }
 
     pub(crate) fn finish_waveform(&mut self) -> Option<Waveform> {
@@ -38,7 +37,7 @@ where
     }
 
     pub(crate) fn has_beat(&self) -> bool {
-        !Slot::is_empty(&self.beat)
+        !beat::Slot::is_empty(&self.beat)
     }
 
     pub(crate) fn push(&mut self, chunk: &PcmChunk, detector: Option<&mut beat::Detector>) {
@@ -46,6 +45,6 @@ where
         self.source_frames = self.source_frames.saturating_add(frames);
 
         waveform::push(&mut self.waveform, chunk);
-        Slot::push(&mut self.beat, chunk, detector);
+        beat::Slot::push(&mut self.beat, chunk, detector);
     }
 }

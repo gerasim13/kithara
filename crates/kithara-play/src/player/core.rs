@@ -248,7 +248,7 @@ mod tests {
     use kithara_platform::CancelToken;
     use kithara_test_utils::kithara;
 
-    use super::{super::state::phase::PlayerPhaseKind, *};
+    use super::*;
     use crate::{api::SlotId, bridge::PlayerCmd, session::testing};
 
     #[derive(Clone, Copy)]
@@ -544,6 +544,8 @@ mod tests {
 
     #[kithara::test]
     fn pause_from_idle_is_noop() {
+        use super::super::state::phase::PlayerPhaseKind;
+
         let player = PlayerImpl::new(PlayerConfig::test_builder().build());
         assert_eq!(player.phase_kind(), PlayerPhaseKind::Idle);
         player.pause();

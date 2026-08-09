@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 
 use anyhow::Result;
-use syn::{Fields, ImplItem};
 
 use super::{Check, Context};
 use crate::{
@@ -82,7 +81,7 @@ impl Check for RedundantAccessors {
                     format!("{}::", scope.path.join("::"))
                 };
                 for s in &scope.structs {
-                    if let Fields::Named(named) = &s.fields {
+                    if let syn::Fields::Named(named) = &s.fields {
                         for f in &named.named {
                             if is_strict_pub(&f.vis)
                                 && let Some(id) = &f.ident
@@ -169,7 +168,7 @@ fn analyze_target_type(
 fn collect_delegate_targets(im: &syn::ItemImpl) -> Vec<String> {
     let mut out = Vec::new();
     for item in &im.items {
-        let ImplItem::Macro(macro_item) = item else {
+        let syn::ImplItem::Macro(macro_item) = item else {
             continue;
         };
         if !path_ends_with(&macro_item.mac.path, "delegate") {
@@ -455,7 +454,7 @@ mod tests {
                     format!("{}::", scope.path.join("::"))
                 };
                 for s in &scope.structs {
-                    if let Fields::Named(named) = &s.fields {
+                    if let syn::Fields::Named(named) = &s.fields {
                         for f in &named.named {
                             if is_strict_pub(&f.vis)
                                 && let Some(id) = &f.ident

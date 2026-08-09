@@ -1,8 +1,4 @@
-use iced::{
-    Element, Length,
-    alignment::Vertical,
-    widget::{Space, container},
-};
+use iced::{Element, Length, alignment::Vertical, widget::container};
 
 use crate::{
     module::TextStyle,
@@ -29,7 +25,7 @@ impl<'a> Widget<'a> for Text<'_, '_, '_> {
             _ => self.label,
         };
         let Some(value) = value else {
-            return Space::new().into();
+            return iced::widget::Space::new().into();
         };
         let role = text_role(
             self.style,

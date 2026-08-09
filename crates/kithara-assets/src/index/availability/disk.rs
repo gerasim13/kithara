@@ -3,7 +3,6 @@
 use std::{collections::BTreeMap, fs, path::PathBuf, sync::OnceLock};
 
 use dashmap::DashMap;
-use fs::OpenOptions;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -143,7 +142,7 @@ impl InnerIndex {
             .collect();
         for path in queued {
             self.pending_durability.remove(&path);
-            let synced = OpenOptions::new()
+            let synced = fs::OpenOptions::new()
                 .write(true)
                 .open(&path)
                 .and_then(|file| file.sync_data());

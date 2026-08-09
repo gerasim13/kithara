@@ -8,7 +8,6 @@ use firewheel::{
         NodeID, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
-use kithara_test_utils::kithara;
 use triple_buffer::{Output, triple_buffer};
 
 use super::{
@@ -117,7 +116,7 @@ impl AudioNodeProcessor for SessionTransportProcessor {
         }
     }
 
-    #[kithara::rtsan_forbid_blocking]
+    #[kithara_test_utils::kithara::rtsan_forbid_blocking]
     fn process(
         &mut self,
         info: &ProcInfo,

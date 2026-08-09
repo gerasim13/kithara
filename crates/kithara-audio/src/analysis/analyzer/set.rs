@@ -1,4 +1,3 @@
-use beat::Config;
 use kithara_bufpool::PcmPool;
 use kithara_decode::PcmSpec;
 use kithara_resampler::ResamplerBackend;
@@ -23,7 +22,7 @@ where
 {
     pub(crate) fn build(&self, spec: PcmSpec) -> TrackAnalyzers<B> {
         TrackAnalyzers {
-            beat: Config::build(&self.beat, spec, &self.pcm_pool),
+            beat: beat::Config::build(&self.beat, spec, &self.pcm_pool),
             waveform: waveform::build(&self.waveform, spec),
             source_frames: 0,
             source_sample_rate: spec.sample_rate,
@@ -32,11 +31,11 @@ where
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        waveform::config_is_empty(&self.waveform) && Config::is_empty(&self.beat)
+        waveform::config_is_empty(&self.waveform) && beat::Config::is_empty(&self.beat)
     }
 
     pub(crate) fn take_detector(&mut self) -> Option<beat::Detector> {
-        Config::take_detector(&mut self.beat)
+        beat::Config::take_detector(&mut self.beat)
     }
 
     #[must_use]
@@ -46,7 +45,7 @@ where
     {
         let mut builder = self;
         let beat_config = builder.beat_config.clone().unwrap_or_default();
-        Config::with_default(&mut builder.beat, beat_config.clone());
+        beat::Config::with_default(&mut builder.beat, beat_config.clone());
         builder.beat_config = Some(beat_config);
         builder
     }
@@ -55,7 +54,7 @@ where
     pub fn with_beat_config(self, config: BeatAnalysisConfig<B>) -> Self {
         let mut builder = self;
         builder.beat_config = Some(config.clone());
-        Config::set_resampler(&mut builder.beat, config);
+        beat::Config::set_resampler(&mut builder.beat, config);
         builder
     }
 

@@ -4,7 +4,6 @@ use iced::{
     time::Instant,
     widget::canvas::{self, Action, Canvas, Geometry},
 };
-use mouse::Interaction;
 
 use crate::{
     render::{ControlAction, UiEvent},
@@ -77,7 +76,7 @@ fn direction(y: f32) -> f32 {
 }
 
 impl WheelCanvas {
-    const HOVER: HoverState = HoverState::new(Interaction::ResizingVertically);
+    const HOVER: HoverState = HoverState::new(mouse::Interaction::ResizingVertically);
 
     fn publish(&self, action: ControlAction) -> Action<UiEvent> {
         Action::publish(UiEvent::Control {

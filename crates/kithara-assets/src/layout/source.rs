@@ -1,9 +1,5 @@
 #![forbid(unsafe_code)]
 
-#[cfg(unix)]
-use std::os::unix::ffi::OsStrExt;
-#[cfg(windows)]
-use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -55,12 +51,16 @@ pub(crate) fn local_root(path: &Path) -> String {
 
     #[cfg(unix)]
     {
+        use std::os::unix::ffi::OsStrExt;
+
         hasher.update(Consts::LOCAL_UNIX_DOMAIN);
         hash_field(&mut hasher, path.as_os_str().as_bytes());
     }
 
     #[cfg(windows)]
     {
+        use std::os::windows::ffi::OsStrExt;
+
         let byte_len = path.as_os_str().encode_wide().count().saturating_mul(2);
         hasher.update(Consts::LOCAL_WINDOWS_DOMAIN);
         hasher.update(u64::try_from(byte_len).unwrap_or(u64::MAX).to_be_bytes());

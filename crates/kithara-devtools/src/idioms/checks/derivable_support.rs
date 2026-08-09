@@ -9,9 +9,8 @@ use anyhow::{Context as _, Result};
 use proc_macro2::Span;
 use quote::ToTokens;
 use syn::{
-    Attribute, Expr, Fields, FnArg, GenericArgument, GenericParam, ImplItem, Item, ItemImpl,
-    ItemStruct, Lit, Member, Meta, Pat, Path, PathArguments, Stmt, Token, Type, Visibility,
-    punctuated::Punctuated, spanned::Spanned,
+    Attribute, Expr, Fields, FnArg, GenericParam, ImplItem, Item, ItemImpl, ItemStruct, Lit,
+    Member, Meta, Pat, Path, Stmt, Token, Type, punctuated::Punctuated, spanned::Spanned,
 };
 
 use super::Context;
@@ -386,10 +385,10 @@ fn from_candidate(src: &str, impl_block: &ItemImpl) -> Option<Candidate> {
         return None;
     }
     let segment = trait_path.segments.last()?;
-    let PathArguments::AngleBracketed(args) = &segment.arguments else {
+    let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
         return None;
     };
-    let GenericArgument::Type(source_ty) = args.args.first()? else {
+    let syn::GenericArgument::Type(source_ty) = args.args.first()? else {
         return None;
     };
     let ImplItem::Fn(method) = &impl_block.items[0] else {
@@ -819,11 +818,11 @@ pub(super) fn merge_derive(existing: &str, derive: &str) -> String {
 fn item_declaration_start(src: &str, item: &Item) -> usize {
     let byte = match item {
         Item::Struct(value) => match &value.vis {
-            Visibility::Inherited => value.struct_token.span.byte_range().start,
+            syn::Visibility::Inherited => value.struct_token.span.byte_range().start,
             visibility => visibility.span().byte_range().start,
         },
         Item::Enum(value) => match &value.vis {
-            Visibility::Inherited => value.enum_token.span.byte_range().start,
+            syn::Visibility::Inherited => value.enum_token.span.byte_range().start,
             visibility => visibility.span().byte_range().start,
         },
         _ => item.span().byte_range().start,
@@ -833,7 +832,7 @@ fn item_declaration_start(src: &str, item: &Item) -> usize {
 
 pub(super) fn field_declaration_start(src: &str, field: &syn::Field) -> usize {
     let byte = match &field.vis {
-        Visibility::Inherited => field.ident.as_ref().map_or_else(
+        syn::Visibility::Inherited => field.ident.as_ref().map_or_else(
             || field.ty.span().byte_range().start,
             |ident| ident.span().byte_range().start,
         ),

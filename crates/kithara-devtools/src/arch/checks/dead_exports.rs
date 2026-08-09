@@ -6,7 +6,6 @@ use std::{
 
 use anyhow::Result;
 use cargo_metadata::{Package, Target, TargetKind};
-use proc_macro2::TokenTree;
 use quote::ToTokens;
 use syn::{
     Attribute, Expr, Fields, FnArg, Ident, ImplItem, Item, ItemStruct, ItemUse, Local, Member,
@@ -841,7 +840,7 @@ impl RefCollector<'_> {
         let mut idx = 0;
         while idx < tokens.len() {
             match &tokens[idx] {
-                TokenTree::Ident(ident)
+                proc_macro2::TokenTree::Ident(ident)
                     if self.is_workspace_crate(ident) || self.is_workspace_import(ident) =>
                 {
                     if let Some((next, names)) = qualified_token_path(&tokens, idx) {
@@ -852,7 +851,7 @@ impl RefCollector<'_> {
                         continue;
                     }
                 }
-                TokenTree::Group(group) => {
+                proc_macro2::TokenTree::Group(group) => {
                     self.record_qualified_tokens(&group.stream());
                 }
                 _ => {}
@@ -903,8 +902,8 @@ impl RefCollector<'_> {
         }
         for tree in ts.clone() {
             match tree {
-                TokenTree::Ident(id) => self.record(id.to_string()),
-                TokenTree::Group(g) => self.record_tokens(&g.stream()),
+                proc_macro2::TokenTree::Ident(id) => self.record(id.to_string()),
+                proc_macro2::TokenTree::Group(g) => self.record_tokens(&g.stream()),
                 _ => {}
             }
         }
@@ -963,14 +962,14 @@ fn qualified_token_path(
     tokens: &[proc_macro2::TokenTree],
     start: usize,
 ) -> Option<(usize, Vec<String>)> {
-    let TokenTree::Ident(root) = &tokens[start] else {
+    let proc_macro2::TokenTree::Ident(root) = &tokens[start] else {
         return None;
     };
     let mut names = vec![root.to_string()];
     let mut idx = start;
     while token_path_sep_at(tokens, idx + 1) {
         let next_ident = idx + 3;
-        let Some(TokenTree::Ident(ident)) = tokens.get(next_ident) else {
+        let Some(proc_macro2::TokenTree::Ident(ident)) = tokens.get(next_ident) else {
             break;
         };
         names.push(ident.to_string());
@@ -980,10 +979,10 @@ fn qualified_token_path(
 }
 
 fn token_path_sep_at(tokens: &[proc_macro2::TokenTree], idx: usize) -> bool {
-    let Some(TokenTree::Punct(first)) = tokens.get(idx) else {
+    let Some(proc_macro2::TokenTree::Punct(first)) = tokens.get(idx) else {
         return false;
     };
-    let Some(TokenTree::Punct(second)) = tokens.get(idx + 1) else {
+    let Some(proc_macro2::TokenTree::Punct(second)) = tokens.get(idx + 1) else {
         return false;
     };
     first.as_char() == ':' && second.as_char() == ':'

@@ -1,6 +1,6 @@
 use std::{
     fmt,
-    io::{BufRead, BufReader, Error, ErrorKind},
+    io::{BufRead, BufReader},
     path::Path,
     process::{Child, ChildStdin, Command, Stdio},
     sync::mpsc::{self, Receiver, RecvTimeoutError},
@@ -214,7 +214,7 @@ impl Client {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|error| {
-                if error.kind() == ErrorKind::NotFound {
+                if error.kind() == std::io::ErrorKind::NotFound {
                     ClientError::Unavailable("rust-analyzer is not available on PATH".to_string())
                 } else {
                     ClientError::Io(error)
@@ -442,8 +442,8 @@ fn read_message(reader: &mut impl BufRead) -> std::io::Result<Option<Value>> {
         let bytes = reader.read_line(&mut line)?;
         if bytes == 0 {
             return if saw_header {
-                Err(Error::new(
-                    ErrorKind::UnexpectedEof,
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
                     "LSP headers ended unexpectedly",
                 ))
             } else {
@@ -462,11 +462,12 @@ fn read_message(reader: &mut impl BufRead) -> std::io::Result<Option<Value>> {
             content_length = Some(value);
         }
     }
-    let content_length = content_length
-        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "missing Content-Length"))?;
+    let content_length = content_length.ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "missing Content-Length")
+    })?;
     if content_length > MAX_MESSAGE_BYTES {
-        return Err(Error::new(
-            ErrorKind::InvalidData,
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
             "LSP message exceeds size budget",
         ));
     }
@@ -474,7 +475,7 @@ fn read_message(reader: &mut impl BufRead) -> std::io::Result<Option<Value>> {
     reader.read_exact(&mut body)?;
     serde_json::from_slice(&body)
         .map(Some)
-        .map_err(|error| Error::new(ErrorKind::InvalidData, error))
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use kithara_events::{AbrMode, DeferredBus, HlsEvent, VariantIndex};
+use kithara_events::{DeferredBus, HlsEvent};
 use kithara_platform::sync::Arc;
 use kithara_stream::{PrerollHint, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
 
@@ -355,7 +355,9 @@ mod tests {
             container: playlist.variant_container(0),
         }
         .into_variant(0, &ctx);
-        let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+        let state = Arc::new(AbrState::new(kithara_events::AbrMode::Auto(Some(
+            kithara_events::VariantIndex::new(0),
+        ))));
         let publisher = state.publisher();
         let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer { state });
         let controller = Arc::new(AbrController::new(AbrSettings::default()));

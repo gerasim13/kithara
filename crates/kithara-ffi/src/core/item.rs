@@ -2,10 +2,7 @@
 use std::collections::HashMap;
 
 use kithara_events::TrackId;
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, Mutex},
-};
+use kithara_platform::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -304,7 +301,7 @@ impl AudioPlayerItem {
             observer,
             None,
             Arc::clone(&self.state),
-            CancelToken::never(),
+            kithara_platform::CancelToken::never(),
         );
         *self.event_bridge.lock() = Some(bridge);
     }

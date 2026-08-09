@@ -1,4 +1,4 @@
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing_subscriber::EnvFilter;
 
 pub fn setup_tracing() {
     setup_tracing_with_filter("warn");
@@ -36,7 +36,9 @@ pub fn init_tracing(filter: EnvFilter) {
     {
         use tracing_subscriber::{Layer as _, layer::SubscriberExt, util::SubscriberInitExt};
 
-        let fmt_layer = fmt::layer().with_test_writer().with_filter(filter);
+        let fmt_layer = tracing_subscriber::fmt::layer()
+            .with_test_writer()
+            .with_filter(filter);
         let probe_layer = crate::probe::capture::probe_layer();
         let _ = tracing_subscriber::registry()
             .with(fmt_layer)

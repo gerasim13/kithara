@@ -6,7 +6,6 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, bail};
-use fs::File;
 use glob::Pattern;
 
 use super::{project::ProjectConfig, scope::Scope};
@@ -181,7 +180,7 @@ fn has_shell_shebang(path: &Path) -> bool {
     if path.extension().is_some() {
         return false;
     }
-    let Ok(file) = File::open(path) else {
+    let Ok(file) = fs::File::open(path) else {
         return false;
     };
     let mut first_line = String::new();

@@ -1,5 +1,5 @@
 use kithara_decode::PcmChunk;
-use kithara_events::{AudioEvent, DecoderChangeCause, SeekLifecycleStage, SegmentLocation};
+use kithara_events::{AudioEvent, DecoderChangeCause};
 use kithara_stream::{SourcePhase, StreamType};
 use tracing::{debug, warn};
 
@@ -272,9 +272,9 @@ fn finish_apply_seek_after_recreate<T: StreamType>(
             if let Some(ref emit) = src.emit {
                 emit.enqueue(
                     AudioEvent::SeekLifecycle {
-                        stage: SeekLifecycleStage::SeekApplied,
+                        stage: kithara_events::SeekLifecycleStage::SeekApplied,
                         seek_epoch: request.seek.epoch,
-                        location: SegmentLocation::new(
+                        location: kithara_events::SegmentLocation::new(
                             src.shared_stream
                                 .abr_handle()
                                 .and_then(|handle| handle.current_variant_index()),

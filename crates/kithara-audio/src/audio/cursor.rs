@@ -3,7 +3,6 @@ use std::num::NonZeroUsize;
 use fast_interleave::deinterleave_variable;
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
-use kithara_platform::time::Duration;
 use kithara_stream::{ChunkPosition, PlayheadWrite};
 use kithara_test_utils::kithara;
 
@@ -244,7 +243,7 @@ fn interpolated_position(meta: PcmMeta, consumed_frames: u64) -> kithara_platfor
     let offset = span_ns * u128::from(consumed_frames) / u128::from(total_frames);
     let interpolated = u128::from(start_ns).saturating_add(offset);
     let nanos = u64::try_from(interpolated).unwrap_or(u64::MAX);
-    Duration::from_nanos(nanos)
+    kithara_platform::time::Duration::from_nanos(nanos)
 }
 
 fn pending(playhead: &dyn PlayheadWrite, reason: PendingReason) -> CursorRead {

@@ -6,7 +6,6 @@ use kithara_events::{
 };
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
-use kithara_queue::RepeatMode;
 
 /// FFI-friendly error type bridging playback failures into platform bindings.
 #[derive(Clone, Debug, thiserror::Error)]
@@ -299,9 +298,9 @@ impl From<QueueRepeatMode> for FfiRepeatMode {
 impl From<kithara_queue::RepeatMode> for FfiRepeatMode {
     fn from(value: kithara_queue::RepeatMode) -> Self {
         match value {
-            RepeatMode::Off => Self::Off,
-            RepeatMode::One => Self::One,
-            RepeatMode::All => Self::All,
+            kithara_queue::RepeatMode::Off => Self::Off,
+            kithara_queue::RepeatMode::One => Self::One,
+            kithara_queue::RepeatMode::All => Self::All,
             _ => Self::Unknown,
         }
     }
@@ -1156,7 +1155,11 @@ mod tests {
 
     #[kithara::test]
     fn queue_repeat_mode_round_trips_through_ffi() {
-        for expected in [RepeatMode::Off, RepeatMode::One, RepeatMode::All] {
+        for expected in [
+            kithara_queue::RepeatMode::Off,
+            kithara_queue::RepeatMode::One,
+            kithara_queue::RepeatMode::All,
+        ] {
             let ffi = FfiRepeatMode::from(expected);
             assert_eq!(kithara_queue::RepeatMode::try_from(ffi), Ok(expected));
         }

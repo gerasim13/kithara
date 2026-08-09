@@ -1,6 +1,5 @@
 use std::ops::Range;
 
-use kithara_decode::DecoderFactory;
 use kithara_platform::sync::Arc;
 use kithara_stream::{DeferredWake, ReaderInput, SeekControl, SourcePhase, StreamType};
 use tracing::trace;
@@ -201,7 +200,8 @@ fn recreate_ready_range<T: StreamType>(
     recreate: &RecreateState,
 ) -> Range<u64> {
     let byte_map = stream.byte_map();
-    let profile = DecoderFactory::reader_profile(&recreate.media_info, byte_map.as_deref());
+    let profile =
+        kithara_decode::DecoderFactory::reader_profile(&recreate.media_info, byte_map.as_deref());
     let read_ahead_bytes = profile.read_ahead_bytes().get();
     if matches!(profile.input(), ReaderInput::Incremental) {
         return recreate.offset..range_end(stream, recreate.offset, read_ahead_bytes);

@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
 use kithara_platform::sync::Arc;
@@ -497,7 +495,7 @@ mod tests {
         let mut fx = keylocked(StretchKind::default(), 0.5);
         let cf = 1024usize;
         let block = sine(cf);
-        let mut fed_ends = HashSet::new();
+        let mut fed_ends = std::collections::HashSet::new();
         let mut emitted = Vec::new();
         for i in 0..40u64 {
             let mut c = chunk(&block);

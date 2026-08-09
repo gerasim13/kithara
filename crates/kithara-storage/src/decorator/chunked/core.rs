@@ -8,7 +8,6 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use io::ErrorKind;
 use kithara_platform::sync::{Arc, Mutex};
 
 use crate::{
@@ -238,7 +237,7 @@ impl<D: DriverIo> AtomicChunked<D> {
             Ok(file) => {
                 drop(file);
             }
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
                 return Err(StorageError::TmpClaimed(tmp_path));
             }
             Err(e) => return Err(StorageError::Io(e)),

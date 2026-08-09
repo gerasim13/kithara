@@ -4,7 +4,6 @@ use std::{
 };
 
 use anyhow::{Result, bail};
-use semantic::{SemanticState, SemanticSummary};
 
 use super::{
     cli::{Lod, RuntimeMode, SemanticMode, ViewName, VizArgs},
@@ -70,7 +69,7 @@ pub(crate) fn run(args: &VizArgs, ctx: &Ctx) -> Result<()> {
         &mut graph,
     )?;
     let semantic = if args.semantic == SemanticMode::Off {
-        SemanticSummary::static_only("semantic resolution disabled")
+        semantic::SemanticSummary::static_only("semantic resolution disabled")
     } else {
         semantic::enrich(
             &mut graph,
@@ -129,7 +128,8 @@ pub(crate) fn run(args: &VizArgs, ctx: &Ctx) -> Result<()> {
     writeln!(io::stdout().lock(), "==> {}", artifacts.document.display())?;
     if semantic.is_incomplete()
         || runtime.is_incomplete()
-        || args.semantic == SemanticMode::Required && semantic.state == SemanticState::Unavailable
+        || args.semantic == SemanticMode::Required
+            && semantic.state == semantic::SemanticState::Unavailable
     {
         bail!("architecture analysis is incomplete; partial artifacts were preserved");
     }

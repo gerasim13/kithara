@@ -1,9 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use syn::{
-    Expr, Item, ItemImpl, Meta, PathArguments, ReturnType, TraitItem, Type, punctuated::Punctuated,
-    visit, visit::Visit,
-};
+use syn::{Expr, ItemImpl, Type, punctuated::Punctuated, visit::Visit};
 
 use super::graph::{Edge, EdgeKind, Evidence, EvidenceGraph, Node, NodeId, NodeKind};
 use crate::common::parse::is_pub_visibility;
@@ -69,7 +66,7 @@ pub(super) struct SourceUnit<'a> {
 
 pub(super) fn is_test_only(attributes: &[syn::Attribute]) -> bool {
     attributes.iter().any(|attribute| {
-        let Meta::List(list) = &attribute.meta else {
+        let syn::Meta::List(list) = &attribute.meta else {
             return false;
         };
         list.path.is_ident("cfg")
@@ -81,14 +78,14 @@ pub(super) fn is_test_only(attributes: &[syn::Attribute]) -> bool {
 
 fn meta_requires_test(meta: &syn::Meta) -> bool {
     match meta {
-        Meta::Path(path) => path.is_ident("test"),
-        Meta::List(list) if list.path.is_ident("all") => list
+        syn::Meta::Path(path) => path.is_ident("test"),
+        syn::Meta::List(list) if list.path.is_ident("all") => list
             .parse_args_with(Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated)
             .is_ok_and(|items| items.iter().any(meta_requires_test)),
-        Meta::List(list) if list.path.is_ident("any") => list
+        syn::Meta::List(list) if list.path.is_ident("any") => list
             .parse_args_with(Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated)
             .is_ok_and(|items| !items.is_empty() && items.iter().all(meta_requires_test)),
-        Meta::List(_) | Meta::NameValue(_) => false,
+        syn::Meta::List(_) | syn::Meta::NameValue(_) => false,
     }
 }
 
@@ -213,7 +210,7 @@ impl<'ast> Visit<'ast> for AbstractionVisitor<'_, '_> {
             return;
         }
         self.add_named(&item.ident, NodeKind::ConcreteType, "type");
-        visit::visit_item_enum(self, item);
+        syn::visit::visit_item_enum(self, item);
     }
 
     fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
@@ -221,7 +218,7 @@ impl<'ast> Visit<'ast> for AbstractionVisitor<'_, '_> {
             return;
         }
         self.add_module_functions(&item.sig.ident);
-        visit::visit_item_fn(self, item);
+        syn::visit::visit_item_fn(self, item);
     }
 
     fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
@@ -249,7 +246,7 @@ impl<'ast> Visit<'ast> for AbstractionVisitor<'_, '_> {
             EdgeKind::Contains,
             Evidence::static_fact(origin),
         ));
-        visit::visit_item_mod(self, item);
+        syn::visit::visit_item_mod(self, item);
         self.inline_modules.pop();
     }
 
@@ -258,7 +255,7 @@ impl<'ast> Visit<'ast> for AbstractionVisitor<'_, '_> {
             return;
         }
         self.add_named(&item.ident, NodeKind::ConcreteType, "type");
-        visit::visit_item_struct(self, item);
+        syn::visit::visit_item_struct(self, item);
     }
 
     fn visit_item_trait(&mut self, item: &'ast syn::ItemTrait) {
@@ -275,7 +272,7 @@ impl<'ast> Visit<'ast> for AbstractionVisitor<'_, '_> {
             &item.ident.to_string(),
         );
         for method in &item.items {
-            let TraitItem::Fn(method) = method else {
+            let syn::TraitItem::Fn(method) = method else {
                 continue;
             };
             let start = method.sig.ident.span().start();
@@ -298,7 +295,7 @@ impl<'ast> Visit<'ast> for AbstractionVisitor<'_, '_> {
                 Evidence::static_fact(origin),
             ));
         }
-        visit::visit_item_trait(self, item);
+        syn::visit::visit_item_trait(self, item);
     }
 
     fn visit_item_type(&mut self, item: &'ast syn::ItemType) {
@@ -306,7 +303,7 @@ impl<'ast> Visit<'ast> for AbstractionVisitor<'_, '_> {
             return;
         }
         self.add_named(&item.ident, NodeKind::ConcreteType, "type");
-        visit::visit_item_type(self, item);
+        syn::visit::visit_item_type(self, item);
     }
 
     fn visit_item_union(&mut self, item: &'ast syn::ItemUnion) {
@@ -314,7 +311,7 @@ impl<'ast> Visit<'ast> for AbstractionVisitor<'_, '_> {
             return;
         }
         self.add_named(&item.ident, NodeKind::ConcreteType, "type");
-        visit::visit_item_union(self, item);
+        syn::visit::visit_item_union(self, item);
     }
 }
 
@@ -386,7 +383,7 @@ impl<'ast> Visit<'ast> for DefinitionVisitor<'_, '_> {
             return;
         }
         self.add_function(&item.sig, &item.vis);
-        visit::visit_impl_item_fn(self, item);
+        syn::visit::visit_impl_item_fn(self, item);
     }
 
     fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
@@ -394,7 +391,7 @@ impl<'ast> Visit<'ast> for DefinitionVisitor<'_, '_> {
             return;
         }
         self.add_function(&item.sig, &item.vis);
-        visit::visit_item_fn(self, item);
+        syn::visit::visit_item_fn(self, item);
     }
 
     fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
@@ -427,7 +424,7 @@ impl<'ast> Visit<'ast> for DefinitionVisitor<'_, '_> {
         }
         let previous = self.impl_type.replace(concrete);
         let previous_owner = std::mem::replace(&mut self.impl_owner, concrete_owner);
-        visit::visit_item_impl(self, item);
+        syn::visit::visit_item_impl(self, item);
         self.impl_type = previous;
         self.impl_owner = previous_owner;
     }
@@ -435,7 +432,7 @@ impl<'ast> Visit<'ast> for DefinitionVisitor<'_, '_> {
     fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
         if item.content.is_some() && !is_test_only(&item.attrs) {
             self.inline_modules.push(item.ident.to_string());
-            visit::visit_item_mod(self, item);
+            syn::visit::visit_item_mod(self, item);
             self.inline_modules.pop();
         }
     }
@@ -561,7 +558,7 @@ impl<'ast> Visit<'ast> for CallVisitor<'_, '_> {
                 self.add_call(&segments, start.line, start.column);
             }
         }
-        visit::visit_expr_call(self, call);
+        syn::visit::visit_expr_call(self, call);
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
@@ -571,7 +568,7 @@ impl<'ast> Visit<'ast> for CallVisitor<'_, '_> {
             start.line,
             start.column,
         );
-        visit::visit_expr_method_call(self, call);
+        syn::visit::visit_expr_method_call(self, call);
     }
 
     fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
@@ -579,7 +576,7 @@ impl<'ast> Visit<'ast> for CallVisitor<'_, '_> {
             return;
         }
         let previous = self.caller.replace(self.function_id(&item.sig.ident));
-        visit::visit_block(self, &item.block);
+        syn::visit::visit_block(self, &item.block);
         self.caller = previous;
     }
 
@@ -588,7 +585,7 @@ impl<'ast> Visit<'ast> for CallVisitor<'_, '_> {
             return;
         }
         let previous = self.caller.replace(self.function_id(&item.sig.ident));
-        visit::visit_block(self, &item.block);
+        syn::visit::visit_block(self, &item.block);
         self.caller = previous;
     }
 
@@ -597,14 +594,14 @@ impl<'ast> Visit<'ast> for CallVisitor<'_, '_> {
             return;
         }
         let previous = self.impl_type.replace(type_name(&item.self_ty));
-        visit::visit_item_impl(self, item);
+        syn::visit::visit_item_impl(self, item);
         self.impl_type = previous;
     }
 
     fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
         if item.content.is_some() && !is_test_only(&item.attrs) {
             self.inline_modules.push(item.ident.to_string());
-            visit::visit_item_mod(self, item);
+            syn::visit::visit_item_mod(self, item);
             self.inline_modules.pop();
         }
     }
@@ -631,7 +628,7 @@ fn type_name(ty: &Type) -> String {
 }
 
 fn returns_owner(signature: &syn::Signature, owner: &str) -> bool {
-    let ReturnType::Type(_, returned) = &signature.output else {
+    let syn::ReturnType::Type(_, returned) = &signature.output else {
         return false;
     };
     type_owns(returned, owner)
@@ -645,13 +642,15 @@ fn type_owns(ty: &Type, owner: &str) -> bool {
         segment.ident == "Self"
             || segment.ident == owner
             || match &segment.arguments {
-                PathArguments::AngleBracketed(arguments) => arguments.args.iter().any(|argument| {
-                    matches!(
-                        argument,
-                        syn::GenericArgument::Type(inner) if type_owns(inner, owner)
-                    )
-                }),
-                PathArguments::None | PathArguments::Parenthesized(_) => false,
+                syn::PathArguments::AngleBracketed(arguments) => {
+                    arguments.args.iter().any(|argument| {
+                        matches!(
+                            argument,
+                            syn::GenericArgument::Type(inner) if type_owns(inner, owner)
+                        )
+                    })
+                }
+                syn::PathArguments::None | syn::PathArguments::Parenthesized(_) => false,
             }
     })
 }
@@ -735,7 +734,7 @@ mod tests {
     fn test_only_cfg_requires_every_possible_branch_to_require_test() {
         fn attributes(source: &str) -> Vec<syn::Attribute> {
             let file = syn::parse_file(source).expect("cfg fixture should parse");
-            let Item::Mod(module) = &file.items[0] else {
+            let syn::Item::Mod(module) = &file.items[0] else {
                 panic!("cfg fixture should contain a module");
             };
             module.attrs.clone()

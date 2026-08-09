@@ -11,7 +11,6 @@ use iced::{
         slider::{Handle, HandleShape, Rail, Status as SliderStatus, Style as SliderStyle},
     },
 };
-use mouse::Interaction;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
@@ -269,7 +268,7 @@ impl<'a> Widget<'a> for VolumeStrip<'_, '_> {
             drag: ScalarDrag::builder()
                 .path(self.path)
                 .mode(ScalarDragMode::Horizontal)
-                .hover(HoverState::new(Interaction::ResizingHorizontally))
+                .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
                 .wheel(WheelStep {
                     value: self.value.clamp(0.0, 1.0).as_(),
                     step: self.skin.fader.step.as_(),

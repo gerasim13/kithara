@@ -6,7 +6,7 @@ use std::{
     path::Path,
 };
 
-use dashmap::{DashMap, mapref::entry::Entry};
+use dashmap::DashMap;
 use kithara_events::{AssetEvent, EventBus};
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::ResourceStatus;
@@ -121,7 +121,7 @@ where
         let next = AssetResourceState::from(status);
         let entry = self.live.entry(key.clone());
         match entry {
-            Entry::Occupied(mut occ) => {
+            dashmap::mapref::entry::Entry::Occupied(mut occ) => {
                 if let Some(existing) = occ.get().upgrade() {
                     let preserve_live = matches!(
                         existing.snapshot(),
@@ -140,7 +140,7 @@ where
                 occ.insert(Arc::downgrade(&live));
                 live
             }
-            Entry::Vacant(vac) => {
+            dashmap::mapref::entry::Entry::Vacant(vac) => {
                 let live = Arc::new(LiveResource::new(
                     key.clone(),
                     Arc::downgrade(&self.live),

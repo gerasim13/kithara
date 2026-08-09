@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-use futures::future;
 use kithara_assets::{AssetResource, AssetScope, ResourceKey};
 use url::Url;
 
@@ -72,5 +71,5 @@ pub(crate) async fn load_variant_playlists(
         .iter()
         .map(|variant| VariantPlaylist::for_variant(cache, scope, master_url, master_key, variant))
         .collect::<HlsResult<Vec<_>>>()?;
-    future::try_join_all(loadables.iter().map(VariantPlaylist::load)).await
+    futures::future::try_join_all(loadables.iter().map(VariantPlaylist::load)).await
 }

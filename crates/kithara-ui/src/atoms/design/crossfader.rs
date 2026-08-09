@@ -8,7 +8,6 @@ use iced::{
         container,
     },
 };
-use mouse::Interaction;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
@@ -90,7 +89,7 @@ where
             drag: ScalarDrag::builder()
                 .path(self.path)
                 .mode(ScalarDragMode::Horizontal)
-                .hover(HoverState::new(Interaction::ResizingHorizontally))
+                .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
                 .build(),
             rail_background: self.skin.color(metrics.rail_background),
             rail_color: self.skin.color(metrics.rail_frame.border),

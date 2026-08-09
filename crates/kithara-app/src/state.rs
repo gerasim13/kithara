@@ -1,6 +1,6 @@
 use kithara::{
     abr::AbrHandle,
-    events::{AbrMode, BpmInfo, DjEvent, Event, MediaTime, PlayerEvent, SlotId, VariantInfo},
+    events::{AbrMode, DjEvent, Event, MediaTime, PlayerEvent, SlotId, VariantInfo},
     play::StretchControls,
     prelude::EngineLoadSnapshot,
     stream::AudioCodec,
@@ -8,7 +8,6 @@ use kithara::{
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
-    time::Duration,
     tokio::task,
 };
 use kithara_queue::{Queue, QueueEvent, TrackEntry};
@@ -314,10 +313,10 @@ fn bpm_info_from_state(
     if source_frames == 0 || duration_secs <= 0.0 {
         return None;
     }
-    Some(BpmInfo::new(
+    Some(kithara::events::BpmInfo::new(
         grid.bpm(),
         None,
-        Duration::from_secs_f64(
+        kithara_platform::time::Duration::from_secs_f64(
             (u64_to_f64(first_beat) / u64_to_f64(source_frames)) * duration_secs,
         ),
     ))

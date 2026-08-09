@@ -1,5 +1,3 @@
-use std::sync::atomic::Ordering;
-
 use firewheel::{
     channel_config::{ChannelConfig, ChannelCount},
     diff::{Diff, Patch},
@@ -126,7 +124,7 @@ mod tests {
             .expect("inputs not yet taken")
             .playback
             .playing
-            .load(Ordering::Relaxed);
+            .load(std::sync::atomic::Ordering::Relaxed);
         assert!(!playing);
     }
 }

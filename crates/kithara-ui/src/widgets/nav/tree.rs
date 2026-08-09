@@ -1,7 +1,7 @@
 use std::fmt;
 
 use iced::{
-    Alignment, Background, Border, Color, Element, Length, Padding, Pixels, Shadow, Theme,
+    Alignment, Background, Border, Element, Length, Padding, Pixels, Shadow, Theme,
     alignment::{Horizontal, Vertical},
     widget::{
         Column, Row, Space, button,
@@ -306,7 +306,7 @@ fn tree_row(
             ContainerStyle::default().background(Background::Color(if row.selected {
                 palette.accent
             } else {
-                Color::TRANSPARENT
+                iced::Color::TRANSPARENT
             }))
         });
     let chevron = row.expanded.map_or(

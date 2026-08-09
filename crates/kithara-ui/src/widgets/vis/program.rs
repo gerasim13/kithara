@@ -3,7 +3,6 @@ use iced::{
     widget::{Space, shader},
 };
 use num_traits::ToPrimitive;
-use shader::Shader;
 
 use super::pipeline::VisPrimitive;
 use crate::{
@@ -50,7 +49,7 @@ impl<'a> Widget<'a> for Vis<'_, '_, '_> {
         }
         .unwrap_or_default();
 
-        Shader::new(VisProgram {
+        shader::Shader::new(VisProgram {
             preset,
             time,
             level: level.clamp(0.0, 1.0),

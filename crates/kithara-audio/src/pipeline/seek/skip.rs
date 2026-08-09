@@ -1,7 +1,6 @@
 use kithara_decode::{PcmChunk, PcmSpec};
 use kithara_platform::time::Duration;
 use kithara_stream::StreamType;
-use num_traits::cast::ToPrimitive;
 use tracing::debug;
 
 use crate::pipeline::{decode::DecoderGeneration, seek::ResumeState, stream::shared::SharedStream};
@@ -16,7 +15,7 @@ pub(crate) fn duration(spec: PcmSpec, frames: usize) -> Duration {
     let nanos = (frames as u128)
         .saturating_mul(Consts::NANOS_PER_SEC)
         .saturating_div(u128::from(spec.sample_rate.get()));
-    let nanos = ToPrimitive::to_u64(&nanos).unwrap_or(u64::MAX);
+    let nanos = num_traits::cast::ToPrimitive::to_u64(&nanos).unwrap_or(u64::MAX);
     Duration::from_nanos(nanos)
 }
 

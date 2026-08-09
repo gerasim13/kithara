@@ -1,6 +1,5 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use anchor::AnchorPlan;
 use kithara_decode::DecodeError;
 use kithara_events::{DeferredBus, Event, SeekLifecycleStage};
 use kithara_platform::{sync::Arc, time::Duration};
@@ -149,10 +148,10 @@ impl SeekEngine {
                     context,
                 };
             }
-            AnchorPlan::Recreate(recreate) => {
+            anchor::AnchorPlan::Recreate(recreate) => {
                 return SeekTransition::Recreate(recreate);
             }
-            AnchorPlan::Seek => {}
+            anchor::AnchorPlan::Seek => {}
         }
         update_len(ctx.decode, ctx.stream);
         match ctx

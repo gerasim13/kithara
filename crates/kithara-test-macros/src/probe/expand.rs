@@ -1,6 +1,6 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{Error, FnArg, Ident, ItemFn, Pat, PatIdent};
+use syn::{Error, Ident, ItemFn, Pat, PatIdent};
 
 use super::parse::ProbeFilter;
 
@@ -12,8 +12,8 @@ fn collect_fn_param_idents(input: &ItemFn) -> syn::Result<Vec<Ident>> {
     let mut idents = Vec::new();
     for arg in &input.sig.inputs {
         match arg {
-            FnArg::Receiver(_) => {}
-            FnArg::Typed(typed) => match typed.pat.as_ref() {
+            syn::FnArg::Receiver(_) => {}
+            syn::FnArg::Typed(typed) => match typed.pat.as_ref() {
                 Pat::Ident(PatIdent { ident, .. }) => idents.push(ident.clone()),
                 other => {
                     return Err(Error::new_spanned(

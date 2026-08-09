@@ -1,5 +1,5 @@
 use kithara_events::{AbrMode, CancelReason, RequestId, RequestPriority};
-use kithara_platform::{time::Duration, tokio};
+use kithara_platform::time::Duration;
 use url::Url;
 
 pub trait Probe {
@@ -136,7 +136,7 @@ pub fn bump_install_id() -> u64 {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-tokio::task_local! {
+kithara_platform::tokio::task_local! {
     pub static OWNED_INSTALL_ID: u64;
 }
 

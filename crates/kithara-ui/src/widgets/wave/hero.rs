@@ -1,6 +1,5 @@
 use std::ops::Range;
 
-use canvas::Text;
 use iced::{
     Color, Point, Rectangle, Size,
     alignment::Vertical,
@@ -11,7 +10,6 @@ use iced::{
     },
 };
 use num_traits::cast::AsPrimitive;
-use text::{Alignment, Shaping};
 
 use super::{
     bars,
@@ -214,10 +212,10 @@ fn draw_cues(
             color: palette.cue_text,
             size: metrics.cue_badge_text.size.into(),
             font: fonts::mono(metrics.cue_badge_text.weight),
-            align_x: Alignment::Center,
+            align_x: text::Alignment::Center,
             align_y: Vertical::Center,
-            shaping: Shaping::Advanced,
-            ..Text::default()
+            shaping: text::Shaping::Advanced,
+            ..canvas::Text::default()
         });
     }
 }

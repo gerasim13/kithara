@@ -3,10 +3,7 @@ use std::sync::{
     atomic::{AtomicI64, Ordering},
 };
 
-use kithara_platform::{
-    sync::{Mutex, MutexGuard, mpsc},
-    thread,
-};
+use kithara_platform::sync::{Mutex, MutexGuard, mpsc};
 use kithara_play::{CmdMsg, wasm};
 use wasm_bindgen::JsValue;
 
@@ -113,7 +110,7 @@ impl WorkerBridge {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         *self.lock_cmd_tx() = Some(cmd_tx);
 
-        let worker = thread::spawn(move || {
+        let worker = kithara_platform::thread::spawn(move || {
             crate::web::worker::worker_main(cmd_rx, session_tx);
         });
         std::mem::forget(worker);

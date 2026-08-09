@@ -2,7 +2,6 @@ use kithara_decode::DecoderSeekOutcome;
 use kithara_events::{AudioEvent, DeferredBus, Event, SeekLifecycleStage, SegmentLocation};
 use kithara_platform::time::Duration;
 use kithara_stream::{PlayheadWrite, SeekObserve, StreamType};
-use num_traits::cast::ToPrimitive;
 
 use crate::pipeline::{
     decode::{DecoderGeneration, core::ActiveDecode},
@@ -27,8 +26,10 @@ pub(crate) fn commit_outcome<T: StreamType>(
             ..
         } => (landed_frame, landed_at, landed_byte),
         DecoderSeekOutcome::PastEof { duration } => {
-            let frame = ToPrimitive::to_u64(&(duration.as_secs_f64() * f64::from(sample_rate)))
-                .unwrap_or(u64::MAX);
+            let frame = num_traits::cast::ToPrimitive::to_u64(
+                &(duration.as_secs_f64() * f64::from(sample_rate)),
+            )
+            .unwrap_or(u64::MAX);
             (frame, duration, None)
         }
     };
@@ -132,7 +133,8 @@ pub(crate) fn land_eof(
 ) {
     let sample_rate = active.decoder().spec().sample_rate.get();
     let frame_offset =
-        ToPrimitive::to_u64(&(duration.as_secs_f64() * f64::from(sample_rate))).unwrap_or(u64::MAX);
+        num_traits::cast::ToPrimitive::to_u64(&(duration.as_secs_f64() * f64::from(sample_rate)))
+            .unwrap_or(u64::MAX);
     playhead.land(&kithara_stream::ChunkPosition {
         frame_offset,
         end_position_ns: u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX),

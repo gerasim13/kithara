@@ -32,7 +32,6 @@ where
 mod tests {
     use std::io::Error as IoError;
 
-    use kithara_stream::PendingReason;
     use kithara_test_utils::kithara;
 
     use crate::error::DecodeError;
@@ -40,7 +39,7 @@ mod tests {
     #[kithara::test]
     fn test_backend_symphonia_seek_pending_counts_as_interrupted() {
         let decode_err = DecodeError::backend(super::SymphoniaError::IoError(IoError::other(
-            PendingReason::SeekPending,
+            kithara_stream::PendingReason::SeekPending,
         )));
         assert!(decode_err.is_interrupted());
     }

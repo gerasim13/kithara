@@ -1,6 +1,5 @@
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom};
 
-use io::Error;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
@@ -25,7 +24,7 @@ impl HlsSessionReader {
             SeekFrom::Current(delta) => i128::from(current).saturating_add(i128::from(delta)),
             SeekFrom::End(delta) => {
                 let len = self.session.len().ok_or_else(|| {
-                    Error::new(
+                    io::Error::new(
                         ErrorKind::Unsupported,
                         "seek from end requires known length",
                     )
@@ -34,7 +33,7 @@ impl HlsSessionReader {
             }
         };
         if position < 0 {
-            return Err(Error::new(
+            return Err(io::Error::new(
                 ErrorKind::InvalidInput,
                 "negative seek position",
             ));
@@ -43,7 +42,7 @@ impl HlsSessionReader {
         if let Some(len) = self.session.len()
             && position > len
         {
-            return Err(Error::new(
+            return Err(io::Error::new(
                 ErrorKind::InvalidInput,
                 StreamSeekPastEof {
                     len,
@@ -98,7 +97,7 @@ impl Read for HlsSessionReader {
                     NotReadyCause::WaitBudgetExhausted,
                 )));
             }
-            Err(error) => return Err(Error::other(error.to_string())),
+            Err(error) => return Err(io::Error::other(error.to_string())),
         }
         self.session.check_live()?;
         match self.session.variant.read_at(byte, buf) {
@@ -112,7 +111,7 @@ impl Read for HlsSessionReader {
                 self.session.arm_peer();
                 Err(pending(reason))
             }
-            Err(error) => Err(Error::other(error.to_string())),
+            Err(error) => Err(io::Error::other(error.to_string())),
         }
     }
 }

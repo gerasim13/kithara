@@ -1,6 +1,5 @@
 use std::rc::Rc;
 
-use broadcast::error::RecvError;
 use js_sys::Reflect;
 use kithara_events::{Envelope, Event, EventReceiver, QueueEvent};
 use kithara_platform::{
@@ -9,7 +8,7 @@ use kithara_platform::{
 };
 use kithara_queue::Queue;
 use wasm_bindgen::JsValue;
-use web_sys::{BroadcastChannel, console};
+use web_sys::BroadcastChannel;
 
 use super::{encode::encode, encode_item::encode_item_event};
 use crate::types::FfiPlayerEvent;
@@ -60,7 +59,7 @@ fn spawn_duration_poll(queue: &Rc<Queue>) {
 
 async fn run(mut rx: EventReceiver) {
     let Ok(channel) = BroadcastChannel::new(EVENT_CHANNEL) else {
-        console::warn_1(&JsValue::from_str(
+        web_sys::console::warn_1(&JsValue::from_str(
             "kithara: BroadcastChannel unavailable in worker; event bridge disabled",
         ));
         return;
@@ -89,8 +88,8 @@ async fn run(mut rx: EventReceiver) {
                     let _ = channel.post_message(&msg);
                 }
             }
-            Err(RecvError::Lagged(_)) => {}
-            Err(RecvError::Closed) => break,
+            Err(broadcast::error::RecvError::Lagged(_)) => {}
+            Err(broadcast::error::RecvError::Closed) => break,
         }
     }
 }

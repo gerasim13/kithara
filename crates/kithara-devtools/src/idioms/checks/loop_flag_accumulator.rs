@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use anyhow::Result;
 use syn::{
     BinOp, Block, Expr, ExprAssign, ExprBinary, ExprForLoop, ExprIf, ExprLoop, ExprPath, ExprWhile,
-    Lit, Local, Pat, PatIdent, Stmt, visit, visit::Visit,
+    Lit, Local, Pat, PatIdent, Stmt, visit::Visit,
 };
 
 use super::{Check, Context};
@@ -62,7 +62,7 @@ fn analyze_file(rel: &str, file: &syn::File, sup: &Suppressions, out: &mut Vec<V
                 self.sup,
                 self.out,
             );
-            visit::visit_item_fn(self, f);
+            syn::visit::visit_item_fn(self, f);
         }
         fn visit_impl_item_fn(&mut self, f: &'ast syn::ImplItemFn) {
             let reset = reset_flags(&f.block);
@@ -74,7 +74,7 @@ fn analyze_file(rel: &str, file: &syn::File, sup: &Suppressions, out: &mut Vec<V
                 self.sup,
                 self.out,
             );
-            visit::visit_impl_item_fn(self, f);
+            syn::visit::visit_impl_item_fn(self, f);
         }
     }
     let mut v = V { rel, sup, out };
@@ -96,7 +96,7 @@ fn reset_flags(block: &Block) -> HashSet<String> {
             {
                 self.names.insert(name);
             }
-            visit::visit_expr_assign(self, e);
+            syn::visit::visit_expr_assign(self, e);
         }
         fn visit_expr_binary(&mut self, e: &'ast ExprBinary) {
             if matches!(e.op, BinOp::BitAndAssign(_))
@@ -105,7 +105,7 @@ fn reset_flags(block: &Block) -> HashSet<String> {
             {
                 self.names.insert(name);
             }
-            visit::visit_expr_binary(self, e);
+            syn::visit::visit_expr_binary(self, e);
         }
     }
     let mut r = Reset {
@@ -311,7 +311,7 @@ impl<'ast> Visit<'ast> for WriteScanner<'_> {
         {
             self.hits.push(name);
         }
-        visit::visit_expr_assign(self, e);
+        syn::visit::visit_expr_assign(self, e);
     }
     fn visit_expr_binary(&mut self, e: &'ast ExprBinary) {
         if self.in_if > 0
@@ -322,11 +322,11 @@ impl<'ast> Visit<'ast> for WriteScanner<'_> {
         {
             self.hits.push(name);
         }
-        visit::visit_expr_binary(self, e);
+        syn::visit::visit_expr_binary(self, e);
     }
     fn visit_expr_if(&mut self, e: &'ast ExprIf) {
         self.in_if += 1;
-        visit::visit_expr_if(self, e);
+        syn::visit::visit_expr_if(self, e);
         self.in_if -= 1;
     }
 }

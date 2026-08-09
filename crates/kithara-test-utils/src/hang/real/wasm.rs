@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use kithara_platform::{logging, time::Duration};
+use kithara_platform::time::Duration;
 
 use super::shared::HangDump;
 
@@ -11,7 +11,7 @@ use super::shared::HangDump;
 /// audio worklet, where the global `tracing` subscriber's cross-instance
 /// vtable would trap).
 pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, _dir: Option<&Path>, diag: &str) {
-    logging::log_error(&format!(
+    kithara_platform::logging::log_error(&format!(
         "[kithara_hang_detector] hang detected: {label} [{diag}] — {}",
         ctx.dump_json()
     ));

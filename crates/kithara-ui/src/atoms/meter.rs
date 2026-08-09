@@ -6,7 +6,6 @@ use iced::{
         canvas::{self, Action, Canvas, Frame, Geometry},
     },
 };
-use mouse::Interaction;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
@@ -34,7 +33,7 @@ impl<'a> Widget<'a> for StereoMeter<'_, '_, '_, '_> {
             drag: ScalarDrag::builder()
                 .path(self.path)
                 .mode(ScalarDragMode::Horizontal)
-                .hover(HoverState::new(Interaction::ResizingHorizontally))
+                .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
                 .build(),
             metrics: self.skin.vu_stereo,
             levels: *levels,

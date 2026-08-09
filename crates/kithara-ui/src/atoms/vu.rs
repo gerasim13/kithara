@@ -6,7 +6,6 @@ use iced::{
         canvas::{self, Action, Canvas, Frame, Geometry},
     },
 };
-use mouse::Interaction;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
@@ -36,7 +35,7 @@ impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, '_> {
             drag: ScalarDrag::builder()
                 .path(self.path)
                 .mode(ScalarDragMode::Vertical)
-                .hover(HoverState::new(Interaction::ResizingVertically))
+                .hover(HoverState::new(mouse::Interaction::ResizingVertically))
                 .build(),
             metrics: self.skin.vu_vertical,
             ticks: self

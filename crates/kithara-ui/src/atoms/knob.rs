@@ -7,7 +7,6 @@ use iced::{
         container,
     },
 };
-use mouse::Interaction;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
@@ -45,7 +44,7 @@ impl<'a> Widget<'a> for Knob<'_, '_, '_, '_> {
                     value,
                     range: self.skin.knob.drag_range,
                 })
-                .hover(HoverState::new(Interaction::ResizingVertically))
+                .hover(HoverState::new(mouse::Interaction::ResizingVertically))
                 .double_click_value(0.5)
                 .wheel(WheelStep {
                     value,

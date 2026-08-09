@@ -7,9 +7,9 @@ use std::{
 use anyhow::{Context as _, Result};
 use quote::ToTokens;
 use syn::{
-    Attribute, Expr, Fields, FnArg, GenericArgument, ImplItem, ImplItemFn, Item, ItemImpl,
-    ItemStruct, Member, Pat, PathArguments, ReceiverKind, ReturnType, Safety, Stmt, Type, UseTree,
-    Visibility, parse_quote, spanned::Spanned,
+    Attribute, Expr, Fields, FnArg, ImplItem, ImplItemFn, Item, ItemImpl, ItemStruct, Member,
+    PathArguments, ReceiverKind, ReturnType, Safety, Stmt, Type, UseTree, Visibility, parse_quote,
+    spanned::Spanned,
 };
 
 use super::{
@@ -835,7 +835,7 @@ fn detect_with(method: &ImplItemFn) -> Option<DetectedAccessor<'_>> {
     let FnArg::Typed(value) = signature.inputs.iter().nth(1)? else {
         return None;
     };
-    let Pat::Ident(argument) = value.pat.as_ref() else {
+    let syn::Pat::Ident(argument) = value.pat.as_ref() else {
         return None;
     };
     if argument.by_ref.is_some() || argument.mutability.is_some() || argument.subpat.is_some() {
@@ -1368,7 +1368,7 @@ fn option_inner(ty: &Type) -> Option<&Type> {
         return None;
     };
     arguments.args.iter().find_map(|argument| match argument {
-        GenericArgument::Type(ty) => Some(ty),
+        syn::GenericArgument::Type(ty) => Some(ty),
         _ => None,
     })
 }
@@ -1473,7 +1473,7 @@ impl PathArgumentsExt for syn::PathSegment {
             .args
             .iter()
             .filter_map(|argument| match argument {
-                GenericArgument::Type(ty) => Some(ty),
+                syn::GenericArgument::Type(ty) => Some(ty),
                 _ => None,
             })
             .nth(index)

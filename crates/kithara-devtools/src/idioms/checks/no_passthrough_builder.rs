@@ -2,8 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use syn::{
-    Expr, Fields, FnArg, ImplItem, Item, ItemFn, ItemImpl, Local, Member, Pat, PatIdent, Stmt,
-    Type, TypePath,
+    Expr, FnArg, ImplItem, Item, ItemFn, ItemImpl, Local, Pat, PatIdent, Stmt, Type, TypePath,
     visit::{self, Visit},
 };
 
@@ -63,7 +62,7 @@ fn collect_named_field_structs(items: &[Item]) -> HashSet<String> {
     let mut out = HashSet::new();
     for item in items {
         if let Item::Struct(s) = item
-            && let Fields::Named(_) = &s.fields
+            && let syn::Fields::Named(_) = &s.fields
         {
             out.insert(s.ident.to_string());
         }
@@ -360,7 +359,7 @@ fn expr_param_field(expr: &Expr, param: &str) -> Option<String> {
         Expr::Field(f) => {
             if let Expr::Path(p) = &*f.base
                 && p.path.is_ident(param)
-                && let Member::Named(name) = &f.member
+                && let syn::Member::Named(name) = &f.member
             {
                 return Some(name.to_string());
             }

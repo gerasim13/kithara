@@ -1,5 +1,4 @@
 use anyhow::Result;
-use derivable_support::Kind;
 
 use super::{Check, Context, derivable_support};
 use crate::common::{fix::FixOutcome, violation::Violation};
@@ -10,17 +9,17 @@ impl Check for DerivableDeref {
     fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
         derivable_support::fix(
             ctx,
-            Kind::Deref,
+            derivable_support::Kind::Deref,
             ctx.config.thresholds.derivable_deref.enabled,
         )
     }
     fn id(&self) -> &'static str {
-        Kind::Deref.id()
+        derivable_support::Kind::Deref.id()
     }
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         derivable_support::run(
             ctx,
-            Kind::Deref,
+            derivable_support::Kind::Deref,
             ctx.config.thresholds.derivable_deref.enabled,
         )
     }

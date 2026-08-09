@@ -1,5 +1,5 @@
 use iced::{
-    Alignment, Background, Border, Element, Length,
+    Background, Border, Element, Length,
     widget::{Row, Space, container, container::Style as ContainerStyle},
 };
 
@@ -45,7 +45,7 @@ impl<'a> Widget<'a> for StatusDot<'a, '_> {
                 .into(),
         ])
         .spacing(metrics.gap)
-        .align_y(Alignment::Center)
+        .align_y(iced::Alignment::Center)
         .into()
     }
 }

@@ -1,7 +1,7 @@
 use std::pin::pin;
 
 use futures::future::{self as future_util, Either};
-use js_sys::{Date, Function, Promise, Reflect, global};
+use js_sys::{Function, Promise, Reflect, global};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 pub use web_time::Instant;
@@ -29,7 +29,7 @@ pub async fn sleep(duration: Duration) {
 /// interval timing.
 #[must_use]
 pub fn coarse_now_ms() -> f64 {
-    Date::now()
+    js_sys::Date::now()
 }
 
 pub async fn timeout<F>(duration: Duration, future: F) -> Result<F::Output, TimeoutError>

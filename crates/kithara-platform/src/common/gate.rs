@@ -1,9 +1,5 @@
 #![forbid(unsafe_code)]
 
-use std::sync::atomic::AtomicBool;
-
-use thread::GateBackend;
-
 use crate::{
     sync::{
         Condvar, Mutex, MutexGuard,
@@ -119,7 +115,7 @@ pub struct ThreadGate {
 impl Default for ThreadGate {
     fn default() -> Self {
         Self {
-            backend: GateBackend::default(),
+            backend: thread::GateBackend::default(),
             state: AtomicU64::new(0),
             waiter: Mutex::new(None),
             waiter_id: AtomicU64::new(0),
@@ -359,7 +355,7 @@ mod tests {
     #[kithara::test]
     fn a_spinning_gate_waiter_must_not_freeze_the_virtual_clock() {
         let gate = Arc::new(ThreadGate::default());
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         let waiter_gate = Arc::clone(&gate);
         let waiter_stop = Arc::clone(&stop);

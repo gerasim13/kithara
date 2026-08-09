@@ -10,11 +10,6 @@ use iced::{
     },
     keyboard::{self, key::Named},
 };
-use keyboard::{Key, key::Code};
-use layout::Node;
-use mouse::Interaction;
-use overlay::Group;
-use tree::Tag;
 
 use crate::{
     module::{PopoverAlign, PopoverAt},
@@ -155,9 +150,9 @@ fn inside(start: f32, length: f32, extent: f32) -> f32 {
 
 fn claims(content: mouse::Interaction, surface: Rectangle, cursor: Cursor) -> mouse::Interaction {
     if cursor.is_over(surface) {
-        content.max(Interaction::Idle)
+        content.max(mouse::Interaction::Idle)
     } else {
-        Interaction::None
+        mouse::Interaction::None
     }
 }
 
@@ -165,7 +160,7 @@ fn dismisses(event: &Event, popover: Rectangle, cursor: Cursor) -> bool {
     match event {
         Event::Mouse(mouse::Event::ButtonPressed(_)) => !cursor.is_over(popover),
         Event::Keyboard(keyboard::Event::KeyPressed {
-            key: Key::Named(Named::Escape),
+            key: keyboard::Key::Named(Named::Escape),
             ..
         }) => true,
         _ => false,
@@ -301,8 +296,9 @@ where
         } else {
             None
         };
-        (anchor.is_some() || popover.is_some())
-            .then(|| Group::with_children(anchor.into_iter().chain(popover).collect()).overlay())
+        (anchor.is_some() || popover.is_some()).then(|| {
+            overlay::Group::with_children(anchor.into_iter().chain(popover).collect()).overlay()
+        })
     }
 
     delegate::delegate! {
@@ -317,7 +313,7 @@ where
     }
 
     fn tag(&self) -> tree::Tag {
-        Tag::of::<State>()
+        tree::Tag::of::<State>()
     }
 
     fn update(
@@ -419,7 +415,7 @@ where
             bounds,
             self.align,
         );
-        Node::with_children(surface.size(), vec![content.translate(chrome.offset())])
+        layout::Node::with_children(surface.size(), vec![content.translate(chrome.offset())])
             .move_to(surface.position())
     }
 
@@ -433,7 +429,7 @@ where
         let content = layout
             .children()
             .next()
-            .map_or(Interaction::None, |content| {
+            .map_or(mouse::Interaction::None, |content| {
                 self.content
                     .as_widget()
                     .mouse_interaction(self.tree, content, cursor, &surface, renderer)
@@ -778,9 +774,9 @@ mod tests {
 
     fn escape() -> Event {
         Event::Keyboard(keyboard::Event::KeyPressed {
-            key: Key::Named(Named::Escape),
-            modified_key: Key::Named(Named::Escape),
-            physical_key: Physical::Code(Code::Escape),
+            key: keyboard::Key::Named(Named::Escape),
+            modified_key: keyboard::Key::Named(Named::Escape),
+            physical_key: Physical::Code(keyboard::key::Code::Escape),
             location: Location::Standard,
             modifiers: Modifiers::empty(),
             text: None,

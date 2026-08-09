@@ -1,8 +1,7 @@
-use kithara_platform::sync;
 pub(crate) enum HostCmd {
     Open {
         id: u64,
-        reply_tx: sync::mpsc::Sender<HostOut>,
+        reply_tx: kithara_platform::sync::mpsc::Sender<HostOut>,
     },
     Configure {
         decoder_id: u64,
