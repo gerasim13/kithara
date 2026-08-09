@@ -15,7 +15,7 @@ use kithara_stream::{
 };
 use kithara_test_utils::kithara;
 
-use super::source::FileSource;
+use super::source::{FileLocalConfig, FileSource};
 use crate::{File, coord::FileCoord};
 
 fn test_key(store: &AssetStore, name: &str) -> ResourceKey {
@@ -47,13 +47,15 @@ fn make_source(reader: AssetReader, coord: Arc<FileCoord>, bus: EventBus) -> Fil
     let backend = AssetStore::builder().cancel(CancelToken::never()).build();
     let key = test_key(&backend, "test-source");
     FileSource::local(
-        reader,
-        coord,
-        bus,
-        backend,
-        key,
-        CancelToken::never(),
-        Some(AudioCodec::Mp3),
+        FileLocalConfig::builder()
+            .reader(reader)
+            .coord(coord)
+            .bus(bus)
+            .backend(backend)
+            .key(key)
+            .cancel(CancelToken::never())
+            .cached_codec(AudioCodec::Mp3)
+            .build(),
     )
 }
 
