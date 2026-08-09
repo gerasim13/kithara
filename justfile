@@ -1,5 +1,15 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+# Empty when absent: cargo reads that as "no wrapper", not as an error.
+sccache := `command -v sccache 2>/dev/null || true`
+
+export RUSTC_WRAPPER := sccache
+
+# sccache refuses incremental compilations, so a wrapper without this is never
+# hit. `check clippy` opts back in: `clippy-driver` is not cached either way,
+# and without incremental it costs 15s where 2.4s would do.
+export CARGO_INCREMENTAL := if sccache == "" { "" } else { "0" }
+
 mod fmt ".config/just/fmt.just"
 mod check ".config/just/check.just"
 mod lint ".config/just/lint.just"

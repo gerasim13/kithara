@@ -1,7 +1,10 @@
+use std::path::PathBuf;
+
 use anyhow::{Result, bail};
 use tracing::info;
 
-use crate::ci::process::Process;
+use super::profile::LinuxHost;
+use crate::ci::{build_cache, process::Process};
 
 /// Build cache older than this is rebuilt faster than it is worth keeping.
 const BUILD_CACHE_AGE: &str = "168h";
@@ -9,9 +12,10 @@ const BUILD_CACHE_AGE: &str = "168h";
 /// Reclaim what this project left behind, and nothing else.
 ///
 /// The machine is shared: other stacks keep images and volumes here, so a
-/// blanket `docker system prune` would take theirs. Every live cache stays:
-/// the per-runner `kithara-ci-target-*`, `kithara-ci-sccache` and
-/// `kithara-ci-fixtures` are what this exists to protect. A volume of this
+/// blanket `docker system prune` would take theirs. A live cache stays and is
+/// held to a budget instead: the per-runner `kithara-ci-target-*` contents are
+/// trimmed here, `kithara-ci-sccache` and `kithara-ci-fixtures` are what this
+/// exists to protect, and Cargo home is never touched. A volume of this
 /// project's that no container is attached to any more is not a cache but a
 /// leftover, and it is reclaimed.
 ///
@@ -19,7 +23,7 @@ const BUILD_CACHE_AGE: &str = "168h";
 /// this runs from a timer and the pins move with the repository. Read there,
 /// a bumped pin nobody has installed yet would name the running fleet's image
 /// as superseded and take it out from under the services.
-pub(super) fn run(process: &Process, keep: &[String]) -> Result<()> {
+pub(super) fn run(process: &Process, host: &LinuxHost, keep: &[String]) -> Result<()> {
     // Every project image would be superseded by an empty list, and this is
     // the one caller whose mistakes are unattended.
     if keep.is_empty() {
@@ -77,6 +81,8 @@ pub(super) fn run(process: &Process, keep: &[String]) -> Result<()> {
         ],
         "prune the build cache",
     );
+    let target_dirs = target_dirs(process)?;
+    build_cache::enforce_budget(&target_dirs, host.build_cache_budget_bytes()?)?;
     Ok(())
 }
 
@@ -107,6 +113,42 @@ fn orphaned_volumes(listed: &str) -> Vec<&str> {
         .map(str::trim)
         .filter(|volume| !volume.is_empty())
         .collect()
+}
+
+/// Where the live per-runner target caches sit on disk, so their contents can
+/// be held to a budget. Dead volumes are gone by the time this runs, so every
+/// name it returns still carries a link.
+fn target_dirs(process: &Process) -> Result<Vec<PathBuf>> {
+    const VOLUME_PREFIX: &str = "kithara-ci-target";
+
+    let filter = format!("name={VOLUME_PREFIX}");
+    let listed = process.capture(
+        "docker",
+        &["volume", "ls", "--filter", &filter, "--format", "{{.Name}}"],
+        "list project target volumes",
+    )?;
+    let mut names: Vec<&str> = listed
+        .lines()
+        .map(str::trim)
+        .filter(|name| name.starts_with(VOLUME_PREFIX))
+        .collect();
+    names.sort_unstable();
+
+    let mut target_dirs = Vec::with_capacity(names.len());
+    for name in names {
+        let label = format!("inspect project target volume {name}");
+        let mountpoint = process.capture(
+            "docker",
+            &["volume", "inspect", "--format", "{{.Mountpoint}}", name],
+            &label,
+        )?;
+        let path = PathBuf::from(mountpoint);
+        if !path.is_absolute() {
+            bail!("Docker target volume {name} returned a non-absolute mountpoint");
+        }
+        target_dirs.push(path);
+    }
+    Ok(target_dirs)
 }
 
 #[cfg(test)]
