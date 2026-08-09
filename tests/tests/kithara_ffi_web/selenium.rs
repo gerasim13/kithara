@@ -1,11 +1,15 @@
 use std::{
-    env,
+    env, fs,
+    io::{BufRead, BufReader},
+    net::TcpListener,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, ChildStdout, Command, Stdio},
+    sync::mpsc::{self, Receiver, TryRecvError},
+    thread,
 };
 
 use kithara::platform::time::{self, Duration, Instant};
-use reqwest::Client;
+use reqwest::{Client, Url};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use thirtyfour::{
@@ -75,13 +79,6 @@ impl BrowserKind {
         }
     }
 
-    fn webdriver_default_port(self) -> u16 {
-        match self {
-            Self::Chrome => 9515,
-            Self::Firefox => 4444,
-        }
-    }
-
     fn webdriver_binary(self, cfg: &SeleniumConfig) -> &str {
         match self {
             Self::Chrome => &cfg.chromedriver_path,
@@ -106,23 +103,17 @@ struct SeleniumConfig {
     page_url_override: Option<String>,
     startup_timeout: Duration,
     switch_wait_seconds: u64,
-    test_server_port: u16,
-    trunk_port: u16,
+    test_server_port: Option<u16>,
+    trunk_port: Option<u16>,
     wait_timeout: Duration,
-    webdriver_port: u16,
+    webdriver_port: Option<u16>,
     webdriver_url_override: Option<String>,
 }
 
 impl SeleniumConfig {
     fn from_env() -> Self {
-        let browser = BrowserKind::from_env();
-        let webdriver_port = env_u16(
-            "KITHARA_SELENIUM_WEBDRIVER_PORT",
-            browser.webdriver_default_port(),
-        );
-
         Self {
-            browser,
+            browser: BrowserKind::from_env(),
             chromedriver_path: env::var("CHROMEDRIVER")
                 .unwrap_or_else(|_| "chromedriver".to_string()),
             geckodriver_path: env::var("GECKODRIVER").unwrap_or_else(|_| "geckodriver".to_string()),
@@ -133,17 +124,66 @@ impl SeleniumConfig {
                 Consts::DEFAULT_STARTUP_TIMEOUT.as_secs(),
             )),
             switch_wait_seconds: env_u64("KITHARA_SELENIUM_SWITCH_WAIT_SECS", 12),
-            test_server_port: env_u16("KITHARA_SELENIUM_TEST_SERVER_PORT", 3444),
-            trunk_port: env_u16("KITHARA_SELENIUM_TRUNK_PORT", 9092),
+            test_server_port: env_u16_opt("KITHARA_SELENIUM_TEST_SERVER_PORT"),
+            trunk_port: env_u16_opt("KITHARA_SELENIUM_TRUNK_PORT"),
             wait_timeout: Duration::from_secs(env_u64(
                 "KITHARA_SELENIUM_WAIT_TIMEOUT_SECS",
                 Consts::DEFAULT_WAIT_TIMEOUT.as_secs(),
             )),
-            webdriver_port,
+            webdriver_port: env_u16_opt("KITHARA_SELENIUM_WEBDRIVER_PORT"),
             webdriver_url_override: env::var("KITHARA_SELENIUM_WEBDRIVER_URL").ok(),
         }
     }
+}
 
+#[derive(Debug)]
+struct PortLease {
+    listener: Option<TcpListener>,
+    port: u16,
+}
+
+impl PortLease {
+    fn reserve(pin: Option<u16>, label: &str) -> Result<Self, String> {
+        let requested_port = pin.unwrap_or(0);
+        let listener = TcpListener::bind(("127.0.0.1", requested_port)).map_err(|err| {
+            pin.map_or_else(
+                || format!("failed to reserve {label} port: {err}"),
+                |port| {
+                    format!(
+                        "{label} port {port} is already in use; this harness will not attach to a \
+                         server it did not start: {err}"
+                    )
+                },
+            )
+        })?;
+        let port = listener
+            .local_addr()
+            .map_err(|err| format!("failed to read reserved {label} port: {err}"))?
+            .port();
+
+        Ok(Self {
+            listener: Some(listener),
+            port,
+        })
+    }
+
+    fn port(&self) -> u16 {
+        self.port
+    }
+
+    fn release(&mut self) {
+        self.listener = None;
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Endpoints {
+    test_server_port: u16,
+    page_url: String,
+    webdriver_url: String,
+}
+
+impl Endpoints {
     fn test_server_base_url(&self) -> String {
         format!("http://127.0.0.1:{}", self.test_server_port)
     }
@@ -160,20 +200,16 @@ impl SeleniumConfig {
         format!("{}/assets/drm/master.m3u8", self.test_server_base_url())
     }
 
-    fn page_url(&self) -> String {
-        self.page_url_override
-            .clone()
-            .unwrap_or_else(|| format!("http://127.0.0.1:{}/", self.trunk_port))
+    fn page_url(&self) -> &str {
+        &self.page_url
     }
 
     fn webdriver_status_url(&self) -> String {
         format!("{}/status", self.webdriver_url())
     }
 
-    fn webdriver_url(&self) -> String {
-        self.webdriver_url_override
-            .clone()
-            .unwrap_or_else(|| format!("http://127.0.0.1:{}", self.webdriver_port))
+    fn webdriver_url(&self) -> &str {
+        &self.webdriver_url
     }
 }
 
@@ -193,6 +229,22 @@ impl ChildGuard {
             .map_err(|err| format!("failed to spawn {name} (`{program}`): {err}"))?;
         Ok(Self { child, name })
     }
+
+    fn spawn_piped(name: &'static str, mut cmd: Command) -> Result<(Self, ChildStdout), String> {
+        let program = cmd.get_program().to_string_lossy().into_owned();
+        let child = cmd
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|err| format!("failed to spawn {name} (`{program}`): {err}"))?;
+        let mut guard = Self { child, name };
+        let stdout = guard
+            .child
+            .stdout
+            .take()
+            .ok_or_else(|| format!("failed to capture {name} stdout"))?;
+        Ok((guard, stdout))
+    }
 }
 
 impl Drop for ChildGuard {
@@ -203,41 +255,109 @@ impl Drop for ChildGuard {
     }
 }
 
+fn forward_test_server_stdout(
+    stdout: ChildStdout,
+    port_sender: mpsc::Sender<u16>,
+) -> Result<(), String> {
+    let reader_thread = thread::Builder::new()
+        .name("selenium-test-server-stdout".to_string())
+        .spawn(move || {
+            let reader = BufReader::new(stdout);
+            let mut port_sent = false;
+
+            for line in reader.lines() {
+                let line = match line {
+                    Ok(line) => line,
+                    Err(err) => {
+                        println!("[selenium] failed to read test server stdout: {err}");
+                        break;
+                    }
+                };
+
+                if !port_sent && let Some(raw_url) = line.strip_prefix("test server listening on ")
+                {
+                    match Url::parse(raw_url.trim()) {
+                        Ok(url) => match url.port() {
+                            Some(port) => {
+                                port_sent = true;
+                                let _ = port_sender.send(port);
+                            }
+                            None => println!(
+                                "[selenium] test server listening URL has no explicit port: {url}"
+                            ),
+                        },
+                        Err(err) => println!(
+                            "[selenium] failed to parse test server listening URL \
+                             `{raw_url}`: {err}"
+                        ),
+                    }
+                }
+
+                println!("{line}");
+            }
+        })
+        .map_err(|err| format!("failed to start test server stdout thread: {err}"))?;
+    // The reader outlives this call: the child's stdout closes when the
+    // `ChildGuard` kills it, which ends the thread.
+    drop(reader_thread);
+    Ok(())
+}
+
 #[derive(Debug)]
 struct SeleniumHarness {
     config: SeleniumConfig,
-    test_server: Option<ChildGuard>,
+    endpoints: Endpoints,
+    _test_server: ChildGuard,
     trunk_server: Option<ChildGuard>,
     webdriver_server: Option<ChildGuard>,
 }
 
 impl SeleniumHarness {
     async fn start(config: SeleniumConfig) -> Result<Self, String> {
+        let (mut trunk_lease, page_url) = if let Some(url) = config.page_url_override.as_ref() {
+            (None, url.clone())
+        } else {
+            let lease = PortLease::reserve(config.trunk_port, "trunk")?;
+            let page_url = format!("http://127.0.0.1:{}/", lease.port());
+            (Some(lease), page_url)
+        };
+        let (mut webdriver_lease, webdriver_url) =
+            if let Some(url) = config.webdriver_url_override.as_ref() {
+                (None, url.clone())
+            } else {
+                let lease = PortLease::reserve(config.webdriver_port, "webdriver")?;
+                let webdriver_url = format!("http://127.0.0.1:{}", lease.port());
+                (Some(lease), webdriver_url)
+            };
+        let (test_server, test_server_port) = Self::ensure_test_server(&config).await?;
+        let endpoints = Endpoints {
+            test_server_port,
+            page_url,
+            webdriver_url,
+        };
         let mut harness = Self {
             config,
-            test_server: None,
+            endpoints,
+            _test_server: test_server,
             trunk_server: None,
             webdriver_server: None,
         };
 
-        harness.ensure_test_server().await?;
-        harness.ensure_trunk_server().await?;
-        harness.ensure_webdriver_server().await?;
+        harness.ensure_trunk_server(trunk_lease.as_mut()).await?;
+        harness
+            .ensure_webdriver_server(webdriver_lease.as_mut())
+            .await?;
 
         Ok(harness)
     }
 
-    async fn ensure_test_server(&mut self) -> Result<(), String> {
-        let health_url = format!("{}/health", self.config.test_server_base_url());
-        if http_ok(&health_url).await {
-            println!("[selenium] test server already running: {health_url}");
-            return Ok(());
-        }
-
-        println!(
-            "[selenium] starting test server on port {}",
-            self.config.test_server_port
-        );
+    async fn ensure_test_server(config: &SeleniumConfig) -> Result<(ChildGuard, u16), String> {
+        let mut port_lease = match config.test_server_port {
+            Some(port) => Some(PortLease::reserve(Some(port), "test server")?),
+            None => None,
+        };
+        let requested_port = config.test_server_port.unwrap_or(0);
+        println!("[selenium] starting test server on port {requested_port}");
         let mut cmd = Command::new("cargo");
         cmd.current_dir(repo_root())
             .args([
@@ -247,30 +367,51 @@ impl SeleniumHarness {
                 "--bin",
                 "test_server",
             ])
-            .env("TEST_SERVER_PORT", self.config.test_server_port.to_string());
+            .env("TEST_SERVER_PORT", requested_port.to_string());
 
-        self.test_server = Some(ChildGuard::spawn("test_server", cmd)?);
-        wait_url_ready(&health_url, self.config.startup_timeout, "").await
+        if let Some(lease) = port_lease.as_mut() {
+            lease.release();
+        }
+        let (guard, stdout) = ChildGuard::spawn_piped("test_server", cmd)?;
+        let (port_sender, port_receiver) = mpsc::channel();
+        forward_test_server_stdout(stdout, port_sender)?;
+        let port = wait_test_server_port(port_receiver, config.startup_timeout).await?;
+
+        if let Some(pin) = config.test_server_port
+            && port != pin
+        {
+            return Err(format!(
+                "test server reported port {port}, but pinned port {pin} was requested"
+            ));
+        }
+
+        let health_url = format!("http://127.0.0.1:{port}/health");
+        wait_url_ready(&health_url, config.startup_timeout, "test server").await?;
+        Ok((guard, port))
     }
 
-    async fn ensure_trunk_server(&mut self) -> Result<(), String> {
-        let page_url = self.config.page_url();
+    async fn ensure_trunk_server(
+        &mut self,
+        port_lease: Option<&mut PortLease>,
+    ) -> Result<(), String> {
+        let page_url = self.endpoints.page_url().to_string();
 
         if self.config.page_url_override.is_some() {
             println!("[selenium] using external wasm page: {page_url}");
             return wait_url_ready(&page_url, self.config.startup_timeout, "wasm page").await;
         }
 
-        if http_ok(&page_url).await {
-            println!("[selenium] trunk page already running: {page_url}");
-            return Ok(());
-        }
-
-        println!(
-            "[selenium] starting trunk serve on port {}",
-            self.config.trunk_port
-        );
-        let trunk_port = self.config.trunk_port.to_string();
+        let port_lease = port_lease.ok_or_else(|| "trunk port lease is missing".to_string())?;
+        let trunk_port = port_lease.port();
+        println!("[selenium] starting trunk serve on port {trunk_port}");
+        let dist_dir = selenium_dist_dir(trunk_port);
+        fs::create_dir_all(&dist_dir).map_err(|err| {
+            format!(
+                "failed to create trunk dist directory {}: {err}",
+                dist_dir.display()
+            )
+        })?;
+        let trunk_port = trunk_port.to_string();
         let toolchain =
             env::var("KITHARA_SELENIUM_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_string());
         let mut cmd = Command::new("trunk");
@@ -284,7 +425,9 @@ impl SeleniumHarness {
                 "--port",
                 &trunk_port,
                 "--no-autoreload",
-            ]);
+            ])
+            .arg("--dist")
+            .arg(&dist_dir);
         // Realtime playback assertions (assert_motion, realtime seek) require
         // an optimised wasm build: our own crates intentionally stay at debug
         // opt-level, so the opt-0 audio pipeline (rubato sinc monomorphised in
@@ -295,28 +438,30 @@ impl SeleniumHarness {
             cmd.arg("--release");
         }
 
+        port_lease.release();
         self.trunk_server = Some(ChildGuard::spawn("trunk", cmd)?);
         wait_url_ready(&page_url, self.config.startup_timeout, "wasm page").await
     }
 
-    async fn ensure_webdriver_server(&mut self) -> Result<(), String> {
-        let status_url = self.config.webdriver_status_url();
-        if http_ok(&status_url).await {
-            println!("[selenium] webdriver already running: {status_url}");
-            return Ok(());
-        }
+    async fn ensure_webdriver_server(
+        &mut self,
+        port_lease: Option<&mut PortLease>,
+    ) -> Result<(), String> {
+        let status_url = self.endpoints.webdriver_status_url();
 
         if self.config.webdriver_url_override.is_some() {
-            return Err(format!(
-                "webdriver at {} is not reachable",
-                self.config.webdriver_url()
-            ));
+            println!(
+                "[selenium] using external webdriver: {}",
+                self.endpoints.webdriver_url()
+            );
+            return wait_url_ready(&status_url, self.config.startup_timeout, "webdriver").await;
         }
 
+        let port_lease = port_lease.ok_or_else(|| "webdriver port lease is missing".to_string())?;
+        let webdriver_port = port_lease.port();
         println!(
-            "[selenium] starting {}driver on port {}",
+            "[selenium] starting {}driver on port {webdriver_port}",
             self.config.browser.name(),
-            self.config.webdriver_port
         );
         let binary = self
             .config
@@ -326,23 +471,24 @@ impl SeleniumHarness {
         let mut cmd = Command::new(binary);
         match self.config.browser {
             BrowserKind::Chrome => {
-                cmd.arg(format!("--port={}", self.config.webdriver_port));
+                cmd.arg(format!("--port={webdriver_port}"));
             }
             BrowserKind::Firefox => {
-                cmd.arg("--port")
-                    .arg(self.config.webdriver_port.to_string());
+                cmd.arg("--port").arg(webdriver_port.to_string());
             }
         }
 
+        port_lease.release();
         self.webdriver_server = Some(ChildGuard::spawn("webdriver", cmd)?);
-        wait_url_ready(&status_url, self.config.startup_timeout, "").await
+        wait_url_ready(&status_url, self.config.startup_timeout, "webdriver").await
     }
 
     async fn new_session(&self) -> Result<WasmPlayerSelenium, String> {
-        let driver = build_webdriver(&self.config).await?;
+        let driver = build_webdriver(&self.config, &self.endpoints).await?;
         let session = WasmPlayerSelenium {
             config: self.config.clone(),
             driver,
+            endpoints: self.endpoints.clone(),
         };
         // Installed once per session, before the first navigation: a boot
         // failure inside the page's top-level module script (a rejected
@@ -387,6 +533,7 @@ struct TrackIndexes {
 struct WasmPlayerSelenium {
     config: SeleniumConfig,
     driver: WebDriver,
+    endpoints: Endpoints,
 }
 
 impl WasmPlayerSelenium {
@@ -401,7 +548,7 @@ impl WasmPlayerSelenium {
     async fn open_player_page(&self) -> Result<(), String> {
         for attempt in 0..3 {
             self.driver
-                .goto(self.config.page_url())
+                .goto(self.endpoints.page_url())
                 .await
                 .map_err(|err| format!("failed to open page: {err}"))?;
             self.install_console_capture().await;
@@ -505,9 +652,9 @@ impl WasmPlayerSelenium {
         self.open_player_page().await?;
         self.clear_playlist().await?;
 
-        self.add_track(&self.config.mp3_url()).await?;
-        self.add_track(&self.config.hls_url()).await?;
-        self.add_track(&self.config.drm_url()).await?;
+        self.add_track(&self.endpoints.mp3_url()).await?;
+        self.add_track(&self.endpoints.hls_url()).await?;
+        self.add_track(&self.endpoints.drm_url()).await?;
 
         let mp3 = self.find_track_index("track.mp3").await?;
         let hls = self.find_track_index("hls/master.m3u8").await?;
@@ -954,7 +1101,7 @@ impl WasmPlayerSelenium {
         );
 
         self.clear_playlist().await?;
-        self.add_track(&self.config.hls_url()).await?;
+        self.add_track(&self.endpoints.hls_url()).await?;
         let hls_idx = self.find_track_index("hls/master.m3u8").await?;
 
         self.click_playlist_item(hls_idx).await?;
@@ -1332,8 +1479,11 @@ impl WasmPlayerSelenium {
     }
 }
 
-async fn build_webdriver(config: &SeleniumConfig) -> Result<WebDriver, String> {
-    let driver_url = config.webdriver_url();
+async fn build_webdriver(
+    config: &SeleniumConfig,
+    endpoints: &Endpoints,
+) -> Result<WebDriver, String> {
+    let driver_url = endpoints.webdriver_url();
 
     let driver = match config.browser {
         BrowserKind::Chrome => {
@@ -1355,7 +1505,7 @@ async fn build_webdriver(config: &SeleniumConfig) -> Result<WebDriver, String> {
                 caps.add_arg("--headless=new")
                     .map_err(|err| format!("failed to set chrome headless: {err}"))?;
             }
-            WebDriver::new(&driver_url, caps)
+            WebDriver::new(driver_url, caps)
                 .await
                 .map_err(|err| format!("failed to create chrome session: {err}"))?
         }
@@ -1376,7 +1526,7 @@ async fn build_webdriver(config: &SeleniumConfig) -> Result<WebDriver, String> {
             caps.set_preferences(prefs)
                 .map_err(|err| format!("failed to set firefox prefs: {err}"))?;
 
-            WebDriver::new(&driver_url, caps)
+            WebDriver::new(driver_url, caps)
                 .await
                 .map_err(|err| format!("failed to create firefox session: {err}"))?
         }
@@ -1405,11 +1555,10 @@ fn env_bool(name: &str, default: bool) -> bool {
     }
 }
 
-fn env_u16(name: &str, default: u16) -> u16 {
+fn env_u16_opt(name: &str) -> Option<u16> {
     env::var(name)
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
-        .unwrap_or(default)
 }
 
 fn env_u64(name: &str, default: u64) -> u64 {
@@ -1424,6 +1573,19 @@ fn repo_root() -> PathBuf {
     manifest
         .parent()
         .map_or_else(|| manifest.to_path_buf(), Path::to_path_buf)
+}
+
+fn selenium_dist_dir(trunk_port: u16) -> PathBuf {
+    let target_dir =
+        env::var("CARGO_TARGET_DIR").map_or_else(|_| repo_root().join("target"), PathBuf::from);
+    let target_dir = if target_dir.is_absolute() {
+        target_dir
+    } else {
+        repo_root().join(target_dir)
+    };
+    target_dir
+        .join("selenium-dist")
+        .join(trunk_port.to_string())
 }
 
 async fn http_ok(url: &str) -> bool {
@@ -1454,6 +1616,24 @@ async fn wait_url_ready(url: &str, timeout: Duration, kind: &str) -> Result<(), 
     } else {
         Err(format!("timeout waiting for {kind} {url}"))
     }
+}
+
+async fn wait_test_server_port(receiver: Receiver<u16>, timeout: Duration) -> Result<u16, String> {
+    let deadline = Instant::now() + timeout;
+
+    while Instant::now() < deadline {
+        match receiver.try_recv() {
+            Ok(port) => return Ok(port),
+            Err(TryRecvError::Empty) => time::sleep(Consts::CHECK_INTERVAL).await,
+            Err(TryRecvError::Disconnected) => {
+                return Err(
+                    "test server stdout closed before reporting its listening port".to_string(),
+                );
+            }
+        }
+    }
+
+    Err("timeout waiting for test server listening port".to_string())
 }
 
 /// Create a [`WasmPlayerSelenium`] session with its owning harness.
