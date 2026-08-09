@@ -394,10 +394,7 @@ exclude_packages = [
   "kithara-workspace-hack",
   "kithara-test-utils",
   "kithara-test-macros",
-  "kithara-ffi",
   "kithara-fuzz",
-  "kithara-decode",
-  "kithara-platform",
   "xtask",
 ]
 
