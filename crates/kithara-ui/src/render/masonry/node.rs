@@ -926,6 +926,11 @@ impl<Action> MasonryNode<Action> {
     pub(crate) fn document_ids(&self) -> &[WidgetId] {
         &self.document_ids
     }
+
+    #[cfg(test)]
+    pub(crate) fn widget_id(&self) -> WidgetId {
+        self.widget.id()
+    }
 }
 
 impl<Action> From<MasonryNode<Action>> for LayerParts {

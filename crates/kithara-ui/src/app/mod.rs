@@ -3,6 +3,8 @@
 mod embed;
 mod neutral;
 #[cfg(test)]
+mod scenario;
+#[cfg(test)]
 mod tests;
 mod window;
 

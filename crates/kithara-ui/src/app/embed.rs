@@ -21,8 +21,12 @@ use masonry::{
     },
     vello::Scene,
 };
+#[cfg(test)]
+use num_traits::cast::AsPrimitive;
 
 use super::neutral::{App, Config, RunError};
+#[cfg(test)]
+use crate::draw::Rect;
 use crate::{
     compile::{CompiledUi, compile},
     draw::Rgba,
@@ -91,6 +95,23 @@ where
     /// document does not reach, and the other host does not have that seam.
     pub const fn background(&self) -> Rgba {
         self.config.skin.palette.bg
+    }
+
+    /// Resolves one control's document path to the rect its layout gave it, in
+    /// the same logical units [`Self::input`] takes a point in.
+    ///
+    /// Test-only: a scenario harness names a control by its path and acts at
+    /// the rect this returns, instead of computing a pixel by hand.
+    #[cfg(test)]
+    pub(crate) fn rect_of(&self, path: &str) -> Option<Rect> {
+        let id = self.state.widget_id(path)?;
+        let bounds = self.root.root().get_widget(id)?.ctx().bounding_rect();
+        Some(Rect {
+            x: (bounds.x0 / self.scale).as_(),
+            y: (bounds.y0 / self.scale).as_(),
+            w: ((bounds.x1 - bounds.x0) / self.scale).as_(),
+            h: ((bounds.y1 - bounds.y0) / self.scale).as_(),
+        })
     }
 
     /// Takes what the document asked its window to do since the last call. A
@@ -314,6 +335,8 @@ fn mount<Application>(
 where
     Application: App,
 {
+    #[cfg(test)]
+    state.clear_paths();
     let node = app.reads(|reads| {
         let host = MasonryHost::new(ui, reads, config.skin).with_state(state.clone());
         document::render(&ui.root, ui, reads, config.skin_doc, host)

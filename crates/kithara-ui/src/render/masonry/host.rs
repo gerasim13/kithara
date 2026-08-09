@@ -4,6 +4,9 @@ use std::{
     rc::Rc,
 };
 
+#[cfg(test)]
+use masonry::core::WidgetId;
+
 use super::{
     CustomWidget, MasonryControl, MasonryNode,
     custom::{HostAction, MappedCustom, MountedCustom},
@@ -52,11 +55,28 @@ pub struct MasonryHost<'a, Action = UiEvent> {
 /// Retained host state shared across Masonry document rebuilds.
 #[derive(Clone, Default)]
 pub struct MasonryState {
+    #[cfg(test)]
+    paths: Rc<RefCell<BTreeMap<String, WidgetId>>>,
     popovers: Rc<RefCell<BTreeMap<String, Rc<PopoverState>>>>,
     pointer: Rc<Cell<Option<crate::draw::Pt>>>,
 }
 
 impl MasonryState {
+    #[cfg(test)]
+    pub(crate) fn clear_paths(&self) {
+        self.paths.borrow_mut().clear();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tag_path(&self, path: &str, id: WidgetId) {
+        self.paths.borrow_mut().insert(path.to_owned(), id);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn widget_id(&self, path: &str) -> Option<WidgetId> {
+        self.paths.borrow().get(path).copied()
+    }
+
     fn popover(&self, path: &str, open: bool) -> Rc<PopoverState> {
         let mut popovers = self.popovers.borrow_mut();
         let state = Rc::clone(
@@ -553,6 +573,8 @@ where
             },
             |widget| self.custom_leaf(widget, declared),
         );
+        #[cfg(test)]
+        self.state.tag_path(path, output.widget_id());
         if custom_installed {
             return output;
         }

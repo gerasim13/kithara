@@ -2,12 +2,12 @@ use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use masonry::vello::Scene;
 
-use super::{App, Config, Ui};
+use super::{App, Config, Ui, scenario::Scenario};
 use crate::{
     builtin,
     draw::{Pt, Rgba},
     ids::{EndpointId, SourceUri},
-    interact::{Input, MOUSE, PointerInput, PointerPhase, Scroll},
+    interact::{Input, MOUSE, PointerInput, PointerPhase},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{ControlAction, ReadValue, Reads, Skin, StereoLevels, UiEvent},
     source::MemResolver,
@@ -28,7 +28,6 @@ impl EndpointRegistry for Registry {
 #[derive(Default)]
 struct Swapper {
     lit: bool,
-    seen: Vec<String>,
 }
 
 impl Reads for Swapper {
@@ -52,10 +51,9 @@ impl App for Swapper {
     }
 
     fn update(&mut self, event: UiEvent) {
-        if let UiEvent::Control { path, action } = event
+        if let UiEvent::Control { action, .. } = event
             && action == ControlAction::Activate
         {
-            self.seen.push(path);
             self.lit = !self.lit;
         }
     }
@@ -110,6 +108,27 @@ impl App for Dial {
     }
 }
 
+struct Board;
+
+impl Reads for Board {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        let id = endpoint.split_once('@').map_or(endpoint, |(id, _)| id);
+        (id == "fixture.flag").then_some(ReadValue::Bool(false))
+    }
+}
+
+impl App for Board {
+    fn document(&self) -> &str {
+        "board.klayout.ron"
+    }
+
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        with(self)
+    }
+
+    fn update(&mut self, _event: UiEvent) {}
+}
+
 /// A document holding one control, so a gesture aimed at the middle of the
 /// window lands on it whatever the control turns out to be.
 ///
@@ -130,6 +149,25 @@ fn one_control(control: &str) -> MemResolver {
             r#"(schema: "kithara.module", version: 1, id: "gallery-knobs", chrome: Plain,
                 root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [{control}]))"#
         ),
+    );
+    resolver
+}
+
+fn board() -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "board.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "board",
+            root: Module(instance: "demo", source: "board.kmodule.ron", size: (w: Fill, h: Fill)))"#,
+    );
+    resolver.insert(
+        "board.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "gallery-knobs", chrome: Plain,
+            root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+                Chip(id: "one", size: Some((w: Fixed(80.0), h: Fixed(40.0))), label: "ONE", read: Model(id: "fixture.flag")),
+                Chip(id: "two", size: Some((w: Fixed(80.0), h: Fixed(40.0))), label: "TWO", read: Model(id: "fixture.flag")),
+                Chip(id: "three", size: Some((w: Fixed(80.0), h: Fixed(40.0))), label: "THREE", read: Model(id: "fixture.flag")),
+            ]))"#,
     );
     resolver
 }
@@ -216,7 +254,7 @@ fn a_wheel_notch_over_a_knob_steps_it() {
         r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"))"#,
     );
     let skin = skin();
-    let mut ui = Ui::new(
+    let mut scenario = Scenario::mount(
         Dial::new(false),
         Config::builder()
             .endpoints(&endpoints)
@@ -226,20 +264,48 @@ fn a_wheel_notch_over_a_knob_steps_it() {
             .build(),
         (240, 120),
         1.0,
-    )
-    .unwrap_or_else(|error| panic!("the knob must mount: {error}"));
-    let at = Pt { x: 19.0, y: 60.0 };
-    ui.input(press(at, PointerPhase::Move));
-    let before = ui.app().value;
+    );
+    let before = scenario.app().value;
 
     // A wheel away from the hand reads as a negative delta, and that is the
     // direction that raises a control.
-    ui.input(Input::Wheel(Scroll::Lines { x: 0.0, y: -1.0 }));
+    scenario.wheel("demo/dial", -1.0);
 
     assert!(
-        ui.app().value > before,
+        scenario.app().value > before,
         "a notch over the knob must raise it, but it stayed at {before}"
     );
+}
+
+#[kithara::test]
+fn controls_on_one_page_publish_only_their_own_activation() {
+    let endpoints = Registry("fixture.flag", EndpointDesc::new(ValueKind::Bool));
+    let resolver = board();
+    let skin = skin();
+    let mut scenario = Scenario::mount(
+        Board,
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .skin(&skin)
+            .skin_doc(builtin::skin_doc())
+            .build(),
+        (240, 120),
+        1.0,
+    );
+
+    for path in ["demo/one", "demo/two", "demo/three"] {
+        let mark = scenario.published().len();
+        scenario.click(path);
+
+        assert_eq!(
+            &scenario.published()[mark..],
+            [UiEvent::Control {
+                path: path.to_owned(),
+                action: ControlAction::Activate,
+            }]
+        );
+    }
 }
 
 /// The page behind a document is the skin's, and a host clears its target to it
@@ -393,28 +459,25 @@ fn a_press_on_a_control_reaches_the_application_and_redraws_the_new_document() {
         .skin(&skin)
         .skin_doc(builtin::skin_doc())
         .build();
-    let mut ui = Ui::new(Swapper::default(), config, (240, 120), 1.0)
-        .unwrap_or_else(|error| panic!("the fixture must mount: {error}"));
-    ui.frame(Duration::from_millis(16));
-    ui.scene()
-        .unwrap_or_else(|error| panic!("the fixture must draw: {error}"));
-    assert_eq!(ui.app().document(), "dim.klayout.ron");
+    let mut scenario = Scenario::mount(Swapper::default(), config, (240, 120), 1.0);
+    assert_eq!(scenario.app().document(), "dim.klayout.ron");
 
-    let at = Pt { x: 60.0, y: 60.0 };
-    ui.input(press(at, PointerPhase::Move));
-    ui.input(press(at, PointerPhase::Down));
-    ui.input(press(at, PointerPhase::Up));
+    scenario.click("demo/swap");
 
     assert_eq!(
-        ui.app().seen,
-        vec!["demo/swap".to_owned()],
+        scenario.published(),
+        [UiEvent::Control {
+            path: "demo/swap".to_owned(),
+            action: ControlAction::Activate,
+        }],
         "a press inside the chip must reach the application exactly once"
     );
     assert_eq!(
-        ui.app().document(),
+        scenario.app().document(),
         "lit.klayout.ron",
         "the application swapped documents, so the next frame must draw the new one"
     );
+    let _scene = scenario.scene();
 }
 
 /// One control a hand can drag: how the document declares it, and the gesture
@@ -471,6 +534,45 @@ fn dragging_a_control_moves_it_for_the_whole_gesture() {
             dragged.seen
         );
     }
+}
+
+#[kithara::test]
+fn dragging_a_knob_by_path_publishes_a_run_of_rising_values() {
+    let endpoints = Registry("fixture.dial", EndpointDesc::new(ValueKind::Scalar));
+    let resolver = one_control(
+        r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"))"#,
+    );
+    let skin = skin();
+    let mut scenario = Scenario::mount(
+        Dial::new(false),
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .skin(&skin)
+            .skin_doc(builtin::skin_doc())
+            .build(),
+        (240, 120),
+        1.0,
+    );
+    let mark = scenario.published().len();
+
+    scenario.drag("demo/dial", Pt { x: 0.5, y: 1.0 }, Pt { x: 0.5, y: 0.0 }, 4);
+    let values = scenario.published()[mark..]
+        .iter()
+        .filter_map(|event| match event {
+            UiEvent::Control {
+                action: ControlAction::SetScalar(value),
+                ..
+            } => Some(*value),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(values.len() > 1, "the drag must publish a run of values");
+    assert!(
+        values.windows(2).all(|pair| pair[1] > pair[0]),
+        "dragging upward must raise every value, but it published {values:?}"
+    );
 }
 
 /// A hand moving a control has to see it move. The application only reaches the
