@@ -20,8 +20,7 @@ use std::{
     path::Path,
 };
 
-use encoder_crates::ENCODERS;
-use toml::{Table, Value};
+use encoder_crates::Lockfile;
 
 /// Hash every `.rs` file under `dir` (path + contents) and register each for
 /// change-tracking so the fingerprint refreshes whenever encoding code changes.
@@ -46,48 +45,28 @@ fn hash_rs_tree(dir: &Path, hasher: &mut DefaultHasher) {
 
 const LOCKFILE: &str = "../Cargo.lock";
 
-/// Hash what the lockfile resolved for [`ENCODERS`], rather than the lockfile.
-///
-/// The whole file was hashed here before, on the reasoning that a dependency
-/// version determines the encoded bytes. Only these ones do: bumping an XML
-/// parser cannot change an AAC frame, but hashing the file said it could, so
-/// every unrelated dependency bump moved the namespace and left the suite with
-/// an empty cache — and a cold cache means per-test ffmpeg re-encodes, which
-/// blow the budgets of tests that assert against a deadline. That is the same
-/// failure the `src/native` narrowing above was written to stop; the lockfile
-/// was the remaining wide input.
 fn hash_encoder_versions(hasher: &mut DefaultHasher) {
     println!("cargo:rerun-if-changed={LOCKFILE}");
     let text = fs::read_to_string(LOCKFILE).expect("the workspace lockfile must be readable");
-    let lock: Table = text.parse().expect("the workspace lockfile must be TOML");
-    let packages = lock
-        .get("package")
-        .and_then(Value::as_array)
-        .expect("the workspace lockfile must list packages");
+    let lockfile = Lockfile::parse(&text).unwrap_or_else(|error| panic!("{LOCKFILE}: {error}"));
 
-    let mut resolved: Vec<String> = packages
-        .iter()
-        .filter_map(|package| {
-            let name = package.get("name").and_then(Value::as_str)?;
-            ENCODERS.contains(&name).then(|| {
-                let field = |key| package.get(key).and_then(Value::as_str).unwrap_or_default();
-                // The checksum pins the exact bytes the version resolves to,
-                // which a re-release under one version number would not.
-                format!("{name} {} {}", field("version"), field("checksum"))
-            })
-        })
-        .collect();
-    resolved.sort();
-
-    // A crate leaving the lock under a name listed here would silently stop
-    // being tracked, and an untracked encoder change is a cache serving bytes
-    // it should not. Fail the build instead.
-    assert_eq!(
-        resolved.len(),
-        ENCODERS.len(),
-        "{LOCKFILE} resolved {resolved:?} for {ENCODERS:?}; update ENCODERS to \
-         match the crates that encode fixtures"
+    // The list this hashes is hand-written, so it is guarded from both sides:
+    // `encoder_versions` fails when a listed crate stops resolving, and an
+    // unclassified new dependency of `kithara-encode` fails here — its version
+    // would otherwise never reach the fingerprint, leaving the cache free to
+    // serve bytes the previous encoder produced.
+    let unclassified = lockfile
+        .unclassified_encode_dependencies()
+        .unwrap_or_else(|error| panic!("{LOCKFILE}: {error}"));
+    assert!(
+        unclassified.is_empty(),
+        "{LOCKFILE}: unclassified kithara-encode dependencies: {unclassified:?}; add each crate \
+         to ENCODERS if it can change an encoded byte, otherwise to NON_ENCODING_DEPENDENCIES"
     );
+
+    let resolved = lockfile
+        .encoder_versions()
+        .unwrap_or_else(|error| panic!("{LOCKFILE}: {error}"));
     resolved.hash(hasher);
 }
 
