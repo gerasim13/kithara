@@ -113,6 +113,8 @@ impl PlayerTrack {
             /// Source identifier.
             #[must_use]
             pub fn src(&self) -> &Arc<str>;
+            /// Propagate the host sample rate to the owned resource.
+            pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
         }
     }
 
@@ -147,12 +149,6 @@ impl PlayerTrack {
     pub fn position(&self) -> f64 {
         let sample_rate = self.sample_rate.max(1);
         self.served_media_frames / f64::from(sample_rate)
-    }
-
-    /// Reference to the owned resource.
-    #[must_use]
-    pub fn resource(&self) -> &PlayerResource {
-        &self.resource
     }
 
     /// Re-base the track on a seek the control thread already begun.

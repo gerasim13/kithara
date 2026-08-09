@@ -220,11 +220,6 @@ impl<T: StreamType> Stream<T> {
             .map_err(|e| IoError::other(e.to_string()))
     }
 
-    /// Get shared reference to inner source.
-    pub fn source(&self) -> &T::Source {
-        &self.source
-    }
-
     delegate::delegate! {
         to self.source {
             /// Overall source readiness at current position.
