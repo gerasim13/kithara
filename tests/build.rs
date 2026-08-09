@@ -10,6 +10,9 @@
 //! - a change to the encoding code or to an encoder crate's resolved version
 //!   yields a fresh namespace, so a stale cache can never serve outdated bytes.
 
+#[path = "src/encoder_crates.rs"]
+mod encoder_crates;
+
 use std::{
     collections::hash_map::DefaultHasher,
     fs,
@@ -17,6 +20,7 @@ use std::{
     path::Path,
 };
 
+use encoder_crates::ENCODERS;
 use toml::{Table, Value};
 
 /// Hash every `.rs` file under `dir` (path + contents) and register each for
@@ -39,11 +43,6 @@ fn hash_rs_tree(dir: &Path, hasher: &mut DefaultHasher) {
         }
     }
 }
-
-/// The crates whose resolved build determines an encoded byte. Read from the
-/// lockfile by name, so a version bump to any of them still lands in a fresh
-/// namespace.
-const ENCODERS: &[&str] = &["fdk-aac", "fdk-aac-sys", "ffmpeg-next", "ffmpeg-sys-next"];
 
 const LOCKFILE: &str = "../Cargo.lock";
 

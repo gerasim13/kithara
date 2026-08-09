@@ -232,6 +232,9 @@ kithara = { workspace = true, features = ["android", "client-wreq"] }
 # unrelated dependency bump.
 toml = { workspace = true }
 
+[dev-dependencies]
+toml = { workspace = true }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { workspace = true }
 
