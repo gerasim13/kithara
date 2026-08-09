@@ -34,8 +34,7 @@ linux:test:
     - .measured
   stage: linux
   timeout: 60 minutes
-  needs:
-    - linux:check
+  needs: []
   script:
     - just ci run linux-test
   artifacts:
@@ -53,8 +52,7 @@ linux:coverage:
     - .measured
   stage: linux
   timeout: 90 minutes
-  needs:
-    - linux:check
+  needs: []
   script:
     - just ci run linux-coverage
   artifacts:

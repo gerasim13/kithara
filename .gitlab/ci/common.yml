@@ -22,7 +22,6 @@
 
 .linux-job:
   extends: .unix-job
-  image: kithara-ci:linux-20260807b
   tags:
     - kithara-linux
 

@@ -1,11 +1,16 @@
 use std::{env, path::PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use kithara_devtools::Ctx;
 use tracing::info;
 
-use super::{config::CiConfig, environment::CiEnvironment, lane, process::Process};
+use super::{
+    config::CiConfig,
+    environment::{CiEnvironment, PROVISIONED_LINUX_IMAGE_ENV, is_gitlab},
+    lane,
+    process::Process,
+};
 use crate::config::KitharaExt;
 
 /// One CI job. Lanes are deliberately narrow: a job that does one thing can be
@@ -136,6 +141,83 @@ pub(crate) struct RunArgs {
     kind: PipelineKind,
 }
 
+#[derive(Debug)]
+struct LinuxImageAttestation {
+    runner: String,
+    commit: String,
+    provisioned: Option<String>,
+}
+
+impl LinuxImageAttestation {
+    fn from_gitlab() -> Result<Option<Self>> {
+        if !is_gitlab() {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            runner: env::var("CI_RUNNER_DESCRIPTION")
+                .context("CI_RUNNER_DESCRIPTION must name the Linux executor")?,
+            commit: env::var("CI_COMMIT_SHA").context("CI_COMMIT_SHA must name the CI checkout")?,
+            provisioned: env::var(PROVISIONED_LINUX_IMAGE_ENV).ok(),
+        }))
+    }
+}
+
+fn linux_image_diagnosis(
+    config: &CiConfig,
+    runner: &str,
+    commit: &str,
+    provisioned: &str,
+) -> String {
+    let expected = &config.pins.linux_image;
+    let host_config = config.host.host_root.join("services/mac-host.toml");
+    format!(
+        "Linux CI image `{expected}` is not provisioned on runner `{runner}`; the runner declares \
+         `{provisioned}`. On the Mac mini that owns `{runner}`, log in as `kithara-ci`, check out \
+         commit `{commit}`, and run from that checkout:\n\
+         `cargo build --locked --release -p xtask`\n\
+         `export KITHARA_CI_HOST_CONFIG={}`\n\
+         `export KITHARA_CI_PINS=$PWD/.config/ci-pins.toml`\n\
+         `target/release/xtask ci host build-linux-image $PWD/docker/ci.Dockerfile`\n\
+         `target/release/xtask ci host configure-runners`\n\
+         `target/release/xtask ci host activate`",
+        host_config.display()
+    )
+}
+
+fn require_provisioned_linux_image(
+    lane: Lane,
+    config: &CiConfig,
+    attestation: Option<&LinuxImageAttestation>,
+) -> Result<()> {
+    if lane.cache_group() != CacheGroup::Linux {
+        return Ok(());
+    }
+    let Some(attestation) = attestation else {
+        return Ok(());
+    };
+    match attestation.provisioned.as_deref() {
+        Some(provisioned) if provisioned == config.pins.linux_image => Ok(()),
+        Some(provisioned) => bail!(
+            "{}",
+            linux_image_diagnosis(
+                config,
+                &attestation.runner,
+                &attestation.commit,
+                provisioned
+            )
+        ),
+        None => bail!(
+            "{}",
+            linux_image_diagnosis(
+                config,
+                &attestation.runner,
+                &attestation.commit,
+                "not declared by runner",
+            )
+        ),
+    }
+}
+
 pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
     ext.ci.validate()?;
@@ -145,6 +227,8 @@ pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             "KITHARA_CI_HOST_CONFIG must point at the host profile installed on this executor",
         )?;
     let ci_config = CiConfig::load(&host_config, &ctx.root.join(&ext.ci.pins))?;
+    let image_attestation = LinuxImageAttestation::from_gitlab()?;
+    require_provisioned_linux_image(args.lane, &ci_config, image_attestation.as_ref())?;
     let environment = CiEnvironment::prepare(ctx, &ci_config, args.lane)?;
     info!(
         lane = ?args.lane,
@@ -219,7 +303,10 @@ mod tests {
 
     use clap::{Parser, ValueEnum};
 
-    use super::{CacheGroup, Lane};
+    use super::{
+        CacheGroup, Lane, LinuxImageAttestation, linux_image_diagnosis,
+        require_provisioned_linux_image,
+    };
     use crate::Cli;
 
     /// Lane names cross a language boundary: the enum is Rust, the schedule is
@@ -244,29 +331,166 @@ mod tests {
         lanes
     }
 
-    /// The image a Linux job starts in is named twice: in the reviewed pins,
-    /// which every machine builds and provisions from, and in the pipeline that
-    /// runs the job. Nothing but this test connects them, and a machine that
-    /// has built one tag cannot serve a pipeline asking for the other — which
-    /// is how a host ended up with an image its own provisioning refused.
     #[test]
-    fn the_linux_pipeline_starts_the_image_the_pins_name() {
+    fn the_linux_pipeline_uses_the_runner_provisioned_image() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("xtask has a workspace root");
-        let pins = crate::ci::config::CiPins::load(&root.join(crate::ci::config::PINS_PATH))
-            .expect("the reviewed pins load");
         let common = fs::read_to_string(root.join(".gitlab/ci/common.yml"))
             .expect("the shared pipeline definition is readable");
-        let declared = common
-            .lines()
-            .find_map(|line| line.trim().strip_prefix("image: "))
-            .expect("the Linux job names an image");
-
-        assert_eq!(
-            declared, pins.linux_image,
-            "the pipeline and the pins name different images"
+        let (_, after_linux) = common
+            .split_once(".linux-job:")
+            .expect("the Linux job template exists");
+        let linux_job = after_linux
+            .split_once("\n.")
+            .map_or(after_linux, |(job, _)| job);
+        assert!(
+            linux_job
+                .lines()
+                .all(|line| !line.trim().starts_with("image:")),
+            "the pipeline must not override the local image provisioned in runner config"
         );
+    }
+
+    #[test]
+    fn linux_tests_do_not_disappear_when_linux_check_fails() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask has a workspace root");
+        let linux = fs::read_to_string(root.join(".gitlab/ci/linux.yml"))
+            .expect("the Linux pipeline definition is readable");
+        let (_, after_test) = linux
+            .split_once("linux:test:")
+            .expect("the Linux test job exists");
+        let (test_job, coverage_job) = after_test
+            .split_once("linux:coverage:")
+            .expect("the coverage job follows Linux test");
+
+        for (name, job) in [("linux:test", test_job), ("linux:coverage", coverage_job)] {
+            assert!(job.contains("needs: []"), "{name} waits on an earlier job");
+            assert!(
+                !job.contains("linux:check"),
+                "{name} disappears when linux:check fails"
+            );
+        }
+    }
+
+    #[test]
+    fn ci_junit_path_is_relative_to_the_nextest_profile_store() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask has a workspace root");
+        let nextest: toml::Value = toml::from_str(
+            &fs::read_to_string(root.join(".config/nextest.toml"))
+                .expect("nextest configuration is readable"),
+        )
+        .expect("nextest configuration is TOML");
+        assert_eq!(
+            nextest["profile"]["ci"]["junit"]["path"].as_str(),
+            Some("junit.xml")
+        );
+
+        let linux = fs::read_to_string(root.join(".gitlab/ci/linux.yml"))
+            .expect("the Linux pipeline definition is readable");
+        let (_, after_test) = linux
+            .split_once("linux:test:")
+            .expect("the Linux test job exists");
+        let (test_job, _) = after_test
+            .split_once("linux:coverage:")
+            .expect("the coverage job follows Linux test");
+        assert!(
+            test_job
+                .lines()
+                .any(|line| line.trim() == "junit: target/nextest/ci/junit.xml"),
+            "linux:test does not publish the nextest JUnit report"
+        );
+
+        let mut reports = Vec::new();
+        for name in ["apple.yml", "linux.yml", "windows.yml"] {
+            let pipeline = fs::read_to_string(root.join(".gitlab/ci").join(name))
+                .expect("pipeline definition is readable");
+            reports.extend(
+                pipeline
+                    .lines()
+                    .filter_map(|line| line.trim().strip_prefix("junit: "))
+                    .map(str::to_owned),
+            );
+        }
+        assert!(
+            !reports.is_empty(),
+            "the pipeline declares no JUnit reports"
+        );
+        assert!(
+            reports
+                .iter()
+                .all(|path| path == "target/nextest/ci/junit.xml")
+        );
+    }
+
+    #[test]
+    fn image_drift_diagnosis_names_the_image_host_and_build_command() {
+        let config = crate::ci::config::fixture();
+        let diagnosis = linux_image_diagnosis(
+            &config,
+            "kithara-mac-mini-linux",
+            "0123456789abcdef",
+            "kithara-ci:old",
+        );
+
+        assert!(diagnosis.contains(&config.pins.linux_image));
+        assert!(diagnosis.contains("kithara-mac-mini-linux"));
+        assert!(diagnosis.contains("0123456789abcdef"));
+        assert!(diagnosis.contains("kithara-ci:old"));
+        assert!(
+            diagnosis.contains(
+                "target/release/xtask ci host build-linux-image $PWD/docker/ci.Dockerfile"
+            )
+        );
+    }
+
+    #[test]
+    fn a_local_linux_lane_does_not_require_runner_attestation() {
+        let config = crate::ci::config::fixture();
+
+        require_provisioned_linux_image(Lane::LinuxCheck, &config, None).unwrap();
+    }
+
+    fn image_attestation(provisioned: Option<&str>) -> LinuxImageAttestation {
+        LinuxImageAttestation {
+            runner: "kithara-mac-mini-linux".to_owned(),
+            commit: "0123456789abcdef".to_owned(),
+            provisioned: provisioned.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_gitlab_linux_lane_accepts_the_provisioned_image() {
+        let config = crate::ci::config::fixture();
+        let attestation = image_attestation(Some(&config.pins.linux_image));
+
+        require_provisioned_linux_image(Lane::LinuxCheck, &config, Some(&attestation)).unwrap();
+    }
+
+    #[test]
+    fn a_gitlab_linux_lane_rejects_a_different_image() {
+        let config = crate::ci::config::fixture();
+        let attestation = image_attestation(Some("kithara-ci:old"));
+
+        let error = require_provisioned_linux_image(Lane::LinuxCheck, &config, Some(&attestation))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("kithara-ci:old"));
+    }
+
+    #[test]
+    fn a_gitlab_linux_lane_rejects_a_missing_image_declaration() {
+        let config = crate::ci::config::fixture();
+        let attestation = image_attestation(None);
+
+        let error = require_provisioned_linux_image(Lane::LinuxCheck, &config, Some(&attestation))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("not declared by runner"));
     }
 
     #[test]

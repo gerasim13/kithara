@@ -12,6 +12,7 @@ use tracing::info;
 use super::services::launchd;
 use crate::ci::{
     config::{CiConfig, MAC_CONFIG_PATH},
+    environment::PROVISIONED_LINUX_IMAGE_ENV,
     process::Process,
 };
 
@@ -178,15 +179,16 @@ impl<'a> RunnerManager<'a> {
         let url = self.config.host.gitlab_origin();
         let cache = self.config.host.cache_root_linux.display();
         let lane_config = MAC_CONFIG_PATH;
+        let image = &self.config.pins.linux_image;
+        let provisioned_image = format!("{PROVISIONED_LINUX_IMAGE_ENV}={image}");
         format!(
             "concurrent = 1\ncheck_interval = 3\nshutdown_timeout = 30\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"RUSTUP_HOME=/usr/local/rustup\"]\n\
-             [runners.docker]\n    host = \"{}\"\n    image = \"{}\"\n    pull_policy = \"if-not-present\"\n    allowed_pull_policies = [\"if-not-present\"]\n    allowed_images = [\"kithara-ci:*\"]\n    cpus = \"5\"\n    memory = \"6500m\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/mac-host.toml:{lane_config}:ro\"]\n\n\
+             [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{provisioned_image}\", \"RUSTUP_HOME=/usr/local/rustup\"]\n\
+             [runners.docker]\n    host = \"{}\"\n    image = \"{image}\"\n    pull_policy = \"never\"\n    allowed_pull_policies = [\"never\"]\n    allowed_images = [\"{image}\"]\n    cpus = \"5\"\n    memory = \"6500m\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/mac-host.toml:{lane_config}:ro\"]\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\"]\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\"]\n",
             tokens.linux,
             docker_host(home),
-            self.config.pins.linux_image,
             tokens.android,
             tokens.release,
         )
@@ -558,7 +560,38 @@ mod tests {
             release: "glrt-release".into(),
         };
 
-        toml::from_str::<toml::Value>(&manager.runner_config(&home, &tokens)).unwrap();
+        let rendered: toml::Value = toml::from_str(&manager.runner_config(&home, &tokens)).unwrap();
+        let linux = rendered["runners"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|runner| runner["name"].as_str() == Some("kithara-mac-mini-linux"))
+            .unwrap();
+        assert_eq!(
+            linux["docker"]["image"].as_str(),
+            Some(config.pins.linux_image.as_str())
+        );
+        assert_eq!(linux["docker"]["pull_policy"].as_str(), Some("never"));
+        assert_eq!(
+            linux["docker"]["allowed_pull_policies"][0].as_str(),
+            Some("never")
+        );
+        assert_eq!(
+            linux["docker"]["allowed_images"][0].as_str(),
+            Some(config.pins.linux_image.as_str())
+        );
+        assert!(
+            linux["environment"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| {
+                    value.as_str().is_some_and(|entry| {
+                        entry
+                            == format!("{PROVISIONED_LINUX_IMAGE_ENV}={}", config.pins.linux_image)
+                    })
+                })
+        );
     }
 
     /// The runner config and the colima agent are written by two different
