@@ -3,6 +3,16 @@ use num_traits::cast::{AsPrimitive, ToPrimitive};
 use super::core::GridParams;
 use crate::waveform::GridSegment;
 
+struct Consts;
+
+impl Consts {
+    /// A least-squares line needs two trusted points.
+    const MIN_FIT_POINTS: usize = 2;
+    const MS_PER_SEC: f64 = 1000.0;
+    /// A split has to leave two leaves of at least `min_leaf_bars`.
+    const SPLIT_HALVES: usize = 2;
+}
+
 pub(super) struct GridFitCtx<'a> {
     params: &'a GridParams,
     outliers: &'a [bool],
@@ -50,7 +60,7 @@ fn fit_segment(ctx: &GridFitCtx<'_>, segment: Segment) -> (f64, f64, f64) {
             (x, ctx.db[i])
         })
         .collect();
-    if points.len() < 2 {
+    if points.len() < Consts::MIN_FIT_POINTS {
         let span: f64 = (end - start).max(1).as_();
         return (ctx.db[start], (ctx.db[end] - ctx.db[start]) / span, 0.0);
     }
@@ -104,8 +114,10 @@ fn bisect_segment(ctx: &GridFitCtx<'_>, segment: Segment) -> Vec<usize> {
         return vec![start, end];
     }
     let (_, _, max_resid) = fit_segment(ctx, segment);
-    let resid_ms = max_resid / ctx.sample_rate * 1000.0;
-    if resid_ms < ctx.params.residual_ms || (end - start) < 2 * ctx.params.min_leaf_bars {
+    let resid_ms = max_resid / ctx.sample_rate * Consts::MS_PER_SEC;
+    if resid_ms < ctx.params.residual_ms
+        || (end - start) < Consts::SPLIT_HALVES * ctx.params.min_leaf_bars
+    {
         return vec![start, end];
     }
     let mid = aligned_mid(start, end, ctx.params.align_bars, ctx.params.min_leaf_bars);
