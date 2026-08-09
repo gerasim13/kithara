@@ -36,6 +36,15 @@ but `atoms` remains render-gated because the knob consumes `render::Skin` and it
 is an iced canvas program. The platform-specific monospace family stays code-owned in
 `render/fonts.rs` - font availability, not skin design.
 
+`Skin::resolve` also copies every sub-skin (`button`, `cell`, ... one per widget family) onto `Skin`
+itself, so each field's value lives twice: once flat on `Skin` for zero-indirection hot-path render
+access (`skin.button()`), once nested inside the retained `document: SkinDoc` for round-trip (the
+raw doc a "reload"/"save skin" flow reads back). That is why `render/skin.rs` is listed in
+`field_passthrough.exempt_files` in `.config/arch/thresholds.toml` - the check's "duplicates a field
+already reachable through `self.document`" is structurally correct but the duplication is the design,
+not an oversight; collapsing it back to `self.document().button` would put the doc's indirection back
+on every render call.
+
 The palette is the single colour vocabulary: a skin section names a `ColorRole`, never a hex, and
 only `PaletteDoc::validate` parses one. Alpha stays a skin field beside the role it applies to, in
 the shape `track_alpha`, `played_alpha` and `ShadowSkin.alpha` already carry.

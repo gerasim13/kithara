@@ -126,7 +126,7 @@ fn assert_initial_apple_decoder(observations: &[DecoderObservation], label: &str
     assert_eq!(event.channels, CHANNELS, "{label} channels");
     assert_eq!(
         event.variant,
-        Some(AAC_HIGH as u32),
+        Some(u32::try_from(AAC_HIGH).unwrap_or(u32::MAX)),
         "{label} initial variant",
     );
 }
@@ -311,7 +311,10 @@ async fn render_desktop(master_url: &url::Url, switch: bool) -> DesktopRender {
         assert_eq!(target.codec, Some(AudioCodecKind::Flac));
         assert_eq!(target.sample_rate, HOST_SAMPLE_RATE);
         assert_eq!(target.channels, CHANNELS);
-        assert_eq!(target.variant, Some(FLAC as u32));
+        assert_eq!(
+            target.variant,
+            Some(u32::try_from(FLAC).unwrap_or(u32::MAX))
+        );
         assert_rubato_route(&lifecycle.resamplers, label);
     } else {
         assert_eq!(

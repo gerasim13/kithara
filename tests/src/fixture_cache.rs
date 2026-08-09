@@ -1,4 +1,5 @@
 use std::{
+    fmt::Write as _,
     fs,
     fs::OpenOptions,
     io::Write,
@@ -16,42 +17,34 @@ fn cache_key(domain: &str, spec: &[u8]) -> String {
     let digest = hasher.finalize();
     let mut hex = String::with_capacity(64);
     for byte in digest {
-        use std::fmt::Write as _;
         let _ = write!(hex, "{byte:02x}");
     }
     hex
 }
 
-/// Default L2 cache directory, used when `KITHARA_FIXTURE_CACHE` is unset.
+/// Appends `KITHARA_FIXTURE_BUILD` to the cache root, whether that root came
+/// from the environment or from the default.
 ///
-/// Namespaced by `KITHARA_FIXTURE_BUILD` — a fingerprint of the fixture-encoding
-/// code and dependency lockfile, emitted by `build.rs` and baked into every test
-/// binary of this package. Because the value is identical across `suite_stress`,
-/// `suite_heavy`, … of one build, a fixture encoded by any binary is reused by
-/// all of them (and by repeated runs of the same build); because it changes when
-/// the encoder or its deps change, a rebuild lands in a fresh sub-dir and can
-/// never serve stale encoded bytes. Launch-independent (no `current_exe`), so
-/// nextest and direct/IDE runs of the same build share one cache.
-fn default_cache_dir() -> PathBuf {
-    let build = env!("KITHARA_FIXTURE_BUILD");
-    std::env::temp_dir()
-        .join("kithara-fixture-cache")
-        .join(build)
+/// The fingerprint covers the fixture-encoding code and the encoder versions the
+/// lockfile resolved, and entry keys are content-addressed over the spec alone —
+/// so the sub-directory is the only thing standing between a new encoder and the
+/// bytes an old one produced. A root that skipped it, as an explicitly configured
+/// one used to, is a cache that never invalidates: shared across runners and
+/// branches, it serves one build's fixtures to another. Identical across
+/// `suite_stress`, `suite_heavy`, … of one build, and launch-independent (no
+/// `current_exe`), so nextest and IDE runs of that build share one directory.
+fn resolve_cache_dir(root: Option<PathBuf>) -> PathBuf {
+    let root = root.unwrap_or_else(|| std::env::temp_dir().join("kithara-fixture-cache"));
+    root.join(env!("KITHARA_FIXTURE_BUILD"))
 }
 
-/// Overrides the default cache directory. When unset, [`FixtureCache::from_env`]
-/// falls back to a build-fingerprinted default dir (see [`default_cache_dir`]),
-/// so the L2 cache is **on by default** for every run mode — not only the
-/// opt-in `cache` profile.
+/// Overrides the default cache root; the build fingerprint is always appended.
 pub(crate) const CACHE_ENV: &str = "KITHARA_FIXTURE_CACHE";
 
 /// Cross-process on-disk content cache.
 ///
-/// On by default: [`from_env`](Self::from_env) resolves to `$KITHARA_FIXTURE_CACHE`
-/// when set, otherwise to a build-fingerprinted temp dir, so plain `cargo test`,
-/// `just test`, `just test rtsan`, and IDE runs all reuse encode/mux output across
-/// the per-test processes in a run. Only [`from_dir(None)`](Self::from_dir)
-/// makes every op a no-op (used for the disabled-path unit tests).
+/// [`from_env`](Self::from_env) appends the build fingerprint to the configured
+/// or default root. Only [`from_dir(None)`](Self::from_dir) disables the cache.
 #[derive(Clone)]
 pub(crate) struct FixtureCache {
     dir: Option<PathBuf>,
@@ -64,7 +57,8 @@ pub(crate) struct FixtureCacheLock {
 
 impl FixtureCache {
     pub(crate) fn from_env() -> Self {
-        let dir = std::env::var_os(CACHE_ENV).map_or_else(default_cache_dir, PathBuf::from);
+        let root = std::env::var_os(CACHE_ENV).map(PathBuf::from);
+        let dir = resolve_cache_dir(root);
         Self::from_dir(Some(dir))
     }
 
@@ -156,7 +150,7 @@ mod tests {
 
     #[test]
     fn default_cache_dir_is_fingerprinted_under_temp() {
-        let dir = default_cache_dir();
+        let dir = resolve_cache_dir(None);
         let base = std::env::temp_dir().join("kithara-fixture-cache");
         assert!(
             dir.starts_with(&base),
@@ -171,8 +165,29 @@ mod tests {
     }
 
     #[test]
+    fn explicit_cache_root_is_preserved() {
+        let root = PathBuf::from("explicit-cache-root");
+        let dir = resolve_cache_dir(Some(root.clone()));
+
+        assert!(
+            dir.starts_with(&root),
+            "resolved dir {dir:?} must live under {root:?}",
+        );
+    }
+
+    #[test]
+    fn explicit_cache_root_ends_with_build_fingerprint() {
+        let dir = resolve_cache_dir(Some(PathBuf::from("explicit-cache-root")));
+
+        assert!(
+            dir.ends_with(env!("KITHARA_FIXTURE_BUILD")),
+            "resolved dir {dir:?} must end with the build fingerprint",
+        );
+    }
+
+    #[test]
     fn from_env_is_enabled_by_default() {
-        // Read-only env probe: under the opt-in `cache` profile the setup
+        // Read-only env probe: under the opt-in `cold` profile the setup
         // script exports KITHARA_FIXTURE_CACHE, so only assert the default
         // path when nothing overrides it.
         if std::env::var_os(CACHE_ENV).is_some() {

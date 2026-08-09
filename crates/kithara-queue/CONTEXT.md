@@ -62,6 +62,15 @@ underlying player / audio / hls / file / downloader events.
 - `NextTrackReady { id, index }` fires when a load lands in a still-valid slot.
 - `AudioEvent::UnderrunStarted` / `UnderrunEnded` translate to
   `ItemEvent::PlaybackStalled` / `PlaybackLikelyToKeepUp`.
+- `player_rx` (`drain_player_events`, `engine_events.rs`) shares the root `EventBus`
+  channel with every descendant scope, so under contention it can lag and lose
+  `PlayerEvent::CurrentItemChanged` — edge-triggered and de-duplicated at the source
+  (`ItemQueue::announce_current_item`), so a dropped copy never re-arrives on its own.
+  On `TryRecvError::Lagged`, `drain_player_events` finishes draining, releases the
+  receiver lock, then calls `handle_current_item_changed()` once to resync from
+  `PlayerImpl::current_index()` directly — the same resync `seek` already performs
+  after an indeterminate gap. The resync runs after the lock is released so its own
+  publish cannot evict the next unread slot and re-trigger `Lagged` against itself.
 
 ## Status lifecycle and load lanes
 

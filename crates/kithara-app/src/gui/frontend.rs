@@ -47,7 +47,7 @@ fn immediate(boot: Boot, palette: gui::GuiPalette) -> Result<(), FrontendError> 
             let boot = boot
                 .lock()
                 .take()
-                .expect("iced boots the application exactly once");
+                .expect("invariant: iced boots the application exactly once");
             Kithara::new(
                 boot.session,
                 boot.decks,

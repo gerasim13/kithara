@@ -381,6 +381,6 @@ mod tests {
             1,
             "the window slid with the cursor and now reaches segment 2"
         );
-        assert_eq!(after_consumption[0].url, Fixture::segment_url(2));
+        assert_eq!(after_consumption[0].url(), &Fixture::segment_url(2));
     }
 }

@@ -1,11 +1,9 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, derive_more::Display)]
+#[display("{}/{}/{}/{}", package, target, module, symbol)]
 pub(crate) struct NodeId {
     pub(crate) module: String,
     pub(crate) package: String,
@@ -61,16 +59,6 @@ impl NodeId {
             module: module.into(),
             symbol: symbol.into(),
         }
-    }
-}
-
-impl fmt::Display for NodeId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "{}/{}/{}/{}",
-            self.package, self.target, self.module, self.symbol
-        )
     }
 }
 

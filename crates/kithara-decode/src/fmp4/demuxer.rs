@@ -37,7 +37,6 @@ pub(crate) struct Fmp4SegmentDemuxer {
     byte_pool: BytePool,
     init: Fmp4InitInfo,
     cursor: Option<SegmentCursor>,
-    duration: Option<Duration>,
     track_info: TrackInfo,
     /// Index of the next segment to decode. Sequential playback advances
     /// this by one per segment; a seek sets it to the segment after the
@@ -134,7 +133,6 @@ impl Fmp4SegmentDemuxer {
             track_info,
             source,
             segments,
-            duration,
             byte_pool,
             next_segment_index: 0,
             cursor: None,
@@ -149,7 +147,7 @@ enum EnsureCursor {
 
 impl Demuxer for Fmp4SegmentDemuxer {
     fn duration(&self) -> Option<Duration> {
-        self.duration
+        self.track_info.duration
     }
 
     #[kithara::probe]
@@ -217,7 +215,7 @@ impl Demuxer for Fmp4SegmentDemuxer {
                 detail: "no segment covers the requested seek time",
             });
         };
-        if let Some(duration) = self.duration
+        if let Some(duration) = self.track_info.duration
             && desc.decode_time >= duration
         {
             return Ok(DemuxSeekOutcome::PastEof { duration });

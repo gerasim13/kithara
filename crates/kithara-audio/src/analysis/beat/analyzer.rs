@@ -348,7 +348,7 @@ fn normalize_times(values: &mut Vec<f32>) {
 #[cfg(test)]
 mod tests {
     use kithara_bufpool::PcmPool;
-    use kithara_platform::sync::Arc;
+    use kithara_platform::sync::{Arc, Mutex};
     use kithara_resampler::{ResamplerBackend, rubato::RubatoBackend};
     use kithara_test_utils::kithara;
     use num_traits::cast::AsPrimitive;
@@ -546,10 +546,10 @@ mod tests {
             .detector_overlap_seconds(0)
             .build();
         let pcm = stereo(3 * usize::try_from(Consts::SRC).unwrap_or(0), |_| 0.25);
-        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = Arc::new(Mutex::new(Vec::new()));
         let seen_for_detector = Arc::clone(&seen);
         let mut detector = detector(move |mono| {
-            seen_for_detector.lock().unwrap().push(mono.len());
+            seen_for_detector.lock().push(mono.len());
             assert!(mono.len() <= usize::try_from(Consts::SRC).unwrap_or(0));
             empty_raw()
         });
@@ -558,7 +558,7 @@ mod tests {
         push_chunked(&mut analyzer, &pcm, 2048, &mut detector);
         analyzer.finalize(&mut detector).expect("mock detects");
 
-        let seen = seen.lock().unwrap().clone();
+        let seen = seen.lock().clone();
         assert_eq!(seen.as_slice(), &[44_100, 44_100, 44_100]);
     }
 
@@ -571,19 +571,19 @@ mod tests {
             .detector_overlap_seconds(1)
             .build();
         let pcm = stereo(2 * usize::try_from(Consts::SRC).unwrap_or(0), |_| 0.25);
-        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = Arc::new(Mutex::new(Vec::new()));
         let seen_for_detector = Arc::clone(&seen);
         let mut detector = detector(move |mono| {
-            seen_for_detector.lock().unwrap().push(mono.len());
+            seen_for_detector.lock().push(mono.len());
             empty_raw()
         });
         let mut analyzer = analyzer(Consts::SRC, config);
 
         analyzer.push_interleaved(&pcm, 2, &mut detector);
-        assert!(seen.lock().unwrap().is_empty());
+        assert!(seen.lock().is_empty());
         analyzer.finalize(&mut detector).expect("mock detects");
 
-        let seen = seen.lock().unwrap().clone();
+        let seen = seen.lock().clone();
         assert_eq!(seen.as_slice(), &[2 * 44_100]);
     }
 

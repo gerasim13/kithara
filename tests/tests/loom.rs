@@ -6,7 +6,7 @@ use kithara::platform::{
 };
 use kithara::platform::{
     sync::{
-        Arc, Condvar, Mutex,
+        Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -26,16 +26,24 @@ fn platform_mutex_is_explored_by_loom() {
     assert_eq!(*value.lock(), 2);
 }
 
+/// `platform_condvar_is_explored_by_loom`'s loop body: the guard enters as a
+/// parameter and drops on return — same hold window as an in-line loop, but
+/// keeps clippy's `significant_drop_tightening` from mis-suggesting an early
+/// drop inside the loop. Mirrors
+/// `kithara_platform::flash::system::wake::wait_set`.
+fn wait_until_ready(condvar: &Condvar, mut ready: MutexGuard<'_, bool>) {
+    while !*ready {
+        ready = condvar.wait(ready);
+    }
+}
+
 #[kithara::test(loom)]
 fn platform_condvar_is_explored_by_loom() {
     let state = Arc::new((Mutex::new(false), Condvar::default()));
     let waiter_state = Arc::clone(&state);
     let waiter = thread::spawn(move || {
         let (lock, condvar) = &*waiter_state;
-        let mut ready = lock.lock();
-        while !*ready {
-            ready = condvar.wait(ready);
-        }
+        wait_until_ready(condvar, lock.lock());
     });
 
     let (lock, condvar) = &*state;

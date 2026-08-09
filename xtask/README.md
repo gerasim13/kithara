@@ -18,6 +18,14 @@ binary directly, a stale invocation refreshes it once, and a missing cache uses
 Cargo for the cold bootstrap. Force a rebuild after an undeclared environment
 change with `just tooling refresh`.
 
+Self-cache commands read `[ext.xtask.cache]` and ignore the rest of
+`.config/xtask.toml`. A cached binary therefore keeps reporting its own
+freshness after the project schema gains a field that binary predates: the
+sources that carry the new field are part of the cache inputs, so the
+generation reports stale and refreshes itself. Reading the whole schema would
+make that generation fail before it could say so, leaving the refresh path
+unreachable.
+
 The ignored `xtask/.xtask-cache` file locates the active generation owned by
 the concrete worktree. Cached commands do not use another worktree's binary or
 the shared `target/debug/xtask`. Cache policy is configured under

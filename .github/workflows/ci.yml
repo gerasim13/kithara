@@ -48,8 +48,8 @@ jobs:
         run: just lint full
 
   test:
-    name: Test
-    needs: lint
+    name: Tests (simulated clock)
+    needs: gate
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 120
 
@@ -63,8 +63,8 @@ jobs:
   # The virtual clock collapses fixture delays, so order-of-service defects
   # cannot reproduce above. Own target dir: the two builds differ.
   test-real-clock:
-    name: Test on a real clock
-    needs: lint
+    name: Tests (real clock)
+    needs: gate
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 120
 
@@ -77,7 +77,7 @@ jobs:
 
   msrv:
     name: MSRV
-    needs: lint
+    needs: gate
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 60
 
@@ -118,7 +118,7 @@ jobs:
 
   wasm:
     name: WASM checks
-    needs: lint
+    needs: gate
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 60
 
@@ -145,7 +145,7 @@ jobs:
 
   wasm-size:
     name: WASM size budget (advisory)
-    needs: lint
+    needs: gate
     continue-on-error: true
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 60
@@ -166,7 +166,7 @@ jobs:
 
   hack:
     name: Feature powerset (advisory)
-    needs: lint
+    needs: gate
     continue-on-error: true
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 120
@@ -180,7 +180,7 @@ jobs:
 
   semver:
     name: Semver checks (advisory)
-    needs: lint
+    needs: gate
     continue-on-error: true
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 60
@@ -194,3 +194,33 @@ jobs:
 
       - name: Run semver checks
         run: just deps semver
+
+  # Real-time correctness is what this product is for: an allocation or a lock
+  # on the audio thread is a dropout, not a slow path. It ran nightly, which
+  # meant learning about it the morning after the push that caused it.
+  #
+  # The fast lane is a tripwire over the mock decoder and blocks. The two
+  # real-decoder soaks stay advisory for now — they carry findings older than
+  # this change, and turning them blocking before those are closed would stop
+  # every push on a defect nobody introduced today.
+  rtsan:
+    name: RealtimeSanitizer
+    needs: gate
+    uses: ./.github/workflows/rtsan.yml
+
+  # Memory is the other budget a player cannot overrun quietly: pool budgets,
+  # allocation regressions, a zero-allocation audio hot path, and the resident
+  # size of an HLS playback. `just perf memory` runs all four.
+  memory:
+    name: Memory budgets
+    needs: gate
+    if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run the memory budgets
+        run: just perf memory

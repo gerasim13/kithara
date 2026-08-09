@@ -37,6 +37,14 @@ fn parse_box_header(buf: &[u8]) -> Option<(u64, [u8; 4])> {
     }
 }
 
+fn hex_dump(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn read_exact_retry(stream: &mut Stream<Hls>, buf: &mut [u8], timeout: Duration) -> usize {
     let deadline = Instant::now() + timeout;
     let mut filled = 0;
@@ -49,6 +57,39 @@ fn read_exact_retry(stream: &mut Stream<Hls>, buf: &mut [u8], timeout: Duration)
         }
     }
     filled
+}
+
+fn next_box(
+    stream: &mut Stream<Hls>,
+    pos: u64,
+    label: &str,
+    box_index: usize,
+) -> Option<(u64, u64, String)> {
+    let mut header = [0u8; 16];
+    let n = read_exact_retry(stream, &mut header[..8], Duration::from_secs(5));
+    if n < 8 {
+        debug!("[{label}] scan: EOF at pos={pos} (read {n} bytes)");
+        return None;
+    }
+    let Some((size, tag)) = parse_box_header(&header[..n]) else {
+        return None;
+    };
+    if size < 8 && size != 0 {
+        let hex = hex_dump(&header[..8]);
+        warn!("[{label}] scan: INVALID box at pos={pos} size={size} hex=[{hex}]");
+        return None;
+    }
+    let tag_str = String::from_utf8_lossy(&tag).to_string();
+    if !is_known_box(&tag) {
+        let hex = hex_dump(&header[..8]);
+        warn!("[{label}] scan: UNKNOWN box at pos={pos} tag='{tag_str}' hex=[{hex}]");
+        return None;
+    }
+    debug!(
+        "[{label}] scan: box #{:<3} pos={:<10} size={:<10} tag='{tag_str}'",
+        box_index, pos, size
+    );
+    Some((pos, size, tag_str))
 }
 
 /// Scan fMP4 boxes from `start_pos`. Returns `(boxes, last_end)`.
@@ -66,41 +107,10 @@ fn scan_boxes(
     }
 
     while pos < max_end {
-        let mut header = [0u8; 16];
-        let n = read_exact_retry(stream, &mut header[..8], Duration::from_secs(5));
-        if n < 8 {
-            debug!("[{label}] scan: EOF at pos={pos} (read {n} bytes)");
-            break;
-        }
-        let Some((size, tag)) = parse_box_header(&header[..n]) else {
+        let Some((offset, size, tag)) = next_box(stream, pos, label, boxes.len()) else {
             break;
         };
-        if size < 8 && size != 0 {
-            let hex: String = header[..8]
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<Vec<_>>()
-                .join(" ");
-            warn!("[{label}] scan: INVALID box at pos={pos} size={size} hex=[{hex}]");
-            break;
-        }
-        let tag_str = String::from_utf8_lossy(&tag).to_string();
-        if !is_known_box(&tag) {
-            let hex: String = header[..8]
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<Vec<_>>()
-                .join(" ");
-            warn!("[{label}] scan: UNKNOWN box at pos={pos} tag='{tag_str}' hex=[{hex}]");
-            break;
-        }
-        debug!(
-            "[{label}] scan: box #{:<3} pos={:<10} size={:<10} tag='{tag_str}'",
-            boxes.len(),
-            pos,
-            size
-        );
-        boxes.push((pos, size, tag_str));
+        boxes.push((offset, size, tag));
 
         if size == 0 {
             break;
@@ -113,6 +123,71 @@ fn scan_boxes(
     }
     let last_end = boxes.last().map_or(start_pos, |(o, s, _)| o + s);
     (boxes, last_end)
+}
+
+struct Phase1Result {
+    total_read: u64,
+    saw_eof: bool,
+    read_error: Option<String>,
+    hit_deadline: bool,
+}
+
+fn read_to_eof_or_deadline(stream: &mut Stream<Hls>, buf: &mut [u8], label: &str) -> Phase1Result {
+    let mut total_read = 0u64;
+    let deadline = Instant::now() + Duration::from_secs(25);
+    let mut hit_deadline = false;
+    let mut read_error = None;
+    let mut saw_eof = false;
+
+    while Instant::now() < deadline {
+        match stream.read(buf) {
+            Ok(0) => {
+                // Confirm true EOF on source STATE, not a wall-clock second
+                // chance: the source reports `Eof` only once drained
+                // (`pos >= total && sizes_complete()`). A non-terminal phase
+                // means a byte-arrival/WorkerWake is still pending, so
+                // re-poll on a virtual tick instead of recording a premature
+                // `saw_eof` (a fixed sleep collapses to ~0 under flash).
+                if matches!(stream.phase(), SourcePhase::Eof | SourcePhase::Cancelled) {
+                    saw_eof = true;
+                    break;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            Ok(n) => total_read += n as u64,
+            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+            Err(e) => {
+                error!("[{label}] read error: {e}");
+                read_error = Some(e.to_string());
+                break;
+            }
+        }
+    }
+
+    if !saw_eof && read_error.is_none() && Instant::now() >= deadline {
+        hit_deadline = true;
+    }
+
+    Phase1Result {
+        total_read,
+        saw_eof,
+        read_error,
+        hit_deadline,
+    }
+}
+
+fn assert_boxes_contiguous(boxes: &[(u64, u64, String)], label: &str) {
+    let mut expected_pos = 0u64;
+    for (i, (offset, size, tag)) in boxes.iter().enumerate() {
+        if *offset != expected_pos {
+            let gap = (*offset as i64) - (expected_pos as i64);
+            panic!(
+                "[{label}] GAP at box #{i} '{tag}': expected pos {expected_pos}, \
+                 got {offset} (gap={gap})"
+            );
+        }
+        expected_pos = offset + size;
+    }
 }
 
 #[kithara::test(
@@ -177,40 +252,12 @@ async fn drm_stream_byte_integrity(
 
         info!("[{label}] Phase 1: reading to EOF");
         let mut buf = vec![0u8; 65536];
-        let mut total_read = 0u64;
-        let deadline = Instant::now() + Duration::from_secs(25);
-        let mut hit_deadline = false;
-        let mut read_error = None;
-        let mut saw_eof = false;
-
-        while Instant::now() < deadline {
-            match stream.read(&mut buf) {
-                Ok(0) => {
-                    // Confirm true EOF on source STATE, not a wall-clock second
-                    // chance: the source reports `Eof` only once drained
-                    // (`pos >= total && sizes_complete()`). A non-terminal phase
-                    // means a byte-arrival/WorkerWake is still pending, so
-                    // re-poll on a virtual tick instead of recording a premature
-                    // `saw_eof` (a fixed sleep collapses to ~0 under flash).
-                    if matches!(stream.phase(), SourcePhase::Eof | SourcePhase::Cancelled) {
-                        saw_eof = true;
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(50));
-                }
-                Ok(n) => total_read += n as u64,
-                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
-                Err(e) => {
-                    error!("[{label}] read error: {e}");
-                    read_error = Some(e.to_string());
-                    break;
-                }
-            }
-        }
-
-        if !saw_eof && read_error.is_none() && Instant::now() >= deadline {
-            hit_deadline = true;
-        }
+        let Phase1Result {
+            total_read,
+            saw_eof,
+            read_error,
+            hit_deadline,
+        } = read_to_eof_or_deadline(&mut stream, &mut buf, label);
 
         let stream_len = stream.len().unwrap_or(0);
         info!("[{label}] Phase 1 done: total_read={total_read} stream_len={stream_len}");
@@ -218,17 +265,7 @@ async fn drm_stream_byte_integrity(
         info!("[{label}] Phase 2: scanning fMP4 from pos 0");
         let (boxes, last_end) = scan_boxes(&mut stream, 0, stream_len.max(total_read), label);
 
-        let mut expected_pos = 0u64;
-        for (i, (offset, size, tag)) in boxes.iter().enumerate() {
-            if *offset != expected_pos {
-                let gap = (*offset as i64) - (expected_pos as i64);
-                panic!(
-                    "[{label}] GAP at box #{i} '{tag}': expected pos {expected_pos}, \
-                     got {offset} (gap={gap})"
-                );
-            }
-            expected_pos = offset + size;
-        }
+        assert_boxes_contiguous(&boxes, label);
 
         let moof_count = boxes.iter().filter(|(_, _, t)| t == "moof").count();
         let mdat_count = boxes.iter().filter(|(_, _, t)| t == "mdat").count();

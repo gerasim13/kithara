@@ -158,7 +158,7 @@ impl Resource {
     ) -> DecodeResult<Self>
     where
         T: StreamType<Events = EventBus> + 'static,
-        B: ResamplerBackend,
+        B: Default + ResamplerBackend,
         Audio<Stream<T>>: PcmReader + 'static,
     {
         let audio = Audio::<Stream<T>>::new(config).await?;

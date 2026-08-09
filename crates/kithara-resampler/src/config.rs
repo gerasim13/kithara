@@ -238,11 +238,11 @@ mod tests {
     }
 
     fn sample_rate(value: u32) -> NonZeroU32 {
-        NonZeroU32::new(value).unwrap_or_else(|| panic!("sample rate must be non-zero"))
+        NonZeroU32::new(value).expect("sample rate must be non-zero")
     }
 
     fn stereo() -> NonZeroUsize {
-        NonZeroUsize::new(2).unwrap_or_else(|| panic!("channel count must be non-zero"))
+        NonZeroUsize::new(2).expect("channel count must be non-zero")
     }
 
     #[test]

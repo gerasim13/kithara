@@ -306,7 +306,8 @@ placement with the selected backend.
 construction settings - backend selection, gapless mode, and resampling. Its `resampler` field
 threads the backend handle and tunables into `AudioConfig` and then `DecoderConfig.resampler`.
 `ResourceConfig` is generic over that backend, defaulting to `PlaybackResamplerBackend` (Rubato,
-else Glide, else none - by feature). Callers wanting a platform backend such as Apple
+else Glide, else none - by feature); leaving the field unset resolves to `B::default()` in
+`kithara-audio`, which owns that fallback. Callers wanting a platform backend such as Apple
 AudioConverter inject it through `ResourceConfig.decoder`, never through separate resource-level
 resampler fields.
 

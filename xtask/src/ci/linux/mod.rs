@@ -1,5 +1,7 @@
 mod cleanup;
 mod command;
+mod compose;
+mod container;
 mod firewall;
 mod profile;
 mod registration;

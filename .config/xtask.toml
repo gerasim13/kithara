@@ -158,14 +158,14 @@ prefix_args = [
   "test-release",
 ]
 
-[test.lanes.cached]
+[test.lanes.cold]
 program = "cargo"
 default_features = ["kithara-ui/render"]
 prefix_args = [
   "nextest",
   "run",
   "--profile",
-  "cache",
+  "cold",
   "--workspace",
   "--exclude",
   "kithara-fuzz",
@@ -247,11 +247,12 @@ prefix_args = [
 default_features = ["e2e", "kithara/resample-glide"]
 default_flash = false
 
-# Everything that talks to a host this workspace does not own: the zvuk
-# production CDN behind `KITHARA_DRM_PROD_*`, and `*.zvq.me`, which resolves
-# only inside the corporate VPN. Deliberately wired to no CI job — the runners
-# sit outside both networks, and a lane that runs there measures the fence, not
-# the code. Run it by hand: `just test run --lane=network`.
+# The network tests a runner can reach: the public zvuk CDN and silvercomet.
+# The CDN is auth-gated, so this lane only says something where
+# `KITHARA_DRM_PROD_*` are in the build environment; without them it fails on
+# the key request rather than on the code, which is why it is a lane of its own
+# rather than a gate job.
+
 [test.lanes.network]
 program = "cargo"
 prefix_args = [
@@ -264,7 +265,26 @@ prefix_args = [
   "--test",
   "suite_network",
 ]
-default_features = ["network"]
+default_features = ["network", "kithara/resample-rubato"]
+default_flash = false
+
+# The half of the network tests no runner can serve: `*.zvq.me`, which resolves
+# only inside the corporate network, and the tests that open a real output
+# device. No CI job runs this and none should — a runner that fails here reports
+# the fence around itself, not the code. `just test run --lane=network-manual`.
+[test.lanes.network-manual]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-integration-tests",
+  "--cargo-profile",
+  "test-release",
+  "--test",
+  "suite_network_manual",
+]
+default_features = ["network-manual", "kithara/resample-rubato"]
 default_flash = false
 
 # Integration regression tests are red by design and stay outside the main gate.
@@ -372,15 +392,24 @@ wasm_dist = "crates/kithara-ffi/dist"
 pages_branch = "gh-pages"
 
 [orphans]
-# Packages excluded from the default `cargo modules orphans` sweep.
+# Packages the sweep cannot say anything useful about: a generated crate, two
+# test harnesses, the fuzz targets, and the build tool.
+#
+# Nothing else belongs here. This check exists to point at code that needs
+# rewriting, so a name on this list is a place someone decided not to look, and
+# the list only ever grew because dropping a whole package is the only lever
+# the tool offers. A green sweep bought that way says exactly as much as a
+# green run that executed nothing.
+#
+# A module the sweep reports but that is real — gated behind a non-default
+# feature or another target — is a gap in how the sweep is invoked, not grounds
+# for an entry here: it runs `--lib` with default features on the native target
+# and passes neither `--features` nor `--target`. Widen the invocation.
 exclude_packages = [
   "kithara-workspace-hack",
   "kithara-test-utils",
   "kithara-test-macros",
-  "kithara-ffi",
   "kithara-fuzz",
-  "kithara-decode",
-  "kithara-platform",
   "xtask",
 ]
 

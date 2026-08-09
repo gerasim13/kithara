@@ -184,11 +184,17 @@ fn try_fix_expr_struct(
         Err(other) => return Err(format!("engine error: {other:?}")),
     };
 
-    let last_block_text = &src[blocks.last().expect("non-empty").bytes.clone()];
+    let last_block_text = &src[blocks
+        .last()
+        .expect("invariant: e.fields.len() >= 2 checked above, blocks mirrors fields")
+        .bytes
+        .clone()];
     if !last_block_text.trim_end().ends_with(',')
         && !last_block_text.trim_end().ends_with([')', '}', ']'])
     {
-        let last = blocks.last().expect("non-empty");
+        let last = blocks
+            .last()
+            .expect("invariant: e.fields.len() >= 2 checked above, blocks mirrors fields");
         if !src[last.item_bytes.end..last.bytes.end].contains(',') {
             return Err("last field has no trailing comma".to_string());
         }

@@ -20,7 +20,7 @@ just test run --profile ci     # a specific nextest profile
 just test run EXPR             # a nextest filter expression, e.g. test(seek)
 just test run --lane=doc       # doc-tests (nextest does not run them)
 just test run --lane=e2e       # gated by the `e2e` feature (suite_e2e)
-just test run --lane=cached    # opt-in ephemeral L2 fixture cache (profile `cache`)
+just test run --lane=cold      # opt-in cold L2 fixture cache (profile `cold`)
 ```
 
 The `--flash=*` token is stripped before reaching nextest; every other argument
@@ -51,16 +51,24 @@ the full suite but passes alone is load-correlated, not deterministic.
 - `ci` — CI tuning.
 - `fast` — quick local iteration.
 - `stress` — for the stress lanes (`--stress-count N` / `--stress-duration`).
-- `cache` — `default` plus a setup script that wipes and re-exports a fresh
-  `KITHARA_FIXTURE_CACHE` for an ephemeral, explicitly-scoped per-run cache.
+- `cold` — `default` plus a setup script that recreates a separate cold root
+  and exports it as `KITHARA_FIXTURE_CACHE` without touching the default cache.
 
 ### Fixture cache (L2)
 
 Encode/mux fixtures are expensive to regenerate, so an on-disk cache is **on by
 default** (unset `KITHARA_FIXTURE_CACHE` ⇒ a persistent default dir; see
-`tests/src/fixture_cache.rs`). The opt-in `cache` profile gives an ephemeral,
-per-run cache instead. Generated fixtures and test logs must stay a reasonable
-size — `src/` is production code, large fixtures belong under `tests/`.
+`tests/src/fixture_cache.rs`). The opt-in `cold` profile gives an isolated,
+freshly recreated per-run cache without touching that persistent default.
+
+Whichever root is in effect, the build fingerprint is appended to it, so an
+encoder change lands in a fresh sub-directory instead of reusing bytes the
+previous encoder produced. `just test fixture-cache path` prints the roots and
+`just test fixture-cache clear` drops them; the next run then re-encodes every
+fixture it touches, which costs a full suite roughly +64% wall time.
+
+Generated fixtures and test logs must stay a reasonable size — `src/` is
+production code, large fixtures belong under `tests/`.
 
 ## Test attributes (`kithara-test-macros`)
 

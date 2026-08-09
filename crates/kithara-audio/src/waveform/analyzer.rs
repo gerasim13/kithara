@@ -1,12 +1,26 @@
+use std::array;
+
 use kithara_platform::sync::Arc;
 use num_traits::cast::ToPrimitive;
 use realfft::{RealFftPlanner, RealToComplex, num_complex::Complex};
 
 use super::{
+    Band,
     bucket::{Bucket, Waveform},
     bucketize::bucketize,
     params::AnalysisParams,
 };
+
+struct Consts;
+
+impl Consts {
+    /// Hann `a0`: `w[n] = a0 - a0·cos(2πn/(N-1))`.
+    const HANN_A0: f32 = 0.5;
+    /// 75 % overlap: the window advances by a quarter of its length.
+    const HOP_DIVISOR: usize = 4;
+    /// A real FFT needs at least two input samples.
+    const MIN_FFT_SIZE: usize = 2;
+}
 
 /// Synchronous streaming waveform analyzer. Downmixes to mono once (channel
 /// mean) and reduces the spectrum to an overlapping-window (75% Hann overlap)
@@ -20,8 +34,8 @@ pub struct WaveformAnalyzer {
     fft_scratch: Vec<Complex<f32>>,
     fill: Vec<f32>,
     hann: Vec<f32>,
-    raw_bands: Vec<[f32; 3]>,
-    band_bin_inv: [f32; 3],
+    raw_bands: Vec<[f32; Band::COUNT]>,
+    band_bin_inv: [f32; Band::COUNT],
     low_mid_bin: usize,
     mid_high_bin: usize,
     window_hop: usize,
@@ -30,7 +44,7 @@ pub struct WaveformAnalyzer {
 impl WaveformAnalyzer {
     #[must_use]
     pub fn new(sample_rate: u32, params: AnalysisParams) -> Self {
-        let fft_size = params.fft_size().max(2);
+        let fft_size = params.fft_size().max(Consts::MIN_FFT_SIZE);
         let mut planner = RealFftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(fft_size);
         let fft_input = fft.make_input_vec();
@@ -64,7 +78,7 @@ impl WaveformAnalyzer {
             fft_input,
             fft_output,
             fft_scratch,
-            window_hop: (fft_size / 4).max(1),
+            window_hop: (fft_size / Consts::HOP_DIVISOR).max(1),
             fill: Vec::with_capacity(fft_size),
             raw_bands: Vec::new(),
         }
@@ -83,13 +97,13 @@ impl WaveformAnalyzer {
         }
 
         let buckets = buckets.min(self.raw_bands.len());
-        let max = |a: [f32; 3], b: [f32; 3]| [a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])];
-        let energy = bucketize(&self.raw_bands, buckets, [0.0; 3], max);
+        let max = |a: [f32; Band::COUNT], b: [f32; Band::COUNT]| array::from_fn(|i| a[i].max(b[i]));
+        let energy = bucketize(&self.raw_bands, buckets, [0.0; Band::COUNT], max);
         let bands = normalize_bands(energy, self.params.band_gain());
 
         let out: Vec<Bucket> = bands
             .into_iter()
-            .map(|b| Bucket::new(b[0], b[1], b[2]))
+            .map(|b| Bucket::new(b[Band::Low.idx()], b[Band::Mid.idx()], b[Band::High.idx()]))
             .collect();
         Waveform::from(out)
     }
@@ -142,7 +156,7 @@ impl WaveformAnalyzer {
         {
             self.window_bands()
         } else {
-            [0.0; 3]
+            [0.0; Band::COUNT]
         };
         self.raw_bands.push(bands);
     }
@@ -161,31 +175,27 @@ impl WaveformAnalyzer {
         self.push_window_bands();
     }
 
-    fn window_bands(&self) -> [f32; 3] {
+    fn window_bands(&self) -> [f32; Band::COUNT] {
         // Zero the DC bin so a constant offset never colors the low band.
         let bins = &self.fft_output[1..];
         let total: f32 = bins.iter().map(Complex::norm_sqr).sum();
         let rms = (total / self.fft_input.len().to_f32().unwrap_or(1.0)).sqrt();
         if rms < self.params.energy_floor() {
-            return [0.0; 3];
+            return [0.0; Band::COUNT];
         }
 
-        let mut band = [0.0_f32; 3];
+        let mut band = [0.0_f32; Band::COUNT];
         for (i, c) in self.fft_output.iter().enumerate().skip(1) {
             let energy = c.norm_sqr();
             if i < self.low_mid_bin {
-                band[0] += energy;
+                band[Band::Low.idx()] += energy;
             } else if i < self.mid_high_bin {
-                band[1] += energy;
+                band[Band::Mid.idx()] += energy;
             } else {
-                band[2] += energy;
+                band[Band::High.idx()] += energy;
             }
         }
-        [
-            band[0] * self.band_bin_inv[0],
-            band[1] * self.band_bin_inv[1],
-            band[2] * self.band_bin_inv[2],
-        ]
+        array::from_fn(|i| band[i] * self.band_bin_inv[i])
     }
 }
 
@@ -198,7 +208,7 @@ fn hann_window(size: usize) -> Vec<f32> {
     (0..size)
         .map(|n| {
             let phase = scale * n.to_f32().unwrap_or(0.0);
-            0.5 - 0.5 * phase.cos()
+            Consts::HANN_A0 - Consts::HANN_A0 * phase.cos()
         })
         .collect()
 }
@@ -214,16 +224,13 @@ fn crossover_bin(hz: f32, bin_hz: f32, bins: usize) -> usize {
 /// Per-bucket band energies -> heights: `sqrt` to magnitude, apply per-band
 /// gain, then divide all three by one shared global max so the relative band
 /// sizes (the loudness tilt) survive while every value lands in `[0, 1]`.
-fn normalize_bands(energy: Vec<[f32; 3]>, gain: [f32; 3]) -> Vec<[f32; 3]> {
-    let mut mags: Vec<[f32; 3]> = energy
+fn normalize_bands(
+    energy: Vec<[f32; Band::COUNT]>,
+    gain: [f32; Band::COUNT],
+) -> Vec<[f32; Band::COUNT]> {
+    let mut mags: Vec<[f32; Band::COUNT]> = energy
         .into_iter()
-        .map(|e| {
-            [
-                e[0].sqrt() * gain[0],
-                e[1].sqrt() * gain[1],
-                e[2].sqrt() * gain[2],
-            ]
-        })
+        .map(|e| array::from_fn(|i| e[i].sqrt() * gain[i]))
         .collect();
 
     let max = mags
@@ -233,9 +240,9 @@ fn normalize_bands(energy: Vec<[f32; 3]>, gain: [f32; 3]) -> Vec<[f32; 3]> {
     if max > 0.0 {
         let inv = 1.0 / max;
         for m in &mut mags {
-            m[0] *= inv;
-            m[1] *= inv;
-            m[2] *= inv;
+            for v in &mut *m {
+                *v *= inv;
+            }
         }
     }
     mags

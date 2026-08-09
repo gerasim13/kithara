@@ -28,7 +28,48 @@ only through `KITHARA_CI_HOST_CONFIG`, which every executor sets to
 ## Host installation
 
 Write the machine profile for this host first — start from the field list in
-`xtask/tests/fixtures/ci-mac-host.toml` — and keep it outside the repository.
+`xtask/tests/fixtures/ci-mac-host.toml` (`ci-linux-host.toml` for a Linux
+host) — and keep it outside the repository.
+
+A Linux host declares the repositories it serves and the token that speaks for
+each, then every runner names one of them:
+
+```toml
+[[repositories]]
+name = "octocat/kithara"
+token_file = "/etc/kithara-ci/tokens/octocat.token"
+
+[[repositories]]
+name = "hubot/kithara"
+token_file = "/etc/kithara-ci/tokens/hubot.token"
+
+[[runners]]
+name = "kithara-ci-hubot"
+repository = "hubot/kithara"
+cpus = 12
+memory = "48g"
+labels = ["self-hosted", "linux", "x64", "kithara"]
+```
+
+No entry is the default and none is subordinate: the repositories are peers,
+named after their owners, and a runner belongs to whichever one it names. This
+is not a convenience — a GitHub runner registration reaches exactly one
+repository, so serving a second one means separate runner processes holding a
+separate credential.
+
+One token per file, named after the owner it authorises. A shared file would
+widen a leak to every repository on the machine and make rotating one token an
+edit to the file the others depend on, and it would put a parsed format between
+the profile and a secret. Create one with
+`install -m 600 -o root -g root /dev/stdin /etc/kithara-ci/tokens/<owner>.token`,
+which sets the mode as the file is created and keeps the token out of shell
+history; `sudo` overrides an inherited `umask`, so `tee` leaves the file
+world-readable unless it is chmodded afterwards.
+
+A runner naming a repository the machine holds no credential for is refused
+while the profile is read. Left to run it would register against whichever
+token the machine happened to hold, come up, take work, and report to the wrong
+repository.
 Then build the installer from a reviewed GitLab commit:
 
 ```text

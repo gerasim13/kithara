@@ -2,8 +2,8 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_apple::audio_toolbox::{
     AUDIO_CONVERTER_ERR_NO_DATA_NOW, AUDIO_FORMAT_LINEAR_PCM, AudioConverter,
-    AudioStreamBasicDescription, BITS_PER_F32_SAMPLE, BYTES_PER_F32_SAMPLE, FLOAT32_PLANAR_FLAGS,
-    NO_ERR, OSStatus, OwnedAudioBufferList, os_status_to_string,
+    AudioStreamBasicDescription, AudioToolboxError, BITS_PER_F32_SAMPLE, BYTES_PER_F32_SAMPLE,
+    FLOAT32_PLANAR_FLAGS, NO_ERR, OSStatus, OwnedAudioBufferList, os_status_to_string,
 };
 use kithara_bufpool::PcmPool;
 use num_traits::cast::ToPrimitive;
@@ -329,10 +329,10 @@ fn apple_error_status(op: &'static str, status: OSStatus) -> ResamplerError {
     }
 }
 
-fn err_status(err: &kithara_apple::audio_toolbox::AudioToolboxError) -> OSStatus {
+fn err_status(err: &AudioToolboxError) -> OSStatus {
     match err {
-        kithara_apple::audio_toolbox::AudioToolboxError::Status { status, .. } => *status,
-        kithara_apple::audio_toolbox::AudioToolboxError::Config { .. } => -50,
+        AudioToolboxError::Status { status, .. } => *status,
+        AudioToolboxError::Config { .. } => -50,
     }
 }
 
@@ -544,14 +544,12 @@ mod tests {
         frames: usize,
     ) -> ResamplerSettings {
         ResamplerSettings::builder()
-            .channels(
-                std::num::NonZeroUsize::new(channels).unwrap_or_else(|| panic!("test channels")),
-            )
+            .channels(std::num::NonZeroUsize::new(channels).expect("test channels"))
             .mode(ResamplerMode::FixedRatio {
                 source_sample_rate: std::num::NonZeroU32::new(source_rate)
-                    .unwrap_or_else(|| panic!("test source rate")),
+                    .expect("test source rate"),
                 target_sample_rate: std::num::NonZeroU32::new(target_rate)
-                    .unwrap_or_else(|| panic!("test target rate")),
+                    .expect("test target rate"),
             })
             .quality(ResamplerQuality::High)
             .options(ResamplerOptions::builder().chunk_size(frames).build())
@@ -565,18 +563,12 @@ mod tests {
     fn planar_signal(channels: usize, frames: usize, sample_rate: u32) -> Vec<Vec<f32>> {
         (0..channels)
             .map(|channel| {
-                let channel = channel
-                    .to_f32()
-                    .unwrap_or_else(|| panic!("test channel index fits f32"));
-                let sample_rate = sample_rate
-                    .to_f32()
-                    .unwrap_or_else(|| panic!("test sample rate fits f32"));
+                let channel = channel.to_f32().expect("test channel index fits f32");
+                let sample_rate = sample_rate.to_f32().expect("test sample rate fits f32");
                 let frequency = 110.0 + channel * 27.5;
                 (0..frames)
                     .map(|frame| {
-                        let frame = frame
-                            .to_f32()
-                            .unwrap_or_else(|| panic!("test frame index fits f32"));
+                        let frame = frame.to_f32().expect("test frame index fits f32");
                         let t = frame / sample_rate;
                         (TAU * frequency * t).sin() * 0.5
                     })
@@ -638,11 +630,11 @@ mod tests {
         let ratio = f64::from(target_rate) / f64::from(source_rate);
         let input_frames = input_frames
             .to_f64()
-            .unwrap_or_else(|| panic!("test input frame count fits f64"));
+            .expect("test input frame count fits f64");
         (input_frames * ratio)
             .ceil()
             .to_usize()
-            .unwrap_or_else(|| panic!("test output frame count fits usize"))
+            .expect("test output frame count fits usize")
     }
 
     fn assert_len_close(label: &str, actual: usize, expected: usize) {
@@ -674,9 +666,7 @@ mod tests {
         if count == 0 {
             return 0.0;
         }
-        let count = count
-            .to_f64()
-            .unwrap_or_else(|| panic!("test sample count fits f64"));
+        let count = count.to_f64().expect("test sample count fits f64");
         (sum / count).sqrt()
     }
 

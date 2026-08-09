@@ -47,11 +47,11 @@ where
     R: Read + Seek + Send + Sync + 'static,
 {
     let seek_enabled = matches!(container, ContainerFormat::Mp4);
-    let adapter = if let Some(ref handle) = config.byte_len_handle {
-        ReadSeekAdapter::new_inner(source, Some(Arc::clone(handle)), seek_enabled)
-    } else {
-        ReadSeekAdapter::new_inner(source, None, seek_enabled)
-    };
+    let adapter = ReadSeekAdapter::new(
+        source,
+        config.byte_len_handle.as_ref().map(Arc::clone),
+        seek_enabled,
+    );
 
     let byte_len_handle = adapter.byte_len_handle();
     let seek_enabled_handle = adapter.seek_enabled_handle();
@@ -86,14 +86,11 @@ pub(crate) fn probe_with_seek<R>(
 where
     R: Read + Seek + Send + Sync + 'static,
 {
-    let adapter = match (&config.byte_len_handle, seek_enabled) {
-        (Some(handle), false) => {
-            ReadSeekAdapter::new_seek_disabled_shared(source, Arc::clone(handle))
-        }
-        (Some(handle), true) => ReadSeekAdapter::new_inner(source, Some(Arc::clone(handle)), true),
-        (None, true) => ReadSeekAdapter::new_seek_enabled(source),
-        (None, false) => ReadSeekAdapter::new_seek_disabled(source),
-    };
+    let adapter = ReadSeekAdapter::new(
+        source,
+        config.byte_len_handle.as_ref().map(Arc::clone),
+        seek_enabled,
+    );
 
     let byte_len_handle = adapter.byte_len_handle();
     let seek_enabled_handle = adapter.seek_enabled_handle();

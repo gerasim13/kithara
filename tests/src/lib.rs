@@ -33,6 +33,8 @@ pub mod e2e;
 pub mod encode_ext;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod encode_test_pcm;
+#[cfg(test)]
+pub(crate) mod encoder_crates;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod fixture_cache;
 pub mod fixture_protocol;

@@ -83,7 +83,9 @@ async fn file_stream_closes_early_seek_still_works() {
     let clean_temp_dir = clean_temp_dir();
     let cancel_token = CancelToken::never();
 
-    let file_data: Vec<u8> = (0..Consts::TOTAL_SIZE).map(|i| (i % 256) as u8).collect();
+    let file_data: Vec<u8> = (0..Consts::TOTAL_SIZE)
+        .map(|i| u8::try_from(i % 256).unwrap_or(0))
+        .collect();
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
@@ -171,7 +173,7 @@ async fn file_stream_closes_early_seek_still_works() {
                 let n = stream.read(&mut buf).unwrap();
                 assert!(n > 0, "Should read data after seek");
 
-                let expected = (seek_offset % 256) as u8;
+                let expected = u8::try_from(seek_offset % 256).unwrap_or(0);
                 assert_eq!(
                     buf[0], expected,
                     "Data should match: expected {}, got {}",
@@ -211,7 +213,9 @@ async fn file_stream_closes_early_seek_still_works() {
 async fn partial_cache_resume_works() {
     let cache_dir = clean_temp_dir();
 
-    let file_data: Vec<u8> = (0..Consts::TOTAL_SIZE).map(|i| (i % 256) as u8).collect();
+    let file_data: Vec<u8> = (0..Consts::TOTAL_SIZE)
+        .map(|i| u8::try_from(i % 256).unwrap_or(0))
+        .collect();
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
@@ -296,7 +300,7 @@ async fn partial_cache_resume_works() {
             "Phase 2: should read data after seek on resumed partial"
         );
 
-        let expected = (seek_offset % 256) as u8;
+        let expected = u8::try_from(seek_offset % 256).unwrap_or(0);
         assert_eq!(
             buf[0], expected,
             "Data mismatch at {}: expected {}, got {}",

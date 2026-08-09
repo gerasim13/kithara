@@ -34,7 +34,11 @@ impl<R: Seek> ReadSeekAdapter<R> {
         Arc::clone(&self.byte_pos)
     }
 
-    pub(crate) fn new_inner(
+    /// Build the adapter. `shared_handle` is `Some` to publish/read the
+    /// byte length through an externally owned cell instead of a fresh
+    /// one; `seek_enabled` starts the adapter seekable or not (toggled
+    /// later via `seek_enabled_handle`).
+    pub(crate) fn new(
         mut inner: R,
         shared_handle: Option<Arc<AtomicU64>>,
         seek_enabled: bool,
@@ -54,21 +58,6 @@ impl<R: Seek> ReadSeekAdapter<R> {
             inner,
             byte_pos: Arc::new(AtomicU64::new(initial_pos)),
         }
-    }
-
-    /// Create adapter with seek initially disabled.
-    pub(crate) fn new_seek_disabled(inner: R) -> Self {
-        Self::new_inner(inner, None, false)
-    }
-
-    /// Create adapter with a shared byte-length handle and seek disabled.
-    pub(crate) fn new_seek_disabled_shared(inner: R, handle: Arc<AtomicU64>) -> Self {
-        Self::new_inner(inner, Some(handle), false)
-    }
-
-    /// Create adapter with seek enabled from the start.
-    pub(crate) fn new_seek_enabled(inner: R) -> Self {
-        Self::new_inner(inner, None, true)
     }
 
     fn probe_byte_len(reader: &mut R) -> Option<u64> {
@@ -125,7 +114,7 @@ mod tests {
     fn test_read_seek_adapter_byte_len() {
         let data = vec![0u8; 5000];
         let cursor = Cursor::new(data);
-        let adapter = ReadSeekAdapter::new_seek_disabled(cursor);
+        let adapter = ReadSeekAdapter::new(cursor, None, false);
 
         assert_eq!(adapter.byte_len(), Some(5000));
         assert!(!adapter.is_seekable());
@@ -138,7 +127,7 @@ mod tests {
     fn test_read_seek_adapter_dynamic_update() {
         let data = vec![0u8; 1000];
         let cursor = Cursor::new(data);
-        let adapter = ReadSeekAdapter::new_seek_disabled(cursor);
+        let adapter = ReadSeekAdapter::new(cursor, None, false);
         let handle = adapter.byte_len_handle();
 
         handle.store(0, Ordering::Release);

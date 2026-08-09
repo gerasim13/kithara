@@ -38,6 +38,7 @@ iced_futures = { version = "0.14", default-features = false, features = ["thread
 iced_graphics = { version = "0.14", default-features = false, features = ["geometry", "svg", "web-colors"] }
 iced_renderer = { version = "0.14", default-features = false, features = ["geometry", "svg", "tiny-skia", "wayland", "web-colors", "wgpu", "wgpu-bare", "x11"] }
 iced_tiny_skia = { version = "0.14", features = ["geometry", "svg"] }
+iced_wgpu = { version = "0.14", features = ["geometry", "svg", "web-colors"] }
 icu_locale_core = { version = "2", default-features = false, features = ["alloc", "zerovec"] }
 litemap = { version = "0.8", default-features = false, features = ["alloc"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
@@ -94,7 +95,7 @@ hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
-indexmap = { version = "2", features = ["serde"] }
+indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
@@ -139,7 +140,7 @@ hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
-indexmap = { version = "2", features = ["serde"] }
+indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
@@ -193,7 +194,7 @@ hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
-indexmap = { version = "2", features = ["serde"] }
+indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
@@ -238,7 +239,7 @@ hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
-indexmap = { version = "2", features = ["serde"] }
+indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
@@ -296,8 +297,9 @@ iced_futures = { version = "0.14", default-features = false, features = ["thread
 iced_graphics = { version = "0.14", default-features = false, features = ["geometry", "svg", "web-colors"] }
 iced_renderer = { version = "0.14", default-features = false, features = ["geometry", "svg", "tiny-skia", "wayland", "web-colors", "wgpu", "wgpu-bare", "x11"] }
 iced_tiny_skia = { version = "0.14", features = ["geometry", "svg"] }
+iced_wgpu = { version = "0.14", features = ["geometry", "svg", "web-colors"] }
 icu_locale_core = { version = "2", default-features = false, features = ["alloc", "zerovec"] }
-indexmap = { version = "2", features = ["serde"] }
+indexmap = { version = "2" }
 litemap = { version = "0.8", default-features = false, features = ["alloc"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }

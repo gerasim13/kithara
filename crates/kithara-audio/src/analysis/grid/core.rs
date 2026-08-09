@@ -7,42 +7,62 @@ use super::{
 };
 use crate::{analysis::beat::detector::RawBeats, waveform::BeatGrid};
 
+struct Consts;
+
+impl Consts {
+    const ALIGN_BARS: usize = 4;
+    const BEATS_PER_BAR: f64 = 4.0;
+    const MAX_BAR_RATIO: f64 = 2.0;
+    const MEDIAN_TRUST_RATIO: f64 = 0.10;
+    const MERGE_RATIO_EPS: f64 = 1e-3;
+    const MIN_BAR_RATIO: f64 = 0.5;
+    /// A bar gap needs two downbeats to measure.
+    const MIN_DOWNBEATS: usize = 2;
+    const MIN_GAP_RATIO: f64 = 0.7;
+    const MIN_LEAF_BARS: usize = 8;
+    const OUTLIER_RATIO: f64 = 0.04;
+    const OUTLIER_WINDOW: usize = 4;
+    const RESIDUAL_MS: f64 = 18.0;
+    const SECS_PER_MIN: f64 = 60.0;
+    const STABLE_WINDOW_BARS: usize = 16;
+}
+
 /// Grid-cleanup tuning.
 #[derive(Builder, Debug, Clone, PartialEq)]
 pub(crate) struct GridParams {
-    #[builder(default = 2.0)]
+    #[builder(default = Consts::MAX_BAR_RATIO)]
     pub(crate) max_bar_ratio: f64,
     /// Stable window median must lie within this fraction of nominal.
-    #[builder(default = 0.10)]
+    #[builder(default = Consts::MEDIAN_TRUST_RATIO)]
     pub(crate) median_trust_ratio: f64,
     /// Merge adjacent leaves whose ratio corrections agree within this
     /// epsilon — collinear halves around the anchor collapse to one segment.
-    #[builder(default = 1e-3)]
+    #[builder(default = Consts::MERGE_RATIO_EPS)]
     pub(crate) merge_ratio_eps: f64,
     /// Hard sanity bounds on a bar length, as fractions of the nominal bar.
-    #[builder(default = 0.5)]
+    #[builder(default = Consts::MIN_BAR_RATIO)]
     pub(crate) min_bar_ratio: f64,
     /// Drop a downbeat closer than this fraction of a nominal bar to its
     /// predecessor (double-detection filter).
-    #[builder(default = 0.7)]
+    #[builder(default = Consts::MIN_GAP_RATIO)]
     pub(crate) min_gap_ratio: f64,
     /// Outlier threshold vs the neighbour-window median bar factor.
-    #[builder(default = 0.04)]
+    #[builder(default = Consts::OUTLIER_RATIO)]
     pub(crate) outlier_ratio: f64,
     /// Bisection leaf fit tolerance: worst bar residual, milliseconds.
-    #[builder(default = 18.0)]
+    #[builder(default = Consts::RESIDUAL_MS)]
     pub(crate) residual_ms: f64,
     /// Snap bisection split points to multiples of this many bars.
-    #[builder(default = 4)]
+    #[builder(default = Consts::ALIGN_BARS)]
     pub(crate) align_bars: usize,
     /// Minimum segment length in bars.
-    #[builder(default = 8)]
+    #[builder(default = Consts::MIN_LEAF_BARS)]
     pub(crate) min_leaf_bars: usize,
     /// Neighbour median window (bars each side) for outlier classification.
-    #[builder(default = 4)]
+    #[builder(default = Consts::OUTLIER_WINDOW)]
     pub(crate) outlier_window: usize,
     /// Sliding window length (bars) for the stable-tempo anchor search.
-    #[builder(default = 16)]
+    #[builder(default = Consts::STABLE_WINDOW_BARS)]
     pub(crate) stable_window_bars: usize,
 }
 
@@ -66,7 +86,7 @@ pub(crate) fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) 
         .filter(|p| p.is_finite() && *p >= 0.0)
         .collect();
     db.sort_by(f64::total_cmp);
-    if db.len() < 2 {
+    if db.len() < Consts::MIN_DOWNBEATS {
         return BeatGrid::new(0.0, beats, positions_to_frames(&db), Vec::new());
     }
 
@@ -114,7 +134,7 @@ fn positions_to_frames(positions: &[f64]) -> Vec<u64> {
 /// 4/4 bars: bpm = beats-per-bar (4) × 60 / bar-seconds.
 fn bar_to_bpm(bar_samples: f64, sr: f64) -> f64 {
     if bar_samples > 0.0 {
-        240.0 * sr / bar_samples
+        Consts::BEATS_PER_BAR * Consts::SECS_PER_MIN * sr / bar_samples
     } else {
         0.0
     }

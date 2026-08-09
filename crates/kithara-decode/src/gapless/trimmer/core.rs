@@ -43,7 +43,7 @@ impl Consts {
 #[fieldwork(opt_in, with)]
 pub struct GaplessTrimmer {
     mode: GaplessMode,
-    #[field(with)]
+    #[field(with, set)]
     tail_compensation: Option<GaplessTailCompensation>,
     tail_buffer: TailBuffer,
     input_frames_seen: u64,
@@ -306,10 +306,6 @@ impl GaplessTrimmer {
                 chunk,
             ),
         }
-    }
-
-    pub fn set_tail_compensation(&mut self, compensation: Option<GaplessTailCompensation>) {
-        self.tail_compensation = compensation;
     }
 
     /// Build a silence-scan trimmer. Trim boundaries are inferred by

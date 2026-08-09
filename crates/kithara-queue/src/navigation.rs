@@ -23,10 +23,10 @@ pub enum RepeatMode {
 pub struct NavigationState {
     #[field(get)]
     current_index: Option<usize>,
-    #[field(get, copy)]
+    #[field(get, copy, set = set_repeat)]
     repeat_mode: RepeatMode,
     history: VecDeque<usize>,
-    #[field(get = is_shuffle_enabled)]
+    #[field(get = is_shuffle_enabled, set = set_shuffle)]
     shuffle_enabled: bool,
 }
 
@@ -102,16 +102,6 @@ impl NavigationState {
             add_to_history(&mut self.history, current);
         }
         self.current_index = Some(idx);
-    }
-
-    /// Set repeat mode.
-    pub fn set_repeat(&mut self, mode: RepeatMode) {
-        self.repeat_mode = mode;
-    }
-
-    /// Enable / disable shuffle.
-    pub fn set_shuffle(&mut self, on: bool) {
-        self.shuffle_enabled = on;
     }
 }
 

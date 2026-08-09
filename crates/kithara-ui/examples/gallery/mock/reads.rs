@@ -32,6 +32,7 @@ pub(crate) struct MockReads {
     active_module: ModuleDemo,
     quality: QualityState,
     stress: StressState,
+    #[field(set, vis = "pub(crate)")]
     library_query: String,
     #[field(get, vis = "pub(crate)", copy)]
     active_tab: Tab,
@@ -259,10 +260,6 @@ impl MockReads {
             self.tree_selected = base_index;
         }
         self.rebuild_tree();
-    }
-
-    pub(crate) fn set_library_query(&mut self, query: String) {
-        self.library_query = query;
     }
 
     fn set_scalar(&mut self, path: &str, value: f64) {

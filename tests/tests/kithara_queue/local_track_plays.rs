@@ -576,7 +576,10 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
     wait_for_queue_event(
         &mut rx,
         |ev| matches!(ev, QueueEvent::CurrentTrackChanged { id: Some(id) } if *id == ids[1]),
-        Duration::from_millis((f64::from(xf_duration) * 1000.0) as u64 + 5_000),
+        Duration::from_millis(
+            num_traits::cast::<f64, u64>(f64::from(xf_duration) * 1000.0).unwrap_or(u64::MAX)
+                + 5_000,
+        ),
     )
     .await
     .expect("CurrentTrackChanged to track 1 after crossfade");

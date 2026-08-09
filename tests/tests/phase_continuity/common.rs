@@ -393,8 +393,11 @@ where
     let chan = sine.channels as usize;
     let scan_end = total_frames_truth.saturating_sub(SAFETY_END_MARGIN_FRAMES);
     let max_seek_frame = total_frames_truth.saturating_sub(u64::from(SAMPLE_RATE));
-    let frame_at =
-        |frac: f64| ((frac.clamp(0.0, 1.0) * total_frames_truth as f64) as u64).min(max_seek_frame);
+    let frame_at = |frac: f64| {
+        num_traits::cast::<f64, u64>(frac.clamp(0.0, 1.0) * total_frames_truth as f64)
+            .unwrap_or(u64::MAX)
+            .min(max_seek_frame)
+    };
 
     let want_samples = READ_FRAMES_AFTER_SEEK * chan;
     let mut buf = vec![0.0_f32; want_samples];
@@ -480,7 +483,7 @@ pub(crate) fn scan_rendered_pcm(
     let mut drifts: Vec<PhaseDrift> = Vec::new();
     let mut at: u64 = 0;
     while at + want as u64 <= total_frames {
-        let start = at as usize * chan;
+        let start = usize::try_from(at).unwrap_or(0) * chan;
         let end = start + want * chan;
         if let Some(drift) = check_against_previous(
             &mut anchor,
@@ -508,7 +511,7 @@ mod tests {
         let d = spec.delta_rad_per_sample();
         for f in 0..frames {
             let phase = d * (start_frame + f as u64) as f64;
-            let v = amp * phase.sin() as f32;
+            let v = amp * num_traits::cast::<f64, f32>(phase.sin()).unwrap_or(0.0);
             for c in 0..chan {
                 out[f * chan + c] = v;
             }
@@ -568,7 +571,12 @@ mod tests {
         let mut sum_sq = 0.0_f64;
         for trial in 0..trials {
             let start = 1000 + trial as u64 * 137;
-            let pcm = synth(spec, start, n, amplitude as f32);
+            let pcm = synth(
+                spec,
+                start,
+                n,
+                num_traits::cast::<f64, f32>(amplitude).unwrap_or(0.0),
+            );
             let mono: Vec<f64> = (0..pcm.len() / chan)
                 .map(|f| f64::from(pcm[f * chan]) + gauss_noise(&mut state, sigma_n))
                 .collect();

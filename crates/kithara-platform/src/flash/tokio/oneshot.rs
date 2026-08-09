@@ -232,7 +232,7 @@ mod tests {
         let futs = (0..ROUNDS).map(|r| async move {
             let (tx, rx) = channel::<usize>();
             drop(spawn(async move {
-                let _ = tx.send(r * 2);
+                tx.send(r * 2).ok();
             }));
             rx.await.expect("sender delivered")
         });

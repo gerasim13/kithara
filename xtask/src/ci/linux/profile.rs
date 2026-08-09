@@ -8,6 +8,8 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::ci::config::{default_build_cache_size, parse_build_cache_size};
+
 /// Installed profile every Linux CI machine reads through
 /// `KITHARA_CI_LINUX_CONFIG`.
 pub(crate) const LINUX_CONFIG_PATH: &str = "/etc/kithara-ci/linux-host.toml";
@@ -19,21 +21,41 @@ pub(crate) const LINUX_CONFIG_PATH: &str = "/etc/kithara-ci/linux-host.toml";
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LinuxHost {
+    /// Positive decimal gigabytes, such as `25GB`. Defaulted: installed
+    /// profiles predate it, and refusing to load would kill the cleanup.
+    #[serde(default = "default_build_cache_size")]
+    pub(crate) build_cache_size: String,
     /// Directory holding the caches jobs keep between runs.
     pub(crate) cache_root: PathBuf,
     /// Docker network the runners are confined to.
     pub(crate) network: String,
-    /// `owner/name` of the repository the runners register with.
-    pub(crate) repository: String,
     /// Address block of that network, fenced off from the rest of the machine.
     pub(crate) subnet: String,
-    /// File holding the token that mints runner registrations.
-    pub(crate) token_file: PathBuf,
     /// Serialised last: TOML requires tables after plain values.
+    ///
+    /// The repositories this machine serves, each with the token that mints
+    /// registrations for it. A GitHub runner registration is bound to exactly
+    /// one repository, so a machine serving two of them holds two credentials
+    /// and runs separate runners against each.
+    pub(crate) repositories: Vec<RepositoryCredential>,
     pub(crate) runners: Vec<LinuxRunner>,
     /// The Windows guest this machine hosts, if it hosts one.
     #[serde(default)]
     pub(crate) windows: Option<WindowsGuest>,
+}
+
+/// One repository this machine serves, and the token that speaks for it.
+///
+/// Kept apart from the runners so the path to a secret is written once per
+/// repository rather than once per runner, and so reading the profile answers
+/// "whose work does this machine take" without counting runner entries.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RepositoryCredential {
+    /// `owner/name` of the repository.
+    pub(crate) name: String,
+    /// File holding the token that mints registrations for it.
+    pub(crate) token_file: PathBuf,
 }
 
 /// A Windows virtual machine serving the lane that needs a real Windows.
@@ -44,6 +66,8 @@ pub(crate) struct LinuxHost {
 #[serde(deny_unknown_fields)]
 pub(crate) struct WindowsGuest {
     pub(crate) name: String,
+    /// Which repository of [`LinuxHost::repositories`] this guest enrols with.
+    pub(crate) repository: String,
     pub(crate) vcpus: u32,
     pub(crate) memory_mib: u32,
     pub(crate) disk_gib: u32,
@@ -66,6 +90,10 @@ fn default_libvirt_network() -> String {
 pub(crate) struct LinuxRunner {
     /// Identifies the runner's service, registration, and container.
     pub(crate) name: String,
+    /// Which repository of [`LinuxHost::repositories`] this runner serves. A
+    /// registration reaches exactly one, so the choice belongs to the runner
+    /// rather than to the machine underneath it.
+    pub(crate) repository: String,
     /// How many cores one job may use. Handed to the container as a set of
     /// core numbers rather than a share of the machine: a share is a CFS
     /// quota, which throttles a job without telling it anything, so `nproc`
@@ -109,25 +137,41 @@ impl LinuxHost {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
-        if !self.cache_root.is_absolute() || !self.token_file.is_absolute() {
-            bail!("Linux CI profile cache_root and token_file must be absolute paths");
+        if self.build_cache_size.trim().is_empty() {
+            bail!("Linux CI profile build_cache_size must not be empty");
+        }
+        self.build_cache_budget_bytes()?;
+        if !self.cache_root.is_absolute() {
+            bail!("Linux CI profile cache_root must be an absolute path");
         }
         if !safe_name(&self.network) {
             bail!("Linux CI profile network contains unsupported characters");
         }
-        if !valid_repository(&self.repository) {
-            bail!("Linux CI profile repository must read owner/name");
-        }
         parse_subnet(&self.subnet)?;
+        if self.repositories.is_empty() {
+            bail!("Linux CI profile must define at least one repository");
+        }
+        let mut repositories = BTreeSet::new();
+        for credential in &self.repositories {
+            credential.validate()?;
+            if !repositories.insert(credential.name.as_str()) {
+                bail!(
+                    "Linux CI profile defines repository {} twice",
+                    credential.name
+                );
+            }
+        }
         if self.runners.is_empty() {
             bail!("Linux CI profile must define at least one runner");
         }
         if let Some(windows) = &self.windows {
             windows.validate()?;
+            self.credential(&windows.repository)?;
         }
         let mut seen = BTreeSet::new();
         for runner in &self.runners {
             runner.validate()?;
+            self.credential(&runner.repository)?;
             if !seen.insert(runner.name.as_str()) {
                 bail!("Linux CI profile defines runner {} twice", runner.name);
             }
@@ -135,11 +179,45 @@ impl LinuxHost {
         Ok(())
     }
 
+    pub(crate) fn build_cache_budget_bytes(&self) -> Result<u64> {
+        parse_build_cache_size(&self.build_cache_size)
+            .context("Linux CI profile build_cache_size is invalid")
+    }
+
+    /// The credential a runner or guest registers with, by the repository it
+    /// names. Unknown names fail here rather than reaching GitHub as a 404.
+    pub(crate) fn credential(&self, repository: &str) -> Result<&RepositoryCredential> {
+        self.repositories
+            .iter()
+            .find(|credential| credential.name == repository)
+            .with_context(|| {
+                format!("Linux CI profile has no credential for repository {repository}")
+            })
+    }
+
     pub(crate) fn runner(&self, name: &str) -> Result<&LinuxRunner> {
         self.runners
             .iter()
             .find(|runner| runner.name == name)
             .with_context(|| format!("Linux CI profile has no runner named {name}"))
+    }
+}
+
+impl RepositoryCredential {
+    fn validate(&self) -> Result<()> {
+        if !valid_repository(&self.name) {
+            bail!(
+                "Linux CI profile repository {} must read owner/name",
+                self.name
+            );
+        }
+        if !self.token_file.is_absolute() {
+            bail!(
+                "Linux CI profile repository {} must name its token file by absolute path",
+                self.name
+            );
+        }
+        Ok(())
     }
 }
 
@@ -235,6 +313,31 @@ fn safe_label(value: &str) -> bool {
 pub(crate) mod tests {
     use super::*;
 
+    /// An installed profile predating the budget must still load: the binary
+    /// reaches every host before its profile does, and one that refused would
+    /// take the cleanup down on each of them.
+    #[test]
+    fn a_profile_without_a_build_cache_size_still_loads() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("linux-host.toml");
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-linux-host.toml");
+        let text = fs::read_to_string(&source).expect("fixture profile");
+        let without: String = text
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("build_cache_size"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        fs::write(&path, without).expect("write profile");
+
+        assert_eq!(
+            LinuxHost::load(&path)
+                .expect("profile loads")
+                .build_cache_size,
+            default_build_cache_size()
+        );
+    }
+
     /// A profile shaped like the machines this command provisions: one plain
     /// runner and one that reaches the hardware a plain one must not.
     pub(crate) fn host_fixture() -> LinuxHost {
@@ -247,8 +350,79 @@ pub(crate) mod tests {
     #[test]
     fn the_fixture_profile_matches_the_machine_contract() {
         let host = host_fixture();
-        assert!(host.runner("kithara-ci").is_ok());
+        assert!(host.runner("kithara-ci-octocat").is_ok());
         assert!(host.runner("absent").is_err());
+    }
+
+    /// The point of the split: one machine, two repositories, and each runner
+    /// reaching the token of the repository it named — neither is the default.
+    #[test]
+    fn a_runner_registers_with_the_repository_it_names() {
+        let host = host_fixture();
+
+        let octocat = host
+            .credential(
+                &host
+                    .runner("kithara-ci-octocat")
+                    .expect("runner")
+                    .repository,
+            )
+            .expect("credential");
+        assert_eq!(octocat.name, "octocat/kithara");
+        assert_eq!(
+            octocat.token_file,
+            Path::new("/etc/kithara-ci/tokens/octocat.token")
+        );
+
+        let hubot = host
+            .credential(&host.runner("kithara-ci-hubot").expect("runner").repository)
+            .expect("credential");
+        assert_eq!(hubot.name, "hubot/kithara");
+        assert_eq!(
+            hubot.token_file,
+            Path::new("/etc/kithara-ci/tokens/hubot.token")
+        );
+    }
+
+    /// A runner naming a repository the machine holds no token for must fail
+    /// while the profile is read. Left to run, it would mint a registration
+    /// against whatever credential happened to be at hand.
+    #[test]
+    fn a_runner_naming_an_unknown_repository_is_rejected() {
+        let mut host = host_fixture();
+        "someone/else".clone_into(&mut host.runners[0].repository);
+        let error = host
+            .validate()
+            .expect_err("an unknown repository must fail");
+        assert!(
+            error.to_string().contains("someone/else"),
+            "the error must name the repository that has no credential: {error}"
+        );
+    }
+
+    #[test]
+    fn one_repository_declared_twice_is_rejected() {
+        let mut host = host_fixture();
+        let duplicate = host.repositories[0].clone();
+        host.repositories.push(duplicate);
+        let error = host.validate().expect_err("a duplicate must fail");
+        assert!(
+            error.to_string().contains("twice"),
+            "the error must say the repository is declared twice: {error}"
+        );
+    }
+
+    #[test]
+    fn a_repository_must_name_its_token_by_absolute_path() {
+        let mut host = host_fixture();
+        host.repositories[0].token_file = PathBuf::from("github.token");
+        let error = host
+            .validate()
+            .expect_err("a relative token file must fail");
+        assert!(
+            error.to_string().contains("absolute"),
+            "the error must say the path has to be absolute: {error}"
+        );
     }
 
     #[test]
@@ -261,7 +435,7 @@ pub(crate) mod tests {
 
     #[test]
     fn repositories_name_an_owner() {
-        assert!(valid_repository("owner/kithara"));
+        assert!(valid_repository("octocat/kithara"));
         assert!(!valid_repository("kithara"));
         assert!(!valid_repository("owner/kithara/extra"));
         assert!(!valid_repository("owner/../etc"));

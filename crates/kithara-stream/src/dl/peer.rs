@@ -111,7 +111,8 @@ pub(super) struct InternalCmd {
 }
 
 /// Shared per-peer state. Cancel fires when the last clone is dropped.
-struct PeerInner {
+#[derive(bon::Builder)]
+pub(super) struct PeerInner {
     /// ABR side of the double registration. Keeps the peer registered
     /// with the shared `AbrController` until the last `PeerHandle` drops
     /// (the handle's `Drop` calls `controller.unregister`).
@@ -152,21 +153,9 @@ impl std::fmt::Debug for PeerHandle {
 }
 
 impl PeerHandle {
-    pub(super) fn new(
-        pool: Arc<DownloaderInner>,
-        cancel: CancelToken,
-        cmd_tx: mpsc::Sender<InternalCmd>,
-        bus: Arc<RwLock<Option<EventBus>>>,
-        abr: AbrHandle,
-    ) -> Self {
+    pub(super) fn new(inner: PeerInner) -> Self {
         Self {
-            inner: Arc::new(PeerInner {
-                cancel,
-                cmd_tx,
-                bus,
-                abr,
-                _pool: pool,
-            }),
+            inner: Arc::new(inner),
         }
     }
 

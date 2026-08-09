@@ -74,7 +74,7 @@ pub(crate) fn pump() {
             .as_ref()
             .map(|p| p.process_key(msg.key, msg.salt))
             .unwrap_or_default();
-        let _ = msg.reply.send(bytes);
+        msg.reply.send(bytes).ok();
     }
 }
 

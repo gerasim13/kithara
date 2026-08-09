@@ -29,6 +29,7 @@ pub mod style;
 pub mod test;
 pub mod typos;
 pub mod util;
+pub mod verdict;
 #[cfg(feature = "viz")]
 pub mod viz;
 

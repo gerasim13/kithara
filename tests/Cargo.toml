@@ -17,8 +17,8 @@ path = "bin/test_server.rs"
 test = false
 
 [[bin]]
-name = "fixture-cache-setup"
-path = "bin/fixture-cache-setup.rs"
+name = "cold-fixture-cache"
+path = "bin/cold-fixture-cache.rs"
 test = false
 
 [[bin]]
@@ -40,13 +40,17 @@ e2e = []
 # known red does not turn the baseline into noise. A fixed regression test
 # moves to `suite_light.rs` and leaves this lane.
 integration-regressions = []
-# Tests that reach a host this workspace does not own: the zvuk production CDN
-# (public, but needs `KITHARA_DRM_PROD_*` baked at build) and `*.zvq.me`, which
-# resolves only from inside the corporate VPN. CI runners sit outside both, so
-# no lane in `.config/xtask.toml` enables this and none ever should — a runner
-# that fails here reports the fence around itself, not the code. Run by hand
-# with `just test run --lane=network` from a machine that has both.
+# Tests that reach a host this workspace does not own, and that a runner can
+# reach: the zvuk production CDN and silvercomet, both on the public internet.
+# The CDN is auth-gated, so the lane needs `KITHARA_DRM_PROD_*` in the build
+# environment; without them the tests compile and fail on the key request,
+# which is why no gate job enables this and a dedicated lane does.
 network = []
+# The half of those a runner cannot serve: `*.zvq.me` resolves only inside the
+# corporate network, and a real output device is not a thing a container has.
+# Kept apart so the reachable half can run unattended — together, the whole set
+# stayed off CI because part of it could not go there.
+network-manual = []
 # Selenium-driven WebDriver tests. Gated off by default so `just test`
 # doesn't try to spin up trunk + chromedriver. Run via
 # `just test run --lane=selenium`.
@@ -222,6 +226,15 @@ web-sys = { workspace = true }
 [target.'cfg(target_os = "android")'.dependencies]
 kithara = { workspace = true, features = ["android", "client-wreq"] }
 
+[build-dependencies]
+# Reads the resolved encoder versions out of the workspace lockfile; see
+# `build.rs`. Hashing the whole lockfile invalidated the fixture cache on every
+# unrelated dependency bump.
+toml = { workspace = true }
+
+[dev-dependencies]
+toml = { workspace = true }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { workspace = true }
 
@@ -252,6 +265,11 @@ path = "tests/suite_stress.rs"
 name = "suite_e2e"
 path = "tests/suite_e2e.rs"
 required-features = ["e2e"]
+
+[[test]]
+name = "suite_network_manual"
+path = "tests/suite_network_manual.rs"
+required-features = ["network-manual"]
 
 [[test]]
 name = "suite_network"

@@ -36,8 +36,9 @@ impl WorkerSlot {
     pub(super) fn shutdown_join(&mut self) {
         if let Some(handle) = self.handle.take()
             && handle.thread().id() != thread::current().id()
+            && handle.join().is_err()
         {
-            let _ = handle.join();
+            tracing::warn!("flush worker thread panicked during shutdown join");
         }
     }
 

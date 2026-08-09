@@ -1,3 +1,5 @@
+pub use crate::common::maybe_send::WasmSend;
+
 pub trait MaybeSend {}
 impl<T> MaybeSend for T {}
 
@@ -26,8 +28,6 @@ impl<T: Future> MaybeSendFuture for T {}
 /// fn plan(&mut self) -> BoxFuture<'_, PlanOutcome<Self::Plan>>;
 /// ```
 pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + 'a>>;
-
-pub use crate::common::maybe_send::WasmSend;
 
 // SAFETY: see the struct-level safety contract on `WasmSend` — the wrapped
 // value must not be used across threads simultaneously; `!Send` JS-backed

@@ -1,9 +1,15 @@
-use std::{fmt::Write as _, path::PathBuf};
+use std::{
+    fmt::Write as _,
+    path::{Path, PathBuf},
+};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use tracing::info;
 
-use super::profile::{LINUX_CONFIG_PATH, LinuxHost, LinuxRunner, RunnerFlavor};
+use super::{
+    container::{Container, container},
+    profile::{LINUX_CONFIG_PATH, LinuxHost, LinuxRunner, RunnerFlavor},
+};
 use crate::ci::{config::CiPins, process::Process};
 
 /// Where the services live and what they call.
@@ -36,8 +42,11 @@ pub(super) fn install(
     pins: &CiPins,
     executable: &str,
 ) -> Result<()> {
-    std::fs::copy(executable, LAYOUT.executable)
-        .with_context(|| format!("installing {}", LAYOUT.executable))?;
+    require_pinned_images(process, host, pins)?;
+    if Path::new(executable) != Path::new(LAYOUT.executable) {
+        std::fs::copy(executable, LAYOUT.executable)
+            .with_context(|| format!("installing {}", LAYOUT.executable))?;
+    }
     std::fs::set_permissions(
         LAYOUT.executable,
         std::os::unix::fs::PermissionsExt::from_mode(0o755),
@@ -71,6 +80,53 @@ pub(super) fn install(
         &["enable", "--now", LAYOUT.cleanup_timer],
         "enable the cleanup timer",
     )?;
+    Ok(())
+}
+
+/// Which images this profile's runners start from, each named once.
+fn required_images<'a>(host: &LinuxHost, pins: &'a CiPins) -> Vec<&'a str> {
+    let mut images = Vec::new();
+    for runner in &host.runners {
+        let image = match runner.flavor {
+            RunnerFlavor::Plain => pins.linux_runner_image.as_str(),
+            RunnerFlavor::Android => pins.linux_android_runner_image.as_str(),
+        };
+        if !images.contains(&image) {
+            images.push(image);
+        }
+    }
+    images
+}
+
+/// Refuse to install services the machine cannot run.
+///
+/// A unit whose image is absent starts, fails to pull, and is restarted — for
+/// as long as anyone leaves it. The fleet reports nothing except that every
+/// runner is `activating (auto-restart)`, which reads like a runner problem
+/// and is a missing build. The pins move with the repository and the images are
+/// built by hand here, so the two drift apart on their own; this is where the
+/// drift becomes a sentence instead of a symptom.
+fn require_pinned_images(process: &Process, host: &LinuxHost, pins: &CiPins) -> Result<()> {
+    let missing: Vec<&str> = required_images(host, pins)
+        .into_iter()
+        .filter(|image| {
+            process
+                .capture(
+                    "docker",
+                    &["image", "inspect", "--format", "{{.Id}}", image],
+                    "look for a pinned runner image",
+                )
+                .is_err()
+        })
+        .collect();
+    if !missing.is_empty() {
+        bail!(
+            "this machine has no image for {}; the pins name it but nothing built it here. \
+             Run `kithara-ci ci image toolchain` then `runner` (and `android`, \
+             `android-runner` for the emulator lane) before installing services",
+            missing.join(" or ")
+        );
+    }
     Ok(())
 }
 
@@ -117,7 +173,7 @@ fn install_cleanup_timer() -> Result<()> {
 /// the set, so Cargo starts that many compilations rather than one per host
 /// core. Sharing a core between two runners costs throughput; misreporting the
 /// count costs memory, and memory is what the kernel kills for.
-fn cpuset(index: usize, cpus: u32, cores: usize) -> String {
+pub(super) fn cpuset(index: usize, cpus: u32, cores: usize) -> String {
     let cores = u32::try_from(cores).unwrap_or(u32::MAX).max(1);
     let cpus = cpus.clamp(1, cores);
     let first = u32::try_from(index).unwrap_or(0).saturating_mul(cpus) % cores;
@@ -162,34 +218,36 @@ fn unit(
         env_file = env_file(runner),
     )?;
 
+    let job = container(host, runner, cpuset.to_owned(), pins);
     write!(
         unit,
-        "\nExecStart=/usr/bin/docker run --rm --name kithara-ci-{name} \
+        "\nExecStart=/usr/bin/docker run --rm --name {name} \
          --network {network} \
          --cpuset-cpus {cpuset} \
          --memory {memory} \
-         --pids-limit 8192 \
+         --pids-limit {pids} \
          --security-opt no-new-privileges \
-         --env-file {env_file} \
-         --env CARGO_TARGET_DIR=/cache/target \
-         --mount type=volume,source=kithara-ci-cargo-home,target=/home/runner/.cargo \
-         --mount type=volume,source=kithara-ci-target,target=/cache/target",
-        name = runner.name,
-        network = host.network,
-        memory = runner.memory,
-        env_file = env_file(runner),
+         --env-file {env_file}",
+        name = job.name,
+        network = job.network,
+        cpuset = job.cpuset,
+        memory = job.memory,
+        pids = Container::PIDS_LIMIT,
+        env_file = job.env_file,
     )?;
-    for device in &runner.devices {
+    for entry in Container::ENVIRONMENT {
+        write!(unit, " --env {entry}")?;
+    }
+    for (volume, target) in &job.mounts {
+        write!(unit, " --mount type=volume,source={volume},target={target}")?;
+    }
+    for device in job.devices {
         write!(unit, " --device {}", device.display())?;
     }
-    for group in &runner.groups {
+    for group in job.groups {
         write!(unit, " --group-add {group}")?;
     }
-    let image = match runner.flavor {
-        RunnerFlavor::Plain => &pins.linux_runner_image,
-        RunnerFlavor::Android => &pins.linux_android_runner_image,
-    };
-    writeln!(unit, " {image}")?;
+    writeln!(unit, " {}", job.image)?;
 
     writeln!(
         unit,
@@ -260,6 +318,75 @@ mod tests {
         }
     }
 
+    /// A machine serving both lanes needs both images, and the emulator image
+    /// is named once however many emulator runners there are.
+    #[test]
+    fn the_profile_asks_for_every_image_its_runners_start_from() {
+        let host = host_fixture();
+        let pins = &fixture().pins;
+        let images = required_images(&host, pins);
+        assert!(
+            images.contains(&pins.linux_runner_image.as_str()),
+            "{images:?}"
+        );
+        assert!(
+            images.contains(&pins.linux_android_runner_image.as_str()),
+            "{images:?}"
+        );
+        assert_eq!(images.len(), 2, "each image is named once: {images:?}");
+    }
+
+    /// The same contract as the Compose rendering: a unit that does not name
+    /// the wrapper leaves `sccache` installed and unused.
+    #[test]
+    fn a_unit_is_told_to_use_the_compiler_cache() {
+        let host = host_fixture();
+        let pins = &fixture().pins;
+        let text = unit(
+            &host,
+            host.runner("kithara-ci-octocat").expect("runner"),
+            "0,1,2",
+            pins,
+            "/usr/local/bin/kithara-ci",
+        )
+        .expect("the unit must render");
+        for entry in Container::ENVIRONMENT {
+            assert!(text.contains(&format!("--env {entry}")), "{entry}:\n{text}");
+        }
+    }
+
+    /// A build directory holds artefacts valid only for the configuration that
+    /// made them, so runners must not share one. The registry and the compiler
+    /// cache are shared on purpose: both are keyed by content.
+    #[test]
+    fn each_runner_builds_in_a_directory_of_its_own() {
+        let host = host_fixture();
+        let first = Container::mounts(host.runner("kithara-ci-octocat").expect("runner"));
+        let second = Container::mounts(host.runner("kithara-ci-hubot").expect("runner"));
+
+        let target = |mounts: &[(String, &str)]| {
+            mounts
+                .iter()
+                .find(|(_, at)| *at == "/cache/target")
+                .expect("a build directory")
+                .0
+                .clone()
+        };
+        assert_ne!(target(&first), target(&second));
+
+        for shared in ["/home/runner/.cargo", "/cache/sccache"] {
+            let name = |mounts: &[(String, &str)]| {
+                mounts
+                    .iter()
+                    .find(|(_, at)| *at == shared)
+                    .expect(shared)
+                    .0
+                    .clone()
+            };
+            assert_eq!(name(&first), name(&second), "{shared} must be shared");
+        }
+    }
+
     /// More runners than cores is the point of the exercise: an idle listener
     /// costs nothing, so the machine carries more of them than it has cores.
     #[test]
@@ -279,7 +406,7 @@ mod tests {
         let pins = &fixture().pins;
         let unit = unit(
             &host,
-            host.runner("kithara-ci").unwrap(),
+            host.runner("kithara-ci-octocat").unwrap(),
             "0,1,2,3",
             pins,
             "/usr/local/bin/kithara-ci",
@@ -304,7 +431,7 @@ mod tests {
         let pins = &fixture().pins;
         let plain = unit(
             &host,
-            host.runner("kithara-ci").unwrap(),
+            host.runner("kithara-ci-octocat").unwrap(),
             "0,1,2,3",
             pins,
             "/usr/bin/xtask",
@@ -312,7 +439,7 @@ mod tests {
         .unwrap();
         let gpu = unit(
             &host,
-            host.runner("kithara-ci-gpu").unwrap(),
+            host.runner("kithara-ci-octocat-gpu").unwrap(),
             "0,1,2,3",
             pins,
             "/usr/bin/xtask",
@@ -321,7 +448,7 @@ mod tests {
 
         let android = unit(
             &host,
-            host.runner("kithara-ci-android").unwrap(),
+            host.runner("kithara-ci-octocat-android").unwrap(),
             "0,1,2,3",
             pins,
             "/usr/bin/xtask",

@@ -83,7 +83,9 @@ impl App for Gallery {
                     self.reads.apply(&path, &action);
                 }
             }
-            UiEvent::LibraryQuery(query) => self.reads.set_library_query(query),
+            UiEvent::LibraryQuery(query) => {
+                self.reads.set_library_query(query);
+            }
             UiEvent::ToggleModule(module) => self.reads.toggle_module(module),
             _ => {}
         }

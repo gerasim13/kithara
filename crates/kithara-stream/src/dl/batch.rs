@@ -243,8 +243,8 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     let started = Instant::now();
     let wait_in_queue = started.saturating_duration_since(internal.enqueued_at);
     let mut cmd = internal.cmd;
-    let writer = cmd.writer.take();
-    let on_complete_cb = cmd.on_complete.take();
+    let writer = cmd.take_writer();
+    let on_complete_cb = cmd.take_on_complete();
     let on_response_cb = cmd.on_response.take();
     let on_slow_cb = cmd.on_slow.take();
     let bus = internal.bus;
@@ -499,10 +499,13 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
         }
         ResponseTarget::Streaming => match result {
             Ok(resp) => {
+                let headers = resp.headers.clone();
                 let Some(mut w) = writer else {
+                    if let Some(cb) = on_complete_cb {
+                        cb(0, Some(&headers), None);
+                    }
                     return;
                 };
-                let headers = resp.headers.clone();
                 if let Some(cb) = on_response_cb {
                     cb(&headers);
                 }
@@ -588,6 +591,10 @@ pub(super) fn deliver_cancelled_with_event(internal: InternalCmd, peer_cancel: &
 
 /// Route a cancellation to its target. Does NOT publish events — use
 /// [`deliver_cancelled_with_event`] for that.
+///
+/// The oneshot is the channel path's completion signal, matching `deliver`,
+/// which never calls `on_complete` for a `Channel` target. Only the streaming
+/// path owns a claim through its callback.
 pub(super) fn deliver_cancelled(target: ResponseTarget, mut cmd: FetchCmd) {
     let err = NetError::Cancelled;
     match target {
@@ -595,7 +602,7 @@ pub(super) fn deliver_cancelled(target: ResponseTarget, mut cmd: FetchCmd) {
             tx.send(Err(err)).ok();
         }
         ResponseTarget::Streaming => {
-            if let Some(cb) = cmd.on_complete.take() {
+            if let Some(cb) = cmd.take_on_complete() {
                 cb(0, None, Some(&err));
             }
         }

@@ -14,7 +14,7 @@ use crate::pipeline::{
     },
     rebuild::{RecreateCause, RecreateNext, RecreateState},
     seek::{
-        anchor,
+        anchor::{self, AnchorPlan},
         emit::{emit, land_eof, location, update_len},
         recover::SeekRecovery,
         skip::estimate_target_byte,
@@ -141,17 +141,17 @@ impl SeekEngine {
         ctx: &mut SeekApplyCtx<'_, T>,
     ) -> SeekTransition {
         match anchor::resolve(ctx.stream, ctx.decode.active(), request, anchor_value) {
-            anchor::AnchorPlan::Failed { context, error } => {
+            AnchorPlan::Failed { context, error } => {
                 return SeekTransition::Failed {
                     request,
                     error,
                     context,
                 };
             }
-            anchor::AnchorPlan::Recreate(recreate) => {
+            AnchorPlan::Recreate(recreate) => {
                 return SeekTransition::Recreate(recreate);
             }
-            anchor::AnchorPlan::Seek => {}
+            AnchorPlan::Seek => {}
         }
         update_len(ctx.decode, ctx.stream);
         match ctx

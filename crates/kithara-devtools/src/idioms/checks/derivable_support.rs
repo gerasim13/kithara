@@ -648,7 +648,10 @@ fn complete_additions(
                 candidate.skip = Some("enum Display requires per-variant analysis");
                 return;
             }
-            let attr = candidate.additions.pop().expect("display attribute");
+            let attr = candidate
+                .additions
+                .pop()
+                .expect("invariant: display_candidate always pushes exactly one addition");
             add_derive(src, item, kind.derive(), item_start, candidate);
             candidate.additions.push(Insertion {
                 at: item_start,

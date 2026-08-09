@@ -450,7 +450,7 @@ mod imp {
             let frames = source.len().min(target.len());
             let [b0, b1, b2, a1, a2] = self.coefficients;
             let [mut x1, mut x2, mut y1, mut y2] = self.delay;
-            for (input, output) in source.iter().zip(target.iter_mut()).take(frames) {
+            for (input, output) in source[..frames].iter().zip(target[..frames].iter_mut()) {
                 let x0 = f64::from(*input);
                 let y0 = b0.mul_add(x0, b1.mul_add(x1, b2.mul_add(x2, a1.mul_add(y1, a2 * y2))));
                 *output = y0.to_f32().unwrap_or(0.0);

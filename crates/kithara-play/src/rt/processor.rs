@@ -200,7 +200,7 @@ impl PlayerNodeProcessor {
     fn set_tracks_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
         self.tracks
             .iter()
-            .for_each(|(_, track)| track.resource().set_host_sample_rate(sample_rate));
+            .for_each(|(_, track)| track.set_host_sample_rate(sample_rate));
     }
 
     pub(super) fn unload_track(&mut self, src: &str) {

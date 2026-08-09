@@ -309,7 +309,11 @@ fn streaming_resource_reopen_round_trip(
             assert_eq!(outcome, WaitOutcome::Ready);
         }
 
-        let data = read_bytes(&resource, 0, file_len as usize);
+        let data = read_bytes(
+            &resource,
+            0,
+            usize::try_from(file_len).unwrap_or(usize::MAX),
+        );
         assert_eq!(&data, payload);
     }
 

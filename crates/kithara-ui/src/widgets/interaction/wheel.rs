@@ -90,7 +90,7 @@ mod tests {
 
         let action = surface
             .update(&mut Stepper::default(), &detent, bounds, cursor)
-            .unwrap_or_else(|| panic!("a detent over the surface must publish"));
+            .expect("a detent over the surface must publish");
 
         assert_eq!(
             action.into_inner().0,

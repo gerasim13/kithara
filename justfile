@@ -1,5 +1,15 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+# Empty when absent: cargo reads that as "no wrapper", not as an error.
+sccache := `command -v sccache 2>/dev/null || true`
+
+export RUSTC_WRAPPER := sccache
+
+# sccache refuses incremental compilations, so a wrapper without this is never
+# hit. `check clippy` opts back in: `clippy-driver` is not cached either way,
+# and without incremental it costs 15s where 2.4s would do.
+export CARGO_INCREMENTAL := if sccache == "" { "" } else { "0" }
+
 mod fmt ".config/just/fmt.just"
 mod check ".config/just/check.just"
 mod lint ".config/just/lint.just"
@@ -25,7 +35,10 @@ _xtask *ARGS: _xtask-ready
 
 [no-exit-message]
 _xtask-refresh:
-    @if just _xtask-cached strict self-cache probe </dev/null >/dev/null 2>&1; then exec just _xtask-cached strict self-cache refresh --force </dev/null; fi; exec just _xtask-bootstrap --force </dev/null
+    @if just _xtask-cached strict self-cache probe </dev/null >/dev/null 2>&1; then \
+      if just _xtask-cached strict self-cache refresh --force </dev/null; then exit 0; fi; \
+      printf 'warning: cached xtask self-cache maintenance failed; rebuilding from source\n' >&2; \
+    fi; exec just _xtask-bootstrap --force </dev/null
 
 [no-exit-message]
 [private]

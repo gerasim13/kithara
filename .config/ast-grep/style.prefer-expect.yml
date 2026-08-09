@@ -27,5 +27,13 @@ ignores:
   - "**/tests.rs"
 rule:
   any:
-    - pattern: $X.unwrap_or_else(|| panic!($$$))
-    - pattern: $X.unwrap_or_else(|_| panic!($$$))
+    - pattern: $X.unwrap_or_else(|| panic!($MSG))
+    - pattern: $X.unwrap_or_else(|_| panic!($MSG))
+constraints:
+  # Only auto-fix a bare string-literal message. `panic!` with format
+  # arguments (`panic!("{err}", err)`) is not a drop-in `.expect(...)`
+  # rewrite — `.expect` takes exactly one `&str`, not a format string plus
+  # arguments — so those stay reporting-only for a human to rephrase.
+  MSG:
+    kind: string_literal
+fix: $X.expect($MSG)

@@ -2,7 +2,7 @@
 
 use std::{
     fs::{self, OpenOptions},
-    io,
+    io::ErrorKind,
     ops::Range,
     path::{Path, PathBuf},
 };
@@ -98,7 +98,7 @@ pub struct AtomicChunked<D: DriverIo> {
 
 impl<D: DriverIo> std::fmt::Debug for AtomicChunked<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let tmp = self.tmp_path.try_lock().map(|g| g.clone());
+        let tmp = self.tmp_path.try_lock().map(|g| (*g).clone());
         f.debug_struct("AtomicChunked")
             .field("canonical_path", &self.canonical_path)
             .field("tmp_path", &tmp)
@@ -237,7 +237,7 @@ impl<D: DriverIo> AtomicChunked<D> {
             Ok(file) => {
                 drop(file);
             }
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
                 return Err(StorageError::TmpClaimed(tmp_path));
             }
             Err(e) => return Err(StorageError::Io(e)),
