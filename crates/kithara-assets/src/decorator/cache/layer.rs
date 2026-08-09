@@ -844,9 +844,9 @@ mod tests {
         // but its bytes survive on disk, so no invalidation must fire.
         assert_eq!(cached.cache.lock().len(), 2);
         assert!(
-            log.lock().expect("log lock").is_empty(),
+            log.lock().is_empty(),
             "durable backend must treat LRU displacement as transparent, got {:?}",
-            log.lock().expect("log lock")
+            log.lock().as_slice()
         );
         assert!(
             matches!(
@@ -878,7 +878,7 @@ mod tests {
         // displacement is real data loss and must invalidate the key.
         assert_eq!(cached.cache.lock().len(), 2);
         assert_eq!(
-            log.lock().expect("log lock").as_slice(),
+            log.lock().as_slice(),
             &[keys[0].clone()],
             "ephemeral backend must invalidate the displaced key"
         );
@@ -905,14 +905,11 @@ mod tests {
 
         let reader = writer.commit(Some(4)).unwrap();
         assert_eq!(cached.cache.lock().len(), 1);
-        assert!(log.lock().expect("log lock").is_empty());
+        assert!(log.lock().is_empty());
 
         let reader = reader.release();
         assert!(cached.cache.lock().is_empty());
-        assert_eq!(
-            log.lock().expect("log lock").as_slice(),
-            std::slice::from_ref(&key)
-        );
+        assert_eq!(log.lock().as_slice(), std::slice::from_ref(&key));
         drop(reader);
     }
 
