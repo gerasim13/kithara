@@ -1,21 +1,12 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-# Clippy runs `clippy-driver` in place of `rustc`, so it compiles the whole
-# graph before it can lint one line, and it does so into its own profile
-# directory — a suite run in `test-release` leaves it nothing to reuse. The CI
-# image has kept `sccache` for exactly this since it was built; a workstation
-# had no equivalent, so every branch switch bought a full rebuild before the
-# pre-commit hook could say anything. Empty when sccache is absent, which cargo
-# reads as "no wrapper" rather than as an error.
+# Empty when absent: cargo reads that as "no wrapper", not as an error.
 sccache := `command -v sccache 2>/dev/null || true`
 
 export RUSTC_WRAPPER := sccache
 
-# sccache declines to cache an incremental compilation and cargo leaves
-# incremental on, so a wrapper set without this is installed, enabled, and never
-# hit — measured here as ten compile requests and zero of them cached. Left
-# alone when there is no wrapper, so a workstation without sccache keeps the
-# incremental rebuilds it does benefit from.
+# sccache refuses incremental compilations, so a wrapper without this is never
+# hit. Only forced alongside one, so a machine without sccache keeps incremental.
 export CARGO_INCREMENTAL := if sccache == "" { "" } else { "0" }
 
 mod fmt ".config/just/fmt.just"

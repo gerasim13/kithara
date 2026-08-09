@@ -26,10 +26,8 @@ pub(crate) struct CiHost {
     pub(crate) aggressive_cleanup_bytes: u64,
     pub(crate) android_home: PathBuf,
     pub(crate) brew_root: PathBuf,
-    /// Positive decimal gigabytes, such as `25GB`. Defaulted because the
-    /// installed profiles predate it: a binary that refused to load without it
-    /// would take the cleanup down on every host it reached, which is the
-    /// failure this budget exists to prevent.
+    /// Positive decimal gigabytes, such as `25GB`. Defaulted: installed
+    /// profiles predate it, and refusing to load would kill the cleanup.
     #[serde(default = "default_build_cache_size")]
     pub(crate) build_cache_size: String,
     pub(crate) cache_root_macos: PathBuf,
