@@ -235,7 +235,9 @@ pub(crate) fn make_env_setup(env_vars: &[(String, String)]) -> TokenStream2 {
                     &'static str,
                     ::std::option::Option<::std::string::String>,
                 )>,
-                lock: ::std::option::Option<::std::sync::MutexGuard<'static, ()>>,
+                lock: ::std::option::Option<
+                    ::kithara_test_utils::kithara_platform::sync::MutexGuard<'static, ()>,
+                >,
             }
 
             impl Drop for __KitharaEnvGuard {
@@ -256,9 +258,7 @@ pub(crate) fn make_env_setup(env_vars: &[(String, String)]) -> TokenStream2 {
                 }
             }
 
-            let __lock = ::kithara_test_utils::kithara_platform::env::mutation_lock()
-                .lock()
-                .unwrap_or_else(|err| err.into_inner());
+            let __lock = ::kithara_test_utils::kithara_platform::env::mutation_lock().lock();
 
             let mut __saved = ::std::vec::Vec::new();
             #(#apply_actions)*

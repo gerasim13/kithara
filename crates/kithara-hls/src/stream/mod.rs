@@ -11,4 +11,3 @@ pub(crate) use coord::HlsCoord;
 pub(crate) use coord::HlsCoordEnv;
 pub use hls::Hls;
 pub(crate) use session::HlsSession;
-pub use source::HlsSource;

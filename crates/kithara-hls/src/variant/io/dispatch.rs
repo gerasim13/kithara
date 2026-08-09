@@ -4,7 +4,7 @@ use kithara_stream::dl::FetchCmd;
 use kithara_test_utils::kithara;
 use tracing::debug;
 
-use super::{HlsVariant, PlanCtx};
+use super::{HlsVariant, PlanCtx, core::NO_PREFETCH_DEFERRAL};
 use crate::segment::{Downloading, FetchClaim, PlannedFetch};
 
 impl HlsVariant {
@@ -133,7 +133,7 @@ impl HlsVariant {
                         continue;
                     };
                     // A decoder cannot start without its init, so it is never
-                    cmd.priority = Some(RequestPriority::High);
+                    cmd.set_priority(RequestPriority::High);
                     out.push(cmd);
                 }
                 PlannedFetch::Segment(seg_idx) => {
@@ -166,7 +166,7 @@ impl HlsVariant {
                         continue;
                     };
                     if owed(seg_idx) {
-                        cmd.priority = Some(RequestPriority::High);
+                        cmd.set_priority(RequestPriority::High);
                     }
                     out.push(cmd);
                 }
@@ -179,7 +179,7 @@ impl HlsVariant {
                 queue.push_front(planned);
             }
         }
-        self.defer_prefetch_until(resume_at.unwrap_or(u64::MAX));
+        self.defer_prefetch_until(resume_at.unwrap_or(NO_PREFETCH_DEFERRAL));
         out
     }
 

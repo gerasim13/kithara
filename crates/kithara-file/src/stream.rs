@@ -10,6 +10,7 @@ use kithara_platform::{
     CancelScope, CancelToken,
     sync::{Arc, Mutex},
     time::{Duration, sleep},
+    tokio,
 };
 use kithara_storage::StorageError;
 use kithara_stream::{
@@ -17,13 +18,15 @@ use kithara_stream::{
     dl::{Downloader, DownloaderConfig},
 };
 use kithara_test_utils::kithara;
+use url::Url;
 
 use crate::{
     config::{FileConfig, FileSrc},
     coord::FileCoord,
     error::SourceError,
     session::{
-        FileAssetCtx, FileInner, FilePeer, FilePhase, FileSource, FileSourceCtx, FileStreamState,
+        FileAssetCtx, FileInner, FileLocalConfig, FilePeer, FilePhase, FileSource, FileSourceCtx,
+        FileStreamState,
     },
 };
 
@@ -37,6 +40,22 @@ impl Consts {
     const MAX_EXTENSION_LEN: usize = 16;
 }
 
+#[derive(Default)]
+struct TmpClaimProgress {
+    last_len: Option<Option<u64>>,
+}
+
+impl TmpClaimProgress {
+    fn observe(&mut self, len: Option<u64>) -> bool {
+        let stalled = matches!(
+            (self.last_len, len),
+            (Some(Some(previous)), Some(current)) if previous == current
+        );
+        self.last_len = Some(len);
+        stalled
+    }
+}
+
 struct RemoteFileOpen {
     backend: AssetStore,
     cancel: CancelToken,
@@ -45,7 +64,7 @@ struct RemoteFileOpen {
     headers: Option<Headers>,
     look_ahead_bytes: Option<u64>,
     key: ResourceKey,
-    url: url::Url,
+    url: Url,
 }
 
 fn local_key(path: PathBuf) -> Result<ResourceKey, SourceError> {
@@ -88,7 +107,17 @@ fn cached_source(
 ) -> FileSource {
     let coord = completed_coord(reader.len());
     let cached_codec = sniff_codec(&reader);
-    FileSource::local(reader, coord, bus, backend, key, cancel, cached_codec)
+    FileSource::local(
+        FileLocalConfig::builder()
+            .reader(reader)
+            .coord(coord)
+            .bus(bus)
+            .backend(backend)
+            .key(key)
+            .cancel(cancel)
+            .maybe_cached_codec(cached_codec)
+            .build(),
+    )
 }
 
 fn publish_open_error(bus: Option<&EventBus>, error: &SourceError) {
@@ -107,7 +136,7 @@ fn valid_extension(extension: &str) -> Option<String> {
     .then(|| extension.to_ascii_lowercase())
 }
 
-fn source_extension(url: &url::Url, hint: Option<&str>) -> String {
+fn source_extension(url: &Url, hint: Option<&str>) -> String {
     hint.and_then(valid_extension)
         .or_else(|| {
             url.path_segments()
@@ -121,7 +150,7 @@ fn source_extension(url: &url::Url, hint: Option<&str>) -> String {
 
 fn remote_key(
     store: &AssetStore,
-    url: &url::Url,
+    url: &Url,
     discriminator: Option<String>,
     extension: Option<&str>,
 ) -> Result<ResourceKey, SourceError> {
@@ -245,7 +274,7 @@ impl File {
     /// `on_connect` callback when the HTTP response arrives. Until then,
     /// `len()` returns `None`.
     fn create_remote(
-        url: url::Url,
+        url: Url,
         config: FileConfig,
         cancel: CancelToken,
     ) -> Result<FileSource, SourceError> {
@@ -313,7 +342,7 @@ impl File {
     /// longer than the watchdog timeout.
     #[kithara::hang_watchdog]
     async fn create_remote_wait_for_claim(
-        url: url::Url,
+        url: Url,
         config: FileConfig,
         cancel: CancelToken,
     ) -> Result<FileSource, StreamSourceError> {
@@ -323,8 +352,11 @@ impl File {
         /// `local_queue_playlist_behavior` resolves in a handful of ticks but
         /// long enough not to busy-spin a tokio worker.
         const TMP_CLAIMED_POLL_INTERVAL: Duration = Duration::from_millis(10);
-        let mut last_len: Option<u64> = None;
+        let mut progress = TmpClaimProgress::default();
         loop {
+            if cancel.is_cancelled() {
+                return Err(StreamSourceError::Cancelled);
+            }
             match Self::create_remote(url.clone(), config.clone(), cancel.clone()) {
                 Ok(src) => {
                     hang_reset!();
@@ -332,13 +364,16 @@ impl File {
                 }
                 Err(SourceError::Assets(AssetsError::Storage(StorageError::TmpClaimed(tmp)))) => {
                     let len = std::fs::metadata(&tmp).ok().map(|m| m.len());
-                    if len == last_len {
+                    if progress.observe(len) {
                         hang_tick!();
                     } else {
-                        last_len = len;
                         hang_reset!();
                     }
-                    sleep(TMP_CLAIMED_POLL_INTERVAL).await;
+                    tokio::select! {
+                        biased;
+                        () = cancel.cancelled() => return Err(StreamSourceError::Cancelled),
+                        () = sleep(TMP_CLAIMED_POLL_INTERVAL) => {}
+                    }
                 }
                 Err(e) => return Err(StreamSourceError::from(e)),
             }
@@ -354,12 +389,14 @@ fn sniff_codec(reader: &AssetReader) -> Option<AudioCodec> {
 
 #[cfg(test)]
 mod tests {
-    use kithara_assets::{AssetStore, StorageBackend};
+    use kithara_assets::{AcquisitionResult, AssetStore, StorageBackend};
+    use kithara_events::{Event, FileEvent};
+    use tempfile::tempdir;
 
     use super::*;
 
-    fn url(value: &str) -> url::Url {
-        url::Url::parse(value).expect("valid test URL")
+    fn url(value: &str) -> Url {
+        Url::parse(value).expect("valid test URL")
     }
 
     #[kithara::test]
@@ -433,5 +470,61 @@ mod tests {
         let result = local_key(PathBuf::from("relative/track.mp3"));
 
         assert!(matches!(result, Err(SourceError::InvalidPath(_))));
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    async fn remote_claim_wait_returns_cancelled() {
+        let dir = tempdir().expect("test cache directory");
+        let backend = StorageBackend::Disk {
+            root: dir.path().to_path_buf(),
+        };
+        let holder_store = AssetStore::builder().backend(backend.clone()).build();
+        let waiting_store = AssetStore::builder().backend(backend).build();
+        let remote_url = url("http://example.test/audio.mp3");
+        let key = remote_key(&holder_store, &remote_url, None, None).expect("remote key");
+        let holder = match holder_store
+            .acquire_resource(&key, None)
+            .expect("holder acquires resource")
+        {
+            AcquisitionResult::Pending(writer) => writer,
+            AcquisitionResult::Ready(_) => panic!("holder must own the pending claim"),
+            _ => panic!("holder returned an unexpected acquisition state"),
+        };
+        let scope = CancelScope::new(None);
+        let cancel = scope.token();
+        let bus = EventBus::new(8);
+        let mut events = bus.subscribe();
+        let config = FileConfig::for_src(FileSrc::Remote(remote_url))
+            .store(waiting_store)
+            .cancel(cancel.clone())
+            .events(bus)
+            .build();
+        let create = File::create(config);
+        kithara_platform::tokio::pin!(create);
+
+        loop {
+            kithara_platform::tokio::select! {
+                _result = &mut create => panic!("claim wait returned before cancellation"),
+                event = events.recv() => {
+                    let event = event.expect("event channel remains open");
+                    if matches!(event.event, Event::File(FileEvent::Error { .. })) {
+                        break;
+                    }
+                }
+            }
+        }
+
+        scope.cancel();
+        let result = create.await;
+
+        assert!(matches!(result, Err(StreamSourceError::Cancelled)));
+        drop(holder);
+    }
+
+    #[kithara::test]
+    fn absent_first_tmp_observation_is_not_a_stall() {
+        let mut progress = TmpClaimProgress::default();
+
+        assert!(!progress.observe(None));
     }
 }

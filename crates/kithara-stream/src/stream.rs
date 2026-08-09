@@ -74,10 +74,24 @@ pub enum StreamReadOutcome {
 /// target is invalid for this stream, not a decoder state corruption).
 #[derive(Debug, Clone, Copy, derive_more::Display)]
 #[display("seek past EOF: new_pos={new_pos} len={len} current_pos={current_pos}")]
+#[non_exhaustive]
 pub struct StreamSeekPastEof {
-    pub current_pos: u64,
-    pub len: u64,
-    pub new_pos: u64,
+    pub(crate) current_pos: u64,
+    pub(crate) len: u64,
+    pub(crate) new_pos: u64,
+}
+
+impl StreamSeekPastEof {
+    /// Build the typed payload for a seek target beyond the stream's
+    /// known length.
+    #[must_use]
+    pub fn new(current_pos: u64, len: u64, new_pos: u64) -> Self {
+        Self {
+            current_pos,
+            len,
+            new_pos,
+        }
+    }
 }
 
 impl StdError for StreamSeekPastEof {}
@@ -107,14 +121,45 @@ impl StdError for StreamReadError {
 #[display(
     "{reason}: pos={pos} want={want} len={len:?} phase={phase:?} epoch={epoch} flushing={flushing}"
 )]
+#[non_exhaustive]
 pub struct StreamPending {
-    pub len: Option<u64>,
-    pub reason: PendingReason,
-    pub phase: SourcePhase,
-    pub flushing: bool,
-    pub epoch: u64,
-    pub pos: u64,
-    pub want: usize,
+    pub(crate) len: Option<u64>,
+    pub(crate) reason: PendingReason,
+    pub(crate) phase: SourcePhase,
+    pub(crate) flushing: bool,
+    pub(crate) epoch: u64,
+    pub(crate) pos: u64,
+    pub(crate) want: usize,
+}
+
+impl StreamPending {
+    /// Build the typed payload for a transient "data not ready" read.
+    #[must_use]
+    pub fn new(
+        reason: PendingReason,
+        pos: u64,
+        want: usize,
+        len: Option<u64>,
+        phase: SourcePhase,
+        epoch: u64,
+        flushing: bool,
+    ) -> Self {
+        Self {
+            len,
+            reason,
+            phase,
+            flushing,
+            epoch,
+            pos,
+            want,
+        }
+    }
+
+    /// Typed reason decoders downcast on to classify a transient stall.
+    #[must_use]
+    pub fn reason(&self) -> PendingReason {
+        self.reason
+    }
 }
 
 impl StdError for StreamPending {}
@@ -218,11 +263,6 @@ impl<T: StreamType> Stream<T> {
             .byte_map()
             .map_or(Ok(None), |m| m.anchor_at_time(position))
             .map_err(|e| IoError::other(e.to_string()))
-    }
-
-    /// Get shared reference to inner source.
-    pub fn source(&self) -> &T::Source {
-        &self.source
     }
 
     delegate::delegate! {

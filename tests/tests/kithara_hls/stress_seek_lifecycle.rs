@@ -203,7 +203,10 @@ async fn stress_seek_lifecycle_with_zero_reset(
 
     let result = spawn_blocking(move || {
         let channels = spec.channels as usize;
-        let chunk_samples = (0.05 * f64::from(spec.sample_rate.get()) * channels as f64) as usize;
+        let chunk_samples = num_traits::cast::<f64, usize>(
+            0.05 * f64::from(spec.sample_rate.get()) * channels as f64,
+        )
+        .unwrap_or(usize::MAX);
         let mut buf = vec![0.0f32; chunk_samples];
         let mut rng = Xorshift64::new(0xCAFE_BABE_DEAD_BEEF);
 

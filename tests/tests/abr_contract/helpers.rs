@@ -63,7 +63,10 @@ pub(crate) mod phase_oracle {
         freq_hz: f64,
     ) -> Option<f64> {
         let stride = usize::from(channels.max(1));
-        let q_samples = ((f64::from(sample_rate) / (4.0 * freq_hz)).round() as usize).max(1);
+        let q_samples =
+            num_traits::cast::<f64, usize>((f64::from(sample_rate) / (4.0 * freq_hz)).round())
+                .unwrap_or(usize::MAX)
+                .max(1);
         let i_idx = sample_offset.checked_mul(stride)?;
         let q_idx = sample_offset.checked_add(q_samples)?.checked_mul(stride)?;
         let i_sample = pcm.get(i_idx).copied()?;
@@ -114,7 +117,7 @@ pub(crate) mod phase_oracle {
             for i in 0..frames {
                 let abs = frame_offset + i as u64;
                 let theta = TAU * Consts::F * (abs as f64) / f64::from(Consts::SR);
-                let s = theta.sin() as f32;
+                let s = num_traits::cast::<f64, f32>(theta.sin()).unwrap_or(0.0);
                 for _ in 0..channels {
                     out.push(s);
                 }
@@ -752,11 +755,13 @@ pub(crate) mod probe_contracts {
             && let Some(bad_emit) = peer_events.iter().find(|e| {
                 e.probe_name() == Some("dispatch")
                     && e.u64("variant") == Some(v_new as u64)
-                    && e.u64("segment_index")
-                        .is_some_and(|s| (s as usize) < forward_only_floor)
+                    && e.u64("segment_index").is_some_and(|s| {
+                        usize::try_from(s).unwrap_or(usize::MAX) < forward_only_floor
+                    })
             })
         {
-            let bad_seg = bad_emit.u64("segment_index").unwrap_or(u64::MAX) as usize;
+            let bad_seg = usize::try_from(bad_emit.u64("segment_index").unwrap_or(u64::MAX))
+                .unwrap_or(usize::MAX);
             return Err(format!(
                 "Forward-only invariant violated: \
                  `dispatch(variant=V_new={v_new}, segment_index={bad_seg})` \

@@ -18,4 +18,4 @@ mod tests;
 
 pub(crate) use inner::{FileAssetCtx, FileInner, FilePhase, FileSourceCtx, FileStreamState};
 pub(crate) use peer::FilePeer;
-pub(crate) use source::FileSource;
+pub(crate) use source::{FileLocalConfig, FileSource};

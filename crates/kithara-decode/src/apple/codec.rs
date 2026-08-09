@@ -3,8 +3,8 @@ use std::{ffi::c_void, mem::size_of};
 use kithara_apple::audio_toolbox::{
     AUDIO_CONVERTER_DECOMPRESSION_MAGIC_COOKIE, AudioConverter, AudioFormatInfo,
     AudioFormatListItem, AudioStreamBasicDescription, AudioStreamPacketDescription,
-    SingleAudioBufferList, audio_format_get_property, audio_format_get_property_info,
-    pod_from_prefix,
+    AudioToolboxError, SingleAudioBufferList, audio_format_get_property,
+    audio_format_get_property_info, pod_from_prefix,
 };
 use kithara_bufpool::PcmBuf;
 use kithara_platform::time::Duration;
@@ -689,10 +689,10 @@ fn build_pcm_output_format(
     }
 }
 
-fn audio_toolbox_status(err: &kithara_apple::audio_toolbox::AudioToolboxError) -> i32 {
+fn audio_toolbox_status(err: &AudioToolboxError) -> i32 {
     match err {
-        kithara_apple::audio_toolbox::AudioToolboxError::Status { status, .. } => *status,
-        kithara_apple::audio_toolbox::AudioToolboxError::Config { .. } => -50,
+        AudioToolboxError::Status { status, .. } => *status,
+        AudioToolboxError::Config { .. } => -50,
     }
 }
 

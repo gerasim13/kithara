@@ -3,6 +3,10 @@ use core::num::{NonZeroU32, NonZeroUsize};
 use kithara_decode::sanitize_sample;
 use num_traits::ToPrimitive;
 
+/// Milliseconds per second: the release time arrives in ms, the coefficient
+/// is computed in samples.
+const MS_PER_SEC: f32 = 1000.0;
+
 /// Configuration rejected by [`PeakLimiter::new`].
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
@@ -43,7 +47,7 @@ impl PeakLimiter {
             return Err(LimiterError::Release { release_ms });
         }
 
-        let samples = release_ms / 1000.0 * sample_rate.get().to_f32().unwrap_or(1.0);
+        let samples = release_ms / MS_PER_SEC * sample_rate.get().to_f32().unwrap_or(1.0);
         let release_coeff = (-1.0 / samples).exp();
 
         Ok(Self {

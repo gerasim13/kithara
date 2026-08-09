@@ -48,7 +48,8 @@ derived artifacts while the original media file stays untouched. `FileSrc::Remot
   already committed (no download); `Pending` hands over the single non-`Clone` commit-owning
   `AssetWriter`.
 - If a sibling `AssetStore` instance holds the atomic-chunked tmp for the same canonical path,
-  `create` polls every 10 ms until that sibling commits or drops. The loop is wrapped in
+  `create` polls every 10 ms until that sibling commits or drops, or returns cancellation when
+  its own work token fires. The loop is wrapped in
   `#[kithara::hang_watchdog]` and ticks the watchdog only while the tmp's length is *unchanged*,
   so a live sibling never panics and only a stale tmp from a crashed process does.
 - Downloading is pull-driven and gap-driven: `Peer::poll_next` fetches from `next_gap(0, upper)`,

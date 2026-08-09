@@ -134,10 +134,10 @@ impl GlideResampler {
             return;
         }
         let frame = consumed.saturating_sub(1);
-        self.previous
+        let channels = self.channels.get();
+        self.previous[..channels]
             .iter_mut()
-            .zip(input.iter())
-            .take(self.channels.get())
+            .zip(&input[..channels])
             .for_each(|(previous, input)| {
                 previous[0] = input[frame];
             });

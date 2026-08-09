@@ -159,7 +159,8 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
     player.load_and_fadein(resource, "t0");
 
     let window_secs = (BLOCKS_PER_WINDOW * BLOCK_FRAMES) as f64 / f64::from(OUT_RATE);
-    let windows = (PLAY_SECS / window_secs).ceil() as u64;
+    let windows =
+        num_traits::cast::<f64, u64>((PLAY_SECS / window_secs).ceil()).unwrap_or(u64::MAX);
     // This reproduces a REAL-TIME-DEADLINE bug: the swallow only occurs when a
     // delayed FLAC segment (700 ms real) is not ready by the player's real-time
     // render deadline. Hold a `RealIoScope` across the playout so the virtual

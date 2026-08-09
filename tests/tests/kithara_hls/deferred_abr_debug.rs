@@ -11,6 +11,42 @@ use kithara::{
 use kithara_integration_tests::{TestTempDir, hls_server::TestServer, rt_cancel, temp_dir};
 use tracing::info;
 
+fn read_to_eof_with_progress(stream: &mut Stream<Hls>) -> (Vec<u8>, i32) {
+    let mut all_data = Vec::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut read_count = 0;
+    let mut total_bytes = 0;
+
+    info!("Starting read loop...");
+    loop {
+        let n = stream.read(&mut buf).unwrap();
+        if n == 0 {
+            info!("Read returned 0 (EOF), breaking loop");
+            break;
+        }
+
+        read_count += 1;
+        total_bytes += n;
+        all_data.extend_from_slice(&buf[..n]);
+
+        if read_count % 100 == 0 {
+            info!(
+                "Progress: {} reads, {} bytes total",
+                read_count, total_bytes
+            );
+        }
+
+        if read_count > 10000 {
+            panic!(
+                "Read loop exceeded 10000 iterations. Total bytes: {}, likely infinite loop",
+                all_data.len()
+            );
+        }
+    }
+
+    (all_data, read_count)
+}
+
 /// Diagnostic version with detailed logging and safety limits
 #[kithara::test(
     tokio,
@@ -48,37 +84,7 @@ async fn debug_sequential_read(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     info!("Starting blocking read task...");
     let result = spawn_blocking(move || {
         info!("Inside blocking task, starting read");
-        let mut all_data = Vec::new();
-        let mut buf = vec![0u8; 64 * 1024];
-        let mut read_count = 0;
-        let mut total_bytes = 0;
-
-        info!("Starting read loop...");
-        loop {
-            let n = stream.read(&mut buf).unwrap();
-            if n == 0 {
-                info!("Read returned 0 (EOF), breaking loop");
-                break;
-            }
-
-            read_count += 1;
-            total_bytes += n;
-            all_data.extend_from_slice(&buf[..n]);
-
-            if read_count % 100 == 0 {
-                info!(
-                    "Progress: {} reads, {} bytes total",
-                    read_count, total_bytes
-                );
-            }
-
-            if read_count > 10000 {
-                panic!(
-                    "Read loop exceeded 10000 iterations. Total bytes: {}, likely infinite loop",
-                    all_data.len()
-                );
-            }
-        }
+        let (all_data, read_count) = read_to_eof_with_progress(&mut stream);
 
         info!(
             "Read loop completed: {} bytes in {} reads",

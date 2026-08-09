@@ -24,9 +24,15 @@ ignores:
   - "**/*_test.rs"
   - "**/*_tests.rs"
   - "**/tests.rs"
-  # The platform crate OWNS the timer impl that lib crates consume; its native
-  # backend legitimately calls std::thread::sleep/park_timeout (the real impl).
-  - "crates/kithara-platform/src/native/**"
+  # The platform crate OWNS the timer impl that lib crates consume; each
+  # backend's thread/pacer primitive module legitimately calls
+  # std::thread::sleep/park_timeout (the real impl the facade wraps). The
+  # crate has no `native/` directory anymore (backends live under `system/`,
+  # `backend/<backend>/`, `flash/system/`) — these are its current owner
+  # sites, not the stale pre-refactor path.
+  - "crates/kithara-platform/src/system/thread.rs"
+  - "crates/kithara-platform/src/backend/flash_system/thread.rs"
+  - "crates/kithara-platform/src/flash/system/pace.rs"
 # ast-grep is purely syntactic (no name resolution), so the bare
 # `thread::sleep(_)` form cannot be told apart from
 # `kithara_platform::thread::sleep(_)` (the sanctioned platform sleep) once

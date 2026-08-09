@@ -136,7 +136,6 @@ impl StorageResource {
     /// # Errors
     /// Returns error if the resource is cancelled or the backend cannot reopen.
     pub fn reactivate(&self) -> StorageResult<()> {
-        // ast-grep-ignore: idioms.match-self-conversion
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.reactivate(),

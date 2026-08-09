@@ -43,29 +43,38 @@ pub struct AudioDecoderConfig<B = NoResamplerBackend> {
 
 impl<B> AudioDecoderConfig<B>
 where
-    B: ResamplerBackend,
+    B: Default + ResamplerBackend,
 {
+    fn effective_resampler(&self) -> DecoderResamplerSettings<B> {
+        self.resampler.clone().unwrap_or_default()
+    }
+
     pub(crate) fn build_resampler_config(
         &self,
         target_sample_rate: Option<NonZeroU32>,
     ) -> Option<DecoderResamplerConfig<B>> {
         let target_sample_rate = target_sample_rate?;
-        let resampler = self.resampler.as_ref()?;
+        let resampler = self.effective_resampler();
         Some(
             DecoderResamplerConfig::builder()
                 .target_sample_rate(target_sample_rate)
-                .backend(resampler.backend.clone())
+                .backend(resampler.backend)
                 .quality(resampler.quality)
                 .options(resampler.options)
                 .build(),
         )
     }
 
+    #[must_use]
+    pub(crate) fn resampler_backend_name(&self) -> &'static str {
+        self.effective_resampler().backend.name()
+    }
+}
+
+impl<B> AudioDecoderConfig<B> {
     delegate::delegate! {
         to self.resampler {
-            #[call(is_some)]
-            pub(crate) fn recreates_on_host_rate_change(&self) -> bool;
-            /// Return the decoder-side resampler settings.
+            /// Return the explicitly configured decoder-side resampler settings.
             #[must_use]
             #[call(as_ref)]
             pub fn resampler(&self) -> Option<&DecoderResamplerSettings<B>>;

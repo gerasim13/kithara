@@ -10,8 +10,8 @@ use crate::common::test_defaults::SawWav;
 
 #[kithara::test(timeout(Duration::from_secs(30)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn stress_seeks_preserve_timeline_integrity() {
-    const DURATION_SECS: f64 = 10.0;
-    const SAMPLE_COUNT: usize = (SawWav::DEFAULT.sample_rate as f64 * DURATION_SECS) as usize;
+    const DURATION_SECS: u32 = 10;
+    const SAMPLE_COUNT: usize = SawWav::DEFAULT.sample_rate as usize * DURATION_SECS as usize;
     const SEEK_ITERATIONS: usize = 200;
     const CHUNKS_PER_BURST: usize = 5;
 
@@ -43,7 +43,9 @@ fn stress_seeks_preserve_timeline_integrity() {
             panic!("seek #{i} to {seek_secs:.4}s failed: {e}");
         });
 
-        let expected_frame = (seek_secs * f64::from(SawWav::DEFAULT.sample_rate)) as u64;
+        let expected_frame =
+            num_traits::cast::<f64, u64>(seek_secs * f64::from(SawWav::DEFAULT.sample_rate))
+                .unwrap_or(u64::MAX);
 
         let mut prev_frame_end: Option<u64> = None;
 

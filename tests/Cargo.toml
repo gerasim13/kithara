@@ -17,8 +17,8 @@ path = "bin/test_server.rs"
 test = false
 
 [[bin]]
-name = "fixture-cache-setup"
-path = "bin/fixture-cache-setup.rs"
+name = "cold-fixture-cache"
+path = "bin/cold-fixture-cache.rs"
 test = false
 
 [[bin]]
@@ -240,6 +240,9 @@ kithara = { workspace = true, features = ["android", "client-wreq"] }
 # Reads the resolved encoder versions out of the workspace lockfile; see
 # `build.rs`. Hashing the whole lockfile invalidated the fixture cache on every
 # unrelated dependency bump.
+toml = { workspace = true }
+
+[dev-dependencies]
 toml = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

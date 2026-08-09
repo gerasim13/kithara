@@ -87,10 +87,13 @@ fn emit(idx: &WorkspaceStructIndex, min_call_sites: usize, out: &mut Vec<Violati
 /// 1. Shorthand `X { field }` desugars to `X { field: field }` — every site
 ///    "agrees" textually but the value really comes from a same-named local.
 /// 2. Trivial defaults — `T::default()`, `Default::default()`, `Vec::new()`,
-///    `HashMap::new()`, `HashSet::new()`. These mean "no per-site value", and
-///    flagging them just nags the caller to write `..Default::default()`,
-///    which the caller may already have a reason not to do (e.g. the type
-///    has no `Default` for the rest of its fields).
+///    `HashMap::new()`, `HashSet::new()`, bare `PhantomData`. These mean "no
+///    per-site value", and flagging them just nags the caller to write
+///    `..Default::default()`, which the caller may already have a reason not
+///    to do (e.g. the type has no `Default` for the rest of its fields).
+///    `PhantomData` specifically is never "foldable into a constant" — it
+///    carries a type parameter for compile-time phase/variance tracking, not
+///    a runtime value.
 fn constant_value(field: &str, sites: &[&LiteralSite]) -> Option<String> {
     let mut shared: Option<&str> = None;
     for site in sites {
@@ -116,6 +119,7 @@ fn is_no_information_expr(expr: &str, field: &str) -> bool {
         || trimmed == "Vec::new()"
         || trimmed == "HashMap::new()"
         || trimmed == "HashSet::new()"
+        || trimmed == "PhantomData"
         || trimmed.ends_with("::default()")
         || trimmed.ends_with("::new()")
 }
@@ -278,6 +282,17 @@ mod tests {
             fn a() -> E { E { items: Vec::new(), cfg: Cfg::default(), kind: 1 } }
             fn b() -> E { E { items: Vec::new(), cfg: Cfg::default(), kind: 2 } }
             fn c() -> E { E { items: Vec::new(), cfg: Cfg::default(), kind: 3 } }
+        "#;
+        assert_eq!(count(src, 3), 0);
+    }
+
+    #[test]
+    fn phantom_data_skipped() {
+        let src = r#"
+            pub(crate) struct E<S> { _phase: PhantomData<S>, kind: u32 }
+            fn a() -> E<A> { E { _phase: PhantomData, kind: 1 } }
+            fn b() -> E<A> { E { _phase: PhantomData, kind: 2 } }
+            fn c() -> E<A> { E { _phase: PhantomData, kind: 3 } }
         "#;
         assert_eq!(count(src, 3), 0);
     }

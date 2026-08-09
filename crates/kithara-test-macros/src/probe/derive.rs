@@ -174,7 +174,10 @@ pub(crate) fn expand_derive_into_probe_arg(input: &DeriveInput) -> syn::Result<T
                      documented bit layout (see `SegmentRequest`).",
                 ));
             }
-            let field = unnamed.unnamed.first().expect("checked len == 1");
+            let field = unnamed
+                .unnamed
+                .first()
+                .expect("invariant: checked len == 1 above");
             let ty = field.ty.clone();
             (
                 quote!(self.0),
@@ -191,7 +194,10 @@ pub(crate) fn expand_derive_into_probe_arg(input: &DeriveInput) -> syn::Result<T
                      documented bit layout (see `SegmentRequest`).",
                 ));
             }
-            let field = named.named.first().expect("checked len == 1");
+            let field = named
+                .named
+                .first()
+                .expect("invariant: checked len == 1 above");
             let name = field
                 .ident
                 .as_ref()

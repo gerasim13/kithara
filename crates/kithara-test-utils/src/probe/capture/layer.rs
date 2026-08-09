@@ -4,7 +4,10 @@ use kithara_platform::time::Instant;
 use tracing::{Subscriber, field::Visit};
 use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
 
-use super::{event::ProbeEvent, recorder::SharedLog};
+use super::{
+    event::ProbeEvent,
+    recorder::{SharedLog, capture_active},
+};
 
 /// Build a `tracing_subscriber` `Layer` that captures probe events
 /// into the shared log. Composed into the global subscriber by
@@ -29,6 +32,9 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for ProbeLayer {
         if !target.ends_with("_probe") {
             return;
         }
+        if !capture_active() {
+            return;
+        }
         let mut visitor = ProbeVisitor::default();
         event.record(&mut visitor);
         let evt = ProbeEvent {
@@ -37,9 +43,15 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for ProbeLayer {
             fields: visitor.numeric,
             string_fields: visitor.strings,
         };
-        if let Ok(mut log) = self.log.lock() {
-            log.push(evt);
+        let Ok(mut log) = self.log.lock() else {
+            return;
+        };
+        // Re-checked under the lock: the last lease may have released the
+        // log while this event was being built.
+        if !capture_active() {
+            return;
         }
+        log.push(evt);
     }
 }
 

@@ -1,7 +1,8 @@
 use std::{num::NonZeroUsize, ops::Range};
 
+use bon::Builder;
 use kithara_assets::{AssetReader, AssetStore, ReadSide, ResourceKey};
-use kithara_events::EventBus;
+use kithara_events::{EventBus, TotalBytesSource};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -21,6 +22,18 @@ use super::{
     segments::FileSegmentIndex,
 };
 use crate::{coord::FileCoord, error::SourceError as FileSourceError};
+
+/// Inputs for constructing a local/cached file source.
+#[derive(Clone, Builder)]
+pub(crate) struct FileLocalConfig {
+    reader: AssetReader,
+    coord: Arc<FileCoord>,
+    bus: EventBus,
+    backend: AssetStore,
+    key: ResourceKey,
+    cancel: CancelToken,
+    cached_codec: Option<AudioCodec>,
+}
 
 /// Sync `Source` impl over a shared [`FileInner`].
 ///
@@ -53,15 +66,16 @@ impl FileSource {
     /// `cancel` is a child of the file config master so a track drop
     /// pulse interrupts any in-flight reads — see
     /// `kithara-play/CONTEXT.md` "Cancel Hierarchy".
-    pub(crate) fn local(
-        reader: AssetReader,
-        coord: Arc<FileCoord>,
-        bus: EventBus,
-        backend: AssetStore,
-        key: ResourceKey,
-        cancel: CancelToken,
-        cached_codec: Option<AudioCodec>,
-    ) -> Self {
+    pub(crate) fn local(config: FileLocalConfig) -> Self {
+        let FileLocalConfig {
+            reader,
+            coord,
+            bus,
+            backend,
+            key,
+            cancel,
+            cached_codec,
+        } = config;
         let inner = Arc::new(FileInner::new(
             FileSourceCtx {
                 cancel,
@@ -88,7 +102,7 @@ impl FileSource {
         inner.publish_opened(
             total_bytes,
             true,
-            total_bytes.map(|_| kithara_events::TotalBytesSource::CommittedLen),
+            total_bytes.map(|_| TotalBytesSource::CommittedLen),
         );
         Self {
             coord,

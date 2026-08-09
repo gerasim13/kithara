@@ -1,8 +1,6 @@
 use std::mem::size_of;
 
-use kithara_apple::audio_toolbox::{
-    AudioStreamBasicDescription, AudioStreamPacketDescription, pod_to_vec, pod_write_to_slice,
-};
+use kithara_apple::audio_toolbox::{AudioStreamPacketDescription, pod_to_vec, pod_write_to_slice};
 use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, ContainerFormat, PrerollHint};
 use num_traits::ToPrimitive;
@@ -122,7 +120,7 @@ impl AppleAudioFileDemuxer {
         };
 
         let extra_data = match codec {
-            AudioCodec::Pcm => serialize_asbd(&asbd),
+            AudioCodec::Pcm => pod_to_vec(&asbd),
             _ => file.magic_cookie().unwrap_or_default(),
         };
 
@@ -374,12 +372,7 @@ impl Demuxer for AppleAudioFileDemuxer {
     }
 }
 
-fn serialize_asbd(asbd: &AudioStreamBasicDescription) -> Vec<u8> {
-    pod_to_vec(asbd)
-}
-
 #[cfg(test)]
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod tests {
     use std::{
         io::{self, Cursor, Error, ErrorKind, Read, Seek, SeekFrom},
@@ -392,7 +385,7 @@ mod tests {
     };
     use kithara_test_utils::kithara;
 
-    use super::{AppleAudioFileDemuxer, SourceOpenMode};
+    use super::{AppleAudioFileDemuxer, Duration, SourceOpenMode};
     use crate::demuxer::{DemuxOutcome, Demuxer};
 
     fn read_asset(name: &str) -> Vec<u8> {
@@ -430,7 +423,7 @@ mod tests {
     }
 
     /// `supports` is the exact predicate the decoder factory gates
-    /// standalone `AudioFileServices` dispatch on (`apple_standalone_supports`).
+    /// standalone `AudioFileServices` dispatch on.
     /// Native FLAC (`fLaC`, `audio/flac`) is the regression contract: the iOS
     /// build ships no Symphonia fallback, so a `false` here is precisely the
     /// `Unsupported codec: Flac` the device hit on every `streamfl` track.
@@ -506,15 +499,15 @@ mod tests {
     fn not_ready_error(pos: u64, want: usize, len: Option<u64>) -> Error {
         Error::new(
             ErrorKind::Interrupted,
-            StreamPending {
+            StreamPending::new(
+                PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted),
                 pos,
                 want,
                 len,
-                reason: PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted),
-                phase: SourcePhase::Waiting,
-                epoch: 0,
-                flushing: false,
-            },
+                SourcePhase::Waiting,
+                0,
+                false,
+            ),
         )
     }
 
@@ -560,7 +553,7 @@ mod tests {
             AudioCodec::Mp3,
             Some(ContainerFormat::MpegAudio),
             SourceOpenMode::Streaming,
-            Some(kithara_platform::time::Duration::from_secs(2)),
+            Some(Duration::from_secs(2)),
         )
         .expect("MP3 streaming open must not require tail bytes");
         assert!(
@@ -569,7 +562,7 @@ mod tests {
         );
         assert_eq!(
             dx.duration(),
-            Some(kithara_platform::time::Duration::from_secs(2)),
+            Some(Duration::from_secs(2)),
             "MP3 streaming open must use the caller's prefix duration hint"
         );
 

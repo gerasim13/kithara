@@ -166,4 +166,5 @@ async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, rt_cancel: CancelT
 
     let switches = variant_switches.lock().unwrap();
     info!("Variant switches detected: {:?}", *switches);
+    drop(switches);
 }

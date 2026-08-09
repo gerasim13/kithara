@@ -90,3 +90,13 @@ rule:
     - pattern: $E.unwrap_or_else(|_| $T::INFINITY)
     - pattern: $E.unwrap_or_else(|_| $T::NEG_INFINITY)
     - pattern: $E.unwrap_or_else(|_| $T::NAN)
+  not:
+    # The receiver is itself a fallible/lossy numeric cast (`T::try_from`,
+    # `.try_into()`, `num_traits`'s `.to_uNN()/.to_iNN()/.to_fNN()`, or the
+    # free `num_traits::cast`). Per this rule's own message above, an inline
+    # `unwrap_or(T::MAX)` on a saturating numeric conversion is the
+    # documented, endorsed idiom — not a hidden-missing-value sentinel. This
+    # is a rule-precision exclusion, not a per-site suppression: it applies
+    # workspace-wide because the shape, not the call site, is what makes it
+    # legitimate.
+    regex: '(::try_from\(|\.try_into\(|num_traits::cast|\.to_f32\(|\.to_f64\(|\.to_u8\(|\.to_u16\(|\.to_u32\(|\.to_u64\(|\.to_u128\(|\.to_usize\(|\.to_i8\(|\.to_i16\(|\.to_i32\(|\.to_i64\(|\.to_i128\(|\.to_isize\()'

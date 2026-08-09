@@ -33,7 +33,6 @@ schema_version = 1
 
 [field_passthrough]
 "crates/kithara-app/src/state.rs:StateController::cancel" = 1
-"crates/kithara-decode/src/fmp4/demuxer.rs:Fmp4SegmentDemuxer::duration" = 1
 "crates/kithara-decode/src/gapless/trimmer/core.rs:HeuristicState::trim_trailing" = 1
 "crates/kithara-ffi/src/native/inner.rs:NativeInner::shutdown" = 1
 "crates/kithara-file/src/session/source.rs:FileSource::coord" = 1
@@ -91,9 +90,6 @@ schema_version = 1
 "crates/kithara-ffi/src/native/bridge/item_bridge.rs::ItemEventBridge::dispatch" = 1
 "crates/kithara-ffi/src/native/bridge/item_bridge.rs::ItemEventBridge::spawn" = 1
 "crates/kithara-ffi/src/native/bridge/item_bridge.rs::ItemEventBridge::spawn_event_task" = 1
-"crates/kithara-ffi/src/web/worker.rs::register_key_rule" = 1
-"crates/kithara-ffi/src/web/worker.rs::replace_track" = 1
-"crates/kithara-file/src/session/source.rs::FileSource::local" = 1
 "crates/kithara-hls/src/stream/coord.rs::HlsCoord::new" = 1
 "crates/kithara-net/src/types.rs::tests::test_retry_policy_delay_for_attempt_custom" = 1
 "crates/kithara-queue/src/queue/playback.rs::tests::should_arm_crossfade_cases" = 1
@@ -101,7 +97,6 @@ schema_version = 1
 "crates/kithara-stream/src/dl/batch.rs::establish" = 1
 "crates/kithara-stream/src/dl/batch.rs::finish_request" = 1
 "crates/kithara-stream/src/dl/batch.rs::publish_failure_or_cancel" = 1
-"crates/kithara-stream/src/dl/peer.rs::PeerHandle::new" = 1
 "crates/kithara-stream/src/dl/registry.rs::classify_progress_tests::advanced_dominates_stalled_when_both_signals_present" = 1
 "crates/kithara-stream/src/dl/registry.rs::enqueue_request" = 1
 "crates/kithara-stream/src/source.rs::SegmentDescriptor::new" = 1
@@ -168,7 +163,6 @@ schema_version = 1
 "crates/kithara-decode/src/android/error.rs:AndroidBackendError" = 1
 "crates/kithara-decode/src/error.rs:DecodeError" = 1
 "crates/kithara-decode/src/gapless/trimmer/core.rs:GaplessTrimmer" = 1
-"crates/kithara-decode/src/symphonia/adapter.rs:ReadSeekAdapter" = 1
 "crates/kithara-events/src/abr.rs:VariantIndex" = 1
 "crates/kithara-events/src/play.rs:MediaTime" = 1
 "crates/kithara-file/src/session/source.rs:FileSource" = 1
@@ -212,21 +206,9 @@ schema_version = 1
 "crates/kithara-queue/src/track.rs::TrackEntry" = 1
 "crates/kithara-storage/src/backend/mmap/driver.rs::MmapOptions" = 1
 "crates/kithara-storage/src/backend/traits.rs::DriverState" = 1
-"crates/kithara-stream/src/dl/cmd.rs::FetchCmd" = 1
-"crates/kithara-stream/src/dl/config.rs::DownloaderConfig" = 1
 "crates/kithara-stream/src/media.rs::MediaInfo" = 1
 "crates/kithara-stream/src/source.rs::SegmentDescriptor" = 1
 "crates/kithara-stream/src/source.rs::SourceSeekAnchor" = 1
-"crates/kithara-stream/src/stream.rs::StreamPending" = 1
-"crates/kithara-stream/src/stream.rs::StreamSeekPastEof" = 1
-
-[redundant_accessors]
-"crates/kithara-stream/src/stream.rs::Stream::source" = 1
-
-[redundant_reexport]
-"crates/kithara-hls/stream/hls.rs::Hls::Source" = 1
-"crates/kithara-storage/backend/memory/driver.rs::MemDriver::Options" = 1
-"crates/kithara-storage/backend/mmap/driver.rs::MmapDriver::Options" = 1
 
 [shared_state]
 "crates/kithara-app/src/state.rs" = 1
@@ -266,5 +248,4 @@ schema_version = 1
 "crates/kithara-ffi/src/web/key_processor_bridge.rs" = 1
 
 [trait_impl_count]
-"crates/kithara-events/src/event.rs::Event" = 1
 "crates/kithara-events/src/play.rs::MediaTime" = 1

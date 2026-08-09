@@ -4449,6 +4449,7 @@ dependencies = [
  "cargo_metadata 0.23.1",
  "clap",
  "delegate",
+ "derive_more",
  "fieldwork",
  "glob",
  "proc-macro2",
@@ -4742,6 +4743,7 @@ dependencies = [
 name = "kithara-platform"
 version = "0.0.1-alpha4"
 dependencies = [
+ "arc-swap",
  "assert_no_alloc",
  "console_error_panic_hook",
  "cpu-time",

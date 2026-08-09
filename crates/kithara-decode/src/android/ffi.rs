@@ -1,8 +1,6 @@
 #![allow(unsafe_code)]
 
-use std::ffi::CStr;
-#[cfg(target_os = "android")]
-use std::ffi::{c_char, c_void};
+use std::ffi::{CStr, c_char, c_void};
 
 pub(crate) const MEDIA_STATUS_OK: i32 = 0;
 pub(crate) const MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM: u32 = 4;
@@ -39,14 +37,10 @@ pub(crate) const MIME_MP3: &CStr = c"audio/mpeg";
 /// Android MediaCodec MIME type for Apple Lossless (ALAC).
 pub(crate) const MIME_ALAC: &CStr = c"audio/alac";
 
-#[cfg(target_os = "android")]
 pub(crate) type MediaStatus = i32;
-#[cfg(target_os = "android")]
 pub(crate) type Off64 = i64;
-#[cfg(target_os = "android")]
 pub(crate) type SSize = isize;
 
-#[cfg(target_os = "android")]
 #[repr(C)]
 pub(crate) struct AMediaCodecBufferInfo {
     pub(crate) offset: i32,
@@ -55,45 +49,36 @@ pub(crate) struct AMediaCodecBufferInfo {
     pub(crate) flags: u32,
 }
 
-#[cfg(target_os = "android")]
 #[repr(C)]
 pub(crate) struct AMediaCodec {
     _private: [u8; 0],
 }
 
-#[cfg(target_os = "android")]
 #[repr(C)]
 pub(crate) struct AMediaDataSource {
     _private: [u8; 0],
 }
 
-#[cfg(target_os = "android")]
 #[repr(C)]
 pub(crate) struct AMediaExtractor {
     _private: [u8; 0],
 }
 
-#[cfg(target_os = "android")]
 #[repr(C)]
 pub(crate) struct AMediaFormat {
     _private: [u8; 0],
 }
 
-#[cfg(target_os = "android")]
 pub(crate) type AMediaDataSourceReadAt =
     Option<unsafe extern "C" fn(*mut c_void, Off64, *mut c_void, usize) -> SSize>;
-#[cfg(target_os = "android")]
 pub(crate) type AMediaDataSourceGetSize = Option<unsafe extern "C" fn(*mut c_void) -> Off64>;
-#[cfg(target_os = "android")]
 pub(crate) type AMediaDataSourceClose = Option<unsafe extern "C" fn(*mut c_void)>;
 
-#[cfg(target_os = "android")]
 #[link(name = "android")]
 unsafe extern "C" {
     fn android_get_device_api_level() -> i32;
 }
 
-#[cfg(target_os = "android")]
 #[link(name = "mediandk")]
 unsafe extern "C" {
     pub(crate) fn AMediaDataSource_new() -> *mut AMediaDataSource;
@@ -242,15 +227,9 @@ unsafe extern "C" {
     ) -> bool;
 }
 
-#[cfg(target_os = "android")]
 pub(crate) fn current_api_level() -> Option<u32> {
     let level = unsafe { android_get_device_api_level() };
     (level >= 0).then_some(level as u32)
-}
-
-#[cfg(not(target_os = "android"))]
-pub(crate) fn current_api_level() -> Option<u32> {
-    None
 }
 
 #[must_use]

@@ -37,7 +37,7 @@ use symphonia::core::{
     errors::{Error as SymphoniaError, SeekErrorKind},
     formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track, TrackType},
     packet::Packet,
-    units::{Time, TimeBase, Timestamp},
+    units::{Duration as SymphoniaDuration, Time, TimeBase, Timestamp},
 };
 
 use crate::{
@@ -110,7 +110,7 @@ impl SymphoniaDemuxer {
             .map(|h| h.load(Ordering::Acquire))
     }
 
-    fn dur_to_duration(&self, dur: symphonia::core::units::Duration) -> Duration {
+    fn dur_to_duration(&self, dur: SymphoniaDuration) -> Duration {
         let Some(tb) = self.time_base else {
             return Duration::ZERO;
         };
@@ -257,7 +257,7 @@ impl Demuxer for SymphoniaDemuxer {
                     let reason = e
                         .get_ref()
                         .and_then(|src| src.downcast_ref::<StreamPending>())
-                        .map(|p| p.reason)
+                        .map(StreamPending::reason)
                         .or_else(|| {
                             e.get_ref()
                                 .and_then(|src| src.downcast_ref::<PendingReason>())

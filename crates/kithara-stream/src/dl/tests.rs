@@ -1,5 +1,6 @@
 use std::{
     convert::Infallible,
+    future::Future,
     net::SocketAddr,
     sync::atomic::{AtomicUsize, Ordering},
     task::{Context, Poll},
@@ -12,10 +13,10 @@ use axum::{
     routing::{get, head},
 };
 use bytes::Bytes;
-use futures::{StreamExt, stream::iter as stream_iter};
+use futures::{StreamExt, stream::iter as stream_iter, task::AtomicWaker};
 use kithara_abr::Abr;
 use kithara_events::{DownloaderEvent, Envelope, Event, EventBus};
-use kithara_net::{HttpClient, NetOptions};
+use kithara_net::{Headers as ResponseHeaders, HttpClient, NetError as FetchError, NetOptions};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex, Notify},
@@ -25,7 +26,10 @@ use kithara_platform::{
 use kithara_test_utils::kithara;
 use url::Url;
 
-use super::{BodyStream, Downloader, DownloaderConfig, FetchCmd, Peer, RequestPriority};
+use super::{
+    BodyStream, Downloader, DownloaderConfig, FetchCmd, Peer, PeerHandle as RegisteredHandle,
+    RequestPriority,
+};
 use crate::{Activity, SeekState};
 
 const CONCURRENCY_TEST_TIMEOUT_SECS: u64 = 30;
@@ -98,6 +102,117 @@ impl CompletionGate {
             notified.await;
         }
     }
+}
+
+type CompletionErrors = Arc<Mutex<Vec<Option<FetchError>>>>;
+
+fn cancellation_cmd(url: &Url, gate: &Arc<CompletionGate>, errors: &CompletionErrors) -> FetchCmd {
+    let gate = Arc::clone(gate);
+    let errors = Arc::clone(errors);
+    FetchCmd::head(url.clone())
+        .writer(Box::new(|_chunk: &[u8]| Ok(())))
+        .on_complete(Box::new(move |_bytes, _headers, error| {
+            errors.lock().push(error.cloned());
+            gate.complete();
+        }))
+        .build()
+}
+
+struct QueuedPeer {
+    cmds: Mutex<Option<Vec<FetchCmd>>>,
+    yielded: Notify,
+}
+
+impl Abr for QueuedPeer {}
+impl Peer for QueuedPeer {
+    fn poll_next(&self, _cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
+        let Some(cmds) = self.cmds.lock().take() else {
+            return Poll::Pending;
+        };
+        self.yielded.notify_one();
+        Poll::Ready(Some(cmds))
+    }
+
+    fn priority(&self) -> RequestPriority {
+        RequestPriority::High
+    }
+}
+
+/// `max_concurrent: 0` parks the peer's batch in the priority slots without
+/// ever spawning a fetch, so cancelling the downloader leaves `Downloader::run`
+/// with the queue full — the shape that used to strand every claim those
+/// commands carried.
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn downloader_shutdown_cancels_queued_commands() {
+    const COMMANDS: usize = 2;
+
+    let url = Url::parse("http://example.test/cancelled").expect("valid test URL");
+    let cancel = CancelToken::never();
+    let gate = CompletionGate::new(COMMANDS);
+    let errors = Arc::new(Mutex::new(Vec::new()));
+    let peer = Arc::new(QueuedPeer {
+        cmds: Mutex::new(Some(
+            (0..COMMANDS)
+                .map(|_| cancellation_cmd(&url, &gate, &errors))
+                .collect(),
+        )),
+        yielded: Notify::default(),
+    });
+    let dl = Downloader::new(DownloaderConfig {
+        cancel: Some(cancel.clone()),
+        max_concurrent: 0,
+        ..test_config()
+    });
+    let _handle = dl.register(peer.clone());
+
+    peer.yielded.notified().await;
+    cancel.cancel();
+    gate.wait().await;
+
+    assert_eq!(gate.done.load(Ordering::SeqCst), COMMANDS);
+    let errors = errors.lock();
+    assert_eq!(errors.len(), COMMANDS);
+    for error in errors.iter() {
+        assert!(matches!(error, Some(FetchError::Cancelled)));
+    }
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn streaming_without_writer_still_completes() {
+    let app = Router::new().route("/data", get(|| async { "body" }));
+    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local_addr");
+    tokio_spawn(async move {
+        axum::serve(listener, app).await.expect("serve");
+    });
+    let url = Url::parse(&format!("http://{addr}/data")).expect("url");
+    let gate = CompletionGate::new(1);
+    let completion = Arc::new(Mutex::new(None));
+    let completion_cb = Arc::clone(&completion);
+    let gate_cb = Arc::clone(&gate);
+    let cmd = FetchCmd::get(url)
+        .on_complete(Box::new(
+            move |bytes, headers: Option<&ResponseHeaders>, error: Option<&FetchError>| {
+                *completion_cb.lock() = Some((bytes, headers.is_some(), error.is_none()));
+                gate_cb.complete();
+            },
+        ))
+        .build();
+    let peer = Arc::new(QueuedPeer {
+        cmds: Mutex::new(Some(vec![cmd])),
+        yielded: Notify::default(),
+    });
+    let dl = Downloader::new(test_config());
+    let handle = dl.register(peer);
+
+    gate.wait().await;
+
+    let completion = completion.lock();
+    let (bytes, has_headers, has_no_error) = completion.expect("completion must be recorded");
+    assert_eq!(bytes, 0);
+    assert!(has_headers);
+    assert!(has_no_error);
+    drop(handle);
 }
 
 #[kithara::test(tokio)]
@@ -452,9 +567,9 @@ async fn poll_next_respects_max_concurrent() {
             let cmds: Vec<FetchCmd> = (0..batch_size)
                 .map(|_| {
                     let gate = Arc::clone(&self.gate);
-                    // No-op writer: a HEAD carries no body, but the streaming
-                    // deliver path only invokes `on_complete` when a writer is
-                    // present, so we supply one to receive the completion signal.
+                    // A no-op writer keeps this concurrency test on the ordinary
+                    // streaming body path; `on_complete` is guaranteed with or
+                    // without a writer.
                     FetchCmd::head(self.url.clone())
                         .writer(Box::new(|_chunk: &[u8]| Ok(())))
                         .on_complete(Box::new(

@@ -1,5 +1,8 @@
+use std::mem::size_of;
+
 use kithara_platform::sync::Arc;
 
+use super::Band;
 use crate::blob::{self, Blob, BlobError, Reader, Writer};
 
 /// Wire/disk format version for the [`Waveform`] blob. Bump when the encoding,
@@ -7,7 +10,7 @@ use crate::blob::{self, Blob, BlobError, Reader, Writer};
 pub(crate) const WAVEFORM_BYTES_VERSION: u32 = 1;
 
 /// Bytes per serialized bucket: three little-endian `f32` band heights.
-const BUCKET_BYTES: usize = 12;
+const BUCKET_BYTES: usize = Band::COUNT * size_of::<f32>();
 
 /// One waveform column: three normalized frequency-band heights, each in
 /// `[0, 1]` on a shared scale after per-band perceptual gain. The deck paints
@@ -26,6 +29,15 @@ impl Bucket {
     #[must_use]
     pub fn new(low: f32, mid: f32, high: f32) -> Self {
         Self { high, low, mid }
+    }
+
+    /// Height of one band — the order the analyzer and the wire both use.
+    pub(crate) fn band(self, band: Band) -> f32 {
+        match band {
+            Band::Low => self.low,
+            Band::Mid => self.mid,
+            Band::High => self.high,
+        }
     }
 }
 
@@ -89,16 +101,21 @@ impl Blob for Waveform {
         let count = r.remaining() / BUCKET_BYTES;
         let mut buckets = Vec::with_capacity(count);
         for _ in 0..count {
-            let low = r.read_f32()?;
-            let mid = r.read_f32()?;
-            let high = r.read_f32()?;
+            let mut heights = [0.0; Band::COUNT];
+            for height in &mut heights {
+                *height = r.read_f32()?;
+            }
             // `(0.0..=1.0).contains` is false for NaN/infinities, so this one
             // check covers finiteness and the `[0, 1]` invariant.
             let ok = |v: f32| (0.0..=1.0).contains(&v);
-            if !(ok(low) && ok(mid) && ok(high)) {
+            if !heights.iter().copied().all(ok) {
                 return Err(BlobError::Corrupt);
             }
-            buckets.push(Bucket::new(low, mid, high));
+            buckets.push(Bucket::new(
+                heights[Band::Low.idx()],
+                heights[Band::Mid.idx()],
+                heights[Band::High.idx()],
+            ));
         }
         Ok(Self::from(buckets))
     }
@@ -106,9 +123,9 @@ impl Blob for Waveform {
     fn encode(&self, w: &mut Writer<'_>) {
         w.reserve(self.0.len() * BUCKET_BYTES);
         for b in self.0.iter() {
-            w.write_f32(b.low());
-            w.write_f32(b.mid());
-            w.write_f32(b.high());
+            for band in Band::ALL {
+                w.write_f32(b.band(band));
+            }
         }
     }
 }

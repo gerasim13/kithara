@@ -4,6 +4,8 @@ use futures::task::AtomicWaker;
 use kithara_abr::{Abr, AbrController, AbrPeerId};
 use kithara_events::{EventBus, RequestId};
 use kithara_net::HttpClient;
+#[cfg(target_arch = "wasm32")]
+use kithara_platform::thread::{keep_worker_alive, spawn};
 use kithara_platform::{
     CancelScope, CancelToken,
     sync::{Arc, Mutex, Notify, RwLock},
@@ -14,7 +16,7 @@ use kithara_platform::{
 use kithara_test_utils::kithara;
 
 use super::{
-    peer::{Peer, PeerHandle},
+    peer::{Peer, PeerHandle, PeerInner},
     registry::{FetchProgress, Registry},
 };
 
@@ -175,7 +177,15 @@ impl Downloader {
             bus: Arc::clone(&bus),
         };
         self.inner.register_tx.send(entry).ok();
-        PeerHandle::new(Arc::clone(&self.inner), cancel, cmd_tx, bus, abr_handle)
+        PeerHandle::new(
+            PeerInner::builder()
+                .pool(Arc::clone(&self.inner))
+                .cancel(cancel)
+                .cmd_tx(cmd_tx)
+                .bus(bus)
+                .abr(abr_handle)
+                .build(),
+        )
     }
 
     /// Download loop.
@@ -254,8 +264,8 @@ impl Downloader {
         // workers via `Atomics.notify`, so the engine worker's blocked read
         // is woken once this worker commits bytes. `keep_worker_alive` keeps
         // the worker's event loop pumping for the page's lifetime.
-        kithara_platform::thread::spawn(move || {
-            kithara_platform::thread::keep_worker_alive();
+        spawn(move || {
+            keep_worker_alive();
             drop(task::spawn(async move {
                 this.run(rx).await;
             }));

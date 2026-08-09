@@ -216,7 +216,7 @@ mod tests {
         thread::spawn(move || {
             let mut buf = [0u8; 11];
             let result = worker.read_at_inner(0, &mut buf);
-            let _ = tx.send(result.map(|n| (n, buf)));
+            tx.send(result.map(|n| (n, buf))).ok();
         });
 
         let received = rx
@@ -255,7 +255,7 @@ mod tests {
             let len = worker.len_inner();
             let covers_exact = worker.contains_range_inner(0..11);
             let covers_over = worker.contains_range_inner(0..12);
-            let _ = tx.send((len, covers_exact, covers_over));
+            tx.send((len, covers_exact, covers_over)).ok();
         });
 
         let (len, covers_exact, covers_over) = rx
@@ -290,7 +290,7 @@ mod tests {
         let worker = core.clone();
         thread::spawn(move || {
             let covers = worker.contains_range_inner(0..11);
-            let _ = tx.send(covers);
+            tx.send(covers).ok();
         });
 
         let covers = rx

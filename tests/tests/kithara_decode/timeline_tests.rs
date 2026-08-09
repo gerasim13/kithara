@@ -78,7 +78,7 @@ fn test_progressive_file_seek_resets_frame_offset() {
     decoder.seek(Duration::from_millis(500)).unwrap();
 
     let chunk = PcmChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
-    let expected_frame = (0.5 * 44100.0) as u64;
+    let expected_frame = num_traits::cast::<f64, u64>(0.5 * 44100.0).unwrap_or(u64::MAX);
 
     let diff = (chunk.meta.frame_offset as i64 - expected_frame as i64).unsigned_abs();
     assert!(

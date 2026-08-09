@@ -14,10 +14,10 @@ impl CountConnectionsLayer {
 }
 
 impl<S> tower_layer::Layer<S> for CountConnectionsLayer {
-    type Service = CountConnectionsService<S>;
+    type Service = CountConnections<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        CountConnectionsService {
+        CountConnections {
             inner,
             metrics: self.metrics.clone(),
         }
@@ -25,12 +25,12 @@ impl<S> tower_layer::Layer<S> for CountConnectionsLayer {
 }
 
 #[derive(Clone)]
-pub(super) struct CountConnectionsService<S> {
+pub(super) struct CountConnections<S> {
     metrics: ConnectionMetrics,
     inner: S,
 }
 
-impl<S, Request> tower_service::Service<Request> for CountConnectionsService<S>
+impl<S, Request> tower_service::Service<Request> for CountConnections<S>
 where
     S: tower_service::Service<Request>,
     S::Future: Send + 'static,

@@ -25,4 +25,4 @@ pub use playlist::{
     KeyStore, MediaPlaylist, ParsedMaster, PlaylistCache, PlaylistState, SegmentState, VariantId,
     VariantState, VariantStream, parse_master_playlist, parse_media_playlist,
 };
-pub use stream::{Hls, HlsSource};
+pub use stream::Hls;

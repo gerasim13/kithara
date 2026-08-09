@@ -36,7 +36,7 @@ pub(crate) fn tick_and_poll_remote(rx: &mpsc::Receiver<CmdMsg>) {
                     *ps.borrow_mut() = Some(Arc::clone(&allocated.control.playback));
                 });
             }
-            let _ = msg.reply_tx.send(reply);
+            msg.reply_tx.send(reply).ok();
         }
 
         if let Some(ctx) = state.ctx_mut()

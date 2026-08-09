@@ -3,9 +3,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use bon::Builder;
 use kithara_abr::AbrMode;
 use kithara_assets::AssetStore;
-use kithara_audio::{
-    AudioDecoderConfig, AudioWorkerHandle, DecoderResamplerSettings, EngineLoad, StretchControls,
-};
+use kithara_audio::{AudioDecoderConfig, AudioWorkerHandle, EngineLoad, StretchControls};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_events::EventBus;
 use kithara_hls::{KeyOptions, SizeProbeMethod};
@@ -35,13 +33,7 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     pub(crate) store: AssetStore,
     /// Decoder construction settings: backend selection, gapless mode, and
     /// decoder-side resampling.
-    #[builder(default = AudioDecoderConfig::builder()
-        .resampler(
-            DecoderResamplerSettings::builder()
-                .backend(B::default())
-                .build(),
-        )
-        .build())]
+    #[builder(default)]
     pub(crate) decoder: AudioDecoderConfig<B>,
     /// Shared byte pool for temporary buffers (probe, etc.).
     pub(crate) byte_pool: BytePool,

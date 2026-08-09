@@ -406,6 +406,25 @@ impl Registry {
     }
 }
 
+/// A queued command still owns its peer's claim — the HLS segment slot and the
+/// single non-`Clone` `AssetWriter` both ride in its `on_complete`. Dropping the
+/// registry (downloader cancel leaves `Downloader::run`) would drop those
+/// closures uncalled and strand the claim, so teardown delivers the
+/// cancellation every queued command was still waiting for.
+///
+/// Peer channels need no such drain: they carry only imperative
+/// `ResponseTarget::Channel` commands, whose caller already learns of the
+/// cancellation from the dropped oneshot.
+impl Drop for Registry {
+    fn drop(&mut self) {
+        for slot in &mut self.slots {
+            for SlotEntry { cmd, peer_cancel } in slot.drain(..) {
+                super::batch::deliver_cancelled_with_event(cmd, &peer_cancel);
+            }
+        }
+    }
+}
+
 /// Classify a completed [`Registry::tick`] as one of the [`FetchProgress`]
 /// variants. `inflight_enter` is the snapshot taken at the start of the
 /// tick; `inflight_exit` is the value after processing. An exit below

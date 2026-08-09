@@ -6,6 +6,8 @@ struct Consts;
 impl Consts {
     const BAND_MAX_FREQ: f32 = 18000.0;
     const BAND_MIN_FREQ: f32 = 60.0;
+    /// Centre frequency a band starts at before the caller places it.
+    const DEFAULT_FREQ: f32 = 1000.0;
     const HIGH_SHELF_DISCRIMINANT: u8 = 2;
     const LOG_FREQ_BASE: f32 = 10.0;
     const Q_REFERENCE_BANDS: f32 = 10.0;
@@ -47,7 +49,7 @@ pub struct EqBandConfig {
     #[builder(default)]
     #[field(get(copy))]
     kind: FilterKind,
-    #[builder(default = 1000.0)]
+    #[builder(default = Consts::DEFAULT_FREQ)]
     frequency: f32,
     #[builder(default)]
     gain_db: f32,

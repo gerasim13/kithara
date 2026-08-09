@@ -51,7 +51,7 @@ struct LimiterProcessor {
 impl LimiterProcessor {
     const CEILING: f32 = 0.98;
     const RELEASE_MS: f32 = 50.0;
-    const STEREO: NonZeroUsize = NonZeroUsize::new(2).expect("2 is non-zero");
+    const STEREO: NonZeroUsize = NonZeroUsize::new(2).expect("invariant: 2 is non-zero");
 
     fn new(sample_rate: NonZeroU32) -> Self {
         Self {
@@ -62,7 +62,7 @@ impl LimiterProcessor {
     fn build_limiter(sample_rate: NonZeroU32) -> PeakLimiter {
         // The session constants are const-asserted valid above, so construction
         PeakLimiter::new(sample_rate, Self::STEREO, Self::CEILING, Self::RELEASE_MS)
-            .expect("session limiter constants are const-asserted valid")
+            .expect("invariant: session limiter constants are const-asserted valid")
     }
 }
 

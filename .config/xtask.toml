@@ -155,14 +155,14 @@ prefix_args = [
   "test-release",
 ]
 
-[test.lanes.cached]
+[test.lanes.cold]
 program = "cargo"
 default_features = ["kithara-ui/render"]
 prefix_args = [
   "nextest",
   "run",
   "--profile",
-  "cache",
+  "cold",
   "--workspace",
   "--exclude",
   "kithara-fuzz",
@@ -398,15 +398,24 @@ wasm_dist = "crates/kithara-ffi/dist"
 pages_branch = "gh-pages"
 
 [orphans]
-# Packages excluded from the default `cargo modules orphans` sweep.
+# Packages the sweep cannot say anything useful about: a generated crate, two
+# test harnesses, the fuzz targets, and the build tool.
+#
+# Nothing else belongs here. This check exists to point at code that needs
+# rewriting, so a name on this list is a place someone decided not to look, and
+# the list only ever grew because dropping a whole package is the only lever
+# the tool offers. A green sweep bought that way says exactly as much as a
+# green run that executed nothing.
+#
+# A module the sweep reports but that is real — gated behind a non-default
+# feature or another target — is a gap in how the sweep is invoked, not grounds
+# for an entry here: it runs `--lib` with default features on the native target
+# and passes neither `--features` nor `--target`. Widen the invocation.
 exclude_packages = [
   "kithara-workspace-hack",
   "kithara-test-utils",
   "kithara-test-macros",
-  "kithara-ffi",
   "kithara-fuzz",
-  "kithara-decode",
-  "kithara-platform",
   "xtask",
 ]
 

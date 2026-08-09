@@ -1,5 +1,7 @@
 use std::{error::Error as StdError, io};
 
+#[cfg(test)]
+use kithara_stream::PendingReason::SeekPending;
 use symphonia::core::errors::Error;
 
 pub(crate) type SymphoniaError = Error;
@@ -39,7 +41,7 @@ mod tests {
     #[kithara::test]
     fn test_backend_symphonia_seek_pending_counts_as_interrupted() {
         let decode_err = DecodeError::backend(super::SymphoniaError::IoError(IoError::other(
-            kithara_stream::PendingReason::SeekPending,
+            super::SeekPending,
         )));
         assert!(decode_err.is_interrupted());
     }

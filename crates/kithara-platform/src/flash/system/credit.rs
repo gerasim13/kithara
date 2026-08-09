@@ -54,11 +54,6 @@ pub(crate) fn mark_dedicated() {
     FLASH.sync_holder_running();
 }
 
-/// True iff the current OS thread is a dedicated pacer (see [`mark_dedicated`]).
-fn is_dedicated() -> bool {
-    ctx::dedicated()
-}
-
 /// A DEDICATED pacer's reservation, minted on the PARENT thread BEFORE the
 /// child is spawned/queued and moved into the child to be claimed. A pacer
 /// runs a warm-up burst (decode the first chunks, fill the ring) before it
@@ -265,7 +260,7 @@ impl WaitGuard<'_> {
     #[cfg(test)]
     pub(super) fn mark_running(self) {
         mem::forget(self);
-        mark_running();
+        ctx::set_credit(Credit::Running);
     }
 
     /// Settle the firer's `active` bump per this thread's credit class —
@@ -289,13 +284,6 @@ impl Drop for WaitGuard<'_> {
             "WaitGuard dropped without resume()/mark_running() — wrapped wait left unsettled"
         );
     }
-}
-
-/// Mark this thread RUNNING after its wrapped wait returned. The firer already
-/// did `active += 1` for the woken entry; the woken thread only updates its own
-/// credit here.
-fn mark_running() {
-    ctx::set_credit(Credit::Running);
 }
 
 /// Reset this thread's credit to `None`. Called at the start of a pooled
@@ -338,7 +326,7 @@ impl FlashInner {
             if let Some((id, _)) = ctx::cur_async() {
                 s.registry.active_async_holders.remove(&id);
             }
-        } else if !is_dedicated() {
+        } else if !ctx::dedicated() {
             // Non-dedicated, non-async-poll thread (a tokio worker driving a raw-spawned
             // task, the main/test thread, a raw `thread::spawn`): NOT a virtual-time
             // pacer. Register the wakeup but stay OUT of `active` — entering it leaks
@@ -439,7 +427,7 @@ impl FlashInner {
             drop(s);
             return;
         }
-        if !is_dedicated() {
+        if !ctx::dedicated() {
             let mut s = self.core.lock();
             debug_assert!(
                 s.registry.active > 0,
@@ -451,7 +439,7 @@ impl FlashInner {
             adv.fire();
             return;
         }
-        mark_running();
+        ctx::set_credit(Credit::Running);
         // Pacer is `Running` again — restore it to the diagnostic holder map.
         self.sync_holder_running();
     }

@@ -66,8 +66,8 @@ fn encode_bytes_honors_explicit_bit_rate_across_lossy_range() {
             );
             assert_container_marker(target, &encoded.bytes);
 
-            let expected_min = (bit_rate as usize / 8) / 8;
-            let expected_max = (bit_rate as usize / 8) * 4;
+            let expected_min = (usize::try_from(bit_rate).unwrap_or(0) / 8) / 8;
+            let expected_max = (usize::try_from(bit_rate).unwrap_or(0) / 8) * 4;
             assert!(
                 encoded.bytes.len() >= expected_min,
                 "{target:?} @ {bit_rate}: output {} bytes < expected_min {expected_min} bps \

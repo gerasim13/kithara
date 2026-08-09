@@ -3,8 +3,13 @@ use std::sync::atomic::Ordering;
 use kithara_platform::time::Duration;
 use portable_atomic::AtomicF32;
 
-/// EWMA weight for per-chunk samples (≈ last ~10 chunks dominate).
-const LOAD_ALPHA: f32 = 0.2;
+struct Consts;
+
+impl Consts {
+    /// EWMA weight for per-chunk samples (≈ last ~10 chunks dominate).
+    const LOAD_ALPHA: f32 = 0.2;
+    const MS_PER_SEC: f64 = 1000.0;
+}
 
 fn to_f64(x: usize) -> f64 {
     num_traits::cast(x).unwrap_or_default()
@@ -20,7 +25,7 @@ fn ewma(prev: f32, sample: f32) -> f32 {
     if prev <= 0.0 {
         sample
     } else {
-        prev * (1.0 - LOAD_ALPHA) + sample * LOAD_ALPHA
+        prev * (1.0 - Consts::LOAD_ALPHA) + sample * Consts::LOAD_ALPHA
     }
 }
 
@@ -67,7 +72,10 @@ impl EngineLoad {
             self.load.load(Ordering::Relaxed),
             to_f32(busy_secs / audio_secs),
         );
-        let ms = ewma(self.ms.load(Ordering::Relaxed), to_f32(busy_secs * 1000.0));
+        let ms = ewma(
+            self.ms.load(Ordering::Relaxed),
+            to_f32(busy_secs * Consts::MS_PER_SEC),
+        );
         let realtime = if load > 0.0 { 1.0 / load } else { 0.0 };
         self.realtime.store(realtime, Ordering::Relaxed);
         self.load.store(load, Ordering::Relaxed);

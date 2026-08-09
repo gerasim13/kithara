@@ -73,7 +73,7 @@ impl EvictionRouter {
             .map(|subscribers| subscribers.values().cloned().collect::<Vec<_>>())
             .unwrap_or_default();
         for tx in subscribers {
-            let _ = tx.send(key.clone());
+            tx.send(key.clone()).ok();
         }
     }
 

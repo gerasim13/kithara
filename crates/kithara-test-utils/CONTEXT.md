@@ -4,7 +4,7 @@ Contracts and invariants for the kithara-test-utils crate; the README is the ove
 
 ## Probe capture
 
-The capture layer records every `tracing::event!` whose target ends with `_probe` (all `#[kithara::probe]` expansions emit to `<crate_name>_probe`, e.g. `kithara_stream_probe`) into a process-wide `Vec`, so a test can snapshot the full sequence and assert on it.
+While at least one `Recorder` is alive, the capture layer records every `tracing::event!` whose target ends with `_probe` (all `#[kithara::probe]` expansions emit to `<crate_name>_probe`, e.g. `kithara_stream_probe`) into a process-wide `Vec`, so a test can snapshot the full sequence and assert on it.
 
 - **Why a tracing layer, not `EventBus`**: `kithara_events::EventBus` is a `tokio::sync::broadcast` — under load, lagged subscribers drop events. Probes fire at the decision site and the tracing layer records every emission without a bounded channel.
 - **Why a process-wide subscriber**: `tracing::subscriber::set_default` is thread-local, but probes fire on tokio worker threads (e.g. those spawned by `Downloader::run`) that do not inherit a per-test default. Because `#[kithara::test]` initialises a global subscriber via `setup_tracing_with_filter`, the probe layer must be composed inside that init path — `test::init_tracing` attaches it alongside the fmt layer. A separate `set_global_default` would fail with `SetGlobalDefault`.
@@ -18,7 +18,7 @@ Isolation is by **install id**, not by serializing tests:
 - `#[kithara::test]` calls `bump_install_id()` once and enters the `OWNED_INSTALL_ID` task-local scope before the test body runs.
 - Every probe firing stamps `current_install_id()` into its event; `Recorder::snapshot` keeps only events whose `install_id` matches the recorder's and whose timestamp is `>= start_at`.
 - The task-local is what makes this correct: `tokio::spawn` inherits it, so orphan tasks from a just-finished test (downloader on-complete, audio worker draining its last buffer) freeze the *previous* id and drop out of the next test's snapshot. `spawn_blocking` and non-tokio threads do not inherit it and fall back to the global atomic.
-- The global log is intentionally never drained — under stress runs with overlapping recorder lifetimes, draining would wipe a live sibling's events. The id filter alone is sufficient.
+- Probe capture is lease-bound. Each `install()` acquires a lease, cloned recorders share that lease, and independently installed recorders share the global log. Dropping the last lease clears the log and releases its backing allocation; dropping one overlapping recorder leaves the log intact for its live siblings. The lease is what bounds the log's lifetime: the layer is composed into every test binary's subscriber, HLS playback fires ~10k probes/second, and a retained `ProbeEvent` costs ~700 bytes — unleased capture added ~70 MB of RSS per playback session and never gave it back.
 
 ### Driving tests off probes
 

@@ -150,7 +150,7 @@ pub(crate) fn write(request: &ArtifactRequest<'_>) -> Result<ArtifactSet> {
         revision: request.revision,
         status: overall_status(request.semantic, request.runtime),
         view: request.args.view.as_str(),
-        lod: request.args.lod.resolve(request.model.lod.as_u8()),
+        lod: request.args.lod.resolve(u8::from(request.model.lod)),
         package: request.args.krate.as_deref(),
         module: request.args.module.as_deref(),
         visible_nodes: request.model.nodes.len(),

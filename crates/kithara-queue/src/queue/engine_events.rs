@@ -73,16 +73,26 @@ impl Queue {
     }
 
     pub(super) fn drain_player_events(&self) {
-        let mut rx = self
-            .player_rx
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        loop {
-            match rx.try_recv() {
-                Ok(Envelope { event: ev, .. }) => self.process_player_event(&ev),
-                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
-                Err(TryRecvError::Lagged(_)) => continue,
+        let mut lagged = false;
+        {
+            let mut rx = self
+                .player_rx
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            loop {
+                match rx.try_recv() {
+                    Ok(Envelope { event: ev, .. }) => self.process_player_event(&ev),
+                    Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+                    Err(TryRecvError::Lagged(_)) => lagged = true,
+                }
             }
+        }
+        if lagged {
+            // `CurrentItemChanged` is edge-triggered and de-duplicated by
+            // `ItemQueue::announce_current_item`, so waiting cannot recover a drop.
+            // Resync after draining, as `Queue::seek` does; publishing mid-drain
+            // could overwrite the next unread slot and trigger another lag.
+            self.handle_current_item_changed();
         }
     }
 
@@ -203,5 +213,49 @@ impl Queue {
             };
             matches.then_some(record.id)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, PlayerEvent, QueueEvent};
+    use kithara_test_utils::kithara;
+
+    use crate::queue::state::tests::{make_queue, wait_for_queue_event};
+
+    #[kithara::test(tokio)]
+    async fn lagged_player_events_resynchronize_current_track() {
+        let queue = make_queue();
+        let id = queue.register_for_test();
+
+        for _ in 0..=DEFAULT_EVENT_BUS_CAPACITY {
+            queue
+                .player
+                .bus()
+                .publish(PlayerEvent::RateChanged { rate: 1.0 });
+        }
+
+        let mut events = queue.subscribe();
+        queue
+            .tick()
+            .expect("BUG: tick returned error in test setup");
+
+        let saw_current_track = wait_for_queue_event(
+            &mut events,
+            |event| {
+                matches!(
+                    event,
+                    QueueEvent::CurrentTrackChanged {
+                        id: Some(current_id)
+                    } if *current_id == id
+                )
+            },
+            200,
+        )
+        .await;
+        assert!(
+            saw_current_track,
+            "lag recovery should re-announce the current track"
+        );
     }
 }
