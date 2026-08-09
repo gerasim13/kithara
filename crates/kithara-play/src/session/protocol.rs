@@ -100,6 +100,9 @@ mod wire {
             binding: TrackBinding,
             at: SessionBeat,
         },
+        UnbindPlayer {
+            player_id: PlayerId,
+        },
         StartPlayer {
             master_volume: f32,
             player_id: PlayerId,
@@ -311,6 +314,10 @@ mod handle {
                 at,
             })
             .map(drop)
+        }
+
+        pub(crate) fn unbind_player(&self, player_id: PlayerId) -> Result<(), PlayError> {
+            self.exec_ok(Cmd::UnbindPlayer { player_id }).map(drop)
         }
 
         pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {

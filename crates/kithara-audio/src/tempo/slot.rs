@@ -1,4 +1,7 @@
+use arc_swap::ArcSwapOption;
 use kithara_platform::sync::Arc;
+use num_traits::ToPrimitive;
+use portable_atomic::{AtomicF64, Ordering};
 
 use crate::{
     musical::{SessionBeat, SourceSchedule},
@@ -44,45 +47,139 @@ pub enum TempoSlotError {
     BoundEngineMissing,
 }
 
-/// What drives one deck's tempo slot.
-///
-/// The two arms are the two ways a deck can be timed and a deck is on exactly
-/// one of them: unbound decks follow live controls and take whatever span the
-/// streaming backend renders, bound decks follow the session grid and get an
-/// exact span per block. Making that a choice rather than two independent
-/// options is what keeps a deck from ending up on both.
-#[derive(Clone)]
+/// The live binding phase of one resident tempo stage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum TempoSlot {
-    /// Live speed, key-lock and region plan, output span chosen by the backend.
-    Streaming(Arc<StretchControls>),
-    /// Bound at a fixed transport revision: the schedule names the source span
-    /// due after advancing from the supplied session-beat origin.
-    Bound(Arc<SourceSchedule>, SessionBeat),
+pub enum TempoState {
+    /// The deck follows its live speed controls.
+    Free,
+    /// The exact-span renderer has a target but has not emitted it in phase.
+    Converging,
+    /// The deck follows the session grid.
+    Bound,
+}
+
+pub(crate) struct TempoBinding {
+    pub(crate) schedule: Arc<SourceSchedule>,
+    pub(crate) session_origin: SessionBeat,
+    bound_rate: AtomicF64,
+    rendered: portable_atomic::AtomicBool,
+}
+
+impl TempoBinding {
+    fn new(schedule: Arc<SourceSchedule>, session_origin: SessionBeat, initial_rate: f64) -> Self {
+        Self {
+            schedule,
+            session_origin,
+            bound_rate: AtomicF64::new(initial_rate),
+            rendered: portable_atomic::AtomicBool::new(false),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_renderer(
+        schedule: Arc<SourceSchedule>,
+        session_origin: SessionBeat,
+    ) -> Self {
+        Self::new(schedule, session_origin, 1.0)
+    }
+
+    pub(crate) fn mark_rendered(&self) {
+        self.rendered.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn set_rate(&self, rate: f64) {
+        self.bound_rate.store(rate, Ordering::Relaxed);
+    }
+}
+
+struct TempoShared {
+    binding: ArcSwapOption<TempoBinding>,
+    controls: Arc<StretchControls>,
+}
+
+/// Shared control handle for one resident duration-changing stage.
+///
+/// Every resource built by a deck receives a clone of this handle. Binding is
+/// changed through the handle after construction; the effect chain keeps the
+/// same stage and observes the new target on its next source chunk.
+#[derive(Clone)]
+pub struct TempoSlot {
+    shared: Arc<TempoShared>,
 }
 
 impl From<Arc<StretchControls>> for TempoSlot {
     fn from(controls: Arc<StretchControls>) -> Self {
-        Self::Streaming(controls)
+        Self {
+            shared: Arc::new(TempoShared {
+                binding: ArcSwapOption::const_empty(),
+                controls,
+            }),
+        }
     }
 }
 
 impl TempoSlot {
-    /// Returns the live controls when this deck is unbound.
+    /// Installs a binding target without replacing the resident stage.
+    pub fn bind(&self, schedule: Arc<SourceSchedule>, session_origin: SessionBeat) {
+        let initial_rate = f64::from(self.shared.controls.speed());
+        self.shared.binding.store(Some(Arc::new(TempoBinding::new(
+            schedule,
+            session_origin,
+            initial_rate,
+        ))));
+    }
+
+    /// Returns the shared live controls used while the stage is free.
     #[must_use]
-    pub fn streaming(&self) -> Option<&Arc<StretchControls>> {
-        match self {
-            Self::Streaming(controls) => Some(controls),
-            Self::Bound(_, _) => None,
+    pub fn controls(&self) -> &Arc<StretchControls> {
+        &self.shared.controls
+    }
+
+    /// Returns the current binding phase.
+    #[must_use]
+    pub fn state(&self) -> TempoState {
+        self.shared
+            .binding
+            .load()
+            .as_ref()
+            .map_or(TempoState::Free, |binding| {
+                if binding.rendered.load(Ordering::Acquire) {
+                    TempoState::Bound
+                } else {
+                    TempoState::Converging
+                }
+            })
+    }
+
+    /// Withdraws the binding and carries its last rendered tempo into the free
+    /// controls.
+    #[must_use]
+    pub fn unbind(&self) -> Option<f32> {
+        let binding = self.shared.binding.swap(None)?;
+        let rate = binding.bound_rate.load(Ordering::Acquire);
+        if rate.is_finite() && rate > 0.0 {
+            let rate = rate.to_f32()?;
+            self.shared.controls.set_speed(rate);
+            Some(rate)
+        } else {
+            None
         }
     }
 
-    /// Returns the schedule when this deck is bound to the session grid.
-    #[must_use]
-    pub fn bound(&self) -> Option<&Arc<SourceSchedule>> {
-        match self {
-            Self::Bound(schedule, _) => Some(schedule),
-            Self::Streaming(_) => None,
-        }
+    pub(crate) fn binding(&self) -> Option<Arc<TempoBinding>> {
+        self.shared.binding.load_full()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unbound_slot_is_free() {
+        let slot = TempoSlot::from(StretchControls::new(1.0));
+
+        assert_eq!(slot.state(), TempoState::Free);
     }
 }

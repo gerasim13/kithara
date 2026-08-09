@@ -356,8 +356,8 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmControl for Audio<S> {
     }
 
     fn set_playback_rate(&self, rate: f32) {
-        if let Some(controls) = self.controls.tempo.as_ref().and_then(TempoSlot::streaming) {
-            controls.set_speed(rate);
+        if let Some(slot) = self.controls.tempo.as_ref() {
+            slot.controls().set_speed(rate);
         } else {
             self.controls.playback_rate.store(rate, Ordering::Relaxed);
         }

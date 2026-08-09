@@ -6,6 +6,8 @@ use crate::musical::ScheduleError;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub(crate) enum BoundError {
+    #[error("bound tempo renderer has no active binding")]
+    Inactive,
     /// The schedule could not resolve the block's output frames.
     #[error("bound schedule: {0}")]
     Schedule(#[from] ScheduleError),

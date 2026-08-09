@@ -63,6 +63,11 @@ impl SignalsmithElastic {
     const MIN_SOURCE_FRAMES_PER_OUTPUT: f64 = 2.0 / 3.0;
 
     /// Declared source-frame advance supported by the exact-span engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ElasticError`] when the declared bounds do not form a
+    /// representable envelope.
     pub fn rate_envelope() -> Result<ElasticRateEnvelope, ElasticError> {
         ElasticRateEnvelope::try_from(
             Self::MIN_SOURCE_FRAMES_PER_OUTPUT..=Self::MAX_SOURCE_FRAMES_PER_OUTPUT,

@@ -9,4 +9,6 @@ mod tests;
 pub(crate) use core::BoundRenderer;
 
 pub(crate) use error::BoundError;
-pub(crate) use slot::{bound_slot, rate_supported, render_span_frames};
+#[cfg(test)]
+pub(crate) use slot::bound_slot;
+pub(crate) use slot::{rate_supported, render_span_frames, resident_slot};

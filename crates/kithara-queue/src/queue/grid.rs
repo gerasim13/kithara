@@ -9,15 +9,9 @@ impl Queue {
     /// Places this deck on the session grid and starts the item at `index` on
     /// the next beat that lands on `quantum`.
     ///
-    /// The order is the whole contract. A resource is timed by the tempo slot
-    /// in force when it is *built*, so a deck bound after its track was loaded
-    /// would start on the beat and then run at its own tempo. This binds
-    /// first, rebuilds the track's resource under the binding, and stamps the
-    /// start only once that resource is in the processor — a stamp sent to a
-    /// track the processor does not hold is silently dropped.
-    ///
-    /// Rebuilding is an ordinary load from the track's own source, the same
-    /// path a respawn takes; it is not a decoder recreate.
+    /// A running current item transitions its resident tempo stage in place.
+    /// A cold item is loaded and armed on the requested beat because it is not
+    /// yet in the processor; a stamp sent before that load would be dropped.
     ///
     /// # Errors
     ///
@@ -41,12 +35,11 @@ impl Queue {
         };
         let (id, source) =
             found.ok_or_else(|| QueueError::InvalidUrl(format!("no track at index {index}")))?;
-        // Rebuilding the resource is what puts it on the bound slot, and
-        // rebuilding the track that is *playing* takes its audio away. A deck
-        // already running has to be pulled into phase, not restarted, and that
-        // is a different mechanism — refuse rather than cut the sound.
         if self.current_index() == Some(index) && self.player.rate() > 0.0 {
-            return Err(QueueError::NotReady(id));
+            self.player
+                .bind_playing_to_grid(analysis)
+                .map_err(QueueError::from)?;
+            return Ok(());
         }
         let start = self
             .player
@@ -55,6 +48,15 @@ impl Queue {
         self.set_pending_beat_start(id, start);
         self.spawn_apply_after_load(id, source, LoadClass::Interactive);
         Ok(())
+    }
+
+    /// Returns the running deck to free tempo without replacing its resource.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueueError`] when the deck cannot be released from the grid.
+    pub fn unbind_from_grid(&self) -> Result<(), QueueError> {
+        self.player.unbind_from_grid().map_err(QueueError::from)
     }
 
     pub(super) fn set_pending_beat_start(&self, id: TrackId, start: BeatStart) {

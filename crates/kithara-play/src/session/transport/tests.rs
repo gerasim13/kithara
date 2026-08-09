@@ -160,18 +160,21 @@ fn a_refused_commit_leaves_the_previously_committed_tempo_in_force() {
 }
 
 #[kithara::test]
-fn a_binding_outside_the_current_envelope_is_refused_typed() {
+fn a_bind_the_engine_cannot_render_is_refused_before_the_decks_state_moves() {
     let (mut state, player_id) = started_state(90.0);
 
+    let result = bind_player(
+        &mut state,
+        player_id,
+        track_binding(60),
+        SessionBeat::default(),
+    );
+
     assert!(matches!(
-        bind_player(
-            &mut state,
-            player_id,
-            track_binding(60),
-            SessionBeat::default(),
-        ),
+        result,
         Err(SessionError::BoundTempoOutsideEnvelope { .. })
     ));
+    assert!(state.players.iter().all(|player| player.binding.is_none()));
 }
 
 fn proc_info_at(clock_samples: i64) -> ProcInfo {

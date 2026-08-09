@@ -39,6 +39,10 @@ pub(crate) fn handle(state: &mut Kithara, msg: TransportMsg) {
     deck.view.sync = !deck.view.sync;
     if !deck.view.sync {
         state.pending_sync = state.pending_sync.filter(|pending| *pending != id);
+        if let Err(error) = deck.controller.queue().unbind_from_grid() {
+            deck.view.sync = true;
+            warn!(?id, %error, "the deck could not be released from the host grid");
+        }
         return;
     }
     state.pending_sync = Some(id);
@@ -117,11 +121,6 @@ fn sync(state: &Kithara, id: DeckId) -> Result<Joined, PlayError> {
         BeatQuantum::new(Consts::BAR_BEATS).map_err(|reason| PlayError::BindUnavailable {
             reason: reason.to_string(),
         })?;
-    // Binding is the queue's to do: the tempo slot is read when the resource is
-    // built, so a deck bound *before* its resource is prepared is born bound —
-    // no chain substitution and no decoder recreate. A deck already spinning
-    // cannot take this path; re-phasing a running deck is a different operation
-    // with a different contract, and it is not written yet.
     deck.controller
         .queue()
         .start_at_beat(index, &analysis, anchor, quantum)

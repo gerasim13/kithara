@@ -358,10 +358,9 @@ impl Queue {
             player.replace_item(index, resource);
             tracks.set_status(id, TrackStatus::Loaded);
 
-            // The resource this landing carries was built under the binding,
-            // so this is the first moment the stamp has a bound track to
-            // address. Arming moves it into the processor as preloading,
-            // which is the only state a stamped start resolves from.
+            // This is the first moment the stamp has a track to address.
+            // Arming moves it into the processor as preloading, which is the
+            // only state a stamped start resolves from.
             let beat_start = {
                 let mut slot = pending_beat_start
                     .lock()

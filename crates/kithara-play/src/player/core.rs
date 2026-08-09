@@ -32,10 +32,7 @@ pub(crate) struct PlayerCore {
     pub(crate) engine_load: Arc<EngineLoad>,
 
     pub(crate) timestretch: Arc<StretchControls>,
-    /// Session-grid binding for this deck. `Some` puts every prepared
-    /// resource on the exact-span slot instead of the streaming one; the two
-    /// are exclusive by construction.
-    pub(crate) binding: Mutex<Option<(Arc<SourceSchedule>, SessionBeat)>>,
+    pub(crate) tempo: TempoSlot,
     pub(crate) byte_pool: BytePool,
     /// Engine drops last — worker shutdown happens after all tracks
     /// unregister and after `items` releases their resources.
@@ -108,20 +105,23 @@ impl PlayerImpl {
             .engine
             .session_handle()
             .bind_player(player_id, binding.clone(), at)?;
-        *self.core.binding.lock() = Some((schedule, at));
+        self.core.tempo.bind(schedule, at);
+        Ok(())
+    }
+
+    pub(crate) fn unbind(&self) -> Result<(), PlayError> {
+        let player_id = self.core.engine.ensure_player_id()?;
+        self.core.engine.session_handle().unbind_player(player_id)?;
+        if let Some(rate) = self.core.tempo.unbind() {
+            self.set_rate(rate);
+        }
         Ok(())
     }
 }
 
 impl PlayerCore {
-    /// The slot every prepared resource is timed by. Bound wins when a
-    /// binding is installed: a deck asked to follow the session grid must not
-    /// quietly keep the streaming path.
     pub(crate) fn tempo_slot(&self) -> TempoSlot {
-        self.binding.lock().clone().map_or_else(
-            || TempoSlot::Streaming(Arc::clone(&self.timestretch)),
-            |(schedule, session_origin)| TempoSlot::Bound(schedule, session_origin),
-        )
+        self.tempo.clone()
     }
 }
 
@@ -162,16 +162,18 @@ impl PlayerImpl {
 
         // Seed the single speed source with the configured default rate.
         config.timestretch.set_speed(config.default_rate);
+        let timestretch = Arc::clone(&config.timestretch);
+        let tempo = TempoSlot::from(Arc::clone(&timestretch));
         let core = PlayerCore {
             engine,
             engine_load: Arc::new(EngineLoad::default()),
             params: PlayerParams::from(&config),
-            timestretch: config.timestretch,
+            timestretch,
+            tempo,
             gapless_mode: config.gapless_mode,
             byte_pool: config.byte_pool,
             status: Mutex::default(),
             items: ItemQueue::new(bus),
-            binding: Mutex::default(),
         };
         Self {
             core,

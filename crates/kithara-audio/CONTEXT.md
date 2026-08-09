@@ -384,17 +384,17 @@ the existing failure path. Render failures must never be collapsed into
 accumulation, because the chain would otherwise continue after silently losing
 the admitted audio.
 
-## Tempo slot: bound and unbound are exclusive
+## Tempo slot state
 
-A deck is timed one of two ways and `TempoSlot` makes that a choice rather than
-two independent options, so it cannot end up on both.
+Each resource installs one resident duration-changing stage. `TempoSlot` is the
+shared control handle for its exclusive `Free -> Converging -> Bound`
+transition, so binding never replaces the chain, resource, or decoder.
 
-`TempoSlot::Streaming` is the unbound deck: live speed, key-lock and region plan
-drive `TimeStretchProcessor`, and the output span is whatever the streaming
-backend renders — `StretchBackend::process` promises nothing about it.
-
-`TempoSlot::Bound` is a deck placed on the session grid, and it is the inverse
-of the streaming slot: **the producer chooses the output span and the plan
+`Free` follows live speed, key-lock and region-plan controls through
+`TimeStretchProcessor`; the output span is whatever the streaming backend
+renders. `Converging` owns an admitted grid target until the exact renderer has
+primed from retained real source and emitted it. `Bound` follows that target:
+**the producer chooses the output span and the plan
 determines the source span.** Per block `BoundRenderer` asks `SourceSchedule`
 which source coordinate is due at the block's first and last output frame,
 quantizes that continuous span through `ElasticSpanPlan`, and renders it with
@@ -405,7 +405,7 @@ the playhead, while the transport owns when those frames play. The fractional
 remainder between blocks lives in the plan's `ElasticCursor`; there is no
 second residual.
 
-When a deck is matched in flight, `BoundRenderer` primes the exact-span engine
+When a deck is matched in flight, the resident `BoundRenderer` primes the exact-span engine
 from the source history and warmup span immediately before the first matched
 span. It retains a bounded source window behind the consumed position for this:
 the engine's declared source latency plus one warmup span. Source coordinates

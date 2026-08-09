@@ -49,7 +49,8 @@ pub use renderer::{
     AudioWorkerHandle, AudioWorkerSource, EngineLoad, EngineLoadSnapshot, PreloadGate, ServiceClass,
 };
 pub use tempo::{
-    StretchControls, TempoSlot, TempoSlotError, bound_rate_supported, bound_render_span_frames,
+    StretchControls, TempoSlot, TempoSlotError, TempoState, bound_rate_supported,
+    bound_render_span_frames,
 };
 pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmControl, PcmRead, PcmReader,

@@ -11,6 +11,7 @@ use tracing::warn;
 use super::BoundError;
 use crate::{
     musical::{SessionBeat, SourceSchedule},
+    tempo::slot::TempoBinding,
     traits::AudioEffect,
 };
 
@@ -27,9 +28,10 @@ use crate::{
 /// The slot is forward-only. It retains the bounded source tail required to
 /// prime from the real audio preceding a span.
 pub(crate) struct BoundRenderer<E: ElasticPriming> {
-    schedule: Arc<SourceSchedule>,
+    schedule: Option<Arc<SourceSchedule>>,
     /// Session beat aligned with this deck's output frame zero.
-    session_origin: SessionBeat,
+    session_origin: Option<SessionBeat>,
+    binding: Option<Arc<TempoBinding>>,
     engine: E,
     capabilities: ElasticCapabilities,
     span_config: ElasticSpanConfig,
@@ -64,6 +66,7 @@ impl<E: ElasticPriming> BoundRenderer<E> {
     /// engine calls inside one exact-span plan.
     pub(crate) const BLOCK_FRAMES: u64 = 512;
 
+    #[cfg(test)]
     pub(crate) fn new(
         schedule: Arc<SourceSchedule>,
         session_origin: SessionBeat,
@@ -72,27 +75,108 @@ impl<E: ElasticPriming> BoundRenderer<E> {
         spec: PcmSpec,
         pool: PcmPool,
     ) -> Result<Self, BoundError> {
+        let mut renderer = Self::resident(engine, span_config, spec, pool);
+        renderer.bind(Arc::new(TempoBinding::new_for_renderer(
+            schedule,
+            session_origin,
+        )))?;
+        Ok(renderer)
+    }
+
+    pub(crate) fn resident(
+        engine: E,
+        span_config: ElasticSpanConfig,
+        spec: PcmSpec,
+        pool: PcmPool,
+    ) -> Self {
         let capabilities = engine.capabilities();
-        let old_beats_per_frame = Some(schedule.beats_per_frame()?);
-        Ok(Self {
+        Self {
             capabilities,
             engine,
             pool,
-            schedule,
-            session_origin,
+            schedule: None,
+            session_origin: None,
+            binding: None,
             span_config,
             spec,
             consumed: 0,
             cursor: None,
             last_input_meta: None,
-            old_beats_per_frame,
+            old_beats_per_frame: None,
             output_frame: 0,
             primed: false,
             elapsed_beats: 0.0,
             pending: Vec::new(),
             pending_start: 0,
             scratch: Vec::new(),
-        })
+        }
+    }
+
+    pub(crate) fn bind(&mut self, binding: Arc<TempoBinding>) -> Result<(), BoundError> {
+        self.engine.reset()?;
+        self.schedule = Some(Arc::clone(&binding.schedule));
+        self.session_origin = Some(binding.session_origin);
+        self.binding = Some(binding);
+        self.scratch.clear();
+        self.cursor = None;
+        self.consumed = 0;
+        self.output_frame = 0;
+        self.primed = false;
+        self.elapsed_beats = 0.0;
+        self.old_beats_per_frame = Some(
+            self.schedule
+                .as_ref()
+                .ok_or(BoundError::Inactive)?
+                .beats_per_frame()?,
+        );
+        Ok(())
+    }
+
+    pub(crate) fn deactivate(&mut self) {
+        if let Err(error) = self.engine.reset() {
+            warn!(%error, "bound engine reset failed");
+        }
+        self.schedule = None;
+        self.session_origin = None;
+        self.binding = None;
+        self.pending.clear();
+        self.scratch.clear();
+        self.cursor = None;
+        self.consumed = 0;
+        self.output_frame = 0;
+        self.primed = false;
+        self.elapsed_beats = 0.0;
+        self.old_beats_per_frame = None;
+        self.pending_start = 0;
+        self.last_input_meta = None;
+    }
+
+    pub(crate) fn retain(&mut self, chunk: &PcmChunk) {
+        self.admit(chunk);
+        let keep = self
+            .capabilities
+            .latency()
+            .source_frames()
+            .saturating_add(self.capabilities.max_source_frames());
+        let frames = self.pending_frames();
+        let drain = frames.saturating_sub(u64::try_from(keep).unwrap_or(u64::MAX));
+        let samples = usize::try_from(drain)
+            .unwrap_or(usize::MAX)
+            .saturating_mul(self.channels())
+            .min(self.pending.len());
+        self.pending.drain(..samples);
+        self.pending_start = self.pending_start.saturating_add(drain);
+    }
+
+    fn admit(&mut self, chunk: &PcmChunk) {
+        if chunk.spec() != self.spec {
+            self.spec = chunk.spec();
+        }
+        if self.pending.is_empty() {
+            self.pending_start = chunk.meta.frame_offset;
+        }
+        self.last_input_meta = Some(chunk.meta);
+        self.pending.extend_from_slice(&chunk.samples);
     }
 
     fn channels(&self) -> usize {
@@ -191,9 +275,9 @@ impl<E: ElasticPriming> BoundRenderer<E> {
     }
 
     fn span(&self, start: f64, end: f64, output_frames: usize) -> Result<ElasticSpan, BoundError> {
+        let schedule = self.schedule.as_ref().ok_or(BoundError::Inactive)?;
         Ok(ElasticSpan::try_from((
-            f64::from(self.schedule.source_after(start)?)
-                ..f64::from(self.schedule.source_after(end)?),
+            f64::from(schedule.source_after(start)?)..f64::from(schedule.source_after(end)?),
             output_frames,
         ))?)
     }
@@ -204,7 +288,9 @@ impl<E: ElasticPriming> BoundRenderer<E> {
         let block_frames = Self::BLOCK_FRAMES
             .to_f64()
             .ok_or(BoundError::BlockOverflow)?;
-        let commit = self.schedule.commit(self.session_origin)?;
+        let schedule = self.schedule.as_ref().ok_or(BoundError::Inactive)?;
+        let session_origin = self.session_origin.ok_or(BoundError::Inactive)?;
+        let commit = schedule.commit(session_origin)?;
         let old_beats_per_frame = self
             .old_beats_per_frame
             .unwrap_or_else(|| commit.beats_per_frame());
@@ -321,6 +407,18 @@ impl<E: ElasticPriming> BoundRenderer<E> {
             }
 
             let consumed = source_frames.to_u64().unwrap_or(u64::MAX);
+            if let Some(binding) = &self.binding {
+                let output = plan
+                    .segments()
+                    .iter()
+                    .map(|segment| segment.request().output_frames())
+                    .sum::<usize>();
+                if output > 0 {
+                    binding.set_rate(
+                        source_frames.to_f64().unwrap_or_default() / output.to_f64().unwrap_or(1.0),
+                    );
+                }
+            }
             let consumed_end = start.saturating_add(consumed);
             let retained = self
                 .retained_source_frames(
@@ -396,14 +494,7 @@ impl<E: ElasticPriming + Send + 'static> AudioEffect for BoundRenderer<E> {
     }
 
     fn process(&mut self, chunk: PcmChunk) -> DecodeResult<Option<PcmChunk>> {
-        if chunk.spec() != self.spec {
-            self.spec = chunk.spec();
-        }
-        if self.pending.is_empty() {
-            self.pending_start = chunk.meta.frame_offset;
-        }
-        self.last_input_meta = Some(chunk.meta);
-        self.pending.extend_from_slice(&chunk.samples);
+        self.admit(&chunk);
         self.scratch.clear();
         self.render_available()
             .map_err(|error| DecodeError::pcm_stream("bound tempo renderer", error))?;

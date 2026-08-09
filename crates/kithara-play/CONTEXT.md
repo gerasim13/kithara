@@ -50,6 +50,12 @@ rate is supported. A refusal is typed and happens before the binding or transpor
 The check currently uses the raw binding ratio; beat-multiple locking is not yet part of the bound
 schedule.
 
+`PlayerCore` owns one `TempoSlot` for the deck. Every prepared resource receives a clone of that
+same handle, so `bind` publishes `Converging` only after session admission succeeds and the worker
+promotes it to `Bound` after exact-span output. `unbind` removes the session binding first, then
+returns the same stage to `Free` at its last rendered rate. Neither transition loads a resource,
+replaces an effect chain, recreates a decoder, or issues a seek.
+
 `kithara_audio::StretchControls` (one `Arc` per deck, in `PlayerConfig.timestretch`) is the single
 source of truth for playback speed, shared between the UI and the worker effect chain, which reads
 it each chunk. It always carries `speed` + `region_plan`; with a stretch backend compiled in

@@ -88,7 +88,9 @@ impl TrackBinding {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_audio::{BeatGrid, BeatMapError, SessionBeat, TrackBeat, analysis::TrackAnalysis};
+    use kithara_audio::{
+        BeatGrid, BeatMapError, SessionBeat, SourceFrame, TrackBeat, analysis::TrackAnalysis,
+    };
     use kithara_events::PlaybackDirection;
     use kithara_test_utils::kithara;
 
@@ -160,11 +162,27 @@ mod tests {
     }
 
     #[kithara::test]
-    fn source_frame_outside_analysed_domain_is_none() {
+    fn a_beat_before_the_sample_start_resolves_to_no_source_frame() {
         let binding = binding(PlaybackDirection::Forward);
 
         assert_eq!(binding.source_frame_at(session_beat(8.0)), Ok(None));
-        assert_eq!(binding.source_frame_at(session_beat(12.0)), Ok(None));
+    }
+
+    /// The map is seeded to the sample's extent, so the last frame of the
+    /// record is a position a bound deck can be at — it is not outside.
+    #[kithara::test]
+    fn the_beat_the_sample_ends_on_resolves_to_its_last_source_frame() {
+        let binding = binding(PlaybackDirection::Forward);
+        let end = SourceFrame::new(144_000.0).expect("invariant: the fixture extent is finite");
+
+        assert_eq!(binding.source_frame_at(session_beat(12.0)), Ok(Some(end)));
+    }
+
+    #[kithara::test]
+    fn a_beat_past_the_sample_end_resolves_to_no_source_frame() {
+        let binding = binding(PlaybackDirection::Forward);
+
+        assert_eq!(binding.source_frame_at(session_beat(13.0)), Ok(None));
     }
 
     #[kithara::test]

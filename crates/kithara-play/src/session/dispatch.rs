@@ -27,6 +27,10 @@ pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply 
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
+        Cmd::UnbindPlayer { player_id } => match transport::unbind_player(state, player_id) {
+            Ok(()) => Reply::Ok,
+            Err(err) => Reply::Err(err),
+        },
         Cmd::StartPlayer {
             master_volume,
             player_id,

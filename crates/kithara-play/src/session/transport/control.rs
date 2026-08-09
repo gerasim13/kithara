@@ -164,6 +164,15 @@ pub(crate) fn bind_player<B: AudioBackend>(
     Ok(())
 }
 
+pub(crate) fn unbind_player<B: AudioBackend>(
+    state: &mut SessionState<B>,
+    player_id: PlayerId,
+) -> Result<(), SessionError> {
+    let index = player_index(state, player_id)?;
+    state.players[index].binding = None;
+    Ok(())
+}
+
 pub(crate) fn set_playing<B: AudioBackend>(
     state: &mut SessionState<B>,
     playing: bool,

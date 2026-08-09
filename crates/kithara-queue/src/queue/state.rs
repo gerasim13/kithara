@@ -67,10 +67,8 @@ pub struct Queue {
     pub(super) autoplay_target: AtomicTrackId,
     pub(super) loader: Arc<Loader>,
     pub(super) navigation: Arc<Mutex<NavigationState>>,
-    /// A start planned against the session grid, waiting for its track's
-    /// resource to be rebuilt under the binding. The rebuild is what makes the
-    /// resource follow the grid, so the stamp cannot be sent beside it — only
-    /// after it lands.
+    /// A start planned against the session grid, waiting for its cold track to
+    /// land in the processor before it can be armed.
     pub(super) pending_beat_start: Arc<Mutex<Option<(TrackId, BeatStart)>>>,
     pub(super) pending_select: Arc<Mutex<SelectPhase>>,
     /// Serialises a selection-apply against a concurrent [`Queue::select`].
