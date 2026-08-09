@@ -259,7 +259,6 @@ impl SessionAnchorCell {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::{CoordinateError, SessionAnchor, SessionAnchorCell, SessionBeat, SessionFrame};

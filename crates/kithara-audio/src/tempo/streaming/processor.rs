@@ -1,5 +1,5 @@
 use kithara_bufpool::PcmPool;
-use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+use kithara_decode::{DecodeResult, PcmChunk, PcmMeta, PcmSpec};
 use kithara_platform::sync::Arc;
 use kithara_stretch::{StretchBackend, StretchKind, StretchOptions, build_backend};
 use tracing::warn;
@@ -228,7 +228,7 @@ impl AudioEffect for TimeStretchProcessor {
         self.emit()
     }
 
-    fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
+    fn process(&mut self, chunk: PcmChunk) -> DecodeResult<Option<PcmChunk>> {
         let spec_changed = chunk.spec() != self.spec;
         if spec_changed {
             self.spec = chunk.spec();
@@ -242,7 +242,7 @@ impl AudioEffect for TimeStretchProcessor {
         let speed = self.controls.speed().max(Self::MIN_SPEED);
         if self.unity_passthrough(speed) {
             self.reset_for_passthrough();
-            return Some(chunk);
+            return Ok(Some(chunk));
         }
 
         self.active = true;
@@ -276,7 +276,7 @@ impl AudioEffect for TimeStretchProcessor {
             let part = &samples[consumed * channels..(consumed + sub) * channels];
             if let Err(e) = self.backend.process(part, &mut self.scratch) {
                 warn!(error = %e, "time-stretch backend process failed; dropping chunk");
-                return None;
+                return Ok(None);
             }
             self.source_frames_pushed = self
                 .source_frames_pushed
@@ -284,7 +284,7 @@ impl AudioEffect for TimeStretchProcessor {
             consumed += sub;
             frame = frame.saturating_add(span);
         }
-        self.emit()
+        Ok(self.emit())
     }
 
     fn held_source_frames(&self) -> u64 {
@@ -419,7 +419,10 @@ mod tests {
         let mut out: Vec<f32> = Vec::new();
         let block = 4096 * usize::from(Consts::CH);
         for data in input.chunks(block) {
-            if let Some(c) = fx.process(chunk(data)) {
+            if let Some(c) = fx
+                .process(chunk(data))
+                .expect("fixture stretch processing must succeed")
+            {
                 assert_eq!(
                     c.spec().sample_rate.get(),
                     Consts::SR,
@@ -521,7 +524,10 @@ mod tests {
             c.meta.end_timestamp = end;
             c.meta.frame_offset = i * u64::try_from(cf).unwrap();
             fed_ends.insert(end);
-            if let Some(o) = fx.process(c) {
+            if let Some(o) = fx
+                .process(c)
+                .expect("fixture stretch processing must succeed")
+            {
                 emitted.push(o);
             }
         }
@@ -582,13 +588,19 @@ mod tests {
         controls.set_backend(StretchKind::default());
         let mut fx = processor(Arc::clone(&controls));
         let block = sine(4096);
-        let unity = fx.process(chunk(&block)).expect("unity bypass emits");
+        let unity = fx
+            .process(chunk(&block))
+            .expect("unity bypass processing succeeds")
+            .expect("unity bypass emits");
         assert_eq!(&unity.samples[..], &block[..], "unity phase bypasses");
 
         controls.set_speed(0.5);
         let mut stretched: Vec<f32> = Vec::new();
         for _ in 0..24 {
-            if let Some(c) = fx.process(chunk(&block)) {
+            if let Some(c) = fx
+                .process(chunk(&block))
+                .expect("fixture stretch processing must succeed")
+            {
                 stretched.extend_from_slice(&c.samples);
             }
         }
@@ -616,7 +628,10 @@ mod tests {
         );
 
         controls.set_speed(1.0);
-        let unity = fx.process(chunk(&block)).expect("unity bypass emits");
+        let unity = fx
+            .process(chunk(&block))
+            .expect("unity bypass processing succeeds")
+            .expect("unity bypass emits");
         assert_eq!(&unity.samples[..], &block[..]);
         assert_eq!(fx.held_source_frames(), 0);
     }
@@ -647,7 +662,10 @@ mod tests {
 
         let mut vinyl_out: Vec<f32> = Vec::new();
         for _ in 0..24 {
-            if let Some(c) = fx.process(chunk(&block)) {
+            if let Some(c) = fx
+                .process(chunk(&block))
+                .expect("fixture stretch processing must succeed")
+            {
                 vinyl_out.extend_from_slice(&c.samples);
             }
         }
@@ -664,7 +682,10 @@ mod tests {
         controls.set_keylock(true);
         let mut stretched: Vec<f32> = Vec::new();
         for _ in 0..24 {
-            if let Some(c) = fx.process(chunk(&block)) {
+            if let Some(c) = fx
+                .process(chunk(&block))
+                .expect("fixture stretch processing must succeed")
+            {
                 stretched.extend_from_slice(&c.samples);
             }
         }
@@ -700,7 +721,10 @@ mod tests {
             if i == 6 {
                 controls.set_backend(StretchKind::Signalsmith);
             }
-            if let Some(c) = fx.process(chunk(&block)) {
+            if let Some(c) = fx
+                .process(chunk(&block))
+                .expect("fixture stretch processing must succeed")
+            {
                 out.extend_from_slice(&c.samples);
             }
         }

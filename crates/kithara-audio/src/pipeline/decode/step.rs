@@ -39,8 +39,10 @@ pub(crate) fn tick<T: StreamType>(
         if ctx.seek_observe.is_flushing() || ctx.seek_observe.is_pending() {
             return DecodeAction::SeekInterrupted;
         }
-        if let Some(chunk) = core.next_output() {
-            return produced(chunk, core.source_end(), epoch, &mut ctx);
+        match core.next_output() {
+            Ok(Some(chunk)) => return produced(chunk, core.source_end(), epoch, &mut ctx),
+            Ok(None) => {}
+            Err(error) => return DecodeAction::Failed(TrackFailure::Decode(error)),
         }
         match core.next_chunk(ctx.stream.position()) {
             Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
@@ -62,16 +64,20 @@ pub(crate) fn tick<T: StreamType>(
             }
             Ok(DecoderChunkOutcome::Eof) => {
                 core.set_tail_compensation();
-                if let Some(chunk) = core.next_output() {
-                    return produced(chunk, core.source_end(), epoch, &mut ctx);
+                match core.next_output() {
+                    Ok(Some(chunk)) => return produced(chunk, core.source_end(), epoch, &mut ctx),
+                    Ok(None) => {}
+                    Err(error) => return DecodeAction::Failed(TrackFailure::Decode(error)),
                 }
                 if let FormatDecision::Recreate(recreate) =
                     detect(ctx.stream, core.active(), ctx.seek_observe)
                 {
                     return DecodeAction::StartRecreate(recreate);
                 }
-                if let Some(chunk) = core.next_drain() {
-                    return produced(chunk, core.source_end(), epoch, &mut ctx);
+                match core.next_drain() {
+                    Ok(Some(chunk)) => return produced(chunk, core.source_end(), epoch, &mut ctx),
+                    Ok(None) => {}
+                    Err(error) => return DecodeAction::Failed(TrackFailure::Decode(error)),
                 }
                 if let Some(emit) = ctx.emit {
                     emit.enqueue(AudioEvent::EndOfStream.into());

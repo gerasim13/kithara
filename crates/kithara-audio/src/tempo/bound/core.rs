@@ -1,5 +1,5 @@
 use kithara_bufpool::PcmPool;
-use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+use kithara_decode::{DecodeError, DecodeResult, PcmChunk, PcmMeta, PcmSpec};
 use kithara_platform::sync::Arc;
 use kithara_stretch::{
     ElasticCapabilities, ElasticCursor, ElasticEngine, ElasticSpan, ElasticSpanConfig,
@@ -190,7 +190,7 @@ impl<E: ElasticEngine + Send + 'static> AudioEffect for BoundRenderer<E> {
             .saturating_add(latency.min(self.consumed))
     }
 
-    fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
+    fn process(&mut self, chunk: PcmChunk) -> DecodeResult<Option<PcmChunk>> {
         if chunk.spec() != self.spec {
             self.spec = chunk.spec();
         }
@@ -200,11 +200,9 @@ impl<E: ElasticEngine + Send + 'static> AudioEffect for BoundRenderer<E> {
         self.last_input_meta = Some(chunk.meta);
         self.pending.extend_from_slice(&chunk.samples);
         self.scratch.clear();
-        if let Err(error) = self.render_available() {
-            warn!(%error, "bound rendering failed; dropping block");
-            return None;
-        }
-        self.emit()
+        self.render_available()
+            .map_err(|error| DecodeError::pcm_stream("bound tempo renderer", error))?;
+        Ok(self.emit())
     }
 
     fn reset(&mut self) {

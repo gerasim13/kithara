@@ -226,18 +226,18 @@ impl ActiveDecode {
         outcome
     }
 
-    pub(crate) fn next_drain(&mut self) -> Option<PcmChunk> {
+    pub(crate) fn next_drain(&mut self) -> DecodeResult<Option<PcmChunk>> {
         self.drain.next(&mut self.effects)
     }
 
-    pub(crate) fn next_output(&mut self) -> Option<PcmChunk> {
+    pub(crate) fn next_output(&mut self) -> DecodeResult<Option<PcmChunk>> {
         while let Some(chunk) = self.active.next() {
             let chunk = self.window.admit(self.blender.process_active(chunk));
-            if let Some(output) = apply_effects(&mut self.effects, chunk) {
-                return Some(output);
+            if let Some(output) = apply_effects(&mut self.effects, chunk)? {
+                return Ok(Some(output));
             }
         }
-        None
+        Ok(None)
     }
 
     pub(crate) fn source_end(&self) -> Option<SourceEnd> {

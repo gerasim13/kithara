@@ -6,13 +6,14 @@
 use std::{f64::consts::TAU, num::NonZeroU32};
 
 use kithara_bufpool::PcmPool;
-use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+use kithara_decode::{DecodeError, PcmChunk, PcmMeta, PcmSpec};
 use kithara_events::PlaybackDirection;
 use kithara_platform::sync::Arc;
+use kithara_stretch::ElasticError;
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
-use super::{BoundRenderer, bound_slot};
+use super::{BoundError, bound_slot};
 use crate::{
     analysis::TrackAnalysis,
     musical::{
@@ -220,6 +221,7 @@ fn render_deck(
     frames: usize,
 ) -> Vec<f32> {
     render_deck_riding(bpm, shape, tone_hz, grid, frames, steady)
+        .expect("steady bound rendering must stay inside the rate envelope")
 }
 
 /// Both decks through one ride, driven in lockstep on one grid.
@@ -326,7 +328,11 @@ impl Deck {
             PcmPool::default().attach(slice.to_vec()),
         );
         self.fed += Consts::CHUNK_FRAMES;
-        if let Some(rendered) = self.slot.process(chunk) {
+        if let Some(rendered) = self
+            .slot
+            .process(chunk)
+            .expect("fixture ride must stay inside the rate envelope")
+        {
             self.out.extend_from_slice(&rendered.samples);
         }
     }
@@ -339,7 +345,7 @@ fn render_deck_riding(
     grid: &Arc<SessionAnchorCell>,
     frames: usize,
     ride: TempoRide,
-) -> Vec<f32> {
+) -> Result<Vec<f32>, DecodeError> {
     let (source, markers) = pulse_track(bpm, shape, tone_hz);
     let source_frames = u64::try_from(source.len() / usize::from(Consts::CHANNELS))
         .expect("invariant: the fixture length fits u64");
@@ -383,12 +389,12 @@ fn render_deck_riding(
             PcmPool::default().attach(slice.to_vec()),
         );
         fed += Consts::CHUNK_FRAMES;
-        if let Some(rendered) = slot.process(chunk) {
+        if let Some(rendered) = slot.process(chunk)? {
             out.extend_from_slice(&rendered.samples);
         }
     }
     out.truncate(want);
-    out
+    Ok(out)
 }
 
 /// Output frames the slot plans in one go, so one commit lands at most this
@@ -538,7 +544,7 @@ fn the_uncompensated_engine_delay_offsets_the_decks() {
 /// A ride parts the decks, and the size of the parting is the commit
 /// quantization.
 ///
-/// `BoundRenderer` plans whole blocks. A tempo commit therefore takes effect
+/// [`super::BoundRenderer`] plans whole blocks. A tempo commit therefore takes effect
 /// at the next block boundary rather than at the frame it was scheduled for —
 /// up to 512 frames late, and late by a different amount on each deck, because
 /// each is mid-block somewhere else. Under a steady tempo this never shows: it
@@ -597,7 +603,8 @@ fn a_tempo_ride_tightens_the_beat_without_a_jump() {
         &grid,
         frames,
         ramp_up,
-    );
+    )
+    .expect("the gentle ride must stay inside the rate envelope");
 
     let beats = onsets(&rendered);
     assert!(beats.len() > 8, "the deck must strike through the ride");
@@ -623,40 +630,39 @@ fn a_tempo_ride_tightens_the_beat_without_a_jump() {
     );
 }
 
-/// Ridden past the engine's stretch envelope, the slot drops blocks.
+/// Ridden past the engine's stretch envelope, the slot refuses the span.
 ///
 /// A record at 96 asked to keep up with 140 needs a ratio of 1.458 and the
-/// engine stops at about 4/3. What happens then is not a typed refusal and not
-/// a degradation: `render_available` fails, the block is logged and dropped,
-/// and the deck loses audio. `spec-v3.md` §8.0 family 1 asks for a typed
-/// reject at the envelope edge; this pins what actually happens so the reject
-/// that replaces it has something to change.
+/// engine stops at about 4/3. The planner's rate-envelope error must cross the
+/// effect boundary instead of looking like an accumulating stage.
 #[kithara::test]
-fn riding_past_the_stretch_envelope_drops_audio() {
+fn riding_past_the_stretch_envelope_returns_a_typed_failure() {
     let frames = session_beat_frames() * Consts::MEASURED_BEATS;
     let grid = session_grid();
 
-    let rendered = render_deck_riding(
+    let error = render_deck_riding(
         Consts::SLOW_BPM,
         Pulse::Sine,
         Consts::SLOW_HZ,
         &grid,
         frames,
         ramp_past_envelope,
-    );
+    )
+    .expect_err("the ride must exceed the declared rate envelope");
 
-    let inside = render_deck_riding(
-        Consts::SLOW_BPM,
-        Pulse::Sine,
-        Consts::SLOW_HZ,
-        &session_grid(),
-        frames,
-        ramp_up,
-    );
-
+    let DecodeError::PcmStream {
+        what: "bound tempo renderer",
+        source,
+    } = error
+    else {
+        panic!("bound planning failure must retain its typed source");
+    };
+    let Some(error) = source.downcast_ref::<BoundError>() else {
+        panic!("bound planning failure must retain BoundError");
+    };
     assert!(
-        onsets(&rendered).len() < onsets(&inside).len(),
-        "beyond the envelope the deck loses beats rather than refusing the ride"
+        matches!(error, BoundError::Elastic(ElasticError::InvalidRate(_))),
+        "the rate envelope must be what refuses the ride, not: {error}"
     );
 }
 

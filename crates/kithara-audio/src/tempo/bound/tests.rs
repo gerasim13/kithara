@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use kithara_bufpool::PcmPool;
-use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+use kithara_decode::{DecodeError, PcmChunk, PcmMeta, PcmSpec};
 use kithara_events::PlaybackDirection;
 use kithara_platform::sync::Arc;
 use kithara_stretch::{ElasticConfig, ElasticEngine, ElasticSpanConfig, SignalsmithElastic};
@@ -132,7 +132,10 @@ fn emitted_chunks_are_whole_planned_blocks() {
     let mut emitted = 0_u64;
 
     for index in 0..8_u64 {
-        if let Some(output) = renderer.process(chunk(index * Consts::CHUNK_FRAMES)) {
+        if let Some(output) = renderer
+            .process(chunk(index * Consts::CHUNK_FRAMES))
+            .expect("identity schedule must render")
+        {
             let frames = u64::from(output.meta.frames);
             assert_eq!(
                 frames % block,
@@ -156,7 +159,10 @@ fn unity_plan_renders_one_output_frame_per_source_frame() {
     let mut emitted = 0_u64;
 
     for index in 0..chunks {
-        if let Some(output) = renderer.process(chunk(index * Consts::CHUNK_FRAMES)) {
+        if let Some(output) = renderer
+            .process(chunk(index * Consts::CHUNK_FRAMES))
+            .expect("unity schedule must render")
+        {
             emitted += u64::from(output.meta.frames);
         }
     }
@@ -173,15 +179,17 @@ fn a_plan_behind_the_retained_source_is_typed() {
 
     // The first chunk starts the pending window well past the schedule's
     // origin, so block zero asks for source the slot never saw.
-    renderer.process(chunk(Consts::BEAT_FRAMES));
+    let error = renderer
+        .process(chunk(Consts::BEAT_FRAMES))
+        .expect_err("reaching behind the retained source must be typed");
+    let DecodeError::PcmStream { source, .. } = error else {
+        panic!("bound rendering failure must retain its typed source");
+    };
 
-    assert!(
-        matches!(
-            renderer.render_available(),
-            Err(BoundError::BehindWindow { .. })
-        ),
-        "reaching behind the retained source must be typed, not clamped"
-    );
+    assert!(matches!(
+        source.downcast_ref::<BoundError>(),
+        Some(BoundError::BehindWindow { .. })
+    ));
 }
 
 /// The declared hold never exceeds the source the slot has actually taken, so
@@ -192,7 +200,9 @@ fn held_source_frames_never_exceeds_the_source_taken() {
     let chunks = 4_u64;
 
     for index in 0..chunks {
-        renderer.process(chunk(index * Consts::CHUNK_FRAMES));
+        let _ = renderer
+            .process(chunk(index * Consts::CHUNK_FRAMES))
+            .expect("identity schedule must render");
     }
 
     assert!(renderer.held_source_frames() <= chunks * Consts::CHUNK_FRAMES);
@@ -208,7 +218,9 @@ fn held_source_frames_reaches_the_declared_latency() {
     let chunks = 16_u64;
 
     for index in 0..chunks {
-        renderer.process(chunk(index * Consts::CHUNK_FRAMES));
+        let _ = renderer
+            .process(chunk(index * Consts::CHUNK_FRAMES))
+            .expect("identity schedule must render");
     }
 
     assert_eq!(renderer.held_source_frames(), latency);
@@ -219,7 +231,9 @@ fn held_source_frames_reaches_the_declared_latency() {
 #[kithara::test]
 fn reset_drops_pending_source() {
     let mut renderer = renderer();
-    renderer.process(chunk(0));
+    let _ = renderer
+        .process(chunk(0))
+        .expect("identity schedule must render");
 
     renderer.reset();
 
@@ -243,5 +257,10 @@ fn a_partial_block_of_source_emits_nothing() {
         PcmPool::default().attach(vec![0.25_f32; frames * usize::from(Consts::CHANNELS)]),
     );
 
-    assert!(renderer.process(half).is_none());
+    assert!(
+        renderer
+            .process(half)
+            .expect("a partial identity span must accumulate")
+            .is_none()
+    );
 }

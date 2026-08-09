@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_decode::{PcmChunk, PcmSpec};
+use kithara_decode::{DecodeResult, PcmChunk, PcmSpec};
 use kithara_test_utils::kithara;
 
 use super::create_effects;
@@ -19,8 +19,8 @@ impl AudioEffect for PassthroughEffect {
     fn held_source_frames(&self) -> u64 {
         0
     }
-    fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
-        Some(chunk)
+    fn process(&mut self, chunk: PcmChunk) -> DecodeResult<Option<PcmChunk>> {
+        Ok(Some(chunk))
     }
     fn reset(&mut self) {}
 }
@@ -135,6 +135,7 @@ mod stretch {
         let chunk = PcmChunk::new(meta, PcmPool::default().attach(samples.clone()));
         let out = effects[0]
             .process(chunk)
+            .expect("vinyl stretch processing succeeds")
             .expect("vinyl stretch emits a chunk");
         assert_eq!(out.spec(), spec());
         assert!(!out.samples.is_empty());

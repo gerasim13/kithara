@@ -377,6 +377,13 @@ production builds is `[TempoSlot?, ..custom]` and the tempo slot is its sole
 duration-changing stage; an effect behind it that buffered could not name its
 hold in source frames, so such an effect must be sample-synchronous.
 
+`AudioEffect::process` reserves `Ok(None)` for accumulation: the effect admitted
+the input but cannot emit output yet, so the chain may feed it again. A span the
+effect cannot render is `Err(DecodeError)`, which terminates the track through
+the existing failure path. Render failures must never be collapsed into
+accumulation, because the chain would otherwise continue after silently losing
+the admitted audio.
+
 ## Tempo slot: bound and unbound are exclusive
 
 A deck is timed one of two ways and `TempoSlot` makes that a choice rather than
