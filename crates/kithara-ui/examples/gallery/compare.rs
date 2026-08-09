@@ -8,6 +8,7 @@
 //! will.
 
 use std::{
+    collections::HashMap,
     env,
     fs::{File, create_dir_all},
     path::{Path, PathBuf},
@@ -127,27 +128,31 @@ fn compare(spec: &str, budget: Option<&Path>) -> Result<bool, String> {
             ));
         }
         let (share, mask) = difference(&a, &b);
+        let ink = ink_disagreement(&a, &b);
         write_png(&out.join(&name), &mask, a.width, a.height)?;
-        rows.push((name, Some(share)));
+        rows.push((name, Some((share, ink))));
         pages += 1;
     }
 
     rows.sort_by(|left, right| {
-        right
-            .1
-            .partial_cmp(&left.1)
+        let worst = |shares: Option<(f64, f64)>| shares.map(|(share, ink)| share.max(ink));
+        worst(right.1)
+            .partial_cmp(&worst(left.1))
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    println!("page                          differing pixels");
-    for (name, share) in &rows {
-        match share {
-            Some(share) => println!("{name:<30}{:>15.1}%", share * 100.0),
+    println!("page                          differing pixels     ink disagreement");
+    for (name, shares) in &rows {
+        match shares {
+            Some((share, ink)) => {
+                println!("{name:<30}{:>15.1}%{:>20.1}%", share * 100.0, ink * 100.0);
+            }
             None => println!("{name:<30}{:>16}", "missing"),
         }
     }
     println!(
         "\ndifference masks in {}; a channel gap under {NOISE} is treated as rasteriser noise, \
-         because the two hosts rasterise with different engines",
+         because the two hosts rasterise with different engines. ink disagreement is the share \
+         of pixels drawn by one host and left as background by the other.",
         out.display()
     );
     let Some(budget) = budget else {
@@ -156,21 +161,23 @@ fn compare(spec: &str, budget: Option<&Path>) -> Result<bool, String> {
     };
     let over = rows
         .iter()
-        .filter_map(|(name, share)| {
+        .filter_map(|(name, shares)| {
             let allowed = budget
                 .iter()
                 .find(|(page, _)| page == name)
                 .map_or(0.0, |(_, allowed)| *allowed);
-            match share {
-                Some(share) if share * 100.0 > allowed => Some((name, share * 100.0, allowed)),
-                Some(_) => None,
+            match shares {
+                Some((share, ink)) => {
+                    let worst = share.max(*ink) * 100.0;
+                    (worst > allowed).then_some((name, worst, allowed))
+                }
                 None => Some((name, f64::INFINITY, allowed)),
             }
         })
         .collect::<Vec<_>>();
-    for (name, share, allowed) in &over {
-        if share.is_finite() {
-            println!("over budget: {name} differs by {share:.1}%, allowed {allowed:.1}%");
+    for (name, worst, allowed) in &over {
+        if worst.is_finite() {
+            println!("over budget: {name} differs by {worst:.1}%, allowed {allowed:.1}%");
         } else {
             println!("over budget: {name} is missing from one of the sets");
         }
@@ -243,4 +250,157 @@ fn difference(left: &Image, right: &Image) -> (f64, Vec<u8>) {
         AsPrimitive::<f64>::as_(differing) / AsPrimitive::<f64>::as_(total)
     };
     (share, mask)
+}
+
+/// The page's background colour is not passed in anywhere the comparison can
+/// read; every page clears to one colour and draws only a minority of pixels
+/// over it, so the most common colour in a capture stands in for it.
+fn background_color(image: &Image) -> [u8; 4] {
+    let mut counts: HashMap<[u8; 4], usize> = HashMap::new();
+    for pixel in image.rgba.chunks_exact(4) {
+        *counts
+            .entry([pixel[0], pixel[1], pixel[2], pixel[3]])
+            .or_insert(0) += 1;
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map_or([0, 0, 0, 0], |(color, _)| color)
+}
+
+/// A pixel that differs from a background by more than the rasteriser-noise
+/// floor `difference` already uses, applied here between a host and its own
+/// background instead of between the two hosts.
+fn is_ink(pixel: &[u8], background: [u8; 4]) -> bool {
+    pixel
+        .iter()
+        .zip(background)
+        .take(3)
+        .map(|(a, b)| a.abs_diff(b))
+        .max()
+        .unwrap_or(0)
+        > NOISE
+}
+
+/// The share of pixels that are ink — drawn over the background — in exactly
+/// one of the two sets. A missing control is thin ink on a wide page, so it
+/// barely moves `difference`'s pixel count; judging each host against its own
+/// background instead of against the other host's pixels catches the absence
+/// directly.
+fn ink_disagreement(left: &Image, right: &Image) -> f64 {
+    let left_bg = background_color(left);
+    let right_bg = background_color(right);
+    let total = left.rgba.len() / 4;
+    let disagreeing = left
+        .rgba
+        .chunks_exact(4)
+        .zip(right.rgba.chunks_exact(4))
+        .filter(|(a, b)| is_ink(a, left_bg) != is_ink(b, right_bg))
+        .count();
+    if total == 0 {
+        0.0
+    } else {
+        AsPrimitive::<f64>::as_(disagreeing) / AsPrimitive::<f64>::as_(total)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs, process,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::capture::{Frame, write_frame};
+
+    static DIR_ID: AtomicU64 = AtomicU64::new(0);
+
+    fn solid(width: u32, height: u32, color: [u8; 4]) -> Image {
+        Image {
+            height,
+            rgba: color.repeat((width * height) as usize),
+            width,
+        }
+    }
+
+    fn scratch_dir(name: &str) -> PathBuf {
+        let id = DIR_ID.fetch_add(1, Ordering::Relaxed);
+        env::temp_dir().join(format!(
+            "kithara-gallery-compare-{name}-{}-{id}",
+            process::id()
+        ))
+    }
+
+    #[kithara::test]
+    fn identical_images_score_zero_on_both_numbers() {
+        let a = solid(4, 4, [200, 200, 200, 255]);
+        let b = solid(4, 4, [200, 200, 200, 255]);
+
+        let (share, _) = difference(&a, &b);
+        let ink = ink_disagreement(&a, &b);
+
+        assert_eq!(share, 0.0);
+        assert_eq!(ink, 0.0);
+    }
+
+    #[kithara::test]
+    fn ink_present_on_one_side_only_scores_high_even_when_pixel_diff_is_low() {
+        // 226 sits within noise of right's 205 background, so `difference` never
+        // flags it, but it sits outside noise of left's own 200 background: ink
+        // on the left, plain background on the right — a control missing on one host.
+        let mut left = solid(10, 1, [200, 200, 200, 255]);
+        left.rgba[0..4].copy_from_slice(&[226, 226, 226, 255]);
+        let right = solid(10, 1, [205, 205, 205, 255]);
+
+        let (share, _) = difference(&left, &right);
+        let ink = ink_disagreement(&left, &right);
+
+        assert_eq!(share, 0.0);
+        assert_eq!(ink, 0.1);
+    }
+
+    #[kithara::test]
+    fn gate_fails_on_the_larger_of_the_two_numbers() {
+        let root = scratch_dir("gate");
+        let left_dir = root.join("left");
+        let right_dir = root.join("right");
+        let out_dir = root.join("out");
+        create_dir_all(&left_dir).unwrap();
+        create_dir_all(&right_dir).unwrap();
+
+        let frame = Frame {
+            height: 1,
+            scale: 1.0,
+            width: 10,
+        };
+        write_frame(&left_dir, frame).unwrap();
+        write_frame(&right_dir, frame).unwrap();
+
+        // Same pixels as ink_present_on_one_side_only: diff share is 0%, ink
+        // share is 10%. A budget of 5% sits strictly between the two, so the
+        // gate only fails if it is judged by the larger number.
+        let mut left = solid(10, 1, [200, 200, 200, 255]);
+        left.rgba[0..4].copy_from_slice(&[226, 226, 226, 255]);
+        let right = solid(10, 1, [205, 205, 205, 255]);
+        write_png(&left_dir.join("page.png"), &left.rgba, 10, 1).unwrap();
+        write_png(&right_dir.join("page.png"), &right.rgba, 10, 1).unwrap();
+
+        let budget_path = root.join("budget.txt");
+        fs::write(&budget_path, "page.png 5\n").unwrap();
+
+        let spec = format!(
+            "{}:{}:{}",
+            left_dir.display(),
+            right_dir.display(),
+            out_dir.display()
+        );
+        let result = compare(&spec, Some(&budget_path));
+
+        fs::remove_dir_all(&root).ok();
+
+        assert_eq!(result, Ok(false));
+    }
 }

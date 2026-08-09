@@ -16,7 +16,10 @@
 10-vis.png                 20
 14-tree.png                 3
 # Not accounted for by a missing control — read the masks before lowering.
-03-modules-deck.png        13
+# Raised 13 -> 19 when the ink measure landed: this page differs by 12.2% of
+# pixels but 18.5% of ink, so six points of it are drawn on one side only, in a
+# colour close enough to the page that comparing colours did not see it.
+03-modules-deck.png        19
 03-modules-telemetry.png    9
 16-stress.png               4
 

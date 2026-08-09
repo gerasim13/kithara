@@ -468,9 +468,12 @@ them against `examples/gallery/parity-budget.txt`. The budget prices each page i
 differing pixels past the noise floor, a page with no line is allowed nothing, and a page over its
 price or missing from a set ends the run non-zero. The floor is under one percent, where the two
 engines disagree on antialiased edges and text gamma; everything above it is a control that draws
-differently, or does not draw at all, under one of the hosts. The numbers are a debt: a control that
-lands must lower the pages it appears on, and a number may not rise without a reason written next to
-it. The window capture, `just test ui-window`, stays for a different question - whether the offscreen path
+differently, or does not draw at all, under one of the hosts. A control that is thin ink on a wide
+panel barely moves that share even when it is entirely missing, so the comparison also derives each
+set's background as its most common colour and measures the share of pixels that are ink - drawn over
+that background - in exactly one set. The gate judges a page by whichever of the two numbers is
+larger, and the report prints both. The numbers are a debt: a control that lands must lower the pages
+it appears on, and a number may not rise without a reason written next to it. The window capture, `just test ui-window`, stays for a different question - whether the offscreen path
 draws what a window draws - and is the only one of the three that needs a display. It is not one side
 of the parity: both its sides are the same host.
 
