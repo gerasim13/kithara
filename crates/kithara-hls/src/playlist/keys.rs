@@ -4,7 +4,9 @@ use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
 use dashmap::DashMap;
+use futures::future::try_join_all;
 use kithara_assets::{AssetResource, AssetScope, ReadSide, ResourceKey};
+use kithara_bufpool::BytePool;
 use kithara_drm::{DecryptContext, KeyProcessor, KeyProcessorRegistry, PreparedKeyRequest};
 use kithara_events::{
     DrmEvent, EventBus, HlsError as EventHlsError, HlsEvent, KeyFailureStage, KeySource,
@@ -30,7 +32,7 @@ pub struct KeyStore {
     keys: Arc<DashMap<Url, Bytes>>,
     scope: AssetScope,
     /// Byte buffer pool for reading cached key bodies.
-    byte_pool: kithara_bufpool::BytePool,
+    byte_pool: BytePool,
     bus: EventBus,
     /// Cache-first + downloader pipeline for HLS-AES / DRM key bodies.
     key_peer: KeyPeer,
@@ -53,7 +55,7 @@ impl KeyStore {
         bus: EventBus,
         base_headers: Option<Headers>,
         key_registry: Option<KeyProcessorRegistry>,
-        byte_pool: kithara_bufpool::BytePool,
+        byte_pool: BytePool,
     ) -> Self {
         Self {
             key_peer: KeyPeer::new(downloader, scope.clone(), byte_pool.clone()),
@@ -306,7 +308,7 @@ impl KeyStore {
         let futs = urls
             .into_iter()
             .map(|url| async move { self.get_raw_key(&url, None).await.map(drop) });
-        futures::future::try_join_all(futs).await?;
+        try_join_all(futs).await?;
         Ok(())
     }
 
@@ -380,7 +382,7 @@ impl KeyStore {
         bus: EventBus,
         base_headers: Option<Headers>,
         options: crate::config::KeyOptions,
-        byte_pool: kithara_bufpool::BytePool,
+        byte_pool: BytePool,
     ) -> Self {
         Self::new(
             downloader,
@@ -851,7 +853,7 @@ mod tests {
             bus.clone(),
             None,
             registry,
-            kithara_bufpool::BytePool::default(),
+            BytePool::default(),
         )
     }
 

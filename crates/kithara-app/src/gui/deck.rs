@@ -1,4 +1,4 @@
-use kithara::abr::AbrMode;
+use kithara::{abr::AbrMode, events::AdvanceReason};
 use kithara_platform::sync::Arc;
 use kithara_queue::{TrackId, Transition};
 use tracing::{debug, error};
@@ -75,10 +75,9 @@ pub(crate) fn handle(deck: &mut DeckUi, msg: &DeckMsg) {
         DeckMsg::TogglePlayPause => toggle_play_pause(deck),
         DeckMsg::Pause => deck.controller.queue().pause(),
         DeckMsg::Next => {
-            deck.controller.queue().advance_to_next(
-                Transition::Crossfade,
-                kithara::events::AdvanceReason::UserNext,
-            );
+            deck.controller
+                .queue()
+                .advance_to_next(Transition::Crossfade, AdvanceReason::UserNext);
         }
         DeckMsg::Prev => {
             deck.controller
