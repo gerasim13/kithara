@@ -7,7 +7,9 @@ use iced::{
         text,
     },
 };
+use mouse::Interaction;
 use num_traits::cast::AsPrimitive;
+use text::{Alignment, Shaping};
 
 use super::Widget;
 use crate::{
@@ -101,9 +103,9 @@ impl canvas::Program<UiEvent> for DragGhost {
             color: self.text_color,
             size: self.metrics.text.size.into(),
             font: fonts::family(self.metrics.text.font, self.metrics.text.weight),
-            align_x: text::Alignment::Left,
+            align_x: Alignment::Left,
             align_y: Vertical::Center,
-            shaping: text::Shaping::Advanced,
+            shaping: Shaping::Advanced,
             ..CanvasText::default()
         });
         vec![frame.into_geometry()]
@@ -115,7 +117,7 @@ impl canvas::Program<UiEvent> for DragGhost {
         _bounds: Rectangle,
         _cursor: Cursor,
     ) -> mouse::Interaction {
-        mouse::Interaction::None
+        Interaction::None
     }
 
     /// The pointer moves without the host's state changing, so a ghost with

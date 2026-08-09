@@ -1,9 +1,12 @@
-use kithara_apple::audio_toolbox::{
-    AUDIO_CONVERTER_ERR_NO_DATA_NOW, AUDIO_FILE_AAC_ADTS_TYPE, AUDIO_FILE_CAF_TYPE,
-    AUDIO_FILE_FLAC_TYPE, AUDIO_FILE_M4A_TYPE, AUDIO_FILE_MP3_TYPE, AUDIO_FILE_WAVE_TYPE,
-    AUDIO_FORMAT_APPLE_LOSSLESS, AUDIO_FORMAT_FLAC, AUDIO_FORMAT_FLAGS_NATIVE_FLOAT_PACKED,
-    AUDIO_FORMAT_LINEAR_PCM, AUDIO_FORMAT_MPEG_LAYER3, AUDIO_FORMAT_MPEG4_AAC,
-    AUDIO_FORMAT_PROPERTY_FORMAT_LIST, AudioFormatFlags, AudioFormatID, OSStatus,
+use kithara_apple::{
+    audio_toolbox,
+    audio_toolbox::{
+        AUDIO_CONVERTER_ERR_NO_DATA_NOW, AUDIO_FILE_AAC_ADTS_TYPE, AUDIO_FILE_CAF_TYPE,
+        AUDIO_FILE_FLAC_TYPE, AUDIO_FILE_M4A_TYPE, AUDIO_FILE_MP3_TYPE, AUDIO_FILE_WAVE_TYPE,
+        AUDIO_FORMAT_APPLE_LOSSLESS, AUDIO_FORMAT_FLAC, AUDIO_FORMAT_FLAGS_NATIVE_FLOAT_PACKED,
+        AUDIO_FORMAT_LINEAR_PCM, AUDIO_FORMAT_MPEG_LAYER3, AUDIO_FORMAT_MPEG4_AAC,
+        AUDIO_FORMAT_PROPERTY_FORMAT_LIST, AudioFormatFlags, AudioFormatID, OSStatus,
+    },
 };
 
 pub(crate) struct Consts;
@@ -57,12 +60,12 @@ impl Consts {
     /// 44.1 kHz for HE-AAC v2). Specifier = `AudioFormatInfo` struct
     /// containing a partial ASBD (`format_id` required) + ESDS cookie.
     pub(crate) const FORMAT_PROPERTY_FORMAT_LIST: u32 = AUDIO_FORMAT_PROPERTY_FORMAT_LIST;
-    pub(crate) const NO_ERR: OSStatus = kithara_apple::audio_toolbox::NO_ERR;
+    pub(crate) const NO_ERR: OSStatus = audio_toolbox::NO_ERR;
 }
 
 /// Decode a `FourCC`-style `OSStatus` into an ASCII tag when possible.
 pub(crate) fn os_status_to_string(status: OSStatus) -> String {
-    kithara_apple::audio_toolbox::os_status_to_string(status)
+    audio_toolbox::os_status_to_string(status)
 }
 
 #[cfg(test)]

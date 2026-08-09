@@ -6,6 +6,7 @@ use iced::{
         canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
     },
 };
+use mouse::Interaction;
 
 use crate::{
     render::{ReadValue, Skin, UiEvent, theme::RenderPalette},
@@ -79,7 +80,7 @@ impl<'a> Widget<'a> for BinaryControl<'_, '_, '_, '_> {
             active: *active,
             click: ClickActivate::builder()
                 .path(self.path)
-                .hover(HoverState::new(mouse::Interaction::Pointer))
+                .hover(HoverState::new(Interaction::Pointer))
                 .build(),
             palette: self.skin.palette,
             shape: self.shape,

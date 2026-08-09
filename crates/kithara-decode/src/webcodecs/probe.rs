@@ -1,5 +1,8 @@
 use js_sys::Uint8Array;
-use kithara_platform::sync::{OnceLock, mpsc};
+use kithara_platform::{
+    sync::{OnceLock, mpsc},
+    tokio::task,
+};
 use kithara_stream::AudioCodec;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
@@ -74,7 +77,7 @@ pub fn spawn_webcodecs_probe() {
         return;
     }
     let _ = host_cmd().set(spawn_host());
-    drop(kithara_platform::tokio::task::spawn(async {
+    drop(task::spawn(async {
         let mut snapshot = Support::default();
         for codec in Support::CODECS {
             snapshot.set(codec, probe(codec).await);

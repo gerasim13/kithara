@@ -6,6 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use ctx::{Permit, PollScope};
 use pin_project_lite::pin_project;
 
 use super::{clock, ctx, mode, report};
@@ -39,7 +40,7 @@ impl<F: Future> Future for PermitPoll<F> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
-        let _permit = ctx::Permit::enter();
+        let _permit = Permit::enter();
         this.fut.poll(cx)
     }
 }
@@ -58,7 +59,7 @@ impl<F: Future> Future for Watched<F> {
         // Snapshot can be up to 1 ms old, which is safe: budgets are 25 ms strict / 3000 ms blanket.
         let cpu_start = clock::snapshot(wall_start);
         let res = {
-            let _scope = ctx::PollScope::enter((this.name, this.loc));
+            let _scope = PollScope::enter((this.name, this.loc));
             this.fut.poll(cx)
         };
         let paused = ctx::paused_nanos().saturating_sub(paused_before);

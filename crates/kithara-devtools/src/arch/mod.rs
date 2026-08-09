@@ -12,6 +12,7 @@ use std::{
 
 use anyhow::{Context as _, Result, bail};
 use cargo_metadata::{Metadata, MetadataCommand};
+use checks::{Check, redundant_accessors};
 use clap::Args;
 
 mod checks;
@@ -41,7 +42,7 @@ pub(crate) fn redundant_accessor_keys(
         scope,
         config: &config,
     };
-    let violations = checks::Check::run(&checks::redundant_accessors::RedundantAccessors, &ctx)?;
+    let violations = Check::run(&redundant_accessors::RedundantAccessors, &ctx)?;
     Ok(violations
         .into_iter()
         .map(|violation| violation.key)

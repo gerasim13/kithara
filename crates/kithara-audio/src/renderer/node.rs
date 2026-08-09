@@ -312,8 +312,10 @@ impl Node for DecoderNode {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZero;
+
     use kithara_bufpool::PcmPool;
-    use kithara_decode::PcmMeta;
+    use kithara_decode::{PcmMeta, PcmSpec};
     use kithara_events::{AudioEvent, Event, EventBus};
     use kithara_platform::time::Duration;
     use kithara_stream::{PlayheadState, PlayheadWrite, SeekControl, SeekObserve, SeekState};
@@ -392,10 +394,6 @@ mod tests {
 
     #[kithara::test]
     fn decoder_node_records_engine_load_on_produced() {
-        use std::num::NonZero;
-
-        use kithara_decode::PcmSpec;
-
         let meter = Arc::new(EngineLoad::default());
         assert!(!meter.snapshot().is_active(), "idle before any tick");
 
@@ -469,7 +467,7 @@ mod tests {
             runtime: DecoderRuntime::default(),
         };
 
-        let now = kithara_platform::time::Instant::now();
+        let now = Instant::now();
         node.maybe_emit_worker_telemetry(now);
         node.maybe_emit_worker_telemetry(now);
         emit.flush();

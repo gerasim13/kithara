@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+use arch::ArchArgs;
 use clap::{Args, Subcommand};
+use idioms::IdiomsArgs;
+use style::StyleArgs;
 
 use crate::{arch, common::style::bold_cyan, idioms, style};
 
@@ -52,7 +55,7 @@ fn run_all(crates: &[String], paths: &[PathBuf], fix: bool, allow_dirty: bool) -
         config_dir: ".config/arch".into(),
         crates: crates.to_vec(),
         paths: paths.to_vec(),
-        ..arch::ArchArgs::default()
+        ..ArchArgs::default()
     };
     let style_args = style::StyleArgs {
         config_dir: ".config/style".into(),
@@ -60,7 +63,7 @@ fn run_all(crates: &[String], paths: &[PathBuf], fix: bool, allow_dirty: bool) -
         paths: paths.to_vec(),
         fix,
         allow_dirty,
-        ..style::StyleArgs::default()
+        ..StyleArgs::default()
     };
     let idioms_args = idioms::IdiomsArgs {
         config_dir: ".config/idioms".into(),
@@ -68,7 +71,7 @@ fn run_all(crates: &[String], paths: &[PathBuf], fix: bool, allow_dirty: bool) -
         paths: paths.to_vec(),
         fix,
         allow_dirty,
-        ..idioms::IdiomsArgs::default()
+        ..IdiomsArgs::default()
     };
 
     println!("{}", bold_cyan("══ arch ══"));

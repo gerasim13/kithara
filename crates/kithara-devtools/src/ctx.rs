@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use cargo_metadata::Metadata;
+use cargo_metadata::{Metadata, MetadataCommand};
 
 use crate::{common::project::ProjectConfig, similarity::SimilarityConfig};
 
@@ -31,7 +31,7 @@ impl Ctx {
     /// Returns an error if Cargo metadata cannot be resolved for the current
     /// working directory or the project config cannot be loaded.
     pub fn load() -> Result<Self> {
-        Self::load_with_metadata(cargo_metadata::MetadataCommand::new())
+        Self::load_with_metadata(MetadataCommand::new())
     }
 
     /// Loads an xtask context from a specific Cargo manifest.
@@ -41,7 +41,7 @@ impl Ctx {
     /// Returns an error if Cargo metadata or the project config cannot be
     /// loaded for the selected manifest.
     pub fn load_from_manifest(manifest_path: &Path) -> Result<Self> {
-        let mut command = cargo_metadata::MetadataCommand::new();
+        let mut command = MetadataCommand::new();
         command.manifest_path(manifest_path);
         Self::load_with_metadata(command)
     }

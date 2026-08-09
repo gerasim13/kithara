@@ -5,6 +5,7 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
+use credit::AsyncPollGuard;
 use pin_project_lite::pin_project;
 
 use super::system::{self, credit, gate::TaskGate};
@@ -51,7 +52,7 @@ impl<F: Future> Future for Participating<F> {
         // releasing this task's `active_async` slot while it blocks instead of
         // pinning the clock. Drops (restoring the depth) even if the poll unwinds.
         let outcome = {
-            let _poll_guard = credit::AsyncPollGuard::enter(this.gate.id(), this.gate.loc());
+            let _poll_guard = AsyncPollGuard::enter(this.gate.id(), this.gate.loc());
             this.fut.poll(&mut gate_cx)
         };
         match outcome {

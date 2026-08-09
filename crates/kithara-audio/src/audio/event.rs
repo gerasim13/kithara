@@ -1,13 +1,16 @@
-use kithara_decode::{DecodeError, DecoderResamplerConfig, PcmMeta, PcmSpec};
+use kithara_decode::{
+    DecodeError, DecoderBackend, DecoderResamplerConfig, ErrorClass, PcmMeta, PcmSpec,
+};
 use kithara_events::{
-    AudioCodecKind, AudioEvent, DecodeErrorClass, DecodeErrorKind,
+    AudioCodecKind, AudioEvent, ContainerKind, DecodeErrorClass, DecodeErrorKind,
     DecoderBackend as EventDecoderBackend, DecoderChangeCause, DecoderEvent, DeferredBus, Event,
     EventBus, FrameDomain, GaplessSpan, PlaybackResamplerKind, ResamplerKind, SeekLifecycleStage,
     SegmentLocation,
 };
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_resampler::ResamplerBackend;
-use kithara_stream::{MediaInfo, PlayheadWrite, SeekObserve};
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, PlayheadWrite, SeekObserve};
+use num_traits::cast::ToPrimitive;
 
 use super::{ReadOutcome, ThreadWake, WakeSignal};
 
@@ -176,21 +179,21 @@ impl WakeSignal for ReaderOutputWake {
 }
 
 fn clamp_millis(duration: Duration) -> u64 {
-    num_traits::cast::ToPrimitive::to_u64(&duration.as_millis()).unwrap_or(u64::MAX)
+    ToPrimitive::to_u64(&duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 pub(crate) fn map_audio_codec_kind(codec: kithara_stream::AudioCodec) -> AudioCodecKind {
     match codec {
-        kithara_stream::AudioCodec::AacLc => AudioCodecKind::AacLc,
-        kithara_stream::AudioCodec::AacHe => AudioCodecKind::AacHe,
-        kithara_stream::AudioCodec::AacHeV2 => AudioCodecKind::AacHeV2,
-        kithara_stream::AudioCodec::Mp3 => AudioCodecKind::Mp3,
-        kithara_stream::AudioCodec::Flac => AudioCodecKind::Flac,
-        kithara_stream::AudioCodec::Vorbis => AudioCodecKind::Vorbis,
-        kithara_stream::AudioCodec::Opus => AudioCodecKind::Opus,
-        kithara_stream::AudioCodec::Alac => AudioCodecKind::Alac,
-        kithara_stream::AudioCodec::Pcm => AudioCodecKind::Pcm,
-        kithara_stream::AudioCodec::Adpcm => AudioCodecKind::Adpcm,
+        AudioCodec::AacLc => AudioCodecKind::AacLc,
+        AudioCodec::AacHe => AudioCodecKind::AacHe,
+        AudioCodec::AacHeV2 => AudioCodecKind::AacHeV2,
+        AudioCodec::Mp3 => AudioCodecKind::Mp3,
+        AudioCodec::Flac => AudioCodecKind::Flac,
+        AudioCodec::Vorbis => AudioCodecKind::Vorbis,
+        AudioCodec::Opus => AudioCodecKind::Opus,
+        AudioCodec::Alac => AudioCodecKind::Alac,
+        AudioCodec::Pcm => AudioCodecKind::Pcm,
+        AudioCodec::Adpcm => AudioCodecKind::Adpcm,
     }
 }
 
@@ -198,27 +201,27 @@ pub(crate) fn map_container_kind(
     container: kithara_stream::ContainerFormat,
 ) -> kithara_events::ContainerKind {
     match container {
-        kithara_stream::ContainerFormat::Mp4 => kithara_events::ContainerKind::Mp4,
-        kithara_stream::ContainerFormat::Fmp4 => kithara_events::ContainerKind::Fmp4,
-        kithara_stream::ContainerFormat::MpegTs => kithara_events::ContainerKind::MpegTs,
-        kithara_stream::ContainerFormat::MpegAudio => kithara_events::ContainerKind::MpegAudio,
-        kithara_stream::ContainerFormat::Adts => kithara_events::ContainerKind::Adts,
-        kithara_stream::ContainerFormat::Flac => kithara_events::ContainerKind::Flac,
-        kithara_stream::ContainerFormat::Wav => kithara_events::ContainerKind::Wav,
-        kithara_stream::ContainerFormat::Ogg => kithara_events::ContainerKind::Ogg,
-        kithara_stream::ContainerFormat::Caf => kithara_events::ContainerKind::Caf,
-        kithara_stream::ContainerFormat::Mkv => kithara_events::ContainerKind::Mkv,
+        ContainerFormat::Mp4 => ContainerKind::Mp4,
+        ContainerFormat::Fmp4 => ContainerKind::Fmp4,
+        ContainerFormat::MpegTs => ContainerKind::MpegTs,
+        ContainerFormat::MpegAudio => ContainerKind::MpegAudio,
+        ContainerFormat::Adts => ContainerKind::Adts,
+        ContainerFormat::Flac => ContainerKind::Flac,
+        ContainerFormat::Wav => ContainerKind::Wav,
+        ContainerFormat::Ogg => ContainerKind::Ogg,
+        ContainerFormat::Caf => ContainerKind::Caf,
+        ContainerFormat::Mkv => ContainerKind::Mkv,
     }
 }
 
 pub(crate) fn map_decoder_backend(backend: kithara_decode::DecoderBackend) -> EventDecoderBackend {
     match backend {
         #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-        kithara_decode::DecoderBackend::Apple => EventDecoderBackend::Apple,
+        DecoderBackend::Apple => EventDecoderBackend::Apple,
         #[cfg(all(feature = "android", target_os = "android"))]
-        kithara_decode::DecoderBackend::Android => EventDecoderBackend::Android,
+        DecoderBackend::Android => EventDecoderBackend::Android,
         #[cfg(feature = "symphonia")]
-        kithara_decode::DecoderBackend::Symphonia => EventDecoderBackend::Symphonia,
+        DecoderBackend::Symphonia => EventDecoderBackend::Symphonia,
         _ => EventDecoderBackend::Symphonia,
     }
 }
@@ -260,8 +263,8 @@ pub(crate) fn map_decode_error_kind(error: &DecodeError) -> DecodeErrorKind {
 
 pub(crate) fn map_decode_error_class(class: kithara_decode::ErrorClass) -> DecodeErrorClass {
     match class {
-        kithara_decode::ErrorClass::Interrupted => DecodeErrorClass::Interrupted,
-        kithara_decode::ErrorClass::VariantChange => DecodeErrorClass::VariantChange,
+        ErrorClass::Interrupted => DecodeErrorClass::Interrupted,
+        ErrorClass::VariantChange => DecodeErrorClass::VariantChange,
         _ => DecodeErrorClass::Other,
     }
 }

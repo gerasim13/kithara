@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, btree_map::Entry},
     fs,
+    io::ErrorKind,
     path::{Path, PathBuf},
     process::{Child, Command},
     time::{Duration, Instant},
@@ -337,7 +338,7 @@ pub(crate) fn run(params: &ProfileParams, project: &ProjectConfig) -> Result<()>
         let clock = Instant::now();
         let mut child = match cmd.spawn() {
             Ok(child) => child,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            Err(err) if err.kind() == ErrorKind::NotFound => {
                 bail!("samply not found on PATH - install with `cargo install samply`")
             }
             Err(err) => return Err(err).context("spawn samply"),

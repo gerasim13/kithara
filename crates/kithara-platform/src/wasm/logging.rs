@@ -1,3 +1,5 @@
+use wasm_bindgen::JsValue;
+use web_sys::console;
 /// Emit an error-level diagnostic line through the platform-appropriate sink.
 ///
 /// On native this routes through `tracing`. On wasm it writes to the browser
@@ -7,5 +9,5 @@
 /// dispatching to it cross-instance would trap. `console.error` is a per-realm
 /// import that is valid in every scope, including `AudioWorkletGlobalScope`.
 pub fn log_error(msg: &str) {
-    web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(msg));
+    console::error_1(&JsValue::from_str(msg));
 }

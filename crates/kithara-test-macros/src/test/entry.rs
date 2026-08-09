@@ -6,7 +6,9 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{Attribute, Expr, Ident, ItemFn, ReturnType, parse_macro_input, visit_mut::VisitMut};
+use syn::{
+    Attribute, Error, Expr, Ident, ItemFn, ReturnType, parse_macro_input, visit_mut::VisitMut,
+};
 
 use super::{
     case::{Case, case_ident, extract_cases, is_case_attr},
@@ -38,14 +40,14 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 fn generate(args: TestArgs, mut func: ItemFn) -> syn::Result<TokenStream2> {
     if args.is_loom && func.sig.asyncness.is_some() {
-        return Err(syn::Error::new_spanned(
+        return Err(Error::new_spanned(
             func.sig.asyncness,
             "`loom` requires a synchronous deterministic model; extract the concurrent contract \
              from async integration work",
         ));
     }
     if args.is_loom && !matches!(func.sig.output, ReturnType::Default) {
-        return Err(syn::Error::new_spanned(
+        return Err(Error::new_spanned(
             &func.sig.output,
             "`loom` tests must return `()` so every failing permutation panics inside the model",
         ));
@@ -72,7 +74,7 @@ fn generate(args: TestArgs, mut func: ItemFn) -> syn::Result<TokenStream2> {
         let mut rewrite = FlashRewrite::default();
         rewrite.visit_block_mut(&mut func.block);
         if let Some((span, name)) = rewrite.bare_time_calls.first() {
-            return Err(syn::Error::new(
+            return Err(Error::new(
                 *span,
                 format!(
                     "bare `{name}(...)` in a flash test body stays on the REAL clock: the \

@@ -1,4 +1,4 @@
-use syn::{Expr, ItemImpl, Type, visit::Visit};
+use syn::{Expr, GenericArgument, ItemImpl, PathArguments, Type, visit, visit::Visit};
 
 use super::graph::{Edge, EdgeKind, Evidence, EvidenceGraph, Node, NodeId, NodeKind};
 
@@ -184,7 +184,7 @@ impl<'ast> Visit<'ast> for OwnershipVisitor<'_> {
                 self.add_channel(start.line, start.column, format!("mpsc::{method}(...)"));
             }
         }
-        syn::visit::visit_expr_call(self, call);
+        visit::visit_expr_call(self, call);
     }
 
     fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
@@ -201,7 +201,7 @@ impl<'ast> Visit<'ast> for OwnershipVisitor<'_> {
             self.current_module(),
             symbol,
         ));
-        syn::visit::visit_block(self, &item.block);
+        visit::visit_block(self, &item.block);
         self.owner = previous;
     }
 
@@ -215,7 +215,7 @@ impl<'ast> Visit<'ast> for OwnershipVisitor<'_> {
             self.current_module(),
             item.sig.ident.to_string(),
         ));
-        syn::visit::visit_block(self, &item.block);
+        visit::visit_block(self, &item.block);
         self.owner = previous;
     }
 
@@ -224,14 +224,14 @@ impl<'ast> Visit<'ast> for OwnershipVisitor<'_> {
             return;
         }
         let previous = self.impl_type.replace(type_name(&item.self_ty));
-        syn::visit::visit_item_impl(self, item);
+        visit::visit_item_impl(self, item);
         self.impl_type = previous;
     }
 
     fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
         if item.content.is_some() && !super::calls::is_test_only(&item.attrs) {
             self.inline_modules.push(item.ident.to_string());
-            syn::visit::visit_item_mod(self, item);
+            visit::visit_item_mod(self, item);
             self.inline_modules.pop();
         }
     }
@@ -267,7 +267,7 @@ impl<'ast> Visit<'ast> for OwnershipVisitor<'_> {
                 &resource,
             );
         }
-        syn::visit::visit_item_struct(self, item);
+        visit::visit_item_struct(self, item);
         self.owner = previous;
     }
 }
@@ -290,7 +290,7 @@ fn arc_inner(ty: &Type) -> Option<String> {
     if segment.ident != "Arc" {
         return None;
     }
-    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
         return None;
     };
     arguments.args.first().map(render_generic_arg)
@@ -298,7 +298,7 @@ fn arc_inner(ty: &Type) -> Option<String> {
 
 fn render_generic_arg(argument: &syn::GenericArgument) -> String {
     match argument {
-        syn::GenericArgument::Type(ty) => render_type(ty),
+        GenericArgument::Type(ty) => render_type(ty),
         _ => "?".to_string(),
     }
 }
@@ -311,7 +311,7 @@ fn render_type(ty: &Type) -> String {
             .iter()
             .map(|segment| {
                 let mut rendered = segment.ident.to_string();
-                if let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments {
+                if let PathArguments::AngleBracketed(arguments) = &segment.arguments {
                     let inner = arguments
                         .args
                         .iter()

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use syn::{
     BinOp, Block, Expr, ExprAwait, ExprBinary, ExprBreak, ExprContinue, ExprForLoop, ExprIf,
-    ExprMethodCall, ExprReturn, Pat, PatIdent, Stmt,
+    ExprMethodCall, ExprReturn, Lit, Pat, PatIdent, Stmt,
     spanned::Spanned,
     visit::{self, Visit},
 };
@@ -250,7 +250,7 @@ fn classify_if_count(if_expr: &ExprIf, loop_vars: &[String]) -> Option<Pattern> 
 
 fn is_lit_one(e: &Expr) -> bool {
     let Expr::Lit(lit) = e else { return false };
-    let syn::Lit::Int(int) = &lit.lit else {
+    let Lit::Int(int) = &lit.lit else {
         return false;
     };
     int.base10_digits() == "1"

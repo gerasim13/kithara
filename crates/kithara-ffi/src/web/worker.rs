@@ -12,7 +12,7 @@ use kithara_platform::{
     tokio::task::spawn as task_spawn,
 };
 use kithara_play::{
-    ResourceConfig,
+    PlayerConfig, PlayerImpl, ResourceConfig,
     policy::{DomainKeyPolicy, DomainKeyRule},
     wasm,
 };
@@ -91,8 +91,8 @@ pub(crate) fn worker_main(
     task_spawn(async move {
         let session = wasm::remote_session(session_tx);
         let state = BuildState::default();
-        let player = Arc::new(kithara_play::PlayerImpl::new(
-            kithara_play::PlayerConfig::builder()
+        let player = Arc::new(PlayerImpl::new(
+            PlayerConfig::builder()
                 .byte_pool(state.region.byte_pool())
                 .pcm_pool(state.region.pcm_pool())
                 .session(session.dispatcher())

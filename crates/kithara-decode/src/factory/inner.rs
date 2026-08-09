@@ -7,7 +7,9 @@ use std::{
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_platform::sync::Arc;
-use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
+use kithara_resampler::{
+    NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality, rubato::RubatoBackend,
+};
 use kithara_stream::{
     AudioCodec, BoxedEventSink, ByteMap, ContainerFormat, MediaInfo, ReaderInput, ReaderProfile,
     ReaderWarmup, needs_exact_byte_sizes,
@@ -19,9 +21,27 @@ use super::probe::{
 };
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 use crate::GaplessInfo;
+#[cfg(all(feature = "android", target_os = "android"))]
+use crate::android::{AndroidCodec, AndroidMediaExtractorDemuxer};
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+use crate::apple::{AppleAudioFileDemuxer, AppleCodec, SourceOpenMode};
+#[cfg(any(
+    feature = "symphonia",
+    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
+))]
+use crate::gapless::scoped_probe;
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+use crate::gapless::scoped_startup_probe;
+#[cfg(feature = "symphonia")]
+use crate::symphonia::{FileOpen, SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer};
+#[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
+use crate::webcodecs::codec::WebCodecsCodec;
 use crate::{
     Decoder,
+    composed::{ComposedDecoder, DecoderRuntime},
+    demuxer::Demuxer,
     error::{DecodeError, DecodeResult},
+    fmp4::Fmp4SegmentDemuxer,
     mp4::sniff_mp4_codec,
     traits::BoxedSource,
 };
@@ -330,8 +350,6 @@ fn create_webcodecs<B>(
 where
     B: ResamplerBackend,
 {
-    use crate::webcodecs::codec::WebCodecsCodec;
-
     if should_use_segment_aware(codec, container, &config)
         && let Some(layout) = config.byte_map.clone()
     {
@@ -378,14 +396,6 @@ fn build_webcodecs_standalone<B>(
 where
     B: ResamplerBackend,
 {
-    use crate::{
-        composed::{ComposedDecoder, DecoderRuntime},
-        demuxer::Demuxer,
-        gapless::scoped_probe,
-        symphonia::{FileOpen, SymphoniaDemuxer},
-        webcodecs::codec::WebCodecsCodec,
-    };
-
     tracing::debug!(
         ?codec,
         ?container,
@@ -434,8 +444,6 @@ fn create_apple<B>(
 where
     B: ResamplerBackend,
 {
-    use crate::apple::AppleCodec;
-
     if should_use_segment_aware(codec, container, &config)
         && let Some(layout) = config.byte_map.clone()
     {
@@ -488,12 +496,6 @@ fn build_apple_standalone_decoder<B>(
 where
     B: ResamplerBackend,
 {
-    use crate::{
-        apple::{AppleAudioFileDemuxer, AppleCodec, SourceOpenMode},
-        composed::{ComposedDecoder, DecoderRuntime},
-        demuxer::Demuxer,
-        gapless::{scoped_probe, scoped_startup_probe},
-    };
     let startup_probe = scoped_startup_probe(&mut *source, codec)?;
     let probed_gapless = if config.gapless {
         if matches!(codec, AudioCodec::Mp3) {
@@ -619,8 +621,6 @@ fn create_android<B>(
 where
     B: ResamplerBackend,
 {
-    use crate::android::AndroidCodec;
-
     if should_use_segment_aware(codec, container, &config)
         && let Some(layout) = config.byte_map.clone()
     {
@@ -680,11 +680,6 @@ fn build_android_standalone_decoder<B>(
 where
     B: ResamplerBackend,
 {
-    use crate::{
-        android::{AndroidCodec, AndroidMediaExtractorDemuxer},
-        composed::{ComposedDecoder, DecoderRuntime},
-        demuxer::Demuxer,
-    };
     let demuxer = match (codec, container) {
         (AudioCodec::Pcm, Some(ContainerFormat::Wav)) => {
             AndroidMediaExtractorDemuxer::open_wav(source)?
@@ -741,13 +736,6 @@ fn create_file_symphonia_universal<B>(
 where
     B: ResamplerBackend,
 {
-    use crate::{
-        composed::{ComposedDecoder, DecoderRuntime},
-        demuxer::Demuxer,
-        gapless::scoped_probe,
-        symphonia::{FileOpen, SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer},
-    };
-
     tracing::debug!(
         ?codec,
         ?container,
@@ -823,8 +811,6 @@ fn create_fmp4_segment_symphonia<B>(
 where
     B: ResamplerBackend,
 {
-    use crate::symphonia::{SymphoniaCodec, SymphoniaConfig};
-
     tracing::debug!(
         ?codec,
         "fmp4_segment: dispatching to segment-aware Symphonia path"
@@ -855,12 +841,6 @@ where
     F: FnOnce(&crate::demuxer::TrackInfo) -> DecodeResult<C>,
     B: ResamplerBackend,
 {
-    use crate::{
-        composed::{ComposedDecoder, DecoderRuntime},
-        demuxer::Demuxer,
-        fmp4::Fmp4SegmentDemuxer,
-    };
-
     let demuxer = Fmp4SegmentDemuxer::open(source, layout, config.byte_pool.clone())?;
     let codec = open_codec(demuxer.track_info())?;
     let pool = config.pcm_pool.clone();
@@ -912,7 +892,7 @@ mod tests {
         let config: DecoderResamplerConfig<kithara_resampler::rubato::RubatoBackend> =
             DecoderResamplerConfig::builder()
                 .target_sample_rate(target_sample_rate)
-                .backend(kithara_resampler::rubato::RubatoBackend::default())
+                .backend(RubatoBackend::default())
                 .build();
 
         assert_eq!(config.target_sample_rate, target_sample_rate);

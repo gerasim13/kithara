@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use fs::File;
 use glob::Pattern;
 
 use super::{
@@ -500,7 +501,7 @@ fn execute(plan: &StagePlan, root: &Path, logs: &Path) -> Result<StageEvidence> 
         .iter()
         .map(|artifact| artifact_stamp(artifact))
         .collect::<Vec<_>>();
-    let stdout = fs::File::create(&log_path)
+    let stdout = File::create(&log_path)
         .with_context(|| format!("create assessment log: {}", log_path.display()))?;
     let stderr = stdout
         .try_clone()

@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara_events::{AbrMode, CancelReason, RequestId, RequestPriority};
-use kithara_platform::time::Duration;
+use kithara_platform::{time::Duration, tokio};
 use url::Url;
 
 /// Implemented by `#[derive(kithara::Probe)]` for value-type probe payloads.
@@ -281,7 +281,7 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 static INSTALL_ID: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(not(target_arch = "wasm32"))]
-kithara_platform::tokio::task_local! {
+tokio::task_local! {
     /// Per-test install_id captured at scope entry. Inherited by
     /// `tokio::spawn` automatically; not inherited by `spawn_blocking`
     /// — that path falls back to the global atomic, which is the

@@ -8,6 +8,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::Args;
+use fs::File;
 
 use crate::{
     common::{project::ProjectConfig, timestamp::utc_timestamp},
@@ -201,7 +202,7 @@ fn build_stages_with_excludes(workspace_exclude: &[String]) -> Vec<Stage> {
 fn run_stage(idx: usize, stage: &Stage, logs_dir: &Path) -> StageResult {
     let cmdline = format!("{} {}", stage.program, stage.args.join(" "));
     let log_path = logs_dir.join(format!("{idx:02}-{}.log", stage.name));
-    let log_file = match fs::File::create(&log_path) {
+    let log_file = match File::create(&log_path) {
         Ok(f) => f,
         Err(e) => {
             return StageResult {

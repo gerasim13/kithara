@@ -5,7 +5,7 @@ use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt};
 use kithara_platform::{
     CancelToken,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant, timeout},
 };
 use url::Url;
@@ -599,7 +599,7 @@ mod tests {
         response::Response as AxumResponse,
         routing::{any, get, post},
     };
-    use futures::StreamExt;
+    use futures::{StreamExt, stream};
     use kithara_platform::{
         sync::Arc,
         time::Duration,
@@ -685,11 +685,8 @@ mod tests {
     /// and one body chunk, then never deliver the rest of the body — the
     /// throttling-CDN shape that must surface as a timeout, not a hang.
     async fn server_stalling_body() -> Url {
-        use axum::{body::Body, response::Response as HttpResponse};
-        use futures::{StreamExt, stream};
-
-        fn stalled() -> HttpResponse {
-            HttpResponse::new(Body::from_stream(
+        fn stalled() -> AxumResponse {
+            AxumResponse::new(Body::from_stream(
                 stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(b"partial"))])
                     .chain(stream::pending()),
             ))
@@ -767,7 +764,7 @@ mod tests {
             0x51, 0x3e, 0xd3, 0x2d, 0x00, 0x00, 0x00,
         ];
 
-        let seen = Arc::new(kithara_platform::sync::Mutex::new(Vec::new()));
+        let seen = Arc::new(Mutex::new(Vec::new()));
         let handler_seen = Arc::clone(&seen);
         let app = Router::new().route(
             "/master.m3u8",

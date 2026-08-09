@@ -502,6 +502,8 @@ pub trait ByteMap: Send + Sync + 'static {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -519,8 +521,6 @@ mod tests {
 
     #[kithara::test]
     fn phase_default_delegates_to_phase_at() {
-        use std::sync::atomic::{AtomicU64, Ordering};
-
         struct ReadySource {
             seek: Arc<SeekState>,
             playhead: Arc<PlayheadState>,
@@ -587,8 +587,6 @@ mod tests {
     /// - `activity().is_playing()` toggles correctly.
     #[kithara::test]
     fn narrow_source_accessors_seam() {
-        use std::sync::atomic::{AtomicU64, Ordering};
-
         struct MinimalSource {
             seek: Arc<SeekState>,
             playhead: Arc<PlayheadState>,

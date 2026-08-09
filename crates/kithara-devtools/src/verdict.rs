@@ -1,5 +1,7 @@
 use std::fmt;
 
+use anyhow::Error;
+
 /// A check ran to completion and the code did not pass it.
 ///
 /// This is not an error: nothing went wrong with the tool, and there is no
@@ -44,7 +46,7 @@ impl NotClean {
     /// verdict itself, and a `new` that does not return `Self` reads wrong.
     #[must_use]
     pub fn raised(check: &'static str, findings: usize) -> anyhow::Error {
-        anyhow::Error::new(Self {
+        Error::new(Self {
             check,
             findings: Some(findings),
         })
@@ -54,7 +56,7 @@ impl NotClean {
     /// hand back a count.
     #[must_use]
     pub fn reported(check: &'static str) -> anyhow::Error {
-        anyhow::Error::new(Self {
+        Error::new(Self {
             check,
             findings: None,
         })

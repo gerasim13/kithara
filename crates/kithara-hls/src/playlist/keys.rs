@@ -4,7 +4,9 @@ use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
 use dashmap::DashMap;
+use futures::future;
 use kithara_assets::{AssetResource, AssetScope, ReadSide, ResourceKey};
+use kithara_bufpool::BytePool;
 use kithara_drm::{DecryptContext, KeyProcessor, KeyProcessorRegistry, PreparedKeyRequest};
 use kithara_events::{
     DrmEvent, EventBus, HlsError as EventHlsError, HlsEvent, KeyFailureStage, KeySource,
@@ -306,7 +308,7 @@ impl KeyStore {
         let futs = urls
             .into_iter()
             .map(|url| async move { self.get_raw_key(&url, None).await.map(drop) });
-        futures::future::try_join_all(futs).await?;
+        future::try_join_all(futs).await?;
         Ok(())
     }
 
@@ -851,7 +853,7 @@ mod tests {
             bus.clone(),
             None,
             registry,
-            kithara_bufpool::BytePool::default(),
+            BytePool::default(),
         )
     }
 

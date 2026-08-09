@@ -1,4 +1,5 @@
 use anyhow::Result;
+use derivable_support::Kind;
 
 use super::{Check, Context, derivable_support};
 use crate::common::{fix::FixOutcome, violation::Violation};
@@ -9,17 +10,17 @@ impl Check for DerivableDisplay {
     fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
         derivable_support::fix(
             ctx,
-            derivable_support::Kind::Display,
+            Kind::Display,
             ctx.config.thresholds.derivable_display.enabled,
         )
     }
     fn id(&self) -> &'static str {
-        derivable_support::Kind::Display.id()
+        Kind::Display.id()
     }
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         derivable_support::run(
             ctx,
-            derivable_support::Kind::Display,
+            Kind::Display,
             ctx.config.thresholds.derivable_display.enabled,
         )
     }

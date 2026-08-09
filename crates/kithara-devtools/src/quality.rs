@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{Result, bail};
 use cargo_metadata::MetadataCommand;
-use clap::Subcommand;
+use clap::{Command, Subcommand};
 use regex::Regex;
 
 use crate::{
@@ -594,7 +594,7 @@ mod tests {
 
     #[test]
     fn assess_command_accepts_default_profile_and_depth() {
-        let command = QualityCommand::augment_subcommands(clap::Command::new("quality"));
+        let command = QualityCommand::augment_subcommands(Command::new("quality"));
         let matches = command.try_get_matches_from(["quality", "assess"]);
 
         assert!(matches.is_ok(), "quality assess should parse: {matches:?}");

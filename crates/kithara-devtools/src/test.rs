@@ -2,6 +2,7 @@ use std::{collections::BTreeSet, path::Path, process::Command};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
+use toml::Table;
 
 use crate::common::project::{ProjectConfig, TestCommandConfig, TestLaneConfig};
 
@@ -421,7 +422,7 @@ mod tests {
             orphans: OrphansConfig::default(),
             quality: QualityConfig::default(),
             perf: PerfConfig::default(),
-            ext: toml::Table::default(),
+            ext: Table::default(),
         }
     }
 

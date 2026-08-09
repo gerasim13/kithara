@@ -379,7 +379,7 @@ mod tests {
         sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     };
 
-    use kithara_platform::sync::Arc;
+    use kithara_platform::{sync::Arc, time::Duration};
     use kithara_stream::{
         AudioCodec, ContainerFormat, NotReadyCause, PendingReason, SourcePhase, StreamPending,
     };
@@ -553,7 +553,7 @@ mod tests {
             AudioCodec::Mp3,
             Some(ContainerFormat::MpegAudio),
             SourceOpenMode::Streaming,
-            Some(kithara_platform::time::Duration::from_secs(2)),
+            Some(Duration::from_secs(2)),
         )
         .expect("MP3 streaming open must not require tail bytes");
         assert!(

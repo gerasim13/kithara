@@ -2,8 +2,8 @@ use std::{collections::BTreeMap, path::Path};
 
 use anyhow::Result;
 use syn::{
-    Block, Expr, File, ImplItem, ImplItemFn, Item, ItemImpl, Member, ReturnType, Signature, Stmt,
-    Type,
+    Block, Expr, File, GenericArgument, ImplItem, ImplItemFn, Item, ItemImpl, Member,
+    PathArguments, ReturnType, Signature, Stmt, Type,
     visit::{self, Visit},
 };
 
@@ -407,9 +407,9 @@ fn type_exposes_handle(ty: &Type, mutable_types: &[String]) -> bool {
                 if mutable_types.iter().any(|t| seg.ident == *t) {
                     return true;
                 }
-                if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                if let PathArguments::AngleBracketed(args) = &seg.arguments {
                     for a in &args.args {
-                        if let syn::GenericArgument::Type(t) = a
+                        if let GenericArgument::Type(t) = a
                             && type_exposes_handle(t, mutable_types)
                         {
                             return true;

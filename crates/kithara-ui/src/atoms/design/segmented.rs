@@ -1,3 +1,4 @@
+use canvas::Text;
 use iced::{
     Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
     alignment::{Horizontal, Vertical},
@@ -5,8 +6,10 @@ use iced::{
     widget::{
         Space,
         canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
+        text::Shaping,
     },
 };
+use mouse::Interaction;
 use num_traits::ToPrimitive;
 
 use crate::{
@@ -118,8 +121,8 @@ impl canvas::Program<UiEvent> for SegmentedCanvas<'_> {
                 font: fonts::mono(self.metrics.text.weight),
                 align_x: Horizontal::Center.into(),
                 align_y: Vertical::Center,
-                shaping: iced::widget::text::Shaping::Advanced,
-                ..canvas::Text::default()
+                shaping: Shaping::Advanced,
+                ..Text::default()
             });
         }
         vec![frame.into_geometry()]
@@ -132,9 +135,9 @@ impl canvas::Program<UiEvent> for SegmentedCanvas<'_> {
         cursor: Cursor,
     ) -> mouse::Interaction {
         if self.items.is_empty() || !cursor.is_over(bounds) {
-            mouse::Interaction::default()
+            Interaction::default()
         } else {
-            mouse::Interaction::Pointer
+            Interaction::Pointer
         }
     }
 

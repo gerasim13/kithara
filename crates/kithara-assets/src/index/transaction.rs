@@ -6,7 +6,10 @@ use std::{
 };
 
 use dashmap::{DashMap, mapref::entry::Entry};
-use kithara_platform::sync::{Arc, Notify};
+use kithara_platform::{
+    sync::{Arc, Notify},
+    time,
+};
 
 use crate::ResourceKey;
 
@@ -213,7 +216,7 @@ mod tests {
         first.abort();
         assert!(first.await.unwrap_err().is_cancelled());
 
-        kithara_platform::time::timeout(Duration::from_millis(100), second)
+        time::timeout(Duration::from_millis(100), second)
             .await
             .expect("remaining waiter must receive the released transaction")
             .expect("remaining waiter task must complete");

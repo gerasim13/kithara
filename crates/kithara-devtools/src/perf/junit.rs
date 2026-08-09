@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use roxmltree::Document;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CaseTiming {
@@ -9,7 +10,7 @@ pub(crate) struct CaseTiming {
 }
 
 pub(crate) fn parse_junit(xml: &str) -> Result<Vec<CaseTiming>> {
-    let doc = roxmltree::Document::parse(xml).context("parse junit xml")?;
+    let doc = Document::parse(xml).context("parse junit xml")?;
     let mut cases = Vec::new();
     for node in doc.descendants().filter(|n| n.has_tag_name("testcase")) {
         let name = node.attribute("name").unwrap_or_default().to_owned();

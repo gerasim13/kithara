@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kithara_ui::{
+    builtin,
     module::TrackColumn,
     render::{ControlAction, ReadValue, Reads, StereoLevels, TreeRow, WaveBucket, WaveformView},
 };
@@ -316,7 +317,7 @@ impl MockReads {
             return;
         };
         if value.is_finite() {
-            let minimum = f64::from(kithara_ui::builtin::skin().track_list.min_column_width);
+            let minimum = f64::from(builtin::skin().track_list.min_column_width);
             self.tracklist_widths.insert(column, value.max(minimum));
         }
     }

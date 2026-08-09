@@ -17,6 +17,7 @@ use kithara_ui::{
     source::{Limits, MemResolver, UiConfig},
 };
 use num_traits::cast::AsPrimitive;
+use ron::ser;
 
 const MODULE_SKELETON: &str = r#"(
     schema: "kithara.module",
@@ -344,7 +345,7 @@ fn module_text(id: &str, root: ControlNode) -> String {
         .unwrap_or_else(|error| panic!("module skeleton must parse: {error}"));
     document.id = DocId(id.to_owned());
     document.root = root;
-    ron::ser::to_string(&document)
+    ser::to_string(&document)
         .unwrap_or_else(|error| panic!("benchmark module must serialize: {error}"))
 }
 

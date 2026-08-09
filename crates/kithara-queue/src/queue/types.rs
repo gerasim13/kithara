@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara_events::TrackId;
-use kithara_play::{PlaybackSnapshot, ResourceSrc};
+use kithara_play::{PlaybackShared, PlaybackSnapshot, ResourceSrc};
 
 use crate::track::TrackSource;
 
@@ -400,7 +400,7 @@ mod tests {
     }
 
     fn view_of(frontier: f64, cached: f64) -> PlaybackView {
-        let shared = kithara_play::PlaybackShared::default();
+        let shared = PlaybackShared::default();
         shared.duration.store(200.0, Ordering::Relaxed);
         shared.frontier.store(frontier, Ordering::Relaxed);
         shared.cached.store(cached, Ordering::Relaxed);

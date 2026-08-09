@@ -1,3 +1,4 @@
+use regex::Regex;
 #[must_use]
 pub fn utc_timestamp() -> String {
     let now = std::time::SystemTime::now();
@@ -40,7 +41,7 @@ mod tests {
     #[test]
     fn utc_timestamp_has_expected_format() {
         let ts = utc_timestamp();
-        let re = regex::Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$").unwrap();
+        let re = Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$").unwrap();
         assert!(re.is_match(&ts), "timestamp should match ISO 8601: {ts}");
     }
 

@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, ops::Range};
 
 use anyhow::Result;
-use syn::{Field, Fields, Item, Type, Visibility, spanned::Spanned};
+use syn::{Field, Fields, Item, Meta, Type, Visibility, spanned::Spanned};
 
 use super::{Check, Context};
 use crate::{
@@ -209,7 +209,7 @@ fn cfg_signature(attrs: &[syn::Attribute]) -> String {
         .iter()
         .filter(|a| a.path().is_ident("cfg"))
         .map(|a| match &a.meta {
-            syn::Meta::List(list) => list.tokens.to_string(),
+            Meta::List(list) => list.tokens.to_string(),
             other => format!("{other:?}"),
         })
         .collect();

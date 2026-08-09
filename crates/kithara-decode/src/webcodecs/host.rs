@@ -1,6 +1,7 @@
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, VecDeque},
+    io::Cursor,
     rc::Rc,
 };
 
@@ -8,6 +9,7 @@ use js_sys::{Float32Array, Object, Uint8Array};
 use kithara_platform::{
     sync::mpsc::{self, TryRecvError},
     thread::{assert_not_main_thread, keep_worker_alive, spawn_named},
+    time,
     time::{self, Duration},
     tokio::task::spawn as task_spawn,
 };
@@ -498,11 +500,30 @@ fn send_error(out_tx: &mpsc::Sender<HostOut>, err: &DecodeError, generation: u64
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::PcmPool;
     use kithara_platform::time::{Duration, Instant};
     use kithara_test_utils::kithara;
+    use symphonia::{
+        core::{
+            formats::{FormatOptions, probe::Hint},
+            io::{MediaSourceStream, MediaSourceStreamOptions},
+            meta::MetadataOptions,
+        },
+        default,
+    };
 
     use super::*;
-    use crate::webcodecs::protocol::{HostCmd, HostOut};
+    use crate::{
+        codec::FrameCodec,
+        composed::{ComposedDecoder, DecoderRuntime},
+        demuxer::{DemuxOutcome, Demuxer},
+        symphonia::SymphoniaDemuxer,
+        traits::{Decoder, DecoderChunkOutcome},
+        webcodecs::{
+            codec::WebCodecsCodec,
+            protocol::{HostCmd, HostOut},
+        },
+    };
 
     fn open_host() -> (mpsc::Sender<HostCmd>, mpsc::Receiver<HostOut>) {
         let cmd = spawn_host();
@@ -514,29 +535,13 @@ mod tests {
 
     #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
     async fn composed_mp3_reaches_eof_with_pcm() {
-        use symphonia::{
-            core::{
-                formats::{FormatOptions, probe::Hint},
-                io::{MediaSourceStream, MediaSourceStreamOptions},
-                meta::MetadataOptions,
-            },
-            default,
-        };
-
-        use crate::{
-            composed::{ComposedDecoder, DecoderRuntime},
-            demuxer::Demuxer,
-            traits::{Decoder, DecoderChunkOutcome},
-            webcodecs::codec::WebCodecsCodec,
-        };
-
         crate::webcodecs::probe::spawn_webcodecs_probe();
 
         const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../assets/test.mp3"
         ));
-        let cursor = std::io::Cursor::new(TEST_MP3_BYTES.to_vec());
+        let cursor = Cursor::new(TEST_MP3_BYTES.to_vec());
         let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let mut hint = Hint::new();
         hint.with_extension("mp3");
@@ -565,7 +570,7 @@ mod tests {
                     total_frames += chunk.frames() as u64;
                 }
                 DecoderChunkOutcome::Pending(_) => {
-                    kithara_platform::time::sleep(Duration::from_millis(1)).await;
+                    time::sleep(Duration::from_millis(1)).await;
                 }
                 DecoderChunkOutcome::Eof => break,
             }
@@ -575,30 +580,13 @@ mod tests {
 
     #[kithara::test(wasm, timeout(Duration::from_secs(60)))]
     async fn real_mp3_frames_produce_pcm() {
-        use kithara_bufpool::PcmPool;
-        use symphonia::{
-            core::{
-                formats::{FormatOptions, probe::Hint},
-                io::{MediaSourceStream, MediaSourceStreamOptions},
-                meta::MetadataOptions,
-            },
-            default,
-        };
-
-        use crate::{
-            codec::FrameCodec,
-            demuxer::{DemuxOutcome, Demuxer},
-            symphonia::SymphoniaDemuxer,
-            webcodecs::codec::WebCodecsCodec,
-        };
-
         crate::webcodecs::probe::spawn_webcodecs_probe();
 
         const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../assets/test.mp3"
         ));
-        let cursor = std::io::Cursor::new(TEST_MP3_BYTES.to_vec());
+        let cursor = Cursor::new(TEST_MP3_BYTES.to_vec());
         let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let mut hint = Hint::new();
         hint.with_extension("mp3");
@@ -629,7 +617,7 @@ mod tests {
             if frames > 0 {
                 return;
             }
-            kithara_platform::time::sleep(Duration::from_millis(50)).await;
+            time::sleep(Duration::from_millis(50)).await;
         }
         panic!("no PCM from WebCodecs for 64 real mp3 frames");
     }
@@ -664,7 +652,7 @@ mod tests {
                 Instant::now() <= deadline,
                 "flush promise never resolved on an empty configured decoder"
             );
-            kithara_platform::time::sleep(Duration::from_millis(100)).await;
+            time::sleep(Duration::from_millis(100)).await;
         }
     }
 
@@ -693,7 +681,7 @@ mod tests {
                 Instant::now() <= deadline,
                 "host task never replied to invalid configure"
             );
-            kithara_platform::time::sleep(Duration::from_millis(100)).await;
+            time::sleep(Duration::from_millis(100)).await;
         }
     }
 }

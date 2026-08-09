@@ -7,6 +7,7 @@ use kithara_stream::{
     VariantControl, VariantPromotion, VariantReaderTake, VariantTransition,
 };
 use tracing::{trace, warn};
+use track::TrackFailure;
 
 pub(crate) use crate::pipeline::{
     decode::{
@@ -580,11 +581,11 @@ pub(crate) fn playing_for_state(state: &CurrentFsm) -> bool {
 
 fn map_track_failure_kind(failure: &track::TrackFailure) -> TrackFailureKind {
     match failure {
-        track::TrackFailure::Decode(_) => TrackFailureKind::Decode,
+        TrackFailure::Decode(_) => TrackFailureKind::Decode,
         track::TrackFailure::RecreateFailed { offset } => {
             TrackFailureKind::RecreateFailed { offset: *offset }
         }
-        track::TrackFailure::SourceCancelled => TrackFailureKind::SourceCancelled,
+        TrackFailure::SourceCancelled => TrackFailureKind::SourceCancelled,
     }
 }
 

@@ -1,6 +1,10 @@
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use anyhow::{Context, Result, bail};
+use glob::Pattern;
 use serde::Deserialize;
 use toml::Table;
 
@@ -400,10 +404,10 @@ impl ProjectConfig {
             if pattern.is_empty() {
                 bail!("architecture exclusion glob cannot be empty");
             }
-            glob::Pattern::new(pattern)
+            Pattern::new(pattern)
                 .with_context(|| format!("invalid architecture exclusion glob `{pattern}`"))?;
         }
-        let mut names = std::collections::BTreeSet::new();
+        let mut names = BTreeSet::new();
         for scenario in &self.architecture.runtime.scenarios {
             scenario.validate()?;
             if !names.insert(scenario.name()) {
@@ -413,8 +417,8 @@ impl ProjectConfig {
                 );
             }
         }
-        let mut stage_names = std::collections::BTreeSet::new();
-        let mut stage_tools = std::collections::BTreeSet::new();
+        let mut stage_names = BTreeSet::new();
+        let mut stage_tools = BTreeSet::new();
         for stage in &self.quality.assessment.deep_stages {
             if stage.name.is_empty()
                 || !stage.name.chars().all(|character| {
@@ -443,7 +447,7 @@ impl ProjectConfig {
             }
             stage_tools.extend(stage.tools.iter().map(String::as_str));
         }
-        let mut policy_tools = std::collections::BTreeSet::new();
+        let mut policy_tools = BTreeSet::new();
         for policy in &self.quality.assessment.not_applicable_tools {
             if policy.tool.is_empty()
                 || !policy.tool.chars().all(|character| {

@@ -9,35 +9,38 @@ use kithara_stream::{
     StreamSeekPastEof,
 };
 use kithara_test_utils::kithara;
-use symphonia::core::{
-    codecs::{
-        CodecParameters,
-        audio::{
-            AudioCodecId, AudioCodecParameters,
-            well_known::{
-                CODEC_ID_AAC, CODEC_ID_ADPCM_G722, CODEC_ID_ADPCM_G726, CODEC_ID_ADPCM_G726LE,
-                CODEC_ID_ADPCM_IMA_QT, CODEC_ID_ADPCM_IMA_WAV, CODEC_ID_ADPCM_MS, CODEC_ID_ALAC,
-                CODEC_ID_FLAC, CODEC_ID_MP3, CODEC_ID_OPUS, CODEC_ID_PCM_ALAW, CODEC_ID_PCM_F32BE,
-                CODEC_ID_PCM_F32BE_PLANAR, CODEC_ID_PCM_F32LE, CODEC_ID_PCM_F32LE_PLANAR,
-                CODEC_ID_PCM_F64BE, CODEC_ID_PCM_F64BE_PLANAR, CODEC_ID_PCM_F64LE,
-                CODEC_ID_PCM_F64LE_PLANAR, CODEC_ID_PCM_MULAW, CODEC_ID_PCM_S8,
-                CODEC_ID_PCM_S8_PLANAR, CODEC_ID_PCM_S16BE, CODEC_ID_PCM_S16BE_PLANAR,
-                CODEC_ID_PCM_S16LE, CODEC_ID_PCM_S16LE_PLANAR, CODEC_ID_PCM_S24BE,
-                CODEC_ID_PCM_S24BE_PLANAR, CODEC_ID_PCM_S24LE, CODEC_ID_PCM_S24LE_PLANAR,
-                CODEC_ID_PCM_S32BE, CODEC_ID_PCM_S32BE_PLANAR, CODEC_ID_PCM_S32LE,
-                CODEC_ID_PCM_S32LE_PLANAR, CODEC_ID_PCM_U8, CODEC_ID_PCM_U8_PLANAR,
-                CODEC_ID_PCM_U16BE, CODEC_ID_PCM_U16BE_PLANAR, CODEC_ID_PCM_U16LE,
-                CODEC_ID_PCM_U16LE_PLANAR, CODEC_ID_PCM_U24BE, CODEC_ID_PCM_U24BE_PLANAR,
-                CODEC_ID_PCM_U24LE, CODEC_ID_PCM_U24LE_PLANAR, CODEC_ID_PCM_U32BE,
-                CODEC_ID_PCM_U32BE_PLANAR, CODEC_ID_PCM_U32LE, CODEC_ID_PCM_U32LE_PLANAR,
-                CODEC_ID_VORBIS,
+use symphonia::{
+    core,
+    core::{
+        codecs::{
+            CodecParameters,
+            audio::{
+                AudioCodecId, AudioCodecParameters,
+                well_known::{
+                    CODEC_ID_AAC, CODEC_ID_ADPCM_G722, CODEC_ID_ADPCM_G726, CODEC_ID_ADPCM_G726LE,
+                    CODEC_ID_ADPCM_IMA_QT, CODEC_ID_ADPCM_IMA_WAV, CODEC_ID_ADPCM_MS,
+                    CODEC_ID_ALAC, CODEC_ID_FLAC, CODEC_ID_MP3, CODEC_ID_OPUS, CODEC_ID_PCM_ALAW,
+                    CODEC_ID_PCM_F32BE, CODEC_ID_PCM_F32BE_PLANAR, CODEC_ID_PCM_F32LE,
+                    CODEC_ID_PCM_F32LE_PLANAR, CODEC_ID_PCM_F64BE, CODEC_ID_PCM_F64BE_PLANAR,
+                    CODEC_ID_PCM_F64LE, CODEC_ID_PCM_F64LE_PLANAR, CODEC_ID_PCM_MULAW,
+                    CODEC_ID_PCM_S8, CODEC_ID_PCM_S8_PLANAR, CODEC_ID_PCM_S16BE,
+                    CODEC_ID_PCM_S16BE_PLANAR, CODEC_ID_PCM_S16LE, CODEC_ID_PCM_S16LE_PLANAR,
+                    CODEC_ID_PCM_S24BE, CODEC_ID_PCM_S24BE_PLANAR, CODEC_ID_PCM_S24LE,
+                    CODEC_ID_PCM_S24LE_PLANAR, CODEC_ID_PCM_S32BE, CODEC_ID_PCM_S32BE_PLANAR,
+                    CODEC_ID_PCM_S32LE, CODEC_ID_PCM_S32LE_PLANAR, CODEC_ID_PCM_U8,
+                    CODEC_ID_PCM_U8_PLANAR, CODEC_ID_PCM_U16BE, CODEC_ID_PCM_U16BE_PLANAR,
+                    CODEC_ID_PCM_U16LE, CODEC_ID_PCM_U16LE_PLANAR, CODEC_ID_PCM_U24BE,
+                    CODEC_ID_PCM_U24BE_PLANAR, CODEC_ID_PCM_U24LE, CODEC_ID_PCM_U24LE_PLANAR,
+                    CODEC_ID_PCM_U32BE, CODEC_ID_PCM_U32BE_PLANAR, CODEC_ID_PCM_U32LE,
+                    CODEC_ID_PCM_U32LE_PLANAR, CODEC_ID_VORBIS,
+                },
             },
         },
+        errors::{Error as SymphoniaError, SeekErrorKind},
+        formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track, TrackType},
+        packet::Packet,
+        units::{Time, TimeBase, Timestamp},
     },
-    errors::{Error as SymphoniaError, SeekErrorKind},
-    formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track, TrackType},
-    packet::Packet,
-    units::{Time, TimeBase, Timestamp},
 };
 
 use crate::{
@@ -110,7 +113,7 @@ impl SymphoniaDemuxer {
             .map(|h| h.load(Ordering::Acquire))
     }
 
-    fn dur_to_duration(&self, dur: symphonia::core::units::Duration) -> Duration {
+    fn dur_to_duration(&self, dur: core::units::Duration) -> Duration {
         let Some(tb) = self.time_base else {
             return Duration::ZERO;
         };

@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, collections::HashSet, ops::Range};
 
 use anyhow::{Context as _, Result};
-use proc_macro2::Span;
+use proc_macro2::{Span, TokenTree};
 use syn::{
     ExprStruct, FieldValue, Member,
     spanned::Spanned,
@@ -384,9 +384,9 @@ impl<'ast> Visit<'ast> for IdentScanner<'_> {
 
 fn tokens_contain_ident(tokens: proc_macro2::TokenStream, names: &HashSet<String>) -> bool {
     tokens.into_iter().any(|tt| match tt {
-        proc_macro2::TokenTree::Ident(id) => names.contains(&id.to_string()),
-        proc_macro2::TokenTree::Group(g) => tokens_contain_ident(g.stream(), names),
-        proc_macro2::TokenTree::Punct(_) | proc_macro2::TokenTree::Literal(_) => false,
+        TokenTree::Ident(id) => names.contains(&id.to_string()),
+        TokenTree::Group(g) => tokens_contain_ident(g.stream(), names),
+        TokenTree::Punct(_) | TokenTree::Literal(_) => false,
     })
 }
 

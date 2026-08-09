@@ -2,7 +2,10 @@
 
 use std::{
     collections::HashSet,
-    sync::{OnceLock, Weak, atomic::AtomicBool},
+    sync::{
+        OnceLock, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use dashmap::{DashMap, mapref::entry::Entry};
@@ -245,8 +248,7 @@ impl Flushable for PinsInner {
 #[cfg(target_arch = "wasm32")]
 impl PinsInner {
     fn flush_with_durability(&self, _durable: bool) -> AssetsResult<()> {
-        self.dirty
-            .store(false, std::sync::atomic::Ordering::Release);
+        self.dirty.store(false, Ordering::Release);
         Ok(())
     }
 }

@@ -8,7 +8,7 @@ use glob::Pattern;
 use quote::ToTokens;
 use syn::{
     BinOp, Block, Expr, ExprAssign, ExprBinary, ExprCall, ExprMethodCall, ExprStruct, Fields,
-    ImplItem, Item, ItemImpl, Member, Pat, Stmt, Type, Visibility, visit::Visit,
+    ImplItem, Item, ItemImpl, Member, Pat, Stmt, Type, Visibility, visit, visit::Visit,
 };
 
 use crate::common::{
@@ -198,7 +198,7 @@ impl AssignedFieldVisitor<'_> {
 impl<'ast> Visit<'ast> for AssignedFieldVisitor<'_> {
     fn visit_expr_assign(&mut self, n: &'ast ExprAssign) {
         self.record_assignment(&n.left);
-        syn::visit::visit_expr_assign(self, n);
+        visit::visit_expr_assign(self, n);
     }
 
     fn visit_expr_binary(&mut self, n: &'ast ExprBinary) {
@@ -217,7 +217,7 @@ impl<'ast> Visit<'ast> for AssignedFieldVisitor<'_> {
         ) {
             self.record_assignment(&n.left);
         }
-        syn::visit::visit_expr_binary(self, n);
+        visit::visit_expr_binary(self, n);
     }
 }
 

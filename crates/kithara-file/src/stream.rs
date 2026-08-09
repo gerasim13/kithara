@@ -17,6 +17,7 @@ use kithara_stream::{
     dl::{Downloader, DownloaderConfig},
 };
 use kithara_test_utils::kithara;
+use url::Url;
 
 use crate::{
     config::{FileConfig, FileSrc},
@@ -359,7 +360,7 @@ mod tests {
     use super::*;
 
     fn url(value: &str) -> url::Url {
-        url::Url::parse(value).expect("valid test URL")
+        Url::parse(value).expect("valid test URL")
     }
 
     #[kithara::test]

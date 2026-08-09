@@ -5,7 +5,7 @@ use proc_macro2::{Delimiter, TokenTree};
 use quote::ToTokens;
 use syn::{
     Expr, ExprAwait, ExprField, ExprMethodCall, FnArg, GenericParam, Ident, ImplItem, ItemImpl,
-    ItemUse, Member, Pat, Stmt, UseTree,
+    ItemUse, Lit, Member, Meta, Pat, Stmt, UseTree, Visibility,
     spanned::Spanned,
     visit::{self, Visit},
 };
@@ -953,7 +953,7 @@ fn method_signature(
     param_modifiers: &[ParamModifier],
 ) -> Option<String> {
     let start = match method.vis {
-        syn::Visibility::Inherited => method.sig.span().byte_range().start,
+        Visibility::Inherited => method.sig.span().byte_range().start,
         _ => method.vis.span().byte_range().start,
     };
     let end = method.block.brace_token.span.open().byte_range().start;
@@ -1084,13 +1084,13 @@ fn is_doc_attr(attr: &syn::Attribute) -> bool {
 }
 
 fn block_doc_attribute(attr: &syn::Attribute) -> Option<String> {
-    let syn::Meta::NameValue(meta) = &attr.meta else {
+    let Meta::NameValue(meta) = &attr.meta else {
         return None;
     };
     let Expr::Lit(value) = &meta.value else {
         return None;
     };
-    let syn::Lit::Str(value) = &value.lit else {
+    let Lit::Str(value) = &value.lit else {
         return None;
     };
     Some(format!("#[doc = {}]", raw_string_literal(&value.value())?))

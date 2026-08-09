@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use syn::{Fields, GenericParam, ImplItem, Item};
+use syn::{Fields, GenericParam, ImplItem, Item, Meta};
 
 use super::{
     SimilarityConfig,
@@ -534,7 +534,7 @@ fn is_test_item(item: &Item) -> bool {
         if attribute.path().is_ident("test") {
             return true;
         }
-        let syn::Meta::List(list) = &attribute.meta else {
+        let Meta::List(list) = &attribute.meta else {
             return false;
         };
         attribute.path().is_ident("cfg")

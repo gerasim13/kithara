@@ -3,6 +3,7 @@ use std::future::Future;
 pub use kithara_platform::no_block::{Pause, Watched};
 #[cfg(not(rtsan))]
 pub use kithara_platform::no_block::{Permit, PermitPoll, permit, permit_poll};
+use kithara_platform::{no_block, thread, tokio::runtime::Builder};
 
 #[cfg(rtsan)]
 mod rtsan_gate {
@@ -61,7 +62,7 @@ pub struct Permit {
 #[cfg(rtsan)]
 pub fn permit() -> Permit {
     Permit {
-        _platform: kithara_platform::no_block::permit(),
+        _platform: no_block::permit(),
         _rtsan: crate::rtsan::permit(),
     }
 }
@@ -77,7 +78,7 @@ pub fn permit_poll<F: Future>(fut: F) -> PermitPoll<F> {
 #[track_caller]
 #[cfg(not(rtsan))]
 pub fn watch<F: Future>(name: &'static str, budget_ms: u64, fut: F) -> Watched<F> {
-    kithara_platform::no_block::watch_budget(name, budget_ms, fut)
+    no_block::watch_budget(name, budget_ms, fut)
 }
 
 #[doc(hidden)]
@@ -88,7 +89,7 @@ pub fn watch<F: Future>(
     budget_ms: u64,
     fut: F,
 ) -> Watched<rtsan_gate::RtsanChecked<F>> {
-    kithara_platform::no_block::watch_budget(name, budget_ms, rtsan_gate::RtsanChecked { fut })
+    no_block::watch_budget(name, budget_ms, rtsan_gate::RtsanChecked { fut })
 }
 
 // A whole test body counts as a real-time context only in the `no-block` lane, which pairs that
@@ -98,14 +99,14 @@ pub fn watch<F: Future>(
 #[track_caller]
 #[cfg(not(all(rtsan, feature = "no-block")))]
 pub fn watch_root<F: Future>(name: &'static str, fut: F) -> Watched<F> {
-    kithara_platform::no_block::watch_blanket(name, fut)
+    no_block::watch_blanket(name, fut)
 }
 
 #[doc(hidden)]
 #[track_caller]
 #[cfg(all(rtsan, feature = "no-block"))]
 pub fn watch_root<F: Future>(name: &'static str, fut: F) -> Watched<rtsan_gate::RtsanChecked<F>> {
-    kithara_platform::no_block::watch_blanket(name, rtsan_gate::RtsanChecked { fut })
+    no_block::watch_blanket(name, rtsan_gate::RtsanChecked { fut })
 }
 
 #[cfg(all(test, feature = "no-block"))]
@@ -135,7 +136,7 @@ mod tests {
     }
 
     fn run<F: Future<Output = ()>>(fut: F) {
-        let rt = kithara_platform::tokio::runtime::Builder::new_current_thread()
+        let rt = Builder::new_current_thread()
             .build()
             .expect("build current-thread runtime");
         rt.block_on(fut);
@@ -162,7 +163,7 @@ mod tests {
 
     #[kithara::allow_block]
     fn sync_allowed_sleep() {
-        kithara_platform::thread::sleep(Duration::from_millis(SLEEP_MS));
+        thread::sleep(Duration::from_millis(SLEEP_MS));
     }
 
     #[kithara::no_block(budget_ms = 10_000)]
@@ -172,7 +173,7 @@ mod tests {
 
     #[kithara::allow_block]
     async fn async_allowed_sleep() {
-        kithara_platform::thread::sleep(Duration::from_millis(SLEEP_MS));
+        thread::sleep(Duration::from_millis(SLEEP_MS));
     }
 
     #[kithara::no_block(budget_ms = 10_000)]

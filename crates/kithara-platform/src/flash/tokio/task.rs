@@ -1,5 +1,8 @@
 use std::{future::Future, panic::Location};
 
+use backend::task;
+use credit::{DedicatedSlot, Participant};
+
 pub use crate::backend::tokio::task::{JoinError, JoinHandle};
 // Under `flash` (native) [`spawn`] wraps the future in the quiescence
 // poll-wrapper and `yield_now` participates in quiescence UNDER AMBIENT (a
@@ -41,7 +44,7 @@ where
 {
     let on = crate::flash::ambient_snapshot();
     let loc = Location::caller();
-    backend::task::spawn(crate::flash::with_ambient(
+    task::spawn(crate::flash::with_ambient(
         on,
         crate::flash::participate(crate::no_block::watch_blanket_at("spawn", loc, future), loc),
     ))
@@ -93,7 +96,7 @@ where
     // never runs the closure. Deliberately NOT unified with the `spawn_named`
     // bracket: a pool closure owns no named-thread count and must restore the
     // reused thread's previous dedicated flag.
-    let slot = ambient.then(credit::DedicatedSlot::reserve);
+    let slot = ambient.then(DedicatedSlot::reserve);
     native_task::spawn_blocking(move || {
         // Held for the closure's lifetime (must outlive `f()`); restores the
         // pool thread's previous ambient on exit.
@@ -105,7 +108,7 @@ where
         } else {
             // Non-ambient: invisible to the engine; the RAII settle only keeps
             // the exit unwind-safe and consistent with the ambient arm.
-            let _exit = credit::Participant::unreserved();
+            let _exit = Participant::unreserved();
             f()
         }
     })
@@ -126,7 +129,7 @@ where
     // never runs the closure. Deliberately NOT unified with the `spawn_named`
     // bracket: a pool closure owns no named-thread count and must restore the
     // reused thread's previous dedicated flag.
-    let slot = ambient.then(credit::DedicatedSlot::reserve);
+    let slot = ambient.then(DedicatedSlot::reserve);
     handle.spawn_blocking(move || {
         // Held for the closure's lifetime (must outlive `f()`); restores the
         // pool thread's previous ambient on exit.
@@ -138,7 +141,7 @@ where
         } else {
             // Non-ambient: invisible to the engine; the RAII settle only keeps
             // the exit unwind-safe and consistent with the ambient arm.
-            let _exit = credit::Participant::unreserved();
+            let _exit = Participant::unreserved();
             f()
         }
     })
