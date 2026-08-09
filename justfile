@@ -64,11 +64,17 @@ _xtask-cached MODE *ARGS:
       if ! { IFS= read -r generation && ! IFS= read -r extra && [ -z "$extra" ]; } < "$pointer"; then \
         unavailable; \
       fi; \
+      system=$(uname -s) || unavailable; \
+      case "$system" in \
+        MINGW*|MSYS*|CYGWIN*) windows=1; suffix=.exe ;; \
+        *) windows=0; suffix= ;; \
+      esac; \
       case "$generation" in \
         /*) ;; \
+        [A-Za-z]:[\\/]*) [ "$windows" -eq 1 ] || unavailable ;; \
         *) unavailable ;; \
       esac; \
-      binary="$generation/xtask"; \
+      binary="$generation/xtask$suffix"; \
       [ -f "$binary" ] && [ ! -L "$binary" ] && [ -x "$binary" ] || unavailable; \
       if [ "$mode" = optional ]; then \
         "$binary" self-cache probe </dev/null >/dev/null 2>&1 || unavailable; \

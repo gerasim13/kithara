@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail, ensure};
 
 use super::manifest::CacheManifest;
 
-pub(super) const BINARY: &str = "xtask";
+pub(super) const BINARY: &str = if cfg!(windows) { "xtask.exe" } else { "xtask" };
 pub(super) const CACHE_DIRECTORY: &str = "xtask-cache";
 pub(super) const GENERATION_PREFIX: &str = "generation-";
 pub(super) const LEASE_FILE: &str = "lease.lock";
@@ -257,7 +257,12 @@ mod tests {
 
     use anyhow::Result;
 
-    use super::{git_dir, read_line};
+    use super::{BINARY, git_dir, read_line};
+
+    #[test]
+    fn cached_binary_name_uses_the_target_executable_suffix() {
+        assert_eq!(BINARY, format!("xtask{}", std::env::consts::EXE_SUFFIX));
+    }
 
     #[test]
     fn linked_worktree_git_dir_is_resolved_without_git() -> Result<()> {

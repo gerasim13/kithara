@@ -1,23 +1,24 @@
 use std::{
     env, fs,
+    io::Read,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
+    thread,
     time::Duration,
 };
 #[cfg(unix)]
 use std::{
-    io::Read,
     os::unix::{fs::PermissionsExt, process::CommandExt},
-    process::{Child, ExitStatus},
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
-    thread,
     time::Instant,
 };
 
-use anyhow::{Context, Result, bail, ensure};
+#[cfg(unix)]
+use anyhow::bail;
+use anyhow::{Context, Result, ensure};
 use clap::{Args, Subcommand};
 #[cfg(unix)]
 use nix::{
@@ -239,6 +240,27 @@ fn build_worker(root: &Path, parent: u32, release: bool) -> Result<()> {
         "self-cache build parent changed before Cargo started"
     );
     let signals = BuildSignals::install()?;
+    let mut command = cargo_build_command(root, release);
+    command.process_group(0);
+    run_cargo_build(root, &mut command, |child| {
+        supervise(child, parent, &signals)
+    })
+}
+
+#[cfg(not(unix))]
+fn build_worker(root: &Path, parent: u32, release: bool) -> Result<()> {
+    ensure!(parent > 1, "invalid self-cache build parent process");
+    let mut command = cargo_build_command(root, release);
+    // Cargo stays on the same Windows console, so control events reach both processes.
+    // std has no Windows parent-change probe, so that check remains Unix-only.
+    run_cargo_build(root, &mut command, |child| {
+        child
+            .wait()
+            .context("wait for xtask self-cache Cargo process")
+    })
+}
+
+fn cargo_build_command(root: &Path, release: bool) -> Command {
     let cargo = env::var_os("XTASK_SELF_CACHE_CARGO")
         .or_else(|| env::var_os("CARGO"))
         .unwrap_or_else(|| "cargo".into());
@@ -255,8 +277,14 @@ fn build_worker(root: &Path, parent: u32, release: bool) -> Result<()> {
         .current_dir(root)
         .env("CARGO_TARGET_DIR", layout::target_dir(root))
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .process_group(0);
+        .stdout(Stdio::piped());
+    command
+}
+
+fn run_cargo_build<F>(root: &Path, command: &mut Command, wait: F) -> Result<()>
+where
+    F: FnOnce(&mut Child) -> Result<ExitStatus>,
+{
     let mut child = command
         .spawn()
         .context("launch Cargo for xtask self-cache refresh")?;
@@ -265,7 +293,7 @@ fn build_worker(root: &Path, parent: u32, release: bool) -> Result<()> {
         .take()
         .context("capture xtask self-cache build output")?;
     let reader = thread::spawn(move || read_bounded_output(stdout, Consts::BUILD_OUTPUT_LIMIT));
-    let status = supervise(&mut child, parent, &signals);
+    let status = wait(&mut child);
     let output = reader
         .join()
         .map_err(|_| anyhow::anyhow!("xtask self-cache output reader panicked"))?;
@@ -278,11 +306,6 @@ fn build_worker(root: &Path, parent: u32, release: bool) -> Result<()> {
     let artifact = parse_artifact(root, &output)?;
     println!("{}", artifact.display());
     Ok(())
-}
-
-#[cfg(not(unix))]
-fn build_worker(_root: &Path, _parent: u32, _release: bool) -> Result<()> {
-    bail!("xtask self-cache build supervision requires a Unix host")
 }
 
 fn artifact(root: &Path) -> Result<()> {
@@ -331,7 +354,6 @@ fn parse_artifact(root: &Path, output: &[u8]) -> Result<PathBuf> {
     Ok(artifact)
 }
 
-#[cfg(unix)]
 fn read_bounded_output(mut reader: impl Read, limit: usize) -> Result<Vec<u8>> {
     let take = u64::try_from(limit)?
         .checked_add(1)

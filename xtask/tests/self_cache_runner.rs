@@ -405,6 +405,30 @@ fn cached_just_transport_preserves_arguments_stdin_and_exit_codes() -> Result<()
 }
 
 #[test]
+fn drive_rooted_windows_transport_uses_the_executable_suffix() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.install_fake_transport()?;
+    write_executable(
+        &fixture.fake_bin.join("uname"),
+        "#!/bin/sh\nset -eu\nprintf 'MINGW64_NT-10.0\\n'\n",
+    )?;
+    let original = fixture.root.join(".git/xtask-cache/generation-fake");
+    let generation = fixture.root.join(r"C:\cache\generation-fake");
+    fs::rename(original, &generation)?;
+    fs::rename(generation.join("xtask"), generation.join("xtask.exe"))?;
+    fs::write(
+        fixture.root.join("xtask/.xtask-cache"),
+        "C:\\cache\\generation-fake\n",
+    )?;
+
+    let output = fixture.transport(&fixture.root)?;
+
+    assert_success(&output);
+    fixture.assert_no_tool_process();
+    Ok(())
+}
+
+#[test]
 fn optional_transport_fails_open_before_policy_starts() -> Result<()> {
     let fixture = Fixture::new()?;
 
