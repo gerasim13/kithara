@@ -4743,6 +4743,7 @@ dependencies = [
 name = "kithara-platform"
 version = "0.0.1-alpha4"
 dependencies = [
+ "arc-swap",
  "assert_no_alloc",
  "console_error_panic_hook",
  "cpu-time",

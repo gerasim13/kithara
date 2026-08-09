@@ -8,10 +8,8 @@ use kithara_test_utils::kithara;
 
 use super::{
     AudioWorkerHandle, ConsumerPhase, EpochValidator, FailureSource, Fetch, Inlet, Outlet,
-    ThreadWake, WakeSignal, connect,
-    cursor::ChunkCursor,
-    event::ReaderOutputWake,
-    park::{receive_is_nonblocking, wait_for_fetch},
+    ThreadWake, WakeSignal, connect, cursor::ChunkCursor, event::ReaderOutputWake,
+    park::receive_is_nonblocking,
 };
 
 enum FetchOutcome {
@@ -179,7 +177,7 @@ impl RingConsumer {
                 return RecvOutcome::Closed;
             }
             wake_worker(ctx.worker);
-            self.reader_wake.register_current();
+            let since = self.reader_wake.current();
             if let Some(fetch) = self.pcm_rx.try_pop() {
                 hang_reset!();
                 wake_worker(ctx.worker);
@@ -189,7 +187,12 @@ impl RingConsumer {
                 hang_reset!();
                 return RecvOutcome::Closed;
             }
-            hang_park!(wait_for_fetch, self.consumer_hang_ctx(ctx));
+            hang_park!(
+                |remaining| {
+                    self.reader_wake.wait_timeout(since, remaining);
+                },
+                self.consumer_hang_ctx(ctx)
+            );
         }
     }
 

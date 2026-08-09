@@ -1,8 +1,10 @@
 #![forbid(unsafe_code)]
 
+use arc_swap::ArcSwapOption;
+
 use crate::{
     sync::{
-        Condvar, Mutex, MutexGuard,
+        Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicU64, Ordering},
     },
     thread::{self, Thread},
@@ -103,13 +105,14 @@ impl WaitGate for CondvarGate<u64> {
     }
 }
 
-/// Single-waiter edge gate with a non-blocking signal path and timed backstop.
-/// Sequence and waiter registration share one atomic to prevent lost wakeups.
+/// Single-waiter edge gate: signal advances atomically, loads the waiter
+/// lock-free, and unparks. Its timed backstop preserves sequence progress.
 pub struct ThreadGate {
     state: AtomicU64,
     waiter_id: AtomicU64,
     backend: thread::GateBackend,
-    waiter: Mutex<Option<Thread>>,
+    waiter: ArcSwapOption<Thread>,
+    retired_waiters: Mutex<Vec<Arc<Thread>>>,
 }
 
 impl Default for ThreadGate {
@@ -117,7 +120,8 @@ impl Default for ThreadGate {
         Self {
             backend: thread::GateBackend::default(),
             state: AtomicU64::new(0),
-            waiter: Mutex::new(None),
+            waiter: ArcSwapOption::empty(),
+            retired_waiters: Mutex::new(Vec::new()),
             waiter_id: AtomicU64::new(0),
         }
     }
@@ -145,13 +149,21 @@ impl ThreadGate {
 
     fn register(&self) {
         let waiter_id = thread::current_thread_id();
-        let mut waiter = self.waiter.lock();
-        if self.waiter_id.load(Ordering::Acquire) != waiter_id || waiter.is_none() {
-            *waiter = Some(thread::current());
+        if self.waiter_id.load(Ordering::Acquire) != waiter_id || self.waiter.load().is_none() {
+            self.publish_waiter();
             self.waiter_id.store(waiter_id, Ordering::Release);
         }
-        drop(waiter);
         self.state.fetch_or(Self::WAITING, Ordering::SeqCst);
+    }
+
+    /// Writer-held retirees make signal guard drops pure decrements; reclaim
+    /// quiesced ones here, off the signal path.
+    fn publish_waiter(&self) {
+        let mut retired = self.retired_waiters.lock();
+        retired.retain(|waiter| Arc::strong_count(waiter) > 1);
+        if let Some(displaced) = self.waiter.swap(Some(Arc::new(thread::current()))) {
+            retired.push(displaced);
+        }
     }
 
     fn sequence(state: u64) -> u64 {
@@ -164,14 +176,13 @@ impl WaitGate for ThreadGate {
         Self::sequence(self.state.load(Ordering::Acquire))
     }
 
-    /// Advance the edge and attempt to unpark an active waiter without blocking.
+    /// Advance the edge, snapshot the active waiter lock-free, and unpark it.
     fn signal(&self) {
         let previous = self.advance();
-        if previous & Self::WAITING != 0
-            && let Ok(waiter) = self.waiter.try_lock()
-        {
+        if previous & Self::WAITING != 0 {
+            let waiter = self.waiter.load();
             self.backend
-                .unpark(self.waiter_id.load(Ordering::Relaxed), waiter.as_ref());
+                .unpark(self.waiter_id.load(Ordering::Relaxed), waiter.as_deref());
         }
     }
 
@@ -278,6 +289,69 @@ mod tests {
     }
 
     #[kithara::test(flash(false))]
+    fn thread_gate_signal_during_waiter_publication_is_not_lost() {
+        let gate = Arc::new(ThreadGate::default());
+        let seed = gate.current();
+        gate.signal();
+        assert!(gate.wait_timeout(seed, Duration::ZERO));
+
+        let publication = gate.retired_waiters.lock();
+        let (started_tx, started_rx) = mpsc::channel();
+        let waiter_gate = Arc::clone(&gate);
+        let waiter = thread::spawn_named("threadgate-register-race", move || {
+            let since = waiter_gate.current();
+            started_tx.send(()).expect("start waiter registration");
+            waiter_gate.wait_timeout(since, Duration::from_secs(5))
+        });
+        started_rx
+            .recv_timeout(Instant::now() + Duration::from_secs(1))
+            .expect("waiter registration started");
+
+        gate.signal();
+        drop(publication);
+
+        assert!(waiter.join().expect("registration-race waiter"));
+    }
+
+    #[kithara::test(flash(false))]
+    fn thread_gate_signal_progress_does_not_wait_for_waiter_publication() {
+        let gate = Arc::new(ThreadGate::default());
+        let seed = gate.current();
+        gate.signal();
+        assert!(gate.wait_timeout(seed, Duration::ZERO));
+
+        let publication = gate.retired_waiters.lock();
+        let (started_tx, started_rx) = mpsc::channel();
+        let waiter_gate = Arc::clone(&gate);
+        let waiter = thread::spawn_named("threadgate-publish-waiter", move || {
+            let since = waiter_gate.current();
+            started_tx.send(()).expect("start waiter publication");
+            waiter_gate.wait_timeout(since, Duration::from_secs(5));
+        });
+        started_rx
+            .recv_timeout(Instant::now() + Duration::from_secs(1))
+            .expect("waiter publication started");
+
+        let before = gate.current();
+        let (progress_tx, progress_rx) = mpsc::channel();
+        let signaller_gate = Arc::clone(&gate);
+        let signaller = thread::spawn_named("threadgate-publish-signal", move || {
+            signaller_gate.signal();
+            progress_tx
+                .send(signaller_gate.current())
+                .expect("report signal progress");
+        });
+        let observed = progress_rx
+            .recv_timeout(Instant::now() + Duration::from_secs(1))
+            .expect("signal progresses while waiter publication is held");
+        assert_ne!(observed, before, "signal must advance the edge");
+
+        drop(publication);
+        signaller.join().expect("publication-race signaller");
+        waiter.join().expect("publication-race waiter");
+    }
+
+    #[kithara::test(flash(false))]
     fn thread_gate_refreshes_waiter_handle() {
         let g = Arc::new(ThreadGate::default());
 
@@ -340,6 +414,7 @@ mod tests {
         while gate.state.load(Ordering::Acquire) & ThreadGate::WAITING == 0 {
             thread::yield_now();
         }
+        drop(gate.waiter.load());
         assert_no_alloc(|| gate.signal());
 
         assert!(waiter.join().expect("allocation waiter thread"));
