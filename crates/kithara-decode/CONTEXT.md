@@ -314,9 +314,11 @@ such a parked parent, so neither the codec nor the decode path may spawn the hos
 only the main-thread bootstrap, whose event loop stays live, may. The host command
 loop uses `try_recv` plus a local timer; the synchronous per-decoder reply receiver
 uses the Atomics-backed `recv_timeout` path and needs no event loop. The singleton
-host owns the decoder-ID → `AudioDecoder` map, reply channel, pending input queue,
-and generation state; `Open` registers a codec, `Close` removes it. JavaScript
-values never cross the Rust thread boundary.
+host receives the app's `PcmPool` at spawn and owns the decoder-ID → `AudioDecoder`
+map, reply channel, pending input queue, and generation state; `Open` registers a
+codec, `Close` removes it. `HostOut::Pcm` carries a pooled `PcmBuf` that the codec
+moves into the caller's output buffer. JavaScript values never cross the Rust
+thread boundary.
 
 The frame codec owns the current generation. A seek advances it, sends `Reset`,
 discards queued output, then sends `Configure` again because WebCodecs `reset()`

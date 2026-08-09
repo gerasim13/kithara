@@ -1,4 +1,5 @@
 use js_sys::Uint8Array;
+use kithara_bufpool::PcmPool;
 use kithara_platform::sync::{OnceLock, mpsc};
 use kithara_stream::AudioCodec;
 use wasm_bindgen::JsCast;
@@ -68,12 +69,12 @@ impl Support {
 
 /// Initialize the main-thread WebCodecs runtime and capability probe.
 #[doc(hidden)]
-pub fn spawn_webcodecs_probe() {
+pub fn spawn_webcodecs_probe(pcm_pool: PcmPool) {
     if host_cmd().get().is_some() {
         tracing::debug!("WebCodecs host was already initialized");
         return;
     }
-    let _ = host_cmd().set(spawn_host());
+    let _ = host_cmd().set(spawn_host(pcm_pool));
     drop(kithara_platform::tokio::task::spawn(async {
         let mut snapshot = Support::default();
         for codec in Support::CODECS {

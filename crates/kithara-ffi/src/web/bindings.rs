@@ -1,3 +1,4 @@
+use kithara_bufpool::PcmPool;
 use kithara_platform::thread::set_wasm_shim_name;
 use kithara_play::wasm;
 use tracing_log::LogTracer;
@@ -33,7 +34,7 @@ pub fn setup() {
         return;
     }
 
-    wasm::spawn_webcodecs_probe();
+    wasm::spawn_webcodecs_probe(PcmPool::default());
 
     let _ = LogTracer::init();
     let config = WASMLayerConfigBuilder::new()

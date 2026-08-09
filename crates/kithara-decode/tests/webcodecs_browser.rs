@@ -3,6 +3,7 @@
 use std::{io::Cursor, sync::Once};
 
 use js_sys::Uint8Array;
+use kithara_bufpool::PcmPool;
 use kithara_decode::{
     Decoder, DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory,
     DecoderSeekOutcome, PcmSpec, duration_for_frames, spawn_webcodecs_probe,
@@ -301,7 +302,7 @@ async fn he_aac_v2_decode() {
 }
 
 async fn prepare_webcodecs(codec: &str) {
-    PROBE_STARTED.call_once(spawn_webcodecs_probe);
+    PROBE_STARTED.call_once(|| spawn_webcodecs_probe(PcmPool::default()));
     assert_browser_support(codec).await;
     for _ in 0..100 {
         if webcodecs_runtime_ready(codec) {

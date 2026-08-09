@@ -1,6 +1,7 @@
 mod playback;
 mod session;
 
+use kithara_bufpool::PcmPool;
 use kithara_platform::thread::assert_main_thread;
 pub use playback::{bridge_duration_secs, bridge_is_playing, bridge_position_secs};
 pub use session::{
@@ -8,7 +9,7 @@ pub use session::{
 };
 
 /// Start the main-thread WebCodecs capability probe.
-pub fn spawn_webcodecs_probe() {
+pub fn spawn_webcodecs_probe(pcm_pool: PcmPool) {
     assert_main_thread("spawn_webcodecs_probe");
-    kithara_decode::spawn_webcodecs_probe();
+    kithara_decode::spawn_webcodecs_probe(pcm_pool);
 }

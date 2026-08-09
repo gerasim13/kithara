@@ -52,8 +52,8 @@ struct CodecConfig {
     sample_rate: u32,
 }
 
-struct PcmOut<'a> {
-    interleaved: &'a [f32],
+struct PcmOut {
+    interleaved: PcmBuf,
     channels: u16,
     frames: u32,
     sample_rate: u32,
@@ -107,14 +107,14 @@ impl WebCodecsCodec {
                     generation,
                 } if generation == self.generation => {
                     let pcm = PcmOut {
+                        interleaved,
+                        channels,
                         frames,
                         sample_rate,
-                        channels,
-                        pts_us,
                         generation,
-                        interleaved: &interleaved,
+                        pts_us,
                     };
-                    return self.write_pcm(out, &pcm);
+                    return self.write_pcm(out, pcm);
                 }
                 HostOut::Flushed { generation } if generation == self.generation => {
                     self.eof_flushed = true;
@@ -230,14 +230,14 @@ impl WebCodecsCodec {
                     generation,
                 } if generation == self.generation => {
                     let pcm = PcmOut {
+                        interleaved,
+                        channels,
                         frames,
                         sample_rate,
-                        channels,
-                        pts_us,
                         generation,
-                        interleaved: &interleaved,
+                        pts_us,
                     };
-                    return self.write_pcm(out, &pcm);
+                    return self.write_pcm(out, pcm);
                 }
                 HostOut::Configured {
                     sample_rate,
@@ -277,30 +277,37 @@ impl WebCodecsCodec {
         codec_string(codec).is_some() && super::probe::supported(codec)
     }
 
-    fn write_pcm(&mut self, out: &mut PcmBuf, pcm: &PcmOut<'_>) -> DecodeResult<u32> {
-        let expected = usize::try_from(pcm.frames)
+    fn write_pcm(&mut self, out: &mut PcmBuf, pcm: PcmOut) -> DecodeResult<u32> {
+        let PcmOut {
+            interleaved,
+            channels,
+            frames,
+            sample_rate,
+            generation,
+            pts_us,
+        } = pcm;
+        let expected = usize::try_from(frames)
             .ok()
-            .and_then(|frames| frames.checked_mul(usize::from(pcm.channels)));
-        if expected != Some(pcm.interleaved.len()) {
+            .and_then(|frames| frames.checked_mul(usize::from(channels)));
+        if expected != Some(interleaved.len()) {
             return Err(DecodeError::backend(WebCodecsError::OutputShape {
-                samples: pcm.interleaved.len(),
-                frames: pcm.frames,
-                channels: pcm.channels,
+                samples: interleaved.len(),
+                frames,
+                channels,
             }));
         }
-        out.ensure_len(pcm.interleaved.len())?;
-        out.copy_from_slice(pcm.interleaved);
-        self.decoded_pts = Duration::from_micros(pcm.pts_us);
+        *out = interleaved;
+        self.decoded_pts = Duration::from_micros(pts_us);
         tracing::debug!(
-            generation = pcm.generation,
+            generation,
             decoder_id = self.decoder_id,
-            pts_us = pcm.pts_us,
-            sample_rate = pcm.sample_rate,
-            channels = pcm.channels,
-            frames = pcm.frames,
+            pts_us,
+            sample_rate,
+            channels,
+            frames,
             "received WebCodecs PCM"
         );
-        Ok(pcm.frames)
+        Ok(frames)
     }
 }
 
