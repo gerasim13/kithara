@@ -96,6 +96,12 @@ registry release the peer entry. Peers are pull-driven — `Peer::poll_next` ret
 `FetchCmd::get(url)` / `head(url)` start its bon builder; each command owns its
 `writer`, `on_complete`, and an optional epoch `CancelToken` combined by the
 downloader with the track-level cancel.
+Every streaming `FetchCmd` the registry accepts gets exactly one `on_complete` call:
+`deliver` makes it for a fetch that ran (with or without a writer), and `Drop for Registry`
+makes it for commands still queued when the downloader is cancelled. That callback is what
+releases the command's claim — the HLS segment slot and the non-`Clone` `AssetWriter` both ride
+in it — so a dropped closure strands a `<canonical>.tmp` that no one will ever write.
+Imperative `execute`/`batch` commands carry no claim: their oneshot is the completion signal.
 
 `DownloaderConfig::for_client(client)` carries `abr_settings` for the shared ABR
 controller, `demand_throttle`, `soft_timeout` (2s — publishes

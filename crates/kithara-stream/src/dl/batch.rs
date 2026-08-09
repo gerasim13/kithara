@@ -499,10 +499,13 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
         }
         ResponseTarget::Streaming => match result {
             Ok(resp) => {
+                let headers = resp.headers.clone();
                 let Some(mut w) = writer else {
+                    if let Some(cb) = on_complete_cb {
+                        cb(0, Some(&headers), None);
+                    }
                     return;
                 };
-                let headers = resp.headers.clone();
                 if let Some(cb) = on_response_cb {
                     cb(&headers);
                 }
@@ -588,6 +591,10 @@ pub(super) fn deliver_cancelled_with_event(internal: InternalCmd, peer_cancel: &
 
 /// Route a cancellation to its target. Does NOT publish events — use
 /// [`deliver_cancelled_with_event`] for that.
+///
+/// The oneshot is the channel path's completion signal, matching `deliver`,
+/// which never calls `on_complete` for a `Channel` target. Only the streaming
+/// path owns a claim through its callback.
 pub(super) fn deliver_cancelled(target: ResponseTarget, mut cmd: FetchCmd) {
     let err = NetError::Cancelled;
     match target {

@@ -10,6 +10,7 @@ use kithara_platform::{
     CancelScope, CancelToken,
     sync::{Arc, Mutex},
     time::{Duration, sleep},
+    tokio,
 };
 use kithara_storage::StorageError;
 use kithara_stream::{
@@ -36,6 +37,22 @@ struct Consts;
 impl Consts {
     const DEFAULT_EXTENSION: &'static str = "bin";
     const MAX_EXTENSION_LEN: usize = 16;
+}
+
+#[derive(Default)]
+struct TmpClaimProgress {
+    last_len: Option<Option<u64>>,
+}
+
+impl TmpClaimProgress {
+    fn observe(&mut self, len: Option<u64>) -> bool {
+        let stalled = matches!(
+            (self.last_len, len),
+            (Some(Some(previous)), Some(current)) if previous == current
+        );
+        self.last_len = Some(len);
+        stalled
+    }
 }
 
 struct RemoteFileOpen {
@@ -334,8 +351,11 @@ impl File {
         /// `local_queue_playlist_behavior` resolves in a handful of ticks but
         /// long enough not to busy-spin a tokio worker.
         const TMP_CLAIMED_POLL_INTERVAL: Duration = Duration::from_millis(10);
-        let mut last_len: Option<u64> = None;
+        let mut progress = TmpClaimProgress::default();
         loop {
+            if cancel.is_cancelled() {
+                return Err(StreamSourceError::Cancelled);
+            }
             match Self::create_remote(url.clone(), config.clone(), cancel.clone()) {
                 Ok(src) => {
                     hang_reset!();
@@ -343,13 +363,16 @@ impl File {
                 }
                 Err(SourceError::Assets(AssetsError::Storage(StorageError::TmpClaimed(tmp)))) => {
                     let len = std::fs::metadata(&tmp).ok().map(|m| m.len());
-                    if len == last_len {
+                    if progress.observe(len) {
                         hang_tick!();
                     } else {
-                        last_len = len;
                         hang_reset!();
                     }
-                    sleep(TMP_CLAIMED_POLL_INTERVAL).await;
+                    tokio::select! {
+                        biased;
+                        () = cancel.cancelled() => return Err(StreamSourceError::Cancelled),
+                        () = sleep(TMP_CLAIMED_POLL_INTERVAL) => {}
+                    }
                 }
                 Err(e) => return Err(StreamSourceError::from(e)),
             }
@@ -365,7 +388,9 @@ fn sniff_codec(reader: &AssetReader) -> Option<AudioCodec> {
 
 #[cfg(test)]
 mod tests {
-    use kithara_assets::{AssetStore, StorageBackend};
+    use kithara_assets::{AcquisitionResult, AssetStore, StorageBackend};
+    use kithara_events::{Event, FileEvent};
+    use tempfile::tempdir;
 
     use super::*;
 
@@ -444,5 +469,61 @@ mod tests {
         let result = local_key(PathBuf::from("relative/track.mp3"));
 
         assert!(matches!(result, Err(SourceError::InvalidPath(_))));
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    async fn remote_claim_wait_returns_cancelled() {
+        let dir = tempdir().expect("test cache directory");
+        let backend = StorageBackend::Disk {
+            root: dir.path().to_path_buf(),
+        };
+        let holder_store = AssetStore::builder().backend(backend.clone()).build();
+        let waiting_store = AssetStore::builder().backend(backend).build();
+        let remote_url = url("http://example.test/audio.mp3");
+        let key = remote_key(&holder_store, &remote_url, None, None).expect("remote key");
+        let holder = match holder_store
+            .acquire_resource(&key, None)
+            .expect("holder acquires resource")
+        {
+            AcquisitionResult::Pending(writer) => writer,
+            AcquisitionResult::Ready(_) => panic!("holder must own the pending claim"),
+            _ => panic!("holder returned an unexpected acquisition state"),
+        };
+        let scope = CancelScope::new(None);
+        let cancel = scope.token();
+        let bus = EventBus::new(8);
+        let mut events = bus.subscribe();
+        let config = FileConfig::for_src(FileSrc::Remote(remote_url))
+            .store(waiting_store)
+            .cancel(cancel.clone())
+            .events(bus)
+            .build();
+        let create = File::create(config);
+        kithara_platform::tokio::pin!(create);
+
+        loop {
+            kithara_platform::tokio::select! {
+                _result = &mut create => panic!("claim wait returned before cancellation"),
+                event = events.recv() => {
+                    let event = event.expect("event channel remains open");
+                    if matches!(event.event, Event::File(FileEvent::Error { .. })) {
+                        break;
+                    }
+                }
+            }
+        }
+
+        scope.cancel();
+        let result = create.await;
+
+        assert!(matches!(result, Err(StreamSourceError::Cancelled)));
+        drop(holder);
+    }
+
+    #[kithara::test]
+    fn absent_first_tmp_observation_is_not_a_stall() {
+        let mut progress = TmpClaimProgress::default();
+
+        assert!(!progress.observe(None));
     }
 }
