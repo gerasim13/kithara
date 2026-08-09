@@ -33,7 +33,6 @@ schema_version = 1
 
 [field_passthrough]
 "crates/kithara-app/src/state.rs:StateController::cancel" = 1
-"crates/kithara-decode/src/fmp4/demuxer.rs:Fmp4SegmentDemuxer::duration" = 1
 "crates/kithara-decode/src/gapless/trimmer/core.rs:HeuristicState::trim_trailing" = 1
 "crates/kithara-ffi/src/native/inner.rs:NativeInner::shutdown" = 1
 "crates/kithara-file/src/session/source.rs:FileSource::coord" = 1
@@ -164,7 +163,6 @@ schema_version = 1
 "crates/kithara-decode/src/android/error.rs:AndroidBackendError" = 1
 "crates/kithara-decode/src/error.rs:DecodeError" = 1
 "crates/kithara-decode/src/gapless/trimmer/core.rs:GaplessTrimmer" = 1
-"crates/kithara-decode/src/symphonia/adapter.rs:ReadSeekAdapter" = 1
 "crates/kithara-events/src/abr.rs:VariantIndex" = 1
 "crates/kithara-events/src/play.rs:MediaTime" = 1
 "crates/kithara-file/src/session/source.rs:FileSource" = 1
