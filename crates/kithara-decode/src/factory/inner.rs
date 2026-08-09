@@ -7,7 +7,7 @@ use std::{
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_platform::sync::Arc;
-#[cfg(test)]
+#[cfg(all(test, feature = "resample-rubato"))]
 use kithara_resampler::rubato::RubatoBackend;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
 use kithara_stream::{
