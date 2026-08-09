@@ -22,10 +22,12 @@ Transport (`runtime/ports.rs`): SPSC `ringbuf::HeapRb` plus a one-slot overflow
   infallible. Each tick starts with `Outlet::flush()`; if still full the node
   returns `TickResult::Backpressured` *without* ticking the FSM — every internal
   transition, seeks included, pauses until the consumer drains.
-- **Wake.** A ring push wakes the consumer; empty→non-empty also fires
-  `on_data_available`. The blocking consumer snapshots `ThreadWake` before
-  re-checking `try_pop`; a signal between the snapshot and park advances the
-  gate sequence, so `wait_timeout` returns immediately while retaining its timed
+- **Wake.** A ring push arms the consumer wake inside the checked produce core;
+  the scheduler shell delivers the `ThreadWake` before the next pass, keeping the
+  syscall off the realtime path. Empty→non-empty also fires `on_data_available`.
+  The blocking consumer snapshots `ThreadWake` before re-checking `try_pop`; a
+  signal between the snapshot and park advances the gate sequence, so
+  `wait_timeout` returns immediately while retaining its timed
   backstop.
 - **Trash ring.** The RT consumer must never `free`, so spent pooled `PcmChunk`s
   go to a second ring drained by `DecoderNode::recycle` on the worker. Capacity

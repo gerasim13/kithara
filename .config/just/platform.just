@@ -41,10 +41,11 @@ wasm MODE="check" *ARGS:
         # native job having left one behind, and failed with "failed to start
         # test_server ... No such file or directory" whenever it ran first.
         cargo build -p kithara-integration-tests --bin test_server
-        # Only `suite_heavy` carries browser tests. Building the whole crate
-        # for wasm compiles every native suite too, and those reach for
-        # threads, the filesystem, and a local test server that the browser
-        # has no way to offer.
+        # The integration browser tests live in `suite_heavy`. Building the
+        # whole crate for wasm compiles every native suite too, and those reach
+        # for threads, the filesystem, and a local test server that the browser
+        # has no way to offer. The crate-owned WebCodecs target runs separately
+        # below because it is not part of any integration suite.
         # `optimize_for_size` matches crates/kithara-ffi/.cargo/config.toml, so
         # the bundle lane and this one rebuild one identical std rather than
         # two that differ.
@@ -52,6 +53,12 @@ wasm MODE="check" *ARGS:
           -Z build-std=std,panic_abort,core,alloc \
           -Z build-std-features=optimize_for_size \
           -p kithara-integration-tests --test suite_heavy
+        if [[ "$browser" == "chrome" ]]; then
+          CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" WASM_BINDGEN_TEST_TIMEOUT=300 \
+          WASM_BINDGEN_USE_BROWSER=1 cargo +nightly test --target wasm32-unknown-unknown \
+            -p kithara-decode --no-default-features \
+            --features symphonia,webcodecs,client-reqwest,tls-rustls --test webcodecs_browser
+        fi
         ;;
       build)
         just _xtask wasm build "$@"
