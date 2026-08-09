@@ -2,8 +2,8 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_apple::audio_toolbox::{
     AUDIO_CONVERTER_ERR_NO_DATA_NOW, AUDIO_FORMAT_LINEAR_PCM, AudioConverter,
-    AudioStreamBasicDescription, BITS_PER_F32_SAMPLE, BYTES_PER_F32_SAMPLE, FLOAT32_PLANAR_FLAGS,
-    NO_ERR, OSStatus, OwnedAudioBufferList, os_status_to_string,
+    AudioStreamBasicDescription, AudioToolboxError, BITS_PER_F32_SAMPLE, BYTES_PER_F32_SAMPLE,
+    FLOAT32_PLANAR_FLAGS, NO_ERR, OSStatus, OwnedAudioBufferList, os_status_to_string,
 };
 use kithara_bufpool::PcmPool;
 use num_traits::cast::ToPrimitive;
@@ -329,10 +329,10 @@ fn apple_error_status(op: &'static str, status: OSStatus) -> ResamplerError {
     }
 }
 
-fn err_status(err: &kithara_apple::audio_toolbox::AudioToolboxError) -> OSStatus {
+fn err_status(err: &AudioToolboxError) -> OSStatus {
     match err {
-        kithara_apple::audio_toolbox::AudioToolboxError::Status { status, .. } => *status,
-        kithara_apple::audio_toolbox::AudioToolboxError::Config { .. } => -50,
+        AudioToolboxError::Status { status, .. } => *status,
+        AudioToolboxError::Config { .. } => -50,
     }
 }
 
