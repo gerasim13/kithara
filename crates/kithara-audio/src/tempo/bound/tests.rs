@@ -1,11 +1,12 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{ByteBudget, PcmPool};
 use kithara_decode::{DecodeError, PcmChunk, PcmMeta, PcmSpec};
 use kithara_events::PlaybackDirection;
 use kithara_platform::sync::Arc;
 use kithara_stretch::{ElasticConfig, ElasticEngine, ElasticSpanConfig, SignalsmithElastic};
 use kithara_test_utils::kithara;
+use num_traits::ToPrimitive;
 
 use super::{BoundError, BoundRenderer};
 use crate::{
@@ -42,7 +43,7 @@ fn spec() -> PcmSpec {
 /// Session tempo equal to the track's makes the schedule the identity on the
 /// source axis, so a planned span is readable by eye: block `k` is source
 /// `[k*BLOCK, (k+1)*BLOCK)`.
-fn identity_schedule() -> Arc<SourceSchedule> {
+fn identity_map() -> TrackBeatMap {
     let markers: Vec<u64> = (0..8).map(|k| k * Consts::BEAT_FRAMES).collect();
     let analysis = TrackAnalysis::with_source_rate(
         Some(BeatGrid::new(120.0, markers, vec![0], Vec::new())),
@@ -50,7 +51,10 @@ fn identity_schedule() -> Arc<SourceSchedule> {
         Consts::BEAT_FRAMES * 8,
         rate(),
     );
-    let map = TrackBeatMap::new(&analysis, rate()).expect("invariant: fixture markers form a map");
+    TrackBeatMap::new(&analysis, rate()).expect("invariant: fixture markers form a map")
+}
+
+fn identity_grid() -> Arc<SessionAnchorCell> {
     let anchor = SessionAnchorCell::new();
     anchor.publish(
         SessionAnchor::new(
@@ -61,15 +65,31 @@ fn identity_schedule() -> Arc<SourceSchedule> {
         )
         .expect("invariant: the fixture tempo is a positive rate"),
     );
+    anchor
+}
+
+fn identity_schedule() -> Arc<SourceSchedule> {
+    let anchor = identity_grid();
     Arc::new(SourceSchedule::new(
-        map,
+        identity_map(),
         TrackBeat::default(),
         PlaybackDirection::Forward,
         anchor,
     ))
 }
 
-fn renderer() -> BoundRenderer<SignalsmithElastic> {
+fn renderer_with(
+    schedule: Arc<SourceSchedule>,
+    pool: PcmPool,
+) -> BoundRenderer<SignalsmithElastic> {
+    renderer_with_origin(schedule, SessionBeat::default(), pool)
+}
+
+fn renderer_with_origin(
+    schedule: Arc<SourceSchedule>,
+    session_origin: SessionBeat,
+    pool: PcmPool,
+) -> BoundRenderer<SignalsmithElastic> {
     let block = usize::try_from(BoundRenderer::<SignalsmithElastic>::BLOCK_FRAMES)
         .expect("invariant: the block fits usize");
     let config = ElasticConfig::try_from((
@@ -82,13 +102,12 @@ fn renderer() -> BoundRenderer<SignalsmithElastic> {
     let engine = SignalsmithElastic::prepare(config).expect("invariant: the engine prepares");
     let span_config = ElasticSpanConfig::try_from((1.0e-6, 0.5, 0.25))
         .expect("invariant: the fixture policy is finite and positive");
-    BoundRenderer::new(
-        identity_schedule(),
-        engine,
-        span_config,
-        spec(),
-        PcmPool::default(),
-    )
+    BoundRenderer::new(schedule, session_origin, engine, span_config, spec(), pool)
+        .expect("invariant: the fixture grid is committed")
+}
+
+fn renderer() -> BoundRenderer<SignalsmithElastic> {
+    renderer_with(identity_schedule(), PcmPool::default())
 }
 
 fn engine_source_latency() -> usize {
@@ -109,7 +128,13 @@ fn engine_source_latency() -> usize {
 }
 
 fn chunk(frame_offset: u64) -> PcmChunk {
-    let frames = usize::try_from(Consts::CHUNK_FRAMES).expect("invariant: the chunk fits usize");
+    chunk_with_frames(
+        frame_offset,
+        usize::try_from(Consts::CHUNK_FRAMES).expect("invariant: the chunk fits usize"),
+    )
+}
+
+fn chunk_with_frames(frame_offset: u64, frames: usize) -> PcmChunk {
     let samples = vec![0.25_f32; frames * usize::from(Consts::CHANNELS)];
     PcmChunk::new(
         PcmMeta {
@@ -120,6 +145,141 @@ fn chunk(frame_offset: u64) -> PcmChunk {
         },
         PcmPool::default().attach(samples),
     )
+}
+
+fn commit_tempo(anchor: &SessionAnchorCell, frame: i64, bpm: f64) {
+    let frame = SessionFrame::new(frame);
+    let beat = anchor
+        .load()
+        .expect("invariant: the fixture grid is committed")
+        .beat_at(frame)
+        .expect("invariant: the fixture commit frame is representable");
+    anchor.publish(
+        SessionAnchor::new(frame, beat, bpm / 60.0, rate())
+            .expect("invariant: the fixture tempo is a positive rate"),
+    );
+}
+
+#[kithara::test]
+fn the_decks_presentation_frame_counts_the_output_frames_it_emitted() {
+    let pool = PcmPool::with_byte_budget(1, 0, ByteBudget(0));
+    let mut renderer = renderer_with(identity_schedule(), pool);
+
+    let emitted = renderer
+        .process(chunk(0))
+        .expect("identity schedule must render")
+        .map_or(0, |output| u64::from(output.meta.frames));
+
+    assert_eq!(renderer.presentation_frame(), emitted);
+}
+
+#[kithara::test]
+fn a_tempo_commit_inside_a_block_takes_effect_at_its_own_output_frame() {
+    let anchor = identity_grid();
+    let schedule = Arc::new(SourceSchedule::new(
+        identity_map(),
+        TrackBeat::default(),
+        PlaybackDirection::Forward,
+        Arc::clone(&anchor),
+    ));
+    let mut renderer = renderer_with(schedule, PcmPool::default());
+    commit_tempo(&anchor, 256, 144.0);
+
+    let emitted = renderer
+        .process(chunk_with_frames(0, 563))
+        .expect("the split span must stay inside the engine envelope")
+        .map(|output| u64::from(output.meta.frames));
+
+    assert_eq!(
+        emitted,
+        Some(BoundRenderer::<SignalsmithElastic>::BLOCK_FRAMES)
+    );
+}
+
+#[kithara::test]
+fn a_deck_bound_across_a_session_pause_plans_its_next_block_at_the_committed_slope() {
+    let anchor = identity_grid();
+    let mut renderer = renderer_with(
+        Arc::new(SourceSchedule::new(
+            identity_map(),
+            TrackBeat::default(),
+            PlaybackDirection::Forward,
+            Arc::clone(&anchor),
+        )),
+        PcmPool::default(),
+    );
+    let _ = renderer
+        .process(chunk(0))
+        .expect("the deck must plan once before the pause");
+    let before = renderer.elapsed_session_beats();
+    let pause_frame = SessionFrame::new(512);
+    let pause_beat = anchor
+        .load()
+        .expect("invariant: the fixture grid is committed")
+        .beat_at(pause_frame)
+        .expect("invariant: the pause boundary is representable");
+    anchor.publish(
+        SessionAnchor::new(pause_frame, pause_beat, Consts::SESSION_BPM / 60.0, rate())
+            .expect("invariant: the paused anchor is valid"),
+    );
+    anchor.publish(
+        SessionAnchor::new(SessionFrame::new(10_512), pause_beat, 144.0 / 60.0, rate())
+            .expect("invariant: the resumed anchor is valid"),
+    );
+
+    let _ = renderer
+        .process(chunk_with_frames(512, 700))
+        .expect("the resumed block must use the committed slope");
+    let planned = renderer.elapsed_session_beats() - before;
+    let expected = 144.0 / 60.0 / f64::from(Consts::RATE)
+        * BoundRenderer::<SignalsmithElastic>::BLOCK_FRAMES
+            .to_f64()
+            .expect("invariant: the block frame count is exact in f64");
+
+    assert!((planned - expected).abs() < f64::EPSILON);
+}
+
+#[kithara::test]
+fn two_decks_mid_block_at_different_offsets_apply_one_commit_at_the_same_output_frame() {
+    let anchor = identity_grid();
+    let second_origin = SessionBeat::new(
+        100.0
+            / Consts::BEAT_FRAMES
+                .to_f64()
+                .expect("invariant: fixture frame count is exact in f64"),
+    )
+    .expect("invariant: the second deck origin is a finite beat");
+    let first = Arc::new(SourceSchedule::new(
+        identity_map(),
+        TrackBeat::default(),
+        PlaybackDirection::Forward,
+        Arc::clone(&anchor),
+    ));
+    let second = Arc::new(SourceSchedule::new(
+        identity_map(),
+        TrackBeat::new(f64::from(second_origin))
+            .expect("invariant: the second track origin is a finite beat"),
+        PlaybackDirection::Forward,
+        Arc::clone(&anchor),
+    ));
+    let mut first = renderer_with(first, PcmPool::default());
+    let mut second = renderer_with_origin(second, second_origin, PcmPool::default());
+    commit_tempo(&anchor, 300, 144.0);
+
+    let _ = first
+        .process(chunk_with_frames(0, 554))
+        .expect("the first split span must render");
+    let _ = second
+        .process(chunk_with_frames(100, 574))
+        .expect("the second split span must render");
+
+    assert_eq!(
+        (
+            first.consumed_source_frames(),
+            second.consumed_source_frames()
+        ),
+        (554, 574)
+    );
 }
 
 /// The slot renders on the output axis: every chunk it emits is a whole number

@@ -35,7 +35,7 @@ pub(crate) struct PlayerCore {
     /// Session-grid binding for this deck. `Some` puts every prepared
     /// resource on the exact-span slot instead of the streaming one; the two
     /// are exclusive by construction.
-    pub(crate) binding: Mutex<Option<Arc<SourceSchedule>>>,
+    pub(crate) binding: Mutex<Option<(Arc<SourceSchedule>, SessionBeat)>>,
     pub(crate) byte_pool: BytePool,
     /// Engine drops last — worker shutdown happens after all tracks
     /// unregister and after `items` releases their resources.
@@ -108,7 +108,7 @@ impl PlayerImpl {
             .engine
             .session_handle()
             .bind_player(player_id, binding.clone(), at)?;
-        *self.core.binding.lock() = Some(schedule);
+        *self.core.binding.lock() = Some((schedule, at));
         Ok(())
     }
 }
@@ -120,7 +120,7 @@ impl PlayerCore {
     pub(crate) fn tempo_slot(&self) -> TempoSlot {
         self.binding.lock().clone().map_or_else(
             || TempoSlot::Streaming(Arc::clone(&self.timestretch)),
-            TempoSlot::Bound,
+            |(schedule, session_origin)| TempoSlot::Bound(schedule, session_origin),
         )
     }
 }

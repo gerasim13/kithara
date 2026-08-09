@@ -400,10 +400,10 @@ which source coordinate is due at the block's first and last output frame,
 quantizes that continuous span through `ElasticSpanPlan`, and renders it with
 `ElasticEngine::process`, which returns exactly the requested output frames from
 exactly the requested source frames. Nothing here is block-synchronous with the
-audio callback: the only invariant is that bound output frame `n` is played at
-session frame `anchor + n`, so the renderer counts its own emitted frames and
-never consults the playhead. The fractional remainder between blocks lives in
-the plan's `ElasticCursor`; there is no second residual.
+audio callback: the renderer counts its own emitted frames and never consults
+the playhead, while the transport owns when those frames play. The fractional
+remainder between blocks lives in the plan's `ElasticCursor`; there is no
+second residual.
 
 `SourceSchedule` is the binding projected onto the deck's own output frames.
 `TrackBinding` (in `kithara-play`) stays the single owner of the session-beat to
@@ -422,33 +422,36 @@ transport owns *when* it changes — every commit republishes an anchor through
 `SessionAnchorCell` and a bound deck reads whichever one is current when it
 plans its next block.
 
-No stage below the transport may hold a tempo of its own, **and a scalar
-captured at bind time is one**. Such a copy is never re-anchored: it silently
-outlives the commit that produced it, so a session tempo change never reaches
-the deck at all and the only way to apply one would be to rebuild the schedule,
-the effect chain and the resource behind it. Rebuilding a decoder because a
-tempo fader moved is the wrong answer to a question that should not be asked.
+No stage below the transport may hold a tempo as an independent source of
+truth. The renderer's retained old slope is only the slope selected for its
+un-emitted planning frontier; every new frontier is reconciled with the live
+commit. A binding-time scalar used indefinitely would silently outlive the
+commit that produced it, so a session tempo change would never reach the deck
+without rebuilding the schedule, effect chain, and resource. Rebuilding a
+decoder because a tempo fader moved is the wrong answer to a question that
+should not be asked.
 
-`SourceSchedule` therefore carries no tempo. What it does own is the deck's own
-anchor pair — the session frame and session beat that output frame zero plays
-at — fixed at bind and never recomputed. Advance is measured *from where the
-deck started*, so a commit bends the grid ahead of the playhead and cannot move
-a frame already rendered. Recomputing the whole elapsed span at the new slope
-would, and it is audible as a jump.
+`SourceSchedule` therefore carries neither tempo nor position. `BoundRenderer`
+owns the session-beat origin fixed at bind and the deck's moving advance from
+it. The advance changes only when the renderer plans output; the presentation
+position changes only by frames actually emitted. A commit bends the grid ahead
+of that frontier and cannot move a frame already rendered. Recomputing the
+whole elapsed span at the new slope would, and it is audible as a jump.
 
 `SessionAnchorCell` is a sequence lock, not a pointer swap: the writer is the
 commit and the commit runs on the audio thread, where building the value behind
 a pointer would allocate. Four scalars, four stores between two counter bumps,
 one writer by construction. Readers retry only across a publish in flight.
 
-Nothing extra is needed for a smooth change. `ElasticSpanPlan` already quantizes
-each block's endpoints and carries the fractional remainder in `ElasticCursor`;
-a commit simply means the next block's plan sees a different slope and the
-cursor carries phase across it. `BoundRenderer` plans ahead of playback, so a
-commit landing between planning and playback leaves that block planned on the
-old slope — correct for the revision it was planned under, per interval-based
-revision validity. It re-plans from the newest anchor on the next block and
-never reinterprets frames already emitted.
+`ElasticSpanPlan` already accepts multiple continuous spans and carries the
+fractional remainder in `ElasticCursor`. `BoundRenderer` retains the slope it
+last planned under. When a commit's beat relative to the deck's origin falls
+strictly inside the next un-emitted beat span, the renderer resolves the old
+slope's beat distance to a whole output frame and supplies the pre-commit and
+post-commit spans as two segments of that one request. No session-frame pin is
+involved, so a pause cannot move the split. A commit behind the frontier does
+not reinterpret emitted frames; the cursor carries phase forward at the new
+slope.
 
 The slot is forward-only and retains nothing behind what it has consumed. A plan
 that reaches behind the retained source is a broken contract and is reported as

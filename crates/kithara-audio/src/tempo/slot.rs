@@ -1,6 +1,9 @@
 use kithara_platform::sync::Arc;
 
-use crate::{musical::SourceSchedule, tempo::streaming::StretchControls};
+use crate::{
+    musical::{SessionBeat, SourceSchedule},
+    tempo::streaming::StretchControls,
+};
 
 /// Returns whether the selected exact-span engine accepts this continuous
 /// source-frame advance, or `None` when this build has no such engine.
@@ -11,7 +14,7 @@ pub fn bound_rate_supported(source_frames_per_output: f64) -> Option<bool> {
         any(feature = "stretch-signalsmith", feature = "stretch-bungee")
     ))]
     {
-        return super::bound::rate_supported(source_frames_per_output);
+        super::bound::rate_supported(source_frames_per_output)
     }
     #[cfg(not(all(
         not(target_arch = "wasm32"),
@@ -31,7 +34,7 @@ pub fn bound_render_span_frames() -> Option<u64> {
         any(feature = "stretch-signalsmith", feature = "stretch-bungee")
     ))]
     {
-        return Some(super::bound::render_span_frames());
+        Some(super::bound::render_span_frames())
     }
     #[cfg(not(all(
         not(target_arch = "wasm32"),
@@ -66,19 +69,13 @@ pub enum TempoSlot {
     /// Live speed, key-lock and region plan, output span chosen by the backend.
     Streaming(Arc<StretchControls>),
     /// Bound at a fixed transport revision: the schedule names the source span
-    /// due at each output frame.
-    Bound(Arc<SourceSchedule>),
+    /// due after advancing from the supplied session-beat origin.
+    Bound(Arc<SourceSchedule>, SessionBeat),
 }
 
 impl From<Arc<StretchControls>> for TempoSlot {
     fn from(controls: Arc<StretchControls>) -> Self {
         Self::Streaming(controls)
-    }
-}
-
-impl From<Arc<SourceSchedule>> for TempoSlot {
-    fn from(schedule: Arc<SourceSchedule>) -> Self {
-        Self::Bound(schedule)
     }
 }
 
@@ -88,7 +85,7 @@ impl TempoSlot {
     pub fn streaming(&self) -> Option<&Arc<StretchControls>> {
         match self {
             Self::Streaming(controls) => Some(controls),
-            Self::Bound(_) => None,
+            Self::Bound(_, _) => None,
         }
     }
 
@@ -96,7 +93,7 @@ impl TempoSlot {
     #[must_use]
     pub fn bound(&self) -> Option<&Arc<SourceSchedule>> {
         match self {
-            Self::Bound(schedule) => Some(schedule),
+            Self::Bound(schedule, _) => Some(schedule),
             Self::Streaming(_) => None,
         }
     }

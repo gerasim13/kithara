@@ -1,7 +1,9 @@
 use kithara_events::PlaybackDirection;
 use kithara_platform::sync::Arc;
 
-use super::{CoordinateError, SessionAnchorCell, SourceFrame, TrackBeat, TrackBeatMap};
+use super::{
+    CoordinateError, SessionAnchorCell, SessionBeat, SourceFrame, TrackBeat, TrackBeatMap,
+};
 
 /// A deck's own output frame cannot be resolved to a source coordinate.
 #[derive(Clone, Copy, Debug, PartialEq, thiserror::Error)]
@@ -10,6 +12,9 @@ pub enum ScheduleError {
     /// No transport commit has published a session grid to follow yet.
     #[error("no committed session grid to follow")]
     Unanchored,
+    /// A session commit beat cannot be expressed from this deck's beat origin.
+    #[error("session commit beat {commit} cannot be expressed from deck origin beat {origin}")]
+    SessionBeat { commit: f64, origin: f64 },
     /// The composed track-beat coordinate is not representable.
     #[error("track beat {beats} beats into the deck is not representable")]
     TrackBeat {
@@ -51,6 +56,15 @@ pub struct SourceSchedule {
     anchor: Arc<SessionAnchorCell>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get)]
+pub(crate) struct ScheduleCommit {
+    #[field(get, copy)]
+    beats_per_frame: f64,
+    #[field(get, copy)]
+    elapsed_beats: f64,
+}
+
 impl SourceSchedule {
     /// Projects a binding onto a deck whose output frame zero plays `origin`,
     /// following whatever grid `anchor` publishes.
@@ -67,6 +81,26 @@ impl SourceSchedule {
             direction,
             anchor,
         }
+    }
+
+    pub(crate) fn commit(
+        &self,
+        session_origin: SessionBeat,
+    ) -> Result<ScheduleCommit, ScheduleError> {
+        let anchor = self.anchor.load().ok_or(ScheduleError::Unanchored)?;
+        let commit_beat = f64::from(anchor.beat());
+        let origin_beat = f64::from(session_origin);
+        let elapsed_beats = commit_beat - origin_beat;
+        if !elapsed_beats.is_finite() {
+            return Err(ScheduleError::SessionBeat {
+                commit: commit_beat,
+                origin: origin_beat,
+            });
+        }
+        Ok(ScheduleCommit {
+            beats_per_frame: anchor.beats_per_frame(),
+            elapsed_beats,
+        })
     }
 
     /// Session beats one output frame advances at the committed tempo.

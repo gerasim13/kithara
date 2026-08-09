@@ -4,7 +4,10 @@ use kithara_platform::sync::Arc;
 use kithara_stretch::{ElasticConfig, ElasticEngine, ElasticSpanConfig};
 
 use super::{BoundError, BoundRenderer};
-use crate::{musical::SourceSchedule, traits::AudioEffect};
+use crate::{
+    musical::{SessionBeat, SourceSchedule},
+    traits::AudioEffect,
+};
 
 pub(crate) fn rate_supported(source_frames_per_output: f64) -> Option<bool> {
     Engine::rate_envelope()
@@ -40,6 +43,7 @@ impl Consts {
 /// Returns [`BoundError`] when the engine cannot be prepared for this shape.
 pub(crate) fn bound_slot(
     schedule: Arc<SourceSchedule>,
+    session_origin: SessionBeat,
     spec: PcmSpec,
     pool: PcmPool,
 ) -> Result<Box<dyn AudioEffect>, BoundError> {
@@ -62,11 +66,12 @@ pub(crate) fn bound_slot(
     ))?;
     Ok(Box::new(BoundRenderer::new(
         schedule,
+        session_origin,
         engine,
         span_config,
         spec,
         pool,
-    )))
+    )?))
 }
 
 /// Signalsmith is the exact-span engine wherever it is compiled in; bungee

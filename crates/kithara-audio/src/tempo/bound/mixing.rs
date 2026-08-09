@@ -9,11 +9,13 @@ use kithara_bufpool::PcmPool;
 use kithara_decode::{DecodeError, PcmChunk, PcmMeta, PcmSpec};
 use kithara_events::PlaybackDirection;
 use kithara_platform::sync::Arc;
-use kithara_stretch::ElasticError;
+use kithara_stretch::{
+    ElasticConfig, ElasticEngine, ElasticError, ElasticSpanConfig, SignalsmithElastic,
+};
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
-use super::{BoundError, bound_slot};
+use super::{BoundError, BoundRenderer, bound_slot};
 use crate::{
     analysis::TrackAnalysis,
     musical::{
@@ -158,19 +160,20 @@ fn pulse_track(bpm: f64, shape: Pulse, tone_hz: f64) -> (Vec<f32>, Vec<u64>) {
 /// The one grid both decks follow.
 fn session_grid() -> Arc<SessionAnchorCell> {
     let cell = SessionAnchorCell::new();
-    commit_tempo(&cell, Consts::SESSION_BPM);
+    commit_tempo(&cell, 0, Consts::SESSION_BPM);
     cell
 }
 
-fn commit_tempo(cell: &SessionAnchorCell, bpm: f64) {
+fn commit_tempo(cell: &SessionAnchorCell, frame: usize, bpm: f64) {
+    let frame = SessionFrame::new(i64::try_from(frame).expect("invariant: fixture frame fits i64"));
+    let beat = cell.load().map_or_else(SessionBeat::default, |anchor| {
+        anchor
+            .beat_at(frame)
+            .expect("invariant: fixture commit frame is representable")
+    });
     cell.publish(
-        SessionAnchor::new(
-            SessionFrame::new(0),
-            SessionBeat::default(),
-            bpm / 60.0,
-            rate(),
-        )
-        .expect("invariant: the fixture tempo is a positive rate"),
+        SessionAnchor::new(frame, beat, bpm / 60.0, rate())
+            .expect("invariant: the fixture tempo is a positive rate"),
     );
 }
 
@@ -184,7 +187,7 @@ fn commit_tempo(cell: &SessionAnchorCell, bpm: f64) {
 ///
 /// Rides are quantized into [`Consts::RIDE_STEPS`] commits over the run.
 /// Continuous here would be a fiction: a transport commit is a discrete event
-/// scheduled to a block boundary, and every deck must see the same sequence of
+/// scheduled to an output frame, and every deck must see the same sequence of
 /// them or they are following different grids.
 type TempoRide = fn(f64) -> f64;
 
@@ -240,11 +243,36 @@ fn render_pair_riding_at(
     frames: usize,
     ride: TempoRide,
 ) -> (Vec<f32>, Vec<f32>) {
+    render_pair_riding_at_origins(slow_bpm, fast_bpm, frames, ride, 0, 0)
+}
+
+fn render_pair_riding_at_origins(
+    slow_bpm: f64,
+    fast_bpm: f64,
+    frames: usize,
+    ride: TempoRide,
+    slow_origin: usize,
+    fast_origin: usize,
+) -> (Vec<f32>, Vec<f32>) {
+    let (slow, fast, _) =
+        ride_pair_at_origins(slow_bpm, fast_bpm, frames, ride, slow_origin, fast_origin);
+    (
+        slow.into_session_output(frames),
+        fast.into_session_output(frames),
+    )
+}
+
+fn ride_pair_at_origins(
+    slow_bpm: f64,
+    fast_bpm: f64,
+    frames: usize,
+    ride: TempoRide,
+    slow_origin: usize,
+    fast_origin: usize,
+) -> (Deck, Deck, Arc<SessionAnchorCell>) {
     let grid = session_grid();
-    let channels = usize::from(Consts::CHANNELS);
-    let want = frames * channels;
-    let mut slow = Deck::new(slow_bpm, Pulse::Sine, Consts::SLOW_HZ, &grid);
-    let mut fast = Deck::new(fast_bpm, Pulse::Square, Consts::FAST_HZ, &grid);
+    let mut slow = Deck::new(slow_bpm, Pulse::Sine, Consts::SLOW_HZ, &grid, slow_origin);
+    let mut fast = Deck::new(fast_bpm, Pulse::Square, Consts::FAST_HZ, &grid, fast_origin);
 
     // Step by *session* time, not by source. A record stretched up eats its
     // source faster and emits less output per chunk, so feeding both the same
@@ -252,32 +280,38 @@ fn render_pair_riding_at(
     // covers the same stretch of session for both decks — which is the
     // readiness barrier a real transport applies before admitting one.
     for step in 1..=Consts::RIDE_STEPS {
-        let progress = (step - 1)
+        let progress = step
             .to_f64()
             .expect("invariant: the step index is exact in f64")
             / Consts::RIDE_STEPS
                 .to_f64()
                 .expect("invariant: the step count is exact in f64");
-        commit_tempo(&grid, ride(progress));
-        let through = want * step / Consts::RIDE_STEPS;
-        slow.render_through(through);
-        fast.render_through(through);
+        let commit_frame = frames * step / Consts::RIDE_STEPS;
+        commit_tempo(&grid, commit_frame, ride(progress));
+        slow.render_through_session(commit_frame);
+        fast.render_through_session(commit_frame);
     }
-    slow.out.truncate(want);
-    fast.out.truncate(want);
-    (slow.out, fast.out)
+    (slow, fast, grid)
 }
 
 /// One deck mid-render: its source, its slot, and what it has emitted.
 struct Deck {
     source: Vec<f32>,
-    slot: Box<dyn AudioEffect>,
+    slot: BoundRenderer<SignalsmithElastic>,
     out: Vec<f32>,
     fed: usize,
+    output_origin: usize,
+    session_origin: SessionBeat,
 }
 
 impl Deck {
-    fn new(bpm: f64, shape: Pulse, tone_hz: f64, grid: &Arc<SessionAnchorCell>) -> Self {
+    fn new(
+        bpm: f64,
+        shape: Pulse,
+        tone_hz: f64,
+        grid: &Arc<SessionAnchorCell>,
+        output_origin: usize,
+    ) -> Self {
         let (source, markers) = pulse_track(bpm, shape, tone_hz);
         let source_frames = u64::try_from(source.len() / usize::from(Consts::CHANNELS))
             .expect("invariant: the fixture length fits u64");
@@ -289,19 +323,77 @@ impl Deck {
         );
         let map =
             TrackBeatMap::new(&analysis, rate()).expect("invariant: fixture markers form a map");
+        let output_origin = SessionFrame::new(
+            i64::try_from(output_origin).expect("invariant: fixture origin fits i64"),
+        );
+        let session_origin = grid
+            .load()
+            .expect("invariant: fixture grid is committed")
+            .beat_at(output_origin)
+            .expect("invariant: fixture origin is representable");
         let schedule = Arc::new(SourceSchedule::new(
             map,
-            TrackBeat::default(),
+            TrackBeat::new(f64::from(session_origin))
+                .expect("invariant: fixture track origin is representable"),
             PlaybackDirection::Forward,
             Arc::clone(grid),
         ));
+        let block = usize::try_from(BoundRenderer::<SignalsmithElastic>::BLOCK_FRAMES)
+            .expect("invariant: fixture block fits usize");
+        let config = ElasticConfig::try_from((
+            Consts::RATE,
+            usize::from(Consts::CHANNELS),
+            block * 2,
+            block,
+        ))
+        .expect("invariant: fixture elastic shape is representable");
+        let engine = SignalsmithElastic::prepare(config).expect("invariant: engine prepares");
+        let span_config = ElasticSpanConfig::try_from((1.0e-6, 0.5, 0.25))
+            .expect("invariant: fixture span policy is valid");
         Self {
             source,
-            slot: bound_slot(schedule, spec(), PcmPool::default())
-                .expect("invariant: an exact-span engine is compiled in"),
+            slot: BoundRenderer::new(
+                schedule,
+                session_origin,
+                engine,
+                span_config,
+                spec(),
+                PcmPool::default(),
+            )
+            .expect("invariant: the fixture grid is committed"),
             out: Vec::new(),
             fed: 0,
+            output_origin: usize::try_from(i64::from(output_origin))
+                .expect("invariant: fixture origin is non-negative"),
+            session_origin,
         }
+    }
+
+    fn render_through_session(&mut self, session_frame: usize) {
+        let local_frames = session_frame.saturating_sub(self.output_origin);
+        self.render_through(local_frames * usize::from(Consts::CHANNELS));
+    }
+
+    fn into_session_output(mut self, session_frames: usize) -> Vec<f32> {
+        let channels = usize::from(Consts::CHANNELS);
+        let mut aligned = vec![0.0; self.output_origin * channels];
+        aligned.append(&mut self.out);
+        aligned.truncate(session_frames * channels);
+        aligned
+    }
+
+    fn grid_error(&self, anchor: SessionAnchor) -> f64 {
+        let global_frame = SessionFrame::new(
+            i64::try_from(self.output_origin).expect("invariant: fixture origin fits i64"),
+        )
+        .offset(self.slot.presentation_frame())
+        .expect("invariant: fixture presentation frame is representable");
+        let expected = f64::from(
+            anchor
+                .beat_at(global_frame)
+                .expect("invariant: fixture presentation beat is representable"),
+        ) - f64::from(self.session_origin);
+        (self.slot.elapsed_session_beats() - expected).abs()
     }
 
     /// Feeds source until this deck has emitted `samples` of output, or its
@@ -362,7 +454,7 @@ fn render_deck_riding(
         PlaybackDirection::Forward,
         Arc::clone(grid),
     ));
-    let mut slot = bound_slot(schedule, spec(), PcmPool::default())
+    let mut slot = bound_slot(schedule, SessionBeat::default(), spec(), PcmPool::default())
         .expect("invariant: an exact-span engine is compiled in");
 
     let channels = usize::from(Consts::CHANNELS);
@@ -377,7 +469,7 @@ fn render_deck_riding(
             / frames
                 .to_f64()
                 .expect("invariant: fixture frame counts are exact in f64");
-        commit_tempo(grid, ride(progress));
+        commit_tempo(grid, out.len() / channels, ride(progress));
         let slice = &source[fed * channels..(fed + Consts::CHUNK_FRAMES) * channels];
         let chunk = PcmChunk::new(
             PcmMeta {
@@ -396,10 +488,6 @@ fn render_deck_riding(
     out.truncate(want);
     Ok(out)
 }
-
-/// Output frames the slot plans in one go, so one commit lands at most this
-/// late on any deck.
-const BLOCK_FRAMES: usize = 512;
 
 /// Frames where a burst begins.
 ///
@@ -541,48 +629,20 @@ fn the_uncompensated_engine_delay_offsets_the_decks() {
     );
 }
 
-/// A ride parts the decks, and the size of the parting is the commit
-/// quantization.
-///
-/// [`super::BoundRenderer`] plans whole blocks. A tempo commit therefore takes effect
-/// at the next block boundary rather than at the frame it was scheduled for —
-/// up to 512 frames late, and late by a different amount on each deck, because
-/// each is mid-block somewhere else. Under a steady tempo this never shows: it
-/// is one boundary, once. Under a ride it is one per commit, and they add up.
-///
-/// `spec-v3.md` §2 requires the opposite — content computed as a function of
-/// session beat, "splitting chunks at exact commit boundaries". Until the slot
-/// can split a block, this is the cost, pinned at its measured size so the
-/// split that removes it has something to change.
+/// Every discrete tempo commit leaves both decks on the session beat due at
+/// the presentation frame they actually emitted.
 #[kithara::test]
-fn a_tempo_ride_parts_the_decks_by_the_commit_quantization() {
+fn a_tempo_ride_keeps_the_decks_together_at_the_committed_output_frames() {
     let frames = session_beat_frames() * Consts::MEASURED_BEATS;
-    let (slow, fast) = render_pair_riding(frames, ramp_up);
+    let (slow, fast, grid) =
+        ride_pair_at_origins(Consts::SLOW_BPM, Consts::FAST_BPM, frames, ramp_up, 0, 173);
+    let anchor = grid
+        .load()
+        .expect("invariant: the ridden grid remains committed");
 
-    let slow_beats = onsets(&slow);
-    let fast_beats = onsets(&fast);
-    let pairs = slow_beats.len().min(fast_beats.len());
-    assert!(pairs > 8, "both decks must strike through the ride");
-
-    let separation = |at: usize| {
-        i64::try_from(fast_beats[at].abs_diff(slow_beats[at]))
-            .expect("invariant: the separation fits i64")
-    };
-    let opened = (separation(pairs - 1) - separation(1)).abs();
-
-    assert!(
-        opened > 0,
-        "the parting is real today; a zero here means the slot learned to split \
-         a block at a commit and this oracle should become the together one"
-    );
-
-    let budget = i64::try_from(Consts::RIDE_STEPS * BLOCK_FRAMES)
-        .expect("invariant: the quantization budget fits i64");
-    assert!(
-        opened < budget,
-        "the parting must stay inside one block per commit: {opened} frames \
-         against a {budget}-frame budget over {} commits",
-        Consts::RIDE_STEPS
+    assert_eq!(
+        (slow.grid_error(anchor), fast.grid_error(anchor)),
+        (0.0, 0.0)
     );
 }
 

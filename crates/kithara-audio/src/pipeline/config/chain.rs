@@ -52,9 +52,14 @@ fn append_tempo_slot(
             initial_spec,
             pool.clone(),
         ))),
-        TempoSlot::Bound(schedule) => chain.push(
-            bound_slot(Arc::clone(schedule), initial_spec, pool.clone())
-                .map_err(|_| TempoSlotError::BoundEngineMissing)?,
+        TempoSlot::Bound(schedule, session_origin) => chain.push(
+            bound_slot(
+                Arc::clone(schedule),
+                *session_origin,
+                initial_spec,
+                pool.clone(),
+            )
+            .map_err(|_| TempoSlotError::BoundEngineMissing)?,
         ),
     }
     Ok(())
@@ -75,6 +80,6 @@ fn append_tempo_slot(
 ) -> Result<(), TempoSlotError> {
     match tempo {
         TempoSlot::Streaming(_) => Ok(()),
-        TempoSlot::Bound(_) => Err(TempoSlotError::BoundEngineMissing),
+        TempoSlot::Bound(_, _) => Err(TempoSlotError::BoundEngineMissing),
     }
 }
