@@ -13,7 +13,7 @@ use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
 };
-use kithara_stream::{MediaInfo, WorkerWake};
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, WorkerWake};
 use url::Url;
 
 use super::segments::FileSegmentIndex;
@@ -260,32 +260,32 @@ fn map_media_info(info: &MediaInfo) -> (Option<AudioCodecKind>, Option<Container
     )
 }
 
-fn map_audio_codec(codec: kithara_stream::AudioCodec) -> AudioCodecKind {
+fn map_audio_codec(codec: AudioCodec) -> AudioCodecKind {
     match codec {
-        kithara_stream::AudioCodec::AacLc => AudioCodecKind::AacLc,
-        kithara_stream::AudioCodec::AacHe => AudioCodecKind::AacHe,
-        kithara_stream::AudioCodec::AacHeV2 => AudioCodecKind::AacHeV2,
-        kithara_stream::AudioCodec::Mp3 => AudioCodecKind::Mp3,
-        kithara_stream::AudioCodec::Flac => AudioCodecKind::Flac,
-        kithara_stream::AudioCodec::Vorbis => AudioCodecKind::Vorbis,
-        kithara_stream::AudioCodec::Opus => AudioCodecKind::Opus,
-        kithara_stream::AudioCodec::Alac => AudioCodecKind::Alac,
-        kithara_stream::AudioCodec::Pcm => AudioCodecKind::Pcm,
-        kithara_stream::AudioCodec::Adpcm => AudioCodecKind::Adpcm,
+        AudioCodec::AacLc => AudioCodecKind::AacLc,
+        AudioCodec::AacHe => AudioCodecKind::AacHe,
+        AudioCodec::AacHeV2 => AudioCodecKind::AacHeV2,
+        AudioCodec::Mp3 => AudioCodecKind::Mp3,
+        AudioCodec::Flac => AudioCodecKind::Flac,
+        AudioCodec::Vorbis => AudioCodecKind::Vorbis,
+        AudioCodec::Opus => AudioCodecKind::Opus,
+        AudioCodec::Alac => AudioCodecKind::Alac,
+        AudioCodec::Pcm => AudioCodecKind::Pcm,
+        AudioCodec::Adpcm => AudioCodecKind::Adpcm,
     }
 }
 
-fn map_container(container: kithara_stream::ContainerFormat) -> ContainerKind {
+fn map_container(container: ContainerFormat) -> ContainerKind {
     match container {
-        kithara_stream::ContainerFormat::Mp4 => ContainerKind::Mp4,
-        kithara_stream::ContainerFormat::Fmp4 => ContainerKind::Fmp4,
-        kithara_stream::ContainerFormat::MpegTs => ContainerKind::MpegTs,
-        kithara_stream::ContainerFormat::MpegAudio => ContainerKind::MpegAudio,
-        kithara_stream::ContainerFormat::Adts => ContainerKind::Adts,
-        kithara_stream::ContainerFormat::Flac => ContainerKind::Flac,
-        kithara_stream::ContainerFormat::Wav => ContainerKind::Wav,
-        kithara_stream::ContainerFormat::Ogg => ContainerKind::Ogg,
-        kithara_stream::ContainerFormat::Caf => ContainerKind::Caf,
-        kithara_stream::ContainerFormat::Mkv => ContainerKind::Mkv,
+        ContainerFormat::Mp4 => ContainerKind::Mp4,
+        ContainerFormat::Fmp4 => ContainerKind::Fmp4,
+        ContainerFormat::MpegTs => ContainerKind::MpegTs,
+        ContainerFormat::MpegAudio => ContainerKind::MpegAudio,
+        ContainerFormat::Adts => ContainerKind::Adts,
+        ContainerFormat::Flac => ContainerKind::Flac,
+        ContainerFormat::Wav => ContainerKind::Wav,
+        ContainerFormat::Ogg => ContainerKind::Ogg,
+        ContainerFormat::Caf => ContainerKind::Caf,
+        ContainerFormat::Mkv => ContainerKind::Mkv,
     }
 }
