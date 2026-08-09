@@ -2,6 +2,7 @@ admin_user = "operator"
 aggressive_cleanup_bytes = 270000000000
 android_home = "/Volumes/KitharaCI/toolchains/android"
 brew_root = "/opt/homebrew"
+build_cache_size = "25GB"
 cache_root_macos = "/Volumes/My Shared Files/kithara-cache"
 cache_root_linux = "/kithara-cache"
 cache_root_windows = "C:/KitharaCI/cache"

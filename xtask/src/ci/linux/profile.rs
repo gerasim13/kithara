@@ -8,6 +8,8 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::ci::config::parse_build_cache_size;
+
 /// Installed profile every Linux CI machine reads through
 /// `KITHARA_CI_LINUX_CONFIG`.
 pub(crate) const LINUX_CONFIG_PATH: &str = "/etc/kithara-ci/linux-host.toml";
@@ -19,6 +21,8 @@ pub(crate) const LINUX_CONFIG_PATH: &str = "/etc/kithara-ci/linux-host.toml";
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LinuxHost {
+    /// Positive decimal gigabytes, such as `25GB`.
+    pub(crate) build_cache_size: String,
     /// Directory holding the caches jobs keep between runs.
     pub(crate) cache_root: PathBuf,
     /// Docker network the runners are confined to.
@@ -131,6 +135,10 @@ impl LinuxHost {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
+        if self.build_cache_size.trim().is_empty() {
+            bail!("Linux CI profile build_cache_size must not be empty");
+        }
+        self.build_cache_budget_bytes()?;
         if !self.cache_root.is_absolute() {
             bail!("Linux CI profile cache_root must be an absolute path");
         }
@@ -167,6 +175,11 @@ impl LinuxHost {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn build_cache_budget_bytes(&self) -> Result<u64> {
+        parse_build_cache_size(&self.build_cache_size)
+            .context("Linux CI profile build_cache_size is invalid")
     }
 
     /// The credential a runner or guest registers with, by the repository it

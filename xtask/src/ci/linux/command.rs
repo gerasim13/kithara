@@ -84,7 +84,7 @@ pub(crate) fn run(args: &LinuxArgs) -> Result<()> {
         }
         LinuxCommand::Cleanup => {
             let pins = CiPins::load(&args.pins)?;
-            cleanup::run(&process, &pins)
+            cleanup::run(&process, &host, &pins)
         }
         LinuxCommand::InstallServices => {
             let pins = CiPins::load(&args.pins)?;

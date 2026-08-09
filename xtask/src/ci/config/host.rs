@@ -1,5 +1,6 @@
 use std::{
-    fs,
+    error::Error,
+    fmt, fs,
     path::{Path, PathBuf},
 };
 
@@ -25,6 +26,12 @@ pub(crate) struct CiHost {
     pub(crate) aggressive_cleanup_bytes: u64,
     pub(crate) android_home: PathBuf,
     pub(crate) brew_root: PathBuf,
+    /// Positive decimal gigabytes, such as `25GB`. Defaulted because the
+    /// installed profiles predate it: a binary that refused to load without it
+    /// would take the cleanup down on every host it reached, which is the
+    /// failure this budget exists to prevent.
+    #[serde(default = "default_build_cache_size")]
+    pub(crate) build_cache_size: String,
     pub(crate) cache_root_macos: PathBuf,
     pub(crate) cache_root_linux: PathBuf,
     pub(crate) cache_root_windows: PathBuf,
@@ -84,6 +91,10 @@ impl CiHost {
         if self.sccache_size.trim().is_empty() {
             bail!("CI host profile sccache_size must not be empty");
         }
+        if self.build_cache_size.trim().is_empty() {
+            bail!("CI host profile build_cache_size must not be empty");
+        }
+        self.build_cache_budget_bytes()?;
         if self.soft_cleanup_bytes == 0
             || self.soft_cleanup_bytes >= self.aggressive_cleanup_bytes
             || self.aggressive_cleanup_bytes >= self.reject_bytes
@@ -145,6 +156,11 @@ impl CiHost {
         self.gitlab_url.as_str().trim_end_matches('/').to_string()
     }
 
+    pub(crate) fn build_cache_budget_bytes(&self) -> Result<u64> {
+        parse_build_cache_size(&self.build_cache_size)
+            .context("CI host profile build_cache_size is invalid")
+    }
+
     /// The headroom a job insists on before it starts. The host stops handing
     /// out work once the CI volume passes `reject_bytes`, so the room left at
     /// that point is what the policy already considers too little to start on.
@@ -194,6 +210,48 @@ impl CiHost {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct BuildCacheSizeError {
+    value: String,
+}
+
+impl fmt::Display for BuildCacheSizeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "build_cache_size {:?} must be a positive whole number followed by GB and fit in u64 bytes",
+            self.value
+        )
+    }
+}
+
+impl Error for BuildCacheSizeError {}
+
+/// Budget a profile inherits when it predates the field. Sized so the Linux
+/// host's two dozen runner caches fit its volume with room to spare, and so a
+/// single macOS cache root stays well inside its own.
+fn default_build_cache_size() -> String {
+    "25GB".to_owned()
+}
+
+pub(crate) fn parse_build_cache_size(value: &str) -> Result<u64, BuildCacheSizeError> {
+    const BYTES_PER_GIGABYTE: u64 = 1_000_000_000;
+
+    let invalid = || BuildCacheSizeError {
+        value: value.to_owned(),
+    };
+    let digits = value.strip_suffix("GB").ok_or_else(&invalid)?;
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(invalid());
+    }
+    digits
+        .parse::<u64>()
+        .ok()
+        .filter(|gigabytes| *gigabytes > 0)
+        .and_then(|gigabytes| gigabytes.checked_mul(BYTES_PER_GIGABYTE))
+        .ok_or_else(invalid)
+}
+
 fn safe_account(value: &str) -> bool {
     !value.is_empty()
         && value
@@ -204,6 +262,57 @@ fn safe_account(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_cache_size_converts_decimal_gigabytes_to_bytes() {
+        assert_eq!(parse_build_cache_size("25GB").unwrap(), 25_000_000_000);
+    }
+
+    #[test]
+    fn build_cache_size_rejects_garbage() {
+        assert!(parse_build_cache_size("twenty-five").is_err());
+    }
+
+    #[test]
+    fn ci_host_rejects_an_empty_build_cache_size() {
+        let mut host = super::super::fixture().host;
+        host.build_cache_size.clear();
+
+        assert!(host.validate().is_err());
+    }
+
+    #[test]
+    fn ci_host_load_accepts_a_profile_without_a_build_cache_size() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("host.toml");
+        let host = super::super::fixture().host;
+        host.write(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let without: String = text
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("build_cache_size"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        fs::write(&path, without).unwrap();
+
+        assert_eq!(
+            CiHost::load(&path).unwrap().build_cache_size,
+            default_build_cache_size()
+        );
+    }
+
+    #[test]
+    fn ci_host_load_rejects_garbage_build_cache_size() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("host.toml");
+        let mut host = super::super::fixture().host;
+        host.build_cache_size = "25GiB".to_owned();
+        host.write(&path).unwrap();
+
+        let error = CiHost::load(&path).unwrap_err();
+
+        assert!(format!("{error:#}").contains("positive whole number followed by GB"));
+    }
 
     #[test]
     fn account_names_are_bounded() {

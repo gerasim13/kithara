@@ -1,7 +1,10 @@
-use anyhow::Result;
+use std::path::PathBuf;
+
+use anyhow::{Result, bail};
 use tracing::{info, warn};
 
-use crate::ci::{config::CiPins, process::Process};
+use super::profile::LinuxHost;
+use crate::ci::{build_cache, config::CiPins, process::Process};
 
 /// Build cache older than this is rebuilt faster than it is worth keeping.
 const BUILD_CACHE_AGE: &str = "168h";
@@ -9,11 +12,10 @@ const BUILD_CACHE_AGE: &str = "168h";
 /// Reclaim what this project left behind, and nothing else.
 ///
 /// The machine is shared: other stacks keep images and volumes here, so a
-/// blanket `docker system prune` would take theirs. Volumes are left alone
-/// entirely — `kithara-ci-target` and `kithara-ci-cargo-home` are the caches
-/// this exists to protect, and the orphans beside them belong to a setup this
-/// code does not own.
-pub(super) fn run(process: &Process, pins: &CiPins) -> Result<()> {
+/// blanket `docker system prune` would take theirs. Project volumes stay in
+/// place: target contents are budgeted here, Cargo home remains protected, and
+/// orphan volumes belong to a setup this code does not own.
+pub(super) fn run(process: &Process, host: &LinuxHost, pins: &CiPins) -> Result<()> {
     let Some((_, pinned)) = pins.linux_image.rsplit_once(':') else {
         warn!(image = pins.linux_image, "pinned image carries no tag");
         return Ok(());
@@ -56,7 +58,42 @@ pub(super) fn run(process: &Process, pins: &CiPins) -> Result<()> {
         ],
         "prune the build cache",
     );
+    let target_dirs = target_dirs(process)?;
+    build_cache::enforce_budget(&target_dirs, host.build_cache_budget_bytes()?)?;
     Ok(())
+}
+
+fn target_dirs(process: &Process) -> Result<Vec<PathBuf>> {
+    const VOLUME_PREFIX: &str = "kithara-ci-target";
+
+    let filter = format!("name={VOLUME_PREFIX}");
+    let listed = process.capture(
+        "docker",
+        &["volume", "ls", "--filter", &filter, "--format", "{{.Name}}"],
+        "list project target volumes",
+    )?;
+    let mut names: Vec<&str> = listed
+        .lines()
+        .map(str::trim)
+        .filter(|name| name.starts_with(VOLUME_PREFIX))
+        .collect();
+    names.sort_unstable();
+
+    let mut target_dirs = Vec::with_capacity(names.len());
+    for name in names {
+        let label = format!("inspect project target volume {name}");
+        let mountpoint = process.capture(
+            "docker",
+            &["volume", "inspect", "--format", "{{.Mountpoint}}", name],
+            &label,
+        )?;
+        let path = PathBuf::from(mountpoint);
+        if !path.is_absolute() {
+            bail!("Docker target volume {name} returned a non-absolute mountpoint");
+        }
+        target_dirs.push(path);
+    }
+    Ok(target_dirs)
 }
 
 #[cfg(test)]

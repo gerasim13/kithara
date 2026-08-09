@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use tracing::{info, warn};
 
-use crate::ci::{config::CiConfig, process::Process};
+use crate::ci::{build_cache, config::CiConfig, process::Process};
 
 /// Ordered least to most urgent: the watchdog reports the worst volume, not
 /// the total, so that a roomy one cannot hide a full one.
@@ -170,6 +170,9 @@ impl<'a> HostStorage<'a> {
             }
             Pressure::Normal => {}
         }
+
+        let target_dirs = persistent_target_dirs(&self.root.join("workspaces/gitlab"))?;
+        build_cache::enforce_budget(&target_dirs, self.config.host.build_cache_budget_bytes()?)?;
 
         let (mut final_pressure, _) = self.worst_pressure()?;
         if final_pressure == Pressure::Reject {
@@ -612,6 +615,55 @@ pub(super) fn pressure_for(used: u64, soft: u64, aggressive: u64, reject: u64) -
     } else {
         Pressure::Normal
     }
+}
+
+fn persistent_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut pending = vec![root.to_path_buf()];
+    let mut targets = Vec::new();
+    while let Some(directory) = pending.pop() {
+        if directory.join("Cargo.toml").is_file() {
+            for name in ["target", "target-flash-off"] {
+                let path = directory.join(name);
+                let metadata = match fs::symlink_metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                    Err(error) => {
+                        return Err(error).with_context(|| format!("reading {}", path.display()));
+                    }
+                };
+                if metadata.file_type().is_dir() {
+                    targets.push(path);
+                }
+            }
+            continue;
+        }
+
+        let entries = fs::read_dir(&directory)
+            .with_context(|| format!("reading CI workspace directory {}", directory.display()))?;
+        for entry in entries {
+            let entry = entry.with_context(|| {
+                format!(
+                    "reading an entry in CI workspace directory {}",
+                    directory.display()
+                )
+            })?;
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)
+                .with_context(|| format!("reading CI workspace metadata for {}", path.display()))?;
+            if metadata.file_type().is_dir() {
+                pending.push(path);
+            }
+        }
+    }
+    targets.sort();
+    Ok(targets)
 }
 
 fn validate_root(root: &Path) -> Result<()> {
