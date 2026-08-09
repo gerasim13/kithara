@@ -7,6 +7,8 @@ use std::{
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_platform::sync::Arc;
+#[cfg(test)]
+use kithara_resampler::rubato::RubatoBackend;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
 use kithara_stream::{
     AudioCodec, BoxedEventSink, ByteMap, ContainerFormat, MediaInfo, ReaderInput, ReaderProfile,
@@ -46,6 +48,19 @@ const READER_READ_AHEAD_BYTES: NonZeroU64 = match NonZeroU64::new(32 * 1_024) {
 /// Exactly one backend feature is expected per build: device builds
 /// (`apple` / `android`) compile with `--no-default-features` so
 /// `symphonia` is absent, and the hardware variant is the sole default.
+#[cfg(not(any(
+    feature = "symphonia",
+    all(feature = "apple", any(target_os = "macos", target_os = "ios")),
+    all(feature = "android", target_os = "android"),
+    all(target_arch = "wasm32", feature = "webcodecs"),
+)))]
+compile_error!(
+    "kithara-decode: enable a decoder backend for this target — `symphonia` \
+     anywhere, `apple` on macOS/iOS, `android` on Android, `webcodecs` on \
+     wasm32. With none of them every variant below is configured out, and a \
+     build that decodes nothing is not one this crate can serve."
+);
+
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, derive_more::Display, PartialEq, Eq)]
 pub enum DecoderBackend {
@@ -432,7 +447,7 @@ where
         }
     }
 
-    if apple_standalone_supports(codec, container) {
+    if crate::apple::AppleAudioFileDemuxer::supports(codec, container) {
         tracing::debug!(
             ?codec,
             ?container,
@@ -448,11 +463,6 @@ where
         let _ = (source, container, config);
         Err(DecodeError::UnsupportedCodec { codec })
     }
-}
-
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-fn apple_standalone_supports(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
-    crate::apple::AppleAudioFileDemuxer::supports(codec, container)
 }
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
@@ -886,17 +896,13 @@ mod tests {
     #[test]
     fn decoder_resampler_config_keeps_typed_backend() {
         let target_sample_rate = NonZeroU32::new(48_000).expect("test rate");
-        let config: DecoderResamplerConfig<kithara_resampler::rubato::RubatoBackend> =
-            DecoderResamplerConfig::builder()
-                .target_sample_rate(target_sample_rate)
-                .backend(kithara_resampler::rubato::RubatoBackend::default())
-                .build();
+        let config: DecoderResamplerConfig<RubatoBackend> = DecoderResamplerConfig::builder()
+            .target_sample_rate(target_sample_rate)
+            .backend(RubatoBackend::default())
+            .build();
 
         assert_eq!(config.target_sample_rate, target_sample_rate);
-        assert_eq!(
-            config.backend.name(),
-            kithara_resampler::rubato::RubatoBackend::default().name()
-        );
+        assert_eq!(config.backend.name(), RubatoBackend::default().name());
     }
 }
 

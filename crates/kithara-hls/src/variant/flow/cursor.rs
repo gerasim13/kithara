@@ -2,13 +2,13 @@ use std::sync::atomic::Ordering;
 
 use kithara_test_utils::kithara;
 
-use super::HlsVariant;
+use super::{HlsVariant, core::NO_PREFETCH_DEFERRAL};
 
 impl HlsVariant {
     /// Record the cursor byte at which the front-of-queue segment enters the
-    /// look-ahead window, or `u64::MAX` when nothing is deferred. Written by
-    /// [`HlsVariant::dispatch`] on every pass, so it always describes the
-    /// decision the peer last took.
+    /// look-ahead window, or [`NO_PREFETCH_DEFERRAL`] when nothing is
+    /// deferred. Written by [`HlsVariant::dispatch`] on every pass, so it
+    /// always describes the decision the peer last took.
     pub(super) fn defer_prefetch_until(&self, byte: u64) {
         self.flow.prefetch_resume_at.store(byte, Ordering::Release);
     }
@@ -44,12 +44,12 @@ impl HlsVariant {
     /// how far it has *consumed* — and leaves the peer asleep on real progress.
     pub(crate) fn take_prefetch_resume_at(&self, consumed: u64) -> bool {
         let at = self.flow.prefetch_resume_at.load(Ordering::Acquire);
-        at != u64::MAX
+        at != NO_PREFETCH_DEFERRAL
             && consumed >= at
             && self
                 .flow
                 .prefetch_resume_at
-                .swap(u64::MAX, Ordering::AcqRel)
-                != u64::MAX
+                .swap(NO_PREFETCH_DEFERRAL, Ordering::AcqRel)
+                != NO_PREFETCH_DEFERRAL
     }
 }

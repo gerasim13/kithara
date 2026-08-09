@@ -8,7 +8,9 @@ use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
-use kithara_stream::{DeferredWake, PlayheadWrite, SeekControl, SeekObserve, SeekPrepare};
+use kithara_stream::{
+    ChunkPosition, DeferredWake, PlayheadWrite, SeekControl, SeekObserve, SeekPrepare,
+};
 use portable_atomic::AtomicF32;
 
 use super::{
@@ -160,7 +162,7 @@ impl<S> Audio<S> {
         if self.ring.current_chunk.is_none() && self.ring.phase != super::ConsumerPhase::AtEof {
             self.fill_buffer();
             if let super::ConsumerPhase::Failed { source } = self.ring.phase {
-                return Err(channel_closed_during_preload(source));
+                return Err(DecodeError::pcm_stream("preload", source));
             }
         }
         Ok(())
@@ -271,7 +273,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
         self.ring.promote_playing();
         self.session
             .playhead
-            .advance(&kithara_stream::ChunkPosition::from(&chunk.meta));
+            .advance(&ChunkPosition::from(&chunk.meta));
         Ok(ChunkOutcome::Chunk(chunk))
     }
 
@@ -401,10 +403,6 @@ fn chunk_outcome(
             reason: PendingReason::Buffering,
         }),
     }
-}
-
-fn channel_closed_during_preload(failure: super::FailureSource) -> DecodeError {
-    DecodeError::pcm_stream("preload", failure)
 }
 
 #[cfg(test)]

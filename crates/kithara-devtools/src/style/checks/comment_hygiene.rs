@@ -638,6 +638,10 @@ fn apply_category_fix(
         if !is_safe_to_autoremove(c) {
             continue;
         }
+        if is_standalone_line(src, c.byte_range.start) && has_standalone_neighbor(src, c, comments)
+        {
+            continue;
+        }
         targets.push(removal_range(src, &c.byte_range));
     }
     if targets.is_empty() {
@@ -653,6 +657,29 @@ fn apply_category_fix(
         }
     }
     Some(buf)
+}
+
+fn is_standalone_line(src: &str, comment_start: usize) -> bool {
+    let line_start = src[..comment_start].rfind('\n').map_or(0, |idx| idx + 1);
+    src[line_start..comment_start]
+        .bytes()
+        .all(|b| b == b' ' || b == b'\t')
+}
+
+/// True when a standalone `target` sits directly above or below another
+/// standalone plain `//` line comment: the two form one prose paragraph, and
+/// deleting only one via the single-line autoremove heuristic would leave the
+/// other half dangling mid-sentence. Trailing (same-line-as-code) comments on
+/// neighboring lines are unrelated notes, not paragraph continuations, so
+/// they do not trigger this guard.
+fn has_standalone_neighbor(src: &str, target: &Comment, all: &[Comment]) -> bool {
+    all.iter().any(|other| {
+        other.kind == CommentKind::Line
+            && other.doc_style == DocStyle::None
+            && (other.line_start + 1 == target.line_start
+                || target.line_start + 1 == other.line_start)
+            && is_standalone_line(src, other.byte_range.start)
+    })
 }
 
 /// A comment is safe to delete via autofix only when its body looks like trivial
@@ -1123,5 +1150,21 @@ mod tests {
         let src = "fn f() {\n    let x = 5; // unused\n}\n";
         let out = run_fix(src).expect("fix");
         assert_eq!(out, "fn f() {\n    let x = 5;\n}\n");
+    }
+
+    #[test]
+    fn fix_preserves_standalone_paragraph_continuation() {
+        let src = "fn f() {\n    // a long explanation that runs onto the next line, so\n    // wrap up\n    let x = 1;\n}\n";
+        assert!(
+            run_fix(src).is_none(),
+            "must not delete only the tail of a standalone multi-line paragraph"
+        );
+    }
+
+    #[test]
+    fn fix_still_removes_independent_trailing_comments_on_adjacent_lines() {
+        let src = "fn f() {\n    let x = 1; // a\n    let y = 2; // b\n}\n";
+        let out = run_fix(src).expect("fix");
+        assert_eq!(out, "fn f() {\n    let x = 1;\n    let y = 2;\n}\n");
     }
 }

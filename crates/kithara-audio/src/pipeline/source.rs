@@ -25,7 +25,7 @@ use crate::{
         parts::SourceParts,
         rebuild::{DecoderBuildComplete, DecoderBuildPurpose, port::RebuildPort, retire::Retired},
         seek::SeekEngine,
-        track::{self, CurrentFsm, Decoding, Track, TrackStep, WaitContext},
+        track::{self, CurrentFsm, Decoding, Track, TrackFailure, TrackStep, WaitContext},
     },
     renderer::AudioWorkerSource,
 };
@@ -83,7 +83,6 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     pub(crate) shared_stream: SharedStream<T>,
 }
 
-// Construction, lifecycle, and state access
 impl<T: StreamType> StreamAudioSource<T> {
     /// Bounded off-RT retire queue for decode state displaced on the produce core.
     const GENERATION_RETIRE_CAPACITY: usize = 4;
@@ -569,13 +568,13 @@ pub(crate) fn playing_for_state(state: &CurrentFsm) -> bool {
     !matches!(state, CurrentFsm::AtEof(_) | CurrentFsm::Failed(_))
 }
 
-fn map_track_failure_kind(failure: &track::TrackFailure) -> TrackFailureKind {
+fn map_track_failure_kind(failure: &TrackFailure) -> TrackFailureKind {
     match failure {
-        track::TrackFailure::Decode(_) => TrackFailureKind::Decode,
-        track::TrackFailure::RecreateFailed { offset } => {
+        TrackFailure::Decode(_) => TrackFailureKind::Decode,
+        TrackFailure::RecreateFailed { offset } => {
             TrackFailureKind::RecreateFailed { offset: *offset }
         }
-        track::TrackFailure::SourceCancelled => TrackFailureKind::SourceCancelled,
+        TrackFailure::SourceCancelled => TrackFailureKind::SourceCancelled,
     }
 }
 

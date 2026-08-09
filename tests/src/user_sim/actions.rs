@@ -13,7 +13,7 @@ use kithara::platform::time::Duration;
 /// single Action sequence is reusable across short HLS fixtures, longer
 /// MP3 assets, and prod tracks of unknown length.
 #[derive(Clone, Debug)]
-pub(crate) enum Action {
+pub enum Action {
     /// Seek to `ratio * duration`. `ratio` in `0.0..0.95` —
     /// stays clear of the near-end window covered by `SeekNearEnd`.
     SeekRatio(f64),
@@ -46,7 +46,7 @@ pub(crate) enum Action {
 impl Action {
     /// Short label used in panic messages and decision logs so a failing
     /// scenario is greppable without paging through the Action enum.
-    pub(crate) fn label(&self) -> String {
+    pub fn label(&self) -> String {
         match self {
             Self::SeekRatio(r) => format!("SeekRatio({r:.3})"),
             Self::SeekNearEnd(r) => format!("SeekNearEnd({r:.3})"),

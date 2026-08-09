@@ -48,7 +48,7 @@ struct DecoderDeps<B> {
 
 impl<B> DecoderDeps<B>
 where
-    B: ResamplerBackend,
+    B: Default + ResamplerBackend,
 {
     fn new(
         decoder: AudioDecoderConfig<B>,
@@ -67,14 +67,11 @@ where
     delegate::delegate! {
         to self.decoder {
             fn backend(&self) -> kithara_decode::DecoderBackend;
-            fn recreates_on_host_rate_change(&self) -> bool;
         }
     }
 
     fn playback_resampler_backend(&self) -> &'static str {
-        self.decoder
-            .resampler()
-            .map_or("none", |resampler| resampler.backend().name())
+        self.decoder.resampler_backend_name()
     }
 
     fn resampler_config(&self) -> Option<DecoderResamplerConfig<B>> {
@@ -156,7 +153,7 @@ where
     /// Returns [`DecodeError`] when stream, probe, decoder, or runtime setup fails.
     pub async fn new<B>(config: AudioConfig<T, B>) -> Result<Self, DecodeError>
     where
-        B: ResamplerBackend,
+        B: Default + ResamplerBackend,
     {
         let AudioConfig {
             byte_pool,
@@ -249,7 +246,9 @@ where
             host_sample_rate: Arc::clone(&host_sample_rate),
             initial_media_info: initial_media_info.clone(),
             playback_resampler_backend: deps.playback_resampler_backend(),
-            recreate_on_host_rate_change: deps.recreates_on_host_rate_change(),
+            // A requested host rate always resolves to a resampler plan, so a
+            // route change is decided by `ResumeCursor`'s rate guards alone.
+            recreate_on_host_rate_change: true,
             worker: config_worker,
         });
         publish_initial_decoder_events(
@@ -322,7 +321,7 @@ fn publish_initial_decoder_events<B>(
     initial_track_info: &kithara_decode::DecoderTrackInfo,
     total_duration: Option<kithara_platform::time::Duration>,
 ) where
-    B: ResamplerBackend,
+    B: Default + ResamplerBackend,
 {
     bus.publish(decoder_changed_event(DecoderChangedEventData {
         backend: deps.backend(),
@@ -342,17 +341,18 @@ fn publish_initial_decoder_events<B>(
     ) {
         bus.publish(event);
     }
+    let resampler = deps.resampler_config();
     if let Some(event) = decoder_resampler_event(
-        deps.resampler_config().as_ref(),
+        resampler.as_ref(),
         initial_spec,
         initial_media_info.and_then(|info| info.sample_rate),
     ) {
         bus.publish(event);
     }
     if let Some(host_rate) = NonZeroU32::new(host_sample_rate.load(Ordering::Acquire))
-        && let Some(resampler) = deps.decoder.resampler()
+        && let Some(resampler) = resampler.as_ref()
         && let Some(event) = playback_resampler_event(
-            resampler.backend(),
+            &resampler.backend,
             host_rate.get(),
             initial_media_info.and_then(|info| info.sample_rate),
         )
@@ -448,7 +448,7 @@ fn create_decoder_factory<B>(
     user_media_info: Option<MediaInfo>,
 ) -> StreamDecoderFactory
 where
-    B: ResamplerBackend,
+    B: Default + ResamplerBackend,
 {
     let configured_media_info = user_media_info.clone();
     let deps = FactoryDeps::new(decoder, epoch, user_media_info);
@@ -493,7 +493,7 @@ async fn create_initial_decoder<B>(
     deps: &DecoderDeps<B>,
 ) -> Result<Box<dyn Decoder>, DecodeError>
 where
-    B: ResamplerBackend,
+    B: Default + ResamplerBackend,
 {
     let byte_len = reader.byte_len().unwrap_or(0);
     let config = DecoderConfig::builder()

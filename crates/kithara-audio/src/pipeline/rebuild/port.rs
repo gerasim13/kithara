@@ -4,7 +4,7 @@ use std::{
 };
 
 use crossbeam_queue::ArrayQueue;
-use kithara_decode::{DecoderSeekOutcome, DropChunks, GaplessMode};
+use kithara_decode::{DecodeError, DecoderSeekOutcome, DropChunks, GaplessMode};
 use kithara_platform::{
     sync::Arc,
     time::Duration,
@@ -148,7 +148,7 @@ impl<T: StreamType> RebuildPort<T> {
             && matches!(recreate.next, RecreateNext::Decode)
         {
             if let Err(error) = stream.probe_seek(SeekFrom::Start(recreate.offset)) {
-                let outcome = classify(&kithara_decode::DecodeError::from(error));
+                let outcome = classify(&DecodeError::from(error));
                 return Err((recreate, outcome));
             }
         } else if stream.probe_seek(SeekFrom::Start(recreate.offset)).is_err() {

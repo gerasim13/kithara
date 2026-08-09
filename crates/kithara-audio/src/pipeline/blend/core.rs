@@ -5,6 +5,12 @@ struct Consts;
 impl Consts {
     const HISTORY_FRAMES: usize = 32;
     const JOIN_MICROS: u32 = 20_000;
+    /// A stable second-order recurrence has coefficient `2·cos θ`, so `|c| ≤ 2`.
+    const MAX_RECURRENCE_COEFF: f32 = 2.0;
+    const MICROS_PER_SEC: u32 = 1_000_000;
+    const MIN_JOIN_FRAMES: u16 = 2;
+    const MIN_JOIN_HISTORY: usize = 3;
+    const RECURRENCE_ORDER: usize = 2;
 }
 
 enum JoinState {
@@ -80,13 +86,20 @@ impl PcmBlender {
             return;
         }
         let channels = usize::from(chunk.spec().channels.max(1));
-        if chunk.samples.len() < channels.saturating_mul(2) {
+        if chunk.samples.len() < channels.saturating_mul(Consts::RECURRENCE_ORDER) {
             return;
         }
         for channel in 0..channels {
-            let coefficient = recurrence(&self.history, channels, channel, 2, self.history_frames)
-                .clamp(-2.0, 2.0);
-            let previous = self.history[(self.history_frames - 2) * channels + channel];
+            let coefficient = recurrence(
+                &self.history,
+                channels,
+                channel,
+                Consts::RECURRENCE_ORDER,
+                self.history_frames,
+            )
+            .clamp(-Consts::MAX_RECURRENCE_COEFF, Consts::MAX_RECURRENCE_COEFF);
+            let previous =
+                self.history[(self.history_frames - Consts::RECURRENCE_ORDER) * channels + channel];
             let current = self.history[(self.history_frames - 1) * channels + channel];
             let observed_bound = self
                 .history
@@ -115,15 +128,15 @@ impl PcmBlender {
                 .sample_rate
                 .get()
                 .saturating_mul(Consts::JOIN_MICROS)
-                .div_ceil(1_000_000),
+                .div_ceil(Consts::MICROS_PER_SEC),
         )
         .unwrap_or(u16::MAX)
-        .max(2);
+        .max(Consts::MIN_JOIN_FRAMES);
         self.join = JoinState::Active { frames, frame: 0 };
     }
 
     pub(crate) fn join_active(&mut self, active: BlenderProfile) {
-        if self.active.spec() == active.spec() && self.history_frames >= 3 {
+        if self.active.spec() == active.spec() && self.history_frames >= Consts::MIN_JOIN_HISTORY {
             self.active = active;
             self.join = JoinState::Pending;
         } else {
@@ -179,7 +192,7 @@ fn recurrence(history: &[f32], channels: usize, channel: usize, start: usize, en
     let mut numerator = 0.0;
     let mut denominator = 0.0;
     for frame in start..end {
-        let antecedent = history[(frame - 2) * channels + channel];
+        let antecedent = history[(frame - Consts::RECURRENCE_ORDER) * channels + channel];
         let previous = history[(frame - 1) * channels + channel];
         let current = history[frame * channels + channel];
         numerator = previous.mul_add(current + antecedent, numerator);
@@ -188,12 +201,12 @@ fn recurrence(history: &[f32], channels: usize, channel: usize, start: usize, en
     if denominator > f32::EPSILON {
         numerator / denominator
     } else {
-        2.0
+        Consts::MAX_RECURRENCE_COEFF
     }
 }
 
 fn recurrence_amplitude(previous: f32, current: f32, coefficient: f32) -> f32 {
-    let cosine = coefficient * 0.5;
+    let cosine = coefficient / Consts::MAX_RECURRENCE_COEFF;
     let sine_squared = 1.0 - cosine * cosine;
     if sine_squared <= f32::EPSILON {
         return 0.0;

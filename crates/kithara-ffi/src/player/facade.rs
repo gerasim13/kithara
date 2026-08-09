@@ -397,7 +397,7 @@ mod tests {
 
     impl PlayerObserver for ChannelObserver {
         fn on_event(&self, event: FfiPlayerEvent) {
-            let _ = self.sender.send(event);
+            self.sender.send(event).ok();
         }
     }
 

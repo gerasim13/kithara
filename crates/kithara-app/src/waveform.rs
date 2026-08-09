@@ -126,7 +126,7 @@ async fn run_analysis(
         let analysis = rx.borrow().clone();
         if let Some(analysis) = analysis {
             // The receiver may be gone (deck swapped).
-            let _ = tx.send(Some(analysis));
+            tx.send(Some(analysis)).ok();
         }
     }
 }

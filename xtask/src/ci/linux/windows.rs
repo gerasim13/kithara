@@ -216,7 +216,12 @@ pub(super) fn enrol(process: &Process, host: &LinuxHost) -> Result<()> {
         .context("this machine's profile defines no Windows guest")?;
     process.require_tools(&["virsh", "xorriso"])?;
 
-    let media = build_enrolment_media(process, host, guest, &registration::enrolment_token(host)?)?;
+    let media = build_enrolment_media(
+        process,
+        host,
+        guest,
+        &registration::enrolment_token(host, guest)?,
+    )?;
     process.run(
         "virsh",
         &[
@@ -237,7 +242,7 @@ pub(super) fn enrol(process: &Process, host: &LinuxHost) -> Result<()> {
 
     for _ in 0..GUEST.enrolment_attempts {
         thread::sleep(Duration::from_secs(10));
-        if registration::is_online(host, &guest.name)? {
+        if registration::is_online(host, guest)? {
             info!(guest = guest.name, "the guest is registered and waiting");
             return Ok(());
         }
@@ -266,7 +271,10 @@ fn build_enrolment_media(
         labels: guest.labels.join(","),
         name: &guest.name,
         token,
-        url: format!("https://github.com/{}", host.repository),
+        url: format!(
+            "https://github.com/{}",
+            host.credential(&guest.repository)?.name
+        ),
     };
     fs::write(
         staging.join("enrolment.json"),

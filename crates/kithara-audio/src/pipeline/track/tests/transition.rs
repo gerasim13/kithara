@@ -277,7 +277,10 @@ async fn incoming_lands_on_the_outgoing_frontier_not_ahead_of_it() {
     }
 
     let landing = landing.expect("an exact transition plans against the outgoing frontier");
-    let frames = (landing.as_secs_f64() * f64::from(Consts::SAMPLE_RATE)).round() as u64;
+    let frames = num_traits::cast::<f64, u64>(
+        (landing.as_secs_f64() * f64::from(Consts::SAMPLE_RATE)).round(),
+    )
+    .unwrap_or(u64::MAX);
     let chunk = u64::try_from(Consts::ROUTE_CHUNK_FRAMES).unwrap_or(u64::MAX);
     assert_eq!(
         frames % chunk,

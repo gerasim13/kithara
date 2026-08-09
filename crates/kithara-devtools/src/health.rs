@@ -58,6 +58,7 @@ struct Stage {
     program: &'static str,
     args: Vec<String>,
     advisory: bool,
+    strict: bool,
 }
 
 impl Stage {
@@ -67,11 +68,23 @@ impl Stage {
             program,
             args: args.iter().map(|s| (*s).to_string()).collect(),
             advisory: false,
+            strict: false,
         }
     }
 
     fn advisory(mut self) -> Self {
         self.advisory = true;
+        self
+    }
+
+    /// A stage whose tool is not provisioned by this repository's own CI
+    /// tooling (see `.config/ci-pins.toml` and `xtask/src/ci/image.rs`).
+    /// `ENV_SKIP_MARKERS` exists for transient, environment-level noise on
+    /// tools the fleet does provision; a stage marked strict never gets that
+    /// pass, because a missing tool here is missing coverage the fleet
+    /// never signed up to give, not a fluke worth hiding behind SKIP.
+    fn strict(mut self) -> Self {
+        self.strict = true;
         self
     }
 
@@ -90,6 +103,7 @@ impl Stage {
             program,
             args,
             advisory: false,
+            strict: false,
         }
     }
 }
@@ -136,16 +150,10 @@ pub(crate) fn run(_args: &HealthArgs) -> Result<()> {
 }
 
 fn build_stages(project: &ProjectConfig) -> Vec<Stage> {
-    build_stages_with_excludes(
-        &project.health.feature_powerset_exclude,
-        &project.health.workspace_exclude,
-    )
+    build_stages_with_excludes(&project.health.workspace_exclude)
 }
 
-fn build_stages_with_excludes(
-    feature_powerset_exclude: &[String],
-    workspace_exclude: &[String],
-) -> Vec<Stage> {
+fn build_stages_with_excludes(workspace_exclude: &[String]) -> Vec<Stage> {
     vec![
         Stage::shared("format-check", SharedStage::FmtCheck),
         Stage::new(
@@ -164,24 +172,29 @@ fn build_stages_with_excludes(
         Stage::new("machete", "cargo", &["machete"]),
         Stage::new("shear", "cargo", &["shear", "--deny-warnings"]),
         Stage::new("deny", "cargo", &["deny", "check"]),
-        // NOTE: deliberately *not* passing `--no-dev-deps`. That flag asks
-        Stage::new(
-            "hack-feature-powerset",
-            "cargo",
-            &[
-                "hack",
-                "check",
-                "--feature-powerset",
-                "--depth",
-                "2",
-                "--workspace",
-            ],
-        )
-        .exclude_crates(feature_powerset_exclude),
+        // The powerset owns which crates refuse a combination and holds them
+        // out of the workspace pass, so this is one command rather than a shape
+        // repeated here and in the deps recipe. `--no-dev-deps` is deliberately
+        // absent: a crate whose tests need a feature its library does not
+        // declare still has the wrong feature set, and the health run is where
+        // that should show.
+        Stage::new("hack-feature-powerset", "cargo", &["xtask", "powerset"]),
+        // No workspace crate is published to crates.io (the workspace is an
+        // application, not a crate release train), so the registry baseline
+        // `check-release` looks up by default can never resolve. Comparing
+        // against the tip of `main` instead makes this a real check: it
+        // reports nothing on `main` itself (current == baseline) and flags
+        // an actual public-API break on a branch that has drifted from it.
         Stage::new(
             "semver-checks",
             "cargo",
-            &["semver-checks", "check-release", "--workspace"],
+            &[
+                "semver-checks",
+                "check-release",
+                "--workspace",
+                "--baseline-rev",
+                "origin/main",
+            ],
         )
         .exclude_crates(workspace_exclude),
         Stage::new(
@@ -196,11 +209,22 @@ fn build_stages_with_excludes(
             ],
         )
         .advisory(),
+        // lockbud has no entry in `.config/ci-pins.toml` `[cargo_tools]` and no
+        // install step in `xtask/src/ci/image.rs` / `docker/ci.Dockerfile`, so
+        // the pinned CI image never carries it: `cargo lockbud` there is a
+        // genuine "no such command". `.config/just/tooling.just` tries to
+        // install it with a plain `cargo install lockbud`, but lockbud is not
+        // published on crates.io at all (only installable from its git repo
+        // against the specific nightly toolchain it builds `rustc_driver`
+        // against) — that recipe line has never actually installed it.
+        // `.strict()` keeps that missing coverage from reading as a harmless
+        // SKIP; see CONTEXT.md for what pinning it for real requires.
         Stage::new(
             "lockbud-deadlock",
             "cargo",
             &["lockbud", "-k", "deadlock", "--workspace"],
-        ),
+        )
+        .strict(),
         Stage::new("workspace-unused-pub", "cargo", &["workspace-unused-pub"]),
         Stage::new(
             "workspace-tests",
@@ -256,11 +280,7 @@ fn run_stage(idx: usize, stage: &Stage, logs_dir: &Path) -> StageResult {
         },
         Ok(s) => {
             let exit = s.code().unwrap_or(-1);
-            let (status, note) = match scan_env_skip_marker(&log_path) {
-                Some(marker) => (Status::Skip, format!("environment: {marker} (exit {exit})")),
-                None if stage.advisory => (Status::Warn, format!("exit {exit}")),
-                None => (Status::Fail, format!("exit {exit}")),
-            };
+            let (status, note) = classify_failure(scan_env_skip_marker(&log_path), stage, exit);
             StageResult {
                 cmdline,
                 status,
@@ -378,6 +398,22 @@ fn write_report(
     Ok(())
 }
 
+/// Turn a non-zero exit into a status, given what (if anything) the log
+/// matched as an environment-level marker. A strict stage never reads a
+/// marker as SKIP: its tool has no pin, so a marker there means the tool is
+/// genuinely absent, not flaking.
+fn classify_failure(marker: Option<&'static str>, stage: &Stage, exit: i32) -> (Status, String) {
+    match marker {
+        Some(m) if stage.strict => (
+            Status::Fail,
+            format!("unprovisioned: {m} (exit {exit}) — not pinned/installed by CI tooling"),
+        ),
+        Some(m) => (Status::Skip, format!("environment: {m} (exit {exit})")),
+        None if stage.advisory => (Status::Warn, format!("exit {exit}")),
+        None => (Status::Fail, format!("exit {exit}")),
+    }
+}
+
 fn scan_env_skip_marker(path: &Path) -> Option<&'static str> {
     let content = fs::read_to_string(path).ok()?;
     Consts::ENV_SKIP_MARKERS
@@ -427,7 +463,7 @@ mod tests {
 
     #[test]
     fn health_xtask_stage_argv_is_parseable() {
-        let stages = build_stages_with_excludes(&[], &[]);
+        let stages = build_stages_with_excludes(&[]);
         let command = CoreCommand::augment_subcommands(clap::Command::new("xtask"));
 
         for stage in stages
@@ -505,5 +541,63 @@ mod tests {
     fn skip_marker_missing_log_returns_none() {
         let path = Path::new("/nonexistent/health-log.txt");
         assert!(scan_env_skip_marker(path).is_none());
+    }
+
+    #[test]
+    fn classify_failure_marker_on_regular_stage_skips() {
+        let stage = Stage::new("geiger", "cargo", &["geiger"]);
+        let (status, note) = classify_failure(Some("no such command:"), &stage, 101);
+        assert_eq!(status, Status::Skip);
+        assert!(note.contains("environment:"));
+    }
+
+    #[test]
+    fn classify_failure_marker_on_strict_stage_fails() {
+        let stage = Stage::new("lockbud-deadlock", "cargo", &["lockbud"]).strict();
+        let (status, note) = classify_failure(Some("no such command:"), &stage, 101);
+        assert_eq!(status, Status::Fail);
+        assert!(note.contains("unprovisioned:"));
+    }
+
+    #[test]
+    fn classify_failure_no_marker_on_regular_stage_fails() {
+        let stage = Stage::new("deny", "cargo", &["deny", "check"]);
+        let (status, _) = classify_failure(None, &stage, 1);
+        assert_eq!(status, Status::Fail);
+    }
+
+    #[test]
+    fn classify_failure_no_marker_on_advisory_stage_warns() {
+        let stage = Stage::new("geiger", "cargo", &["geiger"]).advisory();
+        let (status, _) = classify_failure(None, &stage, 1);
+        assert_eq!(status, Status::Warn);
+    }
+
+    #[test]
+    fn lockbud_stage_is_strict() {
+        let stages = build_stages_with_excludes(&[]);
+        let lockbud = stages
+            .iter()
+            .find(|s| s.name == "lockbud-deadlock")
+            .expect("lockbud-deadlock stage exists");
+        assert!(
+            lockbud.strict,
+            "lockbud is not pinned by ci-pins.toml/image.rs, so its skip \
+             markers must not read as harmless"
+        );
+    }
+
+    #[test]
+    fn semver_checks_uses_git_baseline_not_registry() {
+        let stages = build_stages_with_excludes(&[]);
+        let semver = stages
+            .iter()
+            .find(|s| s.name == "semver-checks")
+            .expect("semver-checks stage exists");
+        assert!(
+            semver.args.iter().any(|a| a == "--baseline-rev"),
+            "workspace crates are never published to crates.io, so the default \
+             registry baseline can never resolve"
+        );
     }
 }

@@ -136,6 +136,7 @@ async fn test_abr_variant_switch_no_byte_glitches(
 
     let switches = variant_switches.lock().unwrap();
     info!("Variant switches detected: {:?}", *switches);
+    drop(switches);
 
     info!("Test passed: bytes read sequentially without gaps");
 
@@ -284,6 +285,7 @@ async fn test_abr_variant_switch_with_seek_backward(
 
     let switches = variant_switches.lock().unwrap();
     println!("Variant switches: {:?}", *switches);
+    drop(switches);
 
     println!("Test passed - seek backward after ABR variant switch works correctly");
 

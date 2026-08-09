@@ -120,8 +120,7 @@ impl StudioCache {
     }
 
     pub(crate) fn refresh(&mut self, decks: &Decks, catalog: &Catalog) {
-        self.decks
-            .resize_with(decks.iter().count(), Default::default);
+        self.decks.resize_with(decks.len(), Default::default);
         for (cache, deck) in self.decks.iter_mut().zip(decks.iter()) {
             cache.refresh(deck);
         }

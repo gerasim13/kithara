@@ -170,7 +170,8 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
 
     let onset = first_onset_frame(&pcm, 0.005)
         .expect("track A must produce non-silence within the render budget");
-    let track_a_frames = (f64::from(SAMPLE_RATE) * TRACK_SECS) as usize;
+    let track_a_frames =
+        num_traits::cast::<f64, usize>(f64::from(SAMPLE_RATE) * TRACK_SECS).unwrap_or(usize::MAX);
     let window = SAMPLE_RATE as usize / 8;
 
     let mean_a =
@@ -238,8 +239,12 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
 
     let onset = first_onset_frame(&pcm, 0.005)
         .expect("track A must produce non-silence within the render budget");
-    let track_a_frames = (f64::from(SAMPLE_RATE) * TRACK_SECS) as usize;
-    let crossfade_frames = (f32::from(SAMPLE_RATE as u16) * CROSSFADE_SECS) as usize;
+    let track_a_frames =
+        num_traits::cast::<f64, usize>(f64::from(SAMPLE_RATE) * TRACK_SECS).unwrap_or(usize::MAX);
+    let crossfade_frames = num_traits::cast::<f32, usize>(
+        f32::from(u16::try_from(SAMPLE_RATE).unwrap_or(u16::MAX)) * CROSSFADE_SECS,
+    )
+    .unwrap_or(usize::MAX);
     let window = SAMPLE_RATE as usize / 8;
 
     let mean_a = mean_abs_window(&pcm, onset + track_a_frames / 4, window)
@@ -384,7 +389,8 @@ async fn autoplay_first_registered_track_plays_first_even_when_loaded_last() {
 
     let onset = first_onset_frame(&pcm, 0.005)
         .expect("autoplay must start producing audio without an explicit select");
-    let track_a_frames = (f64::from(SAMPLE_RATE) * TRACK_SECS) as usize;
+    let track_a_frames =
+        num_traits::cast::<f64, usize>(f64::from(SAMPLE_RATE) * TRACK_SECS).unwrap_or(usize::MAX);
     let window = SAMPLE_RATE as usize / 8;
 
     let mean_first = mean_abs_window(&pcm, onset + track_a_frames / 4, window)
@@ -463,7 +469,8 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS);
 
     let onset = first_onset_frame(&pcm, 0.005).expect("track A must produce non-silence on replay");
-    let track_a_frames = (f64::from(SAMPLE_RATE) * TRACK_SECS) as usize;
+    let track_a_frames =
+        num_traits::cast::<f64, usize>(f64::from(SAMPLE_RATE) * TRACK_SECS).unwrap_or(usize::MAX);
     let window = SAMPLE_RATE as usize / 8;
 
     let mean_a =
@@ -577,7 +584,8 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
 
     let onset =
         first_onset_frame(&pcm, 0.005).expect("autoplay'd track must produce audible samples");
-    let track_frames = (f64::from(SAMPLE_RATE) * TRACK_SECS) as usize;
+    let track_frames =
+        num_traits::cast::<f64, usize>(f64::from(SAMPLE_RATE) * TRACK_SECS).unwrap_or(usize::MAX);
     let window = SAMPLE_RATE as usize / 8;
 
     let mean_mid = mean_abs_window(&pcm, onset + track_frames / 4, window)

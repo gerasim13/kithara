@@ -13,6 +13,64 @@ use kithara::{
 use kithara_integration_tests::{TestServerHelper, TestTempDir, abr_fast, auto, temp_dir};
 use tracing::info;
 
+fn warmup_until_first_frame(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> u64 {
+    let mut warmup_samples = 0u64;
+    while warmup_samples == 0 {
+        match audio.read(buf) {
+            Ok(ReadOutcome::Pending { .. }) => break,
+            Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Err(e) => panic!("warmup decode error: {e}"),
+        }
+    }
+    warmup_samples
+}
+
+#[derive(Default)]
+struct SeekStats {
+    seek_count: u64,
+    samples_after_seek: u64,
+    seek_errors: u64,
+    dead_seeks: u64,
+}
+
+fn run_rapid_random_seeks(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> SeekStats {
+    let mut stats = SeekStats::default();
+    let positions_secs: Vec<f64> = vec![
+        147.0, 30.0, 200.0, 5.0, 180.0, 60.0, 210.0, 15.0, 100.0, 0.0, 170.0, 45.0, 195.0, 80.0,
+        220.0, 10.0, 130.0, 25.0, 160.0, 90.0, 50.0, 110.0, 175.0, 35.0, 140.0, 70.0, 205.0, 55.0,
+        120.0, 185.0, 20.0, 150.0,
+    ];
+
+    for i in 0..200 {
+        let pos = positions_secs[i % positions_secs.len()];
+        let position = Duration::from_secs_f64(pos);
+        match audio.seek(position) {
+            Ok(_) => {
+                stats.seek_count += 1;
+                match audio.read(buf) {
+                    Ok(ReadOutcome::Frames { count, .. }) => {
+                        stats.samples_after_seek += count.get() as u64;
+                    }
+                    Ok(_) => {
+                        stats.dead_seeks += 1;
+                    }
+                    Err(e) => {
+                        stats.seek_errors += 1;
+                        info!(?e, pos, "read error after seek");
+                    }
+                }
+            }
+            Err(e) => {
+                stats.seek_errors += 1;
+                info!(?e, pos, "seek error");
+            }
+        }
+    }
+
+    stats
+}
+
 /// Stress test: 20 seconds of rapid seeking after ABR switch.
 ///
 /// Reproduces production bug: after ABR switch (V0 AAC → V3 FLAC),
@@ -69,15 +127,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
         let start = Instant::now();
 
         info!("Phase 1: warmup — reading PCM samples");
-        let mut warmup_samples = 0u64;
-        while warmup_samples == 0 {
-            match audio.read(&mut buf) {
-                Ok(ReadOutcome::Pending { .. }) => break,
-                Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
-                Ok(ReadOutcome::Eof { .. }) => break,
-                Err(e) => panic!("warmup decode error: {e}"),
-            }
-        }
+        let warmup_samples = warmup_until_first_frame(&mut audio, &mut buf);
         info!(
             warmup_samples,
             elapsed_ms = start.elapsed().as_millis(),
@@ -85,42 +135,12 @@ async fn stress_seek_during_abr_switch_real_decoder(
         );
 
         info!("Phase 2: 200 rapid random seeks");
-        let mut seek_count = 0u64;
-        let mut samples_after_seek = 0u64;
-        let mut seek_errors = 0u64;
-        let mut dead_seeks = 0u64;
-
-        let positions_secs: Vec<f64> = vec![
-            147.0, 30.0, 200.0, 5.0, 180.0, 60.0, 210.0, 15.0, 100.0, 0.0, 170.0, 45.0, 195.0,
-            80.0, 220.0, 10.0, 130.0, 25.0, 160.0, 90.0, 50.0, 110.0, 175.0, 35.0, 140.0, 70.0,
-            205.0, 55.0, 120.0, 185.0, 20.0, 150.0,
-        ];
-
-        for i in 0..200 {
-            let pos = positions_secs[i % positions_secs.len()];
-            let position = Duration::from_secs_f64(pos);
-            match audio.seek(position) {
-                Ok(_) => {
-                    seek_count += 1;
-                    match audio.read(&mut buf) {
-                        Ok(ReadOutcome::Frames { count, .. }) => {
-                            samples_after_seek += count.get() as u64;
-                        }
-                        Ok(_) => {
-                            dead_seeks += 1;
-                        }
-                        Err(e) => {
-                            seek_errors += 1;
-                            info!(?e, pos, "read error after seek");
-                        }
-                    }
-                }
-                Err(e) => {
-                    seek_errors += 1;
-                    info!(?e, pos, "seek error");
-                }
-            }
-        }
+        let SeekStats {
+            seek_count,
+            samples_after_seek,
+            seek_errors,
+            dead_seeks,
+        } = run_rapid_random_seeks(&mut audio, &mut buf);
 
         info!(
             seek_count,

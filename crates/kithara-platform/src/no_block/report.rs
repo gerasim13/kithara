@@ -99,7 +99,7 @@ pub(super) fn over_budget(
 }
 
 fn census_emit(line: &str) {
-    eprintln!("{line}");
+    tracing::warn!(target: "kithara_platform::no_block", "{line}");
 
     if let Some(path) = log_path() {
         let line = format!("{line}\n");

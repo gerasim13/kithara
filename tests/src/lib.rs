@@ -33,6 +33,8 @@ pub mod e2e;
 pub mod encode_ext;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod encode_test_pcm;
+#[cfg(test)]
+pub(crate) mod encoder_crates;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod fixture_cache;
 pub mod fixture_protocol;
@@ -69,8 +71,16 @@ pub mod signal_url;
 pub mod storage_ext;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod swallow_detector;
+pub mod test_defaults;
 pub mod test_server;
 pub mod token_store;
+/// Scenario machinery for the user-simulation suites: the action vocabulary,
+/// the scripted scenarios built from it, and the harness that applies them to a
+/// `Queue`. It lives here rather than beside one suite because two suites drive
+/// it — the fixture-backed one and the production one — and each uses a
+/// different part.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod user_sim;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod waits;
 pub mod wav;

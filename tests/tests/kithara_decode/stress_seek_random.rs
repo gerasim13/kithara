@@ -2,6 +2,7 @@ use std::{fs::File as FsFile, io::Write};
 
 use kithara::{
     audio::{Audio, AudioConfig, ReadOutcome},
+    decode::PcmSpec,
     file::{File, FileConfig, FileSrc},
     platform::{time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
@@ -12,6 +13,130 @@ use tracing::info;
 
 use crate::common::test_defaults::SawWav;
 
+#[derive(Default)]
+struct SeekStats {
+    successful_reads: u64,
+    total_samples_read: u64,
+    channel_mismatches: u64,
+    zero_reads: u64,
+}
+
+fn run_seek_iterations(
+    audio: &mut Audio<Stream<File>>,
+    buf: &mut [f32],
+    seek_positions: &[f64],
+    spec: PcmSpec,
+) -> SeekStats {
+    let SeekStats {
+        mut successful_reads,
+        mut total_samples_read,
+        mut channel_mismatches,
+        mut zero_reads,
+    } = SeekStats::default();
+
+    for (i, &pos_secs) in seek_positions.iter().enumerate() {
+        let position = Duration::from_secs_f64(pos_secs);
+
+        audio.seek(position).unwrap_or_else(|e| {
+            panic!("seek #{i} to {pos_secs:.4}s failed: {e}");
+        });
+
+        let read_count = |outcome: Result<ReadOutcome, _>| -> usize {
+            match outcome {
+                Ok(ReadOutcome::Frames { count, .. }) => count.get(),
+                Ok(ReadOutcome::Pending { .. }) | Ok(ReadOutcome::Eof { .. }) => 0,
+                Err(e) => panic!("decode error during seek read: {e}"),
+            }
+        };
+        let mut n = read_count(audio.read(buf));
+        if n == 0 {
+            audio.seek(position).unwrap_or_else(|e| {
+                panic!("re-seek #{i} to {pos_secs:.4}s failed: {e}");
+            });
+            n = read_count(audio.read(buf));
+            if n == 0 {
+                zero_reads += 1;
+                if zero_reads <= 3 {
+                    tracing::warn!(iteration = i, pos_secs, "zero-read after retry (transient)");
+                }
+                continue;
+            }
+        }
+
+        for (j, &sample) in buf[..n].iter().enumerate() {
+            assert!(
+                sample.is_finite() && (-1.0..=1.0).contains(&sample),
+                "invalid sample at seek #{i} offset {j}: {sample} (pos {pos_secs:.4}s)",
+            );
+        }
+
+        let channels = spec.channels as usize;
+        if channels == 2 {
+            let frames = n / channels;
+            for f in 0..frames {
+                let l = buf[f * 2];
+                let r = buf[f * 2 + 1];
+                if (l - r).abs() > f32::EPSILON {
+                    channel_mismatches += 1;
+                }
+            }
+        }
+
+        successful_reads += 1;
+        total_samples_read += n as u64;
+
+        if (i + 1) % 200 == 0 {
+            info!(
+                iteration = i + 1,
+                successful_reads, total_samples_read, channel_mismatches, "Progress"
+            );
+        }
+    }
+
+    SeekStats {
+        successful_reads,
+        total_samples_read,
+        channel_mismatches,
+        zero_reads,
+    }
+}
+
+fn read_final_tail(
+    audio: &mut Audio<Stream<File>>,
+    buf: &mut [f32],
+    final_seek_secs: f64,
+) -> (u64, bool) {
+    audio
+        .seek(Duration::from_secs_f64(final_seek_secs))
+        .unwrap_or_else(|e| {
+            panic!("final seek to {final_seek_secs:.4}s failed: {e}");
+        });
+
+    let mut remaining_samples = 0u64;
+    let mut saw_final_eof = false;
+    loop {
+        match audio.read(buf) {
+            Ok(ReadOutcome::Pending { .. }) => break,
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                remaining_samples += count.get() as u64;
+                for &sample in &buf[..count.get()] {
+                    assert!(
+                        sample.is_finite() && (-1.0..=1.0).contains(&sample),
+                        "invalid sample in final tail read",
+                    );
+                }
+            }
+            Ok(ReadOutcome::Eof { .. }) => {
+                saw_final_eof = true;
+                break;
+            }
+            Err(e) => panic!("decode error in final tail read: {e}"),
+        }
+    }
+
+    (remaining_samples, saw_final_eof)
+}
+
 #[kithara::test(
     native,
     serial,
@@ -20,8 +145,9 @@ use crate::common::test_defaults::SawWav;
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
 async fn stress_random_seek_read_synthetic_wav() {
-    const DURATION_SECS: f64 = 10.0;
-    const SAMPLE_COUNT: usize = (SawWav::DEFAULT.sample_rate as f64 * DURATION_SECS) as usize;
+    const DURATION_SECS_INT: u32 = 10;
+    const DURATION_SECS: f64 = DURATION_SECS_INT as f64;
+    const SAMPLE_COUNT: usize = SawWav::DEFAULT.sample_rate as usize * DURATION_SECS_INT as usize;
     const SEEK_ITERATIONS: usize = 1000;
 
     let wav_data = create_test_wav(SAMPLE_COUNT, 44100, 2);
@@ -70,9 +196,10 @@ async fn stress_random_seek_read_synthetic_wav() {
     );
 
     let chunk_duration_secs = (total_secs * 0.005).clamp(0.05, 0.5);
-    let chunk_samples = (chunk_duration_secs
-        * f64::from(spec.sample_rate.get())
-        * f64::from(spec.channels)) as usize;
+    let chunk_samples = num_traits::cast::<f64, usize>(
+        chunk_duration_secs * f64::from(spec.sample_rate.get()) * f64::from(spec.channels),
+    )
+    .unwrap_or(usize::MAX);
     info!(chunk_duration_secs, chunk_samples, "Read chunk size");
 
     let result = spawn_blocking(move || {
@@ -91,73 +218,12 @@ async fn stress_random_seek_read_synthetic_wav() {
             max_seek_secs, "Generated seek positions"
         );
 
-        let mut successful_reads = 0u64;
-        let mut total_samples_read = 0u64;
-        let mut channel_mismatches = 0u64;
-        let mut zero_reads = 0u64;
-
-        for (i, &pos_secs) in seek_positions.iter().enumerate() {
-            let position = Duration::from_secs_f64(pos_secs);
-
-            audio.seek(position).unwrap_or_else(|e| {
-                panic!("seek #{i} to {pos_secs:.4}s failed: {e}");
-            });
-
-            let read_count = |outcome: Result<ReadOutcome, _>| -> usize {
-                match outcome {
-                    Ok(ReadOutcome::Frames { count, .. }) => count.get(),
-                    Ok(ReadOutcome::Pending { .. }) | Ok(ReadOutcome::Eof { .. }) => 0,
-                    Err(e) => panic!("decode error during seek read: {e}"),
-                }
-            };
-            let mut n = read_count(audio.read(&mut buf));
-            if n == 0 {
-                audio.seek(position).unwrap_or_else(|e| {
-                    panic!("re-seek #{i} to {pos_secs:.4}s failed: {e}");
-                });
-                n = read_count(audio.read(&mut buf));
-                if n == 0 {
-                    zero_reads += 1;
-                    if zero_reads <= 3 {
-                        tracing::warn!(
-                            iteration = i,
-                            pos_secs,
-                            "zero-read after retry (transient)"
-                        );
-                    }
-                    continue;
-                }
-            }
-
-            for (j, &sample) in buf[..n].iter().enumerate() {
-                assert!(
-                    sample.is_finite() && (-1.0..=1.0).contains(&sample),
-                    "invalid sample at seek #{i} offset {j}: {sample} (pos {pos_secs:.4}s)",
-                );
-            }
-
-            let channels = spec.channels as usize;
-            if channels == 2 {
-                let frames = n / channels;
-                for f in 0..frames {
-                    let l = buf[f * 2];
-                    let r = buf[f * 2 + 1];
-                    if (l - r).abs() > f32::EPSILON {
-                        channel_mismatches += 1;
-                    }
-                }
-            }
-
-            successful_reads += 1;
-            total_samples_read += n as u64;
-
-            if (i + 1) % 200 == 0 {
-                info!(
-                    iteration = i + 1,
-                    successful_reads, total_samples_read, channel_mismatches, "Progress"
-                );
-            }
-        }
+        let SeekStats {
+            successful_reads,
+            total_samples_read,
+            channel_mismatches,
+            zero_reads,
+        } = run_seek_iterations(&mut audio, &mut buf, &seek_positions, spec);
 
         info!(
             successful_reads,
@@ -191,33 +257,8 @@ async fn stress_random_seek_read_synthetic_wav() {
         let final_seek_secs = total_secs - chunk_duration_secs;
         info!(final_seek_secs, "Final seek near end");
 
-        audio
-            .seek(Duration::from_secs_f64(final_seek_secs))
-            .unwrap_or_else(|e| {
-                panic!("final seek to {final_seek_secs:.4}s failed: {e}");
-            });
-
-        let mut remaining_samples = 0u64;
-        let mut saw_final_eof = false;
-        loop {
-            match audio.read(&mut buf) {
-                Ok(ReadOutcome::Pending { .. }) => break,
-                Ok(ReadOutcome::Frames { count, .. }) => {
-                    remaining_samples += count.get() as u64;
-                    for &sample in &buf[..count.get()] {
-                        assert!(
-                            sample.is_finite() && (-1.0..=1.0).contains(&sample),
-                            "invalid sample in final tail read",
-                        );
-                    }
-                }
-                Ok(ReadOutcome::Eof { .. }) => {
-                    saw_final_eof = true;
-                    break;
-                }
-                Err(e) => panic!("decode error in final tail read: {e}"),
-            }
-        }
+        let (remaining_samples, saw_final_eof) =
+            read_final_tail(&mut audio, &mut buf, final_seek_secs);
 
         assert!(
             saw_final_eof,

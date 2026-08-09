@@ -2,7 +2,10 @@ use anyhow::{Context, Result, bail};
 use tracing::info;
 
 use super::profile::LinuxHost;
-use crate::ci::process::Process;
+use crate::ci::{
+    config::{CiPins, PINS_PATH},
+    process::Process,
+};
 
 /// Host packages a runner machine needs beyond Docker itself. Everything a job
 /// compiles with lives in the image; these are the pieces that must sit on the
@@ -13,18 +16,25 @@ use crate::ci::process::Process;
 /// firmware it can boot from, a
 /// software TPM it refuses to install without, the tool that creates it, and
 /// one to build the answer file that installs it unattended.
-const HOST_PACKAGES: [&str; 10] = [
-    "iptables",
-    "dnsmasq-base",
-    "qemu-utils",
-    "nvidia-container-toolkit",
-    "qemu-system-x86",
-    "libvirt-daemon-system",
-    "ovmf",
-    "swtpm-tools",
-    "virtinst",
-    "xorriso",
-];
+struct Consts;
+impl Consts {
+    /// The uid the runner image runs its jobs as. It is the image's, not this
+    /// machine's, so it is written beside the code that mounts into that image.
+    const JOB_USER: u32 = 1000;
+
+    const HOST_PACKAGES: [&'static str; 10] = [
+        "iptables",
+        "dnsmasq-base",
+        "qemu-utils",
+        "nvidia-container-toolkit",
+        "qemu-system-x86",
+        "libvirt-daemon-system",
+        "ovmf",
+        "swtpm-tools",
+        "virtinst",
+        "xorriso",
+    ];
+}
 
 /// Prepare the machine a runner will live on: its caches, its network, and the
 /// packages that cannot live in an image.
@@ -50,12 +60,25 @@ pub(super) fn bootstrap(process: &Process, host: &LinuxHost) -> Result<()> {
         )?;
     }
 
-    for volume in ["kithara-ci-cargo-home", "kithara-ci-target"] {
+    let mut volumes: Vec<String> = host
+        .runners
+        .iter()
+        .flat_map(|runner| {
+            super::container::Container::mounts(runner)
+                .into_iter()
+                .map(|(name, _)| name)
+        })
+        .collect();
+    volumes.sort();
+    volumes.dedup();
+    let pins = CiPins::load(std::path::Path::new(PINS_PATH))?;
+    for volume in &volumes {
         process.run(
             "docker",
             &["volume", "create", volume],
             "create a runner cache volume",
         )?;
+        give_to_the_job(process, volume, &pins)?;
     }
     info!(network = host.network, "runner machine prepared");
     Ok(())
@@ -69,7 +92,7 @@ pub(super) fn install_tools(process: &Process) -> Result<()> {
     // Only what is missing. Naming a package that is already installed invites
     // apt to upgrade it, and upgrading the GPU stack underneath a machine that
     // is serving other work is not this command's business.
-    let missing: Vec<&str> = HOST_PACKAGES
+    let missing: Vec<&str> = Consts::HOST_PACKAGES
         .into_iter()
         .filter(|package| {
             // A package dpkg cannot describe at all is missing just as surely
@@ -120,4 +143,37 @@ fn require_linux() -> Result<()> {
         bail!("this command provisions a Linux CI machine and must run on one");
     }
     Ok(())
+}
+
+/// Hand a cache volume to the user the job runs as.
+///
+/// Docker fills a fresh named volume from the image, ownership included — but
+/// only where the image has that directory. A mount point the image does not
+/// carry gets an empty volume owned by root, and a job that is not root then
+/// cannot write to its own cache. That is not a cache being temperamental: it
+/// is a volume nobody gave away. Both existing volumes worked by accident of
+/// their paths existing in the image; this makes it true on purpose, for every
+/// volume, on every machine that bootstraps.
+fn give_to_the_job(process: &Process, volume: &str, pins: &CiPins) -> Result<()> {
+    let mount = format!("{volume}:/volume");
+    let owner = format!("chown {user}:{user} /volume", user = Consts::JOB_USER);
+    process.run(
+        "docker",
+        &[
+            "run",
+            "--rm",
+            // As root, because the point is to give the directory away, and the
+            // image starts as the user being given it.
+            "--user",
+            "0:0",
+            "--volume",
+            &mount,
+            "--entrypoint",
+            "sh",
+            &pins.linux_runner_image,
+            "-c",
+            &owner,
+        ],
+        "give a cache volume to the job user",
+    )
 }

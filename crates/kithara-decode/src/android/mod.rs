@@ -13,12 +13,9 @@ pub(crate) mod error;
 pub(crate) mod ffi;
 mod jni;
 pub(crate) mod media_codec;
-#[cfg(target_os = "android")]
 pub(crate) mod media_extractor;
-#[cfg(target_os = "android")]
 pub(crate) mod media_extractor_demuxer;
 
 pub(crate) use codec::AndroidCodec;
 pub(crate) use jni::ensure_current_thread_attached;
-#[cfg(target_os = "android")]
 pub(crate) use media_extractor_demuxer::AndroidMediaExtractorDemuxer;

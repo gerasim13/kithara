@@ -25,3 +25,17 @@ rule:
             Ok($X) => $X,
             Err($$$) => $FALLBACK($$$),
         }
+  not:
+    # `Err(poisoned) => poisoned.into_inner()` is the standard std::sync
+    # poison-recovery idiom (`LockResult`/`PoisonError::into_inner`), not a
+    # "try an alternate path" fallback: there is no secondary computation,
+    # just recovering the guard std already handed back on `Err`.
+    #
+    # The shape is what makes it legitimate, so the carve-out spells the shape
+    # out: the `Err` arm binds a name and calls `into_inner` straight on it. A
+    # bare `\.into_inner\(\)` would also excuse a real fallback whose secondary
+    # branch happens to unwrap some *other* container
+    # (`Cell`/`RefCell`/`Mutex::into_inner`), which is the class this rule
+    # exists to catch. (Requiring the two names to be *the same* would need a
+    # backreference, which ast-grep's regex engine does not have.)
+    regex: 'Err\(\s*\w+\s*\)\s*=>\s*\w+\.into_inner\(\)'

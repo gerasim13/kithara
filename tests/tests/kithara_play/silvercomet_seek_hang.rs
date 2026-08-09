@@ -14,9 +14,9 @@ use kithara::{
     play::{Resource, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_integration_tests::{offline::OfflinePlayer, temp_dir};
-
-use crate::common::test_defaults::Consts as Shared;
+use kithara_integration_tests::{
+    offline::OfflinePlayer, temp_dir, test_defaults::Consts as Shared,
+};
 
 struct Consts;
 impl Consts {
@@ -216,7 +216,6 @@ fn rms(samples: &[f32]) -> f32 {
     target_os = "android",
     case::android(DecoderBackend::Android, AbrMode::Auto(None))
 )]
-#[ignore = "real network to silvercomet.top; run with --run-ignored only"]
 async fn silvercomet_3tracks_seek_middle_hang_10x(
     #[case] backend: DecoderBackend,
     #[case] abr: AbrMode,

@@ -7,7 +7,7 @@ use kithara::{
     platform::{
         CancelToken,
         sync::Arc,
-        time::{self, Duration, Instant, timeout},
+        time::{Duration, Instant, timeout},
         tokio,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
@@ -79,10 +79,6 @@ async fn wait_for_status(
     case::apple(DecoderBackend::Apple)
 )]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
-#[ignore = "real network + real cpal; run manually: \
-    cargo test --test suite_e2e \
-    kithara::queue::cold_seek_cpal::cpal_cold_seek_silvercomet_hls \
-    -- --ignored --nocapture --test-threads=1"]
 async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);

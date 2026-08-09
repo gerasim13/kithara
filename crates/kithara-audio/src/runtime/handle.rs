@@ -95,7 +95,7 @@ impl<N: Node> SchedulerHandle<N> {
 }
 
 fn shutdown_inner<N>(inner: &SchedulerInner<N>) {
-    let _ = inner.cmd_tx.send(SchedulerCmd::Shutdown);
+    inner.cmd_tx.send(SchedulerCmd::Shutdown).ok();
     inner.cancel.cancel();
     inner.wake.wake();
 }

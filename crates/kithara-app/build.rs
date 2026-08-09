@@ -168,7 +168,7 @@ fn main() {
 
     let yaml_src = fs::read_to_string(&app_yaml_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", app_yaml_path.display()));
-    let app: AppConfig = serde_yml::from_str(&yaml_src)
+    let app: AppConfig = serde_yaml_ng::from_str(&yaml_src)
         .unwrap_or_else(|e| panic!("parse {}: {e}", app_yaml_path.display()));
 
     let env_map = load_env(&dotenv_path);
@@ -456,7 +456,7 @@ fn render_template(value: &str, env_map: &HashMap<String, String>, label: &str) 
         let tail = &tail[2..];
         let end = tail
             .find('}')
-            .unwrap_or_else(|| panic!("{label}: unterminated `${{...` in `{value}`"));
+            .expect("{label}: unterminated `${{...` in `{value}`");
         let name = &tail[..end];
         if let Some(v) = env_map.get(name).filter(|v| !v.is_empty()) {
             fmt_str.push_str("{}");

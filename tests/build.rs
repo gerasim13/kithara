@@ -1,13 +1,17 @@
 //! Emits `KITHARA_FIXTURE_BUILD`: a fingerprint of the fixture-encoding code and
-//! its dependency lockfile, baked into every test binary of this package.
+//! the encoder versions the lockfile resolved, baked into every test binary of
+//! this package.
 //!
-//! The L2 fixture cache (see `src/fixture_cache.rs`) namespaces its default
-//! directory by this value, so:
+//! The L2 fixture cache (see `src/fixture_cache.rs`) namespaces its selected
+//! cache root by this value, so:
 //! - all test binaries of one build (`suite_stress`, `suite_heavy`, …) share the
 //!   same cache dir — an AAC fixture encoded by one binary is reused by every
 //!   other binary and by repeated runs of the same build;
-//! - a change to the encoder, the fixture server, or any dependency version
+//! - a change to the encoding code or to an encoder crate's resolved version
 //!   yields a fresh namespace, so a stale cache can never serve outdated bytes.
+
+#[path = "src/encoder_crates.rs"]
+mod encoder_crates;
 
 use std::{
     collections::hash_map::DefaultHasher,
@@ -15,6 +19,8 @@ use std::{
     hash::{Hash, Hasher},
     path::Path,
 };
+
+use encoder_crates::Lockfile;
 
 /// Hash every `.rs` file under `dir` (path + contents) and register each for
 /// change-tracking so the fingerprint refreshes whenever encoding code changes.
@@ -37,6 +43,33 @@ fn hash_rs_tree(dir: &Path, hasher: &mut DefaultHasher) {
     }
 }
 
+const LOCKFILE: &str = "../Cargo.lock";
+
+fn hash_encoder_versions(hasher: &mut DefaultHasher) {
+    println!("cargo:rerun-if-changed={LOCKFILE}");
+    let text = fs::read_to_string(LOCKFILE).expect("the workspace lockfile must be readable");
+    let lockfile = Lockfile::parse(&text).unwrap_or_else(|error| panic!("{LOCKFILE}: {error}"));
+
+    // The list this hashes is hand-written, so it is guarded from both sides:
+    // `encoder_versions` fails when a listed crate stops resolving, and an
+    // unclassified new dependency of `kithara-encode` fails here — its version
+    // would otherwise never reach the fingerprint, leaving the cache free to
+    // serve bytes the previous encoder produced.
+    let unclassified = lockfile
+        .unclassified_encode_dependencies()
+        .unwrap_or_else(|error| panic!("{LOCKFILE}: {error}"));
+    assert!(
+        unclassified.is_empty(),
+        "{LOCKFILE}: unclassified kithara-encode dependencies: {unclassified:?}; add each crate \
+         to ENCODERS if it can change an encoded byte, otherwise to NON_ENCODING_DEPENDENCIES"
+    );
+
+    let resolved = lockfile
+        .encoder_versions()
+        .unwrap_or_else(|error| panic!("{LOCKFILE}: {error}"));
+    resolved.hash(hasher);
+}
+
 fn main() {
     let mut hasher = DefaultHasher::new();
 
@@ -50,19 +83,18 @@ fn main() {
         println!("cargo:rerun-if-changed={dir}");
         hash_rs_tree(Path::new(dir), &mut hasher);
     }
-    // The encode glue, the PCM signal generator, and the dependency lockfile
-    // (ffmpeg-sys / encoder crate versions) also determine the encoded bytes.
+    // The encode glue and the PCM signal generator also determine the bytes.
     for file in [
         "src/native/hls_stream.rs",
         "src/native/routes/signal.rs",
         "src/signal_pcm.rs",
-        "../Cargo.lock",
     ] {
         if let Ok(bytes) = fs::read(file) {
             bytes.hash(&mut hasher);
         }
         println!("cargo:rerun-if-changed={file}");
     }
+    hash_encoder_versions(&mut hasher);
     println!("cargo:rerun-if-changed=build.rs");
 
     println!(

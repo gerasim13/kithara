@@ -3,11 +3,12 @@ use std::num::NonZeroUsize;
 use fast_interleave::deinterleave_variable;
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+use kithara_platform::time::Duration;
 use kithara_stream::{ChunkPosition, PlayheadWrite};
 use kithara_test_utils::kithara;
 
 use super::{
-    ConsumerPhase, DecodeError, FailureSource, PendingReason, ReadOutcome,
+    ConsumerPhase, DecodeError, PendingReason, ReadOutcome,
     event::AudioEvents,
     ring::{RecvCtx, RingConsumer},
 };
@@ -112,7 +113,9 @@ impl ChunkCursor {
             ConsumerPhase::AtEof if ring.current_chunk.is_none() => {
                 return Ok(eof(playhead));
             }
-            ConsumerPhase::Failed { source } => return Err(channel_failed(source)),
+            ConsumerPhase::Failed { source } => {
+                return Err(DecodeError::pcm_stream("cursor read", source));
+            }
             _ => {}
         }
 
@@ -168,7 +171,9 @@ impl ChunkCursor {
 
         Ok(match ring.phase {
             ConsumerPhase::AtEof => eof(playhead),
-            ConsumerPhase::Failed { source } => return Err(channel_failed(source)),
+            ConsumerPhase::Failed { source } => {
+                return Err(DecodeError::pcm_stream("cursor read", source));
+            }
             ConsumerPhase::SeekPending { .. } => pending(playhead, PendingReason::SeekInProgress),
             _ => pending(playhead, PendingReason::Buffering),
         })
@@ -228,7 +233,7 @@ fn frames_to_samples(frames: u64, channels: u64) -> Result<usize, DecodeError> {
         .map_err(|_| DecodeError::SampleCountOverflow { frames, channels })
 }
 
-fn interpolated_position(meta: PcmMeta, consumed_frames: u64) -> kithara_platform::time::Duration {
+fn interpolated_position(meta: PcmMeta, consumed_frames: u64) -> Duration {
     let total_frames = u64::from(meta.frames).max(1);
     let start_ns = u64::try_from(meta.timestamp.as_nanos()).unwrap_or(u64::MAX);
     let end_ns = u64::try_from(meta.end_timestamp.as_nanos()).unwrap_or(u64::MAX);
@@ -236,11 +241,7 @@ fn interpolated_position(meta: PcmMeta, consumed_frames: u64) -> kithara_platfor
     let offset = span_ns * u128::from(consumed_frames) / u128::from(total_frames);
     let interpolated = u128::from(start_ns).saturating_add(offset);
     let nanos = u64::try_from(interpolated).unwrap_or(u64::MAX);
-    kithara_platform::time::Duration::from_nanos(nanos)
-}
-
-fn channel_failed(failure: FailureSource) -> DecodeError {
-    DecodeError::pcm_stream("cursor read", failure)
+    Duration::from_nanos(nanos)
 }
 
 fn pending(playhead: &dyn PlayheadWrite, reason: PendingReason) -> CursorRead {

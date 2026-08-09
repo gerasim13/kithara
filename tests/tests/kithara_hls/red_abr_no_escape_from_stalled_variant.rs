@@ -126,7 +126,7 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
     let abr = audio.abr_handle();
 
     // Offline-pull drain on a dedicated thread (`block_on_underrun`): a ring
-    // underrun blocks in the engine-aware park (`wait_for_fetch`) instead of
+    // underrun blocks in the engine-aware park (`ThreadWake::wait_timeout`) instead of
     // returning `Pending`, so this thread yields the CPU to the current-thread
     // runtime that drives the HLS fetch/scheduler tasks. A sleep-poll loop is
     // the wrong pattern here: under the flash virtual clock `thread::sleep`

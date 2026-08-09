@@ -6,8 +6,8 @@ use std::{
 };
 
 use kithara_decode::{
-    ChunkRetire, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome,
-    GaplessMode, PcmChunk,
+    ChunkRetire, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
+    DecoderFactory as BackendDecoderFactory, DecoderSeekOutcome, GaplessMode, PcmChunk,
 };
 use kithara_events::{DeferredBus, Event};
 use kithara_platform::sync::Arc;
@@ -81,7 +81,7 @@ impl DecoderFactory {
                 resolved.container = configured.container;
             }
         }
-        kithara_decode::DecoderFactory::reader_profile(&resolved, byte_map)
+        BackendDecoderFactory::reader_profile(&resolved, byte_map)
     }
 }
 

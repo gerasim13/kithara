@@ -13,6 +13,21 @@ all:
     just test
     just test run --lane=doc
 
+# Locate or drop the on-disk fixture cache. Each build fingerprint gets its own
+# sub-directory, so an obsolete one wastes disk rather than serving stale bytes;
+# dropping the roots costs the next run one re-encode of everything it touches.
+fixture-cache ACTION="path":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tmp="${TMPDIR:-/tmp}"
+    warm="${tmp%/}/kithara-fixture-cache"
+    cold="${tmp%/}/kithara-fixture-cold"
+    case "{{ ACTION }}" in
+      path) printf '%s\n%s\n' "$warm" "$cold" ;;
+      clear) rm -rf "$warm" "$cold" && echo "==> dropped $warm and $cold" ;;
+      *) echo "usage: just test fixture-cache [path|clear]" >&2; exit 2 ;;
+    esac
+
 [positional-arguments]
 e2e-resamplers *ARGS:
     #!/usr/bin/env bash
@@ -151,7 +166,7 @@ rtsan-async FILTER="no_block":
     RUSTFLAGS="-Zsanitizer=realtime --cfg rtsan" \
     RUSTDOCFLAGS="-Zsanitizer=realtime --cfg rtsan" \
         cargo "+$toolchain" test -p kithara-integration-tests --test suite_light \
-        --features kithara/no-block,kithara-test-utils/no-block --target "$target" -- --nocapture {{ FILTER }}
+        --features no-block --target "$target" -- --nocapture {{ FILTER }}
 
 # `rt_metrics` drives `process()` directly: decode error, underrun, eviction,
 # and the on-core seek re-base.

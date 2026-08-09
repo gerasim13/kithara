@@ -1,4 +1,4 @@
-use std::io::{self, ErrorKind, Read, Seek, SeekFrom};
+use std::io::{self, Error, ErrorKind, Read, Seek, SeekFrom};
 
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_storage::WaitOutcome;
@@ -24,7 +24,7 @@ impl HlsSessionReader {
             SeekFrom::Current(delta) => i128::from(current).saturating_add(i128::from(delta)),
             SeekFrom::End(delta) => {
                 let len = self.session.len().ok_or_else(|| {
-                    io::Error::new(
+                    Error::new(
                         ErrorKind::Unsupported,
                         "seek from end requires known length",
                     )
@@ -33,7 +33,7 @@ impl HlsSessionReader {
             }
         };
         if position < 0 {
-            return Err(io::Error::new(
+            return Err(Error::new(
                 ErrorKind::InvalidInput,
                 "negative seek position",
             ));
@@ -42,13 +42,9 @@ impl HlsSessionReader {
         if let Some(len) = self.session.len()
             && position > len
         {
-            return Err(io::Error::new(
+            return Err(Error::new(
                 ErrorKind::InvalidInput,
-                StreamSeekPastEof {
-                    len,
-                    current_pos: current,
-                    new_pos: position,
-                },
+                StreamSeekPastEof::new(current, len, position),
             ));
         }
         Ok(position)
@@ -97,7 +93,7 @@ impl Read for HlsSessionReader {
                     NotReadyCause::WaitBudgetExhausted,
                 )));
             }
-            Err(error) => return Err(io::Error::other(error.to_string())),
+            Err(error) => return Err(Error::other(error.to_string())),
         }
         self.session.check_live()?;
         match self.session.variant.read_at(byte, buf) {
@@ -111,7 +107,7 @@ impl Read for HlsSessionReader {
                 self.session.arm_peer();
                 Err(pending(reason))
             }
-            Err(error) => Err(io::Error::other(error.to_string())),
+            Err(error) => Err(Error::other(error.to_string())),
         }
     }
 }

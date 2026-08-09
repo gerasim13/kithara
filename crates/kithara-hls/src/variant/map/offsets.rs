@@ -196,10 +196,11 @@ pub(super) struct Layout {
     /// old frame.
     publication_seq: AtomicU64,
     total: AtomicU64,
-    /// Serializes off-RT writers so a concurrent load-clone-mutate-store pair
-    /// cannot lose an update (the old `RwLock` serialized writes; `ArcSwap`
-    /// alone does not). Never taken on the produce-core read path.
-    write_lock: Mutex<()>,
+    /// Serializes off-RT writers; never taken on the produce-core read
+    /// path. Payload: frames displaced by a swap, held until quiesced
+    /// (`strong_count == 1`) so reclamation stays on the writer and a
+    /// reader guard drop is a pure decrement.
+    write_lock: Mutex<Vec<Arc<Frame>>>,
 }
 
 impl Layout {
@@ -216,7 +217,7 @@ impl Layout {
         let snapshot = frame.snapshot(segments, init_size);
         Self {
             frame: ArcSwap::from(Arc::new(frame)),
-            write_lock: Mutex::new(()),
+            write_lock: Mutex::new(Vec::new()),
             total: AtomicU64::new(snapshot.total),
             sizes_complete: AtomicBool::new(snapshot.sizes_complete),
             publication_seq: AtomicU64::new(0),
@@ -248,13 +249,14 @@ impl Layout {
         store: impl FnOnce() -> u64,
         before_publish: impl FnOnce(),
     ) {
-        let _w = self.write_lock.lock();
+        let mut retired = self.write_lock.lock();
         self.begin_publication();
         let init_size = store();
         before_publish();
         let mut frame = (**self.frame.load()).clone();
         frame.recompute(init_size, segments);
         let snapshot = frame.snapshot(segments, init_size);
+        Self::retire_current(&mut retired, &self.frame);
         self.frame.store(Arc::new(frame));
         self.republish(snapshot);
         self.finish_publication();
@@ -303,14 +305,21 @@ impl Layout {
     /// and republishes the atomics. Concurrent writers cannot lose an update
     /// because each runs the whole cycle under `write_lock`.
     fn mutate_frame(&self, segments: &[Segment], init_size: u64, f: impl FnOnce(&mut Frame)) {
-        let _w = self.write_lock.lock();
+        let mut retired = self.write_lock.lock();
         self.begin_publication();
         let mut frame = (**self.frame.load()).clone();
         f(&mut frame);
         let snapshot = frame.snapshot(segments, init_size);
+        Self::retire_current(&mut retired, &self.frame);
         self.frame.store(Arc::new(frame));
         self.republish(snapshot);
         self.finish_publication();
+    }
+
+    /// Reclaim quiesced retirees, then park the live frame ahead of the swap.
+    fn retire_current(retired: &mut Vec<Arc<Frame>>, frame: &ArcSwap<Frame>) {
+        retired.retain(|frame| Arc::strong_count(frame) > 1);
+        retired.push(frame.load_full());
     }
 
     pub(super) fn natural_offset(&self, idx: usize) -> Option<u64> {
@@ -386,5 +395,57 @@ impl Layout {
             #[field]
             pub(super) fn served_from(&self) -> u32;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_platform::sync::Weak;
+
+    use super::*;
+
+    #[kithara::test]
+    fn displaced_frame_is_freed_by_the_writer() {
+        let layout = Layout::new(0, &[]);
+        let displaced: Weak<Frame> = Arc::downgrade(&layout.frame.load_full());
+
+        layout.apply_commit(&[], || 0);
+        assert!(
+            displaced.upgrade().is_some(),
+            "a racing reader guard may still resolve to the displaced frame"
+        );
+
+        layout.apply_commit(&[], || 0);
+        assert!(
+            displaced.upgrade().is_none(),
+            "the next mutation reclaims quiesced frames"
+        );
+    }
+
+    #[kithara::test]
+    fn mutate_frame_retires_the_displaced_frame() {
+        let layout = Layout::new(0, &[]);
+        let displaced: Weak<Frame> = Arc::downgrade(&layout.frame.load_full());
+
+        layout.mutate_frame(&[], 0, |_| {});
+        assert!(displaced.upgrade().is_some());
+    }
+
+    #[kithara::test]
+    fn outstanding_reader_blocks_reclamation() {
+        let layout = Layout::new(0, &[]);
+        let reader: Arc<Frame> = layout.frame.load_full();
+        let displaced = Arc::downgrade(&reader);
+
+        layout.apply_commit(&[], || 0);
+        layout.apply_commit(&[], || 0);
+        assert!(
+            displaced.upgrade().is_some(),
+            "an outstanding reader blocks reclamation"
+        );
+
+        drop(reader);
+        layout.apply_commit(&[], || 0);
+        assert!(displaced.upgrade().is_none());
     }
 }

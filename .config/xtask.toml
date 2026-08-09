@@ -83,6 +83,43 @@ feature_powerset_exclude = ["kithara-play", "kithara-app", "kithara-fuzz"]
 # Crates excluded from whole-workspace stages (fuzz target needs cargo-fuzz).
 workspace_exclude = ["kithara-fuzz"]
 
+# Groups a crate refuses to be built without, and says so with compile_error!.
+# A crate is matched by declaring `when_feature`, so these follow the workspace
+# instead of naming crates twice. A crate carrying two of them gets both in one
+# invocation: meeting one while leaving the other empty still builds nothing.
+
+[[health.feature_invariants]]
+when_feature = "client-reqwest"
+at_least_one_of = [
+  [
+    "client-reqwest",
+    "client-wreq",
+  ],
+  [
+    "tls-rustls",
+    "tls-native",
+  ],
+]
+
+[[health.feature_invariants]]
+when_feature = "stretch-signalsmith"
+at_least_one_of = [["stretch-signalsmith", "stretch-bungee"]]
+
+# Forced rather than chosen: apple, android and webcodecs are gated on
+# target_os as well as on their feature, so off those targets symphonia is the
+# only backend whose variant survives and there is nothing to choose between.
+# The platform lanes cover the hardware shapes.
+[[health.feature_invariants]]
+when_feature = "symphonia"
+always = ["symphonia"]
+
+# Same shape, one layer down: kithara-play refuses a non-wasm build without an
+# output backend, and cpal is the only one off wasm — backend-web-audio is a
+# browser API. Every crate that forwards the choice inherits the refusal.
+[[health.feature_invariants]]
+when_feature = "backend-cpal"
+always = ["backend-cpal"]
+
 [test]
 default_lane = "workspace"
 default_backend = "wreq"
@@ -118,14 +155,14 @@ prefix_args = [
   "test-release",
 ]
 
-[test.lanes.cached]
+[test.lanes.cold]
 program = "cargo"
 default_features = ["kithara-ui/render"]
 prefix_args = [
   "nextest",
   "run",
   "--profile",
-  "cache",
+  "cold",
   "--workspace",
   "--exclude",
   "kithara-fuzz",
@@ -158,6 +195,10 @@ default_flash = false
 # Apple shape (embedded AudioConverter SRC in the Apple codec; Symphonia stays
 # on Rubato; inert off Apple), `e2e-glide` the Glide backend (no Rubato in the
 # graph, otherwise the compile-time alias picks Rubato).
+#
+# All three run `suite_e2e`, which reaches nothing outside the runner. The tests
+# that need the zvuk CDN or the corporate VPN live in `suite_network` behind the
+# `network` feature, so no amount of `--run-ignored` can pull them in here.
 [test.lanes.e2e]
 program = "cargo"
 prefix_args = [
@@ -169,8 +210,6 @@ prefix_args = [
   "test-release",
   "--test",
   "suite_e2e",
-  "--run-ignored",
-  "all",
 ]
 default_features = ["e2e", "kithara/resample-rubato"]
 default_flash = false
@@ -186,8 +225,6 @@ prefix_args = [
   "test-release",
   "--test",
   "suite_e2e",
-  "--run-ignored",
-  "all",
 ]
 default_features = ["e2e", "kithara/resample-rubato", "apple-fused-src"]
 default_flash = false
@@ -203,10 +240,48 @@ prefix_args = [
   "test-release",
   "--test",
   "suite_e2e",
-  "--run-ignored",
-  "all",
 ]
 default_features = ["e2e", "kithara/resample-glide"]
+default_flash = false
+
+# The network tests a runner can reach: the public zvuk CDN and silvercomet.
+# The CDN is auth-gated, so this lane only says something where
+# `KITHARA_DRM_PROD_*` are in the build environment; without them it fails on
+# the key request rather than on the code, which is why it is a lane of its own
+# rather than a gate job.
+
+[test.lanes.network]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-integration-tests",
+  "--cargo-profile",
+  "test-release",
+  "--test",
+  "suite_network",
+]
+default_features = ["network", "kithara/resample-rubato"]
+default_flash = false
+
+# The half of the network tests no runner can serve: `*.zvq.me`, which resolves
+# only inside the corporate network, and the tests that open a real output
+# device. No CI job runs this and none should — a runner that fails here reports
+# the fence around itself, not the code. `just test run --lane=network-manual`.
+[test.lanes.network-manual]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-integration-tests",
+  "--cargo-profile",
+  "test-release",
+  "--test",
+  "suite_network_manual",
+]
+default_features = ["network-manual", "kithara/resample-rubato"]
 default_flash = false
 
 # Integration regression tests are red by design and stay outside the main gate.
@@ -314,15 +389,24 @@ wasm_dist = "crates/kithara-ffi/dist"
 pages_branch = "gh-pages"
 
 [orphans]
-# Packages excluded from the default `cargo modules orphans` sweep.
+# Packages the sweep cannot say anything useful about: a generated crate, two
+# test harnesses, the fuzz targets, and the build tool.
+#
+# Nothing else belongs here. This check exists to point at code that needs
+# rewriting, so a name on this list is a place someone decided not to look, and
+# the list only ever grew because dropping a whole package is the only lever
+# the tool offers. A green sweep bought that way says exactly as much as a
+# green run that executed nothing.
+#
+# A module the sweep reports but that is real — gated behind a non-default
+# feature or another target — is a gap in how the sweep is invoked, not grounds
+# for an entry here: it runs `--lib` with default features on the native target
+# and passes neither `--features` nor `--target`. Widen the invocation.
 exclude_packages = [
   "kithara-workspace-hack",
   "kithara-test-utils",
   "kithara-test-macros",
-  "kithara-ffi",
   "kithara-fuzz",
-  "kithara-decode",
-  "kithara-platform",
   "xtask",
 ]
 

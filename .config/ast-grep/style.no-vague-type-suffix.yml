@@ -38,3 +38,14 @@ rule:
     - all:
         - kind: type_item
         - regex: 'type\s+\w*(Manager|Helper|Util|Utils|Service|Handler|Wrapper|Provider)\b'
+        - not:
+            # Associated types inside a trait impl take their name from the
+            # trait definition, not from the implementer — `type Service` in
+            # `impl tower_layer::Layer for X` is mandated by `Layer::Service`,
+            # not a naming choice this rule can flag.
+            inside:
+              kind: impl_item
+              has:
+                field: trait
+                regex: ".*"
+              stopBy: end

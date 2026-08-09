@@ -7,7 +7,7 @@ use anyhow::{Result, bail};
 use clap::Args;
 use serde::Deserialize;
 
-use crate::{Ctx, common::report::print_check_block, util::ensure_clean_tree};
+use crate::{Ctx, common::report::print_check_block, util::ensure_clean_tree, verdict::NotClean};
 
 #[derive(Debug, Args)]
 pub struct AstGrepArgs {
@@ -178,8 +178,8 @@ fn run_grouped(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
     print_grouped(&by_rule);
 
     if !ok {
-        print_failing_rules(&by_rule, args.strict);
-        bail!("ast-grep failed");
+        let findings = print_failing_rules(&by_rule, args.strict);
+        return Err(NotClean::raised("ast-grep", findings));
     }
     Ok(())
 }
@@ -211,14 +211,14 @@ fn severity_rank(s: &str) -> u8 {
 /// on) — to stderr with each hit's `file:line:col`, so the actionable subset
 /// stands out from the full grouped dump above instead of being buried in it.
 /// Mirrors the arch ratchet's focused-failure block.
-fn print_failing_rules(groups: &BTreeMap<String, RuleGroup>, strict: bool) {
+fn print_failing_rules(groups: &BTreeMap<String, RuleGroup>, strict: bool) -> usize {
     let threshold = if strict { 1 } else { 0 };
     let mut failing: Vec<(&String, &RuleGroup)> = groups
         .iter()
         .filter(|(_, g)| severity_rank(&g.severity) <= threshold)
         .collect();
     if failing.is_empty() {
-        return;
+        return 0;
     }
     failing.sort_by(|a, b| {
         severity_rank(&a.1.severity)
@@ -236,6 +236,7 @@ fn print_failing_rules(groups: &BTreeMap<String, RuleGroup>, strict: bool) {
             eprintln!("      ▸ {}:{}:{}", h.file, h.line, h.column);
         }
     }
+    total
 }
 
 fn print_grouped(groups: &BTreeMap<String, RuleGroup>) {

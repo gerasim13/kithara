@@ -255,6 +255,7 @@ fn spawn_live_stats_task(
                         let entry = locked.cache_hits.entry(key).or_insert(0);
                         *entry = entry.saturating_add(1);
                     }
+                    drop(locked);
                 }
                 _ => {}
             }
@@ -483,6 +484,7 @@ async fn live_ephemeral_revisit_sequence_regression(
                         let entry = locked.cache_hits.entry(key).or_insert(0);
                         *entry = entry.saturating_add(1);
                     }
+                    drop(locked);
                 }
                 _ => {}
             }
@@ -913,6 +915,7 @@ async fn live_stress_real_stream_seek_read_cache(
                             let entry = locked.cache_hits.entry(key).or_insert(0);
                             *entry = entry.saturating_add(1);
                         }
+                        drop(locked);
                     }
                     _ => {}
                 }

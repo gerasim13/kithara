@@ -6,8 +6,11 @@ set working-directory := "../.."
 workspace:
     cargo check --workspace
 
+# Runs without the sccache wrapper: `clippy-driver` is not cached by it either
+# way, and sccache aborts outright rather than fall back when it meets the
+# incremental build that keeps this fast.
 clippy:
-    cargo clippy --workspace -- -D warnings
+    RUSTC_WRAPPER= CARGO_INCREMENTAL=1 cargo clippy --workspace -- -D warnings
 
 [positional-arguments]
 clippy-fix *ARGS:

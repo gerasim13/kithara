@@ -155,12 +155,12 @@ async fn wait_for_loaded(
 /// KITHARA_DRM_PROD_KEY=... \
 /// KITHARA_DRM_PROD_AUTH_TOKEN=... \
 /// KITHARA_DRM_PROD_SP_ZV_TOKEN=... \
-///     cargo nextest run -E 'test(zvuk_prod_drm)' --run-ignored=only
+///     just test run --lane=network -E 'test(zvuk_prod_drm)'
 /// ```
 ///
-/// `#[ignore]` because the upstream is VPN-gated and the creds rot.
+/// Lives in `suite_network` because the upstream is VPN-gated and the creds
+/// rot.
 #[kithara::test(tokio)]
-#[ignore = "requires zvuk prod creds baked at build (KITHARA_DRM_PROD_*) — run with --run-ignored=only"]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

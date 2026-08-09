@@ -170,7 +170,6 @@ async fn render_until_variant_applied(
 /// FLAC from startup is known green; this test isolates the AAC decoder teardown
 /// plus FLAC decoder construction path.
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
-#[ignore = "requires zvuk prod creds baked at build (KITHARA_DRM_PROD_*) + VPN - run with --run-ignored=only"]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

@@ -301,7 +301,7 @@ impl AudioDecoder for AacDecoder {
     fn codec_info(&self) -> &CodecInfo {
         &Self::supported_codecs()
             .first()
-            .expect("aac codec descriptor must exist")
+            .expect("invariant: supported_codecs() always returns exactly one entry")
             .info
     }
 

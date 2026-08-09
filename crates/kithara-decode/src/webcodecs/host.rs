@@ -189,7 +189,7 @@ async fn dispatch(cmd: HostCmd, decoders: &mut HashMap<u64, DecoderState>) {
                 .map_err(|err| api_error("flush", &err));
             match result {
                 Ok(()) => {
-                    let _ = state.out_tx.send(HostOut::Flushed { generation });
+                    state.out_tx.send(HostOut::Flushed { generation }).ok();
                 }
                 Err(err) => {
                     tracing::error!(decoder_id, generation, error = %err, "failed to flush WebCodecs decoder");
@@ -267,7 +267,7 @@ impl DecoderHost {
             let generation = error_generation.get();
             let detail = js_detail(&value);
             tracing::error!(decoder_id, generation, detail = %detail, "WebCodecs decoder callback failed");
-            let _ = error_tx.send(HostOut::Error { detail, generation });
+            error_tx.send(HostOut::Error { detail, generation }).ok();
         });
 
         let pending = Rc::new(RefCell::new(VecDeque::new()));
@@ -303,14 +303,16 @@ impl DecoderHost {
                             ..
                         } = &output
                     {
-                        let _ = out_tx.send(HostOut::Configured {
-                            generation,
-                            sample_rate: *sample_rate,
-                            channels: *channels,
-                        });
+                        out_tx
+                            .send(HostOut::Configured {
+                                generation,
+                                sample_rate: *sample_rate,
+                                channels: *channels,
+                            })
+                            .ok();
                         announced_generation.set(Some(generation));
                     }
-                    let _ = out_tx.send(output);
+                    out_tx.send(output).ok();
                 }
                 Err(err) => {
                     tracing::error!(decoder_id, generation, error = %err, "failed to copy WebCodecs AudioData");
@@ -486,10 +488,12 @@ fn js_detail(value: &JsValue) -> String {
 }
 
 fn send_error(out_tx: &mpsc::Sender<HostOut>, err: &DecodeError, generation: u64) {
-    let _ = out_tx.send(HostOut::Error {
-        generation,
-        detail: err.to_string(),
-    });
+    out_tx
+        .send(HostOut::Error {
+            generation,
+            detail: err.to_string(),
+        })
+        .ok();
 }
 
 #[cfg(test)]

@@ -22,14 +22,15 @@ rustflags = [
   "link-arg=--shared-memory",
   "-C",
   "link-arg=--import-memory",
-  # Pre-allocate 256 MiB of shared linear memory up front so dlmalloc never
-  # has to grow it at runtime. On wasm threads, a concurrent memory.grow
-  # during the worker/worklet startup storm leaves other instances with a
-  # stale memory bound, so any later heap deref (JsFuture/setTimeout resolve
-  # closures, RAF tick, AudioPlayer __wbg_ptr) traps with "memory access out
-  # of bounds". A large initial avoids the grow entirely. Must be <= max.
-  "-C",
-  "link-arg=--initial-memory=268435456",
+  # There is deliberately no `--initial-memory` here. A 256 MiB reservation used
+  # to stand in this place so dlmalloc would never call `memory.grow`, on the
+  # reading that a concurrent grow leaves other instances with a stale memory
+  # bound. The heap-donation opt-out in `crates/kithara-ffi/src/web/bindings.rs`
+  # makes dlmalloc take every chunk from `memory.grow`, so the reservation can no
+  # longer prevent a grow and would only pin 256 MiB that nothing allocates from.
+  # The generated shim refreshes its cached views whenever
+  # `cachedUint8ArrayMemory0.buffer !== wasm.memory.buffer`, which is what a grow
+  # changes.
   "-C",
   "link-arg=--max-memory=1610612736",
   "-C",

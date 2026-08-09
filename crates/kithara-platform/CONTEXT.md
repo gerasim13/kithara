@@ -39,12 +39,12 @@ holder always runs (never parks while held), so virtual time can never advance w
 held. Flash-awareness lives only in the wait primitives (`Condvar`, `Notify`, `mpsc`);
 `flash::sync::{Mutex, RwLock}` are plain re-exports.
 
-`ThreadGate` (`common/gate.rs`) has ONE waiter. Waiter registration may take its private lock
-and must happen outside real-time code. `signal` is the real-time path: advances the sequence
-first, uses only non-blocking `try_lock` to fetch the waiter, does not allocate. A missed
-immediate unpark cannot lose the edge — the waiter observes the changed sequence or returns
-through its timed backstop. Every `WaitGate` caller snapshots `current()` BEFORE checking its
-predicate, so a racing `signal` is never lost.
+`ThreadGate` (`common/gate.rs`) has ONE waiter. Same-thread registration performs no publication;
+a changed waiter publishes through `ArcSwap` and keeps displaced handles in a writer-only retire
+list until no signal guard remains. `signal` advances the sequence, lock-free snapshots the waiter,
+and unparks without touching that list. An RT signal thread must pre-warm `arc_swap`'s per-thread
+debt node; the audio source does so in `warm_up`. Every `WaitGate` caller snapshots `current()`
+BEFORE checking its predicate, so a racing `signal` is never lost.
 
 ## Loom Lane
 

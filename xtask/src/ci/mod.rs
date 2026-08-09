@@ -1,4 +1,5 @@
 mod bridge;
+mod build_cache;
 mod command;
 mod config;
 mod environment;

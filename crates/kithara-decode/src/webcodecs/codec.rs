@@ -378,9 +378,11 @@ impl FrameCodec for WebCodecsCodec {
 
 impl Drop for WebCodecsCodec {
     fn drop(&mut self) {
-        let _ = self.cmd.send(HostCmd::Close {
-            id: self.decoder_id,
-        });
+        self.cmd
+            .send(HostCmd::Close {
+                id: self.decoder_id,
+            })
+            .ok();
     }
 }
 

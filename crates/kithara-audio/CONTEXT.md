@@ -23,9 +23,10 @@ Transport (`runtime/ports.rs`): SPSC `ringbuf::HeapRb` plus a one-slot overflow
   returns `TickResult::Backpressured` *without* ticking the FSM — every internal
   transition, seeks included, pauses until the consumer drains.
 - **Wake.** A ring push wakes the consumer; empty→non-empty also fires
-  `on_data_available`. The blocking consumer closes the park/push race by
-  re-checking `try_pop` after `ThreadWake::register_current` and before parking,
-  with a `park_timeout` backstop.
+  `on_data_available`. The blocking consumer snapshots `ThreadWake` before
+  re-checking `try_pop`; a signal between the snapshot and park advances the
+  gate sequence, so `wait_timeout` returns immediately while retaining its timed
+  backstop.
 - **Trash ring.** The RT consumer must never `free`, so spent pooled `PcmChunk`s
   go to a second ring drained by `DecoderNode::recycle` on the worker. Capacity
   `pcm_buffer_chunks + 2` absorbs a full forward-ring seek drain, making the RT
@@ -348,9 +349,14 @@ Sample-rate conversion for playback is decoder-owned. `AudioConfig.decoder`
 carries `AudioDecoderConfig<B>`, whose optional `DecoderResamplerSettings<B>`
 holds the concrete `B: kithara_resampler::ResamplerBackend`, its
 `ResamplerOptions`, and its `ResamplerQuality` (`High` by default), combined with
-`AudioConfig.host_sample_rate` into `DecoderConfig.resampler`. When absent, the
-decoder emits source-rate PCM and `recreates_on_host_rate_change` is false, so
-route changes recreate nothing. Backend implementations belong to
+`AudioConfig.host_sample_rate` into `DecoderConfig.resampler`. A requested host
+rate always resolves to a plan: absent settings fall back to `B::default()`, so
+asking for a rate is never silently dropped — on the Apple fused placement the
+codec converts with no standalone backend at all, and a backend that cannot
+serve the ratio fails loudly at decoder construction. Without a host rate there
+is no plan and the decoder emits source-rate PCM; route changes are then decided
+by `ResumeCursor`'s rate guards, which recreate nothing at an unknown or equal
+rate. Backend implementations belong to
 `kithara-resampler`; this crate never picks a portable default.
 `resample-rubato` / `resample-glide` enable backend types; `apple-fused-src`
 forwards to `kithara-decode/apple-codec-embedded-resampler`. Selecting a backend

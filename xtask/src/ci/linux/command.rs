@@ -1,10 +1,13 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 
 use super::{
-    cleanup, firewall,
+    cleanup, compose, firewall,
     profile::{LINUX_CONFIG_PATH, LinuxHost},
     registration, services, system, windows,
 };
@@ -44,6 +47,16 @@ enum LinuxCommand {
     },
     /// Write and enable one service per runner in the profile.
     InstallServices,
+    /// Generate the whole fleet as one Compose project, from the same profile.
+    Compose {
+        /// Where the project is written.
+        #[arg(long, default_value = compose::FILE)]
+        out: PathBuf,
+        /// Mint every runner's registration first. They are accepted once, so
+        /// this runs immediately before `docker compose up`, not ahead of time.
+        #[arg(long)]
+        mint: bool,
+    },
     /// Reclaim superseded project images and stale build cache.
     Cleanup,
     /// Install the Windows guest that serves the Windows lane.
@@ -71,7 +84,7 @@ pub(crate) fn run(args: &LinuxArgs) -> Result<()> {
         }
         LinuxCommand::Cleanup => {
             let pins = CiPins::load(&args.pins)?;
-            cleanup::run(&process, &pins)
+            cleanup::run(&process, &host, &pins)
         }
         LinuxCommand::InstallServices => {
             let pins = CiPins::load(&args.pins)?;
@@ -80,6 +93,15 @@ pub(crate) fn run(args: &LinuxArgs) -> Result<()> {
                 .to_str()
                 .context("this executable's path is not UTF-8")?;
             services::install(&process, &host, &pins, executable)
+        }
+        LinuxCommand::Compose { out, mint } => {
+            let pins = CiPins::load(&args.pins)?;
+            if *mint {
+                for runner in &host.runners {
+                    registration::configure(&host, runner, Path::new(&services::env_file(runner)))?;
+                }
+            }
+            compose::write(&host, &pins, out)
         }
         LinuxCommand::InstallWindows => {
             let pins = CiPins::load(&args.pins)?;

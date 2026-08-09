@@ -1,24 +1,14 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara_platform::{
-    sync::{Mutex, ThreadGate, WaitGate},
-    thread::{self, Thread},
+    sync::{ThreadGate, WaitGate},
     time::Duration,
 };
 
 use crate::runtime::WakeSignal;
 
-/// Level-triggered wake for the scheduler thread — a thin adapter over the
-/// shared [`ThreadGate`] (RT-safe lock-free wake + `park_timeout` backstop).
-///
-/// The wake side stays wait-free (atomic bump + `unpark`, no lock): the RT
-/// audio thread wakes the worker after consuming a chunk
-/// (`Audio::recv_outcome` → `wake_worker`), where a condvar's internal mutex is
-/// forbidden. `seen` carries the level/consume semantics the scheduler loop
-/// relies on — it is snapshotted at the END of each wait (i.e. before the next
-/// produce pass), so a `wake` that lands during that pass advances the gate
-/// counter past it and the following `wait_timeout` returns at once: no missed
-/// wake, no per-chunk latency.
+/// Level-triggered scheduler wake over [`ThreadGate`]. The RT signal path uses
+/// a sequence CAS, lock-free waiter snapshot, and `unpark`.
 #[derive(Default)]
 pub(crate) struct SchedulerWake {
     /// Gate counter consumed as of the previous wait (scheduler-thread only).
@@ -36,8 +26,7 @@ impl SchedulerWake {
         woken
     }
 
-    /// Signal the scheduler to wake up. Wait-free and safe to call from any
-    /// thread, including the real-time audio thread.
+    /// Signal from any thread, including the real-time audio thread.
     pub(crate) fn wake(&self) {
         self.gate.signal();
     }
@@ -45,31 +34,31 @@ impl SchedulerWake {
 
 #[derive(Default)]
 pub(crate) struct ThreadWake {
-    waiter: Mutex<Option<Thread>>,
+    gate: ThreadGate,
 }
 
 impl ThreadWake {
-    pub(crate) fn register_current(&self) {
-        *self.waiter.lock() = Some(thread::current());
+    delegate::delegate! {
+        to self.gate {
+            /// Snapshot the edge before checking the predicate the wait guards.
+            pub(crate) fn current(&self) -> u64;
+            /// Park until the edge moves past `since` or `timeout` elapses.
+            pub(crate) fn wait_timeout(&self, since: u64, timeout: Duration) -> bool;
+        }
     }
 }
 
 impl WakeSignal for ThreadWake {
     fn wake(&self) {
-        let waiter = self.waiter.lock().as_ref().cloned();
-        if let Some(waiter) = waiter {
-            thread::unpark(&waiter);
-        }
+        self.gate.signal();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
     use kithara_platform::{
         sync::Arc,
-        thread::{self, park_timeout, spawn},
+        thread::{self, spawn},
         time::Duration,
     };
     use kithara_test_utils::kithara;
@@ -82,20 +71,25 @@ mod tests {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let wake = Arc::new(ThreadWake::default());
-            let done = Arc::new(AtomicBool::new(false));
             let worker_wake = Arc::clone(&wake);
-            let worker_done = Arc::clone(&done);
 
             let join = spawn(move || {
-                worker_wake.register_current();
-                park_timeout(Duration::from_secs(1));
-                worker_done.store(true, Ordering::Release);
+                let since = worker_wake.current();
+                worker_wake.wait_timeout(since, Duration::from_secs(1))
             });
 
-            thread::sleep(Duration::from_millis(10)); // M5: real pacing, replace with teardown signal
+            thread::sleep(Duration::from_millis(10));
             wake.wake();
-            join.join().expect("wake test thread");
-            assert!(done.load(Ordering::Acquire));
+            assert!(join.join().expect("wake test thread"));
         }
+    }
+
+    #[kithara::test]
+    fn wake_between_snapshot_and_wait_is_not_lost() {
+        let wake = ThreadWake::default();
+        let since = wake.current();
+        wake.wake();
+
+        assert!(wake.wait_timeout(since, Duration::ZERO));
     }
 }

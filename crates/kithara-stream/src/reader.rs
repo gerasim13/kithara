@@ -150,12 +150,6 @@ impl OpenedVariantReader {
         }
     }
 
-    /// Exact pre-open plan used to construct this reader.
-    #[must_use]
-    pub const fn plan(&self) -> &VariantReaderPlan {
-        &self.plan
-    }
-
     /// Split the move-only bundle for decoder construction.
     #[must_use]
     pub fn split(self) -> (VariantReaderPlan, OpenedReader) {

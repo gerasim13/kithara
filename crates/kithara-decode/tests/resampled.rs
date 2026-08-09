@@ -177,9 +177,11 @@ impl Resampler for CaptureProbeResampler {
         input: &[&[f32]],
         output: &mut [&mut [f32]],
     ) -> Result<ResamplerProcess, kithara_resampler::ResamplerError> {
-        let mut captured = self.captured.lock().expect("capture probe lock");
         for channel in input {
-            captured.extend_from_slice(channel);
+            self.captured
+                .lock()
+                .expect("capture probe lock")
+                .extend_from_slice(channel);
         }
         for (channel, dst) in output.iter_mut().enumerate() {
             dst[..FRAMES].copy_from_slice(&MARKERS[channel]);
@@ -347,6 +349,7 @@ fn resampler_never_sees_a_sample_the_file_poisoned() {
         POISON[1],
         "the untouched channel lost its samples"
     );
+    drop(seen);
 }
 
 #[test]
