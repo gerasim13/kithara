@@ -21,20 +21,8 @@ lanes:integration-regressions:
   script:
     - just ci run linux-integration-regressions
 
-lanes:e2e:
-  extends: .lane-job
-  script:
-    - just ci run linux-e2e
-
-lanes:e2e-fused:
-  extends: .lane-job
-  script:
-    - just ci run linux-e2e-fused
-
-lanes:e2e-glide:
-  extends: .lane-job
-  script:
-    - just ci run linux-e2e-glide
+# Linux CI runs in containers with no output device, so `apple:e2e` serves the
+# hardware-dependent e2e lanes.
 
 lanes:selenium-firefox:
   extends: .lane-job

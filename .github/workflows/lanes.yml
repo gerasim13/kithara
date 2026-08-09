@@ -43,7 +43,12 @@ jobs:
           REQUESTED: ${{ github.event.inputs.lane }}
         run: |
           set -euo pipefail
-          configured='["integration-regressions","network","loom","e2e","e2e-fused","e2e-glide","selenium-firefox"]'
+          # These runners are containers with no output device, so the three
+          # e2e lanes would fail on the machine rather than on the code.
+          # `apple:e2e` serves them on hardware. A lane this fleet cannot run is
+          # left out entirely, producing no job at all rather than a red one or
+          # a skipped-but-green one.
+          configured='["integration-regressions","network","loom","selenium-firefox"]'
           if [ -z "$REQUESTED" ] || [ "$REQUESTED" = all ]; then
             echo "lanes=$configured" >> "$GITHUB_OUTPUT"
             exit 0

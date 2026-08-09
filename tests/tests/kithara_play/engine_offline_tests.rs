@@ -1,8 +1,9 @@
-//! Leaving `EngineConfig::session` unset makes this the hardware half. The
-//! engine falls through to `default_session_handle`, which opens a cpal output
-//! stream, so these tests run only where a real output device exists.
+//! An injected offline session dispatcher replaces the cpal output stream, so
+//! this half asks nothing of the machine and belongs in the ordinary gate
+//! rather than a lane.
 
 use kithara::{bufpool::PcmPool, play::EngineConfig};
+use kithara_integration_tests::offline::OfflineSession;
 
 use super::engine_session_contract as contract;
 
@@ -10,6 +11,7 @@ fn engine_config(max_slots: usize) -> EngineConfig {
     EngineConfig::builder()
         .max_slots(max_slots)
         .pcm_pool(PcmPool::default())
+        .session(OfflineSession::arc_auto())
         .build()
 }
 

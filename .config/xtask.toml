@@ -196,9 +196,11 @@ default_flash = false
 # on Rubato; inert off Apple), `e2e-glide` the Glide backend (no Rubato in the
 # graph, otherwise the compile-time alias picks Rubato).
 #
-# All three run `suite_e2e`, which reaches nothing outside the runner. The tests
-# that need the zvuk CDN or the corporate VPN live in `suite_network` behind the
-# `network` feature, so no amount of `--run-ignored` can pull them in here.
+# All three need a real output device, so they run on the Apple executor and are
+# absent from the Linux container fleet. `suite_e2e` reaches nothing outside the
+# runner. The tests that need the zvuk CDN or the corporate VPN live in
+# `suite_network` behind the `network` feature, so no amount of `--run-ignored`
+# can pull them in here.
 [test.lanes.e2e]
 program = "cargo"
 prefix_args = [

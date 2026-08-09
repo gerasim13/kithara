@@ -19,7 +19,7 @@ just test run -p kithara-hls   # one package
 just test run --profile ci     # a specific nextest profile
 just test run EXPR             # a nextest filter expression, e.g. test(seek)
 just test run --lane=doc       # doc-tests (nextest does not run them)
-just test run --lane=e2e       # gated by the `e2e` feature (suite_e2e)
+just test run --lane=e2e       # gated by the `e2e` feature (suite_e2e); needs a real output device
 just test run --lane=cached    # opt-in ephemeral L2 fixture cache (profile `cache`)
 ```
 

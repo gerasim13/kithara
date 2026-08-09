@@ -32,9 +32,6 @@ pub(crate) enum Lane {
     LinuxDoc,
     LinuxLoom,
     LinuxIntegrationRegressions,
-    LinuxE2e,
-    LinuxE2eFused,
-    LinuxE2eGlide,
     LinuxSeleniumFirefox,
     LinuxCoverage,
     AndroidBuild,
@@ -96,9 +93,6 @@ impl Lane {
             | Self::LinuxDoc
             | Self::LinuxLoom
             | Self::LinuxIntegrationRegressions
-            | Self::LinuxE2e
-            | Self::LinuxE2eFused
-            | Self::LinuxE2eGlide
             | Self::LinuxSeleniumFirefox
             | Self::LinuxCoverage
             | Self::WebChromium
@@ -190,9 +184,6 @@ pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         Lane::LinuxIntegrationRegressions => {
             lane::linux::configured(&process, "integration-regressions")
         }
-        Lane::LinuxE2e => lane::linux::configured(&process, "e2e"),
-        Lane::LinuxE2eFused => lane::linux::configured(&process, "e2e-fused"),
-        Lane::LinuxE2eGlide => lane::linux::configured(&process, "e2e-glide"),
         Lane::LinuxSeleniumFirefox => lane::linux::selenium(&process, "firefox"),
         Lane::LinuxCoverage => lane::linux::coverage(&process),
         Lane::AndroidBuild => lane::android::build(&process),

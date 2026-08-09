@@ -28,10 +28,13 @@ test = false
 
 [features]
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara/perf"]
-# End-to-end tests that require real networks and real audio hardware.
-# Gated off by default so `just test` never compiles `suite_e2e`. Real devices
-# run at arbitrary sample rates, so every e2e lane in .config/xtask.toml pairs
-# this with a fixed-ratio SRC backend (rubato / glide / apple fused).
+# End-to-end playback through a real cpal output device. Gated off by default so
+# `just test` never compiles `suite_e2e`. Real devices run at arbitrary sample
+# rates, so every e2e lane in `.config/xtask.toml` pairs this with a fixed-ratio
+# SRC backend (rubato / glide / apple fused); that axis is why there are three
+# lanes rather than one. Only a machine with a sound card can run them: the
+# Apple executor does, a container does not, so no container lane carries them.
+# The engine-lifecycle tests that need no device moved to `suite_light`.
 e2e = []
 # Regression tests for the player bugs QA filed against the zvooq-ios
 # integration. Some reproduce an open bug and are red on purpose; the rest
