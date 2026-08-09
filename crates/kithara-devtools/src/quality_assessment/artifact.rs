@@ -1,13 +1,13 @@
 use std::{
     collections::BTreeMap,
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
-use anyhow::{Context, Result};
-use serde::Serialize;
+use anyhow::{Context, Result, anyhow, bail};
+use serde::{Deserialize, Serialize};
 
-use super::model::{Assessment, ToolCoverage};
+use super::model::{AnalysisStatus, Assessment, ToolCoverage, Verdict};
 
 const MAX_RENDERED_FINDINGS: usize = 100;
 const MAX_ARCHITECTURE_HOTSPOTS: usize = 30;
@@ -16,15 +16,15 @@ pub(super) struct ArtifactSet {
     pub(super) document: PathBuf,
 }
 
-#[derive(Serialize)]
-struct Manifest<'a> {
-    revision: &'a str,
-    scope: &'a str,
-    status: &'static str,
-    verdict: &'static str,
+#[derive(Deserialize, Serialize)]
+struct Manifest {
+    revision: String,
+    scope: String,
+    status: AnalysisStatus,
+    verdict: Verdict,
     depth: super::AssessmentDepth,
     profile: super::AssessmentProfile,
-    files: BTreeMap<&'static str, &'static str>,
+    files: BTreeMap<String, String>,
     schema_version: u32,
 }
 
@@ -39,18 +39,18 @@ pub(super) fn write(assessment: &Assessment, root: &Path) -> Result<ArtifactSet>
         &output.join("manifest.json"),
         &Manifest {
             schema_version: assessment.schema_version,
-            revision: &assessment.revision,
-            status: assessment.status.as_str(),
+            revision: assessment.revision.clone(),
+            status: assessment.status,
             profile: assessment.profile,
             depth: assessment.depth,
-            scope: &assessment.scope.name,
-            verdict: assessment.verdict.as_str(),
+            scope: assessment.scope.name.clone(),
+            verdict: assessment.verdict,
             files: BTreeMap::from([
-                ("assessment", "assessment.json"),
-                ("document", "assessment.md"),
-                ("logs", "logs/"),
-                ("manifest", "manifest.json"),
-                ("stages", "stages/"),
+                ("assessment".to_owned(), "assessment.json".to_owned()),
+                ("document".to_owned(), "assessment.md".to_owned()),
+                ("logs".to_owned(), "logs/".to_owned()),
+                ("manifest".to_owned(), "manifest.json".to_owned()),
+                ("stages".to_owned(), "stages/".to_owned()),
             ]),
         },
     )?;
@@ -58,6 +58,56 @@ pub(super) fn write(assessment: &Assessment, root: &Path) -> Result<ArtifactSet>
     fs::write(&document, markdown(assessment, root))
         .with_context(|| format!("write assessment report: {}", document.display()))?;
     Ok(ArtifactSet { document })
+}
+
+pub(super) fn read(directory: &Path) -> Result<Assessment> {
+    if !directory.is_dir() {
+        bail!(
+            "quality assessment directory does not exist: {}",
+            directory.display()
+        );
+    }
+    let manifest_path = directory.join("manifest.json");
+    if !manifest_path.is_file() {
+        bail!(
+            "quality assessment manifest does not exist: {}",
+            manifest_path.display()
+        );
+    }
+    let manifest_text = fs::read_to_string(&manifest_path).with_context(|| {
+        format!(
+            "read quality assessment manifest: {}",
+            manifest_path.display()
+        )
+    })?;
+    let manifest: Manifest = serde_json::from_str(&manifest_text).with_context(|| {
+        format!(
+            "parse quality assessment manifest: {}",
+            manifest_path.display()
+        )
+    })?;
+    let assessment_file = manifest.files.get("assessment").ok_or_else(|| {
+        anyhow!(
+            "quality assessment manifest omits files.assessment: {}",
+            manifest_path.display()
+        )
+    })?;
+    let assessment_file = Path::new(assessment_file);
+    if assessment_file.as_os_str().is_empty()
+        || !assessment_file
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+    {
+        bail!(
+            "quality assessment manifest files.assessment must be a relative file path: {}",
+            manifest_path.display()
+        );
+    }
+    let assessment_path = directory.join(assessment_file);
+    let assessment_text = fs::read_to_string(&assessment_path)
+        .with_context(|| format!("read quality assessment: {}", assessment_path.display()))?;
+    serde_json::from_str(&assessment_text)
+        .with_context(|| format!("parse quality assessment: {}", assessment_path.display()))
 }
 
 fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
@@ -306,6 +356,6 @@ fn coverage_row(coverage: &ToolCoverage) -> String {
     )
 }
 
-fn escape(value: &str) -> String {
+pub(super) fn escape(value: &str) -> String {
     value.replace('|', "\\|").replace('\n', " ")
 }

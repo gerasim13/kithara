@@ -159,7 +159,7 @@ pub(super) struct StageEvidence {
     pub(super) hard_invariant: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub(super) struct Assessment {
     pub(super) status: AnalysisStatus,
     pub(super) depth: AssessmentDepth,

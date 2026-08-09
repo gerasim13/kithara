@@ -92,11 +92,8 @@ pub(super) fn collect(
         stage_findings + diagnostic_findings,
         evidence_gaps,
     );
-    let output_directory = ctx
-        .root
-        .join("target/quality-assessment")
-        .join(&revision.directory)
-        .join(format!("{}-{}", args.profile, args.depth));
+    let output_directory =
+        output_directory(&ctx.root, &revision.directory, args.profile, args.depth);
     Ok(Assessment {
         schema_version: SCHEMA_VERSION,
         revision: revision.directory,
@@ -840,6 +837,17 @@ pub(super) fn revision(root: &Path) -> Revision {
         directory: format!("{head}-dirty-{digest}"),
         digest: Some(digest),
     }
+}
+
+pub(super) fn output_directory(
+    root: &Path,
+    revision: &str,
+    profile: AssessmentProfile,
+    depth: AssessmentDepth,
+) -> PathBuf {
+    root.join("target/quality-assessment")
+        .join(revision)
+        .join(format!("{profile}-{depth}"))
 }
 
 fn head_revision(root: &Path) -> Option<String> {

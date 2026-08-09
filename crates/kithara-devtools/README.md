@@ -149,7 +149,7 @@ Crate patterns match Cargo package names. Module patterns match canonical
 packages may still run as runtime evidence producers; they do not enter
 semantic selection, Mermaid, `projection.json`, findings, or architecture
 counters. The complete diagnostic evidence remains in `graph.json`, while
-manifest schema v4 records the effective filters, excluded node/edge counts,
+manifest schema v5 records the effective filters, excluded node/edge counts,
 hierarchical pages, and machine-readable artifact paths.
 
 `[architecture.runtime]` can declare portable tests, binaries, or existing
@@ -200,9 +200,11 @@ change the stable index. Runtime traces and captured process logs are preserved 
 adjacent `traces/` and `logs/` directories. There is no diagram node cap. LOD 4
 writes an index plus linked documents below `contours/`, with manifest coverage
 proving that partitioning did not remove nodes. The manifest status is
-`complete`, `truncated`, `static-only`, `runtime-enriched`, or `incomplete`;
-`truncated` applies to evidence collection, not diagram size. An incomplete run
-returns an error after preserving partial artifacts.
+`complete`, `truncated`, `static-only`, `runtime-enriched`, or
+`runtime-degraded`; `truncated` applies to evidence collection, not diagram
+size. Optional overlay degradation preserves the static projection, emits a
+warning, and succeeds. Explicitly required semantic, scenario, or trace evidence
+that degrades returns an error after preserving the artifacts.
 
 `[perf]` configures the generic test-suite performance pipeline:
 

@@ -9,7 +9,7 @@ use super::manifest::Tool;
 
 const CHA_PLUGINS: &str = "data_clumps,feature_envy,inappropriate_intimacy,shotgun_surgery,\
                            divergent_change,speculative_generality,async_callback_leak";
-const CRAP_THRESHOLD: f64 = 30.0;
+pub(crate) const CRAP_THRESHOLD: f64 = 30.0;
 
 pub(super) struct AdapterOptions<'a> {
     pub(super) baseline: Option<&'a Path>,

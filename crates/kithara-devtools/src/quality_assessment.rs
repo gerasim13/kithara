@@ -2,7 +2,7 @@ use std::{fmt, io::Write as _, path::PathBuf};
 
 use anyhow::{Result, bail};
 use clap::{Args, ValueEnum};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
 
@@ -11,8 +11,12 @@ mod artifact;
 mod collect;
 mod model;
 mod orchestrator;
+mod summary;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, ValueEnum)]
+pub use summary::SummaryArgs;
+pub(crate) use summary::run as run_summary;
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum AssessmentProfile {
     #[default]
@@ -29,7 +33,7 @@ impl fmt::Display for AssessmentProfile {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, ValueEnum)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum AssessmentDepth {
     #[default]

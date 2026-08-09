@@ -87,7 +87,7 @@ source contour stays in `contours.json`. An endpoint hidden by LOD lifts to its 
 visible owner; equal visible endpoint/kind pairs aggregate while retaining the original
 method pairs, occurrence count, evidence origins, and style in `projection.json`, and
 relation kinds stay distinct. There is no diagram node budget: LOD 4 is partitioned by
-semantic contours into an index and linked pages, and manifest schema v4 records
+semantic contours into an index and linked pages, and manifest schema v5 records
 complete visible-node coverage plus hierarchical artifact paths. Optional and
 target-gated Cargo dependencies carry conditional evidence; unconditional normal
 dependencies stay resolved structural facts. The metrics profile in `metrics.json` is
@@ -103,7 +103,7 @@ symbols before semantic selection and matching contours plus incident edges from
 `DiagramModel`; it never alters raw `graph.json` evidence or disables an excluded
 package used as a runtime scenario. A module pattern matching any ancestor of a
 canonical `package::module` path excludes the descendant; relations never lift through
-an excluded endpoint. Manifest schema v4 records the effective patterns and excluded
+an excluded endpoint. Manifest schema v5 records the effective patterns and excluded
 counts. `--include-default-excluded` drops project defaults while keeping explicit CLI
 filters. An emptied projection is an error, not an empty diagram.
 
@@ -127,11 +127,13 @@ report derives from the visible `DiagramModel` and its contracted metrics graph;
 finding and relation points to a visible Mermaid contour.
 
 Artifact status is `complete`, `truncated`, `static-only`, `runtime-enriched`, or
-`incomplete`. Timeout, failed execution, malformed trace, or failed semantic resolution
-preserves partial artifacts and fails the command. Missing optional rust-analyzer
-yields static/runtime output unless `--semantic required` was requested. Truncation is
-explicit, applies only to evidence collection, and never removes nodes because of
-diagram size.
+`runtime-degraded`. Missing, timed-out, or failed semantic resolution yields the same
+static graph classification; diagnostics retain the cause. An empty, failed, or timed-out
+runtime observation is `runtime-degraded` and cannot invalidate the static projection.
+Optional degradation emits a warning and succeeds. Explicitly required semantic,
+scenario, or trace evidence that degrades returns an error after preserving the
+artifacts. Truncation is explicit, applies only to evidence collection, and never
+removes nodes because of diagram size.
 
 ## Quality assessment contract
 
