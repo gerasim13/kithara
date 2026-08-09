@@ -133,6 +133,31 @@ yields static/runtime output unless `--semantic required` was requested. Truncat
 explicit, applies only to evidence collection, and never removes nodes because of
 diagram size.
 
+## Health stage provisioning
+
+`health.rs` runs each stage's tool as pinned/installed by `.config/ci-pins.toml`
+`[cargo_tools]` and `xtask/src/ci/image.rs`; `ENV_SKIP_MARKERS` exists so a stage
+whose *provisioned* tool is transiently missing (a dev box mid-bootstrap) reads
+as SKIP instead of a false FAIL. Two stages needed a different answer:
+
+- `semver-checks` compares against `--baseline-rev origin/main`, not the
+  registry default. No workspace crate is published to crates.io — this is an
+  application, not a crate release train — so the registry lookup could only
+  ever fail. Comparing against `main` is a no-op there and a real check on a
+  branch that has drifted from it.
+- `lockbud-deadlock` is `.strict()`: lockbud has no entry in `[cargo_tools]`
+  and no install step in `image.rs`/`docker/ci.Dockerfile`, so the pinned CI
+  image never carries it — `no such command` there is not noise, it is the
+  honest state. `.config/just/tooling.just` installs it with a bare
+  `cargo install lockbud`, but lockbud is not on crates.io at all; it only
+  installs from its git repository, built against the specific nightly
+  toolchain it links `rustc_driver` against (currently not the toolchain this
+  repository pins). Wiring it into the image for real means picking a nightly
+  that satisfies both lockbud and the rest of the toolchain, or carrying a
+  second nightly in the image just for it — an infra decision, not a stage
+  tweak. Until that lands, `.strict()` keeps a missing lockbud reading as FAIL
+  rather than a harmless SKIP.
+
 ## Quality assessment contract
 
 `quality assess` is an artifact federation layer. Existing linters, architecture,
