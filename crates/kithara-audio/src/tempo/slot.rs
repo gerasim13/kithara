@@ -9,17 +9,11 @@ use crate::{
 /// source-frame advance, or `None` when this build has no such engine.
 #[must_use]
 pub fn bound_rate_supported(source_frames_per_output: f64) -> Option<bool> {
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "stretch-signalsmith"))]
     {
         super::bound::rate_supported(source_frames_per_output)
     }
-    #[cfg(not(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    )))]
+    #[cfg(not(all(not(target_arch = "wasm32"), feature = "stretch-signalsmith")))]
     {
         let _ = source_frames_per_output;
         None
@@ -29,17 +23,11 @@ pub fn bound_rate_supported(source_frames_per_output: f64) -> Option<bool> {
 /// Output frames in one exact-span planning request for the selected engine.
 #[must_use]
 pub fn bound_render_span_frames() -> Option<u64> {
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "stretch-signalsmith"))]
     {
         Some(super::bound::render_span_frames())
     }
-    #[cfg(not(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    )))]
+    #[cfg(not(all(not(target_arch = "wasm32"), feature = "stretch-signalsmith")))]
     {
         None
     }

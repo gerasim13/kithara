@@ -74,10 +74,5 @@ pub(crate) fn bound_slot(
     )?))
 }
 
-/// Signalsmith is the exact-span engine wherever it is compiled in; bungee
-/// serves the builds that carry only it.
-#[cfg(feature = "stretch-signalsmith")]
+/// Signalsmith provides the priming contract required by bound rendering.
 type Engine = kithara_stretch::SignalsmithElastic;
-
-#[cfg(all(not(feature = "stretch-signalsmith"), feature = "stretch-bungee"))]
-type Engine = kithara_stretch::BungeeElastic;

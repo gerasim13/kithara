@@ -110,7 +110,7 @@ fn renderer() -> BoundRenderer<SignalsmithElastic> {
     renderer_with(identity_schedule(), PcmPool::default())
 }
 
-fn engine_source_latency() -> usize {
+fn engine_retained_source_frames() -> u64 {
     let block = usize::try_from(BoundRenderer::<SignalsmithElastic>::BLOCK_FRAMES)
         .expect("invariant: the block fits usize");
     let config = ElasticConfig::try_from((
@@ -120,11 +120,15 @@ fn engine_source_latency() -> usize {
         block,
     ))
     .expect("invariant: the fixture shape is representable");
-    SignalsmithElastic::prepare(config)
+    let latency = SignalsmithElastic::prepare(config)
         .expect("invariant: the engine prepares")
         .capabilities()
-        .latency()
+        .latency();
+    latency
         .source_frames()
+        .checked_add(latency.output_frames())
+        .and_then(|frames| frames.to_u64())
+        .expect("invariant: the retained fixture window fits u64")
 }
 
 fn chunk(frame_offset: u64) -> PcmChunk {
@@ -266,6 +270,13 @@ fn two_decks_mid_block_at_different_offsets_apply_one_commit_at_the_same_output_
     let mut second = renderer_with_origin(second, second_origin, PcmPool::default());
     commit_tempo(&anchor, 300, 144.0);
 
+    assert!(
+        second
+            .process(chunk_with_frames(0, 100))
+            .expect("the second deck must retain its preceding source")
+            .is_none()
+    );
+
     let _ = first
         .process(chunk_with_frames(0, 554))
         .expect("the first split span must render");
@@ -330,9 +341,8 @@ fn unity_plan_renders_one_output_frame_per_source_frame() {
     assert_eq!(emitted, chunks * Consts::CHUNK_FRAMES);
 }
 
-/// The slot retains nothing behind what it has consumed. A plan that reaches
-/// back is a broken contract, and it is reported as one rather than clamped to
-/// the oldest frame still in hand.
+/// A plan that reaches behind the bounded retained tail is a broken contract,
+/// and it is reported as one rather than clamped to the oldest frame in hand.
 #[kithara::test]
 fn a_plan_behind_the_retained_source_is_typed() {
     let mut renderer = renderer();
@@ -368,13 +378,12 @@ fn held_source_frames_never_exceeds_the_source_taken() {
     assert!(renderer.held_source_frames() <= chunks * Consts::CHUNK_FRAMES);
 }
 
-/// The hold reaches the engine's declared source latency: content for those
-/// frames has not left the engine, so the frontier must stay behind them even
-/// though their output frames were already emitted.
+/// The declared hold is the source window actually retained for an in-flight
+/// re-prime: engine history plus one warmup span.
 #[kithara::test]
-fn held_source_frames_reaches_the_declared_latency() {
+fn held_source_frames_reports_the_retained_source_window() {
     let mut renderer = renderer();
-    let latency = u64::try_from(engine_source_latency()).expect("invariant: latency fits u64");
+    let retained = engine_retained_source_frames();
     let chunks = 16_u64;
 
     for index in 0..chunks {
@@ -383,7 +392,7 @@ fn held_source_frames_reaches_the_declared_latency() {
             .expect("identity schedule must render");
     }
 
-    assert_eq!(renderer.held_source_frames(), latency);
+    assert_eq!(renderer.held_source_frames(), retained);
 }
 
 /// A reset drops every pending frame and the plan cursor with it, so a seek

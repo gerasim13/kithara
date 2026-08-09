@@ -405,6 +405,21 @@ the playhead, while the transport owns when those frames play. The fractional
 remainder between blocks lives in the plan's `ElasticCursor`; there is no
 second residual.
 
+When a deck is matched in flight, `BoundRenderer` primes the exact-span engine
+from the source history and warmup span immediately before the first matched
+span. It retains a bounded source window behind the consumed position for this:
+the engine's declared source latency plus one warmup span. Source coordinates
+before track frame zero are silence; a nonnegative coordinate older than the
+retained window is a contract break. Priming discards the engine's declared
+warmup output, and the renderer's output frame count includes emitted frames
+only. A backend without `ElasticPriming` cannot render a bound deck; the slot
+reports `TempoSlotError::BoundEngineMissing` instead of using an unaligned path.
+
+A cold start cannot be phase-exact: no real source precedes frame zero, so the
+phase vocoder's initial latency frames carry its warmup gap even when primed
+with the silence that is actually there. This is the engine's documented limit,
+not a transport defect to compensate.
+
 `SourceSchedule` is the binding projected onto the deck's own output frames.
 `TrackBinding` (in `kithara-play`) stays the single owner of the session-beat to
 track-beat relation and publishes this projection downward: the analysed map and
@@ -453,17 +468,17 @@ involved, so a pause cannot move the split. A commit behind the frontier does
 not reinterpret emitted frames; the cursor carries phase forward at the new
 slope.
 
-The slot is forward-only and retains nothing behind what it has consumed. A plan
-that reaches behind the retained source is a broken contract and is reported as
-`BoundError::BehindWindow`: never clamped to the oldest frame still in hand, and
-never turned into a re-seek.
+The slot is forward-only and retains only its fixed re-prime window behind what
+it has consumed. A plan that reaches behind that retained source is a broken
+contract and is reported as `BoundError::BehindWindow`: never clamped to the
+oldest frame still in hand, and never turned into a re-seek.
 
 An exact-span engine returns the whole output span immediately and carries its
 algorithmic latency as **content** delay, not as a frame-count deficit. A bound
-slot at unity therefore emits one output frame per source frame while
-`held_source_frames` still reports the engine's declared source latency: those
-frames were consumed but their content has not left the engine, so the decode
-frontier must stay behind them.
+slot at unity therefore emits one output frame per source frame.
+`held_source_frames` reports the source actually buffered by the renderer — its
+retained re-prime tail plus any admitted source not yet rendered — so the decode
+frontier and the real retained window cannot drift apart.
 
 Without a compiled exact-span engine the unbound slot degrades to unity, which
 is a lesser answer but not a wrong one. A bound deck has no such fallback —

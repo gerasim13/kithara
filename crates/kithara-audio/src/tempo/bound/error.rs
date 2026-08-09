@@ -18,9 +18,8 @@ pub(crate) enum BoundError {
     /// A frame count or product left the representable range.
     #[error("bound block size is not representable")]
     BlockOverflow,
-    /// The plan asked for source the slot has already consumed. The slot is
-    /// forward-only and retains nothing, so this is a contract break, never a
-    /// condition to clamp or re-seek around.
+    /// The plan asked for source older than the slot's bounded retained window.
+    /// This is a contract break, never a condition to clamp or re-seek around.
     #[error("bound plan needs source frame {requested} behind the retained start {available}")]
     BehindWindow { requested: i64, available: u64 },
 }

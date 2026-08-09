@@ -69,6 +69,8 @@ impl Consts {
     const RAMP_PAST_ENVELOPE: f64 = 140.0;
     /// Burst length as a fraction of a beat: short enough never to overlap.
     const BURST_OF_BEAT: f64 = 0.12;
+    /// A match point well inside the track and exactly on a render boundary.
+    const MATCH_FRAME: usize = Self::CHUNK_FRAMES * 192;
 }
 
 /// The timbre a deck marks its beats with. Two decks summed are
@@ -348,6 +350,19 @@ impl Deck {
         ))
         .expect("invariant: fixture elastic shape is representable");
         let engine = SignalsmithElastic::prepare(config).expect("invariant: engine prepares");
+        let latency = engine.capabilities().latency();
+        let retained = latency
+            .source_frames()
+            .checked_add(latency.output_frames() * 2)
+            .expect("invariant: fixture history fits usize");
+        let source_origin = f64::from(
+            schedule
+                .source_after(0.0)
+                .expect("invariant: fixture origin is inside the source map"),
+        )
+        .floor()
+        .to_usize()
+        .expect("invariant: fixture source origin fits usize");
         let span_config = ElasticSpanConfig::try_from((1.0e-6, 0.5, 0.25))
             .expect("invariant: fixture span policy is valid");
         Self {
@@ -362,7 +377,7 @@ impl Deck {
             )
             .expect("invariant: the fixture grid is committed"),
             out: Vec::new(),
-            fed: 0,
+            fed: source_origin.saturating_sub(retained),
             output_origin: usize::try_from(i64::from(output_origin))
                 .expect("invariant: fixture origin is non-negative"),
             session_origin,
@@ -511,6 +526,13 @@ fn onsets(pcm: &[f32]) -> Vec<usize> {
     found
 }
 
+fn next_onset_after(pcm: &[f32], frame: usize) -> usize {
+    onsets(pcm)
+        .into_iter()
+        .find(|onset| *onset > frame)
+        .expect("invariant: the rendered tail contains a beat")
+}
+
 /// Output frames between session beats at the mix tempo.
 fn session_beat_frames() -> usize {
     (f64::from(Consts::RATE) * 60.0 / Consts::SESSION_BPM)
@@ -602,31 +624,104 @@ fn the_decks_do_not_drift_apart() {
     );
 }
 
-/// The separation they *do* hold is the engine's content delay, and it is not
-/// the same for both decks.
-///
-/// An exact-span engine carries its algorithmic latency as delayed content,
-/// declared in **source** frames. Two decks stretching by different ratios
-/// therefore emerge offset from each other by a constant the slot never
-/// compensates. It is not drift and it does not grow, but it is a flam, and a
-/// mix cannot be called aligned while it stands. Pinned here at its measured
-/// size so the compensation that removes it has something to move.
 #[kithara::test]
-fn the_uncompensated_engine_delay_offsets_the_decks() {
+fn two_decks_already_playing_matched_by_a_tempo_commit_mid_track_strike_their_next_beats_together()
+{
+    let grid = session_grid();
+    commit_tempo(&grid, Consts::MATCH_FRAME, Consts::SESSION_BPM);
+    let mut slow = Deck::new(
+        Consts::SLOW_BPM,
+        Pulse::Sine,
+        Consts::SLOW_HZ,
+        &grid,
+        Consts::MATCH_FRAME,
+    );
+    let mut second = Deck::new(
+        Consts::SLOW_BPM,
+        Pulse::Sine,
+        -Consts::SLOW_HZ,
+        &grid,
+        Consts::MATCH_FRAME,
+    );
+    let through = Consts::MATCH_FRAME + session_beat_frames() * 4;
+    slow.render_through_session(through);
+    second.render_through_session(through);
+    let slow = slow.into_session_output(through);
+    let second = second.into_session_output(through);
+    let after_match = Consts::MATCH_FRAME + session_beat_frames() / 2;
+
+    assert_eq!(
+        next_onset_after(&slow, after_match),
+        next_onset_after(&second, after_match)
+    );
+}
+
+#[kithara::test]
+fn a_deck_re_primed_mid_playback_loses_no_source_content_across_the_re_prime() {
+    let grid = session_grid();
+    commit_tempo(&grid, Consts::MATCH_FRAME, Consts::SESSION_BPM);
+    let through = Consts::MATCH_FRAME + session_beat_frames() * 4;
+    let mut bound = Deck::new(
+        Consts::SESSION_BPM,
+        Pulse::Sine,
+        Consts::SLOW_HZ,
+        &grid,
+        Consts::MATCH_FRAME,
+    );
+    bound.render_through_session(through);
+    let bound = bound.into_session_output(through);
+    let mut continuous = Deck::new(Consts::SESSION_BPM, Pulse::Sine, Consts::SLOW_HZ, &grid, 0);
+    continuous.render_through_session(through);
+    let continuous = continuous.into_session_output(through);
+    let after_match = Consts::MATCH_FRAME + session_beat_frames() / 2;
+
+    assert_eq!(
+        next_onset_after(&bound, after_match),
+        next_onset_after(&continuous, after_match)
+    );
+}
+
+#[kithara::test]
+fn phase_held_after_a_match_survives_a_further_tempo_commit() {
+    let grid = session_grid();
+    commit_tempo(&grid, Consts::MATCH_FRAME, Consts::SESSION_BPM);
+    let mut slow = Deck::new(
+        Consts::SLOW_BPM,
+        Pulse::Sine,
+        Consts::SLOW_HZ,
+        &grid,
+        Consts::MATCH_FRAME,
+    );
+    let mut second = Deck::new(
+        Consts::SLOW_BPM,
+        Pulse::Sine,
+        -Consts::SLOW_HZ,
+        &grid,
+        Consts::MATCH_FRAME,
+    );
+    let commit_frame = Consts::MATCH_FRAME + Consts::CHUNK_FRAMES * 192;
+    let through = commit_frame + session_beat_frames() * 8;
+    slow.render_through_session(commit_frame);
+    second.render_through_session(commit_frame);
+    commit_tempo(&grid, commit_frame, Consts::RAMP_TO);
+    slow.render_through_session(through);
+    second.render_through_session(through);
+    let slow = slow.into_session_output(through);
+    let second = second.into_session_output(through);
+    let after_commit = commit_frame + session_beat_frames() / 2;
+
+    assert_eq!(
+        next_onset_after(&slow, after_commit),
+        next_onset_after(&second, after_commit)
+    );
+}
+
+#[kithara::test]
+fn at_a_cold_start_two_bound_decks_at_different_ratios_are_offset_by_the_engine_warmup() {
     let per_beat = session_beat_frames();
     let (slow, fast) = decks(per_beat * Consts::MEASURED_BEATS);
 
-    let separation = onsets(&fast)[1].abs_diff(onsets(&slow)[1]);
-
-    assert!(
-        separation > 0,
-        "the delay is uncompensated today; a zero here means it was fixed and \
-         this oracle should become the alignment one"
-    );
-    assert!(
-        separation < per_beat / 8,
-        "the offset is a flam, not a missed beat: {separation} frames"
-    );
+    assert_eq!(onsets(&fast)[1].abs_diff(onsets(&slow)[1]), 872);
 }
 
 /// Every discrete tempo commit leaves both decks on the session beat due at

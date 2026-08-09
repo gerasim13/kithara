@@ -18,10 +18,7 @@
 
 /// The bound form needs a compiled exact-span engine, which no wasm target
 /// carries.
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "stretch-signalsmith"))]
 pub mod bound;
 mod slot;
 pub mod streaming;
