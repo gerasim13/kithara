@@ -386,14 +386,15 @@ the admitted audio.
 
 ## Tempo slot state
 
-Each resource installs one resident duration-changing stage. `TempoSlot` is the
-shared control handle for its exclusive `Free -> Converging -> Bound`
-transition, so binding never replaces the chain, resource, or decoder.
+Each resource installs one resident duration-changing renderer with one elastic
+engine. `TempoSlot` is the shared control handle for its exclusive
+`Free -> Converging -> Bound` transition, so binding changes the renderer's
+schedule and never replaces the engine, chain, resource, or decoder.
 
 `Free` follows live speed, key-lock and region-plan controls through
-`TimeStretchProcessor`; the output span is whatever the streaming backend
-renders. `Converging` owns an admitted grid target until the exact renderer has
-primed from retained real source and emitted it. `Bound` follows that target:
+the resident engine's streaming interface; the output span is whatever that
+mode renders. `Converging` owns an admitted grid target until the same renderer
+has emitted exact-span output. `Bound` follows that target:
 **the producer chooses the output span and the plan
 determines the source span.** Per block `BoundRenderer` asks `SourceSchedule`
 which source coordinate is due at the block's first and last output frame,
@@ -405,20 +406,19 @@ the playhead, while the transport owns when those frames play. The fractional
 remainder between blocks lives in the plan's `ElasticCursor`; there is no
 second residual.
 
-When a deck is matched in flight, the resident `BoundRenderer` primes the exact-span engine
-from the source history and warmup span immediately before the first matched
-span. It retains a bounded source window behind the consumed position for this:
-the engine's declared source latency plus one warmup span. Source coordinates
-before track frame zero are silence; a nonnegative coordinate older than the
-retained window is a contract break. Priming discards the engine's declared
-warmup output, and the renderer's output frame count includes emitted frames
-only. A backend without `ElasticPriming` cannot render a bound deck; the slot
+When a deck is matched in flight, the resident renderer keeps the engine that
+has already been consuming that deck and changes only the schedule used for the
+next source span. No second renderer retains a shadow copy of free-deck chunks,
+and binding does not reset or re-prime the engine. A seek resets that one engine
+once and the next span runs directly; priming scratch used by exact-renderer
+fixtures is allocated when the fixture renderer is built, never in `prime`.
+A backend without the exact-span contract cannot render a bound deck; the slot
 reports `TempoSlotError::BoundEngineMissing` instead of using an unaligned path.
 
-A cold start cannot be phase-exact: no real source precedes frame zero, so the
-phase vocoder's initial latency frames carry its warmup gap even when primed
-with the silence that is actually there. This is the engine's documented limit,
-not a transport defect to compensate.
+A cold start or post-seek restart cannot be phase-exact: no live engine history
+precedes the first new span, so the phase vocoder's initial latency frames carry
+its warmup gap. This is the engine's documented limit, not a transport defect
+to compensate.
 
 `SourceSchedule` is the binding projected onto the deck's own output frames.
 `TrackBinding` (in `kithara-play`) stays the single owner of the session-beat to
@@ -468,17 +468,18 @@ involved, so a pause cannot move the split. A commit behind the frontier does
 not reinterpret emitted frames; the cursor carries phase forward at the new
 slope.
 
-The slot is forward-only and retains only its fixed re-prime window behind what
-it has consumed. A plan that reaches behind that retained source is a broken
-contract and is reported as `BoundError::BehindWindow`: never clamped to the
-oldest frame still in hand, and never turned into a re-seek.
+The slot is forward-only. The resident path drains consumed source because its
+single engine already owns the required history. A plan that reaches behind the
+pending source is a broken contract and is reported as
+`BoundError::BehindWindow`: never clamped to the oldest frame still in hand,
+and never turned into a re-seek.
 
 An exact-span engine returns the whole output span immediately and carries its
 algorithmic latency as **content** delay, not as a frame-count deficit. A bound
 slot at unity therefore emits one output frame per source frame.
-`held_source_frames` reports the source actually buffered by the renderer — its
-retained re-prime tail plus any admitted source not yet rendered — so the decode
-frontier and the real retained window cannot drift apart.
+`held_source_frames` reports only source actually buffered by the active timing
+mode, so the decode frontier and the renderer's pending source cannot drift
+apart.
 
 Without a compiled exact-span engine the unbound slot degrades to unity, which
 is a lesser answer but not a wrong one. A bound deck has no such fallback —
@@ -487,8 +488,9 @@ with `TempoSlotError::BoundEngineMissing`, surfacing as `PlayError::BindUnavaila
 
 ## Time-stretch (speed and key-lock)
 
-Playback speed lives in the source-domain `TimeStretchProcessor`; the resampler
-plan is strictly fixed-ratio (source rate → host rate) and never carries speed.
+Playback speed lives in the source-domain resident tempo renderer (or
+`TimeStretchProcessor` on a streaming-only build); the resampler plan is
+strictly fixed-ratio (source rate -> host rate) and never carries speed.
 `StretchControls` is the single source of truth, shared (`Arc`) between the
 consumer/UI and the slot, and read **every chunk** — speed, key-lock, backend,
 and region plan all apply live, mid-track, with no reload:

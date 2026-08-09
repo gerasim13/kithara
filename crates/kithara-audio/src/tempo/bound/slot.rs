@@ -7,7 +7,7 @@ use super::{BoundError, BoundRenderer};
 #[cfg(test)]
 use crate::musical::{SessionBeat, SourceSchedule};
 use crate::{
-    tempo::{TempoSlot, slot::TempoBinding, streaming::TimeStretchProcessor},
+    tempo::{TempoSlot, slot::TempoBinding},
     traits::AudioEffect,
 };
 
@@ -99,22 +99,20 @@ pub(crate) fn resident_slot(
         Consts::MAX_PHASE_ERROR,
         Consts::MAX_CORRECTION_PER_BLOCK,
     ))?;
-    Ok(Box::new(TempoStage {
-        streaming: TimeStretchProcessor::new(Arc::clone(slot.controls()), spec, pool.clone()),
-        bound: BoundRenderer::resident(engine, span_config, spec, pool),
+    Ok(Box::new(TempoRenderer {
+        renderer: BoundRenderer::resident(engine, span_config, spec, pool),
         active: None,
         slot,
     }))
 }
 
-struct TempoStage {
+struct TempoRenderer {
     slot: TempoSlot,
-    streaming: TimeStretchProcessor,
-    bound: BoundRenderer<Engine>,
+    renderer: BoundRenderer<Engine>,
     active: Option<Arc<TempoBinding>>,
 }
 
-impl TempoStage {
+impl TempoRenderer {
     fn sync_binding(&mut self) -> Result<bool, BoundError> {
         let target = self.slot.binding();
         let unchanged = self
@@ -127,31 +125,30 @@ impl TempoStage {
         }
         let Some(binding) = target else {
             if self.active.take().is_some() {
-                self.bound.deactivate();
-                self.streaming.reset();
+                self.renderer.deactivate();
             }
             return Ok(false);
         };
-        self.bound.bind(Arc::clone(&binding))?;
+        self.renderer.bind_resident(Arc::clone(&binding))?;
         self.active = Some(binding);
         Ok(true)
     }
 }
 
-impl AudioEffect for TempoStage {
+impl AudioEffect for TempoRenderer {
     fn flush(&mut self) -> Option<PcmChunk> {
         if self.active.is_some() {
-            self.bound.flush()
+            self.renderer.flush()
         } else {
-            self.streaming.flush()
+            self.renderer.flush_streaming()
         }
     }
 
     fn held_source_frames(&self) -> u64 {
         if self.active.is_some() {
-            self.bound.held_source_frames()
+            self.renderer.held_source_frames()
         } else {
-            self.streaming.held_source_frames()
+            self.renderer.held_streaming_source_frames()
         }
     }
 
@@ -160,10 +157,9 @@ impl AudioEffect for TempoStage {
             .sync_binding()
             .map_err(|error| kithara_decode::DecodeError::pcm_stream("tempo binding", error))?;
         if !bound {
-            self.bound.retain(&chunk);
-            return self.streaming.process(chunk);
+            return self.renderer.process_streaming(chunk, self.slot.controls());
         }
-        let rendered = self.bound.process(chunk)?;
+        let rendered = self.renderer.process(chunk)?;
         if rendered.is_some()
             && let Some(binding) = &self.active
         {
@@ -173,8 +169,7 @@ impl AudioEffect for TempoStage {
     }
 
     fn reset(&mut self) {
-        self.streaming.reset();
-        self.bound.reset();
+        self.renderer.reset();
         self.active = None;
     }
 }
