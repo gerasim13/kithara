@@ -551,6 +551,11 @@ and refreshes row count, row height, and viewport extent without notifying the d
 `HeroWaveComponent` owns modifier and loop state while reusing `Scalar` for the plain drag. A narrow
 `Component` trait gives the router only path, kind, event handling, cursor, capture-slot state, and
 whether the component accepts keyboard focus.
+For a retained TrackList, `Reads` owns rows, selection, column visibility, and declared widths. The
+engine is the only writer of scroll offsets, the pressed row, and divider drag state; paint receives
+a read-only projection of that state. The retained leaf owns one derived picture snapshot containing
+the resolved rows and columns, and refresh replaces that snapshot whole so sibling column reads
+cannot disagree with the row read.
 The dispatch exists because activation, segmented and picker selection, and the Hero Wave have
 emissions or state a scalar alone cannot express, not because controls happened to have different
 names. `Kind` belongs to the retained identity, so reconciling a different component shape at the

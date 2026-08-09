@@ -14,16 +14,29 @@ pub(in crate::engine) struct ScalarComponent {
     kind: Kind,
     scalar: Scalar,
     drag_step: Option<f64>,
+    current: Option<f32>,
     state: ScalarState,
 }
 
 impl ScalarComponent {
-    pub(super) fn new(path: String, kind: Kind, scalar: Scalar, drag_step: Option<f64>) -> Self {
+    #[cfg(feature = "masonry-host")]
+    pub(super) const fn current(&self) -> Option<f32> {
+        self.current
+    }
+
+    pub(super) fn new(
+        path: String,
+        kind: Kind,
+        scalar: Scalar,
+        drag_step: Option<f64>,
+        current: Option<f32>,
+    ) -> Self {
         Self {
             path,
             kind,
             scalar,
             drag_step,
+            current,
             state: ScalarState::default(),
         }
     }
@@ -35,6 +48,9 @@ impl ScalarComponent {
         self.path = next.path;
         self.scalar = next.scalar;
         self.drag_step = next.drag_step;
+        if !self.state.captures_pointer() {
+            self.current = next.current;
+        }
         self
     }
 }
@@ -56,6 +72,11 @@ impl Component for ScalarComponent {
         now: Instant,
     ) -> (Outcome<EngineEvent>, Option<&'static str>) {
         let outcome = self.scalar.on_input(&mut self.state, input, hit, now);
+        if self.current.is_some()
+            && let Some(value) = outcome.value()
+        {
+            self.current = Some(value);
+        }
         (
             outcome.map(|value| EngineEvent::Scalar(scalar_value(input, value, self.drag_step))),
             None,

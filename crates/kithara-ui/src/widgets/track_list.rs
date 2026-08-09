@@ -23,6 +23,7 @@ pub(crate) struct ColumnDividerLayout {
     pub(crate) value: f32,
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TrackListRowData {
     pub(crate) artist: Option<String>,
     pub(crate) bpm: Option<String>,

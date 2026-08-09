@@ -37,14 +37,47 @@ use crate::{
     interact::{Hit, Input, Key as NeutralKey, Outcome, PointerOwnership, PointerPhase, Scroll},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
-        ControlAction, ReadValue, Reads, Skin, StereoLevels, UiEvent, WindowCommand, WindowEdge,
-        WindowLayerProgram, document, picker_hits,
+        ControlAction, ReadValue, Reads, Skin, StereoLevels, TrackRow, UiEvent, WindowCommand,
+        WindowEdge, WindowLayerProgram, document, picker_hits,
     },
     source::{MemResolver, UiConfig},
     text::{FontPolicy, TextContext},
 };
 
 struct FixtureReads;
+
+static LATE_TRACK_ROWS: [TrackRow<'static>; 8] = [TrackRow {
+    title: "Late Arrival",
+    artist: Some("New Artist"),
+    bpm: Some("128"),
+    deck: None,
+    energy: Some(7),
+    key: Some("Am"),
+    search: None,
+    time: Some("03:24"),
+    transition: None,
+    selected: false,
+}; 8];
+
+struct LateTrackReads {
+    loaded: Cell<bool>,
+}
+
+impl Reads for LateTrackReads {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        let id = endpoint.split_once('@').map_or(endpoint, |(id, _scope)| id);
+        if id == "library.visible_tracks" {
+            let rows = if self.loaded.get() {
+                &LATE_TRACK_ROWS[..]
+            } else {
+                &[]
+            };
+            Some(ReadValue::TrackList(rows))
+        } else {
+            FixtureReads.get(endpoint)
+        }
+    }
+}
 
 impl Reads for FixtureReads {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
@@ -1609,7 +1642,7 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     ("Vis", Paints::NotYet, r#"Vis(id: "control")"#),
     (
         "TrackList",
-        Paints::NotYet,
+        Paints::Yes,
         r#"TrackList(id: "control", read: Model(id: "library.visible_tracks"), columns: Some([Title]))"#,
     ),
     ("Tree", Paints::NotYet, r#"Tree(id: "control")"#),
@@ -1779,6 +1812,85 @@ fn masonry_draws_every_control_the_census_claims_it_draws() {
         "the census is stale — move a row when its painter lands, and never leave the census \
          describing a host it no longer matches"
     );
+}
+
+#[kithara::test]
+fn a_mounted_track_list_draws_rows_that_arrive_during_refresh() {
+    let registry = fixture_registry();
+    let ui = fixture_ui(
+        "late-track-list",
+        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            TrackList(
+                id: "tracks",
+                read: Model(id: "library.visible_tracks"),
+                columns: Some([Title]),
+            ),
+        ])"#,
+        &registry,
+    );
+    let reads = LateTrackReads {
+        loaded: Cell::new(false),
+    };
+    let output = document::render(
+        &ui.root,
+        &ui,
+        &reads,
+        builtin::skin_doc(),
+        MasonryHost::new(&ui, &reads, builtin::skin()),
+    );
+    let mut root = masonry_root(output, 240, 160);
+    let (before, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("empty TrackList must draw its frame: {error}"));
+    let before_glyphs = before.encoding().resources.glyphs.len();
+    reads.loaded.set(true);
+    root.refresh(&ui, &reads);
+    let (after, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("refreshed TrackList must draw its rows: {error}"));
+
+    assert!(after.encoding().resources.glyphs.len() > before_glyphs);
+}
+
+#[kithara::test]
+fn a_mounted_track_list_repaints_the_row_under_the_pointer() {
+    let registry = fixture_registry();
+    let ui = fixture_ui(
+        "hovered-track-list",
+        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            TrackList(
+                id: "tracks",
+                read: Model(id: "library.visible_tracks"),
+                columns: Some([Title]),
+            ),
+        ])"#,
+        &registry,
+    );
+    let reads = LateTrackReads {
+        loaded: Cell::new(true),
+    };
+    let output = document::render(
+        &ui.root,
+        &ui,
+        &reads,
+        builtin::skin_doc(),
+        MasonryHost::new(&ui, &reads, builtin::skin()),
+    );
+    let mut root = masonry_root(output, 240, 160);
+    let (idle, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("idle TrackList must draw: {error}"));
+    let idle_draw_data = idle.encoding().draw_data.clone();
+    let skin = builtin::skin();
+    let row_y =
+        skin.track_list.header_height + skin.track_list.grid_gap + skin.track_list.row_height / 2.0;
+    root.handle_pointer_event(pointer_hover(20.0, row_y.into()))
+        .unwrap_or_else(|error| panic!("TrackList hover must route: {error}"));
+    let (hovered, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("hovered TrackList must repaint: {error}"));
+
+    assert_ne!(hovered.encoding().draw_data, idle_draw_data);
 }
 
 /// The one census row that claims a control has no picture at all.

@@ -18,7 +18,7 @@ use crate::{
     interact::{Input, PointerPhase, ScrollAxis, iced as iced_interact},
     module::ChromeStyle,
     render::{
-        Reads, Skin, UiEvent,
+        Reads, Resolving, Skin, UiEvent,
         controls::sync_tree_scroll,
         engine as engine_event, hosted_picker_overlay, picker_hits, sync_picker, sync_text_input,
         sync_track_list_scroll, toggle_module,
@@ -653,10 +653,9 @@ impl HostedLayout {
                     spec,
                     read.as_ref()
                         .and_then(|binding| resolve(reads, binding, ui)),
+                    read.as_ref(),
                     read_scope(read.as_ref(), ui),
-                    reads,
-                    ui,
-                    skin,
+                    Resolving { reads, skin, ui },
                 );
                 if effective_size(node, skin).is_none() {
                     Self::SelfMeasuredControl(control)

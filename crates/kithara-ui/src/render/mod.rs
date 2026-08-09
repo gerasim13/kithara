@@ -28,9 +28,9 @@ pub(crate) use event::{
     activate, command, control_event, drag, engine, index, scalar, scalar_child, step,
     toggle_module, window,
 };
-pub(crate) use hosted::HostedControlPlan;
 #[cfg(feature = "masonry-host")]
 pub(crate) use hosted::hosted_control_plan;
+pub(crate) use hosted::{HostedControlPlan, Resolving};
 pub use icons::Icon;
 pub(crate) use icons::{Mark, document_icon};
 pub(crate) use layer::{

@@ -32,15 +32,17 @@ use crate::{
         masonry::{portable_modifiers, portable_text_input},
     },
     layout::FrameSides,
-    render::{HostedControlPlan, ReadValue, UiEvent},
+    render::{HostedControlPlan, ReadValue, Reads, UiEvent},
     solve,
 };
 
 type PopoverRegistration = (WidgetId, Rc<PopoverState>, Rc<dyn Fn() -> HostAction>);
 type WindowTracker = (Rc<Cell<Option<Pt>>>, Option<WidgetId>, bool);
-/// One mounted leaf and the endpoint it shows, so the value can be re-read into
-/// it without the tree being rebuilt around it.
-pub(crate) type Watched = (WidgetId, Binding);
+/// One mounted leaf and the model source it re-reads without rebuilding.
+pub(crate) enum Watched {
+    Read { id: WidgetId, binding: Binding },
+    Snapshot { id: WidgetId },
+}
 pub(super) type LayerParts = (
     NewWidget<Node>,
     solve::Size<solve::Length>,
@@ -206,6 +208,10 @@ impl Node {
         self.layout.leaf().is_some_and(|leaf| leaf.set_read(value))
     }
 
+    pub(crate) fn refresh(&mut self, reads: &dyn Reads) -> bool {
+        self.layout.leaf().is_some_and(|leaf| leaf.refresh(reads))
+    }
+
     fn engine_input(
         &mut self,
         ctx: &mut EventCtx<'_>,
@@ -218,7 +224,11 @@ impl Node {
         };
         let retained = self.pointer_owner == Some(NodePointerOwner::Engine);
         let routed = engine.route(input, point);
+        let repaint = routed.repaint;
         let (outcome, focused) = (routed.outcome, routed.focused);
+        if repaint {
+            ctx.request_paint_only();
+        }
         if matches!(event, PointerEvent::Down(_)) {
             if focused {
                 ctx.request_focus();
@@ -869,7 +879,16 @@ impl<Action> MasonryNode<Action> {
     /// Remembers that this node's leaf shows one endpoint, so its value can be
     /// re-read into the mounted tree instead of rebuilding the tree to show it.
     pub(crate) fn watch(&mut self, binding: &Binding) {
-        self.watched.push((self.widget.id(), binding.clone()));
+        self.watched.push(Watched::Read {
+            id: self.widget.id(),
+            binding: binding.clone(),
+        });
+    }
+
+    pub(crate) fn watch_snapshot(&mut self) {
+        self.watched.push(Watched::Snapshot {
+            id: self.widget.id(),
+        });
     }
 
     pub(crate) fn host_engine(&mut self, map_event: Rc<dyn Fn(UiEvent) -> HostAction>) {

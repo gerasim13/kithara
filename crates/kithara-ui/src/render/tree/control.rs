@@ -16,7 +16,7 @@ use crate::{
     ids::InternId,
     interact::{Hit, iced as iced_interact},
     mount,
-    render::{HostedControlPlan, InputOwner, ReadValue, Reads, Skin},
+    render::{HostedControlPlan, InputOwner, ReadValue, Reads, Resolving, Skin},
 };
 
 pub(super) fn render_control<'a>(
@@ -62,21 +62,20 @@ impl HostedControl {
         path: &str,
         spec: &ControlSpec,
         value: Option<ReadValue<'_>>,
+        read: Option<&Binding>,
         scope: &str,
-        reads: &dyn Reads,
-        ui: &CompiledUi,
-        skin: &Skin,
+        cx: Resolving<'_>,
     ) -> Option<Self> {
-        HostedControlPlan::resolved(path, spec, value, scope, reads, ui, skin)
-            .map(|plan| Self::mounted(plan, skin))
+        HostedControlPlan::resolved(path, spec, value, read, scope, cx)
+            .map(|plan| Self::mounted(plan, cx.skin))
     }
 
     pub(super) fn mounted(plan: HostedControlPlan, skin: &Skin) -> Self {
         let track_list = match &plan {
             HostedControlPlan::TrackList(plan) => Some(Box::new(TrackListHost::new(
                 &plan.path,
-                plan.columns.clone(),
-                plan.row_count,
+                plan.columns(),
+                plan.row_count(),
                 skin,
             ))),
             _ => None,

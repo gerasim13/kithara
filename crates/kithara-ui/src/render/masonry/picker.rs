@@ -1,6 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
-    rc::Rc,
+    rc::{Rc, Weak},
 };
 
 use masonry::{
@@ -11,10 +11,14 @@ use num_traits::cast::AsPrimitive;
 
 use super::{custom::HostAction, node::pointer_button};
 use crate::{
+    atoms::track_list::face::Drawn,
     draw::{Pt, Rect},
     engine::{Engine, Target},
     interact::{CursorShape, Input, MOUSE, Outcome, PointerInput, PointerPhase},
-    render::{HostedControlPlan, UiEvent, engine_value},
+    render::{
+        HostedControlPlan, UiEvent, engine_value,
+        hosted::{TrackListPlan, TrackListProjection},
+    },
 };
 
 /// One control an engine drives: what it is and where it sits.
@@ -27,15 +31,18 @@ pub(crate) struct EngineTarget {
 pub(super) struct Routed {
     pub(super) focused: bool,
     pub(super) outcome: Outcome<HostAction>,
+    pub(super) repaint: bool,
 }
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct HostedEngine {
-    engine: RefCell<Engine>,
+    engine: Rc<RefCell<Engine>>,
     map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
     #[field(get(copy), vis = "pub(super)")]
     owner: WidgetId,
+    pointer: Rc<Cell<Option<Pt>>>,
+    _projections: Vec<Rc<dyn TrackListProjection>>,
     targets: Vec<EngineTarget>,
     #[field(get(copy), vis = "pub(super)", rename = "accepts_text_input")]
     text_input: bool,
@@ -52,17 +59,43 @@ impl HostedEngine {
             .any(|target| matches!(target.plan, HostedControlPlan::Tree { .. }));
         let mut engine = Engine::default();
         engine.reconcile(targets.iter().flat_map(|target| target.plan.descriptors()));
-        Rc::new(Self {
-            engine: RefCell::new(engine),
-            map_event,
-            owner,
-            targets,
-            text_input,
+        let engine = Rc::new(RefCell::new(engine));
+        let pointer = Rc::new(Cell::new(None));
+        Rc::new_cyclic(|host| {
+            let projections = targets
+                .iter()
+                .filter_map(|target| {
+                    let HostedControlPlan::TrackList(plan) = &target.plan else {
+                        return None;
+                    };
+                    let projection: Rc<dyn TrackListProjection> = Rc::new(EngineProjection {
+                        area: Rc::clone(&target.area),
+                        engine: Rc::clone(&engine),
+                        host: host.clone(),
+                        pointer: Rc::clone(&pointer),
+                    });
+                    plan.bind_projection(Rc::downgrade(&projection));
+                    Some(projection)
+                })
+                .collect();
+            Self {
+                engine: Rc::clone(&engine),
+                map_event,
+                owner,
+                pointer: Rc::clone(&pointer),
+                _projections: projections,
+                targets,
+                text_input,
+            }
         })
     }
 
     pub(super) fn route(&self, input: Input<'_>, point: Option<Pt>) -> Routed {
         let mut engine = self.engine.borrow_mut();
+        let before = self.track_list_views(&engine, self.pointer.get());
+        if matches!(input, Input::Pointer(_) | Input::Wheel(_)) {
+            self.pointer.set(point);
+        }
         let targets = self.targets(&engine, point);
         let descriptors = self
             .targets
@@ -75,10 +108,12 @@ impl HostedEngine {
         }
         let emission = engine.handle(input, &targets, kithara_platform::time::Instant::now());
         let focused = engine.focused_path().is_some();
+        let repaint = before != self.track_list_views(&engine, self.pointer.get());
         let Some(emission) = emission else {
             return Routed {
                 focused,
                 outcome: Outcome::IGNORED,
+                repaint,
             };
         };
         let path = emission.path;
@@ -86,7 +121,11 @@ impl HostedEngine {
         let outcome = emission
             .outcome
             .map(|event| (self.map_event)(engine_value(&path, child, event)));
-        Routed { focused, outcome }
+        Routed {
+            focused,
+            outcome,
+            repaint,
+        }
     }
 
     pub(super) fn input_method_area(&self) -> Option<Rect> {
@@ -136,6 +175,55 @@ impl HostedEngine {
             );
         }
         targets
+    }
+
+    fn track_list_views(&self, engine: &Engine, point: Option<Pt>) -> Vec<Drawn> {
+        self.targets
+            .iter()
+            .filter_map(|target| {
+                let HostedControlPlan::TrackList(plan) = &target.plan else {
+                    return None;
+                };
+                plan.view(engine, point, target_bounds(target))
+            })
+            .collect()
+    }
+}
+
+struct EngineProjection {
+    area: Rc<Cell<MasonryRect>>,
+    engine: Rc<RefCell<Engine>>,
+    host: Weak<HostedEngine>,
+    pointer: Rc<Cell<Option<Pt>>>,
+}
+
+impl TrackListProjection for EngineProjection {
+    fn project(&self, plan: &TrackListPlan) -> Option<Drawn> {
+        let engine = self.engine.borrow();
+        plan.view(&engine, self.pointer.get(), bounds(self.area.get()))
+    }
+
+    fn reconcile(&self) {
+        if let Some(host) = self.host.upgrade() {
+            host.engine.borrow_mut().reconcile(
+                host.targets
+                    .iter()
+                    .flat_map(|target| target.plan.descriptors()),
+            );
+        }
+    }
+}
+
+fn target_bounds(target: &EngineTarget) -> Rect {
+    bounds(target.area.get())
+}
+
+fn bounds(area: MasonryRect) -> Rect {
+    Rect {
+        x: area.x0.as_(),
+        y: area.y0.as_(),
+        w: area.width().as_(),
+        h: area.height().as_(),
     }
 }
 

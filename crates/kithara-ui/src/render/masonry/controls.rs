@@ -25,6 +25,7 @@ use crate::{
         readout::Readout,
         tab::TabLarge,
         toggle::Binary,
+        track_list::face::TrackList as TrackListFace,
         vu::VerticalVu,
         wave::{face::Wave, snapshot::WaveformData},
     },
@@ -34,8 +35,9 @@ use crate::{
         recognizers::{Scalar, ScalarState, click},
     },
     render::{
-        ControlAction, ReadValue, Skin, StereoLevels, UiEvent, control_event,
+        ControlAction, ReadValue, Reads, Skin, StereoLevels, UiEvent, control_event,
         controls::{Drag, Grip, Press},
+        hosted::TrackListPlan,
     },
     text::TextContext,
 };
@@ -66,6 +68,10 @@ pub(crate) trait MasonryControl {
         false
     }
 
+    fn refresh(&mut self, _reads: &dyn Reads) -> bool {
+        false
+    }
+
     fn cursor(&self, _hit: &Hit) -> CursorShape {
         CursorShape::None
     }
@@ -78,6 +84,107 @@ pub(crate) trait MasonryControl {
 
     fn repaint(&self) -> Repaint {
         Repaint::None
+    }
+}
+
+pub(crate) struct TrackListLeaf {
+    plan: TrackListPlan,
+    text: TextContext,
+}
+
+impl TrackListLeaf {
+    pub(crate) fn new(plan: TrackListPlan, skin: &Skin) -> Self {
+        Self {
+            plan,
+            text: TextContext::from(skin.text_resources()),
+        }
+    }
+}
+
+impl MasonryControl for TrackListLeaf {
+    fn draw_list(&mut self, bounds: Rect) -> DrawList {
+        let Some(drawn) = self.plan.drawn() else {
+            return DrawList::default();
+        };
+        let picture = self.plan.picture();
+        TrackListFace::commands(&picture, &mut self.text, bounds, &drawn)
+    }
+
+    fn input(&mut self, _input: Input<'_>, _hit: &Hit) -> Outcome<HostAction> {
+        Outcome::IGNORED
+    }
+
+    fn accepts_input(&self) -> bool {
+        false
+    }
+
+    fn refresh(&mut self, reads: &dyn Reads) -> bool {
+        self.plan.refresh(reads)
+    }
+}
+
+#[cfg(test)]
+mod track_list_projection {
+    use std::rc::Rc;
+
+    use kithara_test_utils::kithara;
+
+    use super::{MasonryControl, TrackListLeaf};
+    use crate::{
+        atoms::track_list::face::Drawn,
+        builtin,
+        draw::Rect,
+        engine::Engine,
+        module::TrackColumn,
+        render::hosted::{TrackListPlan, TrackListProjection},
+        widgets::track_list::ColumnLayout,
+    };
+
+    struct MissingEngineProjection {
+        bounds: Rect,
+        engine: Engine,
+    }
+
+    impl TrackListProjection for MissingEngineProjection {
+        fn project(&self, plan: &TrackListPlan) -> Option<Drawn> {
+            plan.view(&self.engine, None, self.bounds)
+        }
+
+        fn reconcile(&self) {}
+    }
+
+    #[kithara::test]
+    fn track_list_with_a_missing_engine_entry_draws_nothing() {
+        let skin = builtin::skin();
+        let bounds = Rect {
+            h: 120.0,
+            w: 240.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let plan = TrackListPlan::fixture(
+            "library/tracks",
+            Vec::new(),
+            vec![
+                ColumnLayout {
+                    column: TrackColumn::Index,
+                    width: 48.0,
+                },
+                ColumnLayout {
+                    column: TrackColumn::Title,
+                    width: 192.0,
+                },
+            ],
+            skin,
+        );
+        let projection: Rc<dyn TrackListProjection> = Rc::new(MissingEngineProjection {
+            bounds,
+            engine: Engine::default(),
+        });
+        plan.bind_projection(Rc::downgrade(&projection));
+        let mut leaf = TrackListLeaf::new(plan, skin);
+
+        assert!(leaf.draw_list(bounds).commands().is_empty());
     }
 }
 

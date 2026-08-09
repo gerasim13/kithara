@@ -187,6 +187,17 @@ impl RetainedComponent {
         }
     }
 
+    #[cfg(feature = "masonry-host")]
+    pub(in crate::engine) fn column_divider_value(&self) -> Option<f32> {
+        if let Self::Scalar(component) = self
+            && component.kind() == Kind::ColumnDivider
+        {
+            component.current()
+        } else {
+            None
+        }
+    }
+
     pub(in crate::engine) fn pressed_item_index(&self) -> Option<usize> {
         if let Self::Item(component) = self {
             component.pressed_index()
@@ -254,17 +265,28 @@ impl From<Descriptor> for RetainedComponent {
                 path,
                 count,
             } => Self::Item(ItemComponent::new(target, path, count)),
-            Descriptor::ColumnDivider { path, scalar } => Self::Scalar(ScalarComponent::new(
+            Descriptor::ColumnDivider {
+                path,
+                scalar,
+                current,
+            } => Self::Scalar(ScalarComponent::new(
                 path,
                 Kind::ColumnDivider,
                 scalar,
                 None,
+                Some(current),
             )),
             Descriptor::Fader {
                 path,
                 scalar,
                 drag_step,
-            } => Self::Scalar(ScalarComponent::new(path, Kind::Fader, scalar, drag_step)),
+            } => Self::Scalar(ScalarComponent::new(
+                path,
+                Kind::Fader,
+                scalar,
+                drag_step,
+                None,
+            )),
             Descriptor::Crossfader { path } => Self::Scalar(ScalarComponent::new(
                 path,
                 Kind::Crossfader,
@@ -272,6 +294,7 @@ impl From<Descriptor> for RetainedComponent {
                     .track(Track::AbsoluteHorizontal)
                     .hover(Hover::new(CursorShape::ResizeH))
                     .build(),
+                None,
                 None,
             )),
             Descriptor::Knob {
@@ -295,6 +318,7 @@ impl From<Descriptor> for RetainedComponent {
                     })
                     .build(),
                 None,
+                None,
             )),
             Descriptor::StereoMeter { path } => Self::Scalar(ScalarComponent::new(
                 path,
@@ -303,6 +327,7 @@ impl From<Descriptor> for RetainedComponent {
                     .track(Track::AbsoluteHorizontal)
                     .hover(Hover::new(CursorShape::ResizeH))
                     .build(),
+                None,
                 None,
             )),
             Descriptor::VerticalVu { path } => Self::Scalar(ScalarComponent::new(
@@ -313,6 +338,7 @@ impl From<Descriptor> for RetainedComponent {
                     .hover(Hover::new(CursorShape::ResizeV))
                     .build(),
                 None,
+                None,
             )),
             Descriptor::Wave { path } => Self::Scalar(ScalarComponent::new(
                 path,
@@ -321,6 +347,7 @@ impl From<Descriptor> for RetainedComponent {
                     .track(Track::HorizontalClick)
                     .hover(Hover::new(CursorShape::Pointer))
                     .build(),
+                None,
                 None,
             )),
             Descriptor::HeroWave {

@@ -538,6 +538,7 @@ where
             declared,
             owner: owns_pointer,
             path,
+            plan: plan.as_ref(),
             read,
         };
         let mut output = custom.map_or_else(
@@ -555,7 +556,9 @@ where
         if custom_installed {
             return output;
         }
-        if let Some(read) = read {
+        if matches!(spec, ControlSpec::TrackList { .. }) {
+            output.watch_snapshot();
+        } else if let Some(read) = read {
             output.watch(read);
         }
         if owns_pointer == InputOwner::Leaf {

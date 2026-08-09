@@ -85,12 +85,12 @@ pub(crate) fn sync_track_list_scroll(
     }
 }
 
-struct TrackListProgram<'skin> {
+struct TrackListProgram {
     config: TrackListConfig,
-    paint: TrackListPaint<'skin>,
+    paint: TrackListPaint,
 }
 
-impl canvas::Program<UiEvent> for TrackListProgram<'_> {
+impl canvas::Program<UiEvent> for TrackListProgram {
     type State = TrackListState;
 
     fn update(
@@ -119,7 +119,7 @@ impl canvas::Program<UiEvent> for TrackListProgram<'_> {
             return Some(action);
         }
 
-        let body = track_list_body(bounds, self.paint.skin);
+        let body = track_list_body(bounds, self.paint.face.skin());
         let vertical_hit = Hit::new(point, body);
         let before = state.vertical.offset();
         let outcome = state.vertical.handle(input, &vertical_hit);
@@ -161,9 +161,9 @@ impl canvas::Program<UiEvent> for TrackListProgram<'_> {
         let bounds = local_rect(bounds);
         let dividers = track_list_dividers(
             bounds,
-            &self.paint.columns,
+            self.paint.face.columns(),
             state.horizontal.offset(),
-            self.paint.skin,
+            self.paint.face.skin(),
         );
         for divider in &dividers {
             let Some((_, drag_state)) = state
@@ -173,7 +173,10 @@ impl canvas::Program<UiEvent> for TrackListProgram<'_> {
             else {
                 continue;
             };
-            let drag = divider_drag(divider.value, self.paint.skin.track_list.min_column_width);
+            let drag = divider_drag(
+                divider.value,
+                self.paint.face.skin().track_list.min_column_width,
+            );
             let hit = Hit::new(point, divider.hit);
             let cursor = drag.cursor(drag_state, &hit);
             if cursor != CursorShape::None {
@@ -187,10 +190,10 @@ impl canvas::Program<UiEvent> for TrackListProgram<'_> {
         if hovered_row(
             point,
             bounds,
-            self.paint.rows.len(),
+            self.paint.face.rows().len(),
             state.horizontal.offset(),
             state.vertical.offset(),
-            &self.paint,
+            &self.paint.face,
         )
         .is_some()
         {
@@ -201,7 +204,7 @@ impl canvas::Program<UiEvent> for TrackListProgram<'_> {
     }
 }
 
-impl TrackListProgram<'_> {
+impl TrackListProgram {
     fn divider_input(
         &self,
         state: &mut TrackListState,
@@ -212,9 +215,9 @@ impl TrackListProgram<'_> {
     ) -> Option<Action<UiEvent>> {
         let dividers = track_list_dividers(
             bounds,
-            &self.paint.columns,
+            self.paint.face.columns(),
             state.horizontal.offset(),
-            self.paint.skin,
+            self.paint.face.skin(),
         );
         for divider in &dividers {
             let Some((_, drag_state)) = state
@@ -224,7 +227,10 @@ impl TrackListProgram<'_> {
             else {
                 continue;
             };
-            let drag = divider_drag(divider.value, self.paint.skin.track_list.min_column_width);
+            let drag = divider_drag(
+                divider.value,
+                self.paint.face.skin().track_list.min_column_width,
+            );
             let hit = Rect {
                 x: divider.hit.x + origin.x,
                 y: divider.hit.y + origin.y,
@@ -258,22 +264,22 @@ impl TrackListProgram<'_> {
             state.drag_index = hovered_row(
                 point,
                 bounds,
-                self.paint.rows.len(),
+                self.paint.face.rows().len(),
                 state.horizontal.offset(),
                 state.vertical.offset(),
-                &self.paint,
+                &self.paint.face,
             );
             state.pressed_index = state.drag_index;
         }
         let row_index = state.drag_index?;
         let visible = track_list_visible_row_rect(
             bounds,
-            &self.paint.columns,
-            self.paint.rows.len(),
+            self.paint.face.columns(),
+            self.paint.face.rows().len(),
             row_index,
             state.horizontal.offset(),
             state.vertical.offset(),
-            self.paint.skin,
+            self.paint.face.skin(),
         );
         let row = visible.unwrap_or(Rect {
             h: 0.0,
@@ -354,6 +360,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        atoms::track_list::face::Drawn,
         builtin,
         draw::{DrawCmd, Geom},
         module::TrackColumn,
@@ -397,11 +404,11 @@ mod tests {
             .collect()
     }
 
-    fn paint() -> TrackListPaint<'static> {
+    fn paint() -> TrackListPaint {
         TrackListPaint::new("library/tracks", rows(), columns(), builtin::skin())
     }
 
-    fn program() -> TrackListProgram<'static> {
+    fn program() -> TrackListProgram {
         let paint = paint();
         let config = paint.config();
         TrackListProgram { config, paint }
@@ -422,20 +429,30 @@ mod tests {
     #[kithara::test]
     fn body_rows_are_scoped_under_a_vertical_clip() {
         let paint = paint();
-        let mut text = TextContext::from(paint.skin.text_resources());
+        let mut text = TextContext::from(paint.face.skin().text_resources());
         let bounds = Rect {
             h: 120.0,
             w: 180.0,
             x: 0.0,
             y: 0.0,
         };
-        let list = paint.commands(&mut text, bounds, 20.0, 13.0, None, None);
+        let list = paint.face.commands(
+            &mut text,
+            bounds,
+            &Drawn {
+                columns: paint.face.columns().to_vec(),
+                horizontal: 20.0,
+                hovered: None,
+                pressed: None,
+                vertical: 13.0,
+            },
+        );
         let Some(DrawCmd::Clip { region, list }) = list.commands().first() else {
             panic!("an overflowing track list must start with its outer viewport clip");
         };
         assert_eq!(*region, bounds);
         assert!(list.commands().iter().any(|command| {
-            matches!(command, DrawCmd::Clip { region, .. } if *region == track_list_body(bounds, paint.skin))
+            matches!(command, DrawCmd::Clip { region, .. } if *region == track_list_body(bounds, paint.face.skin()))
         }));
     }
 
@@ -443,8 +460,8 @@ mod tests {
     fn outer_horizontal_clip_exists_only_while_columns_overflow() {
         for (width, clipped) in [(180.0, true), (900.0, false)] {
             let paint = paint();
-            let mut text = TextContext::from(paint.skin.text_resources());
-            let list = paint.commands(
+            let mut text = TextContext::from(paint.face.skin().text_resources());
+            let list = paint.face.commands(
                 &mut text,
                 Rect {
                     h: 120.0,
@@ -452,10 +469,13 @@ mod tests {
                     x: 0.0,
                     y: 0.0,
                 },
-                0.0,
-                0.0,
-                None,
-                None,
+                &Drawn {
+                    columns: paint.face.columns().to_vec(),
+                    horizontal: 0.0,
+                    hovered: None,
+                    pressed: None,
+                    vertical: 0.0,
+                },
             );
             assert_eq!(
                 matches!(list.commands().first(), Some(DrawCmd::Clip { .. })),
@@ -470,9 +490,9 @@ mod tests {
         let bounds = Rectangle::new(Point::new(37.0, 23.0), Size::new(180.0, 120.0));
         let divider = track_list_dividers(
             local_rect(bounds),
-            &program.paint.columns,
+            program.paint.face.columns(),
             0.0,
-            program.paint.skin,
+            program.paint.face.skin(),
         )[0];
         assert!(divider.hit.w > divider.paint.w);
         let point = Point::new(
@@ -515,9 +535,9 @@ mod tests {
         let bounds = Rectangle::new(Point::ORIGIN, Size::new(180.0, 120.0));
         let divider = track_list_dividers(
             bounds.into(),
-            &program.paint.columns,
+            program.paint.face.columns(),
             0.0,
-            program.paint.skin,
+            program.paint.face.skin(),
         )[0];
         assert_eq!(divider.column, TrackColumn::Index);
         let point = Point::new(divider.hit.x + 0.5, divider.hit.y + divider.hit.h / 2.0);
@@ -578,11 +598,11 @@ mod tests {
         let bounds = Rectangle::new(Point::ORIGIN, Size::new(900.0, 220.0));
         let row = track_list_row_rect(
             bounds.into(),
-            &program.paint.columns,
+            program.paint.face.columns(),
             3,
             0.0,
             0.0,
-            program.paint.skin,
+            program.paint.face.skin(),
         );
         let at = |x: f32| Cursor::Available(Point::new(x, row.y + row.h / 2.0));
         let moved = |x: f32| {
@@ -622,11 +642,11 @@ mod tests {
         let bounds = Rectangle::new(Point::ORIGIN, Size::new(900.0, 220.0));
         let row = track_list_row_rect(
             bounds.into(),
-            &program.paint.columns,
+            program.paint.face.columns(),
             2,
             0.0,
             0.0,
-            program.paint.skin,
+            program.paint.face.skin(),
         );
         let cursor = Cursor::Available(Point::new(20.0, row.y + row.h / 2.0));
         let mut state = TrackListState::default();
@@ -673,11 +693,11 @@ mod tests {
         let bounds = Rectangle::new(Point::ORIGIN, Size::new(900.0, 220.0));
         let row = track_list_row_rect(
             bounds.into(),
-            &program.paint.columns,
+            program.paint.face.columns(),
             2,
             0.0,
             0.0,
-            program.paint.skin,
+            program.paint.face.skin(),
         );
         let cursor = Cursor::Available(Point::new(20.0, row.y + row.h / 2.0));
         let mut state = TrackListState::default();
@@ -729,8 +749,8 @@ mod tests {
     #[kithara::test]
     fn divider_lines_are_retained_as_solid_rectangles() {
         let paint = paint();
-        let mut text = TextContext::from(paint.skin.text_resources());
-        let list = paint.commands(
+        let mut text = TextContext::from(paint.face.skin().text_resources());
+        let list = paint.face.commands(
             &mut text,
             Rect {
                 h: 120.0,
@@ -738,10 +758,13 @@ mod tests {
                 x: 0.0,
                 y: 0.0,
             },
-            0.0,
-            0.0,
-            None,
-            None,
+            &Drawn {
+                columns: paint.face.columns().to_vec(),
+                horizontal: 0.0,
+                hovered: None,
+                pressed: None,
+                vertical: 0.0,
+            },
         );
         assert!(list.commands().iter().any(|command| {
             matches!(
@@ -749,7 +772,7 @@ mod tests {
                 DrawCmd::Fill {
                     geom: Geom::Rect(Rect { w, .. }),
                     ..
-                } if *w == paint.skin.track_list.divider_width
+                } if *w == paint.face.skin().track_list.divider_width
             )
         }));
     }

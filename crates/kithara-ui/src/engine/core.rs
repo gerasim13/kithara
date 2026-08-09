@@ -52,11 +52,23 @@ impl Engine {
             .and_then(RetainedComponent::scroll_offset)
     }
 
+    #[cfg(feature = "masonry-host")]
+    pub(crate) fn column_divider_value(&self, path: &str) -> Option<f32> {
+        self.components
+            .iter()
+            .find(|component| component.path() == path && component.kind() == Kind::ColumnDivider)
+            .and_then(RetainedComponent::column_divider_value)
+    }
+
     pub(crate) fn pressed_item_index(&self, path: &str) -> Option<usize> {
+        self.item_pressed(path).flatten()
+    }
+
+    pub(crate) fn item_pressed(&self, path: &str) -> Option<Option<usize>> {
         self.components
             .iter()
             .find(|component| component.kind() == Kind::Item && component.event_path() == path)
-            .and_then(RetainedComponent::pressed_item_index)
+            .map(RetainedComponent::pressed_item_index)
     }
 
     pub(crate) fn picker_snapshot(&self, path: &str) -> Option<PickerSnapshot> {

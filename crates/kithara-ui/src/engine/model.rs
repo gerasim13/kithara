@@ -120,6 +120,7 @@ pub(crate) enum Descriptor {
     ColumnDivider {
         path: String,
         scalar: Scalar,
+        current: f32,
     },
     Fader {
         path: String,
@@ -198,6 +199,7 @@ impl Descriptor {
     pub(crate) fn column_divider(path: String, value: f32, minimum: f32) -> Self {
         Self::ColumnDivider {
             path,
+            current: value,
             scalar: Scalar::builder()
                 .track(Track::HorizontalPixels { minimum, value })
                 .hover(Hover::new(CursorShape::ResizeH))

@@ -146,16 +146,28 @@ where
     /// every control bound to the same endpoint moves together rather than one
     /// of them being poked by hand.
     pub fn refresh(&mut self, ui: &CompiledUi, reads: &dyn Reads) {
-        for (id, binding) in &self.watched {
-            let Some(value) = resolve(reads, binding, ui) else {
-                continue;
-            };
-            self.root.edit_widget(*id, |mut widget| {
-                let mut node = widget.downcast::<Node>();
-                if node.widget.show_live(&value) {
-                    node.ctx.request_paint_only();
+        for watched in &self.watched {
+            match watched {
+                Watched::Read { id, binding } => {
+                    let Some(value) = resolve(reads, binding, ui) else {
+                        continue;
+                    };
+                    self.root.edit_widget(*id, |mut widget| {
+                        let mut node = widget.downcast::<Node>();
+                        if node.widget.show_live(&value) {
+                            node.ctx.request_paint_only();
+                        }
+                    });
                 }
-            });
+                Watched::Snapshot { id } => {
+                    self.root.edit_widget(*id, |mut widget| {
+                        let mut node = widget.downcast::<Node>();
+                        if node.widget.refresh(reads) {
+                            node.ctx.request_paint_only();
+                        }
+                    });
+                }
+            }
         }
     }
 

@@ -1,12 +1,13 @@
-use std::ops::Range;
+use std::{cell::RefCell, ops::Range, rc::Rc};
 
 use num_traits::cast::AsPrimitive;
 
 #[cfg(feature = "masonry-host")]
-use super::masonry::TreeMetrics;
+use super::masonry::{TrackListSource, TrackListState, TreeMetrics};
 use crate::{
     atoms::{
         bar::context::Context,
+        track_list::face::TrackList,
         wave::zoom_math::{clamp_zoom, window_bounds, zoom_for_wheel},
     },
     compile::CompiledUi,
@@ -15,19 +16,28 @@ use crate::{
     expand::{Binding, ControlSpec},
     ids::InternId,
     interact::{CursorShape, Hover, ScrollAxis, TextInputLayout, recognizers::WheelStep},
-    module::{FaderStyle, WaveStyle},
+    module::{FaderStyle, TrackColumn, WaveStyle},
     render::{
-        ReadValue, Reads, Skin,
+        ReadValue, Reads, Skin, TrackRow,
         document::read::{read_scope, resolve, wave_zoom},
         model::derived,
         picker_selected_index, text_input_layout,
     },
     text::TextContext,
     widgets::track_list::{
-        ColumnLayout, column_layouts, column_resizable, minimum_table_width,
+        ColumnLayout, TrackListRowData, column_layouts, column_resizable, minimum_table_width,
         track_list_content_height,
     },
 };
+/// What a control plan is resolved against: the compiled document that names
+/// things, the model that answers a reading, and the skin that sizes it.
+#[derive(Clone, Copy)]
+pub(crate) struct Resolving<'a> {
+    pub(crate) reads: &'a dyn Reads,
+    pub(crate) skin: &'a Skin,
+    pub(crate) ui: &'a CompiledUi,
+}
+
 #[derive(Clone)]
 pub(crate) enum HostedControlPlan {
     Activation {
@@ -95,16 +105,58 @@ pub(crate) enum HostedControlPlan {
 
 #[derive(Clone)]
 pub(crate) struct TrackListPlan {
-    pub(crate) columns: Vec<ColumnLayout>,
-    pub(crate) divider_paths: Vec<String>,
+    divider_paths: DividerPaths,
     pub(crate) horizontal_path: String,
     pub(crate) path: String,
-    pub(crate) row_count: usize,
     pub(crate) row_target: String,
-    content_height: f32,
     min_column_width: f32,
+    pub(super) picture: Rc<RefCell<TrackList>>,
     #[cfg(feature = "masonry-host")]
-    pub(super) skin: Skin,
+    pub(super) state: TrackListState,
+}
+
+#[derive(Clone)]
+struct DividerPaths {
+    artist: String,
+    bpm: String,
+    deck: String,
+    energy: String,
+    index: String,
+    key: String,
+    time: String,
+    title: String,
+    transition: String,
+}
+
+impl DividerPaths {
+    fn new(path: &str) -> Self {
+        let path = |column: TrackColumn| format!("{path}/width/{}", column.endpoint_name());
+        Self {
+            artist: path(TrackColumn::Artist),
+            bpm: path(TrackColumn::Bpm),
+            deck: path(TrackColumn::Deck),
+            energy: path(TrackColumn::Energy),
+            index: path(TrackColumn::Index),
+            key: path(TrackColumn::Key),
+            time: path(TrackColumn::Time),
+            title: path(TrackColumn::Title),
+            transition: path(TrackColumn::Transition),
+        }
+    }
+
+    fn get(&self, column: TrackColumn) -> &str {
+        match column {
+            TrackColumn::Index => &self.index,
+            TrackColumn::Deck => &self.deck,
+            TrackColumn::Title => &self.title,
+            TrackColumn::Artist => &self.artist,
+            TrackColumn::Bpm => &self.bpm,
+            TrackColumn::Key => &self.key,
+            TrackColumn::Time => &self.time,
+            TrackColumn::Energy => &self.energy,
+            TrackColumn::Transition => &self.transition,
+        }
+    }
 }
 
 impl HostedControlPlan {
@@ -112,11 +164,11 @@ impl HostedControlPlan {
         path: &str,
         spec: &ControlSpec,
         value: Option<ReadValue<'_>>,
+        read: Option<&Binding>,
         scope: &str,
-        reads: &dyn Reads,
-        ui: &CompiledUi,
-        skin: &Skin,
+        cx: Resolving<'_>,
     ) -> Option<Self> {
+        let Resolving { reads, skin, ui } = cx;
         match (spec, value) {
             (ControlSpec::Button { .. }, _)
             | (
@@ -185,18 +237,28 @@ impl HostedControlPlan {
                     columns_state,
                 },
                 Some(ReadValue::TrackList(rows)),
-            ) => {
-                let state = columns_state
-                    .as_ref()
-                    .map(|binding| (ui.resolve(binding.id), read_scope(Some(binding), ui)));
-                let columns = column_layouts(columns, reads, state, skin);
-                Some(Self::TrackList(Box::new(TrackListPlan::new(
-                    path,
+            ) => Some(Self::TrackList(Box::new(TrackListPlan::resolved(
+                path,
+                columns,
+                columns_state.as_ref(),
+                read,
+                rows,
+                cx,
+            )))),
+            (
+                ControlSpec::TrackList {
                     columns,
-                    rows.len(),
-                    skin,
-                ))))
-            }
+                    columns_state,
+                },
+                _,
+            ) => Some(Self::TrackList(Box::new(TrackListPlan::resolved(
+                path,
+                columns,
+                columns_state.as_ref(),
+                read,
+                &[],
+                cx,
+            )))),
             (ControlSpec::Fader { style, label }, Some(ReadValue::Scalar(value))) => {
                 let (drag_step, wheel) = match style {
                     FaderStyle::Default => (Some(skin.fader.step), None),
@@ -412,61 +474,106 @@ fn wave_plan(
 }
 
 impl TrackListPlan {
+    fn resolved(
+        path: &str,
+        declared_columns: &[TrackColumn],
+        columns_state: Option<&Binding>,
+        _read: Option<&Binding>,
+        rows: &[TrackRow<'_>],
+        cx: Resolving<'_>,
+    ) -> Self {
+        let Resolving { reads, skin, ui } = cx;
+        let state =
+            columns_state.map(|binding| (ui.resolve(binding.id), read_scope(Some(binding), ui)));
+        let columns = column_layouts(declared_columns, reads, state, skin);
+        let rows = rows.iter().map(TrackListRowData::from).collect();
+        let plan = Self::new(path, rows, columns, skin);
+        #[cfg(feature = "masonry-host")]
+        plan.bind_source(TrackListSource::new(
+            declared_columns.to_vec(),
+            columns_state.map(|binding| {
+                (
+                    ui.resolve(binding.id).to_owned(),
+                    read_scope(Some(binding), ui).to_owned(),
+                )
+            }),
+            _read.map(|binding| ui.resolve(binding.key).to_owned()),
+        ));
+        plan
+    }
+
     pub(super) fn new(
         path: &str,
+        rows: Vec<TrackListRowData>,
         columns: Vec<ColumnLayout>,
-        row_count: usize,
         skin: &Skin,
     ) -> Self {
-        let divider_paths = columns
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| column_resizable(&columns, *index))
-            .map(|(_, column)| format!("{path}/width/{}", column.column.endpoint_name()))
-            .collect();
         Self {
-            content_height: track_list_content_height(row_count, skin),
-            columns,
-            divider_paths,
+            divider_paths: DividerPaths::new(path),
             horizontal_path: format!("{path}/scroll-x"),
             path: path.to_owned(),
-            row_count,
             row_target: format!("{path}/rows"),
             min_column_width: skin.track_list.min_column_width,
+            picture: Rc::new(RefCell::new(TrackList::new(rows, columns, skin))),
             #[cfg(feature = "masonry-host")]
-            skin: skin.clone(),
+            state: TrackListState::default(),
         }
     }
 
+    pub(crate) fn columns(&self) -> Vec<ColumnLayout> {
+        self.picture.borrow().columns().to_vec()
+    }
+
+    pub(crate) fn row_count(&self) -> usize {
+        self.picture.borrow().rows().len()
+    }
+
     fn descriptor_count(&self) -> usize {
-        self.divider_paths.len() + 3
+        let picture = self.picture.borrow();
+        picture
+            .columns()
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| column_resizable(picture.columns(), *index))
+            .count()
+            + 3
     }
 
     fn append_descriptors(&self, descriptors: &mut Vec<Descriptor>) {
+        let picture = self.picture.borrow();
+        let columns = picture.columns();
+        let row_count = picture.rows().len();
         descriptors.push(Descriptor::scroll(
             self.horizontal_path.clone(),
-            ScrollConfig::plain(ScrollAxis::Horizontal, minimum_table_width(&self.columns)),
+            ScrollConfig::plain(ScrollAxis::Horizontal, minimum_table_width(columns)),
         ));
         descriptors.push(Descriptor::scroll(
             self.path.clone(),
-            ScrollConfig::plain(ScrollAxis::Vertical, self.content_height),
+            ScrollConfig::plain(
+                ScrollAxis::Vertical,
+                track_list_content_height(row_count, picture.skin()),
+            ),
         ));
         descriptors.push(Descriptor::item(
             self.row_target.clone(),
             self.path.clone(),
-            self.row_count,
+            row_count,
         ));
-        let resizable = self
-            .columns
+        let resizable = columns
             .iter()
             .enumerate()
-            .filter(|(index, _)| column_resizable(&self.columns, *index));
-        for (divider_path, (_, column)) in self.divider_paths.iter().zip(resizable) {
+            .filter(|(index, _)| column_resizable(columns, *index));
+        for (_, column) in resizable {
+            let divider_path = self.divider_path(column.column);
             descriptors.push(Descriptor::column_divider(
-                divider_path.clone(),
+                divider_path.to_owned(),
                 column.width,
                 self.min_column_width,
             ));
         }
+    }
+
+    pub(crate) fn divider_path(&self, column: TrackColumn) -> &str {
+        self.divider_paths.get(column)
     }
 }

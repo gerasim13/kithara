@@ -6,7 +6,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     MasonryHost, MasonryNode, Painted,
-    controls::Retained,
+    controls::{Retained, TrackListLeaf},
     flex::{box_constraints, normalized},
     leaf::{DragProgram, Leaf},
     node::Node,
@@ -17,7 +17,7 @@ use crate::{
     module::{TextAlign, TextStyle},
     mount,
     render::{
-        InputOwner, ReadValue, Skin,
+        HostedControlPlan, InputOwner, ReadValue, Skin,
         controls::{Draws, Reading},
         document::read::{read_scope, resolve},
     },
@@ -58,6 +58,7 @@ pub(super) struct Cx<'a> {
     pub(super) declared: solve::Size<solve::Length>,
     pub(super) owner: InputOwner,
     pub(super) path: &'a str,
+    pub(super) plan: Option<&'a HostedControlPlan>,
     pub(super) read: Option<&'a Binding>,
 }
 
@@ -174,7 +175,22 @@ impl NodeControl for mount::Wave<'_> {
     }
 }
 impl NodeControl for mount::Vis {}
-impl NodeControl for mount::TrackList<'_> {}
+impl NodeControl for mount::TrackList<'_> {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        let Some(HostedControlPlan::TrackList(plan)) = cx.plan else {
+            tracing::error!(
+                control_path = cx.path,
+                engine_entry = "hosted plan",
+                "TrackList mount is incomplete"
+            );
+            return host.empty(cx.declared);
+        };
+        host.control_leaf(TrackListLeaf::new((**plan).clone(), host.skin), cx.declared)
+    }
+}
 impl NodeControl for mount::Tree<'_> {}
 impl NodeControl for mount::ContextBar<'_> {
     fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>

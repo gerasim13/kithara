@@ -25,7 +25,7 @@ use crate::{
     interact::{
         CursorShape, Hit, Input, MOUSE, Outcome, PointerInput, PointerOwnership, PointerPhase,
     },
-    render::{HostLayer, ReadValue, UiEvent, WindowCommand, WindowLayerProgram},
+    render::{HostLayer, ReadValue, Reads, UiEvent, WindowCommand, WindowLayerProgram},
     skin::TextRoleSkin,
     text::{TextContext, TextResources},
 };
@@ -172,6 +172,13 @@ impl Leaf {
                 _ => false,
             },
             Self::Custom { .. } | Self::Empty => false,
+        }
+    }
+
+    pub(crate) fn refresh(&mut self, reads: &dyn Reads) -> bool {
+        match self {
+            Self::Control(control) => control.refresh(reads),
+            Self::Custom { .. } | Self::Empty | Self::Text { .. } => false,
         }
     }
 

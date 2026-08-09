@@ -6,20 +6,22 @@
 # that lands must lower the pages it appears on, and no number may rise without
 # a reason written next to it.
 #
-# Measured 2026-08-08 at 1100x720 scale 1, iced through wgpu against masonry
+# Measured 2026-08-09 at 1100x720 scale 1, iced through wgpu against masonry
 # through Vello, both clearing to the skin's page colour. The floor is under 1%:
 # the two engines disagree on antialiased edges and on text gamma.
 
-# The undrawn controls. library2 holds the TrackList; vis is a native shader
-# the retained host has no pass for yet.
-15-library2.png            39
+# The undrawn controls. vis is a native shader the retained host has no pass
+# for yet; tree is thin ink on a wide panel, which is why its number is small
+# even though the retained host draws no tree at all.
 10-vis.png                 20
+14-tree.png                 3
 # Not accounted for by a missing control — read the masks before lowering.
 03-modules-deck.png        13
-03-modules-telemetry.png    8
+03-modules-telemetry.png    9
 16-stress.png               4
 
-14-tree.png                 3
+# TrackList landed 2026-08-09: library2 fell 37.8% -> 3.1%, tracklist to 1.5%.
+15-library2.png             4
 08-micro.png                3
 13-tracklist.png            2
 07-tokens.png               2

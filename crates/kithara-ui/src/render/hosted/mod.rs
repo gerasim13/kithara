@@ -3,5 +3,7 @@ mod masonry;
 mod plan;
 
 #[cfg(feature = "masonry-host")]
-pub(crate) use masonry::hosted_control_plan;
-pub(crate) use plan::HostedControlPlan;
+pub(crate) use masonry::{TrackListProjection, hosted_control_plan};
+#[cfg(feature = "masonry-host")]
+pub(crate) use plan::TrackListPlan;
+pub(crate) use plan::{HostedControlPlan, Resolving};
