@@ -157,7 +157,7 @@ jobs:
           install-chromedriver: true
           no-sudo: true
 
-      - name: Expose browser commands to the typed lane
+      - name: Expose browser commands to the WASM recipe
         shell: bash
         env:
           CHROME_PATH: ${{ steps.browser.outputs.chrome-path }}
@@ -172,7 +172,7 @@ jobs:
           echo "$browser_bin" >> "$GITHUB_PATH"
 
       - name: Run the Chromium browser lane
-        run: just ci run web-chromium
+        run: just platform wasm test chrome
 
   machete:
     name: cargo-machete (advisory)
