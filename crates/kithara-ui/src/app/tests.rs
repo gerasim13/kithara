@@ -198,7 +198,7 @@ struct Counted<'a> {
 impl crate::source::SourceResolver for Counted<'_> {
     fn load(
         &self,
-        base: Option<&crate::ids::SourceUri>,
+        base: Option<&SourceUri>,
         rel: &str,
     ) -> Result<crate::source::LoadedSource, crate::error::UiDocError> {
         self.loads.set(self.loads.get() + 1);

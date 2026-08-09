@@ -160,6 +160,7 @@ mod fills {
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
     use kithara_ui::app::Ui;
+    use masonry::vello::peniko::Color;
 
     use super::{Config, Gallery, builtin, mock, resolver};
     use crate::masonry_shots::Offscreen;
@@ -192,8 +193,11 @@ mod fills {
                 .unwrap_or_else(|error| panic!("the gallery must draw at {scale}x: {error}"));
             let mut off = Offscreen::new(width, height)
                 .unwrap_or_else(|error| panic!("offscreen at {scale}x: {error}"));
+            // Black, not the skin's page colour: a corner that only shows what
+            // the host cleared to would read as painted whatever the document
+            // did, and the question here is whether the document reached it.
             let rgba = off
-                .rasterise(&scene)
+                .rasterise(&scene, Color::BLACK)
                 .unwrap_or_else(|error| panic!("rasterise at {scale}x: {error}"));
 
             let width_px = width as usize;
