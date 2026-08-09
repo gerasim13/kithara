@@ -64,4 +64,11 @@ constraints:
       # `Option<&T>`, ...) provably cannot be a `From` impl, which consumes
       # `self` and returns an owned value, so they are accessors, not
       # conversions. Excluding both keeps the rule on owned `self -> Other`.
-      regex: "Self|&"
+      #
+      # A return carrying `()` — `StorageResult<()>` and friends — is the same
+      # kind of proof: there is nothing to convert *to*, so the method is a
+      # delegation that performs an action, not a conversion. Without this the
+      # rule fires on every `match self` that forwards a command to the
+      # variant's own backend, and the only way to pass it is the suppression
+      # comment this repository does not allow.
+      regex: 'Self|&|\(\)'
