@@ -14,11 +14,14 @@ use url::Url;
 
 const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
-#[derive(Debug)]
+#[derive(Debug, derive_more::From)]
 pub(super) enum ClientError {
     Unavailable(String),
-    TimedOut { method: String },
+    TimedOut {
+        method: String,
+    },
     Protocol(String),
+    #[from]
     Io(std::io::Error),
 }
 
@@ -31,12 +34,6 @@ impl fmt::Display for ClientError {
             }
             Self::Io(error) => write!(formatter, "rust-analyzer I/O: {error}"),
         }
-    }
-}
-
-impl From<std::io::Error> for ClientError {
-    fn from(error: std::io::Error) -> Self {
-        Self::Io(error)
     }
 }
 
