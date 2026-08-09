@@ -399,20 +399,6 @@ exclude_packages = [
   "kithara-decode",
   "kithara-platform",
   "xtask",
-  # The sweep checks `--lib` with default features on the native target, so a
-  # module gated on a non-default feature or on wasm/apple-only cfg is real
-  # code the sweep cannot see, not dead code. Each crate below carries at
-  # least one such module (kithara-resampler: resample-glide; kithara-play,
-  # kithara-net, kithara-integration-tests: wasm backends; kithara-apple:
-  # the foundation feature; kithara-audio: analysis-beat/beat-nn/
-  # analysis-waveform/stretch-* slot variants). Validate these via
-  # feature/target-specific builds instead.
-  "kithara-apple",
-  "kithara-audio",
-  "kithara-integration-tests",
-  "kithara-net",
-  "kithara-play",
-  "kithara-resampler",
 ]
 
 [ext.android]
