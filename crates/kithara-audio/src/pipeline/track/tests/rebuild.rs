@@ -390,6 +390,7 @@ impl VariantControl for TestControl {
             return false;
         }
         *exact_plan = None;
+        drop(exact_plan);
         *self.aborted_transition.lock() = Some(transition);
         true
     }

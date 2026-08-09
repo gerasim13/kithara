@@ -138,8 +138,16 @@ impl EventCollector {
     /// `Lagged` is tolerated (mirrors the old task's `continue`); `Empty`/
     /// `Closed` end the drain. No `.await`, so it never pins the virtual clock.
     fn drain(&self) {
+        self.drain_locked(self.rx.lock());
+    }
+
+    /// `drain`'s loop body: the guard enters as a parameter and drops on
+    /// return, same hold window as before — keeps clippy's
+    /// `significant_drop_tightening` from mis-suggesting an early drop
+    /// inside the loop. Mirrors
+    /// `kithara_platform::flash::system::wake::wait_set`.
+    fn drain_locked(&self, mut rx: kithara::platform::sync::MutexGuard<'_, EventReceiver>) {
         use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
-        let mut rx = self.rx.lock();
         loop {
             let ev = match rx.try_recv().map(|env| env.event) {
                 Ok(ev) => ev,
