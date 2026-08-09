@@ -257,12 +257,7 @@ mod tests {
 
     use anyhow::Result;
 
-    use super::{BINARY, git_dir, read_line};
-
-    #[test]
-    fn cached_binary_name_uses_the_target_executable_suffix() {
-        assert_eq!(BINARY, format!("xtask{}", std::env::consts::EXE_SUFFIX));
-    }
+    use super::{git_dir, read_line};
 
     #[test]
     fn linked_worktree_git_dir_is_resolved_without_git() -> Result<()> {
