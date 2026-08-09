@@ -228,7 +228,7 @@ impl Error for BuildCacheSizeError {}
 /// Budget a profile inherits when it predates the field. Sized so the Linux
 /// host's two dozen runner caches fit its volume with room to spare, and so a
 /// single macOS cache root stays well inside its own.
-fn default_build_cache_size() -> String {
+pub(crate) fn default_build_cache_size() -> String {
     "25GB".to_owned()
 }
 

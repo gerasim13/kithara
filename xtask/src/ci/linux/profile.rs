@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::ci::config::parse_build_cache_size;
+use crate::ci::config::{default_build_cache_size, parse_build_cache_size};
 
 /// Installed profile every Linux CI machine reads through
 /// `KITHARA_CI_LINUX_CONFIG`.
@@ -21,7 +21,9 @@ pub(crate) const LINUX_CONFIG_PATH: &str = "/etc/kithara-ci/linux-host.toml";
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LinuxHost {
-    /// Positive decimal gigabytes, such as `25GB`.
+    /// Positive decimal gigabytes, such as `25GB`. Defaulted: installed
+    /// profiles predate it, and refusing to load would kill the cleanup.
+    #[serde(default = "default_build_cache_size")]
     pub(crate) build_cache_size: String,
     /// Directory holding the caches jobs keep between runs.
     pub(crate) cache_root: PathBuf,
@@ -310,6 +312,31 @@ fn safe_label(value: &str) -> bool {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// An installed profile predating the budget must still load: the binary
+    /// reaches every host before its profile does, and one that refused would
+    /// take the cleanup down on each of them.
+    #[test]
+    fn a_profile_without_a_build_cache_size_still_loads() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("linux-host.toml");
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-linux-host.toml");
+        let text = fs::read_to_string(&source).expect("fixture profile");
+        let without: String = text
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("build_cache_size"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        fs::write(&path, without).expect("write profile");
+
+        assert_eq!(
+            LinuxHost::load(&path)
+                .expect("profile loads")
+                .build_cache_size,
+            default_build_cache_size()
+        );
+    }
 
     /// A profile shaped like the machines this command provisions: one plain
     /// runner and one that reaches the hardware a plain one must not.
