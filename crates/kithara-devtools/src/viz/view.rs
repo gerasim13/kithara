@@ -28,14 +28,14 @@ pub(crate) enum DetailLevel {
     Full,
 }
 
-impl DetailLevel {
-    pub(crate) fn as_u8(self) -> u8 {
-        match self {
-            Self::Crates => 0,
-            Self::Modules => 1,
-            Self::Abstractions => 2,
-            Self::Methods => 3,
-            Self::Full => 4,
+impl From<DetailLevel> for u8 {
+    fn from(lod: DetailLevel) -> Self {
+        match lod {
+            DetailLevel::Crates => 0,
+            DetailLevel::Modules => 1,
+            DetailLevel::Abstractions => 2,
+            DetailLevel::Methods => 3,
+            DetailLevel::Full => 4,
         }
     }
 }

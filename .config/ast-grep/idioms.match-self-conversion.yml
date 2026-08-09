@@ -63,5 +63,9 @@ constraints:
       # `Self` returns are already idiomatic; reference returns (`&T`,
       # `Option<&T>`, ...) provably cannot be a `From` impl, which consumes
       # `self` and returns an owned value, so they are accessors, not
-      # conversions. Excluding both keeps the rule on owned `self -> Other`.
-      regex: "Self|&"
+      # conversions. Excluding both keeps the rule on owned `self -> Other`. A
+      # bare `String` return is a `Display` impl, never `impl From<T> for
+      # String`; the sibling rule `rust.prefer-from-not-to-into` already
+      # excludes `^String$` on that ground and `rust.no-to-string-method` owns
+      # the class.
+      regex: "Self|&|^String$"
