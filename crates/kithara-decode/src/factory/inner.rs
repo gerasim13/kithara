@@ -908,6 +908,7 @@ mod tests {
         assert_eq!(profile.input(), ReaderInput::Incremental);
     }
 
+    #[cfg(feature = "resample-rubato")]
     #[test]
     fn decoder_resampler_config_keeps_typed_backend() {
         let target_sample_rate = NonZeroU32::new(48_000).expect("test rate");

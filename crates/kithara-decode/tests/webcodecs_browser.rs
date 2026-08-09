@@ -3,7 +3,7 @@
 use std::{io::Cursor, sync::Once};
 
 use js_sys::Uint8Array;
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{
     Decoder, DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory,
     DecoderSeekOutcome, PcmSpec, duration_for_frames, spawn_webcodecs_probe,
@@ -393,6 +393,8 @@ async fn assert_browser_support(codec: &str) {
 fn decoder_config(backend: DecoderBackend) -> DecoderConfig<NoResamplerBackend> {
     DecoderConfig::<NoResamplerBackend>::builder()
         .backend(backend)
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
         .build()
 }
 
