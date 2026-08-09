@@ -145,9 +145,6 @@ pub struct TrackBeatMap {
     zero_index: usize,
 }
 
-/// A segment needs two adjacent markers (its start and end).
-const MIN_MARKERS: usize = 2;
-
 impl TrackBeatMap {
     /// Builds a map and converts its source-rate markers to `host_sample_rate`.
     ///
@@ -208,7 +205,7 @@ impl TrackBeatMap {
             .partition_point(|marker| *marker <= source);
         let segment = match upper {
             0 => 0,
-            value if value >= self.source_markers.len() => self.source_markers.len() - MIN_MARKERS,
+            value if value >= self.source_markers.len() => self.source_markers.len() - 2,
             value => value - 1,
         };
         let start = f64::from(self.source_markers[segment]);
@@ -224,7 +221,7 @@ impl TrackBeatMap {
         source_rate: NonZeroU32,
         host_sample_rate: NonZeroU32,
     ) -> Result<Self, BeatMapError> {
-        if grid.beats().len() < MIN_MARKERS {
+        if grid.beats().len() < 2 {
             return Err(BeatMapError::InsufficientMarkers {
                 count: grid.beats().len(),
             });

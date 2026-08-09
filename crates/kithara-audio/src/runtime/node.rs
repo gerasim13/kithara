@@ -7,29 +7,32 @@ use serde::Serialize;
 /// Nodes with higher service class are served first when the scheduler
 /// selects which node to process next.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Serialize)]
-#[repr(u8)]
 #[serde(rename_all = "snake_case")]
 pub enum ServiceClass {
     /// Not playing, not needed soon. Lowest priority.
     #[default]
-    Idle = 0,
+    Idle,
     /// Preloading or about to play. Medium priority.
-    Warm = 1,
+    Warm,
     /// Currently audible. Highest priority.
-    Audible = 2,
+    Audible,
 }
 
 impl From<ServiceClass> for u8 {
     fn from(class: ServiceClass) -> Self {
-        class as Self
+        match class {
+            ServiceClass::Idle => 0,
+            ServiceClass::Warm => 1,
+            ServiceClass::Audible => 2,
+        }
     }
 }
 
 impl From<u8> for ServiceClass {
     fn from(value: u8) -> Self {
         match value {
-            _ if value == Self::Audible as u8 => Self::Audible,
-            _ if value == Self::Warm as u8 => Self::Warm,
+            2 => Self::Audible,
+            1 => Self::Warm,
             _ => Self::Idle,
         }
     }

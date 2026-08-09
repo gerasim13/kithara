@@ -1,12 +1,9 @@
 use bon::Builder;
 
-/// Fixed band count: low / mid / high.
-pub(crate) const BAND_COUNT: usize = 3;
-
 struct Consts;
 
 impl Consts {
-    const BAND_GAIN: [f32; BAND_COUNT] = [1.0, 2.5, 12.0];
+    const BAND_GAIN: [f32; 3] = [1.0, 2.5, 12.0];
     const ENERGY_FLOOR: f32 = 1e-4;
     const FFT_SIZE: usize = 4096;
     const LOW_MID_HZ: f32 = 250.0;
@@ -25,7 +22,7 @@ pub struct AnalysisParams {
     /// This is the balance knob, not a color: low stays the dominant hull.
     #[builder(default = Consts::BAND_GAIN)]
     #[field(get(copy))]
-    band_gain: [f32; BAND_COUNT],
+    band_gain: [f32; 3],
     /// Per-window RMS gate; windows below it contribute no band energy.
     #[builder(default = Consts::ENERGY_FLOOR)]
     energy_floor: f32,

@@ -62,9 +62,6 @@ impl AudioEffect for EqEffect {
     }
 
     fn process(&mut self, mut chunk: PcmChunk) -> Option<PcmChunk> {
-        // Right channel only exists in stereo (or wider) output.
-        const STEREO_CHANNELS: usize = 2;
-
         let channels = self.channels as usize;
         if channels == 0 {
             return Some(chunk);
@@ -74,7 +71,7 @@ impl AudioEffect for EqEffect {
 
         for frame in samples.chunks_exact_mut(channels) {
             frame[0] = self.eq_l.process_sample(frame[0]);
-            if channels >= STEREO_CHANNELS {
+            if channels >= 2 {
                 frame[1] = self.eq_r.process_sample(frame[1]);
             }
         }

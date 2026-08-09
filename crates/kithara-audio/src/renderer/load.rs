@@ -62,17 +62,12 @@ impl EngineLoad {
         if audio_secs <= 0.0 {
             return;
         }
-        const MS_PER_SEC: f64 = 1000.0;
-
         let busy_secs = busy.as_secs_f64();
         let load = ewma(
             self.load.load(Ordering::Relaxed),
             to_f32(busy_secs / audio_secs),
         );
-        let ms = ewma(
-            self.ms.load(Ordering::Relaxed),
-            to_f32(busy_secs * MS_PER_SEC),
-        );
+        let ms = ewma(self.ms.load(Ordering::Relaxed), to_f32(busy_secs * 1000.0));
         let realtime = if load > 0.0 { 1.0 / load } else { 0.0 };
         self.realtime.store(realtime, Ordering::Relaxed);
         self.load.store(load, Ordering::Relaxed);
