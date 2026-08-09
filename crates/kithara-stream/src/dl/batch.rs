@@ -243,8 +243,8 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     let started = Instant::now();
     let wait_in_queue = started.saturating_duration_since(internal.enqueued_at);
     let mut cmd = internal.cmd;
-    let writer = cmd.writer.take();
-    let on_complete_cb = cmd.on_complete.take();
+    let writer = cmd.take_writer();
+    let on_complete_cb = cmd.take_on_complete();
     let on_response_cb = cmd.on_response.take();
     let on_slow_cb = cmd.on_slow.take();
     let bus = internal.bus;
@@ -595,7 +595,7 @@ pub(super) fn deliver_cancelled(target: ResponseTarget, mut cmd: FetchCmd) {
             tx.send(Err(err)).ok();
         }
         ResponseTarget::Streaming => {
-            if let Some(cb) = cmd.on_complete.take() {
+            if let Some(cb) = cmd.take_on_complete() {
                 cb(0, None, Some(&err));
             }
         }

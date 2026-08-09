@@ -44,11 +44,7 @@ impl HlsSessionReader {
         {
             return Err(io::Error::new(
                 ErrorKind::InvalidInput,
-                StreamSeekPastEof {
-                    len,
-                    current_pos: current,
-                    new_pos: position,
-                },
+                StreamSeekPastEof::new(current, len, position),
             ));
         }
         Ok(position)

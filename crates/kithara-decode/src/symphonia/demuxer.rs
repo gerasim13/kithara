@@ -257,7 +257,7 @@ impl Demuxer for SymphoniaDemuxer {
                     let reason = e
                         .get_ref()
                         .and_then(|src| src.downcast_ref::<StreamPending>())
-                        .map(|p| p.reason)
+                        .map(StreamPending::reason)
                         .or_else(|| {
                             e.get_ref()
                                 .and_then(|src| src.downcast_ref::<PendingReason>())

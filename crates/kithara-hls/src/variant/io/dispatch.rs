@@ -133,7 +133,7 @@ impl HlsVariant {
                         continue;
                     };
                     // A decoder cannot start without its init, so it is never
-                    cmd.priority = Some(RequestPriority::High);
+                    cmd.set_priority(RequestPriority::High);
                     out.push(cmd);
                 }
                 PlannedFetch::Segment(seg_idx) => {
@@ -166,7 +166,7 @@ impl HlsVariant {
                         continue;
                     };
                     if owed(seg_idx) {
-                        cmd.priority = Some(RequestPriority::High);
+                        cmd.set_priority(RequestPriority::High);
                     }
                     out.push(cmd);
                 }

@@ -499,15 +499,15 @@ mod tests {
     fn not_ready_error(pos: u64, want: usize, len: Option<u64>) -> Error {
         Error::new(
             ErrorKind::Interrupted,
-            StreamPending {
+            StreamPending::new(
+                PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted),
                 pos,
                 want,
                 len,
-                reason: PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted),
-                phase: SourcePhase::Waiting,
-                epoch: 0,
-                flushing: false,
-            },
+                SourcePhase::Waiting,
+                0,
+                false,
+            ),
         )
     }
 

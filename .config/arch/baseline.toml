@@ -206,13 +206,9 @@ schema_version = 1
 "crates/kithara-queue/src/track.rs::TrackEntry" = 1
 "crates/kithara-storage/src/backend/mmap/driver.rs::MmapOptions" = 1
 "crates/kithara-storage/src/backend/traits.rs::DriverState" = 1
-"crates/kithara-stream/src/dl/cmd.rs::FetchCmd" = 1
-"crates/kithara-stream/src/dl/config.rs::DownloaderConfig" = 1
 "crates/kithara-stream/src/media.rs::MediaInfo" = 1
 "crates/kithara-stream/src/source.rs::SegmentDescriptor" = 1
 "crates/kithara-stream/src/source.rs::SourceSeekAnchor" = 1
-"crates/kithara-stream/src/stream.rs::StreamPending" = 1
-"crates/kithara-stream/src/stream.rs::StreamSeekPastEof" = 1
 
 [redundant_accessors]
 "crates/kithara-stream/src/stream.rs::Stream::source" = 1

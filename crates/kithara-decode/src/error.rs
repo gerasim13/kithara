@@ -280,7 +280,7 @@ impl DecodeError {
             .get_ref()
             .and_then(|src| {
                 src.downcast_ref::<StreamPending>()
-                    .map(|p| p.reason)
+                    .map(StreamPending::reason)
                     .or_else(|| src.downcast_ref::<PendingReason>().copied())
             })
             .unwrap_or(PendingReason::NotReady(NotReadyCause::SourcePending));

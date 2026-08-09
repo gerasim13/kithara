@@ -632,7 +632,11 @@ fn variant_init_not_applicable_no_acquire() {
     let cmds = session.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 2, "only the two media segments dispatch");
     let seg0_url = v.segments()[0].url().clone();
-    assert_eq!(cmds[0].url, seg0_url, "first cmd is seg 0, not an init");
+    assert_eq!(
+        cmds[0].url().clone(),
+        seg0_url,
+        "first cmd is seg 0, not an init"
+    );
 }
 
 /// `init_size > 0` (fMP4 `#EXT-X-MAP` with a known size) is a present
@@ -660,7 +664,7 @@ fn variant_init_pending_for_fmp4() {
     let session = active_session(&v, &ctx, 0);
     let cmds = session.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 3, "init + two media segments dispatch");
-    assert_eq!(cmds[0].url, init_url, "init dispatched first");
+    assert_eq!(cmds[0].url().clone(), init_url, "init dispatched first");
 }
 
 /// Frozen-discriminator guard: `init.size` only ever shrinks post-commit
@@ -1176,7 +1180,7 @@ fn incoming_session_is_ready_once_its_construction_fetches_land() {
 
     let mut commands = session.dispatch_constructing(&ctx, 10);
     for cmd in &mut commands {
-        let Some(mut writer) = cmd.writer.take() else {
+        let Some(mut writer) = cmd.take_writer() else {
             continue;
         };
         writer(&[7; 100]).expect("construction bytes");
@@ -1202,12 +1206,12 @@ fn dispatch_emits_init_first_then_segments_under_budget() {
     let session = active_session(&v, &ctx, 0);
     let cmds = session.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 4);
-    assert_eq!(cmds[0].url, init_url, "init dispatched first");
-    assert_eq!(cmds[1].url, seg0_url);
-    assert_eq!(cmds[2].url, seg1_url);
-    assert_eq!(cmds[3].url, seg2_url);
+    assert_eq!(cmds[0].url().clone(), init_url, "init dispatched first");
+    assert_eq!(cmds[1].url().clone(), seg0_url);
+    assert_eq!(cmds[2].url().clone(), seg1_url);
+    assert_eq!(cmds[3].url().clone(), seg2_url);
     for cmd in &cmds {
-        assert!(cmd.cancel.is_some(), "every cmd carries a cancel token");
+        assert!(cmd.cancel().is_some(), "every cmd carries a cancel token");
     }
 }
 
@@ -1780,14 +1784,14 @@ fn raw_byte_seek_registers_lazy_exact_demand_only_after_cursor_moves() {
         3,
         "raw byte seek size probes must respect the dispatch budget"
     );
-    assert_eq!(cmds[0].url, v.segments()[0].url().clone());
-    assert_eq!(cmds[1].url, v.segments()[1].url().clone());
-    assert_eq!(cmds[2].url, v.segments()[2].url().clone());
+    assert_eq!(cmds[0].url().clone(), v.segments()[0].url().clone());
+    assert_eq!(cmds[1].url().clone(), v.segments()[1].url().clone());
+    assert_eq!(cmds[2].url().clone(), v.segments()[2].url().clone());
     let cmds = session.dispatch(&ctx, 3);
     assert_eq!(cmds.len(), 3);
-    assert_eq!(cmds[0].url, v.segments()[3].url().clone());
-    assert_eq!(cmds[1].url, v.segments()[4].url().clone());
-    assert_eq!(cmds[2].url, v.segments()[5].url().clone());
+    assert_eq!(cmds[0].url().clone(), v.segments()[3].url().clone());
+    assert_eq!(cmds[1].url().clone(), v.segments()[4].url().clone());
+    assert_eq!(cmds[2].url().clone(), v.segments()[5].url().clone());
 }
 
 #[kithara::test]
@@ -1900,7 +1904,7 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
     let session = active_session(&v, &ctx, 0);
     let cmds = session.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 1);
-    assert!(cmds[0].cancel.is_some());
+    assert!(cmds[0].cancel().is_some());
     push_planned(&v, 0);
     assert!(
         session.dispatch(&ctx, 10).is_empty(),
@@ -1984,12 +1988,12 @@ fn dispatch_cmd_cancel_shares_cancellation_with_session() {
     }
     let cmds = session.dispatch(&ctx, 10);
     for cmd in &cmds {
-        let token = cmd.cancel.as_ref().expect("cmd carries cancel");
+        let token = cmd.cancel().expect("cmd carries cancel");
         assert!(!token.is_cancelled());
     }
     session.abort();
     for cmd in &cmds {
-        let token = cmd.cancel.as_ref().expect("cmd carries cancel");
+        let token = cmd.cancel().expect("cmd carries cancel");
         assert!(
             token.is_cancelled(),
             "command cancellation must follow its reader session"
@@ -2049,7 +2053,7 @@ fn dispatch_skips_loaded_segments_in_queue_without_burning_budget() {
     assert_eq!(cmds.len(), 3);
     let seg10_url = v.segments()[10].url().clone();
     assert!(
-        cmds.iter().all(|c| c.url != seg10_url),
+        cmds.iter().all(|c| c.url() != &seg10_url),
         "Loaded seg 10 must not be re-emitted"
     );
 }

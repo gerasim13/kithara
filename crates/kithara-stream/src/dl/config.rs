@@ -13,31 +13,31 @@ pub struct DownloaderConfig {
     /// with the caller. Pass a single shared `HttpClient` to multiple
     /// Downloaders to share keep-alive sockets across them.
     #[builder(start_fn)]
-    pub client: HttpClient,
+    pub(crate) client: HttpClient,
     /// Settings for the shared ABR controller owned by the Downloader.
     #[builder(default)]
-    pub abr_settings: AbrSettings,
+    pub(crate) abr_settings: AbrSettings,
     /// Throttle delay for demand (low-priority) processing.
     /// Gives urgent work a chance to preempt before demand batch runs.
     #[builder(default = Duration::ZERO)]
-    pub demand_throttle: Duration,
+    pub(crate) demand_throttle: Duration,
     /// Soft timeout. When a fetch has not produced a response within
     /// this duration, the Downloader publishes
     /// [`DownloaderEvent::LoadSlow`](kithara_events::DownloaderEvent::LoadSlow)
     /// on the peer's bus (if any). The request itself is not aborted
     /// — it keeps running until hard timeout fires.
     #[builder(default = Duration::from_secs(2))]
-    pub soft_timeout: Duration,
+    pub(crate) soft_timeout: Duration,
     /// Optional parent cancel. `Some` → the download loop's scope is a child
     /// of it (composed); `None` → the Downloader owns a standalone scope. The
     /// `CancelScope` seam lives in [`Downloader::new`](super::Downloader::new).
-    pub cancel: Option<CancelToken>,
+    pub(crate) cancel: Option<CancelToken>,
     /// Tokio runtime handle for the download loop.
     ///
     /// - `Some(handle)` — the loop runs as a task on this runtime.
     /// - `None` — spawns as a task on the current runtime via `task::spawn`.
-    pub runtime: Option<Handle>,
+    pub(crate) runtime: Option<Handle>,
     /// Maximum number of concurrent in-flight fetch commands.
     #[builder(default = 5)]
-    pub max_concurrent: usize,
+    pub(crate) max_concurrent: usize,
 }

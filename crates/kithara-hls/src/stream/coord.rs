@@ -786,7 +786,7 @@ mod tests {
             .dispatch_incoming(ctx, 1)
             .pop()
             .expect("incoming fetch");
-        command.writer.take().expect("streaming writer")(&[1; 32]).expect("construction bytes");
+        command.take_writer().expect("streaming writer")(&[1; 32]).expect("construction bytes");
         assert!(matches!(
             coord
                 .take_prepared_variant_reader(transition)
@@ -1039,9 +1039,9 @@ mod tests {
         // playlist and its init — while both of its media segments sat queued
         // until teardown and readiness stayed false on all 216 polls. Tagged,
         // both segments start and the reader becomes readable.
-        assert_eq!(command.priority, Some(RequestPriority::High));
-        assert_eq!(command.url.as_str(), "https://example.com/v1-seg0.m4s");
-        let mut writer = command.writer.take().expect("streaming writer");
+        assert_eq!(command.priority(), Some(RequestPriority::High));
+        assert_eq!(command.url().as_str(), "https://example.com/v1-seg0.m4s");
+        let mut writer = command.take_writer().expect("streaming writer");
 
         writer(&[1; 7]).expect("first delivery chunk");
         assert!(matches!(
@@ -1074,7 +1074,7 @@ mod tests {
         ));
 
         writer(&[3; 68]).expect("remaining delivery body");
-        command.on_complete.take().expect("completion handler")(100, None, None);
+        command.take_on_complete().expect("completion handler")(100, None, None);
         let mut first = [0_u8; 8];
         assert_eq!(input.read(&mut first).expect("read incoming"), first.len());
         assert_eq!(coord.position(), 17);
@@ -1143,8 +1143,7 @@ mod tests {
             .pop()
             .expect("first session fetch");
         let stale_cancel = stale_command
-            .cancel
-            .as_ref()
+            .cancel()
             .expect("session fetch cancel")
             .clone();
         assert!(!stale_cancel.is_cancelled());
@@ -1156,14 +1155,13 @@ mod tests {
 
         assert_ne!(stale.id(), current.id());
         assert!(stale_cancel.is_cancelled());
-        stale_command.on_complete.take().expect("stale completion")(0, None, None);
+        stale_command.take_on_complete().expect("stale completion")(0, None, None);
         let current_command = coord
             .dispatch_incoming(&ctx, 1)
             .pop()
             .expect("replacement session fetch");
         let current_cancel = current_command
-            .cancel
-            .as_ref()
+            .cancel()
             .expect("replacement fetch cancel")
             .clone();
         assert!(!current_cancel.is_cancelled());
