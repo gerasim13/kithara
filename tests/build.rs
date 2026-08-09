@@ -2,8 +2,8 @@
 //! the encoder versions the lockfile resolved, baked into every test binary of
 //! this package.
 //!
-//! The L2 fixture cache (see `src/fixture_cache.rs`) namespaces its default
-//! directory by this value, so:
+//! The L2 fixture cache (see `src/fixture_cache.rs`) namespaces its selected
+//! cache root by this value, so:
 //! - all test binaries of one build (`suite_stress`, `suite_heavy`, …) share the
 //!   same cache dir — an AAC fixture encoded by one binary is reused by every
 //!   other binary and by repeated runs of the same build;

@@ -155,14 +155,14 @@ prefix_args = [
   "test-release",
 ]
 
-[test.lanes.cached]
+[test.lanes.cold]
 program = "cargo"
 default_features = ["kithara-ui/render"]
 prefix_args = [
   "nextest",
   "run",
   "--profile",
-  "cache",
+  "cold",
   "--workspace",
   "--exclude",
   "kithara-fuzz",
