@@ -186,7 +186,11 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &Rc<Queue>, build_state: &Rc<RefCell<Buil
             url,
             request_id,
         } => {
-            let result = replace_track(queue, &build_state.borrow(), index, id, url);
+            let result = replace_track(
+                queue,
+                &build_state.borrow(),
+                ReplaceTrackArgs { index, id, url },
+            );
             crate::web::interop::send_reply(request_id, result);
         }
         WorkerCmd::SelectQueue {
@@ -224,10 +228,12 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &Rc<Queue>, build_state: &Rc<RefCell<Buil
         } => {
             register_key_rule(
                 &mut build_state.borrow_mut(),
-                &salt,
-                &domains,
-                headers,
-                query_params,
+                SetupHlsAesArgs {
+                    salt,
+                    domains,
+                    headers,
+                    query_params,
+                },
             );
         }
     }
@@ -268,19 +274,27 @@ fn apply_peak_bitrate(queue: &Rc<Queue>, wifi_bps: f64, cellular_bps: f64) {
     }
 }
 
+struct SetupHlsAesArgs {
+    salt: String,
+    domains: Vec<String>,
+    headers: Option<HashMap<String, String>>,
+    query_params: Option<HashMap<String, String>>,
+}
+
 /// Fold a DRM rule into the worker's [`BuildState`]. Builds the
 /// cross-thread [`KeyRequestFactory`] (the real JS callback lives on the
 /// main thread; the worker-side processor routes each decrypt through
 /// [`key_processor_bridge`]) and writes the salt / static headers into the
 /// player-wide header map. Mirrors
 /// [`NativeInner::setup_hls_aes_with_rule`](crate::native::inner::NativeInner).
-fn register_key_rule(
-    state: &mut BuildState,
-    salt: &str,
-    domains: &[String],
-    headers: Option<HashMap<String, String>>,
-    query_params: Option<HashMap<String, String>>,
-) {
+fn register_key_rule(state: &mut BuildState, args: SetupHlsAesArgs) {
+    let SetupHlsAesArgs {
+        salt,
+        domains,
+        headers,
+        query_params,
+    } = args;
+
     if let Some(rule_headers) = headers.as_ref() {
         for (k, v) in rule_headers {
             state.headers.insert(k.clone(), v.clone());
@@ -301,7 +315,7 @@ fn register_key_rule(
             )
         })
     };
-    let rule = DomainKeyRule::for_domains(domains, factory)
+    let rule = DomainKeyRule::for_domains(&domains, factory)
         .maybe_headers(headers)
         .maybe_query_params(query_params)
         .build();
@@ -338,16 +352,22 @@ fn build_source(state: &BuildState, url: String) -> TrackSource {
     }
 }
 
+struct ReplaceTrackArgs {
+    index: u32,
+    id: TrackId,
+    url: String,
+}
+
 /// Mirror of [`NativeInner::replace_item`](crate::native::inner::NativeInner::replace_item):
 /// insert the new track after the predecessor of `index`, then drop the
 /// old track at `index`.
 fn replace_track(
     queue: &Rc<Queue>,
     state: &BuildState,
-    index: u32,
-    id: TrackId,
-    url: String,
+    args: ReplaceTrackArgs,
 ) -> Result<(), String> {
+    let ReplaceTrackArgs { index, id, url } = args;
+
     let idx = index as usize;
     let tracks = queue.tracks();
     let old = tracks

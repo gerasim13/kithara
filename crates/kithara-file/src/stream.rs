@@ -23,7 +23,8 @@ use crate::{
     coord::FileCoord,
     error::SourceError,
     session::{
-        FileAssetCtx, FileInner, FilePeer, FilePhase, FileSource, FileSourceCtx, FileStreamState,
+        FileAssetCtx, FileInner, FileLocalConfig, FilePeer, FilePhase, FileSource, FileSourceCtx,
+        FileStreamState,
     },
 };
 
@@ -88,7 +89,17 @@ fn cached_source(
 ) -> FileSource {
     let coord = completed_coord(reader.len());
     let cached_codec = sniff_codec(&reader);
-    FileSource::local(reader, coord, bus, backend, key, cancel, cached_codec)
+    FileSource::local(
+        FileLocalConfig::builder()
+            .reader(reader)
+            .coord(coord)
+            .bus(bus)
+            .backend(backend)
+            .key(key)
+            .cancel(cancel)
+            .maybe_cached_codec(cached_codec)
+            .build(),
+    )
 }
 
 fn publish_open_error(bus: Option<&EventBus>, error: &SourceError) {

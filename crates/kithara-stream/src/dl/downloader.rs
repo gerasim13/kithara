@@ -14,7 +14,7 @@ use kithara_platform::{
 use kithara_test_utils::kithara;
 
 use super::{
-    peer::{Peer, PeerHandle},
+    peer::{Peer, PeerHandle, PeerInner},
     registry::{FetchProgress, Registry},
 };
 
@@ -175,7 +175,15 @@ impl Downloader {
             bus: Arc::clone(&bus),
         };
         self.inner.register_tx.send(entry).ok();
-        PeerHandle::new(Arc::clone(&self.inner), cancel, cmd_tx, bus, abr_handle)
+        PeerHandle::new(
+            PeerInner::builder()
+                .pool(Arc::clone(&self.inner))
+                .cancel(cancel)
+                .cmd_tx(cmd_tx)
+                .bus(bus)
+                .abr(abr_handle)
+                .build(),
+        )
     }
 
     /// Download loop.
