@@ -33,7 +33,7 @@ pub enum TextError {
 /// A fallback key carries a script and a locale rather than a family, so this
 /// is a collection-wide safety net: Inter and `JetBrains` Mono carry these
 /// scripts themselves and never reach it, and only Space Grotesk does.
-const FALLBACK_SCRIPTS: [Script; 2] = [Script(*b"Cyrl"), Script(*b"Grek")];
+const DISPLAY_SCRIPT_COVERAGE: [Script; 2] = [Script(*b"Cyrl"), Script(*b"Grek")];
 
 /// Maps a registered Fontique blob back to the face it was registered for.
 ///
@@ -128,7 +128,7 @@ fn register_fallbacks(collection: &mut Collection) -> Result<(), TextError> {
     let Some(family) = collection.family_id(font.family_name()) else {
         return Err(TextError::Registration { font });
     };
-    for script in FALLBACK_SCRIPTS {
+    for script in DISPLAY_SCRIPT_COVERAGE {
         if !collection.append_fallbacks(FallbackKey::new(script, None), [family].into_iter()) {
             return Err(TextError::Fallback { script });
         }
