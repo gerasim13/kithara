@@ -73,10 +73,11 @@ impl AppleRequest {
         }
 
         if let Some(headers) = self.headers {
-            for (key, value) in headers.iter() {
-                if !key.eq_ignore_ascii_case("accept-encoding") {
-                    set_header(&request, key, value);
-                }
+            for (key, value) in headers
+                .iter()
+                .filter(|(key, _)| !key.eq_ignore_ascii_case("accept-encoding"))
+            {
+                set_header(&request, key, value);
             }
         }
         let accept_encoding = match self.accept_encoding {

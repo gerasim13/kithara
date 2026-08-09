@@ -456,7 +456,7 @@ fn render_template(value: &str, env_map: &HashMap<String, String>, label: &str) 
         let tail = &tail[2..];
         let end = tail
             .find('}')
-            .unwrap_or_else(|| panic!("{label}: unterminated `${{...` in `{value}`"));
+            .expect("{label}: unterminated `${{...` in `{value}`");
         let name = &tail[..end];
         if let Some(v) = env_map.get(name).filter(|v| !v.is_empty()) {
             fmt_str.push_str("{}");

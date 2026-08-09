@@ -360,7 +360,7 @@ mod tests {
     #[should_panic(expected = "recv_outcome_blocking")]
     fn blocking_recv_without_preload_panics_when_no_chunk_arrives() {
         let mut fixture = RingFixture::new(false);
-        let _ = fixture.recv();
+        let _chunk = fixture.recv();
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -531,7 +531,7 @@ mod tests {
         eof.data_tx
             .try_push(Fetch::eof(0))
             .expect("natural eof reaches ring");
-        let _ = eof.recv();
+        let _chunk = eof.recv();
         assert_eq!(eof.ring.phase, ConsumerPhase::AtEof);
 
         let mut failed = RingFixture::new(true);
@@ -539,7 +539,7 @@ mod tests {
             .data_tx
             .try_push(Fetch::failure(0))
             .expect("failure reaches ring");
-        let _ = failed.recv();
+        let _chunk = failed.recv();
         assert_ne!(failed.ring.phase, ConsumerPhase::AtEof);
         assert_eq!(
             failed.ring.phase,

@@ -177,7 +177,7 @@ impl Compiler<'_> {
                 })
             }
             LayoutNode::Optional { id, hidden, node } => {
-                let hidden = substitute_binding(&no_args(), layout_uri, hidden, &id.0)?;
+                let hidden = substitute_binding(&BTreeMap::new(), layout_uri, hidden, &id.0)?;
                 validate::check_layout_block(&hidden, &id.0, layout_uri, self.endpoints)?;
                 let child = self.build(node, layout_uri)?;
                 Ok(CompiledNode::Optional {
@@ -196,7 +196,7 @@ impl Compiler<'_> {
                 frame,
                 corners,
             } => {
-                let args = substitute_map(&no_args(), layout_uri, with, &instance.0)?;
+                let args = substitute_map(&BTreeMap::new(), layout_uri, with, &instance.0)?;
                 let (module_uri, set) = load_module_graph(
                     self.resolver,
                     Some(layout_uri),
@@ -263,8 +263,4 @@ pub(crate) fn module_size(
     hidden: Hidden<'_>,
 ) -> SizeSpec {
     with_module_chrome(compute_size(root, skin, hidden), chrome, skin)
-}
-
-fn no_args() -> BTreeMap<String, String> {
-    BTreeMap::new()
 }

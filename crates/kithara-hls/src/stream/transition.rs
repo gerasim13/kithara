@@ -129,7 +129,7 @@ impl HlsCoord {
         self.sessions.active(|| {
             self.abr
                 .current_variant_index()
-                .unwrap_or_else(|| panic!("HLS coordinator lost its stateful ABR selector"))
+                .expect("HLS coordinator lost its stateful ABR selector")
         })
     }
 

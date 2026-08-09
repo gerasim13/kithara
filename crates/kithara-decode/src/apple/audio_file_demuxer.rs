@@ -1,8 +1,6 @@
 use std::mem::size_of;
 
-use kithara_apple::audio_toolbox::{
-    AudioStreamBasicDescription, AudioStreamPacketDescription, pod_to_vec, pod_write_to_slice,
-};
+use kithara_apple::audio_toolbox::{AudioStreamPacketDescription, pod_to_vec, pod_write_to_slice};
 use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, ContainerFormat, PrerollHint};
 use num_traits::ToPrimitive;
@@ -122,7 +120,7 @@ impl AppleAudioFileDemuxer {
         };
 
         let extra_data = match codec {
-            AudioCodec::Pcm => serialize_asbd(&asbd),
+            AudioCodec::Pcm => pod_to_vec(&asbd),
             _ => file.magic_cookie().unwrap_or_default(),
         };
 
@@ -374,10 +372,6 @@ impl Demuxer for AppleAudioFileDemuxer {
     }
 }
 
-fn serialize_asbd(asbd: &AudioStreamBasicDescription) -> Vec<u8> {
-    pod_to_vec(asbd)
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -429,7 +423,7 @@ mod tests {
     }
 
     /// `supports` is the exact predicate the decoder factory gates
-    /// standalone `AudioFileServices` dispatch on (`apple_standalone_supports`).
+    /// standalone `AudioFileServices` dispatch on.
     /// Native FLAC (`fLaC`, `audio/flac`) is the regression contract: the iOS
     /// build ships no Symphonia fallback, so a `false` here is precisely the
     /// `Unsupported codec: Flac` the device hit on every `streamfl` track.

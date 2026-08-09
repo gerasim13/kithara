@@ -813,17 +813,11 @@ mod tests {
         assert_eq!(cached.cache.lock().len(), 3);
     }
 
-    fn record_invalidations() -> (
-        Arc<std::sync::Mutex<Vec<ResourceKey>>>,
-        crate::store::OnInvalidatedFn,
-    ) {
-        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    fn record_invalidations() -> (Arc<Mutex<Vec<ResourceKey>>>, crate::store::OnInvalidatedFn) {
+        let log = Arc::new(Mutex::new(Vec::new()));
         let log_cb = Arc::clone(&log);
         let cb: crate::store::OnInvalidatedFn = Arc::new(move |key: &ResourceKey| {
-            log_cb
-                .lock()
-                .expect("invalidation log lock")
-                .push(key.clone());
+            log_cb.lock().push(key.clone());
         });
         (log, cb)
     }

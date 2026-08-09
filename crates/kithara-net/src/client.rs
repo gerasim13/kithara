@@ -150,10 +150,11 @@ impl RawHttp {
         policy: AcceptEncodingPolicy,
     ) -> RequestBuilder {
         if let Some(headers) = headers {
-            for (k, v) in headers.iter() {
-                if !k.eq_ignore_ascii_case("accept-encoding") {
-                    req = req.header(k, v);
-                }
+            for (k, v) in headers
+                .iter()
+                .filter(|(k, _)| !k.eq_ignore_ascii_case("accept-encoding"))
+            {
+                req = req.header(k, v);
             }
         }
         let accept_encoding = match policy {

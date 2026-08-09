@@ -500,7 +500,7 @@ mod tests {
 
         let started = drag
             .update(&mut state, &moved(40.0), ROW, at(40.0))
-            .unwrap_or_else(|| panic!("crossing the threshold must start the drag"));
+            .expect("crossing the threshold must start the drag");
         let (message, _, status) = started.into_inner();
         assert_eq!(
             message,
@@ -515,7 +515,7 @@ mod tests {
 
         let dropped = drag
             .update(&mut state, &release(), ROW, at(80.0))
-            .unwrap_or_else(|| panic!("release must end the drag"));
+            .expect("release must end the drag");
         assert_eq!(
             dropped.into_inner().0,
             Some(dragged("library/tracks", DragPhase::Drop))
@@ -541,7 +541,7 @@ mod tests {
 
         let started = drag
             .update(&mut state, &moved(340.0), ROW, gone)
-            .unwrap_or_else(|| panic!("the drag must start away from the item"));
+            .expect("the drag must start away from the item");
         assert_eq!(
             started.into_inner().0,
             Some(dragged("library/tracks", DragPhase::Start(1)))
@@ -549,7 +549,7 @@ mod tests {
 
         let dropped = drag
             .update(&mut state, &release(), ROW, gone)
-            .unwrap_or_else(|| panic!("release must end the drag"));
+            .expect("release must end the drag");
         assert_eq!(
             dropped.into_inner().0,
             Some(dragged("library/tracks", DragPhase::Drop))
@@ -604,7 +604,7 @@ mod tests {
 
         let action = drag
             .update(&mut state, &press, bounds, cursor)
-            .unwrap_or_else(|| panic!("horizontal drag must publish an action"));
+            .expect("horizontal drag must publish an action");
         let (message, _, _) = action.into_inner();
 
         assert_eq!(
@@ -669,7 +669,7 @@ mod tests {
                 bounds,
                 Cursor::Available(Point::new(100.0, 20.0)),
             )
-            .unwrap_or_else(|| panic!("relative drag must capture its press"));
+            .expect("relative drag must capture its press");
         assert_eq!(pressed.into_inner().0, None);
 
         let moved = drag
@@ -681,7 +681,7 @@ mod tests {
                 bounds,
                 Cursor::Available(Point::new(150.0, 20.0)),
             )
-            .unwrap_or_else(|| panic!("relative drag must publish movement"));
+            .expect("relative drag must publish movement");
         let Some(UiEvent::Control {
             path,
             action: ControlAction::SetScalar(value),
@@ -699,7 +699,7 @@ mod tests {
                 bounds,
                 Cursor::Available(Point::new(150.0, 20.0)),
             )
-            .unwrap_or_else(|| panic!("relative drag must capture its release"));
+            .expect("relative drag must capture its release");
         assert_eq!(released.into_inner().0, None);
     }
 
@@ -862,7 +862,7 @@ mod tests {
                 bounds,
                 Cursor::Available(Point::new(43.0, 11.0)),
             )
-            .unwrap_or_else(|| panic!("pixel drag must publish movement"));
+            .expect("pixel drag must publish movement");
         assert_eq!(
             grown.into_inner().0,
             Some(UiEvent::Control {
@@ -880,7 +880,7 @@ mod tests {
                 bounds,
                 Cursor::Available(Point::new(-300.0, 11.0)),
             )
-            .unwrap_or_else(|| panic!("pixel drag must publish clamped movement"));
+            .expect("pixel drag must publish clamped movement");
         assert_eq!(
             clamped.into_inner().0,
             Some(UiEvent::Control {

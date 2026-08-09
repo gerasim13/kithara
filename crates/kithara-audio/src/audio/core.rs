@@ -160,7 +160,7 @@ impl<S> Audio<S> {
         if self.ring.current_chunk.is_none() && self.ring.phase != super::ConsumerPhase::AtEof {
             self.fill_buffer();
             if let super::ConsumerPhase::Failed { source } = self.ring.phase {
-                return Err(channel_closed_during_preload(source));
+                return Err(DecodeError::pcm_stream("preload", source));
             }
         }
         Ok(())
@@ -401,10 +401,6 @@ fn chunk_outcome(
             reason: PendingReason::Buffering,
         }),
     }
-}
-
-fn channel_closed_during_preload(failure: super::FailureSource) -> DecodeError {
-    DecodeError::pcm_stream("preload", failure)
 }
 
 #[cfg(test)]

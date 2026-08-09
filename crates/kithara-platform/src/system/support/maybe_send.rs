@@ -1,3 +1,5 @@
+pub use crate::common::maybe_send::WasmSend;
+
 pub trait MaybeSend: Send {}
 impl<T: Send> MaybeSend for T {}
 
@@ -26,5 +28,3 @@ impl<T: Future + Send> MaybeSendFuture for T {}
 /// fn plan(&mut self) -> BoxFuture<'_, PlanOutcome<Self::Plan>>;
 /// ```
 pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
-pub use crate::common::maybe_send::WasmSend;

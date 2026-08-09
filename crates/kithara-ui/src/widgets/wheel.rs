@@ -266,7 +266,7 @@ mod tests {
         for tail in [-11.0, -8.0, -5.0, -3.0, -1.5, -0.6, -0.2] {
             let action = surface
                 .update(&mut state, &pixels(tail), bounds(), inside())
-                .unwrap_or_else(|| panic!("the surface owns every pixel delta over it"));
+                .expect("the surface owns every pixel delta over it");
             assert_eq!(
                 action.into_inner().0,
                 None,
@@ -320,7 +320,7 @@ mod tests {
 
         let released = surface
             .update(&mut state, &release(), bounds(), at(27.0))
-            .unwrap_or_else(|| panic!("release must end the drag"));
+            .expect("release must end the drag");
         assert_eq!(released.into_inner().0, None);
         assert!(
             surface

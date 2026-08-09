@@ -13,7 +13,7 @@ pub(crate) struct QueuedResource {
 pub(crate) struct Playlist {
     last_announced: Option<usize>,
     items: Vec<Option<QueuedResource>>,
-    #[field(get, vis = "pub(crate)")]
+    #[field(get, set, vis = "pub(crate)")]
     current: usize,
 }
 
@@ -97,10 +97,6 @@ impl Playlist {
 
     pub(crate) fn reserve(&mut self, count: usize) {
         self.items.resize_with(count, || None);
-    }
-
-    pub(crate) fn set_current(&mut self, index: usize) {
-        self.current = index;
     }
 }
 
