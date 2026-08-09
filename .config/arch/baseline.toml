@@ -210,14 +210,6 @@ schema_version = 1
 "crates/kithara-stream/src/source.rs::SegmentDescriptor" = 1
 "crates/kithara-stream/src/source.rs::SourceSeekAnchor" = 1
 
-[redundant_accessors]
-"crates/kithara-stream/src/stream.rs::Stream::source" = 1
-
-[redundant_reexport]
-"crates/kithara-hls/stream/hls.rs::Hls::Source" = 1
-"crates/kithara-storage/backend/memory/driver.rs::MemDriver::Options" = 1
-"crates/kithara-storage/backend/mmap/driver.rs::MmapDriver::Options" = 1
-
 [shared_state]
 "crates/kithara-app/src/state.rs" = 1
 "crates/kithara-ffi/src/native/bridge/event_bridge.rs" = 1
@@ -256,5 +248,4 @@ schema_version = 1
 "crates/kithara-ffi/src/web/key_processor_bridge.rs" = 1
 
 [trait_impl_count]
-"crates/kithara-events/src/event.rs::Event" = 1
 "crates/kithara-events/src/play.rs::MediaTime" = 1

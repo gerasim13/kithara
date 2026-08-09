@@ -453,7 +453,7 @@ impl HlsCoord {
             /// Active variant's media info. `HlsCoord` is constructed
             /// non-empty (asserted in [`Self::new`]) so this always succeeds;
             /// the `Source` trait's `Option<MediaInfo>` shape is restored at
-            /// the [`HlsSource`](crate::stream::HlsSource) facade.
+            /// the [`HlsSource`](super::source::HlsSource) facade.
             pub(crate) fn media_info(&self) -> MediaInfo;
             /// Collapse the active variant to a fresh single-variant layout on
             /// seek, restoring the natural served range and byte shift.

@@ -183,6 +183,17 @@ exempt_crates = [
 # is already clean and not listed here.)
 allowed_crates = []
 
+[redundant_reexport]
+# `MmapOptions` / `MemOptions` are surfaced twice by design: once as the
+# canonical `pub use` from `kithara-storage`'s crate root (the constructor type
+# callers reach as `kithara_storage::{MmapOptions, MemOptions}`), and once as
+# `<Driver>::Options` so `Resource::<D>::open(cancel, opts)` can pick the
+# driver from the option type alone via call-site inference. Rationale is
+# recorded in `crates/kithara-storage/CONTEXT.md` ("Notes on the
+# `redundant_reexport` audit warning") and `backend/traits.rs` doc comment on
+# `Driver`.
+exempt = ["MmapOptions", "MemOptions"]
+
 [shared_state]
 warn = 3
 deny = 5
