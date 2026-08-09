@@ -7,6 +7,8 @@ use std::{
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_platform::sync::Arc;
+#[cfg(test)]
+use kithara_resampler::rubato::RubatoBackend;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
 use kithara_stream::{
     AudioCodec, BoxedEventSink, ByteMap, ContainerFormat, MediaInfo, ReaderInput, ReaderProfile,
@@ -914,17 +916,13 @@ mod tests {
     #[test]
     fn decoder_resampler_config_keeps_typed_backend() {
         let target_sample_rate = NonZeroU32::new(48_000).expect("test rate");
-        let config: DecoderResamplerConfig<kithara_resampler::rubato::RubatoBackend> =
-            DecoderResamplerConfig::builder()
-                .target_sample_rate(target_sample_rate)
-                .backend(kithara_resampler::rubato::RubatoBackend::default())
-                .build();
+        let config: DecoderResamplerConfig<RubatoBackend> = DecoderResamplerConfig::builder()
+            .target_sample_rate(target_sample_rate)
+            .backend(RubatoBackend::default())
+            .build();
 
         assert_eq!(config.target_sample_rate, target_sample_rate);
-        assert_eq!(
-            config.backend.name(),
-            kithara_resampler::rubato::RubatoBackend::default().name()
-        );
+        assert_eq!(config.backend.name(), RubatoBackend::default().name());
     }
 }
 

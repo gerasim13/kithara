@@ -17,6 +17,7 @@ use kithara_stream::{
     dl::{Downloader, DownloaderConfig},
 };
 use kithara_test_utils::kithara;
+use url::Url;
 
 use crate::{
     config::{FileConfig, FileSrc},
@@ -45,7 +46,7 @@ struct RemoteFileOpen {
     headers: Option<Headers>,
     look_ahead_bytes: Option<u64>,
     key: ResourceKey,
-    url: url::Url,
+    url: Url,
 }
 
 fn local_key(path: PathBuf) -> Result<ResourceKey, SourceError> {
@@ -107,7 +108,7 @@ fn valid_extension(extension: &str) -> Option<String> {
     .then(|| extension.to_ascii_lowercase())
 }
 
-fn source_extension(url: &url::Url, hint: Option<&str>) -> String {
+fn source_extension(url: &Url, hint: Option<&str>) -> String {
     hint.and_then(valid_extension)
         .or_else(|| {
             url.path_segments()
@@ -121,7 +122,7 @@ fn source_extension(url: &url::Url, hint: Option<&str>) -> String {
 
 fn remote_key(
     store: &AssetStore,
-    url: &url::Url,
+    url: &Url,
     discriminator: Option<String>,
     extension: Option<&str>,
 ) -> Result<ResourceKey, SourceError> {
@@ -245,7 +246,7 @@ impl File {
     /// `on_connect` callback when the HTTP response arrives. Until then,
     /// `len()` returns `None`.
     fn create_remote(
-        url: url::Url,
+        url: Url,
         config: FileConfig,
         cancel: CancelToken,
     ) -> Result<FileSource, SourceError> {
@@ -313,7 +314,7 @@ impl File {
     /// longer than the watchdog timeout.
     #[kithara::hang_watchdog]
     async fn create_remote_wait_for_claim(
-        url: url::Url,
+        url: Url,
         config: FileConfig,
         cancel: CancelToken,
     ) -> Result<FileSource, StreamSourceError> {
@@ -358,8 +359,8 @@ mod tests {
 
     use super::*;
 
-    fn url(value: &str) -> url::Url {
-        url::Url::parse(value).expect("valid test URL")
+    fn url(value: &str) -> Url {
+        Url::parse(value).expect("valid test URL")
     }
 
     #[kithara::test]

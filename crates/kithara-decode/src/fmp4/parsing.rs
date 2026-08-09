@@ -1,7 +1,7 @@
 use std::io::{Cursor, Read, Seek, SeekFrom};
 
 use kithara_stream::AudioCodec;
-use re_mp4::{BoxHeader, BoxType, MoofBox, Mp4, ReadBox, StsdBoxContent};
+use re_mp4::{BoxHeader, BoxType, MoofBox, Mp4, ReadBox, StsdBoxContent, TfhdBox, TrunBox};
 
 use crate::error::{DecodeError, DecodeResult};
 
@@ -478,7 +478,7 @@ fn collect_frames(parse: &SegmentParse, out: &mut Vec<Fmp4Frame>) -> DecodeResul
         })?;
 
     let tfhd = &traf.tfhd;
-    let default_base_is_moof = (tfhd.flags & re_mp4::TfhdBox::FLAG_DEFAULT_BASE_IS_MOOF) != 0;
+    let default_base_is_moof = (tfhd.flags & TfhdBox::FLAG_DEFAULT_BASE_IS_MOOF) != 0;
     let mut decode_time = traf.tfdt.as_ref().map_or(0, |t| t.base_media_decode_time);
 
     let sample_total: usize = traf
@@ -534,12 +534,8 @@ fn collect_frames(parse: &SegmentParse, out: &mut Vec<Fmp4Frame>) -> DecodeResul
     Ok(())
 }
 
-fn sample_size_for(
-    trun: &re_mp4::TrunBox,
-    tfhd: &re_mp4::TfhdBox,
-    idx: usize,
-) -> DecodeResult<u32> {
-    if (trun.flags & re_mp4::TrunBox::FLAG_SAMPLE_SIZE) != 0 {
+fn sample_size_for(trun: &TrunBox, tfhd: &TfhdBox, idx: usize) -> DecodeResult<u32> {
+    if (trun.flags & TrunBox::FLAG_SAMPLE_SIZE) != 0 {
         return trun
             .sample_sizes
             .get(idx)
@@ -554,8 +550,8 @@ fn sample_size_for(
         })
 }
 
-fn sample_duration_for(trun: &re_mp4::TrunBox, tfhd: &re_mp4::TfhdBox, idx: usize) -> u32 {
-    if (trun.flags & re_mp4::TrunBox::FLAG_SAMPLE_DURATION) != 0 {
+fn sample_duration_for(trun: &TrunBox, tfhd: &TfhdBox, idx: usize) -> u32 {
+    if (trun.flags & TrunBox::FLAG_SAMPLE_DURATION) != 0 {
         return trun.sample_durations.get(idx).copied().unwrap_or(0);
     }
     tfhd.default_sample_duration.unwrap_or(0)
