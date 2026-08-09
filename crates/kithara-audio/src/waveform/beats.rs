@@ -1,7 +1,25 @@
+use std::mem::size_of;
+
 use crate::{
     blob::{self, Blob, BlobError, MAX_PREALLOC, Reader, Writer},
     region::GridSegment,
 };
+
+struct Consts;
+
+impl Consts {
+    /// One frame position on the wire.
+    const FRAME_BYTES: usize = size_of::<u64>();
+    /// A length prefix on the wire.
+    const LEN_PREFIX_BYTES: usize = size_of::<u64>();
+    /// `beats`, `downbeats`, `segments` — three length-prefixed lists.
+    const LIST_COUNT: usize = 3;
+    /// `start_frame`, `end_frame`, `ratio_correction`.
+    const SEGMENT_BYTES: usize = size_of::<u64>() * 2 + size_of::<f64>();
+    /// Wire/disk format version for the [`BeatGrid`] blob. Bump when the
+    /// encoding changes.
+    const VERSION: u32 = 1;
+}
 
 /// Cleaned beat grid for one track. All positions are source frames
 /// (decoder/song time, `PcmMeta.frame_offset` space) — never output/stretched
@@ -19,10 +37,6 @@ pub struct BeatGrid {
     /// Stable-window tempo of the track, beats per minute.
     bpm: f64,
 }
-
-/// Wire/disk format version for the [`BeatGrid`] blob. Bump when the
-/// encoding changes.
-const BEAT_GRID_BYTES_VERSION: u32 = 1;
 
 impl BeatGrid {
     /// Construct from already-cleaned parts.
@@ -58,7 +72,7 @@ impl TryFrom<&[u8]> for BeatGrid {
 }
 
 impl Blob for BeatGrid {
-    const VERSION: u32 = BEAT_GRID_BYTES_VERSION;
+    const VERSION: u32 = Consts::VERSION;
 
     fn decode(r: &mut Reader<'_>) -> Result<Self, BlobError> {
         let bpm = read_finite(r)?;
@@ -78,7 +92,10 @@ impl Blob for BeatGrid {
 
     fn encode(&self, w: &mut Writer<'_>) {
         w.reserve(
-            8 + 3 * 8 + 8 * (self.beats.len() + self.downbeats.len()) + 24 * self.segments.len(),
+            size_of::<f64>()
+                + Consts::LIST_COUNT * Consts::LEN_PREFIX_BYTES
+                + Consts::FRAME_BYTES * (self.beats.len() + self.downbeats.len())
+                + Consts::SEGMENT_BYTES * self.segments.len(),
         );
         w.write_f64(self.bpm);
         w.write_frames(&self.beats);

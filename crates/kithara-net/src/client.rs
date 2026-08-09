@@ -3,6 +3,8 @@ use std::{fmt::Write, num::NonZeroU16};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt};
+#[cfg(all(test, not(target_arch = "wasm32")))]
+use kithara_platform::sync::Mutex;
 use kithara_platform::{
     CancelToken,
     sync::Arc,
@@ -767,7 +769,7 @@ mod tests {
             0x51, 0x3e, 0xd3, 0x2d, 0x00, 0x00, 0x00,
         ];
 
-        let seen = Arc::new(kithara_platform::sync::Mutex::new(Vec::new()));
+        let seen = Arc::new(Mutex::new(Vec::new()));
         let handler_seen = Arc::clone(&seen);
         let app = Router::new().route(
             "/master.m3u8",

@@ -2,6 +2,8 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::BTreeMap;
+#[cfg(target_arch = "wasm32")]
+use std::sync::atomic::Ordering;
 use std::{
     collections::{HashMap, HashSet},
     sync::{OnceLock, Weak, atomic::AtomicBool},
@@ -194,8 +196,7 @@ impl Flushable for LruInner {
 #[cfg(target_arch = "wasm32")]
 impl LruInner {
     fn flush_with_durability(&self, _durable: bool) -> AssetsResult<()> {
-        self.dirty
-            .store(false, std::sync::atomic::Ordering::Release);
+        self.dirty.store(false, Ordering::Release);
         Ok(())
     }
 }

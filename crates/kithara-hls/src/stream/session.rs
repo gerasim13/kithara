@@ -2,7 +2,7 @@ mod cancel;
 mod reader;
 
 use std::{
-    io::{self, ErrorKind},
+    io::{self, Error, ErrorKind},
     ops::Range,
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
@@ -129,7 +129,7 @@ impl HlsSession {
 
     fn check_live(&self) -> io::Result<()> {
         if self.cancel.root.is_cancelled() {
-            return Err(io::Error::other("HLS reader session cancelled"));
+            return Err(Error::other("HLS reader session cancelled"));
         }
         if !self.active.load(Ordering::Acquire)
             && self
@@ -261,7 +261,7 @@ impl HlsSession {
             profile,
         } = &self.readiness
         else {
-            return Err(StreamError::Source(SourceError::Io(io::Error::new(
+            return Err(StreamError::Source(SourceError::Io(Error::new(
                 ErrorKind::Unsupported,
                 "active HLS session does not carry a decoder reader profile",
             ))));
@@ -378,6 +378,6 @@ impl ByteMap for HlsSession {
     }
 }
 
-fn pending(reason: PendingReason) -> io::Error {
-    io::Error::new(ErrorKind::Interrupted, reason)
+fn pending(reason: PendingReason) -> Error {
+    Error::new(ErrorKind::Interrupted, reason)
 }

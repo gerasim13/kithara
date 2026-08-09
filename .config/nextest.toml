@@ -1,18 +1,18 @@
 # On-disk fixture cache (L2). ON BY DEFAULT: when KITHARA_FIXTURE_CACHE is unset
 # (the default profile, `just test`, `cargo test`, `just test rtsan`, IDE), the test
 # code falls back to a build-fingerprinted temp dir (see
-# tests/src/fixture_cache.rs::default_cache_dir), so encode/mux output is reused
+# tests/src/fixture_cache.rs::resolve_cache_dir), so encode/mux output is reused
 # across the per-test processes in a run. Without L2, nextest's process-per-test
 # model re-encodes every AAC fixture from scratch — under CPU oversubscription a
 # single test's ffmpeg encode can exhaust its whole time budget and time out.
 #
-# The opt-in `cache` profile below additionally runs a setup script that wipes
-# and recreates a shared cache dir and exports KITHARA_FIXTURE_CACHE, giving an
-# ephemeral, explicitly-scoped per-run cache instead of the persistent default.
+# The opt-in `cold` profile below additionally runs a setup script that recreates
+# a separate cold root and exports KITHARA_FIXTURE_CACHE. It never removes the
+# persistent default cache.
 experimental = ["setup-scripts"]
 
-[scripts.setup.fixture-cache]
-command = 'cargo run -q -p kithara-integration-tests --bin fixture-cache-setup'
+[scripts.setup.cold-fixture-cache]
+command = 'cargo run -q -p kithara-integration-tests --bin cold-fixture-cache'
 
 [profile.default]
 fail-fast = false
@@ -58,18 +58,18 @@ test-threads = "num-cpus"
 slow-timeout = { period = "120s", terminate-after = 1 }
 leak-timeout = "2s"
 
-# Opt-in L2 fixture-cache profile: same settings as default, plus the
-# setup script that prepares the cache dir and exports KITHARA_FIXTURE_CACHE.
-# Use via `cargo nextest run --profile cache` / `just test run --lane=cached`.
-[profile.cache]
+# Opt-in cold fixture-cache profile: same settings as default, plus the setup
+# script that recreates an isolated cold root and exports KITHARA_FIXTURE_CACHE.
+# Use via `cargo nextest run --profile cold` / `just test run --lane=cold`.
+[profile.cold]
 fail-fast = false
 test-threads = "num-cpus"
 slow-timeout = { period = "120s", terminate-after = 1 }
 leak-timeout = "2s"
 
-[[profile.cache.scripts]]
+[[profile.cold.scripts]]
 filter = 'package(kithara-integration-tests)'
-setup = ['fixture-cache']
+setup = ['cold-fixture-cache']
 
 # Perf-measurement profile: behavior identical to default (profiles inherit
 # it); adds JUnit so `just perf suite` gets exact per-test timings.

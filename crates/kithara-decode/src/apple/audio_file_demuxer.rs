@@ -385,7 +385,7 @@ mod tests {
     };
     use kithara_test_utils::kithara;
 
-    use super::{AppleAudioFileDemuxer, SourceOpenMode};
+    use super::{AppleAudioFileDemuxer, Duration, SourceOpenMode};
     use crate::demuxer::{DemuxOutcome, Demuxer};
 
     fn read_asset(name: &str) -> Vec<u8> {
@@ -553,7 +553,7 @@ mod tests {
             AudioCodec::Mp3,
             Some(ContainerFormat::MpegAudio),
             SourceOpenMode::Streaming,
-            Some(kithara_platform::time::Duration::from_secs(2)),
+            Some(Duration::from_secs(2)),
         )
         .expect("MP3 streaming open must not require tail bytes");
         assert!(
@@ -562,7 +562,7 @@ mod tests {
         );
         assert_eq!(
             dx.duration(),
-            Some(kithara_platform::time::Duration::from_secs(2)),
+            Some(Duration::from_secs(2)),
             "MP3 streaming open must use the caller's prefix duration hint"
         );
 

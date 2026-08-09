@@ -71,4 +71,9 @@ constraints:
       # rule fires on every `match self` that forwards a command to the
       # variant's own backend, and the only way to pass it is the suppression
       # comment this repository does not allow.
-      regex: 'Self|&|\(\)'
+      #
+      # A bare `String` return is a `Display` impl, never `impl From<T> for
+      # String`; the sibling rule `rust.prefer-from-not-to-into` already
+      # excludes `^String$` on that ground and `rust.no-to-string-method` owns
+      # the class.
+      regex: 'Self|&|\(\)|^String$'

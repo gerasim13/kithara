@@ -1,8 +1,10 @@
 use dashmap::DashMap;
 use kithara_apple::foundation::{
     ns::{NSData, NSError, NSURLResponse, NSURLSessionTaskMetrics},
+    objc::rc::Retained,
     urlsession::{
-        self, AuthenticationChallenge, AuthenticationChallengeDisposition, TaskId, UrlSessionEvents,
+        AuthenticationChallenge, AuthenticationChallengeDisposition, TaskId, UrlSessionDelegate,
+        UrlSessionEvents,
     },
 };
 use kithara_platform::{sync::Arc, tokio::sync::oneshot};
@@ -128,9 +130,7 @@ impl UrlSessionEvents for AppleSessionEvents {
     }
 }
 
-pub(super) fn make_delegate(
-    events: &Arc<AppleSessionEvents>,
-) -> kithara_apple::foundation::objc::rc::Retained<urlsession::UrlSessionDelegate> {
+pub(super) fn make_delegate(events: &Arc<AppleSessionEvents>) -> Retained<UrlSessionDelegate> {
     let event_sink: Arc<dyn UrlSessionEvents> = events.clone();
-    urlsession::UrlSessionDelegate::new(event_sink)
+    UrlSessionDelegate::new(event_sink)
 }

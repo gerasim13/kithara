@@ -25,7 +25,10 @@ _xtask *ARGS: _xtask-ready
 
 [no-exit-message]
 _xtask-refresh:
-    @if just _xtask-cached strict self-cache probe </dev/null >/dev/null 2>&1; then exec just _xtask-cached strict self-cache refresh --force </dev/null; fi; exec just _xtask-bootstrap --force </dev/null
+    @if just _xtask-cached strict self-cache probe </dev/null >/dev/null 2>&1; then \
+      if just _xtask-cached strict self-cache refresh --force </dev/null; then exit 0; fi; \
+      printf 'warning: cached xtask self-cache maintenance failed; rebuilding from source\n' >&2; \
+    fi; exec just _xtask-bootstrap --force </dev/null
 
 [no-exit-message]
 [private]

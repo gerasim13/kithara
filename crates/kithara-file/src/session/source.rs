@@ -2,7 +2,7 @@ use std::{num::NonZeroUsize, ops::Range};
 
 use bon::Builder;
 use kithara_assets::{AssetReader, AssetStore, ReadSide, ResourceKey};
-use kithara_events::EventBus;
+use kithara_events::{EventBus, TotalBytesSource};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -102,7 +102,7 @@ impl FileSource {
         inner.publish_opened(
             total_bytes,
             true,
-            total_bytes.map(|_| kithara_events::TotalBytesSource::CommittedLen),
+            total_bytes.map(|_| TotalBytesSource::CommittedLen),
         );
         Self {
             coord,

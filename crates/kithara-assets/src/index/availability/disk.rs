@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::BTreeMap, fs, path::PathBuf, sync::OnceLock};
+use std::{collections::BTreeMap, fs::OpenOptions, path::PathBuf, sync::OnceLock};
 
 use dashmap::DashMap;
 use kithara_platform::{
@@ -142,7 +142,7 @@ impl InnerIndex {
             .collect();
         for path in queued {
             self.pending_durability.remove(&path);
-            let synced = fs::OpenOptions::new()
+            let synced = OpenOptions::new()
                 .write(true)
                 .open(&path)
                 .and_then(|file| file.sync_data());

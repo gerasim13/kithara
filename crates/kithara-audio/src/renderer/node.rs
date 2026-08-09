@@ -469,7 +469,7 @@ mod tests {
             runtime: DecoderRuntime::default(),
         };
 
-        let now = kithara_platform::time::Instant::now();
+        let now = Instant::now();
         node.maybe_emit_worker_telemetry(now);
         node.maybe_emit_worker_telemetry(now);
         emit.flush();

@@ -15,6 +15,19 @@ use crate::{
     traits::AudioEffect,
 };
 
+struct Consts;
+
+impl Consts {
+    /// PCM ring depth, ~100 ms per chunk. wasm needs a deeper ring because
+    /// its worker is scheduled coarsely.
+    #[cfg(not(target_arch = "wasm32"))]
+    const PCM_BUFFER_CHUNKS: usize = 10;
+    #[cfg(target_arch = "wasm32")]
+    const PCM_BUFFER_CHUNKS: usize = 32;
+    /// Chunks buffered before preload readiness is signalled.
+    const PRELOAD_CHUNKS: usize = 3;
+}
+
 /// Configuration for audio pipeline with stream config.
 ///
 /// Generic over `StreamType` to include stream-specific configuration.
@@ -36,7 +49,7 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     #[field(get)]
     pub(crate) byte_pool: BytePool,
     /// Number of chunks to buffer before signaling preload readiness.
-    #[builder(default = NonZeroUsize::new(3).expect("3 is non-zero"))]
+    #[builder(default = NonZeroUsize::new(Consts::PRELOAD_CHUNKS).expect("preload chunk count is non-zero"))]
     #[field(get, copy)]
     pub(crate) preload_chunks: NonZeroUsize,
     /// Unified event bus (optional — if not provided, one is created internally).
@@ -84,19 +97,9 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     pub(crate) block_on_underrun: bool,
     /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s).
     /// Default: 10 on native, 32 on wasm32.
-    #[builder(default = default_pcm_buffer_chunks())]
+    #[builder(default = Consts::PCM_BUFFER_CHUNKS)]
     #[field(get)]
     pub(crate) pcm_buffer_chunks: usize,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-const fn default_pcm_buffer_chunks() -> usize {
-    10
-}
-
-#[cfg(target_arch = "wasm32")]
-const fn default_pcm_buffer_chunks() -> usize {
-    32
 }
 
 impl<T, B> AudioConfig<T, B>
