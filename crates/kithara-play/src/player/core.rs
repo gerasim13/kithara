@@ -78,7 +78,9 @@ impl PlayerImpl {
     /// # Errors
     ///
     /// Returns [`PlayError::BindUnavailable`] when the session has committed
-    /// no grid yet, or the track has no usable analysed map at `at`.
+    /// no grid yet or the track has no usable analysed map at `at`. Returns a
+    /// typed session error when the current tempo is outside the bound
+    /// engine's declared rate envelope.
     pub(crate) fn bind(&self, binding: &TrackBinding, at: SessionBeat) -> Result<(), PlayError> {
         let anchor = self.core.engine.session_handle().anchor()?;
         if anchor.load().is_none() {
@@ -95,12 +97,18 @@ impl PlayerImpl {
             .map_err(|reason| PlayError::BindUnavailable {
                 reason: reason.to_string(),
             })?;
-        *self.core.binding.lock() = Some(Arc::new(SourceSchedule::new(
+        let schedule = Arc::new(SourceSchedule::new(
             binding.map().clone(),
             origin,
             binding.direction(),
             anchor,
-        )));
+        ));
+        let player_id = self.core.engine.ensure_player_id()?;
+        self.core
+            .engine
+            .session_handle()
+            .bind_player(player_id, binding.clone(), at)?;
+        *self.core.binding.lock() = Some(schedule);
         Ok(())
     }
 }

@@ -1,12 +1,15 @@
 mod wire {
     use firewheel::FirewheelCtx;
-    use kithara_audio::{EqBandConfig, SessionAnchorCell, SessionBeat};
+    use kithara_audio::{CoordinateError, EqBandConfig, SessionAnchorCell, SessionBeat};
     use kithara_bufpool::PcmPool;
     use kithara_events::EventBus;
     use kithara_platform::sync::{Arc, mpsc};
 
     use crate::{
-        api::{SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
+        api::{
+            SessionDuckingMode, SessionTransportSnapshot, SlotId, SyncUnavailable, Tempo,
+            TrackBinding,
+        },
         bridge::SlotControl,
     };
 
@@ -48,6 +51,36 @@ mod wire {
         TransportFrameExhausted,
         #[error("session transport revision is exhausted")]
         TransportRevisionExhausted,
+        #[error("bound player {player_id} has no compiled exact-span engine")]
+        BoundEngineUnavailable { player_id: PlayerId },
+        #[error(
+            "session tempo {beats_per_minute} BPM asks bound player {player_id} for unsupported elastic source rate {source_frames_per_output}"
+        )]
+        BoundTempoOutsideEnvelope {
+            player_id: PlayerId,
+            beats_per_minute: f64,
+            source_frames_per_output: f64,
+        },
+        #[error(
+            "bound player {player_id} cannot resolve the committed session span {start_beat}..{end_beat}"
+        )]
+        BoundSpanOutsideMap {
+            player_id: PlayerId,
+            start_beat: f64,
+            end_beat: f64,
+        },
+        #[error("bound player {player_id} has an invalid session span")]
+        BoundSpanCoordinate {
+            player_id: PlayerId,
+            #[source]
+            reason: CoordinateError,
+        },
+        #[error("bound player {player_id} has an unusable track binding")]
+        BoundBindingUnavailable {
+            player_id: PlayerId,
+            #[source]
+            reason: SyncUnavailable,
+        },
         #[error("stream stopped: {reason}; restart failed: {source}")]
         RestartFailed { reason: String, r#source: String },
     }
@@ -61,6 +94,11 @@ mod wire {
         },
         UnregisterPlayer {
             player_id: PlayerId,
+        },
+        BindPlayer {
+            player_id: PlayerId,
+            binding: TrackBinding,
+            at: SessionBeat,
         },
         StartPlayer {
             master_volume: f32,
@@ -157,14 +195,14 @@ mod wire {
 }
 
 mod handle {
-    use kithara_audio::{EqBandConfig, SessionAnchorCell};
+    use kithara_audio::{EqBandConfig, SessionAnchorCell, SessionBeat};
     use kithara_bufpool::PcmPool;
     use kithara_events::EventBus;
     use kithara_platform::sync::Arc;
 
     use super::wire::{AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionError};
     use crate::{
-        api::{SessionTransportSnapshot, SlotId, Tempo},
+        api::{SessionTransportSnapshot, SlotId, Tempo, TrackBinding},
         error::PlayError,
     };
 
@@ -259,6 +297,20 @@ mod handle {
                 Reply::SessionAnchor(anchor) => Ok(anchor),
                 _ => Err(PlayError::Session(SessionError::TransportNotProcessed)),
             }
+        }
+
+        pub(crate) fn bind_player(
+            &self,
+            player_id: PlayerId,
+            binding: TrackBinding,
+            at: SessionBeat,
+        ) -> Result<(), PlayError> {
+            self.exec_ok(Cmd::BindPlayer {
+                player_id,
+                binding,
+                at,
+            })
+            .map(drop)
         }
 
         pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {

@@ -43,6 +43,13 @@ also need playlist/segment headers keep the same immutable `Arc<DomainKeyPolicy>
 
 ## Tempo & Key-Lock
 
+The session owns admission for bound-deck tempo. Each registered player contributes its canonical
+`TrackBinding`; binding and tempo commits resolve one exact-span render block through that map and
+ask the selected elastic engine's declared envelope whether the resulting source-frames-per-output
+rate is supported. A refusal is typed and happens before the binding or transport revision changes.
+The check currently uses the raw binding ratio; beat-multiple locking is not yet part of the bound
+schedule.
+
 `kithara_audio::StretchControls` (one `Arc` per deck, in `PlayerConfig.timestretch`) is the single
 source of truth for playback speed, shared between the UI and the worker effect chain, which reads
 it each chunk. It always carries `speed` + `region_plan`; with a stretch backend compiled in

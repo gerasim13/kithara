@@ -11,21 +11,34 @@ use firewheel::{
         ProcStore, ProcStreamCtx, ProcessStatus, StreamStatus,
     },
 };
-use kithara_audio::{SessionAnchorCell, SessionBeat, SessionFrame};
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_audio::{
+    BeatGrid, SessionAnchorCell, SessionBeat, SessionFrame, TrackBeat, analysis::TrackAnalysis,
+};
+use kithara_bufpool::PcmPool;
+use kithara_events::{EventBus, PlaybackDirection};
+use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 use triple_buffer::{Output, triple_buffer};
 
 use super::{
+    bind_player,
     commit::{
         SessionTransportCommit, TransportCommitEvent, TransportCommitResult, TransportCommitStamp,
         TransportObservation, TransportProcessError,
     },
     node::SessionTransportProcessor,
     process::{TransportCommitState, TransportObservationInput, process_transport},
+    seed_committed_transport, set_tempo,
 };
-use crate::api::{SessionTransportSnapshot, Tempo, TransportRevision};
+use crate::{
+    api::{SessionTransportSnapshot, Tempo, TrackBinding, TransportRevision},
+    session::{
+        Cmd, PlayerId, Reply, SessionError, SessionState, run_cmd,
+        state::register_player,
+        testing::{NoopBackend, test_state},
+    },
+};
 
 const BLOCK_FRAMES: usize = 480;
 const SAMPLE_RATE: u32 = 48_000;
@@ -46,6 +59,119 @@ fn commit(tempo: f64, playing: bool, revision: TransportRevision) -> SessionTran
         playing,
         revision,
     )
+}
+
+fn tempo(beats_per_minute: f64) -> Tempo {
+    Tempo::new(beats_per_minute).expect("invariant: fixture tempo is valid")
+}
+
+fn track_binding(beats_per_minute: u32) -> TrackBinding {
+    let frames_per_beat = u64::from(SAMPLE_RATE) * 60 / u64::from(beats_per_minute);
+    let analysis = TrackAnalysis::with_source_rate(
+        Some(BeatGrid::new(
+            f64::from(beats_per_minute),
+            (0..=4).map(|beat| beat * frames_per_beat).collect(),
+            vec![0],
+            Vec::new(),
+        )),
+        None,
+        frames_per_beat * 5,
+        sample_rate(),
+    );
+    TrackBinding::new(
+        &analysis,
+        sample_rate(),
+        SessionBeat::default(),
+        TrackBeat::default(),
+        PlaybackDirection::Forward,
+    )
+    .expect("invariant: fixture binding is valid")
+}
+
+fn register_deck(state: &mut SessionState<NoopBackend>) -> PlayerId {
+    register_player(state, EventBus::default(), Vec::new(), PcmPool::default())
+}
+
+fn started_state(beats_per_minute: f64) -> (SessionState<NoopBackend>, PlayerId) {
+    let mut state = test_state();
+    let player_id = register_deck(&mut state);
+    match run_cmd(
+        &mut state,
+        Cmd::StartPlayer {
+            master_volume: 1.0,
+            player_id,
+            sample_rate: SAMPLE_RATE,
+        },
+    ) {
+        Reply::Ok => {}
+        Reply::Err(error) => panic!("fixture player start failed: {error}"),
+        _ => panic!("fixture player start returned an unexpected reply"),
+    }
+    seed_committed_transport(&mut state, tempo(beats_per_minute), sample_rate())
+        .expect("invariant: fixture transport is committed");
+    (state, player_id)
+}
+
+fn state_with_bound_decks(track_tempos: &[u32]) -> SessionState<NoopBackend> {
+    let (mut state, first_player_id) = started_state(90.0);
+    for (index, track_tempo) in track_tempos.iter().copied().enumerate() {
+        let player_id = if index == 0 {
+            first_player_id
+        } else {
+            register_deck(&mut state)
+        };
+        bind_player(
+            &mut state,
+            player_id,
+            track_binding(track_tempo),
+            SessionBeat::default(),
+        )
+        .expect("invariant: fixture binding fits the committed tempo");
+    }
+    state
+}
+
+#[kithara::test]
+fn a_commit_inside_every_deck_envelope_is_accepted() {
+    let mut state = state_with_bound_decks(&[120, 75]);
+
+    assert!(set_tempo(&mut state, tempo(95.0)).is_ok());
+}
+
+#[kithara::test]
+fn a_commit_outside_one_deck_envelope_is_refused_typed() {
+    let mut state = state_with_bound_decks(&[120, 75]);
+
+    assert!(matches!(
+        set_tempo(&mut state, tempo(120.0)),
+        Err(SessionError::BoundTempoOutsideEnvelope { .. })
+    ));
+}
+
+#[kithara::test]
+fn a_refused_commit_leaves_the_previously_committed_tempo_in_force() {
+    let mut state = state_with_bound_decks(&[120, 75]);
+    let _ = set_tempo(&mut state, tempo(120.0));
+
+    assert_eq!(
+        state.transport.accepted().map(|commit| commit.tempo()),
+        Some(tempo(90.0))
+    );
+}
+
+#[kithara::test]
+fn a_binding_outside_the_current_envelope_is_refused_typed() {
+    let (mut state, player_id) = started_state(90.0);
+
+    assert!(matches!(
+        bind_player(
+            &mut state,
+            player_id,
+            track_binding(60),
+            SessionBeat::default(),
+        ),
+        Err(SessionError::BoundTempoOutsideEnvelope { .. })
+    ));
 }
 
 fn proc_info_at(clock_samples: i64) -> ProcInfo {

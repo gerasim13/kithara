@@ -26,7 +26,7 @@ pub mod bound;
 mod slot;
 pub mod streaming;
 
-pub use slot::{TempoSlot, TempoSlotError};
+pub use slot::{TempoSlot, TempoSlotError, bound_rate_supported, bound_render_span_frames};
 pub use streaming::StretchControls;
 #[cfg(all(
     not(target_arch = "wasm32"),

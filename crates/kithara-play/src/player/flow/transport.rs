@@ -45,7 +45,8 @@ impl PlayerImpl {
     ///
     /// Returns [`PlayError::BindUnavailable`] when the session has committed
     /// no grid, the track has no usable analysed map, or the quantum names no
-    /// representable beat.
+    /// representable beat. Returns a typed session error when the current
+    /// tempo is outside the bound engine's declared rate envelope.
     pub fn bind_to_grid(
         &self,
         analysis: &TrackAnalysis,

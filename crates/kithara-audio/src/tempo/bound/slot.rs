@@ -6,6 +6,16 @@ use kithara_stretch::{ElasticConfig, ElasticEngine, ElasticSpanConfig};
 use super::{BoundError, BoundRenderer};
 use crate::{musical::SourceSchedule, traits::AudioEffect};
 
+pub(crate) fn rate_supported(source_frames_per_output: f64) -> Option<bool> {
+    Engine::rate_envelope()
+        .ok()
+        .map(|envelope| envelope.contains_rate(source_frames_per_output))
+}
+
+pub(crate) const fn render_span_frames() -> u64 {
+    BoundRenderer::<Engine>::BLOCK_FRAMES
+}
+
 /// Numeric policy the bound slot plans under.
 struct Consts;
 

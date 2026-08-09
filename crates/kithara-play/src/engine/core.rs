@@ -107,7 +107,7 @@ impl EngineImpl {
         self.bus.publish(event);
     }
 
-    fn ensure_player_id(&self) -> Result<PlayerId, PlayError> {
+    pub(crate) fn ensure_player_id(&self) -> Result<PlayerId, PlayError> {
         let mut player_id = self.player_id.lock();
         if let Some(id) = *player_id {
             return Ok(id);

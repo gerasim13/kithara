@@ -2,6 +2,46 @@ use kithara_platform::sync::Arc;
 
 use crate::{musical::SourceSchedule, tempo::streaming::StretchControls};
 
+/// Returns whether the selected exact-span engine accepts this continuous
+/// source-frame advance, or `None` when this build has no such engine.
+#[must_use]
+pub fn bound_rate_supported(source_frames_per_output: f64) -> Option<bool> {
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
+    {
+        return super::bound::rate_supported(source_frames_per_output);
+    }
+    #[cfg(not(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    )))]
+    {
+        let _ = source_frames_per_output;
+        None
+    }
+}
+
+/// Output frames in one exact-span planning request for the selected engine.
+#[must_use]
+pub fn bound_render_span_frames() -> Option<u64> {
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
+    {
+        return Some(super::bound::render_span_frames());
+    }
+    #[cfg(not(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    )))]
+    {
+        None
+    }
+}
+
 /// A tempo slot cannot be built as configured.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
