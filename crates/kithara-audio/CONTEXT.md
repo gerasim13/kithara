@@ -22,21 +22,27 @@ Transport (`runtime/ports.rs`): SPSC `ringbuf::HeapRb` plus a one-slot overflow
   infallible. Each tick starts with `Outlet::flush()`; if still full the node
   returns `TickResult::Backpressured` *without* ticking the FSM — every internal
   transition, seeks included, pauses until the consumer drains.
-- **Wake.** A ring push wakes the consumer; empty→non-empty also fires
-  `on_data_available`. The blocking consumer snapshots `ThreadWake` before
-  re-checking `try_pop`; a signal between the snapshot and park advances the
-  gate sequence, so `wait_timeout` returns immediately while retaining its timed
+- **Wake.** A ring push arms the consumer wake inside the checked produce core;
+  the scheduler shell delivers the `ThreadWake` before the next pass, keeping the
+  syscall off the realtime path. A terminal, unregistered, or cancelled node
+  gets one final shell-side flush before removal. Empty→non-empty also fires
+  `on_data_available`.
+  The blocking consumer snapshots `ThreadWake` before re-checking `try_pop`; a
+  signal between the snapshot and park advances the gate sequence, so
+  `wait_timeout` returns immediately while retaining its timed
   backstop.
 - **Trash ring.** The RT consumer must never `free`, so spent pooled `PcmChunk`s
   go to a second ring drained by `DecoderNode::recycle` on the worker. Capacity
   `pcm_buffer_chunks + 2` absorbs a full forward-ring seek drain, making the RT
   push infallible.
 - **Off-RT deferral.** Signals the forbid-blocking core must not make are armed
-  on-core and flushed by the shell from `AudioWorkerSource::flush_deferred`: FSM
-  lifecycle events (`DeferredBus<Event>`), the reader→peer wake
-  (`ReadinessGate::flush_peer_wake`), retired state (`Retired::drain`).
-  `StreamAudioSource::drop` flushes once more — `retain` removes a terminal slot
-  without another pass.
+  on-core and flushed by the shell from `DecoderNode::recycle`. The outlet flush
+  delivers the consumer output wake (`ReaderOutputWake`), while
+  `AudioWorkerSource::flush_deferred` owns FSM lifecycle events
+  (`DeferredBus<Event>`), the reader→peer wake
+  (`ReadinessGate::flush_peer_wake`), and retired state (`Retired::drain`).
+  `StreamAudioSource::drop` flushes lifecycle events once more — `retain` removes
+  a terminal slot without another pass.
 
 ### Scheduler
 
@@ -45,7 +51,9 @@ Transport (`runtime/ports.rs`): SPSC `ringbuf::HeapRb` plus a one-slot overflow
 carries `#[kithara::rtsan_forbid_blocking]`; `RtPolicy::Heavy` nodes tick outside
 it via `produce_tick_heavy`. `Node::rt_policy()` defaults to `Rt`; `AnalysisNode`
 declares `Heavy`. `Node::warm_up` runs once at registration in the shell, before
-any checked tick, to pre-touch `arc_swap`'s per-thread debt node.
+any checked tick, to pre-touch `arc_swap`'s per-thread debt node. Terminal,
+unregistered, and cancelled nodes get one final `Node::recycle` before removal,
+so deferred work armed by their last tick is delivered before the node is dropped.
 
 Park budgets: `Waiting`/`UpstreamPending`/`Backpressured` re-check after 10 ms,
 `Idle` after 100 ms; a `Produced` streak yields cooperatively every 16 passes

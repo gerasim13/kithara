@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use kithara_decode::{
     DecodeError, DecoderBackend as DecodeBackend, DecoderResamplerConfig, ErrorClass, PcmMeta,
     PcmSpec,
@@ -157,16 +159,24 @@ impl AudioEvents {
 pub(super) struct ReaderOutputWake {
     emit: Arc<DeferredBus<Event>>,
     thread: Arc<ThreadWake>,
+    pending: AtomicBool,
 }
 
 impl ReaderOutputWake {
     pub(super) fn new(thread: Arc<ThreadWake>, emit: Arc<DeferredBus<Event>>) -> Self {
-        Self { emit, thread }
+        Self {
+            emit,
+            thread,
+            pending: AtomicBool::new(false),
+        }
     }
 }
 
 impl WakeSignal for ReaderOutputWake {
     fn flush_deferred(&self) {
+        if self.pending.swap(false, Ordering::AcqRel) {
+            WakeSignal::wake(self.thread.as_ref());
+        }
         self.emit.flush();
     }
 
@@ -175,7 +185,7 @@ impl WakeSignal for ReaderOutputWake {
     }
 
     fn wake(&self) {
-        WakeSignal::wake(self.thread.as_ref());
+        self.pending.store(true, Ordering::Release);
     }
 }
 
@@ -424,6 +434,23 @@ mod tests {
                 if seek_epoch == epoch
         ));
         assert_eq!(seek.pending_epoch(), None);
+    }
+
+    #[kithara::test]
+    fn output_wake_is_deferred_until_the_scheduler_shell_flushes() {
+        let bus = EventBus::new(8);
+        let thread = Arc::new(ThreadWake::default());
+        let since = thread.current();
+        let wake = ReaderOutputWake::new(Arc::clone(&thread), AudioEvents::deferred(&bus));
+
+        WakeSignal::wake(&wake);
+
+        assert_eq!(thread.current(), since);
+        wake.flush_deferred();
+        let delivered = thread.current();
+        assert_ne!(delivered, since);
+        wake.flush_deferred();
+        assert_eq!(thread.current(), delivered);
     }
 
     #[kithara::test]

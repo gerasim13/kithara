@@ -106,11 +106,13 @@ pub(crate) trait Node: Send + 'static {
     /// the checked produce path. Default no-op.
     ///
     /// Run by the scheduler shell before [`tick`](Node::tick) — once per pass,
-    /// and again between the ticks of a burst. The burst is what makes the
+    /// again between the ticks of a burst, and once after cancellation or a
+    /// terminal tick before the node is removed. The burst is what makes the
     /// second call load-bearing: it puts a visit's worth of chunks in flight at
     /// once, and the consumer returns the spent buffers as it drains them, so
     /// reclaiming only at the start of the next pass overflows the trash ring
-    /// and pushes the free onto the audio thread.
+    /// and pushes the free onto the audio thread. The final call delivers work
+    /// armed by the last tick before dropping its owner.
     fn recycle(&mut self) {}
 
     /// Scheduling policy, cached when the node is registered.
