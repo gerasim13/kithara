@@ -520,8 +520,10 @@ async fn stress_seek_audio_hls(
     let result = spawn_blocking(move || {
         let mut warmup_churn: Option<ChurnSnapshot> = None;
         let chunk_duration_secs = 0.05;
-        let chunk_samples =
-            (chunk_duration_secs * f64::from(spec.sample_rate.get()) * f64::from(spec.channels)) as usize;
+        let chunk_samples = num_traits::cast::<f64, usize>(
+            chunk_duration_secs * f64::from(spec.sample_rate.get()) * f64::from(spec.channels),
+        )
+        .unwrap_or(usize::MAX);
         info!(chunk_duration_secs, chunk_samples, "Read chunk size");
 
         let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);
@@ -615,7 +617,10 @@ async fn stress_seek_audio_hls(
                 }
             }
 
-            let expected_frame_idx = (pos_secs * f64::from(spec.sample_rate.get())).round() as usize;
+            let expected_frame_idx = num_traits::cast::<f64, usize>(
+                (pos_secs * f64::from(spec.sample_rate.get())).round(),
+            )
+            .unwrap_or(usize::MAX);
             let expected_phase = expected_frame_idx % SawWav::SAW_PERIOD;
             let actual_phase = phase_from_f32(buf[0]);
             let dist = phase_distance(actual_phase, expected_phase);

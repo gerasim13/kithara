@@ -128,7 +128,7 @@ async fn test_retryable_errors_success_after_retries(#[case] failures_before_suc
     let result = try_with_retry(
         failures_before_success,
         http_500(),
-        failures_before_success as u32,
+        u32::try_from(failures_before_success).unwrap_or(0),
         Duration::from_millis(10),
     )
     .await;
@@ -143,7 +143,7 @@ async fn test_non_retryable_errors_no_retry(#[case] failures_before_success: usi
     let result = try_with_retry(
         failures_before_success,
         status(400),
-        failures_before_success as u32,
+        u32::try_from(failures_before_success).unwrap_or(0),
         Duration::from_millis(10),
     )
     .await;
@@ -201,7 +201,7 @@ async fn test_exponential_backoff_with_max_delay(
 async fn test_all_net_methods_with_retry(#[case] failures_before_success: usize) {
     let mock_net = make_retry_mock(failures_before_success, http_500());
     let retry_policy = RetryPolicy::builder()
-        .max_retries(failures_before_success as u32)
+        .max_retries(u32::try_from(failures_before_success).unwrap_or(0))
         .base_delay(Duration::from_millis(10))
         .max_delay(Duration::from_secs(5))
         .build();
@@ -215,7 +215,7 @@ async fn test_all_net_methods_with_retry(#[case] failures_before_success: usize)
 async fn test_timeout_retry_chaining(#[case] failures_before_success: usize) {
     let mock_net = make_retry_mock(failures_before_success, http_500());
     let retry_policy = RetryPolicy::builder()
-        .max_retries(failures_before_success as u32)
+        .max_retries(u32::try_from(failures_before_success).unwrap_or(0))
         .base_delay(Duration::from_millis(10))
         .max_delay(Duration::from_secs(5))
         .build();
@@ -238,7 +238,7 @@ async fn test_zero_base_delay(#[case] failures_before_success: usize) {
     let result = try_with_retry(
         failures_before_success,
         http_500(),
-        failures_before_success as u32,
+        u32::try_from(failures_before_success).unwrap_or(0),
         Duration::from_millis(0),
     )
     .await;

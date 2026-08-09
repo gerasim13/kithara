@@ -204,7 +204,8 @@ async fn run_case_paced(
         total_secs > 30.0 && total_secs < 120.0,
         "fixture duration out of sane range: {total_secs:.1}s",
     );
-    let total_frames_truth = (total_secs * f64::from(SAMPLE_RATE)) as u64;
+    let total_frames_truth =
+        num_traits::cast::<f64, u64>(total_secs * f64::from(SAMPLE_RATE)).unwrap_or(u64::MAX);
 
     let aspec = audio.spec();
     assert_eq!(aspec.sample_rate.get(), SAMPLE_RATE);

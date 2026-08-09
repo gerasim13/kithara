@@ -70,8 +70,10 @@ fn streaming_resource_complex_write_patterns(
 
     let total_chunks = total_size / chunk_size;
     for i in 0..total_chunks {
-        let offset = initial_offset + (i * chunk_size) as u64;
-        let data: Vec<u8> = (0..chunk_size).map(|j| ((i + j) % 256) as u8).collect();
+        let offset = initial_offset + u64::try_from(i * chunk_size).unwrap_or(u64::MAX);
+        let data: Vec<u8> = (0..chunk_size)
+            .map(|j| u8::try_from((i + j) % 256).unwrap_or(0))
+            .collect();
 
         writer.write_at(offset, &data).unwrap();
         reader
@@ -107,9 +109,9 @@ fn streaming_resource_concurrent_writes(
     for i in 0..write_count {
         let handle = thread::spawn({
             move || {
-                let offset = (i * chunk_size) as u64;
+                let offset = u64::try_from(i * chunk_size).unwrap_or(u64::MAX);
                 let data: Vec<u8> = (0..chunk_size)
-                    .map(|j| ((i * chunk_size + j) % 256) as u8)
+                    .map(|j| u8::try_from((i * chunk_size + j) % 256).unwrap_or(0))
                     .collect();
 
                 (offset, data)
@@ -145,18 +147,21 @@ fn streaming_resource_edge_case_reads(
     let reader = writer.reader();
 
     let data_size = 6144;
-    let initial_data: Vec<u8> = (0..data_size).map(|i| (i % 256) as u8).collect();
+    let initial_data: Vec<u8> = (0..data_size)
+        .map(|i| u8::try_from(i % 256).unwrap_or(0))
+        .collect();
     writer.write_at(0, &initial_data).unwrap();
     reader.wait_range(0..data_size as u64).unwrap();
 
     if offset < data_size as u64 {
-        let expected_size = read_size.min(data_size - offset as usize);
+        let offset_usize = usize::try_from(offset).unwrap_or(usize::MAX);
+        let expected_size = read_size.min(data_size - offset_usize);
         let read_back = read_bytes(&reader, offset, read_size);
 
         assert_eq!(read_back.len(), expected_size);
 
         if expected_size > 0 {
-            let expected_data = &initial_data[offset as usize..offset as usize + expected_size];
+            let expected_data = &initial_data[offset_usize..offset_usize + expected_size];
             assert_eq!(read_back, expected_data);
         }
     }
@@ -179,7 +184,9 @@ fn streaming_resource_multiple_range_operations(
     let reader = writer.reader();
 
     for (i, (offset, size)) in write_ranges.iter().enumerate() {
-        let data: Vec<u8> = (0..*size).map(|j| ((i * 1000 + j) % 256) as u8).collect();
+        let data: Vec<u8> = (0..*size)
+            .map(|j| u8::try_from((i * 1000 + j) % 256).unwrap_or(0))
+            .collect();
         let offset_u64 = *offset as u64;
 
         writer.write_at(offset_u64, &data).unwrap();
@@ -192,7 +199,9 @@ fn streaming_resource_multiple_range_operations(
     }
 
     for (i, (offset, size)) in write_ranges.iter().enumerate() {
-        let expected_data: Vec<u8> = (0..*size).map(|j| ((i * 1000 + j) % 256) as u8).collect();
+        let expected_data: Vec<u8> = (0..*size)
+            .map(|j| u8::try_from((i * 1000 + j) % 256).unwrap_or(0))
+            .collect();
         let read_back = read_bytes(&reader, *offset as u64, *size);
         assert_eq!(read_back, expected_data);
     }

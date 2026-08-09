@@ -85,7 +85,9 @@ fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
     let scope = asset_scope_with_root(&temp_dir, asset_root);
 
     let key = scope.key(&resource(rel_path)).unwrap();
-    let payload: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+    let payload: Vec<u8> = (0..size)
+        .map(|i| u8::try_from(i % 251).unwrap_or(0))
+        .collect();
 
     let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
 
@@ -222,7 +224,8 @@ fn streaming_resource_concurrent_write_and_read_across_handles(
             .open_resource(&key_reader, None)
             .unwrap();
         res.wait_range(0..payload_len_reader).unwrap();
-        let mut buf = BytePool::default().get_with(|b| b.resize(payload_len_reader as usize, 0));
+        let mut buf = BytePool::default()
+            .get_with(|b| b.resize(usize::try_from(payload_len_reader).unwrap_or(0), 0));
         let n = res.read_at(0, &mut buf).unwrap();
         buf.truncate(n);
         buf.to_vec()
@@ -360,7 +363,9 @@ fn streaming_resource_write_read_at_different_positions(
     let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
     let reader = writer.reader();
 
-    let data: Vec<u8> = (0..size).map(|i| (i % 256) as u8).collect();
+    let data: Vec<u8> = (0..size)
+        .map(|i| u8::try_from(i % 256).unwrap_or(0))
+        .collect();
 
     writer.write_at(offset, &data).unwrap();
     reader.wait_range(offset..(offset + size as u64)).unwrap();

@@ -86,7 +86,10 @@ async fn render_into(
 ) {
     const BATCH: u32 = 8;
     const TICK_MS: u64 = 10;
-    let target_blocks = (target_secs * f64::from(out_rate) / BLOCK_FRAMES as f64).ceil() as u32;
+    let target_blocks = num_traits::cast::<f64, u32>(
+        (target_secs * f64::from(out_rate) / BLOCK_FRAMES as f64).ceil(),
+    )
+    .unwrap_or(u32::MAX);
     let deadline = Instant::now() + Duration::from_millis(wall_budget_ms);
     let mut rendered = 0u32;
     while rendered < target_blocks {
@@ -153,7 +156,9 @@ async fn run_case(
     player.load_and_fadein(resource, "t0");
 
     let chan = CHANNELS as usize;
-    let wall_budget_ms = (PLAY_SECS * 1000.0 / 4.0) as u64 + delay_ms.unwrap_or(0) * 8 + 5_000;
+    let wall_budget_ms = num_traits::cast::<f64, u64>(PLAY_SECS * 1000.0 / 4.0).unwrap_or(u64::MAX)
+        + delay_ms.unwrap_or(0) * 8
+        + 5_000;
     let mut pcm: Vec<f32> = Vec::new();
     let scan_from_frame: u64 = match scenario {
         Scenario::SustainedFlac => {
@@ -182,7 +187,9 @@ async fn run_case(
                 wall_budget_ms,
             )
             .await;
-            switch_at_frame + (SWITCH_SETTLE_SECS * f64::from(out_rate)) as u64
+            switch_at_frame
+                + num_traits::cast::<f64, u64>(SWITCH_SETTLE_SECS * f64::from(out_rate))
+                    .unwrap_or(u64::MAX)
         }
     };
 
@@ -203,7 +210,7 @@ async fn run_case(
         "captured only {played_secs:.1}s of {PLAY_SECS:.0}s — player starved/stalled",
     );
 
-    let scan_from = (scan_from_frame as usize * chan).min(pcm.len());
+    let scan_from = (usize::try_from(scan_from_frame).unwrap_or(usize::MAX) * chan).min(pcm.len());
     let sine = SinePhaseSpec {
         freq_hz: FREQ_HZ,
         sample_rate: out_rate,

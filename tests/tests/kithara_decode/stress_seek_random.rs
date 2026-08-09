@@ -20,8 +20,9 @@ use crate::common::test_defaults::SawWav;
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
 async fn stress_random_seek_read_synthetic_wav() {
-    const DURATION_SECS: f64 = 10.0;
-    const SAMPLE_COUNT: usize = (SawWav::DEFAULT.sample_rate as f64 * DURATION_SECS) as usize;
+    const DURATION_SECS_INT: u32 = 10;
+    const DURATION_SECS: f64 = DURATION_SECS_INT as f64;
+    const SAMPLE_COUNT: usize = SawWav::DEFAULT.sample_rate as usize * DURATION_SECS_INT as usize;
     const SEEK_ITERATIONS: usize = 1000;
 
     let wav_data = create_test_wav(SAMPLE_COUNT, 44100, 2);
@@ -70,9 +71,10 @@ async fn stress_random_seek_read_synthetic_wav() {
     );
 
     let chunk_duration_secs = (total_secs * 0.005).clamp(0.05, 0.5);
-    let chunk_samples = (chunk_duration_secs
-        * f64::from(spec.sample_rate.get())
-        * f64::from(spec.channels)) as usize;
+    let chunk_samples = num_traits::cast::<f64, usize>(
+        chunk_duration_secs * f64::from(spec.sample_rate.get()) * f64::from(spec.channels),
+    )
+    .unwrap_or(usize::MAX);
     info!(chunk_duration_secs, chunk_samples, "Read chunk size");
 
     let result = spawn_blocking(move || {

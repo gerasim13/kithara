@@ -96,7 +96,9 @@ async fn serve_head_then_stall(State(state): State<StallState>, headers: HeaderM
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(45)))]
 async fn zero_progress_resume_loop_fails_terminally() {
-    let data: Vec<u8> = (0..Consts::TOTAL).map(|i| (i % 256) as u8).collect();
+    let data: Vec<u8> = (0..Consts::TOTAL)
+        .map(|i| u8::try_from(i % 256).unwrap_or(0))
+        .collect();
     let gets = Arc::new(AtomicUsize::new(0));
     let app = Router::new()
         .route("/audio.mp3", get(serve_head_then_stall))

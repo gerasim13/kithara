@@ -49,7 +49,7 @@ async fn run_case(
     let spec = SignalSpec {
         sample_rate: SAMPLE_RATE,
         channels: CHANNELS,
-        length: SignalSpecLength::Frames(STREAM_FRAMES as usize),
+        length: SignalSpecLength::Frames(usize::try_from(STREAM_FRAMES).unwrap_or(0)),
         format,
         bit_rate,
     };
@@ -102,7 +102,8 @@ async fn run_case(
         total_secs > 30.0 && total_secs < 120.0,
         "fixture duration out of sane range: {total_secs:.1}s",
     );
-    let total_frames_truth = (total_secs * f64::from(SAMPLE_RATE)) as u64;
+    let total_frames_truth =
+        num_traits::cast::<f64, u64>(total_secs * f64::from(SAMPLE_RATE)).unwrap_or(u64::MAX);
 
     let aspec = audio.spec();
     assert_eq!(aspec.sample_rate.get(), SAMPLE_RATE);
@@ -171,7 +172,7 @@ async fn local_run_case(format: SignalFormat, backend: DecoderBackend, bit_rate:
     let spec = SignalSpec {
         sample_rate: SAMPLE_RATE,
         channels: CHANNELS,
-        length: SignalSpecLength::Frames(STREAM_FRAMES as usize),
+        length: SignalSpecLength::Frames(usize::try_from(STREAM_FRAMES).unwrap_or(0)),
         format,
         bit_rate,
     };
@@ -205,7 +206,8 @@ async fn local_run_case(format: SignalFormat, backend: DecoderBackend, bit_rate:
         total_secs > 30.0 && total_secs < 120.0,
         "fixture duration out of sane range: {total_secs:.1}s",
     );
-    let total_frames_truth = (total_secs * f64::from(SAMPLE_RATE)) as u64;
+    let total_frames_truth =
+        num_traits::cast::<f64, u64>(total_secs * f64::from(SAMPLE_RATE)).unwrap_or(u64::MAX);
 
     let aspec = audio.spec();
     assert_eq!(aspec.sample_rate.get(), SAMPLE_RATE);
@@ -384,7 +386,7 @@ async fn decode_pcm_seconds(
     let spec = SignalSpec {
         sample_rate: SAMPLE_RATE,
         channels: CHANNELS,
-        length: SignalSpecLength::Frames(STREAM_FRAMES as usize),
+        length: SignalSpecLength::Frames(usize::try_from(STREAM_FRAMES).unwrap_or(0)),
         format,
         bit_rate,
     };
@@ -413,7 +415,8 @@ async fn decode_pcm_seconds(
     let chan = aspec.channels as usize;
     assert_eq!(aspec.sample_rate.get(), SAMPLE_RATE);
     assert_eq!(u32::from(aspec.channels), u32::from(CHANNELS));
-    let total_frames_target = (secs * f64::from(SAMPLE_RATE)) as usize;
+    let total_frames_target =
+        num_traits::cast::<f64, usize>(secs * f64::from(SAMPLE_RATE)).unwrap_or(usize::MAX);
     spawn_blocking(move || -> Vec<f32> {
         let mut pcm: Vec<f32> = Vec::with_capacity(total_frames_target * chan);
         let mut buf = vec![0.0_f32; 4096 * chan];
@@ -540,7 +543,7 @@ fn profile_codec_window(
 fn write_wav_mono_f32(path: &std::path::Path, samples: &[f32], sample_rate: u32) {
     use std::io::Write;
     let mut file = std::fs::File::create(path).expect("create wav");
-    let n = samples.len() as u32;
+    let n = u32::try_from(samples.len()).unwrap_or(u32::MAX);
     let byte_rate = sample_rate * 2;
     let data_bytes = n * 2;
     let total = 36 + data_bytes;
@@ -558,7 +561,7 @@ fn write_wav_mono_f32(path: &std::path::Path, samples: &[f32], sample_rate: u32)
     file.write_all(b"data").unwrap();
     file.write_all(&data_bytes.to_le_bytes()).unwrap();
     for &s in samples {
-        let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+        let v = num_traits::cast::<f32, i16>(s.clamp(-1.0, 1.0) * 32767.0).unwrap_or(0);
         file.write_all(&v.to_le_bytes()).unwrap();
     }
 }
@@ -618,12 +621,12 @@ async fn dump_aac_for_listening() {
 
     let chan = CHANNELS as usize;
     let secs: f64 = 5.0;
-    let total = (secs * f64::from(SAMPLE_RATE)) as usize;
+    let total = num_traits::cast::<f64, usize>(secs * f64::from(SAMPLE_RATE)).unwrap_or(usize::MAX);
     let sine = SinePhaseSpec::default_440();
     let delta = sine.delta_rad_per_sample();
 
     let ref_mono: Vec<f32> = (0..total)
-        .map(|k| (delta * k as f64).sin() as f32 * 0.95)
+        .map(|k| num_traits::cast::<f64, f32>((delta * k as f64).sin()).unwrap_or(0.0) * 0.95)
         .collect();
     write_wav_mono_f32(
         &dump_dir.join("01_reference_440hz.wav"),
@@ -652,7 +655,7 @@ async fn dump_aac_for_listening() {
         let residual: Vec<f32> = (0..aligned_to)
             .map(|k| {
                 let ref_aligned = amp * (delta * k as f64 + phi).sin();
-                mono[k] - ref_aligned as f32
+                mono[k] - num_traits::cast::<f64, f32>(ref_aligned).unwrap_or(0.0)
             })
             .collect();
         let residual_name = format!("{}.residual.wav", name.trim_end_matches(".wav"));
@@ -696,7 +699,7 @@ async fn bit_rate_e2e_does_not_hang(#[case] format: SignalFormat, #[case] bit_ra
     let spec = SignalSpec {
         sample_rate: SAMPLE_RATE,
         channels: CHANNELS,
-        length: SignalSpecLength::Frames(STREAM_FRAMES as usize),
+        length: SignalSpecLength::Frames(usize::try_from(STREAM_FRAMES).unwrap_or(0)),
         format,
         bit_rate: Some(bit_rate),
     };
@@ -961,7 +964,7 @@ async fn build_aac_sine_audio(backend: DecoderBackend) -> Audio<Stream<File>> {
     let spec = SignalSpec {
         sample_rate: SAMPLE_RATE,
         channels: CHANNELS,
-        length: SignalSpecLength::Frames(STREAM_FRAMES as usize),
+        length: SignalSpecLength::Frames(usize::try_from(STREAM_FRAMES).unwrap_or(0)),
         format: SignalFormat::Aac,
         bit_rate: Some(320_000),
     };

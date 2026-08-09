@@ -139,7 +139,9 @@ async fn stress_random_seek_read_hls(
         }
         stream.seek(SeekFrom::Start(0)).expect("seek back to 0");
 
-        let chunk_size = ((total_bytes as f64 * 0.005) as usize).clamp(1024, 65_536);
+        let chunk_size = num_traits::cast::<f64, usize>(total_bytes as f64 * 0.005)
+            .unwrap_or(usize::MAX)
+            .clamp(1024, 65_536);
         info!(chunk_size, "Read chunk size");
 
         let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);

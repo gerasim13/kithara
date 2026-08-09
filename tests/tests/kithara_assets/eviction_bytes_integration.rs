@@ -178,7 +178,7 @@ fn eviction_corner_cases_different_byte_limits(
         else {
             panic!("fresh acquire must be Pending");
         };
-        let data = Bytes::from(vec![0x11 * (i + 1) as u8; *size]);
+        let data = Bytes::from(vec![0x11 * u8::try_from(i + 1).unwrap_or(0); *size]);
         writer.write_at(0, &data).unwrap();
         writer.commit(Some(data.len() as u64)).unwrap();
     }

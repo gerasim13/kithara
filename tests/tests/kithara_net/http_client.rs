@@ -64,7 +64,8 @@ async fn range_endpoint(headers: HeaderMap) -> impl IntoResponse {
                     let end = end_opt.unwrap_or((data.len() - 1) as u64);
 
                     if start <= end && end < data.len() as u64 {
-                        let slice = &data[start as usize..=end as usize];
+                        let slice = &data[usize::try_from(start).unwrap_or(0)
+                            ..=usize::try_from(end).unwrap_or(0)];
                         let mut response_headers = HeaderMap::new();
                         response_headers.insert(
                             header::CONTENT_RANGE,
