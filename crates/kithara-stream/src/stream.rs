@@ -410,7 +410,7 @@ impl<T: StreamType> Stream<T> {
             let read_epoch = seek_obs.epoch();
             let pos = self.source.position();
             let requested_end = pos.saturating_add(buf.len() as u64);
-            let unit_end = if self.source.peer_wake().is_some() {
+            let unit_end = if matches!(wait, WaitMode::Probe) && self.source.peer_wake().is_some() {
                 self.source.byte_map().and_then(|map| {
                     let init = map.init_segment_range();
                     if init.contains(&pos) {
@@ -1200,6 +1200,29 @@ mod tests {
             StreamReadOutcome::Pending(PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted))
         ));
         assert_eq!(stream.position(), 4);
+    }
+
+    #[kithara::test]
+    fn blocking_read_preserves_the_full_construction_range() {
+        let source = ScriptSource::new(
+            Arc::new(SeekState::new()),
+            [],
+            [ScriptRead::Data(8)],
+            b"ABCDEFGH".to_vec(),
+        )
+        .with_segments([0..4, 4..8], 4)
+        .with_peer_wake(Arc::new(DeferredWake::default()));
+        let mut stream = Stream::<DummyType> { source };
+        let mut buf = [0u8; 8];
+
+        let outcome = stream
+            .try_read_with(&mut buf, WaitMode::Block)
+            .expect("the unavailable construction range is a pending status");
+        assert!(matches!(
+            outcome,
+            StreamReadOutcome::Pending(PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted))
+        ));
+        assert_eq!(stream.position(), 0);
     }
 
     #[kithara::test]
