@@ -610,20 +610,13 @@ async fn vod_manual_switch_affects_future_segments() {
     );
 }
 
-/// Deterministic regression for the urgent-down-switch reader-stall hang.
+/// Regression for escaping a stalled reader at a clean segment boundary.
 ///
-/// V0's tail (segment >= 5) is delayed far longer than the hang budget, so
-/// once the reader reaches the segment-4/5 boundary it blocks on a V0 segment
-/// V0 cannot deliver in time. The ABR raises an `UrgentDownSwitch` to the fast
-/// V1, but the Auto-mode commit historically fired only on a reader
-/// segment-boundary cross — which the undelivered segment prevents. That
-/// circular dependency stalled the reader past `KITHARA_HANG_TIMEOUT_SECS`
-/// and tripped the watchdog (the production freeze). The proactive rescue
-/// (`HlsCoord::urgent_rescue_boundary`) hands the undelivered tail to V1 at
-/// the segment boundary, so the reader finishes V0's loaded prefix and reads
-/// the rest from V1. With the delay (10s) >> hang budget (5s) the stall is
-/// deterministic: pre-fix this test trips the watchdog; post-fix it completes
-/// the full track via V1.
+/// V0's segment 5 body is withheld, so the reader parks at its start. Once the
+/// downloader reports `LoadSlow`, the HLS peer marks V0 non-delivering and ABR
+/// must publish an `EscapeStalled` switch to V1. V0 is the only variant that
+/// fits the initial throughput estimate; V1 is the sole escape candidate once
+/// V0 is excluded, so no pre-stall down-switch can satisfy the test.
 #[kithara::test(
     native,
     tokio,
@@ -631,18 +624,19 @@ async fn vod_manual_switch_affects_future_segments() {
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
-async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
+async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant() {
+    const STALLED_VARIANT: usize = 0;
+    const RESCUE_VARIANT: usize = 1;
+    const STALLED_SEGMENT: usize = 5;
+    const ESCAPE_BANDWIDTHS: [u64; 2] = [1_000_000, 5_000_000];
+
     let segment_count = 30;
     let init_segment = Arc::new(create_wav_init_segment(segment_count * D.segment_size));
     let pcm_data = Arc::new(create_pcm_segments(segment_count));
 
-    // Slow variant modelled as STATE, not a wall-clock timer: withhold V0's
-    // segment-5 BODY entirely (its HEAD/size stays open, so the layout is learned
-    // up front). The reader consumes V0 seg 0..5, then blocks on the
-    // never-delivered seg 5 — exactly "reader blocked on a slow variant" — and the
-    // urgent rescue must hand the tail to V1. No `delay_ms`, no `sleep`: progress
-    // is driven purely by the read outcome and the rescue, deterministic on both
-    // the real and the virtual clock.
+    // The body gate leaves HEAD/size available, so the layout is known before
+    // the reader parks. The downloader's own soft-timeout is the production
+    // trigger; the test does not manufacture a controller tick.
     let (server, gate) = HlsTestServer::with_segment_gate(
         HlsTestServerConfig {
             variant_count: 2,
@@ -651,12 +645,12 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
             segment_duration_secs: segment_duration_secs(),
             custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
             init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
-            variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
+            variant_bandwidths: Some(ESCAPE_BANDWIDTHS.to_vec()),
             codecs: Some("wav".to_string()),
             ..Default::default()
         },
-        0,
-        5,
+        STALLED_VARIANT,
+        STALLED_SEGMENT,
     )
     .await;
 
@@ -666,27 +660,7 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
-    // Event-driven release: the moment the urgent down-switch commits (the first
-    // `VariantApplied`, which in this test is the rescue onto V1), the rescue owns
-    // the tail, so free V0's withheld seg-5 GET. Driven by the EVENT, never a
-    // timer — and it fires only AFTER the behaviour under test has happened, so it
-    // cannot mask a missing rescue (no rescue ⇒ no event ⇒ no release ⇒ the read
-    // stalls and the hang watchdog still catches a real regression).
-    let release_gate = gate.clone();
-    let mut release_rx = bus.subscribe();
-    drop(spawn(async move {
-        loop {
-            match release_rx.recv().await.map(|env| env.event) {
-                Ok(Event::Abr(AbrEvent::VariantApplied { .. })) => {
-                    release_gate.release();
-                    break;
-                }
-                Ok(_) => {}
-                Err(kithara::platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                Err(kithara::platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
-            }
-        }
-    }));
+    let mut rescue_rx = bus.subscribe();
 
     let hls_config = HlsConfig::for_url(url)
         .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
@@ -709,9 +683,63 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
         .await
         .expect("create audio");
 
-    let total = spawn_blocking(move || read_to_eof(&mut audio))
-        .await
-        .expect("read");
+    let mut stalled_requests = HashSet::new();
+    let mut saw_load_slow = false;
+    wait_for_event(
+        &mut rescue_rx,
+        "LoadSlow for the gated V0 segment",
+        |event| {
+            match event {
+                Event::Downloader(DownloaderEvent::RequestEnqueued {
+                    request_id, url, ..
+                }) if parse_segment_url(url.as_str())
+                    == Some((STALLED_VARIANT, STALLED_SEGMENT)) =>
+                {
+                    stalled_requests.insert(*request_id);
+                }
+                Event::Downloader(DownloaderEvent::LoadSlow { request_id, .. })
+                    if stalled_requests.contains(request_id) =>
+                {
+                    saw_load_slow = true;
+                }
+                _ => {}
+            }
+            saw_load_slow
+        },
+        Duration::from_secs(20),
+    )
+    .await
+    .expect("LoadSlow for the gated V0 segment");
+    assert!(
+        gate.requested() > 0,
+        "the gated V0 segment body must be parked before reading"
+    );
+
+    let read = spawn_blocking(move || read_to_eof(&mut audio));
+    let mut saw_escape = false;
+    wait_for_event(
+        &mut rescue_rx,
+        "stalled-boundary EscapeStalled rescue",
+        |event| {
+            match event {
+                Event::Abr(AbrEvent::VariantApplied { from, to, reason })
+                    if from.get() == STALLED_VARIANT
+                        && to.get() == RESCUE_VARIANT
+                        && *reason == AbrReason::EscapeStalled =>
+                {
+                    saw_escape = true;
+                }
+                _ => {}
+            }
+            saw_escape
+        },
+        Duration::from_secs(20),
+    )
+    .await
+    .expect("stalled-boundary EscapeStalled rescue");
+    gate.release();
+
+    let total = read.await.expect("read");
 
     let segments = collector.segments();
     let switches = collector.switch_count();
@@ -719,7 +747,9 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
         .iter()
         .filter(|s| s.variant == 1 && !s.cached)
         .count();
-    info!(switches, net_v1, total, "urgent rescue test result");
+    let transitions = collector.applied_transitions();
+    let reader_segments = collector.reader_segments();
+    info!(switches, net_v1, total, "stalled escape test result");
 
     // The reader must finish the whole track via V1, not stall on V0's
     // undeliverable tail. A full WAV track is `segment_count * segment_size`
@@ -728,11 +758,18 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
     let full_frames = (segment_count * D.segment_size) as u64 / u64::from(D.channels) / 2;
     assert!(
         total >= full_frames * 9 / 10,
-        "reader must finish the track via V1 after the urgent rescue; \
+        "reader must finish the track via V1 after the stalled escape; \
          got {total} frames, expected >= {} (90% of {full_frames})",
         full_frames * 9 / 10
     );
-    assert!(switches > 0, "an urgent down-switch must commit");
+    assert!(
+        transitions.contains(&(RESCUE_VARIANT, AbrReason::EscapeStalled)),
+        "the stalled boundary must commit an EscapeStalled switch: {transitions:?}"
+    );
+    assert!(
+        reader_segments.contains(&(STALLED_VARIANT, STALLED_SEGMENT)),
+        "the V0 reader must reach the gated segment boundary: {reader_segments:?}"
+    );
     assert!(net_v1 > 0, "V1 must serve the tail after the rescue");
 }
 

@@ -409,7 +409,24 @@ impl<T: StreamType> Stream<T> {
         loop {
             let read_epoch = seek_obs.epoch();
             let pos = self.source.position();
-            let range = pos..pos.saturating_add(buf.len() as u64);
+            let requested_end = pos.saturating_add(buf.len() as u64);
+            let unit_end = if self.source.peer_wake().is_some() {
+                self.source.byte_map().and_then(|map| {
+                    let init = map.init_segment_range();
+                    if init.contains(&pos) {
+                        Some(init.end)
+                    } else {
+                        map.segment_at_byte(pos)
+                            .map(|segment| segment.byte_range.end)
+                    }
+                })
+            } else {
+                None
+            };
+            let range = pos..unit_end.map_or(requested_end, |end| end.min(requested_end));
+            let read_len = usize::try_from(range.end.saturating_sub(pos))
+                .map_or(buf.len(), |len| len.min(buf.len()));
+            let buf = &mut buf[..read_len];
 
             let wait_result = self
                 .source
@@ -760,6 +777,8 @@ mod tests {
         peer_wake: Option<Arc<DeferredWake>>,
         data: Vec<u8>,
         reads: VecDeque<ScriptRead>,
+        ready_end: Option<u64>,
+        segments: Vec<Range<u64>>,
         waits: VecDeque<WaitOutcome>,
     }
 
@@ -777,9 +796,21 @@ mod tests {
                 position: Arc::new(AtomicU64::new(0)),
                 anchor: None,
                 reads: reads.into_iter().collect(),
+                ready_end: None,
+                segments: Vec::new(),
                 waits: waits.into_iter().collect(),
                 peer_wake: None,
             }
+        }
+
+        fn with_segments(
+            mut self,
+            segments: impl IntoIterator<Item = Range<u64>>,
+            ready_end: u64,
+        ) -> Self {
+            self.segments = segments.into_iter().collect();
+            self.ready_end = Some(ready_end);
+            self
         }
 
         fn with_peer_wake(mut self, wake: Arc<DeferredWake>) -> Self {
@@ -801,6 +832,7 @@ mod tests {
             Some(Arc::new(ScriptByteMap {
                 anchor: self.anchor,
                 len: self.data.len() as u64,
+                segments: self.segments.clone(),
             }))
         }
 
@@ -861,9 +893,15 @@ mod tests {
 
         fn wait_range(
             &mut self,
-            _range: Range<u64>,
+            range: Range<u64>,
             _timeout: Option<Duration>,
         ) -> StreamResult<WaitOutcome> {
+            if self
+                .ready_end
+                .is_some_and(|ready_end| range.end > ready_end)
+            {
+                return Err(SourceError::WaitBudgetExceeded.into());
+            }
             Ok(self.waits.pop_front().unwrap_or(WaitOutcome::Ready))
         }
     }
@@ -871,6 +909,20 @@ mod tests {
     struct ScriptByteMap {
         anchor: Option<SourceSeekAnchor>,
         len: u64,
+        segments: Vec<Range<u64>>,
+    }
+
+    impl ScriptByteMap {
+        fn descriptor(&self, index: usize) -> Option<crate::SegmentDescriptor> {
+            let segment_index = u32::try_from(index).ok()?;
+            Some(crate::SegmentDescriptor::new(
+                self.segments.get(index)?.clone(),
+                Duration::ZERO,
+                Duration::ZERO,
+                segment_index,
+                0,
+            ))
+        }
     }
 
     impl crate::ByteMap for ScriptByteMap {
@@ -886,8 +938,18 @@ mod tests {
             Some(self.len)
         }
 
-        fn segment_after_byte(&self, _byte_offset: u64) -> Option<crate::SegmentDescriptor> {
-            None
+        fn segment_after_byte(&self, byte_offset: u64) -> Option<crate::SegmentDescriptor> {
+            self.segments
+                .iter()
+                .position(|range| range.start >= byte_offset)
+                .and_then(|index| self.descriptor(index))
+        }
+
+        fn segment_at_byte(&self, byte_offset: u64) -> Option<crate::SegmentDescriptor> {
+            self.segments
+                .iter()
+                .position(|range| range.contains(&byte_offset))
+                .and_then(|index| self.descriptor(index))
         }
 
         fn segment_at_time(&self, _t: Duration) -> Option<crate::SegmentDescriptor> {
@@ -1099,6 +1161,45 @@ mod tests {
             .expect("BUG: read must succeed once the source reports the range ready");
         assert_eq!(n, 4);
         assert_eq!(&buf, b"ABCD");
+    }
+
+    #[kithara::test]
+    fn try_read_stops_at_ready_segment_boundary() {
+        let source = ScriptSource::new(
+            Arc::new(SeekState::new()),
+            [],
+            [ScriptRead::Data(8)],
+            b"ABCDEFGH".to_vec(),
+        )
+        .with_segments([0..4, 4..8], 4)
+        .with_peer_wake(Arc::new(DeferredWake::default()));
+        let mut stream = Stream::<DummyType> { source };
+        let mut buf = [0u8; 8];
+
+        let outcome = stream
+            .try_read(&mut buf)
+            .expect("the ready current segment must produce a partial read");
+        let StreamReadOutcome::Bytes {
+            count,
+            byte_position,
+        } = outcome
+        else {
+            panic!("ready current segment must not wait for the next segment: {outcome:?}");
+        };
+
+        assert_eq!(count.get(), 4);
+        assert_eq!(byte_position, 4);
+        assert_eq!(&buf[..4], b"ABCD");
+        assert_eq!(stream.position(), 4);
+
+        let next = stream
+            .try_read(&mut buf)
+            .expect("the unavailable next segment is a pending status");
+        assert!(matches!(
+            next,
+            StreamReadOutcome::Pending(PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted))
+        ));
+        assert_eq!(stream.position(), 4);
     }
 
     #[kithara::test]

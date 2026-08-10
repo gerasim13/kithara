@@ -33,9 +33,14 @@ Outcome mapping in `try_read_with`: `SourceError::WaitBudgetExceeded` →
 `Pending(SeekPending)` while flushing, else `Pending(NotReady(WaitInterrupted))`; a
 seek-epoch change at any checkpoint (before the wait, after the wait, after the
 read) → `Pending(SeekPending)`; an empty `buf` → `Eof`, so callers must never probe
-with a zero-length buffer. `impl Read` maps `Bytes` → `Ok(n)`, `Eof` → `Ok(0)`, and
-re-loops on `NotReady`/`Retry` after notifying the peer; `probe_read` never loops —
-it arms the peer wake and returns. Both pending kinds surface as
+with a zero-length buffer. For a pull-driven segmented source whose byte map
+resolves the current unit, the wait range and read slice stop at the end of that
+init or media segment. An oversized caller buffer therefore receives a standard
+partial read from the ready current unit instead of waiting on bytes from the
+next unit; other sources keep the full requested range. `impl Read` maps
+`Bytes` → `Ok(n)`, `Eof` → `Ok(0)`, and re-loops on `NotReady`/`Retry` after
+notifying the peer; `probe_read` never loops — it arms the peer wake and returns.
+Both pending kinds surface as
 `ErrorKind::Interrupted` carrying `StreamPending` (never `WouldBlock`) so
 Symphonia's fragmented-MP4 reader treats the pause as transient; a variant fence
 surfaces as `io::Error::other(VariantChangeError)`. Both payloads are
