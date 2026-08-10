@@ -87,13 +87,29 @@ impl Process {
         }
     }
 
-    /// Reach a state. Refusal because it already holds is success, not output.
-    pub(crate) fn ensure(&self, program: &str, args: &[&str], label: &str) {
-        match self.command(program).args(args).output() {
-            Ok(output) if output.status.success() => info!(step = label, "done"),
-            Ok(_) => debug!(step = label, "already so"),
-            Err(error) => warn!(step = label, %error, "could not start"),
+    /// Reach a state, accepting only a caller-classified refusal that proves
+    /// the state already holds.
+    pub(crate) fn ensure(
+        &self,
+        program: &str,
+        args: &[&str],
+        label: &str,
+        already_satisfied: impl FnOnce(&Output) -> bool,
+    ) -> Result<()> {
+        let output = self
+            .command(program)
+            .args(args)
+            .output()
+            .with_context(|| format!("failed to start {label}"))?;
+        if output.status.success() {
+            info!(step = label, "done");
+            return Ok(());
         }
+        if already_satisfied(&output) {
+            debug!(step = label, "already so");
+            return Ok(());
+        }
+        output_text(output, label).map(drop)
     }
 
     pub(crate) fn require_tools(&self, tools: &[&str]) -> Result<()> {
@@ -173,6 +189,20 @@ fn output_text(output: Output, label: &str) -> Result<String> {
 mod tests {
     use super::*;
 
+    const FIXTURE_FAILURE_EXIT_CODE: i32 = 7;
+
+    fn fixture_ensure(
+        process: &Process,
+        script: &str,
+        already_satisfied: impl FnOnce(&Output) -> bool,
+    ) -> Result<()> {
+        if cfg!(windows) {
+            process.ensure("cmd", &["/C", script], "fixture state", already_satisfied)
+        } else {
+            process.ensure("sh", &["-c", script], "fixture state", already_satisfied)
+        }
+    }
+
     #[test]
     fn failed_output_keeps_command_context() {
         let output = if cfg!(windows) {
@@ -186,5 +216,64 @@ mod tests {
         let error = output_text(output, "fixture command").unwrap_err();
         assert!(error.to_string().contains("fixture command"));
         assert!(error.to_string().contains('7'));
+    }
+
+    #[test]
+    fn ensure_accepts_only_an_explicitly_classified_state() {
+        let process = Process::new(Path::new("."), BTreeMap::new());
+        let script = if cfg!(windows) {
+            "echo already 1>&2 & exit /B 7"
+        } else {
+            "printf already >&2; exit 7"
+        };
+
+        fixture_ensure(&process, script, |output| {
+            output.status.code() == Some(FIXTURE_FAILURE_EXIT_CODE)
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn ensure_accepts_success_without_classifying_it() {
+        let process = Process::new(Path::new("."), BTreeMap::new());
+        let script = if cfg!(windows) { "exit /B 0" } else { "exit 0" };
+
+        fixture_ensure(&process, script, |_| panic!("success needs no classifier")).unwrap();
+    }
+
+    #[test]
+    fn ensure_rejects_an_unclassified_failure_with_context() {
+        let process = Process::new(Path::new("."), BTreeMap::new());
+        let script = if cfg!(windows) {
+            "echo unexpected 1>&2 & exit /B 7"
+        } else {
+            "printf unexpected >&2; exit 7"
+        };
+
+        let error = fixture_ensure(&process, script, |_| false).unwrap_err();
+
+        assert!(error.to_string().contains("fixture state"));
+        assert!(error.to_string().contains('7'));
+        assert!(error.to_string().contains("unexpected"));
+    }
+
+    #[test]
+    fn ensure_rejects_a_command_that_cannot_start() {
+        let process = Process::new(Path::new("."), BTreeMap::new());
+
+        let error = process
+            .ensure(
+                "kithara-command-that-does-not-exist",
+                &[],
+                "missing fixture",
+                |_| false,
+            )
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to start missing fixture")
+        );
     }
 }

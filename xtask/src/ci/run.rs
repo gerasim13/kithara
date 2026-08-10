@@ -1,4 +1,4 @@
-use std::{env, path::PathBuf};
+use std::{env, path::PathBuf, process::Output};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
@@ -148,6 +148,23 @@ struct LinuxImageAttestation {
     provisioned: Option<String>,
 }
 
+struct Consts;
+
+impl Consts {
+    const CONNECTION_REFUSED_CODE: Option<&str> = if cfg!(target_os = "macos") {
+        Some("(os error 61)")
+    } else if cfg!(target_os = "linux") {
+        Some("(os error 111)")
+    } else if cfg!(windows) {
+        Some("(os error 10061)")
+    } else {
+        None
+    };
+    const SCCACHE_COMMAND_ERROR: i32 = 2;
+    const SCCACHE_CONNECT_ERROR: &str = "sccache: error: couldn't connect to server";
+    const SCCACHE_STOP_MESSAGE: &str = "Stopping sccache server...";
+}
+
 impl LinuxImageAttestation {
     fn from_gitlab() -> Result<Option<Self>> {
         if !is_gitlab() {
@@ -218,6 +235,28 @@ fn require_provisioned_linux_image(
     }
 }
 
+fn sccache_server_is_stopped(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> bool {
+    let stdout = String::from_utf8_lossy(stdout);
+    let stderr = String::from_utf8_lossy(stderr);
+    code == Some(Consts::SCCACHE_COMMAND_ERROR)
+        && stdout.trim() == Consts::SCCACHE_STOP_MESSAGE
+        && stderr.contains(Consts::SCCACHE_CONNECT_ERROR)
+        && Consts::CONNECTION_REFUSED_CODE.is_some_and(|code| stderr.contains(code))
+}
+
+fn sccache_server_already_stopped(output: &Output) -> bool {
+    sccache_server_is_stopped(output.status.code(), &output.stdout, &output.stderr)
+}
+
+fn retire_sccache_server(process: &Process) -> Result<()> {
+    process.ensure(
+        "sccache",
+        &["--stop-server"],
+        "retire the compiler cache",
+        sccache_server_already_stopped,
+    )
+}
+
 pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
     ext.ci.validate()?;
@@ -246,7 +285,7 @@ pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     // exists fails every compilation while reporting only that a C compiler
     // exited 254. Retire the server so it restarts with what this job asked
     // for; the cache on disk is untouched.
-    process.ensure("sccache", &["--stop-server"], "retire the compiler cache");
+    retire_sccache_server(&process)?;
 
     let result = match args.lane {
         Lane::AppleLint => lane::apple::lint(&process, &ci_config),
@@ -304,8 +343,8 @@ mod tests {
     use clap::{Parser, ValueEnum};
 
     use super::{
-        CacheGroup, Lane, LinuxImageAttestation, linux_image_diagnosis,
-        require_provisioned_linux_image,
+        CacheGroup, Consts, Lane, LinuxImageAttestation, linux_image_diagnosis,
+        require_provisioned_linux_image, sccache_server_is_stopped,
     };
     use crate::Cli;
 
@@ -491,6 +530,79 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("not declared by runner"));
+    }
+
+    #[test]
+    fn sccache_connection_refusal_is_an_already_stopped_state() {
+        let Some(os_error) = Consts::CONNECTION_REFUSED_CODE else {
+            return;
+        };
+        let stderr = format!(
+            "sccache: error: couldn't connect to server\n\
+             sccache: caused by: operating system refused the connection {os_error}"
+        );
+
+        assert!(sccache_server_is_stopped(
+            Some(Consts::SCCACHE_COMMAND_ERROR),
+            b"Stopping sccache server...\n",
+            stderr.as_bytes(),
+        ));
+    }
+
+    #[test]
+    fn sccache_rejects_another_platforms_connection_error() {
+        let Some(expected) = Consts::CONNECTION_REFUSED_CODE else {
+            return;
+        };
+        for os_error in ["(os error 61)", "(os error 111)", "(os error 10061)"] {
+            if os_error == expected {
+                continue;
+            }
+            let stderr = format!(
+                "sccache: error: couldn't connect to server\n\
+                 sccache: caused by: connection failed {os_error}"
+            );
+            assert!(!sccache_server_is_stopped(
+                Some(Consts::SCCACHE_COMMAND_ERROR),
+                b"Stopping sccache server...\n",
+                stderr.as_bytes(),
+            ));
+        }
+    }
+
+    #[test]
+    fn sccache_does_not_hide_other_exit_two_failures() {
+        const UNRELATED_EXIT_CODE: i32 = 7;
+        let Some(os_error) = Consts::CONNECTION_REFUSED_CODE else {
+            return;
+        };
+        let refusal = format!(
+            "sccache: error: couldn't connect to server\n\
+             sccache: caused by: connection failed {os_error}"
+        );
+
+        assert!(!sccache_server_is_stopped(
+            Some(UNRELATED_EXIT_CODE),
+            b"Stopping sccache server...\n",
+            refusal.as_bytes(),
+        ));
+        assert!(!sccache_server_is_stopped(
+            Some(Consts::SCCACHE_COMMAND_ERROR),
+            b"Unexpected command output\n",
+            refusal.as_bytes(),
+        ));
+        let missing_header = format!("sccache: error: configuration is invalid {os_error}");
+        assert!(!sccache_server_is_stopped(
+            Some(Consts::SCCACHE_COMMAND_ERROR),
+            b"Stopping sccache server...\n",
+            missing_header.as_bytes(),
+        ));
+        assert!(!sccache_server_is_stopped(
+            Some(Consts::SCCACHE_COMMAND_ERROR),
+            b"Stopping sccache server...\n",
+            b"sccache: error: couldn't connect to server\n\
+              sccache: caused by: connection failed without an operating-system code",
+        ));
     }
 
     #[test]
