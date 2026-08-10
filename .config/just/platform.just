@@ -1,7 +1,7 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set working-directory := "../.."
 
-# WASM tasks: check, test, build, or size-check.
+# WASM tasks: check, test, test-webcodecs, build, or size-check.
 [positional-arguments]
 wasm MODE="check" *ARGS:
     #!/usr/bin/env bash
@@ -16,7 +16,7 @@ wasm MODE="check" *ARGS:
         cargo check -p kithara-decode --target wasm32-unknown-unknown --no-default-features --features symphonia,webcodecs,client-reqwest,tls-rustls
         cargo check -p kithara-ffi --target wasm32-unknown-unknown --features wasm --no-default-features
         ;;
-      test)
+      test|test-webcodecs)
         # The wasm target rebuilds std for shared memory, which only a nightly
         # honours, and the repository pins one. `wasm-pack` cannot be used
         # here: it drives Cargo with the default toolchain, which refuses the
@@ -33,36 +33,41 @@ wasm MODE="check" *ARGS:
             exit 2
             ;;
         esac
-        WASM_BINDGEN_TEST_TIMEOUT=300 \
-        WASM_BINDGEN_USE_BROWSER=1 \
-        # The browser talks to a fixture server that runs on this machine, and
-        # the runner looks for it beside itself. Nothing in a wasm build
-        # produces a host binary, so the lane used to depend on some earlier
-        # native job having left one behind, and failed with "failed to start
-        # test_server ... No such file or directory" whenever it ran first.
-        cargo build -p kithara-integration-tests --bin test_server
-        # The integration browser tests live in `suite_heavy`. Building the
-        # whole crate for wasm compiles every native suite too, and those reach
-        # for threads, the filesystem, and a local test server that the browser
-        # has no way to offer. The crate-owned WebCodecs target runs separately
-        # below because it is not part of any integration suite.
-        # `optimize_for_size` matches crates/kithara-ffi/.cargo/config.toml, so
-        # the bundle lane and this one rebuild one identical std rather than
-        # two that differ.
-        # Keep the stress tests' own deadlines intact while running the WASM
-        # graph with the workspace's release-grade test profile. `opt-level=2`
-        # still missed the seek-pressure contract's 10-second deadline on the
-        # self-hosted Chromium runner before reaching the final seek-to-zero
-        # oracle.
-        cargo "+$toolchain" test --profile test-release --target wasm32-unknown-unknown \
-          -Z build-std=std,panic_abort,core,alloc \
-          -Z build-std-features=optimize_for_size \
-          -p kithara-integration-tests --test suite_heavy
+        if [[ "$mode" == "test" ]]; then
+          WASM_BINDGEN_TEST_TIMEOUT=300 \
+          WASM_BINDGEN_USE_BROWSER=1 \
+          # The browser talks to a fixture server that runs on this machine, and
+          # the runner looks for it beside itself. Nothing in a wasm build
+          # produces a host binary, so the lane used to depend on some earlier
+          # native job having left one behind, and failed with "failed to start
+          # test_server ... No such file or directory" whenever it ran first.
+          cargo build -p kithara-integration-tests --bin test_server
+          # The integration browser tests live in `suite_heavy`. Building the
+          # whole crate for wasm compiles every native suite too, and those reach
+          # for threads, the filesystem, and a local test server that the browser
+          # has no way to offer. The crate-owned WebCodecs target runs separately
+          # below because it is not part of any integration suite.
+          # `optimize_for_size` matches crates/kithara-ffi/.cargo/config.toml, so
+          # the bundle lane and this one rebuild one identical std rather than
+          # two that differ.
+          # Keep the stress tests' own deadlines intact while running the WASM
+          # graph with the workspace's release-grade test profile. `opt-level=2`
+          # still missed the seek-pressure contract's 10-second deadline on the
+          # self-hosted Chromium runner before reaching the final seek-to-zero
+          # oracle.
+          cargo "+$toolchain" test --profile test-release --target wasm32-unknown-unknown \
+            -Z build-std=std,panic_abort,core,alloc \
+            -Z build-std-features=optimize_for_size \
+            -p kithara-integration-tests --test suite_heavy
+        fi
         if [[ "$browser" == "chrome" ]]; then
           CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" WASM_BINDGEN_TEST_TIMEOUT=300 \
-          WASM_BINDGEN_USE_BROWSER=1 cargo +nightly test --target wasm32-unknown-unknown \
+          WASM_BINDGEN_USE_BROWSER=1 cargo "+$toolchain" test --target wasm32-unknown-unknown \
             -p kithara-decode --no-default-features \
             --features symphonia,webcodecs,client-reqwest,tls-rustls --test webcodecs_browser
+        elif [[ "$mode" == "test-webcodecs" ]]; then
+          echo "WebCodecs browser tests require chrome"
+          exit 2
         fi
         ;;
       build)
@@ -72,7 +77,7 @@ wasm MODE="check" *ARGS:
         just _xtask wasm size-check "$@"
         ;;
       *)
-        echo "unknown wasm mode: $mode (use check|test|build|size-check)"
+        echo "unknown wasm mode: $mode (use check|test|test-webcodecs|build|size-check)"
         exit 2
         ;;
     esac

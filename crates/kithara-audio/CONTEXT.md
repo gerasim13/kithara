@@ -278,9 +278,12 @@ and terminal phases abort the transition.
   priming can never fix; the transition waits for the outgoing instead.
 - **Promotion** trims the staged head to the cut frame, requires remaining
   output, tells the source (`VariantControl::promote_variant`), swaps the
-  generation, and joins the blender. `VariantPromotion::Deferred` stops the pass,
-  `Stale` discards the local incoming, and every displaced or aborted generation
-  goes to `Retired` — never dropped on the produce core.
+  generation, and joins the blender. Equal default codec profiles carry the
+  larger observed timeline gap into the promoted generation; this is the same
+  normalization used by the overlap proof, and retaining it prevents a later
+  switch from moving the active timeline origin backward. `VariantPromotion::Deferred`
+  stops the pass, `Stale` discards the local incoming, and every displaced or
+  aborted generation goes to `Retired` — never dropped on the produce core.
 
 **`PcmBlender`** is always on and owns the audible seam. `join_active` starts a
 `Pending` join when the two generations share a `PcmSpec` and ≥3 frames of

@@ -9,9 +9,9 @@ use crate::ci::{
 /// Firefox regression should not hide whether Chromium still passes.
 ///
 /// Both go through the repository's own wasm recipe rather than driving
-/// `wasm-pack` directly. The target rebuilds std for shared memory, which
-/// needs the pinned nightly; `wasm-pack` drives Cargo with the default
-/// toolchain, so std keeps its stock features and the linker rejects it.
+/// `wasm-pack` directly. Chromium owns the crate-level `WebCodecs` target;
+/// Firefox retains the full integration suite, whose shared-memory standard
+/// library build needs the pinned nightly.
 pub(crate) fn chromium(process: &Process, pins: &CiPins) -> Result<()> {
     require_os("linux", "Web browser")?;
     process.require_tools(&["chromium", "chromedriver", "just"])?;
@@ -19,8 +19,8 @@ pub(crate) fn chromium(process: &Process, pins: &CiPins) -> Result<()> {
     require_version(process, "chromedriver", &pins.chrome_for_testing_version)?;
     process.run(
         "just",
-        &["platform", "wasm", "test", "chrome"],
-        "Chromium WASM tests",
+        &["platform", "wasm", "test-webcodecs", "chrome"],
+        "Chromium WebCodecs tests",
     )
 }
 
