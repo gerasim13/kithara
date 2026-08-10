@@ -19,13 +19,11 @@ use super::offset::OffsetReader;
 /// - `StreamAudioSource` to check `media_info()` for format changes
 pub(crate) struct SharedStream<T: StreamType> {
     inner: Arc<Mutex<Stream<T>>>,
-    /// Construction-phase read mode, shared across clones. When set, `Read`
-    /// routes through the blocking off-RT [`Stream::read`] adapter (waits for
-    /// the seeked range to download, cancel-bounded by its own timeout)
-    /// instead of the non-blocking RT [`Stream::probe_read`]. Decoder builders
-    /// arm it only around their off-RT factory call and disarm it before
-    /// steady-state decoding resumes. See the crate `CONTEXT.md`
-    /// "Construction reads".
+    /// Construction-phase I/O mode, shared across clones. When set, `Read` and
+    /// `Seek` route through the blocking off-RT [`Stream`] adapters instead of
+    /// the non-blocking RT probes. Decoder builders arm it only around their
+    /// off-RT factory call and disarm it before steady-state decoding resumes.
+    /// See the crate `CONTEXT.md` "Construction reads".
     blocking: ConstructionGate,
 }
 
@@ -147,9 +145,12 @@ impl<T: StreamType> Read for SharedStream<T> {
 }
 
 impl<T: StreamType> Seek for SharedStream<T> {
-    delegate! {
-        to self.inner.lock() {
-            fn seek(&mut self, pos: SeekFrom) -> io::Result<u64>;
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        let mut stream = self.inner.lock();
+        if self.blocking.is_armed() {
+            stream.seek(pos)
+        } else {
+            stream.probe_seek(pos)
         }
     }
 }
