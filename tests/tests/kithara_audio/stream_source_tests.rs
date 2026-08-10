@@ -9,6 +9,7 @@ use kithara::{
 use kithara_integration_tests::{
     create_test_wav, kithara,
     memory_source::{MemStream, MemStreamConfig, MemorySource},
+    reads::blocking_audio,
 };
 
 fn wav_stream(samples: usize) -> AudioConfig<MemStream> {
@@ -25,13 +26,23 @@ fn wav_stream(samples: usize) -> AudioConfig<MemStream> {
         .build()
 }
 
-async fn wait_for_frames<S>(audio: &mut Audio<S>, budget: Duration) -> usize {
+async fn wait_for_frames<S>(mut audio: Audio<S>, budget: Duration) -> (Audio<S>, usize)
+where
+    Audio<S>: Send + 'static,
+{
     let mut buf = [0.0f32; 256];
     let deadline = Instant::now() + budget;
     while Instant::now() < deadline {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => return count.get(),
-            Ok(ReadOutcome::Eof { .. }) => return 0,
+        let (next_audio, (next_buf, outcome)) = blocking_audio(audio, move |audio| {
+            let outcome = audio.read(&mut buf);
+            (buf, outcome)
+        })
+        .await;
+        audio = next_audio;
+        buf = next_buf;
+        match outcome {
+            Ok(ReadOutcome::Frames { count, .. }) => return (audio, count.get()),
+            Ok(ReadOutcome::Eof { .. }) => return (audio, 0),
             Ok(ReadOutcome::Pending { .. }) => {
                 time::sleep(Duration::from_millis(20)).await;
             }
@@ -41,14 +52,24 @@ async fn wait_for_frames<S>(audio: &mut Audio<S>, budget: Duration) -> usize {
     panic!("timed out waiting for ReadOutcome::Frames");
 }
 
-async fn drain_to_eof<S>(audio: &mut Audio<S>, budget: Duration) -> usize {
+async fn drain_to_eof<S>(mut audio: Audio<S>, budget: Duration) -> (Audio<S>, usize)
+where
+    Audio<S>: Send + 'static,
+{
     let mut buf = [0.0f32; 4096];
     let mut total = 0usize;
     let deadline = Instant::now() + budget;
     while Instant::now() < deadline {
-        match audio.read(&mut buf) {
+        let (next_audio, (next_buf, outcome)) = blocking_audio(audio, move |audio| {
+            let outcome = audio.read(&mut buf);
+            (buf, outcome)
+        })
+        .await;
+        audio = next_audio;
+        buf = next_buf;
+        match outcome {
             Ok(ReadOutcome::Frames { count, .. }) => total += count.get(),
-            Ok(ReadOutcome::Eof { .. }) => return total,
+            Ok(ReadOutcome::Eof { .. }) => return (audio, total),
             Ok(ReadOutcome::Pending { .. }) => {
                 time::sleep(Duration::from_millis(10)).await;
             }
@@ -61,11 +82,11 @@ async fn drain_to_eof<S>(audio: &mut Audio<S>, budget: Duration) -> usize {
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn basic_decode_to_eof() {
     let config = wav_stream(8_000);
-    let mut audio = Audio::<Stream<MemStream>>::new(config)
+    let audio = Audio::<Stream<MemStream>>::new(config)
         .await
         .expect("audio construction");
 
-    let frames = drain_to_eof(&mut audio, Duration::from_secs(5)).await;
+    let (_audio, frames) = drain_to_eof(audio, Duration::from_secs(5)).await;
     assert!(
         frames >= 8_000,
         "expected at least the input frame count, got {frames}"
@@ -75,13 +96,15 @@ async fn basic_decode_to_eof() {
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn seek_during_active_decode_completes_without_hang() {
     let config = wav_stream(44_100 * 3);
-    let mut audio = Audio::<Stream<MemStream>>::new(config)
+    let audio = Audio::<Stream<MemStream>>::new(config)
         .await
         .expect("audio construction");
     let mut events = audio.event_bus().subscribe();
 
-    let _ = wait_for_frames(&mut audio, Duration::from_secs(2)).await;
-    audio.seek(Duration::from_secs_f64(1.5)).expect("seek");
+    let (audio, _initial_frames) = wait_for_frames(audio, Duration::from_secs(2)).await;
+    let (mut audio, seek_result) =
+        blocking_audio(audio, |audio| audio.seek(Duration::from_secs_f64(1.5))).await;
+    seek_result.expect("seek");
 
     let mut observed_epoch: Option<SeekEpoch> = None;
     let deadline = Instant::now() + Duration::from_secs(3);
@@ -116,14 +139,16 @@ async fn seek_during_active_decode_completes_without_hang() {
                 break;
             }
             Ok(_) => {
-                let _ = wait_for_frames(&mut audio, Duration::from_millis(150)).await;
+                let (next_audio, _frames) =
+                    wait_for_frames(audio, Duration::from_millis(150)).await;
+                audio = next_audio;
             }
             Err(_) => break,
         }
     }
     assert!(saw_complete, "SeekComplete must arrive after seek");
 
-    let frames_after = wait_for_frames(&mut audio, Duration::from_secs(2)).await;
+    let (_audio, frames_after) = wait_for_frames(audio, Duration::from_secs(2)).await;
     assert!(
         frames_after > 0,
         "audio must keep producing frames after seek"
@@ -150,7 +175,14 @@ async fn rapid_seeks_via_timeline_all_complete() {
         let mut buf = [0.0f32; 256];
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            match audio.read(&mut buf) {
+            let (next_audio, (next_buf, outcome)) = blocking_audio(audio, move |audio| {
+                let outcome = audio.read(&mut buf);
+                (buf, outcome)
+            })
+            .await;
+            audio = next_audio;
+            buf = next_buf;
+            match outcome {
                 Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Eof { .. }) => break,
                 Ok(ReadOutcome::Pending { .. }) => {
                     time::sleep(Duration::from_millis(20)).await;
@@ -163,7 +195,10 @@ async fn rapid_seeks_via_timeline_all_complete() {
     let mut expected_epochs = Vec::with_capacity(SEEK_COUNT);
     for i in 0..SEEK_COUNT {
         let target = Duration::from_millis(200 + (i as u64) * 250);
-        audio.seek(target).expect("seek");
+        let (next_audio, seek_result) =
+            blocking_audio(audio, move |audio| audio.seek(target)).await;
+        audio = next_audio;
+        seek_result.expect("seek");
 
         let deadline = Instant::now() + Duration::from_secs(1);
         let mut captured = None;
@@ -188,7 +223,14 @@ async fn rapid_seeks_via_timeline_all_complete() {
         let mut buf = [0.0f32; 256];
         let deadline = Instant::now() + Duration::from_millis(500);
         while Instant::now() < deadline {
-            match audio.read(&mut buf) {
+            let (next_audio, (next_buf, outcome)) = blocking_audio(audio, move |audio| {
+                let outcome = audio.read(&mut buf);
+                (buf, outcome)
+            })
+            .await;
+            audio = next_audio;
+            buf = next_buf;
+            match outcome {
                 Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Eof { .. }) => break,
                 Ok(ReadOutcome::Pending { .. }) => {
                     time::sleep(Duration::from_millis(20)).await;
@@ -208,10 +250,17 @@ async fn rapid_seeks_via_timeline_all_complete() {
     let mut last_complete: Option<SeekEpoch> = None;
     while Instant::now() < deadline {
         // Read each tick so the consumer keeps committing post-seek output and
-        // emitting `SeekComplete` for the highest requested epoch. `read()` is
-        // non-blocking; the `events.recv()` below parks on the virtual clock,
-        // letting the worker decode the next chunk.
-        match audio.read(&mut buf) {
+        // emitting `SeekComplete` for the highest requested epoch. The
+        // ownership roundtrip keeps a possible read park off the runtime;
+        // `events.recv()` then yields on the virtual clock for the next chunk.
+        let (next_audio, (next_buf, outcome)) = blocking_audio(audio, move |audio| {
+            let outcome = audio.read(&mut buf);
+            (buf, outcome)
+        })
+        .await;
+        audio = next_audio;
+        buf = next_buf;
+        match outcome {
             Ok(ReadOutcome::Frames { .. })
             | Ok(ReadOutcome::Eof { .. })
             | Ok(ReadOutcome::Pending { .. }) => {}
@@ -261,7 +310,14 @@ async fn truncated_wav_surfaces_decode_error_or_eof() {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut saw_terminal = false;
     while Instant::now() < deadline {
-        match audio.read(&mut buf) {
+        let (next_audio, (next_buf, outcome)) = blocking_audio(audio, move |audio| {
+            let outcome = audio.read(&mut buf);
+            (buf, outcome)
+        })
+        .await;
+        audio = next_audio;
+        buf = next_buf;
+        match outcome {
             Ok(ReadOutcome::Eof { .. }) | Err(_) => {
                 saw_terminal = true;
                 break;

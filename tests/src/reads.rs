@@ -5,6 +5,8 @@
 //! read loop, so the read contract (engine-aware blocking, finiteness checks,
 //! `Pending => re-park`) lives in exactly one place.
 
+#[cfg(not(target_arch = "wasm32"))]
+use kithara::platform::tokio::task::spawn_blocking;
 #[cfg(target_arch = "wasm32")]
 use kithara::platform::{thread, time::Duration};
 use kithara::{
@@ -15,6 +17,25 @@ use kithara::{
 /// Default audio read buffer; large enough to keep syscall overhead low but
 /// small enough to exercise the pipeline in short bursts.
 const READ_BUF_SAMPLES: usize = 4096;
+
+/// Run one synchronous audio phase on the blocking pool, returning both the
+/// audio owner and the operation result to the async caller.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn blocking_audio<S, R>(
+    mut audio: Audio<S>,
+    operation: impl FnOnce(&mut Audio<S>) -> R + Send + 'static,
+) -> (Audio<S>, R)
+where
+    Audio<S>: Send + 'static,
+    R: Send + 'static,
+{
+    spawn_blocking(move || {
+        let result = operation(&mut audio);
+        (audio, result)
+    })
+    .await
+    .expect("blocking audio operation must join")
+}
 
 /// Read `audio` to natural EOF, asserting every sample is finite; returns total
 /// samples read.
