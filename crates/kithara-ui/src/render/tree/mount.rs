@@ -14,9 +14,7 @@ use crate::{
         InputOwner, ReadValue, Reads, Skin,
         controls::{Draws, Gesture, Grip, Paint, Reading},
     },
-    widgets::{
-        Widget, global_bar::PresetSelector, text::Text, wave::mini::MiniWave, window::WindowSurface,
-    },
+    widgets::{Widget, text::Text, wave::mini::MiniWave, window::WindowSurface},
 };
 
 /// How one built-in control becomes an element of the immediate-mode tree.
@@ -66,13 +64,7 @@ impl ViewControl for mount::Divider {
 
 impl ViewControl for mount::Preset {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(
-            PresetSelector::builder()
-                .reads(cx.reads)
-                .skin(cx.skin)
-                .build()
-                .view(),
-        )
+        painted(self, cx)
     }
 }
 
@@ -326,12 +318,15 @@ where
         return Rendered::leading(Space::new().into());
     };
     let grip = control.grip(cx.skin, &data);
+    let index_event = control.index_event();
     let paint = Paint::new(control.painter(cx.skin), data, cx.skin);
     Rendered::leading(match (cx.owner, grip) {
         (InputOwner::Leaf, Grip::Press) => Gesture::press(cx.path, paint).view(),
         (InputOwner::Leaf, Grip::Command(event)) => Gesture::command(cx.path, paint, event).view(),
         (InputOwner::Leaf, Grip::Drag(drag)) => Gesture::drag(cx.path, paint, drag).view(),
-        (InputOwner::Leaf, Grip::Index { count }) => Gesture::index(cx.path, paint, count).view(),
+        (InputOwner::Leaf, Grip::Index { count }) => {
+            Gesture::index(cx.path, paint, count, index_event).view()
+        }
         (InputOwner::Engine, _) | (_, Grip::None) => paint.view(),
     })
 }

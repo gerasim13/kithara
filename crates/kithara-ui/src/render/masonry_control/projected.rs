@@ -7,7 +7,7 @@ use crate::{
         Reads, Skin,
         hosted::{TrackListPlan, TreePlan},
     },
-    text::{TextContext, TextResources},
+    text::TextContext,
 };
 
 pub(crate) type TrackListLeaf = ProjectedLeaf<TrackListPlan>;

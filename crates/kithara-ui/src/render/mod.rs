@@ -25,7 +25,7 @@ pub(crate) use controls::{ChromeLeaf, chrome_leaf, header_chevron, tree_rows};
 pub(crate) use event::engine_value;
 pub use event::{ControlAction, DragPhase, UiEvent, WindowCommand, WindowEdge};
 pub(crate) use event::{
-    activate, command, control_event, drag, engine, index, scalar, scalar_child, step,
+    activate, command, control_event, drag, engine, index, publish, scalar, scalar_child, step,
     toggle_module, window,
 };
 #[cfg(feature = "masonry-host")]

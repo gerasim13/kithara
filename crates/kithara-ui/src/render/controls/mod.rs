@@ -6,7 +6,9 @@ mod scroll;
 mod tree;
 
 pub(crate) use chrome::{ChromeLeaf, chrome_leaf, header_chevron};
-pub(crate) use grip::{Drag, Grip};
+pub(crate) use grip::{Drag, Grip, IndexEvent, IndexPress, Indexing};
+#[cfg(feature = "masonry-host")]
+pub(crate) use painted::DataRefresh;
 pub(crate) use painted::{Draws, Gesture, Paint, Reading};
 pub(crate) use press::Press;
 pub(super) use scroll::{RetainedCanvas, RetainedCanvasState};

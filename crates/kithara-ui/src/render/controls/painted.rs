@@ -15,18 +15,21 @@ use iced::{
 use kithara_platform::time::Instant;
 
 use crate::{
-    atoms::{button::VisualState, painter::ControlPainter},
+    atoms::{
+        button::VisualState,
+        painter::{ControlPainter, IndexedVisual},
+    },
     backends::replay_ordered,
     compile::CompiledUi,
     draw::{DrawList, DrawListBuilder, Rect},
     interact::{
-        CursorShape, Hit, Hover, Input, iced as iced_interact,
+        CursorShape, Hit, Hover, Input, Outcome, iced as iced_interact,
         recognizers::{Crossing, Scalar, ScalarState, click},
     },
     render::{
         ReadValue, Reads, Skin, UiEvent, activate, command,
-        controls::{Drag, Grip, Press},
-        index, scalar,
+        controls::{Drag, Grip, IndexEvent, IndexPress, Indexing, Press},
+        publish, scalar,
     },
     solve,
     text::{TextContext, TextResources},
@@ -56,7 +59,19 @@ pub(crate) trait Draws {
     fn grip(&self, _skin: &Skin, _data: &<Self::Painter as ControlPainter>::Data) -> Grip {
         Grip::None
     }
+
+    fn index_event(&self) -> Option<IndexEvent<<Self::Painter as ControlPainter>::Data>> {
+        None
+    }
+
+    #[cfg(feature = "masonry-host")]
+    fn retained_refresh(&self) -> Option<DataRefresh<<Self::Painter as ControlPainter>::Data>> {
+        None
+    }
 }
+
+#[cfg(feature = "masonry-host")]
+pub(crate) type DataRefresh<Data> = fn(&mut Data, &dyn Reads) -> bool;
 
 /// What a control is handed when it decides what to draw.
 ///
@@ -166,6 +181,10 @@ where
         self.painter.grip_bounds(&self.data, bounds)
     }
 
+    fn index_at(&self, hit: &Hit, count: usize) -> Option<usize> {
+        self.painter.index_at(&self.data, hit, count)
+    }
+
     pub(crate) fn draw_list(
         &self,
         state: &PaintState,
@@ -177,6 +196,20 @@ where
         let mut builder = DrawListBuilder::default();
         self.painter
             .draw(&mut builder, text, &self.data, bounds, visual);
+        builder.finish()
+    }
+
+    pub(crate) fn indexed_draw_list(
+        &self,
+        state: &PaintState,
+        bounds: Rect,
+        visual: IndexedVisual,
+    ) -> DrawList {
+        let mut text = state.text.borrow_mut();
+        let text = text.get_or_insert_with(|| self.text_resources.into());
+        let mut builder = DrawListBuilder::default();
+        self.painter
+            .draw_indexed(&mut builder, text, &self.data, bounds, visual);
         builder.finish()
     }
 
@@ -204,10 +237,43 @@ where
             },
             visual,
         );
-        state.refresh(&list);
+        self.replay_into(state, renderer, bounds, &list);
+    }
+
+    fn paint_indexed_into(
+        &self,
+        state: &PaintState,
+        renderer: &mut Renderer,
+        bounds: Rectangle,
+        visual: IndexedVisual,
+    ) {
+        if bounds.width < 1.0 || bounds.height < 1.0 {
+            return;
+        }
+        let list = self.indexed_draw_list(
+            state,
+            Rect {
+                h: bounds.height,
+                w: bounds.width,
+                x: 0.0,
+                y: 0.0,
+            },
+            visual,
+        );
+        self.replay_into(state, renderer, bounds, &list);
+    }
+
+    fn replay_into(
+        &self,
+        state: &PaintState,
+        renderer: &mut Renderer,
+        bounds: Rectangle,
+        list: &DrawList,
+    ) {
+        state.refresh(list);
         renderer.with_translation(Vector::new(bounds.x, bounds.y), |renderer| {
             let geometry = state.geometry.draw(renderer, bounds.size(), |frame| {
-                replay_ordered(&list, frame, self.text_resources);
+                replay_ordered(list, frame, self.text_resources);
             });
             renderer.draw_geometry(geometry);
         });
@@ -301,16 +367,19 @@ where
 {
     paint: Paint<'skin, Painter>,
     path: String,
-    recognize: Recognize,
+    recognize: Recognize<Painter::Data>,
 }
 
 /// What the pointer means to a control: a press it activates on, or a drag
 /// along one axis that sets a scalar.
-enum Recognize {
+enum Recognize<Data> {
     Press,
     Command(fn() -> UiEvent),
     Drag(Box<Dragging>),
-    Index { count: usize },
+    Index {
+        count: usize,
+        map: Option<IndexEvent<Data>>,
+    },
 }
 
 /// A mounted scalar drag: the recognizer, and the description it was built from
@@ -328,6 +397,7 @@ pub(crate) struct GestureState {
     drag: ScalarState,
     paint: PaintState,
     press: Press,
+    index: IndexPress,
 }
 
 impl<'skin, Painter> Gesture<'skin, Painter>
@@ -354,11 +424,16 @@ where
         }
     }
 
-    pub(crate) fn index(path: &str, paint: Paint<'skin, Painter>, count: usize) -> Self {
+    pub(crate) fn index(
+        path: &str,
+        paint: Paint<'skin, Painter>,
+        count: usize,
+        map: Option<IndexEvent<Painter::Data>>,
+    ) -> Self {
         Self {
             paint,
             path: path.to_owned(),
-            recognize: Recognize::Index { count },
+            recognize: Recognize::Index { count, map },
         }
     }
 
@@ -390,7 +465,10 @@ where
     ) -> Option<Action<UiEvent>> {
         let input = iced_interact::input(event)?;
         let hit = iced_interact::hit(bounds, cursor);
-        let repaint = Painter::READS_POINTER && state.follow(input, &hit);
+        let mut repaint = false;
+        if Painter::READS_POINTER && !matches!(&self.recognize, Recognize::Index { .. }) {
+            repaint = state.follow(input, &hit);
+        }
         let action = match &self.recognize {
             Recognize::Press => activate(&self.path, click::on_input(input, &hit)),
             Recognize::Command(event) => command(*event, click::on_input(input, &hit)),
@@ -400,11 +478,31 @@ where
                     .on_input(&mut state.drag, input, &self.gripped(hit), Instant::now())
                     .map(|value| drag.spec.published(input, value)),
             ),
-            Recognize::Index { count } => hit.uniform_horizontal_index(*count).and_then(|picked| {
-                index(&self.path, click::on_input(input, &hit).map(|()| picked))
-            }),
+            Recognize::Index { count, map } => {
+                let (changed, outcome) = self.indexed_input(state, input, &hit, *count, *map);
+                repaint = Painter::READS_POINTER && changed;
+                publish(outcome)
+            }
         };
         action.or_else(|| repaint.then(Action::request_redraw))
+    }
+
+    fn indexed_input(
+        &self,
+        state: &mut GestureState,
+        input: Input<'_>,
+        hit: &Hit,
+        count: usize,
+        map: Option<IndexEvent<Painter::Data>>,
+    ) -> (bool, Outcome<UiEvent>) {
+        let index = self.paint.index_at(hit, count);
+        Indexing::new(&self.paint.data, &self.path, map).on_input(&mut state.index, input, index)
+    }
+
+    fn indexed_cursor(&self, hit: &Hit, count: usize) -> CursorShape {
+        self.paint
+            .index_at(hit, count)
+            .map_or(CursorShape::None, |_| CursorShape::Pointer)
     }
 
     /// The gesture is measured against the part of the box the painter says the
@@ -451,12 +549,20 @@ where
         _viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_ref::<GestureState>();
-        self.paint.paint_into(
-            &state.paint,
-            renderer,
-            layout.bounds(),
-            state.press.visual(),
-        );
+        match &self.recognize {
+            Recognize::Index { .. } => self.paint.paint_indexed_into(
+                &state.paint,
+                renderer,
+                layout.bounds(),
+                state.index.visual(),
+            ),
+            _ => self.paint.paint_into(
+                &state.paint,
+                renderer,
+                layout.bounds(),
+                state.press.visual(),
+            ),
+        }
     }
 
     fn mouse_interaction(
@@ -477,7 +583,7 @@ where
                 .recognizer
                 .cursor(&state.drag, &self.gripped(hit))
                 .into(),
-            Recognize::Index { .. } => Hover::new(CursorShape::Pointer).cursor(false, &hit).into(),
+            Recognize::Index { count, .. } => self.indexed_cursor(&hit, *count).into(),
         }
     }
 
@@ -533,11 +639,14 @@ impl GestureState {
 
 #[cfg(all(test, feature = "masonry-host"))]
 mod tests {
+    use std::rc::Rc;
+
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
         atoms::{
+            bar::preset::{Preset, PresetData},
             button::{Button, ButtonConfig, ButtonLabel},
             design::{
                 cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter,
@@ -553,10 +662,13 @@ mod tests {
             vu::VerticalVu,
         },
         builtin,
+        draw::Pt,
+        interact::mouse as pointer_input,
         module::{ButtonStyle, FaderStyle, Tone},
+        mount,
         render::{
             Icon, StereoLevels,
-            masonry::{MasonryControl, Painted},
+            masonry::{HostAction, MasonryControl, Painted},
         },
         skin::ColorRole,
     };
@@ -566,6 +678,149 @@ mod tests {
         r: 0.4,
         volume: 0.8,
     };
+
+    struct NoReads;
+
+    impl Reads for NoReads {
+        fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
+            None
+        }
+    }
+
+    fn preset_data(active: Option<usize>) -> PresetData {
+        let mut data = mount::Preset::snapshot(&NoReads);
+        data.active = active;
+        data
+    }
+
+    #[kithara::test]
+    fn iced_and_masonry_record_the_same_preset_states() {
+        let skin = builtin::skin();
+        let bounds = Rect {
+            h: skin.global_bar.height,
+            w: skin.global_bar.selector_width,
+            x: 0.0,
+            y: 0.0,
+        };
+        let iced_bounds = Rectangle {
+            height: bounds.h,
+            width: bounds.w,
+            x: bounds.x,
+            y: bounds.y,
+        };
+        let hit = |x| Hit::new(Some(Pt { x, y: 20.0 }), bounds);
+        let input = |phase, x| Input::Pointer(pointer_input(phase, Some(Pt { x, y: 20.0 })));
+        let map = mount::Preset.index_event();
+        for active in [None, Some(0), Some(1)] {
+            let immediate = Gesture::index(
+                "bar/presets",
+                Paint::new(Preset::new(skin), preset_data(active), skin),
+                2,
+                map,
+            );
+            let iced_state = GestureState::default();
+            let mut masonry = Painted::new(Preset::new(skin), preset_data(active), skin)
+                .interactive(
+                    Grip::Index { count: 2 },
+                    "bar/presets".to_owned(),
+                    Rc::new(HostAction::new),
+                    map,
+                );
+            assert_eq!(
+                immediate.paint.indexed_draw_list(
+                    &iced_state.paint,
+                    bounds,
+                    iced_state.index.visual(),
+                ),
+                masonry.draw_list(bounds)
+            );
+        }
+
+        let mut masonry = Painted::new(Preset::new(skin), preset_data(Some(0)), skin).interactive(
+            Grip::Index { count: 2 },
+            "bar/presets".to_owned(),
+            Rc::new(HostAction::new),
+            map,
+        );
+        let immediate = Gesture::index(
+            "bar/presets",
+            Paint::new(Preset::new(skin), preset_data(Some(0)), skin),
+            2,
+            map,
+        );
+        let mut iced_state = GestureState::default();
+
+        assert_eq!(
+            immediate
+                .paint
+                .indexed_draw_list(&iced_state.paint, bounds, iced_state.index.visual(),),
+            masonry.draw_list(bounds)
+        );
+
+        let first = bounds.w / 4.0;
+        let iced_first = iced::Point::new(first, 20.0);
+        let _ = immediate.on_input(
+            &mut iced_state,
+            &Event::Mouse(mouse::Event::CursorMoved {
+                position: iced_first,
+            }),
+            iced_bounds,
+            Cursor::Available(iced_first),
+        );
+        let _ = masonry.input(input(PointerPhase::Move, first), &hit(first));
+        assert_eq!(
+            immediate
+                .paint
+                .indexed_draw_list(&iced_state.paint, bounds, iced_state.index.visual(),),
+            masonry.draw_list(bounds)
+        );
+
+        let second = bounds.w * 3.0 / 4.0;
+        let iced_second = iced::Point::new(second, 20.0);
+        let _ = immediate.on_input(
+            &mut iced_state,
+            &Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            iced_bounds,
+            Cursor::Available(iced_second),
+        );
+        let _ = masonry.input(input(PointerPhase::Down, second), &hit(second));
+        assert_eq!(
+            immediate
+                .paint
+                .indexed_draw_list(&iced_state.paint, bounds, iced_state.index.visual(),),
+            masonry.draw_list(bounds)
+        );
+
+        let _ = immediate.on_input(
+            &mut iced_state,
+            &Event::Mouse(mouse::Event::CursorMoved {
+                position: iced_first,
+            }),
+            iced_bounds,
+            Cursor::Available(iced_first),
+        );
+        let _ = masonry.input(input(PointerPhase::Move, first), &hit(first));
+        assert_eq!(
+            immediate
+                .paint
+                .indexed_draw_list(&iced_state.paint, bounds, iced_state.index.visual(),),
+            masonry.draw_list(bounds)
+        );
+
+        let _ = immediate.on_input(
+            &mut iced_state,
+            &Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+            iced_bounds,
+            Cursor::Available(iced_first),
+        );
+        let _ = masonry.input(input(PointerPhase::Up, first), &hit(first));
+        assert_eq!(
+            immediate
+                .paint
+                .indexed_draw_list(&iced_state.paint, bounds, iced_state.index.visual(),),
+            masonry.draw_list(bounds)
+        );
+    }
 
     #[kithara::test]
     fn iced_and_masonry_record_the_same_vertical_vu() {
@@ -988,6 +1243,394 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod indexed {
+    use iced::{Point, event::Status, mouse};
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        atoms::{
+            bar::preset::{Preset, PresetData},
+            design::segmented::{Segmented, SegmentedData},
+        },
+        builtin,
+        interact::{PointerOwnership, PointerPhase},
+        mount,
+        render::ControlAction,
+    };
+
+    #[derive(Clone, Copy)]
+    struct Points {
+        first: Point,
+        gap: Point,
+        second: Point,
+        x_padding: Point,
+        y_padding: Point,
+    }
+
+    fn bounds() -> Rectangle {
+        Rectangle {
+            height: 42.0,
+            width: 126.0,
+            x: 0.0,
+            y: 0.0,
+        }
+    }
+
+    fn preset_data() -> PresetData {
+        struct NoReads;
+
+        impl Reads for NoReads {
+            fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
+                None
+            }
+        }
+
+        mount::Preset::snapshot(&NoReads)
+    }
+
+    fn skin() -> Skin {
+        let mut skin = builtin::skin().clone();
+        skin.global_bar.selector_padding_y = 4.0;
+        skin
+    }
+
+    fn points(skin: &Skin) -> Points {
+        let metrics = skin.global_bar;
+        let selector_x = metrics.selector_padding_x;
+        let selector_y = metrics.selector_padding_y;
+        let selector_width = bounds().width - selector_x * 2.0;
+        let chip_width = (selector_width - metrics.chip_gap) / 2.0;
+        let y = selector_y + (bounds().height - selector_y * 2.0) / 2.0;
+        Points {
+            first: Point::new(selector_x + chip_width / 2.0, y),
+            gap: Point::new(selector_x + chip_width + metrics.chip_gap / 2.0, y),
+            second: Point::new(
+                selector_x + chip_width + metrics.chip_gap + chip_width / 2.0,
+                y,
+            ),
+            x_padding: Point::new(selector_x / 2.0, y),
+            y_padding: Point::new(selector_x + chip_width / 2.0, selector_y / 2.0),
+        }
+    }
+
+    fn preset(skin: &Skin, map: Option<IndexEvent<PresetData>>) -> Gesture<'_, Preset> {
+        Gesture::index(
+            "bar/presets",
+            Paint::new(Preset::new(skin), preset_data(), skin),
+            2,
+            map,
+        )
+    }
+
+    fn event<Painter>(
+        gesture: &Gesture<'_, Painter>,
+        state: &mut GestureState,
+        event: Event,
+        point: Option<Point>,
+    ) -> (Option<UiEvent>, Status)
+    where
+        Painter: ControlPainter,
+    {
+        gesture
+            .on_input(
+                state,
+                &event,
+                bounds(),
+                point.map_or(Cursor::Unavailable, Cursor::Available),
+            )
+            .map_or((None, Status::Ignored), |action| {
+                let (event, _, status) = action.into_inner();
+                (event, status)
+            })
+    }
+
+    #[kithara::test]
+    fn an_ordinary_indexed_control_keeps_its_path_addressed_select_index() {
+        let skin = builtin::skin();
+        let gesture = Gesture::index(
+            "gallery/segments",
+            Paint::new(
+                Segmented::new(skin),
+                SegmentedData {
+                    active: None,
+                    items: vec!["A".to_owned(), "B".to_owned()],
+                },
+                skin,
+            ),
+            2,
+            None,
+        );
+
+        assert_eq!(
+            event(
+                &gesture,
+                &mut GestureState::default(),
+                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                Some(Point::new(94.0, 21.0)),
+            ),
+            (
+                Some(UiEvent::Control {
+                    path: "gallery/segments".to_owned(),
+                    action: ControlAction::SelectIndex(1),
+                }),
+                Status::Captured,
+            )
+        );
+    }
+
+    #[kithara::test]
+    fn preset_mapper_arms_on_down_and_publishes_only_on_same_chip_up() {
+        let control = mount::Preset;
+        let map = control.index_event();
+        let skin = skin();
+        let points = points(&skin);
+
+        for (point, expected) in [
+            (points.first, builtin::MICRO_PRESET),
+            (points.second, builtin::PLAYER_PRESET),
+        ] {
+            let gesture = preset(&skin, map);
+            let mut state = GestureState::default();
+            assert_eq!(
+                event(
+                    &gesture,
+                    &mut state,
+                    Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                    Some(point),
+                ),
+                (None, Status::Captured),
+            );
+            assert_eq!(
+                event(
+                    &gesture,
+                    &mut state,
+                    Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+                    Some(point),
+                ),
+                (
+                    Some(UiEvent::SelectPreset(expected.to_owned())),
+                    Status::Captured,
+                )
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn preset_mapper_cancels_on_another_chip_cancel_or_leave() {
+        let map = mount::Preset.index_event();
+        let skin = skin();
+        let points = points(&skin);
+        let gesture = preset(&skin, map);
+        let mut state = GestureState::default();
+
+        let _ = event(
+            &gesture,
+            &mut state,
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            Some(points.first),
+        );
+        let _ = event(
+            &gesture,
+            &mut state,
+            Event::Mouse(mouse::Event::CursorMoved {
+                position: points.second,
+            }),
+            Some(points.second),
+        );
+        assert_eq!(state.index.visual().pressed_origin, Some(0));
+        assert_eq!(state.index.visual().hovered, Some(1));
+        assert_eq!(
+            event(
+                &gesture,
+                &mut state,
+                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+                Some(points.second),
+            )
+            .0,
+            None
+        );
+
+        let _ = event(
+            &gesture,
+            &mut state,
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            Some(points.first),
+        );
+        let cancel = Input::Pointer(crate::interact::mouse(PointerPhase::Cancel, None));
+        let hit = Hit::new(None, bounds().into());
+        let (_, cancelled) = gesture.indexed_input(&mut state, cancel, &hit, 2, map);
+        assert_eq!(
+            cancelled.propagation(),
+            crate::interact::Propagation::Captured
+        );
+        assert_eq!(cancelled.ownership(), PointerOwnership::Release);
+        assert_eq!(cancelled.value(), None);
+        assert_eq!(state.index.visual().pressed_origin, None);
+
+        let _ = event(
+            &gesture,
+            &mut state,
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            Some(points.first),
+        );
+        assert_eq!(
+            event(
+                &gesture,
+                &mut state,
+                Event::Mouse(mouse::Event::CursorLeft),
+                None,
+            ),
+            (None, Status::Captured)
+        );
+        assert_eq!(state.index.visual().pressed_origin, None);
+    }
+
+    #[kithara::test]
+    fn preset_padding_and_gap_are_not_interactive() {
+        let map = mount::Preset.index_event();
+        let skin = skin();
+        let gesture = preset(&skin, map);
+        let points = points(&skin);
+        for point in [points.first, points.second] {
+            let hit = Hit::new(Some(point.into()), bounds().into());
+            assert_eq!(gesture.indexed_cursor(&hit, 2), CursorShape::Pointer);
+        }
+
+        for point in [
+            points.x_padding,
+            points.y_padding,
+            points.gap,
+            Point::new(-1.0, points.first.y),
+        ] {
+            let hit = Hit::new(Some(point.into()), bounds().into());
+            assert_eq!(gesture.indexed_cursor(&hit, 2), CursorShape::None);
+            let mut state = GestureState::default();
+            assert_eq!(
+                event(
+                    &gesture,
+                    &mut state,
+                    Event::Mouse(mouse::Event::CursorMoved { position: point }),
+                    Some(point),
+                ),
+                (None, Status::Ignored),
+            );
+            assert_eq!(state.index.visual().hovered, None);
+            assert_eq!(
+                event(
+                    &gesture,
+                    &mut state,
+                    Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                    Some(point),
+                ),
+                (None, Status::Ignored),
+            );
+            assert_eq!(state.index.visual().pressed_origin, None);
+            assert_eq!(
+                event(
+                    &gesture,
+                    &mut state,
+                    Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+                    Some(point),
+                ),
+                (None, Status::Ignored),
+            );
+
+            let _ = event(
+                &gesture,
+                &mut state,
+                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                Some(points.first),
+            );
+            let _ = event(
+                &gesture,
+                &mut state,
+                Event::Mouse(mouse::Event::CursorMoved { position: point }),
+                Some(point),
+            );
+            assert_eq!(state.index.visual().hovered, None);
+            assert_eq!(
+                event(
+                    &gesture,
+                    &mut state,
+                    Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+                    Some(point),
+                ),
+                (None, Status::Captured),
+            );
+        }
+    }
+
+    fn no_event(_data: &PresetData, _index: usize) -> Option<UiEvent> {
+        None
+    }
+
+    fn bounded_segment_event(data: &SegmentedData, index: usize) -> Option<UiEvent> {
+        data.items
+            .get(index)
+            .map(|_| UiEvent::SelectPreset(index.to_string()))
+    }
+
+    #[kithara::test]
+    fn invalid_and_out_of_range_mapper_results_publish_nothing() {
+        let skin = skin();
+        let points = points(&skin);
+        let gesture = preset(&skin, Some(no_event));
+        let mut state = GestureState::default();
+        assert_eq!(
+            event(
+                &gesture,
+                &mut state,
+                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                Some(points.first),
+            ),
+            (None, Status::Captured)
+        );
+        assert_eq!(
+            event(
+                &gesture,
+                &mut state,
+                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+                Some(points.first),
+            ),
+            (None, Status::Captured)
+        );
+        assert_eq!(state.index.visual().pressed_origin, None);
+
+        let skin = builtin::skin();
+        let out_of_range = Gesture::index(
+            "gallery/segments",
+            Paint::new(
+                Segmented::new(skin),
+                SegmentedData {
+                    active: None,
+                    items: vec!["A".to_owned(), "B".to_owned()],
+                },
+                skin,
+            ),
+            3,
+            Some(bounded_segment_event),
+        );
+        let mut state = GestureState::default();
+        for event_kind in [
+            mouse::Event::ButtonPressed(mouse::Button::Left),
+            mouse::Event::ButtonReleased(mouse::Button::Left),
+        ] {
+            assert_eq!(
+                event(
+                    &out_of_range,
+                    &mut state,
+                    Event::Mouse(event_kind),
+                    Some(Point::new(105.0, 21.0)),
+                ),
+                (None, Status::Captured)
+            );
+        }
+        assert_eq!(state.index.visual().pressed_origin, None);
+    }
+}
+
 /// What a press on the shared adapter means, for every control that grips one.
 #[cfg(test)]
 mod pressed {
@@ -1387,8 +2030,6 @@ mod lengths {
     use kithara_test_utils::kithara;
 
     use super::*;
-    #[cfg(feature = "masonry-host")]
-    use crate::atoms::button::declared_width;
     use crate::{
         atoms::{
             button::{Button, ButtonConfig, ButtonLabel},
@@ -1468,39 +2109,6 @@ mod lengths {
         ));
     }
 
-    /// The retained host settles a row's shares while it is still walking the
-    /// document, which is before it holds a painter. It reads the same table
-    /// rather than keeping a second copy, and this is the pin that the two
-    /// answers cannot drift apart.
-    #[cfg(feature = "masonry-host")]
-    #[kithara::test]
-    fn what_a_parent_is_told_matches_what_the_painter_asks_for() {
-        let skin = builtin::skin();
-        for style in [
-            ButtonStyle::MicroPrimary,
-            ButtonStyle::Transport,
-            ButtonStyle::TransportPrimary,
-            ButtonStyle::VisNav,
-        ] {
-            assert_eq!(
-                iced_length(declared_width(style, skin)),
-                paint(style, skin).length().0,
-                "the two hosts must weigh a {style:?} button the same"
-            );
-        }
-    }
-
-    /// The one width a parent cannot be told, because the button only knows it
-    /// once it holds the word it is going to draw.
-    #[cfg(feature = "masonry-host")]
-    #[kithara::test]
-    fn a_measured_width_is_not_something_a_parent_can_be_told() {
-        assert_eq!(
-            declared_width(ButtonStyle::Default, builtin::skin()),
-            solve::Length::Shrink
-        );
-    }
-
     /// A tab is the one control whose width is neither fixed nor a share: it is
     /// as wide as the word it shows. That number has to survive the adapter, or
     /// a strip of tabs stops being a row of headings.
@@ -1533,22 +2141,58 @@ mod lengths {
         assert_eq!(node.size().height, skin.tab_large.height);
     }
 
-    /// The retained host is told a tab's length before it holds a painter, so
-    /// the two answers have to come from one place.
     #[cfg(feature = "masonry-host")]
-    #[kithara::test]
-    fn both_hosts_ask_for_the_same_tab_box() {
-        let skin = builtin::skin();
-        let painter = TabLarge::new(skin);
-        let data = Labelled {
-            active: false,
-            label: "DECK MICRO".to_owned(),
-        };
+    mod masonry_host {
+        use super::*;
+        use crate::atoms::button::declared_width;
 
-        assert_eq!(
-            painter.length(&mut skin.text_resources().into(), &data),
-            TabLarge::declared_length(skin.tab_large.height)
-        );
+        /// The retained host settles a row's shares while it is still walking the
+        /// document, which is before it holds a painter. It reads the same table
+        /// rather than keeping a second copy, and this is the pin that the two
+        /// answers cannot drift apart.
+        #[kithara::test]
+        fn what_a_parent_is_told_matches_what_the_painter_asks_for() {
+            let skin = builtin::skin();
+            for style in [
+                ButtonStyle::MicroPrimary,
+                ButtonStyle::Transport,
+                ButtonStyle::TransportPrimary,
+                ButtonStyle::VisNav,
+            ] {
+                assert_eq!(
+                    iced_length(declared_width(style, skin)),
+                    paint(style, skin).length().0,
+                    "the two hosts must weigh a {style:?} button the same"
+                );
+            }
+        }
+
+        /// The one width a parent cannot be told, because the button only knows it
+        /// once it holds the word it is going to draw.
+        #[kithara::test]
+        fn a_measured_width_is_not_something_a_parent_can_be_told() {
+            assert_eq!(
+                declared_width(ButtonStyle::Default, builtin::skin()),
+                solve::Length::Shrink
+            );
+        }
+
+        /// The retained host is told a tab's length before it holds a painter, so
+        /// the two answers have to come from one place.
+        #[kithara::test]
+        fn both_hosts_ask_for_the_same_tab_box() {
+            let skin = builtin::skin();
+            let painter = TabLarge::new(skin);
+            let data = Labelled {
+                active: false,
+                label: "DECK MICRO".to_owned(),
+            };
+
+            assert_eq!(
+                painter.length(&mut skin.text_resources().into(), &data),
+                TabLarge::declared_length(skin.tab_large.height)
+            );
+        }
     }
 
     /// Answering the length is not enough: it has to reach the mounted canvas,

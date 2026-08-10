@@ -46,6 +46,16 @@ use crate::{
 
 struct FixtureReads;
 
+struct PresetReads {
+    active: Cell<&'static str>,
+}
+
+impl Reads for PresetReads {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        (endpoint == "ui.preset").then_some(ReadValue::Text(self.active.get()))
+    }
+}
+
 static LATE_TRACK_ROWS: [TrackRow<'static>; 8] = [TrackRow {
     title: "Late Arrival",
     artist: Some("New Artist"),
@@ -1632,7 +1642,7 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     ("Divider", Paints::Yes, r#"Divider(id: "control")"#),
     (
         "PresetSelector",
-        Paints::NotYet,
+        Paints::Yes,
         r#"PresetSelector(id: "control")"#,
     ),
     (
@@ -1851,6 +1861,116 @@ fn masonry_draws_every_control_the_census_claims_it_draws() {
         observed, expected,
         "the census is stale — move a row when its painter lands, and never leave the census \
          describing a host it no longer matches"
+    );
+}
+
+#[kithara::test]
+fn a_retained_preset_press_release_is_painted_and_publishes_the_selected_name() {
+    let registry = fixture_registry();
+    let reads = PresetReads {
+        active: Cell::new(builtin::MICRO_PRESET),
+    };
+    let ui = fixture_ui(
+        "leaf-fixture",
+        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            PresetSelector(id: "presets"),
+        ])"#,
+        &registry,
+    );
+    let host = MasonryHost::map_actions(&ui, &reads, builtin::skin(), TestAction::Document);
+    let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+    let mut root = masonry_root(output, 126, 42);
+    let (idle, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("idle PresetSelector must draw: {error}"));
+    let idle_draw_data = idle.encoding().draw_data.clone();
+
+    root.handle_pointer_event(pointer_hover(31.5, 21.0))
+        .unwrap_or_else(|error| panic!("PresetSelector hover must route: {error}"));
+    let (hovered, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("hovered PresetSelector must draw: {error}"));
+    let hovered_draw_data = hovered.encoding().draw_data.clone();
+    assert_ne!(hovered_draw_data, idle_draw_data);
+
+    assert_eq!(
+        root.handle_pointer_event(pointer_down(31.5, 21.0))
+            .unwrap_or_else(|error| panic!("PresetSelector press must route: {error}")),
+        Handled::Yes,
+    );
+    assert!(root.take_actions().is_empty());
+    let (pressed, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("pressed PresetSelector must draw: {error}"));
+    let pressed_draw_data = pressed.encoding().draw_data.clone();
+    assert_ne!(pressed_draw_data, hovered_draw_data);
+
+    root.handle_pointer_event(pointer_up(31.5, 21.0))
+        .unwrap_or_else(|error| panic!("PresetSelector release must route: {error}"));
+    assert_eq!(
+        root.take_actions(),
+        vec![TestAction::Document(UiEvent::SelectPreset(
+            builtin::MICRO_PRESET.to_owned(),
+        ))]
+    );
+    let (released, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("released PresetSelector must draw: {error}"));
+    assert_eq!(released.encoding().draw_data, hovered_draw_data);
+
+    root.handle_pointer_event(pointer_down(94.5, 21.0))
+        .unwrap_or_else(|error| panic!("second PresetSelector cell must route: {error}"));
+    assert!(root.take_actions().is_empty());
+    root.handle_pointer_event(pointer_up(94.5, 21.0))
+        .unwrap_or_else(|error| panic!("second PresetSelector release must route: {error}"));
+    assert_eq!(
+        root.take_actions(),
+        vec![TestAction::Document(UiEvent::SelectPreset(
+            builtin::PLAYER_PRESET.to_owned(),
+        ))]
+    );
+}
+
+#[kithara::test]
+fn retained_refresh_changes_the_active_preset_without_remounting_the_leaf() {
+    let registry = fixture_registry();
+    let reads = PresetReads {
+        active: Cell::new(builtin::MICRO_PRESET),
+    };
+    let ui = fixture_ui(
+        "leaf-fixture",
+        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            PresetSelector(id: "presets"),
+        ])"#,
+        &registry,
+    );
+    let output = document::render(
+        &ui.root,
+        &ui,
+        &reads,
+        builtin::skin_doc(),
+        MasonryHost::new(&ui, &reads, builtin::skin()),
+    );
+    let id = *output
+        .document_ids()
+        .last()
+        .unwrap_or_else(|| panic!("PresetSelector must retain one leaf"));
+    let mut root = masonry_root(output, 126, 42);
+    let (micro, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("MICRO PresetSelector must draw: {error}"));
+    let micro_draw_data = micro.encoding().draw_data.clone();
+
+    reads.active.set(builtin::PLAYER_PRESET);
+    root.refresh(&ui, &reads);
+    let (player, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("PLAYER PresetSelector must draw: {error}"));
+
+    assert_ne!(micro_draw_data, player.encoding().draw_data);
+    assert!(
+        root.root().get_widget(id).is_some(),
+        "refresh must update the mounted leaf rather than replace it"
     );
 }
 

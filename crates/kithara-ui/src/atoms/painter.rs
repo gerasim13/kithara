@@ -4,6 +4,7 @@ use crate::{
             brand::Brand,
             context::{Context, Viewed},
             divider::Divider,
+            preset::{Preset, PresetData},
             settings::Settings,
             spacer::Spacer,
         },
@@ -36,10 +37,18 @@ use crate::{
         wave::face::{Drawn, Wave},
     },
     draw::{DrawListBuilder, Rect},
+    interact::Hit,
     render::{Mark, StereoLevels},
     solve::{Length, Size},
     text::TextContext,
 };
+
+/// Transient per-cell state owned by an indexed control adapter.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct IndexedVisual {
+    pub(crate) hovered: Option<usize>,
+    pub(crate) pressed_origin: Option<usize>,
+}
 
 /// A neutral painter, drawn the same way by every host.
 ///
@@ -64,6 +73,23 @@ pub(crate) trait ControlPainter {
         bounds: Rect,
         state: VisualState,
     );
+
+    /// Draws adapter-owned indexed state; ordinary painters keep normal drawing.
+    fn draw_indexed(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        data: &Self::Data,
+        bounds: Rect,
+        _visual: IndexedVisual,
+    ) {
+        self.draw(list, text, data, bounds, VisualState::Idle);
+    }
+
+    /// Resolves the painted cell under the pointer.
+    fn index_at(&self, _data: &Self::Data, hit: &Hit, count: usize) -> Option<usize> {
+        hit.uniform_horizontal_index(count)
+    }
 
     /// The box it asks for when the skin, rather than the row it sits in,
     /// settles an axis.
@@ -398,6 +424,42 @@ impl ControlPainter for Divider {
         _state: VisualState,
     ) {
         self.paint(list, bounds);
+    }
+}
+
+impl ControlPainter for Preset {
+    type Data = PresetData;
+
+    const READS_POINTER: bool = true;
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        data: &Self::Data,
+        bounds: Rect,
+        _state: VisualState,
+    ) {
+        self.paint(list, text, data, bounds, IndexedVisual::default());
+    }
+
+    fn draw_indexed(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        data: &Self::Data,
+        bounds: Rect,
+        visual: IndexedVisual,
+    ) {
+        self.paint(list, text, data, bounds, visual);
+    }
+
+    fn index_at(&self, data: &Self::Data, hit: &Hit, _count: usize) -> Option<usize> {
+        self.hit_index(data, hit.area(), hit.inside()?)
+    }
+
+    fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
+        self.declared()
     }
 }
 

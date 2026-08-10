@@ -8,7 +8,8 @@ pub(crate) use super::{
 use crate::{
     atoms::{
         bar::{
-            brand::Brand, context::Context, divider::Divider, settings::Settings, spacer::Spacer,
+            brand::Brand, context::Context, divider::Divider, preset::Preset, settings::Settings,
+            spacer::Spacer,
         },
         button::Button,
         chip::Chip,
@@ -395,6 +396,7 @@ mod dragged {
             grip,
             "mixer/gain".to_owned(),
             Rc::new(HostAction::new),
+            control.index_event(),
         )
     }
 
@@ -545,6 +547,8 @@ impl Retained for Meter {
 impl Retained for Brand {}
 
 impl Retained for Divider {}
+
+impl Retained for Preset {}
 
 impl Retained for Spacer {}
 

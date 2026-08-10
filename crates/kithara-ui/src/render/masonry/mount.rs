@@ -94,7 +94,14 @@ impl NodeControl for mount::Divider {
         painted(self, host, cx)
     }
 }
-impl NodeControl for mount::Preset {}
+impl NodeControl for mount::Preset {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        painted(self, host, cx)
+    }
+}
 impl NodeControl for mount::Settings {
     fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where
@@ -592,6 +599,7 @@ fn leaf_paints(spec: &ControlSpec) -> bool {
         | ControlSpec::Chip { .. }
         | ControlSpec::Knob { .. }
         | ControlSpec::NavItem { .. }
+        | ControlSpec::PresetSelector
         | ControlSpec::SettingsButton
         | ControlSpec::TabLarge { .. } => true,
         _ => false,
@@ -629,11 +637,22 @@ where
         return host.empty(cx.declared);
     };
     let grip = control.grip(host.skin, &data);
+    let index_event = control.index_event();
+    let refresh = control.retained_refresh();
     let leaf = Painted::new(control.painter(host.skin), data, host.skin);
+    let leaf = if let Some(refresh) = refresh {
+        leaf.refreshing(refresh)
+    } else {
+        leaf
+    };
     let leaf = host.owned(leaf, cx.owner, cx.path, |leaf, path, map_event| {
-        leaf.interactive(grip, path, map_event)
+        leaf.interactive(grip, path, map_event, index_event)
     });
-    host.control_leaf(leaf, cx.declared)
+    let mut output = host.control_leaf(leaf, cx.declared);
+    if refresh.is_some() {
+        output.watch_snapshot();
+    }
+    output
 }
 
 /// Which controls this host lets answer the pointer themselves.
@@ -658,6 +677,10 @@ mod owns {
     fn a_control_this_host_paints_keeps_the_leaf_the_document_gave_it() {
         assert_eq!(
             pointer_owner(InputOwner::Leaf, &ControlSpec::Knob { label: None }),
+            InputOwner::Leaf
+        );
+        assert_eq!(
+            pointer_owner(InputOwner::Leaf, &ControlSpec::PresetSelector),
             InputOwner::Leaf
         );
     }

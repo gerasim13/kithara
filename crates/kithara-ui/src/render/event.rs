@@ -28,6 +28,10 @@ fn action<T>(outcome: Outcome<T>, event: impl FnOnce(T) -> UiEvent) -> Option<Ac
     })
 }
 
+pub(crate) fn publish(outcome: Outcome<UiEvent>) -> Option<Action<UiEvent>> {
+    action(outcome, |event| event)
+}
+
 /// The one place a control event is built. Every publisher and every widget
 /// goes through here, so a binding rule has a single site to attach to instead
 /// of fifteen literals to keep in step.

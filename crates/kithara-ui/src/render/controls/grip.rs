@@ -1,10 +1,11 @@
 use crate::{
+    atoms::painter::IndexedVisual,
     engine::scalar_value,
     interact::{
-        CursorShape, Hover, Input,
+        CursorShape, Hover, Input, Outcome, PointerOwnership, PointerPhase,
         recognizers::{Scalar, Track, WheelStep},
     },
-    render::UiEvent,
+    render::{ControlAction, UiEvent, control_event},
 };
 
 /// What the pointer means to a control.
@@ -24,7 +25,8 @@ pub(crate) enum Grip {
     Command(fn() -> UiEvent),
     /// A drag along one axis that sets a scalar.
     Drag(Drag),
-    /// A press that picks one of a row of equal cells.
+    /// A press that picks one indexed cell. Painters use equal horizontal cells
+    /// by default and may narrow the hit geometry to what they actually draw.
     Index { count: usize },
 }
 
@@ -71,5 +73,143 @@ impl Drag {
             wheel: self.wheel.map(|wheel| WheelStep { value, ..wheel }),
             ..self
         }
+    }
+}
+
+pub(crate) type IndexEvent<Data> = fn(&Data, usize) -> Option<UiEvent>;
+
+pub(crate) struct Indexing<'a, Data> {
+    data: &'a Data,
+    map: Option<IndexEvent<Data>>,
+    path: &'a str,
+}
+
+impl<'a, Data> Indexing<'a, Data> {
+    pub(crate) const fn new(data: &'a Data, path: &'a str, map: Option<IndexEvent<Data>>) -> Self {
+        Self { data, map, path }
+    }
+
+    pub(crate) fn on_input(
+        &self,
+        state: &mut IndexPress,
+        input: Input<'_>,
+        index: Option<usize>,
+    ) -> (bool, Outcome<UiEvent>) {
+        let (changed, selected) = state.follow(input, index, self.map.is_some());
+        let captured = selected.is_captured();
+        let ownership = selected.ownership();
+        let event = selected.value().and_then(|index| {
+            self.map.map_or_else(
+                || Some(control_event(self.path, ControlAction::SelectIndex(index))),
+                |map| map(self.data, index),
+            )
+        });
+        match (event, captured) {
+            (Some(event), true) => (changed, Outcome::set(event).with_ownership(ownership)),
+            (Some(event), false) => (changed, Outcome::observed(event).with_ownership(ownership)),
+            (None, true) => (changed, Outcome::captured().with_ownership(ownership)),
+            (None, false) => (changed, Outcome::IGNORED.with_ownership(ownership)),
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct IndexPress {
+    hovered: Option<usize>,
+    pressed_origin: Option<usize>,
+}
+
+impl IndexPress {
+    pub(crate) const fn visual(&self) -> IndexedVisual {
+        IndexedVisual {
+            hovered: self.hovered,
+            pressed_origin: self.pressed_origin,
+        }
+    }
+
+    fn follow(
+        &mut self,
+        input: Input<'_>,
+        index: Option<usize>,
+        release_activation: bool,
+    ) -> (bool, Outcome<usize>) {
+        let Input::Pointer(pointer) = input else {
+            return (false, Outcome::IGNORED);
+        };
+        if !release_activation {
+            let selected = match pointer.phase {
+                PointerPhase::Down => index.map_or(Outcome::IGNORED, Outcome::set),
+                PointerPhase::Cancel
+                | PointerPhase::DoubleClick
+                | PointerPhase::Leave
+                | PointerPhase::LongPress
+                | PointerPhase::Move
+                | PointerPhase::MoveLongPress
+                | PointerPhase::Up => Outcome::IGNORED,
+            };
+            return (false, selected);
+        }
+        let pressed_origin = self.pressed_origin;
+        let hovered = match pointer.phase {
+            PointerPhase::Cancel | PointerPhase::Leave => None,
+            PointerPhase::Down
+            | PointerPhase::LongPress
+            | PointerPhase::Move
+            | PointerPhase::MoveLongPress
+            | PointerPhase::Up
+            | PointerPhase::DoubleClick => index,
+        };
+        let next_pressed_origin = match pointer.phase {
+            PointerPhase::Down => index,
+            PointerPhase::Cancel
+            | PointerPhase::DoubleClick
+            | PointerPhase::Leave
+            | PointerPhase::Up => None,
+            PointerPhase::LongPress | PointerPhase::Move | PointerPhase::MoveLongPress => {
+                pressed_origin
+            }
+        };
+        let changed = self.hovered != hovered || self.pressed_origin != next_pressed_origin;
+        self.hovered = hovered;
+        self.pressed_origin = next_pressed_origin;
+        let selected = match pointer.phase {
+            PointerPhase::Down if index.is_some() => {
+                Outcome::captured().with_ownership(PointerOwnership::Claim)
+            }
+            PointerPhase::Up => match pressed_origin {
+                Some(origin) if index == Some(origin) => {
+                    Outcome::set(origin).with_ownership(PointerOwnership::Release)
+                }
+                Some(_) => Outcome::captured().with_ownership(PointerOwnership::Release),
+                None => Outcome::IGNORED,
+            },
+            PointerPhase::Cancel | PointerPhase::DoubleClick | PointerPhase::Leave
+                if pressed_origin.is_some() =>
+            {
+                Outcome::captured().with_ownership(PointerOwnership::Release)
+            }
+            PointerPhase::LongPress | PointerPhase::Move | PointerPhase::MoveLongPress
+                if pressed_origin.is_some() =>
+            {
+                Outcome::captured()
+            }
+            PointerPhase::Down
+            | PointerPhase::Cancel
+            | PointerPhase::DoubleClick
+            | PointerPhase::Leave
+            | PointerPhase::LongPress
+            | PointerPhase::Move
+            | PointerPhase::MoveLongPress => Outcome::IGNORED,
+        };
+        (changed, selected)
+    }
+
+    #[cfg(feature = "masonry-host")]
+    pub(crate) fn hover(&mut self, hovered: bool) -> bool {
+        if hovered || self.hovered.is_none() {
+            return false;
+        }
+        self.hovered = None;
+        true
     }
 }

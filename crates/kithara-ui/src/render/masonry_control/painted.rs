@@ -14,8 +14,8 @@ use crate::{
         recognizers::{Scalar, ScalarState, click},
     },
     render::{
-        ControlAction, ReadValue, Skin, UiEvent, control_event,
-        controls::{Drag, Grip, Press},
+        ControlAction, ReadValue, Reads, Skin, UiEvent, control_event,
+        controls::{DataRefresh, Drag, Grip, IndexEvent, IndexPress, Indexing, Press},
     },
     text::TextContext,
 };
@@ -27,24 +27,30 @@ where
     Painter: Retained,
 {
     data: Painter::Data,
-    interaction: Option<Interaction>,
+    interaction: Option<Interaction<Painter::Data>>,
+    index: IndexPress,
     painter: Painter,
     press: Press,
+    refresh: Option<DataRefresh<Painter::Data>>,
     repaint: bool,
     text: TextContext,
 }
 
 /// What a control does with the pointer, and where it publishes the answer.
-struct Interaction {
+struct Interaction<Data> {
     map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
     path: String,
-    recognize: Recognize,
+    recognize: Recognize<Data>,
 }
 
-enum Recognize {
+enum Recognize<Data> {
     Press,
     Command(fn() -> UiEvent),
     Drag(Box<Dragged>),
+    Index {
+        count: usize,
+        map: Option<IndexEvent<Data>>,
+    },
 }
 
 /// A scalar drag in flight: what it was described as, the recognizer made from
@@ -105,8 +111,10 @@ where
         Self {
             data,
             interaction: None,
+            index: IndexPress::default(),
             painter,
             press: Press::default(),
+            refresh: None,
             repaint: false,
             text: TextContext::from(skin.text_resources()),
         }
@@ -117,22 +125,28 @@ where
         grip: Grip,
         path: String,
         map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+        index_event: Option<IndexEvent<Painter::Data>>,
     ) -> Self {
         let recognize = match grip {
             Grip::None => return self,
             Grip::Press => Recognize::Press,
             Grip::Command(event) => Recognize::Command(event),
             Grip::Drag(drag) => Recognize::Drag(Box::new(Dragged::new(drag))),
-            // Picking a cell is a gesture only the immediate host recognises;
-            // here the engine plan drives it, which is what this host has
-            // always done. The two are reconciled by the gesture census.
-            Grip::Index { .. } => return self,
+            Grip::Index { count } => Recognize::Index {
+                count,
+                map: index_event,
+            },
         };
         self.interaction = Some(Interaction {
             map_event,
             path,
             recognize,
         });
+        self
+    }
+
+    pub(crate) fn refreshing(mut self, refresh: DataRefresh<Painter::Data>) -> Self {
+        self.refresh = Some(refresh);
         self
     }
 
@@ -160,13 +174,26 @@ where
     fn draw_list(&mut self, bounds: Rect) -> DrawList {
         self.repaint = false;
         let mut list = DrawListBuilder::default();
-        self.painter.draw(
-            &mut list,
-            &mut self.text,
-            &self.data,
-            bounds,
-            self.press.visual(),
-        );
+        match self
+            .interaction
+            .as_ref()
+            .map(|interaction| &interaction.recognize)
+        {
+            Some(Recognize::Index { .. }) => self.painter.draw_indexed(
+                &mut list,
+                &mut self.text,
+                &self.data,
+                bounds,
+                self.index.visual(),
+            ),
+            _ => self.painter.draw(
+                &mut list,
+                &mut self.text,
+                &self.data,
+                bounds,
+                self.press.visual(),
+            ),
+        }
         list.finish()
     }
 
@@ -175,7 +202,16 @@ where
     }
 
     fn input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<HostAction> {
-        if Painter::READS_POINTER {
+        let indexed =
+            self.interaction
+                .as_ref()
+                .and_then(|interaction| match &interaction.recognize {
+                    Recognize::Index { count, .. } => {
+                        Some((*count, self.painter.index_at(&self.data, hit, *count)))
+                    }
+                    _ => None,
+                });
+        if Painter::READS_POINTER && indexed.is_none() {
             self.repaint |= self.press.press(input, hit);
         }
         let gripped = self.gripped(hit);
@@ -195,6 +231,13 @@ where
                 let event = *event;
                 return click::on_input(input, hit).map(|()| (interaction.map_event)(event()));
             }
+            Recognize::Index { map, .. } => {
+                let index = indexed.and_then(|(_, index)| index);
+                let (changed, outcome) = Indexing::new(&self.data, &interaction.path, *map)
+                    .on_input(&mut self.index, input, index);
+                self.repaint |= Painter::READS_POINTER && changed;
+                return outcome.map(|event| (interaction.map_event)(event));
+            }
             Recognize::Drag(drag) => (drag.follow(input, &gripped), drag.spec),
         };
         // The control draws the value it just authored: the application is told
@@ -213,7 +256,6 @@ where
             ))
         })
     }
-
     fn accepts_input(&self) -> bool {
         self.interaction.is_some()
     }
@@ -221,6 +263,14 @@ where
     fn set_read(&mut self, value: &ReadValue<'_>) -> bool {
         self.repaint |= Painter::set_read(&mut self.data, value);
         self.moved_to(value);
+        self.repaint
+    }
+
+    fn refresh(&mut self, reads: &dyn Reads) -> bool {
+        let Some(refresh) = self.refresh else {
+            return false;
+        };
+        self.repaint |= refresh(&mut self.data, reads);
         self.repaint
     }
 
@@ -235,6 +285,10 @@ where
                     Recognize::Drag(drag) => {
                         drag.recognizer.cursor(&drag.state, &self.gripped(hit))
                     }
+                    Recognize::Index { count, .. } => self
+                        .painter
+                        .index_at(&self.data, hit, *count)
+                        .map_or(CursorShape::None, |_| CursorShape::Pointer),
                 }
             })
     }
@@ -243,7 +297,14 @@ where
         if !Painter::READS_POINTER {
             return false;
         }
-        self.repaint |= self.press.hover(hovered);
+        self.repaint |= match self
+            .interaction
+            .as_ref()
+            .map(|interaction| &interaction.recognize)
+        {
+            Some(Recognize::Index { .. }) => self.index.hover(hovered),
+            _ => self.press.hover(hovered),
+        };
         self.repaint
     }
 
@@ -253,5 +314,307 @@ where
         } else {
             Repaint::None
         }
+    }
+}
+
+#[cfg(test)]
+mod indexed {
+    use std::rc::Rc;
+
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        atoms::{
+            bar::preset::{Preset, PresetData},
+            design::segmented::{Segmented, SegmentedData},
+        },
+        builtin,
+        draw::Pt,
+        interact::{PointerOwnership, PointerPhase, Propagation, mouse},
+        mount,
+        render::{Reads, controls::Draws},
+    };
+
+    #[derive(Clone, Copy)]
+    struct Points {
+        first: Pt,
+        gap: Pt,
+        second: Pt,
+        x_padding: Pt,
+        y_padding: Pt,
+    }
+
+    fn bounds() -> Rect {
+        Rect {
+            h: 42.0,
+            w: 126.0,
+            x: 0.0,
+            y: 0.0,
+        }
+    }
+
+    fn preset_data() -> PresetData {
+        struct NoReads;
+
+        impl Reads for NoReads {
+            fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
+                None
+            }
+        }
+
+        mount::Preset::snapshot(&NoReads)
+    }
+
+    fn skin() -> Skin {
+        let mut skin = builtin::skin().clone();
+        skin.global_bar.selector_padding_y = 4.0;
+        skin
+    }
+
+    fn points(skin: &Skin) -> Points {
+        let metrics = skin.global_bar;
+        let selector_x = metrics.selector_padding_x;
+        let selector_y = metrics.selector_padding_y;
+        let selector_width = bounds().w - selector_x * 2.0;
+        let chip_width = (selector_width - metrics.chip_gap) / 2.0;
+        let y = selector_y + (bounds().h - selector_y * 2.0) / 2.0;
+        Points {
+            first: Pt {
+                x: selector_x + chip_width / 2.0,
+                y,
+            },
+            gap: Pt {
+                x: selector_x + chip_width + metrics.chip_gap / 2.0,
+                y,
+            },
+            second: Pt {
+                x: selector_x + chip_width + metrics.chip_gap + chip_width / 2.0,
+                y,
+            },
+            x_padding: Pt {
+                x: selector_x / 2.0,
+                y,
+            },
+            y_padding: Pt {
+                x: selector_x + chip_width / 2.0,
+                y: selector_y / 2.0,
+            },
+        }
+    }
+
+    fn preset(skin: &Skin, map: Option<IndexEvent<PresetData>>) -> Painted<Preset> {
+        Painted::new(Preset::new(skin), preset_data(), skin).interactive(
+            Grip::Index { count: 2 },
+            "bar/presets".to_owned(),
+            Rc::new(HostAction::new),
+            map,
+        )
+    }
+
+    fn answer<Painter>(
+        control: &mut Painted<Painter>,
+        phase: PointerPhase,
+        point: Option<Pt>,
+    ) -> (Option<UiEvent>, Propagation, PointerOwnership)
+    where
+        Painter: Retained,
+    {
+        let outcome = control.input(
+            Input::Pointer(mouse(phase, point)),
+            &Hit::new(point, bounds()),
+        );
+        let propagation = outcome.propagation();
+        let ownership = outcome.ownership();
+        let event = outcome
+            .value()
+            .and_then(|action| action.downcast::<UiEvent>().ok());
+        (event, propagation, ownership)
+    }
+
+    #[kithara::test]
+    fn an_ordinary_retained_index_keeps_its_path_addressed_select_index() {
+        let skin = builtin::skin();
+        let mut control = Painted::new(
+            Segmented::new(skin),
+            SegmentedData {
+                active: None,
+                items: vec!["A".to_owned(), "B".to_owned()],
+            },
+            skin,
+        )
+        .interactive(
+            Grip::Index { count: 2 },
+            "gallery/segments".to_owned(),
+            Rc::new(HostAction::new),
+            None,
+        );
+
+        assert_eq!(
+            answer(
+                &mut control,
+                PointerPhase::Down,
+                Some(Pt { x: 94.0, y: 21.0 }),
+            ),
+            (
+                Some(UiEvent::Control {
+                    path: "gallery/segments".to_owned(),
+                    action: ControlAction::SelectIndex(1),
+                }),
+                Propagation::Captured,
+                PointerOwnership::Unchanged,
+            )
+        );
+    }
+
+    #[kithara::test]
+    fn retained_preset_mapper_arms_on_down_and_publishes_only_on_same_chip_up() {
+        let map = mount::Preset.index_event();
+        let skin = skin();
+        let points = points(&skin);
+
+        for (point, expected) in [
+            (points.first, builtin::MICRO_PRESET),
+            (points.second, builtin::PLAYER_PRESET),
+        ] {
+            let mut control = preset(&skin, map);
+            assert_eq!(
+                answer(&mut control, PointerPhase::Down, Some(point)),
+                (None, Propagation::Captured, PointerOwnership::Claim,)
+            );
+            assert_eq!(
+                answer(&mut control, PointerPhase::Up, Some(point)),
+                (
+                    Some(UiEvent::SelectPreset(expected.to_owned())),
+                    Propagation::Captured,
+                    PointerOwnership::Release,
+                )
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn retained_preset_mapper_cancels_on_another_chip_cancel_or_leave() {
+        let map = mount::Preset.index_event();
+        let skin = skin();
+        let points = points(&skin);
+        let mut control = preset(&skin, map);
+
+        let _ = answer(&mut control, PointerPhase::Down, Some(points.first));
+        let _ = answer(&mut control, PointerPhase::Move, Some(points.second));
+        assert_eq!(control.index.visual().pressed_origin, Some(0));
+        assert_eq!(control.index.visual().hovered, Some(1));
+        assert_eq!(
+            answer(&mut control, PointerPhase::Up, Some(points.second)),
+            (None, Propagation::Captured, PointerOwnership::Release,)
+        );
+
+        for phase in [PointerPhase::Cancel, PointerPhase::Leave] {
+            let _ = answer(&mut control, PointerPhase::Down, Some(points.first));
+            assert_eq!(
+                answer(&mut control, phase, None),
+                (None, Propagation::Captured, PointerOwnership::Release,)
+            );
+            assert_eq!(control.index.visual().pressed_origin, None);
+        }
+    }
+
+    #[kithara::test]
+    fn retained_preset_padding_and_gap_are_not_interactive() {
+        let skin = skin();
+        let mut control = preset(&skin, mount::Preset.index_event());
+        let points = points(&skin);
+        for point in [points.first, points.second] {
+            assert_eq!(
+                control.cursor(&Hit::new(Some(point), bounds())),
+                CursorShape::Pointer
+            );
+        }
+
+        for point in [
+            points.x_padding,
+            points.y_padding,
+            points.gap,
+            Pt {
+                x: -1.0,
+                y: points.first.y,
+            },
+        ] {
+            let hit = Hit::new(Some(point), bounds());
+            assert_eq!(control.cursor(&hit), CursorShape::None);
+            assert_eq!(
+                answer(&mut control, PointerPhase::Move, Some(point)),
+                (None, Propagation::Ignored, PointerOwnership::Unchanged,)
+            );
+            assert_eq!(control.index.visual().hovered, None);
+            assert_eq!(
+                answer(&mut control, PointerPhase::Down, Some(point)),
+                (None, Propagation::Ignored, PointerOwnership::Unchanged,)
+            );
+            assert_eq!(control.index.visual().pressed_origin, None);
+            assert_eq!(
+                answer(&mut control, PointerPhase::Up, Some(point)),
+                (None, Propagation::Ignored, PointerOwnership::Unchanged,)
+            );
+
+            let _ = answer(&mut control, PointerPhase::Down, Some(points.first));
+            let _ = answer(&mut control, PointerPhase::Move, Some(point));
+            assert_eq!(control.index.visual().hovered, None);
+            assert_eq!(
+                answer(&mut control, PointerPhase::Up, Some(point)),
+                (None, Propagation::Captured, PointerOwnership::Release,)
+            );
+        }
+    }
+
+    fn no_event(_data: &PresetData, _index: usize) -> Option<UiEvent> {
+        None
+    }
+
+    fn bounded_segment_event(data: &SegmentedData, index: usize) -> Option<UiEvent> {
+        data.items
+            .get(index)
+            .map(|_| UiEvent::SelectPreset(index.to_string()))
+    }
+
+    #[kithara::test]
+    fn retained_invalid_and_out_of_range_mapper_results_publish_nothing() {
+        let skin = skin();
+        let points = points(&skin);
+        let mut control = preset(&skin, Some(no_event));
+        assert_eq!(
+            answer(&mut control, PointerPhase::Down, Some(points.first)),
+            (None, Propagation::Captured, PointerOwnership::Claim,)
+        );
+        assert_eq!(
+            answer(&mut control, PointerPhase::Up, Some(points.first)),
+            (None, Propagation::Captured, PointerOwnership::Release,)
+        );
+
+        let skin = builtin::skin();
+        let mut out_of_range = Painted::new(
+            Segmented::new(skin),
+            SegmentedData {
+                active: None,
+                items: vec!["A".to_owned(), "B".to_owned()],
+            },
+            skin,
+        )
+        .interactive(
+            Grip::Index { count: 3 },
+            "gallery/segments".to_owned(),
+            Rc::new(HostAction::new),
+            Some(bounded_segment_event),
+        );
+        let third = Pt { x: 105.0, y: 21.0 };
+        assert_eq!(
+            answer(&mut out_of_range, PointerPhase::Down, Some(third)),
+            (None, Propagation::Captured, PointerOwnership::Claim,)
+        );
+        assert_eq!(
+            answer(&mut out_of_range, PointerPhase::Up, Some(third)),
+            (None, Propagation::Captured, PointerOwnership::Release,)
+        );
+        assert_eq!(out_of_range.index.visual().pressed_origin, None);
     }
 }

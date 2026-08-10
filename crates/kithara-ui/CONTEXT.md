@@ -594,6 +594,17 @@ the required existing `Descriptor::Activation` is stateless and carries no held 
 second pressed-state channel merely for paint would create the parallel mutable ownership this
 transition forbids.
 
+`PresetSelector` is a painted leaf on both hosts. `mount::bar::Preset` owns its ordered inventory,
+and the painter data carries those labels and preset names together with the index resolved from
+`Reads::get("ui.preset")`. The shared indexed gesture may map an index through that same data into a
+typed `UiEvent`; without a mapper it retains the path-addressed `ControlAction::SelectIndex`
+contract on pointer down. A mapper-backed index instead arms one painter-resolved cell on down and
+publishes only when pointer up resolves to that same cell. The painter owns indexed hit geometry,
+so Preset padding and gaps are neither cells nor pointer targets. Each adapter owns only the hovered
+and pressed-origin cell indices. The retained leaf refreshes the active index in its mounted painter
+data without remounting, and the Masonry control census therefore marks `PresetSelector` as painted
+rather than `NotYet`.
+
 The interactive `canvas::Program` for a button, nav item, segmented control, fader, crossfader,
 knob, vertical VU, stereo meter, toggle, checkbox, text input, tree, or wave is therefore not gone:
 `InputOwner`

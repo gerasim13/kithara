@@ -16,6 +16,8 @@ mod root;
 mod tests;
 
 pub(crate) use controls::{MasonryControl, Painted};
+#[cfg(test)]
+pub(crate) use custom::HostAction;
 pub use custom::{CustomWidget, Repaint, Size2, SizeLimits, TextMeasurer};
 pub use host::{MasonryHost, MasonryState};
 pub use node::MasonryNode;
