@@ -927,6 +927,47 @@ async fn rebuilding_decoder_pending_poll_blocks() {
 }
 
 #[kithara::test(tokio)]
+async fn rebuilding_decoder_completion_waits_for_shell_routing() {
+    let RebuildFixture {
+        drops, mut source, ..
+    } = test_source(1).await;
+    enter_rebuilding(&mut source, 7, recreate_state(1));
+    push_completion_with_drops(&source, 7, 2, drops.clone());
+
+    assert!(matches!(
+        source.step_track(),
+        TrackStep::Blocked(WaitingReason::Waiting)
+    ));
+    assert!(matches!(source.state, CurrentFsm::RebuildingDecoder(_)));
+    assert_eq!(
+        source
+            .decode
+            .active()
+            .media_info()
+            .and_then(|info| info.variant_index),
+        Some(0)
+    );
+
+    source.flush_deferred();
+
+    assert!(matches!(source.step_track(), TrackStep::StateChanged));
+    assert!(matches!(source.state, CurrentFsm::Decoding(_)));
+    assert_eq!(
+        source
+            .decode
+            .active()
+            .media_info()
+            .and_then(|info| info.variant_index),
+        Some(1)
+    );
+    assert_eq!(source.retired.len(), 1);
+
+    source.flush_deferred();
+    source.flush_deferred();
+    assert_eq!(drops.lock().as_slice(), &[1]);
+}
+
+#[kithara::test(tokio)]
 async fn rebuild_prepares_generation_profiles_before_rt_install() {
     let RebuildFixture { mut source, .. } =
         test_source_with_mode(1, GaplessMode::SilenceTrim(Default::default())).await;

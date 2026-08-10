@@ -174,9 +174,11 @@ Recreation is two-phase and never builds a decoder on the produce core.
 job — only one may be pending at a time. `flush_deferred` → `RebuildPort::submit`
 spawns it (`spawn_blocking_on`); the job builds the decoder, optionally seeks it
 to its landing time, pushes a `DecoderBuildComplete` onto the replacement or
-incoming completion queue (capacity 4 each), then wakes the worker.
-`RebuildingDecoder` pops the completion matching its `BuildId`; installation is a
-`replace_active` plus a retire. A caught factory panic becomes
+incoming completion queue (capacity 4 each), then wakes the worker. Shell-side
+`flush_deferred` drains the queues, retires stale completions, and caches the
+replacement matching the current `BuildId`; `RebuildingDecoder` only takes that
+cached replacement. Installation is a `replace_active` plus a retire. A caught
+factory panic becomes
 `RecreateOutcome::SoftFailed`, failing the track with
 `TrackFailure::RecreateFailed`; `NeedsSourceWait` parks (`classify` maps only
 `ErrorClass::Interrupted` here).
