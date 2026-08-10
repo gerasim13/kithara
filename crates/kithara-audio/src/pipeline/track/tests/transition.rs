@@ -10,6 +10,7 @@ use kithara_test_utils::kithara;
 
 use super::rebuild::{
     Consts, RouteFixture, TestDecoder, media_info, produced_data, route_signal_source,
+    route_signal_source_with_gaps,
 };
 use crate::{
     pipeline::{
@@ -243,6 +244,33 @@ async fn exact_primed_generation_promotes_once_at_outgoing_frontier() {
     assert_eq!(
         produced_data(incoming).meta.frame_offset,
         u64::try_from(Consts::ROUTE_CHUNK_FRAMES).unwrap_or(u64::MAX)
+    );
+}
+
+#[kithara::test(tokio)]
+async fn promotion_preserves_the_normalized_timeline_gap() {
+    const ACTIVE_GAP: u64 = 17;
+    const INCOMING_GAP: u64 = 3;
+
+    let mut fixture = route_signal_source_with_gaps(ACTIVE_GAP, INCOMING_GAP).await;
+    let plan = incoming_plan();
+    let transition = plan.transition();
+    fixture.control.set_exact_plan(plan);
+    fixture.control.set_exact_reader_ready();
+    fixture.control.set_promotion(VariantPromotion::Promoted);
+
+    fixture.source.flush_deferred();
+    wait_for_incoming_priming(&mut fixture, transition).await;
+    assert!(matches!(
+        fixture.source.step_track(),
+        TrackStep::Produced(_)
+    ));
+    fixture.source.flush_deferred();
+
+    assert_eq!(
+        fixture.source.decode.active().timeline_gap(),
+        ACTIVE_GAP,
+        "the promoted generation must retain the splice proof's shared timeline origin"
     );
 }
 
