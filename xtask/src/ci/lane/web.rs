@@ -19,7 +19,7 @@ pub(crate) fn chromium(process: &Process, pins: &CiPins) -> Result<()> {
     require_version(process, "chromedriver", &pins.chrome_for_testing_version)?;
     process.run(
         "just",
-        &["platform", "wasm", "test", "chrome", "webcodecs"],
+        &["test", "wasm", "chrome", "webcodecs"],
         "Chromium WebCodecs tests",
     )
 }
@@ -36,11 +36,7 @@ fn require_version(process: &Process, tool: &str, expected: &str) -> Result<()> 
 pub(crate) fn firefox(process: &Process) -> Result<()> {
     require_os("linux", "Web browser")?;
     process.require_tools(&["firefox", "geckodriver", "just"])?;
-    process.run(
-        "just",
-        &["platform", "wasm", "test", "firefox"],
-        "Firefox WASM tests",
-    )
+    process.run("just", &["test", "wasm", "firefox"], "Firefox WASM tests")
 }
 
 pub(crate) fn size(process: &Process) -> Result<()> {

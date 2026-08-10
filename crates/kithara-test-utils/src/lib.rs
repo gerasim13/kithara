@@ -12,6 +12,8 @@ extern crate self as kithara_test_utils;
 /// flash wrapping.
 pub use kithara_platform;
 
+#[doc(hidden)]
+pub mod __private;
 pub mod hang;
 pub mod mock;
 pub mod no_block;
