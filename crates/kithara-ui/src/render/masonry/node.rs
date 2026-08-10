@@ -17,7 +17,7 @@ use tracing::{Span, trace_span};
 use super::{
     Repaint,
     custom::HostAction,
-    leaf::cursor_icon,
+    leaf::{Leaf, cursor_icon},
     mount::NodeLayout,
     picker::{EngineTarget, HostedEngine},
     popover::PopoverState,
@@ -32,7 +32,7 @@ use crate::{
         masonry::{portable_modifiers, portable_text_input},
     },
     layout::FrameSides,
-    render::{HostedControlPlan, ReadValue, Reads, UiEvent},
+    render::{HostedControlPlan, ReadValue, Reads, UiEvent, vis::VisFrame},
     solve,
 };
 
@@ -50,6 +50,7 @@ pub(super) type LayerParts = (
     Vec<PopoverRegistration>,
     Vec<EngineTarget>,
     Vec<Rc<HostedEngine>>,
+    Vec<WidgetId>,
     Option<WindowTracker>,
     Vec<Watched>,
 );
@@ -58,6 +59,7 @@ pub(super) type RootParts = (
     Vec<NewWidget<dyn Widget>>,
     Vec<PopoverRegistration>,
     Vec<Rc<HostedEngine>>,
+    Vec<WidgetId>,
     Option<WindowTracker>,
     Vec<Watched>,
 );
@@ -97,6 +99,7 @@ pub struct MasonryNode<Action> {
     engine_targets: Vec<EngineTarget>,
     engines: Vec<Rc<HostedEngine>>,
     watched: Vec<Watched>,
+    vis: Vec<WidgetId>,
     window: Option<WindowTracker>,
     #[cfg(test)]
     document_ids: Vec<WidgetId>,
@@ -210,6 +213,17 @@ impl Node {
 
     pub(crate) fn refresh(&mut self, reads: &dyn Reads) -> bool {
         self.layout.leaf().is_some_and(|leaf| leaf.refresh(reads))
+    }
+
+    pub(crate) fn vis_frame(&self) -> Option<VisFrame> {
+        match &self.layout {
+            NodeLayout::Leaf(Leaf::Vis(vis)) => vis.frame(),
+            NodeLayout::Leaf(
+                Leaf::Empty | Leaf::Control(_) | Leaf::Text { .. } | Leaf::Custom { .. },
+            )
+            | NodeLayout::Flex(_)
+            | NodeLayout::Stack => None,
+        }
     }
 
     fn engine_input(
@@ -542,7 +556,7 @@ impl Widget for Node {
     }
 
     fn update(&mut self, ctx: &mut UpdateCtx<'_>, _props: &mut PropertiesMut<'_>, event: &Update) {
-        if matches!(event, Update::WidgetAdded)
+        if matches!(event, Update::WidgetAdded | Update::StashedChanged(false))
             && let Some(leaf) = self.layout.leaf()
         {
             leaf.added(ctx);
@@ -566,6 +580,9 @@ impl Widget for Node {
         _props: &mut PropertiesMut<'_>,
         interval: u64,
     ) {
+        if ctx.is_stashed() {
+            return;
+        }
         if let Some(leaf) = self.layout.leaf()
             && let Some(action) = leaf.frame(kithara_platform::time::Duration::from_nanos(interval))
         {
@@ -733,7 +750,7 @@ pub(crate) fn pointer_button(button: MasonryPointerButton) -> PointerButton {
 }
 
 impl<Action> MasonryNode<Action> {
-    pub(crate) fn document(
+    pub(super) fn document(
         layout: NodeLayout,
         declared: solve::Size<solve::Length>,
         children: Vec<Self>,
@@ -747,6 +764,7 @@ impl<Action> MasonryNode<Action> {
         let mut engine_targets = Vec::new();
         let mut engines = Vec::new();
         let mut watched = Vec::new();
+        let mut vis = Vec::new();
         let mut window = None;
         #[cfg(test)]
         let mut child_ids = Vec::new();
@@ -756,6 +774,7 @@ impl<Action> MasonryNode<Action> {
             engine_targets.extend(child.engine_targets);
             engines.extend(child.engines);
             watched.extend(child.watched);
+            vis.extend(child.vis);
             window = merge_window(window, child.window);
             #[cfg(test)]
             if _expose_children {
@@ -770,6 +789,9 @@ impl<Action> MasonryNode<Action> {
             background,
             frame,
         ));
+        if matches!(&widget.widget.layout, NodeLayout::Leaf(Leaf::Vis(_))) {
+            vis.push(widget.id());
+        }
         #[cfg(test)]
         let document_ids = {
             let mut ids = Vec::with_capacity(child_ids.len() + 1);
@@ -786,13 +808,14 @@ impl<Action> MasonryNode<Action> {
             engine_targets,
             engines,
             watched,
+            vis,
             window,
             #[cfg(test)]
             document_ids,
         }
     }
 
-    pub(crate) fn furniture(
+    pub(super) fn furniture(
         layout: NodeLayout,
         declared: solve::Size<solve::Length>,
         background: Option<Rgba>,
@@ -807,6 +830,7 @@ impl<Action> MasonryNode<Action> {
             engine_targets: Vec::new(),
             engines: Vec::new(),
             watched: Vec::new(),
+            vis: Vec::new(),
             window: None,
             #[cfg(test)]
             document_ids: Vec::new(),
@@ -876,6 +900,10 @@ impl<Action> MasonryNode<Action> {
         self.watched.extend(watched);
     }
 
+    pub(crate) fn append_vis(&mut self, vis: Vec<WidgetId>) {
+        self.vis.extend(vis);
+    }
+
     /// Remembers that this node's leaf shows one endpoint, so its value can be
     /// re-read into the mounted tree instead of rebuilding the tree to show it.
     pub(crate) fn watch(&mut self, binding: &Binding) {
@@ -933,6 +961,18 @@ impl<Action> MasonryNode<Action> {
     }
 }
 
+#[cfg(test)]
+impl Node {
+    pub(crate) fn set_child_stashed(
+        this: &mut masonry::core::WidgetMut<'_, Self>,
+        child: usize,
+        stashed: bool,
+    ) {
+        this.ctx
+            .set_stashed(&mut this.widget.children[child], stashed);
+    }
+}
+
 impl<Action> From<MasonryNode<Action>> for LayerParts {
     fn from(node: MasonryNode<Action>) -> Self {
         (
@@ -942,6 +982,7 @@ impl<Action> From<MasonryNode<Action>> for LayerParts {
             node.popovers,
             node.engine_targets,
             node.engines,
+            node.vis,
             node.window,
             node.watched,
         )
@@ -955,6 +996,7 @@ impl<Action> From<MasonryNode<Action>> for RootParts {
             node.layers,
             node.popovers,
             node.engines,
+            node.vis,
             node.window,
             node.watched,
         )

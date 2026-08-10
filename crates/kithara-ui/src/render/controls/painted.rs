@@ -663,7 +663,7 @@ mod tests {
         },
         builtin,
         draw::Pt,
-        interact::mouse as pointer_input,
+        interact::{PointerPhase, mouse as pointer_input},
         module::{ButtonStyle, FaderStyle, Tone},
         mount,
         render::{

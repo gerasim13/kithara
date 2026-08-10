@@ -14,6 +14,8 @@ mod projected;
 mod root;
 #[cfg(test)]
 mod tests;
+#[path = "../masonry_control/vis.rs"]
+mod vis;
 
 pub(crate) use controls::{MasonryControl, Painted};
 #[cfg(test)]

@@ -62,7 +62,7 @@ impl<'config, A: App> Scenario<'config, A> {
         let mut ui = Ui::new(Recording::new(app), config, size, scale)
             .unwrap_or_else(|error| panic!("the scenario must mount: {error}"));
         ui.frame(Duration::from_millis(16));
-        ui.scene()
+        ui.render()
             .unwrap_or_else(|error| panic!("the scenario must draw its first frame: {error}"));
         Self { ui }
     }

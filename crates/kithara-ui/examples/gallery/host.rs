@@ -136,7 +136,7 @@ mod tests {
         let mut ui = Ui::new(Gallery::default(), config, size, scale)
             .unwrap_or_else(|error| panic!("the gallery must mount: {error}"));
         ui.frame(Duration::from_millis(16));
-        ui.scene()
+        ui.render()
             .unwrap_or_else(|error| panic!("the gallery must draw: {error}"));
         assert_eq!(ui.app().document(), "gallery-atoms.klayout.ron");
 
@@ -190,8 +190,8 @@ mod fills {
             let mut ui = Ui::new(Gallery::default(), config, (width, height), scale)
                 .unwrap_or_else(|error| panic!("the gallery must mount at {scale}x: {error}"));
             ui.frame(Duration::from_millis(16));
-            let scene = ui
-                .scene()
+            let frame = ui
+                .render()
                 .unwrap_or_else(|error| panic!("the gallery must draw at {scale}x: {error}"));
             let mut off = Offscreen::new(width, height)
                 .unwrap_or_else(|error| panic!("offscreen at {scale}x: {error}"));
@@ -199,7 +199,7 @@ mod fills {
             // the host cleared to would read as painted whatever the document
             // did, and the question here is whether the document reached it.
             let rgba = off
-                .rasterise(&scene, Color::BLACK)
+                .rasterise(&frame, scale, Color::BLACK)
                 .unwrap_or_else(|error| panic!("rasterise at {scale}x: {error}"));
 
             let width_px = width as usize;

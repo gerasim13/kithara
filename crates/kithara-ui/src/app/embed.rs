@@ -1,9 +1,10 @@
 //! The embeddable layer: a UI that owns no window and no GPU device.
 //!
 //! A host that already has both — bevy, a plug-in shell, someone else's winit
-//! loop — drives this directly: hand it a size, hand it input, take the scene,
-//! draw the scene wherever you like. [`super::run`] is a thin window of its own
-//! built on top of this, for an application that has no host to live in.
+//! loop - drives this directly: hand it a size, hand it input, take the complete
+//! frame, draw its Vello scene and then its native effects. [`super::run`] is a
+//! thin window of its own built on top of this, for an application that has no
+//! host to live in.
 
 use kithara_platform::{sync::Arc, time::Duration};
 use masonry::{
@@ -24,7 +25,10 @@ use masonry::{
 #[cfg(test)]
 use num_traits::cast::AsPrimitive;
 
-use super::neutral::{App, Config, RunError};
+use super::{
+    frame::Frame,
+    neutral::{App, Config, RunError},
+};
 #[cfg(test)]
 use crate::draw::Rect;
 use crate::{
@@ -107,10 +111,10 @@ where
         let id = self.state.widget_id(path)?;
         let bounds = self.root.root().get_widget(id)?.ctx().bounding_rect();
         Some(Rect {
-            x: (bounds.x0 / self.scale).as_(),
-            y: (bounds.y0 / self.scale).as_(),
-            w: ((bounds.x1 - bounds.x0) / self.scale).as_(),
-            h: ((bounds.y1 - bounds.y0) / self.scale).as_(),
+            x: bounds.x0.as_(),
+            y: bounds.y0.as_(),
+            w: (bounds.x1 - bounds.x0).as_(),
+            h: (bounds.y1 - bounds.y0).as_(),
         })
     }
 
@@ -121,10 +125,26 @@ where
         std::mem::take(&mut self.commands)
     }
 
+    /// Satisfies the redraw signals covered by a frame the host completed.
+    ///
+    /// Returns whether Masonry requested a following animation frame. Every
+    /// unrelated platform signal remains queued on the retained root.
+    pub fn complete_frame(&mut self) -> bool {
+        self.root.complete_frame()
+    }
+
     /// Tells the UI how big its rectangle is now, in physical pixels.
     pub fn resize(&mut self, size: (u32, u32), scale: f64) {
+        let scale_changed = self.scale != scale;
         self.size = PhysicalSize::new(size.0, size.1);
         self.scale = scale;
+        if scale_changed
+            && let Err(error) = self
+                .root
+                .handle_window_event(WindowEvent::Rescale(self.scale))
+        {
+            tracing::error!(%error, "masonry rescale");
+        }
         if let Err(error) = self
             .root
             .handle_window_event(WindowEvent::Resize(self.size))
@@ -192,6 +212,8 @@ where
     /// Advances one frame's worth of animation.
     pub fn frame(&mut self, elapsed: Duration) {
         self.app.tick();
+        let Self { app, root, .. } = self;
+        app.reads(|reads| root.refresh_vis(reads));
         if let Err(error) = self
             .root
             .handle_window_event(WindowEvent::AnimFrame(elapsed))
@@ -202,25 +224,38 @@ where
     }
 
     /// Draws the current document, in the physical pixels the caller sized it
-    /// with. The caller rasterises this with its own device and queue, into
-    /// whatever target it likes.
+    /// with. The caller rasterises the Vello scene, then sends the native
+    /// declarations through [`crate::render::vis::VisPass`] on the same target.
     ///
-    /// The document is laid out and painted in logical units; the display scale
-    /// is applied here so that a host only ever deals in the size it gave.
+    /// The document is laid out and painted in logical units. This method scales
+    /// the Vello scene; the host gives that same scale and its physical target
+    /// size to the native pass.
     ///
     /// # Errors
     /// Returns [`RunError`] when the paint pass fails.
-    pub fn scene(&mut self) -> Result<Scene, RunError> {
+    pub fn render(&mut self) -> Result<Frame, RunError> {
         let (scene, _) = self
             .root
             .redraw()
             .map_err(|error| RunError::Host(error.to_string()))?;
-        if (self.scale - 1.0).abs() < f64::EPSILON {
-            return Ok(scene);
-        }
-        let mut scaled = Scene::new();
-        scaled.append(&scene, Some(Affine::scale(self.scale)));
-        Ok(scaled)
+        let vis = self.root.vis_declarations();
+        let scene = if (self.scale - 1.0).abs() < f64::EPSILON {
+            scene
+        } else {
+            let mut scaled = Scene::new();
+            scaled.append(&scene, Some(Affine::scale(self.scale)));
+            scaled
+        };
+        Ok(Frame::new(scene, vis))
+    }
+
+    /// Draws the current document through the same single paint path as
+    /// [`Self::render`] and returns only its Vello scene.
+    ///
+    /// # Errors
+    /// Returns [`RunError`] when the paint pass fails.
+    pub fn scene(&mut self) -> Result<Scene, RunError> {
+        self.render().map(Into::into)
     }
 
     fn pointer_event(&self, phase: PointerPhase, clicks: u8) -> Option<PointerEvent> {

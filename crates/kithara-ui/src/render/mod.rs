@@ -18,6 +18,7 @@ mod track_list;
 mod track_list_paint;
 pub mod tree;
 pub mod typography;
+pub mod vis;
 
 pub use address::{Node, Scope, Walk};
 pub(crate) use controls::{ChromeLeaf, chrome_leaf, header_chevron, tree_rows};

@@ -18,6 +18,7 @@ use super::{
     MasonryControl, Repaint, Size2, SizeLimits, TextMeasurer,
     custom::{HostAction, MountedCustom},
     node::pointer_button,
+    vis::VisLeaf,
 };
 use crate::{
     backends::VelloBackend,
@@ -30,7 +31,7 @@ use crate::{
     text::{TextContext, TextResources},
 };
 
-pub(crate) enum Leaf {
+pub(super) enum Leaf {
     Empty,
     Control(Box<dyn MasonryControl>),
     Text {
@@ -44,12 +45,13 @@ pub(crate) enum Leaf {
         widget: Box<dyn MountedCustom>,
         text: Box<TextContext>,
     },
+    Vis(VisLeaf),
 }
 
 impl Leaf {
     pub(crate) fn measure(&mut self, limits: crate::solve::Limits) -> crate::solve::Size {
         match self {
-            Self::Empty => crate::solve::Size::ZERO,
+            Self::Empty | Self::Vis(_) => crate::solve::Size::ZERO,
             Self::Control(control) => control.measure(),
             Self::Text {
                 content,
@@ -82,7 +84,7 @@ impl Leaf {
         }
         let mut list = DrawListBuilder::default();
         match self {
-            Self::Empty | Self::Control(_) => {}
+            Self::Empty | Self::Control(_) | Self::Vis(_) => {}
             Self::Text {
                 content,
                 role,
@@ -129,18 +131,21 @@ impl Leaf {
         match self {
             Self::Control(control) => control.input(input, &hit),
             Self::Custom { widget, .. } => widget.input(input, hit),
-            Self::Empty | Self::Text { .. } => Outcome::IGNORED,
+            Self::Empty | Self::Text { .. } | Self::Vis(_) => Outcome::IGNORED,
         }
     }
 
     pub(crate) fn frame(&mut self, elapsed: Duration) -> Option<HostAction> {
         match self {
             Self::Custom { widget, .. } => widget.frame(elapsed),
-            Self::Empty | Self::Control(_) | Self::Text { .. } => None,
+            Self::Empty | Self::Control(_) | Self::Text { .. } | Self::Vis(_) => None,
         }
     }
 
     pub(crate) fn repaint(&self) -> Repaint {
+        if matches!(self, Self::Vis(_)) {
+            return Repaint::Continuous;
+        }
         if let Self::Control(control) = self {
             return control.repaint();
         }
@@ -153,7 +158,7 @@ impl Leaf {
     pub(crate) fn hover(&mut self, hovered: bool) -> bool {
         match self {
             Self::Control(control) => control.hover(hovered),
-            Self::Custom { .. } | Self::Empty | Self::Text { .. } => false,
+            Self::Custom { .. } | Self::Empty | Self::Text { .. } | Self::Vis(_) => false,
         }
     }
 
@@ -171,13 +176,14 @@ impl Leaf {
                 }
                 _ => false,
             },
-            Self::Custom { .. } | Self::Empty => false,
+            Self::Custom { .. } | Self::Empty | Self::Vis(_) => false,
         }
     }
 
     pub(crate) fn refresh(&mut self, reads: &dyn Reads) -> bool {
         match self {
             Self::Control(control) => control.refresh(reads),
+            Self::Vis(vis) => vis.refresh(reads),
             Self::Custom { .. } | Self::Empty | Self::Text { .. } => false,
         }
     }
@@ -196,7 +202,9 @@ impl Leaf {
     pub(crate) fn cursor(&self, hit: &Hit) -> CursorShape {
         match self {
             Self::Control(control) => control.cursor(hit),
-            Self::Empty | Self::Text { .. } | Self::Custom { .. } => CursorShape::None,
+            Self::Empty | Self::Text { .. } | Self::Custom { .. } | Self::Vis(_) => {
+                CursorShape::None
+            }
         }
     }
 }

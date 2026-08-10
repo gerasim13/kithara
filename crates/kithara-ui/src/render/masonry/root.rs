@@ -31,7 +31,7 @@ use crate::{
     compile::CompiledUi,
     draw::{Pt, Rect, replay},
     interact::CursorShape,
-    render::{Reads, Skin, UiEvent, WindowCommand, document::read::resolve},
+    render::{Reads, Skin, UiEvent, WindowCommand, document::read::resolve, vis::VisDeclaration},
     text::TextContext,
     widgets::{drag_ghost::DragGhost, window::WindowSurface},
 };
@@ -48,6 +48,7 @@ pub struct MasonryRoot<Action> {
     engines: Vec<Rc<HostedEngine>>,
     popovers: Vec<PopoverRegistration>,
     watched: Vec<Watched>,
+    vis: Vec<WidgetId>,
     window: Option<WindowTracker>,
     #[field(get, vis = "pub")]
     root: RenderRoot,
@@ -81,7 +82,7 @@ where
         node: MasonryNode<Action>,
         options: RenderRootOptions,
     ) -> Result<Self, MasonryRootError> {
-        let (base, layers, popovers, engines, window, watched) = RootParts::from(node);
+        let (base, layers, popovers, engines, vis, window, watched) = RootParts::from(node);
         let signals = Rc::new(RefCell::new(VecDeque::new()));
         let sink = Rc::clone(&signals);
         let root = RenderRoot::new(
@@ -95,6 +96,7 @@ where
             engines,
             popovers,
             watched,
+            vis,
             window,
             root,
             signals,
@@ -169,6 +171,32 @@ where
                 }
             }
         }
+    }
+
+    pub(crate) fn refresh_vis(&mut self, reads: &dyn Reads) {
+        for id in &self.vis {
+            self.root.edit_widget(*id, |mut widget| {
+                let mut node = widget.downcast::<Node>();
+                if node.widget.refresh(reads) {
+                    node.ctx.request_paint_only();
+                }
+            });
+        }
+    }
+
+    pub(crate) fn vis_declarations(&self) -> Vec<VisDeclaration> {
+        self.vis
+            .iter()
+            .filter_map(|id| {
+                let widget = self.root.get_widget(*id)?.downcast::<Node>()?;
+                if widget.ctx().is_stashed() {
+                    return None;
+                }
+                let frame = widget.vis_frame()?;
+                let bounds = widget.ctx().bounding_rect();
+                VisDeclaration::logical(frame, [bounds.x0, bounds.y0, bounds.x1, bounds.y1])
+            })
+            .collect()
     }
 
     fn routes_open_picker(&mut self, event: &PointerEvent) -> Result<bool, MasonryRootError> {
@@ -262,6 +290,14 @@ where
     /// Takes non-layer, non-action signals for the platform runner.
     pub fn take_platform_signals(&mut self) -> Vec<RenderRootSignal> {
         std::mem::take(&mut self.platform)
+    }
+
+    /// Satisfies the redraw signals covered by a completed frame.
+    ///
+    /// Returns whether an animation frame, rather than an ordinary redraw, was
+    /// requested. Every unrelated platform signal remains queued in order.
+    pub(crate) fn complete_frame(&mut self) -> bool {
+        complete_frame_signals(&mut self.platform)
     }
 
     #[cfg(test)]
@@ -406,6 +442,63 @@ where
             })?;
         self.actions.push(action);
         Ok(())
+    }
+}
+
+fn complete_frame_signals(signals: &mut Vec<RenderRootSignal>) -> bool {
+    let mut animation = false;
+    signals.retain(|signal| match signal {
+        RenderRootSignal::RequestRedraw => false,
+        RenderRootSignal::RequestAnimFrame => {
+            animation = true;
+            false
+        }
+        _ => true,
+    });
+    animation
+}
+
+#[cfg(test)]
+mod frame_signal_tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn ordinary_redraw_does_not_schedule_another_frame() {
+        let mut signals = vec![RenderRootSignal::RequestRedraw];
+
+        assert!(!complete_frame_signals(&mut signals));
+        assert!(signals.is_empty());
+    }
+
+    #[kithara::test]
+    fn animation_request_schedules_another_frame() {
+        let mut signals = vec![RenderRootSignal::RequestAnimFrame];
+
+        assert!(complete_frame_signals(&mut signals));
+        assert!(signals.is_empty());
+    }
+
+    #[kithara::test]
+    fn satisfied_signals_are_removed_and_unrelated_signals_keep_their_order() {
+        let mut signals = vec![
+            RenderRootSignal::StartIme,
+            RenderRootSignal::RequestRedraw,
+            RenderRootSignal::EndIme,
+            RenderRootSignal::RequestAnimFrame,
+            RenderRootSignal::TakeFocus,
+        ];
+
+        assert!(complete_frame_signals(&mut signals));
+        assert!(matches!(
+            signals.as_slice(),
+            [
+                RenderRootSignal::StartIme,
+                RenderRootSignal::EndIme,
+                RenderRootSignal::TakeFocus
+            ]
+        ));
     }
 }
 

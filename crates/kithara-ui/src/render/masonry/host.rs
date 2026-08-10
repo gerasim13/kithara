@@ -19,6 +19,7 @@ use super::{
     node::LayerParts,
     popover::{PopoverLayer, PopoverState},
     root::WindowLayer,
+    vis::VisLeaf,
 };
 use crate::{
     compile::CompiledUi,
@@ -218,6 +219,22 @@ where
     ) -> MasonryNode<Action> {
         MasonryNode::document(
             NodeLayout::Leaf(Leaf::Control(Box::new(control))),
+            declared,
+            Vec::new(),
+            false,
+            None,
+            None,
+        )
+    }
+
+    pub(super) fn vis_leaf(
+        &self,
+        preset: Option<String>,
+        value: Option<ReadValue<'_>>,
+        declared: solve::Size<solve::Length>,
+    ) -> MasonryNode<Action> {
+        MasonryNode::document(
+            NodeLayout::Leaf(Leaf::Vis(VisLeaf::new(preset, value, self.reads))),
             declared,
             Vec::new(),
             false,
@@ -466,8 +483,17 @@ where
             MasonryNode::document(NodeLayout::Stack, size, vec![anchor], false, None, None);
         output.add_popover(Rc::clone(&state), Rc::clone(&dismiss));
         if let Some(content) = content {
-            let (content, declared, layers, popovers, engine_targets, engines, window, watched) =
-                LayerParts::from(content);
+            let (
+                content,
+                declared,
+                layers,
+                popovers,
+                engine_targets,
+                engines,
+                vis,
+                window,
+                watched,
+            ) = LayerParts::from(content);
             let layer = PopoverLayer::new(
                 content,
                 declared,
@@ -480,6 +506,7 @@ where
             output.append_popovers(popovers);
             output.append_engine_targets(engine_targets);
             output.append_engines(engines);
+            output.append_vis(vis);
             output.append_watched(watched);
             if let Some(window) = window {
                 output.set_window_tracker(window);
@@ -580,7 +607,7 @@ where
         }
         if matches!(
             spec,
-            ControlSpec::TrackList { .. } | ControlSpec::Tree { .. }
+            ControlSpec::Vis | ControlSpec::TrackList { .. } | ControlSpec::Tree { .. }
         ) {
             output.watch_snapshot();
         } else if let Some(read) = read {

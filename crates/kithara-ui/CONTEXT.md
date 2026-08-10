@@ -344,8 +344,9 @@ render root's signal callback, synchronises native layer signals, recovers the d
 returns concrete values from `take_actions`. A `UiEvent` queue is not an action channel, and no
 custom action is encoded into one. Built-in control events still pass through the sole
 `render::event::control_event` constructor before the same private mapping. Full iced-only control
-painters and `Vis` remain toolkit-local; `Vis` is deliberately not substituted with a second
-visualiser here.
+painters remain toolkit-local. `Vis` is the one native effect: the retained leaf paints no Vello
+commands and registers its widget id, while the root projects only those registered leaves into the
+complete frame's unclipped logical rectangles and current uniforms.
 
 Pointer input crosses the seam as one `PointerInput`: stable identity, optional changed button,
 host-logical point, click count, and the raw or recognised phase. `Outcome<Action>` keeps three
@@ -861,11 +862,26 @@ host-owned. `SkinDoc.meter` owns track size, hairline frame, track colour and fi
 is inset by the frame width on every side, so a full bar stops at the frame's inner edge.
 `Vis` is render-only and emits nothing. It reads the host-owned preset through its own binding as a
 Scalar index, the master `player.output.levels` Stereo snapshot, and the animation clock as a Scalar
-at `vis.time`. Reaction level is `max(l, r) * volume` clamped to `0..=1`; a non-finite level, an
-out-of-range preset or any missing read collapses the widget to `Space`. It keeps no audio state and
-no wall clock, so pacing belongs to the host. The embedded WGSL asset owns the three fixed presets
+at `vis.time`; that Scalar binding is distinct from the `ui.preset` Text contract consumed by
+`PresetSelector`. Reaction level is `max(l, r) * volume` clamped to `0..=1`; non-finite levels, an
+out-of-range or missing preset, or missing levels produce no Vis draw. A missing, wrongly typed,
+or non-finite clock instead produces a valid static frame at time zero. It keeps no audio state and
+no wall clock, so pacing belongs to the host. `VisFrame` owns this one read projection, and one
+32-byte packer plus the embedded WGSL asset serves the iced wgpu 27 adapter and retained wgpu 26
+pass without sharing typed GPU objects across them. The WGSL asset owns the three fixed presets
 (`PRESET_COUNT = 3`), chrome around it is markup plus `SkinDoc.vis`, and the shader stays behind the
 `render` feature so the non-render wasm schema lane needs neither wgpu nor a clock.
+
+The retained pass consumes every logical declaration after Vello and before live blit or headless
+readback. The wgpu 26 pass owns display-scale conversion: uniform origin and resolution preserve the
+unclipped logical rectangle while only its physical-pixel scissor is rounded and clipped. The live
+intermediate target is recreated with
+`STORAGE_BINDING | RENDER_ATTACHMENT | TEXTURE_BINDING` after every resize; the headless target
+uses `STORAGE_BINDING | RENDER_ATTACHMENT | COPY_SRC`. `Ui::render` returns both the scene and the
+declarations as one frame, so production and capture call the same `VisPass`. Vis requests
+continuous Masonry animation frames. After a successful present the window satisfies both redraw
+signals from that completed paint and requests another redraw only when an animation frame was
+present, without draining unrelated platform signals or introducing a general idle-frame policy.
 
 ## Scoped Read Resolution
 
@@ -1359,10 +1375,13 @@ page.
 ## Masonry Host Exports
 
 `MasonryHost::{with_state, with_custom}` and `MasonryRoot::{take_actions,
-take_platform_signals}` are the public contract a Masonry consumer drives: install retained state,
-mount custom content at a document path, then drain typed actions and platform signals each frame.
-`examples/masonry_host.rs` is their production caller and exercises all four end to end; the M9 lsq
-migration is the second consumer.
+take_platform_signals}` are the public contract a direct Masonry consumer drives: install retained
+state, mount custom content at a document path, then drain typed actions and platform signals each
+frame. `app::Ui::render` is the complete higher-level frame export: its `Frame` carries the Vello
+scene and native logical Vis declarations, and `render::vis::VisPass` converts and consumes those
+declarations on the same wgpu 26 device. `examples/masonry_host.rs` exercises the direct four
+exports end to end; the gallery window and headless capture exercise the complete frame and native
+pass; the M9 lsq migration is the second direct consumer.
 
 Those four are why `dead_exports` stopped classifying `TargetKind::Example` as test-like. An example
 is shipped code demonstrating a public API, `cargo --all-targets` builds it, and

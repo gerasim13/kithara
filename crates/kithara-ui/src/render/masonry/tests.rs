@@ -8,7 +8,7 @@ use std::{
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use masonry::{
-    app::{RenderRootOptions, RenderRootSignal, WindowSizePolicy},
+    app::{RenderRoot, RenderRootOptions, RenderRootSignal, WindowSizePolicy},
     core::{CursorIcon, Handled, Ime, PointerEvent, TextEvent, WindowEvent},
     dpi::{PhysicalPosition, PhysicalSize},
     kurbo::{Point, Size as MasonrySize},
@@ -26,7 +26,9 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     CustomWidget, MasonryHost, MasonryNode, MasonryRoot, MasonryState, Repaint, Size2, SizeLimits,
-    TextMeasurer, leaf::DragProgram,
+    TextMeasurer,
+    leaf::DragProgram,
+    node::{Node, RootParts},
 };
 use crate::{
     atoms::bar::context::Context,
@@ -45,6 +47,34 @@ use crate::{
 };
 
 struct FixtureReads;
+
+struct VisReads {
+    left: Cell<f32>,
+    right: Cell<f32>,
+    volume: Cell<f32>,
+    time: Cell<f64>,
+    first: Cell<f64>,
+    second: Cell<f64>,
+    levels_present: Cell<bool>,
+}
+
+impl Reads for VisReads {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        match endpoint {
+            "vis.first" => Some(ReadValue::Scalar(self.first.get())),
+            "vis.second" => Some(ReadValue::Scalar(self.second.get())),
+            "vis.time" => Some(ReadValue::Scalar(self.time.get())),
+            "player.output.levels" if self.levels_present.get() => {
+                Some(ReadValue::Stereo(StereoLevels {
+                    l: self.left.get(),
+                    r: self.right.get(),
+                    volume: self.volume.get(),
+                }))
+            }
+            _ => None,
+        }
+    }
+}
 
 struct PresetReads {
     active: Cell<&'static str>,
@@ -139,6 +169,8 @@ impl Reads for FixtureReads {
             "library.breadcrumb" => Some(ReadValue::Text("All Tracks")),
             "library.query" => Some(ReadValue::Text("Folder")),
             "library.scope" => Some(ReadValue::Scalar(0.0)),
+            "vis.preset" => Some(ReadValue::Scalar(1.0)),
+            "vis.time" => Some(ReadValue::Scalar(0.5)),
             "library.tree" => Some(ReadValue::Tree(&TREE_ROWS)),
             "player.output.levels" => Some(ReadValue::Stereo(StereoLevels {
                 l: 0.6,
@@ -1612,7 +1644,8 @@ fn assert_scalar_value(actions: &[TestAction], path: &str, expected: f32) {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Paints {
     Yes,
-    NotYet,
+    /// A native pass draws this control after the Vello scene.
+    Native,
     /// There is no picture to draw. A window-drag region is a place the hand
     /// grabs the window by, and the immediate host draws nothing for it either,
     /// so an empty scene here is the control working rather than a gap. That
@@ -1621,17 +1654,10 @@ enum Paints {
     Nothing,
 }
 
-impl Paints {
-    const fn draws(self) -> bool {
-        matches!(self, Self::Yes)
-    }
-}
-
 /// Every control the shared base draws, and whether Masonry draws it today.
 ///
-/// The `NotYet` rows are the remaining work, stated once and checked rather
-/// than described. A control that starts drawing fails this test until its row
-/// moves to `Yes`; a control that stops drawing fails it immediately.
+/// Native output is counted separately from Vello output, so an intentionally
+/// empty Vello scene cannot make a working second-pass control look undrawn.
 ///
 /// Every `ControlSpec` variant has a row. A census that covered only the
 /// controls someone remembered to add left the rest invisible: not drawn, and
@@ -1685,7 +1711,11 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
         r#"Scalar(id: "control", read: Model(id: "deck.view.zoom"))"#,
     ),
     ("Wave", Paints::Yes, r#"Wave(id: "control")"#),
-    ("Vis", Paints::NotYet, r#"Vis(id: "control")"#),
+    (
+        "Vis",
+        Paints::Native,
+        r#"Vis(id: "control", read: Model(id: "vis.preset"))"#,
+    ),
     (
         "TrackList",
         Paints::Yes,
@@ -1846,21 +1876,192 @@ fn masonry_draws_every_control_the_census_claims_it_draws() {
                 panic!("`{name}` must reach a Masonry paint pass: {error}")
             });
             let encoding = scene.encoding();
-            (
-                *name,
-                !(encoding.is_empty() && encoding.resources.glyphs.is_empty()),
-            )
+            let paints = if !(encoding.is_empty() && encoding.resources.glyphs.is_empty()) {
+                Paints::Yes
+            } else if !root.vis_declarations().is_empty() {
+                Paints::Native
+            } else {
+                Paints::Nothing
+            };
+            (*name, paints)
         })
         .collect::<Vec<_>>();
     let expected = CONTROL_CENSUS
         .iter()
-        .map(|(name, paints, _)| (*name, paints.draws()))
+        .map(|(name, paints, _)| (*name, *paints))
         .collect::<Vec<_>>();
 
     assert_eq!(
         observed, expected,
         "the census is stale — move a row when its painter lands, and never leave the census \
          describing a host it no longer matches"
+    );
+}
+
+#[kithara::test]
+fn retained_vis_declares_exact_logical_frames_and_continuous_repaint() {
+    let mut registry = fixture_registry();
+    for id in ["vis.first", "vis.second"] {
+        registry.insert(
+            EndpointCategory::Model,
+            id,
+            EndpointDesc::new(ValueKind::Scalar),
+        );
+    }
+    let reads = VisReads {
+        left: Cell::new(0.25),
+        right: Cell::new(0.75),
+        volume: Cell::new(0.8),
+        time: Cell::new(1.25),
+        first: Cell::new(0.2),
+        second: Cell::new(1.8),
+        levels_present: Cell::new(true),
+    };
+    let ui = fixture_ui(
+        "vis-fixture",
+        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Vis(id: "first", read: Model(id: "vis.first"), size: Some((w: Fixed(40.0), h: Fill))),
+            Vis(id: "second", read: Model(id: "vis.second"), size: Some((w: Fixed(40.0), h: Fill))),
+        ])"#,
+        &registry,
+    );
+    let output = document::render(
+        &ui.root,
+        &ui,
+        &reads,
+        builtin::skin_doc(),
+        MasonryHost::new(&ui, &reads, builtin::skin()),
+    );
+    let mut root = masonry_root(output, 80, 20);
+    root.redraw()
+        .unwrap_or_else(|error| panic!("Vis leaves must reach retained layout: {error}"));
+
+    assert!(
+        root.take_platform_signals()
+            .into_iter()
+            .any(|signal| matches!(signal, RenderRootSignal::RequestAnimFrame)),
+        "a retained Vis leaf must request continuous animation frames"
+    );
+    let declarations = root.vis_declarations();
+    assert_eq!(declarations.len(), 2);
+    assert_eq!(
+        declarations
+            .iter()
+            .map(|vis| vis.rect())
+            .collect::<Vec<_>>(),
+        vec![[0.0, 0.0, 40.0, 20.0], [40.0, 0.0, 80.0, 20.0]]
+    );
+    assert_eq!(declarations[0].frame().preset(), 0);
+    assert_eq!(declarations[1].frame().preset(), 2);
+    assert!((declarations[0].frame().level() - 0.6).abs() < f32::EPSILON);
+    assert_eq!(declarations[0].frame().time(), 1.25);
+    assert_eq!(
+        root.handle_pointer_event(pointer_down(20.0, 10.0))
+            .unwrap_or_else(|error| panic!("Vis pointer routing must remain typed: {error}")),
+        Handled::No,
+        "Vis is render-only and must not claim pointer input"
+    );
+    assert!(root.take_actions().is_empty(), "Vis must emit no event");
+
+    reads.first.set(1.0);
+    reads.right.set(0.5);
+    reads.volume.set(0.5);
+    reads.time.set(9.0);
+    root.refresh_vis(&reads);
+    root.redraw()
+        .unwrap_or_else(|error| panic!("Vis refresh must not remount the tree: {error}"));
+    let refreshed = root.vis_declarations();
+    assert_eq!(refreshed.len(), 2);
+    assert_eq!(refreshed[0].frame().preset(), 1);
+    assert!((refreshed[0].frame().level() - 0.25).abs() < f32::EPSILON);
+    assert_eq!(refreshed[0].frame().time(), 9.0);
+
+    reads.first.set(f64::NAN);
+    root.refresh_vis(&reads);
+    assert_eq!(
+        root.vis_declarations().len(),
+        1,
+        "an invalid preset suppresses only its own native declaration"
+    );
+    reads.levels_present.set(false);
+    root.refresh_vis(&reads);
+    assert!(
+        root.vis_declarations().is_empty(),
+        "missing levels suppress every Vis declaration"
+    );
+}
+
+#[kithara::test]
+fn stashed_continuous_vis_stops_and_unstashing_restarts_animation_frames() {
+    let registry = fixture_registry();
+    let reads = FixtureReads;
+    let ui = fixture_ui(
+        "vis-stashing-fixture",
+        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Vis(id: "continuous", read: Model(id: "vis.preset")),
+        ])"#,
+        &registry,
+    );
+    let output = document::render(
+        &ui.root,
+        &ui,
+        &reads,
+        builtin::skin_doc(),
+        MasonryHost::new(&ui, &reads, builtin::skin()),
+    );
+    let [_, parent, vis] = output.document_ids() else {
+        panic!("the fixture must retain exactly the document root, one parent, and one Vis leaf")
+    };
+    let parent = *parent;
+    let vis = *vis;
+    let (base, _, _, _, _, _, _): RootParts = output.into();
+    let signals = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&signals);
+    let mut root = RenderRoot::new(
+        base,
+        move |signal| sink.borrow_mut().push(signal),
+        render_root_options(80, 20),
+    );
+
+    assert!(
+        take_animation_request(&signals),
+        "WidgetAdded must start a continuous Vis"
+    );
+    root.edit_widget(parent, |mut widget| {
+        let mut node = widget.downcast::<Node>();
+        Node::set_child_stashed(&mut node, 0, true);
+    });
+    assert!(
+        root.get_widget(vis)
+            .is_some_and(|widget| widget.ctx().is_stashed()),
+        "the test must exercise Masonry's real stashed state"
+    );
+    signals.borrow_mut().clear();
+
+    root.handle_window_event(WindowEvent::AnimFrame(Duration::from_millis(16)));
+    assert!(
+        !take_animation_request(&signals),
+        "the already-requested callback for a stashed continuous Vis must not request another frame"
+    );
+
+    root.edit_widget(parent, |mut widget| {
+        let mut node = widget.downcast::<Node>();
+        Node::set_child_stashed(&mut node, 0, false);
+    });
+    assert!(
+        root.get_widget(vis)
+            .is_some_and(|widget| !widget.ctx().is_stashed()),
+        "the Vis leaf must be visible again before repaint restarts"
+    );
+    assert!(
+        take_animation_request(&signals),
+        "unstashing must restart the leaf repaint contract"
+    );
+
+    root.handle_window_event(WindowEvent::AnimFrame(Duration::from_millis(16)));
+    assert!(
+        take_animation_request(&signals),
+        "the visible continuous Vis must keep scheduling frames"
     );
 }
 
@@ -2393,18 +2594,26 @@ fn masonry_root<Action>(output: MasonryNode<Action>, width: u32, height: u32) ->
 where
     Action: std::fmt::Debug + Send + 'static,
 {
-    MasonryRoot::new(
-        output,
-        RenderRootOptions {
-            default_properties: Arc::new(default_property_set()),
-            use_system_fonts: false,
-            size_policy: WindowSizePolicy::User,
-            size: PhysicalSize::new(width, height),
-            scale_factor: 1.0,
-            test_font: None,
-        },
-    )
-    .unwrap_or_else(|error| panic!("Masonry fixture root must retain typed actions: {error}"))
+    MasonryRoot::new(output, render_root_options(width, height))
+        .unwrap_or_else(|error| panic!("Masonry fixture root must retain typed actions: {error}"))
+}
+
+fn render_root_options(width: u32, height: u32) -> RenderRootOptions {
+    RenderRootOptions {
+        default_properties: Arc::new(default_property_set()),
+        use_system_fonts: false,
+        size_policy: WindowSizePolicy::User,
+        size: PhysicalSize::new(width, height),
+        scale_factor: 1.0,
+        test_font: None,
+    }
+}
+
+fn take_animation_request(signals: &Rc<RefCell<Vec<RenderRootSignal>>>) -> bool {
+    signals
+        .borrow_mut()
+        .drain(..)
+        .any(|signal| matches!(signal, RenderRootSignal::RequestAnimFrame))
 }
 
 fn pointer_info() -> PointerInfo {
@@ -2623,6 +2832,11 @@ fn fixture_registry() -> FixtureRegistry {
         EndpointCategory::Model,
         "library.tree",
         EndpointDesc::new(ValueKind::Tree),
+    );
+    registry.insert(
+        EndpointCategory::Model,
+        "vis.preset",
+        EndpointDesc::new(ValueKind::Scalar),
     );
     insert_stream_endpoints(&mut registry);
     registry

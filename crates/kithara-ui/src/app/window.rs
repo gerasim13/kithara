@@ -6,9 +6,9 @@ use kithara_platform::{
     time::{Duration, Instant},
 };
 use masonry::vello::{
-    AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene,
+    AaConfig, AaSupport, RenderParams, Renderer, RendererOptions,
     util::{RenderContext, RenderSurface},
-    wgpu::{CommandEncoderDescriptor, PresentMode, TextureViewDescriptor},
+    wgpu::{CommandEncoderDescriptor, PresentMode, SurfaceError, TextureViewDescriptor},
 };
 use num_traits::cast::AsPrimitive;
 use winit::{
@@ -21,12 +21,14 @@ use winit::{
 
 use super::{
     embed::Ui,
+    frame::Frame,
     neutral::{App, Config, RunError},
+    target,
 };
 use crate::{
     draw::Pt,
     interact::{Input, MOUSE, PointerInput, PointerPhase, Scroll},
-    render::{WindowCommand, WindowEdge},
+    render::{WindowCommand, WindowEdge, vis::VisPass},
 };
 
 /// Opens a window of `size` logical points and runs `app` in it until the
@@ -61,10 +63,27 @@ struct Live<'config, Application> {
     clicks: Clicks,
     context: RenderContext,
     pointer: PhysicalPosition<f64>,
+    recovery_redraw_latched: bool,
     renderer: Renderer,
     surface: RenderSurface<'static>,
     ui: Ui<'config, Application>,
+    vis: VisPass,
     window: Arc<Window>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SurfaceRecovery {
+    Retry,
+    Reconfigure,
+    Stop,
+}
+
+const fn surface_recovery(error: &SurfaceError) -> SurfaceRecovery {
+    match error {
+        SurfaceError::Timeout => SurfaceRecovery::Retry,
+        SurfaceError::Outdated | SurfaceError::Lost => SurfaceRecovery::Reconfigure,
+        SurfaceError::OutOfMemory | SurfaceError::Other => SurfaceRecovery::Stop,
+    }
 }
 
 /// Multi-click counting. Winit reports presses, not clicks, so the run of
@@ -77,12 +96,13 @@ struct Clicks {
 }
 
 #[cfg(test)]
-mod clicks {
+mod tests {
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
+    use masonry::vello::wgpu::SurfaceError;
     use winit::dpi::PhysicalPosition;
 
-    use super::Clicks;
+    use super::{Clicks, SurfaceRecovery, surface_recovery};
 
     /// A double click is two presses close in time and place. Nothing below the
     /// window sees presses, so if this does not count them no control can.
@@ -118,6 +138,30 @@ mod clicks {
             ),
             1,
             "a press away from the last one starts a new run"
+        );
+    }
+
+    #[kithara::test]
+    fn retries_only_recoverable_surface_errors() {
+        assert_eq!(
+            surface_recovery(&SurfaceError::Timeout),
+            SurfaceRecovery::Retry
+        );
+        assert_eq!(
+            surface_recovery(&SurfaceError::Outdated),
+            SurfaceRecovery::Reconfigure
+        );
+        assert_eq!(
+            surface_recovery(&SurfaceError::Lost),
+            SurfaceRecovery::Reconfigure
+        );
+        assert_eq!(
+            surface_recovery(&SurfaceError::OutOfMemory),
+            SurfaceRecovery::Stop
+        );
+        assert_eq!(
+            surface_recovery(&SurfaceError::Other),
+            SurfaceRecovery::Stop
         );
     }
 }
@@ -249,8 +293,9 @@ where
             PresentMode::AutoVsync,
         ))
         .map_err(|error| RunError::Host(format!("surface: {error}")))?;
+        let handle = &context.devices[surface.dev_id];
         let renderer = Renderer::new(
-            &context.devices[surface.dev_id].device,
+            &handle.device,
             RendererOptions {
                 use_cpu: false,
                 antialiasing_support: AaSupport::area_only(),
@@ -259,6 +304,7 @@ where
             },
         )
         .map_err(|error| RunError::Host(format!("vello renderer: {error}")))?;
+        let vis = VisPass::new(&handle.device, target::FORMAT);
 
         let scale = window.scale_factor();
         let ui = Ui::new(app, self.config, (size.width, size.height), scale)?;
@@ -266,9 +312,11 @@ where
             clicks: Clicks::default(),
             context,
             pointer: PhysicalPosition::new(0.0, 0.0),
+            recovery_redraw_latched: false,
             renderer,
             surface,
             ui,
+            vis,
             window,
         };
         live.resize(size);
@@ -284,15 +332,67 @@ where
     /// told when the window asks for a redraw.
     const FRAME: Duration = Duration::from_millis(16);
 
+    fn request_redraw(&mut self) {
+        self.clear_recovery_redraw();
+        self.window.request_redraw();
+    }
+
+    fn request_recovery_redraw(&mut self) -> bool {
+        if self.recovery_redraw_latched {
+            return false;
+        }
+        self.recovery_redraw_latched = true;
+        self.window.request_redraw();
+        true
+    }
+
+    fn clear_recovery_redraw(&mut self) {
+        self.recovery_redraw_latched = false;
+    }
+
     fn resize(&mut self, size: PhysicalSize<u32>) {
         if size.width == 0 || size.height == 0 {
             return;
         }
-        self.context
-            .resize_surface(&mut self.surface, size.width, size.height);
+        if self.surface.config.width != size.width || self.surface.config.height != size.height {
+            self.reconfigure_surface(size);
+        } else {
+            self.replace_target(size);
+        }
         self.ui
             .resize((size.width, size.height), self.window.scale_factor());
-        self.window.request_redraw();
+        self.request_redraw();
+    }
+
+    fn reconfigure_surface(&mut self, size: PhysicalSize<u32>) {
+        self.context
+            .resize_surface(&mut self.surface, size.width, size.height);
+        self.replace_target(size);
+    }
+
+    fn replace_target(&mut self, size: PhysicalSize<u32>) {
+        let handle = &self.context.devices[self.surface.dev_id];
+        target::replace(&mut self.surface, &handle.device, size.width, size.height);
+    }
+
+    fn recover_surface(&mut self, error: SurfaceError) {
+        match surface_recovery(&error) {
+            SurfaceRecovery::Retry => {
+                let retry = self.request_recovery_redraw();
+                tracing::warn!(%error, retry, "surface frame timed out");
+            }
+            SurfaceRecovery::Reconfigure => {
+                let size = self.window.inner_size();
+                if size.width == 0 || size.height == 0 {
+                    tracing::warn!(%error, "surface recovery waits for a nonzero resize");
+                    return;
+                }
+                self.reconfigure_surface(size);
+                let retry = self.request_recovery_redraw();
+                tracing::warn!(%error, retry, "surface frame reconfigured");
+            }
+            SurfaceRecovery::Stop => tracing::error!(%error, "surface frame failed"),
+        }
     }
 
     /// Turns the window's physical pointer position into the logical point the
@@ -315,7 +415,7 @@ where
             Some(at),
             clicks,
         )));
-        self.window.request_redraw();
+        self.request_redraw();
     }
 
     /// One wheel notch, in whichever units the platform reports it.
@@ -327,7 +427,7 @@ where
                 y: at.y.as_(),
             },
         }));
-        self.window.request_redraw();
+        self.request_redraw();
     }
 
     /// Carries out what the document asked its window to do, and says whether
@@ -352,25 +452,27 @@ where
 
     fn draw(&mut self) {
         self.ui.frame(Self::FRAME);
-        let Ok(scene) = self
+        let Ok(frame) = self
             .ui
-            .scene()
+            .render()
             .inspect_err(|error| tracing::error!(%error, "redraw"))
         else {
             return;
         };
-        self.present(&scene);
+        if self.present(&frame) && self.ui.complete_frame() {
+            self.request_redraw();
+        }
     }
 
     /// Vello paints into its own `Rgba8Unorm` target; the surface takes whatever
     /// format the platform offers, so the frame is blitted across.
-    fn present(&mut self, scene: &Scene) {
+    fn present(&mut self, frame: &Frame) -> bool {
         let size = self.window.inner_size();
         let handle = &self.context.devices[self.surface.dev_id];
         if let Err(error) = self.renderer.render_to_texture(
             &handle.device,
             &handle.queue,
-            scene,
+            frame.scene(),
             &self.surface.target_view,
             &RenderParams {
                 base_color: self.ui.background().into(),
@@ -380,10 +482,22 @@ where
             },
         ) {
             tracing::error!(%error, "vello render");
-            return;
+            return false;
         }
-        let Ok(frame) = self.surface.surface.get_current_texture() else {
-            return;
+        self.vis.render(
+            &handle.device,
+            &handle.queue,
+            &self.surface.target_view,
+            frame.vis(),
+            self.window.scale_factor(),
+            [size.width, size.height],
+        );
+        let frame = match self.surface.surface.get_current_texture() {
+            Ok(frame) => frame,
+            Err(error) => {
+                self.recover_surface(error);
+                return false;
+            }
         };
         let view = frame.texture.create_view(&TextureViewDescriptor::default());
         let mut encoder = handle
@@ -399,5 +513,7 @@ where
         );
         handle.queue.submit([encoder.finish()]);
         frame.present();
+        self.clear_recovery_redraw();
+        true
     }
 }

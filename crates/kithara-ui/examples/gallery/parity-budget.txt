@@ -10,10 +10,11 @@
 # through Vello, both clearing to the skin's page colour. The floor is under 1%:
 # the two engines disagree on antialiased edges and on text gamma.
 
-# The undrawn controls. vis is a native shader the retained host has no pass
-# for yet; tree is thin ink on a wide panel, which is why its number is small
-# even though the retained host draws no tree at all.
-10-vis.png                 20
+# Vis now runs through the same retained native pass in the live and headless
+# hosts; its old 20-point allowance was the missing shader, not rasteriser noise.
+10-vis.png                  2
+# Tree is thin ink on a wide panel, which is why its number is small even when
+# a regression removes much of it.
 14-tree.png                 3
 # Not accounted for by a missing control — read the masks before lowering.
 # Raised 13 -> 19 when the ink measure landed: this page differs by 12.2% of

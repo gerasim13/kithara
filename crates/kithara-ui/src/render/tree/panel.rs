@@ -8,9 +8,11 @@ use crate::{
     expand::Binding,
     ids::InternId,
     module::TrackColumn,
-    render::{InputOwner, ReadValue, Reads, Skin, UiEvent, controls::Paint, scope_picker},
+    render::{
+        InputOwner, ReadValue, Reads, Skin, UiEvent, controls::Paint, scope_picker, vis::view,
+    },
     text::TextContext,
-    widgets::{Widget, nav::Tree, track_list::TrackList, vis::Vis},
+    widgets::{Widget, nav::Tree, track_list::TrackList},
 };
 
 /// The context strip, with the menu its scope face opens.
@@ -46,11 +48,7 @@ pub(super) fn context_bar<'a>(
 }
 
 pub(super) fn vis<'a>(value: Option<&ReadValue<'_>>, reads: &dyn Reads) -> Element<'a, UiEvent> {
-    Vis::builder()
-        .maybe_preset(value)
-        .reads(reads)
-        .build()
-        .view()
+    view(value, reads)
 }
 
 pub(super) fn track_list<'a>(

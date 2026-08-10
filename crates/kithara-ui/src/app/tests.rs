@@ -2,10 +2,10 @@ use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use masonry::vello::Scene;
 
-use super::{App, Config, Ui, scenario::Scenario};
+use super::{App, Config, RunError, Ui, scenario::Scenario};
 use crate::{
     builtin,
-    draw::{Pt, Rgba},
+    draw::{Pt, Rect, Rgba},
     ids::{EndpointId, SourceUri},
     interact::{Input, MOUSE, PointerInput, PointerPhase},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
@@ -202,7 +202,7 @@ fn drag(control: &Draggable) -> Dragged {
     let mut ui = Ui::new(Dial::new(stereo), config, (240, 120), 1.0)
         .unwrap_or_else(|error| panic!("{control} must mount: {error}"));
     ui.frame(Duration::from_millis(16));
-    ui.scene()
+    ui.render()
         .unwrap_or_else(|error| panic!("{control} must draw: {error}"));
 
     ui.input(press(from, PointerPhase::Move));
@@ -217,10 +217,10 @@ fn drag(control: &Draggable) -> Dragged {
         };
         ui.input(press(at, PointerPhase::Move));
         seen.push(ui.app().value);
-        let scene = ui
-            .scene()
+        let frame = ui
+            .render()
             .unwrap_or_else(|error| panic!("{control} must draw mid-drag: {error}"));
-        drawn.push(geometry(&scene));
+        drawn.push(geometry(frame.scene()));
     }
     ui.input(press(to, PointerPhase::Up));
     Dragged { drawn, seen }
@@ -449,6 +449,59 @@ fn press(at: Pt, phase: PointerPhase) -> Input<'static> {
 }
 
 #[kithara::test]
+fn scene_keeps_the_public_single_redraw_signature() {
+    let endpoints = Registry("fixture.dial", EndpointDesc::new(ValueKind::Scalar));
+    let resolver = one_control(r#"Spacer(id: "scene", size: Some((w: Fill, h: Fill)))"#);
+    let skin = skin();
+    let config = Config::builder()
+        .endpoints(&endpoints)
+        .resolver(&resolver)
+        .skin(&skin)
+        .skin_doc(builtin::skin_doc())
+        .build();
+    let mut ui = Ui::new(Dial::new(false), config, (240, 120), 1.0)
+        .unwrap_or_else(|error| panic!("the scene fixture must mount: {error}"));
+
+    let scene: Result<Scene, RunError> = ui.scene();
+
+    let _scene = scene.unwrap_or_else(|error| panic!("the compatibility scene must draw: {error}"));
+}
+
+#[kithara::test]
+fn resize_from_one_to_two_x_keeps_layout_geometry_logical() {
+    let endpoints = Registry("fixture.dial", EndpointDesc::new(ValueKind::Scalar));
+    let resolver = one_control(r#"Spacer(id: "scaled", size: Some((w: Fill, h: Fill)))"#);
+    let skin = skin();
+    let config = Config::builder()
+        .endpoints(&endpoints)
+        .resolver(&resolver)
+        .skin(&skin)
+        .skin_doc(builtin::skin_doc())
+        .build();
+    let mut ui = Ui::new(Dial::new(false), config, (240, 120), 1.0)
+        .unwrap_or_else(|error| panic!("the scale fixture must mount: {error}"));
+    ui.render()
+        .unwrap_or_else(|error| panic!("the 1x fixture must draw: {error}"));
+    let expected = Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 240.0,
+        h: 120.0,
+    };
+    assert_eq!(ui.rect_of("demo/scaled"), Some(expected));
+
+    ui.resize((480, 240), 2.0);
+    ui.render()
+        .unwrap_or_else(|error| panic!("the 2x fixture must draw: {error}"));
+
+    assert_eq!(
+        ui.rect_of("demo/scaled"),
+        Some(expected),
+        "physical resize and rescale must preserve the 240x120 logical layout"
+    );
+}
+
+#[kithara::test]
 fn a_press_on_a_control_reaches_the_application_and_redraws_the_new_document() {
     let endpoints = Registry("fixture.lit", EndpointDesc::new(ValueKind::Bool));
     let resolver = resolver();
@@ -611,8 +664,9 @@ fn controls_sharing_an_endpoint_move_together_during_the_gesture() {
         .unwrap_or_else(|error| panic!("the pair must mount: {error}"));
     ui.frame(Duration::from_millis(16));
     let before = geometry(
-        &ui.scene()
-            .unwrap_or_else(|error| panic!("the pair must draw: {error}")),
+        ui.render()
+            .unwrap_or_else(|error| panic!("the pair must draw: {error}"))
+            .scene(),
     );
 
     let grip = Pt { x: 19.0, y: 60.0 };
@@ -621,13 +675,15 @@ fn controls_sharing_an_endpoint_move_together_during_the_gesture() {
     ui.input(press(grip, PointerPhase::Down));
     ui.input(press(moved, PointerPhase::Move));
     let mid = geometry(
-        &ui.scene()
-            .unwrap_or_else(|error| panic!("the pair must draw mid-drag: {error}")),
+        ui.render()
+            .unwrap_or_else(|error| panic!("the pair must draw mid-drag: {error}"))
+            .scene(),
     );
     ui.input(press(moved, PointerPhase::Up));
     let after = geometry(
-        &ui.scene()
-            .unwrap_or_else(|error| panic!("the pair must draw after: {error}")),
+        ui.render()
+            .unwrap_or_else(|error| panic!("the pair must draw after: {error}"))
+            .scene(),
     );
 
     assert_ne!(
@@ -660,7 +716,7 @@ fn a_double_click_resets_the_knob_it_lands_on() {
     let mut ui = Ui::new(Dial::new(false), config, (240, 120), 1.0)
         .unwrap_or_else(|error| panic!("the dial must mount: {error}"));
     ui.frame(Duration::from_millis(16));
-    ui.scene()
+    ui.render()
         .unwrap_or_else(|error| panic!("the dial must draw: {error}"));
 
     // Drag it away from its reset point first, so the reset is visible.

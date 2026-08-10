@@ -122,7 +122,7 @@ mod tests {
 
     impl App for Empty {
         fn document(&self) -> &str {
-            studio_ui::entry(super::super::studio_ui::cache::DeckLayout::Dual)
+            studio_ui::entry(studio_ui::cache::DeckLayout::Dual)
         }
 
         fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
@@ -152,11 +152,11 @@ mod tests {
         )
         .unwrap_or_else(|error| panic!("the studio must mount under the retained host: {error}"));
 
-        let scene = ui
-            .scene()
+        let frame = ui
+            .render()
             .unwrap_or_else(|error| panic!("the studio must reach a paint pass: {error}"));
 
-        let encoding = scene.encoding();
+        let encoding = frame.scene().encoding();
 
         assert!(
             !encoding.is_empty(),

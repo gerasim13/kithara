@@ -13,7 +13,7 @@ use super::{
 };
 use crate::{
     atoms::{button::declared_width, deck::summary::Summary, tab::TabLarge},
-    expand::{Binding, ControlSpec},
+    expand::{Binding, BindingKind, ControlSpec},
     module::{TextAlign, TextStyle},
     mount,
     render::{
@@ -181,7 +181,21 @@ impl NodeControl for mount::Wave<'_> {
         painted(self, host, cx)
     }
 }
-impl NodeControl for mount::Vis {}
+impl NodeControl for mount::Vis {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        let value = cx
+            .read
+            .and_then(|binding| resolve(host.reads, binding, host.ui));
+        let preset = cx
+            .read
+            .filter(|binding| binding.kind != BindingKind::Command)
+            .map(|binding| host.ui.resolve(binding.key).to_owned());
+        host.vis_leaf(preset, value, cx.declared)
+    }
+}
 impl NodeControl for mount::TrackList<'_> {
     fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where
@@ -409,14 +423,14 @@ impl NodeControl for mount::Button {
     }
 }
 
-pub(crate) enum NodeLayout {
+pub(super) enum NodeLayout {
     Leaf(Leaf),
     Flex(super::flex::Flex),
     Stack,
 }
 
 impl NodeLayout {
-    pub(crate) fn layout(
+    pub(super) fn layout(
         &mut self,
         ctx: &mut LayoutCtx<'_>,
         children: &mut [WidgetPod<Node>],
@@ -436,18 +450,18 @@ impl NodeLayout {
         }
     }
 
-    pub(crate) const fn leaf(&mut self) -> Option<&mut Leaf> {
+    pub(super) const fn leaf(&mut self) -> Option<&mut Leaf> {
         match self {
             Self::Leaf(leaf) => Some(leaf),
             Self::Flex(_) | Self::Stack => None,
         }
     }
 
-    pub(crate) fn accepts_input(&self) -> bool {
+    pub(super) fn accepts_input(&self) -> bool {
         matches!(self, Self::Leaf(leaf) if leaf.accepts_input())
     }
 
-    pub(crate) fn accepts_text_input(&self) -> bool {
+    pub(super) fn accepts_text_input(&self) -> bool {
         matches!(self, Self::Leaf(leaf) if leaf.accepts_text_input())
     }
 }

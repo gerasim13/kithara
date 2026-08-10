@@ -1,31 +1,57 @@
-use std::{
-    borrow::Cow,
-    sync::atomic::{AtomicUsize, Ordering},
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use iced::{
+    Element, Length, Rectangle, wgpu,
+    widget::{Space, shader},
 };
 
-use iced::{Rectangle, wgpu, widget::shader};
+use super::{SHADER, Uniforms, VisFrame};
+use crate::render::{ReadValue, Reads, UiEvent};
 
-#[derive(Debug)]
-pub(super) struct VisPrimitive {
-    slot: AtomicUsize,
-    level: f32,
-    time: f32,
-    preset: u32,
+pub(crate) fn view<'a>(preset: Option<&ReadValue<'_>>, reads: &dyn Reads) -> Element<'a, UiEvent> {
+    let Some(frame) = VisFrame::read(preset.copied(), reads) else {
+        return Space::new().into();
+    };
+    shader::Shader::new(Program(frame))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
 }
 
-impl VisPrimitive {
-    pub(super) fn new(level: f32, preset: u32, time: f32) -> Self {
+#[derive(Clone, Copy, Debug)]
+struct Program(VisFrame);
+
+impl shader::Program<UiEvent> for Program {
+    type Primitive = Primitive;
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        _cursor: iced::mouse::Cursor,
+        _bounds: Rectangle,
+    ) -> Self::Primitive {
+        Primitive::new(self.0)
+    }
+}
+
+#[derive(Debug)]
+struct Primitive {
+    slot: AtomicUsize,
+    frame: VisFrame,
+}
+
+impl Primitive {
+    fn new(frame: VisFrame) -> Self {
         Self {
-            level,
-            preset,
-            time,
+            frame,
             slot: AtomicUsize::new(usize::MAX),
         }
     }
 }
 
-impl shader::Primitive for VisPrimitive {
-    type Pipeline = VisPipeline;
+impl shader::Primitive for Primitive {
+    type Pipeline = Pipeline;
 
     fn draw(&self, pipeline: &Self::Pipeline, render_pass: &mut wgpu::RenderPass<'_>) -> bool {
         let Some(slot) = pipeline.slots.get(self.slot.load(Ordering::Relaxed)) else {
@@ -56,26 +82,24 @@ impl shader::Primitive for VisPrimitive {
             return;
         };
         let scale = viewport.scale_factor();
-        let uniforms = Uniforms {
-            resolution: [bounds.width * scale, bounds.height * scale],
-            origin: [bounds.x * scale, bounds.y * scale],
-            time: self.time,
-            level: self.level,
-            preset: self.preset,
-        };
+        let uniforms = Uniforms::new(
+            self.frame,
+            [bounds.x * scale, bounds.y * scale],
+            [bounds.width * scale, bounds.height * scale],
+        );
         queue.write_buffer(&slot.buffer, 0, &uniforms.bytes());
         self.slot.store(index, Ordering::Relaxed);
     }
 }
 
-pub(super) struct VisPipeline {
+struct Pipeline {
     bind_group_layout: wgpu::BindGroupLayout,
     render_pipeline: wgpu::RenderPipeline,
     slots: Vec<UniformSlot>,
     prepared: usize,
 }
 
-impl shader::Pipeline for VisPipeline {
+impl shader::Pipeline for Pipeline {
     fn new(device: &wgpu::Device, _queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("kithara_ui.vis.bind_group_layout"),
@@ -97,9 +121,7 @@ impl shader::Pipeline for VisPipeline {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("kithara_ui.vis.shader"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
-                "../../../assets/shaders/vis.wgsl"
-            ))),
+            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
         });
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("kithara_ui.vis.pipeline"),
@@ -148,12 +170,10 @@ struct UniformSlot {
 }
 
 impl UniformSlot {
-    const BUFFER_SIZE: u64 = Uniforms::BYTE_COUNT as u64;
-
     fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> Self {
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("kithara_ui.vis.uniforms"),
-            size: Self::BUFFER_SIZE,
+            size: Uniforms::BUFFER_SIZE,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -169,39 +189,6 @@ impl UniformSlot {
     }
 }
 
-#[derive(Clone, Copy)]
-struct Uniforms {
-    origin: [f32; 2],
-    resolution: [f32; 2],
-    level: f32,
-    time: f32,
-    preset: u32,
-}
-
-impl Uniforms {
-    const BYTE_COUNT: usize = 32;
-
-    fn bytes(self) -> [u8; Self::BYTE_COUNT] {
-        let mut bytes = [0; Self::BYTE_COUNT];
-        for (index, value) in [
-            self.resolution[0],
-            self.resolution[1],
-            self.origin[0],
-            self.origin[1],
-            self.time,
-            self.level,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let offset = index * size_of::<f32>();
-            bytes[offset..offset + size_of::<f32>()].copy_from_slice(&value.to_ne_bytes());
-        }
-        bytes[24..28].copy_from_slice(&self.preset.to_ne_bytes());
-        bytes
-    }
-}
-
 #[cfg(all(test, feature = "gpu"))]
 mod tests {
     use iced::wgpu::util::DeviceExt as _;
@@ -209,16 +196,9 @@ mod tests {
 
     use super::*;
 
-    /// Render one frame of the visualiser off screen and hand back its pixels.
-    ///
-    /// This is the whole point of a lane with a graphics device: the uniform
-    /// block is packed by hand, field by field, and nothing but a real draw
-    /// tells us the shader reads back what Rust wrote.
     fn render(uniforms: Uniforms) -> Vec<u8> {
         const SIDE: u32 = 64;
         const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-        // A row of a mapped texture is padded to 256 bytes, and 64 pixels of
-        // four bytes each is exactly that, so the readback needs no unpacking.
         const ROW_BYTES: u32 = SIDE * 4;
 
         let instance = wgpu::Instance::default();
@@ -232,7 +212,7 @@ mod tests {
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
                 .expect("the adapter must give up a device");
 
-        let pipeline = <VisPipeline as shader::Pipeline>::new(&device, &queue, FORMAT);
+        let pipeline = <Pipeline as shader::Pipeline>::new(&device, &queue, FORMAT);
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("kithara_ui.vis.test.uniforms"),
             contents: &uniforms.bytes(),
@@ -323,13 +303,7 @@ mod tests {
     }
 
     fn uniforms(level: f32, preset: u32) -> Uniforms {
-        Uniforms {
-            origin: [0.0, 0.0],
-            resolution: [64.0, 64.0],
-            level,
-            time: 0.5,
-            preset,
-        }
+        Uniforms::new(VisFrame::new(level, 0.5, preset), [0.0, 0.0], [64.0, 64.0])
     }
 
     #[kithara::test]
@@ -338,23 +312,9 @@ mod tests {
         let loud = render(uniforms(1.0, 0));
         let other_preset = render(uniforms(1.0, 1));
 
-        assert_eq!(
-            silent,
-            render(uniforms(0.0, 0)),
-            "the same uniforms must draw the same frame"
-        );
-        assert!(
-            silent.chunks_exact(4).any(|pixel| pixel[..3] != [0, 0, 0]),
-            "the visualiser drew nothing at all"
-        );
-        assert_ne!(
-            silent, loud,
-            "the level never reached the shader: the uniform block is packed by \
-             hand and its layout has drifted from assets/shaders/vis.wgsl"
-        );
-        assert_ne!(
-            loud, other_preset,
-            "the preset never reached the shader: see the layout above"
-        );
+        assert_eq!(silent, render(uniforms(0.0, 0)));
+        assert!(silent.chunks_exact(4).any(|pixel| pixel[..3] != [0, 0, 0]));
+        assert_ne!(silent, loud, "the level did not reach the shader");
+        assert_ne!(loud, other_preset, "the preset did not reach the shader");
     }
 }

@@ -12,11 +12,12 @@ use std::{
 
 use futures_lite::future::block_on;
 use kithara_ui::{
-    app::{Config, Ui},
+    app::{Config, Frame as UiFrame, Ui},
     builtin,
+    render::vis::VisPass,
 };
 use masonry::vello::{
-    AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene,
+    AaConfig, AaSupport, RenderParams, Renderer, RendererOptions,
     peniko::Color,
     wgpu::{
         Backends, BufferDescriptor, BufferUsages, CommandEncoderDescriptor, Device,
@@ -40,6 +41,7 @@ pub(super) struct Offscreen {
     queue: Queue,
     renderer: Renderer,
     texture: Texture,
+    vis: VisPass,
     width: u32,
     height: u32,
 }
@@ -72,14 +74,18 @@ impl Offscreen {
             sample_count: 1,
             dimension: TextureDimension::D2,
             format: TextureFormat::Rgba8Unorm,
-            usage: TextureUsages::STORAGE_BINDING | TextureUsages::COPY_SRC,
+            usage: TextureUsages::STORAGE_BINDING
+                | TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::COPY_SRC,
             view_formats: &[],
         });
+        let vis = VisPass::new(&device, TextureFormat::Rgba8Unorm);
         Ok(Self {
             device,
             queue,
             renderer,
             texture,
+            vis,
             width,
             height,
         })
@@ -90,13 +96,18 @@ impl Offscreen {
     /// The base colour is the window's, not this capture's: the page behind a
     /// document belongs to the skin, and a set cleared to anything else differs
     /// from the other host wherever a document leaves its rectangle bare.
-    pub(super) fn rasterise(&mut self, scene: &Scene, base: Color) -> Result<Vec<u8>, String> {
+    pub(super) fn rasterise(
+        &mut self,
+        frame: &UiFrame,
+        scale: f64,
+        base: Color,
+    ) -> Result<Vec<u8>, String> {
         let view = self.texture.create_view(&TextureViewDescriptor::default());
         self.renderer
             .render_to_texture(
                 &self.device,
                 &self.queue,
-                scene,
+                frame.scene(),
                 &view,
                 &RenderParams {
                     base_color: base,
@@ -106,6 +117,14 @@ impl Offscreen {
                 },
             )
             .map_err(|error| format!("render_to_texture: {error}"))?;
+        self.vis.render(
+            &self.device,
+            &self.queue,
+            &view,
+            frame.vis(),
+            scale,
+            [self.width, self.height],
+        );
 
         // wgpu requires each copied row to start on a 256-byte boundary.
         let unpadded = self.width * 4;
@@ -197,10 +216,10 @@ fn capture(dir: &PathBuf) -> Result<usize, String> {
             frame.scale,
         )
         .map_err(|error| format!("mount {}: {error}", shot.name()))?;
-        let scene = ui
-            .scene()
+        let ui_frame = ui
+            .render()
             .map_err(|error| format!("draw {}: {error}", shot.name()))?;
-        let rgba = off.rasterise(&scene, ui.background().into())?;
+        let rgba = off.rasterise(&ui_frame, frame.scale, ui.background().into())?;
         let path = dir.join(format!("{}.png", shot.name()));
         write_png(&path, &rgba, frame.width, frame.height)?;
         println!("captured {}", path.display());
