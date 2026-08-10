@@ -34,6 +34,16 @@ struct Session {
     tick: tokio::task::JoinHandle<()>,
 }
 
+#[kithara::flash(true)]
+async fn drive_queue_ticks(queue: Arc<Queue>) {
+    loop {
+        sleep(Duration::from_millis(50)).await;
+        if queue.tick().is_err() {
+            break;
+        }
+    }
+}
+
 fn build_session(cache_path: &Path) -> Session {
     // Own the flush hub so the test can drive a synchronous durable
     // checkpoint (`flush_now`) instead of guessing at the background
@@ -58,15 +68,7 @@ fn build_session(cache_path: &Path) -> Session {
             .store(store.clone())
             .build(),
     ));
-    let queue_for_tick = Arc::clone(&queue);
-    let tick = tokio::task::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let tick = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),

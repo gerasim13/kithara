@@ -1358,6 +1358,7 @@ async fn hls_sine_aac_resource(
     resource
 }
 
+#[kithara::flash(true)]
 async fn render_until_b_with_postroll(
     queue: &Queue,
     harness: &OfflinePlayerHarness,
@@ -1392,6 +1393,7 @@ async fn render_until_b_with_postroll(
     )
 }
 
+#[kithara::flash(true)]
 async fn render_until_b_with_late_variant_switch(
     queue: &Queue,
     harness: &OfflinePlayerHarness,
@@ -1463,6 +1465,7 @@ async fn render_until_b_with_late_variant_switch(
     )
 }
 
+#[kithara::flash(true)]
 async fn render_crossfade_until_b_with_postroll(
     queue: &Queue,
     harness: &OfflinePlayerHarness,
@@ -1511,6 +1514,7 @@ async fn render_app_layer_crossfade_until_b_with_postroll(
     .await
 }
 
+#[kithara::flash(true)]
 async fn render_app_layer_crossfade_until_b_with_postroll_config(
     queue: &Queue,
     harness: &OfflinePlayerHarness,
@@ -1583,6 +1587,7 @@ fn drain_variant_applied_events(
     }
 }
 
+#[kithara::flash(true)]
 async fn render_seek_near_end_until_b_with_postroll(
     queue: &Queue,
     harness: &OfflinePlayerHarness,
@@ -1622,6 +1627,7 @@ async fn render_seek_near_end_until_b_with_postroll(
     )
 }
 
+#[kithara::flash(true)]
 async fn render_until_tone_b_with_postroll(
     queue: &Queue,
     harness: &OfflinePlayerHarness,
