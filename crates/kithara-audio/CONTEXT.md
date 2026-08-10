@@ -295,17 +295,18 @@ is an exact `f32::from`.
 `Audio::new` builds the initial decoder **exactly once**
 (`create_initial_decoder`, one `spawn_blocking`), with no retry loop and no
 readiness gate. The construction read goes through the **blocking** off-RT
-`Stream::read` adapter: `SharedStream` carries a `ConstructionGate`
-(`set_blocking`) that `Audio::new` arms before the build and disarms before the
-RT worker is registered. `RebuildPort` uses the same gate, carried by
-`OpenedReader`, around each off-RT factory call — armed before, disarmed after a
-normal return *or* a caught panic. Steady-state reads use non-blocking
-`Stream::probe_read`; on-core seeks use `probe_seek` (position math only, no
-`prime_seek_range` spin on the forbid path). Blocking makes a slow-but-arriving
-prefix wait, off the RT worker, up to the stream's blocking-read budget rather
-than error on the first not-ready probe. A construction-range byte that never
-arrives surfaces the **stream layer's** typed terminal verbatim; the audio layer
-mints no construction error type and there is no synthetic `TimedOut`.
+`Stream::read` adapter: every `OpenedReader` carries its own `ConstructionGate`,
+shared only with that reader's `SharedStream` clone. The initial builder and
+`RebuildPort` arm their reader-local gate around each off-RT factory call and
+disarm it after a normal return, join error, or caught panic. A rebuild therefore
+cannot switch an active decoder reader into blocking mode. Steady-state reads
+use non-blocking `Stream::probe_read`; on-core seeks use `probe_seek` (position
+math only, no `prime_seek_range` spin on the forbid path). Blocking makes a
+slow-but-arriving prefix wait, off the RT worker, up to the stream's blocking-read
+budget rather than error on the first not-ready probe. A construction-range byte
+that never arrives surfaces the **stream layer's** typed terminal verbatim; the
+audio layer mints no construction error type and there is no synthetic
+`TimedOut`.
 
 A `VariantChange`/`SeekPending` at construction is **not** a rebuild trigger: the
 variant is settled before the build, construction always probes at offset 0, and

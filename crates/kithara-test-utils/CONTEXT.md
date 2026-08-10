@@ -2,6 +2,13 @@
 
 Contracts and invariants for the kithara-test-utils crate; the README is the overview.
 
+## WASM test serialization
+
+`#[kithara::test(serial)]` expansions acquire the hidden test-binary-wide async
+mutex before entering the generated body. The guard is deliberately outside the
+per-test timeout: serialization controls overlap, while each timeout measures
+only its own test body.
+
 ## Probe capture
 
 While at least one `Recorder` is alive, the capture layer records every `tracing::event!` whose target ends with `_probe` (all `#[kithara::probe]` expansions emit to `<crate_name>_probe`, e.g. `kithara_stream_probe`) into a process-wide `Vec`, so a test can snapshot the full sequence and assert on it.

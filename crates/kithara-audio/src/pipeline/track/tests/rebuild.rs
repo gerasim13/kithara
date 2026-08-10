@@ -679,6 +679,33 @@ async fn test_source(variant: u32) -> RebuildFixture {
     test_source_with_mode(variant, GaplessMode::Disabled).await
 }
 
+#[kithara::test(native, tokio)]
+async fn decoder_readers_have_isolated_construction_gates() {
+    let control = Arc::new(TestControl::new(media_info(0)));
+    let stream = match Stream::<TestStream>::new(TestConfig {
+        source: TestSource::new(control),
+    })
+    .await
+    {
+        Ok(stream) => stream,
+        Err(error) => panic!("test stream construction failed: {error}"),
+    };
+    let shared_stream = SharedStream::new(stream);
+    let initial = shared_stream.open_initial_reader();
+    let rebuild = shared_stream.open_rebuild_reader(0);
+    let Some(initial_gate) = initial.construction_gate() else {
+        panic!("initial reader must carry a construction gate");
+    };
+    let Some(rebuild_gate) = rebuild.construction_gate() else {
+        panic!("rebuild reader must carry a construction gate");
+    };
+
+    initial_gate.arm();
+
+    assert!(initial_gate.is_armed());
+    assert!(!rebuild_gate.is_armed());
+}
+
 async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> RebuildFixture {
     let control = Arc::new(TestControl::new(media_info(variant)));
     let drops = Arc::new(Mutex::new(Vec::new()));
