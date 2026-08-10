@@ -57,8 +57,8 @@ impl WakeSignal for ThreadWake {
 #[cfg(test)]
 mod tests {
     use kithara_platform::{
-        sync::Arc,
-        thread::{self, spawn},
+        sync::{Arc, mpsc},
+        thread::spawn,
         time::Duration,
     };
     use kithara_test_utils::kithara;
@@ -72,13 +72,15 @@ mod tests {
         {
             let wake = Arc::new(ThreadWake::default());
             let worker_wake = Arc::clone(&wake);
+            let (ready_tx, ready_rx) = mpsc::channel();
 
             let join = spawn(move || {
                 let since = worker_wake.current();
+                ready_tx.send(()).expect("publish wake snapshot");
                 worker_wake.wait_timeout(since, Duration::from_secs(1))
             });
 
-            thread::sleep(Duration::from_millis(10));
+            ready_rx.recv().expect("wait for wake snapshot");
             wake.wake();
             assert!(join.join().expect("wake test thread"));
         }
