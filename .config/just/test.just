@@ -74,9 +74,17 @@ wasm BROWSER="chrome" SUITE="all":
     # `webcodecs_browser` belongs to kithara-decode, not to any integration
     # suite, so it is its own cargo invocation. WebCodecs is a Chromium API;
     # the other engines have nothing to answer here.
+    #
+    # It rebuilds std for the same reason the suite above does: the repository
+    # compiles wasm32 with `+atomics`, and linking that against a stock std
+    # fails with "--shared-memory is disallowed by std ... not compiled with
+    # 'atomics' or 'bulk-memory'". Both invocations must carry the flags.
     if [[ "$browser" == "chrome" ]]; then
       WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-        cargo "+$toolchain" test --target wasm32-unknown-unknown \
+        cargo "+$toolchain" test --profile test-release \
+        --target wasm32-unknown-unknown \
+        -Z build-std=std,panic_abort,core,alloc \
+        -Z build-std-features=optimize_for_size \
         -p kithara-decode --no-default-features \
         --features symphonia,webcodecs,client-reqwest,tls-rustls \
         --test webcodecs_browser
