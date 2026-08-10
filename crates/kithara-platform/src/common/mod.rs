@@ -1,4 +1,3 @@
-pub(crate) mod async_lock;
 pub(crate) mod cancel;
 pub(crate) mod error;
 pub(crate) mod gate;

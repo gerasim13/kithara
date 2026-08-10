@@ -7,7 +7,7 @@ use super::{
     shared::{
         finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_env_setup,
         make_runtime_builder, make_selenium_attrs, make_serial_attr, make_tracing_init,
-        make_wasm_serial_guard, wrap_with_model, wrap_with_soft_fail, wrap_with_timeout,
+        wrap_with_model, wrap_with_soft_fail, wrap_with_timeout,
     },
 };
 
@@ -303,15 +303,11 @@ pub(crate) fn emit_browser_test(
     };
     let wasm_with_timeout = wrap_with_timeout(&wasm_body, &args.timeout, true, fn_name);
     let wasm_wrapped = finalize_body(&wasm_with_timeout, args, fn_name, true);
-    let wasm_serial_guard = make_wasm_serial_guard(args);
     output.extend(quote! {
         #(#remaining_attrs)*
         #[cfg(target_arch = "wasm32")]
         #[wasm_bindgen_test::wasm_bindgen_test]
-        #vis async fn #fn_name() #ret_type {
-            #wasm_serial_guard
-            #wasm_wrapped
-        }
+        #vis async fn #fn_name() #ret_type #wasm_wrapped
     });
 
     if !browser_only {

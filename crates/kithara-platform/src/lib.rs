@@ -53,7 +53,6 @@ pub mod no_block;
 pub mod no_block;
 
 pub use common::{
-    async_lock::{AsyncMutex, AsyncMutexGuard},
     cancel::{CancelGroup, CancelScope, CancelToken, CancelWakerGuard, Cancelled},
     traits,
 };

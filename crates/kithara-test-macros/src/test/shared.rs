@@ -17,17 +17,6 @@ pub(crate) fn make_serial_attr(args: &TestArgs) -> TokenStream2 {
     }
 }
 
-pub(crate) fn make_wasm_serial_guard(args: &TestArgs) -> TokenStream2 {
-    if args.is_serial {
-        quote! {
-            let _kithara_wasm_serial_guard =
-                ::kithara_test_utils::__private::wasm_serial_guard().await;
-        }
-    } else {
-        quote! {}
-    }
-}
-
 /// Test attributes for **sync** tests only (dual-platform: native `#[test]` + WASM).
 ///
 /// Async tests are handled separately via `emit_async_runtime_test` /

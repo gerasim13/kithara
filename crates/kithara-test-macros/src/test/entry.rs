@@ -17,7 +17,7 @@ use super::{
     rewrite::FlashRewrite,
     shared::{
         finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_serial_attr,
-        make_sync_test_attrs, make_tracing_init, make_wasm_serial_guard, wrap_with_timeout,
+        make_sync_test_attrs, make_tracing_init, wrap_with_timeout,
     },
 };
 
@@ -140,7 +140,6 @@ fn generate_wasm_only(ctx: &GenCtx<'_>) -> TokenStream2 {
         let full = quote! { { #tracing_init #preamble #ambient #(#body_stmts)* } };
         let with_timeout = wrap_with_timeout(&full, &ctx.args.timeout, true, name);
         let wrapped = finalize_body(&with_timeout, ctx.args, name, true);
-        let serial_guard = make_wasm_serial_guard(ctx.args);
         let remaining_attrs = ctx.remaining_attrs;
         let vis = ctx.vis;
         let ret_type = ctx.ret_type;
@@ -148,10 +147,7 @@ fn generate_wasm_only(ctx: &GenCtx<'_>) -> TokenStream2 {
             #(#remaining_attrs)*
             #[cfg(target_arch = "wasm32")]
             #[wasm_bindgen_test::wasm_bindgen_test]
-            #vis async fn #name() #ret_type {
-                #serial_guard
-                #wrapped
-            }
+            #vis async fn #name() #ret_type #wrapped
         }
     };
 
@@ -301,33 +297,6 @@ mod tests {
 
             assert!(generate(args, function).is_err(), "accepted `{source}`");
         }
-        Ok(())
-    }
-
-    #[test]
-    fn serial_browser_guard_precedes_body_timeout() -> syn::Result<()> {
-        let args = syn::parse_str::<TestArgs>(
-            "browser, serial, timeout(std::time::Duration::from_secs(10))",
-        )?;
-        let function = syn::parse_str("async fn stress() {}")?;
-
-        let expanded = generate(args, function)?.to_string();
-        let guard = expanded.find("wasm_serial_guard").expect("serial guard");
-        let timeout = expanded.find("time :: timeout").expect("body timeout");
-
-        assert!(guard < timeout, "serial wait consumed the body timeout");
-        Ok(())
-    }
-
-    #[test]
-    fn serial_sync_wasm_test_becomes_async() -> syn::Result<()> {
-        let args = syn::parse_str::<TestArgs>("serial")?;
-        let function = syn::parse_str("fn contract() {}")?;
-
-        let expanded = generate(args, function)?.to_string();
-
-        assert!(expanded.contains("async fn contract"));
-        assert!(expanded.contains("wasm_serial_guard"));
         Ok(())
     }
 }
