@@ -130,9 +130,8 @@ jobs:
         run: just platform wasm
 
   machete:
-    name: cargo-machete (advisory)
+    name: cargo-machete
     needs: gate
-    continue-on-error: true
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 30
 
@@ -144,9 +143,8 @@ jobs:
         run: just deps machete
 
   wasm-size:
-    name: WASM size budget (advisory)
+    name: WASM size budget
     needs: gate
-    continue-on-error: true
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 60
 
@@ -165,9 +163,8 @@ jobs:
           path: target/wasm-slim-result.json
 
   hack:
-    name: Feature powerset (advisory)
+    name: Feature powerset
     needs: gate
-    continue-on-error: true
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 120
 
@@ -179,9 +176,8 @@ jobs:
         run: just deps hack
 
   semver:
-    name: Semver checks (advisory)
+    name: Semver checks
     needs: gate
-    continue-on-error: true
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 60
 
@@ -199,10 +195,8 @@ jobs:
   # on the audio thread is a dropout, not a slow path. It ran nightly, which
   # meant learning about it the morning after the push that caused it.
   #
-  # The fast lane is a tripwire over the mock decoder and blocks. The two
-  # real-decoder soaks stay advisory for now — they carry findings older than
-  # this change, and turning them blocking before those are closed would stop
-  # every push on a defect nobody introduced today.
+  # The fast lane is a tripwire over the mock decoder. The real-decoder lanes
+  # exercise file and HLS playback under the same required sanitizer gate.
   rtsan:
     name: RealtimeSanitizer
     needs: gate

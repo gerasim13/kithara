@@ -53,7 +53,8 @@ jobs:
             just quality assess
           fi
 
-      # Decision evidence stays visible when assessment execution is partial.
+      # Decision evidence stays visible when assessment execution is partial,
+      # and an invalid summary remains a failed check.
       - name: Summarize the assessment
         if: always()
         env:
@@ -63,9 +64,7 @@ jobs:
           if [[ "$DEPTH" == "deep" ]]; then
             summary_args=(--depth deep)
           fi
-          if ! just quality summary "${summary_args[@]}" >> "$GITHUB_STEP_SUMMARY"; then
-            echo "::warning::Quality assessment summary could not be rendered; see the error above." >&2
-          fi
+          just quality summary "${summary_args[@]}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the assessment
         if: always()
@@ -110,7 +109,9 @@ jobs:
       # `viz` no longer fails over a degraded optional overlay, so the only place
       # that degradation would otherwise appear is an artifact nobody opens.
       - name: Render the architecture document
+        shell: bash
         run: |
+          set -o pipefail
           mkdir -p target
           just arch viz 2>&1 | tee target/viz.log
 
