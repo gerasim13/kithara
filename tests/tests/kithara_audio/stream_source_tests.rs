@@ -302,38 +302,22 @@ async fn truncated_wav_surfaces_decode_error_or_eof() {
     .hint("wav".to_string())
     .build();
 
-    let mut audio = Audio::<Stream<MemStream>>::new(config)
+    let audio = Audio::<Stream<MemStream>>::new(config)
         .await
         .expect("audio construction");
 
-    let mut buf = [0.0f32; 4096];
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut saw_terminal = false;
-    while Instant::now() < deadline {
-        let (next_audio, (next_buf, outcome)) = blocking_audio(audio, move |audio| {
-            let outcome = audio.read(&mut buf);
-            (buf, outcome)
-        })
-        .await;
-        audio = next_audio;
-        buf = next_buf;
-        match outcome {
-            Ok(ReadOutcome::Eof { .. }) | Err(_) => {
-                saw_terminal = true;
-                break;
-            }
-            Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Pending { .. }) => {
-                // Qualified `time::sleep` so the `#[kithara::test(flash(true))]`
-                // body rewriter virtualizes this wait to match the already-
-                // virtualized `Instant::now()` deadline above. A bare-imported
-                // `sleep` is a single-segment path the rewriter does not match,
-                // leaving it REAL — a mixed driver clock whose virtual deadline
-                // races past while the driver sleeps real, exiting the loop
-                // before the worker's EOF marker is drained.
-                time::sleep(Duration::from_millis(20)).await;
+    let (_audio, saw_terminal) = blocking_audio(audio, |audio| {
+        let mut buf = [0.0f32; 4096];
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Eof { .. }) | Err(_) => return true,
+                Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Pending { .. }) => {}
             }
         }
-    }
+        false
+    })
+    .await;
     assert!(
         saw_terminal,
         "truncated WAV must surface either Eof or DecodeError"
