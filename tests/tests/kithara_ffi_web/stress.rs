@@ -281,10 +281,10 @@ async fn read_with_yield_limit(
                 return None;
             }
         }
-        // Yield without adding wall-clock delay. Every seek can pend once
-        // while the browser schedules fetch/decode work, so a fixed 10 ms
-        // sleep consumed the 500/1000-seek tests' entire deadline by itself.
-        TimeoutFuture::new(0).await;
+        // A positive timer turn lets fetch and worker queues make progress.
+        // The wait happens only after an observed Pending; 1 ms keeps the
+        // 500/1000-seek stress cases inside their unchanged deadline.
+        TimeoutFuture::new(1).await;
     }
     Some(0)
 }

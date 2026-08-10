@@ -591,13 +591,21 @@ mod tests {
     use std::io;
 
     use kithara_stream::{NotReadyCause, PendingReason};
-    use symphonia::core::errors::Error as SymphoniaError;
+    use symphonia::core::{
+        errors::Error as SymphoniaError,
+        units::{Duration as SymphoniaDuration, Timestamp},
+    };
 
     use super::{Packet, packet_ends_at_or_before, pending_reason};
 
     #[test]
     fn resume_floor_rejects_the_packet_before_the_authoritative_timestamp() {
-        let packet = Packet::new_from_slice(0, 1_000, 1_152, &[]);
+        let packet = Packet::new(
+            0,
+            Timestamp::new(1_000),
+            SymphoniaDuration::new(1_152),
+            Vec::new(),
+        );
 
         assert!(packet_ends_at_or_before(&packet, 2_152));
         assert!(!packet_ends_at_or_before(&packet, 2_151));
