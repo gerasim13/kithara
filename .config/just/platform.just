@@ -1,7 +1,7 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set working-directory := "../.."
 
-# WASM tasks: check, test, test-webcodecs, build, or size-check.
+# WASM tasks: check, test, build, or size-check.
 [positional-arguments]
 wasm MODE="check" *ARGS:
     #!/usr/bin/env bash
@@ -16,14 +16,29 @@ wasm MODE="check" *ARGS:
         cargo check -p kithara-decode --target wasm32-unknown-unknown --no-default-features --features symphonia,webcodecs,client-reqwest,tls-rustls
         cargo check -p kithara-ffi --target wasm32-unknown-unknown --features wasm --no-default-features
         ;;
-      test|test-webcodecs)
+      test)
         # The wasm target rebuilds std for shared memory, which only a nightly
         # honours, and the repository pins one. `wasm-pack` cannot be used
         # here: it drives Cargo with the default toolchain, which refuses the
         # flags below, so std keeps its stock features and the linker rejects
         # `--shared-memory` against it.
         browser="${1:-chrome}"
+        # Which targets to run: everything, or only the crate-owned WebCodecs
+        # one. The browser CI job wants the latter — `suite_heavy` costs minutes
+        # it does not need to spend to say whether WebCodecs decodes.
+        suite="${2:-all}"
         toolchain="${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
+        case "$suite" in
+          all|webcodecs) ;;
+          *)
+            echo "unknown wasm test suite: $suite (use all|webcodecs)"
+            exit 2
+            ;;
+        esac
+        if [[ "$suite" == "webcodecs" && "$browser" != "chrome" ]]; then
+          echo "the WebCodecs target runs on chrome only"
+          exit 2
+        fi
         case "$browser" in
           chrome)  export CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" ;;
           firefox) export GECKODRIVER="${GECKODRIVER:-geckodriver}" ;;
@@ -33,7 +48,7 @@ wasm MODE="check" *ARGS:
             exit 2
             ;;
         esac
-        if [[ "$mode" == "test" ]]; then
+        if [[ "$suite" == "all" ]]; then
           WASM_BINDGEN_TEST_TIMEOUT=300 \
           WASM_BINDGEN_USE_BROWSER=1 \
           # The browser talks to a fixture server that runs on this machine, and
@@ -60,14 +75,14 @@ wasm MODE="check" *ARGS:
             -Z build-std-features=optimize_for_size \
             -p kithara-integration-tests --test suite_heavy
         fi
+        # `webcodecs_browser` belongs to kithara-decode, not to any integration
+        # suite, so it is its own cargo invocation. WebCodecs itself is a
+        # Chromium API; the other engines have nothing to answer here.
         if [[ "$browser" == "chrome" ]]; then
           CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" WASM_BINDGEN_TEST_TIMEOUT=300 \
           WASM_BINDGEN_USE_BROWSER=1 cargo "+$toolchain" test --target wasm32-unknown-unknown \
             -p kithara-decode --no-default-features \
             --features symphonia,webcodecs,client-reqwest,tls-rustls --test webcodecs_browser
-        elif [[ "$mode" == "test-webcodecs" ]]; then
-          echo "WebCodecs browser tests require chrome"
-          exit 2
         fi
         ;;
       build)
@@ -77,7 +92,7 @@ wasm MODE="check" *ARGS:
         just _xtask wasm size-check "$@"
         ;;
       *)
-        echo "unknown wasm mode: $mode (use check|test|test-webcodecs|build|size-check)"
+        echo "unknown wasm mode: $mode (use check|test|build|size-check)"
         exit 2
         ;;
     esac

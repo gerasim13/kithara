@@ -47,7 +47,6 @@ backtrace = { workspace = true, optional = true }
 pin-project-lite = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-futures = { workspace = true }
 tracing-wasm = { workspace = true }
 
 [dev-dependencies]

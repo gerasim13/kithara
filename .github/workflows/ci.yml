@@ -172,7 +172,7 @@ jobs:
           echo "$browser_bin" >> "$GITHUB_PATH"
 
       - name: Run the Chromium browser lane
-        run: just platform wasm test-webcodecs chrome
+        run: just platform wasm test chrome webcodecs
 
   machete:
     name: cargo-machete (advisory)

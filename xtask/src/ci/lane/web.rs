@@ -19,7 +19,7 @@ pub(crate) fn chromium(process: &Process, pins: &CiPins) -> Result<()> {
     require_version(process, "chromedriver", &pins.chrome_for_testing_version)?;
     process.run(
         "just",
-        &["platform", "wasm", "test-webcodecs", "chrome"],
+        &["platform", "wasm", "test", "chrome", "webcodecs"],
         "Chromium WebCodecs tests",
     )
 }
