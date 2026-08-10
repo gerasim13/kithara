@@ -7,7 +7,7 @@ use kithara_platform::{sync::Arc, time::Duration};
 
 use crate::{BoxedEventSink, ByteMap, MediaInfo, VariantTransition};
 
-/// Shared switch for blocking I/O during off-RT decoder construction.
+/// Shared switch for blocking reads during off-RT decoder construction.
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct ConstructionGate {
