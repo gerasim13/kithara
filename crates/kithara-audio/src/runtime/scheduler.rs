@@ -143,17 +143,9 @@ fn recycle_all<N: Node>(slots: &mut [Slot<N>], slots_order: &[usize]) {
     }
 }
 
-/// Flush work armed by the final tick before terminal slots are dropped.
 fn remove_terminal<N: Node>(slots: &mut Vec<Slot<N>>) -> bool {
     let before = slots.len();
-    slots.retain_mut(|slot| {
-        if slot.is_terminal {
-            slot.node.recycle();
-            false
-        } else {
-            true
-        }
-    });
+    slots.retain(|slot| !slot.is_terminal);
     slots.len() < before
 }
 
@@ -284,6 +276,12 @@ fn produce_pass<N: Node, O: SchedulerObserver>(
                 break;
             }
         }
+
+        // Flush work armed by the visit's final checked tick before reporting
+        // its result. A terminal slot is removed below and gets no next pass;
+        // a live slot may park before its next pass. In both cases, deferring
+        // this recycle would strand signals the final tick already promised.
+        slot.node.recycle();
 
         // A burst that produced and then hit its consumer's backpressure still
         // made progress; only a terminal tick overrides that.
@@ -481,7 +479,7 @@ pub(crate) fn parse_cputime(s: &str) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::{cell::Cell, mem};
 
     use kithara_platform::thread;
     use kithara_test_utils::kithara;
@@ -573,6 +571,24 @@ mod tests {
 
         fn tick(&mut self) -> TickResult {
             TickResult::Done
+        }
+    }
+
+    struct DeferredWaitingNode {
+        events: mpsc::Sender<&'static str>,
+        pending: bool,
+    }
+
+    impl Node for DeferredWaitingNode {
+        fn recycle(&mut self) {
+            if mem::take(&mut self.pending) {
+                let _ = self.events.send("recycle");
+            }
+        }
+
+        fn tick(&mut self) -> TickResult {
+            self.pending = true;
+            TickResult::Waiting
         }
     }
 
@@ -803,7 +819,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn remove_terminal_recycles_node_before_removal() {
+    fn terminal_visit_recycles_node_once_before_removal() {
         let (events, received) = mpsc::channel();
         let mut slots = vec![Slot {
             id: 1,
@@ -817,10 +833,35 @@ mod tests {
 
         let _ = produce_pass(&mut slots, &order, &mut observer);
         assert!(slots[0].is_terminal);
+        assert_eq!(received.try_recv(), Ok("recycle"));
+        assert!(received.try_recv().is_err());
+
         assert!(remove_terminal(&mut slots));
 
         assert!(slots.is_empty());
+        assert!(received.try_recv().is_err());
+    }
+
+    #[kithara::test]
+    fn live_visit_flushes_deferred_work_before_reporting_wait() {
+        let (events, received) = mpsc::channel();
+        let mut slots = vec![Slot {
+            id: 1,
+            node: DeferredWaitingNode {
+                events,
+                pending: false,
+            },
+            service_class: ServiceClass::Audible,
+            rt_policy: RtPolicy::Rt,
+            is_terminal: false,
+        }];
+        let mut observer = TestObserver;
+
+        let report = produce_pass(&mut slots, &[0], &mut observer);
+
+        assert_eq!(report.outcome, PassOutcome::Waiting);
         assert_eq!(received.try_recv(), Ok("recycle"));
+        assert!(received.try_recv().is_err());
     }
 
     #[kithara::test]

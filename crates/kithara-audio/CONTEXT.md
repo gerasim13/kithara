@@ -23,10 +23,10 @@ Transport (`runtime/ports.rs`): SPSC `ringbuf::HeapRb` plus a one-slot overflow
   returns `TickResult::Backpressured` *without* ticking the FSM — every internal
   transition, seeks included, pauses until the consumer drains.
 - **Wake.** A ring push arms the consumer wake inside the checked produce core;
-  the scheduler shell delivers the `ThreadWake` before the next pass, keeping the
-  syscall off the realtime path. A terminal, unregistered, or cancelled node
-  gets one final shell-side flush before removal. Empty→non-empty also fires
-  `on_data_available`.
+  the scheduler shell delivers the `ThreadWake` after the node visit and before
+  reporting or removing the slot, keeping the syscall off the realtime path. An
+  unregistered or cancelled node gets one final shell-side flush before removal.
+  Empty→non-empty also fires `on_data_available`.
   The blocking consumer snapshots `ThreadWake` before re-checking `try_pop`; a
   signal between the snapshot and park advances the gate sequence, so
   `wait_timeout` returns immediately while retaining its timed
