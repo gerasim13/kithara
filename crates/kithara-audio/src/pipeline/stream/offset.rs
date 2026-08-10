@@ -36,21 +36,20 @@ impl<T: StreamType> Read for OffsetReader<T> {
 
 impl<T: StreamType> Seek for OffsetReader<T> {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        // The reader-local construction gate selects blocking off-RT seek
-        // during decoder creation and non-blocking probe seek on the produce
-        // core after the builder disarms it.
+        // The decoder runs on the produce core, so seek through the real-time
+        // `probe_seek` (no `prime_seek_range` spin on the forbid path).
         match pos {
             SeekFrom::Start(p) => {
                 let abs = self.base_offset + p;
-                let real_pos = self.shared.seek(SeekFrom::Start(abs))?;
+                let real_pos = self.shared.probe_seek(SeekFrom::Start(abs))?;
                 Ok(real_pos.saturating_sub(self.base_offset))
             }
             SeekFrom::Current(delta) => {
-                let real_pos = self.shared.seek(SeekFrom::Current(delta))?;
+                let real_pos = self.shared.probe_seek(SeekFrom::Current(delta))?;
                 Ok(real_pos.saturating_sub(self.base_offset))
             }
             SeekFrom::End(delta) => {
-                let real_pos = self.shared.seek(SeekFrom::End(delta))?;
+                let real_pos = self.shared.probe_seek(SeekFrom::End(delta))?;
                 Ok(real_pos.saturating_sub(self.base_offset))
             }
         }

@@ -70,12 +70,6 @@ so only the reader's consumption can make it stale and only that consumption may
 Popped-but-undispatchable non-terminal entries are pushed back to the queue front, so an orphaned
 `Downloading` slot is re-claimed, never dropped.
 
-Reader progress reaches the downloader peer through one forwarding task. It delivers at most one
-wake before an ambient-aware cooperative yield: a producer may publish another edge while the task
-is still being polled, and draining that stream continuously would keep a Flash async participant
-active and prevent the virtual clock from advancing. Outside Flash the same yield is the ordinary
-Tokio scheduler hand-off; it does not delay or coalesce the reader edge.
-
 ## Variant Init, Header Range, Probe Rebuild
 
 `HlsVariant::build_init_entry` (`variant/io/init.rs`) records the init slot as

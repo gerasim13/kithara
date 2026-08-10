@@ -12,11 +12,7 @@ use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex, Weak},
     time::Duration,
-    tokio::{
-        self,
-        sync::mpsc,
-        task::{spawn, yield_now},
-    },
+    tokio::{self, sync::mpsc, task::spawn},
 };
 use kithara_stream::{
     Activity, DeferredWake, SeekObserve, WorkerWake,
@@ -252,20 +248,12 @@ impl HlsPeer {
                     () = wake_signal.cancelled() => return,
                     () = reader_advanced.notified() => {
                         let Some(peer) = peer_weak.upgrade() else { return; };
+                        let guard = peer.state.lock();
+                        if let Some(ref state) = *guard
+                            && let Some(waker) = state.waker.as_ref()
                         {
-                            let guard = peer.state.lock();
-                            if let Some(ref state) = *guard
-                                && let Some(waker) = state.waker.as_ref()
-                            {
-                                waker.wake_by_ref();
-                            }
+                            waker.wake_by_ref();
                         }
-                        // A producer can publish another reader edge while
-                        // this task is still being polled. Hand the task back
-                        // to the scheduler after each delivery so Flash can
-                        // observe quiescence instead of draining an endless
-                        // stream of ready Notify permits in one active poll.
-                        yield_now().await;
                     }
                 }
             }
