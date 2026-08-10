@@ -1,0 +1,24 @@
+[package]
+name = "symphonia-bundle-mp3"
+version = "0.6.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+description = "Pure Rust MP1, MP2, and MP3 demuxer and decoder (a part of project Symphonia)."
+homepage = "https://github.com/pdeljanov/Symphonia"
+readme = "README.md"
+keywords = ["audio", "codec", "decoder", "mp3", "mpeg"]
+categories = ["multimedia", "multimedia::audio", "multimedia::encoding"]
+license = "MPL-2.0"
+repository = "https://github.com/pdeljanov/Symphonia"
+
+[features]
+default = ["mp1", "mp2", "mp3"]
+mp1 = ["symphonia-bundle-mp3-upstream/mp1"]
+mp2 = ["symphonia-bundle-mp3-upstream/mp2"]
+mp3 = ["symphonia-bundle-mp3-upstream/mp3"]
+
+[dependencies]
+log = "0.4"
+symphonia-bundle-mp3-upstream = { package = "symphonia-bundle-mp3", git = "https://github.com/pdeljanov/Symphonia.git", rev = "980bf5830a90e069fd64641d9c38f067ab772a24", default-features = false }
+symphonia-core = "0.6.0"

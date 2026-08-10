@@ -35,7 +35,10 @@ use symphonia::core::{
         },
     },
     errors::{Error as SymphoniaError, SeekErrorKind},
-    formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track, TrackType},
+    formats::{
+        FormatOptions, FormatReader, SeekMode, SeekTo, Track, TrackType,
+        well_known::{FORMAT_ID_MP1, FORMAT_ID_MP2, FORMAT_ID_MP3},
+    },
     packet::Packet,
     units::{Duration as SymphoniaDuration, Time, TimeBase, Timestamp},
 };
@@ -264,16 +267,15 @@ impl Demuxer for SymphoniaDemuxer {
                                 .copied()
                         })
                         .unwrap_or(PendingReason::NotReady(NotReadyCause::SourcePending));
-                    // A `MediaSourceStream` read interrupted at a not-ready
-                    // boundary can strand bytes it already consumed from its
-                    // ring (read position advanced, no packet emitted). The
-                    // adapter's byte cursor doesn't reveal this — the consumed
-                    // bytes were buffered by an earlier read-ahead. Flag an
-                    // unconditional resume: the next call re-seeks to
-                    // `resume_ts` so the interrupted packet is re-read from
-                    // its start. Idempotent when no strand occurred (the read
-                    // position already sits at `resume_ts`).
-                    self.needs_resume = true;
+                    // Most readers can strand bytes consumed from
+                    // `MediaSourceStream`, so they need timestamp recovery on
+                    // the next call. Native MPA readers restore their own byte
+                    // checkpoint before returning the transient error; a
+                    // timestamp seek would discard that exact rollback.
+                    self.needs_resume = !matches!(
+                        self.format_reader.format_info().format,
+                        FORMAT_ID_MP1 | FORMAT_ID_MP2 | FORMAT_ID_MP3
+                    );
                     return Ok(DemuxOutcome::Pending(reason));
                 }
                 Err(e) => return Err(DecodeError::backend(e)),
