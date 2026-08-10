@@ -66,7 +66,7 @@ mod tests {
     use super::ThreadWake;
     use crate::runtime::WakeSignal;
 
-    #[kithara::test]
+    #[kithara::test(flash(false))]
     fn wake_unparks_registered_thread() {
         #[cfg(not(target_arch = "wasm32"))]
         {
