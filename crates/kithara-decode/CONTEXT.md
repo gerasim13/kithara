@@ -131,15 +131,17 @@ from stream position) then silently skip them.
 MSS exposes no per-call rewind through `FormatReader`, so `SymphoniaDemuxer` makes
 the **decoder's timestamp authoritative across a `Pending`**: it tracks
 `resume_ts` (native timebase units — `actual_ts` on seek, `pts + dur` after each
-emitted packet) and sets `needs_resume` on any interrupted read; the next
+emitted packet) and stores the pending reason on any interrupted read; the next
 `next_frame` re-seeks to `resume_ts` first so the interrupted packet is re-read
-from its start. Symphonia's accurate seek may land one packet before the requested
-timestamp, so recovery discards packets ending at or before `resume_ts`; otherwise
-that packet is decoded twice while the PCM cursor advances once. The re-seek is a
-bare position restore — no pre-roll back-off, no codec flush (that is the
-user-seek path). `resume_ts` stays native: a `Duration` round-trip loses sub-frame
-precision and can move the recovery boundary by another packet. The strand never
-reaches the `Stream` / `wait_range` contract.
+from its start. The pending reason stays armed when that recovery seek also
+pends; clearing it before a successful seek turns ordinary segment fetch latency
+into a terminal decode error. Symphonia's accurate seek may land one packet
+before the requested timestamp, so recovery discards packets ending at or before
+`resume_ts`; otherwise that packet is decoded twice while the PCM cursor advances
+once. The re-seek is a bare position restore — no pre-roll back-off, no codec
+flush (that is the user-seek path). `resume_ts` stays native: a `Duration`
+round-trip loses sub-frame precision and can move the recovery boundary by
+another packet. The strand never reaches the `Stream` / `wait_range` contract.
 
 ## Gapless playback
 

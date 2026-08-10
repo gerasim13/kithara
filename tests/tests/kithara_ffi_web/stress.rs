@@ -271,8 +271,6 @@ async fn read_with_yield_limit(
     buf: &mut [f32],
     max_yields: usize,
 ) -> Option<usize> {
-    const YIELD_MS: u32 = 10;
-
     for _ in 0..max_yields {
         match audio.read(buf) {
             Ok(ReadOutcome::Frames { count, .. }) => return Some(count.get()),
@@ -283,7 +281,10 @@ async fn read_with_yield_limit(
                 return None;
             }
         }
-        TimeoutFuture::new(YIELD_MS).await;
+        // Yield without adding wall-clock delay. Every seek can pend once
+        // while the browser schedules fetch/decode work, so a fixed 10 ms
+        // sleep consumed the 500/1000-seek tests' entire deadline by itself.
+        TimeoutFuture::new(0).await;
     }
     Some(0)
 }
