@@ -1,17 +1,17 @@
 use num_traits::ToPrimitive;
 
 use crate::{
+    atoms::track_list::{
+        ColumnLayout, TrackListRowData, column_label, track_list_body, track_list_content_height,
+        track_list_content_width, track_list_dividers, track_list_overflows, track_list_row_pitch,
+        track_list_row_rect, track_list_vertical_scrollbar_rect,
+    },
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform},
     interact::ScrollAxis,
     module::TrackColumn,
     render::Skin,
     skin::{ColorRole, FontFamily, FontSkin, FrameSkin, TextRoleSkin},
     text::TextContext,
-    widgets::track_list::{
-        ColumnLayout, TrackListRowData, column_label, track_list_body, track_list_content_height,
-        track_list_content_width, track_list_dividers, track_list_overflows, track_list_row_pitch,
-        track_list_row_rect, track_list_vertical_scrollbar_rect,
-    },
 };
 
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
@@ -692,9 +692,9 @@ mod tests {
 
     use super::*;
     use crate::{
+        atoms::track_list::track_list_body,
         builtin,
         draw::{DrawCmd, Geom},
-        widgets::track_list::track_list_body,
     };
 
     #[kithara::test]

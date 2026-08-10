@@ -13,14 +13,14 @@ use super::{
     track_list_paint::{TrackListConfig, TrackListPaint, TrackListState, hovered_row, local_rect},
 };
 use crate::{
+    atoms::track_list::{
+        ColumnLayout, TrackListRowData, track_list_body, track_list_dividers,
+        track_list_visible_row_rect,
+    },
     draw::{Pt, Rect},
     interact::{
         CursorShape, Hit, Hover, Input, Outcome, PointerPhase, iced as iced_interact,
         recognizers::{ItemDrag, Scalar, Track},
-    },
-    widgets::track_list::{
-        ColumnLayout, TrackListRowData, track_list_body, track_list_dividers,
-        track_list_visible_row_rect,
     },
 };
 
@@ -360,7 +360,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        atoms::track_list::face::Drawn,
+        atoms::track_list::{face::Drawn, track_list_body, track_list_row_rect},
         builtin,
         draw::{DrawCmd, Geom},
         module::TrackColumn,
@@ -369,7 +369,6 @@ mod tests {
             fonts::{FONT_BYTES, SANS},
         },
         text::TextContext,
-        widgets::track_list::{track_list_body, track_list_row_rect},
     };
 
     fn rows() -> Vec<TrackListRowData> {

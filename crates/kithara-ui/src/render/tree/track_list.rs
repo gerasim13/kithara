@@ -1,20 +1,20 @@
 use iced::advanced::{layout::Layout, mouse};
 
 use crate::{
+    atoms::track_list::{
+        ColumnLayout, column_resizable, track_list_body, track_list_dividers, track_list_overflows,
+        track_list_row_at, track_list_visible_divider_hit, track_list_visible_row_rect,
+    },
     draw::Rect,
     engine::{Engine, Target},
     interact::Hit,
     render::Skin,
-    widgets::track_list::{
-        ColumnLayout, column_resizable, track_list_body, track_list_dividers, track_list_overflows,
-        track_list_row_at, track_list_visible_divider_hit, track_list_visible_row_rect,
-    },
 };
 #[cfg(test)]
 use crate::{
+    atoms::track_list::{minimum_table_width, track_list_content_height},
     engine::{Descriptor, ScrollConfig},
     interact::ScrollAxis,
-    widgets::track_list::{minimum_table_width, track_list_content_height},
 };
 
 pub(super) struct TrackListHost {

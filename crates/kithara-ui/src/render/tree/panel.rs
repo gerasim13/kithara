@@ -1,18 +1,19 @@
-use iced::Element;
+use iced::{Element, widget::Space};
 
 use super::{mount::Cx, read_scope, resolve};
 use crate::{
-    atoms::bar::context::{Context, Viewed},
+    atoms::{
+        bar::context::{Context, Viewed},
+        track_list::{TrackListRowData, column_layouts},
+    },
     compile::CompiledUi,
     draw::Rect,
     expand::Binding,
     ids::InternId,
     module::TrackColumn,
-    render::{
-        InputOwner, ReadValue, Reads, Skin, UiEvent, controls::Paint, scope_picker, vis::view,
-    },
+    render::{InputOwner, ReadValue, Reads, Skin, UiEvent, controls::Paint, scope_picker, vis},
     text::TextContext,
-    widgets::{Widget, nav::Tree, track_list::TrackList},
+    widgets::{Widget, nav::Tree},
 };
 
 /// The context strip, with the menu its scope face opens.
@@ -48,30 +49,23 @@ pub(super) fn context_bar<'a>(
 }
 
 pub(super) fn vis<'a>(value: Option<&ReadValue<'_>>, reads: &dyn Reads) -> Element<'a, UiEvent> {
-    view(value, reads)
+    vis::view(value, reads)
 }
 
 pub(super) fn track_list<'a>(
-    path: &'a str,
+    cx: &Cx<'a, '_, '_>,
     columns: (&[TrackColumn], Option<&Binding>),
-    value: Option<&ReadValue<'_>>,
-    ui: &'a CompiledUi,
-    reads: &dyn Reads,
-    skin: &'a Skin,
-    owner: InputOwner,
 ) -> Element<'a, UiEvent> {
+    let Some(ReadValue::TrackList(tracks)) = cx.value else {
+        return Space::new().into();
+    };
     let (columns, columns_state) = columns;
-    TrackList::builder()
-        .path(path)
-        .columns(columns)
-        .maybe_columns_state(columns_state.map(|binding| ui.resolve(binding.id)))
-        .columns_scope(read_scope(columns_state, ui))
-        .maybe_value(value)
-        .reads(reads)
-        .skin(skin)
-        .owner(owner)
-        .build()
-        .view()
+    let columns_scope = read_scope(columns_state, cx.ui);
+    let columns_state = columns_state.map(|binding| cx.ui.resolve(binding.id));
+    let state = columns_state.map(|prefix| (prefix, columns_scope));
+    let columns = column_layouts(columns, cx.reads, state, cx.skin);
+    let rows = tracks.iter().map(TrackListRowData::from).collect();
+    crate::render::track_list(cx.path, rows, columns, cx.skin, cx.owner)
 }
 
 pub(super) fn tree<'a>(

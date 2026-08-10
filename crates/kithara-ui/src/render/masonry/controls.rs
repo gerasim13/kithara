@@ -88,13 +88,12 @@ mod track_list_projection {
 
     use super::{MasonryControl, TrackListLeaf};
     use crate::{
-        atoms::track_list::face::Drawn,
+        atoms::track_list::{ColumnLayout, face::Drawn},
         builtin,
         draw::Rect,
         engine::Engine,
         module::TrackColumn,
         render::hosted::{TrackListPlan, TrackListProjection},
-        widgets::track_list::ColumnLayout,
     };
 
     struct MissingEngineProjection {

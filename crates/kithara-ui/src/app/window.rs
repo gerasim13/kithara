@@ -378,8 +378,8 @@ where
     fn recover_surface(&mut self, error: SurfaceError) {
         match surface_recovery(&error) {
             SurfaceRecovery::Retry => {
-                let retry = self.request_recovery_redraw();
-                tracing::warn!(%error, retry, "surface frame timed out");
+                let redraw_requested = self.request_recovery_redraw();
+                tracing::warn!(%error, redraw_requested, "surface frame timed out");
             }
             SurfaceRecovery::Reconfigure => {
                 let size = self.window.inner_size();
@@ -388,8 +388,8 @@ where
                     return;
                 }
                 self.reconfigure_surface(size);
-                let retry = self.request_recovery_redraw();
-                tracing::warn!(%error, retry, "surface frame reconfigured");
+                let redraw_requested = self.request_recovery_redraw();
+                tracing::warn!(%error, redraw_requested, "surface frame reconfigured");
             }
             SurfaceRecovery::Stop => tracing::error!(%error, "surface frame failed"),
         }

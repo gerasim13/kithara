@@ -7,7 +7,10 @@ use super::masonry::{TrackListSource, TrackListState, TreeSource, TreeState};
 use crate::{
     atoms::{
         bar::context::Context,
-        track_list::face::TrackList,
+        track_list::{
+            ColumnLayout, TrackListRowData, column_layouts, column_resizable, face::TrackList,
+            minimum_table_width, track_list_content_height,
+        },
         tree::face::Tree,
         wave::zoom_math::{clamp_zoom, window_bounds, zoom_for_wheel},
     },
@@ -25,10 +28,6 @@ use crate::{
         picker_selected_index, text_input_layout,
     },
     text::TextContext,
-    widgets::track_list::{
-        ColumnLayout, TrackListRowData, column_layouts, column_resizable, minimum_table_width,
-        track_list_content_height,
-    },
 };
 /// What a control plan is resolved against: the compiled document that names
 /// things, the model that answers a reading, and the skin that sizes it.

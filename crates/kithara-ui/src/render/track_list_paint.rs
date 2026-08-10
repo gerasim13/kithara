@@ -8,7 +8,11 @@ use iced::{
 
 use super::{Skin, UiEvent, controls::RetainedCanvasState};
 use crate::{
-    atoms::track_list::face::{Drawn, TrackList},
+    atoms::track_list::{
+        ColumnLayout, TrackListRowData, column_resizable,
+        face::{Drawn, TrackList},
+        minimum_table_width, track_list_content_height, track_list_row_at,
+    },
     backends::replay_ordered,
     draw::{Pt, Rect},
     engine::{ScrollConfig, ScrollState},
@@ -18,10 +22,6 @@ use crate::{
     },
     module::TrackColumn,
     text::TextContext,
-    widgets::track_list::{
-        ColumnLayout, TrackListRowData, column_resizable, minimum_table_width,
-        track_list_content_height, track_list_row_at,
-    },
 };
 
 pub(super) struct TrackListPaint {

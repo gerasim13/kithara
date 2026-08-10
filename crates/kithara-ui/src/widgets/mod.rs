@@ -5,7 +5,6 @@ mod interaction;
 mod module;
 pub(crate) mod nav;
 pub(crate) mod text;
-pub(crate) mod track_list;
 pub(crate) mod wave;
 pub(crate) mod window;
 pub(crate) use interaction::wheel;

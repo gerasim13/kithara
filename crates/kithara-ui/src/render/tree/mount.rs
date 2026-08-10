@@ -196,15 +196,7 @@ impl ViewControl for mount::Vis {
 
 impl ViewControl for mount::TrackList<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(track_list(
-            cx.path,
-            (self.columns, self.columns_state),
-            cx.value,
-            cx.ui,
-            cx.reads,
-            cx.skin,
-            cx.owner,
-        ))
+        Rendered::leading(track_list(cx, (self.columns, self.columns_state)))
     }
 }
 

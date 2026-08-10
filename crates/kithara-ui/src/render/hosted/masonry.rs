@@ -5,12 +5,17 @@ use std::{
 
 use super::plan::{HostedControlPlan, Resolving, TrackListPlan, TreePlan};
 #[cfg(test)]
-use crate::widgets::track_list::ColumnLayout;
+use crate::atoms::track_list::ColumnLayout;
 use crate::{
     atoms::{
         bar::context::Context,
         design::fader::rail_bounds as fader_bounds,
-        track_list::face::{Drawn, TrackList},
+        track_list::{
+            TrackListRowData, column_layouts, column_resizable,
+            face::{Drawn, TrackList},
+            track_list_body, track_list_dividers, track_list_overflows, track_list_row_at,
+            track_list_visible_divider_hit, track_list_visible_row_rect,
+        },
         tree::{face::Tree, retained::Drawn as TreeDrawn},
     },
     compile::CompiledUi,
@@ -24,11 +29,6 @@ use crate::{
         ReadValue, Reads, Skin,
         document::read::{read_scope, resolve},
         picker_hits,
-    },
-    widgets::track_list::{
-        TrackListRowData, column_layouts, column_resizable, track_list_body, track_list_dividers,
-        track_list_overflows, track_list_row_at, track_list_visible_divider_hit,
-        track_list_visible_row_rect,
     },
 };
 
@@ -552,10 +552,10 @@ mod tests {
 
     use super::*;
     use crate::{
+        atoms::track_list::{ColumnLayout, TrackListRowData},
         builtin,
         interact::{Input, PointerPhase, Scroll, mouse as mouse_input},
         module::TrackColumn,
-        widgets::track_list::{ColumnLayout, TrackListRowData},
     };
 
     #[kithara::test]
