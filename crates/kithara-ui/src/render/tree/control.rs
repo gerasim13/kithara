@@ -124,19 +124,16 @@ pub(super) fn append_control_targets<'a>(
     engine: Option<&Engine>,
     targets: &mut Vec<Target<'a>>,
 ) {
-    if let HostedControlPlan::Tree {
-        path, search_path, ..
-    } = &control.plan
-    {
+    if let HostedControlPlan::Tree(plan) = &control.plan {
         if let Some(layout) = tree_search_input_layout(layout) {
             targets.push(Target::new(
-                search_path,
+                &plan.search_path,
                 iced_interact::hit(layout.bounds(), cursor),
             ));
         }
         if let Some(layout) = tree_input_layout(layout) {
             targets.push(Target::new(
-                path,
+                &plan.path,
                 iced_interact::hit(layout.bounds(), cursor),
             ));
         }

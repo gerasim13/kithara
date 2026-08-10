@@ -1,4 +1,4 @@
-use std::{cell::RefCell, ops::Range};
+use std::cell::RefCell;
 
 use iced::{
     Element, Event, Rectangle, Renderer, Theme,
@@ -8,26 +8,22 @@ use iced::{
 };
 use num_traits::ToPrimitive;
 
-use super::{RetainedCanvas, RetainedCanvasState, tree_row::TreeRowPaint};
+use super::{RetainedCanvas, RetainedCanvasState};
 use crate::{
+    atoms::tree::face::Tree,
     backends::replay_ordered,
-    draw::{DrawList, DrawListBuilder, Rect},
+    draw::Rect,
     engine::{ScrollConfig, ScrollState},
     interact::{ScrollAxis, iced as iced_interact},
-    render::{InputOwner, Skin, TreeRow, UiEvent, index},
+    render::{InputOwner, UiEvent, index},
     text::TextContext,
 };
 
-pub(crate) fn tree_rows<'a>(
-    path: &str,
-    rows: &[TreeRow<'_>],
-    skin: &'a Skin,
-    owner: InputOwner,
-) -> Element<'a, UiEvent> {
-    let paint = TreePaint::new(rows, skin);
-    let row_count = paint.rows.len();
-    let row_height = skin.tree.row_height;
-    let row_right_inset = skin.tree.scrollbar_margin + skin.tree.scrollbar_width;
+pub(crate) fn tree_rows<'a>(path: &str, picture: Tree, owner: InputOwner) -> Element<'a, UiEvent> {
+    let row_count = picture.row_count();
+    let row_height = picture.skin().tree.row_height;
+    let row_right_inset =
+        picture.skin().tree.scrollbar_margin + picture.skin().tree.scrollbar_width;
     let config = TreeConfig {
         row_count,
         row_height,
@@ -36,14 +32,14 @@ pub(crate) fn tree_rows<'a>(
     match owner {
         InputOwner::Leaf => RetainedCanvas::new(
             TreeProgram {
-                paint,
+                picture,
                 path: path.to_owned(),
             },
             path,
             config,
         )
         .view(),
-        InputOwner::Engine => RetainedCanvas::new(paint, path, config).view(),
+        InputOwner::Engine => RetainedCanvas::new(TreePaint { picture }, path, config).view(),
     }
 }
 
@@ -73,12 +69,12 @@ pub(crate) fn sync_tree_scroll(path: &str, offset: f32) -> impl Operation + '_ {
     Sync { offset, path }
 }
 
-struct TreeProgram<'skin> {
-    paint: TreePaint<'skin>,
+struct TreeProgram {
+    picture: Tree,
     path: String,
 }
 
-impl canvas::Program<UiEvent> for TreeProgram<'_> {
+impl canvas::Program<UiEvent> for TreeProgram {
     type State = TreeState;
 
     fn update(
@@ -90,9 +86,9 @@ impl canvas::Program<UiEvent> for TreeProgram<'_> {
     ) -> Option<Action<UiEvent>> {
         state.reconcile_scroll(
             &self.path,
-            self.paint.rows.len(),
-            self.paint.skin.tree.row_height,
-            self.paint.skin.tree.scrollbar_margin + self.paint.skin.tree.scrollbar_width,
+            self.picture.row_count(),
+            self.picture.skin().tree.row_height,
+            self.picture.skin().tree.scrollbar_margin + self.picture.skin().tree.scrollbar_width,
         );
         let input = iced_interact::input(event)?;
         let before = state.scroll.offset();
@@ -114,7 +110,7 @@ impl canvas::Program<UiEvent> for TreeProgram<'_> {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Vec<Geometry> {
-        self.paint.geometry(state, renderer, theme, bounds, cursor)
+        geometry(&self.picture, state, renderer, theme, bounds, cursor)
     }
 
     fn mouse_interaction(
@@ -124,8 +120,8 @@ impl canvas::Program<UiEvent> for TreeProgram<'_> {
         cursor: Cursor,
     ) -> Interaction {
         if hovered_row(
-            self.paint.rows.len(),
-            self.paint.skin.tree.row_height,
+            self.picture.row_count(),
+            self.picture.skin().tree.row_height,
             state.scroll.offset(),
             bounds,
             cursor,
@@ -139,60 +135,11 @@ impl canvas::Program<UiEvent> for TreeProgram<'_> {
     }
 }
 
-struct TreePaint<'skin> {
-    rows: Vec<TreeRowPaint>,
-    skin: &'skin Skin,
+struct TreePaint {
+    picture: Tree,
 }
 
-impl<'skin> TreePaint<'skin> {
-    fn new(rows: &[TreeRow<'_>], skin: &'skin Skin) -> Self {
-        Self {
-            rows: rows.iter().copied().map(TreeRowPaint::new).collect(),
-            skin,
-        }
-    }
-
-    fn geometry(
-        &self,
-        state: &TreeState,
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        let mut text = state.text.borrow_mut();
-        let text = text.get_or_insert_with(|| self.skin.text_resources().into());
-        let viewport = Rect {
-            h: bounds.height,
-            w: bounds.width,
-            x: 0.0,
-            y: 0.0,
-        };
-        let hovered = hovered_row(
-            self.rows.len(),
-            self.skin.tree.row_height,
-            state.scroll.offset(),
-            bounds,
-            cursor,
-        );
-        let list = self.commands(text, viewport, state.scroll.offset(), hovered);
-        replay_ordered(&list, &mut frame, self.skin.text_resources());
-        vec![frame.into_geometry()]
-    }
-
-    fn commands(
-        &self,
-        text: &mut TextContext,
-        viewport: Rect,
-        offset: f32,
-        hovered: Option<usize>,
-    ) -> DrawList {
-        paint_rows(&self.rows, self.skin, text, viewport, offset, hovered)
-    }
-}
-
-impl canvas::Program<UiEvent> for TreePaint<'_> {
+impl canvas::Program<UiEvent> for TreePaint {
     type State = TreeState;
 
     fn draw(
@@ -203,8 +150,37 @@ impl canvas::Program<UiEvent> for TreePaint<'_> {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Vec<Geometry> {
-        self.geometry(state, renderer, theme, bounds, cursor)
+        geometry(&self.picture, state, renderer, theme, bounds, cursor)
     }
+}
+
+fn geometry(
+    picture: &Tree,
+    state: &TreeState,
+    renderer: &Renderer,
+    _theme: &Theme,
+    bounds: Rectangle,
+    cursor: Cursor,
+) -> Vec<Geometry> {
+    let mut frame = Frame::new(renderer, bounds.size());
+    let mut text = state.text.borrow_mut();
+    let text = text.get_or_insert_with(|| picture.skin().text_resources().into());
+    let viewport = Rect {
+        h: bounds.height,
+        w: bounds.width,
+        x: 0.0,
+        y: 0.0,
+    };
+    let hovered = hovered_row(
+        picture.row_count(),
+        picture.skin().tree.row_height,
+        state.scroll.offset(),
+        bounds,
+        cursor,
+    );
+    let list = picture.row_commands(text, viewport, state.scroll.offset(), hovered);
+    replay_ordered(&list, &mut frame, picture.skin().text_resources());
+    vec![frame.into_geometry()]
 }
 
 #[derive(Default)]
@@ -300,98 +276,6 @@ fn hovered_row(
         .filter(|index| *index < row_count)
 }
 
-fn paint_rows(
-    rows: &[TreeRowPaint],
-    skin: &Skin,
-    text: &mut TextContext,
-    viewport: Rect,
-    offset: f32,
-    hovered: Option<usize>,
-) -> DrawList {
-    let mut contents = DrawListBuilder::default();
-    let visible = visible_rows(rows.len(), skin.tree.row_height, viewport.h, offset);
-    let first = visible.start;
-    for (relative, row) in rows[visible].iter().enumerate() {
-        let index = first + relative;
-        let y = index.to_f32().map_or(f32::MAX, |index| {
-            index.mul_add(skin.tree.row_height, viewport.y) - offset
-        });
-        row.paint(
-            &mut contents,
-            text,
-            Rect {
-                h: skin.tree.row_height,
-                w: viewport.w,
-                x: viewport.x,
-                y,
-            },
-            hovered == Some(index),
-            skin,
-        );
-    }
-
-    let mut list = DrawListBuilder::default();
-    list.clip(viewport, contents.finish());
-    paint_scrollbar(&mut list, rows.len(), skin, viewport, offset);
-    list.finish()
-}
-
-fn visible_rows(
-    row_count: usize,
-    row_height: f32,
-    viewport_height: f32,
-    offset: f32,
-) -> Range<usize> {
-    if row_height <= 0.0 || viewport_height <= 0.0 {
-        return 0..0;
-    }
-    let start = (offset.max(0.0) / row_height)
-        .floor()
-        .to_usize()
-        .map_or(row_count, |index| index.min(row_count));
-    let end = ((offset.max(0.0) + viewport_height) / row_height)
-        .ceil()
-        .to_usize()
-        .map_or(row_count, |index| index.min(row_count));
-    start..end.max(start)
-}
-
-fn paint_scrollbar(
-    list: &mut DrawListBuilder,
-    row_count: usize,
-    skin: &Skin,
-    viewport: Rect,
-    offset: f32,
-) {
-    let content_height = row_count
-        .to_f32()
-        .map_or(f32::MAX, |count| count * skin.tree.row_height);
-    let max_offset = (content_height - viewport.h).max(0.0);
-    if viewport.h <= 0.0 || max_offset <= 0.0 {
-        return;
-    }
-    let width = skin.tree.scrollbar_width.min(viewport.w.max(0.0));
-    let x = (viewport.x + viewport.w - skin.tree.scrollbar_margin - width).max(viewport.x);
-    let rail = Rect {
-        h: viewport.h,
-        w: width,
-        x,
-        y: viewport.y,
-    };
-    let thumb_height = (viewport.h * viewport.h / content_height)
-        .max(width)
-        .min(viewport.h);
-    let travel = viewport.h - thumb_height;
-    let thumb = Rect {
-        h: thumb_height,
-        w: width,
-        x,
-        y: viewport.y + offset.clamp(0.0, max_offset) / max_offset * travel,
-    };
-    list.fill_rect(rail, skin.rgba(skin.tree.scrollbar_background));
-    list.fill_rect(thumb, skin.rgba(skin.tree.scroller_color));
-}
-
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
@@ -399,9 +283,8 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        draw::{DrawCmd, Geom},
         interact::{Input, PointerPhase, mouse as mouse_input},
-        render::TreeIcon,
+        render::{TreeIcon, TreeRow},
     };
 
     fn rows() -> [TreeRow<'static>; 3] {
@@ -436,114 +319,16 @@ mod tests {
         ]
     }
 
-    fn commands(offset: f32, viewport: Rect) -> DrawList {
-        let skin = builtin::skin();
-        let paint = TreePaint::new(&rows(), skin);
-        let mut text = TextContext::from(skin.text_resources());
-        paint.commands(&mut text, viewport, offset, None)
-    }
-
-    #[kithara::test]
-    fn scrolled_rows_are_nested_under_the_viewport_clip() {
-        let skin = builtin::skin();
-        let viewport = Rect {
-            h: 48.0,
-            w: 180.0,
-            x: 0.0,
-            y: 0.0,
-        };
-        let list = commands(skin.tree.row_height / 2.0, viewport);
-        let Some(DrawCmd::Clip { region, list }) = list.commands().first() else {
-            panic!("the retained tree must start with its scoped viewport clip");
-        };
-
-        assert_eq!(*region, viewport);
-        assert!(list.commands().iter().any(|command| {
-            matches!(
-                command,
-                DrawCmd::Fill {
-                    geom: Geom::Rect(Rect { y, .. }),
-                    ..
-                } if *y < viewport.y
-            )
-        }));
-    }
-
-    #[kithara::test]
-    fn offset_changes_the_retained_row_positions() {
-        let viewport = Rect {
-            h: 48.0,
-            w: 180.0,
-            x: 0.0,
-            y: 0.0,
-        };
-
-        assert_ne!(
-            commands(0.0, viewport),
-            commands(builtin::skin().tree.row_height, viewport)
-        );
-    }
-
-    #[kithara::test]
-    fn rows_fully_outside_the_viewport_are_not_retained() {
-        let viewport = Rect {
-            h: builtin::skin().tree.row_height,
-            w: 180.0,
-            x: 0.0,
-            y: 0.0,
-        };
-        let list = commands(0.0, viewport);
-        let Some(DrawCmd::Clip { list, .. }) = list.commands().first() else {
-            panic!("the tree painter must retain a clip");
-        };
-
-        assert!(list.commands().iter().all(|command| {
-            !matches!(
-                command,
-                DrawCmd::Text { content, .. } if content == "Second" || content == "Third"
-            )
-        }));
-    }
-
-    #[kithara::test]
-    fn the_zvuk_row_stays_on_the_neutral_geometry_seam() {
-        let skin = builtin::skin();
-        let paint = TreePaint::new(&rows()[2..], skin);
-        let mut text = TextContext::from(skin.text_resources());
-        let list = paint.commands(
-            &mut text,
-            Rect {
-                h: skin.tree.row_height,
-                w: 180.0,
-                x: 0.0,
-                y: 0.0,
-            },
-            0.0,
-            None,
-        );
-        let Some(DrawCmd::Clip { list, .. }) = list.commands().first() else {
-            panic!("the tree painter must retain a clip");
-        };
-
-        assert!(list.commands().iter().any(|command| {
-            matches!(
-                command,
-                DrawCmd::Stroke {
-                    geom: Geom::RoundedRect { .. } | Geom::Arc { .. },
-                    ..
-                }
-            )
-        }));
-    }
-
     #[kithara::test]
     fn paint_only_program_has_no_input_update() {
         let skin = builtin::skin();
-        let paint = TreePaint::new(&rows(), skin);
+        let paint = TreePaint {
+            picture: Tree::new(&rows(), "", skin),
+        };
         let mut state = TreeState::default();
         state.reconcile_scroll(
             "tree/browser",
-            paint.rows.len(),
+            paint.picture.row_count(),
             skin.tree.row_height,
             skin.tree.scrollbar_margin + skin.tree.scrollbar_width,
         );
@@ -570,7 +355,7 @@ mod tests {
     fn leaf_wheel_moves_offset_without_notifying_the_document() {
         let skin = builtin::skin();
         let program = TreeProgram {
-            paint: TreePaint::new(&rows(), skin),
+            picture: Tree::new(&rows(), "", skin),
             path: "tree/browser".to_owned(),
         };
         let mut state = TreeState::default();

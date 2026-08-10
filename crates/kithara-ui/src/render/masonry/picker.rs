@@ -11,13 +11,13 @@ use num_traits::cast::AsPrimitive;
 
 use super::{custom::HostAction, node::pointer_button};
 use crate::{
-    atoms::track_list::face::Drawn,
+    atoms::{track_list::face::Drawn, tree::retained::Drawn as TreeDrawn},
     draw::{Pt, Rect},
     engine::{Engine, Target},
     interact::{CursorShape, Input, MOUSE, Outcome, PointerInput, PointerPhase},
     render::{
         HostedControlPlan, UiEvent, engine_value,
-        hosted::{TrackListPlan, TrackListProjection},
+        hosted::{TrackListPlan, TrackListProjection, TreePlan, TreeProjection},
     },
 };
 
@@ -43,6 +43,7 @@ pub(crate) struct HostedEngine {
     owner: WidgetId,
     pointer: Rc<Cell<Option<Pt>>>,
     _projections: Vec<Rc<dyn TrackListProjection>>,
+    _tree_projections: Vec<Rc<dyn TreeProjection>>,
     targets: Vec<EngineTarget>,
     #[field(get(copy), vis = "pub(super)", rename = "accepts_text_input")]
     text_input: bool,
@@ -56,7 +57,7 @@ impl HostedEngine {
     ) -> Rc<Self> {
         let text_input = targets
             .iter()
-            .any(|target| matches!(target.plan, HostedControlPlan::Tree { .. }));
+            .any(|target| matches!(target.plan, HostedControlPlan::Tree(_)));
         let mut engine = Engine::default();
         engine.reconcile(targets.iter().flat_map(|target| target.plan.descriptors()));
         let engine = Rc::new(RefCell::new(engine));
@@ -78,12 +79,29 @@ impl HostedEngine {
                     Some(projection)
                 })
                 .collect();
+            let tree_projections = targets
+                .iter()
+                .filter_map(|target| {
+                    let HostedControlPlan::Tree(plan) = &target.plan else {
+                        return None;
+                    };
+                    let projection: Rc<dyn TreeProjection> = Rc::new(EngineProjection {
+                        area: Rc::clone(&target.area),
+                        engine: Rc::clone(&engine),
+                        host: host.clone(),
+                        pointer: Rc::clone(&pointer),
+                    });
+                    plan.bind_projection(Rc::downgrade(&projection));
+                    Some(projection)
+                })
+                .collect();
             Self {
                 engine: Rc::clone(&engine),
                 map_event,
                 owner,
                 pointer: Rc::clone(&pointer),
                 _projections: projections,
+                _tree_projections: tree_projections,
                 targets,
                 text_input,
             }
@@ -93,6 +111,7 @@ impl HostedEngine {
     pub(super) fn route(&self, input: Input<'_>, point: Option<Pt>) -> Routed {
         let mut engine = self.engine.borrow_mut();
         let before = self.track_list_views(&engine, self.pointer.get());
+        let tree_before = self.tree_views(&engine, self.pointer.get());
         if matches!(input, Input::Pointer(_) | Input::Wheel(_)) {
             self.pointer.set(point);
         }
@@ -108,7 +127,8 @@ impl HostedEngine {
         }
         let emission = engine.handle(input, &targets, kithara_platform::time::Instant::now());
         let focused = engine.focused_path().is_some();
-        let repaint = before != self.track_list_views(&engine, self.pointer.get());
+        let repaint = before != self.track_list_views(&engine, self.pointer.get())
+            || tree_before != self.tree_views(&engine, self.pointer.get());
         let Some(emission) = emission else {
             return Routed {
                 focused,
@@ -152,6 +172,20 @@ impl HostedEngine {
         })
     }
 
+    #[cfg(test)]
+    pub(super) fn tree_picture(&self, path: &str) -> Option<(usize, String)> {
+        self.targets.iter().find_map(|target| {
+            let HostedControlPlan::Tree(plan) = &target.plan else {
+                return None;
+            };
+            if plan.path != path {
+                return None;
+            }
+            let picture = plan.picture();
+            Some((picture.row_count(), picture.query().to_owned()))
+        })
+    }
+
     delegate::delegate! {
         to self.engine.borrow_mut() {
             pub(super) fn clear_focus(&self);
@@ -188,6 +222,18 @@ impl HostedEngine {
             })
             .collect()
     }
+
+    fn tree_views(&self, engine: &Engine, point: Option<Pt>) -> Vec<TreeDrawn> {
+        self.targets
+            .iter()
+            .filter_map(|target| {
+                let HostedControlPlan::Tree(plan) = &target.plan else {
+                    return None;
+                };
+                plan.view(engine, point, target_bounds(target))
+            })
+            .collect()
+    }
 }
 
 struct EngineProjection {
@@ -204,6 +250,23 @@ impl TrackListProjection for EngineProjection {
     }
 
     fn reconcile(&self) {
+        self.reconcile_engine();
+    }
+}
+
+impl TreeProjection for EngineProjection {
+    fn project(&self, plan: &TreePlan) -> Option<TreeDrawn> {
+        let engine = self.engine.borrow();
+        plan.view(&engine, self.pointer.get(), bounds(self.area.get()))
+    }
+
+    fn reconcile(&self) {
+        self.reconcile_engine();
+    }
+}
+
+impl EngineProjection {
+    fn reconcile_engine(&self) {
         if let Some(host) = self.host.upgrade() {
             host.engine.borrow_mut().reconcile(
                 host.targets

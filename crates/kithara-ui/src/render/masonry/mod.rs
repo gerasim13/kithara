@@ -5,8 +5,12 @@ mod host;
 mod leaf;
 mod mount;
 mod node;
+#[path = "../masonry_control/painted.rs"]
+mod painted;
 mod picker;
 mod popover;
+#[path = "../masonry_control/projected.rs"]
+mod projected;
 mod root;
 #[cfg(test)]
 mod tests;

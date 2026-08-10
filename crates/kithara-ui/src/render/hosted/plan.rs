@@ -3,11 +3,12 @@ use std::{cell::RefCell, ops::Range, rc::Rc};
 use num_traits::cast::AsPrimitive;
 
 #[cfg(feature = "masonry-host")]
-use super::masonry::{TrackListSource, TrackListState, TreeMetrics};
+use super::masonry::{TrackListSource, TrackListState, TreeSource, TreeState};
 use crate::{
     atoms::{
         bar::context::Context,
         track_list::face::TrackList,
+        tree::face::Tree,
         wave::zoom_math::{clamp_zoom, window_bounds, zoom_for_wheel},
     },
     compile::CompiledUi,
@@ -15,10 +16,10 @@ use crate::{
     engine::{Descriptor, ScrollConfig},
     expand::{Binding, ControlSpec},
     ids::InternId,
-    interact::{CursorShape, Hover, ScrollAxis, TextInputLayout, recognizers::WheelStep},
+    interact::{CursorShape, Hover, ScrollAxis, recognizers::WheelStep},
     module::{FaderStyle, TrackColumn, WaveStyle},
     render::{
-        ReadValue, Reads, Skin, TrackRow,
+        ReadValue, Reads, Skin, TrackRow, TreeRow,
         document::read::{read_scope, resolve, wave_zoom},
         model::derived,
         picker_selected_index, text_input_layout,
@@ -57,15 +58,7 @@ pub(crate) enum HostedControlPlan {
         /// the painter drew, rather than measuring the same parts again.
         face: Rect,
     },
-    Tree {
-        path: String,
-        query: String,
-        scroll: ScrollConfig,
-        search_layout: TextInputLayout,
-        search_path: String,
-        #[cfg(feature = "masonry-host")]
-        metrics: TreeMetrics,
-    },
+    Tree(Box<TreePlan>),
     TrackList(Box<TrackListPlan>),
     Fader {
         path: String,
@@ -101,6 +94,15 @@ pub(crate) enum HostedControlPlan {
         wheel_positive: f32,
         wheel_non_positive: f32,
     },
+}
+
+#[derive(Clone)]
+pub(crate) struct TreePlan {
+    pub(crate) path: String,
+    pub(super) picture: Rc<RefCell<Tree>>,
+    pub(crate) search_path: String,
+    #[cfg(feature = "masonry-host")]
+    pub(super) state: TreeState,
 }
 
 #[derive(Clone)]
@@ -199,38 +201,16 @@ impl HostedControlPlan {
                     skin,
                 ))
             }
-            (ControlSpec::Tree { query }, Some(ReadValue::Tree(rows))) => {
-                let query = query
-                    .as_ref()
-                    .and_then(|binding| resolve(reads, binding, ui))
-                    .and_then(|value| match value {
-                        ReadValue::Text(query) => Some(query.to_owned()),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                let search_layout = text_input_layout(&query, skin);
-                Some(Self::Tree {
-                    path: path.to_owned(),
-                    query,
-                    scroll: ScrollConfig::items(
-                        ScrollAxis::Vertical,
-                        AsPrimitive::<f32>::as_(rows.len()) * skin.tree.row_height,
-                        rows.len(),
-                        skin.tree.row_height,
-                        skin.tree.row_height,
-                        skin.tree.scrollbar_margin + skin.tree.scrollbar_width,
-                    ),
-                    search_layout,
-                    search_path: format!("{path}/search"),
-                    #[cfg(feature = "masonry-host")]
-                    metrics: TreeMetrics {
-                        search_height: skin.tree.search_height,
-                        search_icon_width: skin.tree.search_icon_width,
-                        panel_padding_top: skin.tree.panel_padding_top,
-                        panel_padding_bottom: skin.tree.panel_padding_bottom,
-                    },
-                })
-            }
+            (ControlSpec::Tree { query }, Some(ReadValue::Tree(rows))) => Some(Self::Tree(
+                Box::new(tree_plan(path, query.as_ref(), read, rows, cx)),
+            )),
+            (ControlSpec::Tree { query }, _) => Some(Self::Tree(Box::new(tree_plan(
+                path,
+                query.as_ref(),
+                read,
+                &[],
+                cx,
+            )))),
             (
                 ControlSpec::TrackList {
                     columns,
@@ -318,7 +298,6 @@ impl HostedControlPlan {
             Self::Activation { path }
             | Self::Segmented { path, .. }
             | Self::Picker { path, .. }
-            | Self::Tree { path, .. }
             | Self::Fader { path, .. }
             | Self::Crossfader { path }
             | Self::Knob { path, .. }
@@ -326,19 +305,19 @@ impl HostedControlPlan {
             | Self::VerticalVu { path }
             | Self::Wave { path }
             | Self::HeroWave { path, .. } => path,
+            Self::Tree(plan) => &plan.path,
             Self::TrackList(plan) => &plan.path,
         }
     }
 
     fn descriptor_count(&self) -> usize {
+        if matches!(self, Self::Tree(_)) {
+            return TreePlan::DESCRIPTORS;
+        }
         if let Self::TrackList(plan) = self {
             return plan.descriptor_count();
         }
-        if matches!(self, Self::Tree { .. }) {
-            2
-        } else {
-            1
-        }
+        1
     }
 
     fn append_descriptors(&self, descriptors: &mut Vec<Descriptor>) {
@@ -353,21 +332,7 @@ impl HostedControlPlan {
                 selected,
                 ..
             } => descriptors.push(Descriptor::picker(path.clone(), *item_count, *selected)),
-            Self::Tree {
-                path,
-                query,
-                scroll,
-                search_layout,
-                search_path,
-                ..
-            } => {
-                descriptors.push(Descriptor::text_input(
-                    search_path.clone(),
-                    query.clone(),
-                    search_layout.clone(),
-                ));
-                descriptors.push(Descriptor::scroll(path.clone(), *scroll));
-            }
+            Self::Tree(plan) => plan.append_descriptors(descriptors),
             Self::TrackList(plan) => plan.append_descriptors(descriptors),
             Self::Fader {
                 path,
@@ -424,6 +389,36 @@ impl HostedControlPlan {
     }
 }
 
+fn tree_plan(
+    path: &str,
+    query: Option<&Binding>,
+    _read: Option<&Binding>,
+    rows: &[TreeRow<'_>],
+    cx: Resolving<'_>,
+) -> TreePlan {
+    let Resolving { reads, skin, ui } = cx;
+    let query_text = query
+        .and_then(|binding| resolve(reads, binding, ui))
+        .and_then(|value| match value {
+            ReadValue::Text(query) => Some(query),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let plan = TreePlan {
+        path: path.to_owned(),
+        picture: Rc::new(RefCell::new(Tree::new(rows, query_text, skin))),
+        search_path: format!("{path}/search"),
+        #[cfg(feature = "masonry-host")]
+        state: TreeState::default(),
+    };
+    #[cfg(feature = "masonry-host")]
+    plan.bind_source(TreeSource::new(
+        _read.map(|binding| ui.resolve(binding.key).to_owned()),
+        query.map(|binding| ui.resolve(binding.key).to_owned()),
+    ));
+    plan
+}
+
 fn context_bar_plan(
     path: &str,
     scope_items: &[InternId],
@@ -470,6 +465,32 @@ fn wave_plan(
         visible: window_bounds(progress, scale),
         wheel_positive: zoom_for_wheel(scale, 1.0),
         wheel_non_positive: zoom_for_wheel(scale, 0.0),
+    }
+}
+
+impl TreePlan {
+    /// A tree registers exactly two: its search field and its scroll.
+    const DESCRIPTORS: usize = 2;
+
+    fn append_descriptors(&self, descriptors: &mut Vec<Descriptor>) {
+        let picture = self.picture.borrow();
+        descriptors.push(Descriptor::text_input(
+            self.search_path.clone(),
+            picture.query().to_owned(),
+            text_input_layout(picture.query(), picture.skin()),
+        ));
+        let row_count = picture.row_count();
+        descriptors.push(Descriptor::scroll(
+            self.path.clone(),
+            ScrollConfig::items(
+                ScrollAxis::Vertical,
+                AsPrimitive::<f32>::as_(row_count) * picture.skin().tree.row_height,
+                row_count,
+                picture.skin().tree.row_height,
+                picture.skin().tree.row_height,
+                picture.skin().tree.scrollbar_margin + picture.skin().tree.scrollbar_width,
+            ),
+        ));
     }
 }
 

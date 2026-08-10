@@ -14,5 +14,6 @@ pub(crate) mod tab;
 pub(crate) mod text;
 pub(crate) mod toggle;
 pub(crate) mod track_list;
+pub(crate) mod tree;
 pub(crate) mod vu;
 pub(crate) mod wave;

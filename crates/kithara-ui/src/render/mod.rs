@@ -32,7 +32,7 @@ pub(crate) use event::{
 pub(crate) use hosted::hosted_control_plan;
 pub(crate) use hosted::{HostedControlPlan, Resolving};
 pub use icons::Icon;
-pub(crate) use icons::{Mark, document_icon};
+pub(crate) use icons::{Mark, document_icon, tree_icon};
 pub(crate) use layer::{
     HostLayer, LayerHit, WindowLayerProgram, draw_host_layer, place_popover, window_layer,
     window_layers,

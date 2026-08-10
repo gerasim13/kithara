@@ -4,7 +4,6 @@ mod painted;
 mod press;
 mod scroll;
 mod tree;
-mod tree_row;
 
 pub(crate) use chrome::{ChromeLeaf, chrome_leaf, header_chevron};
 pub(crate) use grip::{Drag, Grip};

@@ -264,6 +264,13 @@ where
         std::mem::take(&mut self.platform)
     }
 
+    #[cfg(test)]
+    pub(crate) fn tree_picture(&self, path: &str) -> Option<(usize, String)> {
+        self.engines
+            .iter()
+            .find_map(|engine| engine.tree_picture(path))
+    }
+
     fn observe_pointer(&mut self, event: &PointerEvent) {
         let position = match event {
             PointerEvent::Down(button) | PointerEvent::Up(button) => {

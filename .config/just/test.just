@@ -11,6 +11,7 @@ run *ARGS:
 
 all:
     just test
+    just test run --lane=masonry
     just test run --lane=doc
 
 # Locate or drop the on-disk fixture cache. Each build fingerprint gets its own

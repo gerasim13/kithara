@@ -578,7 +578,10 @@ where
         if custom_installed {
             return output;
         }
-        if matches!(spec, ControlSpec::TrackList { .. }) {
+        if matches!(
+            spec,
+            ControlSpec::TrackList { .. } | ControlSpec::Tree { .. }
+        ) {
             output.watch_snapshot();
         } else if let Some(read) = read {
             output.watch(read);

@@ -5,6 +5,7 @@ use iced::{
 };
 
 use crate::{
+    atoms::tree::face::Tree as TreeFace,
     render::{IcedSkin, Icon, InputOwner, ReadValue, Skin, UiEvent, search_input, tree_rows},
     widgets::Widget,
 };
@@ -23,7 +24,9 @@ impl<'a, 'skin: 'a> Widget<'a> for Tree<'_, '_, '_, '_, 'skin> {
         let Some(ReadValue::Tree(rows)) = self.value else {
             return Space::new().into();
         };
-        let tree = tree_rows(self.path, rows, self.skin, self.owner);
+        let picture = TreeFace::new(rows, self.query, self.skin);
+        let query = picture.query().to_owned();
+        let tree = tree_rows(self.path, picture, self.owner);
         let panel = container(tree)
             .padding(Padding {
                 top: self.skin.tree.panel_padding_top,
@@ -38,13 +41,10 @@ impl<'a, 'skin: 'a> Widget<'a> for Tree<'_, '_, '_, '_, 'skin> {
                 move |_| ContainerStyle::default().background(Background::Color(background))
             });
 
-        column![
-            search_bar(self.path, self.query, self.skin, self.owner),
-            panel
-        ]
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+        column![search_bar(self.path, &query, self.skin, self.owner), panel]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 }
 

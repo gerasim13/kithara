@@ -3,7 +3,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use super::plan::{HostedControlPlan, Resolving, TrackListPlan};
+use super::plan::{HostedControlPlan, Resolving, TrackListPlan, TreePlan};
 #[cfg(test)]
 use crate::widgets::track_list::ColumnLayout;
 use crate::{
@@ -11,6 +11,7 @@ use crate::{
         bar::context::Context,
         design::fader::rail_bounds as fader_bounds,
         track_list::face::{Drawn, TrackList},
+        tree::{face::Tree, retained::Drawn as TreeDrawn},
     },
     compile::CompiledUi,
     draw::{Pt, Rect},
@@ -30,14 +31,6 @@ use crate::{
         track_list_visible_row_rect,
     },
 };
-
-#[derive(Clone)]
-pub(crate) struct TreeMetrics {
-    pub(super) search_height: f32,
-    pub(super) search_icon_width: f32,
-    pub(super) panel_padding_top: f32,
-    pub(super) panel_padding_bottom: f32,
-}
 
 pub(crate) fn hosted_control_plan(
     path: InternId,
@@ -62,6 +55,11 @@ pub(crate) trait TrackListProjection {
     fn reconcile(&self);
 }
 
+pub(crate) trait TreeProjection {
+    fn project(&self, plan: &TreePlan) -> Option<TreeDrawn>;
+    fn reconcile(&self);
+}
+
 #[derive(Clone, Default)]
 pub(super) struct TrackListState {
     projection: Rc<OnceCell<Weak<dyn TrackListProjection>>>,
@@ -72,6 +70,18 @@ pub(super) struct TrackListState {
 pub(super) struct TrackListSource {
     columns: Vec<TrackColumn>,
     columns_state: Option<(String, String)>,
+    rows: Option<String>,
+}
+
+#[derive(Clone, Default)]
+pub(super) struct TreeState {
+    projection: Rc<OnceCell<Weak<dyn TreeProjection>>>,
+    reported_missing: Rc<RefCell<Vec<String>>>,
+    source: Rc<OnceCell<TreeSource>>,
+}
+
+pub(super) struct TreeSource {
+    query: Option<String>,
     rows: Option<String>,
 }
 
@@ -118,32 +128,12 @@ impl HostedControlPlan {
                     }
                 }
             }
-            Self::Tree {
-                path,
-                search_path,
-                metrics,
-                ..
-            } => {
-                let divider = 1.0;
-                let search = Rect {
-                    x: bounds.x + metrics.search_icon_width + divider,
-                    y: bounds.y,
-                    w: (bounds.w - metrics.search_icon_width - divider).max(0.0),
-                    h: metrics.search_height,
+            Self::Tree(plan) => {
+                let Some(engine) = engine else {
+                    plan.report_missing("retained engine");
+                    return;
                 };
-                targets.push(Target::new(search_path, Hit::new(point, search)));
-                let body_y = bounds.y + metrics.search_height + metrics.panel_padding_top;
-                let body = Rect {
-                    x: bounds.x,
-                    y: body_y,
-                    w: bounds.w,
-                    h: (bounds.h
-                        - metrics.search_height
-                        - metrics.panel_padding_top
-                        - metrics.panel_padding_bottom)
-                        .max(0.0),
-                };
-                targets.push(Target::new(path, Hit::new(point, body)));
+                plan.append_targets(bounds, point, engine, targets);
             }
             Self::TrackList(plan) => {
                 let Some(engine) = engine else {
@@ -173,6 +163,121 @@ impl HostedControlPlan {
                 targets.push(Target::new(path, Hit::new(point, bounds)));
             }
         }
+    }
+}
+
+impl TreePlan {
+    pub(crate) fn bind_projection(&self, projection: Weak<dyn TreeProjection>) {
+        let _ = self.state.projection.get_or_init(|| projection);
+    }
+
+    pub(super) fn bind_source(&self, source: TreeSource) {
+        let _ = self.state.source.get_or_init(|| source);
+    }
+
+    pub(crate) fn refresh(&self, reads: &dyn Reads) -> bool {
+        let Some(source) = self.state.source.get() else {
+            self.report_missing("tree source");
+            return false;
+        };
+        let skin = self.picture.borrow().skin().clone();
+        let next = source.picture(reads, &skin);
+        if *self.picture.borrow() == next {
+            return false;
+        }
+        *self.picture.borrow_mut() = next;
+        if let Some(projection) = self.projection() {
+            projection.reconcile();
+        }
+        true
+    }
+
+    pub(crate) fn drawn(&self) -> Option<TreeDrawn> {
+        self.projection()
+            .and_then(|projection| projection.project(self))
+    }
+
+    pub(crate) fn picture(&self) -> Ref<'_, Tree> {
+        self.picture.borrow()
+    }
+
+    pub(crate) fn view(
+        &self,
+        engine: &Engine,
+        point: Option<Pt>,
+        bounds: Rect,
+    ) -> Option<TreeDrawn> {
+        match self.complete_view(engine, point, bounds) {
+            Ok(view) => Some(view),
+            Err(missing) => {
+                self.report_missing(missing.entry);
+                None
+            }
+        }
+    }
+
+    fn complete_view<'a>(
+        &'a self,
+        engine: &Engine,
+        point: Option<Pt>,
+        bounds: Rect,
+    ) -> Result<TreeDrawn, MissingEntry<'a>> {
+        let offset = engine
+            .scroll_offset(&self.path)
+            .ok_or(MissingEntry { entry: &self.path })?;
+        let search = engine
+            .text_input_snapshot(&self.search_path)
+            .ok_or(MissingEntry {
+                entry: &self.search_path,
+            })?;
+        let picture = self.picture.borrow();
+        Ok(TreeDrawn {
+            hovered: picture.hovered_row(point, bounds, offset),
+            offset,
+            search,
+        })
+    }
+
+    fn projection(&self) -> Option<Rc<dyn TreeProjection>> {
+        let projection = self.state.projection.get().and_then(Weak::upgrade);
+        if projection.is_none() {
+            self.report_missing("retained projection");
+        }
+        projection
+    }
+
+    fn report_missing(&self, entry: &str) {
+        let mut reported = self.state.reported_missing.borrow_mut();
+        if reported.iter().any(|candidate| candidate == entry) {
+            return;
+        }
+        reported.push(entry.to_owned());
+        tracing::error!(
+            control_path = self.path,
+            engine_entry = entry,
+            "Tree projection is incomplete"
+        );
+    }
+
+    fn append_targets<'a>(
+        &'a self,
+        bounds: Rect,
+        point: Option<Pt>,
+        engine: &Engine,
+        targets: &mut Vec<Target<'a>>,
+    ) {
+        if self.view(engine, point, bounds).is_none() {
+            return;
+        }
+        let picture = self.picture();
+        targets.push(Target::new(
+            &self.search_path,
+            Hit::new(point, picture.search_input_bounds(bounds)),
+        ));
+        targets.push(Target::new(
+            &self.path,
+            Hit::new(point, picture.rows_bounds(bounds)),
+        ));
     }
 }
 
@@ -400,6 +505,34 @@ impl TrackListSource {
     }
 }
 
+impl TreeSource {
+    pub(super) fn new(rows: Option<String>, query: Option<String>) -> Self {
+        Self { query, rows }
+    }
+
+    fn picture(&self, reads: &dyn Reads, skin: &Skin) -> Tree {
+        let rows = self
+            .rows
+            .as_deref()
+            .and_then(|endpoint| reads.get(endpoint))
+            .and_then(|value| match value {
+                ReadValue::Tree(rows) => Some(rows),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let query = self
+            .query
+            .as_deref()
+            .and_then(|endpoint| reads.get(endpoint))
+            .and_then(|value| match value {
+                ReadValue::Text(query) => Some(query),
+                _ => None,
+            })
+            .unwrap_or_default();
+        Tree::new(rows, query, skin)
+    }
+}
+
 struct MissingEntry<'a> {
     entry: &'a str,
 }
@@ -420,29 +553,20 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        engine::ScrollConfig,
-        interact::{Input, PointerPhase, Scroll, ScrollAxis, mouse as mouse_input},
+        interact::{Input, PointerPhase, Scroll, mouse as mouse_input},
         module::TrackColumn,
-        render::text_input_layout,
         widgets::track_list::{ColumnLayout, TrackListRowData},
     };
 
     #[kithara::test]
     fn tree_targets_keep_search_and_rows_disjoint() {
         let skin = builtin::skin();
-        let plan = HostedControlPlan::Tree {
+        let plan = HostedControlPlan::Tree(Box::new(TreePlan {
             path: "tree".to_owned(),
-            query: String::new(),
-            scroll: ScrollConfig::plain(ScrollAxis::Vertical, 400.0),
-            search_layout: text_input_layout("", skin),
+            picture: Rc::new(RefCell::new(Tree::new(&[], "", skin))),
             search_path: "tree/search".to_owned(),
-            metrics: TreeMetrics {
-                search_height: skin.tree.search_height,
-                search_icon_width: skin.tree.search_icon_width,
-                panel_padding_top: skin.tree.panel_padding_top,
-                panel_padding_bottom: skin.tree.panel_padding_bottom,
-            },
-        };
+            state: TreeState::default(),
+        }));
         let bounds = Rect {
             x: 5.0,
             y: 7.0,
@@ -450,7 +574,9 @@ mod tests {
             h: 180.0,
         };
         let mut targets = Vec::new();
-        plan.append_targets(bounds, None, None, &mut targets);
+        let mut engine = Engine::default();
+        engine.reconcile(plan.descriptors());
+        plan.append_targets(bounds, None, Some(&engine), &mut targets);
 
         assert_eq!(targets.len(), 2);
         assert_eq!(targets[0].path, "tree/search");

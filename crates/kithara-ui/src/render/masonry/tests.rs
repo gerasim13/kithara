@@ -9,7 +9,7 @@ use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use masonry::{
     app::{RenderRootOptions, RenderRootSignal, WindowSizePolicy},
-    core::{CursorIcon, Handled, PointerEvent, TextEvent, WindowEvent},
+    core::{CursorIcon, Handled, Ime, PointerEvent, TextEvent, WindowEvent},
     dpi::{PhysicalPosition, PhysicalSize},
     kurbo::{Point, Size as MasonrySize},
     theme::default_property_set,
@@ -37,8 +37,8 @@ use crate::{
     interact::{Hit, Input, Key as NeutralKey, Outcome, PointerOwnership, PointerPhase, Scroll},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
-        ControlAction, ReadValue, Reads, Skin, StereoLevels, TrackRow, UiEvent, WindowCommand,
-        WindowEdge, WindowLayerProgram, document, picker_hits,
+        ControlAction, ReadValue, Reads, Skin, StereoLevels, TrackRow, TreeIcon, TreeRow, UiEvent,
+        WindowCommand, WindowEdge, WindowLayerProgram, document, picker_hits,
     },
     source::{MemResolver, UiConfig},
     text::{FontPolicy, TextContext},
@@ -57,6 +57,16 @@ static LATE_TRACK_ROWS: [TrackRow<'static>; 8] = [TrackRow {
     time: Some("03:24"),
     transition: None,
     selected: false,
+}; 8];
+
+static TREE_ROWS: [TreeRow<'static>; 8] = [TreeRow {
+    label: "Late Folder",
+    count: Some(8),
+    expanded: Some(true),
+    icon: TreeIcon::Folder,
+    muted: false,
+    selected: false,
+    depth: 0,
 }; 8];
 
 struct LateTrackReads {
@@ -79,6 +89,30 @@ impl Reads for LateTrackReads {
     }
 }
 
+struct LateTreeReads {
+    query_loaded: Cell<bool>,
+    rows_loaded: Cell<bool>,
+}
+
+impl Reads for LateTreeReads {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        let id = endpoint.split_once('@').map_or(endpoint, |(id, _scope)| id);
+        match id {
+            "library.tree" => Some(ReadValue::Tree(if self.rows_loaded.get() {
+                &TREE_ROWS
+            } else {
+                &[]
+            })),
+            "library.query" => Some(ReadValue::Text(if self.query_loaded.get() {
+                "Late"
+            } else {
+                ""
+            })),
+            _ => FixtureReads.get(endpoint),
+        }
+    }
+}
+
 impl Reads for FixtureReads {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         let id = endpoint.split_once('@').map_or(endpoint, |(id, _scope)| id);
@@ -93,7 +127,9 @@ impl Reads for FixtureReads {
             "deck.playback.position_normalized" => Some(ReadValue::Scalar(0.375)),
             "deck.view.zoom" => Some(ReadValue::Scalar(0.25)),
             "library.breadcrumb" => Some(ReadValue::Text("All Tracks")),
+            "library.query" => Some(ReadValue::Text("Folder")),
             "library.scope" => Some(ReadValue::Scalar(0.0)),
+            "library.tree" => Some(ReadValue::Tree(&TREE_ROWS)),
             "player.output.levels" => Some(ReadValue::Stereo(StereoLevels {
                 l: 0.6,
                 r: 0.4,
@@ -1645,7 +1681,11 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
         Paints::Yes,
         r#"TrackList(id: "control", read: Model(id: "library.visible_tracks"), columns: Some([Title]))"#,
     ),
-    ("Tree", Paints::NotYet, r#"Tree(id: "control")"#),
+    (
+        "Tree",
+        Paints::Yes,
+        r#"Tree(id: "control", read: Model(id: "library.tree"), query: Model(id: "library.query"))"#,
+    ),
     (
         // The path in view is the strip's own reading, and the fixture never
         // bound one: a strip with no path names nothing, so it drew nothing
@@ -1889,6 +1929,265 @@ fn a_mounted_track_list_repaints_the_row_under_the_pointer() {
     let (hovered, _) = root
         .redraw()
         .unwrap_or_else(|error| panic!("hovered TrackList must repaint: {error}"));
+
+    assert_ne!(hovered.encoding().draw_data, idle_draw_data);
+}
+
+#[kithara::test]
+fn a_mounted_tree_refreshes_rows_and_query_independently() {
+    let registry = fixture_registry();
+    let ui = fixture_ui(
+        "late-tree",
+        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Tree(
+                id: "browser",
+                read: Model(id: "library.tree"),
+                query: Model(id: "library.query"),
+            ),
+        ])"#,
+        &registry,
+    );
+    let reads = LateTreeReads {
+        query_loaded: Cell::new(false),
+        rows_loaded: Cell::new(false),
+    };
+    let output = document::render(
+        &ui.root,
+        &ui,
+        &reads,
+        builtin::skin_doc(),
+        MasonryHost::new(&ui, &reads, builtin::skin()),
+    );
+    let mut root = masonry_root(output, 240, 160);
+    let (before, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("empty Tree must draw its frame: {error}"));
+    let before_draw_data = before.encoding().draw_data.clone();
+    assert_eq!(
+        root.tree_picture("demo/browser"),
+        Some((0, String::new())),
+        "the mounted Tree must retain the initially empty rows and query"
+    );
+
+    reads.rows_loaded.set(true);
+    root.refresh(&ui, &reads);
+    assert_eq!(
+        root.tree_picture("demo/browser"),
+        Some((TREE_ROWS.len(), String::new())),
+        "row refresh must not change the independently empty query"
+    );
+    let (with_rows, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("refreshed Tree must draw its rows: {error}"));
+    let with_rows_draw_data = with_rows.encoding().draw_data.clone();
+    assert_ne!(
+        with_rows_draw_data, before_draw_data,
+        "the mounted scene must repaint when Tree rows arrive"
+    );
+
+    reads.query_loaded.set(true);
+    root.refresh(&ui, &reads);
+    assert_eq!(
+        root.tree_picture("demo/browser"),
+        Some((TREE_ROWS.len(), "Late".to_owned())),
+        "query refresh must retain the independently loaded rows"
+    );
+    let (with_query, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("refreshed Tree must draw its query: {error}"));
+    assert_ne!(
+        with_query.encoding().draw_data,
+        with_rows_draw_data,
+        "the mounted scene must repaint when the Tree query arrives"
+    );
+}
+
+#[kithara::test]
+fn a_mounted_tree_row_click_emits_its_typed_index_action() {
+    let registry = fixture_registry();
+    let ui = fixture_ui(
+        "tree-row-action",
+        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Tree(
+                id: "browser",
+                read: Model(id: "library.tree"),
+                query: Model(id: "library.query"),
+            ),
+        ])"#,
+        &registry,
+    );
+    let reads = LateTreeReads {
+        query_loaded: Cell::new(false),
+        rows_loaded: Cell::new(true),
+    };
+    let output = document::render(
+        &ui.root,
+        &ui,
+        &reads,
+        builtin::skin_doc(),
+        MasonryHost::new(&ui, &reads, builtin::skin()),
+    );
+    let mut root = masonry_root(output, 240, 160);
+    let expected = 2_usize;
+    let skin = builtin::skin();
+    let row_y = skin.tree.search_height
+        + skin.tree.panel_padding_top
+        + skin.tree.row_height * (AsPrimitive::<f32>::as_(expected) + 0.5);
+
+    assert_eq!(
+        root.handle_pointer_event(pointer_down(20.0, row_y.into()))
+            .unwrap_or_else(|error| panic!("Tree row press must route: {error}")),
+        Handled::Yes,
+    );
+    assert_eq!(
+        root.take_actions(),
+        vec![UiEvent::Control {
+            path: "demo/browser".to_owned(),
+            action: ControlAction::SelectIndex(expected),
+        }],
+        "the retained Tree target must preserve its control path and row index"
+    );
+}
+
+#[kithara::test]
+fn a_mounted_tree_search_ime_commit_emits_the_complete_query() {
+    let registry = fixture_registry();
+    let ui = fixture_ui(
+        "tree-query-action",
+        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Tree(
+                id: "browser",
+                read: Model(id: "library.tree"),
+                query: Model(id: "library.query"),
+            ),
+        ])"#,
+        &registry,
+    );
+    let reads = LateTreeReads {
+        query_loaded: Cell::new(false),
+        rows_loaded: Cell::new(true),
+    };
+    let output = document::render(
+        &ui.root,
+        &ui,
+        &reads,
+        builtin::skin_doc(),
+        MasonryHost::new(&ui, &reads, builtin::skin()),
+    );
+    let mut root = masonry_root(output, 240, 160);
+    let skin = builtin::skin();
+    let search_x = skin.tree.search_icon_width + 1.0 + skin.tree.search_padding_x;
+    let search_y = skin.tree.search_height / 2.0;
+
+    assert_eq!(
+        root.handle_pointer_event(pointer_down(search_x.into(), search_y.into()))
+            .unwrap_or_else(|error| panic!("Tree search press must focus: {error}")),
+        Handled::Yes,
+    );
+    assert!(
+        root.root().focused_widget().is_some(),
+        "the real Tree search target must own Masonry focus before text input"
+    );
+    assert_eq!(
+        root.handle_pointer_event(pointer_up(search_x.into(), search_y.into()))
+            .unwrap_or_else(|error| panic!("Tree search release must route: {error}")),
+        Handled::Yes,
+    );
+    assert!(root.take_actions().is_empty());
+    assert_eq!(
+        root.handle_text_event(TextEvent::Ime(Ime::Commit("needle".to_owned())))
+            .unwrap_or_else(|error| panic!("Tree search IME commit must route: {error}")),
+        Handled::Yes,
+    );
+    assert_eq!(
+        root.take_actions(),
+        vec![UiEvent::LibraryQuery("needle".to_owned())],
+        "the focused retained search target must publish the complete committed query"
+    );
+}
+
+#[kithara::test]
+fn a_mounted_tree_repaints_after_scrolling() {
+    let registry = fixture_registry();
+    let ui = fixture_ui(
+        "scrolled-tree",
+        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Tree(
+                id: "browser",
+                read: Model(id: "library.tree"),
+                query: Model(id: "library.query"),
+            ),
+        ])"#,
+        &registry,
+    );
+    let reads = LateTreeReads {
+        query_loaded: Cell::new(true),
+        rows_loaded: Cell::new(true),
+    };
+    let output = document::render(
+        &ui.root,
+        &ui,
+        &reads,
+        builtin::skin_doc(),
+        MasonryHost::new(&ui, &reads, builtin::skin()),
+    );
+    let mut root = masonry_root(output, 240, 120);
+    let (idle, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("unscrolled Tree must draw: {error}"));
+    let idle_draw_data = idle.encoding().draw_data.clone();
+    let skin = builtin::skin();
+    let row_y = skin.tree.search_height + skin.tree.panel_padding_top + skin.tree.row_height / 2.0;
+    root.handle_pointer_event(pointer_scroll(
+        20.0,
+        row_y.into(),
+        ScrollDelta::LineDelta(0.0, -1.0),
+    ))
+    .unwrap_or_else(|error| panic!("Tree scroll must route: {error}"));
+    let (scrolled, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("scrolled Tree must repaint: {error}"));
+
+    assert_ne!(scrolled.encoding().draw_data, idle_draw_data);
+}
+
+#[kithara::test]
+fn a_mounted_tree_repaints_the_row_under_the_pointer() {
+    let registry = fixture_registry();
+    let ui = fixture_ui(
+        "hovered-tree",
+        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Tree(
+                id: "browser",
+                read: Model(id: "library.tree"),
+                query: Model(id: "library.query"),
+            ),
+        ])"#,
+        &registry,
+    );
+    let reads = LateTreeReads {
+        query_loaded: Cell::new(true),
+        rows_loaded: Cell::new(true),
+    };
+    let output = document::render(
+        &ui.root,
+        &ui,
+        &reads,
+        builtin::skin_doc(),
+        MasonryHost::new(&ui, &reads, builtin::skin()),
+    );
+    let mut root = masonry_root(output, 240, 160);
+    let (idle, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("idle Tree must draw: {error}"));
+    let idle_draw_data = idle.encoding().draw_data.clone();
+    let skin = builtin::skin();
+    let row_y = skin.tree.search_height + skin.tree.panel_padding_top + skin.tree.row_height / 2.0;
+    root.handle_pointer_event(pointer_hover(20.0, row_y.into()))
+        .unwrap_or_else(|error| panic!("Tree hover must route: {error}"));
+    let (hovered, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("hovered Tree must repaint: {error}"));
 
     assert_ne!(hovered.encoding().draw_data, idle_draw_data);
 }
@@ -2192,8 +2491,18 @@ fn fixture_registry() -> FixtureRegistry {
     );
     registry.insert(
         EndpointCategory::Model,
+        "library.query",
+        EndpointDesc::new(ValueKind::Text),
+    );
+    registry.insert(
+        EndpointCategory::Model,
         "library.scope",
         EndpointDesc::new(ValueKind::Scalar),
+    );
+    registry.insert(
+        EndpointCategory::Model,
+        "library.tree",
+        EndpointDesc::new(ValueKind::Tree),
     );
     insert_stream_endpoints(&mut registry);
     registry

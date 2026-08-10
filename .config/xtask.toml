@@ -158,6 +158,20 @@ prefix_args = [
   "test-release",
 ]
 
+[test.lanes.masonry]
+program = "cargo"
+default_features = ["kithara-ui/masonry-host"]
+default_flash = false
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-ui",
+  "--lib",
+  "--cargo-profile",
+  "test-release",
+]
+
 [test.lanes.cold]
 program = "cargo"
 default_features = ["kithara-ui/render"]

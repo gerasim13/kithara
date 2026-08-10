@@ -568,6 +568,11 @@ engine is the only writer of scroll offsets, the pressed row, and divider drag s
 a read-only projection of that state. The retained leaf owns one derived picture snapshot containing
 the resolved rows and columns, and refresh replaces that snapshot whole so sibling column reads
 cannot disagree with the row read.
+For a hosted tree, `Reads` owns both the rows and query. The engine is the only writer of the
+vertical offset and the search field's caret, selection, focus, drag and preedit state; the retained
+painter receives only a read-only projection. The retained leaf owns one derived picture containing
+the resolved skin, rows and query, and refresh replaces that picture whole so rows and query cannot
+come from different model snapshots.
 The dispatch exists because activation, segmented and picker selection, and the Hero Wave have
 emissions or state a scalar alone cannot express, not because controls happened to have different
 names. `Kind` belongs to the retained identity, so reconciling a different component shape at the
