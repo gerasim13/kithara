@@ -239,10 +239,13 @@ impl Demuxer for SymphoniaDemuxer {
         // then discarded, advancing its read position). Re-seek to the last
         // authoritative timestamp so the stranded packet is re-read from its
         // start instead of being skipped (CONTEXT.md "Read-ahead strand").
-        if self.needs_resume {
+        let resume_floor = if self.needs_resume {
             self.needs_resume = false;
             self.reseek_to_resume()?;
-        }
+            Some(self.resume_ts)
+        } else {
+            None
+        };
         loop {
             let packet = match self.format_reader.next_packet() {
                 Ok(Some(p)) => p,
@@ -271,14 +274,17 @@ impl Demuxer for SymphoniaDemuxer {
                     // bytes were buffered by an earlier read-ahead. Flag an
                     // unconditional resume: the next call re-seeks to
                     // `resume_ts` so the interrupted packet is re-read from
-                    // its start. Idempotent when no strand occurred (the read
-                    // position already sits at `resume_ts`).
+                    // its start. Recovery filters an accurate seek's possible
+                    // one-packet backstep before returning PCM.
                     self.needs_resume = true;
                     return Ok(DemuxOutcome::Pending(reason));
                 }
                 Err(e) => return Err(DecodeError::backend(e)),
             };
             if packet.track_id != self.track_id {
+                continue;
+            }
+            if resume_floor.is_some_and(|floor| packet_ends_at_or_before(&packet, floor)) {
                 continue;
             }
             // This packet was emitted cleanly; the next one must start at
@@ -352,6 +358,14 @@ impl Demuxer for SymphoniaDemuxer {
     fn track_info(&self) -> &TrackInfo {
         &self.track_info
     }
+}
+
+fn packet_ends_at_or_before(packet: &Packet, timestamp: i64) -> bool {
+    packet
+        .pts
+        .get()
+        .saturating_add(i64::try_from(packet.dur.get()).unwrap_or(i64::MAX))
+        <= timestamp
 }
 
 impl SymphoniaDemuxer {
@@ -549,5 +563,20 @@ fn mdct_packet_frames(codec: AudioCodec) -> u32 {
         AudioCodec::Mp3 => 1152,
         AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => 1024,
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use symphonia::core::formats::Packet;
+
+    use super::packet_ends_at_or_before;
+
+    #[kithara::test]
+    fn resume_floor_rejects_the_packet_before_the_authoritative_timestamp() {
+        let packet = Packet::new_from_slice(0, 1_000, 1_152, &[]);
+
+        assert!(packet_ends_at_or_before(&packet, 2_152));
+        assert!(!packet_ends_at_or_before(&packet, 2_151));
     }
 }

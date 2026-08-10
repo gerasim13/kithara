@@ -49,12 +49,12 @@ wasm MODE="check" *ARGS:
         # `optimize_for_size` matches crates/kithara-ffi/.cargo/config.toml, so
         # the bundle lane and this one rebuild one identical std rather than
         # two that differ.
-        # Keep the stress tests' own deadlines intact while compiling the WASM
-        # test graph at the same optimization level as the audio crates' local
-        # dev overrides. The browser runs generated test code, so leaving the
-        # test profile at opt-level 0 makes its seek-pressure contract miss its
-        # 10-second deadline before it reaches the final seek-to-zero oracle.
-        CARGO_PROFILE_TEST_OPT_LEVEL=2 cargo "+$toolchain" test --target wasm32-unknown-unknown \
+        # Keep the stress tests' own deadlines intact while running the WASM
+        # graph with the workspace's release-grade test profile. `opt-level=2`
+        # still missed the seek-pressure contract's 10-second deadline on the
+        # self-hosted Chromium runner before reaching the final seek-to-zero
+        # oracle.
+        cargo "+$toolchain" test --profile test-release --target wasm32-unknown-unknown \
           -Z build-std=std,panic_abort,core,alloc \
           -Z build-std-features=optimize_for_size \
           -p kithara-integration-tests --test suite_heavy
