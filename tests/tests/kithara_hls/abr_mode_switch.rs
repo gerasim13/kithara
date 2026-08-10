@@ -7,7 +7,8 @@ use kithara::{
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
     events::{
-        AbrEvent, AudioEvent, DownloaderEvent, Event, EventBus, EventReceiver, HlsEvent, RequestId,
+        AbrEvent, AbrReason, AudioEvent, DownloaderEvent, Event, EventBus, EventReceiver, HlsEvent,
+        RequestId,
     },
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
@@ -99,7 +100,7 @@ struct EventCollector {
     network_fetches: Mutex<HashSet<(usize, usize)>>,
     /// Reader-side reads (segment boundaries crossed in `read_at`).
     reader_segments: Mutex<Vec<(usize, usize)>>,
-    applied_targets: Mutex<Vec<usize>>,
+    applied_transitions: Mutex<Vec<(usize, AbrReason)>>,
     audio_trace: Mutex<Vec<String>>,
     event_tail: Mutex<Vec<String>>,
     switch_count: AtomicUsize,
@@ -112,7 +113,7 @@ impl EventCollector {
             request_map: Mutex::new(HashMap::new()),
             network_fetches: Mutex::new(HashSet::new()),
             reader_segments: Mutex::new(Vec::new()),
-            applied_targets: Mutex::new(Vec::new()),
+            applied_transitions: Mutex::new(Vec::new()),
             audio_trace: Mutex::new(Vec::new()),
             event_tail: Mutex::new(Vec::new()),
             switch_count: AtomicUsize::new(0),
@@ -177,7 +178,7 @@ impl EventCollector {
                 }
                 Event::Abr(AbrEvent::VariantApplied { to, reason, .. }) => {
                     info!(to = to.get(), ?reason, "VariantApplied");
-                    self.applied_targets.lock().push(to.get());
+                    self.applied_transitions.lock().push((to.get(), *reason));
                     self.switch_count.fetch_add(1, Ordering::Release);
                 }
                 Event::Audio(AudioEvent::SeekLifecycle {
@@ -265,8 +266,15 @@ impl EventCollector {
     }
 
     fn applied_targets(&self) -> Vec<usize> {
+        self.applied_transitions()
+            .into_iter()
+            .map(|(target, _)| target)
+            .collect()
+    }
+
+    fn applied_transitions(&self) -> Vec<(usize, AbrReason)> {
         self.drain();
-        self.applied_targets.lock().clone()
+        self.applied_transitions.lock().clone()
     }
 
     fn event_tail(&self) -> Vec<String> {
@@ -1054,7 +1062,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
-    let collector = EventCollector::new(&bus);
+    let collector = Arc::new(EventCollector::new(&bus));
 
     let hls_config = HlsConfig::for_url(url)
         .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
@@ -1088,37 +1096,68 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
     let handle = audio
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
+    let applied_before = collector.applied_transitions().len();
     handle
         .set_mode(AbrMode::manual(2))
         .expect("Manual(2) target is in the variant list");
 
-    let post_total = spawn_blocking(move || read_to_eof(&mut audio))
-        .await
-        .expect("read");
+    let switch_seen = Arc::clone(&collector);
+    let (mut audio, transition) = spawn_blocking(move || {
+        let stats = read_phase_until(&mut audio, 8_192, "runtime manual transition", || {
+            switch_seen.applied_transitions()[applied_before..]
+                .contains(&(2, AbrReason::ManualOverride))
+        });
+        (audio, stats)
+    })
+    .await
+    .expect("transition read");
 
-    let segments = collector.segments();
-    let switches = collector.switch_count();
-    let v2_fetches = segments
-        .iter()
-        .filter(|s| s.variant == 2 && !s.cached)
-        .count();
+    let transitions = collector.applied_transitions();
+    let manual_applied = transitions[applied_before..].contains(&(2, AbrReason::ManualOverride));
+    let reader_after_promotion = collector.reader_segments().len();
+    let (mut audio, post_promotion) = spawn_blocking(move || {
+        let stats = read_phase_until_samples(&mut audio, 8_192, "runtime manual promoted audio");
+        (audio, stats)
+    })
+    .await
+    .expect("post-promotion read");
+    let tail_total = spawn_blocking(move || read_to_eof(&mut audio))
+        .await
+        .expect("tail drain");
+
+    let reader_segments = collector.reader_segments();
+    let promoted_reader_segments = &reader_segments[reader_after_promotion..];
 
     info!(
-        switches,
-        total_segments = segments.len(),
-        v2_fetches,
-        post_total,
+        ?transitions,
+        ?reader_segments,
+        ?transition,
+        ?post_promotion,
+        tail_total,
         "L1: runtime Manual switch result"
     );
 
-    assert!(post_total > 0, "playback must continue after Manual flip");
     assert!(
-        switches >= 1,
-        "Manual(2) must trigger at least one VariantApplied event"
+        !transition.saw_eof,
+        "Manual(2) must promote before outgoing EOF: {transition:?}"
     );
     assert!(
-        v2_fetches > 0,
-        "Manual(2) must produce future-segment fetches from variant 2"
+        manual_applied,
+        "Manual(2) must publish a new ManualOverride transition: {transitions:?}"
+    );
+    assert!(
+        !post_promotion.saw_eof && post_promotion.samples >= 8_192,
+        "promoted variant must produce a fresh audio budget: {post_promotion:?}"
+    );
+    assert!(
+        promoted_reader_segments
+            .iter()
+            .any(|(variant, _)| *variant == 2),
+        "Manual(2) must read variant 2 after promotion: {promoted_reader_segments:?}"
+    );
+    assert!(
+        tail_total > 0,
+        "playback must continue from the promoted variant through EOF"
     );
 }
 
