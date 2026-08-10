@@ -53,6 +53,11 @@ impl WorkerSlot {
             let cancel = hub.cancel.clone();
             let policy = hub.policy.clone();
             spawn_named("kithara-flush-hub", move || {
+                let cancel_wait = Arc::clone(&wait);
+                let _cancel_wake = cancel.on_cancel(move || {
+                    let _guard = cancel_wait.state.lock();
+                    cancel_wait.cv.notify_all();
+                });
                 run(&weak, &wait, &cancel, &policy);
             })
         });
@@ -81,6 +86,10 @@ fn run(weak: &Weak<FlushHub>, wait: &HubWait, cancel: &CancelToken, policy: &Flu
             // crawl `poll_interval` at a time (never the big jump a flash test
             // needs) — and on the real clock it is just a redundant wakeup. An
             // indefinite wait parks until a real flush/shutdown event.
+            #[cfg(test)]
+            if let Some(sender) = wait.idle_park.lock().take() {
+                let _ = sender.send(());
+            }
             guard = wait.cv.wait(guard);
         }
         drop(guard);
