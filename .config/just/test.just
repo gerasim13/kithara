@@ -50,13 +50,13 @@ wasm BROWSER="chrome" SUITE="all":
         exit 2
         ;;
     esac
+    # The browser talks to a fixture server that runs on this machine, and the
+    # runner looks for it beside itself — for every wasm test binary, not just
+    # the integration suite. Nothing in a wasm build produces a host binary, so
+    # without this the run dies with "failed to start test_server ... No such
+    # file or directory".
+    cargo build -p kithara-integration-tests --bin test_server
     if [[ "$suite" == "all" ]]; then
-      # The browser talks to a fixture server that runs on this machine, and the
-      # runner looks for it beside itself. Nothing in a wasm build produces a
-      # host binary, so the lane used to depend on some earlier native job
-      # having left one behind, and failed with "failed to start test_server ...
-      # No such file or directory" whenever it ran first.
-      cargo build -p kithara-integration-tests --bin test_server
       # The integration browser tests live in `suite_heavy`. Building the whole
       # crate for wasm compiles every native suite too, and those reach for
       # threads, the filesystem, and a local test server the browser cannot
