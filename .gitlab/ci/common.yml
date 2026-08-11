@@ -22,7 +22,6 @@
 
 .linux-job:
   extends: .unix-job
-  image: kithara-ci:linux-20260807b
   tags:
     - kithara-linux
 
@@ -119,19 +118,21 @@
     - if: $KITHARA_PIPELINE_KIND == "branch"
     - !reference [.rules-verify, rules]
 
-.rules-integration-and-branch:
+.rules-integration-and-review:
   interruptible: false
   rules:
     - if: $KITHARA_PIPELINE_KIND == "branch"
+    - if: $KITHARA_PIPELINE_KIND == "merge-request"
     - !reference [.rules-integration, rules]
 
-# Long lanes a branch asks for on purpose. Keeping them off `main` leaves the
-# merge queue as short as it is today; the nightly channel is where they guard
-# the default branch.
-.rules-branch-or-nightly:
+# Long lanes a review ref asks for on purpose. Keeping them off `main` leaves
+# the merge queue as short as it is today; the nightly channel is where they
+# guard the default branch.
+.rules-review-or-nightly:
   interruptible: false
   rules:
     - if: $KITHARA_PIPELINE_KIND == "branch"
+    - if: $KITHARA_PIPELINE_KIND == "merge-request"
     - if: $KITHARA_PIPELINE_KIND == "nightly"
 
 .rules-nightly:

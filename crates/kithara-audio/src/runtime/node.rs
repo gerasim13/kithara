@@ -105,13 +105,13 @@ pub(crate) trait Node: Send + 'static {
     /// forbid-blocking produce core, so a `free` on a full pool never lands on
     /// the checked produce path. Default no-op.
     ///
-    /// Run by the scheduler shell before [`tick`](Node::tick), once per pass
-    /// and again between the ticks of a burst, then once after the visit so
-    /// its final tick cannot strand deferred work. The burst is what makes the
-    /// intermediate call load-bearing: it puts a visit's worth of chunks in
-    /// flight at once, and the consumer returns the spent buffers as it drains
-    /// them, so reclaiming only at the start of the next pass overflows the
-    /// trash ring and pushes the free onto the audio thread.
+    /// Run by the scheduler shell before [`tick`](Node::tick) — once per pass,
+    /// again between the ticks of a burst, after every visit, and once after
+    /// cancellation before the node is removed. The intermediate call keeps a
+    /// visit's spent buffers from overflowing the trash ring as the consumer
+    /// returns them. The post-visit call delivers work armed by the final tick
+    /// before reporting or parking; the cancellation call does the same before
+    /// dropping its owner.
     fn recycle(&mut self) {}
 
     /// Scheduling policy, cached when the node is registered.

@@ -26,7 +26,7 @@ use kithara_integration_tests::{
     kithara,
     offline::OfflineSession,
     temp_dir,
-    waits::{wait_for_loader_done, wait_for_position_at_least},
+    waits::{wait_for_loader_done, wait_for_position_at_least, wait_for_position_event},
 };
 use url::Url;
 
@@ -223,6 +223,7 @@ async fn superseded_hung_selection_frees_lane_for_next_select() {
 
     let temp = temp_dir();
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp, Consts::BG_CAP);
+    let mut events = queue.subscribe();
 
     let hung_id = queue.append(TrackSource::Config(Box::new(mk_cfg(
         &hung.url(),
@@ -254,9 +255,14 @@ async fn superseded_hung_selection_frees_lane_for_next_select() {
         .unwrap_or_else(|e| {
             panic!("selection after a superseded hung selection must still load: {e}")
         });
-    wait_for_position_at_least(&queue, Consts::PLAY_POSITION_SECS, Consts::PLAY_DEADLINE)
-        .await
-        .unwrap_or_else(|e| panic!("follow-up selection must play: {e}"));
+    wait_for_position_event(
+        &mut events,
+        &queue,
+        Consts::PLAY_POSITION_SECS,
+        Consts::PLAY_DEADLINE,
+    )
+    .await
+    .unwrap_or_else(|e| panic!("follow-up selection must play: {e}"));
 
     // "select on a Loading track keeps its single attempt" is pinned
     // deterministically by `Tracks` unit tests; a request count here

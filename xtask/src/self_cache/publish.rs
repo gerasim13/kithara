@@ -18,9 +18,6 @@ use super::{
 const RESERVATION_ATTEMPTS: usize = 1_000;
 
 fn publish(root: &Path, source: &Path, manifest: &CacheManifest) -> Result<PathBuf> {
-    if !cfg!(unix) {
-        bail!("xtask self-cache publication requires a Unix host");
-    }
     publish_with_activation(root, source, manifest, activate)
 }
 
@@ -40,6 +37,8 @@ where
     let cache = layout::cache_dir(root)?;
     fs::create_dir_all(&cache)
         .with_context(|| format!("create self-cache directory {}", cache.display()))?;
+    // std has no Windows directory-entry sync equivalent; file syncs still run on every host.
+    #[cfg(unix)]
     sync_directory(
         cache
             .parent()
@@ -83,6 +82,7 @@ where
         format!("{}\n", manifest.source_stamp).as_bytes(),
     )?;
     write_new(&temporary.join(LEASE_FILE), b"")?;
+    #[cfg(unix)]
     sync_directory(temporary)?;
     fs::rename(temporary, generation).with_context(|| {
         format!(
@@ -91,6 +91,7 @@ where
             generation.display()
         )
     })?;
+    #[cfg(unix)]
     sync_directory(
         generation
             .parent()
@@ -153,15 +154,17 @@ fn activate(root: &Path, generation: &Path, suffix: &str) -> Result<()> {
     let locator = layout::locator(root);
     let temporary = locator.with_file_name(format!(".xtask-cache.{suffix}"));
     let body = format!("{}\n", generation.display());
-    let result = (|| {
+    let result = (|| -> Result<()> {
         write_new(&temporary, body.as_bytes())?;
         fs::rename(&temporary, &locator)
             .with_context(|| format!("activate self-cache locator {}", locator.display()))?;
+        #[cfg(unix)]
         sync_directory(
             locator
                 .parent()
                 .context("self-cache locator has no parent")?,
-        )
+        )?;
+        Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
@@ -213,6 +216,7 @@ fn copy_executable(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn sync_directory(path: &Path) -> Result<()> {
     fs::File::open(path)
         .with_context(|| format!("open self-cache directory {}", path.display()))?
@@ -346,9 +350,10 @@ generation_grace_secs = 3600
         let source = root.join("source");
         fs::write(&source, b"binary")?;
 
-        publish(&root, &source, &manifest)?;
+        let published = publish(&root, &source, &manifest)?;
         let generation = layout::active(&root)?;
 
+        assert_eq!(published, generation.binary);
         assert_eq!(fs::read(generation.binary)?, b"binary");
         assert_eq!(generation.manifest.source_stamp, manifest.source_stamp);
         Ok(())

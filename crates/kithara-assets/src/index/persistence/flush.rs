@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+#[cfg(test)]
+use std::sync::mpsc::Sender;
 use std::{
     num::NonZeroUsize,
     sync::{
@@ -104,6 +106,8 @@ pub(super) struct HubState {
 pub(super) struct HubWait {
     pub(super) cv: Condvar,
     pub(super) state: Mutex<HubState>,
+    #[cfg(test)]
+    pub(super) idle_park: Mutex<Option<Sender<()>>>,
 }
 
 /// Shared flush coordinator. Created once per process or per
@@ -141,6 +145,8 @@ impl FlushHub {
             wait: Arc::new(HubWait {
                 cv: Condvar::default(),
                 state: Mutex::default(),
+                #[cfg(test)]
+                idle_park: Mutex::default(),
             }),
             worker: WorkerSlot::default(),
         })
@@ -313,7 +319,10 @@ pub(crate) fn flush_sync(source: &dyn Flushable) -> AssetsResult<()> {
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::{
+        atomic::AtomicUsize,
+        mpsc::{self, TryRecvError},
+    };
 
     use kithara_storage::StorageError;
     use kithara_test_utils::kithara;
@@ -328,6 +337,7 @@ mod tests {
         dirty: AtomicBool,
         durable_flushes: AtomicUsize,
         flushes: AtomicUsize,
+        flushed: Option<mpsc::Sender<()>>,
     }
 
     impl CountingSource {
@@ -337,6 +347,17 @@ mod tests {
                 dirty: AtomicBool::new(false),
                 flushes: AtomicUsize::new(0),
                 durable_flushes: AtomicUsize::new(0),
+                flushed: None,
+            })
+        }
+
+        fn with_completion(name: &'static str, flushed: mpsc::Sender<()>) -> Arc<Self> {
+            Arc::new(Self {
+                name,
+                dirty: AtomicBool::new(false),
+                flushes: AtomicUsize::new(0),
+                durable_flushes: AtomicUsize::new(0),
+                flushed: Some(flushed),
             })
         }
 
@@ -355,6 +376,9 @@ mod tests {
         }
         fn flush(&self) -> AssetsResult<()> {
             self.flushes.fetch_add(1, Ordering::AcqRel);
+            if let Some(flushed) = &self.flushed {
+                flushed.send(()).unwrap();
+            }
             Ok(())
         }
         fn flush_durable(&self) -> AssetsResult<()> {
@@ -481,18 +505,24 @@ mod tests {
     fn cancel_triggers_final_flush() {
         let cancel = CancelToken::never();
         let hub = FlushHub::new(cancel.clone(), fast_policy());
-        let src = CountingSource::new("final");
+        let (parked_tx, parked_rx) = mpsc::channel();
+        *hub.wait.idle_park.lock() = Some(parked_tx);
+        let (flushed_tx, flushed_rx) = mpsc::channel();
+        let src = CountingSource::with_completion("final", flushed_tx);
         hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
 
+        parked_rx.recv().unwrap();
         src.dirty.store(true, Ordering::Release);
         cancel.cancel();
+        flushed_rx.recv().unwrap();
+        drop(hub);
 
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while src.flush_count() == 0 && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(10)); // M5: real pacing, replace with teardown signal
-        }
-
-        assert_eq!(src.flush_count(), 1, "cancel must trigger a final flush");
+        assert_eq!(
+            src.flush_count(),
+            1,
+            "cancel must trigger exactly one final flush"
+        );
+        assert_eq!(flushed_rx.try_recv(), Err(TryRecvError::Empty));
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]

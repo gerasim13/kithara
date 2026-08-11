@@ -103,6 +103,26 @@ The Linux image is built from the pins alone: `RUST_VERSION` and
 `RUST_BASE_DIGEST` select the base image, and every tool version reaches the
 Dockerfile as a build argument. No version is written twice.
 
+A Linux image tag change is not deployed until the Mac mini has built it and
+regenerated its runner configuration. From a checkout of the commit carrying
+the new pin, logged in as `kithara-ci` on that host, run:
+
+```text
+cargo build --locked --release -p xtask
+export KITHARA_CI_HOST_CONFIG=/Volumes/KitharaCI/services/mac-host.toml
+export KITHARA_CI_PINS=$PWD/.config/ci-pins.toml
+target/release/xtask ci host build-linux-image $PWD/docker/ci.Dockerfile
+target/release/xtask ci host configure-runners
+target/release/xtask ci host activate
+```
+
+GitLab leaves the job image to that generated runner configuration. The runner
+never pulls this local-only tag and declares the tag it provisioned to each
+job; `xtask ci run` compares that declaration with the checked-out pin before
+running a Linux, web, or dependency lane. A drifted host therefore starts its
+existing local image only long enough to name the missing tag and print the
+commands above.
+
 ## GitLab runners
 
 Create four project runner authentication tokens in corporate GitLab:

@@ -48,7 +48,7 @@ apple:test-flash-off:
   extends:
     - .macos-job
     - .judged
-    - .rules-integration-and-branch
+    - .rules-integration-and-review
     - .measured
   stage: apple
   timeout: 60 minutes
@@ -113,7 +113,7 @@ apple:ios-test:
   extends:
     - .macos-job
     - .judged
-    - .rules-verify-and-branch
+    - .rules-integration-and-review
     - .measured
   stage: apple
   timeout: 60 minutes
@@ -135,7 +135,7 @@ apple:ios-test:
 apple:e2e:
   extends:
     - .macos-job
-    - .rules-branch-or-nightly
+    - .rules-review-or-nightly
     - .measured
   stage: apple
   timeout: 90 minutes

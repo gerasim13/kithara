@@ -35,7 +35,10 @@ use symphonia::core::{
         },
     },
     errors::{Error as SymphoniaError, SeekErrorKind},
-    formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track, TrackType},
+    formats::{
+        FormatOptions, FormatReader, SeekMode, SeekTo, Track, TrackType,
+        well_known::{FORMAT_ID_MP1, FORMAT_ID_MP2, FORMAT_ID_MP3},
+    },
     packet::Packet,
     units::{Duration as SymphoniaDuration, Time, TimeBase, Timestamp},
 };
@@ -275,8 +278,16 @@ impl Demuxer for SymphoniaDemuxer {
                     // unconditional resume: the next call re-seeks to
                     // `resume_ts` so the interrupted packet is re-read from
                     // its start. Recovery filters an accurate seek's possible
-                    // one-packet backstep before returning PCM.
-                    self.resume_pending = Some(reason);
+                    // one-packet backstep before returning PCM. Native MPA
+                    // readers instead restore their byte checkpoint before
+                    // surfacing the transient error; timestamp recovery would
+                    // discard that exact rollback.
+                    if !matches!(
+                        self.format_reader.format_info().format,
+                        FORMAT_ID_MP1 | FORMAT_ID_MP2 | FORMAT_ID_MP3
+                    ) {
+                        self.resume_pending = Some(reason);
+                    }
                     return Ok(DemuxOutcome::Pending(reason));
                 }
             };

@@ -192,9 +192,7 @@ fn architecture_manifest_compatible(ctx: &Ctx, args: &AssessArgs, path: &Path) -
     let Some(manifest) = read_json(path)? else {
         return Ok(false);
     };
-    if manifest["schema_version"].as_u64().unwrap_or(0) < 4
-        || manifest["status"].as_str() == Some("incomplete")
-    {
+    if manifest["schema_version"].as_u64().unwrap_or(0) < 5 {
         return Ok(false);
     }
     let (expected_package, expected_module) = selected_scope(args);
@@ -632,7 +630,7 @@ fn read_json(path: &Path) -> Result<Option<serde_json::Value>> {
     Ok(Some(value))
 }
 
-fn git_revision(root: &Path, short: bool) -> Option<String> {
+pub(super) fn git_revision(root: &Path, short: bool) -> Option<String> {
     let mut command = Command::new("git");
     command.arg("-C").arg(root).arg("rev-parse");
     if short {
@@ -660,6 +658,68 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::{common::project::ProjectConfig, quality_assessment::AssessmentDepth};
+
+    #[test]
+    fn architecture_manifest_compatibility_uses_schema_not_overlay_state() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("manifest.json");
+        let ctx = Ctx::new(temp.path().to_path_buf(), ProjectConfig::default());
+        let args = AssessArgs {
+            depth: AssessmentDepth::Standard,
+            profile: AssessmentProfile::Product,
+            baseline: None,
+            krate: None,
+            module: None,
+            reuse_existing: false,
+        };
+        let mut manifest = serde_json::json!({
+            "schema_version": 5,
+            "status": "static-only",
+            "package": null,
+            "module": null,
+            "filters": {
+                "exclude_crates": [],
+                "exclude_modules": []
+            },
+            "semantic": {
+                "state": "timed_out",
+                "diagnostics": ["rust-analyzer timed out during workspace loading"]
+            }
+        });
+        fs::write(
+            &path,
+            serde_json::to_vec(&manifest).expect("serialize manifest"),
+        )
+        .expect("write manifest");
+
+        assert!(
+            architecture_manifest_compatible(&ctx, &args, &path).expect("schema 5 compatibility")
+        );
+
+        manifest["status"] = serde_json::json!("incomplete");
+        fs::write(
+            &path,
+            serde_json::to_vec(&manifest).expect("serialize manifest"),
+        )
+        .expect("write manifest");
+
+        assert!(
+            architecture_manifest_compatible(&ctx, &args, &path)
+                .expect("legacy status compatibility")
+        );
+
+        manifest["schema_version"] = serde_json::json!(4);
+        fs::write(
+            &path,
+            serde_json::to_vec(&manifest).expect("serialize manifest"),
+        )
+        .expect("write manifest");
+
+        assert!(
+            !architecture_manifest_compatible(&ctx, &args, &path).expect("schema 4 compatibility")
+        );
+    }
 
     #[test]
     fn health_failures_are_normalized_as_hard_invariants() {

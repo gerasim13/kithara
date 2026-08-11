@@ -4309,7 +4309,7 @@ dependencies = [
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
- "lru 0.18.0",
+ "lru 0.18.2",
  "rangemap",
  "rkyv",
  "serial_test",
@@ -5278,9 +5278,9 @@ checksum = "7f66e8d5d03f609abc3a39e6f08e4164ebf1447a732906d39eb9b99b7919ef39"
 
 [[package]]
 name = "lru"
-version = "0.18.0"
+version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a860605968fce16869fd239cf4237a82f3ac470723415db603b0e8b6c8d4fb9"
+checksum = "5d2f2f9b4ba7e6b24d95e7e899329d35be83bcded72c8540cdd5368932d1d90a"
 dependencies = [
  "hashbrown 0.17.1",
 ]
@@ -8302,7 +8302,7 @@ checksum = "1758d6c853020a7244de03cc3e0185eaea3f58715122422dd3cc7452e6d4c16a"
 dependencies = [
  "lazy_static",
  "symphonia-bundle-flac",
- "symphonia-bundle-mp3",
+ "symphonia-bundle-mp3 0.6.0",
  "symphonia-codec-aac",
  "symphonia-codec-adpcm",
  "symphonia-codec-alac",
@@ -8332,8 +8332,16 @@ dependencies = [
 [[package]]
 name = "symphonia-bundle-mp3"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "350f1f2f2e19ad4dd315db94304d1eb361b29af070681f94e51b8fdaad769546"
+dependencies = [
+ "log",
+ "symphonia-bundle-mp3 0.6.0 (git+https://github.com/pdeljanov/Symphonia.git?rev=980bf5830a90e069fd64641d9c38f067ab772a24)",
+ "symphonia-core 0.6.0",
+]
+
+[[package]]
+name = "symphonia-bundle-mp3"
+version = "0.6.0"
+source = "git+https://github.com/pdeljanov/Symphonia.git?rev=980bf5830a90e069fd64641d9c38f067ab772a24#980bf5830a90e069fd64641d9c38f067ab772a24"
 dependencies = [
  "lazy_static",
  "log",
@@ -8421,8 +8429,7 @@ dependencies = [
 [[package]]
 name = "symphonia-core"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95ec293b5f288383b72a7bffcade6b2860b642cf66f28b3bd5967349a49938b1"
+source = "git+https://github.com/pdeljanov/Symphonia.git?rev=980bf5830a90e069fd64641d9c38f067ab772a24#980bf5830a90e069fd64641d9c38f067ab772a24"
 dependencies = [
  "bitflags 2.13.0",
  "bytemuck",
@@ -10865,7 +10872,7 @@ dependencies = [
  "httparse",
  "ipnet",
  "libc",
- "lru 0.18.0",
+ "lru 0.18.2",
  "percent-encoding",
  "pin-project-lite",
  "socket2",
@@ -11029,6 +11036,7 @@ dependencies = [
  "rustdoc-types",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "sha2 0.11.0",
  "signal-hook",
  "tempfile",

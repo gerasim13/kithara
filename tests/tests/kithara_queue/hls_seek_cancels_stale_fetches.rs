@@ -56,8 +56,7 @@ impl Consts {
     /// healthy latency keeps the panic precise without pinning the test to a
     /// clock the fixture cannot hold.
     const POST_SEEK_OBSERVATION: Duration = Duration::from_secs(30);
-    /// Allow 1 segment of slack between the nominal target and the
-    /// observed value (warmup vs `seek_at` race).
+    /// Allow 1 segment of HLS readahead before the `ReaderSeek` landing.
     const WARMUP_TOLERANCE: usize = 1;
 }
 
@@ -261,8 +260,6 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
     let duration = queue.duration_seconds().expect("duration");
     let target_seconds = (duration - 0.5).max(0.0);
 
-    let nominal_target_segment = Consts::SEGMENT_COUNT.saturating_sub(1);
-
     // Partition probe firings into pre- vs post-seek by the process-wide
     // monotonic `seq` counter, NOT by `Instant` timestamps. Under flash the
     // probe's `at` is stamped on the HLS scheduler's poll thread while
@@ -327,6 +324,36 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
         .max()
         .expect("seek_epoch field present on seek_epoch_reset probe");
 
+    let Some(Event::Hls(HlsEvent::ReaderSeek {
+        to_offset,
+        seek_epoch: reader_seek_epoch,
+        segment_index,
+        ..
+    })) = observation.reader_seek
+    else {
+        panic!(
+            "[{backend:?}] no HlsEvent::ReaderSeek after queue.seek — \
+             decoder seek didn't fire (or didn't reach the stream layer)"
+        );
+    };
+    assert_eq!(
+        reader_seek_epoch, new_epoch,
+        "[{backend:?}] ReaderSeek epoch {reader_seek_epoch} does not match scheduler epoch {new_epoch}"
+    );
+    let target_segment = segment_index.unwrap_or_else(|| {
+        panic!(
+            "[{backend:?}] ReaderSeek to_offset={to_offset} landed outside \
+             any committed segment — segment map not ready / seek too early"
+        )
+    });
+    let target_floor = target_segment.saturating_sub(Consts::WARMUP_TOLERANCE);
+    assert!(
+        target_floor >= Consts::MAX_CONCURRENT,
+        "[{backend:?}] ReaderSeek landed inside the initial prefix window: \
+         segment={target_segment}, floor={target_floor}, max_concurrent={}",
+        Consts::MAX_CONCURRENT,
+    );
+
     let post_seek_prefix_emissions: Vec<_> = probe_events
         .iter()
         .filter(|e| e.seq().is_some_and(|s| s > pre_seek_seq))
@@ -335,15 +362,15 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
         .filter(|e| {
             e.u64("segment_index").is_some_and(|s| {
                 let seg = usize::try_from(s).unwrap_or(usize::MAX);
-                seg + Consts::WARMUP_TOLERANCE < nominal_target_segment
+                seg < target_floor
             })
         })
         .collect();
     assert!(
         post_seek_prefix_emissions.is_empty(),
         "[bug, {backend:?}, probe-level defense-in-depth] {} `fetch_cmd_emitted` \
-         events for prefix segments in the new epoch ({new_epoch}) after seek to \
-         nominal segment {nominal_target_segment} — scheduler walked through prefix \
+         events for prefix segments in the new epoch ({new_epoch}) after ReaderSeek \
+         landed at segment {target_segment} — scheduler walked through prefix \
          despite cursor reset. Sample seg indices: {:?}",
         post_seek_prefix_emissions.len(),
         post_seek_prefix_emissions
@@ -361,39 +388,15 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
         .filter(|e| {
             e.u64("segment_index").is_some_and(|s| {
                 let seg = usize::try_from(s).unwrap_or(0);
-                seg + Consts::WARMUP_TOLERANCE >= nominal_target_segment
+                seg >= target_floor
             })
         })
         .collect();
     assert!(
         !target_emissions.is_empty(),
-        "[{backend:?}, probe] no `fetch_cmd_emitted` for target segment {nominal_target_segment} \
+        "[{backend:?}, probe] no `fetch_cmd_emitted` for ReaderSeek target segment {target_segment} \
          (or near it within WARMUP_TOLERANCE) in the new epoch ({new_epoch}) — \
          scheduler did not emit a FetchCmd for the seek target"
-    );
-
-    let Some(Event::Hls(HlsEvent::ReaderSeek {
-        to_offset,
-        segment_index,
-        ..
-    })) = observation.reader_seek
-    else {
-        panic!(
-            "[{backend:?}] no HlsEvent::ReaderSeek after queue.seek — \
-             decoder seek didn't fire (or didn't reach the stream layer)"
-        );
-    };
-    let target_segment = segment_index.unwrap_or_else(|| {
-        panic!(
-            "[{backend:?}] ReaderSeek to_offset={to_offset} landed outside \
-             any committed segment — segment map not ready / seek too early"
-        )
-    });
-    assert!(
-        target_segment + Consts::WARMUP_TOLERANCE >= nominal_target_segment,
-        "[{backend:?}] ReaderSeek landed at segment {target_segment}, \
-         expected near-end (≥ {} based on nominal target {nominal_target_segment})",
-        nominal_target_segment.saturating_sub(Consts::WARMUP_TOLERANCE),
     );
 
     let Some(Event::Hls(HlsEvent::SegmentReadStart {
@@ -408,7 +411,7 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
         );
     };
     assert!(
-        first_seg + Consts::WARMUP_TOLERANCE >= target_segment,
+        first_seg >= target_floor,
         "[bug, {backend:?}] reader went to prefix segment {first_seg} after \
          seek to segment {target_segment} — the target byte range never \
          got a free slot, so the reader is consuming prefix bytes that \

@@ -5,10 +5,10 @@ use kithara_events::VariantIndex;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{
     ByteMap, MediaInfo, OpenedReader, OpenedVariantReader, ReaderProfile, SourceError, StreamError,
-    StreamResult, VariantReaderPlan, VariantTransition, VariantTransitionId,
+    StreamResult, VariantReaderPlan, VariantTransition,
 };
 
-use super::{HlsCoord, IncomingSlot, unsupported_pending_claim};
+use super::{HlsCoord, IncomingSlot, transition_for_claim, unsupported_pending_claim};
 use crate::{
     reader::HlsReaderEventSink,
     stream::session::{HlsSession, HlsSessionReader},
@@ -55,10 +55,10 @@ impl HlsCoord {
             PendingAbrClaim::Ready(claim) => claim,
             _ => return Err(unsupported_pending_claim()),
         };
-        let expected = VariantTransition::new(
-            VariantTransitionId::new(claim.ticket(), self.seek_observe().epoch()),
+        let expected = transition_for_claim(
+            claim,
+            self.seek_observe().epoch(),
             VariantIndex::new(self.variant_index()),
-            claim.decision().target(),
         );
         if transition != expected {
             let abort_intent = state

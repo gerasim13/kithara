@@ -49,6 +49,19 @@ pub(crate) struct ScenarioSummary {
     pub(crate) trace: TraceSummary,
 }
 
+impl ScenarioSummary {
+    pub(crate) fn is_degraded(&self) -> bool {
+        matches!(
+            self.state,
+            ScenarioState::Empty | ScenarioState::Failed | ScenarioState::TimedOut
+        ) || matches!(self.trace.state, TraceState::Empty | TraceState::Failed)
+    }
+
+    fn is_truncated(&self) -> bool {
+        self.state == ScenarioState::Truncated || self.trace.state == TraceState::Truncated
+    }
+}
+
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct RuntimeSummary {
     pub(crate) scenarios: Vec<ScenarioSummary>,
@@ -59,19 +72,12 @@ impl RuntimeSummary {
         !self.scenarios.is_empty()
     }
 
-    pub(crate) fn is_incomplete(&self) -> bool {
-        self.scenarios.iter().any(|scenario| {
-            matches!(
-                scenario.state,
-                ScenarioState::Empty | ScenarioState::Failed | ScenarioState::TimedOut
-            )
-        })
+    pub(crate) fn is_degraded(&self) -> bool {
+        self.scenarios.iter().any(ScenarioSummary::is_degraded)
     }
 
     pub(crate) fn is_truncated(&self) -> bool {
-        self.scenarios
-            .iter()
-            .any(|scenario| scenario.state == ScenarioState::Truncated)
+        self.scenarios.iter().any(ScenarioSummary::is_truncated)
     }
 }
 

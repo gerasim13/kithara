@@ -46,18 +46,16 @@ dispatch:merge-request:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
 
-# Work in progress reaching the Apple host on its own, before anyone opens a
-# merge request. It answers a question rather than guarding anything, so it
-# takes neither the verdict nor the queue from the pipelines that do: the
-# trigger is allowed to fail, and it holds a resource group of its own, so a
-# push can never make `dispatch:main` or a merge request wait behind an hour of
-# somebody's branch. Measurement stays honest regardless — the suites, the
-# simulator run and every perf lane share `kithara-suite` across pipelines, so
-# one of them still holds the machine at a time.
+# Work in progress reaches the Apple host on its own, before anyone opens a
+# merge request. The child verdict propagates through `strategy: depend`, while
+# a resource group of its own prevents a branch push from making
+# `dispatch:main` or a merge request wait behind an hour of somebody's branch.
+# Measurement stays honest regardless — the suites, the simulator run and
+# every perf lane share `kithara-suite` across pipelines, so one of them still
+# holds the machine at a time.
 dispatch:branch:
   stage: dispatch
   resource_group: kithara-mac-mini-branch
-  allow_failure: true
   interruptible: true
   trigger:
     include:

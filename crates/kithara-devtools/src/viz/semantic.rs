@@ -54,10 +54,6 @@ pub(crate) struct SemanticSummary {
 }
 
 impl SemanticSummary {
-    pub(crate) const fn is_incomplete(&self) -> bool {
-        matches!(self.state, SemanticState::TimedOut | SemanticState::Failed)
-    }
-
     pub(crate) fn static_only(diagnostic: impl Into<String>) -> Self {
         Self {
             state: SemanticState::Unavailable,

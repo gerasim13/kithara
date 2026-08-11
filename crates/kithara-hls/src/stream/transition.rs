@@ -3,15 +3,16 @@ mod prepare;
 use std::io::{Error as IoError, ErrorKind};
 
 use arc_swap::ArcSwap;
-use kithara_abr::{PendingAbrClaim, PendingAbrDecision};
-use kithara_events::VariantIndex;
+use kithara_abr::{AbrDecision, PendingAbrClaim, PendingAbrDecision};
+use kithara_events::{AbrReason, SeekEpoch, VariantIndex};
 use kithara_platform::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use kithara_stream::{
-    OpenedVariantReader, ReaderProfile, SourceError, StreamError, StreamResult, VariantPromotion,
-    VariantReaderPlan, VariantReaderTake, VariantTransition, VariantTransitionId,
+    OpenedVariantReader, OutgoingDisposition, ReaderProfile, SourceError, StreamError,
+    StreamResult, VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
+    VariantTransitionId,
 };
 
 use super::{
@@ -75,6 +76,14 @@ impl SessionSlots {
                 Arc::clone,
             );
         }
+    }
+
+    pub(super) fn incoming_session(&self) -> Option<Arc<HlsSession>> {
+        self.transition
+            .lock()
+            .incoming
+            .as_ref()
+            .map(|slot| Arc::clone(&slot.session))
     }
 
     fn publish_exact_one(&self, session: Arc<HlsSession>) {
@@ -231,10 +240,10 @@ impl HlsCoord {
             PendingAbrClaim::Ready(claim) => claim,
             _ => return Err(unsupported_pending_claim()),
         };
-        let transition = VariantTransition::new(
-            VariantTransitionId::new(claim.ticket(), self.seek_observe().epoch()),
+        let transition = transition_for_claim(
+            claim,
+            self.seek_observe().epoch(),
             VariantIndex::new(self.variant_index()),
-            claim.decision().target(),
         );
 
         if let Some(slot) = state.incoming.as_ref()
@@ -439,6 +448,26 @@ impl HlsCoord {
         }
         result
     }
+}
+
+fn transition_for_claim(
+    claim: PendingAbrDecision,
+    seek_epoch: SeekEpoch,
+    active_variant: VariantIndex,
+) -> VariantTransition {
+    let outgoing_disposition = match claim.decision() {
+        AbrDecision::UpSwitch {
+            reason: AbrReason::EscapeStalled,
+            ..
+        } => OutgoingDisposition::Abandoned,
+        _ => OutgoingDisposition::Retained,
+    };
+    VariantTransition::new(
+        VariantTransitionId::new(claim.ticket(), seek_epoch),
+        active_variant,
+        claim.decision().target(),
+    )
+    .with_outgoing_disposition(outgoing_disposition)
 }
 
 fn unsupported_pending_claim() -> StreamError {

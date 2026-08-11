@@ -57,22 +57,19 @@ pub(crate) fn msrv(process: &Process, config: &CiConfig) -> Result<()> {
     process.run_command(&mut check, "MSRV workspace check")
 }
 
-pub(crate) fn test(process: &Process, config: &CiConfig, kind: PipelineKind) -> Result<()> {
-    preflight(process, config)?;
+fn test_command(kind: PipelineKind) -> Result<(&'static [&'static str], &'static str)> {
     match kind {
-        PipelineKind::MergeRequest | PipelineKind::Quarantine => process.run(
-            "just",
+        PipelineKind::Quarantine => Ok((
             &["test", "run", "--profile", "ci"],
-            "Apple merge-request tests",
-        ),
-        // A branch push asks the same question the default branch asks, before
-        // anyone opens a merge request: what a reviewer would have to fix
-        // anyway is cheaper to learn now.
-        PipelineKind::Branch
+            "Apple quarantine tests",
+        )),
+        // A review ref asks the same question the default branch asks: what a
+        // reviewer would have to fix anyway is cheaper to learn before merge.
+        PipelineKind::MergeRequest
+        | PipelineKind::Branch
         | PipelineKind::Main
         | PipelineKind::Nightly
-        | PipelineKind::Release => process.run(
-            "just",
+        | PipelineKind::Release => Ok((
             &[
                 "test",
                 "run",
@@ -82,9 +79,15 @@ pub(crate) fn test(process: &Process, config: &CiConfig, kind: PipelineKind) -> 
                 "ci",
             ],
             "Apple flash and no-block gate",
-        ),
+        )),
         PipelineKind::Weekly => bail!("weekly pipelines do not run the Apple suite"),
     }
+}
+
+pub(crate) fn test(process: &Process, config: &CiConfig, kind: PipelineKind) -> Result<()> {
+    preflight(process, config)?;
+    let (args, label) = test_command(kind)?;
+    process.run("just", args, label)
 }
 
 /// The off-flash suite owns its own target directory: the two gates differ by
@@ -278,4 +281,49 @@ fn build_xcframework(process: &Process) -> Result<()> {
         &["platform", "apple", "xcframework", "--profile", "debug"],
         "Apple XCFramework",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn review_and_trusted_pipelines_run_the_explicit_flash_and_no_block_gate() {
+        let expected = [
+            "test",
+            "run",
+            "--flash=on",
+            "--no-block=on",
+            "--profile",
+            "ci",
+        ];
+
+        for kind in [
+            PipelineKind::MergeRequest,
+            PipelineKind::Branch,
+            PipelineKind::Main,
+            PipelineKind::Nightly,
+            PipelineKind::Release,
+        ] {
+            let (args, _) = test_command(kind).unwrap();
+            assert_eq!(args, expected);
+        }
+    }
+
+    #[test]
+    fn quarantine_keeps_its_plain_profile_probe() {
+        let (args, _) = test_command(PipelineKind::Quarantine).unwrap();
+
+        assert_eq!(args, ["test", "run", "--profile", "ci"]);
+    }
+
+    #[test]
+    fn weekly_pipeline_does_not_claim_to_run_the_apple_suite() {
+        let error = test_command(PipelineKind::Weekly).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "weekly pipelines do not run the Apple suite"
+        );
+    }
 }

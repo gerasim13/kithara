@@ -49,6 +49,7 @@ const TRACK_DURATION_S: f64 = SEGMENT_COUNT_U32 as f64 * SEGMENT_DURATION_S;
 const LOAD_BUDGET: Duration = Duration::from_secs(30);
 const SEEK_OBSERVE_BUDGET: Duration = Duration::from_secs(15);
 
+#[kithara::flash(true)]
 async fn wait_for_status(
     rx: &mut EventReceiver,
     queue: &Queue,
@@ -97,6 +98,7 @@ enum ScrubOutcome {
 /// Drain `Event::Player` until either the scrub target is reached
 /// (root recovery), `ItemDidFail` fires for the scrubbed src (the
 /// bug), or `budget` elapses.
+#[kithara::flash(true)]
 async fn observe_scrub_outcome(
     queue: &Queue,
     rx: &mut EventReceiver,
@@ -148,6 +150,7 @@ async fn observe_scrub_outcome(
 /// "play between scrubs so recovery actually runs and real PCM is
 /// rendered". `budget` is a safety deadline that bounds a hang, not a
 /// pacing wait — the function returns the moment progress is observed.
+#[kithara::flash(true)]
 async fn wait_for_playback_progress(
     rx: &mut EventReceiver,
     baseline_secs: f64,
@@ -176,6 +179,16 @@ struct Harness {
     rx: EventReceiver,
     master_url: String,
     tick: tokio::task::JoinHandle<()>,
+}
+
+#[kithara::flash(true)]
+async fn drive_queue_ticks(queue: Arc<Queue>) {
+    loop {
+        sleep(Duration::from_millis(50)).await;
+        if queue.tick().is_err() {
+            break;
+        }
+    }
 }
 
 impl Harness {
@@ -248,15 +261,7 @@ impl Harness {
         ));
         let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
-        let queue_for_tick = Arc::clone(&queue);
-        let tick = tokio::task::spawn(async move {
-            loop {
-                sleep(Duration::from_millis(50)).await;
-                if queue_for_tick.tick().is_err() {
-                    break;
-                }
-            }
-        });
+        let tick = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
 
         let cfg =
             ResourceConfig::for_src(ResourceConfig::parse_src(master.as_str()).expect("valid URL"))
@@ -306,6 +311,7 @@ impl Harness {
     /// a stale `decoder.seek` partially read an atom header, the
     /// new epoch arrived mid-atom, and `next_chunk` then saw the
     /// torn cursor as "isomp4: no atom pending read".
+    #[kithara::flash(true)]
     async fn drag(&mut self, final_target: f64, drag_duration: Duration, steps: usize, tag: &str) {
         let start_pos = self.queue.position_seconds().unwrap_or(0.0);
         let steps_u32 = u32::try_from(steps).unwrap_or(u32::MAX);
@@ -409,7 +415,12 @@ async fn seek_into_cold_range_does_not_fail(
     // and playback is progressing again. `PLAY_BETWEEN_SCRUBS` is the
     // safety deadline bounding a stall, not a pacing wait.
     let baseline_secs = harness.queue.position_seconds().unwrap_or(0.0);
-    wait_for_playback_progress(&mut harness.rx, baseline_secs, PLAY_BETWEEN_SCRUBS).await;
+    let progress =
+        wait_for_playback_progress(&mut harness.rx, baseline_secs, PLAY_BETWEEN_SCRUBS).await;
+    assert!(
+        progress.is_some(),
+        "[first] playback did not progress past {baseline_secs:.3}s within {PLAY_BETWEEN_SCRUBS:?}"
+    );
 
     let second_target = TRACK_DURATION_S * second_ratio;
     let second_outcome = harness.scrub(second_target, "second").await;
