@@ -5,16 +5,20 @@ use kithara::{
     events::{AbrEvent, AbrReason, Event, EventBus, EventReceiver},
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
+    net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         thread::paced_backoff,
         time::{self, Duration, Instant},
         tokio::task::spawn_blocking,
     },
-    stream::{AudioCodec, Stream},
+    stream::{
+        AudioCodec, Stream,
+        dl::{Downloader, DownloaderConfig},
+    },
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, auto,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, abr_fast, auto,
     fixture_protocol::{DelayRule, PcmPattern},
     flash_pace::virtual_pace,
     offline::{OfflinePlayer, resource_from_reader},
@@ -26,18 +30,16 @@ use crate::continuity::{
     CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe, render_offline_window,
 };
 
-fn forced_downswitch_abr_options() -> AbrMode {
+fn packaged_switch_abr_mode() -> AbrMode {
     auto(0)
 }
-
-const PRE_SWITCH_PACE_SAMPLES: u64 = 17_640;
 
 fn packaged_identical_content_abr_builder(codec: AudioCodec) -> HlsFixtureBuilder {
     let builder = HlsFixtureBuilder::new()
         .variant_count(2)
         .segments_per_variant(6)
         .segment_duration_secs(2.0)
-        .variant_bandwidths(vec![5_000_000, 1_000_000])
+        .variant_bandwidths(vec![10_000, 50_000])
         .delay_rules(vec![DelayRule {
             variant: Some(0),
             segment_gte: Some(2),
@@ -74,10 +76,19 @@ async fn open_packaged_hls_audio(
     abr: AbrMode,
     bus: Option<EventBus>,
 ) -> Audio<Stream<Hls>> {
+    let cancel = CancelToken::never();
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), cancel.child()))
+            .abr_settings(abr_fast())
+            .cancel(cancel.child())
+            .build(),
+    );
     let hls_config = HlsConfig::for_url(url.clone())
         .store(store)
         .initial_abr_mode(abr)
         .download_batch_size(1)
+        .cancel(cancel)
+        .downloader(downloader)
         .maybe_events(bus.clone())
         .build();
 
@@ -203,14 +214,16 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
 
     let bus = EventBus::new(64);
     let mut hls_rx = bus.subscribe();
-    let mut wake_rx = bus.subscribe();
     let mut progress_audio = open_packaged_hls_audio(
         &url,
         store.clone(),
-        forced_downswitch_abr_options(),
+        packaged_switch_abr_mode(),
         Some(bus.clone()),
     )
     .await;
+    let abr = progress_audio
+        .abr_handle()
+        .expect("packaged HLS audio must expose AbrHandle");
     let mut progress_rx = progress_audio.events();
     let mut progress_probe = PlaybackProgressProbe::default();
     let mut switch_count = 0usize;
@@ -218,6 +231,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     let mut total_samples = 0u64;
     let mut post_switch_samples = 0u64;
     let mut consumed = Duration::ZERO;
+    let mut reevaluated = false;
     let mut buf = vec![0.0f32; 4096];
     total_samples += read_audio_some(&mut progress_audio, "packaged_abr_warmup").await as u64;
     progress_probe.drain(&mut progress_rx);
@@ -227,13 +241,17 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
         let _ = progress_audio.preload();
         let read: usize = match progress_audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, position }) => {
-                if !switch_seen && total_samples >= PRE_SWITCH_PACE_SAMPLES {
+                if !switch_seen {
                     let pace = position.saturating_sub(consumed);
                     spawn_blocking(move || paced_backoff(pace))
                         .await
                         .expect("packaged ABR pace");
                 }
                 consumed = position;
+                if !reevaluated && consumed >= Duration::from_secs(2) {
+                    abr.reevaluate();
+                    reevaluated = true;
+                }
                 count.get()
             }
             Ok(ReadOutcome::Pending { .. }) => 0,
@@ -256,12 +274,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
         }
 
         if read == 0 {
-            // Read is Pending: wait until the worker emits the next event
-            // (decode progress / segment read / variant applied) rather than
-            // sleeping on a timer. The dedicated wake receiver does not consume
-            // from hls_rx / progress_rx, so no switch or progress event is lost.
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            let _ = time::timeout(remaining, wake_rx.recv()).await;
+            time::sleep(Duration::from_millis(10)).await;
             progress_probe.observe_idle();
             continue;
         }
@@ -353,8 +366,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
         );
     }
 
-    let decode_audio =
-        open_packaged_hls_audio(&url, store, forced_downswitch_abr_options(), None).await;
+    let decode_audio = open_packaged_hls_audio(&url, store, packaged_switch_abr_mode(), None).await;
     let mut resource = resource_from_reader(decode_audio);
     let _ = time::timeout(Duration::from_secs(5), resource.preload())
         .await
