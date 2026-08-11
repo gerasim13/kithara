@@ -16,6 +16,11 @@ workflow:
     - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $KITHARA_RELEASE_VERSION =~ /^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/
     - if: $CI_PIPELINE_SOURCE == "api" && $KITHARA_QUARANTINE_SHA
+    # Asking for a platform is only possible on a run that carries variables,
+    # and a push carries none. This is that door: "Run pipeline" with
+    # `KITHARA_PLATFORMS` set. It is deliberately narrow — without the variable
+    # the run would only repeat what a push already does.
+    - if: $KITHARA_PLATFORMS && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api")
     - when: never
 
 .serialized:
@@ -63,6 +68,25 @@ dispatch:branch:
     KITHARA_PLATFORMS: $KITHARA_PLATFORMS
   rules:
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+
+# The same subset a branch push runs, started by hand to name platforms a push
+# cannot. It shares the branch queue rather than the main one, so asking for
+# Linux or Windows never puts the default branch behind it.
+dispatch:platforms:
+  stage: dispatch
+  resource_group: kithara-mac-mini-branch
+  allow_failure: true
+  interruptible: true
+  trigger:
+    include:
+      - local: .gitlab/ci/pipeline.yml
+    strategy: depend
+  variables:
+    KITHARA_CACHE_TRUST: review
+    KITHARA_PIPELINE_KIND: branch
+    KITHARA_PLATFORMS: $KITHARA_PLATFORMS
+  rules:
+    - if: $KITHARA_PLATFORMS && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api")
 
 dispatch:main:
   extends: .serialized
