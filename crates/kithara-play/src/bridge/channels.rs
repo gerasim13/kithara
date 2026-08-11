@@ -1,3 +1,5 @@
+use core::sync::atomic::AtomicU64;
+
 use kithara_audio::SeekBegin;
 use kithara_platform::{sync::Arc, time::Duration};
 use ringbuf::{HeapCons, HeapProd, HeapRb, traits::Split};
@@ -16,6 +18,20 @@ pub struct NodeInputs {
     pub(crate) cmd_rx: HeapCons<PlayerCmd>,
     pub(crate) notif_tx: HeapProd<PlayerNotification>,
     pub(crate) trash_tx: HeapProd<PlayerTrack>,
+}
+
+/// Producer for interleaved stereo mix samples and their drop count.
+#[non_exhaustive]
+pub struct MixTapWriter {
+    pub(crate) pcm: HeapProd<f32>,
+    pub(crate) drops: Arc<AtomicU64>,
+}
+
+impl MixTapWriter {
+    #[must_use]
+    pub fn new(pcm: HeapProd<f32>, drops: Arc<AtomicU64>) -> Self {
+        Self { pcm, drops }
+    }
 }
 
 /// Control-owned channel halves and shared controls for one allocated slot.

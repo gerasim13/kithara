@@ -1,10 +1,16 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use kithara::{
     platform::{
         sync::{Arc, Mutex, mpsc},
         thread::{JoinHandle, spawn_named},
         time::{Duration, Instant},
     },
-    play::{Cmd, PlayError, Reply, SessionDispatcher, SessionState, run_cmd},
+    play::{Cmd, MixTapWriter, PlayError, Reply, SessionDispatcher, SessionState, run_cmd},
+};
+use ringbuf::{
+    HeapCons, HeapRb,
+    traits::{Consumer, Observer, Split},
 };
 use tracing::warn;
 
@@ -76,6 +82,15 @@ impl OfflineSession {
         }
     }
 
+    pub fn enable_mix_tap(&self, capacity: usize) -> Result<MixTapProbe, PlayError> {
+        let (pcm_tx, pcm_rx) = HeapRb::<f32>::new(capacity).split();
+        let drops = Arc::new(AtomicU64::new(0));
+        self.exec_ok(Cmd::EnableMixTap {
+            writer: MixTapWriter::new(pcm_tx, Arc::clone(&drops)),
+        })?;
+        Ok(MixTapProbe { drops, pcm: pcm_rx })
+    }
+
     /// Synchronously drive one render iteration. Returns
     /// stereo-interleaved samples, or an empty `Vec` if the firewheel
     /// context has not been initialised yet (no player started).
@@ -98,6 +113,27 @@ impl OfflineSession {
 impl Default for OfflineSession {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+pub struct MixTapProbe {
+    drops: Arc<AtomicU64>,
+    pcm: HeapCons<f32>,
+}
+
+impl MixTapProbe {
+    pub fn drain(&mut self) -> Vec<f32> {
+        self.pcm.pop_iter().collect()
+    }
+
+    #[must_use]
+    pub fn drops(&self) -> u64 {
+        self.drops.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn writer_alive(&self) -> bool {
+        self.pcm.write_is_held()
     }
 }
 

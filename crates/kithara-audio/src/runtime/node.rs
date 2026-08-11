@@ -108,9 +108,10 @@ pub(crate) trait Node: Send + 'static {
     /// Run by the scheduler shell before [`tick`](Node::tick) — once per pass,
     /// again between the ticks of a burst, after every visit, and once after
     /// cancellation before the node is removed. The intermediate call keeps a
-    /// visit's spent buffers from overflowing the trash ring. The post-visit
-    /// call delivers work armed by the final tick before reporting or parking;
-    /// the cancellation call does the same before dropping its owner.
+    /// visit's spent buffers from overflowing the trash ring as the consumer
+    /// returns them. The post-visit call delivers work armed by the final tick
+    /// before reporting or parking; the cancellation call does the same before
+    /// dropping its owner.
     fn recycle(&mut self) {}
 
     /// Scheduling policy, cached when the node is registered.

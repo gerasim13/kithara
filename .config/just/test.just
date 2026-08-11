@@ -13,6 +13,83 @@ all:
     just test
     just test run --lane=doc
 
+# These are workspace tests like any other, but `wasm32` has no host binary for
+# nextest to execute: the harness is `wasm-bindgen-test` driving a real browser,
+# and the target rebuilds std, which only the pinned nightly honours. That is
+# why they do not go through `just test run`. `just platform wasm` keeps the
+# artifacts (check, build, size-check); the tests belong here.
+#
+# SUITE `all` adds the integration browser suite; `webcodecs` runs only
+# kithara-decode's own target, which is what the browser CI job asks for.
+
+# Run the Rust tests that need a browser (SUITE: all | webcodecs).
+[positional-arguments]
+wasm BROWSER="chrome" SUITE="all":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    browser="{{ BROWSER }}"
+    suite="{{ SUITE }}"
+    toolchain="${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
+    case "$suite" in
+      all|webcodecs) ;;
+      *)
+        echo "unknown wasm test suite: $suite (use all|webcodecs)"
+        exit 2
+        ;;
+    esac
+    if [[ "$suite" == "webcodecs" && "$browser" != "chrome" ]]; then
+      echo "the WebCodecs target runs on chrome only"
+      exit 2
+    fi
+    case "$browser" in
+      chrome)  export CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" ;;
+      firefox) export GECKODRIVER="${GECKODRIVER:-geckodriver}" ;;
+      safari)  export SAFARIDRIVER="${SAFARIDRIVER:-safaridriver}" ;;
+      *)
+        echo "unknown wasm test browser: $browser (use chrome|firefox|safari)"
+        exit 2
+        ;;
+    esac
+    # The browser talks to a fixture server that runs on this machine, and the
+    # runner looks for it beside itself — for every wasm test binary, not just
+    # the integration suite. Nothing in a wasm build produces a host binary, so
+    # without this the run dies with "failed to start test_server ... No such
+    # file or directory".
+    cargo build -p kithara-integration-tests --bin test_server
+    if [[ "$suite" == "all" ]]; then
+      # The integration browser tests live in `suite_heavy`. Building the whole
+      # crate for wasm compiles every native suite too, and those reach for
+      # threads, the filesystem, and a local test server the browser cannot
+      # offer. `optimize_for_size` matches crates/kithara-ffi/.cargo/config.toml
+      # so both lanes rebuild one identical std. The release-grade test profile
+      # is what lets the seek-pressure contract reach its final oracle inside
+      # its own ten-second deadline, which stays untouched.
+      WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+        cargo "+$toolchain" test --profile test-release \
+        --target wasm32-unknown-unknown \
+        -Z build-std=std,panic_abort,core,alloc \
+        -Z build-std-features=optimize_for_size \
+        -p kithara-integration-tests --test suite_heavy
+    fi
+    # `webcodecs_browser` belongs to kithara-decode, not to any integration
+    # suite, so it is its own cargo invocation. WebCodecs is a Chromium API;
+    # the other engines have nothing to answer here.
+    #
+    # It rebuilds std for the same reason the suite above does: the repository
+    # compiles wasm32 with `+atomics`, and linking that against a stock std
+    # fails with "--shared-memory is disallowed by std ... not compiled with
+    # 'atomics' or 'bulk-memory'". Both invocations must carry the flags.
+    if [[ "$browser" == "chrome" ]]; then
+      WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+        cargo "+$toolchain" test --profile test-release \
+        --target wasm32-unknown-unknown \
+        -Z build-std=std,panic_abort,core,alloc \
+        -Z build-std-features=optimize_for_size \
+        -p kithara-decode --no-default-features \
+        --features symphonia,webcodecs,client-reqwest,tls-rustls \
+        --test webcodecs_browser
+    fi
+
 # Locate or drop the on-disk fixture cache. Each build fingerprint gets its own
 # sub-directory, so an obsolete one wastes disk rather than serving stale bytes;
 # dropping the roots costs the next run one re-encode of everything it touches.
@@ -167,8 +244,8 @@ rtsan-async FILTER="no_block":
         --features no-block --target "$target" -- --nocapture {{ FILTER }}
 
 # `rt_metrics` drives `process()` directly: decode error, underrun, eviction,
-# and the on-core seek re-base.
-rtsan FILTER="offline_harness kithara_play::rt_metrics": (_rtsan "suite_light" FILTER)
+# and the on-core seek re-base. `mix_tap` drives the post-limiter PCM sink.
+rtsan FILTER="offline_harness kithara_play::rt_metrics kithara_play::mix_tap": (_rtsan "suite_light" FILTER)
 
 rtsan-file FILTER="phase_continuity::file": (_rtsan "suite_stress" FILTER)
 

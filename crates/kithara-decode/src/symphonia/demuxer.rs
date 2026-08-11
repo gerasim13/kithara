@@ -77,13 +77,13 @@ pub(crate) struct SymphoniaDemuxer {
     /// [`std::time::Duration`].
     time_base: Option<TimeBase>,
     track_info: TrackInfo,
-    /// Set when a `next_frame` read was interrupted at a not-ready segment
-    /// boundary. Symphonia's `MediaSourceStream` may have consumed
-    /// ring-buffered bytes into a packet that was then discarded (its read
-    /// position advanced), stranding those bytes. The next `next_frame`
-    /// re-seeks the reader back to `resume_ts` before reading so the
-    /// interrupted packet is re-read from its start instead of skipped.
-    needs_resume: bool,
+    /// Pending reason retained while recovering an interrupted packet read.
+    /// Symphonia's `MediaSourceStream` may have consumed ring-buffered bytes
+    /// into a packet that was then discarded (its read position advanced),
+    /// stranding those bytes. The next `next_frame` re-seeks the reader back
+    /// to `resume_ts`; if that seek also pends, the reason stays armed until
+    /// recovery succeeds.
+    resume_pending: Option<PendingReason>,
     /// Native (timebase-unit) timestamp the *next* packet must start at.
     /// Authoritative across a `Pending`: set to the seek's `actual_ts` on
     /// seek and advanced to `pts + dur` after each successfully-returned
@@ -159,7 +159,7 @@ impl SymphoniaDemuxer {
             byte_map,
             current_packet: None,
             resume_ts: 0,
-            needs_resume: false,
+            resume_pending: None,
         })
     }
 
@@ -242,10 +242,22 @@ impl Demuxer for SymphoniaDemuxer {
         // then discarded, advancing its read position). Re-seek to the last
         // authoritative timestamp so the stranded packet is re-read from its
         // start instead of being skipped (CONTEXT.md "Read-ahead strand").
-        if self.needs_resume {
-            self.needs_resume = false;
-            self.reseek_to_resume()?;
-        }
+        let resume_floor = if let Some(reason) = self.resume_pending {
+            match self.reseek_to_resume() {
+                Ok(()) => {
+                    self.resume_pending = None;
+                    Some(self.resume_ts)
+                }
+                Err(error) => {
+                    if pending_reason(&error).is_some() {
+                        return Ok(DemuxOutcome::Pending(reason));
+                    }
+                    return Err(classify_seek_err(&error));
+                }
+            }
+        } else {
+            None
+        };
         loop {
             let packet = match self.format_reader.next_packet() {
                 Ok(Some(p)) => p,
@@ -254,33 +266,35 @@ impl Demuxer for SymphoniaDemuxer {
                 Err(SymphoniaError::IoError(e)) if e.kind() == ErrorKind::UnexpectedEof => {
                     return Ok(DemuxOutcome::Eof);
                 }
-                Err(SymphoniaError::IoError(e))
-                    if e.kind() == ErrorKind::Interrupted || e.kind() == ErrorKind::WouldBlock =>
-                {
-                    let reason = e
-                        .get_ref()
-                        .and_then(|src| src.downcast_ref::<StreamPending>())
-                        .map(StreamPending::reason)
-                        .or_else(|| {
-                            e.get_ref()
-                                .and_then(|src| src.downcast_ref::<PendingReason>())
-                                .copied()
-                        })
-                        .unwrap_or(PendingReason::NotReady(NotReadyCause::SourcePending));
-                    // Most readers can strand bytes consumed from
-                    // `MediaSourceStream`, so they need timestamp recovery on
-                    // the next call. Native MPA readers restore their own byte
-                    // checkpoint before returning the transient error; a
-                    // timestamp seek would discard that exact rollback.
-                    self.needs_resume = !matches!(
+                Err(error) => {
+                    let Some(reason) = pending_reason(&error) else {
+                        return Err(DecodeError::backend(error));
+                    };
+                    // A `MediaSourceStream` read interrupted at a not-ready
+                    // boundary can strand bytes it already consumed from its
+                    // ring (read position advanced, no packet emitted). The
+                    // adapter's byte cursor doesn't reveal this — the consumed
+                    // bytes were buffered by an earlier read-ahead. Flag an
+                    // unconditional resume: the next call re-seeks to
+                    // `resume_ts` so the interrupted packet is re-read from
+                    // its start. Recovery filters an accurate seek's possible
+                    // one-packet backstep before returning PCM. Native MPA
+                    // readers instead restore their byte checkpoint before
+                    // surfacing the transient error; timestamp recovery would
+                    // discard that exact rollback.
+                    if !matches!(
                         self.format_reader.format_info().format,
                         FORMAT_ID_MP1 | FORMAT_ID_MP2 | FORMAT_ID_MP3
-                    );
+                    ) {
+                        self.resume_pending = Some(reason);
+                    }
                     return Ok(DemuxOutcome::Pending(reason));
                 }
-                Err(e) => return Err(DecodeError::backend(e)),
             };
             if packet.track_id != self.track_id {
+                continue;
+            }
+            if resume_floor.is_some_and(|floor| packet_ends_at_or_before(&packet, floor)) {
                 continue;
             }
             // This packet was emitted cleanly; the next one must start at
@@ -290,7 +304,7 @@ impl Demuxer for SymphoniaDemuxer {
                 .pts
                 .get()
                 .saturating_add(i64::try_from(packet.dur.get()).unwrap_or(i64::MAX));
-            self.needs_resume = false;
+            self.resume_pending = None;
             let pts = self.ts_to_duration(packet.pts);
             let duration = self.dur_to_duration(packet.dur);
             self.current_packet = Some(packet);
@@ -329,7 +343,7 @@ impl Demuxer for SymphoniaDemuxer {
         // A fresh seek defines the authoritative resume point and clears any
         // pending strand recovery left over from the prior read position.
         self.resume_ts = seeked.actual_ts.get();
-        self.needs_resume = false;
+        self.resume_pending = None;
 
         if let Some(duration) = self.track_info.duration
             && landed_at >= duration
@@ -356,6 +370,14 @@ impl Demuxer for SymphoniaDemuxer {
     }
 }
 
+fn packet_ends_at_or_before(packet: &Packet, timestamp: i64) -> bool {
+    packet
+        .pts
+        .get()
+        .saturating_add(i64::try_from(packet.dur.get()).unwrap_or(i64::MAX))
+        <= timestamp
+}
+
 impl SymphoniaDemuxer {
     /// Re-seek the reader back to the last authoritative timestamp
     /// (`resume_ts`) after a read-ahead strand. Unlike [`Demuxer::seek`]
@@ -367,15 +389,14 @@ impl SymphoniaDemuxer {
     /// that strand (WAV/PCM) the landing is the same packet boundary, so no
     /// audio is re-emitted twice (the decoder's leading-trim guard already
     /// gates on the seek target).
-    fn reseek_to_resume(&mut self) -> DecodeResult<()> {
+    fn reseek_to_resume(&mut self) -> Result<(), SymphoniaError> {
         let seek_to = SeekTo::Timestamp {
             ts: Timestamp::new(self.resume_ts),
             track_id: self.track_id,
         };
         self.format_reader
             .seek(SeekMode::Accurate, seek_to)
-            .map_err(|e| classify_seek_err(&e))?;
-        Ok(())
+            .map(|_| ())
     }
 
     /// Override the `track.gapless` slot built by `from_reader` with a
@@ -532,11 +553,13 @@ fn classify_seek_err(err: &SymphoniaError) -> DecodeError {
             }
         }
         SymphoniaError::IoError(io_err)
-            if io_err.kind() == ErrorKind::Interrupted
-                || io_err.get_ref().is_some_and(|src| {
-                    src.downcast_ref::<PendingReason>()
-                        .is_some_and(|reason| matches!(reason, PendingReason::SeekPending))
-                }) =>
+            if matches!(
+                io_err.kind(),
+                ErrorKind::Interrupted | ErrorKind::WouldBlock
+            ) || io_err.get_ref().is_some_and(|src| {
+                src.downcast_ref::<PendingReason>()
+                    .is_some_and(|reason| matches!(reason, PendingReason::SeekPending))
+            }) =>
         {
             DecodeError::Interrupted
         }
@@ -546,10 +569,66 @@ fn classify_seek_err(err: &SymphoniaError) -> DecodeError {
     }
 }
 
+fn pending_reason(error: &SymphoniaError) -> Option<PendingReason> {
+    let SymphoniaError::IoError(error) = error else {
+        return None;
+    };
+    if !matches!(error.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock) {
+        return None;
+    }
+    Some(
+        error
+            .get_ref()
+            .and_then(|source| {
+                source
+                    .downcast_ref::<StreamPending>()
+                    .map(StreamPending::reason)
+                    .or_else(|| source.downcast_ref::<PendingReason>().copied())
+            })
+            .unwrap_or(PendingReason::NotReady(NotReadyCause::SourcePending)),
+    )
+}
+
 fn mdct_packet_frames(codec: AudioCodec) -> u32 {
     match codec {
         AudioCodec::Mp3 => 1152,
         AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => 1024,
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use kithara_stream::{NotReadyCause, PendingReason};
+    use symphonia::core::{
+        errors::Error as SymphoniaError,
+        units::{Duration as SymphoniaDuration, Timestamp},
+    };
+
+    use super::{Packet, packet_ends_at_or_before, pending_reason};
+
+    #[test]
+    fn resume_floor_rejects_the_packet_before_the_authoritative_timestamp() {
+        let packet = Packet::new(
+            0,
+            Timestamp::new(1_000),
+            SymphoniaDuration::new(1_152),
+            Vec::new(),
+        );
+
+        assert!(packet_ends_at_or_before(&packet, 2_152));
+        assert!(!packet_ends_at_or_before(&packet, 2_151));
+    }
+
+    #[test]
+    fn would_block_uses_source_pending_reason() {
+        let error = SymphoniaError::IoError(io::Error::from(io::ErrorKind::WouldBlock));
+
+        assert_eq!(
+            pending_reason(&error),
+            Some(PendingReason::NotReady(NotReadyCause::SourcePending))
+        );
     }
 }

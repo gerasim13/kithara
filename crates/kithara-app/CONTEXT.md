@@ -2,6 +2,21 @@
 
 Contracts and invariants for the kithara-app crate; the README is the overview.
 
+## Broadcast service
+
+The crate owns only the service wiring; the packaging and the origin belong to `kithara-broadcast`.
+A request stays `Requested` until the session exposes its measured output rate, which configures
+both the ring and the encoder and arms the single mix tap. App-root cancellation ends the origin and
+encoder; dropping the running phase releases the tap.
+
+Stopping blocks — it closes the feed, drains the encoder and joins the worker — so the toggle moves
+the handle into an iced task and marks the service `Stopping`; only that task's completion message
+makes it `Off`. The GUI tick polls `BroadcastHandle::status`, so a producer released by a
+device-rate change reaches `Off` through the same path.
+
+The design canon puts this control in the app menu and a recorder module, and the studio has
+neither, so the owner placed the canon's REC cell in the bar beside the CPU cell.
+
 ## Studio UI host
 
 The studio is a compiled `kithara-ui` document set; `gui::studio_ui` is the host side of it. `StudioRegistry` declares

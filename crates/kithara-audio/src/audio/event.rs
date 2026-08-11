@@ -446,9 +446,11 @@ mod tests {
         WakeSignal::wake(&wake);
 
         assert_eq!(thread.current(), since);
+        assert!(wake.pending.load(Ordering::Acquire));
         wake.flush_deferred();
         let delivered = thread.current();
         assert_ne!(delivered, since);
+        assert!(!wake.pending.load(Ordering::Acquire));
         wake.flush_deferred();
         assert_eq!(thread.current(), delivered);
     }
