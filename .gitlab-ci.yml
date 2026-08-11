@@ -21,6 +21,11 @@ workflow:
 .serialized:
   stage: dispatch
   resource_group: kithara-mac-mini
+  variables:
+    # The child pipeline gates its platform includes on this, and it does not
+    # see what the run was started with unless the trigger forwards it. Unset
+    # is the ordinary case and means Apple alone.
+    KITHARA_PLATFORMS: $KITHARA_PLATFORMS
   trigger:
     include:
       - local: .gitlab/ci/pipeline.yml
@@ -55,6 +60,7 @@ dispatch:branch:
   variables:
     KITHARA_CACHE_TRUST: review
     KITHARA_PIPELINE_KIND: branch
+    KITHARA_PLATFORMS: $KITHARA_PLATFORMS
   rules:
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
 

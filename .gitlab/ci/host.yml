@@ -1,0 +1,26 @@
+# Repairs the host needs on itself, reachable from the pipeline rather than
+# only over ssh.
+
+# The Linux image is built on this machine and never pushed anywhere, so a
+# colima restart — which recreates the VM — takes it with it. Until someone
+# rebuilds it, every `linux:*` job dies in two seconds on
+# `pull access denied for kithara-ci`, and the lane looks broken in a way that
+# says nothing about the code. That happened on 2026-08-07 and cost four days.
+#
+# This job is the repair. It runs on the host's own shell runner, so it stays
+# reachable exactly when the Linux lane is not, and it is manual because
+# rebuilding takes forty minutes and is a decision, not a reaction. `pins` come
+# from the checkout the job already has, so the image is tagged with whatever
+# the commit pins — the mismatch that made the tag change silently break the
+# lane cannot happen here.
+linux:image:
+  extends: .release-job
+  stage: linux
+  timeout: 90 minutes
+  needs: []
+  rules:
+    - when: manual
+      allow_failure: true
+  script:
+    - just ci host build-linux-image docker/ci.Dockerfile
+    - just ci host smoke-linux

@@ -1,13 +1,38 @@
+# Apple is what this host is for, so it is always included. The other
+# platforms are opt-in through `KITHARA_PLATFORMS` — a comma-separated list
+# naming the ones a run should carry, e.g. `linux,web`.
+#
+# They are all served by one Mac mini: a Linux container under colima, Windows
+# under qemu, Android on the host, the simulator in a throwaway macOS guest.
+# Running every one of them on every push spends the machine on lanes the fork
+# already covers on GitHub, and buries the platform under focus — today iOS —
+# among their failures. Whole files are gated rather than the jobs inside them,
+# so an excluded platform contributes nothing at all: no jobs, no queue, no
+# resource-group contention.
+#
+# `lanes.yml` rides with Linux because that is the runner it uses. `deep.yml`
+# and `release.yml` are Apple-hosted and keep their own kind-based rules.
 include:
   - local: .gitlab/ci/common.yml
   - local: .gitlab/ci/apple.yml
-  - local: .gitlab/ci/linux.yml
-  - local: .gitlab/ci/android.yml
-  - local: .gitlab/ci/web.yml
-  - local: .gitlab/ci/windows.yml
+  - local: .gitlab/ci/host.yml
   - local: .gitlab/ci/deep.yml
-  - local: .gitlab/ci/lanes.yml
   - local: .gitlab/ci/release.yml
+  - local: .gitlab/ci/linux.yml
+    rules:
+      - if: $KITHARA_PLATFORMS =~ /(^|,)\s*linux\s*(,|$)/
+  - local: .gitlab/ci/lanes.yml
+    rules:
+      - if: $KITHARA_PLATFORMS =~ /(^|,)\s*linux\s*(,|$)/
+  - local: .gitlab/ci/android.yml
+    rules:
+      - if: $KITHARA_PLATFORMS =~ /(^|,)\s*android\s*(,|$)/
+  - local: .gitlab/ci/web.yml
+    rules:
+      - if: $KITHARA_PLATFORMS =~ /(^|,)\s*web\s*(,|$)/
+  - local: .gitlab/ci/windows.yml
+    rules:
+      - if: $KITHARA_PLATFORMS =~ /(^|,)\s*windows\s*(,|$)/
 
 stages:
   - apple
