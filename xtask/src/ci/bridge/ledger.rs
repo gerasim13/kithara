@@ -84,6 +84,29 @@ impl Ledger {
         })
     }
 
+    /// Drop every entry recorded for one GitHub head, whatever base it was
+    /// judged against. A rejection is otherwise permanent — `import_github`
+    /// refuses the pair on sight — and a maintainer who has dealt with the
+    /// reason has no other way to let the commit through.
+    pub(super) fn forget(&self, github_sha: &str) -> Result<Vec<String>> {
+        self.with_locked_data(|data| {
+            let prefix = format!("{github_sha}:");
+            let cleared: Vec<String> = data
+                .imports
+                .keys()
+                .filter(|key| key.starts_with(&prefix))
+                .cloned()
+                .collect();
+            for key in &cleared {
+                data.imports.remove(key);
+            }
+            if !cleared.is_empty() {
+                self.write(data)?;
+            }
+            Ok(cleared)
+        })
+    }
+
     fn with_locked_data<T>(
         &self,
         operation: impl FnOnce(&mut LedgerData) -> Result<T>,
@@ -190,5 +213,31 @@ mod tests {
         assert_eq!(entry.pipeline_id, Some(42));
         assert_eq!(entry.check_run_id, Some(84));
         assert_eq!(entry.detail.as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn forgetting_a_head_clears_every_base_it_was_judged_against() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        for base in ["one", "two"] {
+            ledger
+                .put("github", base, ImportState::Rejected, None, None, None)
+                .unwrap();
+        }
+        ledger
+            .put("other", "one", ImportState::Rejected, None, None, None)
+            .unwrap();
+
+        assert_eq!(ledger.forget("github").unwrap().len(), 2);
+        assert_eq!(ledger.get("github", "one").unwrap(), None);
+        assert_eq!(ledger.get("github", "two").unwrap(), None);
+        assert!(ledger.get("other", "one").unwrap().is_some());
+    }
+
+    #[test]
+    fn forgetting_an_unknown_head_clears_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        assert!(ledger.forget("github").unwrap().is_empty());
     }
 }

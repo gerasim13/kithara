@@ -190,10 +190,19 @@ sudo -E /Volumes/KitharaCI/services/bin/kithara-ci ci host activate-bridge
 ```
 
 GitLab `main` fast-forwards to GitHub only after the exact commit has a
-successful GitLab push pipeline. A GitHub `main` update is imported only when
-it belongs to a merged pull request, changes no CI control path, and passes the
-private quarantine pipeline. Divergence is fail-closed and opens one
+successful GitLab push pipeline, judged on the child pipeline the dispatch
+stage triggers rather than on its parent. A GitHub `main` update is imported
+only when it belongs to a merged pull request, changes no CI control path, and
+passes the private quarantine pipeline. Manifests are not control paths:
+`deps:deny` runs on quarantine instead. Divergence is fail-closed and opens one
 deduplicated GitLab incident.
+
+A rejection is recorded and refused on sight. Once its reason has been dealt
+with, clear the head so the import runs again:
+
+```text
+/Volumes/KitharaCI/services/bin/kithara-ci ci bridge retry --config /Volumes/KitharaCI/services/bridge/config.toml --github-sha <sha>
+```
 
 ## Storage policy
 

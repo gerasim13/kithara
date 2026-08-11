@@ -8,9 +8,11 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use reqwest::Url;
 use serde::Deserialize;
+use tracing::info;
 
 use super::{
-    model::{regular_file, simple_branch, simple_repository},
+    ledger::Ledger,
+    model::{regular_file, simple_branch, simple_repository, validate_sha},
     reconcile::Bridge,
 };
 
@@ -33,6 +35,15 @@ enum BridgeCommand {
         /// Bridge configuration file.
         #[arg(long, env = "KITHARA_BRIDGE_CONFIG")]
         config: PathBuf,
+    },
+    /// Forget a GitHub head so a rejected import can be attempted again.
+    Retry {
+        /// Bridge configuration file.
+        #[arg(long, env = "KITHARA_BRIDGE_CONFIG")]
+        config: PathBuf,
+        /// Full commit SHA of the GitHub head to clear.
+        #[arg(long)]
+        github_sha: String,
     },
 }
 
@@ -144,6 +155,20 @@ pub(crate) fn run(args: &BridgeArgs) -> Result<()> {
         BridgeCommand::Reconcile { config } => {
             Bridge::new(BridgeConfig::load(config)?)?.reconcile_once()
         }
+        BridgeCommand::Retry { config, github_sha } => {
+            if !validate_sha(github_sha) {
+                bail!("github-sha must be a full 40-character commit SHA");
+            }
+            let config = BridgeConfig::load(config)?;
+            let cleared = Ledger::new(&config.state_dir)?.forget(github_sha)?;
+            if cleared.is_empty() {
+                bail!("no ledger entry recorded for {github_sha}");
+            }
+            for key in cleared {
+                info!(entry = %key, "ledger entry cleared");
+            }
+            Ok(())
+        }
     }
 }
 
@@ -202,6 +227,27 @@ mod tests {
                 "reconcile",
                 "--config",
                 "bridge.toml"
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn retry_names_the_head_it_forgets() {
+        assert!(
+            Cli::try_parse_from(["xtask", "ci", "bridge", "retry", "--config", "bridge.toml"])
+                .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "xtask",
+                "ci",
+                "bridge",
+                "retry",
+                "--config",
+                "bridge.toml",
+                "--github-sha",
+                "0123456789abcdef0123456789abcdef01234567"
             ])
             .is_ok()
         );
