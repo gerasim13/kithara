@@ -445,6 +445,36 @@ where
     .unwrap_or_else(|err| panic!("{join_label}: spawn_blocking failed: {err}"))
 }
 
+async fn read_until_manual_applied<S>(
+    mut audio: Audio<Stream<S>>,
+    collector: &EventCollector,
+    applied_before: usize,
+    target: usize,
+    label: &str,
+) -> (Audio<Stream<S>>, PhaseReadStats)
+where
+    S: StreamType + 'static,
+    Audio<Stream<S>>: Send + 'static,
+{
+    let mut stats = PhaseReadStats {
+        samples: 0,
+        pending: 0,
+        saw_eof: false,
+    };
+    while !collector.applied_transitions()[applied_before..]
+        .contains(&(target, AbrReason::ManualOverride))
+    {
+        let (next, step) = read_one_chunk_blocking(audio, label).await;
+        audio = next;
+        stats.samples = stats.samples.saturating_add(step.samples);
+        if step.saw_eof {
+            stats.saw_eof = true;
+            break;
+        }
+    }
+    (audio, stats)
+}
+
 /// Wait until every v0 media segment has been network-fetched (the all-cached
 /// precondition the bug repros against), polling the real download state.
 ///
@@ -1390,30 +1420,33 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     let handle = audio
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
-    let pre_switch = collector.switch_count();
+    let applied_before = collector.applied_transitions().len();
     handle
         .set_mode(AbrMode::manual(1))
         .expect("Manual(1) target must be valid");
 
-    // Wait for the commit, event-driven: if `set_mode` correctly wakes
-    // the parked peer, `commit_variant_switch` fires within tens of ms.
-    // If the wake is lost (the pinned bug) the harness timeout fails
-    // the test.
-    while collector.switch_count() == pre_switch {
-        kithara::platform::time::sleep(Duration::from_millis(50)).await;
-    }
+    let (_audio, transition) = read_until_manual_applied(
+        audio,
+        &collector,
+        applied_before,
+        1,
+        "all-cached manual transition",
+    )
+    .await;
 
-    let post_switch = collector.switch_count();
+    let transitions = collector.applied_transitions();
+    let manual_applied = transitions[applied_before..].contains(&(1, AbrReason::ManualOverride));
     info!(
-        pre_switch,
-        post_switch, v0_fetched, "O.0: all-cached Manual click result"
+        ?transitions,
+        ?transition,
+        v0_fetched,
+        "O.0: all-cached Manual click result"
     );
 
     assert!(
-        post_switch > pre_switch,
-        "Manual(1) after all-cached prefetch must fire VariantApplied \
-         (pre={pre_switch}, post={post_switch}); peer was parked idle and \
-         set_mode failed to wake it"
+        manual_applied,
+        "Manual(1) after all-cached prefetch must fire a new ManualOverride \
+         VariantApplied; saw {transitions:?}, transition={transition:?}"
     );
 }
 
@@ -1540,26 +1573,34 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
     let handle = audio
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
-    let pre_switch = collector.switch_count();
+    let applied_before = collector.applied_transitions().len();
     handle
         .set_mode(AbrMode::manual(1))
         .expect("Manual(1) target must be valid");
 
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline && collector.switch_count() == pre_switch {
-        kithara::platform::time::sleep(Duration::from_millis(50)).await;
-    }
+    let (_audio, transition) = read_until_manual_applied(
+        audio,
+        &collector,
+        applied_before,
+        1,
+        "cache-and-seek manual transition",
+    )
+    .await;
 
-    let post_switch = collector.switch_count();
+    let transitions = collector.applied_transitions();
+    let manual_applied = transitions[applied_before..].contains(&(1, AbrReason::ManualOverride));
     info!(
-        pre_switch,
-        post_switch, v0_fetched, seek_target_secs, "MSW-3: all-cached + seek + Manual click result"
+        ?transitions,
+        ?transition,
+        v0_fetched,
+        seek_target_secs,
+        "MSW-3: all-cached + seek + Manual click result"
     );
 
     assert!(
-        post_switch > pre_switch,
+        manual_applied,
         "Manual(1) after all-cached prefetch + seek must fire VariantApplied \
-         (pre={pre_switch}, post={post_switch}). Production regression: \
+         with ManualOverride, saw {transitions:?}, transition={transition:?}. Production regression: \
          after `audio.seek({seek_target_secs}s)` the peer parks and \
          subsequent `handle.set_mode(...)` no longer reaches \
          `commit_variant_switch` — observed in app.log 2026-05-17 \

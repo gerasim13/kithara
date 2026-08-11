@@ -8,7 +8,7 @@ use kithara::{
     platform::{
         CancelToken,
         thread::paced_backoff,
-        time::{Duration, Instant, sleep},
+        time::{self, Duration, Instant},
         tokio::task::spawn_blocking,
     },
     stream::{AudioCodec, Stream},
@@ -112,7 +112,7 @@ async fn read_audio_some(audio: &mut Audio<Stream<Hls>>, stage: &str) -> usize {
             Instant::now() <= deadline,
             "timed out waiting for packaged ABR audio at stage={stage}"
         );
-        sleep(Duration::from_millis(10)).await;
+        time::sleep(Duration::from_millis(10)).await;
     }
 }
 
@@ -228,7 +228,10 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
         let read: usize = match progress_audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, position }) => {
                 if !switch_seen && total_samples >= PRE_SWITCH_PACE_SAMPLES {
-                    paced_backoff(position.saturating_sub(consumed));
+                    let pace = position.saturating_sub(consumed);
+                    spawn_blocking(move || paced_backoff(pace))
+                        .await
+                        .expect("packaged ABR pace");
                 }
                 consumed = position;
                 count.get()

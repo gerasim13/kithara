@@ -13,7 +13,6 @@ use crate::{
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
     duration_for_frames,
     error::DecodeResult,
-    pcm::frames_for_duration,
     traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
     types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata},
 };
@@ -245,11 +244,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                 self.codec
                     .decode_frame(frame.data, frame_pts, frame.packet_desc, &mut buf)?;
             self.head_strip.record(
-                u64::try_from(frames_for_duration(
-                    self.spec.sample_rate.get(),
-                    frame_duration,
-                ))
-                .unwrap_or(u64::MAX),
+                frame_offset_for(frame_duration, self.spec.sample_rate.get()),
                 u64::from(frames),
             );
             let zero_frame_budget_reached = if frames == 0 {
