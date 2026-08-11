@@ -1,0 +1,51 @@
+# The gate the merge decision hangs on. Everything else may be red — the suite
+# is not green and waiting for it to be green blocks every change behind it —
+# but nothing may be red here that the default branch has not already been
+# failing.
+#
+# It runs on the Linux executor because that is the one whose cache directory is
+# mounted from the host: the journal has to outlive the job that writes it, and
+# a macOS job runs in a throwaway guest. It carries no platform rule for the
+# same reason a lint gate carries none.
+verdict:
+  extends:
+    - .linux-job
+    - .rules-verify-and-branch
+  stage: verdict
+  interruptible: true
+  # Every lane it judges, and every one of them optional: platforms are opt-in,
+  # so a pipeline that did not ask for Android has no Android job to wait for.
+  needs:
+    - job: apple:test
+      artifacts: true
+      optional: true
+    - job: apple:test-flash-off
+      artifacts: true
+      optional: true
+    - job: apple:swift-test
+      artifacts: true
+      optional: true
+    - job: apple:ios-test
+      artifacts: true
+      optional: true
+    - job: linux:test
+      artifacts: true
+      optional: true
+    - job: android:test
+      artifacts: true
+      optional: true
+    - job: web:chromium
+      artifacts: true
+      optional: true
+    - job: web:firefox
+      artifacts: true
+      optional: true
+  # A lane that failed is exactly the one whose report is needed, so this runs
+  # after a failure rather than instead of one.
+  when: always
+  script:
+    - just ci run verdict
+  artifacts:
+    when: always
+    paths:
+      - target/junit/

@@ -20,7 +20,7 @@ use super::{
     view::DiagramModel,
 };
 
-const SCHEMA_VERSION: u32 = 4;
+const SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug)]
 pub(crate) struct ArtifactSet {
@@ -243,7 +243,7 @@ fn page_document(request: &ArtifactRequest<'_>, page: &DiagramPage) -> String {
 fn architecture_document(request: &ArtifactRequest<'_>) -> String {
     let analysis = report::render(request.model);
     let metrics = report::render_metrics(request.metrics);
-    let evidence = evidence_summary(request);
+    let evidence = evidence_summary(request.semantic, request.runtime);
     format!(
         "# {} Architecture\n\n\
          Status: **{}**\n\n\
@@ -287,19 +287,22 @@ fn contour_links(diagrams: &DiagramSet) -> String {
     output
 }
 
-fn evidence_summary(request: &ArtifactRequest<'_>) -> String {
+fn evidence_summary(semantic: &SemanticSummary, runtime: &RuntimeSummary) -> String {
     let mut output = format!(
         "## Evidence status\n\n- Semantic: `{}`; requested {}, prepared {}, resolved {} edges, skipped {}.\n",
-        request.semantic.state.as_str(),
-        request.semantic.requested_symbols,
-        request.semantic.prepared_symbols,
-        request.semantic.resolved_edges,
-        request.semantic.skipped_symbols,
+        semantic.state.as_str(),
+        semantic.requested_symbols,
+        semantic.prepared_symbols,
+        semantic.resolved_edges,
+        semantic.skipped_symbols,
     );
-    if request.runtime.scenarios.is_empty() {
+    for diagnostic in &semantic.diagnostics {
+        output.push_str(&format!("  - Semantic diagnostic: {diagnostic}\n"));
+    }
+    if runtime.scenarios.is_empty() {
         output.push_str("- Runtime: no configured or selected scenario evidence.\n\n");
     } else {
-        for scenario in &request.runtime.scenarios {
+        for scenario in &runtime.scenarios {
             output.push_str(&format!(
                 "- Runtime `{}`: `{}`; {} records, {} matched, {} unmatched.\n",
                 scenario.name,
@@ -308,6 +311,24 @@ fn evidence_summary(request: &ArtifactRequest<'_>) -> String {
                 scenario.trace.matched_records,
                 scenario.trace.unmatched_records,
             ));
+            for diagnostic in &scenario.trace.diagnostics {
+                output.push_str(&format!(
+                    "  - Runtime `{}` diagnostic: {diagnostic}\n",
+                    scenario.name
+                ));
+            }
+            if let Some(exit_code) = scenario.exit_code {
+                output.push_str(&format!(
+                    "  - Runtime `{}` exit code: {exit_code}\n",
+                    scenario.name
+                ));
+            }
+            if let Some(stderr) = &scenario.stderr {
+                output.push_str(&format!(
+                    "  - Runtime `{}` stderr log: `{stderr}`\n",
+                    scenario.name
+                ));
+            }
         }
         output.push('\n');
     }
@@ -315,20 +336,26 @@ fn evidence_summary(request: &ArtifactRequest<'_>) -> String {
 }
 
 fn overall_status(semantic: &SemanticSummary, runtime: &RuntimeSummary) -> &'static str {
-    if semantic.is_incomplete() || runtime.is_incomplete() {
-        return "incomplete";
+    if runtime.is_degraded() {
+        return "runtime-degraded";
     }
     if semantic.state == SemanticState::Truncated || runtime.is_truncated() {
         return "truncated";
     }
-    if runtime.has_runtime() && semantic.state == SemanticState::Unavailable {
+    if runtime.has_runtime()
+        && matches!(
+            semantic.state,
+            SemanticState::Unavailable | SemanticState::TimedOut | SemanticState::Failed
+        )
+    {
         return "runtime-enriched";
     }
     match semantic.state {
         SemanticState::Complete => "complete",
         SemanticState::Truncated => "truncated",
-        SemanticState::Unavailable => "static-only",
-        SemanticState::TimedOut | SemanticState::Failed => "incomplete",
+        SemanticState::Unavailable | SemanticState::TimedOut | SemanticState::Failed => {
+            "static-only"
+        }
     }
 }
 
@@ -340,4 +367,186 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     let mut bytes = serde_json::to_vec_pretty(value)?;
     bytes.push(b'\n');
     fs::write(path, bytes).with_context(|| format!("write {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::viz::{
+        scenario::{ScenarioState, ScenarioSummary},
+        trace::{TraceState, TraceSummary},
+    };
+
+    #[test]
+    fn missing_semantic_evidence_has_the_same_status_for_every_cause() {
+        let absent = semantic(SemanticState::Unavailable);
+        let timed_out = semantic(SemanticState::TimedOut);
+        let failed = semantic(SemanticState::Failed);
+
+        assert_eq!(
+            overall_status(&absent, &RuntimeSummary::default()),
+            "static-only"
+        );
+        assert_eq!(
+            overall_status(&timed_out, &RuntimeSummary::default()),
+            "static-only"
+        );
+        assert_eq!(
+            overall_status(&failed, &RuntimeSummary::default()),
+            "static-only"
+        );
+        assert_eq!(
+            overall_status(&absent, &runtime(ScenarioState::Complete)),
+            "runtime-enriched"
+        );
+        assert_eq!(
+            overall_status(&timed_out, &runtime(ScenarioState::Complete)),
+            "runtime-enriched"
+        );
+        assert_eq!(
+            overall_status(&failed, &runtime(ScenarioState::Complete)),
+            "runtime-enriched"
+        );
+    }
+
+    #[test]
+    fn degraded_runtime_evidence_has_its_own_status() {
+        assert_eq!(
+            overall_status(
+                &semantic(SemanticState::Complete),
+                &runtime(ScenarioState::TimedOut),
+            ),
+            "runtime-degraded"
+        );
+    }
+
+    #[test]
+    fn manual_trace_content_controls_the_runtime_status() {
+        let mut empty = runtime(ScenarioState::Manual);
+        empty.scenarios[0].trace.state = TraceState::Empty;
+        let mut truncated = runtime(ScenarioState::Manual);
+        truncated.scenarios[0].trace.state = TraceState::Truncated;
+
+        assert_eq!(
+            overall_status(&semantic(SemanticState::Complete), &empty),
+            "runtime-degraded"
+        );
+        assert_eq!(
+            overall_status(&semantic(SemanticState::Complete), &truncated),
+            "truncated"
+        );
+    }
+
+    #[test]
+    fn evidence_summary_explains_why_each_overlay_degraded() {
+        let summary = evidence_summary(
+            &semantic(SemanticState::TimedOut),
+            &runtime(ScenarioState::TimedOut),
+        );
+
+        assert_eq!(
+            summary,
+            concat!(
+                "## Evidence status\n\n",
+                "- Semantic: `timed_out`; requested 0, prepared 0, resolved 0 edges, skipped 0.\n",
+                "  - Semantic diagnostic: semantic diagnostic\n",
+                "- Runtime `scenario`: `timed_out`; 0 records, 0 matched, 0 unmatched.\n",
+                "  - Runtime `scenario` diagnostic: runtime diagnostic\n\n",
+            )
+        );
+    }
+
+    #[test]
+    fn evidence_summary_preserves_failed_process_details() {
+        let mut semantic = semantic(SemanticState::Complete);
+        semantic.diagnostics.clear();
+        let mut runtime = runtime(ScenarioState::Failed);
+        runtime.scenarios[0].exit_code = Some(7);
+        runtime.scenarios[0].stderr = Some("logs/scenario.stderr.log".to_string());
+        runtime.scenarios[0].trace.state = TraceState::Complete;
+        runtime.scenarios[0].trace.diagnostics.clear();
+
+        let summary = evidence_summary(&semantic, &runtime);
+
+        assert_eq!(
+            summary,
+            concat!(
+                "## Evidence status\n\n",
+                "- Semantic: `complete`; requested 0, prepared 0, resolved 0 edges, skipped 0.\n",
+                "- Runtime `scenario`: `failed`; 0 records, 0 matched, 0 unmatched.\n",
+                "  - Runtime `scenario` exit code: 7\n",
+                "  - Runtime `scenario` stderr log: `logs/scenario.stderr.log`\n\n",
+            )
+        );
+    }
+
+    #[test]
+    fn no_evidence_combination_has_an_incomplete_status() {
+        let semantic_states = [
+            SemanticState::Complete,
+            SemanticState::Truncated,
+            SemanticState::Unavailable,
+            SemanticState::TimedOut,
+            SemanticState::Failed,
+        ];
+        let scenario_states = [
+            ScenarioState::Complete,
+            ScenarioState::Empty,
+            ScenarioState::Truncated,
+            ScenarioState::Failed,
+            ScenarioState::TimedOut,
+            ScenarioState::Manual,
+        ];
+
+        for semantic_state in semantic_states {
+            assert_ne!(
+                overall_status(&semantic(semantic_state), &RuntimeSummary::default()),
+                "incomplete"
+            );
+            for scenario_state in scenario_states {
+                assert_ne!(
+                    overall_status(&semantic(semantic_state), &runtime(scenario_state)),
+                    "incomplete"
+                );
+            }
+        }
+    }
+
+    fn semantic(state: SemanticState) -> SemanticSummary {
+        SemanticSummary {
+            state,
+            diagnostics: vec!["semantic diagnostic".to_string()],
+            outgoing_calls: 0,
+            prepared_symbols: 0,
+            requested_symbols: 0,
+            resolved_edges: 0,
+            skipped_symbols: 0,
+            unmatched_targets: 0,
+        }
+    }
+
+    fn runtime(state: ScenarioState) -> RuntimeSummary {
+        let trace_state = match state {
+            ScenarioState::Complete | ScenarioState::Manual => TraceState::Complete,
+            ScenarioState::Empty | ScenarioState::TimedOut => TraceState::Empty,
+            ScenarioState::Truncated => TraceState::Truncated,
+            ScenarioState::Failed => TraceState::Failed,
+        };
+        RuntimeSummary {
+            scenarios: vec![ScenarioSummary {
+                exit_code: None,
+                stderr: None,
+                stdout: None,
+                state,
+                name: "scenario".to_string(),
+                trace: TraceSummary {
+                    state: trace_state,
+                    diagnostics: vec!["runtime diagnostic".to_string()],
+                    matched_records: 0,
+                    records: 0,
+                    unmatched_records: 0,
+                },
+            }],
+        }
+    }
 }

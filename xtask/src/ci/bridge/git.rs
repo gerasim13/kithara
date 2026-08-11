@@ -49,7 +49,7 @@ impl GitRepo {
                     self.config.branch
                 ),
             ],
-            Some(github.git_header()?),
+            Some(github.git_header()),
         )?;
 
         let gitlab_url = format!(
@@ -128,7 +128,7 @@ impl GitRepo {
                 &url,
                 &format!("{sha}:refs/heads/{}", self.config.branch),
             ],
-            Some(github.git_header()?),
+            Some(github.git_header()),
         )?;
         Ok(())
     }

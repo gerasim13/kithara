@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use kithara_decode::duration_for_frames;
+use kithara_decode::{PcmChunk, duration_for_frames};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::StreamType;
 
@@ -16,7 +16,8 @@ use crate::pipeline::{
 #[fieldwork(opt_in, get)]
 pub(crate) struct ResumeCursor {
     host_rate: Arc<AtomicU32>,
-    decode_head: Option<(u64, u64, u32)>,
+    raw_decode_head: Option<(u64, u64, u32)>,
+    emitted_source_head: Option<(u64, u64, u32)>,
     #[field(get = recreates_on_route, vis = "pub(crate)")]
     recreate_on_route: bool,
     decoder_rate: u32,
@@ -40,12 +41,19 @@ impl ResumeCursor {
             host_rate,
             recreate_on_route,
             decoder_rate,
-            decode_head: None,
+            raw_decode_head: None,
+            emitted_source_head: None,
         }
     }
 
-    pub(crate) fn decode_head(&self, epoch: u64) -> Option<(u64, u32)> {
-        self.decode_head
+    pub(crate) fn raw_decode_head(&self, epoch: u64) -> Option<(u64, u32)> {
+        self.raw_decode_head
+            .filter(|&(head_epoch, _, _)| head_epoch == epoch)
+            .map(|(_, frame, rate)| (frame, rate))
+    }
+
+    pub(crate) fn emitted_source_head(&self, epoch: u64) -> Option<(u64, u32)> {
+        self.emitted_source_head
             .filter(|&(head_epoch, _, _)| head_epoch == epoch)
             .map(|(_, frame, rate)| (frame, rate))
     }
@@ -59,10 +67,27 @@ impl ResumeCursor {
         self.host_rate.load(Ordering::Acquire)
     }
 
-    pub(crate) fn record(&mut self, source_end: Option<SourceEnd>, epoch: u64) {
+    pub(crate) fn record_raw_decode(&mut self, chunk: &PcmChunk, epoch: u64) {
+        self.raw_decode_head = Some((
+            epoch,
+            chunk
+                .meta
+                .frame_offset
+                .saturating_add(u64::from(chunk.meta.frames)),
+            chunk.meta.spec.sample_rate.get(),
+        ));
+    }
+
+    pub(crate) fn record_emitted_source(&mut self, source_end: Option<SourceEnd>, epoch: u64) {
         if let Some(source_end) = source_end {
-            self.decode_head = Some((epoch, source_end.frame, source_end.rate));
+            self.emitted_source_head = Some((epoch, source_end.frame, source_end.rate));
         }
+    }
+
+    pub(crate) fn rebase_raw_to_emitted(&mut self, epoch: u64) {
+        self.raw_decode_head = self
+            .emitted_source_head
+            .filter(|&(head_epoch, _, _)| head_epoch == epoch);
     }
 
     pub(crate) fn resume_position(
@@ -72,7 +97,7 @@ impl ResumeCursor {
         resume_target: Option<(u64, Duration)>,
     ) -> Duration {
         let head = self
-            .decode_head(epoch)
+            .emitted_source_head(epoch)
             .map(|(frame, rate)| duration_for_frames(rate, frame))
             .filter(|&position| position > committed)
             .unwrap_or(committed);
@@ -136,9 +161,9 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    fn missing_source_end_preserves_the_last_proven_head() {
+    fn missing_source_end_preserves_the_last_proven_emitted_head() {
         let mut cursor = ResumeCursor::new(Arc::new(AtomicU32::new(48_000)), false, 48_000);
-        cursor.record(
+        cursor.record_emitted_source(
             Some(SourceEnd {
                 frame: 512,
                 rate: 48_000,
@@ -146,8 +171,8 @@ mod tests {
             7,
         );
 
-        cursor.record(None, 7);
+        cursor.record_emitted_source(None, 7);
 
-        assert_eq!(cursor.decode_head(7), Some((512, 48_000)));
+        assert_eq!(cursor.emitted_source_head(7), Some((512, 48_000)));
     }
 }

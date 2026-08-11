@@ -8,4 +8,5 @@ mod orchestrator;
 mod report;
 mod workspace;
 
+pub(crate) use adapter::CRAP_THRESHOLD;
 pub use cli::{LabCommand, run};

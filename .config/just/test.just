@@ -105,13 +105,11 @@ fixture-cache ACTION="path":
       *) echo "usage: just test fixture-cache [path|clear]" >&2; exit 2 ;;
     esac
 
+# All three lanes require a real output device.
 [positional-arguments]
 e2e-resamplers *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
-    if (( $# == 0 )); then
-      set -- -E 'test(track_plays_end_to_end_silvercomet)' --test-threads=4
-    fi
     just test run --lane=e2e "$@"
     just test run --lane=e2e-fused "$@"
     just test run --lane=e2e-glide "$@"

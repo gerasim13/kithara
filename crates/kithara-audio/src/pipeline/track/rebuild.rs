@@ -72,14 +72,6 @@ impl Track<RebuildingDecoder> {
         if let Some(complete) = src.rebuild.take_replacement(rebuild.build) {
             return finish_rebuild(src, rebuild, complete);
         }
-        while let Some(complete) = src.rebuild.pop_replacement_completion() {
-            if complete.build == rebuild.build {
-                return finish_rebuild(src, rebuild, complete);
-            }
-            if let Ok(generation) = complete.result {
-                src.retired.retire_generation(generation);
-            }
-        }
         src.update_state(Self::new(rebuild).erase());
         TrackStep::Blocked(WaitingReason::Waiting)
     }

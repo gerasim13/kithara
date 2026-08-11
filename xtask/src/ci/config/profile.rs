@@ -48,7 +48,52 @@ pub(crate) fn fixture() -> CiConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
+
+    /// Keys nextest reads on a profile. Inside a `junit` table it drops them
+    /// with a warning, which is how `[profile.ci.junit]` swallowed two of them.
+    const PROFILE_KEYS: &[&str] = &["fail-fast", "leak-timeout", "slow-timeout", "test-threads"];
+
+    #[test]
+    fn the_ci_junit_report_lands_where_the_lanes_collect_it() {
+        let nextest: toml::Value = toml::from_str(
+            &fs::read_to_string(workspace_root().join(".config/nextest.toml")).unwrap(),
+        )
+        .unwrap();
+        let junit = nextest["profile"]["ci"]["junit"].as_table().unwrap();
+
+        let path = junit["path"].as_str().unwrap();
+        assert!(
+            !path.contains('/'),
+            "nextest resolves junit.path against the profile store directory, so `{path}` \
+             nests the report under `target/nextest/ci/` twice and CI collects nothing"
+        );
+        for key in PROFILE_KEYS {
+            assert!(
+                !junit.contains_key(*key),
+                "`{key}` belongs on `[profile.ci]`; inside the junit table nextest ignores it"
+            );
+        }
+
+        let produced = format!("target/nextest/ci/{path}");
+        for lane in ["apple", "linux", "windows"] {
+            let yaml = fs::read_to_string(workspace_root().join(format!(".gitlab/ci/{lane}.yml")))
+                .unwrap();
+            let declared = yaml
+                .lines()
+                .filter_map(|line| line.trim().strip_prefix("junit:"))
+                .map(str::trim)
+                .filter(|value| value.starts_with("target/nextest/"));
+            for value in declared {
+                assert_eq!(
+                    value, produced,
+                    "{lane}.yml collects a report that nextest does not write"
+                );
+            }
+        }
+    }
 
     #[test]
     fn tracked_pins_are_valid_on_every_build_platform() {

@@ -1,10 +1,14 @@
-use kithara_decode::{DecoderChunkOutcome, duration_for_frames, frames_for_duration};
+#[path = "transition_promotion.rs"]
+mod promotion;
+
+use kithara_decode::{DecoderChunkOutcome, PcmSpec, duration_for_frames, frames_for_duration};
 use kithara_platform::time::Duration;
-use kithara_stream::VariantTransition;
+use kithara_stream::{PendingReason, VariantTransition};
 use tracing::{debug, trace};
 
 use super::generation::DecoderGeneration;
 use crate::pipeline::{
+    blend::PcmBlender,
     rebuild::state::BuildId,
     seek::skip::{apply as apply_skip, apply_frames},
 };
@@ -18,14 +22,17 @@ impl Consts {
 pub(crate) enum IncomingDecode {
     Preparing {
         transition: VariantTransition,
+        frontier: OutgoingFrontier,
     },
     Building {
         transition: VariantTransition,
         build: BuildId,
+        frontier: OutgoingFrontier,
     },
     Priming {
         transition: VariantTransition,
         generation: DecoderGeneration,
+        frontier: OutgoingFrontier,
     },
     Failed {
         transition: VariantTransition,
@@ -36,7 +43,7 @@ pub(crate) enum IncomingDecode {
 impl IncomingDecode {
     pub(crate) const fn transition(&self) -> VariantTransition {
         match self {
-            Self::Preparing { transition }
+            Self::Preparing { transition, .. }
             | Self::Building { transition, .. }
             | Self::Priming { transition, .. }
             | Self::Failed { transition, .. } => *transition,
@@ -54,17 +61,44 @@ impl From<IncomingDecode> for Option<DecoderGeneration> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OutgoingFrontier {
     Awaiting,
     Exact { frame: u64, rate: u32 },
     Unavailable,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct ReadyToPromote {
-    overlap: OverlapSpan,
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
+pub(crate) struct PreparedPromotion {
+    generation: DecoderGeneration,
+    join: PromotionJoin,
+    #[field(get, vis = "pub(crate)", copy)]
     transition: VariantTransition,
+}
+
+#[derive(Clone, Copy)]
+struct PromotionSpan {
+    join: PromotionJoin,
+    overlap: OverlapSpan,
+}
+
+#[derive(Clone, Copy)]
+enum PromotionReadiness {
+    Ready(PromotionSpan),
+    NeedIncoming,
+    AwaitingOutgoingFrontier,
+    AwaitingOutgoingPcm,
+}
+
+#[derive(Clone, Copy)]
+enum PromotionJoin {
+    HardCut,
+    Blend {
+        frames: u64,
+        outgoing_first: u64,
+        spec: PcmSpec,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -73,9 +107,9 @@ struct OverlapSpan {
     incoming_next: u64,
 }
 
-impl ReadyToPromote {
-    pub(crate) const fn transition(self) -> VariantTransition {
-        self.transition
+impl From<PreparedPromotion> for DecoderGeneration {
+    fn from(prepared: PreparedPromotion) -> Self {
+        prepared.generation
     }
 }
 
@@ -92,12 +126,16 @@ impl super::core::ActiveDecode {
     pub(crate) fn begin_incoming(
         &mut self,
         transition: VariantTransition,
+        frontier: OutgoingFrontier,
     ) -> Option<DecoderGeneration> {
         if self.incoming_transition() == Some(transition) {
             return None;
         }
         self.incoming
-            .replace(IncomingDecode::Preparing { transition })
+            .replace(IncomingDecode::Preparing {
+                transition,
+                frontier,
+            })
             .and_then(Into::into)
     }
 
@@ -137,7 +175,8 @@ impl super::core::ActiveDecode {
         matches!(
             self.incoming,
             Some(IncomingDecode::Preparing {
-                transition: current
+                transition: current,
+                ..
             }) if current == transition
         )
     }
@@ -153,24 +192,46 @@ impl super::core::ActiveDecode {
         )
     }
 
+    #[cfg(test)]
+    pub(crate) fn incoming_staged_span(&self) -> Option<(u64, u64, PcmSpec)> {
+        let IncomingDecode::Priming { generation, .. } = self.incoming.as_ref()? else {
+            return None;
+        };
+        generation.staged_span()
+    }
+
+    pub(crate) fn incoming_frontier(&self) -> Option<OutgoingFrontier> {
+        match self.incoming.as_ref()? {
+            IncomingDecode::Preparing { frontier, .. }
+            | IncomingDecode::Building { frontier, .. }
+            | IncomingDecode::Priming { frontier, .. } => Some(*frontier),
+            IncomingDecode::Failed { .. } => None,
+        }
+    }
+
     pub(crate) fn install_incoming(
         &mut self,
         transition: VariantTransition,
         build: BuildId,
         generation: DecoderGeneration,
     ) -> Option<DecoderGeneration> {
-        if !matches!(
-            self.incoming,
-            Some(IncomingDecode::Building {
-                transition: current,
-                build: current_build,
-            }) if current == transition && current_build == build
-        ) {
+        let Some(IncomingDecode::Building {
+            transition: current,
+            build: current_build,
+            frontier,
+        }) = self.incoming.as_ref()
+        else {
+            return Some(generation);
+        };
+        if *current != transition || *current_build != build {
             return Some(generation);
         }
+        let frontier = *frontier;
+        self.prepare_incoming_profile(generation.blender_profile());
         self.incoming = Some(IncomingDecode::Priming {
             transition,
             generation,
+            frontier,
         });
         None
     }
@@ -198,7 +259,8 @@ impl super::core::ActiveDecode {
             return None;
         };
         let origin = self.active.timeline_origin(self.gapless_mode());
-        Some(duration_for_frames(rate, frame.saturating_sub(origin)))
+        let active_rate = self.active.blender_profile().spec().sample_rate.get();
+        content_time(rate, frame, active_rate, origin)
     }
 
     pub(crate) fn mark_incoming_building(
@@ -209,31 +271,76 @@ impl super::core::ActiveDecode {
         if !self.incoming_is_preparing(transition) {
             return false;
         }
-        self.incoming = Some(IncomingDecode::Building { transition, build });
+        let Some(IncomingDecode::Preparing { frontier, .. }) = self.incoming.as_ref() else {
+            return false;
+        };
+        let frontier = *frontier;
+        self.incoming = Some(IncomingDecode::Building {
+            transition,
+            build,
+            frontier,
+        });
         true
     }
 
     pub(crate) fn prime_incoming(&mut self, outgoing_frontier: OutgoingFrontier) -> IncomingPrime {
         let gapless_mode = self.gapless_mode();
         let outgoing_origin = self.active.timeline_origin(gapless_mode);
+        let outgoing_rate = self.active.blender_profile().spec().sample_rate.get();
         let active_profile = self.active.gapless_profile();
         let active_gap = self.active.timeline_gap();
-        let outgoing_end = outgoing_staged_end(&self.active, outgoing_origin);
-        let Some(IncomingDecode::Priming { generation, .. }) = self.incoming.as_mut() else {
+        let active = &self.active;
+        let blender = &self.blender;
+        let Some(IncomingDecode::Priming {
+            frontier,
+            generation,
+            ..
+        }) = self.incoming.as_mut()
+        else {
             return IncomingPrime::Idle;
         };
+        if *frontier == OutgoingFrontier::Awaiting
+            && outgoing_frontier != OutgoingFrontier::Awaiting
+        {
+            *frontier = outgoing_frontier;
+        }
+        let mut latched_frontier = *frontier;
         let incoming_origin =
             incoming_origin_from(active_profile, active_gap, generation, gapless_mode);
-        if overlap_span(
+        let mut readiness = promotion_readiness(
+            active,
+            blender,
             generation,
-            outgoing_frontier,
+            latched_frontier,
             outgoing_origin,
             incoming_origin,
-            outgoing_end,
-        )
-        .is_some()
+        );
+        if matches!(readiness, PromotionReadiness::AwaitingOutgoingFrontier)
+            && observed_frontier_is_later(
+                latched_frontier,
+                outgoing_frontier,
+                outgoing_rate,
+                outgoing_origin,
+            )
         {
-            return IncomingPrime::Ready;
+            *frontier = outgoing_frontier;
+            latched_frontier = outgoing_frontier;
+            readiness = promotion_readiness(
+                active,
+                blender,
+                generation,
+                latched_frontier,
+                outgoing_origin,
+                incoming_origin,
+            );
+        }
+        match readiness {
+            PromotionReadiness::Ready(_) => return IncomingPrime::Ready,
+            PromotionReadiness::AwaitingOutgoingFrontier
+            | PromotionReadiness::AwaitingOutgoingPcm => {
+                return IncomingPrime::Pending;
+            }
+            PromotionReadiness::NeedIncoming => {}
         }
         let mut outcome = IncomingPrime::Pending;
         for _ in 0..Consts::PRIME_STEPS_PER_PASS {
@@ -247,48 +354,58 @@ impl super::core::ActiveDecode {
                     if !chunk.samples.is_empty() {
                         generation.stage(chunk);
                     }
-                    if overlap_span(
+                    match promotion_readiness(
+                        active,
+                        blender,
                         generation,
-                        outgoing_frontier,
+                        latched_frontier,
                         outgoing_origin,
                         incoming_origin,
-                        outgoing_end,
-                    )
-                    .is_some()
-                    {
-                        IncomingPrime::Ready
-                    } else {
-                        outcome = IncomingPrime::Advanced;
-                        continue;
+                    ) {
+                        PromotionReadiness::Ready(_) => IncomingPrime::Ready,
+                        PromotionReadiness::AwaitingOutgoingFrontier
+                        | PromotionReadiness::AwaitingOutgoingPcm => IncomingPrime::Pending,
+                        PromotionReadiness::NeedIncoming => {
+                            outcome = IncomingPrime::Advanced;
+                            continue;
+                        }
                     }
+                }
+                Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
+                    IncomingPrime::Failed
                 }
                 Ok(DecoderChunkOutcome::Pending(_)) => IncomingPrime::Pending,
                 Ok(DecoderChunkOutcome::Eof) => {
                     generation.finish_staging();
-                    if overlap_span(
+                    match promotion_readiness(
+                        active,
+                        blender,
                         generation,
-                        outgoing_frontier,
-                        outgoing_origin,
-                        incoming_origin,
-                        outgoing_end,
-                    )
-                    .is_some()
-                    {
-                        IncomingPrime::Ready
-                    } else if staged_ahead(
-                        generation,
-                        outgoing_frontier,
+                        latched_frontier,
                         outgoing_origin,
                         incoming_origin,
                     ) {
-                        IncomingPrime::Pending
-                    } else {
-                        debug!(
-                            ?outgoing_frontier,
-                            outgoing_origin,
-                            "incoming generation reached EOF before the outgoing frontier"
-                        );
-                        IncomingPrime::Failed
+                        PromotionReadiness::Ready(_) => IncomingPrime::Ready,
+                        PromotionReadiness::AwaitingOutgoingFrontier
+                        | PromotionReadiness::AwaitingOutgoingPcm => IncomingPrime::Pending,
+                        PromotionReadiness::NeedIncoming => {
+                            if staged_ahead(
+                                generation,
+                                latched_frontier,
+                                outgoing_rate,
+                                outgoing_origin,
+                                incoming_origin,
+                            ) {
+                                IncomingPrime::Pending
+                            } else {
+                                debug!(
+                                    outgoing_frontier = ?latched_frontier,
+                                    outgoing_origin,
+                                    "incoming generation reached EOF before the outgoing frontier"
+                                );
+                                IncomingPrime::Failed
+                            }
+                        }
                     }
                 }
                 Err(_) => IncomingPrime::Failed,
@@ -299,6 +416,7 @@ impl super::core::ActiveDecode {
             && let Some(IncomingDecode::Priming {
                 transition,
                 generation,
+                ..
             }) = self.incoming.take()
         {
             self.incoming = Some(IncomingDecode::Failed {
@@ -308,136 +426,57 @@ impl super::core::ActiveDecode {
         }
         outcome
     }
-
-    pub(crate) fn promote_incoming(&mut self, proof: ReadyToPromote) -> Option<DecoderGeneration> {
-        let incoming = self.incoming.take()?;
-        let IncomingDecode::Priming {
-            transition,
-            mut generation,
-        } = incoming
-        else {
-            self.incoming = Some(incoming);
-            return None;
-        };
-        if transition != proof.transition
-            || !trim_staged_head(&mut generation, proof.overlap)
-            || !generation.has_output()
-        {
-            self.incoming = Some(IncomingDecode::Priming {
-                transition,
-                generation,
-            });
-            return None;
-        }
-        if shares_default_profile(self.active.gapless_profile(), generation.gapless_profile()) {
-            generation.align_timeline_gap(self.active.timeline_gap());
-        }
-        self.blender.join_active(generation.blender_profile());
-        Some(std::mem::replace(&mut self.active, generation))
-    }
-
-    pub(crate) fn ready_to_promote(
-        &self,
-        outgoing_frontier: OutgoingFrontier,
-    ) -> Option<ReadyToPromote> {
-        let IncomingDecode::Priming {
-            transition,
-            generation,
-        } = self.incoming.as_ref()?
-        else {
-            return None;
-        };
-        let gapless_mode = self.gapless_mode();
-        let outgoing_origin = self.active.timeline_origin(gapless_mode);
-        let incoming_origin = incoming_origin(&self.active, generation, gapless_mode);
-        let outgoing_end = outgoing_staged_end(&self.active, outgoing_origin);
-        let overlap = overlap_span(
-            generation,
-            outgoing_frontier,
-            outgoing_origin,
-            incoming_origin,
-            outgoing_end,
-        )?;
-        Some(ReadyToPromote {
-            overlap,
-            transition: *transition,
-        })
-    }
-
-    pub(crate) fn take_failed_incoming(
-        &mut self,
-    ) -> Option<(VariantTransition, DecoderGeneration)> {
-        let incoming = self.incoming.take()?;
-        match incoming {
-            IncomingDecode::Failed {
-                transition,
-                generation,
-            } => Some((transition, generation)),
-            incoming => {
-                self.incoming = Some(incoming);
-                None
-            }
-        }
-    }
 }
 
-/// How far the outgoing generation has itself decoded, on the shared timeline.
-///
-/// The splice proof only asks whether the incoming covers the frame the
-/// outgoing is about to emit. Covering that instant is not the same as being
-/// able to carry on from it: an incoming that is staged a sliver past the cut
-/// hands the consumer that sliver and then answers `Pending`, and a starved
-/// render block is written as silence. Measured on a cold target, the sliver
-/// was 12 to 80 ms and the silence that followed was the same size.
-///
-/// So the proof also asks that the incoming be no further behind than the
-/// generation it replaces. The bar calibrates itself — it is the outgoing's own
-/// depth, not a number — and it is reachable, because a priming generation is
-/// not being consumed and its staged span only grows.
-fn outgoing_staged_end(active: &DecoderGeneration, outgoing_origin: u64) -> Option<Duration> {
-    let (_, end, rate) = active.staged_span()?;
-    Some(duration_for_frames(
-        rate,
-        end.saturating_sub(outgoing_origin),
-    ))
-}
-
-fn overlap_span(
+fn promotion_readiness(
+    active: &DecoderGeneration,
+    blender: &PcmBlender,
     generation: &DecoderGeneration,
     outgoing_frontier: OutgoingFrontier,
     outgoing_origin: u64,
     incoming_origin: u64,
-    outgoing_end: Option<Duration>,
-) -> Option<OverlapSpan> {
-    let (incoming_first, incoming_end, incoming_rate) = generation.staged_span()?;
+) -> PromotionReadiness {
+    if !blender.is_steady() {
+        return PromotionReadiness::NeedIncoming;
+    }
+    let Some((incoming_first, incoming_end, incoming_spec)) = generation.staged_span() else {
+        return PromotionReadiness::NeedIncoming;
+    };
+    let incoming_rate = incoming_spec.sample_rate.get();
     let (outgoing_frame, outgoing_rate) = match outgoing_frontier {
-        OutgoingFrontier::Awaiting => return None,
+        OutgoingFrontier::Awaiting => return PromotionReadiness::NeedIncoming,
         OutgoingFrontier::Exact { frame, rate } => (frame, rate),
         OutgoingFrontier::Unavailable => {
-            return Some(OverlapSpan {
-                incoming_first,
-                incoming_next: incoming_first,
+            return PromotionReadiness::Ready(PromotionSpan {
+                join: PromotionJoin::HardCut,
+                overlap: OverlapSpan {
+                    incoming_first,
+                    incoming_next: incoming_first,
+                },
             });
         }
     };
-    let incoming_first_time = duration_for_frames(
+    let active_spec = active.blender_profile().spec();
+    let active_rate = active_spec.sample_rate.get();
+    let Some(incoming_first_time) = content_time(
         incoming_rate,
-        incoming_first.saturating_sub(incoming_origin),
-    );
-    let incoming_end_time =
-        duration_for_frames(incoming_rate, incoming_end.saturating_sub(incoming_origin));
-    let outgoing_next = duration_for_frames(
-        outgoing_rate,
-        outgoing_frame.saturating_sub(outgoing_origin),
-    );
-    if incoming_first_time > outgoing_next || outgoing_next >= incoming_end_time {
-        // Two very different situations share this exit. `outgoing_next >=
-        // incoming_end_time` is ordinary: the incoming has not decoded far
-        // enough yet and the next priming pass fixes it. `incoming_first_time >
-        // outgoing_next` is not: priming only extends the staged END, so an
-        // incoming that landed *after* the frame the outgoing is about to emit
-        // can never cover it, and the transition waits for the outgoing to
-        // catch up instead. Log the three quantities so the difference is
+        incoming_first,
+        incoming_rate,
+        incoming_origin,
+    ) else {
+        return PromotionReadiness::NeedIncoming;
+    };
+    let Some(incoming_end_time) =
+        content_time(incoming_rate, incoming_end, incoming_rate, incoming_origin)
+    else {
+        return PromotionReadiness::NeedIncoming;
+    };
+    let Some(outgoing_next) =
+        content_time(outgoing_rate, outgoing_frame, active_rate, outgoing_origin)
+    else {
+        return PromotionReadiness::NeedIncoming;
+    };
+    if incoming_first_time > outgoing_next {
         trace!(
             ?incoming_first_time,
             ?incoming_end_time,
@@ -448,73 +487,153 @@ fn overlap_span(
             outgoing_frame,
             outgoing_origin,
             outgoing_rate,
-            landed_late = incoming_first_time > outgoing_next,
-            "incoming generation does not cover the outgoing frontier"
+            "incoming generation is waiting for the outgoing frontier"
         );
-        return None;
+        return PromotionReadiness::AwaitingOutgoingFrontier;
     }
-    if let Some(outgoing_end) = outgoing_end
-        && incoming_end_time < outgoing_end
-    {
-        trace!(
-            ?incoming_end_time,
-            ?outgoing_end,
-            ?outgoing_next,
-            "incoming generation covers the frontier but is shallower than the outgoing"
-        );
-        return None;
+    if outgoing_next >= incoming_end_time {
+        return PromotionReadiness::NeedIncoming;
     }
-    let mut incoming_next =
-        u64::try_from(frames_for_duration(incoming_rate, outgoing_next)).unwrap_or(u64::MAX);
-    if duration_for_frames(incoming_rate, incoming_next) < outgoing_next {
-        incoming_next = incoming_next.saturating_add(1);
+    let Some(incoming_next) = frame_at_or_after(incoming_rate, incoming_origin, outgoing_next)
+    else {
+        return PromotionReadiness::NeedIncoming;
+    };
+    if incoming_first > incoming_next || incoming_next >= incoming_end {
+        return PromotionReadiness::NeedIncoming;
     }
-    incoming_next = incoming_next.saturating_add(incoming_origin);
-    let span =
-        (incoming_first <= incoming_next && incoming_next < incoming_end).then_some(OverlapSpan {
+    let join = if incoming_spec == active_spec {
+        let frames = blender.join_frame_count();
+        let Some(outgoing_first) = frame_at_or_after(active_rate, outgoing_origin, outgoing_next)
+        else {
+            return PromotionReadiness::NeedIncoming;
+        };
+        if !generation.staged_covers(incoming_spec, incoming_next, frames) {
+            trace!(
+                frames,
+                incoming_next,
+                outgoing_first,
+                ?outgoing_next,
+                "same-spec promotion is waiting for incoming join PCM"
+            );
+            return PromotionReadiness::NeedIncoming;
+        }
+        if !active.staged_covers(active_spec, outgoing_first, frames) {
+            trace!(
+                frames,
+                incoming_next,
+                outgoing_first,
+                ?outgoing_next,
+                "same-spec promotion is waiting for outgoing join PCM"
+            );
+            return if active.is_finished() {
+                PromotionReadiness::NeedIncoming
+            } else {
+                PromotionReadiness::AwaitingOutgoingPcm
+            };
+        }
+        PromotionJoin::Blend {
+            frames,
+            outgoing_first,
+            spec: active_spec,
+        }
+    } else {
+        PromotionJoin::HardCut
+    };
+    let span = PromotionSpan {
+        join,
+        overlap: OverlapSpan {
             incoming_first,
             incoming_next,
-        });
-    if span.is_some() {
-        // Fires once per transition, and it is the one number the splice is
-        // judged by: which incoming frame replaces the outgoing frontier. The
-        // miss path already explains why a proof was refused; without this the
-        // proof that succeeded says nothing about where it cut.
-        debug!(
-            incoming_first,
-            incoming_next,
-            incoming_end,
-            incoming_origin,
-            incoming_rate,
-            outgoing_frame,
-            outgoing_origin,
-            outgoing_rate,
-            ?outgoing_next,
-            "incoming generation covers the outgoing frontier"
-        );
-    }
-    span
+        },
+    };
+    debug!(
+        incoming_first,
+        incoming_next,
+        incoming_end,
+        incoming_origin,
+        incoming_rate,
+        outgoing_frame,
+        outgoing_origin,
+        outgoing_rate,
+        ?outgoing_next,
+        blended = matches!(span.join, PromotionJoin::Blend { .. }),
+        "incoming generation covers the outgoing frontier"
+    );
+    PromotionReadiness::Ready(span)
 }
 
 fn staged_ahead(
     generation: &DecoderGeneration,
     outgoing_frontier: OutgoingFrontier,
+    outgoing_origin_rate: u32,
     outgoing_origin: u64,
     incoming_origin: u64,
 ) -> bool {
-    let Some((incoming_first, _, incoming_rate)) = generation.staged_span() else {
+    let Some((incoming_first, _, incoming_spec)) = generation.staged_span() else {
         return false;
     };
+    let incoming_rate = incoming_spec.sample_rate.get();
     match outgoing_frontier {
         OutgoingFrontier::Awaiting => true,
         OutgoingFrontier::Unavailable => false,
-        OutgoingFrontier::Exact { frame, rate } => {
-            duration_for_frames(
+        OutgoingFrontier::Exact { frame, rate } => match (
+            content_time(
                 incoming_rate,
-                incoming_first.saturating_sub(incoming_origin),
-            ) > duration_for_frames(rate, frame.saturating_sub(outgoing_origin))
-        }
+                incoming_first,
+                incoming_rate,
+                incoming_origin,
+            ),
+            content_time(rate, frame, outgoing_origin_rate, outgoing_origin),
+        ) {
+            (Some(incoming), Some(outgoing)) => incoming > outgoing,
+            _ => false,
+        },
     }
+}
+
+fn content_time(rate: u32, frame: u64, origin_rate: u32, origin: u64) -> Option<Duration> {
+    if rate == origin_rate {
+        return frame
+            .checked_sub(origin)
+            .map(|frames| duration_for_frames(rate, frames));
+    }
+    duration_for_frames(rate, frame).checked_sub(duration_for_frames(origin_rate, origin))
+}
+
+fn observed_frontier_is_later(
+    current: OutgoingFrontier,
+    observed: OutgoingFrontier,
+    origin_rate: u32,
+    origin: u64,
+) -> bool {
+    let (
+        OutgoingFrontier::Exact {
+            frame: current_frame,
+            rate: current_rate,
+        },
+        OutgoingFrontier::Exact {
+            frame: observed_frame,
+            rate: observed_rate,
+        },
+    ) = (current, observed)
+    else {
+        return false;
+    };
+    match (
+        content_time(current_rate, current_frame, origin_rate, origin),
+        content_time(observed_rate, observed_frame, origin_rate, origin),
+    ) {
+        (Some(current), Some(observed)) => observed > current,
+        _ => false,
+    }
+}
+
+fn frame_at_or_after(rate: u32, origin: u64, time: Duration) -> Option<u64> {
+    let mut frame = u64::try_from(frames_for_duration(rate, time)).ok()?;
+    if duration_for_frames(rate, frame) < time {
+        frame = frame.checked_add(1)?;
+    }
+    origin.checked_add(frame)
 }
 
 fn trim_staged_head(generation: &mut DecoderGeneration, overlap: OverlapSpan) -> bool {
@@ -568,4 +687,21 @@ fn shares_default_profile(
     active.gapless().is_none()
         && incoming.gapless().is_none()
         && active.default_priming_frames() == incoming.default_priming_frames()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{content_time, frame_at_or_after};
+
+    #[test]
+    fn same_rate_cut_preserves_exact_nonzero_origin() {
+        const RATE: u32 = 44_100;
+        const ORIGIN: u64 = 1_024;
+        const FRONTIER: u64 = 2_048;
+
+        let time = content_time(RATE, FRONTIER, RATE, ORIGIN).expect("frontier follows origin");
+        let cut = frame_at_or_after(RATE, ORIGIN, time);
+
+        assert_eq!(cut, Some(FRONTIER));
+    }
 }

@@ -3,6 +3,15 @@ use std::path::Path;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+/// Paths that define the pipeline judging an imported commit. A merged pull
+/// request touching one of these would rewrite its own judge, so the import
+/// stops and the change is ported through a reviewed merge request instead.
+///
+/// Manifests are deliberately absent. `Cargo.toml` and `Cargo.lock` do not
+/// touch the judge — the trusted pipeline runs the real suite against them —
+/// and refusing them outright turned every dependency bump into a manual port.
+/// Their risk is a build script running on the runner, which is what
+/// `deps:deny` covers on the quarantine pipeline.
 pub(super) const CONTROL_PATHS: &[&str] = &[
     ".gitlab-ci.yml",
     ".gitlab/",
@@ -11,8 +20,6 @@ pub(super) const CONTROL_PATHS: &[&str] = &[
     ".config/mutation-suites.toml",
     ".config/nextest.toml",
     ".config/xtask.toml",
-    "Cargo.lock",
-    "Cargo.toml",
     "ci/",
     "docker/",
     "justfile",
@@ -140,14 +147,24 @@ mod tests {
                 "xtask/src/ci/run.rs".to_string(),
                 ".gitlab-ci.yml".to_string(),
                 ".config/just/ci.just".to_string(),
-                "Cargo.lock".to_string(),
             ]),
             [
                 ".config/just/ci.just",
                 ".gitlab-ci.yml",
-                "Cargo.lock",
                 "xtask/src/ci/run.rs",
             ]
+        );
+    }
+
+    #[test]
+    fn a_manifest_change_alone_does_not_block_the_import() {
+        assert!(
+            changed_control_paths([
+                "Cargo.toml".to_string(),
+                "Cargo.lock".to_string(),
+                "crates/kithara-net/Cargo.toml".to_string(),
+            ])
+            .is_empty()
         );
     }
 

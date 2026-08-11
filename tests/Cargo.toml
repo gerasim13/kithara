@@ -28,10 +28,13 @@ test = false
 
 [features]
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara/perf"]
-# End-to-end tests that require real networks and real audio hardware.
-# Gated off by default so `just test` never compiles `suite_e2e`. Real devices
-# run at arbitrary sample rates, so every e2e lane in .config/xtask.toml pairs
-# this with a fixed-ratio SRC backend (rubato / glide / apple fused).
+# End-to-end playback through a real cpal output device. Gated off by default so
+# `just test` never compiles `suite_e2e`. Real devices run at arbitrary sample
+# rates, so every e2e lane in `.config/xtask.toml` pairs this with a fixed-ratio
+# SRC backend (rubato / glide / apple fused); that axis is why there are three
+# lanes rather than one. Only a machine with a sound card can run them: the
+# Apple executor does, a container does not, so no container lane carries them.
+# The engine-lifecycle tests that need no device moved to `suite_light`.
 e2e = []
 # Regression tests for the player bugs QA filed against the zvooq-ios
 # integration. Some reproduce an open bug and are red on purpose; the rest
@@ -52,8 +55,8 @@ network = []
 # stayed off CI because part of it could not go there.
 network-manual = []
 # Selenium-driven WebDriver tests. Gated off by default so `just test`
-# doesn't try to spin up trunk + chromedriver. Run via
-# `just test run --lane=selenium`.
+# doesn't try to spin up trunk + a webdriver. Run via
+# `just test run --lane=selenium-firefox`.
 selenium = []
 # Deterministic virtual-clock test mode. Routes the platform's blocking waits
 # (`thread::park_timeout`, `sync::Condvar`) onto the quiescence engine so timed
@@ -117,32 +120,13 @@ uuid = { workspace = true }
 [target.'cfg(all(not(target_arch = "wasm32"), not(all(target_os = "windows", target_arch = "aarch64"))))'.dependencies]
 kithara = { workspace = true, features = ["fdk-aac"] }
 
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
-kithara = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
-
-# --- Apple hardware backend (macOS/iOS only) ---
-# Forwarded so `DecoderBackend::Apple` is in scope for tests that
-# parametrise over backends. The variant is `#[cfg]`-gated on
-# `feature = "apple"` + matching `target_os`, so without these entries
-# the test crate cannot reference it.
-[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-kithara = { workspace = true, features = ["apple", "client-wreq"] }
-
-# --- Native-only dependencies ---
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara = { workspace = true, features = [
-    "full",
-    "queue",
-    "probe",
-    "mock",
-    "symphonia",
-    "stretch-signalsmith",
-    "stretch-bungee",
-    "backend-cpal",
-    "tokio-net",
-    "tokio-rt-multi-thread",
-] }
-kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "beat-nn", "lib-only"] }
+# `bungee-sys` builds through `cmake`/MSVC and fails there; `kithara-stretch`
+# already drops the dependency for that target (see its `Cargo.toml`), so
+# requesting the feature here would compile a module whose imports do not
+# exist, the same failure wasm32 gets if it asks for the feature that block
+# above never lists.
+[target.'cfg(all(not(target_arch = "wasm32"), not(all(target_os = "windows", target_env = "msvc"))))'.dependencies]
+kithara = { workspace = true, features = ["stretch-bungee"] }
 
 kithara-broadcast = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 # Only `architecture_trace` reaches for it, and that module is already native
@@ -188,6 +172,32 @@ tower-http = { workspace = true }
 
 # Mocking
 unimock = { workspace = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
+kithara = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
+
+# --- Apple hardware backend (macOS/iOS only) ---
+# Forwarded so `DecoderBackend::Apple` is in scope for tests that
+# parametrise over backends. The variant is `#[cfg]`-gated on
+# `feature = "apple"` + matching `target_os`, so without these entries
+# the test crate cannot reference it.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+kithara = { workspace = true, features = ["apple", "client-wreq"] }
+
+# --- Native-only dependencies ---
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara = { workspace = true, features = [
+    "full",
+    "queue",
+    "probe",
+    "mock",
+    "symphonia",
+    "stretch-signalsmith",
+    "backend-cpal",
+    "tokio-net",
+    "tokio-rt-multi-thread",
+] }
+kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "beat-nn", "lib-only"] }
 
 # --- WASM-only dependencies ---
 [target.'cfg(target_arch = "wasm32")'.dependencies]

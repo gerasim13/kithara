@@ -14,7 +14,7 @@ use kithara::{
     platform::time::{self, Duration, Instant},
     stream::{ContainerFormat, MediaInfo, Stream},
 };
-use kithara_integration_tests::{TestTempDir, create_test_wav, kithara};
+use kithara_integration_tests::{TestTempDir, create_test_wav, kithara, reads::blocking_audio};
 use tempfile::NamedTempFile;
 
 /// Polls `audio.read()` until it returns `Frames`, an unrelated `Eof`,
@@ -233,20 +233,23 @@ async fn test_audio_spec() {
 #[kithara::test(tokio, timeout(Duration::from_secs(20)))]
 async fn test_audio_read() {
     let (_cache, _tmp, config) = test_wav_config(1000);
-    let mut audio = Audio::<Stream<kithara::file::File>>::new(config)
+    let audio = Audio::<Stream<kithara::file::File>>::new(config)
         .await
         .unwrap();
 
-    let mut buf = [0.0f32; 256];
-    let mut total_read = 0usize;
-
-    let saw_eof = loop {
-        match audio.read(&mut buf).expect("read") {
-            ReadOutcome::Pending { .. } => break false,
-            ReadOutcome::Frames { count, .. } => total_read += count.get(),
-            ReadOutcome::Eof { .. } => break true,
-        }
-    };
+    let (_audio, (total_read, saw_eof)) = blocking_audio(audio, |audio| {
+        let mut buf = [0.0f32; 256];
+        let mut total_read = 0usize;
+        let saw_eof = loop {
+            match audio.read(&mut buf).expect("read") {
+                ReadOutcome::Pending { .. } => break false,
+                ReadOutcome::Frames { count, .. } => total_read += count.get(),
+                ReadOutcome::Eof { .. } => break true,
+            }
+        };
+        (total_read, saw_eof)
+    })
+    .await;
 
     assert!(total_read > 0);
     assert!(saw_eof);
@@ -257,12 +260,16 @@ async fn test_audio_read() {
 #[case::wide(1000, 64)]
 async fn test_audio_read_small_buffer(#[case] sample_count: usize, #[case] buf_len: usize) {
     let (_cache, _tmp, config) = test_wav_config(sample_count);
-    let mut audio = Audio::<Stream<kithara::file::File>>::new(config)
+    let audio = Audio::<Stream<kithara::file::File>>::new(config)
         .await
         .unwrap();
 
-    let mut buf = vec![0.0f32; buf_len];
-    let outcome = audio.read(&mut buf).expect("read");
+    let (_audio, outcome) = blocking_audio(audio, move |audio| {
+        let mut buf = vec![0.0f32; buf_len];
+        audio.read(&mut buf)
+    })
+    .await;
+    let outcome = outcome.expect("read");
     let ReadOutcome::Frames { count, .. } = outcome else {
         panic!("expected Frames, got {outcome:?}");
     };
@@ -273,52 +280,61 @@ async fn test_audio_read_small_buffer(#[case] sample_count: usize, #[case] buf_l
 #[kithara::test(tokio)]
 async fn test_audio_is_eof() {
     let (_cache, _tmp, config) = test_wav_config(10);
-    let mut audio = Audio::<Stream<kithara::file::File>>::new(config)
+    let audio = Audio::<Stream<kithara::file::File>>::new(config)
         .await
         .unwrap();
 
-    let mut buf = [0.0f32; 1024];
-    let saw_eof = loop {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Pending { .. }) => break false,
-            Ok(ReadOutcome::Frames { .. }) => continue,
-            Ok(ReadOutcome::Eof { .. }) => break true,
-            Err(e) => panic!("decode error: {e}"),
+    let (_audio, saw_eof) = blocking_audio(audio, |audio| {
+        let mut buf = [0.0f32; 1024];
+        loop {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => break false,
+                Ok(ReadOutcome::Frames { .. }) => continue,
+                Ok(ReadOutcome::Eof { .. }) => break true,
+                Err(e) => panic!("decode error: {e}"),
+            }
         }
-    };
+    })
+    .await;
     assert!(saw_eof, "expected ReadOutcome::Eof after draining WAV");
 }
 
 #[kithara::test(tokio)]
 async fn test_audio_seek() {
     let (_cache, _tmp, config) = test_wav_config(44100);
-    let mut audio = Audio::<Stream<kithara::file::File>>::new(config)
+    let audio = Audio::<Stream<kithara::file::File>>::new(config)
         .await
         .unwrap();
 
-    let mut buf = [0.0f32; 256];
-    let _ = audio.read(&mut buf);
+    let (audio, initial_read) = blocking_audio(audio, |audio| {
+        let mut buf = [0.0f32; 256];
+        audio.read(&mut buf)
+    })
+    .await;
+    let _ = initial_read;
 
-    let result = audio.seek(Duration::from_secs(0));
+    let (audio, result) = blocking_audio(audio, |audio| audio.seek(Duration::from_secs(0))).await;
     assert!(result.is_ok());
 
-    assert!(matches!(
-        audio.read(&mut buf),
-        Ok(ReadOutcome::Frames { .. })
-    ));
+    let (_audio, read_result) = blocking_audio(audio, |audio| {
+        let mut buf = [0.0f32; 256];
+        audio.read(&mut buf)
+    })
+    .await;
+    assert!(matches!(read_result, Ok(ReadOutcome::Frames { .. })));
 }
 
 #[kithara::test(tokio)]
 async fn test_audio_playback_progress_uses_output_commit() {
     let (_cache, _tmp, config) = test_wav_config(1024);
-    let mut audio = Audio::<Stream<kithara::file::File>>::new(config)
+    let audio = Audio::<Stream<kithara::file::File>>::new(config)
         .await
         .unwrap();
 
     let mut events = audio.event_bus().subscribe();
     let mut buf = [0.0f32; 256];
 
-    let _ = audio.read(&mut buf);
+    let (_audio, _read_result) = blocking_audio(audio, move |audio| audio.read(&mut buf)).await;
 
     let mut saw_progress = false;
     let deadline = Instant::now() + Duration::from_millis(300);
@@ -346,16 +362,18 @@ async fn test_audio_playback_progress_uses_output_commit() {
 #[kithara::test(tokio)]
 async fn test_seek_emits_matching_playback_progress() {
     let (_cache, _tmp, config) = test_wav_config(44_100 * 4);
-    let mut audio = Audio::<Stream<kithara::file::File>>::new(config)
+    let audio = Audio::<Stream<kithara::file::File>>::new(config)
         .await
         .unwrap();
 
     let mut events = audio.event_bus().subscribe();
     let mut buf = [0.0f32; 256];
 
-    audio.seek(Duration::from_secs_f64(2.5)).unwrap();
+    let (audio, seek_result) =
+        blocking_audio(audio, |audio| audio.seek(Duration::from_secs_f64(2.5))).await;
+    seek_result.unwrap();
     let expected_epoch = await_seek_request_epoch(&mut events, Duration::from_secs(1)).await;
-    let _ = audio.read(&mut buf);
+    let (_audio, _read_result) = blocking_audio(audio, move |audio| audio.read(&mut buf)).await;
 
     let deadline = Instant::now() + Duration::from_millis(500);
     let mut matched_epoch = None;
@@ -377,12 +395,14 @@ async fn test_seek_emits_matching_playback_progress() {
 #[kithara::test(tokio)]
 async fn test_seek_complete_emitted_only_after_output_commit() {
     let (_cache, _tmp, config) = test_wav_config(44_100 * 4);
-    let mut audio = Audio::<Stream<kithara::file::File>>::new(config)
+    let audio = Audio::<Stream<kithara::file::File>>::new(config)
         .await
         .unwrap();
 
     let mut events = audio.event_bus().subscribe();
-    audio.seek(Duration::from_secs_f64(1.5)).unwrap();
+    let (audio, seek_result) =
+        blocking_audio(audio, |audio| audio.seek(Duration::from_secs_f64(1.5))).await;
+    seek_result.unwrap();
     let expected_epoch = await_seek_request_epoch(&mut events, Duration::from_secs(1)).await;
 
     let mut saw_seek_complete_before_read = false;
@@ -397,8 +417,11 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
         "SeekComplete must not be emitted before output commit"
     );
 
-    let mut buf = [0.0f32; 512];
-    let read_result = audio.read(&mut buf);
+    let (_audio, read_result) = blocking_audio(audio, |audio| {
+        let mut buf = [0.0f32; 512];
+        audio.read(&mut buf)
+    })
+    .await;
     assert!(
         matches!(read_result, Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0),
         "read must commit PCM output",

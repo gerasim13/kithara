@@ -17,7 +17,6 @@ use super::model::ImportState;
 pub(super) struct LedgerEntry {
     pub(super) state: ImportState,
     pub(super) pipeline_id: Option<u64>,
-    pub(super) check_run_id: Option<u64>,
     pub(super) detail: Option<String>,
     updated_at: u64,
 }
@@ -62,7 +61,6 @@ impl Ledger {
         gitlab_base_sha: &str,
         state: ImportState,
         pipeline_id: Option<u64>,
-        check_run_id: Option<u64>,
         detail: Option<String>,
     ) -> Result<()> {
         self.with_locked_data(|data| {
@@ -74,13 +72,34 @@ impl Ledger {
                     state,
                     pipeline_id: pipeline_id
                         .or_else(|| previous.and_then(|entry| entry.pipeline_id)),
-                    check_run_id: check_run_id
-                        .or_else(|| previous.and_then(|entry| entry.check_run_id)),
                     detail,
                     updated_at: unix_time()?,
                 },
             );
             self.write(data)
+        })
+    }
+
+    /// Drop every entry recorded for one GitHub head, whatever base it was
+    /// judged against. A rejection is otherwise permanent — `import_github`
+    /// refuses the pair on sight — and a maintainer who has dealt with the
+    /// reason has no other way to let the commit through.
+    pub(super) fn forget(&self, github_sha: &str) -> Result<Vec<String>> {
+        self.with_locked_data(|data| {
+            let prefix = format!("{github_sha}:");
+            let cleared: Vec<String> = data
+                .imports
+                .keys()
+                .filter(|key| key.starts_with(&prefix))
+                .cloned()
+                .collect();
+            for key in &cleared {
+                data.imports.remove(key);
+            }
+            if !cleared.is_empty() {
+                self.write(data)?;
+            }
+            Ok(cleared)
         })
     }
 
@@ -161,25 +180,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn transition_is_idempotent_and_preserves_ids() {
+    fn transition_is_idempotent_and_preserves_the_pipeline() {
         let directory = tempfile::tempdir().unwrap();
         let ledger = Ledger::new(directory.path()).unwrap();
         ledger
-            .put(
-                "github",
-                "gitlab",
-                ImportState::Testing,
-                Some(42),
-                Some(84),
-                None,
-            )
+            .put("github", "gitlab", ImportState::Testing, Some(42), None)
             .unwrap();
         ledger
             .put(
                 "github",
                 "gitlab",
                 ImportState::Promoted,
-                None,
                 None,
                 Some("done".into()),
             )
@@ -188,7 +199,32 @@ mod tests {
         let entry = ledger.get("github", "gitlab").unwrap().unwrap();
         assert_eq!(entry.state, ImportState::Promoted);
         assert_eq!(entry.pipeline_id, Some(42));
-        assert_eq!(entry.check_run_id, Some(84));
         assert_eq!(entry.detail.as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn forgetting_a_head_clears_every_base_it_was_judged_against() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        for base in ["one", "two"] {
+            ledger
+                .put("github", base, ImportState::Rejected, None, None)
+                .unwrap();
+        }
+        ledger
+            .put("other", "one", ImportState::Rejected, None, None)
+            .unwrap();
+
+        assert_eq!(ledger.forget("github").unwrap().len(), 2);
+        assert_eq!(ledger.get("github", "one").unwrap(), None);
+        assert_eq!(ledger.get("github", "two").unwrap(), None);
+        assert!(ledger.get("other", "one").unwrap().is_some());
+    }
+
+    #[test]
+    fn forgetting_an_unknown_head_clears_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        assert!(ledger.forget("github").unwrap().is_empty());
     }
 }

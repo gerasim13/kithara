@@ -53,6 +53,19 @@ jobs:
             just quality assess
           fi
 
+      # Decision evidence stays visible when assessment execution is partial,
+      # and an invalid summary remains a failed check.
+      - name: Summarize the assessment
+        if: always()
+        env:
+          DEPTH: ${{ inputs.depth || 'shallow' }}
+        run: |
+          summary_args=()
+          if [[ "$DEPTH" == "deep" ]]; then
+            summary_args=(--depth deep)
+          fi
+          just quality summary "${summary_args[@]}" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload the assessment
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -93,8 +106,28 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # `viz` no longer fails over a degraded optional overlay, so the only place
+      # that degradation would otherwise appear is an artifact nobody opens.
       - name: Render the architecture document
-        run: just arch viz
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p target
+          just arch viz 2>&1 | tee target/viz.log
+
+      - name: Report the architecture evidence status
+        if: always()
+        run: |
+          {
+            echo "## Architecture document"
+            echo
+            if [[ -f target/viz.log ]]; then
+              grep -E '^(==>|warning:)' target/viz.log | sed 's/^/- /' \
+                || echo "- The render produced no status line."
+            else
+              echo "- The render step did not run."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Sweep for orphans
         run: just arch orphans

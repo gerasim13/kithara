@@ -112,11 +112,14 @@ async fn waveform_and_player_share_one_get() {
     );
     let mut analysis_rx = runner.analyze(waveform_cfg, std::sync::Arc::from("fixture"));
 
-    let mut player = Audio::<Stream<File>>::new(player_cfg)
+    let player = Audio::<Stream<File>>::new(player_cfg)
         .await
         .expect("open player audio");
-    player.preload().expect("player preload");
-    let player_drain = spawn_blocking(move || drain_to_eof(player));
+    let player_drain = spawn_blocking(move || {
+        let mut player = player;
+        player.preload().expect("player preload");
+        drain_to_eof(player)
+    });
 
     analysis_rx
         .changed()

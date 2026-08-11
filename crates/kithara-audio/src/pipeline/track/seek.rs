@@ -185,6 +185,7 @@ impl Track<AwaitingResume> {
         match decode_step(src) {
             DecodeStep::Produced(fetch) => TrackStep::Produced(fetch),
             DecodeStep::Interrupted => TrackStep::StateChanged,
+            DecodeStep::TransitionPending => TrackStep::Blocked(WaitingReason::Waiting),
             DecodeStep::NotReady(reason) => TrackStep::Blocked(reason),
             DecodeStep::Eof => TrackStep::Eof,
             DecodeStep::Failed => TrackStep::Failed,

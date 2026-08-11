@@ -36,6 +36,7 @@ const QUIESCE_TICKS: usize = 3;
 /// true, or returns `Err` when `deadline` (virtual time) elapses without
 /// progress. Callers `.expect()` the result, so a genuinely wedged pipeline
 /// panics with `label` instead of silently letting a later assertion pass.
+#[kithara::flash(true)]
 pub async fn wait_until<F>(deadline: Duration, label: &str, mut cond: F) -> Result<(), String>
 where
     F: FnMut() -> bool,

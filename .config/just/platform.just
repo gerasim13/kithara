@@ -120,12 +120,19 @@ apple MODE="xcframework" *ARGS:
         # `redefinition of module 'SwiftShims'` — every fresh CI guest hit it
         # before any test ran. A warm cache hides it, which is why it looks
         # intermittent.
+        #
+        # xcodebuild writes no JUnit, and it refuses to overwrite a bundle.
+        # `xtask ci run apple-ios-test` turns this into the report CI collects.
+        bundle="target/xcresult/ios-test.xcresult"
+        rm -rf "$bundle"
+        mkdir -p "$(dirname "$bundle")"
         KITHARA_LOCAL_DEV=1 \
         TEST_RUNNER_KITHARA_TEST_SERVER_URL="$test_server_url" \
           xcodebuild test \
             -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
             -scheme KitharaDemoUnitTests_iOS \
             -destination "$destination" \
+            -resultBundlePath "$bundle" \
             SWIFT_ENABLE_EXPLICIT_MODULES=NO
         ;;
       integration-regressions)

@@ -14,6 +14,8 @@ use super::{
     run::{CacheGroup, Lane},
 };
 
+pub(crate) const PROVISIONED_LINUX_IMAGE_ENV: &str = "KITHARA_CI_PROVISIONED_LINUX_IMAGE";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CacheTrust {
     Quarantine,
@@ -252,6 +254,10 @@ fn shared_root(config: &CiConfig, lane: Lane) -> PathBuf {
 
 fn is_ci() -> bool {
     env::var_os("CI").is_some_and(|value| !value.is_empty())
+}
+
+pub(crate) fn is_gitlab() -> bool {
+    env::var_os("GITLAB_CI").is_some_and(|value| !value.is_empty())
 }
 
 /// How much room the cache still has. A job reads this through whatever the

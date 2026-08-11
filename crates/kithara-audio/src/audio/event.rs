@@ -439,14 +439,20 @@ mod tests {
     #[kithara::test]
     fn output_wake_is_deferred_until_the_scheduler_shell_flushes() {
         let bus = EventBus::new(8);
-        let wake =
-            ReaderOutputWake::new(Arc::new(ThreadWake::default()), AudioEvents::deferred(&bus));
+        let thread = Arc::new(ThreadWake::default());
+        let since = thread.current();
+        let wake = ReaderOutputWake::new(Arc::clone(&thread), AudioEvents::deferred(&bus));
 
         WakeSignal::wake(&wake);
 
+        assert_eq!(thread.current(), since);
         assert!(wake.pending.load(Ordering::Acquire));
         wake.flush_deferred();
+        let delivered = thread.current();
+        assert_ne!(delivered, since);
         assert!(!wake.pending.load(Ordering::Acquire));
+        wake.flush_deferred();
+        assert_eq!(thread.current(), delivered);
     }
 
     #[kithara::test]

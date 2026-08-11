@@ -1,11 +1,20 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::{Mutex, MutexGuard, OnceLock, PoisonError},
 };
 
 use clap::{FromArgMatches, Subcommand};
 use kithara_devtools::{CoreCommand, Ctx};
 use tempfile::tempdir;
+
+fn runtime_scenario_guard() -> MutexGuard<'static, ()> {
+    static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+    GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
 
 fn copy_tree(source: &Path, target: &Path) {
     fs::create_dir_all(target).expect("create fixture directory");
@@ -37,6 +46,25 @@ fn viz_command(runtime: &str) -> CoreCommand {
         ])
         .expect("parse viz command");
     CoreCommand::from_arg_matches(&matches).expect("build viz command")
+}
+
+fn selected_scenario_command(name: &str) -> CoreCommand {
+    let command = CoreCommand::augment_subcommands(clap::Command::new("xtask"));
+    let matches = command
+        .try_get_matches_from([
+            "xtask",
+            "viz",
+            "--crate",
+            "flow",
+            "--lod",
+            "3",
+            "--semantic",
+            "off",
+            "--scenario",
+            name,
+        ])
+        .expect("parse selected scenario command");
+    CoreCommand::from_arg_matches(&matches).expect("build selected scenario command")
 }
 
 fn workspace_lod_command(lod: &str) -> CoreCommand {
@@ -262,7 +290,7 @@ fn workspace_filters_remove_crates_modules_edges_and_report_findings() {
                     && edge["target"]["module"] != "runtime"
             })
     );
-    assert_eq!(manifest["schema_version"], 4);
+    assert_eq!(manifest["schema_version"], 5);
     assert_eq!(manifest["lod"], 1);
     assert_eq!(
         manifest["filters"]["exclude_crates"],
@@ -540,7 +568,7 @@ fn crate_lod_two_groups_methods_into_architectural_abstractions() {
     assert!(!document.contains("[\"fn worker()\"]"));
     assert!(document.contains("Architecture contours:"));
     assert!(document.contains("abstractions"));
-    assert_eq!(manifest["schema_version"], 4);
+    assert_eq!(manifest["schema_version"], 5);
     assert_eq!(manifest["lod"], 2);
     let lifted_call = projection["edges"]
         .as_array()
@@ -704,6 +732,7 @@ fn portable_workspace_produces_stable_mermaid_artifacts() {
 
 #[test]
 fn configured_runtime_scenario_enriches_the_same_graph() {
+    let _guard = runtime_scenario_guard();
     let temp = tempdir().expect("tempdir");
     let fixture =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/architecture-workspace");
@@ -758,7 +787,53 @@ fn configured_runtime_scenario_enriches_the_same_graph() {
 }
 
 #[test]
+fn degraded_selected_scenario_preserves_the_static_projection_before_failing() {
+    let temp = tempdir().expect("tempdir");
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/architecture-workspace");
+    copy_tree(&fixture, temp.path());
+    fs::write(
+        temp.path().join(".config/xtask.toml"),
+        r#"
+[project]
+name = "portable-flow"
+
+[[architecture.runtime.scenarios]]
+name = "broken-runtime"
+command = "trace"
+path = "missing.jsonl"
+"#,
+    )
+    .expect("degraded runtime config");
+    let manifest_path = temp.path().join("Cargo.toml");
+    let ctx = Ctx::load_from_manifest(&manifest_path).expect("load fixture context");
+
+    let error = kithara_devtools::run(&selected_scenario_command("broken-runtime"), &ctx)
+        .expect_err("degraded selected scenario");
+
+    assert!(
+        error
+            .to_string()
+            .contains("explicitly requested architecture evidence degraded")
+    );
+    let output = temp
+        .path()
+        .join("target/architecture/working-tree/manifest.json");
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(output).expect("preserved manifest"))
+            .expect("manifest JSON");
+    assert_eq!(manifest["schema_version"], 5);
+    assert_eq!(manifest["status"], "runtime-degraded");
+    assert!(
+        manifest["visible_nodes"]
+            .as_u64()
+            .is_some_and(|nodes| nodes > 0)
+    );
+}
+
+#[test]
 fn excluded_test_harness_can_still_produce_runtime_evidence() {
+    let _guard = runtime_scenario_guard();
     let temp = tempdir().expect("tempdir");
     let fixture =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/architecture-workspace");

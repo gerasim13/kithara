@@ -103,6 +103,26 @@ The Linux image is built from the pins alone: `RUST_VERSION` and
 `RUST_BASE_DIGEST` select the base image, and every tool version reaches the
 Dockerfile as a build argument. No version is written twice.
 
+A Linux image tag change is not deployed until the Mac mini has built it and
+regenerated its runner configuration. From a checkout of the commit carrying
+the new pin, logged in as `kithara-ci` on that host, run:
+
+```text
+cargo build --locked --release -p xtask
+export KITHARA_CI_HOST_CONFIG=/Volumes/KitharaCI/services/mac-host.toml
+export KITHARA_CI_PINS=$PWD/.config/ci-pins.toml
+target/release/xtask ci host build-linux-image $PWD/docker/ci.Dockerfile
+target/release/xtask ci host configure-runners
+target/release/xtask ci host activate
+```
+
+GitLab leaves the job image to that generated runner configuration. The runner
+never pulls this local-only tag and declares the tag it provisioned to each
+job; `xtask ci run` compares that declaration with the checked-out pin before
+running a Linux, web, or dependency lane. A drifted host therefore starts its
+existing local image only long enough to name the missing tag and print the
+commands above.
+
 ## GitLab runners
 
 Create four project runner authentication tokens in corporate GitLab:
@@ -175,8 +195,11 @@ Android, and web checks.
 ## Repository bridge
 
 Copy `ci/bridge/config.example.toml` to
-`/Volumes/KitharaCI/services/bridge/config.toml`. The config, GitHub App key,
-and GitLab token must belong to UID 504 (`kithara-sync`) and have mode `0600`.
+`/Volumes/KitharaCI/services/bridge/config.toml`. The config and the two
+tokens must belong to UID 504 (`kithara-sync`) and have mode `0600`. The GitHub
+token needs `Contents: write` to publish `main`, `Pull requests: read` to
+recognise a merged pull request, and `Commit statuses: write` to report the
+verdict — check runs are a GitHub App API and the bridge does not use one.
 Validate without network mutation:
 
 ```text
@@ -190,10 +213,47 @@ sudo -E /Volumes/KitharaCI/services/bin/kithara-ci ci host activate-bridge
 ```
 
 GitLab `main` fast-forwards to GitHub only after the exact commit has a
-successful GitLab push pipeline. A GitHub `main` update is imported only when
-it belongs to a merged pull request, changes no CI control path, and passes the
-private quarantine pipeline. Divergence is fail-closed and opens one
+successful GitLab push pipeline, judged on the child pipeline the dispatch
+stage triggers rather than on its parent. A GitHub `main` update is imported
+only when it belongs to a merged pull request, changes no CI control path, and
+passes the private quarantine pipeline. Manifests are not control paths:
+`deps:deny` runs on quarantine instead. Divergence is fail-closed and opens one
 deduplicated GitLab incident.
+
+A rejection is recorded and refused on sight. Once its reason has been dealt
+with, clear the head so the import runs again:
+
+```text
+/Volumes/KitharaCI/services/bin/kithara-ci ci bridge retry --config /Volumes/KitharaCI/services/bridge/config.toml --github-sha <sha>
+```
+
+## The verdict
+
+The suite is not green, and gating on it being green holds every change behind
+red it did not cause. The lanes the verdict judges therefore carry
+`allow_failure: true` and one job decides: a run is held for failing something
+the default branch is not.
+
+Each lane leaves what it produced in `target/junit/`, collected by the lane
+dispatcher rather than by the lane itself — the build directory survives between
+jobs, so the report a lane is expected to write is removed before it runs. A
+lane that can name no test leaves a marker carrying its own name, because GitLab
+hands a job no status for the jobs it needed.
+
+The journal lives on the Linux executor, whose cache directory is mounted from
+the host, at `<cache root>/verdict/journal.json`. A macOS job runs in a
+throwaway guest, where nothing written survives it. `main` and the nightly chain
+record; branch, merge-request and quarantine runs check. The window unions the
+last five recorded runs: a test that fails a quarter of the time would otherwise
+read as a regression whenever the run it was compared with happened to be green.
+
+A merge request is told which of the failures it is being let through with were
+already failing at the commit it was branched from, when the journal still
+remembers that commit.
+
+The first check after this lands has no journal to read and says so; a `main`
+run has to record before a regression can be told from what the branch already
+carries.
 
 ## Storage policy
 

@@ -1,7 +1,9 @@
 .lane-job:
-  extends:
-    - .linux-job
-    - .rules-weekly
+  extends: .linux-job
+  interruptible: false
+  rules:
+    - !reference [.platform-linux, rules]
+    - !reference [.rules-weekly, rules]
   stage: lanes
   timeout: 180 minutes
   needs: []
@@ -21,22 +23,10 @@ lanes:integration-regressions:
   script:
     - just ci run linux-integration-regressions
 
-lanes:e2e:
-  extends: .lane-job
-  script:
-    - just ci run linux-e2e
+# Linux CI runs in containers with no output device, so `apple:e2e` serves the
+# hardware-dependent e2e lanes.
 
-lanes:e2e-fused:
+lanes:selenium-firefox:
   extends: .lane-job
   script:
-    - just ci run linux-e2e-fused
-
-lanes:e2e-glide:
-  extends: .lane-job
-  script:
-    - just ci run linux-e2e-glide
-
-lanes:selenium:
-  extends: .lane-job
-  script:
-    - just ci run linux-selenium
+    - just ci run linux-selenium-firefox

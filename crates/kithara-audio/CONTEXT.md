@@ -24,7 +24,8 @@ Transport (`runtime/ports.rs`): SPSC `ringbuf::HeapRb` plus a one-slot overflow
   transition, seeks included, pauses until the consumer drains.
 - **Wake.** A ring push arms the consumer wake inside the checked produce core;
   the scheduler shell delivers the `ThreadWake` after the node visit and before
-  reporting or removing the slot, keeping the syscall off the realtime path.
+  reporting or removing the slot, keeping the syscall off the realtime path. An
+  unregistered or cancelled node gets one final shell-side flush before removal.
   Empty-to-non-empty also fires `on_data_available`.
   The blocking consumer snapshots `ThreadWake` before re-checking `try_pop`; a
   signal between the snapshot and park advances the gate sequence, so
@@ -35,11 +36,13 @@ Transport (`runtime/ports.rs`): SPSC `ringbuf::HeapRb` plus a one-slot overflow
   `pcm_buffer_chunks + 2` absorbs a full forward-ring seek drain, making the RT
   push infallible.
 - **Off-RT deferral.** Signals the forbid-blocking core must not make are armed
-  on-core and flushed by the shell from `AudioWorkerSource::flush_deferred`: FSM
-  lifecycle events (`DeferredBus<Event>`), the reader→peer wake
-  (`ReadinessGate::flush_peer_wake`), retired state (`Retired::drain`).
-  `StreamAudioSource::drop` flushes once more — `retain` removes a terminal slot
-  without another pass.
+  on-core and flushed by the shell from `DecoderNode::recycle`. The outlet flush
+  delivers the consumer output wake (`ReaderOutputWake`), while
+  `AudioWorkerSource::flush_deferred` owns FSM lifecycle events
+  (`DeferredBus<Event>`), the reader→peer wake
+  (`ReadinessGate::flush_peer_wake`), and retired state (`Retired::drain`).
+  `StreamAudioSource::drop` flushes lifecycle events once more — `retain` removes
+  a terminal slot without another pass.
 
 ### Scheduler
 
@@ -48,7 +51,9 @@ Transport (`runtime/ports.rs`): SPSC `ringbuf::HeapRb` plus a one-slot overflow
 carries `#[kithara::rtsan_forbid_blocking]`; `RtPolicy::Heavy` nodes tick outside
 it via `produce_tick_heavy`. `Node::rt_policy()` defaults to `Rt`; `AnalysisNode`
 declares `Heavy`. `Node::warm_up` runs once at registration in the shell, before
-any checked tick, to pre-touch `arc_swap`'s per-thread debt node.
+any checked tick, to pre-touch `arc_swap`'s per-thread debt node. Terminal,
+unregistered, and cancelled nodes get one final `Node::recycle` before removal,
+so deferred work armed by their last tick is delivered before the node is dropped.
 
 Park budgets: `Waiting`/`UpstreamPending`/`Backpressured` re-check after 10 ms,
 `Idle` after 100 ms; a `Produced` streak yields cooperatively every 16 passes
@@ -91,9 +96,10 @@ mutator of track state through `update_state`. Sub-owners never take
   per-generation `GaplessStage`, and staged chunks.
 - `ReadinessGate` — the only owner of byte-range readiness calculations; gate and
   wait paths must resolve the same range for the same phase.
-- `SeekEngine` — `resume_target`, and the only writer of the producer decode
-  epoch (`commit_decode_epoch`). `ResumeCursor` — `decode_head` plus host/decoder
-  sample rates; resolves recreate resume positions and detects route changes.
+- `SeekEngine` - `resume_target`, and the only writer of the producer decode
+  epoch (`commit_decode_epoch`). `ResumeCursor` — the raw decode head, emitted
+  source head, and host/decoder sample rates. The raw head owns ABR splice cuts;
+  the emitted head resolves recreate positions after effect hold.
 - `RebuildPort<T>` — the two-phase rebuild boundary: `prepare` produces a pending
   job, `submit` (from `flush_deferred`) spawns it off-RT. The job constructs a
   complete `DecoderGeneration`; installation only moves it.
@@ -170,9 +176,14 @@ Recreation is two-phase and never builds a decoder on the produce core.
 job — only one may be pending at a time. `flush_deferred` → `RebuildPort::submit`
 spawns it (`spawn_blocking_on`); the job builds the decoder, optionally seeks it
 to its landing time, pushes a `DecoderBuildComplete` onto the replacement or
-incoming completion queue (capacity 4 each), then wakes the worker.
-`RebuildingDecoder` pops the completion matching its `BuildId`; installation is a
-`replace_active` plus a retire. A caught factory panic becomes
+incoming completion queue (capacity 4 each), then wakes the worker. Shell-side
+`flush_deferred` drains the queues, retires stale completions, and caches the
+replacement matching the current `BuildId`; `RebuildingDecoder` only takes that
+cached replacement. A matching replacement first aborts any exact incoming
+transition: its landing and prepared blend belong to the generation being
+replaced, and a late incoming completion is retired as stale. Installation is a
+`replace_active` plus a retire. A caught
+factory panic becomes
 `RecreateOutcome::SoftFailed`, failing the track with
 `TrackFailure::RecreateFailed`; `NeedsSourceWait` parks (`classify` maps only
 `ErrorClass::Interrupted` here).
@@ -197,12 +208,12 @@ incoming completion queue (capacity 4 each), then wakes the worker.
   `RecreateNext::Seek`/`ApplySeek` returns to `SeekRequested`. Only a decode-only
   rebuild may continue into a fresh `FormatBoundary` recreate; dropping the
   carried request permanently starves the producer.
-- **Mid-playback recreate resumes at the decode head, not `committed`.** A
+- **Mid-playback recreate resumes at the emitted source head, not `committed`.** A
   `FormatBoundary` + `RecreateNext::Decode` rebuild bumps no seek epoch and
   flushes no outlet ring, so resuming at the lagging `committed_position` would
   replay already-queued chunks backwards, so `ResumeCursor::resume_position`
-  resumes at the decode head and `resume_target` wins only while
-  `target > decode_head`. The decode head is an exact frame plus its rate,
+  resumes at the emitted source head and `resume_target` wins only while
+  `target > emitted_source_head`. The head is an exact frame plus its rate,
   converted with `duration_for_frames`; the demuxer quantizes the landing to a
   sample and the decoder relabels its first chunk by rounding to the nearest
   frame, consistent with head trimming.
@@ -266,33 +277,53 @@ and terminal phases abort the transition.
   `OutgoingFrontier::Exact` frame, translated through each generation's timeline
   origin — never the audible playhead (behind the frontier the gap never closes)
   and never past it (the outgoing stops decoding on a full ring, so a stalled
-  consumer would wedge the switch). `Awaiting` and `Unavailable` carry no frame;
+  consumer would wedge the switch). The source derives this landing frontier
+  only from `ResumeCursor::raw_decode_head`; neither `WaitingForSource` nor the outgoing
+  disposition replaces a known exact landing. `Awaiting` carries no frame, so
   the source keeps its own seek-derived target.
 - **Priming** is bounded to 8 decode steps per pass and only extends the staged
-  span. `IncomingPrime::Advanced` wakes the rebuild runtime; `Ready` means a
-  proof exists; EOF before the frontier is `Failed`.
-- **Promotion proof** (`overlap_span`): the incoming must cover the frame the
-  outgoing is about to emit **and** be no shallower than the outgoing's own
-  staged end, which keeps the bar self-calibrating and reachable. Covering the
-  instant alone hands over a sliver, then answers `Pending`, and renders silence.
-  `incoming_first_time > outgoing_next` is the distinct "landed late" case
-  priming can never fix; the transition waits for the outgoing instead.
-- **Promotion** trims the staged head to the cut frame, requires remaining
-  output, tells the source (`VariantControl::promote_variant`), swaps the
-  generation, and joins the blender. Equal default codec profiles carry the
-  larger observed timeline gap into the promoted generation; this is the same
-  normalization used by the overlap proof, and retaining it prevents a later
-  switch from moving the active timeline origin backward. `VariantPromotion::Deferred`
-  stops the pass, `Stale` discards the local incoming, and every displaced or
-  aborted generation goes to `Retired` — never dropped on the produce core.
+  span. The reader plan's exact or unavailable promotion frontier is latched in
+  `Preparing` and carried through `Building` into the incoming generation;
+  decoder build latency and later `ResumeCursor` movement cannot move that cut.
+  Once latched, outgoing publication stops at the cut. A same-`PcmSpec` active
+  generation may decode only until its bounded holdback covers the real 20 ms
+  outgoing tail, while a cross-spec transition stops immediately. This lets the
+  incoming catch one fixed cut instead of chasing an equal-rate outgoing stream.
+  `IncomingPrime::Advanced` wakes the rebuild runtime; `Ready` means a proof
+  exists, while EOF before the frontier is `Failed`.
+  A finished active generation still uses the unheld EOF drain. Gap, mixed-spec,
+  malformed, or over-capacity PCM fails the decode and stays owned for shell
+  retirement. `ResumeCursor` records each
+  post-skip, post-gapless chunk immediately before blending and effects, so a
+  buffering or frame-changing effect cannot move the raw cut. A generation marks
+  EOF once, disables holdback, and drains staged then gapless PCM without
+  reflushing over pending tail data.
+- **Promotion proof** (`promotion_span`) is fail-closed and minted before
+  `VariantControl::promote_variant`. A same-spec exact transition requires
+  continuous active PCM from the rate-converted outgoing cut through the whole
+  join and continuous incoming PCM from its corresponding cut through the same
+  end. An installed transition with `OutgoingDisposition::Abandoned` maps only
+  its priming and promotion proof to `OutgoingFrontier::Unavailable`, an explicit
+  hard cut; `WaitingForSource` alone does not. A retained transition still needs
+  real outgoing join PCM. `Deferred` preserves the same latched cut. `Awaiting`,
+  a previous active join, a discontinuous
+  span, or a landed-late incoming mints no proof.
+- **Promotion** takes the incoming generation into a non-copy
+  `PreparedPromotion`, trims it to the proven cut, and copies exactly the proven
+  active sample range before `VariantControl::promote_variant`. `Deferred`
+  restores the already-trimmed generation to `Priming`; `Stale` returns it for
+  shell retirement; `Promoted` performs only the infallible blender/generation
+  state swap. Every displaced or aborted generation goes to `Retired` - never
+  dropped on the produce core. Seek/reset cancels an active join; generation seek
+  notification retires every staged chunk.
 
-**`PcmBlender`** is always on and owns the audible seam. `join_active` starts a
-`Pending` join when the two generations share a `PcmSpec` and ≥3 frames of
-history are recorded; otherwise it hard-replaces state. The join extrapolates the
-outgoing tail with a two-tap recurrence fitted over the last 32 frames
-(amplitude-bounded by the observed peak) and cross-fades into the incoming over
-20 ms, then returns to `Steady`. Ramp counters are `u16`, so the per-frame gain
-is an exact `f32::from`.
+**`PcmBlender`** is always on and owns the audible seam. It owns active and
+prepared reusable buffers; profile growth and resizing happen in the shell before
+`Priming`, while checked replacement and `process_active` only move or reuse
+state. For exactly 20 ms it combines real outgoing sample `i` with incoming
+sample `i` using gains `1 - i / frames` and `i / frames`, then returns to
+`Steady`; identical samples remain bit-exact. Different specs hard-replace state.
+Ramp counters are `u16`, so the per-frame gain is an exact `f32::from`.
 
 ## Construction reads
 
@@ -305,7 +336,13 @@ shared only with that reader's `SharedStream` clone. The initial builder and
 disarm it after a normal return, join error, or caught panic. A rebuild therefore
 cannot switch an active decoder reader into blocking mode. Steady-state reads
 use non-blocking `Stream::probe_read`; on-core seeks use `probe_seek` (position
-math only, no `prime_seek_range` spin on the forbid path). Blocking makes a
+math only, no `prime_seek_range` spin on the forbid path). The gate selects the
+read mode and nothing else: `SharedStream`'s `Seek` is the blocking adapter in
+both phases, because a decoder seeks past residual lateness in steady state as
+well, and a probe seek there only reports not-ready to a caller that can do
+nothing but ask again. Staying off the blocking path is `OffsetReader`'s own
+choice, made by naming `probe_seek` — not a consequence of a disarmed gate.
+Blocking makes a
 slow-but-arriving prefix wait, off the RT worker, up to the stream's blocking-read
 budget rather than error on the first not-ready probe. A construction-range byte
 that never arrives surfaces the **stream layer's** typed terminal verbatim; the
@@ -328,9 +365,10 @@ inserted and PCM output is pinned to 1.0.
 
 **Coordinate space.** `PcmMeta.timestamp`, `end_timestamp`, and `frame_offset`
 stay in decoder/song time, while a duration-changing effect rewrites `frames` in
-the output domain. `SourceWindow` is the explicit translation boundary: resume
-and splice frontiers come from its source endpoint minus source frames still held
-by the effect chain, never from transformed output frame counts.
+the output domain. `ResumeCursor` keeps the two source frontiers explicit: ABR
+splice cuts use the post-gapless raw decoder head before blending and effects;
+recreates use `SourceWindow`'s admitted endpoint minus source frames still held
+by the effect chain. Neither frontier is derived from transformed output frames.
 
 **Sample guard.** `sanitize_sample` (`kithara-decode`, which owns it) runs on the
 *input* of every stage taking untrusted samples: `IsolatorEq::process_sample`
@@ -378,13 +416,14 @@ effect chain. `admit` records the track-absolute source endpoint and decoded
 sample rate while returning the same `PcmChunk` by move, so forward samples are
 not copied or allocated. After an effect emits, the committed source endpoint is
 the admitted endpoint minus the chain's saturating sum of held source frames.
-`ResumeCursor` records only that committed endpoint; no admitted endpoint means
-the previous proven head remains unchanged. Seek and recreate resets clear the
-window with the effects and EOF drain.
+`ResumeCursor::record_emitted_source` records that committed endpoint; no
+admitted endpoint means the previous proven emitted head remains unchanged.
+The separate raw decode head advances before blending and effects. Seek and
+recreate resets clear the window with the effects and EOF drain.
 
 `AudioEffect::held_source_frames` has no default: a wrong answer moves where a
-recreate resumes and where a variant splice lands, so every effect states its own
-hold instead of inheriting a silent zero. The count is on the **source** axis,
+recreate resumes, so every effect states its own hold instead of inheriting a
+silent zero. The count is on the **source** axis,
 which only a stage owning the source-to-output mapping can express. The chain
 production builds is `[TempoSlot?, ..custom]` and the tempo slot is its sole
 duration-changing stage; an effect behind it that buffered could not name its

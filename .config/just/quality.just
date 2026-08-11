@@ -9,6 +9,10 @@ report *ARGS:
 assess *ARGS:
     just _xtask quality assess "$@"
 
+[positional-arguments]
+summary *ARGS:
+    just _xtask quality summary "$@"
+
 unimock-check:
     just _xtask quality unimock-check
 

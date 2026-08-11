@@ -47,13 +47,29 @@ impl VariantTransitionId {
     }
 }
 
-/// Immutable route facts for one active-to-incoming transition.
+/// Fate of the outgoing source once this exact transition is accepted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
+pub enum OutgoingDisposition {
+    /// Keep the outgoing source available for the ordinary transition path.
+    Retained,
+    /// Stop relying on the outgoing source because it is no longer delivering.
+    Abandoned,
+}
+
+/// Immutable route facts for one active-to-incoming transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
+#[non_exhaustive]
+#[fieldwork(opt_in, with)]
 pub struct VariantTransition {
     active_variant: VariantIndex,
     incoming_variant: VariantIndex,
     id: VariantTransitionId,
+    #[field(with(
+        vis = "pub",
+        doc = "Return this transition with an explicitly bound outgoing disposition."
+    ))]
+    outgoing_disposition: OutgoingDisposition,
 }
 
 impl VariantTransition {
@@ -68,6 +84,7 @@ impl VariantTransition {
             active_variant,
             incoming_variant,
             id,
+            outgoing_disposition: OutgoingDisposition::Retained,
         }
     }
 
@@ -87,6 +104,12 @@ impl VariantTransition {
     #[must_use]
     pub const fn incoming_variant(self) -> VariantIndex {
         self.incoming_variant
+    }
+
+    /// Fate of the outgoing source for this exact transition.
+    #[must_use]
+    pub const fn outgoing_disposition(self) -> OutgoingDisposition {
+        self.outgoing_disposition
     }
 }
 
@@ -129,5 +152,26 @@ mod tests {
         assert_eq!(transition.active_variant(), VariantIndex::new(0));
         assert_eq!(transition.incoming_variant(), VariantIndex::new(1));
         assert_eq!(transition.id().seek_epoch(), 3);
+    }
+
+    #[kithara::test]
+    fn outgoing_disposition_defaults_to_retained_and_changes_immutably() {
+        let retained = VariantTransition::new(
+            VariantTransitionId::new(ticket_for(1), 3),
+            VariantIndex::new(0),
+            VariantIndex::new(1),
+        );
+
+        let abandoned = retained.with_outgoing_disposition(OutgoingDisposition::Abandoned);
+
+        assert_eq!(
+            retained.outgoing_disposition(),
+            OutgoingDisposition::Retained
+        );
+        assert_eq!(
+            abandoned.outgoing_disposition(),
+            OutgoingDisposition::Abandoned
+        );
+        assert_eq!(abandoned.id(), retained.id());
     }
 }

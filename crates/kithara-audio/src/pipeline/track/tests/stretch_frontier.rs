@@ -77,7 +77,7 @@ async fn route_change_at_non_unity_uses_the_emitted_source_endpoint() {
     let expected = admitted.saturating_sub(source_latency.min(admitted));
     let epoch = source.seek_engine.epoch();
     assert_eq!(
-        source.resume.decode_head(epoch),
+        source.resume.emitted_source_head(epoch),
         Some((expected, Consts::SAMPLE_RATE)),
         "the produced frontier must subtract source still held by Signalsmith"
     );

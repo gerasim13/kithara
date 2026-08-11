@@ -7,7 +7,8 @@ use kithara::{
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
     events::{
-        AbrEvent, AudioEvent, DownloaderEvent, Event, EventBus, EventReceiver, HlsEvent, RequestId,
+        AbrEvent, AbrReason, AudioEvent, DownloaderEvent, Event, EventBus, EventReceiver, HlsEvent,
+        RequestId,
     },
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
@@ -99,7 +100,7 @@ struct EventCollector {
     network_fetches: Mutex<HashSet<(usize, usize)>>,
     /// Reader-side reads (segment boundaries crossed in `read_at`).
     reader_segments: Mutex<Vec<(usize, usize)>>,
-    applied_targets: Mutex<Vec<usize>>,
+    applied_transitions: Mutex<Vec<(usize, AbrReason)>>,
     audio_trace: Mutex<Vec<String>>,
     event_tail: Mutex<Vec<String>>,
     switch_count: AtomicUsize,
@@ -112,7 +113,7 @@ impl EventCollector {
             request_map: Mutex::new(HashMap::new()),
             network_fetches: Mutex::new(HashSet::new()),
             reader_segments: Mutex::new(Vec::new()),
-            applied_targets: Mutex::new(Vec::new()),
+            applied_transitions: Mutex::new(Vec::new()),
             audio_trace: Mutex::new(Vec::new()),
             event_tail: Mutex::new(Vec::new()),
             switch_count: AtomicUsize::new(0),
@@ -177,7 +178,7 @@ impl EventCollector {
                 }
                 Event::Abr(AbrEvent::VariantApplied { to, reason, .. }) => {
                     info!(to = to.get(), ?reason, "VariantApplied");
-                    self.applied_targets.lock().push(to.get());
+                    self.applied_transitions.lock().push((to.get(), *reason));
                     self.switch_count.fetch_add(1, Ordering::Release);
                 }
                 Event::Audio(AudioEvent::SeekLifecycle {
@@ -265,8 +266,15 @@ impl EventCollector {
     }
 
     fn applied_targets(&self) -> Vec<usize> {
+        self.applied_transitions()
+            .into_iter()
+            .map(|(target, _)| target)
+            .collect()
+    }
+
+    fn applied_transitions(&self) -> Vec<(usize, AbrReason)> {
         self.drain();
-        self.applied_targets.lock().clone()
+        self.applied_transitions.lock().clone()
     }
 
     fn event_tail(&self) -> Vec<String> {
@@ -437,6 +445,36 @@ where
     .unwrap_or_else(|err| panic!("{join_label}: spawn_blocking failed: {err}"))
 }
 
+async fn read_until_manual_applied<S>(
+    mut audio: Audio<Stream<S>>,
+    collector: &EventCollector,
+    applied_before: usize,
+    target: usize,
+    label: &str,
+) -> (Audio<Stream<S>>, PhaseReadStats)
+where
+    S: StreamType + 'static,
+    Audio<Stream<S>>: Send + 'static,
+{
+    let mut stats = PhaseReadStats {
+        samples: 0,
+        pending: 0,
+        saw_eof: false,
+    };
+    while !collector.applied_transitions()[applied_before..]
+        .contains(&(target, AbrReason::ManualOverride))
+    {
+        let (next, step) = read_one_chunk_blocking(audio, label).await;
+        audio = next;
+        stats.samples = stats.samples.saturating_add(step.samples);
+        if step.saw_eof {
+            stats.saw_eof = true;
+            break;
+        }
+    }
+    (audio, stats)
+}
+
 /// Wait until every v0 media segment has been network-fetched (the all-cached
 /// precondition the bug repros against), polling the real download state.
 ///
@@ -602,20 +640,13 @@ async fn vod_manual_switch_affects_future_segments() {
     );
 }
 
-/// Deterministic regression for the urgent-down-switch reader-stall hang.
+/// Regression for escaping a stalled reader at a clean segment boundary.
 ///
-/// V0's tail (segment >= 5) is delayed far longer than the hang budget, so
-/// once the reader reaches the segment-4/5 boundary it blocks on a V0 segment
-/// V0 cannot deliver in time. The ABR raises an `UrgentDownSwitch` to the fast
-/// V1, but the Auto-mode commit historically fired only on a reader
-/// segment-boundary cross — which the undelivered segment prevents. That
-/// circular dependency stalled the reader past `KITHARA_HANG_TIMEOUT_SECS`
-/// and tripped the watchdog (the production freeze). The proactive rescue
-/// (`HlsCoord::urgent_rescue_boundary`) hands the undelivered tail to V1 at
-/// the segment boundary, so the reader finishes V0's loaded prefix and reads
-/// the rest from V1. With the delay (10s) >> hang budget (5s) the stall is
-/// deterministic: pre-fix this test trips the watchdog; post-fix it completes
-/// the full track via V1.
+/// V0's segment 5 body is withheld, so the reader parks at its start. Once the
+/// downloader reports `LoadSlow`, the HLS peer marks V0 non-delivering and ABR
+/// must publish an `EscapeStalled` switch to V1. V0 is the only variant that
+/// fits the initial throughput estimate; V1 is the sole escape candidate once
+/// V0 is excluded, so no pre-stall down-switch can satisfy the test.
 #[kithara::test(
     native,
     tokio,
@@ -623,18 +654,19 @@ async fn vod_manual_switch_affects_future_segments() {
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
-async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
+async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant() {
+    const STALLED_VARIANT: usize = 0;
+    const RESCUE_VARIANT: usize = 1;
+    const STALLED_SEGMENT: usize = 5;
+    const ESCAPE_BANDWIDTHS: [u64; 2] = [1_000_000, 5_000_000];
+
     let segment_count = 30;
     let init_segment = Arc::new(create_wav_init_segment(segment_count * D.segment_size));
     let pcm_data = Arc::new(create_pcm_segments(segment_count));
 
-    // Slow variant modelled as STATE, not a wall-clock timer: withhold V0's
-    // segment-5 BODY entirely (its HEAD/size stays open, so the layout is learned
-    // up front). The reader consumes V0 seg 0..5, then blocks on the
-    // never-delivered seg 5 — exactly "reader blocked on a slow variant" — and the
-    // urgent rescue must hand the tail to V1. No `delay_ms`, no `sleep`: progress
-    // is driven purely by the read outcome and the rescue, deterministic on both
-    // the real and the virtual clock.
+    // The body gate leaves HEAD/size available, so the layout is known before
+    // the reader parks. The downloader's own soft-timeout is the production
+    // trigger; the test does not manufacture a controller tick.
     let (server, gate) = HlsTestServer::with_segment_gate(
         HlsTestServerConfig {
             variant_count: 2,
@@ -643,12 +675,12 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
             segment_duration_secs: segment_duration_secs(),
             custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
             init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
-            variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
+            variant_bandwidths: Some(ESCAPE_BANDWIDTHS.to_vec()),
             codecs: Some("wav".to_string()),
             ..Default::default()
         },
-        0,
-        5,
+        STALLED_VARIANT,
+        STALLED_SEGMENT,
     )
     .await;
 
@@ -658,27 +690,7 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
-    // Event-driven release: the moment the urgent down-switch commits (the first
-    // `VariantApplied`, which in this test is the rescue onto V1), the rescue owns
-    // the tail, so free V0's withheld seg-5 GET. Driven by the EVENT, never a
-    // timer — and it fires only AFTER the behaviour under test has happened, so it
-    // cannot mask a missing rescue (no rescue ⇒ no event ⇒ no release ⇒ the read
-    // stalls and the hang watchdog still catches a real regression).
-    let release_gate = gate.clone();
-    let mut release_rx = bus.subscribe();
-    drop(spawn(async move {
-        loop {
-            match release_rx.recv().await.map(|env| env.event) {
-                Ok(Event::Abr(AbrEvent::VariantApplied { .. })) => {
-                    release_gate.release();
-                    break;
-                }
-                Ok(_) => {}
-                Err(kithara::platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                Err(kithara::platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
-            }
-        }
-    }));
+    let mut rescue_rx = bus.subscribe();
 
     let hls_config = HlsConfig::for_url(url)
         .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
@@ -701,9 +713,63 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
         .await
         .expect("create audio");
 
-    let total = spawn_blocking(move || read_to_eof(&mut audio))
-        .await
-        .expect("read");
+    let mut stalled_requests = HashSet::new();
+    let mut saw_load_slow = false;
+    wait_for_event(
+        &mut rescue_rx,
+        "LoadSlow for the gated V0 segment",
+        |event| {
+            match event {
+                Event::Downloader(DownloaderEvent::RequestEnqueued {
+                    request_id, url, ..
+                }) if parse_segment_url(url.as_str())
+                    == Some((STALLED_VARIANT, STALLED_SEGMENT)) =>
+                {
+                    stalled_requests.insert(*request_id);
+                }
+                Event::Downloader(DownloaderEvent::LoadSlow { request_id, .. })
+                    if stalled_requests.contains(request_id) =>
+                {
+                    saw_load_slow = true;
+                }
+                _ => {}
+            }
+            saw_load_slow
+        },
+        Duration::from_secs(20),
+    )
+    .await
+    .expect("LoadSlow for the gated V0 segment");
+    assert!(
+        gate.requested() > 0,
+        "the gated V0 segment body must be parked before reading"
+    );
+
+    let read = spawn_blocking(move || read_to_eof(&mut audio));
+    let mut saw_escape = false;
+    wait_for_event(
+        &mut rescue_rx,
+        "stalled-boundary EscapeStalled rescue",
+        |event| {
+            match event {
+                Event::Abr(AbrEvent::VariantApplied { from, to, reason })
+                    if from.get() == STALLED_VARIANT
+                        && to.get() == RESCUE_VARIANT
+                        && *reason == AbrReason::EscapeStalled =>
+                {
+                    saw_escape = true;
+                }
+                _ => {}
+            }
+            saw_escape
+        },
+        Duration::from_secs(20),
+    )
+    .await
+    .expect("stalled-boundary EscapeStalled rescue");
+    gate.release();
+
+    let total = read.await.expect("read");
 
     let segments = collector.segments();
     let switches = collector.switch_count();
@@ -711,7 +777,9 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
         .iter()
         .filter(|s| s.variant == 1 && !s.cached)
         .count();
-    info!(switches, net_v1, total, "urgent rescue test result");
+    let transitions = collector.applied_transitions();
+    let reader_segments = collector.reader_segments();
+    info!(switches, net_v1, total, "stalled escape test result");
 
     // The reader must finish the whole track via V1, not stall on V0's
     // undeliverable tail. A full WAV track is `segment_count * segment_size`
@@ -720,11 +788,18 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
     let full_frames = (segment_count * D.segment_size) as u64 / u64::from(D.channels) / 2;
     assert!(
         total >= full_frames * 9 / 10,
-        "reader must finish the track via V1 after the urgent rescue; \
+        "reader must finish the track via V1 after the stalled escape; \
          got {total} frames, expected >= {} (90% of {full_frames})",
         full_frames * 9 / 10
     );
-    assert!(switches > 0, "an urgent down-switch must commit");
+    assert!(
+        transitions.contains(&(RESCUE_VARIANT, AbrReason::EscapeStalled)),
+        "the stalled boundary must commit an EscapeStalled switch: {transitions:?}"
+    );
+    assert!(
+        reader_segments.contains(&(STALLED_VARIANT, STALLED_SEGMENT)),
+        "the V0 reader must reach the gated segment boundary: {reader_segments:?}"
+    );
     assert!(net_v1 > 0, "V1 must serve the tail after the rescue");
 }
 
@@ -1054,7 +1129,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
-    let collector = EventCollector::new(&bus);
+    let collector = Arc::new(EventCollector::new(&bus));
 
     let hls_config = HlsConfig::for_url(url)
         .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
@@ -1088,37 +1163,68 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
     let handle = audio
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
+    let applied_before = collector.applied_transitions().len();
+    let reader_before = collector.reader_segments().len();
     handle
         .set_mode(AbrMode::manual(2))
         .expect("Manual(2) target is in the variant list");
 
-    let post_total = spawn_blocking(move || read_to_eof(&mut audio))
-        .await
-        .expect("read");
+    let switch_seen = Arc::clone(&collector);
+    let (mut audio, transition) = spawn_blocking(move || {
+        let stats = read_phase_until(&mut audio, 0, "runtime manual transition", || {
+            switch_seen.applied_transitions()[applied_before..]
+                .contains(&(2, AbrReason::ManualOverride))
+        });
+        (audio, stats)
+    })
+    .await
+    .expect("transition read");
 
-    let segments = collector.segments();
-    let switches = collector.switch_count();
-    let v2_fetches = segments
-        .iter()
-        .filter(|s| s.variant == 2 && !s.cached)
-        .count();
+    let transitions = collector.applied_transitions();
+    let manual_applied = transitions[applied_before..].contains(&(2, AbrReason::ManualOverride));
+    let (mut audio, post_promotion) = spawn_blocking(move || {
+        let stats = read_phase_until_samples(&mut audio, 8_192, "runtime manual promoted audio");
+        (audio, stats)
+    })
+    .await
+    .expect("post-promotion read");
+    let tail_total = spawn_blocking(move || read_to_eof(&mut audio))
+        .await
+        .expect("tail drain");
+
+    let reader_segments = collector.reader_segments();
+    let manual_reader_segments = &reader_segments[reader_before..];
 
     info!(
-        switches,
-        total_segments = segments.len(),
-        v2_fetches,
-        post_total,
+        ?transitions,
+        ?reader_segments,
+        ?transition,
+        ?post_promotion,
+        tail_total,
         "L1: runtime Manual switch result"
     );
 
-    assert!(post_total > 0, "playback must continue after Manual flip");
     assert!(
-        switches >= 1,
-        "Manual(2) must trigger at least one VariantApplied event"
+        !transition.saw_eof,
+        "Manual(2) must promote before outgoing EOF: {transition:?}"
     );
     assert!(
-        v2_fetches > 0,
-        "Manual(2) must produce future-segment fetches from variant 2"
+        manual_applied,
+        "Manual(2) must publish a new ManualOverride transition: {transitions:?}"
+    );
+    assert!(
+        !post_promotion.saw_eof && post_promotion.samples >= 8_192,
+        "promoted variant must produce a fresh audio budget: {post_promotion:?}"
+    );
+    assert!(
+        manual_reader_segments
+            .iter()
+            .any(|(variant, _)| *variant == 2),
+        "Manual(2) must read variant 2 after the command: {manual_reader_segments:?}"
+    );
+    assert!(
+        tail_total > 0,
+        "playback must continue from the promoted variant through EOF"
     );
 }
 
@@ -1314,30 +1420,33 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     let handle = audio
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
-    let pre_switch = collector.switch_count();
+    let applied_before = collector.applied_transitions().len();
     handle
         .set_mode(AbrMode::manual(1))
         .expect("Manual(1) target must be valid");
 
-    // Wait for the commit, event-driven: if `set_mode` correctly wakes
-    // the parked peer, `commit_variant_switch` fires within tens of ms.
-    // If the wake is lost (the pinned bug) the harness timeout fails
-    // the test.
-    while collector.switch_count() == pre_switch {
-        kithara::platform::time::sleep(Duration::from_millis(50)).await;
-    }
+    let (_audio, transition) = read_until_manual_applied(
+        audio,
+        &collector,
+        applied_before,
+        1,
+        "all-cached manual transition",
+    )
+    .await;
 
-    let post_switch = collector.switch_count();
+    let transitions = collector.applied_transitions();
+    let manual_applied = transitions[applied_before..].contains(&(1, AbrReason::ManualOverride));
     info!(
-        pre_switch,
-        post_switch, v0_fetched, "O.0: all-cached Manual click result"
+        ?transitions,
+        ?transition,
+        v0_fetched,
+        "O.0: all-cached Manual click result"
     );
 
     assert!(
-        post_switch > pre_switch,
-        "Manual(1) after all-cached prefetch must fire VariantApplied \
-         (pre={pre_switch}, post={post_switch}); peer was parked idle and \
-         set_mode failed to wake it"
+        manual_applied,
+        "Manual(1) after all-cached prefetch must fire a new ManualOverride \
+         VariantApplied; saw {transitions:?}, transition={transition:?}"
     );
 }
 
@@ -1464,26 +1573,34 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
     let handle = audio
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
-    let pre_switch = collector.switch_count();
+    let applied_before = collector.applied_transitions().len();
     handle
         .set_mode(AbrMode::manual(1))
         .expect("Manual(1) target must be valid");
 
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline && collector.switch_count() == pre_switch {
-        kithara::platform::time::sleep(Duration::from_millis(50)).await;
-    }
+    let (_audio, transition) = read_until_manual_applied(
+        audio,
+        &collector,
+        applied_before,
+        1,
+        "cache-and-seek manual transition",
+    )
+    .await;
 
-    let post_switch = collector.switch_count();
+    let transitions = collector.applied_transitions();
+    let manual_applied = transitions[applied_before..].contains(&(1, AbrReason::ManualOverride));
     info!(
-        pre_switch,
-        post_switch, v0_fetched, seek_target_secs, "MSW-3: all-cached + seek + Manual click result"
+        ?transitions,
+        ?transition,
+        v0_fetched,
+        seek_target_secs,
+        "MSW-3: all-cached + seek + Manual click result"
     );
 
     assert!(
-        post_switch > pre_switch,
+        manual_applied,
         "Manual(1) after all-cached prefetch + seek must fire VariantApplied \
-         (pre={pre_switch}, post={post_switch}). Production regression: \
+         with ManualOverride, saw {transitions:?}, transition={transition:?}. Production regression: \
          after `audio.seek({seek_target_secs}s)` the peer parks and \
          subsequent `handle.set_mode(...)` no longer reaches \
          `commit_variant_switch` — observed in app.log 2026-05-17 \
