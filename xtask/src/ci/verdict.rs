@@ -49,6 +49,11 @@ struct Common {
     /// Journal kept on the executor, outliving artifact expiry.
     #[arg(long, env = "KITHARA_VERDICT_JOURNAL")]
     journal: PathBuf,
+    /// Commit this run is based on. When the journal remembers that exact
+    /// commit, the comparison is against what it failed rather than against
+    /// the window alone.
+    #[arg(long, env = "CI_MERGE_REQUEST_DIFF_BASE_SHA")]
+    base: Option<String>,
 }
 
 /// One run of the default branch, as the journal remembers it.
@@ -91,6 +96,10 @@ impl Journal {
         self.runs.push(run);
         let excess = self.runs.len().saturating_sub(REMEMBERED_RUNS);
         self.runs.drain(..excess);
+    }
+
+    fn run_at(&self, sha: &str) -> Option<&Run> {
+        self.runs.iter().find(|run| run.sha == sha)
     }
 
     fn tests(&self) -> BTreeSet<&str> {
@@ -150,7 +159,7 @@ fn check(common: &Common) -> Result<()> {
     }
     let known_tests = journal.tests();
     let known_jobs = journal.jobs();
-
+    let at_base = attested_at_base(&journal, common.base.as_deref());
     let new_tests: Vec<&String> = observed
         .tests
         .iter()
@@ -161,26 +170,13 @@ fn check(common: &Common) -> Result<()> {
         .iter()
         .filter(|job| !known_jobs.contains(job.as_str()))
         .collect();
-
-    for id in observed
-        .tests
-        .iter()
-        .filter(|id| known_tests.contains(id.as_str()))
-    {
-        warn!(test = %id, "failing, and already failing on the default branch");
-    }
-    for id in &new_tests {
-        warn!(test = %id, "failing here and not on the default branch");
-    }
-    for job in &new_jobs {
-        warn!(job = %job, "lane failed without per-test identity, and not on the default branch");
-    }
-    info!(
-        cases = observed.cases,
-        regressed_tests = new_tests.len(),
-        regressed_jobs = new_jobs.len(),
-        remembered_runs = journal.runs.len(),
-        "verdict"
+    report(
+        &observed,
+        &known_tests,
+        &at_base,
+        &new_tests,
+        &new_jobs,
+        &journal,
     );
     if new_tests.is_empty() && new_jobs.is_empty() {
         return Ok(());
@@ -190,6 +186,71 @@ fn check(common: &Common) -> Result<()> {
         new_tests.len(),
         new_jobs.len()
     )
+}
+
+/// The window is what a failure has to be new against: it unions the last runs
+/// of the default branch, so a test that fails a quarter of the time does not
+/// read as a regression whenever the run it is compared with happened to be
+/// green.
+///
+/// The base commit does not widen it — that run is already one of the five —
+/// but it is what makes a known failure arguable: "this was failing at the
+/// commit you branched from" is evidence, "this failed sometime last week" is
+/// not. Returned separately for exactly that.
+fn attested_at_base<'a>(journal: &'a Journal, base: Option<&str>) -> BTreeSet<&'a str> {
+    let Some(sha) = base else {
+        warn!("no base commit named; a known failure cannot be attributed to one");
+        return BTreeSet::new();
+    };
+    let Some(run) = journal.run_at(sha) else {
+        warn!(
+            base = %sha,
+            "the journal does not remember this base commit, so nothing can be attributed to it; \
+             the window still decides the verdict"
+        );
+        return BTreeSet::new();
+    };
+    info!(base = %sha, "the base commit has a recorded run");
+    run.tests.iter().map(String::as_str).collect()
+}
+
+fn report(
+    observed: &Observed,
+    known_tests: &BTreeSet<&str>,
+    at_base: &BTreeSet<&str>,
+    new_tests: &[&String],
+    new_jobs: &[&String],
+    journal: &Journal,
+) {
+    report_known(observed, known_tests, at_base);
+    for id in new_tests {
+        warn!(test = %id, "failing here and not on the default branch");
+    }
+    for job in new_jobs {
+        warn!(job = %job, "lane failed without per-test identity, and not on the default branch");
+    }
+    info!(
+        cases = observed.cases,
+        regressed_tests = new_tests.len(),
+        regressed_jobs = new_jobs.len(),
+        attested_at_base = at_base.len(),
+        remembered_runs = journal.runs.len(),
+        "verdict"
+    );
+}
+
+fn report_known(observed: &Observed, known_tests: &BTreeSet<&str>, at_base: &BTreeSet<&str>) {
+    for id in observed
+        .tests
+        .iter()
+        .filter(|id| known_tests.contains(id.as_str()))
+    {
+        if at_base.contains(id.as_str()) {
+            warn!(test = %id, "failing, and failing at the base commit too");
+        } else {
+            warn!(test = %id, "failing, and seen failing on the default branch recently");
+        }
+    }
 }
 
 struct Observed {
@@ -294,6 +355,39 @@ mod tests {
         assert_eq!(journal.runs.len(), REMEMBERED_RUNS);
         assert!(!journal.tests().contains("suite::0"));
         assert!(journal.tests().contains("suite::5"));
+    }
+
+    #[test]
+    fn the_journal_can_answer_for_one_commit() {
+        let mut journal = Journal::default();
+        journal.record(run_of("base", &["suite::a"], &[]));
+        journal.record(run_of("later", &["suite::b"], &[]));
+        assert_eq!(
+            journal.run_at("base").map(|run| run.tests.clone()),
+            Some(BTreeSet::from(["suite::a".to_owned()]))
+        );
+        assert!(journal.run_at("absent").is_none());
+    }
+
+    #[test]
+    fn a_failure_is_attributed_to_the_base_commit_when_the_journal_has_it() {
+        let mut journal = Journal::default();
+        journal.record(run_of("base", &["suite::a"], &[]));
+        journal.record(run_of("later", &["suite::b"], &[]));
+        assert_eq!(
+            attested_at_base(&journal, Some("base")),
+            BTreeSet::from(["suite::a"])
+        );
+    }
+
+    #[test]
+    fn an_unremembered_base_attributes_nothing_and_still_lets_the_window_decide() {
+        let mut journal = Journal::default();
+        journal.record(run_of("later", &["suite::b"], &[]));
+        assert!(attested_at_base(&journal, Some("gone")).is_empty());
+        assert!(attested_at_base(&journal, None).is_empty());
+        // The window is untouched by either: it is what the verdict compares to.
+        assert_eq!(journal.tests(), BTreeSet::from(["suite::b"]));
     }
 
     #[test]
