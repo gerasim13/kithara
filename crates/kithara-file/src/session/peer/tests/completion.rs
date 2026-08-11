@@ -166,6 +166,45 @@ fn inflight_clears_after_completion_settlement() {
     assert!(!peer.inflight.load(Ordering::Acquire));
 }
 
+#[kithara::test(native, timeout(Duration::from_secs(2)))]
+fn terminal_reader_wake_settles_file_before_worker_wake() {
+    let (_store, _key, inner, writer) = fresh_session(None);
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let epoch = writer.epoch();
+    assert!(matches!(
+        epoch.write_at(0, b"done"),
+        WriterOutcome::Current(Ok(()))
+    ));
+    inner.set_worker_wake(Arc::new(BlockingWake {
+        entered: Arc::clone(&entered),
+        release: Arc::clone(&release),
+    }));
+    inner.arm_reader_waker();
+    inner.source.coord.set_total_bytes(Some(4));
+    let mut events = inner.source.bus.subscribe();
+
+    let completion = thread::spawn(move || epoch.commit(Some(4)));
+    entered.wait();
+    let mut settled_before_wake = false;
+    while let Ok(envelope) = events.try_recv() {
+        settled_before_wake |= matches!(
+            envelope.event,
+            Event::File(FileEvent::CacheComplete { total_bytes: 4 })
+        );
+    }
+    release.wait();
+    assert!(matches!(
+        completion.join().expect("commit must not panic"),
+        WriterOutcome::Current(Ok(()))
+    ));
+
+    assert!(
+        settled_before_wake,
+        "terminal reader wake must settle File state before waking the audio worker"
+    );
+}
+
 #[kithara::test]
 fn repeated_committed_observation_does_not_self_wake() {
     let (_store, _key, inner, writer) = fresh_session(None);

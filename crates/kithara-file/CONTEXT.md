@@ -66,8 +66,10 @@ derived artifacts while the original media file stays untouched. `FileSrc::Remot
   from `AssetStore::attach_pending_resource`, bounded by `look_ahead_bytes`. Before a missing range yields
   or blocks, File raises that consumer's monotonic requested-end floor; this immediate demand
   overrides the bounded prefetch frontier, including `look_ahead_bytes = 0`. The lease's one-shot
-  reader Waker uses only `Weak<FileInner>`, rearms before waking the audio worker, and therefore
-  cannot pin a dropped source through the pending-resource state.
+  reader Waker uses only `Weak<FileInner>`. On writes it rearms before waking the audio worker;
+  on a terminal commit it settles file metadata and derived indexes before that wake. Completion
+  work therefore stays outside the audio worker's real-time read path, and the Waker cannot pin a
+  dropped source through the pending-resource state.
 - Only the **elected writer epoch** issues GETs. `poll_next` registers its peer Waker before the
   readiness/election check, leaves it armed on `Pending`, and clears that exact registration before
   `Ready`. A stale writer handle is removed and dropped outside the File mutex before the peer

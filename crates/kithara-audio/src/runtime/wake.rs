@@ -73,7 +73,7 @@ impl WakeSignal for ThreadWake {
 #[cfg(test)]
 mod tests {
     use kithara_platform::{
-        sync::{Arc, mpsc},
+        sync::{Arc, WaitGate, mpsc},
         thread::{self, spawn},
         time::Duration,
     };

@@ -234,7 +234,13 @@ impl Wake for FileReaderWake {
 
     fn wake_by_ref(self: &Arc<Self>) {
         if let Some(inner) = self.inner.upgrade() {
-            inner.arm_reader_waker();
+            match inner.asset.reader.status() {
+                ResourceStatus::Active => inner.arm_reader_waker(),
+                ResourceStatus::Committed { .. } => {
+                    let _ = inner.observe_committed();
+                }
+                ResourceStatus::Failed(_) | ResourceStatus::Cancelled => {}
+            }
             inner.wake_worker();
         }
     }

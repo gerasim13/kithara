@@ -71,8 +71,6 @@ impl FileSource {
     }
 
     fn known_len(&self) -> Option<u64> {
-        self.inner.arm_reader_waker();
-        self.inner.observe_committed();
         self.coord
             .total_bytes()
             .or_else(|| self.inner.asset.reader.len())
@@ -235,8 +233,6 @@ impl kithara_stream::Source for FileSource {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         self.ensure_not_cancelled()?;
-        self.inner.arm_reader_waker();
-        self.inner.observe_committed();
         let n = self
             .inner
             .asset
