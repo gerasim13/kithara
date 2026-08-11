@@ -261,6 +261,23 @@ fn retire_sccache_server(process: &Process) -> Result<()> {
 }
 
 pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
+    let lane_name = args
+        .lane
+        .to_possible_value()
+        .map_or_else(|| "lane".to_owned(), |value| value.get_name().to_owned());
+    verdict::clear(&ctx.root, &lane_name)?;
+    let outcome = execute(args, ctx);
+    // A lane that fell over before it reached its own work — no host profile,
+    // no room on the cache volume — is still a lane that failed, and the
+    // verdict has to hear about it. Collecting only after a dispatched lane
+    // let exactly that go unrecorded on the first live run.
+    if let Err(error) = verdict::gather(&ctx.root, &lane_name, outcome.is_err()) {
+        warn!(%error, lane = %lane_name, "could not collect this lane's test report");
+    }
+    outcome
+}
+
+fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
     ext.ci.validate()?;
     let host_config = env::var_os("KITHARA_CI_HOST_CONFIG")
@@ -289,12 +306,6 @@ pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     // exited 254. Retire the server so it restarts with what this job asked
     // for; the cache on disk is untouched.
     retire_sccache_server(&process)?;
-
-    let lane_name = args
-        .lane
-        .to_possible_value()
-        .map_or_else(|| "lane".to_owned(), |value| value.get_name().to_owned());
-    verdict::clear(&ctx.root, &lane_name)?;
 
     let result = match args.lane {
         Lane::AppleLint => lane::apple::lint(&process, &ci_config),
@@ -343,12 +354,6 @@ pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         Lane::Verdict => verdict::lane(&ctx.root, &ci_config, args.kind),
     };
     process.best_effort("sccache", &["--show-stats"], "sccache statistics");
-    // The verdict reads what every lane leaves here, so collection cannot be
-    // conditional on the lane passing — a failing lane is the one whose report
-    // decides whether a merge request is held.
-    if let Err(error) = verdict::gather(&ctx.root, &lane_name, result.is_err()) {
-        warn!(%error, lane = %lane_name, "could not collect this lane's test report");
-    }
     result
 }
 
