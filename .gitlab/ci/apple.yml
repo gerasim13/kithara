@@ -84,6 +84,12 @@ apple:swift-test:
     - apple:xcframework
   script:
     - just ci run apple-swift-test
+  artifacts:
+    when: always
+    reports:
+      junit: target/xcresult/swift-test.junit.xml
+    paths:
+      - target/xcresult/swift-test.junit.xml
 
 apple:ios:
   extends: .apple-job
@@ -95,10 +101,14 @@ apple:ios:
 # The suite plays audio and asserts on what came back, so it takes the measured
 # group: a simulator sharing the host with a full build reports on the load
 # rather than on the commit.
+# It carries the merge-request kind on top of the branch one: this is the only
+# lane that runs the iOS regressions, and a push stops producing pipelines once
+# a merge request is open, so without it a merge request carrying one of those
+# regressions would go through without ever running it.
 apple:ios-test:
   extends:
     - .macos-job
-    - .rules-integration-and-branch
+    - .rules-verify-and-branch
     - .measured
   stage: apple
   timeout: 60 minutes
@@ -107,6 +117,12 @@ apple:ios-test:
       artifacts: true
   script:
     - just ci run apple-ios-test
+  artifacts:
+    when: always
+    reports:
+      junit: target/xcresult/ios-test.junit.xml
+    paths:
+      - target/xcresult/ios-test.junit.xml
 
 # The resampler axis: the same end-to-end playback through three source-rate
 # conversion shapes, which is what a change to decode, blending or output can

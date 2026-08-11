@@ -12,6 +12,7 @@ use crate::ci::{
     config::CiConfig,
     process::{Process, require_os},
     run::PipelineKind,
+    xcresult,
 };
 
 /// Every Apple job repeats this preflight instead of inheriting it from a
@@ -130,12 +131,20 @@ pub(crate) fn swift_test(process: &Process, config: &CiConfig, swiftpm_cache: &P
     // this job builds it too. Repeated work is nearly free — the jobs share a
     // target directory on the executor — and it keeps the job self-contained.
     build_xcframework(process)?;
+    // SwiftPM writes xUnit on request, so this lane needs no conversion.
+    let report = process.root().join("target/xcresult/swift-test.junit.xml");
+    if let Some(parent) = report.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
     let mut command = process.command("swift");
     command
         .env("KITHARA_LOCAL_DEV", "1")
         .arg("test")
         .arg("--cache-path")
-        .arg(swiftpm_cache);
+        .arg(swiftpm_cache)
+        .arg("--xunit-output")
+        .arg(&report);
     process.run_command(&mut command, "Swift package tests")
 }
 
@@ -164,7 +173,18 @@ pub(crate) fn ios_test(process: &Process, config: &CiConfig) -> Result<()> {
         // measured group while a simulator runs, and rebuilding what another
         // job already produced spends that window twice.
         .args(["platform", "apple", "test", "--skip-build"]);
-    process.run_command(&mut command, "iOS Simulator tests")
+    let outcome = process.run_command(&mut command, "iOS Simulator tests");
+    // A failing run is exactly the one whose report matters, so the bundle is
+    // converted either way and the test outcome is returned afterwards.
+    let bundle = process.root().join("target/xcresult/ios-test.xcresult");
+    if bundle.exists() {
+        xcresult::write_junit(
+            process,
+            &bundle,
+            &process.root().join("target/xcresult/ios-test.junit.xml"),
+        )?;
+    }
+    outcome
 }
 
 struct Consts;
