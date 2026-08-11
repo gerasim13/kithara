@@ -294,7 +294,7 @@ impl ActiveDecode {
     }
 
     pub(crate) fn transition_holds_output(&self) -> bool {
-        !self.active.is_finished() && self.incoming_cut_is_latched()
+        !self.active.is_finished() && self.blender.is_steady() && self.incoming_cut_is_latched()
     }
 
     pub(crate) fn outgoing_holdback_needs_pcm(&self) -> bool {
@@ -658,6 +658,111 @@ mod tests {
                 .next_output_unheld(&mut cursor, 0)
                 .expect("drained output remains valid")
                 .is_none()
+        );
+    }
+
+    #[kithara::test]
+    fn active_join_drains_before_a_latched_follow_up_transition_holds_output() {
+        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let incoming = generation(spec);
+        let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+        abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        let claim = abr
+            .claim_pending_decision(VariantIndex::new(0))
+            .expect("test transition claim");
+        let transition = VariantTransition::new(
+            VariantTransitionId::new(claim.ticket(), 0),
+            VariantIndex::new(0),
+            VariantIndex::new(1),
+        );
+        let mut decode = ActiveDecode::new(generation(spec), GaplessMode::Disabled, Vec::new());
+        let frames = u32::try_from(decode.blender.join_frame_count()).expect("test join fits u32");
+        let samples = usize::try_from(frames)
+            .expect("test join fits usize")
+            .saturating_mul(usize::from(spec.channels));
+        decode.active.stage(PcmChunk::new(
+            PcmMeta {
+                spec,
+                frames,
+                ..Default::default()
+            },
+            PcmPool::default().attach(vec![0.25; samples]),
+        ));
+        decode.blender.prepare_active(BlenderProfile::new(spec));
+        assert!(decode.blender.prepare_join(|outgoing| {
+            outgoing.fill(-0.25);
+            true
+        }));
+        decode.blender.commit_join();
+        decode.incoming = Some(IncomingDecode::Priming {
+            transition,
+            generation: incoming,
+            frontier: OutgoingFrontier::Exact {
+                frame: 0,
+                rate: spec.sample_rate.get(),
+            },
+        });
+        let mut cursor = ResumeCursor::new(
+            Arc::new(AtomicU32::new(spec.sample_rate.get())),
+            false,
+            spec.sample_rate.get(),
+        );
+
+        assert!(
+            !decode.transition_holds_output(),
+            "the follow-up transition must not freeze an active join"
+        );
+        let output = decode
+            .next_output(&mut cursor, 0)
+            .expect("active join remains decodable");
+
+        assert!(output.is_some(), "the prior join must keep consuming PCM");
+        assert!(decode.blender.is_steady(), "the prior join must finish");
+    }
+
+    #[kithara::test]
+    fn latched_incoming_preparation_keeps_outgoing_pcm_running() {
+        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+        abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        let claim = abr
+            .claim_pending_decision(VariantIndex::new(0))
+            .expect("test transition claim");
+        let transition = VariantTransition::new(
+            VariantTransitionId::new(claim.ticket(), 0),
+            VariantIndex::new(0),
+            VariantIndex::new(1),
+        );
+        let mut decode = ActiveDecode::new(generation(spec), GaplessMode::Disabled, Vec::new());
+        decode.active.stage(PcmChunk::new(
+            PcmMeta {
+                spec,
+                frames: 64,
+                ..Default::default()
+            },
+            PcmPool::default().attach(vec![0.25; 64 * usize::from(spec.channels)]),
+        ));
+        decode.incoming = Some(IncomingDecode::Preparing {
+            transition,
+            frontier: OutgoingFrontier::Exact {
+                frame: 0,
+                rate: spec.sample_rate.get(),
+            },
+        });
+        let mut cursor = ResumeCursor::new(
+            Arc::new(AtomicU32::new(spec.sample_rate.get())),
+            false,
+            spec.sample_rate.get(),
+        );
+
+        assert!(decode.transition_holds_output());
+        let output = decode
+            .next_output(&mut cursor, 0)
+            .expect("preparing transition keeps active output valid");
+
+        assert!(
+            output.is_some(),
+            "preparing an incoming reader must not stall playback"
         );
     }
 
