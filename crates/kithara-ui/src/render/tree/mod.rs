@@ -1,4 +1,5 @@
 mod control;
+mod event;
 mod flex;
 mod geometry;
 mod host;
@@ -9,6 +10,10 @@ mod size;
 mod track_list;
 mod window;
 
+pub(crate) use event::{
+    Widget, activate, command, drag, engine, index, publish, scalar, scalar_child, step,
+    toggle_module, window,
+};
 pub(crate) use geometry::active_tone;
 pub use window::render;
 

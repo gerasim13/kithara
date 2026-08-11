@@ -13,7 +13,7 @@ use crate::{
     layout::FrameSides,
     module::ChromeStyle,
     render::{
-        ChromeLeaf, IcedSkin, InputOwner, Skin, UiEvent, chrome_leaf, event::Widget, fonts,
+        ChromeLeaf, IcedSkin, InputOwner, Skin, UiEvent, Widget, chrome_leaf, fonts,
         header_chevron, shaped_text,
     },
 };

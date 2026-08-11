@@ -19,11 +19,10 @@ use crate::{
     module::TextAlign,
     render::{
         Anchored, ControlAction, DropZone, InputOwner, ModuleChrome, Placement, Reads, Skin,
-        UiEvent, WheelSurface,
+        UiEvent, WheelSurface, Widget,
         document::{
             Group, Host as DocumentHost, Module as DocumentModule, Popover as DocumentPopover,
         },
-        event::Widget,
         window_layers,
     },
     size::{Dim, SizeSpec},

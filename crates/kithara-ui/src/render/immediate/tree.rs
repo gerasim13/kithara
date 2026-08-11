@@ -7,8 +7,7 @@ use iced::{
 use crate::{
     atoms::tree::face::Tree as TreeFace,
     render::{
-        IcedSkin, Icon, InputOwner, ReadValue, Skin, UiEvent, event::Widget, search_input,
-        tree_rows,
+        IcedSkin, Icon, InputOwner, ReadValue, Skin, UiEvent, Widget, search_input, tree_rows,
     },
 };
 

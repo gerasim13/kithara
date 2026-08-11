@@ -25,13 +25,10 @@ mod window;
 
 pub use address::{Node, Scope, Walk};
 pub(crate) use controls::{ChromeLeaf, chrome_leaf, header_chevron, tree_rows};
+pub(crate) use event::control_event;
 #[cfg(feature = "masonry")]
 pub(crate) use event::engine_value;
 pub use event::{ControlAction, DragPhase, UiEvent, WindowCommand, WindowEdge};
-pub(crate) use event::{
-    activate, command, control_event, drag, engine, index, publish, scalar, scalar_child, step,
-    toggle_module, window,
-};
 #[cfg(feature = "masonry")]
 pub(crate) use hosted::hosted_control_plan;
 pub(crate) use hosted::{HostedControlPlan, Resolving};
@@ -56,6 +53,10 @@ pub(crate) use skin::IcedSkin;
 pub use skin::Skin;
 pub(crate) use text_input::{search_input, sync_text_input, text_input_layout};
 pub(crate) use track_list::{sync_track_list_scroll, track_list};
+pub(crate) use tree::{
+    Widget, activate, command, drag, engine, index, publish, scalar, scalar_child, step,
+    toggle_module, window,
+};
 pub use typography::shaped_text;
 #[cfg(feature = "masonry")]
 pub(crate) use window::{ControlsProgram, TitleProgram};

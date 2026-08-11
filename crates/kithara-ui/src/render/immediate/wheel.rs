@@ -7,7 +7,7 @@ use kithara_platform::time::Instant;
 
 use crate::{
     interact::{CursorShape, Hover, iced as iced_interact, recognizers::Stepper},
-    render::{UiEvent, event::Widget, step},
+    render::{UiEvent, Widget, step},
 };
 
 #[derive(bon::Builder)]

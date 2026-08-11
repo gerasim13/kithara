@@ -12,8 +12,8 @@ use crate::{
     ids::InternId,
     module::TrackColumn,
     render::{
-        InputOwner, ReadValue, Reads, Skin, Tree, UiEvent, controls::Paint, event::Widget,
-        scope_picker, vis,
+        InputOwner, ReadValue, Reads, Skin, Tree, UiEvent, Widget, controls::Paint, scope_picker,
+        vis,
     },
     text::TextContext,
 };

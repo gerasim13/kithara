@@ -5,8 +5,7 @@ use crate::{
     interact::{CursorShape, Hit, Input, Outcome, PointerPhase},
     module::WindowControlsStyle,
     render::{
-        HostLayer, LayerHit, Skin, UiEvent, WindowCommand, WindowLayerProgram, event::Widget,
-        window_layer,
+        HostLayer, LayerHit, Skin, UiEvent, Widget, WindowCommand, WindowLayerProgram, window_layer,
     },
     skin::{FrameSkin, WindowControlSkin},
     solve::{Length, Size},

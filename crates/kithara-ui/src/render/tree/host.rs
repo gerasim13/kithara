@@ -970,8 +970,7 @@ mod tests {
         render::{
             ControlAction, DragPhase, DropZone, HostLayer, InputOwner, LayerHit, ModuleChrome,
             ReadValue, StereoLevels, TrackRow, TreeIcon, TreeRow, WaveBucket, WaveformView,
-            WheelSurface, WindowCommand, WindowLayerProgram,
-            event::Widget,
+            WheelSurface, Widget, WindowCommand, WindowLayerProgram,
             fonts::{FONT_BYTES, SANS},
             window_layer,
         },

@@ -11,9 +11,8 @@ use crate::{
     module::TextAlign,
     mount,
     render::{
-        InputOwner, MiniWave, ReadValue, Reads, Skin, Text, WindowSurface,
+        InputOwner, MiniWave, ReadValue, Reads, Skin, Text, Widget, WindowSurface,
         controls::{Draws, Gesture, Grip, Paint, Reading},
-        event::Widget,
     },
 };
 

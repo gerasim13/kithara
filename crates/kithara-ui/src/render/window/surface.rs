@@ -4,7 +4,7 @@ use crate::{
     draw::{DrawList, Pt, Rect},
     interact::CursorShape,
     render::{
-        HostLayer, LayerHit, UiEvent, WindowCommand, WindowEdge, WindowLayerProgram, event::Widget,
+        HostLayer, LayerHit, UiEvent, Widget, WindowCommand, WindowEdge, WindowLayerProgram,
         window_layer,
     },
     solve::{Length, Size},

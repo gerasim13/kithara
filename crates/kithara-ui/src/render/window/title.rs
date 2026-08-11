@@ -6,8 +6,7 @@ use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform},
     interact::CursorShape,
     render::{
-        HostLayer, LayerHit, Skin, UiEvent, WindowCommand, WindowLayerProgram, event::Widget,
-        window_layer,
+        HostLayer, LayerHit, Skin, UiEvent, Widget, WindowCommand, WindowLayerProgram, window_layer,
     },
     skin::TextRoleSkin,
     solve::{Length, Size},

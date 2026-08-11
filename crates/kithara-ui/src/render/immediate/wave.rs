@@ -20,7 +20,7 @@ use crate::{
         recognizers::{Scalar, ScalarState, Track},
     },
     module::WaveStyle,
-    render::{Skin, UiEvent, event::Widget, scalar, scalar_child},
+    render::{Skin, UiEvent, Widget, scalar, scalar_child},
     text::TextContext,
 };
 
