@@ -1,4 +1,4 @@
-use super::pointer::PointerInput;
+use super::{modifiers::Modifiers, pointer::PointerInput};
 use crate::draw::{Pt, Rect};
 
 /// Toolkit-neutral input delivered to a custom component.
@@ -55,35 +55,6 @@ pub enum InputMethod<'a> {
     },
     Commit(&'a str),
     Closed,
-}
-
-/// Active keyboard modifiers.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct Modifiers {
-    alt: bool,
-    control: bool,
-    logo: bool,
-    shift: bool,
-}
-
-impl Modifiers {
-    /// Builds the full modifier state in `alt`, `control`, `logo`, `shift` order.
-    #[must_use]
-    pub const fn new(alt: bool, control: bool, logo: bool, shift: bool) -> Self {
-        Self {
-            alt,
-            control,
-            logo,
-            shift,
-        }
-    }
-
-    /// Whether the shift modifier is active.
-    #[must_use]
-    pub const fn shift(self) -> bool {
-        self.shift
-    }
 }
 
 /// Axis selected from a neutral scroll delta.

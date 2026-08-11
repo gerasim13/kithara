@@ -34,7 +34,7 @@ use crate::draw::Rect;
 use crate::{
     compile::{CompiledUi, compile},
     draw::Rgba,
-    interact::{Input, PointerPhase, ScrollAxis},
+    interact::{Input, PointerPhase, ScrollAxis, masonry::masonry_text_event},
     render::{
         UiEvent, WindowCommand, document,
         masonry::{MasonryHost, MasonryRoot, MasonryState},
@@ -187,20 +187,19 @@ where
             Input::KeyPressed { .. }
             | Input::KeyReleased { .. }
             | Input::InputMethod(_)
-            | Input::ModifiersChanged(_) => {}
+            | Input::ModifiersChanged(_) => {
+                if let Some(event) = masonry_text_event(input) {
+                    self.text(event);
+                }
+            }
         }
         self.settle();
     }
 
-    /// One typed keyboard or input-method event, in the toolkit's own words.
-    ///
-    /// Kept apart from [`Self::input`] because the neutral vocabulary borrows
-    /// the text it carries, and the toolkit's own event owns it.
-    pub fn text(&mut self, event: TextEvent) {
+    fn text(&mut self, event: TextEvent) {
         if let Err(error) = self.root.handle_text_event(event) {
             tracing::error!(%error, "masonry text");
         }
-        self.settle();
     }
 
     fn pointer_input(&mut self, event: PointerEvent) {

@@ -14,8 +14,12 @@ use num_traits::cast::AsPrimitive;
 use winit::{
     application::ApplicationHandler,
     dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
-    event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
+    event::{
+        ElementState, Ime as WinitIme, KeyEvent as WinitKeyEvent, Modifiers as WinitModifiers,
+        MouseButton, MouseScrollDelta, WindowEvent,
+    },
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    keyboard::{Key as WinitKey, NamedKey as WinitNamedKey},
     window::{ResizeDirection, Window, WindowId},
 };
 
@@ -27,7 +31,7 @@ use super::{
 };
 use crate::{
     draw::Pt,
-    interact::{Input, MOUSE, PointerInput, PointerPhase, Scroll},
+    interact::{Input, InputMethod, Key, MOUSE, Modifiers, PointerInput, PointerPhase, Scroll},
     render::{WindowCommand, WindowEdge, vis::VisPass},
 };
 
@@ -62,6 +66,7 @@ where
 struct Live<'config, Application> {
     clicks: Clicks,
     context: RenderContext,
+    modifiers: Modifiers,
     pointer: PhysicalPosition<f64>,
     recovery_redraw_latched: bool,
     renderer: Renderer,
@@ -237,6 +242,9 @@ where
                 ElementState::Released => PointerPhase::Up,
             }),
             WindowEvent::MouseWheel { delta, .. } => live.wheel(delta),
+            WindowEvent::KeyboardInput { event, .. } => live.key(&event),
+            WindowEvent::ModifiersChanged(modifiers) => live.modifiers_changed(modifiers),
+            WindowEvent::Ime(event) => live.ime(&event),
             WindowEvent::RedrawRequested => live.draw(),
             _ => {}
         }
@@ -283,6 +291,7 @@ where
         let window = event_loop
             .create_window(attributes)
             .map_err(|error| RunError::Host(error.to_string()))?;
+        window.set_ime_allowed(true);
         let window = Arc::new(window);
         let size = window.inner_size();
         let mut context = RenderContext::new();
@@ -311,6 +320,7 @@ where
         let mut live = Live {
             clicks: Clicks::default(),
             context,
+            modifiers: Modifiers::default(),
             pointer: PhysicalPosition::new(0.0, 0.0),
             recovery_redraw_latched: false,
             renderer,
@@ -430,6 +440,37 @@ where
         self.request_redraw();
     }
 
+    fn key(&mut self, event: &WinitKeyEvent) {
+        let key = portable_key(&event.logical_key);
+        let modifiers = self.modifiers;
+        self.ui.input(match event.state {
+            ElementState::Pressed => Input::KeyPressed {
+                key,
+                modifiers,
+                text: event.text.as_deref(),
+            },
+            ElementState::Released => Input::KeyReleased { key, modifiers },
+        });
+        self.request_redraw();
+    }
+
+    fn modifiers_changed(&mut self, modifiers: WinitModifiers) {
+        let state = modifiers.state();
+        self.modifiers = Modifiers::new(
+            state.alt_key(),
+            state.control_key(),
+            state.super_key(),
+            state.shift_key(),
+        );
+        self.ui.input(Input::ModifiersChanged(self.modifiers));
+        self.request_redraw();
+    }
+
+    fn ime(&mut self, event: &WinitIme) {
+        self.ui.input(Input::InputMethod(portable_ime(event)));
+        self.request_redraw();
+    }
+
     /// Carries out what the document asked its window to do, and says whether
     /// it asked to be closed.
     fn obey(&mut self, _event_loop: &ActiveEventLoop) -> bool {
@@ -515,5 +556,35 @@ where
         frame.present();
         self.clear_recovery_redraw();
         true
+    }
+}
+
+fn portable_key(key: &WinitKey) -> Key<'_> {
+    match key {
+        WinitKey::Named(WinitNamedKey::ArrowDown) => Key::ArrowDown,
+        WinitKey::Named(WinitNamedKey::ArrowLeft) => Key::ArrowLeft,
+        WinitKey::Named(WinitNamedKey::ArrowRight) => Key::ArrowRight,
+        WinitKey::Named(WinitNamedKey::ArrowUp) => Key::ArrowUp,
+        WinitKey::Named(WinitNamedKey::Backspace) => Key::Backspace,
+        WinitKey::Named(WinitNamedKey::Delete) => Key::Delete,
+        WinitKey::Named(WinitNamedKey::End) => Key::End,
+        WinitKey::Named(WinitNamedKey::Enter) => Key::Enter,
+        WinitKey::Named(WinitNamedKey::Escape) => Key::Escape,
+        WinitKey::Named(WinitNamedKey::Home) => Key::Home,
+        WinitKey::Named(_) | WinitKey::Unidentified(_) | WinitKey::Dead(_) => Key::Other,
+        WinitKey::Character(text) if text.as_str() == " " => Key::Space,
+        WinitKey::Character(text) => Key::Character(text.as_str()),
+    }
+}
+
+fn portable_ime(event: &WinitIme) -> InputMethod<'_> {
+    match event {
+        WinitIme::Enabled => InputMethod::Opened,
+        WinitIme::Preedit(content, selection) => InputMethod::Preedit {
+            content,
+            selection: *selection,
+        },
+        WinitIme::Commit(content) => InputMethod::Commit(content),
+        WinitIme::Disabled => InputMethod::Closed,
     }
 }

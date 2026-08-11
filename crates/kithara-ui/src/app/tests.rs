@@ -7,7 +7,7 @@ use crate::{
     builtin,
     draw::{Pt, Rect, Rgba},
     ids::{EndpointId, SourceUri},
-    interact::{Input, MOUSE, PointerInput, PointerPhase},
+    interact::{Input, Key, MOUSE, Modifiers, PointerInput, PointerPhase},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{ControlAction, ReadValue, Reads, Skin, StereoLevels, UiEvent},
     source::MemResolver,
@@ -108,6 +108,34 @@ impl App for Dial {
     }
 }
 
+#[derive(Default)]
+struct Typed {
+    query: String,
+}
+
+impl Reads for Typed {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        let id = endpoint.split_once('@').map_or(endpoint, |(id, _)| id);
+        (id == "fixture.tree").then_some(ReadValue::Tree(&[]))
+    }
+}
+
+impl App for Typed {
+    fn document(&self) -> &str {
+        "one.klayout.ron"
+    }
+
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        with(self)
+    }
+
+    fn update(&mut self, event: UiEvent) {
+        if let UiEvent::LibraryQuery(query) = event {
+            self.query = query;
+        }
+    }
+}
+
 struct Board;
 
 impl Reads for Board {
@@ -151,6 +179,42 @@ fn one_control(control: &str) -> MemResolver {
         ),
     );
     resolver
+}
+
+fn focused_search<'a>(
+    endpoints: &'a Registry,
+    resolver: &'a MemResolver,
+    skin: &'a Skin,
+) -> Ui<'a, Typed> {
+    let config = Config::builder()
+        .endpoints(endpoints)
+        .resolver(resolver)
+        .skin(skin)
+        .skin_doc(builtin::skin_doc())
+        .build();
+    let mut ui = Ui::new(Typed::default(), config, (240, 120), 1.0)
+        .unwrap_or_else(|error| panic!("the search box must mount: {error}"));
+    ui.frame(Duration::from_millis(16));
+    ui.scene()
+        .unwrap_or_else(|error| panic!("the search box must draw: {error}"));
+    let at = Pt {
+        x: skin.tree.search_icon_width + 10.0,
+        y: skin.tree.search_height / 2.0,
+    };
+    ui.input(press(at, PointerPhase::Move));
+    ui.input(press(at, PointerPhase::Down));
+    ui.input(press(at, PointerPhase::Up));
+    ui
+}
+
+fn tree_fixture() -> (Registry, MemResolver, Skin) {
+    (
+        Registry("fixture.tree", EndpointDesc::new(ValueKind::Tree)),
+        one_control(
+            r#"Tree(id: "control", size: (w: Fill, h: Fill), read: Model(id: "fixture.tree"))"#,
+        ),
+        skin(),
+    )
 }
 
 fn board() -> MemResolver {
@@ -275,6 +339,48 @@ fn a_wheel_notch_over_a_knob_steps_it() {
         scenario.app().value > before,
         "a notch over the knob must raise it, but it stayed at {before}"
     );
+}
+
+#[kithara::test]
+fn a_typed_character_reaches_a_focused_retained_text_field() {
+    let (endpoints, resolver, skin) = tree_fixture();
+    let mut ui = focused_search(&endpoints, &resolver, &skin);
+
+    ui.input(Input::KeyPressed {
+        key: Key::Character("a"),
+        modifiers: Modifiers::default(),
+        text: Some("a"),
+    });
+
+    assert_eq!(ui.app().query, "a");
+}
+
+#[kithara::test]
+fn a_modifier_change_alone_does_not_edit_the_focused_field() {
+    let (endpoints, resolver, skin) = tree_fixture();
+    let mut ui = focused_search(&endpoints, &resolver, &skin);
+    ui.input(Input::ModifiersChanged(Modifiers::new(
+        false, false, false, true,
+    )));
+
+    assert!(ui.app().query.is_empty());
+}
+
+#[kithara::test]
+fn a_key_release_does_not_repeat_text_input() {
+    let (endpoints, resolver, skin) = tree_fixture();
+    let mut ui = focused_search(&endpoints, &resolver, &skin);
+    ui.input(Input::KeyPressed {
+        key: Key::Character("a"),
+        modifiers: Modifiers::default(),
+        text: Some("a"),
+    });
+    ui.input(Input::KeyReleased {
+        key: Key::Character("a"),
+        modifiers: Modifiers::default(),
+    });
+
+    assert_eq!(ui.app().query, "a");
 }
 
 #[kithara::test]

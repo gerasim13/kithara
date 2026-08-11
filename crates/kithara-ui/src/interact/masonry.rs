@@ -1,9 +1,27 @@
-//! Translating Masonry's keyboard and text events into the neutral input
-//! contract, so no widget has to speak the toolkit's dialect.
+//! Translates keyboard, IME, and modifier events between Masonry and the
+//! neutral input contract, so no widget has to speak the toolkit's dialect.
 
-use masonry::core::{Ime, TextEvent};
+use masonry::{
+    core::{Ime, TextEvent},
+    ui_events::keyboard::{
+        Key as MasonryKey, KeyState, KeyboardEvent, Modifiers as MasonryModifiers, NamedKey,
+    },
+};
 
 use super::{Input, InputMethod, Key, Modifiers};
+
+const NAMED_KEYS: [(NamedKey, Key<'static>); 10] = [
+    (NamedKey::ArrowDown, Key::ArrowDown),
+    (NamedKey::ArrowLeft, Key::ArrowLeft),
+    (NamedKey::ArrowRight, Key::ArrowRight),
+    (NamedKey::ArrowUp, Key::ArrowUp),
+    (NamedKey::Backspace, Key::Backspace),
+    (NamedKey::Delete, Key::Delete),
+    (NamedKey::End, Key::End),
+    (NamedKey::Enter, Key::Enter),
+    (NamedKey::Escape, Key::Escape),
+    (NamedKey::Home, Key::Home),
+];
 
 pub(crate) fn portable_text_input(event: &TextEvent) -> Option<Input<'_>> {
     match event {
@@ -16,8 +34,8 @@ pub(crate) fn portable_text_input(event: &TextEvent) -> Option<Input<'_>> {
                     None
                 } else {
                     match &event.key {
-                        masonry::ui_events::keyboard::Key::Character(text) => Some(text.as_str()),
-                        masonry::ui_events::keyboard::Key::Named(_) => None,
+                        MasonryKey::Character(text) => Some(text.as_str()),
+                        MasonryKey::Named(_) => None,
                     }
                 };
                 Some(Input::KeyPressed {
@@ -42,31 +60,87 @@ pub(crate) fn portable_text_input(event: &TextEvent) -> Option<Input<'_>> {
     }
 }
 
-fn portable_key(key: &masonry::ui_events::keyboard::Key) -> Key<'_> {
-    use masonry::ui_events::keyboard::{Key as MasonryKey, NamedKey};
-
-    match key {
-        MasonryKey::Named(NamedKey::ArrowDown) => Key::ArrowDown,
-        MasonryKey::Named(NamedKey::ArrowLeft) => Key::ArrowLeft,
-        MasonryKey::Named(NamedKey::ArrowRight) => Key::ArrowRight,
-        MasonryKey::Named(NamedKey::ArrowUp) => Key::ArrowUp,
-        MasonryKey::Named(NamedKey::Backspace) => Key::Backspace,
-        MasonryKey::Named(NamedKey::Delete) => Key::Delete,
-        MasonryKey::Named(NamedKey::End) => Key::End,
-        MasonryKey::Named(NamedKey::Enter) => Key::Enter,
-        MasonryKey::Named(NamedKey::Escape) => Key::Escape,
-        MasonryKey::Named(NamedKey::Home) => Key::Home,
-        MasonryKey::Character(character) if character == " " => Key::Space,
-        MasonryKey::Character(character) => Key::Character(character),
-        MasonryKey::Named(_) => Key::Other,
+pub(crate) fn masonry_text_event(input: Input<'_>) -> Option<TextEvent> {
+    match input {
+        Input::KeyPressed { key, modifiers, .. } => {
+            Some(keyboard_event(KeyState::Down, key, modifiers))
+        }
+        Input::KeyReleased { key, modifiers } => Some(keyboard_event(KeyState::Up, key, modifiers)),
+        Input::ModifiersChanged(modifiers) => {
+            Some(keyboard_event(KeyState::Up, Key::Other, modifiers))
+        }
+        Input::InputMethod(event) => Some(TextEvent::Ime(match event {
+            InputMethod::Opened => Ime::Enabled,
+            InputMethod::Preedit { content, selection } => {
+                Ime::Preedit(content.to_owned(), selection)
+            }
+            InputMethod::Commit(content) => Ime::Commit(content.to_owned()),
+            InputMethod::Closed => Ime::Disabled,
+        })),
+        Input::Pointer(_) | Input::Wheel(_) => None,
     }
 }
 
-pub(crate) fn portable_modifiers(modifiers: masonry::ui_events::keyboard::Modifiers) -> Modifiers {
+fn keyboard_event(state: KeyState, key: Key<'_>, modifiers: Modifiers) -> TextEvent {
+    TextEvent::Keyboard(KeyboardEvent {
+        state,
+        key: masonry_key(key),
+        modifiers: masonry_modifiers(modifiers),
+        ..KeyboardEvent::default()
+    })
+}
+
+fn portable_key(key: &MasonryKey) -> Key<'_> {
+    match key {
+        MasonryKey::Character(character) if character == " " => Key::Space,
+        MasonryKey::Character(character) => Key::Character(character),
+        MasonryKey::Named(named) => {
+            let Some((_, neutral)) = NAMED_KEYS.iter().find(|(candidate, _)| candidate == named)
+            else {
+                return Key::Other;
+            };
+            *neutral
+        }
+    }
+}
+
+fn masonry_key(key: Key<'_>) -> MasonryKey {
+    match key {
+        Key::Space => MasonryKey::Character(" ".to_owned()),
+        Key::Character(text) => MasonryKey::Character(text.to_owned()),
+        Key::Other => MasonryKey::Named(NamedKey::Unidentified),
+        named => {
+            let Some((candidate, _)) = NAMED_KEYS.iter().find(|(_, neutral)| *neutral == named)
+            else {
+                return MasonryKey::Named(NamedKey::Unidentified);
+            };
+            MasonryKey::Named(*candidate)
+        }
+    }
+}
+
+pub(crate) fn portable_modifiers(modifiers: MasonryModifiers) -> Modifiers {
     Modifiers::new(
         modifiers.alt(),
         modifiers.ctrl(),
         modifiers.meta(),
         modifiers.shift(),
     )
+}
+
+fn masonry_modifiers(modifiers: Modifiers) -> MasonryModifiers {
+    let mut out = MasonryModifiers::empty();
+    if modifiers.alt() {
+        out |= MasonryModifiers::ALT;
+    }
+    if modifiers.control() {
+        out |= MasonryModifiers::CONTROL;
+    }
+    if modifiers.logo() {
+        out |= MasonryModifiers::META;
+    }
+    if modifiers.shift() {
+        out |= MasonryModifiers::SHIFT;
+    }
+    out
 }
