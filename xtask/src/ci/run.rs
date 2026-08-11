@@ -431,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn ci_junit_path_is_relative_to_the_nextest_profile_store() {
+    fn ci_junit_paths_match_their_producers() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("xtask has a workspace root");
@@ -475,10 +475,18 @@ mod tests {
             !reports.is_empty(),
             "the pipeline declares no JUnit reports"
         );
-        assert!(
-            reports
-                .iter()
-                .all(|path| path == "target/nextest/ci/junit.xml")
+        reports.sort();
+        assert_eq!(
+            reports,
+            [
+                "target-flash-off/nextest/ci/junit.xml",
+                "target/nextest/ci/junit.xml",
+                "target/nextest/ci/junit.xml",
+                "target/nextest/ci/junit.xml",
+                "target/nextest/ci/junit.xml",
+                "target/xcresult/ios-test.junit.xml",
+                "target/xcresult/swift-test.junit.xml",
+            ]
         );
     }
 
