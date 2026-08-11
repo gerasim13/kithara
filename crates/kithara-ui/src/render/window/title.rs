@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 
-use iced::{Element, Length, Size};
+use iced::Element;
 
 use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform},
@@ -10,6 +10,7 @@ use crate::{
         window_layer,
     },
     skin::TextRoleSkin,
+    solve::{Length, Size},
     text::{TextContext, TextResources},
 };
 

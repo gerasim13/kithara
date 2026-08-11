@@ -8,41 +8,15 @@ use iced::{
     },
 };
 
+use super::contract::WindowLayerProgram;
+#[cfg(test)]
+use crate::{draw::Pt, render::HostLayer, solve::Size as SolveSize, text::TextResources};
 use crate::{
-    draw::{Pt, Rect},
+    draw::Rect,
     interact::{Input, Outcome, PointerId, PointerOwnership, PointerPhase, iced as iced_interact},
-    render::{HostLayer, UiEvent, WindowCommand, draw_host_layer, window as window_event},
-    text::TextResources,
+    render::{UiEvent, draw_host_layer, window as window_event},
+    solve::Length as SolveLength,
 };
-
-pub(crate) trait WindowLayerProgram {
-    type State: Default + 'static;
-
-    fn size(&self) -> Size<Length>;
-
-    fn layer(
-        &self,
-        state: &Self::State,
-        bounds: Rect,
-        pointer: Option<Pt>,
-    ) -> HostLayer<WindowCommand>;
-
-    fn hit_layer(&self, state: &Self::State, bounds: Rect) -> HostLayer<WindowCommand> {
-        self.layer(state, bounds, None)
-    }
-
-    fn update(
-        &self,
-        _state: &mut Self::State,
-        input: Input<'_>,
-        layer: &HostLayer<WindowCommand>,
-        pointer: Option<Pt>,
-    ) -> (Outcome<WindowCommand>, bool) {
-        (layer.handle(input, pointer), false)
-    }
-
-    fn resources(&self) -> Option<&TextResources>;
-}
 
 pub(crate) fn window_layer<'a>(program: impl WindowLayerProgram + 'a) -> Element<'a, UiEvent> {
     Element::new(WindowLayerLeaf { program })
@@ -65,7 +39,8 @@ where
     }
 
     fn size(&self) -> Size<Length> {
-        self.program.size()
+        let size = self.program.size();
+        Size::new(iced_length(size.width), iced_length(size.height))
     }
 
     fn layout(
@@ -106,6 +81,15 @@ where
             program: &self.program,
             state,
         })))
+    }
+}
+
+const fn iced_length(length: SolveLength) -> Length {
+    match length {
+        SolveLength::Fill => Length::Fill,
+        SolveLength::FillPortion(portion) => Length::FillPortion(portion),
+        SolveLength::Shrink => Length::Shrink,
+        SolveLength::Fixed(value) => Length::Fixed(value),
     }
 }
 
@@ -252,8 +236,8 @@ mod tests {
     impl WindowLayerProgram for TestProgram {
         type State = ();
 
-        fn size(&self) -> Size<Length> {
-            Size::new(Length::Fixed(20.0), Length::Fixed(10.0))
+        fn size(&self) -> SolveSize<SolveLength> {
+            SolveSize::new(SolveLength::Fixed(20.0), SolveLength::Fixed(10.0))
         }
 
         fn layer(
@@ -283,8 +267,8 @@ mod tests {
     impl WindowLayerProgram for CaptureProgram {
         type State = ();
 
-        fn size(&self) -> Size<Length> {
-            Size::new(Length::Fixed(20.0), Length::Fixed(10.0))
+        fn size(&self) -> SolveSize<SolveLength> {
+            SolveSize::new(SolveLength::Fixed(20.0), SolveLength::Fixed(10.0))
         }
 
         fn layer(
@@ -325,6 +309,17 @@ mod tests {
         fn resources(&self) -> Option<&TextResources> {
             None
         }
+    }
+
+    #[kithara::test]
+    fn neutral_lengths_keep_their_iced_layout_meaning() {
+        assert_eq!(iced_length(SolveLength::Fill), Length::Fill);
+        assert_eq!(
+            iced_length(SolveLength::FillPortion(3)),
+            Length::FillPortion(3)
+        );
+        assert_eq!(iced_length(SolveLength::Shrink), Length::Shrink);
+        assert_eq!(iced_length(SolveLength::Fixed(24.0)), Length::Fixed(24.0));
     }
 
     #[kithara::test]

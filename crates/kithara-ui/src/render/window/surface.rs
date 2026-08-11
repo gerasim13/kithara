@@ -1,4 +1,4 @@
-use iced::{Element, Length, Size};
+use iced::Element;
 
 use crate::{
     draw::{DrawList, Pt, Rect},
@@ -7,6 +7,7 @@ use crate::{
         HostLayer, LayerHit, UiEvent, WindowCommand, WindowEdge, WindowLayerProgram, event::Widget,
         window_layer,
     },
+    solve::{Length, Size},
     text::TextResources,
 };
 

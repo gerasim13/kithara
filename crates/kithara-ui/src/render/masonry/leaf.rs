@@ -28,6 +28,7 @@ use crate::{
     },
     render::{HostLayer, ReadValue, Reads, UiEvent, WindowCommand, WindowLayerProgram},
     skin::TextRoleSkin,
+    solve::{Length, Size},
     text::{TextContext, TextResources},
 };
 
@@ -49,9 +50,9 @@ pub(super) enum Leaf {
 }
 
 impl Leaf {
-    pub(crate) fn measure(&mut self, limits: crate::solve::Limits) -> crate::solve::Size {
+    pub(crate) fn measure(&mut self, limits: crate::solve::Limits) -> Size {
         match self {
-            Self::Empty | Self::Vis(_) => crate::solve::Size::ZERO,
+            Self::Empty | Self::Vis(_) => Size::ZERO,
             Self::Control(control) => control.measure(),
             Self::Text {
                 content,
@@ -61,7 +62,7 @@ impl Leaf {
                 ..
             } => {
                 let run = text.shape(content, *role, wrap_width(limits.max().width, *padding_x));
-                crate::solve::Size::new(run.width() + *padding_x * 2.0, run.height())
+                Size::new(run.width() + *padding_x * 2.0, run.height())
             }
             Self::Custom { widget, text } => {
                 let mut text = TextMeasurer::new(text);
@@ -72,7 +73,7 @@ impl Leaf {
                         Size2::new(limits.max().width, limits.max().height),
                     ),
                 );
-                crate::solve::Size::new(size.w, size.h)
+                Size::new(size.w, size.h)
             }
         }
     }
@@ -403,8 +404,8 @@ pub(crate) struct DragProgram;
 impl WindowLayerProgram for DragProgram {
     type State = ();
 
-    fn size(&self) -> iced::Size<iced::Length> {
-        iced::Size::new(iced::Length::Fill, iced::Length::Fill)
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fill, Length::Fill)
     }
 
     fn layer(&self, _state: &(), bounds: Rect, _pointer: Option<Pt>) -> HostLayer<WindowCommand> {

@@ -975,6 +975,7 @@ mod tests {
             fonts::{FONT_BYTES, SANS},
             window_layer,
         },
+        solve::{Length as SolveLength, Size as SolveSize},
         source::{MemResolver, UiConfig},
         text::TextResources,
     };
@@ -994,8 +995,8 @@ mod tests {
     impl WindowLayerProgram for OverlapWindowProgram {
         type State = ();
 
-        fn size(&self) -> Size<Length> {
-            Size::new(Length::Fill, Length::Fill)
+        fn size(&self) -> SolveSize<SolveLength> {
+            SolveSize::new(SolveLength::Fill, SolveLength::Fill)
         }
 
         fn layer(

@@ -1,4 +1,4 @@
-use iced::{Element, Length, Size};
+use iced::Element;
 
 use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba},
@@ -9,6 +9,7 @@ use crate::{
         window_layer,
     },
     skin::{FrameSkin, WindowControlSkin},
+    solve::{Length, Size},
     text::TextResources,
 };
 
