@@ -125,12 +125,16 @@ where
         std::mem::take(&mut self.commands)
     }
 
-    /// Satisfies the redraw signals covered by a frame the host completed.
-    ///
-    /// Returns whether Masonry requested a following animation frame. Every
-    /// unrelated platform signal remains queued on the retained root.
-    pub fn complete_frame(&mut self) -> bool {
-        self.root.complete_frame()
+    delegate::delegate! {
+        to self.root {
+            /// Satisfies the redraw signals covered by a frame the host completed.
+            ///
+            /// Returns whether Masonry requested a following animation frame. Every
+            /// unrelated platform signal remains queued on the retained root.
+            pub fn complete_frame(&mut self) -> bool;
+            /// Reports whether the next retained frame would change the picture.
+            pub fn needs_frame(&self) -> bool;
+        }
     }
 
     /// Tells the UI how big its rectangle is now, in physical pixels.

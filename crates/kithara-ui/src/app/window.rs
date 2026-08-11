@@ -497,6 +497,9 @@ where
 
     fn draw(&mut self) {
         self.ui.frame(Self::FRAME);
+        if !self.ui.needs_frame() {
+            return;
+        }
         let Ok(frame) = self
             .ui
             .render()

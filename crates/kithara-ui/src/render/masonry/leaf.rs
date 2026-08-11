@@ -119,10 +119,11 @@ impl Leaf {
         }
     }
 
-    pub(crate) fn animate(&self, ctx: &mut UpdateCtx<'_>) {
-        let repaint = self.repaint();
-        ctx.request_paint_only();
-        if repaint == Repaint::Continuous {
+    pub(crate) fn animate(&self, ctx: &mut UpdateCtx<'_>, repaint: Repaint) {
+        if repaint != Repaint::None {
+            ctx.request_paint_only();
+        }
+        if self.repaint() == Repaint::Continuous {
             ctx.request_anim_frame();
         }
     }

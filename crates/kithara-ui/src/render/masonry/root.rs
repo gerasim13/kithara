@@ -302,6 +302,11 @@ where
         complete_frame_signals(&mut self.platform)
     }
 
+    /// Reports whether Masonry requested another paint or animation frame.
+    pub(crate) fn needs_frame(&self) -> bool {
+        frame_requested(&self.platform)
+    }
+
     #[cfg(test)]
     pub(crate) fn tree_picture(&self, path: &str) -> Option<(usize, String)> {
         self.engines
@@ -483,6 +488,17 @@ mod frame_signal_tests {
     }
 
     #[kithara::test]
+    fn only_redraw_and_animation_signals_need_a_frame() {
+        let no_frame = [RenderRootSignal::StartIme, RenderRootSignal::EndIme];
+        let redraw = [RenderRootSignal::RequestRedraw];
+        let animation = [RenderRootSignal::RequestAnimFrame];
+
+        assert!(!frame_requested(&no_frame));
+        assert!(frame_requested(&redraw));
+        assert!(frame_requested(&animation));
+    }
+
+    #[kithara::test]
     fn satisfied_signals_are_removed_and_unrelated_signals_keep_their_order() {
         let mut signals = vec![
             RenderRootSignal::StartIme,
@@ -502,6 +518,15 @@ mod frame_signal_tests {
             ]
         ));
     }
+}
+
+fn frame_requested(signals: &[RenderRootSignal]) -> bool {
+    signals.iter().any(|signal| {
+        matches!(
+            signal,
+            RenderRootSignal::RequestRedraw | RenderRootSignal::RequestAnimFrame
+        )
+    })
 }
 
 pub(crate) struct WindowLayer {

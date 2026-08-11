@@ -574,6 +574,37 @@ fn scene_keeps_the_public_single_redraw_signature() {
 }
 
 #[kithara::test]
+fn an_idle_ui_skips_its_following_frame() {
+    let endpoints = Registry("fixture.dial", EndpointDesc::new(ValueKind::Scalar));
+    let resolver = one_control(r#"Spacer(id: "idle", size: Some((w: Fill, h: Fill)))"#);
+    let skin = skin();
+    let config = Config::builder()
+        .endpoints(&endpoints)
+        .resolver(&resolver)
+        .skin(&skin)
+        .skin_doc(builtin::skin_doc())
+        .build();
+    let mut ui = Ui::new(Dial::new(false), config, (240, 120), 1.0)
+        .unwrap_or_else(|error| panic!("the idle fixture must mount: {error}"));
+
+    assert!(ui.needs_frame(), "the mounted document must paint once");
+    ui.render()
+        .unwrap_or_else(|error| panic!("the idle fixture must draw: {error}"));
+    assert!(!ui.complete_frame());
+    assert!(
+        !ui.needs_frame(),
+        "the completed frame must leave no paint pending"
+    );
+
+    ui.frame(Duration::from_millis(16));
+
+    assert!(
+        !ui.needs_frame(),
+        "an idle animation tick must not make the host rasterise and present again"
+    );
+}
+
+#[kithara::test]
 fn resize_from_one_to_two_x_keeps_layout_geometry_logical() {
     let endpoints = Registry("fixture.dial", EndpointDesc::new(ValueKind::Scalar));
     let resolver = one_control(r#"Spacer(id: "scaled", size: Some((w: Fill, h: Fill)))"#);

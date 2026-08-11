@@ -583,13 +583,13 @@ impl Widget for Node {
         if ctx.is_stashed() {
             return;
         }
-        if let Some(leaf) = self.layout.leaf()
-            && let Some(action) = leaf.frame(kithara_platform::time::Duration::from_nanos(interval))
-        {
-            ctx.submit_action::<HostAction>(action);
-        }
         if let Some(leaf) = self.layout.leaf() {
-            leaf.animate(ctx);
+            let repaint = leaf.repaint();
+            if let Some(action) = leaf.frame(kithara_platform::time::Duration::from_nanos(interval))
+            {
+                ctx.submit_action::<HostAction>(action);
+            }
+            leaf.animate(ctx, repaint);
         }
     }
 
