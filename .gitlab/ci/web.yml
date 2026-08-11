@@ -1,10 +1,28 @@
 .web-job:
-  extends:
-    - .linux-job
-    - .rules-integration
+  extends: .linux-job
+  interruptible: false
+  rules:
+    - !reference [.platform-web, rules]
+    - !reference [.rules-integration, rules]
   stage: web
   timeout: 60 minutes
   needs: []
+
+# Built in the Linux container, but what it answers for is the wasm target, so
+# it belongs to the web request and not to the Linux one. It keeps the verify
+# rule set the browser lanes do not have: it is a build check, cheap enough to
+# carry wherever the web platform is asked for.
+web:wasm:
+  extends: .linux-job
+  interruptible: true
+  rules:
+    - !reference [.platform-web, rules]
+    - !reference [.rules-verify, rules]
+  stage: web
+  timeout: 60 minutes
+  needs: []
+  script:
+    - just ci run linux-wasm
 
 web:chromium:
   extends:

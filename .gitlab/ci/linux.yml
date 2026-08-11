@@ -1,7 +1,9 @@
 .linux-lane:
-  extends:
-    - .linux-job
-    - .rules-verify
+  extends: .linux-job
+  interruptible: true
+  rules:
+    - !reference [.platform-linux, rules]
+    - !reference [.rules-verify, rules]
   stage: linux
   timeout: 60 minutes
   needs: []
@@ -22,16 +24,14 @@ linux:check:
   script:
     - just ci run linux-check
 
-linux:wasm:
-  extends: .linux-lane
-  script:
-    - just ci run linux-wasm
-
 linux:test:
   extends:
     - .linux-job
-    - .rules-integration
     - .measured
+  interruptible: false
+  rules:
+    - !reference [.platform-linux, rules]
+    - !reference [.rules-integration, rules]
   stage: linux
   timeout: 60 minutes
   needs: []
@@ -48,8 +48,11 @@ linux:test:
 linux:coverage:
   extends:
     - .linux-job
-    - .rules-nightly
     - .measured
+  interruptible: false
+  rules:
+    - !reference [.platform-linux, rules]
+    - !reference [.rules-nightly, rules]
   stage: linux
   timeout: 90 minutes
   needs: []

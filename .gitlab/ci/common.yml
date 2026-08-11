@@ -42,6 +42,39 @@
   tags:
     - kithara-release
 
+# One Mac mini serves every platform: a Linux container under colima, Windows
+# under qemu, Android on the host, the simulator in a throwaway macOS guest.
+# Carrying all of them on every push spends the machine on lanes the GitHub
+# fork already covers, and buries the platform under focus — today iOS — among
+# failures that belong elsewhere. So the others are opt-in: name them in
+# `KITHARA_PLATFORMS`, comma-separated, on a run started for that purpose.
+#
+# These gate the lanes' own rule sets rather than the `include`, because an
+# `include:rules` is resolved before the variables a run carries are visible —
+# a child pipeline that plainly has `KITHARA_PLATFORMS=linux` still saw none of
+# the Linux jobs. As the first entry in a job's `rules` a `when: never` match
+# ends the evaluation, so the platform check comes before anything the lane's
+# own kind rules would allow.
+.platform-linux:
+  rules:
+    - if: $KITHARA_PLATFORMS !~ /(^|,)\s*linux\s*(,|$)/
+      when: never
+
+.platform-web:
+  rules:
+    - if: $KITHARA_PLATFORMS !~ /(^|,)\s*web\s*(,|$)/
+      when: never
+
+.platform-android:
+  rules:
+    - if: $KITHARA_PLATFORMS !~ /(^|,)\s*android\s*(,|$)/
+      when: never
+
+.platform-windows:
+  rules:
+    - if: $KITHARA_PLATFORMS !~ /(^|,)\s*windows\s*(,|$)/
+      when: never
+
 # Jobs declare only the dependencies they really have. Ordering on the shared
 # host belongs to the runners — each takes a single build at a time — so a lane
 # no longer queues behind an unrelated lane, and a lane whose runner is not
