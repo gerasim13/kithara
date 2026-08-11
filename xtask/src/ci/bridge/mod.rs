@@ -5,4 +5,4 @@ mod ledger;
 mod model;
 mod reconcile;
 
-pub(crate) use command::{BridgeArgs, run};
+pub(crate) use command::{BridgeArgs, run, secret_files};

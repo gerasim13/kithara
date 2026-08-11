@@ -4,19 +4,13 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
 use tracing::info;
 
 use crate::ci::{
+    bridge,
     config::{CiConfig, LANE_CONFIG_DIR, MAC_CONFIG_PATH},
     process::Process,
 };
-
-#[derive(Deserialize)]
-struct BridgeSecrets {
-    github_private_key: PathBuf,
-    gitlab_token_file: PathBuf,
-}
 
 pub(super) struct ServiceInstaller<'a> {
     config: &'a CiConfig,
@@ -61,13 +55,9 @@ impl<'a> ServiceInstaller<'a> {
             bail!("missing staged bridge service: {}", pending.display());
         }
         self.require_private_sync_file(&config)?;
-        let secrets: BridgeSecrets = toml::from_str(
-            &fs::read_to_string(&config)
-                .with_context(|| format!("reading {}", config.display()))?,
-        )
-        .with_context(|| format!("parsing {}", config.display()))?;
-        self.require_private_sync_file(&secrets.github_private_key)?;
-        self.require_private_sync_file(&secrets.gitlab_token_file)?;
+        for secret in bridge::secret_files(&config)? {
+            self.require_private_sync_file(&secret)?;
+        }
         let binary = self.installed_binary();
         self.process.run(
             path_text(&binary)?,
