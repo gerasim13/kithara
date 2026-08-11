@@ -1,7 +1,7 @@
 use std::{
     sync::{
         OnceLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     task::{Wake, Waker},
 };
@@ -21,6 +21,25 @@ use super::segments::FileSegmentIndex;
 use crate::coord::FileCoord;
 
 const CODEC_SNIFF_BYTES: usize = 16;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FileTerminalState {
+    Active = 0,
+    Committed = 1,
+    Failed = 2,
+    Cancelled = 3,
+}
+
+impl From<&ResourceStatus> for FileTerminalState {
+    fn from(status: &ResourceStatus) -> Self {
+        match status {
+            ResourceStatus::Active => Self::Active,
+            ResourceStatus::Committed { .. } => Self::Committed,
+            ResourceStatus::Failed(_) => Self::Failed,
+            ResourceStatus::Cancelled => Self::Cancelled,
+        }
+    }
+}
 
 /// Control-plane handles shared between the source and the download driver.
 pub(crate) struct FileSourceCtx {
@@ -62,7 +81,9 @@ pub(crate) struct FileInner {
     /// election if the original writer drops. `None` for local /
     /// already-cached sources that never download.
     pub(crate) resource_lease: Option<ResourceLease>,
+    completion_started: AtomicBool,
     complete: AtomicBool,
+    terminal_state: AtomicU8,
 
     opened_emitted: OnceLock<()>,
 
@@ -80,6 +101,8 @@ impl FileInner {
         complete: bool,
         resource_lease: Option<ResourceLease>,
     ) -> Self {
+        let terminal_state = FileTerminalState::from(&asset.reader.status());
+        let complete = complete && terminal_state == FileTerminalState::Committed;
         let inner = Self {
             source,
             asset,
@@ -89,7 +112,9 @@ impl FileInner {
             segment_index: OnceLock::new(),
             worker_wake: OnceLock::new(),
             reader_waker: OnceLock::new(),
+            completion_started: AtomicBool::new(complete),
             complete: AtomicBool::new(complete),
+            terminal_state: AtomicU8::new(terminal_state as u8),
         };
         if complete {
             inner.try_build_segment_index();
@@ -149,7 +174,7 @@ impl FileInner {
     /// can short-circuit on `segment_index.get()` without re-reading the
     /// file each tick.
     pub(crate) fn mark_complete(&self) {
-        if self.complete.swap(true, Ordering::AcqRel) {
+        if self.completion_started.swap(true, Ordering::AcqRel) {
             return;
         }
         if let Some(total_bytes) = self.source.coord.total_bytes() {
@@ -158,6 +183,32 @@ impl FileInner {
                 .publish(FileEvent::CacheComplete { total_bytes });
         }
         self.try_build_segment_index();
+        self.set_terminal_state(FileTerminalState::Committed);
+        self.complete.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn is_complete(&self) -> bool {
+        self.complete.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn terminal_state(&self) -> FileTerminalState {
+        match self.terminal_state.load(Ordering::Acquire) {
+            code if code == FileTerminalState::Committed as u8 => FileTerminalState::Committed,
+            code if code == FileTerminalState::Failed as u8 => FileTerminalState::Failed,
+            code if code == FileTerminalState::Cancelled as u8 => FileTerminalState::Cancelled,
+            _ => FileTerminalState::Active,
+        }
+    }
+
+    pub(crate) fn refresh_unmanaged_terminal(&self) {
+        if self.resource_lease.is_some() || self.is_complete() {
+            return;
+        }
+        self.set_terminal_state(FileTerminalState::from(&self.asset.reader.status()));
+    }
+
+    fn set_terminal_state(&self, state: FileTerminalState) {
+        self.terminal_state.store(state as u8, Ordering::Release);
     }
 
     pub(crate) fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>) {
@@ -239,7 +290,12 @@ impl Wake for FileReaderWake {
                 ResourceStatus::Committed { .. } => {
                     let _ = inner.observe_committed();
                 }
-                ResourceStatus::Failed(_) | ResourceStatus::Cancelled => {}
+                ResourceStatus::Failed(_) => {
+                    inner.set_terminal_state(FileTerminalState::Failed);
+                }
+                ResourceStatus::Cancelled => {
+                    inner.set_terminal_state(FileTerminalState::Cancelled);
+                }
             }
             inner.wake_worker();
         }

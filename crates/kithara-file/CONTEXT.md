@@ -69,7 +69,9 @@ derived artifacts while the original media file stays untouched. `FileSrc::Remot
   reader Waker uses only `Weak<FileInner>`. On writes it rearms before waking the audio worker;
   on a terminal commit it settles file metadata and derived indexes before that wake. Completion
   work therefore stays outside the audio worker's real-time read path, and the Waker cannot pin a
-  dropped source through the pending-resource state.
+  dropped source through the pending-resource state. Non-blocking audio probes wait for that
+  commit and raise their demand to the whole resource, so the real-time decoder reads only the
+  immutable committed snapshot. Blocking file readers may still consume published partial ranges.
 - Only the **elected writer epoch** issues GETs. `poll_next` registers its peer Waker before the
   readiness/election check, leaves it armed on `Pending`, and clears that exact registration before
   `Ready`. A stale writer handle is removed and dropped outside the File mutex before the peer

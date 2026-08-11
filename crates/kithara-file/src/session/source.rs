@@ -14,7 +14,7 @@ use tracing::trace;
 use url::Url;
 
 use super::{
-    inner::{FileAssetCtx, FileInner, FileSourceCtx},
+    inner::{FileAssetCtx, FileInner, FileSourceCtx, FileTerminalState},
     segments::FileSegmentIndex,
 };
 use crate::{coord::FileCoord, error::SourceError as FileSourceError};
@@ -67,6 +67,17 @@ impl FileSource {
             )),
             ResourceStatus::Cancelled => Err(Self::cancelled_error()),
             ResourceStatus::Active | ResourceStatus::Committed { .. } => Ok(()),
+        }
+    }
+
+    fn ensure_realtime_not_terminal(&self) -> StreamResult<()> {
+        self.inner.refresh_unmanaged_terminal();
+        match self.inner.terminal_state() {
+            FileTerminalState::Failed => {
+                Err(StreamError::Source(StreamSourceError::SegmentUnavailable))
+            }
+            FileTerminalState::Cancelled => Err(Self::cancelled_error()),
+            FileTerminalState::Active | FileTerminalState::Committed => Ok(()),
         }
     }
 
@@ -139,7 +150,7 @@ impl FileSource {
         self.peer_handle = Some(handle);
     }
 
-    fn update_read_demand(&self, range: &Range<u64>) {
+    fn update_read_demand(&self, range: &Range<u64>, requested_end: u64) {
         if range.start > self.coord.read_pos() {
             self.coord.set_read_pos(range.start);
             if let Some(lease) = self.inner.resource_lease.as_ref() {
@@ -147,7 +158,7 @@ impl FileSource {
             }
         }
         if let Some(lease) = self.inner.resource_lease.as_ref() {
-            lease.request_until(range.end);
+            lease.request_until(requested_end);
         }
     }
 
@@ -209,14 +220,15 @@ impl kithara_stream::Source for FileSource {
         if self.inner.source.cancel.is_cancelled() {
             return SourcePhase::Cancelled;
         }
-        if matches!(self.inner.asset.reader.status(), ResourceStatus::Cancelled) {
+        self.inner.refresh_unmanaged_terminal();
+        if self.inner.terminal_state() == FileTerminalState::Cancelled {
             return SourcePhase::Cancelled;
         }
         let Some(readable) = self.readable_part(range) else {
-            return match self.inner.asset.reader.status() {
-                ResourceStatus::Committed { .. } => SourcePhase::Eof,
-                ResourceStatus::Cancelled => SourcePhase::Cancelled,
-                ResourceStatus::Active | ResourceStatus::Failed(_) => SourcePhase::Waiting,
+            return match self.inner.terminal_state() {
+                FileTerminalState::Committed => SourcePhase::Eof,
+                FileTerminalState::Cancelled => SourcePhase::Cancelled,
+                FileTerminalState::Active | FileTerminalState::Failed => SourcePhase::Waiting,
             };
         };
         let contains = readable.is_empty() || self.inner.asset.reader.contains_range(readable);
@@ -270,8 +282,15 @@ impl kithara_stream::Source for FileSource {
         timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome> {
         self.ensure_not_cancelled()?;
-        self.inner.arm_reader_waker();
-        self.ensure_storage_not_terminal()?;
+        if timeout.is_some() {
+            self.ensure_realtime_not_terminal()?;
+            if !self.inner.is_complete() {
+                self.update_read_demand(&range, u64::MAX);
+                return Err(StreamError::Source(StreamSourceError::WaitBudgetExceeded));
+            }
+        } else {
+            self.ensure_storage_not_terminal()?;
+        }
         match self.phase_at(range.clone()) {
             SourcePhase::Cancelled => return Err(Self::cancelled_error()),
             SourcePhase::Seeking => return Ok(WaitOutcome::Interrupted),
@@ -280,7 +299,7 @@ impl kithara_stream::Source for FileSource {
             _ => {}
         }
 
-        self.update_read_demand(&range);
+        self.update_read_demand(&range, range.end);
 
         if timeout.is_some() {
             return Err(StreamError::Source(StreamSourceError::WaitBudgetExceeded));
