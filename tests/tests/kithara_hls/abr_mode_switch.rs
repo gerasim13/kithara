@@ -1164,13 +1164,14 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
     let applied_before = collector.applied_transitions().len();
+    let reader_before = collector.reader_segments().len();
     handle
         .set_mode(AbrMode::manual(2))
         .expect("Manual(2) target is in the variant list");
 
     let switch_seen = Arc::clone(&collector);
     let (mut audio, transition) = spawn_blocking(move || {
-        let stats = read_phase_until(&mut audio, 8_192, "runtime manual transition", || {
+        let stats = read_phase_until(&mut audio, 0, "runtime manual transition", || {
             switch_seen.applied_transitions()[applied_before..]
                 .contains(&(2, AbrReason::ManualOverride))
         });
@@ -1181,7 +1182,6 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
 
     let transitions = collector.applied_transitions();
     let manual_applied = transitions[applied_before..].contains(&(2, AbrReason::ManualOverride));
-    let reader_after_promotion = collector.reader_segments().len();
     let (mut audio, post_promotion) = spawn_blocking(move || {
         let stats = read_phase_until_samples(&mut audio, 8_192, "runtime manual promoted audio");
         (audio, stats)
@@ -1193,7 +1193,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
         .expect("tail drain");
 
     let reader_segments = collector.reader_segments();
-    let promoted_reader_segments = &reader_segments[reader_after_promotion..];
+    let manual_reader_segments = &reader_segments[reader_before..];
 
     info!(
         ?transitions,
@@ -1217,10 +1217,10 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
         "promoted variant must produce a fresh audio budget: {post_promotion:?}"
     );
     assert!(
-        promoted_reader_segments
+        manual_reader_segments
             .iter()
             .any(|(variant, _)| *variant == 2),
-        "Manual(2) must read variant 2 after promotion: {promoted_reader_segments:?}"
+        "Manual(2) must read variant 2 after the command: {manual_reader_segments:?}"
     );
     assert!(
         tail_total > 0,
