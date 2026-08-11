@@ -326,14 +326,20 @@ impl FetchSlot {
                 });
                 handle.into_failed();
             } else {
+                // Freeing the slot is not enough to get this segment fetched
+                // again. Dispatch popped its plan entry when it sent the
+                // fetch, and `poll_next` only runs on reader progress or the
+                // slow-fetch hook — neither of which a failed download
+                // produces. So the work has to go back on the plan, and the
+                // peer has to be woken to take it; without both, the segment
+                // is never asked for again and playback stops at the gap it
+                // leaves, even once the network is back.
+                let planned = handle.planned();
+                let variant = handle.variant();
                 handle.into_missing();
-                // Returning the slot to the pool is not enough to get it
-                // fetched again: `poll_next` is driven by reader progress and
-                // by the slow-fetch hook, and a download that failed produces
-                // neither. Without this wake the peer emits no further
-                // command, so a segment freed here is simply never asked for
-                // — playback stops at the gap and stays there even once the
-                // network is back. Wake the peer so it re-aims.
+                if let Some(variant) = variant {
+                    variant.requeue_planned(planned);
+                }
                 signal.wake_peer();
             }
         }

@@ -83,6 +83,22 @@ impl HlsVariant {
         Some(seg)
     }
 
+    /// Put a fetch that failed recoverably back on the plan.
+    ///
+    /// Freeing the slot is only half of it: dispatch popped the entry when it
+    /// sent the fetch, so a slot returned to `Missing` describes work nobody
+    /// holds. The peer then wakes to an empty plan and asks for nothing, and
+    /// the segment is never fetched again — playback stops at that gap even
+    /// once the network is back. Front of the queue, because playback is
+    /// waiting on it; only when absent, so a rebuild that already re-planned
+    /// it is not duplicated.
+    pub(crate) fn requeue_planned(&self, planned: PlannedFetch) {
+        let mut queue = self.flow.queue.lock();
+        if !queue.contains(&planned) {
+            queue.push_front(planned);
+        }
+    }
+
     #[kithara::probe]
     pub(super) fn rebuild_queue(&self, from_seg: u32, probe_seg: Option<u32>) {
         let segs_len = self.num_segments();
