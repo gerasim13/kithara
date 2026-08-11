@@ -372,6 +372,41 @@ mod tests {
         )));
     }
 
+    /// A failed fetch must not cost the resource its future. The network
+    /// going away for a moment is the ordinary case: the same segment is
+    /// asked for again once it is back, and that request has to open a fresh
+    /// download rather than trip over the wreckage of the last one.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn reacquire_after_failure_opens_a_fresh_download() {
+        let dir = tempdir().unwrap();
+        let store = AssetStore::builder()
+            .backend(StorageBackend::Disk {
+                root: dir.path().into(),
+            })
+            .build();
+        let key = ResourceKey::relative(ROOT, "seg.m4s");
+
+        let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
+            panic!("expected a Pending writer");
+        };
+        // The reader the player parks on outlives the download, which is what
+        // routes the retry through the cached in-flight entry rather than a
+        // clean first acquisition.
+        let parked = writer.reader();
+        writer.write_at(0, b"half").unwrap();
+        writer.fail("network away".to_string());
+
+        let reacquired = store
+            .acquire_resource(&key, None)
+            .expect("a failed segment must be fetchable again");
+        assert!(
+            matches!(reacquired, AcquisitionResult::Pending(_)),
+            "the retry must get a writer, not the failed resource"
+        );
+        drop(parked);
+    }
+
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn fail_publishes_asset_failed() {
         let bus = EventBus::new(8);
