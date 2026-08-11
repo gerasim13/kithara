@@ -30,7 +30,10 @@ pub(super) struct HostStorage<'a> {
 
 #[derive(Serialize)]
 struct Health<'a> {
-    volume_used_bytes: u64,
+    /// What is left where there is least of it. The thresholds are free-space
+    /// floors, so this is the number `pressure` was read from — reporting bytes
+    /// spent instead described a quantity no decision uses.
+    free_bytes: u64,
     pressure: Pressure,
     /// Named so an operator can see which volume is under pressure without
     /// running `df` by hand.
@@ -42,14 +45,13 @@ struct Health<'a> {
 #[derive(Serialize)]
 struct VolumeHealth {
     path: String,
-    used_bytes: u64,
+    free_bytes: u64,
     total_bytes: u64,
     pressure: Pressure,
 }
 
 struct Volume {
     path: PathBuf,
-    used: u64,
     total: u64,
     available: u64,
 }
@@ -62,7 +64,6 @@ impl Volume {
             .with_context(|| format!("reading available space for {}", path.display()))?;
         Ok(Self {
             path: path.to_path_buf(),
-            used: total.saturating_sub(available),
             total,
             available,
         })
@@ -111,7 +112,7 @@ impl<'a> HostStorage<'a> {
     }
 
     pub(super) fn preflight(&self) -> Result<()> {
-        let used = self.used_bytes()?;
+        let free = self.free_bytes()?;
         let (pressure, volume) = self.worst_pressure()?;
         match pressure {
             Pressure::Reject => bail!("{} is full; new jobs stop here", volume.display()),
@@ -129,19 +130,19 @@ impl<'a> HostStorage<'a> {
             writable_probe(&directory)?;
         }
         self.process.require_tools(&["git", "sccache"])?;
-        info!(used_bytes = used, ?pressure, "host preflight passed");
+        info!(free_bytes = free, ?pressure, "host preflight passed");
         Ok(())
     }
 
     pub(super) fn cleanup(&self) -> Result<()> {
-        let initial = self.used_bytes()?;
+        let initial = self.free_bytes()?;
         // The worst single volume, not the sum: adding a second volume's bytes
         // to the first and comparing that against thresholds calibrated for the
         // first reads every machine with a guest volume as full, and the branch
         // it reaches for throws away the compiler caches that were never the
         // problem. `preflight` already decides this way.
         let (pressure, volume) = self.worst_pressure()?;
-        info!(used_bytes = initial, ?pressure, volume = %volume.display(), "cleanup started");
+        info!(free_bytes = initial, ?pressure, volume = %volume.display(), "cleanup started");
 
         self.prune_old_trees("workspaces/tmp", Self::DAY)?;
         self.prune_old_trees("workspaces/builds", Self::DAY)?;
@@ -169,10 +170,19 @@ impl<'a> HostStorage<'a> {
                 self.prune_old_trees("cache/bootstrap/trusted", 7 * Self::DAY)?;
                 self.prune_old_trees("vm/tart/cache", 7 * Self::DAY)?;
                 self.prune_docker_cache("168h");
-                self.trim_linux_guest();
             }
             Pressure::Normal => {}
         }
+
+        // Unconditional, and after the pruning above, because the guest frees
+        // blocks on its own schedule and holds them until asked. Its root
+        // filesystem is mounted `discard` and stays at a gigabyte, but the data
+        // disk carrying `/var/lib/docker` is not, so every layer Docker deletes
+        // stays allocated in a file this volume pays for. One trim on a machine
+        // that had drifted to 44 GB free returned 63 of them in seconds — too
+        // cheap to hold back for a threshold, and holding it back is what let
+        // the drift reach refusal five times.
+        self.trim_linux_guest();
 
         let target_dirs = persistent_target_dirs(&self.root.join("workspaces/gitlab"))?;
         build_cache::enforce_budget(&target_dirs, self.config.host.build_cache_budget_bytes()?)?;
@@ -182,13 +192,14 @@ impl<'a> HostStorage<'a> {
             // The guests are where the space is, and the caches are what the
             // steps above can reach — so taking the caches first pays for the
             // guests with the compiler output the machine exists to keep warm.
-            // Both guests only give their space back when they are thrown
-            // away: the macOS one measured 38 gibibytes in a recycle against
-            // three and a half for everything else together, and the Linux
-            // one's disk is allocated once and never deflates, so pruning
-            // inside it returns nothing to this volume. Recycling costs the
-            // job in flight and a cold image build, which is a trade worth
-            // making only once jobs are being refused anyway — this branch.
+            // The macOS one gives its space back only when it is thrown away:
+            // 38 gibibytes in a recycle against three and a half for
+            // everything else together. The Linux one has already been
+            // trimmed, so what is left in it is what Docker still holds and
+            // the prune window would not take — layers younger than a week.
+            // Only recycling reaches those, and it costs the job in flight and
+            // a cold image build, which is a trade worth making once jobs are
+            // being refused anyway — this branch.
             self.recycle_linux_guest();
             self.recycle_macos_guest();
             final_pressure = self.worst_pressure()?.0;
@@ -200,7 +211,7 @@ impl<'a> HostStorage<'a> {
             final_pressure = self.worst_pressure()?.0;
         }
         info!(
-            used_bytes = self.used_bytes()?,
+            free_bytes = self.free_bytes()?,
             ?final_pressure,
             "cleanup completed"
         );
@@ -211,13 +222,13 @@ impl<'a> HostStorage<'a> {
     }
 
     pub(super) fn health(&self) -> Result<()> {
-        let used = self.used_bytes()?;
+        let free = self.free_bytes()?;
         let volumes: Vec<VolumeHealth> = self
             .volumes()?
             .into_iter()
             .map(|volume| VolumeHealth {
                 path: volume.path.display().to_string(),
-                used_bytes: volume.used,
+                free_bytes: volume.available,
                 total_bytes: volume.total,
                 pressure: self.pressure_of(&volume),
             })
@@ -227,7 +238,7 @@ impl<'a> HostStorage<'a> {
         serde_json::to_writer(
             io::stdout().lock(),
             &Health {
-                volume_used_bytes: used,
+                free_bytes: free,
                 pressure,
                 volumes,
                 runner,
@@ -247,8 +258,19 @@ impl<'a> HostStorage<'a> {
         Ok(())
     }
 
-    fn used_bytes(&self) -> Result<u64> {
-        Ok(self.volumes()?.into_iter().map(|volume| volume.used).sum())
+    /// What is left on the volume with the least to spare — the one the pressure
+    /// verdict comes from, since every volume is judged against the same floors.
+    ///
+    /// Summing bytes spent across volumes measured neither: on a shared APFS
+    /// container a volume's used space counts what its neighbours hold, so the
+    /// total ran past the quota it was being compared with. This host reported
+    /// 470 GB spent on a 300 GB quota while it had 44 GB free.
+    fn free_bytes(&self) -> Result<u64> {
+        self.volumes()?
+            .into_iter()
+            .map(|volume| volume.available)
+            .min()
+            .context("no CI volume to measure")
     }
 
     /// Every volume CI storage sits on, in the order they should be reported.
@@ -779,7 +801,6 @@ mod tests {
         // volume half the quota's size reaches every step.
         let half = |available| Volume {
             path: PathBuf::from("/elsewhere"),
-            used: 150 - available,
             total: 150,
             available,
         };
@@ -788,6 +809,43 @@ mod tests {
         assert_eq!(storage.pressure_of(&half(60)), Pressure::Soft);
         assert_eq!(storage.pressure_of(&half(30)), Pressure::Aggressive);
         assert_eq!(storage.pressure_of(&half(15)), Pressure::Reject);
+    }
+
+    /// The blocks Docker frees inside the guest stay allocated in a file this
+    /// volume pays for until something asks for them back, and waiting for
+    /// pressure to ask is what let 63 gibibytes sit there while the volume drifted
+    /// toward refusing work. A tempdir has more than the sixty bytes this config
+    /// calls a floor, so the run below is `Normal` — the pressure that used to
+    /// skip the trim entirely.
+    #[cfg(unix)]
+    #[test]
+    fn the_guest_is_trimmed_even_with_nothing_under_pressure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut cfg = config(directory.path());
+        cfg.host.brew_root = directory.path().join("brew");
+        let bin = cfg.host.brew_root.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let asked = directory.path().join("asked");
+        fs::write(
+            bin.join("colima"),
+            format!("#!/bin/sh\necho \"$@\" > {}\n", asked.display()),
+        )
+        .unwrap();
+        fs::set_permissions(bin.join("colima"), fs::Permissions::from_mode(0o755)).unwrap();
+
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage =
+            HostStorage::for_test(directory.path().to_path_buf(), &cfg, &process).unwrap();
+        assert_eq!(storage.worst_pressure().unwrap().0, Pressure::Normal);
+        storage.cleanup().unwrap();
+
+        let arguments = fs::read_to_string(&asked).expect("the guest was never asked for anything");
+        assert!(
+            arguments.contains("fstrim"),
+            "cleanup asked the guest for {arguments} instead of a trim"
+        );
     }
 
     #[test]

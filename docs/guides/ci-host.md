@@ -265,9 +265,13 @@ APFS container the volume shares with others the two are different questions,
 and reading them the old way left a 279 GB volume with 24 GB free reported as
 `Normal` while jobs were already being refused.
 
-The Linux guest's data disk is sparse and never deflates: pruning inside it
-returns nothing to this volume. Aggressive cleanup therefore discards its freed
-blocks, and only refusal recycles the guest outright.
+The Linux guest keeps its root filesystem mounted `discard`, so that image stays
+at about a gigabyte. Its data disk — the one carrying `/var/lib/docker` — is not,
+so every layer Docker deletes stays allocated in a sparse file this volume pays
+for. Every cleanup therefore trims it, whatever the pressure: the trim costs
+seconds, and one on a machine that had drifted to 44 GB free returned 63 of them.
+Recycling the guest outright reaches only what Docker still holds and the prune
+window will not take, which is why refusal is the one thing that does it.
 
 The CI volume has a 300 GB APFS quota. New work stops at 285 GB. Cleanup starts
 at 240 GB and becomes aggressive at 270 GB. Workspaces, VM overlays, logs, and
